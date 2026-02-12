@@ -15,19 +15,10 @@ import "./styles/liquid-glass.css";
 import "./App.css";
 
 export function App() {
-  console.log('[App] ========== RENDER START ==========');
-  
   const { chats, createChat } = useChat();
   const { tabs, createTab } = useTabs();
   const { activeTabId } = useTabStore();
   const [hydrated, setHydrated] = useState(false);
-
-  console.log(`[App] Current render state:`);
-  console.log(`[App]   - tabs.length: ${tabs.length}`);
-  console.log(`[App]   - activeTabId: ${activeTabId}`);
-  console.log(`[App]   - hydrated: ${hydrated}`);
-  console.log(`[App]   - tabs:`, tabs.map(t => ({ id: t.id, entityId: t.entityId })));
-  console.log('[App] ========== RENDER END ==========');
 
   // Wait for Zustand persist to finish loading from localStorage
   useEffect(() => {
@@ -78,7 +69,6 @@ export function App() {
             const currentState = useTabStore.getState();
             console.log(`[App.useEffect] Step 3: activeTabId = ${currentState.activeTabId}`);
             console.log(`[App.useEffect] Step 3: tabs count = ${currentState.tabs.length}`);
-            console.log(`[App.useEffect] Step 3: tabs =`, currentState.tabs.map(t => ({ id: t.id, entityId: t.entityId })));
             
             if (!currentState.activeTabId) {
               console.error("[App.useEffect] ❌ ERROR: activeTabId is STILL null/undefined after createTab!");
@@ -94,7 +84,6 @@ export function App() {
         }
       } else {
         console.log(`[App.useEffect] ⏭️  Tabs already exist (${tabs.length})`);
-        console.log(`[App.useEffect] Existing tabs:`, tabs.map(t => ({ id: t.id, entityId: t.entityId })));
         console.log(`[App.useEffect] Current activeTabId:`, activeTabId);
         
         // If tabs exist but no active tab, restore from history or select first tab

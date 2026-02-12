@@ -39,42 +39,6 @@ export function useChat() {
 
   const { getHistory } = useAgent();
 
-  // Load chats on mount
-  useEffect(() => {
-    loadChats();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run once on mount
-
-  // Load messages when active chat changes (driven by tabStore now)
-  // BUT: Don't reload if chat already has messages (prevents clobbering in-memory state)
-  useEffect(() => {
-    console.log(`[useChat.useEffect] Active chat changed to: ${activeChat}`);
-    
-    if (activeChat) {
-      const { chatStates } = useChatStore.getState();
-      const existingState = chatStates.get(activeChat);
-      
-      const messageCount = existingState?.messages?.length || 0;
-      console.log(`[useChat.useEffect] Chat state for ${activeChat}:`, {
-        hasState: !!existingState,
-        messageCount: messageCount,
-        isStreaming: existingState?.isStreaming,
-        isSending: existingState?.isSending
-      });
-      
-      // Only load if we don't already have messages
-      // This prevents wiping out the user message that was just added
-      if (!existingState || messageCount === 0) {
-        console.log(`[useChat.useEffect] 🔄 Loading messages for ${activeChat}...`);
-        loadMessages(activeChat);
-      } else {
-        console.log(`[useChat.useEffect] ✅ Chat ${activeChat} already has ${messageCount} messages, skipping load`);
-      }
-    } else {
-      console.log(`[useChat.useEffect] No active chat`);
-    }
-  }, [activeChat, loadMessages]);
-
   // Load all chats
   const loadChats = useCallback(async () => {
     try {
@@ -130,6 +94,42 @@ export function useChat() {
     },
     [getHistory, setLoading],
   );
+
+  // Load chats on mount
+  useEffect(() => {
+    loadChats();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Run once on mount
+
+  // Load messages when active chat changes (driven by tabStore now)
+  // BUT: Don't reload if chat already has messages (prevents clobbering in-memory state)
+  useEffect(() => {
+    console.log(`[useChat.useEffect] Active chat changed to: ${activeChat}`);
+    
+    if (activeChat) {
+      const { chatStates } = useChatStore.getState();
+      const existingState = chatStates.get(activeChat);
+      
+      const messageCount = existingState?.messages?.length || 0;
+      console.log(`[useChat.useEffect] Chat state for ${activeChat}:`, {
+        hasState: !!existingState,
+        messageCount: messageCount,
+        isStreaming: existingState?.isStreaming,
+        isSending: existingState?.isSending
+      });
+      
+      // Only load if we don't already have messages
+      // This prevents wiping out the user message that was just added
+      if (!existingState || messageCount === 0) {
+        console.log(`[useChat.useEffect] 🔄 Loading messages for ${activeChat}...`);
+        loadMessages(activeChat);
+      } else {
+        console.log(`[useChat.useEffect] ✅ Chat ${activeChat} already has ${messageCount} messages, skipping load`);
+      }
+    } else {
+      console.log(`[useChat.useEffect] No active chat`);
+    }
+  }, [activeChat, loadMessages]);
 
   // Create new chat
   const createChat = useCallback(

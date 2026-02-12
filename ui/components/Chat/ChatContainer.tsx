@@ -72,10 +72,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
   // Log after getting messages (not inside the selector)
   useEffect(() => {
     const chatState = useChatStore.getState().chatStates.get(chatId);
-    console.log(`[ChatContainer] Rendering chatId=${chatId}:`, {
-      hasChatState: !!chatState,
-      messageCount: chatState?.messages?.length || 0,
-    });
+    console.log(`[ChatContainer] Rendering chatId=${chatId}, hasChatState=${!!chatState}, messageCount=${chatState?.messages?.length || 0}`);
   }, [chatId, messages.length]);
 
   const isSending = useChatStore((state) => {
