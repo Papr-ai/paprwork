@@ -1,0 +1,67 @@
+/**
+ * NavButton Styles - v1 Layout with Liquid Glass Colors
+ */
+
+.nav-button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 0.15s var(--ease);
+  text-align: left;
+}
+
+.nav-button:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.nav-button--active {
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--text-primary);
+}
+
+.nav-button__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.nav-button--active .nav-button__icon {
+  color: var(--text-primary);
+}
+
+.nav-button__label {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: inherit;
+}
+
+.nav-button--active .nav-button__label {
+  font-weight: 600;
+}
+
+.nav-button__badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  background: var(--primary-color);
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 600;
+  color: white;
+}

@@ -1,0 +1,65 @@
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+// https://vitejs.dev/config/
+export default defineConfig({
+  plugins: [react()],
+  base: "./", // Use relative paths for Electron
+  resolve: {
+    // CRITICAL: Do not resolve from parent node_modules
+    preserveSymlinks: true,
+    dedupe: ["react", "react-dom", "zustand"],
+  },
+  optimizeDeps: {
+    // Force Vite to only bundle these specific deps from ui/node_modules
+    include: ["react", "react/jsx-runtime", "react-dom", "zustand"],
+  },
+  server: {
+    port: 5173,
+    strictPort: true,
+  },
+  build: {
+    outDir: "../dist/ui",
+    emptyOutDir: true,
+    // Optimize bundle size with esbuild (faster than terser)
+    minify: 'esbuild',
+    // Increase chunk size warning limit (679KB gzipped to 187KB is acceptable)
+    chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      output: {
+        // Split vendor chunks for better caching
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom'],
+          'state': ['zustand'],
+        },
+      },
+      // Mark everything except our UI deps as external
+      external: (id) => {
+        // Allow our UI dependencies
+        if (
+          id === "react" ||
+          id === "react-dom" ||
+          id === "zustand" ||
+          id.startsWith("react/") ||
+          id.startsWith("react-dom/")
+        ) {
+          return false;
+        }
+        // Everything else is external (shouldn't be bundled)
+        return (
+          id.includes("@mastra") ||
+          id.includes("@ai-sdk") ||
+          id.includes("@papr") ||
+          id.includes("better-sqlite3") ||
+          id.includes("express") ||
+          id.includes("fs-extra") ||
+          id.includes("uuid") ||
+          id.includes("node:") ||
+          id === "crypto" ||
+          id === "fs" ||
+          id === "path"
+        );
+      },
+    },
+  },
+});

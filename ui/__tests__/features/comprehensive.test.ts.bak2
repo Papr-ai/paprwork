@@ -1,0 +1,384 @@
+/**
+ * Comprehensive Feature Tests
+ * Tests all major features implemented in Paprwork v2
+ */
+
+import { describe, it, expect, beforeEach } from "vitest";
+import { useChatStore } from "../../stores/chatStore";
+import { useTabStore } from "../../stores/tabStore";
+
+describe("Comprehensive Feature Tests", () => {
+  beforeEach(() => {
+    // Reset all stores
+    useChatStore.setState({
+      activeChat: null,
+      chatStates: new Map(),
+      chats: [],
+      messages: [],
+      isLoading: false,
+      isSending: false,
+      error: null,
+    });
+
+    useTabStore.setState({
+      tabs: [],
+      activeTabId: null,
+      splitRatio: 0.5,
+      isSplitView: false,
+      activeLeftTab: null,
+      activeRightTab: null,
+    });
+
+    // Setup global window
+    if (!global.window) {
+      (global as any).window = {};
+    }
+    (global.window as any).__chatStore__ = useChatStore.getState();
+  });
+
+  describe("Tab System", () => {
+    describe("Tab Creation", () => {
+      it("should create tabs of different types", () => {
+        // const store = useTabStore.getState() // REMOVED - use direct calls;
+
+        const chatTab = store.createTab("chat", "chat-1", "Chat");
+        const docTab = store.createTab("document", "doc-1", "Document");
+        const settingsTab = store.createTab("settings", "settings", "Settings");
+
+        expect(store.tabs.length).toBe(3);
+        expect(chatTab).toBe("chat-chat-1");
+        expect(docTab).toBe("document-doc-1");
+        expect(settingsTab).toBe("settings-settings");
+      });
+
+      it("should reuse existing tabs with same ID", () => {
+        // const store = useTabStore.getState() // REMOVED - use direct calls;
+
+        const tabId1 = store.createTab("document", "artifacts", "Artifacts");
+        const tabId2 = store.createTab("document", "artifacts", "Artifacts");
+
+        expect(store.tabs.length).toBe(1);
+        expect(tabId1).toBe(tabId2);
+      });
+
+      it("should set newly created tab as active", () => {
+        // const store = useTabStore.getState() // REMOVED - use direct calls;
+
+        store.createTab("chat", "chat-1", "Chat 1");
+        expect(store.activeTabId).toBe("chat-chat-1");
+
+        store.createTab("chat", "chat-2", "Chat 2");
+        expect(store.activeTabId).toBe("chat-chat-2");
+      });
+    });
+
+    describe("Tab Navigation", () => {
+      it("should switch between tabs", () => {
+        // const store = useTabStore.getState() // REMOVED - use direct calls;
+
+        const tab1 = store.createTab("chat", "chat-1", "Chat 1");
+        const tab2 = store.createTab("chat", "chat-2", "Chat 2");
+        const tab3 = store.createTab("document", "doc-1", "Doc 1");
+
+        store.switchToTab(tab1);
+        expect(store.activeTabId).toBe(tab1);
+
+        store.switchToTab(tab2);
+        expect(store.activeTabId).toBe(tab2);
+
+        store.switchToTab(tab3);
+        expect(store.activeTabId).toBe(tab3);
+      });
+
+      it("should get visible tabs (excluding children)", () => {
+        // const store = useTabStore.getState() // REMOVED - use direct calls;
+
+        const parent = store.createTab("chat", "chat-1", "Chat");
+        const child = store.createTab("document", "doc-1", "Doc");
+        store.createTab("settings", "settings", "Settings");
+
+        expect(store.getVisibleTabs().length).toBe(3);
+
+        // Merge child with parent
+        store.addChild(parent, child, "right");
+
+        // Child should be hidden from visible tabs
+        expect(store.getVisibleTabs().length).toBe(2);
+      });
+    });
+
+    describe("Tab Merging (Parent-Child)", () => {
+      it("should merge tabs (create parent-child relationship)", () => {
+        // const store = useTabStore.getState() // REMOVED - use direct calls;
+
+        const parentId = store.createTab("chat", "chat-1", "Chat");
+        const childId = store.createTab("document", "doc-1", "Document");
+
+        store.addChild(parentId, childId, "right");
+
+        const parent = store.getTab(parentId);
+        const child = store.getTab(childId);
+
+        expect(parent?.childTabIds).toContain(childId);
+        expect(child?.parentTabId).toBe(parentId);
+        expect(child?.displayMode).toBe("child");
+      });
+
+      it("should unmerge tabs (promote child to standalone)", () => {
+        // const store = useTabStore.getState() // REMOVED - use direct calls;
+
+        const parentId = store.createTab("chat", "chat-1", "Chat");
+        const childId = store.createTab("document", "doc-1", "Document");
+
+        store.addChild(parentId, childId, "right");
+        store.promoteToStandalone(childId);
+
+        const child = store.getTab(childId);
+        expect(child?.parentTabId).toBeNull();
+        expect(child?.displayMode).toBe("standalone");
+      });
+
+      it("should replace child tab when artifact is updated", () => {
+        // const store = useTabStore.getState() // REMOVED - use direct calls;
+
+        const chatId = store.createTab("chat", "chat-1", "Chat");
+        const doc1Id = store.createTab("document", "doc-1", "Doc 1");
+
+        store.addChild(chatId, doc1Id, "right");
+
+        // Create new artifact and replace
+        const doc2Id = store.createTab("document", "doc-2", "Doc 2");
+        store.replaceChild(chatId, doc1Id, doc2Id);
+
+        const chat = store.getTab(chatId);
+        expect(chat?.childTabIds).not.toContain(doc1Id);
+        expect(chat?.childTabIds).toContain(doc2Id);
+      });
+    });
+  });
+
+  describe("Chat System", () => {
+    describe("Chat State Management", () => {
+      it("should initialize chat state when activated", () => {
+        const store = useChatStore.getState();
+        const chatId = "chat-1";
+
+        store.setActiveChat(chatId);
+
+        const state = store.chatStates.get(chatId);
+        expect(state).toBeDefined();
+        expect(state?.messages).toEqual([]);
+        expect(state?.isStreaming).toBe(false);
+        expect(state?.hasUnread).toBe(false);
+      });
+
+      it("should maintain independent state for multiple chats", () => {
+        const store = useChatStore.getState();
+
+        store.setActiveChat("chat-1");
+        store.setActiveChat("chat-2");
+        store.setActiveChat("chat-3");
+
+        store.addMessage({ role: "user", content: "Msg 1" }, "chat-1");
+        store.addMessage({ role: "user", content: "Msg 2" }, "chat-2");
+
+        expect(store.getChatState("chat-1").messages.length).toBe(1);
+        expect(store.getChatState("chat-2").messages.length).toBe(1);
+        expect(store.getChatState("chat-3").messages.length).toBe(0);
+      });
+    });
+
+    describe("Parallel Chat Streaming", () => {
+      it("should track streaming state per chat", () => {
+        const store = useChatStore.getState();
+
+        store.setActiveChat("chat-1");
+        store.setActiveChat("chat-2");
+
+        store.setChatStreaming("chat-1", true);
+
+        expect(store.getChatState("chat-1").isStreaming).toBe(true);
+        expect(store.getChatState("chat-2").isStreaming).toBe(false);
+      });
+
+      it("should track unread state per chat", () => {
+        const store = useChatStore.getState();
+
+        store.setActiveChat("chat-1");
+        store.setActiveChat("chat-2");
+
+        // Add message to inactive chat
+        store.addMessage({ role: "assistant", content: "Response" }, "chat-1");
+
+        // Update global reference
+        (global.window as any).__chatStore__ = useChatStore.getState();
+
+        // Chat-1 should be unread (received message while not active)
+        const chat1 = store.chats.find((c) => c.id === "chat-1");
+        expect(chat1?.hasUnread).toBe(true);
+      });
+
+      it("should clear unread when switching to chat", () => {
+        const store = useChatStore.getState();
+
+        store.setActiveChat("chat-1");
+        store.setActiveChat("chat-2");
+        store.addMessage({ role: "assistant", content: "Response" }, "chat-1");
+
+        // Switch back to chat-1
+        store.setActiveChat("chat-1");
+
+        const chat1 = store.chats.find((c) => c.id === "chat-1");
+        expect(chat1?.hasUnread).toBe(false);
+      });
+    });
+
+    describe("Empty Chat Detection", () => {
+      it("should reuse empty chat with temp ID", () => {
+        useChatStore.getState().setActiveChat("temp-123");
+        (global.window as any).__chatStore__ = useChatStore.getState();
+
+        const tab1 = useTabStore
+          .getState()
+          .createTab("chat", "temp-123", "New Chat");
+        expect(useTabStore.getState().tabs.length).toBe(1);
+
+        // Try to create another temp chat - should reuse
+        useChatStore.getState().setActiveChat("temp-456");
+        (global.window as any).__chatStore__ = useChatStore.getState();
+
+        const tab2 = useTabStore
+          .getState()
+          .createTab("chat", "temp-456", "New Chat");
+
+        expect(useTabStore.getState().tabs.length).toBe(1);
+        expect(tab2).toBe(tab1);
+      });
+
+      it("should create new chat when existing has messages", () => {
+        useChatStore.getState().setActiveChat("temp-123");
+        useTabStore.getState().createTab("chat", "temp-123", "Chat 1");
+        useChatStore
+          .getState()
+          .addMessage({ role: "user", content: "Hello" }, "temp-123");
+
+        (global.window as any).__chatStore__ = useChatStore.getState();
+
+        // Try to create new temp chat - should create new (first has messages)
+        useChatStore.getState().setActiveChat("temp-456");
+        (global.window as any).__chatStore__ = useChatStore.getState();
+
+        useTabStore.getState().createTab("chat", "temp-456", "Chat 2");
+
+        expect(useTabStore.getState().tabs.length).toBe(2);
+      });
+    });
+  });
+
+  describe("Settings System", () => {
+    describe("Custom API Keys", () => {
+      it("should manage custom keys lifecycle", () => {
+        // This would test the custom keys feature
+        // For now, we'll mark it as a placeholder
+        expect(true).toBe(true);
+      });
+    });
+  });
+
+  describe("Keyboard Shortcuts", () => {
+    it("should support all keyboard shortcuts", () => {
+      // Placeholder for keyboard shortcut tests
+      // Cmd+T, Cmd+W, Cmd+Tab, Cmd+[, Cmd+], Cmd+1-9
+      expect(true).toBe(true);
+    });
+  });
+
+  describe("Split View", () => {
+    it("should manage split view state", () => {
+      // const store = useTabStore.getState() // REMOVED - use direct calls;
+
+      const tab1 = store.createTab("chat", "chat-1", "Chat");
+      const tab2 = store.createTab("document", "doc-1", "Doc");
+
+      store.enableSplitView(tab1, tab2);
+
+      expect(store.isSplitView).toBe(true);
+      expect(store.activeLeftTab).toBe(tab1);
+      expect(store.activeRightTab).toBe(tab2);
+    });
+
+    it("should adjust split ratio", () => {
+      // const store = useTabStore.getState() // REMOVED - use direct calls;
+
+      expect(store.splitRatio).toBe(0.5);
+
+      store.setSplitRatio(0.3);
+      expect(store.splitRatio).toBe(0.3);
+
+      store.setSplitRatio(0.7);
+      expect(store.splitRatio).toBe(0.7);
+    });
+  });
+
+  describe("Integration Tests", () => {
+    it("should handle complete workflow: create chat, merge with artifact, unmerge", () => {
+      const tabStore = useTabStore.getState();
+      const chatStore = useChatStore.getState();
+
+      // 1. Create chat
+      chatStore.setActiveChat("temp-123");
+      (global.window as any).__chatStore__ = chatStore;
+
+      const chatTab = tabStore.createTab("chat", "temp-123", "New Chat");
+      expect(tabStore.tabs.length).toBe(1);
+
+      // 2. Send message
+      chatStore.addMessage(
+        { role: "user", content: "Create a document" },
+        "temp-123",
+      );
+
+      // 3. Create artifact and merge
+      const docTab = tabStore.createTab("document", "doc-1", "Document");
+      tabStore.addChild(chatTab, docTab, "right");
+
+      expect(tabStore.getVisibleTabs().length).toBe(1); // Only parent visible
+      expect(tabStore.getTab(chatTab)?.childTabIds).toContain(docTab);
+
+      // 4. Unmerge
+      tabStore.promoteToStandalone(docTab);
+
+      expect(tabStore.getVisibleTabs().length).toBe(2); // Both visible
+      expect(tabStore.getTab(docTab)?.parentTabId).toBeNull();
+    });
+
+    it("should handle multiple parallel chats with streaming", () => {
+      const chatStore = useChatStore.getState();
+      const tabStore = useTabStore.getState();
+
+      // Create 3 chats
+      chatStore.setActiveChat("chat-1");
+      tabStore.createTab("chat", "chat-1", "Chat 1");
+
+      chatStore.setActiveChat("chat-2");
+      tabStore.createTab("chat", "chat-2", "Chat 2");
+
+      chatStore.setActiveChat("chat-3");
+      tabStore.createTab("chat", "chat-3", "Chat 3");
+
+      // Start streaming in chat-1
+      chatStore.setChatStreaming("chat-1", true);
+
+      // Add message to chat-2 (should mark unread)
+      chatStore.addMessage(
+        { role: "assistant", content: "Response" },
+        "chat-2",
+      );
+
+      // Verify independent states
+      expect(chatStore.getChatState("chat-1").isStreaming).toBe(true);
+      expect(chatStore.getChatState("chat-2").isStreaming).toBe(false);
+      expect(chatStore.getChatState("chat-3").isStreaming).toBe(false);
+    });
+  });
+});

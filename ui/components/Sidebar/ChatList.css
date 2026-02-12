@@ -1,0 +1,66 @@
+/**
+ * ChatList Styles - v1 Layout with Liquid Glass Colors
+ */
+
+.chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+}
+
+/* Loading State */
+.chat-list__loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+  gap: 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.chat-list__spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--primary-color);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Empty State */
+.chat-list__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+  gap: 8px;
+  text-align: center;
+}
+
+.chat-list__empty svg {
+  color: var(--text-tertiary);
+  opacity: 0.5;
+  margin-bottom: 8px;
+}
+
+.chat-list__empty p {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.chat-list__empty span {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}

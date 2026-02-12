@@ -1,0 +1,76 @@
+/**
+ * ContextPills Styles - Liquid Glass Design
+ */
+
+.context-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+}
+
+.context-pill {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--glass-bg);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  transition: all var(--dur-1) ease;
+}
+
+.context-pill:hover {
+  border-color: var(--accent);
+}
+
+.context-pill--add {
+  cursor: pointer;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.context-pill--add:hover {
+  background: var(--accent);
+  color: white;
+}
+
+.context-pill__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.context-pill__title {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-pill__remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--text-tertiary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all var(--dur-1) ease;
+}
+
+.context-pill__remove:hover {
+  background: var(--error);
+  color: white;
+}

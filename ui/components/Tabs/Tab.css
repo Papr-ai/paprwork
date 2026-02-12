@@ -1,0 +1,247 @@
+/**
+ * Tab Styles - v1 Layout with Liquid Glass Colors
+ */
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 14px;
+  border-radius: 7px;
+  /* Apple "Clear Variant": High transparency for small floating elements */
+  background: rgba(236, 236, 236, 0.65);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border: none;
+  /* Apple guideline: Add subtle shadow for depth */
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  color: #6E6E73;
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+  user-select: none;
+  white-space: nowrap;
+  max-width: 200px;
+  position: relative;
+  /* Make tabs clickable/draggable (override parent drag) */
+  -webkit-app-region: no-drag;
+}
+
+.tab:hover {
+  background: rgba(224, 224, 224, 0.75);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.10), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  color: var(--text-primary);
+}
+
+.tab--active {
+  /* Active tabs: Higher opacity for emphasis */
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+  color: var(--text-primary);
+}
+
+.tab--dragging {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+
+.tab--drag-over {
+  background: rgba(0, 122, 255, 0.1);
+  border: 1px solid rgba(0, 122, 255, 0.3);
+}
+
+.tab--split-preview {
+  background: rgba(0, 122, 255, 0.2);
+  border: 2px solid var(--primary-color);
+  box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.2);
+}
+
+@media (prefers-color-scheme: dark) {
+  .tab--drag-over {
+    background: rgba(10, 132, 255, 0.15);
+    border: 1px solid rgba(10, 132, 255, 0.4);
+  }
+  
+  .tab--split-preview {
+    background: rgba(10, 132, 255, 0.25);
+    box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.3);
+  }
+}
+
+.tab--merged {
+  max-width: 300px;
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  .tab {
+    background: rgba(44, 44, 46, 0.65);
+    backdrop-filter: blur(20px) saturate(150%);
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(0, 0, 0, 0.2);
+    color: #8E8E93;
+  }
+  
+  .tab:hover {
+    background: rgba(58, 58, 60, 0.75);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4), 0 0 0 0.5px rgba(0, 0, 0, 0.25);
+    color: #F2F2F7;
+  }
+  
+  .tab--active {
+    background: rgba(28, 28, 30, 0.88);
+    backdrop-filter: blur(30px) saturate(180%);
+    -webkit-backdrop-filter: blur(30px) saturate(180%);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(0, 0, 0, 0.3);
+    color: #F2F2F7;
+  }
+}
+
+/* Icon */
+.tab__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.tab--active .tab__icon {
+  color: var(--text-primary);
+}
+
+/* Title */
+.tab__title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab--active .tab__title {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* Merged title (split-view) */
+.tab__title--merged {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tab__title-left,
+.tab__title-right {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab__title-separator {
+  color: var(--text-tertiary);
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.tab__title-right {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+/* Close button */
+.tab__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--text-tertiary);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s var(--ease);
+}
+
+.tab:hover .tab__close {
+  opacity: 1;
+}
+
+.tab__close:hover {
+  background: rgba(0, 0, 0, 0.1);
+  color: var(--text-primary);
+}
+
+.tab__close:active {
+  opacity: 0.6;
+}
+
+/* Streaming/Unread Indicator - Paprwork V1 style with ::before pseudo-element */
+.tab {
+  position: relative;
+}
+
+/* Streaming indicator (blue pulsing dot) */
+.tab.tab--streaming::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #3B82F6; /* Blue */
+  animation: pulse-streaming 1.5s ease-in-out infinite;
+}
+
+/* Unread indicator (green static dot) */
+.tab.tab--unread::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #10B981; /* Green */
+}
+
+/* Shift icon to make room for dot */
+.tab.tab--streaming .tab__icon,
+.tab.tab--unread .tab__icon {
+  margin-left: 10px;
+}
+
+@keyframes pulse-streaming {
+  0%, 100% {
+    opacity: 1;
+    transform: translateY(-50%) scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: translateY(-50%) scale(0.8);
+  }
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  .tab.tab--streaming::before {
+    background-color: #60A5FA; /* Lighter blue for dark mode */
+  }
+  
+  .tab.tab--unread::before {
+    background-color: #34D399; /* Lighter green for dark mode */
+  }
+}

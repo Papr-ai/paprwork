@@ -1,0 +1,305 @@
+/**
+ * InputBar Styles - v1 Layout with Liquid Glass Colors
+ * Reference: Paprwork v1 style.css lines 2048-2529
+ */
+
+.input-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 20px 16px 20px;
+}
+
+.input-bar__wrapper {
+  background: var(--background-color);
+  border: 1px solid var(--border-color);
+  border-radius: 24px;
+  padding: 14px 16px;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.15s var(--ease);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.input-bar__wrapper:focus-within {
+  box-shadow: var(--shadow-md);
+}
+
+/* Context section - above textarea */
+.input-context-section {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.add-context-pill {
+  padding: 6px 10px;
+  border: 1px dashed var(--border-color);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+}
+
+.add-context-pill:hover {
+  border-color: var(--primary-color);
+  color: var(--text-primary);
+}
+
+/* Input row */
+.input-row {
+  display: flex;
+  width: 100%;
+}
+
+.input-textarea {
+  flex: 1;
+  width: 100%;
+  min-height: 48px;
+  max-height: 200px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.5;
+  resize: none;
+  overflow-y: auto;
+  color: var(--text-color);
+  /* Hide scrollbar */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.input-textarea::-webkit-scrollbar {
+  display: none;
+}
+
+.input-textarea:focus {
+  outline: none;
+}
+
+.input-textarea:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.input-textarea::placeholder {
+  color: var(--text-muted);
+}
+
+/* Footer - below textarea */
+.input-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  position: relative; /* For absolute positioned dropdown */
+}
+
+.model-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative; /* For dropdown positioning */
+}
+
+.model-selector-pill {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+}
+
+.model-selector-pill:hover {
+  background: var(--hover-bg);
+  border-color: var(--primary-color);
+  color: var(--text-primary);
+}
+
+.chat-history-btn {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+}
+
+.chat-history-btn:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.send-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: var(--background-secondary);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s var(--ease);
+  flex-shrink: 0;
+}
+
+.send-button:hover:not(:disabled) {
+  background: var(--primary-color);
+  color: white;
+  transform: scale(1.05);
+}
+
+.send-button:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.send-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.send-button-active {
+  background: var(--primary-color);
+  color: white;
+}
+
+.send-button-active:hover:not(:disabled) {
+  background: var(--link-hover);
+}
+
+/* Model Picker Dropdown */
+.model-picker-dropdown {
+  position: absolute;
+  bottom: calc(100% + 8px); /* Position above the button with gap */
+  left: 0;
+  background: var(--background-color);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  min-width: 320px;
+  max-width: 400px;
+  max-height: 500px;
+  overflow-y: auto;
+  z-index: 10000; /* Very high to ensure it's on top */
+  padding: 6px;
+  animation: dropdownSlideIn 0.15s ease-out;
+}
+
+@keyframes dropdownSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.model-picker-header {
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.model-picker-group {
+  margin-bottom: 8px;
+}
+
+.model-picker-group:last-child {
+  margin-bottom: 0;
+}
+
+.model-picker-group-label {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  opacity: 0.7;
+}
+
+.model-picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+  width: 100%;
+  text-align: left;
+}
+
+.model-picker-item:hover {
+  background: var(--hover-bg);
+}
+
+.model-picker-item--selected {
+  background: var(--primary-color);
+  color: white;
+}
+
+.model-picker-item--selected:hover {
+  background: var(--link-hover);
+}
+
+.model-picker-item-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.model-picker-item-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.model-picker-item--selected .model-picker-item-name {
+  color: white;
+}
+
+.model-badge-thinking {
+  font-size: 10px;
+}
+
+.model-picker-item-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.3;
+}
+
+.model-picker-item--selected .model-picker-item-desc {
+  color: rgba(255, 255, 255, 0.8);
+}

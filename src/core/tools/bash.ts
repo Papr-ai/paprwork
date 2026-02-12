@@ -1,0 +1,409 @@
+/**
+ * Bash Tool - Command execution with security and timeout
+ *
+ * Executes bash commands with:
+ * - Timeout enforcement (default 60s)
+ * - Working directory control
+ * - Environment variable isolation
+ * - Output streaming support
+ * - Error handling
+ */
+
+import { exec, spawn } from "child_process";
+import { promisify } from "util";
+import { z } from "zod";
+import { createTool } from "@mastra/core/tools";
+import type { ToolResult } from "../types/tools.js";
+import {
+  substituteCustomKeys,
+  substituteCustomKeysWithPermission,
+  sanitizeError,
+  getApiKeysForSanitization,
+  truncateResult,
+} from "./security.js";
+
+const execAsync = promisify(exec);
+
+// Input schema - command required, others optional with smart defaults
+const BashInputSchema = z.object({
+  command: z.string().describe("The bash command to execute"),
+  cwd: z
+    .string()
+    .optional()
+    .describe('Working directory (optional, defaults to current directory)'),
+  timeout: z
+    .number()
+    .optional()
+    .describe("Timeout in milliseconds (optional, defaults to 60000)"),
+  env: z
+    .record(z.string())
+    .optional()
+    .describe("Environment variables (optional, defaults to system environment)"),
+});
+
+export type BashInput = z.infer<typeof BashInputSchema>;
+
+// Output type
+export interface BashOutput {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  command: string;
+  duration: number;
+}
+
+/**
+ * Execute bash command with timeout and safety
+ */
+export async function executeBashCommand(
+  input: BashInput,
+): Promise<ToolResult<BashOutput>> {
+  const startTime = Date.now();
+  
+  // Apply defaults for optional parameters
+  let { command } = input;
+  const cwd = input.cwd || "";
+  const timeout = input.timeout || 60000;
+  const env = input.env || {};
+
+  try {
+    // Security: Basic validation
+    if (!command || command.trim().length === 0) {
+      return {
+        success: false,
+        error: "Command cannot be empty",
+        type: "validation_error",
+      };
+    }
+
+    // Get API keys for sanitization and substitution
+    const apiKeys = getApiKeysForSanitization();
+
+    // Build custom keys map from environment
+    const customKeys: Record<string, string> = {};
+    for (const key of apiKeys) {
+      const keyName = Object.keys(process.env).find(
+        (k) => process.env[k] === key
+      );
+      if (keyName) {
+        customKeys[keyName] = key;
+      }
+    }
+
+    // Check if command uses any keys - if so, request permission
+    const usesKeys = Object.keys(customKeys).some((keyName) =>
+      command.includes(`\${${keyName}}`)
+    );
+
+    if (usesKeys) {
+      try {
+        // Use permission-aware substitution
+        // The global permission requester is set by Gateway
+        const { requestKeyPermission } = await import(
+          "../../gateway/permissions/PermissionRequester.js"
+        );
+
+        command = await substituteCustomKeysWithPermission(
+          command,
+          customKeys,
+          { toolName: "bash", command: input.command },
+          async (keyName, context) => {
+            return await requestKeyPermission({
+              keyName,
+              description: `Allow ${keyName} to be used in bash command?`,
+              isEnvKey: process.env[keyName] !== undefined,
+              toolContext: context,
+            });
+          }
+        );
+      } catch (error) {
+        // Permission denied or error requesting permission
+        return {
+          success: false,
+          error: `Permission error: ${error instanceof Error ? error.message : String(error)}`,
+          type: "permission_error",
+        };
+      }
+    } else {
+      // No keys used, simple substitution
+      command = substituteCustomKeys(command, customKeys);
+    }
+
+    // Execute with timeout
+    const { stdout, stderr } = await execAsync(command, {
+      cwd: cwd || process.cwd(),
+      timeout,
+      maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+      env:
+        Object.keys(env).length > 0 ? { ...process.env, ...env } : process.env,
+      shell: "/bin/bash",
+    });
+
+    const duration = Date.now() - startTime;
+
+    // Sanitize output before returning
+    const sanitizedStdout = truncateResult(sanitizeError(stdout || "", apiKeys));
+    const sanitizedStderr = truncateResult(sanitizeError(stderr || "", apiKeys));
+
+    return {
+      success: true,
+      data: {
+        stdout: sanitizedStdout,
+        stderr: sanitizedStderr,
+        exitCode: 0,
+        command: sanitizeError(command, apiKeys), // Sanitize command too
+        duration,
+      },
+    };
+  } catch (error: unknown) {
+    const duration = Date.now() - startTime;
+    const apiKeys = getApiKeysForSanitization();
+
+    // Handle exec errors (non-zero exit codes)
+    if (error && typeof error === "object" && "code" in error) {
+      const execError = error as {
+        code?: number;
+        stdout?: string;
+        stderr?: string;
+        killed?: boolean;
+        signal?: string;
+      };
+
+      // Timeout
+      if (execError.killed || execError.signal === "SIGTERM") {
+        const sanitizedError = sanitizeError(
+          `Command timed out after ${timeout}ms`,
+          apiKeys
+        );
+        return {
+          success: false,
+          error: sanitizedError,
+          type: "timeout_error",
+          data: {
+            stdout: truncateResult(sanitizeError(execError.stdout || "", apiKeys)),
+            stderr: truncateResult(sanitizeError(execError.stderr || "", apiKeys)),
+            exitCode: execError.code || -1,
+            command: sanitizeError(input.command, apiKeys),
+            duration,
+          },
+        };
+      }
+
+      // Non-zero exit code
+      const sanitizedError = sanitizeError(
+        `Command failed with exit code ${execError.code}`,
+        apiKeys
+      );
+      return {
+        success: false,
+        error: sanitizedError,
+        type: "execution_error",
+        data: {
+          stdout: truncateResult(sanitizeError(execError.stdout || "", apiKeys)),
+          stderr: truncateResult(sanitizeError(execError.stderr || "", apiKeys)),
+          exitCode: execError.code || 1,
+          command: sanitizeError(input.command, apiKeys),
+          duration,
+        },
+      };
+    }
+
+    // Unknown error
+    const message = error instanceof Error ? error.message : String(error);
+    const sanitizedMessage = sanitizeError(message, apiKeys);
+    return {
+      success: false,
+      error: `Bash execution failed: ${sanitizedMessage}`,
+      type: "unknown_error",
+    };
+  }
+}
+
+/**
+ * Execute bash command with streaming output
+ * Useful for long-running commands
+ */
+export async function executeBashCommandStreaming(
+  input: BashInput,
+  onData: (type: "stdout" | "stderr", data: string) => void,
+): Promise<ToolResult<BashOutput>> {
+  const startTime = Date.now();
+  
+  // Apply defaults for optional parameters
+  let command = input.command;
+  const cwd = input.cwd || "";
+  const timeout = input.timeout || 60000;
+  const env = input.env || {};
+
+  // Get API keys for sanitization and substitution
+  const apiKeys = getApiKeysForSanitization();
+  
+  // Build custom keys map
+  const customKeys: Record<string, string> = {};
+  for (const key of apiKeys) {
+    const keyName = Object.keys(process.env).find((k) => process.env[k] === key);
+    if (keyName) {
+      customKeys[keyName] = key;
+    }
+  }
+
+  // Check if command uses any keys - if so, request permission
+  const usesKeys = Object.keys(customKeys).some((keyName) =>
+    command.includes(`\${${keyName}}`)
+  );
+
+  if (usesKeys) {
+    try {
+      // Use permission-aware substitution
+      const { requestKeyPermission } = await import(
+        "../../gateway/permissions/PermissionRequester.js"
+      );
+
+      command = await substituteCustomKeysWithPermission(
+        command,
+        customKeys,
+        { toolName: "bash", command: input.command },
+        async (keyName, context) => {
+          return await requestKeyPermission({
+            keyName,
+            description: `Allow ${keyName} to be used in bash command?`,
+            isEnvKey: process.env[keyName] !== undefined,
+            toolContext: context,
+          });
+        }
+      );
+    } catch (error) {
+      // Permission denied - return error immediately
+      return {
+        success: false,
+        error: `Permission error: ${error instanceof Error ? error.message : String(error)}`,
+        type: "permission_error",
+      };
+    }
+  } else {
+    // No keys used, simple substitution
+    command = substituteCustomKeys(command, customKeys);
+  }
+
+  return new Promise((resolve) => {
+    let stdoutData = "";
+    let stderrData = "";
+
+    const proc = spawn("/bin/bash", ["-c", command], {
+      cwd: cwd || process.cwd(),
+      env: env ? { ...process.env, ...env } : process.env,
+      timeout,
+    });
+
+    // Stream stdout (sanitize before sending)
+    proc.stdout.on("data", (data: Buffer) => {
+      const text = data.toString();
+      stdoutData += text;
+      const sanitized = sanitizeError(text, apiKeys);
+      onData("stdout", sanitized);
+    });
+
+    // Stream stderr (sanitize before sending)
+    proc.stderr.on("data", (data: Buffer) => {
+      const text = data.toString();
+      stderrData += text;
+      const sanitized = sanitizeError(text, apiKeys);
+      onData("stderr", sanitized);
+    });
+
+    // Handle exit
+    proc.on("close", (code: number | null) => {
+      const duration = Date.now() - startTime;
+      const exitCode = code ?? -1;
+
+      // Sanitize and truncate final output
+      const sanitizedStdout = truncateResult(sanitizeError(stdoutData, apiKeys));
+      const sanitizedStderr = truncateResult(sanitizeError(stderrData, apiKeys));
+      const sanitizedCommand = sanitizeError(input.command, apiKeys);
+
+      if (exitCode === 0) {
+        resolve({
+          success: true,
+          data: {
+            stdout: sanitizedStdout,
+            stderr: sanitizedStderr,
+            exitCode,
+            command: sanitizedCommand,
+            duration,
+          },
+        });
+      } else {
+        resolve({
+          success: false,
+          error: sanitizeError(
+            `Command failed with exit code ${exitCode}`,
+            apiKeys
+          ),
+          type: "execution_error",
+          data: {
+            stdout: sanitizedStdout,
+            stderr: sanitizedStderr,
+            exitCode,
+            command: sanitizedCommand,
+            duration,
+          },
+        });
+      }
+    });
+
+    // Handle errors
+    proc.on("error", (error: Error) => {
+      const duration = Date.now() - startTime;
+      const sanitizedStdout = truncateResult(sanitizeError(stdoutData, apiKeys));
+      const sanitizedStderr = truncateResult(sanitizeError(stderrData, apiKeys));
+      const sanitizedCommand = sanitizeError(input.command, apiKeys);
+      const sanitizedError = sanitizeError(error.message, apiKeys);
+
+      resolve({
+        success: false,
+        error: `Failed to execute: ${sanitizedError}`,
+        type: "spawn_error",
+        data: {
+          stdout: sanitizedStdout,
+          stderr: sanitizedStderr,
+          exitCode: -1,
+          command: sanitizedCommand,
+          duration,
+        },
+      });
+    });
+
+    // Handle timeout
+    setTimeout(() => {
+      if (!proc.killed) {
+        proc.kill("SIGTERM");
+      }
+    }, timeout);
+  });
+}
+
+/**
+ * Tool definition for Mastra
+ */
+export const bashTool = createTool({
+  id: "bash",
+  description: `Execute bash commands on the system. Use for:
+- Running scripts or command-line tools
+- System operations (file operations, network requests)
+- Package management (npm, pip, brew, etc.)
+- Git operations
+- Process management
+
+IMPORTANT:
+- Commands timeout after 60 seconds by default
+- Use absolute paths or specify 'cwd' parameter
+- For long operations, break into smaller commands
+- Always check stdout/stderr in response
+
+Examples:
+- Run npm install: {"command": "npm install", "cwd": "/path/to/project", "timeout": 60000, "env": {}}
+- Check git status: {"command": "git status", "cwd": "", "timeout": 60000, "env": {}}
+- List files: {"command": "ls -la", "cwd": "", "timeout": 60000, "env": {}}`,
+  inputSchema: BashInputSchema,
+  execute: executeBashCommand,
+});

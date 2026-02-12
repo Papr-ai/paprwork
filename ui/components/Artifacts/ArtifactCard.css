@@ -1,0 +1,149 @@
+/**
+ * ArtifactCard Styles - Liquid Glass Design
+ */
+
+.artifact-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--glass-bg);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  cursor: pointer;
+  transition: all var(--dur-1) ease;
+}
+
+.artifact-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-3);
+  border-color: var(--accent);
+}
+
+/* Preview */
+.artifact-card__preview {
+  width: 100%;
+  height: 150px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.artifact-card__preview-text {
+  padding: var(--space-3);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+}
+
+.artifact-card__preview-icon {
+  color: var(--text-tertiary);
+  opacity: 0.5;
+}
+
+/* Content */
+.artifact-card__content {
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.artifact-card__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-card__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.artifact-card__type {
+  padding: 2px var(--space-2);
+  background: var(--hover);
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.artifact-card__date {
+  flex: 1;
+}
+
+.artifact-card__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.artifact-card__tag {
+  padding: 2px var(--space-2);
+  background: var(--accent);
+  color: white;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* Actions */
+.artifact-card__actions {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: flex;
+  gap: var(--space-1);
+  opacity: 0;
+  transition: opacity var(--dur-1) ease;
+}
+
+.artifact-card__actions--visible {
+  opacity: 1;
+}
+
+.artifact-card__action {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--glass-bg);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--dur-1) ease;
+}
+
+.artifact-card__action:hover {
+  background: var(--hover);
+  color: var(--text-primary);
+  transform: scale(1.05);
+}
+
+.artifact-card__action--favorite.artifact-card__action--active {
+  color: #FFD700;
+}
+
+.artifact-card__action--delete:hover {
+  background: var(--error);
+  border-color: var(--error);
+  color: white;
+}

@@ -1,0 +1,53 @@
+/**
+ * NewChatButton Styles - Matches Paprwork v1
+ */
+
+.new-chat-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: calc(100% - 24px);
+  margin: 0 12px 16px 12px;
+  padding: 8px 16px;
+  background: #1C1C1E;
+  border: none;
+  border-radius: 8px;
+  color: #FFFFFF;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s var(--ease), transform 0.15s var(--ease);
+}
+
+.new-chat-button:hover {
+  background: #2C2C2E;
+  transform: translateY(-1px);
+}
+
+.new-chat-button:active {
+  transform: translateY(0);
+}
+
+.new-chat-button__icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+}
+
+.new-chat-button__label {
+  font-weight: 600;
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  .new-chat-button {
+    background: #F2F2F7;
+    color: #1C1C1E;
+  }
+  
+  .new-chat-button:hover {
+    background: #E5E5EA;
+  }
+}

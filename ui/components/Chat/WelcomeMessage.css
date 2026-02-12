@@ -1,0 +1,104 @@
+/**
+ * WelcomeMessage Styles - v1 Design
+ * Reference: Paprwork v1 style.css lines 1604-1704
+ */
+
+.welcome-message {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  min-height: calc(100vh - 200px);
+  max-width: 700px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.welcome-message__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+.welcome-message__title {
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--text-color);
+  letter-spacing: -0.02em;
+  margin: 0 0 12px 0;
+}
+
+.welcome-message__subtitle {
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin: 0 0 40px 0;
+}
+
+/* Example cards */
+.example-cards {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  max-width: 600px;
+  width: 100%;
+  padding: 0 20px;
+}
+
+.example-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  min-height: 48px;
+  background: var(--card-background);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.15s var(--ease);
+  text-align: left;
+}
+
+.example-card:hover {
+  background: var(--card-background-hover);
+}
+
+.example-card:active {
+  background: var(--card-background-active);
+}
+
+.card-icon {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--card-icon-color);
+}
+
+.card-text {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  color: var(--card-text-color);
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+  .example-cards {
+    grid-template-columns: 1fr;
+  }
+  
+  .welcome-message__title {
+    font-size: 28px;
+  }
+  
+  .welcome-message__subtitle {
+    font-size: 15px;
+  }
+}

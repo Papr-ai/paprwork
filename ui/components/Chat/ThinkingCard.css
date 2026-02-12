@@ -1,0 +1,63 @@
+/**
+ * ThinkingCard Styles - Matching Paprwork V1 exactly
+ */
+
+.thinking-card {
+  margin: 12px 0;
+}
+
+.thinking-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.thinking-chevron {
+  font-size: 10px;
+  color: var(--text-secondary);
+  transition: transform 0.2s ease;
+  display: inline-block;
+}
+
+.thinking-chevron-collapsed {
+  transform: rotate(-90deg);
+}
+
+.thinking-label-text {
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.thinking-card-content {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  max-height: 200px;
+  overflow-y: auto;
+  transition: max-height 0.3s ease, opacity 0.3s ease;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.thinking-cursor {
+  display: inline-block;
+  margin-left: 2px;
+  animation: blink 1s step-end infinite;
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+@keyframes blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
+}

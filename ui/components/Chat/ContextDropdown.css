@@ -1,0 +1,141 @@
+/**
+ * ContextDropdown Styles - Liquid Glass Design
+ */
+
+.context-dropdown {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: var(--space-2);
+  background: var(--glass-bg);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3);
+  max-height: 400px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 100;
+}
+
+/* Header */
+.context-dropdown__header {
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.context-dropdown__search {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: var(--font-body);
+  transition: all var(--dur-1) ease;
+}
+
+.context-dropdown__search:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.1);
+}
+
+.context-dropdown__search::placeholder {
+  color: var(--text-tertiary);
+}
+
+/* Content */
+.context-dropdown__content {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 100px;
+}
+
+.context-dropdown__loading,
+.context-dropdown__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+/* List */
+.context-dropdown__list {
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.context-dropdown__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-md);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--dur-1) ease;
+  text-align: left;
+}
+
+.context-dropdown__item:hover {
+  background: var(--hover);
+  color: var(--text-primary);
+}
+
+.context-dropdown__item-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.context-dropdown__item-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  overflow: hidden;
+}
+
+.context-dropdown__item-title {
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-dropdown__item-type {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+/* Scrollbar */
+.context-dropdown__content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.context-dropdown__content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.context-dropdown__content::-webkit-scrollbar-thumb {
+  background: var(--text-tertiary);
+  border-radius: var(--r-sm);
+  opacity: 0.3;
+}
+
+.context-dropdown__content::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}

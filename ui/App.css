@@ -1,0 +1,24 @@
+/**
+ * Global App Styles
+ */
+
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Selection */
+::selection {
+  background: var(--accent);
+  color: white;
+}

@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ES2022",
+    "outDir": "dist/electron",
+    "lib": ["ES2023"]
+  },
+  "include": ["src/electron/**/*", "src/core/**/*"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "ui",
+    "src/gateway",
+    "src/electron/preload.ts"
+  ]
+}

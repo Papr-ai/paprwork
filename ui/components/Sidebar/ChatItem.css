@@ -1,0 +1,89 @@
+/**
+ * ChatItem Styles - v1 Layout with Liquid Glass Colors
+ */
+
+.chat-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s var(--ease);
+  border: none;
+}
+
+.chat-item:hover {
+  background: var(--hover-bg);
+}
+
+.chat-item--active {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.chat-item__content {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-item__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chat-item__title {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-item--active .chat-item__title {
+  font-weight: 600;
+}
+
+.chat-item__time {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Delete button */
+.chat-item__delete {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--background-secondary);
+  border: none;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: opacity 0.15s var(--ease), background-color 0.15s var(--ease);
+  opacity: 0;
+}
+
+.chat-item:hover .chat-item__delete {
+  opacity: 1;
+}
+
+.chat-item__delete:hover {
+  background: rgba(255, 59, 48, 0.15);
+  color: rgb(255, 59, 48);
+}
+
+.chat-item__delete:active {
+  transform: translateY(-50%) scale(0.9);
+}

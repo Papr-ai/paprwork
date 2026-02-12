@@ -1,0 +1,153 @@
+/**
+ * ContentArea Styles - Split-view layout with resize
+ * Reference: Paprwork v1 split view CSS
+ */
+
+.content-area {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  position: relative;
+}
+
+.content-area--split {
+  display: grid;
+  grid-template-columns: calc(var(--split-ratio) * 100%) 5px 1fr;
+  gap: 0;
+}
+
+/* Panes */
+.content-pane {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  /* Fully transparent - shows app-layout background through */
+  background: transparent;
+}
+
+.content-pane--full {
+  width: 100%;
+  height: 100%;
+}
+
+.content-pane--left,
+.content-pane--right {
+  height: 100%;
+}
+
+/* Add border to left pane in split view for better visual separation */
+.content-area--split .content-pane--left {
+  border-right: 1px solid var(--border-color);
+}
+
+/* Resize handle - Always visible for better discoverability */
+.content-area__resize-handle {
+  width: 5px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  user-select: none;
+  position: relative;
+  z-index: 10;
+  /* Expand hit area for easier grabbing */
+  padding: 0 6px;
+  margin: 0 -6px;
+  background: transparent;
+  transition: background 0.15s var(--ease);
+}
+
+.content-area__resize-handle:hover {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.content-area__resize-handle:active {
+  background: rgba(0, 122, 255, 0.08);
+}
+
+/* The visible line in the middle */
+.content-area__resize-line {
+  width: 2px;
+  height: 100%;
+  background: rgba(228, 228, 235, 0.9);
+  transition: all 0.15s var(--ease);
+  pointer-events: none;
+  border-radius: 1px;
+}
+
+.content-area__resize-handle:hover .content-area__resize-line {
+  background: #DADAE6;
+  width: 3px;
+}
+
+.content-area__resize-handle:active .content-area__resize-line {
+  background: var(--primary-color);
+  width: 3px;
+  transition: none; /* Immediate feedback when dragging */
+}
+
+/* Active resize state */
+body.resizing .content-area__resize-handle {
+  cursor: col-resize !important;
+}
+
+body.resizing .content-area__resize-line {
+  background: var(--primary-color);
+  width: 3px;
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  .content-area__resize-handle:hover {
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .content-area__resize-handle:active {
+    background: rgba(10, 132, 255, 0.12);
+  }
+
+  .content-area__resize-line {
+    background: rgba(50, 50, 50, 0.9);
+  }
+
+  .content-area__resize-handle:hover .content-area__resize-line {
+    background: #4A4A5A;
+  }
+
+  .content-area__resize-handle:active .content-area__resize-line {
+    background: var(--primary-color);
+  }
+
+  body.resizing .content-area__resize-line {
+    background: var(--primary-color);
+  }
+}
+
+/* Empty state */
+.content-area__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--text-tertiary);
+  font-size: 14px;
+}
+
+/* Placeholder for unimplemented views */
+.content-area__placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--text-secondary);
+  font-size: 16px;
+  font-weight: 500;
+  background: var(--glass-bg);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  margin: var(--space-4);
+}
