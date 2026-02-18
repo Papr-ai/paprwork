@@ -22,11 +22,12 @@ const DEFAULT_KEY_PERMISSIONS: KeyPermissionsData = {};
 export class KeyPermissionsStorage {
   private store: Store<KeyPermissionsData>;
 
-  constructor() {
+  constructor(storagePath?: string) {
     this.store = new Store<KeyPermissionsData>({
       name: "env-key-permissions",
       defaults: DEFAULT_KEY_PERMISSIONS,
       encryptionKey: "paprwork-v2-key-permissions",
+      ...(storagePath ? { cwd: storagePath } : {}),
     });
   }
 

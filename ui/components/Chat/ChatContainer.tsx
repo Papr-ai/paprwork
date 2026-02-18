@@ -3,13 +3,17 @@
  * Brings together MessageList and InputBar with agent integration
  */
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { MessageList } from "./MessageList";
 import { InputBar, InputBarRef } from "./InputBar";
 import { useAgent } from "../../hooks/useAgent";
-import { useChatStore } from "../../stores/chatStore";
+import { useChatStore, defaultChatState } from "../../stores/chatStore";
+import { useTabStore } from "../../stores/tabStore";
 import { CHAT_MODELS } from "../../constants/models";
 import type { AIModel } from "../../constants/models";
+import { mapHistoryMessages } from "../../utils/historyMapper";
+import { fetchChatHistory } from "../../utils/chatHistoryApi";
+import { gateway } from "../../src/lib/gateway";
 import "./ChatContainer.css";
 
 const DEFAULT_SYSTEM_PROMPT = `You're Papr, an AI assistant running in Paprwork—a native Mac AI workspace.
@@ -68,6 +72,14 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
     const chatState = state.chatStates.get(chatId);
     return chatState?.messages || [];
   });
+  const chatIsLoading = useChatStore((state) => {
+    const chatState = state.chatStates.get(chatId);
+    return chatState?.isLoading || false;
+  });
+  const isSending = useChatStore((state) => {
+    const chatState = state.chatStates.get(chatId);
+    return chatState?.isSending || false;
+  });
   
   // Log after getting messages (not inside the selector)
   useEffect(() => {
@@ -75,12 +87,6 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
     console.log(`[ChatContainer] Rendering chatId=${chatId}, hasChatState=${!!chatState}, messageCount=${chatState?.messages?.length || 0}`);
   }, [chatId, messages.length]);
 
-  const isSending = useChatStore((state) => {
-    const chatState = state.chatStates.get(chatId);
-    return chatState?.isSending || false;
-  });
-
-  const isLoading = useChatStore((state) => state.isLoading);
   const error = useChatStore((state) => state.error);
   
   const { sendMessage } = useAgent();
@@ -88,7 +94,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
   
   // Model selection state - default to Claude Sonnet 4.5
   const [selectedModel, setSelectedModel] = useState<AIModel>(
-    CHAT_MODELS.find((m) => m.id === "claude-sonnet-4-5") || CHAT_MODELS[0]
+    CHAT_MODELS.find((m) => m.id === "claude-sonnet-4-6") || CHAT_MODELS[0]
   );
 
   // Focus input when this chat's container mounts
@@ -100,7 +106,139 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
     return () => clearTimeout(timer);
   }, [chatId]); // Re-focus when chatId changes (different chat loaded)
 
-  const handleSendMessage = async (message: string) => {
+  // Ensure each visible pane hydrates its own chat history.
+  // This fixes split-view startup where right pane could stay empty until tab toggles.
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrateHistory = async () => {
+      const existingState = useChatStore.getState().chatStates.get(chatId);
+      if ((existingState?.messages.length || 0) > 0) {
+        return;
+      }
+
+      useChatStore.setState((state) => {
+        const current = state.chatStates.get(chatId) || { ...defaultChatState };
+        const next = new Map(state.chatStates);
+        next.set(chatId, {
+          ...current,
+          isLoading: true,
+        });
+        return { chatStates: next };
+      });
+
+      try {
+        const history = await fetchChatHistory(chatId);
+        if (cancelled) return;
+        const mapped = mapHistoryMessages(history);
+
+        useChatStore.setState((state) => {
+          const current = state.chatStates.get(chatId) || { ...defaultChatState };
+          const next = new Map(state.chatStates);
+          next.set(chatId, {
+            ...current,
+            messages: mapped,
+            isLoading: false,
+          });
+          return { chatStates: next };
+        });
+      } catch (error) {
+        if (!cancelled) {
+          console.error(`[ChatContainer] Failed to hydrate chat ${chatId}:`, error);
+        }
+      } finally {
+        useChatStore.setState((state) => {
+          const current = state.chatStates.get(chatId) || { ...defaultChatState };
+          const next = new Map(state.chatStates);
+          next.set(chatId, {
+            ...current,
+            isLoading: false,
+          });
+          return { chatStates: next };
+        });
+      }
+    };
+
+    hydrateHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, [chatId]);
+
+  // Slash command handler
+  const handleSlashCommand = useCallback(
+    async (commandId: string) => {
+      switch (commandId) {
+        case "new": {
+          const { createTab } = useTabStore.getState();
+          const newChatId = `chat-${Date.now()}`;
+          createTab("chat", newChatId, "New Chat");
+          break;
+        }
+        case "export": {
+          try {
+            const response = await gateway.send("chat:export", {
+              chatId,
+              format: "markdown",
+            });
+            const data = response.data as {
+              content: string;
+              filename: string;
+              mimeType: string;
+            };
+            const blob = new Blob([data.content], { type: data.mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = data.filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          } catch (err) {
+            console.error("[ChatContainer] Export error:", err);
+          }
+          break;
+        }
+        case "summarize": {
+          try {
+            await gateway.send("chat:stats", { chatId });
+            // The summarize action is primarily for fetching/displaying a summary
+            // For now, trigger a stats update
+          } catch (err) {
+            console.error("[ChatContainer] Summarize error:", err);
+          }
+          break;
+        }
+        case "context": {
+          try {
+            const response = await gateway.send("chat:stats", { chatId });
+            const stats = response.data as Record<string, unknown>;
+            alert(
+              `Messages: ${stats.messageCount ?? "N/A"}\nTokens (est): ${stats.tokenCount ?? "N/A"}`,
+            );
+          } catch (err) {
+            console.error("[ChatContainer] Context stats error:", err);
+          }
+          break;
+        }
+        case "help": {
+          alert(
+            "Available commands:\n/new - New chat\n/export - Export conversation\n/summarize - Summarize\n/context - Message/token count\n/help - This help\n/settings - Open settings",
+          );
+          break;
+        }
+        case "settings": {
+          const { createTab } = useTabStore.getState();
+          createTab("settings", "settings", "Settings");
+          break;
+        }
+      }
+    },
+    [chatId],
+  );
+
+  const handleSendMessage = useCallback(async (message: string) => {
     // Create config WITHOUT apiKey - Gateway will fetch it via IPC
     // This keeps keys secure and never sends them over WebSocket
     const config = {
@@ -108,14 +246,37 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
       model: selectedModel.id,
       systemPrompt: DEFAULT_SYSTEM_PROMPT,
       reasoning: selectedModel.reasoning,
+      thinkingBudget: selectedModel.defaultThinkingBudget,
+      maxTokens: selectedModel.maxTokens, // Output token limit
     };
 
     // Send message for THIS chat (not activeChat)
     await sendMessage(message, config, chatId);
-  };
+  }, [selectedModel, sendMessage, chatId]);
+
+  const handleStopAgent = useCallback(async () => {
+    try {
+      await gateway.send("agent:stop", { chatId });
+      console.log(`[ChatContainer] Stopped agent for chat ${chatId}`);
+    } catch (error) {
+      console.error("[ChatContainer] Failed to stop agent:", error);
+    }
+  }, [chatId]);
+
+  // Listen for onboarding messages dispatched from OnboardingCard via sidebar
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ message: string }>).detail;
+      if (detail?.message) {
+        handleSendMessage(detail.message);
+      }
+    };
+    window.addEventListener("papr-onboarding-send", handler);
+    return () => window.removeEventListener("papr-onboarding-send", handler);
+  }, [handleSendMessage]);
 
   return (
-    <div className="chat-container">
+    <div className="chat-container" data-testid="chat-container">
       {error && (
         <div className="error-banner">
           <span className="error-icon">⚠️</span>
@@ -123,13 +284,15 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
         </div>
       )}
 
-      <MessageList messages={messages} isLoading={isLoading} />
+      <MessageList messages={messages} isLoading={chatIsLoading} isSending={isSending} />
 
       <InputBar
         ref={inputBarRef}
         onSend={handleSendMessage}
-        disabled={isSending}
-        placeholder={isSending ? "Sending..." : "Type a message..."}
+        onStop={handleStopAgent}
+        onSlashCommand={handleSlashCommand}
+        isSending={isSending}
+        placeholder="Type a message..."
         selectedModel={selectedModel}
         onModelChange={setSelectedModel}
       />

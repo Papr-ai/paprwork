@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Reddit Outreach Draft Studio</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Sidebar Navigation -->
+  <aside class="sidebar">
+    <div class="brand">
+      <span>Reddit</span> Studio
+    </div>
+    
+    <nav class="nav-menu">
+      <button class="nav-item active" data-view="dashboard">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+        Dashboard
+      </button>
+      
+      <button class="nav-item" data-view="engage">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+        Engage Queue
+        <span id="nav-badge-engage" class="nav-badge">0</span>
+      </button>
+      
+      <button class="nav-item" data-view="posts">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+        Weekly Posts
+        <span id="nav-badge-posts" class="nav-badge">0</span>
+      </button>
+      
+      <div style="flex:1"></div>
+      
+      <button class="nav-item" data-view="settings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        Settings
+      </button>
+    </nav>
+    
+    <div class="sidebar-footer">
+       <button id="themeToggle" class="btn btn-ghost" style="width:100%">Toggle Theme</button>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="main-content">
+  
+    <!-- Top Header (Contextual) -->
+    <header class="topbar">
+      <div class="page-title" id="page-title">Dashboard</div>
+      <div class="toolbar">
+         <span id="status-indicator" class="chip">Ready</span>
+         <button id="syncBtn" class="btn btn-secondary btn-sm">Sync Data</button>
+         <button id="exportAllBtn" class="btn btn-secondary btn-sm">Export</button>
+         <label for="importAllFile" class="btn btn-ghost btn-sm">Import</label>
+         <input id="importAllFile" type="file" accept="application/json" hidden />
+      </div>
+    </header>
+
+    <!-- VIEW: Dashboard -->
+    <section id="view-dashboard" class="view-container active">
+      <div class="settings-container"> <!-- Reuse container for padding -->
+        <div class="section-title">Overview</div>
+        <div class="grid" style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 32px;">
+          <div class="settings-section" style="margin:0; padding: 20px;">
+            <div class="text-muted" style="font-size:12px">Ready in Queue</div>
+            <div id="dash-ready" style="font-size:28px; font-weight:700; margin-top:4px">0</div>
+          </div>
+          <div class="settings-section" style="margin:0; padding: 20px;">
+            <div class="text-muted" style="font-size:12px">Drafted Today</div>
+            <div id="dash-drafted" style="font-size:28px; font-weight:700; margin-top:4px">0</div>
+          </div>
+          <div class="settings-section" style="margin:0; padding: 20px;">
+            <div class="text-muted" style="font-size:12px">Mention Rate</div>
+            <div id="dash-mention" style="font-size:28px; font-weight:700; margin-top:4px">0%</div>
+          </div>
+        </div>
+
+        <div class="section-title">Quick Actions</div>
+        <div style="display:flex; gap: 12px;">
+           <button id="dash-go-engage" class="btn btn-primary">Start Engaging</button>
+           <button id="dash-new-post" class="btn btn-secondary">Draft New Post</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW: Engage (Split) -->
+    <section id="view-engage" class="view-container">
+      <div class="split-layout">
+        <!-- List Pane -->
+        <div class="list-pane">
+          <div class="search-bar">
+            <input id="engage-search" class="input" placeholder="Filter threads..." />
+          </div>
+          <div id="engage-list" class="list-scroller">
+            <!-- Items injected by JS -->
+          </div>
+        </div>
+
+        <!-- Detail Pane -->
+        <div class="detail-pane">
+          <div id="engage-empty" class="empty-state">
+            <p>Select a thread to start drafting.</p>
+          </div>
+          
+          <div id="engage-detail" class="detail-content hidden">
+            <div class="thread-header">
+              <div class="thread-meta">
+                <span id="detail-sub" class="chip">r/SaaS</span>
+                <span id="detail-seg" class="chip accent">Vertical SaaS</span>
+                <span id="detail-score" class="chip">Score 120</span>
+              </div>
+              <div id="detail-title" class="thread-title">
+                Title goes here
+              </div>
+              <a id="detail-link" href="#" target="_blank" class="text-muted" style="font-size:12px; margin-top:8px; display:inline-block">Open on Reddit ↗</a>
+            </div>
+
+            <div id="detail-context" class="thread-context">
+              Context...
+            </div>
+
+            <div class="editor-area">
+              <div class="editor-label">
+                <span>Reply Draft</span>
+                <div class="range-wrapper">
+                  <span style="font-weight:400; text-transform:none">Mention Papr?</span>
+                  <input id="detail-mention-toggle" type="checkbox" />
+                </div>
+              </div>
+              <textarea id="detail-reply" class="textarea" placeholder="Write your reply..."></textarea>
+              
+              <div class="action-bar">
+                <button id="btn-copy-reply" class="btn btn-primary">Copy Reply</button>
+                <button id="btn-done" class="btn btn-secondary">Mark Done</button>
+                <button id="btn-skip" class="btn btn-ghost">Skip</button>
+                <div style="flex:1"></div>
+                <button id="btn-regen-reply" class="btn btn-ghost">Re-draft</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW: Posts (Split) -->
+    <section id="view-posts" class="view-container">
+      <div class="split-layout">
+        <div class="list-pane">
+          <div class="search-bar" style="display:flex; gap:8px">
+            <input id="posts-search" class="input" placeholder="Search drafts..." />
+            <button id="btn-new-post" class="btn btn-primary" style="padding:0 12px">+</button>
+          </div>
+          <div id="posts-list" class="list-scroller">
+            <!-- Items injected -->
+          </div>
+        </div>
+
+        <div class="detail-pane">
+           <div id="posts-empty" class="empty-state">
+            <p>Select a draft or create a new one.</p>
+          </div>
+
+          <div id="posts-detail" class="detail-content hidden">
+             <div class="thread-header">
+                <div class="thread-meta">
+                   <span id="post-status" class="chip">Draft</span>
+                   <span id="post-mention" class="chip">No Mention</span>
+                </div>
+                <input id="post-title-edit" class="input" style="font-size:18px; font-weight:700; border:none; background:transparent; padding:0;" placeholder="Post Title" />
+             </div>
+
+             <div class="editor-area">
+                <textarea id="post-body" class="textarea" style="height: 400px" placeholder="Write your post content..."></textarea>
+                
+                <div class="action-bar">
+                  <button id="btn-copy-post" class="btn btn-primary">Copy Post</button>
+                  <button id="btn-publish-post" class="btn btn-secondary">Mark Published</button>
+                  <div style="flex:1"></div>
+                  <button id="btn-regen-post" class="btn btn-ghost">Re-draft</button>
+                </div>
+             </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW: Settings -->
+    <section id="view-settings" class="view-container">
+       <div class="settings-container">
+         <div class="section-title">General Policy</div>
+         <div class="settings-section">
+            <div style="margin-bottom:16px">
+              <label class="editor-label" style="margin-bottom:8px">Papr Mention Rate Target</label>
+              <div class="range-wrapper">
+                <input id="set-mention-ratio" type="range" min="0" max="100" style="flex:1" />
+                <span id="set-mention-val" class="chip">30%</span>
+              </div>
+            </div>
+            
+            <div>
+               <label class="editor-label" style="margin-bottom:8px">Disclosure Line</label>
+               <input id="set-disclosure" class="input" />
+            </div>
+         </div>
+
+         <div class="section-title">Data Sources</div>
+         <div class="settings-section">
+            <label class="editor-label" style="margin-bottom:8px">Subreddits (one per line)</label>
+            <textarea id="set-subs" class="textarea" style="min-height:120px"></textarea>
+         </div>
+
+         <div class="action-bar">
+            <button id="btn-save-settings" class="btn btn-primary">Save Changes</button>
+            <button id="btn-reset-settings" class="btn btn-ghost">Reset Defaults</button>
+         </div>
+       </div>
+    </section>
+
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -11,14 +11,25 @@ import { ContentArea } from "./components/Layout/ContentArea";
 import { useChat } from "./hooks/useChat";
 import { useTabs } from "./hooks/useTabs";
 import { useTabStore } from "./stores/tabStore";
+import {
+  usePermissionStore,
+  initPermissionListener,
+} from "./stores/permissionStore";
+import { KeyPermissionModal } from "./components/Permissions/KeyPermissionModal";
 import "./styles/liquid-glass.css";
 import "./App.css";
 
 export function App() {
   const { chats, createChat } = useChat();
   const { tabs, createTab } = useTabs();
-  const { activeTabId } = useTabStore();
+  const { activeTabId, activeLeftTab } = useTabStore();
+  const { activeRequest, claimedByChat, respond } = usePermissionStore();
   const [hydrated, setHydrated] = useState(false);
+
+  // Initialize the Electron IPC permission listener once
+  useEffect(() => {
+    initPermissionListener();
+  }, []);
 
   // Wait for Zustand persist to finish loading from localStorage
   useEffect(() => {
@@ -87,8 +98,10 @@ export function App() {
         console.log(`[App.useEffect] Current activeTabId:`, activeTabId);
         
         // If tabs exist but no active tab, restore from history or select first tab
-        if (!activeTabId && tabs.length > 0) {
-          console.log("[App.useEffect] ⚠️  No active tab despite having tabs, restoring...");
+        if (tabs.length > 0 && (!activeTabId || !activeLeftTab)) {
+          console.log(
+            "[App.useEffect] ⚠️  Missing active tab/pane selection despite existing tabs, restoring...",
+          );
           const { history, historyIndex, switchToTab } = useTabStore.getState();
           
           console.log(`[App.useEffect] Tab history:`, { 
@@ -97,8 +110,15 @@ export function App() {
             history 
           });
           
-          // Try to restore from history
-          if (history.length > 0 && historyIndex >= 0) {
+          // First preference: restore persisted activeTabId when available.
+          if (activeTabId) {
+            console.log(
+              `[App.useEffect] Restoring from activeTabId: ${activeTabId}`,
+            );
+            switchToTab(activeTabId, true);
+          }
+          // Otherwise restore from history.
+          else if (history.length > 0 && historyIndex >= 0) {
             const lastActiveTabId = history[historyIndex];
             console.log(`[App.useEffect] Restoring from history: ${lastActiveTabId}`);
             switchToTab(lastActiveTabId, true); // Skip adding to history
@@ -116,14 +136,22 @@ export function App() {
     };
 
     initialize();
-  }, [hydrated, tabs.length, activeTabId]); // Re-run after hydration or if tabs/activeTabId changes
+  }, [hydrated, tabs.length, activeTabId, activeLeftTab]); // Re-run after hydration or tab selection changes
 
   return (
-    <AppLayout
-      sidebar={<Sidebar />}
-      topBar={<TabBar />}
-      content={<ContentArea />}
-    />
+    <>
+      <AppLayout
+        sidebar={<Sidebar />}
+        topBar={<TabBar />}
+        content={<ContentArea />}
+      />
+      {activeRequest && !claimedByChat && (
+        <KeyPermissionModal
+          request={activeRequest}
+          onResponse={respond}
+        />
+      )}
+    </>
   );
 }
 

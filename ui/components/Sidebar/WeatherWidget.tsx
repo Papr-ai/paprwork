@@ -219,12 +219,12 @@ export function WeatherWidget() {
       {weather && (
         <div className="weather-widget__info">
           <div className="weather-widget__left">
-            <span className="weather-widget__icon">{getWeatherIcon()}</span>
             <div className="weather-widget__temp">{weather.temperature}°F</div>
+            <div className="weather-widget__location">{weather.location}</div>
           </div>
           <div className="weather-widget__right">
+            <span className="weather-widget__icon">{getWeatherIcon()}</span>
             <div className="weather-widget__condition">{weather.condition}</div>
-            <div className="weather-widget__location">{weather.location}</div>
           </div>
         </div>
       )}

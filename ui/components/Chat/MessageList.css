@@ -6,7 +6,7 @@
   flex: 1;
   overflow-y: auto;
   padding: 2rem 0 0 0;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
   display: flex;
   flex-direction: column;
 }
@@ -52,6 +52,13 @@
   gap: 12px;
 }
 
+.agent-loading-indicator {
+  display: flex;
+  align-items: center;
+  padding: 12px 0;
+  gap: 12px;
+}
+
 .loading-dots {
   display: flex;
   gap: 8px;
@@ -61,7 +68,7 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--primary-color);
+  background: var(--text-secondary); /* Use text color instead of primary for visibility */
   animation: bounce 1.4s infinite ease-in-out both;
 }
 

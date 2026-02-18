@@ -13,6 +13,24 @@ This file tracks key learnings, architectural decisions, and context for AI assi
 - **Companion Apps:** Swift for native macOS/iOS features (future)
 - **Dev Tools:** Rust-based tools for faster development
 
+**⚠️ CRITICAL: Node Version Requirement**
+- **Requires Node v24+** (matches Electron 40's embedded Node v24.13.0)
+- Use `nvm use 24` or `nvm install 24` before running any commands
+- The `.nvmrc` file enforces this version
+- `@electron/rebuild` requires Node v24+ features
+
+**Quick Start:**
+```bash
+# 1. Switch to Node v24
+nvm use 24
+
+# 2. Install dependencies (auto-rebuilds native modules)
+npm install
+
+# 3. Start the app
+npm start
+```
+
 **Why V2?**
 - V1 accumulated 30,335 lines in monolithic files
 - 90% code duplication between main + gateway processes
@@ -402,8 +420,15 @@ Gateway = ESM (.js)               ← Separate Node process, can use ESM
 
 ### Issue 6: Native Module Version Mismatch
 **Problem:** `better-sqlite3.node was compiled against a different Node.js version`
-**Solution:** Run `npx @electron/rebuild` after npm install or Node version changes
-**Why:** Electron 40 uses embedded Node v24.13.0, native modules must match
+**Solution:** 
+1. **CRITICAL:** Use Node v24+ (matching Electron 40's embedded Node v24.13.0)
+2. Run `npx @electron/rebuild` after npm install or Node version changes
+3. The `postinstall` script automatically rebuilds, but only if Node v24+ is used
+**Why:** 
+- Electron 40 uses embedded Node v24.13.0
+- `@electron/rebuild` requires Node v24+ features (`util.styleText`)
+- Native modules must be compiled for the same Node version as Electron's embedded Node
+**Required:** Add `"engines": { "node": ">=24.0.0" }` to `package.json`
 
 ### Issue 7: Chat Streams and Titles Not Showing
 **Problem:** WebSocket connection fails, chat streams and titles don't display

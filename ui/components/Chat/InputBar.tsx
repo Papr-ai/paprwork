@@ -1,17 +1,23 @@
 /**
  * InputBar Component - Message input with send button
- * Handles textarea auto-resize and keyboard shortcuts
+ * Handles textarea auto-resize, keyboard shortcuts, context artifacts, and slash commands
  */
 
-import React, { useState, useRef, KeyboardEvent, useEffect, forwardRef, useImperativeHandle } from "react";
+import React, { useState, useRef, KeyboardEvent, useEffect, forwardRef, useImperativeHandle, useCallback } from "react";
 import { CHAT_MODELS, getModelGroups } from "../../constants/models";
 import type { AIModel } from "../../constants/models";
 import { ChatHistoryDropdown } from "./ChatHistoryDropdown";
+import { ContextDropdown } from "./ContextDropdown";
+import { ContextPills } from "./ContextPills";
+import { SlashCommandMenu } from "./SlashCommandMenu";
+import type { Artifact } from "../../stores/artifactsStore";
 import "./InputBar.css";
 
 interface InputBarProps {
-  onSend: (message: string) => void;
-  disabled?: boolean;
+  onSend: (message: string, context?: Artifact[]) => void;
+  onStop?: () => void;
+  onSlashCommand?: (commandId: string) => void;
+  isSending?: boolean;
   placeholder?: string;
   selectedModel?: AIModel;
   onModelChange?: (model: AIModel) => void;
@@ -23,7 +29,9 @@ export interface InputBarRef {
 
 export const InputBar = forwardRef<InputBarRef, InputBarProps>(({
   onSend,
-  disabled = false,
+  onStop,
+  onSlashCommand,
+  isSending = false,
   placeholder = "Type a message...",
   selectedModel,
   onModelChange,
@@ -32,6 +40,10 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(({
   const [isFocused, setIsFocused] = useState(false);
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [showChatHistory, setShowChatHistory] = useState(false);
+  const [showContextDropdown, setShowContextDropdown] = useState(false);
+  const [showSlashMenu, setShowSlashMenu] = useState(false);
+  const [slashQuery, setSlashQuery] = useState("");
+  const [selectedArtifacts, setSelectedArtifacts] = useState<Artifact[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputBarRef = useRef<HTMLDivElement>(null);
 
@@ -51,11 +63,41 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(({
     textareaRef.current?.focus();
   }, []);
 
+  // Context artifact management
+  const handleSelectArtifact = useCallback((artifact: Artifact) => {
+    setSelectedArtifacts((prev) => {
+      if (prev.some((a) => a.id === artifact.id)) return prev;
+      return [...prev, artifact];
+    });
+    setShowContextDropdown(false);
+  }, []);
+
+  const handleRemoveArtifact = useCallback((id: string) => {
+    setSelectedArtifacts((prev) => prev.filter((a) => a.id !== id));
+  }, []);
+
+  // Slash command selection
+  const handleSlashSelect = useCallback(
+    (commandId: string) => {
+      setShowSlashMenu(false);
+      setSlashQuery("");
+      setMessage("");
+      onSlashCommand?.(commandId);
+    },
+    [onSlashCommand],
+  );
+
   const handleSend = () => {
     const trimmedMessage = message.trim();
-    if (trimmedMessage && !disabled) {
-      onSend(trimmedMessage);
+    if (trimmedMessage) {
+      // If agent is working, stop it first, then send new message
+      if (isSending && onStop) {
+        onStop();
+      }
+      
+      onSend(trimmedMessage, selectedArtifacts.length > 0 ? selectedArtifacts : undefined);
       setMessage("");
+      setSelectedArtifacts([]);
 
       // Reset textarea height
       if (textareaRef.current) {
@@ -64,7 +106,25 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(({
     }
   };
 
+  const handleStop = () => {
+    if (onStop) {
+      onStop();
+    }
+  };
+
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Let the slash command menu handle navigation keys
+    if (showSlashMenu && (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "Tab")) {
+      return; // SlashCommandMenu handles these via window event
+    }
+    if (showSlashMenu && e.key === "Enter") {
+      return; // Let SlashCommandMenu handle Enter
+    }
+    if (showSlashMenu && e.key === "Escape") {
+      setShowSlashMenu(false);
+      return;
+    }
+
     // Send on Enter (without Shift)
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -73,7 +133,17 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(({
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setMessage(e.target.value);
+    const value = e.target.value;
+    setMessage(value);
+
+    // Detect slash commands: must start with "/" and have no spaces before the query
+    if (value.startsWith("/") && !value.includes(" ")) {
+      setSlashQuery(value.slice(1));
+      setShowSlashMenu(true);
+    } else {
+      setShowSlashMenu(false);
+      setSlashQuery("");
+    }
 
     // Auto-resize textarea
     if (textareaRef.current) {
@@ -96,22 +166,31 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(({
   };
 
   return (
-    <div className="input-bar" ref={inputBarRef}>
+    <div className="input-bar" ref={inputBarRef} style={{ position: "relative" }}>
+      {/* Slash command menu */}
+      {showSlashMenu && (
+        <SlashCommandMenu
+          query={slashQuery}
+          onSelect={handleSlashSelect}
+          onClose={() => setShowSlashMenu(false)}
+        />
+      )}
+
       <div className="input-bar__wrapper">
-        {/* Context section - above textarea, shown when focused */}
-        {isFocused && (
+        {/* Context pills - shown when artifacts are selected */}
+        {(isFocused || selectedArtifacts.length > 0) && (
           <div className="input-context-section">
-            <button
-              className="add-context-pill"
-              title="Add context"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                // TODO: Open context picker
-                console.log("Add context clicked");
-              }}
-            >
-              + Add context
-            </button>
+            <ContextPills
+              artifacts={selectedArtifacts}
+              onRemove={handleRemoveArtifact}
+              onAddClick={() => setShowContextDropdown(!showContextDropdown)}
+            />
+            <ContextDropdown
+              isOpen={showContextDropdown}
+              onClose={() => setShowContextDropdown(false)}
+              onSelectArtifact={handleSelectArtifact}
+              selectedIds={selectedArtifacts.map((a) => a.id)}
+            />
           </div>
         )}
 
@@ -120,13 +199,13 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(({
           <textarea
             ref={textareaRef}
             className="input-textarea"
+            data-testid="chat-input"
             value={message}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
             onFocus={() => setIsFocused(true)}
             onBlur={handleBlur}
             placeholder={placeholder}
-            disabled={disabled}
             rows={1}
           />
         </div>
@@ -140,7 +219,6 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(({
                 title="Select model"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
-                  console.log("Model picker clicked, current state:", showModelPicker);
                   setShowModelPicker(!showModelPicker);
                 }}
               >
@@ -161,7 +239,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(({
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
                   setShowChatHistory(!showChatHistory);
-                  setShowModelPicker(false); // Close model picker if open
+                  setShowModelPicker(false);
                 }}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
@@ -186,7 +264,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(({
                 <ChatHistoryDropdown onClose={() => setShowChatHistory(false)} />
               )}
 
-              {/* Model Picker Dropdown - inside model-controls for proper positioning */}
+              {/* Model Picker Dropdown */}
               {showModelPicker && (
                 <div className="model-picker-dropdown">
             {Object.entries(modelGroups).map(([groupName, models]) => (
@@ -207,7 +285,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(({
                       <div className="model-picker-item-name">
                         {model.name}
                         {model.supportsThinking && (
-                          <span className="model-badge-thinking">💭</span>
+                          <span className="model-badge-thinking">thinking</span>
                         )}
                       </div>
                       <div className="model-picker-item-desc">
@@ -227,21 +305,38 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(({
               )}
             </div>
             <button
-              className={`send-button ${message.trim() ? "send-button-active" : ""}`}
-              onClick={handleSend}
-              disabled={disabled || !message.trim()}
+              className={`send-button ${isSending ? "send-button-stop" : message.trim() ? "send-button-active" : ""}`}
+              data-testid={isSending ? "stop-button" : "send-button"}
+              onClick={isSending ? handleStop : handleSend}
+              disabled={!isSending && !message.trim()}
               type="button"
-              aria-label="Send message"
+              aria-label={isSending ? "Stop agent" : "Send message"}
+              title={isSending ? "Stop agent (or press Enter to stop & send new message)" : "Send message"}
             >
-              <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
-                <path
-                  d="M2.5 10L17.5 3.33333L10.8333 18.3333L9.16667 11.6667L2.5 10Z"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
+              {isSending ? (
+                // Stop icon (square)
+                <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
+                  <rect
+                    x="5"
+                    y="5"
+                    width="10"
+                    height="10"
+                    fill="currentColor"
+                    rx="1"
+                  />
+                </svg>
+              ) : (
+                // Send icon (paper plane)
+                <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
+                  <path
+                    d="M2.5 10L17.5 3.33333L10.8333 18.3333L9.16667 11.6667L2.5 10Z"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              )}
             </button>
           </div>
         )}

@@ -31,6 +31,14 @@ import { initializeAgentService } from "./services/AgentService.js";
 import { initializeChatService } from "./services/ChatService.js";
 import { initializeDocumentService } from "./services/DocumentService.js";
 import { initializeAppService } from "./services/AppService.js";
+import { getAppService } from "./services/AppService.js";
+import { initializeJobsService, getJobsService } from "./services/JobsService.js";
+import { initializeSkillService } from "./services/SkillService.js";
+import { initializeBundleService } from "./services/BundleService.js";
+import { initializeSubAgentService } from "./services/SubAgentService.js";
+import { initializePlanService } from "./services/PlanService.js";
+import { getJobsScheduler } from "./services/JobsScheduler.js";
+import { initializeWorkspaceService } from "./services/WorkspaceService.js";
 import { setupWebSocketHandlers } from "./websocket/index.js";
 import {
   initializePermissionBridge,
@@ -76,12 +84,24 @@ async function initializeServices(): Promise<void> {
       openaiApiKey: undefined, // Will be loaded lazily
     });
 
+    // Initialize workspace (creates ~/PAPR/workspace/ and templates on first run)
+    await initializeWorkspaceService();
+
     // Initialize other services
     await Promise.all([
       initializeChatService(),
       initializeDocumentService(),
       initializeAppService(),
+      initializeJobsService(),
+      initializeSkillService(),
+      initializeBundleService(),
+      initializeSubAgentService(),
+      initializePlanService(),
     ]);
+
+    // Register built-in sleep job (depends on JobsService being initialized)
+    const { getWorkspaceService } = await import("./services/WorkspaceService.js");
+    await getWorkspaceService().ensureSleepJob();
 
     console.log("[Gateway] All services initialized");
     console.log(`[Gateway] Storage mode: ${storageMode} (keys will load on demand)`);
@@ -127,6 +147,504 @@ async function startGateway(): Promise<void> {
       res.json({ status: "ok", timestamp: Date.now() });
     });
 
+    // ── Mini-app SQLite query API ────────────────────────────────────────────
+    // Apps call: fetch('/api/db/query', { method: 'POST', body: JSON.stringify({ appId, sql, params }) })
+    // Apps call: fetch('/api/db/schema?appId=<id>') to list tables and columns
+    //
+    // Security:
+    //  - Only SELECT statements allowed (read-only)
+    //  - Only db paths that are registered in the app's data-sources.json
+    //  - Path traversal blocked at the linked dbPath level
+    //
+    // Source routing (when sourceId is omitted):
+    //  - Single source → use it automatically
+    //  - Multiple sources → extract primary table from SQL, find which source has it
+    //  - If ambiguous → error lists available aliases so the caller can add sourceId
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Extract the primary table name from a SQL statement for auto-routing across
+     * multiple linked data sources. Handles INSERT INTO, UPDATE, DELETE FROM, SELECT FROM.
+     * Returns null if the table name cannot be determined.
+     */
+    function extractPrimaryTable(sql: string): string | null {
+      const s = sql.trim();
+      let m: RegExpMatchArray | null;
+      m = s.match(/\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+["'`]?(\w+)/i);
+      if (m) return m[1];
+      m = s.match(/\bREPLACE\s+INTO\s+["'`]?(\w+)/i);
+      if (m) return m[1];
+      m = s.match(/\bUPDATE\s+(?:OR\s+\w+\s+)?["'`]?(\w+)/i);
+      if (m) return m[1];
+      m = s.match(/\bDELETE\s+FROM\s+["'`]?(\w+)/i);
+      if (m) return m[1];
+      m = s.match(/\bFROM\s+["'`]?(\w+)/i);
+      if (m) return m[1];
+      return null;
+    }
+
+    /**
+     * Resolve which linked data source to use for a query.
+     *
+     * Priority:
+     * 1. Explicit sourceId (by id or alias) — exact match.
+     * 2. Single source — use it automatically.
+     * 3. Multiple sources + SQL provided — extract table name, check sqlite_master
+     *    on each source, pick the first that has the table.
+     * 4. Multiple sources + no match — throw a descriptive error listing aliases.
+     *
+     * This means apps never need to hardcode a sourceId UUID; they just write
+     * normal SQL and the platform finds the right database.
+     */
+    async function resolveDataSource(
+      sources: import("./services/AppService.js").AppDataSource[],
+      sourceId?: string,
+      sql?: string,
+    ): Promise<import("./services/AppService.js").AppDataSource> {
+      // 1. Explicit sourceId
+      if (sourceId) {
+        const found = sources.find((s) => s.id === sourceId || s.alias === sourceId);
+        if (!found) {
+          const available = sources.map((s) => s.alias ?? s.id).join(", ");
+          throw Object.assign(new Error(`Data source "${sourceId}" not found. Available: ${available}`), { status: 404 });
+        }
+        return found;
+      }
+
+      // 2. Single source — no ambiguity
+      if (sources.length === 1) return sources[0];
+
+      // 3. Multiple sources — auto-route by table name
+      const tableName = sql ? extractPrimaryTable(sql) : null;
+      if (tableName) {
+        const DatabaseCtor = (await import("better-sqlite3")).default;
+        for (const source of sources) {
+          try {
+            const db = new DatabaseCtor(source.dbPath, { readonly: true, fileMustExist: true });
+            try {
+              const row = db
+                .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1")
+                .get(tableName) as unknown;
+              if (row !== undefined) return source;
+            } finally {
+              db.close();
+            }
+          } catch {
+            // source unreadable — skip
+          }
+        }
+      }
+
+      // 4. Could not auto-route — give a useful error
+      const aliases = sources.map((s) => `"${s.alias ?? s.id}"`).join(", ");
+      const tableHint = tableName ? ` Table "${tableName}" was not found in any linked source.` : "";
+      throw Object.assign(
+        new Error(
+          `Multiple data sources are linked (${aliases}) and the target could not be determined automatically.${tableHint} Pass sourceId to specify which source to use.`,
+        ),
+        { status: 400 },
+      );
+    }
+
+    app.use(express.json());
+
+    app.get("/api/db/schema", async (req, res) => {
+      try {
+        const appId = req.query["appId"] as string | undefined;
+        if (!appId) {
+          res.status(400).json({ error: "appId query param required" });
+          return;
+        }
+        const appService = getAppService();
+        const sources = await appService.listAppDataSources(appId);
+        if (!sources.length) {
+          res.json({ sources: [] });
+          return;
+        }
+
+        const Database = (await import("better-sqlite3")).default;
+        const result = sources.map((source) => {
+          try {
+            const db = new Database(source.dbPath, { readonly: true, fileMustExist: true });
+            const tables = (
+              db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[]
+            ).map((row) => {
+              const cols = db.prepare(`PRAGMA table_info(${JSON.stringify(row.name)})`).all() as {
+                cid: number; name: string; type: string; notnull: number; dflt_value: unknown; pk: number;
+              }[];
+              return { table: row.name, columns: cols.map((c) => ({ name: c.name, type: c.type, pk: c.pk === 1 })) };
+            });
+            db.close();
+            return { sourceId: source.id, alias: source.alias, dbPath: source.dbPath, tables };
+          } catch (err) {
+            return { sourceId: source.id, alias: source.alias, dbPath: source.dbPath, error: (err as Error).message };
+          }
+        });
+
+        res.json({ sources: result });
+      } catch (err) {
+        console.error("[Gateway] /api/db/schema error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/db/query", async (req, res) => {
+      try {
+        const { appId, sourceId, sql, params } = req.body as {
+          appId?: string;
+          sourceId?: string;
+          sql?: string;
+          params?: unknown[];
+        };
+
+        if (!appId || !sql) {
+          res.status(400).json({ error: "appId and sql are required" });
+          return;
+        }
+
+        // Only allow SELECT
+        const trimmed = sql.trim().toLowerCase();
+        if (!trimmed.startsWith("select") && !trimmed.startsWith("with")) {
+          res.status(403).json({ error: "Only SELECT (and WITH ... SELECT) queries are allowed" });
+          return;
+        }
+
+        const appService = getAppService();
+        const sources = await appService.listAppDataSources(appId);
+        if (!sources.length) {
+          res.status(404).json({ error: `No data sources linked to app ${appId}. Use link_app_data_source first.` });
+          return;
+        }
+
+        const Database = (await import("better-sqlite3")).default;
+        let source: import("./services/AppService.js").AppDataSource;
+        try {
+          source = await resolveDataSource(sources, sourceId, sql);
+        } catch (err) {
+          const e = err as Error & { status?: number };
+          res.status(e.status ?? 400).json({ error: e.message });
+          return;
+        }
+
+        const db = new Database(source.dbPath, { readonly: true, fileMustExist: true });
+
+        try {
+          const stmt = db.prepare(sql);
+          const rows = stmt.all(...(params ?? [])) as Record<string, unknown>[];
+          const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+          console.log(`[Gateway] /api/db/query app=${appId} source=${source.alias} rows=${rows.length}`);
+          res.json({ rows, columns, count: rows.length, source: source.alias });
+        } finally {
+          db.close();
+        }
+      } catch (err) {
+        console.error("[Gateway] /api/db/query error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+    // ── Mini-app SQLite write API ────────────────────────────────────────────
+    // Apps call: fetch('/api/db/write', { method: 'POST', body: JSON.stringify({ appId, sql, params }) })
+    //
+    // Allows INSERT / UPDATE / DELETE / UPSERT / REPLACE on linked sources only.
+    // Security:
+    //  - SELECT and DDL (CREATE/DROP/ALTER) are rejected — use /api/db/query for reads
+    //  - Only db paths registered in the app's data-sources.json
+    //  - Bound params required for any user-supplied values (prevents SQL injection)
+    //
+    // Returns: { changes: number, lastInsertRowid: number }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    app.post("/api/db/write", async (req, res) => {
+      try {
+        const { appId, sourceId, sql, params } = req.body as {
+          appId?: string;
+          sourceId?: string;
+          sql?: string;
+          params?: unknown[];
+        };
+
+        if (!appId || !sql) {
+          res.status(400).json({ error: "appId and sql are required" });
+          return;
+        }
+
+        // Only allow write operations — block reads and DDL
+        const trimmed = sql.trim().toLowerCase();
+        const isWrite =
+          trimmed.startsWith("insert") ||
+          trimmed.startsWith("update") ||
+          trimmed.startsWith("delete") ||
+          trimmed.startsWith("replace") ||
+          trimmed.startsWith("upsert");
+        if (!isWrite) {
+          res
+            .status(403)
+            .json({ error: "Only INSERT, UPDATE, DELETE, REPLACE, and UPSERT are allowed on /api/db/write. Use /api/db/query for SELECT." });
+          return;
+        }
+
+        const appService = getAppService();
+        const sources = await appService.listAppDataSources(appId);
+        if (!sources.length) {
+          res.status(404).json({ error: `No data sources linked to app ${appId}. Use link_app_data_source first.` });
+          return;
+        }
+
+        const Database = (await import("better-sqlite3")).default;
+        let source: import("./services/AppService.js").AppDataSource;
+        try {
+          source = await resolveDataSource(sources, sourceId, sql);
+        } catch (err) {
+          const e = err as Error & { status?: number };
+          res.status(e.status ?? 400).json({ error: e.message });
+          return;
+        }
+
+        // Open read-write (not readonly)
+        const db = new Database(source.dbPath, { fileMustExist: true });
+
+        try {
+          const stmt = db.prepare(sql);
+          const result = stmt.run(...(params ?? [])) as { changes: number; lastInsertRowid: number | bigint };
+          const lastInsertRowid =
+            typeof result.lastInsertRowid === "bigint"
+              ? Number(result.lastInsertRowid)
+              : result.lastInsertRowid;
+          console.log(
+            `[Gateway] /api/db/write app=${appId} source=${source.alias} changes=${result.changes}`,
+          );
+          res.json({ changes: result.changes, lastInsertRowid });
+        } finally {
+          db.close();
+        }
+      } catch (err) {
+        console.error("[Gateway] /api/db/write error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Mini-app Jobs API ─────────────────────────────────────────────────────
+    // Gives mini-apps the same job-triggering capability that agents have via
+    // the run_job tool.  All endpoints are same-origin (localhost:18789) so no
+    // CORS issues and no auth token is required.
+    //
+    //  GET  /api/jobs/list              → list all jobs (id, name, status, type)
+    //  GET  /api/jobs/status/:jobId     → get current status of one job
+    //  POST /api/jobs/run               → trigger a job
+    //    body: { jobId: string, wait?: boolean }
+    //    wait=false (default): fires immediately, returns { jobId, status:"running" }
+    //    wait=true:            blocks until job finishes, returns { jobId, status, completedAt, lastOutput }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    app.get("/api/jobs/list", async (_req, res) => {
+      try {
+        const jobsService = getJobsService();
+        const jobs = await jobsService.listJobs();
+        const summary = jobs.map((j) => ({
+          id: j.id,
+          name: j.name,
+          type: j.type,
+          status: j.status,
+          lastRunAt: j.lastRunAt,
+          completedAt: j.completedAt,
+        }));
+        res.json({ jobs: summary, count: summary.length });
+      } catch (err) {
+        console.error("[Gateway] /api/jobs/list error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.get("/api/jobs/status/:jobId", async (req, res) => {
+      try {
+        const { jobId } = req.params;
+        const jobsService = getJobsService();
+        const job = await jobsService.getJob(jobId);
+        if (!job) {
+          res.status(404).json({ error: `Job not found: ${jobId}` });
+          return;
+        }
+        res.json({
+          id: job.id,
+          name: job.name,
+          type: job.type,
+          status: job.status,
+          lastRunAt: job.lastRunAt,
+          completedAt: job.completedAt,
+          error: job.error,
+          lastOutput: job.lastOutput,
+        });
+      } catch (err) {
+        console.error("[Gateway] /api/jobs/status error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/jobs/run", async (req, res) => {
+      try {
+        const { jobId, wait, params } = req.body as {
+          jobId?: string;
+          wait?: boolean;
+          /** Runtime env vars passed to the job process, e.g. { THREAD_ID: "abc123" } */
+          params?: Record<string, string>;
+        };
+        if (!jobId) {
+          res.status(400).json({ error: "jobId is required" });
+          return;
+        }
+        // Validate params: keys and values must be strings
+        if (params !== undefined) {
+          if (typeof params !== "object" || Array.isArray(params)) {
+            res.status(400).json({ error: "params must be a flat object of string key-value pairs" });
+            return;
+          }
+          for (const [k, v] of Object.entries(params)) {
+            if (typeof k !== "string" || typeof v !== "string") {
+              res.status(400).json({ error: `params values must be strings (got ${typeof v} for key "${k}")` });
+              return;
+            }
+          }
+        }
+        const jobsService = getJobsService();
+        const job = await jobsService.getJob(jobId);
+        if (!job) {
+          res.status(404).json({ error: `Job not found: ${jobId}` });
+          return;
+        }
+        if (wait) {
+          // Block until the job completes (use for short jobs only)
+          const result = await jobsService.runJob(jobId, params);
+          res.json({ jobId, status: result.status, completedAt: result.completedAt, error: result.error, lastOutput: result.lastOutput });
+        } else {
+          // Fire-and-forget: returns immediately, app polls /api/jobs/status/:jobId
+          jobsService.runJob(jobId, params).catch((err: unknown) => {
+            console.error(`[Gateway] /api/jobs/run background error for ${jobId}:`, err);
+          });
+          res.json({ jobId, status: "running" });
+        }
+      } catch (err) {
+        console.error("[Gateway] /api/jobs/run error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Mini-app Bash API ─────────────────────────────────────────────────────
+    // Lets mini-apps run quick shell commands (the same capability agents have
+    // via the bash tool).  Intended for lightweight backend calls like resetting
+    // a DB row, calling a CLI, or reading a file — not long-running processes.
+    //
+    //  POST /api/bash/run
+    //    body: { command: string, timeoutMs?: number (default 30000) }
+    //    returns: { stdout, stderr, exitCode }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    app.post("/api/bash/run", async (req, res) => {
+      try {
+        const { command, timeoutMs } = req.body as {
+          command?: string;
+          timeoutMs?: number;
+        };
+        if (!command || typeof command !== "string" || !command.trim()) {
+          res.status(400).json({ error: "command is required" });
+          return;
+        }
+        const timeout = Math.min(timeoutMs ?? 30_000, 120_000); // cap at 2 min
+        const { exec } = await import("child_process");
+        const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>(
+          (resolve) => {
+            const proc = exec(
+              command,
+              { timeout, env: process.env, shell: "/bin/bash" },
+              (error, stdout, stderr) => {
+                resolve({
+                  stdout: stdout ?? "",
+                  stderr: stderr ?? "",
+                  exitCode: error?.code ?? (error ? 1 : 0),
+                });
+              },
+            );
+            // Ensure the child process is killed on timeout
+            setTimeout(() => {
+              try { proc.kill("SIGTERM"); } catch { /* already done */ }
+            }, timeout);
+          },
+        );
+        console.log(`[Gateway] /api/bash/run exit=${result.exitCode} cmd="${command.slice(0, 80)}"`);
+        res.json(result);
+      } catch (err) {
+        console.error("[Gateway] /api/bash/run error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // Serve mini-app files for iframe rendering in UI.
+    // Supports on-the-fly TypeScript transpilation via esbuild.
+    // Use RegExp route for Express/path-to-regexp compatibility.
+    app.get(/^\/apps\/([^/]+)\/?(.*)$/, async (req, res) => {
+      try {
+        const appService = getAppService();
+        const appId = req.params[0];
+        const wildcard = req.params[1];
+        const requestedPath =
+          typeof wildcard === "string" && wildcard.length > 0
+            ? wildcard
+            : "index.html";
+
+        if (requestedPath.includes("..")) {
+          res.status(400).send("Invalid app path");
+          return;
+        }
+
+        let content = await appService.readAppFile(appId, requestedPath);
+        if (content === null) {
+          res.status(404).send("Not found");
+          return;
+        }
+
+        const ext = path.extname(requestedPath).toLowerCase();
+
+        // Transpile TypeScript files on-the-fly so agents can write .ts
+        if (ext === ".ts" || ext === ".tsx") {
+          try {
+            const esbuild = await import("esbuild");
+            const result = await esbuild.transform(content, {
+              loader: ext === ".tsx" ? "tsx" : "ts",
+              format: "esm",
+              target: "es2020",
+              sourcemap: "inline",
+            });
+            content = result.code;
+          } catch (transpileError) {
+            console.error(`[Gateway] TypeScript transpile error for ${requestedPath}:`, transpileError);
+            res.status(500).send(`TypeScript compilation error:\n${(transpileError as Error).message}`);
+            return;
+          }
+        }
+
+        const contentTypeByExt: Record<string, string> = {
+          ".html": "text/html; charset=utf-8",
+          ".js": "text/javascript; charset=utf-8",
+          ".ts": "text/javascript; charset=utf-8",
+          ".tsx": "text/javascript; charset=utf-8",
+          ".css": "text/css; charset=utf-8",
+          ".json": "application/json; charset=utf-8",
+          ".svg": "image/svg+xml",
+          ".txt": "text/plain; charset=utf-8",
+        };
+        res.setHeader(
+          "Content-Type",
+          contentTypeByExt[ext] ?? "text/plain; charset=utf-8",
+        );
+        res.send(content);
+      } catch (error) {
+        console.error("[Gateway] Failed to serve app file:", error);
+        res.status(500).send("Failed to read app file");
+      }
+    });
+
     // Serve UI assets in production
     if (process.env.NODE_ENV === "production") {
       const uiPath = path.join(__dirname, "../ui");
@@ -167,12 +685,14 @@ async function startGateway(): Promise<void> {
     // Handle shutdown
     const shutdown = async () => {
       console.log("[Gateway] Shutting down...");
+      getJobsScheduler().stop();
       server.close();
       process.exit(0);
     };
     
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
+    getJobsScheduler().start();
   } catch (error) {
     console.error("[Gateway] Failed to start:", error);
     process.exit(1);

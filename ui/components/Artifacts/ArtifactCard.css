@@ -83,8 +83,30 @@
   font-weight: 500;
 }
 
+.artifact-card__word-count {
+  padding: 1px 6px;
+  background: var(--glass-bg, rgba(0,0,0,0.04));
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
 .artifact-card__date {
   flex: 1;
+}
+
+/* Title input for inline rename */
+.artifact-card__title-input {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  border: none;
+  border-bottom: 2px solid var(--accent);
+  background: transparent;
+  outline: none;
+  padding: 0;
+  margin: 0;
+  width: 100%;
 }
 
 .artifact-card__tags {
@@ -146,4 +168,43 @@
   background: var(--error);
   border-color: var(--error);
   color: white;
+}
+
+/* ===== List view mode ===== */
+.artifact-card--list {
+  flex-direction: row;
+  align-items: center;
+  border-radius: var(--r-md);
+}
+
+.artifact-card--list .artifact-card__preview {
+  width: 80px;
+  height: 60px;
+  min-width: 80px;
+  border-bottom: none;
+  border-right: 1px solid var(--border);
+}
+
+.artifact-card--list .artifact-card__preview-text {
+  font-size: 10px;
+  -webkit-line-clamp: 3;
+}
+
+.artifact-card--list .artifact-card__content {
+  flex: 1;
+  gap: 2px;
+}
+
+.artifact-card--list:hover {
+  transform: none;
+}
+
+/* ===== Drag state ===== */
+.artifact-card[draggable="true"] {
+  cursor: grab;
+}
+
+.artifact-card[draggable="true"]:active {
+  cursor: grabbing;
+  opacity: 0.7;
 }

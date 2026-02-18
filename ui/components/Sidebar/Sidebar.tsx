@@ -3,23 +3,59 @@
  * Reference: Paprwork v1 index.html lines 21-215
  */
 
-import React, { useState } from "react";
+import React, { useState, useMemo, useCallback } from "react";
 import { useChat } from "../../hooks/useChat";
 import { useTabs } from "../../hooks/useTabs";
+import type { TabType } from "../../types/tabs";
 import { WeatherWidget } from "./WeatherWidget.tsx";
 import { NavButton } from "./NavButton.tsx";
 import { FavoritesList } from "./FavoritesList.tsx";
 import { ChatList } from "./ChatList.tsx";
 import { NewChatButton } from "./NewChatButton.tsx";
+import { OnboardingCard } from "./OnboardingCard.tsx";
 import "./Sidebar.css";
 
 type View = "chat" | "artifacts" | "meetings" | "agents" | "jobs" | "skills";
 
+/** Map tab types to sidebar nav views */
+function tabTypeToView(type: TabType | undefined): View {
+  switch (type) {
+    case "chat":
+      return "chat";
+    case "document":
+    case "app":
+    case "artifacts":
+      return "artifacts";
+    case "meetings":
+      return "meetings";
+    case "agents":
+      return "agents";
+    case "jobs":
+      return "jobs";
+    case "skills":
+      return "skills";
+    default:
+      return "chat";
+  }
+}
+
 export function Sidebar() {
-  const [activeView, setActiveView] = useState<View>("chat");
   const [isCreatingChat, setIsCreatingChat] = useState(false);
   const { createChat } = useChat();
-  const { createTab, switchToTab } = useTabs();
+  const { tabs, createTab, switchToTab, activeLeftTab } = useTabs();
+
+  // Derive active view from the current left-pane tab type
+  // For split view, activeLeftTab is the parent/left pane
+  const activeView = useMemo<View>(() => {
+    if (!activeLeftTab) return "chat";
+    const tab = tabs.find((t) => t.id === activeLeftTab);
+    if (!tab) return "chat";
+
+    // For parent tabs (split view), use the parent's own type
+    // If parent type is generic (e.g. "chat"), that's correct
+    // If it's a document/app parent, it maps to "artifacts"
+    return tabTypeToView(tab.type);
+  }, [activeLeftTab, tabs]);
 
   const handleNewChat = async () => {
     // Prevent multiple simultaneous chat creations
@@ -42,13 +78,34 @@ export function Sidebar() {
     }
   };
 
-  const handleNavClick = (view: View) => {
-    setActiveView(view);
+  const handleOpenSettings = useCallback(() => {
+    const settingsId = createTab("settings", "settings", "Settings");
+    switchToTab(settingsId);
+  }, [createTab, switchToTab]);
 
+  const handleOnboardingSendMessage = useCallback(
+    async (message: string) => {
+      // Create a new chat, switch to it, then dispatch event for ChatContainer to send
+      const chatId = await createChat();
+      if (chatId) {
+        const tabId = createTab("chat", chatId, "New Chat");
+        switchToTab(tabId);
+        // Give the ChatContainer a moment to mount, then dispatch send event
+        setTimeout(() => {
+          window.dispatchEvent(
+            new CustomEvent("papr-onboarding-send", { detail: { message } }),
+          );
+        }, 300);
+      }
+    },
+    [createChat, createTab, switchToTab],
+  );
+
+  const handleNavClick = (view: View) => {
     // Create appropriate tab when clicking navigation and switch to it
     let tabId: string | undefined;
     if (view === "artifacts") {
-      tabId = createTab("document", "artifacts", "Artifacts");
+      tabId = createTab("artifacts", "artifacts", "Artifacts");
     } else if (view === "agents") {
       tabId = createTab("agents", "agents", "Agents");
     } else if (view === "meetings") {
@@ -241,10 +298,7 @@ export function Sidebar() {
             Click a tab above to view artifacts
           </div>
         )}
-        {(activeView === "meetings" ||
-          activeView === "agents" ||
-          activeView === "jobs" ||
-          activeView === "skills") && (
+        {activeView === "meetings" && (
           <div
             style={{
               padding: "16px",
@@ -258,13 +312,14 @@ export function Sidebar() {
       </div>
 
       <div className="sidebar__footer">
+        <OnboardingCard
+          onOpenSettings={handleOpenSettings}
+          onSendMessage={handleOnboardingSendMessage}
+        />
         <button
           className="sidebar__settings-btn"
           aria-label="Settings"
-          onClick={() => {
-            const settingsId = createTab("settings", "settings", "Settings");
-            switchToTab(settingsId);
-          }}
+          onClick={handleOpenSettings}
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
             <path

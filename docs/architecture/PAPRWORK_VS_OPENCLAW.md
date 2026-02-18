@@ -718,6 +718,16 @@ export class MiniAppManager {
 
 ## ✅ Decision Summary
 
+### Portable Bundle Direction (for sharing + cloud)
+
+Paprwork V2 now has a typed portable bundle contract for mini-app sharing and cloud-ready migration:
+
+- Manifest + schema in `src/core/types/bundles.ts`
+- Architecture spec in `docs/architecture/PORTABLE_BUNDLE_SPEC.md`
+- Recommended sync root: `~/PAPR/bundles/{bundleId}/`
+
+This keeps Paprwork's persistent strengths while making import/export/sync easier over time.
+
 ### Paprwork's Approach is Superior ✅
 
 **Why:**

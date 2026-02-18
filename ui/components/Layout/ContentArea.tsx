@@ -3,11 +3,17 @@
  * Reference: Paprwork v1 split view implementation
  */
 
-import React, { useRef } from "react";
+import React, { useRef, useCallback, useEffect } from "react";
 import { useTabs } from "../../hooks/useTabs";
 import { ChatContainer } from "../Chat/ChatContainer";
 import { ArtifactsView } from "../Artifacts/ArtifactsView";
+import { DocumentView } from "../Documents/DocumentView";
 import { SettingsView } from "../Settings/SettingsView";
+import { JobsView } from "../Jobs/JobsView";
+import { MiniAppView } from "../Apps/MiniAppView";
+import { SkillsView } from "../Skills/SkillsView";
+import { AgentsView } from "../Agents/AgentsView";
+import { MeetingsView } from "../Meetings/MeetingsView";
 import "./ContentArea.css";
 
 export function ContentArea() {
@@ -22,6 +28,10 @@ export function ContentArea() {
   } = useTabs();
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const isDraggingRef = useRef(false);
+  const startXRef = useRef(0);
+  const startRatioRef = useRef(0);
+  const containerWidthRef = useRef(0);
 
   // Get the actual active tab and its children (if parent)
   const activeTab = getTab(activeTabId || "");
@@ -45,39 +55,88 @@ export function ContentArea() {
     }
   }
 
-  // Handle split view resize
+  // Handle split view resize with stable event handlers
+  const handleMouseMove = useCallback((moveEvent: MouseEvent) => {
+    if (!isDraggingRef.current) return;
+    
+    moveEvent.preventDefault();
+    const deltaX = moveEvent.clientX - startXRef.current;
+    const deltaRatio = deltaX / containerWidthRef.current;
+    const newRatio = startRatioRef.current + deltaRatio;
+    const clampedRatio = Math.max(0.2, Math.min(0.8, newRatio));
+    setSplitRatio(clampedRatio);
+  }, [setSplitRatio]);
+
+  const handleMouseUp = useCallback(() => {
+    if (!isDraggingRef.current) return;
+    
+    isDraggingRef.current = false;
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    document.body.classList.remove("resizing");
+    
+    // Remove iframe blocker overlay
+    const overlay = document.getElementById("resize-overlay");
+    if (overlay) {
+      overlay.remove();
+    }
+  }, []);
+
+  // Clean up event listeners on unmount or when handlers change
+  useEffect(() => {
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+    
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+      // Clean up any lingering drag state
+      if (isDraggingRef.current) {
+        isDraggingRef.current = false;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        document.body.classList.remove("resizing");
+        
+        // Remove iframe blocker overlay if it exists
+        const overlay = document.getElementById("resize-overlay");
+        if (overlay) {
+          overlay.remove();
+        }
+      }
+    };
+  }, [handleMouseMove, handleMouseUp]);
+
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (!isSplitView || !containerRef.current) return;
+    // Check showSplitView (local state) not isSplitView (global state)
+    // This fixes resize for merged tabs (parent mode)
+    if (!showSplitView || !containerRef.current) return;
 
     e.preventDefault();
     e.stopPropagation();
 
-    const startX = e.clientX;
-    const startRatio = splitRatio;
-    const container = containerRef.current;
-    const containerWidth = container.offsetWidth;
-
-    const handleMouseMove = (moveEvent: MouseEvent) => {
-      const deltaX = moveEvent.clientX - startX;
-      const deltaRatio = deltaX / containerWidth;
-      const newRatio = startRatio + deltaRatio;
-      const clampedRatio = Math.max(0.2, Math.min(0.8, newRatio));
-      setSplitRatio(clampedRatio);
-    };
-
-    const handleMouseUp = () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
+    isDraggingRef.current = true;
+    startXRef.current = e.clientX;
+    startRatioRef.current = splitRatio;
+    containerWidthRef.current = containerRef.current.offsetWidth;
 
     // Prevent text selection during drag
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
-
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
+    document.body.classList.add("resizing");
+    
+    // Create overlay to block iframe pointer events during resize
+    // This prevents iframes from capturing mousemove/mouseup events
+    const overlay = document.createElement("div");
+    overlay.id = "resize-overlay";
+    overlay.style.position = "fixed";
+    overlay.style.top = "0";
+    overlay.style.left = "0";
+    overlay.style.width = "100%";
+    overlay.style.height = "100%";
+    overlay.style.zIndex = "9999";
+    overlay.style.cursor = "col-resize";
+    overlay.style.background = "transparent";
+    document.body.appendChild(overlay);
   };
 
   // Render view based on tab type
@@ -92,13 +151,11 @@ export function ContentArea() {
       case "chat":
         return <ChatContainer chatId={tab.entityId} />;
       case "document":
-        return <ArtifactsView />; // Show artifacts view for document tabs
+        return <DocumentView documentId={tab.entityId} />;
+      case "artifacts":
+        return <ArtifactsView />;
       case "app":
-        return (
-          <div className="content-area__placeholder">
-            Mini-App View (Coming Soon)
-          </div>
-        );
+        return <MiniAppView appId={tab.entityId} />;
       case "home":
         return (
           <div className="content-area__placeholder">
@@ -106,25 +163,13 @@ export function ContentArea() {
           </div>
         );
       case "meetings":
-        return (
-          <div className="content-area__placeholder">
-            Meetings View (Coming Soon)
-          </div>
-        );
+        return <MeetingsView />;
       case "jobs":
-        return (
-          <div className="content-area__placeholder">
-            Jobs View (Coming Soon)
-          </div>
-        );
+        return <JobsView />;
       case "agents":
-        return <ArtifactsView />; // Show artifacts view for browsing (temporary)
+        return <AgentsView />;
       case "skills":
-        return (
-          <div className="content-area__placeholder">
-            Skills View (Coming Soon)
-          </div>
-        );
+        return <SkillsView />;
       case "settings":
         return <SettingsView />;
       default:

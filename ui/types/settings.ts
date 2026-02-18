@@ -39,4 +39,4 @@ export interface UserProfile {
 
 export type PermissionLevel = "open" | "moderate" | "strict";
 
-export type SettingsTab = "keys" | "profile" | "permissions";
+export type SettingsTab = "keys" | "profile" | "permissions" | "data";

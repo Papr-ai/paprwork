@@ -27,10 +27,22 @@ export default defineConfig({
     chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
-        // Split vendor chunks for better caching
+        // Split vendor chunks for better caching and smaller main bundle
         manualChunks: {
           'react-vendor': ['react', 'react-dom'],
           'state': ['zustand'],
+          'editor': [
+            '@tiptap/react',
+            '@tiptap/starter-kit',
+            '@tiptap/extension-underline',
+            '@tiptap/extension-placeholder',
+            '@tiptap/extension-bubble-menu',
+            '@tiptap/suggestion',
+            'tiptap-markdown',
+            'tippy.js',
+          ],
+          'syntax': ['react-syntax-highlighter'],
+          'markdown': ['react-markdown', 'remark-math', 'rehype-katex'],
         },
       },
       // Mark everything except our UI deps as external

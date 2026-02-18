@@ -16,6 +16,7 @@ export interface Artifact {
   icon?: string;
   favorite?: boolean;
   tags?: string[];
+  wordCount?: number;
 }
 
 interface ArtifactsState {

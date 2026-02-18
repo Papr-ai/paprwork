@@ -6,6 +6,7 @@ export type TabType =
   | "chat"
   | "document"
   | "app"
+  | "artifacts"
   | "home"
   | "meetings"
   | "jobs"

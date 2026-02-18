@@ -15,11 +15,12 @@ export interface AIModel {
   reasoning?: {
     effort?: "low" | "medium" | "high" | "xhigh";
   };
+  maxTokens?: number; // Output token limit
   requiresApiKey: string;
 }
 
 export const CHAT_MODELS: AIModel[] = [
-  // Anthropic Claude Models (matching Paprwork v1)
+  // Anthropic — weakest to strongest (Haiku → Sonnet 4.6 → Opus 4.6 → Opus 4.5 Deep Thinking)
   {
     id: "claude-haiku-4-5",
     name: "Claude Haiku 4.5",
@@ -28,26 +29,29 @@ export const CHAT_MODELS: AIModel[] = [
     group: "Anthropic",
     supportsThinking: false,
     defaultThinkingBudget: 0,
+    maxTokens: 8192,
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
   {
-    id: "claude-sonnet-4-5",
-    name: "Claude Sonnet 4.5",
+    id: "claude-sonnet-4-6",
+    name: "Claude Sonnet 4.6",
     provider: "anthropic",
-    description: "Fast and capable, good balance of speed and quality",
+    description: "Best balance of speed and intelligence",
     group: "Anthropic",
     supportsThinking: true,
     defaultThinkingBudget: 10000,
+    maxTokens: 64000,
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
   {
-    id: "claude-opus-4-5",
-    name: "Claude Opus 4.5",
+    id: "claude-opus-4-6",
+    name: "Claude Opus 4.6",
     provider: "anthropic",
-    description: "Most advanced model, best for complex reasoning",
+    description: "Most capable model for complex tasks",
     group: "Anthropic",
     supportsThinking: true,
-    defaultThinkingBudget: 16000,
+    defaultThinkingBudget: 32000,
+    maxTokens: 128000,
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
   {
@@ -59,18 +63,19 @@ export const CHAT_MODELS: AIModel[] = [
     supportsThinking: true,
     defaultThinkingBudget: 32000,
     extendedThinking: true,
+    maxTokens: 8192,
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
 
-  // GPT-5.2 Series (Latest, Most Capable) - Matching Paprwork v1
+  // OpenAI — weakest to strongest
   {
-    id: "gpt-5.2",
-    name: "GPT-5.2",
+    id: "gpt-5-mini",
+    name: "GPT-5 Mini",
     provider: "openai",
-    description: "Latest flagship with medium reasoning (recommended)",
+    description: "Fast, efficient model for simple tasks and high-volume operations",
     group: "OpenAI",
-    supportsThinking: true,
-    reasoning: { effort: "medium" },
+    supportsThinking: false,
+    maxTokens: 16384,
     requiresApiKey: "OPENAI_API_KEY",
   },
   {
@@ -81,6 +86,18 @@ export const CHAT_MODELS: AIModel[] = [
     group: "OpenAI",
     supportsThinking: true,
     reasoning: { effort: "low" },
+    maxTokens: 16384,
+    requiresApiKey: "OPENAI_API_KEY",
+  },
+  {
+    id: "gpt-5.2",
+    name: "GPT-5.2",
+    provider: "openai",
+    description: "Latest flagship with medium reasoning (recommended)",
+    group: "OpenAI",
+    supportsThinking: true,
+    reasoning: { effort: "medium" },
+    maxTokens: 16384,
     requiresApiKey: "OPENAI_API_KEY",
   },
   {
@@ -91,6 +108,7 @@ export const CHAT_MODELS: AIModel[] = [
     group: "OpenAI",
     supportsThinking: true,
     reasoning: { effort: "high" },
+    maxTokens: 16384,
     requiresApiKey: "OPENAI_API_KEY",
   },
   {
@@ -101,6 +119,7 @@ export const CHAT_MODELS: AIModel[] = [
     group: "OpenAI",
     supportsThinking: true,
     reasoning: { effort: "xhigh" },
+    maxTokens: 16384,
     requiresApiKey: "OPENAI_API_KEY",
   },
   {
@@ -111,26 +130,20 @@ export const CHAT_MODELS: AIModel[] = [
     group: "OpenAI",
     supportsThinking: true,
     reasoning: { effort: "medium" },
+    maxTokens: 16384,
     requiresApiKey: "OPENAI_API_KEY",
   },
 
-  // Google Models (from https://ai.google.dev/gemini-api/docs/models)
+  // Google — weakest to strongest
   {
-    id: "gemini-3-pro-preview",
-    name: "Gemini 3 Pro",
-    description: "Most intelligent model for multimodal understanding",
+    id: "gemini-2.5-flash-lite",
+    name: "Gemini 2.5 Flash Lite",
+    description: "Fastest flash model optimized for cost-efficiency and high throughput",
     provider: "google",
     group: "Google",
     supportsThinking: true,
-    requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
-  },
-  {
-    id: "gemini-3-flash-preview",
-    name: "Gemini 3 Flash",
-    description: "Balanced model built for speed, scale, and frontier intelligence",
-    provider: "google",
-    group: "Google",
-    supportsThinking: true,
+    defaultThinkingBudget: 5000,
+    maxTokens: 8192,
     requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
   },
   {
@@ -140,15 +153,30 @@ export const CHAT_MODELS: AIModel[] = [
     provider: "google",
     group: "Google",
     supportsThinking: true,
+    defaultThinkingBudget: 8000,
+    maxTokens: 8192,
     requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
   },
   {
-    id: "gemini-2.5-flash-lite",
-    name: "Gemini 2.5 Flash Lite",
-    description: "Fastest flash model optimized for cost-efficiency and high throughput",
+    id: "gemini-3-flash-preview",
+    name: "Gemini 3 Flash",
+    description: "Balanced model built for speed, scale, and frontier intelligence",
     provider: "google",
     group: "Google",
     supportsThinking: true,
+    defaultThinkingBudget: 10000,
+    maxTokens: 8192,
+    requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
+  },
+  {
+    id: "gemini-3-pro-preview",
+    name: "Gemini 3 Pro",
+    description: "Most intelligent model for multimodal understanding",
+    provider: "google",
+    group: "Google",
+    supportsThinking: true,
+    defaultThinkingBudget: 16000,
+    maxTokens: 8192,
     requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
   },
 ];

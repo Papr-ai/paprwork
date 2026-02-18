@@ -48,7 +48,7 @@ describe('MessageList', () => {
     it('should render all messages', () => {
       render(<MessageList messages={mockMessages} isStreaming={false} />);
       
-      const messages = screen.getAllByTestId(/^message-/);
+      const messages = screen.getAllByTestId(/^message-item-/);
       expect(messages.length).toBeGreaterThanOrEqual(mockMessages.length);
     });
 
@@ -59,7 +59,7 @@ describe('MessageList', () => {
       expect(messageList).toBeDefined();
       
       // Should not have any messages
-      const messages = screen.queryAllByTestId(/^message-/);
+      const messages = screen.queryAllByTestId(/^message-item-/);
       expect(messages.length).toBe(0);
     });
   });
@@ -68,8 +68,8 @@ describe('MessageList', () => {
     it('should distinguish between user and assistant messages', () => {
       render(<MessageList messages={mockMessages} isStreaming={false} />);
       
-      const userMessages = screen.getAllByTestId(/message-user/);
-      const assistantMessages = screen.getAllByTestId(/message-assistant/);
+      const userMessages = screen.getAllByTestId(/message-item-user/);
+      const assistantMessages = screen.getAllByTestId(/message-item-assistant/);
       
       expect(userMessages.length).toBeGreaterThan(0);
       expect(assistantMessages.length).toBeGreaterThan(0);
@@ -247,7 +247,7 @@ describe('MessageList', () => {
       render(<MessageList messages={groupedMessages} isStreaming={false} />);
       
       // All messages should be rendered
-      const messages = screen.getAllByTestId(/^message-/);
+      const messages = screen.getAllByTestId(/^message-item-/);
       expect(messages.length).toBeGreaterThanOrEqual(4);
     });
   });

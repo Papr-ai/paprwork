@@ -145,6 +145,25 @@ describe("TabStore", () => {
       useTabStore.getState().switchToTab(tab2);
       expect(useTabStore.getState().activeTabId).toBe(tab2);
     });
+
+    it("should restore pane selection from persisted activeTabId", () => {
+      const tab1 = useTabStore.getState().createTab("chat", "chat-1", "Chat 1");
+      useTabStore.getState().createTab("chat", "chat-2", "Chat 2");
+
+      // Simulate older persisted state where activeTabId exists but pane fields were not restored.
+      useTabStore.setState({
+        activeTabId: tab1,
+        activeLeftTab: null,
+        activeRightTab: null,
+        isSplitView: false,
+      });
+
+      useTabStore.getState().switchToTab(tab1, true);
+
+      expect(useTabStore.getState().activeTabId).toBe(tab1);
+      expect(useTabStore.getState().activeLeftTab).toBe(tab1);
+      expect(useTabStore.getState().isSplitView).toBe(false);
+    });
   });
 
   describe("Tab Closing", () => {

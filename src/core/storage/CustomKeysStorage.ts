@@ -142,7 +142,12 @@ export class CustomKeysStorage {
    * Get a custom key by name (decrypted value)
    */
   async getKeyByName(name: string): Promise<string | null> {
-    const key = Array.from(this.keys.values()).find((k) => k.name === name);
+    const normalizeKeyName = (input: string): string =>
+      input.trim().toUpperCase();
+    const expectedName = normalizeKeyName(name);
+    const key = Array.from(this.keys.values()).find(
+      (k) => normalizeKeyName(k.name) === expectedName,
+    );
     if (!key) return null;
 
     try {

@@ -47,7 +47,7 @@
 .exploring-tool-item {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   margin: 2px 0;
 }
 
@@ -58,7 +58,7 @@
 
 .exploring-tool-name {
   color: var(--text-secondary);
-  flex: 1; /* Take remaining space */
+  /* Removed flex: 1 so checkmark appears right after text */
 }
 
 .exploring-tool-status {
@@ -69,7 +69,6 @@
 
 /* Status indicators */
 .exploring-tool-loading {
-  margin-left: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -112,16 +111,22 @@
 }
 
 .exploring-tool-success {
-  margin-left: 8px;
   color: #10b981; /* Green */
   font-size: 14px;
   font-weight: bold;
 }
 
 .exploring-tool-error {
-  margin-left: 8px;
   color: #ef4444; /* Red */
   font-size: 14px;
   font-weight: bold;
 }
 
+/* Agent narration text that appears after tool calls */
+.exploring-narration {
+  padding: 00px 2px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}

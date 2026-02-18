@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect, useMemo } from "react";
 import { useCustomKeys } from "../../hooks/useCustomKeys";
+import { gateway } from "../../src/lib/gateway";
 import type { CustomKeyInput, SettingsTab } from "../../types/settings";
 import "./SettingsView.css";
 
@@ -69,6 +70,24 @@ export function SettingsView() {
           </svg>
           Permissions
         </button>
+        <button
+          className={`settings-tab ${activeTab === "data" ? "settings-tab--active" : ""}`}
+          onClick={() => setActiveTab("data")}
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <ellipse cx="12" cy="5" rx="9" ry="3" />
+            <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+            <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+          </svg>
+          Data
+        </button>
       </div>
 
       {/* Content */}
@@ -76,6 +95,7 @@ export function SettingsView() {
         {activeTab === "keys" && <APIKeysTab />}
         {activeTab === "profile" && <ProfileTab />}
         {activeTab === "permissions" && <PermissionsTab />}
+        {activeTab === "data" && <DataTab />}
       </div>
     </div>
   );
@@ -507,6 +527,50 @@ function APIKeysTab() {
 }
 
 function ProfileTab() {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [imageUrl, setImageUrl] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  // Load profile on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const response = await gateway.send("settings:get");
+        const data = response.data as { profile?: { name?: string; email?: string; imageUrl?: string } };
+        if (data?.profile) {
+          setName(data.profile.name ?? "");
+          setEmail(data.profile.email ?? "");
+          setImageUrl(data.profile.imageUrl ?? "");
+        }
+        setLoaded(true);
+      } catch (err) {
+        console.error("[ProfileTab] Load error:", err);
+        setLoaded(true);
+      }
+    })();
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await gateway.send("settings:save-profile", { name, email, imageUrl });
+    } catch (err) {
+      console.error("[ProfileTab] Save error:", err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!loaded) {
+    return (
+      <div className="settings-content">
+        <div className="settings-section">Loading profile...</div>
+      </div>
+    );
+  }
+
   return (
     <div className="settings-content">
       <div className="settings-section">
@@ -517,7 +581,13 @@ function ProfileTab() {
 
         <div className="form-group">
           <label className="form-label">Name</label>
-          <input type="text" className="form-input" placeholder="Your name" />
+          <input
+            type="text"
+            className="form-input"
+            placeholder="Your name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
         </div>
 
         <div className="form-group">
@@ -528,6 +598,8 @@ function ProfileTab() {
             type="email"
             className="form-input"
             placeholder="your@email.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
           />
         </div>
 
@@ -540,13 +612,19 @@ function ProfileTab() {
             type="url"
             className="form-input"
             placeholder="https://..."
+            value={imageUrl}
+            onChange={(e) => setImageUrl(e.target.value)}
           />
         </div>
       </div>
 
       <div className="settings-actions">
-        <button className="settings-btn settings-btn--primary">
-          Save Profile
+        <button
+          className="settings-btn settings-btn--primary"
+          onClick={handleSave}
+          disabled={saving}
+        >
+          {saving ? "Saving..." : "Save Profile"}
         </button>
       </div>
     </div>
@@ -554,52 +632,271 @@ function ProfileTab() {
 }
 
 function PermissionsTab() {
+  const [permissionLevel, setPermissionLevel] = useState<"open" | "moderate" | "strict">("open");
+  const [saving, setSaving] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const response = await gateway.send("settings:get");
+        const data = response.data as { permissions?: { permissionLevel?: string } };
+        if (data?.permissions?.permissionLevel) {
+          setPermissionLevel(data.permissions.permissionLevel as "open" | "moderate" | "strict");
+        }
+        setLoaded(true);
+      } catch (err) {
+        console.error("[PermissionsTab] Load error:", err);
+        setLoaded(true);
+      }
+    })();
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await gateway.send("settings:save-permissions", {
+        permissionLevel,
+      });
+    } catch (err) {
+      console.error("[PermissionsTab] Save error:", err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!loaded) {
+    return (
+      <div className="settings-content">
+        <div className="settings-section">Loading permissions...</div>
+      </div>
+    );
+  }
+
   return (
     <div className="settings-content">
       <div className="settings-section">
-        <h2 className="settings-section__title">Permissions</h2>
+        <h2 className="settings-section__title">Agent Permissions</h2>
         <p className="settings-section__description">
-          Control what agents and automations can access
+          Control how much autonomy agents have
         </p>
 
-        <div className="permission-group">
-          <div className="permission-group__header">
-            <h3>File System</h3>
-            <p>Allow reading and writing files</p>
-          </div>
-          <label className="toggle-switch">
-            <input type="checkbox" defaultChecked />
-            <span className="toggle-switch__slider"></span>
+        <div className="permission-level-selector">
+          {/* Open */}
+          <label className="permission-option">
+            <input
+              type="radio"
+              name="permission-level"
+              value="open"
+              checked={permissionLevel === "open"}
+              onChange={(e) => setPermissionLevel(e.target.value as "open")}
+            />
+            <div className="permission-card">
+              <div className="permission-header">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                </svg>
+                <h4>Open</h4>
+                <span className="badge badge-success">Recommended</span>
+              </div>
+              <p>Agents can run most commands freely</p>
+              <ul className="permission-list">
+                <li>✓ File operations (read, create, edit)</li>
+                <li>✓ Install packages (npm, pip)</li>
+                <li>✓ Network requests and API calls</li>
+                <li>✓ Create and manage jobs</li>
+                <li>⚠️ Asks only for destructive operations (rm, system changes)</li>
+              </ul>
+            </div>
           </label>
-        </div>
 
-        <div className="permission-group">
-          <div className="permission-group__header">
-            <h3>Network</h3>
-            <p>Allow making HTTP requests</p>
-          </div>
-          <label className="toggle-switch">
-            <input type="checkbox" defaultChecked />
-            <span className="toggle-switch__slider"></span>
+          {/* Moderate */}
+          <label className="permission-option">
+            <input
+              type="radio"
+              name="permission-level"
+              value="moderate"
+              checked={permissionLevel === "moderate"}
+              onChange={(e) => setPermissionLevel(e.target.value as "moderate")}
+            />
+            <div className="permission-card">
+              <div className="permission-header">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                </svg>
+                <h4>Moderate</h4>
+              </div>
+              <p>Balance between autonomy and control</p>
+              <ul className="permission-list">
+                <li>✓ File operations (read, create, edit)</li>
+                <li>✓ Create and manage jobs</li>
+                <li>⚠️ Asks before installing packages</li>
+                <li>⚠️ Asks before network requests</li>
+                <li>⚠️ Asks before system commands requiring password</li>
+              </ul>
+            </div>
           </label>
-        </div>
 
-        <div className="permission-group">
-          <div className="permission-group__header">
-            <h3>Calendar</h3>
-            <p>Allow reading and creating calendar events</p>
-          </div>
-          <label className="toggle-switch">
-            <input type="checkbox" />
-            <span className="toggle-switch__slider"></span>
+          {/* Strict */}
+          <label className="permission-option">
+            <input
+              type="radio"
+              name="permission-level"
+              value="strict"
+              checked={permissionLevel === "strict"}
+              onChange={(e) => setPermissionLevel(e.target.value as "strict")}
+            />
+            <div className="permission-card">
+              <div className="permission-header">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                </svg>
+                <h4>Strict</h4>
+                <span className="badge badge-warning">High Security</span>
+              </div>
+              <p>Maximum control and confirmation</p>
+              <ul className="permission-list">
+                <li>⚠️ Asks before reading files</li>
+                <li>⚠️ Asks before writing files</li>
+                <li>⚠️ Asks before network requests</li>
+                <li>⚠️ Asks before installing packages</li>
+                <li>⚠️ Asks before using API keys</li>
+                <li>⚠️ Asks before creating/running jobs</li>
+              </ul>
+            </div>
           </label>
         </div>
       </div>
 
       <div className="settings-actions">
-        <button className="settings-btn settings-btn--primary">
-          Save Permissions
+        <button
+          className="settings-btn settings-btn--primary"
+          onClick={handleSave}
+          disabled={saving}
+        >
+          {saving ? "Saving..." : "Save Permissions"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ===== Data & Migration Tab =====
+
+interface MigrationResult {
+  chats: { migrated: number; messages: number };
+  documents: { migrated: number };
+  apps: { migrated: number };
+}
+
+function DataTab() {
+  const [migrating, setMigrating] = useState(false);
+  const [migrationResult, setMigrationResult] =
+    useState<MigrationResult | null>(null);
+  const [migrationError, setMigrationError] = useState<string | null>(null);
+
+  const handleMigrate = async () => {
+    setMigrating(true);
+    setMigrationResult(null);
+    setMigrationError(null);
+
+    try {
+      const response = await gateway.send("settings:migrate-v1", {});
+      if (response.success && response.data) {
+        setMigrationResult(response.data as MigrationResult);
+      } else {
+        setMigrationError("Migration failed. Check the console for details.");
+      }
+    } catch (err) {
+      setMigrationError((err as Error).message);
+    } finally {
+      setMigrating(false);
+    }
+  };
+
+  return (
+    <div className="settings-content">
+      <div className="settings-section">
+        <h2 className="settings-section__title">Data Management</h2>
+        <p className="settings-section__description">
+          Import data from Paprwork V1 or manage your stored data
+        </p>
+
+        {/* V1 Migration */}
+        <div className="data-card">
+          <div className="data-card__header">
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            <div>
+              <h3>Import from Paprwork V1</h3>
+              <p>
+                Migrate your chats, documents, and mini-apps from V1. This reads
+                from <code>~/.paprwork/</code> and imports into the V2 data
+                directory.
+              </p>
+            </div>
+          </div>
+
+          <button
+            className="settings-btn settings-btn--primary"
+            onClick={handleMigrate}
+            disabled={migrating}
+          >
+            {migrating ? "Migrating..." : "Start Migration"}
+          </button>
+
+          {migrationResult && (
+            <div className="migration-result">
+              <h4>Migration Complete</h4>
+              <ul>
+                <li>
+                  Chats: {migrationResult.chats.migrated} imported (
+                  {migrationResult.chats.messages} messages)
+                </li>
+                <li>Documents: {migrationResult.documents.migrated} imported</li>
+                <li>Apps: {migrationResult.apps.migrated} imported</li>
+              </ul>
+            </div>
+          )}
+
+          {migrationError && (
+            <div className="migration-error">Error: {migrationError}</div>
+          )}
+        </div>
+
+        {/* Storage info */}
+        <div className="data-card">
+          <div className="data-card__header">
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            </svg>
+            <div>
+              <h3>Data Location</h3>
+              <p>
+                Your V2 data is stored at <code>~/PAPR/</code>. This includes
+                chats, documents, apps, settings, and meeting data.
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

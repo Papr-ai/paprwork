@@ -2,6 +2,22 @@
 
 AI-powered desktop assistant rebuilt with TypeScript, Electron, and Mastra framework.
 
+## ⚠️ Prerequisites
+
+**Node.js v24 or higher is required.** Electron 40 uses Node v24.13.0 internally, and native modules must match.
+
+```bash
+# Check your Node version
+node --version  # Should be v24.x.x or higher
+
+# If using nvm (recommended)
+nvm install 24
+nvm use 24
+nvm alias default 24
+```
+
+See [docs/NODE_VERSION_REQUIREMENTS.md](docs/NODE_VERSION_REQUIREMENTS.md) for detailed information.
+
 ## ✨ Features
 
 - **Liquid Glass Design**: Apple-inspired translucent UI with subtle depth
@@ -13,16 +29,26 @@ AI-powered desktop assistant rebuilt with TypeScript, Electron, and Mastra frame
 ## 🚀 Quick Start
 
 ```bash
-# Install dependencies
+# 1. Ensure you're using Node v24+
+node --version  # Should show v24.x.x
+
+# 2. Install dependencies (auto-rebuilds native modules)
 npm install
 
-# Build main process (first time only)
-npm run build:main
+# 3. Build the app
+npm run build
 
-# Start development (Vite + Electron)
+# 4. Start the app
+npm start
+
+# Or for development mode
 npm run dev
+```
 
-# Or run full build + start
+**Common Issue:** If you get native module errors, switch to Node v24:
+```bash
+nvm use 24
+npm rebuild
 npm start
 ```
 

@@ -23,8 +23,9 @@ Thumbs.db
 *.log
 npm-debug.log*
 
-# Test coverage
+# Test coverage & reports
 coverage/
+test-results/
 
 # Electron
 out/

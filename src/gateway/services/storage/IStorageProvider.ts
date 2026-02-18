@@ -24,6 +24,12 @@ export interface StoredMessage {
     status?: 'pending' | 'success' | 'error';
   }>;
   
+  // Sequence tracking (V1 compatibility for interleaved text/tool calls)
+  sequence?: Array<{
+    type: 'text' | 'tool' | 'thinking';
+    data: string | Record<string, any>;
+  }>;
+  
   // Model metadata
   model?: string;
   prompt_tokens?: number;
@@ -39,6 +45,10 @@ export interface StoredMessage {
   papr_message_id?: string;  // Parse PostMessage objectId
   last_sync_attempt?: string;
   sync_error?: string;
+  
+  // Agent attribution (for SubAgents)
+  source_agent_id?: string;    // Override default "main-agent"
+  source_agent_name?: string;  // Override default "Paprwork Assistant"
 }
 
 export interface StoredSummary {

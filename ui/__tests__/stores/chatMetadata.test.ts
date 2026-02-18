@@ -1,78 +1,74 @@
 /**
  * Chat Metadata Tests
- * Verifies that chat metadata is created with proper timestamps and structure
+ *
+ * Tests how chat metadata is managed in the store:
+ * - setChats populates metadata correctly
+ * - Metadata structure has all required fields
+ * - setChatUnread / markChatAsRead modify metadata
+ * - setChatStreaming syncs to metadata
+ * - finalizeStreamingMessage clears streaming flag in metadata
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { useChatStore } from "../../stores/chatStore";
+import { useChatStore, defaultChatState } from "../../stores/chatStore";
+import type { ChatMetadata } from "../../types/chat";
+
+/** Build a ChatMetadata entry with sensible defaults */
+function makeMeta(id: string, overrides: Partial<ChatMetadata> = {}): ChatMetadata {
+  const now = new Date().toISOString();
+  return {
+    id,
+    title: "New Chat",
+    createdAt: now,
+    updatedAt: now,
+    messageCount: 0,
+    isStreaming: false,
+    hasUnread: false,
+    ...overrides,
+  };
+}
 
 describe("Chat Metadata", () => {
   beforeEach(() => {
     useChatStore.setState({
       chats: [],
-      activeChat: null,
-      messages: [],
       chatStates: new Map(),
+      isLoading: false,
       error: null,
     });
   });
 
-  describe("Timestamp Generation", () => {
-    it("should create chat metadata with createdAt timestamp", () => {
-      const chatId = "test-chat-1";
-      useChatStore.getState().setActiveChat(chatId);
+  // ── setChats ────────────────────────────────────────────────────
 
-      const chat = useChatStore.getState().chats.find((c) => c.id === chatId);
-      expect(chat).toBeDefined();
-      expect(chat?.createdAt).toBeDefined();
-      expect(chat?.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/); // ISO format
+  describe("setChats", () => {
+    it("should store chat metadata from setChats", () => {
+      const meta = makeMeta("chat-1", { title: "My Chat" });
+      useChatStore.getState().setChats([meta]);
+
+      const chats = useChatStore.getState().chats;
+      expect(chats).toHaveLength(1);
+      expect(chats[0].id).toBe("chat-1");
+      expect(chats[0].title).toBe("My Chat");
     });
 
-    it("should create chat metadata with updatedAt timestamp", () => {
-      const chatId = "test-chat-2";
-      useChatStore.getState().setActiveChat(chatId);
+    it("should replace all metadata on subsequent setChats calls", () => {
+      useChatStore.getState().setChats([makeMeta("a"), makeMeta("b")]);
+      expect(useChatStore.getState().chats).toHaveLength(2);
 
-      const chat = useChatStore.getState().chats.find((c) => c.id === chatId);
-      expect(chat).toBeDefined();
-      expect(chat?.updatedAt).toBeDefined();
-      expect(chat?.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/); // ISO format
-    });
-
-    it("should create valid Date objects from timestamps", () => {
-      const chatId = "test-chat-3";
-      useChatStore.getState().setActiveChat(chatId);
-
-      const chat = useChatStore.getState().chats.find((c) => c.id === chatId);
-      expect(chat).toBeDefined();
-
-      // Verify timestamps are valid dates
-      const createdDate = new Date(chat!.createdAt);
-      const updatedDate = new Date(chat!.updatedAt);
-
-      expect(createdDate.toString()).not.toBe("Invalid Date");
-      expect(updatedDate.toString()).not.toBe("Invalid Date");
-    });
-
-    it("should not show 'Invalid Date' in UI components", () => {
-      const chatId = "test-chat-4";
-      useChatStore.getState().setActiveChat(chatId);
-
-      const chat = useChatStore.getState().chats.find((c) => c.id === chatId);
-      expect(chat).toBeDefined();
-
-      // Verify dates can be formatted without showing "Invalid Date"
-      const formattedDate = new Date(chat!.createdAt).toLocaleDateString();
-      expect(formattedDate).not.toContain("Invalid");
+      useChatStore.getState().setChats([makeMeta("c")]);
+      expect(useChatStore.getState().chats).toHaveLength(1);
+      expect(useChatStore.getState().chats[0].id).toBe("c");
     });
   });
 
-  describe("Chat Metadata Structure", () => {
-    it("should include all required fields", () => {
-      const chatId = "test-chat-5";
-      useChatStore.getState().setActiveChat(chatId);
+  // ── Metadata Structure ──────────────────────────────────────────
 
-      const chat = useChatStore.getState().chats.find((c) => c.id === chatId);
-      expect(chat).toBeDefined();
+  describe("Metadata Structure", () => {
+    it("should include all required fields", () => {
+      const meta = makeMeta("chat-1");
+      useChatStore.getState().setChats([meta]);
+
+      const chat = useChatStore.getState().chats[0];
       expect(chat).toHaveProperty("id");
       expect(chat).toHaveProperty("title");
       expect(chat).toHaveProperty("createdAt");
@@ -81,40 +77,88 @@ describe("Chat Metadata", () => {
       expect(chat).toHaveProperty("hasUnread");
     });
 
-    it("should initialize with correct default values", () => {
-      const chatId = "test-chat-6";
-      useChatStore.getState().setActiveChat(chatId);
+    it("should have valid ISO timestamp strings", () => {
+      const meta = makeMeta("chat-1");
+      useChatStore.getState().setChats([meta]);
 
-      const chat = useChatStore.getState().chats.find((c) => c.id === chatId);
-      expect(chat?.id).toBe(chatId);
-      expect(chat?.title).toBe("New Chat");
-      expect(chat?.isStreaming).toBe(false);
-      expect(chat?.hasUnread).toBe(false);
+      const chat = useChatStore.getState().chats[0];
+      expect(chat.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(chat.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+      expect(new Date(chat.createdAt).toString()).not.toBe("Invalid Date");
+      expect(new Date(chat.updatedAt).toString()).not.toBe("Invalid Date");
+    });
+
+    it("should initialize with correct default values", () => {
+      const meta = makeMeta("chat-1");
+      useChatStore.getState().setChats([meta]);
+
+      const chat = useChatStore.getState().chats[0];
+      expect(chat.isStreaming).toBe(false);
+      expect(chat.hasUnread).toBe(false);
     });
   });
 
-  describe("Temp Chat IDs", () => {
-    it("should create metadata for temp chat IDs", () => {
-      const tempChatId = "temp-123-abc";
-      useChatStore.getState().setActiveChat(tempChatId);
+  // ── Unread / Read ───────────────────────────────────────────────
 
-      const chat = useChatStore
-        .getState()
-        .chats.find((c) => c.id === tempChatId);
-      expect(chat).toBeDefined();
-      expect(chat?.createdAt).toBeDefined();
-      expect(chat?.updatedAt).toBeDefined();
+  describe("Unread / Read", () => {
+    it("should mark a chat as unread", () => {
+      useChatStore.getState().setChats([makeMeta("chat-1")]);
+
+      useChatStore.getState().setChatUnread("chat-1", true);
+
+      expect(useChatStore.getState().chats[0].hasUnread).toBe(true);
     });
 
-    it("should not duplicate metadata for same chat ID", () => {
-      const chatId = "test-chat-7";
-      useChatStore.getState().setActiveChat(chatId);
-      useChatStore.getState().setActiveChat(chatId); // Call twice
+    it("should mark a chat as read", () => {
+      useChatStore.getState().setChats([makeMeta("chat-1", { hasUnread: true })]);
 
-      const matchingChats = useChatStore
-        .getState()
-        .chats.filter((c) => c.id === chatId);
-      expect(matchingChats.length).toBe(1);
+      useChatStore.getState().markChatAsRead("chat-1");
+
+      expect(useChatStore.getState().chats[0].hasUnread).toBe(false);
+    });
+
+    it("should not affect other chats when marking one as unread", () => {
+      useChatStore.getState().setChats([makeMeta("a"), makeMeta("b")]);
+
+      useChatStore.getState().setChatUnread("a", true);
+
+      expect(useChatStore.getState().chats.find((c) => c.id === "a")?.hasUnread).toBe(true);
+      expect(useChatStore.getState().chats.find((c) => c.id === "b")?.hasUnread).toBe(false);
+    });
+  });
+
+  // ── Streaming Synced to Metadata ────────────────────────────────
+
+  describe("Streaming Synced to Metadata", () => {
+    it("should set isStreaming on metadata via setChatStreaming", () => {
+      useChatStore.getState().setChats([makeMeta("chat-1")]);
+      useChatStore.setState((s) => {
+        const next = new Map(s.chatStates);
+        next.set("chat-1", { ...defaultChatState });
+        return { chatStates: next };
+      });
+
+      useChatStore.getState().setChatStreaming("chat-1", true);
+
+      expect(useChatStore.getState().chats[0].isStreaming).toBe(true);
+    });
+
+    it("should clear isStreaming on metadata via finalizeStreamingMessage", () => {
+      useChatStore.getState().setChats([makeMeta("chat-1", { isStreaming: true })]);
+      useChatStore.setState((s) => {
+        const next = new Map(s.chatStates);
+        next.set("chat-1", {
+          ...defaultChatState,
+          isStreaming: true,
+          messages: [{ id: "m1", role: "assistant", content: "", isStreaming: true, streamingContent: "Final" }],
+        });
+        return { chatStates: next };
+      });
+
+      useChatStore.getState().finalizeStreamingMessage("m1", "chat-1");
+
+      expect(useChatStore.getState().chats[0].isStreaming).toBe(false);
     });
   });
 });

@@ -18,7 +18,7 @@
 
 /* Panes */
 .content-pane {
-  overflow: hidden;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   /* Fully transparent - shows app-layout background through */

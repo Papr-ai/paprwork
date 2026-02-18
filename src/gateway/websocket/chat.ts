@@ -155,6 +155,41 @@ export async function setupChatHandlers(
         break;
       }
 
+      case "chat:export": {
+        const { chatId, format } = message.payload as { chatId: string; format?: "json" | "markdown" };
+        const chat = await agentService.getStorageManager().getChat(chatId);
+        const messages = await agentService.getChatHistory(chatId);
+        const title = chat?.title || "Untitled Chat";
+        const exportedAt = new Date().toISOString();
+
+        if (format === "markdown") {
+          const lines: string[] = [`# ${title}`, "", `> Exported ${new Date(exportedAt).toLocaleString()}`, ""];
+          for (const msg of messages) {
+            const role = (msg as unknown as Record<string, unknown>).role as string;
+            const content = (msg as unknown as Record<string, unknown>).content as string;
+            if (role && content) {
+              lines.push(`## ${role === "user" ? "User" : "Assistant"}`, "", content, "");
+            }
+          }
+          sendResponse(ws, {
+            id: message.id,
+            success: true,
+            data: { content: lines.join("\n"), filename: `${title}.md`, mimeType: "text/markdown" },
+          });
+        } else {
+          sendResponse(ws, {
+            id: message.id,
+            success: true,
+            data: {
+              content: JSON.stringify({ chatId, title, exportedAt, messages }, null, 2),
+              filename: `${title}.json`,
+              mimeType: "application/json",
+            },
+          });
+        }
+        break;
+      }
+
       case "chat:switch": {
         // Just acknowledge - switching is handled on client side
         sendResponse(ws, {

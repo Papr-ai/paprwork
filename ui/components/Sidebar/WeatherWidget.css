@@ -24,14 +24,10 @@
 
 .weather-widget__left {
   display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.weather-widget__icon {
-  font-size: 28px;
-  line-height: 1;
-  flex-shrink: 0;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
 }
 
 .weather-widget__temp {
@@ -42,28 +38,30 @@
   white-space: nowrap;
 }
 
-.weather-widget__right {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  text-align: right;
-  min-width: 0;
-  flex: 1;
-}
-
-.weather-widget__condition {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .weather-widget__location {
   font-size: 11px;
   color: var(--text-tertiary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.weather-widget__right {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.weather-widget__icon {
+  font-size: 25px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.weather-widget__condition {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  text-align: right;
 }

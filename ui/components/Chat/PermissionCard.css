@@ -1,0 +1,146 @@
+/* PermissionCard - inline chat permission request card */
+
+.permission-card {
+  margin: 8px 0;
+  padding: 12px 16px;
+  background: var(--glass-bg, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.12));
+  border-radius: 12px;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  max-width: 480px;
+  animation: permission-card-appear 0.2s ease-out;
+}
+
+@keyframes permission-card-appear {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Header */
+.permission-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.permission-card-icon {
+  color: var(--accent-color, #6b8aff);
+  flex-shrink: 0;
+}
+
+.permission-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, rgba(255, 255, 255, 0.95));
+}
+
+/* Body */
+.permission-card-desc {
+  font-size: 12px;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.65));
+  margin: 0 0 10px 0;
+  line-height: 1.4;
+}
+
+.permission-card-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
+}
+
+.permission-detail {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.permission-detail-label {
+  color: var(--text-muted, rgba(255, 255, 255, 0.4));
+  min-width: 40px;
+  text-transform: uppercase;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+}
+
+.permission-detail-value {
+  color: var(--text-primary, rgba(255, 255, 255, 0.85));
+  font-family: var(--font-mono, "SF Mono", "Fira Code", monospace);
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.permission-detail-command {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Always allow checkbox */
+.permission-card-always {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+  cursor: pointer;
+  margin-bottom: 2px;
+}
+
+.permission-card-always input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent-color, #6b8aff);
+  cursor: pointer;
+}
+
+/* Action buttons */
+.permission-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.permission-btn {
+  padding: 5px 16px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s ease;
+}
+
+.permission-btn-deny {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary, rgba(255, 255, 255, 0.7));
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.1));
+}
+
+.permission-btn-deny:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary, rgba(255, 255, 255, 0.9));
+}
+
+.permission-btn-allow {
+  background: var(--accent-color, #6b8aff);
+  color: #fff;
+}
+
+.permission-btn-allow:hover {
+  filter: brightness(1.1);
+}

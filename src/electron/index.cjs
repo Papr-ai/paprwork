@@ -5,7 +5,7 @@
  * CommonJS format - Electron's require() is more reliable than ESM
  */
 
-const { app, BrowserWindow, Menu } = require("electron");
+const { app, BrowserWindow, Menu, shell } = require("electron");
 const { spawn } = require("child_process");
 const path = require("path");
 
@@ -19,6 +19,7 @@ let KeyPermissionsStorage;
 let SettingsStorage;
 let initializeCustomKeysIPC;
 let initializePermissionsIPC;
+let requestPermissionFromGateway;
 
 async function loadESMModules() {
   // Import from compiled dist directory
@@ -32,6 +33,7 @@ async function loadESMModules() {
 
   const permissionsIpcModule = await import("../../dist/electron/electron/ipc/permissions.js");
   initializePermissionsIPC = permissionsIpcModule.initializePermissionsIPC;
+  requestPermissionFromGateway = permissionsIpcModule.requestPermissionFromGateway;
 }
 
 // Configuration
@@ -41,6 +43,242 @@ const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
 let mainWindow = null;
 let gatewayProcess = null;
+const webviewSessions = new Map();
+let defaultWebviewId = null;
+let webviewCounter = 0;
+
+function isRequestKeysMessage(message) {
+  return (
+    message &&
+    message.type === "REQUEST_KEYS" &&
+    typeof message.requestId === "string" &&
+    Array.isArray(message.keys)
+  );
+}
+
+function isRequestPermissionMessage(message) {
+  return (
+    message &&
+    message.type === "REQUEST_PERMISSION" &&
+    typeof message.requestId === "string" &&
+    typeof message.request === "object" &&
+    message.request !== null
+  );
+}
+
+function isRequestWebviewTestMessage(message) {
+  return (
+    message &&
+    message.type === "REQUEST_WEBVIEW_TEST" &&
+    typeof message.requestId === "string" &&
+    typeof message.request === "object" &&
+    message.request !== null &&
+    typeof message.request.action === "string"
+  );
+}
+
+async function handleWebviewTestRequest(request) {
+  const action = request.action;
+  const payload = request.payload || {};
+  const gatewayHost = "localhost";
+  const gatewayPort = String(GATEWAY_PORT);
+
+  if (action === "list") {
+    return {
+      success: true,
+      data: {
+        sessions: Array.from(webviewSessions.entries()).map(([id, entry]) => ({
+          id,
+          url: entry.window.webContents.getURL(),
+          title: entry.window.webContents.getTitle(),
+          createdAt: entry.createdAt,
+        })),
+        defaultWebviewId,
+      },
+    };
+  }
+
+  if (action === "close") {
+    const id = payload.webviewId || defaultWebviewId;
+    if (!id || !webviewSessions.has(id)) {
+      return { success: true, data: { closed: false, reason: "not_found" } };
+    }
+    const entry = webviewSessions.get(id);
+    if (entry && !entry.window.isDestroyed()) {
+      entry.window.close();
+    }
+    return { success: true, data: { closed: true, webviewId: id } };
+  }
+
+  if (action === "launch") {
+    const appId = payload.appId;
+    if (typeof appId !== "string" || appId.length === 0) {
+      return { success: false, error: "appId is required for launch" };
+    }
+
+    const id = `webview-${Date.now()}-${++webviewCounter}`;
+    const width = Number(payload.width) || 1280;
+    const height = Number(payload.height) || 720;
+    const visible = Boolean(payload.visible);
+    const url = `http://${gatewayHost}:${gatewayPort}/apps/${appId}/index.html`;
+
+    const win = new BrowserWindow({
+      width,
+      height,
+      show: visible,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: false,
+        webSecurity: false,
+      },
+    });
+
+    // Open external links from webview windows in the system browser
+    win.webContents.setWindowOpenHandler(({ url }) => {
+      const isInternal =
+        url.startsWith(`http://localhost:${GATEWAY_PORT}`) ||
+        url.startsWith(`http://127.0.0.1:${GATEWAY_PORT}`);
+      if (!isInternal) {
+        shell.openExternal(url).catch(() => {});
+        return { action: 'deny' };
+      }
+      return { action: 'allow' };
+    });
+
+    const entry = {
+      window: win,
+      consoleLogs: [],
+      networkLogs: [],
+      createdAt: new Date().toISOString(),
+    };
+    webviewSessions.set(id, entry);
+    if (!defaultWebviewId) {
+      defaultWebviewId = id;
+    }
+
+    const session = win.webContents.session;
+    // Capture the webContentsId now — before the window can be destroyed —
+    // so the onCompleted filter never touches a dead webContents object.
+    const webContentsId = win.webContents.id;
+    const onCompleted = (details) => {
+      if (details.webContentsId !== webContentsId) return;
+      entry.networkLogs.push({
+        url: details.url,
+        statusCode: details.statusCode,
+        method: details.method,
+        timestamp: new Date().toISOString(),
+      });
+      if (entry.networkLogs.length > 500) {
+        entry.networkLogs.shift();
+      }
+    };
+    session.webRequest.onCompleted(onCompleted);
+
+    const onConsoleMessage = (_event, level, message, line, sourceId) => {
+      entry.consoleLogs.push({
+        level,
+        message,
+        line,
+        sourceId,
+        timestamp: new Date().toISOString(),
+      });
+      if (entry.consoleLogs.length > 500) {
+        entry.consoleLogs.shift();
+      }
+    };
+    win.webContents.on("console-message", onConsoleMessage);
+
+    win.on("closed", () => {
+      // Remove the session-level network listener so it never fires on a dead window.
+      // webRequest.onCompleted(null) clears the listener for this session.
+      try { session.webRequest.onCompleted(null); } catch (_) {}
+      webviewSessions.delete(id);
+      if (defaultWebviewId === id) {
+        defaultWebviewId = null;
+      }
+    });
+
+    await win.loadURL(url);
+    return {
+      success: true,
+      data: {
+        webviewId: id,
+        url,
+        title: win.webContents.getTitle(),
+      },
+    };
+  }
+
+  const id = payload.webviewId || defaultWebviewId;
+  if (!id || !webviewSessions.has(id)) {
+    return { success: false, error: "No active webview session" };
+  }
+  const entry = webviewSessions.get(id);
+  const win = entry.window;
+  if (!win || win.isDestroyed()) {
+    return { success: false, error: "Webview session is no longer available" };
+  }
+
+  if (action === "snapshot") {
+    const maxHtmlChars = Number(payload.maxHtmlChars) || 80000;
+    const maxTextChars = Number(payload.maxTextChars) || 12000;
+    const html = await win.webContents.executeJavaScript(
+      "document.documentElement.outerHTML",
+    );
+    const text = await win.webContents.executeJavaScript(
+      "document.body ? document.body.innerText : ''",
+    );
+    return {
+      success: true,
+      data: {
+        webviewId: id,
+        url: win.webContents.getURL(),
+        title: win.webContents.getTitle(),
+        html:
+          typeof html === "string" ? html.slice(0, maxHtmlChars) : "",
+        text:
+          typeof text === "string" ? text.slice(0, maxTextChars) : "",
+      },
+    };
+  }
+
+  if (action === "execute") {
+    const script = payload.script;
+    if (typeof script !== "string" || script.length === 0) {
+      return { success: false, error: "script is required for execute" };
+    }
+    const result = await win.webContents.executeJavaScript(script);
+    return {
+      success: true,
+      data: {
+        webviewId: id,
+        url: win.webContents.getURL(),
+        result,
+      },
+    };
+  }
+
+  if (action === "get_console") {
+    const limit = Number(payload.limit) || 100;
+    const logs = entry.consoleLogs.slice(-limit);
+    if (payload.clearAfterRead) {
+      entry.consoleLogs.length = 0;
+    }
+    return { success: true, data: { webviewId: id, logs } };
+  }
+
+  if (action === "get_network") {
+    const limit = Number(payload.limit) || 100;
+    const logs = entry.networkLogs.slice(-limit);
+    if (payload.clearAfterRead) {
+      entry.networkLogs.length = 0;
+    }
+    return { success: true, data: { webviewId: id, logs } };
+  }
+
+  return { success: false, error: `Unknown webview action: ${action}` };
+}
 
 // Minimal window setup - just load the UI
 function createMainWindow() {
@@ -81,8 +319,26 @@ function createMainWindow() {
     console.error('[Electron] loadURL failed:', err);
   });
 
-  // Always open DevTools to see console errors
-  mainWindow.webContents.openDevTools();
+  // Intercept window.open() calls from mini-app iframes (target="_blank" links, etc.)
+  // and open them in the system default browser instead of a new Electron window.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    // Allow internal gateway URLs to open normally (e.g. webview windows)
+    const isInternal =
+      url.startsWith(`http://localhost:${GATEWAY_PORT}`) ||
+      url.startsWith(`http://127.0.0.1:${GATEWAY_PORT}`);
+    if (!isInternal) {
+      shell.openExternal(url).catch(err => {
+        console.error(`[Electron] Failed to open external URL: ${url}`, err);
+      });
+      return { action: 'deny' };
+    }
+    return { action: 'allow' };
+  });
+
+  // Keep DevTools development-only to avoid exposing internals in production.
+  if (!IS_PRODUCTION) {
+    mainWindow.webContents.openDevTools();
+  }
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -115,18 +371,24 @@ function startGateway(customKeysStorage) {
   // Set up IPC for Gateway communication
   gatewayProcess.on("message", async (msg) => {
     // Handle key resolution requests (existing)
-    if (msg.type === "REQUEST_KEYS") {
+    if (isRequestKeysMessage(msg)) {
       console.log("[Electron] Gateway requested keys:", msg.keys);
 
       const resolvedKeys = {};
       for (const keyName of msg.keys || []) {
         try {
           const value = await customKeysStorage.getKeyByName(keyName);
-          if (value) {
+          if (value !== null) {
             resolvedKeys[keyName] = value;
             console.log(`[Electron]   ✓ Resolved ${keyName}`);
           } else {
-            console.log(`[Electron]   ✗ Key ${keyName} not found`);
+            const envFallback = process.env[keyName];
+            if (envFallback) {
+              resolvedKeys[keyName] = envFallback;
+              console.log(`[Electron]   ✓ Resolved ${keyName} from env fallback`);
+            } else {
+              console.log(`[Electron]   ✗ Key ${keyName} not found`);
+            }
           }
         } catch (error) {
           console.error(`[Electron]   ✗ Error resolving ${keyName}:`, error);
@@ -141,20 +403,15 @@ function startGateway(customKeysStorage) {
     }
     
     // Handle permission requests from Gateway (new)
-    else if (msg.type === "REQUEST_PERMISSION") {
+    else if (isRequestPermissionMessage(msg)) {
       console.log("[Electron] Gateway requested permission:", msg.request);
 
       try {
-        // Forward to main window's IPC handler
-        const { ipcMain } = require("electron");
-        const response = await new Promise((resolve) => {
-          // Use the permissions:request-key handler we set up
-          ipcMain.emit("permissions:request-key-from-gateway", {
-            requestId: msg.requestId,
-            request: msg.request,
-            resolve,
-          });
-        });
+        if (!requestPermissionFromGateway) {
+          throw new Error("Permission IPC module not initialized");
+        }
+
+        const response = await requestPermissionFromGateway(msg.request);
 
         gatewayProcess.send({
           type: "PERMISSION_RESPONSE",
@@ -167,6 +424,25 @@ function startGateway(customKeysStorage) {
           type: "PERMISSION_RESPONSE",
           requestId: msg.requestId,
           response: { approved: false },
+        });
+      }
+    }
+    else if (isRequestWebviewTestMessage(msg)) {
+      try {
+        const response = await handleWebviewTestRequest(msg.request);
+        gatewayProcess.send({
+          type: "WEBVIEW_TEST_RESPONSE",
+          requestId: msg.requestId,
+          response,
+        });
+      } catch (error) {
+        gatewayProcess.send({
+          type: "WEBVIEW_TEST_RESPONSE",
+          requestId: msg.requestId,
+          response: {
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          },
         });
       }
     }
@@ -216,6 +492,7 @@ app.whenReady().then(async () => {
   // Wait for Gateway to start (check if it's actually running)
   let attempts = 0;
   const maxAttempts = 20; // 10 seconds max
+  let gatewayReady = false; // guard against multiple in-flight requests all resolving
   
   const checkGateway = setInterval(() => {
     attempts++;
@@ -223,6 +500,8 @@ app.whenReady().then(async () => {
     // Try to connect to Gateway
     const http = require('http');
     const req = http.get(`http://localhost:${GATEWAY_PORT}/`, (res) => {
+      if (gatewayReady) return; // already handled — discard duplicate response
+      gatewayReady = true;
       console.log(`[Electron] Gateway is ready (status: ${res.statusCode})`);
       clearInterval(checkGateway);
       createMainWindow();
@@ -232,7 +511,9 @@ app.whenReady().then(async () => {
     });
     
     req.on('error', (err) => {
+      if (gatewayReady) return;
       if (attempts >= maxAttempts) {
+        gatewayReady = true;
         console.error(`[Electron] Gateway failed to start after ${maxAttempts} attempts`);
         clearInterval(checkGateway);
         // Try to create window anyway

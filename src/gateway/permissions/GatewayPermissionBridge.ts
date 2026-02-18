@@ -9,24 +9,35 @@ import type {
   KeyPermissionRequest,
   KeyPermissionResponse,
 } from "../../core/types/permissions.js";
+import type { RequestPermissionMessage } from "../../core/types/gateway-ipc.js";
+import { isPermissionResponseMessage } from "../../core/types/gateway-ipc.js";
+
+interface PendingPermissionRequest {
+  resolve: (response: KeyPermissionResponse) => void;
+  reject: (error: Error) => void;
+  timeout: NodeJS.Timeout;
+}
 
 // Track pending permission requests
-const pendingRequests = new Map<
-  string,
-  (response: KeyPermissionResponse) => void
->();
+const pendingRequests = new Map<string, PendingPermissionRequest>();
 
 let requestIdCounter = 0;
+
+interface IpcProcessLike {
+  send?: (message: unknown) => void;
+  on: (event: "message", listener: (message: unknown) => void) => void;
+}
 
 /**
  * Request permission from Main process
  * Sends IPC message to parent (Electron main), waits for response
  */
 export async function requestPermissionFromMain(
-  request: KeyPermissionRequest
+  request: KeyPermissionRequest,
+  ipcProcess: IpcProcessLike = process,
 ): Promise<KeyPermissionResponse> {
   // Check if we're running as a subprocess (with parent process)
-  if (!process.send) {
+  if (!ipcProcess.send) {
     console.warn(
       "[GatewayPermissionBridge] Not running as subprocess, auto-approving permission"
     );
@@ -40,29 +51,28 @@ export async function requestPermissionFromMain(
   );
 
   // Send permission request to Main process
-  process.send({
+  const payload: RequestPermissionMessage = {
     type: "REQUEST_PERMISSION",
     requestId,
     request,
-  });
+  };
+  ipcProcess.send(payload);
 
   // Wait for response
   return new Promise((resolve, reject) => {
-    pendingRequests.set(requestId, resolve);
-
     // Timeout after 30 seconds
     const timeout = setTimeout(() => {
-      if (pendingRequests.has(requestId)) {
+      const pending = pendingRequests.get(requestId);
+      if (pending) {
         console.warn(
           `[GatewayPermissionBridge] Permission request ${requestId} timed out`
         );
         pendingRequests.delete(requestId);
-        reject(new Error("Permission request timed out"));
+        pending.reject(new Error("Permission request timed out"));
       }
     }, 30000);
 
-    // Store timeout so we can clear it on response
-    (pendingRequests.get(requestId) as any).timeout = timeout;
+    pendingRequests.set(requestId, { resolve, reject, timeout });
   });
 }
 
@@ -79,16 +89,12 @@ export function handlePermissionResponse(
     response.approved ? "approved" : "denied"
   );
 
-  const resolver = pendingRequests.get(requestId);
+  const pending = pendingRequests.get(requestId);
 
-  if (resolver) {
+  if (pending) {
     // Clear timeout
-    const timeout = (resolver as any).timeout;
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-
-    resolver(response);
+    clearTimeout(pending.timeout);
+    pending.resolve(response);
     pendingRequests.delete(requestId);
   } else {
     console.warn(
@@ -101,8 +107,10 @@ export function handlePermissionResponse(
  * Initialize permission response listener
  * Should be called once by Gateway on startup
  */
-export function initializePermissionBridge(): void {
-  if (!process.send) {
+export function initializePermissionBridge(
+  ipcProcess: IpcProcessLike = process,
+): void {
+  if (!ipcProcess.send) {
     console.warn(
       "[GatewayPermissionBridge] Not running as subprocess, permission bridge disabled"
     );
@@ -110,8 +118,8 @@ export function initializePermissionBridge(): void {
   }
 
   // Listen for permission responses from Main process
-  process.on("message", (msg: any) => {
-    if (msg.type === "PERMISSION_RESPONSE") {
+  ipcProcess.on("message", (msg: unknown) => {
+    if (isPermissionResponseMessage(msg)) {
       handlePermissionResponse(msg.requestId, msg.response);
     }
   });

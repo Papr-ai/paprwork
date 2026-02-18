@@ -23,7 +23,7 @@ export function KeyPermissionModal({ request, onResponse }: Props) {
   const handleApprove = () => {
     onResponse({
       approved: true,
-      alwaysAllow: request.isEnvKey ? alwaysAllow : undefined,
+      alwaysAllow: alwaysAllow || undefined,
     });
   };
 
@@ -67,16 +67,14 @@ export function KeyPermissionModal({ request, onResponse }: Props) {
             )}
           </div>
 
-          {request.isEnvKey && (
-            <label className="always-allow-checkbox">
-              <input
-                type="checkbox"
-                checked={alwaysAllow}
-                onChange={(e) => setAlwaysAllow(e.target.checked)}
-              />
-              <span>Always allow this key (don't ask again)</span>
-            </label>
-          )}
+          <label className="always-allow-checkbox">
+            <input
+              type="checkbox"
+              checked={alwaysAllow}
+              onChange={(e) => setAlwaysAllow(e.target.checked)}
+            />
+            <span>Always allow this (don't ask again)</span>
+          </label>
         </div>
 
         <div className="key-permission-actions">

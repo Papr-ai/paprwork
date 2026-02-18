@@ -17,7 +17,6 @@ import type {
 
 export interface PaprConfig {
   apiKey: string;       // X-API-Key from macOS Keychain
-  baseUrl?: string;     // Optional custom base URL
 }
 
 export class PaprMemoryProvider implements IStorageProvider {
@@ -28,7 +27,6 @@ export class PaprMemoryProvider implements IStorageProvider {
   constructor(config: PaprConfig) {
     this.client = new Papr({
       xAPIKey: config.apiKey,  // X-API-Key header from macOS Keychain
-      baseURL: config.baseUrl,
       maxRetries: 3,
       timeout: 30000, // 30 seconds
     });
@@ -42,6 +40,39 @@ export class PaprMemoryProvider implements IStorageProvider {
 
   async saveMessage(chatId: string, message: StoredMessage): Promise<void> {
     try {
+      // Build customMetadata: only string | number | boolean | Array<string> allowed
+      // This goes in metadata.customMetadata per the MemoryMetadata SDK type
+      const customMetadata: Record<string, string | number | boolean | Array<string>> = {
+        sourceAgentId: message.source_agent_id || 'main-agent',
+        sourceAgentName: message.source_agent_name || 'Paprwork Assistant',
+        model: message.model || 'unknown',
+      };
+
+      if (message.toolCalls && message.toolCalls.length > 0) {
+        // Array<string> is allowed
+        customMetadata.toolsUsed = message.toolCalls.map(tc => tc.name);
+        customMetadata.toolCallsCount = message.toolCalls.length;
+      }
+
+      if (message.thinking) {
+        customMetadata.hasThinking = true;
+        customMetadata.thinkingLength = message.thinking.length;
+      }
+
+      if (message.prompt_tokens) {
+        customMetadata.promptTokens = message.prompt_tokens;
+        customMetadata.completionTokens = message.completion_tokens ?? 0;
+        customMetadata.totalTokens = message.total_tokens ?? 0;
+      }
+
+      if (message.error) {
+        customMetadata.hasError = true;
+      }
+
+      if (message.incomplete) {
+        customMetadata.incomplete = true;
+      }
+
       // POST to PAPR /v1/messages using SDK
       const response = await this.client.messages.store({
         content: message.content,
@@ -49,8 +80,12 @@ export class PaprMemoryProvider implements IStorageProvider {
         sessionId: chatId,
         process_messages: true, // Let PAPR do batch analysis & auto-summarize
         metadata: {
+          // Typed MemoryMetadata fields
           conversationId: chatId,
           createdAt: message.timestamp,
+          role: message.role,
+          // Custom fields in their proper container
+          customMetadata,
         },
       });
 

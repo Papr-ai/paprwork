@@ -7,17 +7,32 @@
 
 import { bashTool } from "./bash.js";
 import {
-  readFileTool,
-  writeFileTool,
-  listDirectoryTool,
-  searchFilesTool,
   filesystemTools,
 } from "./filesystem.js";
+import { browserTools } from "./browser.js";
+import { documentTools } from "./documents.js";
+import { paprMemoryTools } from "./paprMemory.js";
+import { skillsTools } from "./skills.js";
+import { appJobsTools } from "./appJobs.js";
+import { webviewTools } from "./webview.js";
+import { delegationTools } from "./delegation.js";
+import { planningTools } from "./planning.js";
 
 /**
  * All available tools
  */
-export const allTools = [bashTool, ...filesystemTools];
+export const allTools = [
+  bashTool,
+  ...filesystemTools,
+  ...browserTools,
+  ...documentTools,
+  ...paprMemoryTools,
+  ...skillsTools,
+  ...appJobsTools,
+  ...webviewTools,
+  ...delegationTools,
+  ...planningTools,
+];
 
 /**
  * Tool categories for organization
@@ -25,11 +40,14 @@ export const allTools = [bashTool, ...filesystemTools];
 export const toolsByCategory = {
   system: [bashTool],
   filesystem: filesystemTools,
-  // Future categories:
-  // browser: [],
-  // papr: [],
-  // documents: [],
-  // calendar: [],
+  browser: browserTools,
+  webview: webviewTools,
+  papr: paprMemoryTools,
+  documents: documentTools,
+  skills: skillsTools,
+  automation: appJobsTools,
+  delegation: delegationTools,
+  planning: planningTools,
 } as const;
 
 /**
@@ -37,13 +55,7 @@ export const toolsByCategory = {
  */
 export function getToolById(
   id: string,
-):
-  | typeof bashTool
-  | typeof readFileTool
-  | typeof writeFileTool
-  | typeof listDirectoryTool
-  | typeof searchFilesTool
-  | undefined {
+): (typeof allTools)[number] | undefined {
   return allTools.find((tool) => tool.id === id);
 }
 
@@ -70,6 +82,41 @@ export {
   searchFilesTool,
   filesystemTools,
 } from "./filesystem.js";
+export { browserTools } from "./browser.js";
+export { webviewTools } from "./webview.js";
+export {
+  delegationTools,
+  listSubAgentsTool,
+  createSubAgentTool,
+  deleteSubAgentTool,
+  delegateTaskTool,
+  getDelegationRunTool,
+  listDelegationRunsTool,
+} from "./delegation.js";
+export { documentTools } from "./documents.js";
+export { paprMemoryTools } from "./paprMemory.js";
+export { skillsTools } from "./skills.js";
+export {
+  appJobsTools,
+  createAppTool,
+  createJobTool,
+  runJobTool,
+  readJobLogsTool,
+  listJobsTool,
+  listJobFilesTool,
+  readJobFileTool,
+  editJobFileTool,
+  updateJobTool,
+  deleteJobTool,
+  linkAppDataSourceTool,
+  readAppDataSourcesTool,
+  readAppFileTool,
+  editAppFileTool,
+  listAppFilesTool,
+  listAppsTool,
+} from "./appJobs.js";
+
+export { planningTools, createPlanTool, updatePlanTool } from "./planning.js";
 
 // Export security utilities
 export {

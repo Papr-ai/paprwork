@@ -31,7 +31,7 @@ interface ChatStore {
   finalizeStreamingMessage: (messageId: string, chatId?: string) => void;
   setChats: (chats: ChatMetadata[]) => void;
   setLoading: (loading: boolean) => void;
-  setSending: (chatId: string, sending: boolean) => void;  // ✅ Now per-chat
+  setSending: (chatId: string, sending: boolean) => void;
   setError: (error: string | null) => void;
 
   // Parallel chat state management

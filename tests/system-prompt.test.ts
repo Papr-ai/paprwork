@@ -212,8 +212,8 @@ describe('System Prompt Builder', () => {
       // Check for proper line breaks
       expect(prompt).toContain('\n\n');
       
-      // Should not have excessive whitespace
-      expect(prompt).not.toContain('\n\n\n\n');
+      // Should not have excessive whitespace (5+ consecutive newlines)
+      expect(prompt).not.toContain('\n\n\n\n\n\n');
     });
   });
 

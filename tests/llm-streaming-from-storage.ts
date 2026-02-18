@@ -7,7 +7,7 @@
 
 import { MastraAgent } from "../src/core/agents/MastraAgent.js";
 import { CustomKeysStorage } from "../src/core/storage/CustomKeysStorage.js";
-import type { AgentConfig } from "../src/core/types/agents.js";
+import type { AgentConfigInternal } from "../src/core/types/agents.js";
 import os from "os";
 import path from "path";
 
@@ -18,17 +18,17 @@ const TEST_MESSAGE = "Say 'Hello World' and nothing else.";
 // Test models for each provider
 const TEST_MODELS = {
   anthropic: {
-    model: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-4-5",
     provider: "anthropic",
     keyName: "ANTHROPIC_API_KEY",
   },
   openai: {
-    model: "gpt-4o-mini",
+    model: "gpt-5-2",
     provider: "openai",
     keyName: "OPENAI_API_KEY",
   },
   google: {
-    model: "gemini-2.0-flash-exp",
+    model: "gemini-2-5-flash",
     provider: "google",
     keyName: "GOOGLE_API_KEY",
   },
@@ -51,8 +51,8 @@ async function testProviderStreaming(
     const agent = new MastraAgent(TEST_USER_DATA);
     await agent.initialize();
 
-    // Create config
-    const config: AgentConfig = {
+    // Create config (Internal config with API key)
+    const config: AgentConfigInternal = {
       model: modelConfig.model,
       provider: modelConfig.provider as "anthropic" | "openai" | "google",
       apiKey,
@@ -84,7 +84,7 @@ async function testProviderStreaming(
           }
           break;
 
-        case "thinking-delta":
+        case "reasoning-delta":
           if (chunk.payload && typeof chunk.payload === "object") {
             const thinking = (chunk.payload as { thinking?: string }).thinking || "";
             thinkingContent += thinking;

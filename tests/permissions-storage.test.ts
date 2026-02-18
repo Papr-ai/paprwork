@@ -159,9 +159,9 @@ describe('SettingsStorage - Permission Settings', () => {
   });
 
   describe('Permission Level', () => {
-    test('should default to "moderate"', () => {
+    test('should default to "open"', () => {
       const level = storage.getPermissionLevel();
-      expect(level).toBe('moderate');
+      expect(level).toBe('open');
     });
 
     test('should set and get permission level', () => {
@@ -177,7 +177,7 @@ describe('SettingsStorage - Permission Settings', () => {
     test('should get default permission settings', () => {
       const settings = storage.getPermissionSettings();
       
-      expect(settings.permissionLevel).toBe('moderate');
+      expect(settings.permissionLevel).toBe('open');
       expect(settings.requireConfirmForBash).toBe(false);
       expect(settings.requireConfirmForFileWrite).toBe(false);
       expect(settings.requireConfirmForBrowser).toBe(false);

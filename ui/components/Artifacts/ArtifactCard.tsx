@@ -1,24 +1,32 @@
 /**
- * ArtifactCard - Individual artifact card with preview
- * Reference: Paprwork v1 artifact card implementation
+ * ArtifactCard - Individual artifact card with preview, word count, inline rename, drag support
  */
 
-import React, { useState } from "react";
+import React, { useState, useRef, useCallback } from "react";
 import type { Artifact } from "../../stores/artifactsStore";
 import "./ArtifactCard.css";
 
 interface ArtifactCardProps {
   artifact: Artifact;
+  viewMode?: "grid" | "list";
   onDelete: () => void;
   onToggleFavorite: () => void;
+  onOpen: () => void;
+  onRename?: (newTitle: string) => void;
 }
 
 export function ArtifactCard({
   artifact,
+  viewMode = "grid",
   onDelete,
   onToggleFavorite,
+  onOpen,
+  onRename,
 }: ArtifactCardProps) {
   const [isHovered, setIsHovered] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(artifact.title);
+  const titleInputRef = useRef<HTMLInputElement>(null);
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -32,6 +40,54 @@ export function ArtifactCard({
     if (days < 30) return `${Math.floor(days / 7)} weeks ago`;
     return date.toLocaleDateString();
   };
+
+  const startRename = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setIsEditing(true);
+      setEditTitle(artifact.title);
+      setTimeout(() => titleInputRef.current?.select(), 0);
+    },
+    [artifact.title],
+  );
+
+  const commitRename = useCallback(() => {
+    setIsEditing(false);
+    const trimmed = editTitle.trim();
+    if (trimmed && trimmed !== artifact.title) {
+      onRename?.(trimmed);
+    }
+  }, [editTitle, artifact.title, onRename]);
+
+  const handleTitleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commitRename();
+      } else if (e.key === "Escape") {
+        setIsEditing(false);
+        setEditTitle(artifact.title);
+      }
+    },
+    [commitRename, artifact.title],
+  );
+
+  // Drag support for favorites
+  const handleDragStart = useCallback(
+    (e: React.DragEvent) => {
+      e.dataTransfer.setData(
+        "application/json",
+        JSON.stringify({
+          id: artifact.id,
+          type: artifact.type,
+          title: artifact.title,
+          ...(artifact.icon ? { icon: artifact.icon } : {}),
+        }),
+      );
+      e.dataTransfer.effectAllowed = "copy";
+    },
+    [artifact.id, artifact.type, artifact.title, artifact.icon],
+  );
 
   const getIcon = () => {
     if (artifact.icon) {
@@ -53,56 +109,31 @@ export function ArtifactCard({
 
     return (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-        <rect
-          x="3"
-          y="3"
-          width="7"
-          height="7"
-          rx="1"
-          stroke="currentColor"
-          strokeWidth="1.5"
-        />
-        <rect
-          x="14"
-          y="3"
-          width="7"
-          height="7"
-          rx="1"
-          stroke="currentColor"
-          strokeWidth="1.5"
-        />
-        <rect
-          x="3"
-          y="14"
-          width="7"
-          height="7"
-          rx="1"
-          stroke="currentColor"
-          strokeWidth="1.5"
-        />
-        <rect
-          x="14"
-          y="14"
-          width="7"
-          height="7"
-          rx="1"
-          stroke="currentColor"
-          strokeWidth="1.5"
-        />
+        <rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
+        <rect x="14" y="3" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
+        <rect x="3" y="14" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
+        <rect x="14" y="14" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
       </svg>
     );
   };
 
+  const previewLines = artifact.preview
+    ? artifact.preview.slice(0, 120)
+    : "";
+
   return (
     <div
-      className="artifact-card"
+      className={`artifact-card artifact-card--${viewMode}`}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
+      onClick={onOpen}
+      draggable
+      onDragStart={handleDragStart}
     >
       {/* Preview */}
       <div className="artifact-card__preview">
-        {artifact.preview ? (
-          <div className="artifact-card__preview-text">{artifact.preview}</div>
+        {previewLines ? (
+          <div className="artifact-card__preview-text">{previewLines}</div>
         ) : (
           <div className="artifact-card__preview-icon">{getIcon()}</div>
         )}
@@ -110,11 +141,35 @@ export function ArtifactCard({
 
       {/* Content */}
       <div className="artifact-card__content">
-        <h3 className="artifact-card__title">{artifact.title}</h3>
+        {isEditing ? (
+          <input
+            ref={titleInputRef}
+            className="artifact-card__title-input"
+            value={editTitle}
+            onChange={(e) => setEditTitle(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={handleTitleKeyDown}
+            onClick={(e) => e.stopPropagation()}
+            autoFocus
+          />
+        ) : (
+          <h3
+            className="artifact-card__title"
+            onDoubleClick={startRename}
+            title="Double-click to rename"
+          >
+            {artifact.title}
+          </h3>
+        )}
         <div className="artifact-card__meta">
           <span className="artifact-card__type">
             {artifact.type === "document" ? "Document" : "App"}
           </span>
+          {artifact.wordCount !== undefined && artifact.wordCount > 0 && (
+            <span className="artifact-card__word-count">
+              {artifact.wordCount.toLocaleString()} words
+            </span>
+          )}
           <span className="artifact-card__date">
             {formatDate(artifact.updatedAt)}
           </span>

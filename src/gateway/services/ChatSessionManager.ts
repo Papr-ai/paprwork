@@ -6,7 +6,7 @@
  * Based on Paprwork V1's chatSessions architecture.
  */
 
-import { Agent } from '@mastra/core';
+import { Agent } from '@mastra/core/agent';
 import { anthropic } from '@ai-sdk/anthropic';
 import { openai } from '@ai-sdk/openai';
 import { google } from '@ai-sdk/google';
@@ -88,13 +88,13 @@ export class ChatSessionManager {
         
       case 'openai':
         // For GPT-5.x models with reasoning, normalize the model name
-        // UI sends: "gpt-5.2-low" -> API expects: "gpt-5.2" with reasoning effort in providerOptions
+        // UI sends: "gpt-5-2-low" -> API expects: "gpt-5-2" with reasoning effort in providerOptions
         let normalizedModel = config.model;
-        if (config.model.startsWith('gpt-5.2-')) {
-          // Extract base model (e.g., "gpt-5.2-low" -> "gpt-5.2")
-          normalizedModel = 'gpt-5.2';
-        } else if (config.model.startsWith('gpt-5.2')) {
-          // Keep as is for base "gpt-5.2"
+        if (config.model.startsWith('gpt-5-2-')) {
+          // Extract base model (e.g., "gpt-5-2-low" -> "gpt-5-2")
+          normalizedModel = 'gpt-5-2';
+        } else if (config.model.startsWith('gpt-5-2')) {
+          // Keep as is for base "gpt-5-2"
           normalizedModel = config.model;
         }
         
@@ -214,7 +214,7 @@ export class ChatSessionManager {
   /**
    * Set abort controller for a session
    */
-  setAbortController(chatId: string, controller: AbortController): void {
+  setAbortController(chatId: string, controller: AbortController | null): void {
     const session = this.sessions.get(chatId);
     if (session) {
       session.abortController = controller;

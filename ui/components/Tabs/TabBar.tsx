@@ -129,12 +129,16 @@ export function TabBar() {
 
     const tabBarRect = tabBarRef.current.getBoundingClientRect();
     const targetRect = targetElement.getBoundingClientRect();
+    // Account for horizontal scroll offset (V1 pattern)
+    // Without this, the indicator drifts when tabs are scrolled right
+    const scrollLeft = tabBarRef.current.scrollLeft || 0;
+    const leftOffset = targetRect.left - tabBarRect.left + scrollLeft;
 
     if (position === "on-top") {
       // Full outline around target tab
       setDropIndicatorStyle({
         display: "block",
-        left: `${targetRect.left - tabBarRect.left}px`,
+        left: `${leftOffset}px`,
         top: "12px",
         width: `${targetRect.width}px`,
         height: "28px",
@@ -144,8 +148,8 @@ export function TabBar() {
       // Vertical bar at edge
       const left =
         position === "before"
-          ? targetRect.left - tabBarRect.left - 2
-          : targetRect.right - tabBarRect.left - 1;
+          ? leftOffset - 2
+          : leftOffset + targetRect.width - 1;
 
       setDropIndicatorStyle({
         display: "block",

@@ -1,5 +1,7 @@
 /**
  * Document WebSocket Handlers
+ *
+ * Supports CRUD, search, favorites, version history, and file-change watching.
  */
 
 import type { WebSocket } from "ws";
@@ -31,6 +33,34 @@ interface SearchDocumentsPayload {
 }
 
 interface ToggleFavoritePayload {
+  documentId: string;
+}
+
+interface VersionsPayload {
+  documentId: string;
+}
+
+interface GetVersionPayload {
+  documentId: string;
+  versionId: string;
+}
+
+interface RestoreVersionPayload {
+  documentId: string;
+  versionId: string;
+}
+
+interface SaveVersionPayload {
+  documentId: string;
+  content: string;
+  reason?: string;
+}
+
+interface ExportDocumentPayload {
+  documentId: string;
+}
+
+interface WatchDocumentPayload {
   documentId: string;
 }
 
@@ -145,6 +175,149 @@ export async function setupDocumentHandlers(
             type: "document:toggle-favorite:response",
             success: true,
             data: document,
+          }),
+        );
+        break;
+      }
+
+      // ===== Version History =====
+
+      case "document:versions": {
+        const payload = message.payload as VersionsPayload;
+        const versions = await documentService.getVersionHistory(
+          payload.documentId,
+        );
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "document:versions:response",
+            success: true,
+            data: versions,
+          }),
+        );
+        break;
+      }
+
+      case "document:get-version": {
+        const payload = message.payload as GetVersionPayload;
+        const version = await documentService.getVersion(
+          payload.documentId,
+          payload.versionId,
+        );
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "document:get-version:response",
+            success: true,
+            data: version,
+          }),
+        );
+        break;
+      }
+
+      case "document:restore-version": {
+        const payload = message.payload as RestoreVersionPayload;
+        const document = await documentService.restoreVersion(
+          payload.documentId,
+          payload.versionId,
+        );
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "document:restore-version:response",
+            success: true,
+            data: document,
+          }),
+        );
+        break;
+      }
+
+      case "document:save-version": {
+        const payload = message.payload as SaveVersionPayload;
+        const versionId = await documentService.saveVersion(
+          payload.documentId,
+          payload.content,
+          payload.reason ?? "save",
+        );
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "document:save-version:response",
+            success: true,
+            data: { versionId },
+          }),
+        );
+        break;
+      }
+
+      // ===== Export =====
+
+      case "document:export": {
+        const payload = message.payload as ExportDocumentPayload;
+        const buffer = await documentService.exportToDocx(payload.documentId);
+        const doc = await documentService.getDocument(payload.documentId);
+        const filename = `${(doc?.title ?? "document").replace(/[^a-zA-Z0-9_-]/g, "_")}.docx`;
+
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "document:export:response",
+            success: true,
+            data: {
+              filename,
+              base64: buffer.toString("base64"),
+              mimeType:
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            },
+          }),
+        );
+        break;
+      }
+
+      // ===== File Watching =====
+
+      case "document:watch": {
+        const payload = message.payload as WatchDocumentPayload;
+        documentService.watchDocument(payload.documentId);
+
+        // Register a callback that pushes changes to this WS client
+        const unsubscribe = documentService.onFileChange((docId) => {
+          if (docId === payload.documentId && ws.readyState === ws.OPEN) {
+            ws.send(
+              JSON.stringify({
+                type: "document:content-changed",
+                data: { documentId: docId },
+              }),
+            );
+          }
+        });
+
+        // Clean up when WS closes
+        ws.on("close", () => {
+          unsubscribe();
+          documentService.unwatchDocument(payload.documentId);
+        });
+
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "document:watch:response",
+            success: true,
+            data: { watching: payload.documentId },
+          }),
+        );
+        break;
+      }
+
+      case "document:unwatch": {
+        const payload = message.payload as WatchDocumentPayload;
+        documentService.unwatchDocument(payload.documentId);
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "document:unwatch:response",
+            success: true,
+            data: { unwatched: payload.documentId },
           }),
         );
         break;

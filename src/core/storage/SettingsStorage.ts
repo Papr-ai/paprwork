@@ -35,11 +35,12 @@ const DEFAULT_SETTINGS: AppSettings = {
 export class SettingsStorage {
   private store: Store<AppSettings>;
 
-  constructor() {
+  constructor(storagePath?: string) {
     this.store = new Store<AppSettings>({
       name: "settings",
       defaults: DEFAULT_SETTINGS,
       encryptionKey: "paprwork-v2-secure-settings",
+      ...(storagePath ? { cwd: storagePath } : {}),
     });
   }
 

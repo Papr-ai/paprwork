@@ -1,12 +1,10 @@
 /**
- * CodeBlock Styles - Based on Paprwork v1
- * Matches Tailwind classes: bg-zinc-100 dark:bg-zinc-800 for inline
- * bg-zinc-900 for block code
+ * CodeBlock Styles - Syntax highlighted code blocks with copy button
  */
 
 /* Inline code */
 .code-inline {
-  background: rgba(161, 161, 170, 0.15); /* zinc-100-ish */
+  background: rgba(161, 161, 170, 0.15);
   padding: 2px 6px;
   border-radius: 4px;
   font-family: "SF Mono", "Monaco", "Cascadia Code", "Roboto Mono", "Courier New", monospace;
@@ -17,58 +15,80 @@
 /* Block code wrapper */
 .code-block-wrapper {
   margin: 1rem 0;
-  border-radius: 12px;
+  border-radius: 8px;
   overflow: hidden;
-  background: rgba(39, 39, 42, 1); /* zinc-900 */
-  border: 1px solid rgba(63, 63, 70, 1); /* zinc-700 */
+  background: rgba(39, 39, 42, 1);
+  border: 1px solid rgba(63, 63, 70, 1);
 }
 
-/* Language label */
+/* Header bar with language + copy */
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: rgba(24, 24, 27, 1);
+  border-bottom: 1px solid rgba(63, 63, 70, 1);
+  min-height: 32px;
+}
+
 .code-block-language {
-  padding: 0.5rem 1rem;
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-weight: 500;
-  color: rgba(161, 161, 170, 1); /* zinc-400 */
-  background: rgba(24, 24, 27, 1); /* zinc-950 */
-  border-bottom: 1px solid rgba(63, 63, 70, 1); /* zinc-700 */
-  font-family: "SF Mono", "Monaco", "Cascadia Code", "Roboto Mono", "Courier New", monospace;
+  color: rgba(161, 161, 170, 1);
+  font-family: "SF Mono", "Monaco", "Cascadia Code", monospace;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
-/* Pre tag */
-.code-block-pre {
-  margin: 0;
-  padding: 1rem;
-  overflow-x: auto;
+.code-block-copy {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: none;
+  border-radius: 4px;
   background: transparent;
+  color: rgba(161, 161, 170, 1);
+  font-size: 0.7rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
 }
 
-/* Code content */
-.code-block-code {
-  font-family: "SF Mono", "Monaco", "Cascadia Code", "Roboto Mono", "Courier New", monospace;
-  font-size: 0.875rem;
-  line-height: 1.6;
-  color: rgba(244, 244, 245, 1); /* zinc-50 */
-  display: block;
-  white-space: pre;
+.code-block-copy:hover {
+  background: rgba(63, 63, 70, 0.5);
+  color: rgba(244, 244, 245, 1);
 }
 
-/* Scrollbar styling for code blocks */
-.code-block-pre::-webkit-scrollbar {
+.code-block-copy svg {
+  flex-shrink: 0;
+}
+
+/* Override react-syntax-highlighter styles for consistent look */
+.code-block-wrapper pre {
+  margin: 0 !important;
+}
+
+.code-block-wrapper pre code {
+  font-family: "SF Mono", "Monaco", "Cascadia Code", "Roboto Mono", "Courier New", monospace !important;
+}
+
+/* Scrollbar styling */
+.code-block-wrapper pre::-webkit-scrollbar {
   height: 8px;
 }
 
-.code-block-pre::-webkit-scrollbar-track {
+.code-block-wrapper pre::-webkit-scrollbar-track {
   background: rgba(24, 24, 27, 1);
   border-radius: 4px;
 }
 
-.code-block-pre::-webkit-scrollbar-thumb {
-  background: rgba(82, 82, 91, 1); /* zinc-600 */
+.code-block-wrapper pre::-webkit-scrollbar-thumb {
+  background: rgba(82, 82, 91, 1);
   border-radius: 4px;
 }
 
-.code-block-pre::-webkit-scrollbar-thumb:hover {
-  background: rgba(113, 113, 122, 1); /* zinc-500 */
+.code-block-wrapper pre::-webkit-scrollbar-thumb:hover {
+  background: rgba(113, 113, 122, 1);
 }

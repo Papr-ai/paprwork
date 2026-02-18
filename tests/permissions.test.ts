@@ -27,7 +27,7 @@ describe('Permissions System', () => {
     // Set electron-store path to temp dir
     process.env.PAPR_TEST_DATA_PATH = tempDir;
     
-    storage = new KeyPermissionsStorage();
+    storage = new KeyPermissionsStorage(tempDir);
   });
 
   afterEach(() => {
@@ -105,19 +105,35 @@ describe('Permissions System', () => {
       const all = storage.getAll();
       expect(Object.keys(all)).toHaveLength(0);
     });
+
+    test('should support tool-level keys like BROWSER_TOOL', () => {
+      // BROWSER_TOOL is not an env key but should still support "always" permission
+      storage.setPermission('BROWSER_TOOL', 'always');
+      
+      expect(storage.getPermission('BROWSER_TOOL')).toBe('always');
+      expect(storage.shouldAskPermission('BROWSER_TOOL')).toBe(false);
+      
+      // Verify it shows in always-allowed keys
+      const alwaysAllowed = storage.getAlwaysAllowedKeys();
+      expect(alwaysAllowed).toContain('BROWSER_TOOL');
+      
+      // Reset should work too
+      storage.resetPermission('BROWSER_TOOL');
+      expect(storage.getPermission('BROWSER_TOOL')).toBe('ask');
+    });
   });
 
   describe('SettingsStorage Permissions', () => {
     let settingsStorage: SettingsStorage;
 
     beforeEach(() => {
-      settingsStorage = new SettingsStorage();
+      settingsStorage = new SettingsStorage(tempDir);
     });
 
     test('should have default permission settings', () => {
       const settings = settingsStorage.getPermissionSettings();
       
-      expect(settings.permissionLevel).toBe('moderate');
+      expect(settings.permissionLevel).toBe('open');
       expect(settings.requireConfirmForBash).toBe(false);
       expect(settings.requireConfirmForFileWrite).toBe(false);
       expect(settings.requireConfirmForBrowser).toBe(false);

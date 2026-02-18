@@ -3,22 +3,37 @@ import path from "path";
 
 export default defineConfig({
   test: {
+    name: "unit-backend",
     globals: true,
-    environment: "node", // Node environment for backend tests
+    environment: "node",
     include: ["tests/**/*.{test,spec}.{js,ts}"],
     exclude: [
       "**/node_modules/**",
       "**/dist/**",
       "**/*.d.ts",
       "**/ui/**",
+      // Legacy script/manual/live tests (not deterministic vitest suites)
+      "tests/agent-performance-scaling.test.ts",
+      "tests/bash-tool.test.ts",
+      "tests/chat-exporter.test.ts",
+      "tests/chat-session-manager.test.ts",
+      "tests/llm-streaming.test.ts",
+      "tests/local-storage.test.ts",
+      "tests/papr-sdk-integration.test.ts",
+      "tests/storage-manager.test.ts",
+      "tests/title-generation.test.ts",
+      "tests/security-manual-test.ts",
+      "tests/papr-connection-test.ts",
+      "tests/papr-summarization-test.ts",
+      "tests/test-tab-activation.ts",
+      "tests/test-chat-flow.ts",
+      "tests/chat-creation-flow.test.ts",
+      "tests/keychain-fix-test.ts",
     ],
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "html"],
-      include: [
-        "src/core/**/*.ts",
-        "src/gateway/**/*.ts",
-      ],
+      include: ["src/core/**/*.ts", "src/gateway/**/*.ts"],
       exclude: [
         "**/*.d.ts",
         "**/*.test.ts",

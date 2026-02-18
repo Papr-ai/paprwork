@@ -1,0 +1,145 @@
+/* PlanCard - Step progress card */
+
+.plan-card {
+  background: var(--glass-bg, rgba(0, 0, 0, 0.03));
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 8px 0;
+}
+
+.plan-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  gap: 12px;
+}
+
+.plan-card__header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plan-card__chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s;
+  transform: rotate(-90deg);
+  color: var(--text-secondary);
+}
+
+.plan-card__chevron--expanded {
+  transform: rotate(0deg);
+}
+
+.plan-card__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plan-card__progress-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.plan-card__progress-text {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.plan-card__progress-bar {
+  width: 60px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-color, #e5e5e5);
+  overflow: hidden;
+}
+
+.plan-card__progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--primary-color, #007aff);
+  transition: width 0.3s ease;
+}
+
+/* Steps */
+.plan-card__steps {
+  padding: 0 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.plan-card__step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.plan-card__step-icon {
+  width: 16px;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.plan-card__step--pending .plan-card__step-icon {
+  color: var(--text-tertiary);
+}
+
+.plan-card__step--in_progress .plan-card__step-icon {
+  color: var(--primary-color, #007aff);
+}
+
+.plan-card__step--completed .plan-card__step-icon {
+  color: #34c759;
+}
+
+.plan-card__step--skipped .plan-card__step-icon {
+  color: var(--text-tertiary);
+}
+
+.plan-card__step-desc {
+  flex: 1;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.plan-card__step--completed .plan-card__step-desc {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+.plan-card__step--skipped .plan-card__step-desc {
+  text-decoration: line-through;
+  opacity: 0.5;
+}
+
+.plan-card__step-status {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  .plan-card {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+}

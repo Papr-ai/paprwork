@@ -9,6 +9,13 @@ import { setupAgentHandlers } from "./agent.js";
 import { setupChatHandlers } from "./chat.js";
 import { setupDocumentHandlers } from "./document.js";
 import { setupAppHandlers } from "./app.js";
+import { setupJobsHandlers } from "./jobs.js";
+import { setupSkillHandlers } from "./skill.js";
+import { setupBundleHandlers } from "./bundle.js";
+import { setupTemplateHandlers } from "./template.js";
+import { setupSubAgentHandlers } from "./subagent.js";
+import { setupSettingsHandlers } from "./settings.js";
+import { setupMeetingsHandlers } from "./meetings.js";
 
 export interface WSMessage {
   id: string;
@@ -21,6 +28,33 @@ export interface WSResponse {
   success: boolean;
   data?: unknown;
   error?: string;
+}
+
+// Global WebSocketServer reference for broadcasting
+let wssInstance: WebSocketServer | null = null;
+
+/**
+ * Set the WebSocketServer instance for broadcasting
+ */
+export function setWebSocketServer(wss: WebSocketServer): void {
+  wssInstance = wss;
+}
+
+/**
+ * Broadcast a message to all connected clients
+ */
+export function broadcast(message: { type: string; data?: unknown }): void {
+  if (!wssInstance) {
+    console.warn('[WebSocket] Cannot broadcast - server not initialized');
+    return;
+  }
+
+  const payload = JSON.stringify(message);
+  wssInstance.clients.forEach((client) => {
+    if (client.readyState === client.OPEN) {
+      client.send(payload);
+    }
+  });
 }
 
 /**
@@ -53,6 +87,9 @@ export function sendError(
  */
 export function setupWebSocketHandlers(wss: WebSocketServer): void {
   console.log("[WebSocket] Setting up handlers...");
+  
+  // Store WSS instance for broadcasting
+  setWebSocketServer(wss);
 
   wss.on("connection", (ws: WebSocket) => {
     console.log("[WebSocket] Client connected");
@@ -71,6 +108,20 @@ export function setupWebSocketHandlers(wss: WebSocketServer): void {
           await setupDocumentHandlers(ws, message);
         } else if (message.type.startsWith("app:")) {
           await setupAppHandlers(ws, message);
+        } else if (message.type.startsWith("jobs:")) {
+          await setupJobsHandlers(ws, message);
+        } else if (message.type.startsWith("skill:")) {
+          await setupSkillHandlers(ws, message);
+        } else if (message.type.startsWith("bundle:")) {
+          await setupBundleHandlers(ws, message);
+        } else if (message.type.startsWith("template:")) {
+          await setupTemplateHandlers(ws, message);
+        } else if (message.type.startsWith("subagent:")) {
+          await setupSubAgentHandlers(ws, message);
+        } else if (message.type.startsWith("settings:")) {
+          await setupSettingsHandlers(ws, message);
+        } else if (message.type.startsWith("meetings:")) {
+          await setupMeetingsHandlers(ws, message);
         } else if (message.type.startsWith("custom-keys:")) {
           // Custom keys are now handled via Electron IPC, not WebSocket
           // No action needed here - handled in customKeys.ts

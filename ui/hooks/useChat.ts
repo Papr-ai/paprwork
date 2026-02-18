@@ -6,13 +6,18 @@
 import { useCallback, useEffect } from "react";
 import { useChatStore, defaultChatState } from "../stores/chatStore";
 import { useTabStore } from "../stores/tabStore";
-import { useAgent } from "./useAgent";
 import { gateway } from "../src/lib/gateway";
+import { mapHistoryMessages } from "../utils/historyMapper";
+import { fetchChatHistory } from "../utils/chatHistoryApi";
+
+let hasLoadedChatsOnce = false;
+let loadChatsPromise: Promise<void> | null = null;
 
 export function useChat() {
   // V1 APPROACH: Get active chat from tabStore (single source of truth)
-  const { activeTabId, getTab } = useTabStore();
-  const activeTab = activeTabId ? getTab(activeTabId) : null;
+  const { activeLeftTab, activeTabId, getTab } = useTabStore();
+  const selectedTabId = activeLeftTab || activeTabId;
+  const activeTab = selectedTabId ? getTab(selectedTabId) : null;
   const activeChat = activeTab?.type === 'chat' ? activeTab.entityId : null;
 
   // Get messages for the ACTIVE chat specifically (not global messages array)
@@ -37,10 +42,17 @@ export function useChat() {
   const setChats = useChatStore(s => s.setChats);
   const setLoading = useChatStore(s => s.setLoading);
 
-  const { getHistory } = useAgent();
-
   // Load all chats
-  const loadChats = useCallback(async () => {
+  const loadChats = useCallback(async (force: boolean = false) => {
+    if (hasLoadedChatsOnce && !force) {
+      return;
+    }
+    if (loadChatsPromise && !force) {
+      await loadChatsPromise;
+      return;
+    }
+
+    loadChatsPromise = (async () => {
     try {
       setLoading(true);
       const response = await gateway.send("chat:list");
@@ -53,13 +65,18 @@ export function useChat() {
 
       if (chatsList) {
         setChats(chatsList);
+        hasLoadedChatsOnce = true;
         // Note: No setActiveChat - tabStore manages active state
       }
     } catch (error) {
       console.error("Failed to load chats:", error);
     } finally {
       setLoading(false);
+      loadChatsPromise = null;
     }
+    })();
+
+    await loadChatsPromise;
   }, [setChats, setLoading]); // Fixed: removed activeChat and setActiveChat
 
   // Load messages for a chat
@@ -67,13 +84,19 @@ export function useChat() {
     async (chatId: string) => {
       try {
         setLoading(true);
-        const history = await getHistory(chatId);
-        
-        // Transform CoreMessage to ChatMessage by adding id
-        const messages = history.map((msg, index) => ({
-          ...msg,
-          id: `msg-${index}-${Date.now()}`,
-        }));
+        useChatStore.setState((state) => {
+          const existingState = state.chatStates.get(chatId) || { ...defaultChatState };
+          const newChatStates = new Map(state.chatStates);
+          newChatStates.set(chatId, {
+            ...existingState,
+            isLoading: true,
+          });
+          return { chatStates: newChatStates };
+        });
+
+        const history = await fetchChatHistory(chatId);
+
+        const messages = mapHistoryMessages(history);
         
         // Store messages in the specific chat's state using set() with updater function
         useChatStore.setState((state) => {
@@ -89,10 +112,19 @@ export function useChat() {
       } catch (error) {
         console.error("Failed to load messages:", error);
       } finally {
+        useChatStore.setState((state) => {
+          const existingState = state.chatStates.get(chatId) || { ...defaultChatState };
+          const newChatStates = new Map(state.chatStates);
+          newChatStates.set(chatId, {
+            ...existingState,
+            isLoading: false,
+          });
+          return { chatStates: newChatStates };
+        });
         setLoading(false);
       }
     },
-    [getHistory, setLoading],
+    [setLoading],
   );
 
   // Load chats on mount
@@ -101,35 +133,9 @@ export function useChat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Run once on mount
 
-  // Load messages when active chat changes (driven by tabStore now)
-  // BUT: Don't reload if chat already has messages (prevents clobbering in-memory state)
-  useEffect(() => {
-    console.log(`[useChat.useEffect] Active chat changed to: ${activeChat}`);
-    
-    if (activeChat) {
-      const { chatStates } = useChatStore.getState();
-      const existingState = chatStates.get(activeChat);
-      
-      const messageCount = existingState?.messages?.length || 0;
-      console.log(`[useChat.useEffect] Chat state for ${activeChat}:`, {
-        hasState: !!existingState,
-        messageCount: messageCount,
-        isStreaming: existingState?.isStreaming,
-        isSending: existingState?.isSending
-      });
-      
-      // Only load if we don't already have messages
-      // This prevents wiping out the user message that was just added
-      if (!existingState || messageCount === 0) {
-        console.log(`[useChat.useEffect] 🔄 Loading messages for ${activeChat}...`);
-        loadMessages(activeChat);
-      } else {
-        console.log(`[useChat.useEffect] ✅ Chat ${activeChat} already has ${messageCount} messages, skipping load`);
-      }
-    } else {
-      console.log(`[useChat.useEffect] No active chat`);
-    }
-  }, [activeChat, loadMessages]);
+  // IMPORTANT:
+  // Message hydration is handled by each ChatContainer instance per chatId.
+  // Keeping it there avoids duplicate fetch storms from multiple useChat consumers.
 
   // Create new chat
   const createChat = useCallback(
@@ -159,7 +165,7 @@ export function useChat() {
         const chat = response.data as { chatId: string };
 
         if (chat?.chatId) {
-          await loadChats();
+          await loadChats(true);
           return chat.chatId;
         }
         throw new Error("Failed to create chat");
@@ -176,7 +182,7 @@ export function useChat() {
     async (chatId: string) => {
       try {
         await gateway.send("chat:delete", { chatId });
-        await loadChats();
+        await loadChats(true);
         // Note: Tab management handled by tabStore (closeTab)
       } catch (error) {
         console.error("Failed to delete chat:", error);
@@ -200,7 +206,7 @@ export function useChat() {
     async (chatId: string, title: string) => {
       try {
         await gateway.send("chat:update", { chatId, title });
-        await loadChats();
+        await loadChats(true);
       } catch (error) {
         console.error("Failed to update chat title:", error);
       }

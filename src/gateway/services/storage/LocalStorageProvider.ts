@@ -99,6 +99,10 @@ export class LocalStorageProvider implements IStorageProvider {
         last_sync_attempt TEXT,
         sync_error TEXT,
         
+        -- Agent attribution (for SubAgents participating in chats)
+        source_agent_id TEXT DEFAULT 'main-agent',
+        source_agent_name TEXT DEFAULT 'Paprwork Assistant',
+        
         FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
       )
     `);
@@ -134,6 +138,24 @@ export class LocalStorageProvider implements IStorageProvider {
       this.db.exec('ALTER TABLE messages ADD COLUMN incomplete INTEGER DEFAULT 0');
     }
     
+    // Add source_agent_id column if missing
+    if (!columnNames.includes('source_agent_id')) {
+      console.log('[LocalStorage] Adding "source_agent_id" column to messages table...');
+      this.db.exec('ALTER TABLE messages ADD COLUMN source_agent_id TEXT DEFAULT \'main-agent\'');
+    }
+    
+    // Add source_agent_name column if missing
+    if (!columnNames.includes('source_agent_name')) {
+      console.log('[LocalStorage] Adding "source_agent_name" column to messages table...');
+      this.db.exec('ALTER TABLE messages ADD COLUMN source_agent_name TEXT DEFAULT \'Paprwork Assistant\'');
+    }
+    
+    // Add sequence column if missing (V1-style interleaved text/tool sequence)
+    if (!columnNames.includes('sequence')) {
+      console.log('[LocalStorage] Adding "sequence" column to messages table...');
+      this.db.exec('ALTER TABLE messages ADD COLUMN sequence TEXT'); // Store as JSON
+    }
+    
     console.log('[LocalStorage] Database migration complete');
 
     // Create indexes
@@ -167,8 +189,10 @@ export class LocalStorageProvider implements IStorageProvider {
         id, chat_id, role, content, timestamp,
         thinking, tool_calls, error, incomplete,
         model, prompt_tokens, completion_tokens, total_tokens,
-        sync_status, papr_message_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        sync_status, papr_message_id,
+        source_agent_id, source_agent_name,
+        sequence
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       message.id || uuidv4(),
       chatId,
@@ -184,7 +208,10 @@ export class LocalStorageProvider implements IStorageProvider {
       message.completion_tokens || 0,
       message.total_tokens || 0,
       message.sync_status || 'local',
-      message.papr_message_id || null
+      message.papr_message_id || null,
+      message.source_agent_id || 'main-agent',
+      message.source_agent_name || 'Paprwork Assistant',
+      message.sequence ? JSON.stringify(message.sequence) : null, // Store sequence as JSON
     );
 
     // Update chat message count and updated_at
@@ -202,7 +229,9 @@ export class LocalStorageProvider implements IStorageProvider {
         id, chat_id, role, content, timestamp,
         thinking, tool_calls, error, incomplete,
         model, prompt_tokens, completion_tokens, total_tokens,
-        sync_status, papr_message_id, last_sync_attempt, sync_error
+        sync_status, papr_message_id, last_sync_attempt, sync_error,
+        source_agent_id, source_agent_name,
+        sequence
       FROM messages 
       WHERE chat_id = ? 
       ORDER BY timestamp ASC
@@ -230,6 +259,7 @@ export class LocalStorageProvider implements IStorageProvider {
       timestamp: row.timestamp,
       thinking: row.thinking || undefined,
       toolCalls: row.tool_calls ? JSON.parse(row.tool_calls) : undefined,
+      sequence: row.sequence ? JSON.parse(row.sequence) : undefined, // Parse sequence from JSON
       error: row.error || undefined,
       incomplete: row.incomplete === 1,
       model: row.model,
@@ -240,6 +270,8 @@ export class LocalStorageProvider implements IStorageProvider {
       papr_message_id: row.papr_message_id,
       last_sync_attempt: row.last_sync_attempt,
       sync_error: row.sync_error,
+      source_agent_id: row.source_agent_id || 'main-agent',
+      source_agent_name: row.source_agent_name || 'Paprwork Assistant',
     }));
   }
 
@@ -256,15 +288,21 @@ export class LocalStorageProvider implements IStorageProvider {
       return [];
     }
 
-    // If no summary, return all messages
+    // If no summary, return all messages with toolCalls intact
+    // IMPORTANT: Pass toolCalls as a separate field so historyFormatter
+    // can produce proper AI SDK structured messages (not [tool_activity] text)
     if (!chat.summary_long) {
       const messages = await this.loadMessages(chatId);
-      return messages.map(m => ({ role: m.role, content: m.content }));
+      return messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+        toolCalls: message.toolCalls,
+      }));
     }
 
     // Get last 6 messages
     const recentMessages = this.db.prepare(`
-      SELECT role, content 
+      SELECT role, content, thinking, tool_calls
       FROM messages 
       WHERE chat_id = ? 
       ORDER BY timestamp DESC 
@@ -312,11 +350,19 @@ KEY TOPICS: ${topics.join(', ')}
 The following 6 messages are the RECENT conversation.`
     };
 
-    // Format recent messages
-    const formattedRecent = recentMessages.map(m => ({
-      role: m.role,
-      content: m.content
-    }));
+    // Format recent messages — pass toolCalls through for structured AI SDK format
+    const formattedRecent = recentMessages.map((message) => {
+      const parsedToolCalls =
+        typeof message.tool_calls === 'string' && message.tool_calls.length > 0
+          ? JSON.parse(message.tool_calls) as unknown[]
+          : undefined;
+
+      return {
+        role: typeof message.role === 'string' ? message.role : 'assistant',
+        content: typeof message.content === 'string' ? message.content : '',
+        toolCalls: parsedToolCalls,
+      };
+    });
 
     return [summaryMessage, ...formattedRecent];
   }

@@ -1,0 +1,324 @@
+{
+  "_meta": {
+    "description": "Cached catalog of popular skills from skills.sh and ClawHub. Agent reads this file during onboarding instead of browsing the web.",
+    "lastUpdated": "2026-02-13",
+    "sources": ["skills.sh", "clawhub.ai"]
+  },
+  "skills": [
+    {
+      "id": "vercel-labs/agent-skills/vercel-react-best-practices",
+      "name": "Vercel React Best Practices",
+      "description": "40+ React and Next.js optimization patterns from 10+ years of experience",
+      "category": "frontend",
+      "tags": ["react", "nextjs", "performance", "best-practices"],
+      "source": "skills.sh",
+      "installs": 36000
+    },
+    {
+      "id": "vercel-labs/agent-skills/web-design-guidelines",
+      "name": "Web Design Guidelines",
+      "description": "Modern web design principles and UI/UX best practices",
+      "category": "design",
+      "tags": ["design", "ui", "ux", "guidelines"],
+      "source": "skills.sh",
+      "installs": 27300
+    },
+    {
+      "id": "remotion-dev/skills/remotion-best-practices",
+      "name": "Remotion Best Practices",
+      "description": "Video generation with React — best practices and patterns for programmatic video",
+      "category": "video",
+      "tags": ["remotion", "video", "react", "animation"],
+      "source": "skills.sh",
+      "installs": 16600
+    },
+    {
+      "id": "anthropics/skills/frontend-design",
+      "name": "Frontend Design",
+      "description": "Expert frontend design patterns and implementation strategies",
+      "category": "design",
+      "tags": ["frontend", "design", "ui", "components"],
+      "source": "skills.sh",
+      "installs": 6300
+    },
+    {
+      "id": "anthropics/skills/skill-creator",
+      "name": "Skill Creator",
+      "description": "Learn how to create effective skills for AI agents — structure, testing, publishing",
+      "category": "meta",
+      "tags": ["skills", "meta", "creation"],
+      "source": "skills.sh",
+      "installs": 3500
+    },
+    {
+      "id": "expo/skills/building-native-ui",
+      "name": "Building Native UI",
+      "description": "React Native and Expo UI development patterns for mobile apps",
+      "category": "mobile",
+      "tags": ["react-native", "expo", "mobile", "ui"],
+      "source": "skills.sh",
+      "installs": 2600
+    },
+    {
+      "id": "better-auth/skills/better-auth-best-practices",
+      "name": "Better Auth Best Practices",
+      "description": "Authentication and authorization best practices — sessions, OAuth, JWT",
+      "category": "backend",
+      "tags": ["auth", "security", "authentication", "oauth"],
+      "source": "skills.sh",
+      "installs": 2100
+    },
+    {
+      "id": "supabase/agent-skills/supabase-postgres-best-practices",
+      "name": "Supabase Postgres Best Practices",
+      "description": "Database design and optimization with Supabase and PostgreSQL",
+      "category": "backend",
+      "tags": ["supabase", "postgres", "database", "sql"],
+      "source": "skills.sh",
+      "installs": 1300
+    },
+    {
+      "id": "anthropics/skills/pdf",
+      "name": "PDF Processing",
+      "description": "Working with PDF files — reading, extracting text/tables, generating PDFs",
+      "category": "documents",
+      "tags": ["pdf", "documents", "processing", "extraction"],
+      "source": "skills.sh",
+      "installs": 1300
+    },
+    {
+      "id": "anthropics/skills/docx",
+      "name": "DOCX Processing",
+      "description": "Microsoft Word document processing — generation, editing, conversion",
+      "category": "documents",
+      "tags": ["docx", "word", "documents"],
+      "source": "skills.sh",
+      "installs": 983
+    },
+    {
+      "id": "anthropics/skills/pptx",
+      "name": "PPTX Processing",
+      "description": "PowerPoint presentation creation, editing, and theming with python-pptx",
+      "category": "documents",
+      "tags": ["pptx", "powerpoint", "presentations"],
+      "source": "skills.sh",
+      "installs": 1100
+    },
+    {
+      "id": "anthropics/skills/xlsx",
+      "name": "XLSX Processing",
+      "description": "Excel spreadsheet processing — formulas, charts, data manipulation",
+      "category": "documents",
+      "tags": ["xlsx", "excel", "spreadsheets", "data"],
+      "source": "skills.sh",
+      "installs": 1000
+    },
+    {
+      "id": "anthropics/skills/webapp-testing",
+      "name": "Web App Testing",
+      "description": "Testing strategies for web applications — unit, integration, E2E",
+      "category": "testing",
+      "tags": ["testing", "qa", "web", "e2e"],
+      "source": "skills.sh",
+      "installs": 892
+    },
+    {
+      "id": "anthropics/skills/mcp-builder",
+      "name": "MCP Builder",
+      "description": "Building Model Context Protocol integrations — servers, tools, resources",
+      "category": "integrations",
+      "tags": ["mcp", "integrations", "tools", "protocol"],
+      "source": "skills.sh",
+      "installs": 845
+    },
+    {
+      "id": "coreyhaines31/marketingskills/seo-audit",
+      "name": "SEO Audit",
+      "description": "Comprehensive SEO analysis — technical, on-page, content, and off-page auditing",
+      "category": "marketing",
+      "tags": ["seo", "marketing", "optimization", "audit"],
+      "source": "skills.sh",
+      "installs": 2000
+    },
+    {
+      "id": "coreyhaines31/marketingskills/copywriting",
+      "name": "Copywriting",
+      "description": "Professional copywriting — AIDA, PAS, headlines, emails, landing pages",
+      "category": "marketing",
+      "tags": ["copywriting", "content", "marketing", "persuasion"],
+      "source": "skills.sh",
+      "installs": 1800
+    },
+    {
+      "id": "coreyhaines31/marketingskills/content-strategy",
+      "name": "Content Strategy",
+      "description": "Planning content strategies — audience analysis, editorial calendars, distribution",
+      "category": "marketing",
+      "tags": ["content", "strategy", "editorial", "marketing"],
+      "source": "skills.sh",
+      "installs": 1500
+    },
+    {
+      "id": "anthropics/skills/systematic-debugging",
+      "name": "Systematic Debugging",
+      "description": "Structured approach to debugging — reproduce, isolate, hypothesize, verify",
+      "category": "development",
+      "tags": ["debugging", "troubleshooting", "methodology"],
+      "source": "skills.sh",
+      "installs": 1200
+    },
+    {
+      "id": "anthropics/skills/brainstorming",
+      "name": "Brainstorming",
+      "description": "Structured ideation techniques — SCAMPER, mind mapping, reverse brainstorming",
+      "category": "productivity",
+      "tags": ["brainstorming", "ideation", "creativity"],
+      "source": "skills.sh",
+      "installs": 1100
+    },
+    {
+      "id": "anthropics/skills/doc-coauthoring",
+      "name": "Document Co-authoring",
+      "description": "Collaborative document editing between agent and user — feedback, revisions",
+      "category": "documents",
+      "tags": ["documents", "collaboration", "writing"],
+      "source": "skills.sh",
+      "installs": 900
+    },
+    {
+      "id": "clawhub/yahoo-finance",
+      "name": "Yahoo Finance",
+      "description": "Access financial data — stock prices, financials, market data via yfinance Python library",
+      "category": "finance",
+      "tags": ["finance", "stocks", "market-data", "yfinance"],
+      "source": "clawhub",
+      "installs": 5200
+    },
+    {
+      "id": "clawhub/summarize-cli",
+      "name": "Summarize CLI",
+      "description": "Summarize files, URLs, and command output from terminal with AI",
+      "category": "productivity",
+      "tags": ["summarize", "cli", "productivity"],
+      "source": "clawhub",
+      "installs": 3800
+    },
+    {
+      "id": "clawhub/weather",
+      "name": "Weather",
+      "description": "Get current weather and forecasts for any location",
+      "category": "utilities",
+      "tags": ["weather", "forecast", "api"],
+      "source": "clawhub",
+      "installs": 4500
+    },
+    {
+      "id": "clawhub/google-search",
+      "name": "Google Search",
+      "description": "Perform web searches and retrieve structured results without browser automation",
+      "category": "search",
+      "tags": ["search", "google", "web", "research"],
+      "source": "clawhub",
+      "installs": 8900
+    },
+    {
+      "id": "clawhub/github-tools",
+      "name": "GitHub Tools",
+      "description": "Advanced GitHub operations — PR reviews, issue management, CI/CD monitoring",
+      "category": "development",
+      "tags": ["github", "git", "ci-cd", "devops"],
+      "source": "clawhub",
+      "installs": 6700
+    },
+    {
+      "id": "clawhub/notion-integration",
+      "name": "Notion Integration",
+      "description": "Read and write Notion pages, databases, and blocks via API",
+      "category": "integrations",
+      "tags": ["notion", "productivity", "database", "api"],
+      "source": "clawhub",
+      "installs": 4100
+    },
+    {
+      "id": "clawhub/slack-tools",
+      "name": "Slack Tools",
+      "description": "Send messages, read channels, and manage Slack workspaces via API",
+      "category": "integrations",
+      "tags": ["slack", "messaging", "team", "api"],
+      "source": "clawhub",
+      "installs": 3600
+    },
+    {
+      "id": "clawhub/email-tools",
+      "name": "Email Tools",
+      "description": "Send, read, and manage emails via SMTP/IMAP — templates, campaigns",
+      "category": "integrations",
+      "tags": ["email", "smtp", "imap", "automation"],
+      "source": "clawhub",
+      "installs": 3200
+    },
+    {
+      "id": "clawhub/calendar-tools",
+      "name": "Calendar Tools",
+      "description": "Manage calendar events — create, update, list across Google Calendar and iCal",
+      "category": "productivity",
+      "tags": ["calendar", "scheduling", "google-calendar"],
+      "source": "clawhub",
+      "installs": 2800
+    },
+    {
+      "id": "clawhub/crm-tools",
+      "name": "CRM Tools",
+      "description": "Manage contacts, deals, and pipelines across popular CRMs (HubSpot, Attio, Salesforce)",
+      "category": "business",
+      "tags": ["crm", "hubspot", "salesforce", "attio"],
+      "source": "clawhub",
+      "installs": 2500
+    },
+    {
+      "id": "clawhub/data-analysis",
+      "name": "Data Analysis",
+      "description": "Analyze datasets with pandas, create visualizations, and generate reports",
+      "category": "data",
+      "tags": ["data", "analysis", "pandas", "visualization"],
+      "source": "clawhub",
+      "installs": 4800
+    },
+    {
+      "id": "clawhub/web-scraping",
+      "name": "Web Scraping",
+      "description": "Extract structured data from websites — Puppeteer, Cheerio, rate limiting",
+      "category": "data",
+      "tags": ["scraping", "web", "data-extraction", "puppeteer"],
+      "source": "clawhub",
+      "installs": 5600
+    },
+    {
+      "id": "clawhub/image-generation",
+      "name": "Image Generation",
+      "description": "Generate images with AI — DALL-E, Stable Diffusion, prompting strategies",
+      "category": "media",
+      "tags": ["image", "ai", "generation", "dall-e"],
+      "source": "clawhub",
+      "installs": 3900
+    },
+    {
+      "id": "clawhub/stripe-tools",
+      "name": "Stripe Tools",
+      "description": "Manage Stripe payments — subscriptions, invoices, checkout sessions",
+      "category": "business",
+      "tags": ["stripe", "payments", "billing", "subscriptions"],
+      "source": "clawhub",
+      "installs": 2200
+    },
+    {
+      "id": "clawhub/social-media-scheduler",
+      "name": "Social Media Scheduler",
+      "description": "Schedule and post content across Twitter/X, LinkedIn, Instagram — optimal timing",
+      "category": "marketing",
+      "tags": ["social-media", "scheduling", "twitter", "linkedin"],
+      "source": "clawhub",
+      "installs": 2900
+    }
+  ]
+}

@@ -94,10 +94,10 @@ export class MastraAgent {
 
       try {
         // Map UI model ID to API model ID
-        // All GPT-5.2 variants (except codex) use the same API ID "gpt-5.2"
+        // All GPT-5-2 variants (except codex) use the same API ID "gpt-5-2"
         let apiModelId = config.model;
-        if (config.model.startsWith("gpt-5.2-") && config.model !== "gpt-5.2-codex") {
-          apiModelId = "gpt-5.2"; // Map gpt-5.2-low, gpt-5.2-high, gpt-5.2-xhigh to gpt-5.2
+        if (config.model.startsWith("gpt-5-2-") && config.model !== "gpt-5-2-codex") {
+          apiModelId = "gpt-5-2"; // Map gpt-5-2-low, gpt-5-2-high, gpt-5-2-xhigh to gpt-5-2
         }
 
         // Create Mastra agent with tools passed as object
@@ -121,18 +121,28 @@ export class MastraAgent {
           .join("\n\n");
 
         // Configure provider options for reasoning models
-        const providerOptions: Record<string, any> = {};
+        const providerOptions: Record<string, unknown> = {};
         if (config.provider === "openai" && config.reasoning?.effort) {
           // Use the reasoning effort from the model config
           providerOptions.openai = {
             reasoningEffort: config.reasoning.effort, // "low" | "medium" | "high" | "xhigh"
           };
         }
+        
+        // For Google Gemini models with thinking capabilities
+        if (config.provider === "google" && config.thinkingBudget !== undefined && config.thinkingBudget > 0) {
+          providerOptions.google = {
+            thinkingConfig: {
+              includeThoughts: true, // Enable thought summaries in stream
+              thinkingBudget: config.thinkingBudget, // Token budget for thinking
+            },
+          };
+        }
 
         // Stream with Mastra
         const streamResult = await agent.stream(mastraMessages, {
           maxSteps: config.maxSteps || 50,
-          providerOptions: Object.keys(providerOptions).length > 0 ? providerOptions : undefined,
+          providerOptions: Object.keys(providerOptions).length > 0 ? (providerOptions as any) : undefined,
         });
 
         // Stream chunks - use proper Mastra types

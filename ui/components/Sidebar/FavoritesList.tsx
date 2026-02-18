@@ -1,8 +1,9 @@
 /**
- * FavoritesList - Collapsible favorites section
+ * FavoritesList - Collapsible favorites section with drag-and-drop support
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import { useTabs } from "../../hooks/useTabs";
 import "./FavoritesList.css";
 
 interface Favorite {
@@ -15,9 +16,10 @@ interface Favorite {
 export function FavoritesList() {
   const [isExpanded, setIsExpanded] = useState(true);
   const [favorites, setFavorites] = useState<Favorite[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const { createTab, switchToTab } = useTabs();
 
   useEffect(() => {
-    // Load favorites from localStorage
     const stored = localStorage.getItem("paprwork-favorites");
     if (stored) {
       try {
@@ -28,15 +30,91 @@ export function FavoritesList() {
     }
   }, []);
 
+  const saveFavorites = useCallback((updated: Favorite[]) => {
+    setFavorites(updated);
+    localStorage.setItem("paprwork-favorites", JSON.stringify(updated));
+  }, []);
+
   const toggleExpanded = () => {
     setIsExpanded(!isExpanded);
   };
 
   const removeFavorite = (id: string) => {
-    const updated = favorites.filter((f) => f.id !== id);
-    setFavorites(updated);
-    localStorage.setItem("paprwork-favorites", JSON.stringify(updated));
+    saveFavorites(favorites.filter((f) => f.id !== id));
   };
+
+  const handleOpen = useCallback(
+    (fav: Favorite) => {
+      const tabType = fav.type === "chat" ? "chat" : fav.type === "app" ? "app" : "document";
+      const tabId = createTab(tabType, fav.id, fav.title);
+      switchToTab(tabId);
+    },
+    [createTab, switchToTab],
+  );
+
+  // Drag-and-drop handlers
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    setIsDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    // Only clear drag-over when the cursor actually leaves the favorites area
+    // (not when hovering child elements within the section)
+    const current = e.currentTarget as HTMLElement;
+    const related = e.relatedTarget as Node | null;
+    if (!related || !current.contains(related)) {
+      setIsDragOver(false);
+    }
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragOver(false);
+
+      // Try application/json first (tab drag or artifact card drag)
+      // then fall back to text/plain for legacy drag sources
+      let raw = e.dataTransfer.getData("application/json");
+      if (!raw) {
+        raw = e.dataTransfer.getData("text/plain");
+      }
+      if (!raw) return;
+
+      try {
+        const data = JSON.parse(raw) as Record<string, unknown>;
+
+        // Determine the entity id and type
+        // Tab drag provides { id (entityId), type, title }
+        // Artifact card drag provides { id, type, title, icon }
+        const entityId = (data.id ?? data.tabId) as string | undefined;
+        const entityType = data.type as string | undefined;
+        const entityTitle = data.title as string | undefined;
+
+        if (!entityId || !entityType || !entityTitle) return;
+
+        // Accept chat, document, and app types
+        const validTypes: Favorite["type"][] = ["chat", "document", "app"];
+        if (!validTypes.includes(entityType as Favorite["type"])) return;
+
+        // Don't add duplicates
+        if (favorites.some((f) => f.id === entityId)) return;
+
+        const newFav: Favorite = {
+          id: entityId,
+          type: entityType as Favorite["type"],
+          title: entityTitle,
+          icon: typeof data.icon === "string" ? data.icon : undefined,
+        };
+
+        saveFavorites([...favorites, newFav]);
+      } catch {
+        /* invalid drop data */
+      }
+    },
+    [favorites, saveFavorites],
+  );
 
   const getIcon = (favorite: Favorite) => {
     if (favorite.icon) {
@@ -53,12 +131,13 @@ export function FavoritesList() {
     return <span dangerouslySetInnerHTML={{ __html: icons[favorite.type] }} />;
   };
 
-  if (favorites.length === 0) {
-    return null;
-  }
-
   return (
-    <div className="favorites-list">
+    <div
+      className={`favorites-list${isDragOver ? " favorites-list--drag-over" : ""}`}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <button className="favorites-list__header" onClick={toggleExpanded}>
         <svg
           className={`favorites-list__chevron ${isExpanded ? "favorites-list__chevron--expanded" : ""}`}
@@ -76,16 +155,29 @@ export function FavoritesList() {
           />
         </svg>
         <span className="favorites-list__title">Favorites</span>
+        <span className="favorites-list__count">{favorites.length}</span>
       </button>
       {isExpanded && (
         <div className="favorites-list__items">
+          {favorites.length === 0 && (
+            <div className="favorites-list__empty">
+              Drag artifacts here
+            </div>
+          )}
           {favorites.map((favorite) => (
-            <div key={favorite.id} className="favorite-item">
+            <div
+              key={favorite.id}
+              className="favorite-item"
+              onClick={() => handleOpen(favorite)}
+            >
               <span className="favorite-item__icon">{getIcon(favorite)}</span>
               <span className="favorite-item__title">{favorite.title}</span>
               <button
                 className="favorite-item__remove"
-                onClick={() => removeFavorite(favorite.id)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  removeFavorite(favorite.id);
+                }}
                 aria-label="Remove favorite"
               >
                 ×

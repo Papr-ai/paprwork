@@ -15,6 +15,45 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { _electron as electron, type ElectronApplication, type Page } from 'playwright';
 import * as path from 'path';
 import * as os from 'os';
+import { rm } from "node:fs/promises";
+
+const electronEntryPath = path.join(__dirname, "../../src/electron/main.js");
+
+async function launchTestApp(
+  testDataPath: string,
+): Promise<{ app: ElectronApplication; window: Page }> {
+  const app = await electron.launch({
+    args: [
+      electronEntryPath,
+      `--user-data-path=${testDataPath}`,
+    ],
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+      PAPR_E2E: "1",
+    },
+  });
+
+  try {
+    const window = await app.firstWindow();
+    await window.waitForLoadState("domcontentloaded");
+    await window.waitForTimeout(500);
+    return { app, window };
+  } catch (error) {
+    const processHandle = app.process();
+    const reason = error instanceof Error ? error.message : String(error);
+    const diagnostic = [
+      "E2E failed to acquire first window",
+      `entry=${electronEntryPath}`,
+      `pid=${processHandle.pid ?? "unknown"}`,
+      `exitCode=${String(processHandle.exitCode)}`,
+      `signal=${String(processHandle.signalCode)}`,
+      `reason=${reason}`,
+    ].join(" | ");
+    await app.close().catch(() => {});
+    throw new Error(diagnostic);
+  }
+}
 
 describe('E2E: Chat Workflow', () => {
   let app: ElectronApplication;
@@ -22,30 +61,17 @@ describe('E2E: Chat Workflow', () => {
   const testDataPath = path.join(os.tmpdir(), 'paprwork-e2e-test');
 
   beforeAll(async () => {
-    // Launch Electron app
-    app = await electron.launch({
-      args: [
-        path.join(__dirname, '../../dist/electron/electron/index.js'),
-        '--test-mode',
-        `--user-data-path=${testDataPath}`,
-      ],
-      env: {
-        ...process.env,
-        NODE_ENV: 'test',
-      },
-    });
-
-    // Get first window
-    window = await app.firstWindow();
-    
-    // Wait for app to be ready
-    await window.waitForLoadState('domcontentloaded');
+    await rm(testDataPath, { recursive: true, force: true });
+    const launched = await launchTestApp(testDataPath);
+    app = launched.app;
+    window = launched.window;
   }, 60000);
 
   afterAll(async () => {
     if (app) {
       await app.close();
     }
+    await rm(testDataPath, { recursive: true, force: true });
   });
 
   describe('App Launch', () => {
@@ -323,20 +349,9 @@ describe('E2E: Chat Workflow', () => {
       await app.close();
 
       // Reopen app
-      app = await electron.launch({
-        args: [
-          path.join(__dirname, '../../dist/electron/electron/index.js'),
-          '--test-mode',
-          `--user-data-path=${testDataPath}`,
-        ],
-        env: {
-          ...process.env,
-          NODE_ENV: 'test',
-        },
-      });
-
-      window = await app.firstWindow();
-      await window.waitForLoadState('domcontentloaded');
+      const relaunched = await launchTestApp(testDataPath);
+      app = relaunched.app;
+      window = relaunched.window;
 
       // Check if chats are still there
       const chatsAfterReopen = await window.locator('[data-testid^="chat-item"]');

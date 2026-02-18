@@ -10,15 +10,27 @@
  * This matches V1's approach - no upfront decryption, only on-demand
  */
 
+import type { RequestKeysMessage } from "../../core/types/gateway-ipc.js";
+import { isKeysResponseMessage } from "../../core/types/gateway-ipc.js";
+
 let keyCache: Record<string, string> = {};
 let requestId = 0;
+
+interface IpcProcessLike {
+  send?: (message: unknown) => void;
+  on: (event: "message", listener: (message: unknown) => void) => void;
+  off: (event: "message", listener: (message: unknown) => void) => void;
+}
 
 /**
  * Request keys from main process via IPC (production mode)
  */
-async function requestKeysViaIPC(keyNames: string[]): Promise<Record<string, string>> {
+async function requestKeysViaIPC(
+  keyNames: string[],
+  ipcProcess: IpcProcessLike,
+): Promise<Record<string, string>> {
   return new Promise((resolve, reject) => {
-    if (!process.send) {
+    if (!ipcProcess.send) {
       reject(new Error("IPC not available - not running as child process"));
       return;
     }
@@ -29,8 +41,8 @@ async function requestKeysViaIPC(keyNames: string[]): Promise<Record<string, str
       reject(new Error("Key resolution timeout"));
     }, 5000);
 
-    const messageHandler = (message: { type?: string; requestId?: string; keys?: Record<string, string> }) => {
-      if (message.type === "KEYS_RESPONSE" && message.requestId === reqId) {
+    const messageHandler = (message: unknown) => {
+      if (isKeysResponseMessage(message) && message.requestId === reqId) {
         cleanup();
         resolve(message.keys || {});
       }
@@ -38,15 +50,16 @@ async function requestKeysViaIPC(keyNames: string[]): Promise<Record<string, str
 
     const cleanup = () => {
       clearTimeout(timeout);
-      process.off("message", messageHandler);
+      ipcProcess.off("message", messageHandler);
     };
 
-    process.on("message", messageHandler);
-    process.send({
+    ipcProcess.on("message", messageHandler);
+    const payload: RequestKeysMessage = {
       type: "REQUEST_KEYS",
       requestId: reqId,
       keys: keyNames,
-    });
+    };
+    ipcProcess.send(payload);
   });
 }
 
@@ -56,7 +69,10 @@ async function requestKeysViaIPC(keyNames: string[]): Promise<Record<string, str
  * @param keyNames - Array of key names to fetch
  * @returns Record of key names to values
  */
-export async function getApiKeys(keyNames: string[]): Promise<Record<string, string>> {
+export async function getApiKeys(
+  keyNames: string[],
+  ipcProcess: IpcProcessLike = process,
+): Promise<Record<string, string>> {
   const isDev = process.env.NODE_ENV === "development";
   const keys: Record<string, string> = {};
 
@@ -77,20 +93,26 @@ export async function getApiKeys(keyNames: string[]): Promise<Record<string, str
   const uncachedKeys = keyNames.filter((name) => !keyCache[name]);
 
   if (uncachedKeys.length > 0) {
-    console.log(`[KeyResolver] Requesting ${uncachedKeys.length} keys from main process`);
+    console.log(
+      `[KeyResolver] Requesting ${uncachedKeys.length} keys from main process`,
+    );
+
+    let missingAfterIpc = uncachedKeys;
     try {
-      const resolved = await requestKeysViaIPC(uncachedKeys);
-      // Update cache
+      const resolved = await requestKeysViaIPC(uncachedKeys, ipcProcess);
       Object.assign(keyCache, resolved);
+      missingAfterIpc = uncachedKeys.filter((keyName) => !resolved[keyName]);
       console.log(`[KeyResolver] Received ${Object.keys(resolved).length} keys`);
     } catch (error) {
       console.error("[KeyResolver] Failed to resolve keys via IPC:", error);
-      // Fall back to env vars if IPC fails
-      for (const keyName of uncachedKeys) {
-        const value = process.env[keyName];
-        if (value) {
-          keyCache[keyName] = value;
-        }
+    }
+
+    // Fall back to env vars for unresolved keys.
+    // This keeps development usable while still preferring secure IPC lookups.
+    for (const keyName of missingAfterIpc) {
+      const value = process.env[keyName];
+      if (value) {
+        keyCache[keyName] = value;
       }
     }
   }
@@ -109,7 +131,7 @@ export async function getApiKeys(keyNames: string[]): Promise<Record<string, str
  * Get a single API key
  */
 export async function getApiKey(keyName: string): Promise<string | undefined> {
-  const keys = await getApiKeys([keyName]);
+  const keys = await getApiKeys([keyName], process);
   return keys[keyName];
 }
 

@@ -40,9 +40,9 @@ export function Tab({
   const tabRef = useRef<HTMLDivElement>(null);
 
   const handleClick = () => {
-    if (!isMerged) {
-      switchToTab(tab.id);
-    }
+    // Merged tabs must remain clickable so users can re-focus
+    // the parent split view after drag/merge operations.
+    switchToTab(tab.id);
   };
 
   const handleDoubleClick = (e: React.MouseEvent) => {
@@ -51,6 +51,7 @@ export function Tab({
     // Double-click on merged tab: unmerge it
     if (isMerged && tab.displayMode === "parent") {
       console.log("[Tab] Double-click: Unmerging parent tab", tab.id);
+      switchToTab(tab.id, true);
       disableSplitView();
     } else {
       // Switch to tab if not merged
@@ -64,11 +65,27 @@ export function Tab({
   };
 
   const handleDragStart = (e: React.DragEvent) => {
-    e.dataTransfer.effectAllowed = "move";
+    // "copyMove" allows both reordering tabs (move) and dragging to favorites (copy)
+    e.dataTransfer.effectAllowed = "copyMove";
+
+    // Tab reorder/merge data (consumed by Tab.handleDrop)
     e.dataTransfer.setData(
       "text/plain",
       JSON.stringify({ tabIndex, tabId: tab.id }),
     );
+
+    // Favorites drop data (consumed by FavoritesList.handleDrop)
+    // Include tab metadata so the favorites section can identify the artifact
+    e.dataTransfer.setData(
+      "application/json",
+      JSON.stringify({
+        id: tab.entityId,
+        type: tab.type,
+        title: tab.title,
+        tabId: tab.id,
+      }),
+    );
+
     setIsDragging(true);
   };
 
@@ -153,6 +170,8 @@ export function Tab({
       document:
         '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 2v6h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
       app: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/></svg>',
+      artifacts:
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" stroke-width="1.5"/><path d="M14 2v6h6" stroke="currentColor" stroke-width="1.5"/><line x1="8" y1="13" x2="16" y2="13" stroke="currentColor" stroke-width="1.5"/><line x1="8" y1="17" x2="13" y2="17" stroke="currentColor" stroke-width="1.5"/></svg>',
       home: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="9 22 9 12 15 12 15 22" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
       meetings:
         '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.5"/><line x1="3" y1="10" x2="21" y2="10" stroke="currentColor" stroke-width="1.5"/><line x1="8" y1="2" x2="8" y2="6" stroke="currentColor" stroke-width="1.5"/><line x1="16" y1="2" x2="16" y2="6" stroke="currentColor" stroke-width="1.5"/></svg>',

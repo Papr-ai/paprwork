@@ -21,6 +21,12 @@ export type {
   ModelInfo,
   SessionState,
 } from "./agents";
+export type {
+  SubAgentProfile,
+  DelegationRunRecord,
+  DelegationRunStatus,
+  DelegateTaskInput,
+} from "./subagents";
 
 // Tools
 export type {
@@ -68,3 +74,33 @@ export type {
   PermissionSettings,
 } from "./permissions";
 export { DEFAULT_PERMISSION_SETTINGS } from "./permissions";
+
+// Gateway IPC bridge
+export type {
+  RequestKeysMessage,
+  KeysResponseMessage,
+  RequestPermissionMessage,
+  PermissionResponseMessage,
+  GatewayToElectronIpcMessage,
+  ElectronToGatewayIpcMessage,
+} from "./gateway-ipc";
+export {
+  isKeysResponseMessage,
+  isPermissionResponseMessage,
+} from "./gateway-ipc";
+
+// Bundle sharing + deployment manifests
+export type {
+  RuntimeType,
+  BundleManifest,
+  BundleAppSpec,
+  BundleJobSpec,
+  BundleDatabaseSpec,
+  BundleDeploymentProfile,
+} from "./bundles";
+export {
+  BUNDLE_SCHEMA_VERSION,
+  RuntimeTypeSchema,
+  BundleManifestSchema,
+  parseBundleManifest,
+} from "./bundles";

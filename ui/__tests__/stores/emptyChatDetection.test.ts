@@ -1,22 +1,39 @@
 /**
- * Tests for Empty Chat Detection in TabStore
- * Tests the centralized logic in createTab() that prevents duplicate empty chats
+ * Empty Chat Detection in TabStore
+ *
+ * Tests the tabStore's createTab() logic that prevents duplicate empty chats:
+ * - When creating a new temp chat tab, reuse an existing empty one
+ * - Allow new tabs when existing chats have messages
+ * - Non-chat tabs are unaffected
+ * - Static tabs (artifacts, settings) deduplicate by entityId
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { useChatStore } from "../../stores/chatStore";
+import { useChatStore, defaultChatState } from "../../stores/chatStore";
 import { useTabStore } from "../../stores/tabStore";
+import type { ChatState } from "../../types/chat";
+
+/** Initialize a per-chat state entry in the store */
+function initChat(chatId: string, overrides: Partial<ChatState> = {}) {
+  useChatStore.setState((state) => {
+    const next = new Map(state.chatStates);
+    next.set(chatId, { ...defaultChatState, ...overrides });
+    return { chatStates: next };
+  });
+}
+
+/** Sync the global __chatStore__ reference that tabStore reads */
+function syncGlobal() {
+  (global.window as Record<string, unknown>).__chatStore__ =
+    useChatStore.getState();
+}
 
 describe("Empty Chat Detection in TabStore", () => {
   beforeEach(() => {
-    // Reset both stores
     useChatStore.setState({
-      activeChat: null,
-      chatStates: new Map(),
       chats: [],
-      messages: [],
+      chatStates: new Map(),
       isLoading: false,
-      isSending: false,
       error: null,
     });
 
@@ -29,194 +46,135 @@ describe("Empty Chat Detection in TabStore", () => {
       activeRightTab: null,
     });
 
-    // Setup global window and chat store for tabStore to access
     if (!global.window) {
-      (global as any).window = {};
+      (global as Record<string, unknown>).window = {};
     }
-    (global.window as any).__chatStore__ = useChatStore.getState();
+    syncGlobal();
   });
 
-  describe("Centralized Empty Chat Detection", () => {
-    it("should reuse empty chat when createTab is called", () => {
-      // Create first chat with empty state (using temp ID)
-      const chatId1 = "temp-123-abc";
-      useChatStore.getState().setActiveChat(chatId1);
+  // ── Reuse Empty Temp Chat ───────────────────────────────────────
 
-      // Update global reference
-      (global.window as any).__chatStore__ = useChatStore.getState();
+  describe("Reuse Empty Temp Chat", () => {
+    it("should reuse an existing empty temp chat tab", () => {
+      // Create first empty temp chat
+      initChat("temp-111");
+      syncGlobal();
 
-      const tabId1 = useTabStore
-        .getState()
-        .createTab("chat", chatId1, "New Chat");
+      const tab1 = useTabStore.getState().createTab("chat", "temp-111", "New Chat");
+      expect(useTabStore.getState().tabs).toHaveLength(1);
 
-      expect(useTabStore.getState().tabs.length).toBe(1);
-      expect(tabId1).toBe("chat-temp-123-abc");
+      // Try to create a second temp chat → should reuse the first
+      initChat("temp-222");
+      syncGlobal();
 
-      // Try to create second temp chat - should reuse first empty one
-      const chatId2 = "temp-456-def";
-      useChatStore.getState().setActiveChat(chatId2);
-
-      // Update global reference
-      (global.window as any).__chatStore__ = useChatStore.getState();
-
-      const tabId2 = useTabStore
-        .getState()
-        .createTab("chat", chatId2, "New Chat");
-
-      // Should still have only 1 tab (reused the first one)
-      expect(useTabStore.getState().tabs.length).toBe(1);
-      expect(tabId2).toBe(tabId1); // Returns existing tab ID
+      const tab2 = useTabStore.getState().createTab("chat", "temp-222", "New Chat");
+      expect(useTabStore.getState().tabs).toHaveLength(1);
+      expect(tab2).toBe(tab1);
     });
 
-    it("should create new chat tab when existing chat has messages", () => {
-      // Create first chat and add a message (using temp ID)
-      const chatId1 = "temp-123-abc";
-      useChatStore.getState().setActiveChat(chatId1);
-      useTabStore.getState().createTab("chat", chatId1, "Chat 1");
-      useChatStore
-        .getState()
-        .addMessage({ role: "user", content: "Hello" }, chatId1);
+    it("should create a new tab when existing chat has messages", () => {
+      // Create first chat WITH a message
+      initChat("temp-111", {
+        messages: [{ id: "m1", role: "user", content: "Hello" }],
+      });
+      syncGlobal();
 
-      // Update global reference
-      (global.window as any).__chatStore__ = useChatStore.getState();
+      useTabStore.getState().createTab("chat", "temp-111", "Chat 1");
+      expect(useTabStore.getState().tabs).toHaveLength(1);
 
-      expect(useTabStore.getState().tabs.length).toBe(1);
+      // Create second temp chat → no empty chat to reuse → new tab
+      initChat("temp-222");
+      syncGlobal();
 
-      // Create second temp chat - should create new tab (first has messages)
-      const chatId2 = "temp-456-def";
-      useChatStore.getState().setActiveChat(chatId2);
-
-      // Update global reference again
-      (global.window as any).__chatStore__ = useChatStore.getState();
-
-      const tabId2 = useTabStore
-        .getState()
-        .createTab("chat", chatId2, "Chat 2");
-
-      // Should now have 2 tabs
-      expect(useTabStore.getState().tabs.length).toBe(2);
-      expect(tabId2).toBe("chat-temp-456-def");
+      const tab2 = useTabStore.getState().createTab("chat", "temp-222", "Chat 2");
+      expect(useTabStore.getState().tabs).toHaveLength(2);
+      expect(tab2).toBe("chat-temp-222");
     });
 
-    it("should find first empty chat among multiple chats", () => {
-      // Create Chat 1 with message
-      const chatId1 = "chat-1";
-      useChatStore.getState().setActiveChat(chatId1);
-      useTabStore.getState().createTab("chat", chatId1, "Chat 1");
-      useChatStore
-        .getState()
-        .addMessage({ role: "user", content: "Message 1" }, chatId1);
+    it("should find the first empty chat among mixed chats", () => {
+      // Chat 1: has messages
+      initChat("chat-1", {
+        messages: [{ id: "m1", role: "user", content: "Message 1" }],
+      });
+      useTabStore.getState().createTab("chat", "chat-1", "Chat 1");
 
-      // Update global reference
-      (global.window as any).__chatStore__ = useChatStore.getState();
+      // Chat 2: empty temp chat
+      initChat("temp-222");
+      syncGlobal();
+      useTabStore.getState().createTab("chat", "temp-222", "Chat 2");
 
-      // Create Chat 2 (empty, temp ID)
-      const chatId2 = "temp-222-bbb";
-      useChatStore.getState().setActiveChat(chatId2);
-
-      // Update global reference
-      (global.window as any).__chatStore__ = useChatStore.getState();
-
-      useTabStore.getState().createTab("chat", chatId2, "Chat 2");
-
-      // Create Chat 3 with message (need to bypass empty chat reuse by adding message first)
-      const chatId3 = "temp-333-ccc";
-      useChatStore.getState().setActiveChat(chatId3);
-      // First manually create tab without using createTab to avoid reuse
+      // Chat 3: has messages (bypass empty-chat logic with non-temp id)
+      initChat("chat-3", {
+        messages: [{ id: "m3", role: "user", content: "Message 3" }],
+      });
       useTabStore.setState((state) => ({
         tabs: [
           ...state.tabs,
           {
-            id: "chat-temp-333-ccc",
-            type: "chat",
-            entityId: chatId3,
+            id: "chat-chat-3",
+            type: "chat" as const,
+            entityId: "chat-3",
             title: "Chat 3",
             parentTabId: null,
             childTabIds: [],
-            displayMode: "standalone",
+            displayMode: "standalone" as const,
             metadata: {},
           },
         ],
-        activeTabId: "chat-temp-333-ccc",
-        activeLeftTab: "chat-temp-333-ccc",
       }));
-      useChatStore
-        .getState()
-        .addMessage({ role: "user", content: "Message 3" }, chatId3);
+      syncGlobal();
 
-      // Update global reference
-      (global.window as any).__chatStore__ = useChatStore.getState();
+      expect(useTabStore.getState().tabs).toHaveLength(3);
 
-      expect(useTabStore.getState().tabs.length).toBe(3);
+      // Try to create another temp chat → reuse Chat 2 (empty)
+      initChat("temp-444");
+      syncGlobal();
+      const reusedTab = useTabStore.getState().createTab("chat", "temp-444", "Chat 4");
 
-      // Try to create new temp chat - should reuse Chat 2 (empty)
-      const chatId4 = "temp-444-ddd";
-      useChatStore.getState().setActiveChat(chatId4);
-
-      // Update global reference
-      (global.window as any).__chatStore__ = useChatStore.getState();
-
-      const tabId4 = useTabStore
-        .getState()
-        .createTab("chat", chatId4, "Chat 4");
-
-      // Should still have 3 tabs, reused Chat 2
-      expect(useTabStore.getState().tabs.length).toBe(3);
-      expect(tabId4).toBe("chat-temp-222-bbb"); // Reuses temp-222-bbb
+      expect(useTabStore.getState().tabs).toHaveLength(3);
+      expect(reusedTab).toBe("chat-temp-222");
     });
   });
+
+  // ── Non-Chat Tabs ───────────────────────────────────────────────
 
   describe("Non-Chat Tabs", () => {
     it("should not apply empty detection to non-chat tabs", () => {
-      // Create document tab
-      const tabId1 = useTabStore
-        .getState()
-        .createTab("document", "doc-1", "Document 1");
-      expect(useTabStore.getState().tabs.length).toBe(1);
+      const tab1 = useTabStore.getState().createTab("document", "doc-1", "Document 1");
+      const tab2 = useTabStore.getState().createTab("document", "doc-2", "Document 2");
 
-      // Create another document tab
-      const tabId2 = useTabStore
-        .getState()
-        .createTab("document", "doc-2", "Document 2");
-      expect(useTabStore.getState().tabs.length).toBe(2);
-
-      // Both tabs should exist
-      expect(tabId1).toBe("document-doc-1");
-      expect(tabId2).toBe("document-doc-2");
+      expect(useTabStore.getState().tabs).toHaveLength(2);
+      expect(tab1).toBe("document-doc-1");
+      expect(tab2).toBe("document-doc-2");
     });
 
     it("should reuse static tabs like artifacts and settings", () => {
-      // Create artifacts tab
-      const tabId1 = useTabStore
-        .getState()
-        .createTab("document", "artifacts", "Artifacts");
-      expect(useTabStore.getState().tabs.length).toBe(1);
+      const tab1 = useTabStore.getState().createTab("document", "artifacts", "Artifacts");
+      const tab2 = useTabStore.getState().createTab("document", "artifacts", "Artifacts");
 
-      // Try to create artifacts tab again
-      const tabId2 = useTabStore
-        .getState()
-        .createTab("document", "artifacts", "Artifacts");
-
-      // Should reuse existing tab (via existing tab check, not empty chat logic)
-      expect(useTabStore.getState().tabs.length).toBe(1);
-      expect(tabId2).toBe(tabId1);
+      expect(useTabStore.getState().tabs).toHaveLength(1);
+      expect(tab2).toBe(tab1);
     });
   });
 
-  describe("Chat State Initialization", () => {
-    it("should have chat state initialized after setActiveChat", () => {
-      const chatId = "chat-1";
+  // ── Chat State Initialization ───────────────────────────────────
 
-      // Before activation
-      expect(useChatStore.getState().chatStates.has(chatId)).toBe(false);
+  describe("Chat State via getChatState", () => {
+    it("should return default state for an uninitialized chatId", () => {
+      expect(useChatStore.getState().chatStates.has("unknown")).toBe(false);
 
-      // Activate chat
-      useChatStore.getState().setActiveChat(chatId);
+      const state = useChatStore.getState().getChatState("unknown");
+      expect(state.messages).toEqual([]);
+      expect(state.isStreaming).toBe(false);
+    });
 
-      // After activation
-      expect(useChatStore.getState().chatStates.has(chatId)).toBe(true);
-      const state = useChatStore.getState().chatStates.get(chatId);
-      expect(state?.messages).toEqual([]);
+    it("should return initialized state after setting it", () => {
+      initChat("chat-1", {
+        messages: [{ id: "m1", role: "user", content: "Test" }],
+      });
+
+      const state = useChatStore.getState().getChatState("chat-1");
+      expect(state.messages).toHaveLength(1);
     });
   });
 });

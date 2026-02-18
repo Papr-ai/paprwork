@@ -1,0 +1,136 @@
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import path from "path";
+import os from "os";
+import { promises as fs } from "fs";
+import { DocumentService } from "../src/gateway/services/DocumentService.js";
+
+describe("DocumentService", () => {
+  let originalHome: string | undefined;
+  let testHomeDir: string;
+  let documentService: DocumentService;
+
+  beforeEach(async () => {
+    originalHome = process.env.HOME;
+    testHomeDir = path.join(
+      os.tmpdir(),
+      `paprwork-v2-document-service-${Date.now()}`,
+    );
+    process.env.HOME = testHomeDir;
+    await fs.mkdir(testHomeDir, { recursive: true });
+    documentService = new DocumentService();
+    await documentService.initialize();
+  });
+
+  afterEach(async () => {
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+    await fs.rm(testHomeDir, { recursive: true, force: true });
+  });
+
+  test("creates and retrieves documents", async () => {
+    const created = await documentService.createDocument(
+      "Plan",
+      "Architecture migration details",
+    );
+    const loaded = await documentService.getDocument(created.id);
+
+    expect(loaded).toBeDefined();
+    expect(loaded?.title).toBe("Plan");
+    expect(loaded?.content).toContain("Architecture");
+    expect(loaded?.preview).toBe("Architecture migration details");
+  });
+
+  test("updates document content and preview", async () => {
+    const created = await documentService.createDocument("Doc", "Old content");
+    const updated = await documentService.updateDocument(created.id, {
+      content: "New content for the updated preview",
+    });
+
+    expect(updated).toBeDefined();
+    expect(updated?.content).toContain("New content");
+    expect(updated?.preview).toContain("New content");
+  });
+
+  test("searches documents by title and body", async () => {
+    await documentService.createDocument("Backend Guide", "Gateway details");
+    await documentService.createDocument("UI Notes", "Renderer behavior");
+
+    const byTitle = await documentService.searchDocuments("backend");
+    const byBody = await documentService.searchDocuments("renderer");
+
+    expect(byTitle).toHaveLength(1);
+    expect(byTitle[0].title).toBe("Backend Guide");
+    expect(byBody).toHaveLength(1);
+    expect(byBody[0].title).toBe("UI Notes");
+  });
+
+  test("toggles favorite and deletes documents", async () => {
+    const created = await documentService.createDocument("Fav", "Value");
+    const toggled = await documentService.toggleFavorite(created.id);
+    const deleted = await documentService.deleteDocument(created.id);
+    const afterDelete = await documentService.getDocument(created.id);
+
+    expect(toggled?.favorite).toBe(true);
+    expect(deleted).toBe(true);
+    expect(afterDelete).toBeNull();
+  });
+
+  test("uses slugified title as document ID", async () => {
+    const created = await documentService.createDocument(
+      "My Research Notes",
+      "Content here",
+    );
+    // ID should be a slug, not a UUID
+    expect(created.id).toBe("my-research-notes");
+    expect(created.id).not.toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+  });
+
+  test("handles slug collisions by appending counter", async () => {
+    const first = await documentService.createDocument(
+      "Weekly Report",
+      "First report",
+    );
+    const second = await documentService.createDocument(
+      "Weekly Report",
+      "Second report",
+    );
+    const third = await documentService.createDocument(
+      "Weekly Report",
+      "Third report",
+    );
+
+    expect(first.id).toBe("weekly-report");
+    expect(second.id).toBe("weekly-report-2");
+    expect(third.id).toBe("weekly-report-3");
+
+    // All three should be independently retrievable
+    const loaded1 = await documentService.getDocument(first.id);
+    const loaded2 = await documentService.getDocument(second.id);
+    const loaded3 = await documentService.getDocument(third.id);
+
+    expect(loaded1?.content).toContain("First");
+    expect(loaded2?.content).toContain("Second");
+    expect(loaded3?.content).toContain("Third");
+  });
+
+  test("slugifies special characters and caps length", async () => {
+    const created = await documentService.createDocument(
+      "My Report: Q1 2026 (Final Draft!) & Updates",
+      "",
+    );
+    // Special chars removed, spaces become hyphens
+    expect(created.id).toBe("my-report-q1-2026-final-draft-updates");
+    expect(created.id.length).toBeLessThanOrEqual(80);
+  });
+
+  test("falls back to 'untitled' for empty title", async () => {
+    const created = await documentService.createDocument("!!!", "");
+    // All non-word chars stripped, fallback to "untitled"
+    expect(created.id).toBe("untitled");
+  });
+});

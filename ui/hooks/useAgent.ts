@@ -17,12 +17,18 @@ export function useAgent() {
     setSending,
     setError,
   } = useChatStore();
-  const streamingMessageIdRef = useRef<string | null>(null);
-  const streamingContentRef = useRef<string>("");
-  const streamingReasoningRef = useRef<string>("");
-  const toolCallsMapRef = useRef<Map<string, any>>(new Map());
-  const updateBatchRef = useRef<NodeJS.Timeout | null>(null);
-  const pendingChatIdRef = useRef<string | null>(null);
+  
+  // ✅ FIX: Use Maps keyed by chatId to support parallel streaming
+  const streamingMessageIdRef = useRef<Map<string, string>>(new Map());
+  const streamingContentRef = useRef<Map<string, string>>(new Map());
+  const streamingReasoningRef = useRef<Map<string, string>>(new Map());
+  const toolCallsMapRef = useRef<Map<string, Map<string, any>>>(new Map());
+  const updateBatchRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
+  const activeStreamRequestByChatRef = useRef<Map<string, string>>(new Map());
+  
+  // Sequence tracking (V1-style interleaving)
+  const sequenceRef = useRef<Map<string, Array<{ type: 'text' | 'tool' | 'thinking'; data: any }>>>(new Map());
+  const currentTextSegmentRef = useRef<Map<string, string>>(new Map());
 
   // Listen for Gateway connection changes
   useEffect(() => {
@@ -45,20 +51,38 @@ export function useAgent() {
       console.log("[useAgent] handleStreamChunk received:", chunk.type, chunk);
 
       // Extract chatId from chunk (all chunks should have this)
-      const chatId = (chunk as any).chatId;
+      const streamChunk = chunk as unknown as Record<string, unknown>;
+      const chatId =
+        typeof streamChunk.chatId === "string" ? streamChunk.chatId : undefined;
+      const requestId =
+        typeof streamChunk.requestId === "string"
+          ? streamChunk.requestId
+          : undefined;
       
       if (!chatId) {
         console.error("[useAgent] Chunk missing chatId:", chunk);
         return;
       }
 
+      if (requestId) {
+        const activeRequestId = activeStreamRequestByChatRef.current.get(chatId);
+        if (activeRequestId && activeRequestId !== requestId) {
+          console.log(
+            `[useAgent] Ignoring stale chunk for ${chatId} (active=${activeRequestId}, got=${requestId})`,
+          );
+          return;
+        }
+      }
+
       // Ensure we have a streaming message for all chunk types
-      if (!streamingMessageIdRef.current && chunk.type !== "done" && chunk.type !== "error") {
+      if (!streamingMessageIdRef.current.has(chatId) && chunk.type !== "done" && chunk.type !== "error") {
         const messageId = `msg-${Date.now()}`;
-        streamingMessageIdRef.current = messageId;
-        streamingContentRef.current = "";
-        streamingReasoningRef.current = "";
-        toolCallsMapRef.current = new Map();
+        streamingMessageIdRef.current.set(chatId, messageId);
+        streamingContentRef.current.set(chatId, "");
+        streamingReasoningRef.current.set(chatId, "");
+        toolCallsMapRef.current.set(chatId, new Map());
+        sequenceRef.current.set(chatId, []); // Initialize sequence
+        currentTextSegmentRef.current.set(chatId, ""); // Initialize text segment
 
         addMessage({
           id: messageId,
@@ -69,6 +93,7 @@ export function useAgent() {
           reasoning: "",
           streamingReasoning: "",
           toolCalls: [],
+          sequence: [], // Initialize empty sequence
         }, chatId);
       }
 
@@ -76,19 +101,20 @@ export function useAgent() {
         case "reasoning-delta":
           {
             // Append reasoning delta
-            const chatId = (chunk as any).chatId;
             const text = (chunk.payload as { text: string }).text || "";
-            streamingReasoningRef.current += text;
+            const currentReasoning = streamingReasoningRef.current.get(chatId) || "";
+            streamingReasoningRef.current.set(chatId, currentReasoning + text);
             
             // Update the message with new reasoning content directly in chatState
             const { chatStates } = useChatStore.getState();
             const chatState = chatStates.get(chatId);
-            if (chatState) {
+            const streamingMessageId = streamingMessageIdRef.current.get(chatId);
+            if (chatState && streamingMessageId) {
               const updatedMessages = chatState.messages.map((msg) =>
-                msg.id === streamingMessageIdRef.current
+                msg.id === streamingMessageId
                   ? {
                       ...msg,
-                      streamingReasoning: streamingReasoningRef.current,
+                      streamingReasoning: streamingReasoningRef.current.get(chatId) || "",
                     }
                   : msg
               );
@@ -102,31 +128,57 @@ export function useAgent() {
         case "tool-call":
           {
             // Add or update tool call
-            const chatId = (chunk as any).chatId;
             const payload = chunk.payload as { toolName: string; args?: Record<string, unknown>; toolCallId?: string };
             const toolCallId = payload.toolCallId || `tool-${Date.now()}-${payload.toolName}`;
             
             console.log(`[useAgent] Tool call: ${payload.toolName}`, payload.args);
             
-            toolCallsMapRef.current.set(toolCallId, {
+            const chatToolCalls = toolCallsMapRef.current.get(chatId) || new Map();
+            chatToolCalls.set(toolCallId, {
               id: toolCallId,
               toolName: payload.toolName,
               args: payload.args,
               status: "calling",
             });
+            toolCallsMapRef.current.set(chatId, chatToolCalls);
+            
+            // ✅ SEQUENCE: Flush accumulated text before tool
+            const currentSegment = currentTextSegmentRef.current.get(chatId) || "";
+            const sequence = sequenceRef.current.get(chatId) || [];
+            
+            if (currentSegment.trim()) {
+              console.log(`[useAgent] Adding text to sequence: "${currentSegment.trim().substring(0, 50)}..."`);
+              sequence.push({ type: 'text', data: currentSegment.trim() });
+              currentTextSegmentRef.current.set(chatId, ""); // Reset
+            }
+            
+            // Add tool to sequence with 'calling' status
+            console.log(`[useAgent] Adding tool to sequence: ${payload.toolName}`);
+            sequence.push({
+              type: 'tool',
+              data: {
+                name: payload.toolName,
+                input: payload.args,
+                status: 'calling',
+                toolCallId, // Track ID for updating later
+              },
+            });
+            sequenceRef.current.set(chatId, sequence);
 
-            // Update the message with new tool calls directly in chatState
+            // Update the message with new tool calls AND sequence directly in chatState
             const { chatStates } = useChatStore.getState();
             const chatState = chatStates.get(chatId);
-            if (chatState) {
-              const toolCallsArray = Array.from(toolCallsMapRef.current.values());
-              console.log(`[useAgent] Updating UI with ${toolCallsArray.length} tool call(s):`, toolCallsArray);
+            const streamingMessageId = streamingMessageIdRef.current.get(chatId);
+            if (chatState && streamingMessageId) {
+              const toolCallsArray = Array.from(chatToolCalls.values());
+              console.log(`[useAgent] Updating UI with ${toolCallsArray.length} tool call(s) and ${sequence.length} sequence items`);
               
               const updatedMessages = chatState.messages.map((msg) =>
-                msg.id === streamingMessageIdRef.current
+                msg.id === streamingMessageId
                   ? {
                       ...msg,
                       toolCalls: toolCallsArray,
+                      sequence: [...sequence], // Update sequence in real-time
                     }
                   : msg
               );
@@ -140,40 +192,163 @@ export function useAgent() {
         case "tool-result":
           {
             // Update tool call with result
-            const chatId = (chunk as any).chatId;
             const payload = chunk.payload as { toolCallId: string; result?: string; error?: string };
-            const existingCall = toolCallsMapRef.current.get(payload.toolCallId);
+            const chatToolCalls = toolCallsMapRef.current.get(chatId);
+            const existingCall = chatToolCalls?.get(payload.toolCallId);
             
             console.log(`[useAgent] Tool result for ${existingCall?.toolName || payload.toolCallId}:`, 
               payload.result ? (typeof payload.result === 'string' ? payload.result.substring(0, 100) : JSON.stringify(payload.result).substring(0, 100)) : 'no result');
             
-            if (existingCall) {
-              toolCallsMapRef.current.set(payload.toolCallId, {
+            if (existingCall && chatToolCalls) {
+              chatToolCalls.set(payload.toolCallId, {
                 ...existingCall,
                 status: payload.error ? "error" : "success",
                 result: payload.result,
                 error: payload.error,
               });
+              toolCallsMapRef.current.set(chatId, chatToolCalls);
+              
+              // ✅ SEQUENCE: Update tool in sequence with result
+              const sequence = sequenceRef.current.get(chatId) || [];
+              const toolIndex = sequence.findIndex(
+                item => item.type === 'tool' && 
+                (item.data as any).toolCallId === payload.toolCallId
+              );
+              
+              if (toolIndex !== -1) {
+                console.log(`[useAgent] Updating tool in sequence at index ${toolIndex} with result`);
+                sequence[toolIndex].data = {
+                  name: existingCall.toolName,
+                  input: existingCall.args,
+                  output: payload.result,
+                  status: payload.error ? 'error' : 'success',
+                  toolCallId: payload.toolCallId, // Preserve so sequence stays identifiable
+                };
+                sequenceRef.current.set(chatId, sequence);
+              } else {
+                // Fallback: toolCallId not found in sequence (e.g. mismatch) — add a completed entry
+                console.warn(`[useAgent] Could not find sequence entry for toolCallId ${payload.toolCallId}, appending completed entry`);
+                sequence.push({
+                  type: 'tool',
+                  data: {
+                    name: existingCall.toolName,
+                    input: existingCall.args,
+                    output: payload.result,
+                    status: payload.error ? 'error' : 'success',
+                    toolCallId: payload.toolCallId,
+                  },
+                });
+                sequenceRef.current.set(chatId, sequence);
+              }
 
               // Update the message directly in chatState
               const { chatStates } = useChatStore.getState();
               const chatState = chatStates.get(chatId);
-              if (chatState) {
-                const toolCallsArray = Array.from(toolCallsMapRef.current.values());
+              const streamingMessageId = streamingMessageIdRef.current.get(chatId);
+              if (chatState && streamingMessageId) {
+                const toolCallsArray = Array.from(chatToolCalls.values());
                 console.log(`[useAgent] Updating UI after tool result, ${toolCallsArray.length} tool call(s):`, 
                   toolCallsArray.map(tc => ({ name: tc.toolName, status: tc.status })));
                 
                 const updatedMessages = chatState.messages.map((msg) =>
-                  msg.id === streamingMessageIdRef.current
+                  msg.id === streamingMessageId
                     ? {
                         ...msg,
                         toolCalls: toolCallsArray,
+                        sequence: [...sequence], // Update sequence with tool result
                       }
                     : msg
                 );
                 const newChatStates = new Map(chatStates);
                 newChatStates.set(chatId, { ...chatState, messages: updatedMessages });
                 useChatStore.setState({ chatStates: newChatStates });
+              }
+
+              // === Auto-open document/app tabs when agent creates or edits them ===
+              if (
+                !payload.error &&
+                payload.result &&
+                (existingCall.toolName === "create_document" ||
+                  existingCall.toolName === "import_document" ||
+                  existingCall.toolName === "create_app" ||
+                  existingCall.toolName === "edit_app_file" || // Auto-open on edits too
+                  existingCall.toolName === "update_app")
+              ) {
+                try {
+                  let docId: string | undefined;
+                  let docTitle: string | undefined;
+                  let isApp = false;
+                  
+                  // For create/import, parse from result
+                  if (existingCall.toolName === "create_document" ||
+                      existingCall.toolName === "import_document" ||
+                      existingCall.toolName === "create_app") {
+                    const resultData =
+                      typeof payload.result === "string"
+                        ? JSON.parse(payload.result)
+                        : payload.result;
+                    const docData = resultData?.data ?? resultData;
+                    docId = docData?.id as string | undefined;
+                    docTitle = (docData?.title as string) || "Document";
+                    isApp = existingCall.toolName === "create_app";
+                  }
+                  
+                  // For edit_app_file, get appId from args
+                  if (existingCall.toolName === "edit_app_file" || existingCall.toolName === "update_app") {
+                    docId = existingCall.args?.appId as string | undefined;
+                    docTitle = "App"; // Will be updated from tab if it exists
+                    isApp = true;
+                    console.log('[useAgent] edit_app_file auto-open:', { 
+                      toolName: existingCall.toolName,
+                      appId: docId, 
+                      args: existingCall.args 
+                    });
+                  }
+
+                  if (docId) {
+                    const tabType = isApp ? "app" : "document";
+                    const { createTab, createArtifactFromChat, getTab } =
+                      useTabStore.getState();
+                    
+                    console.log('[useAgent] Attempting auto-open:', { docId, tabType });
+                    
+                    // Check if tab already exists
+                    const existingTabId = `${tabType}-${docId}`;
+                    const existingTab = getTab(existingTabId);
+                    
+                    if (existingTab) {
+                      // Tab exists - just merge with chat (refreshes the view)
+                      const chatTabId = `chat-${chatId}`;
+                      createArtifactFromChat(chatTabId, existingTabId);
+                      console.log(
+                        `[useAgent] Refreshed existing ${tabType} tab: ${existingTabId}`,
+                      );
+                    } else {
+                      // Create new tab and merge
+                      const artifactTabId = createTab(
+                        tabType,
+                        docId,
+                        docTitle || "Artifact",
+                      );
+                      const chatTabId = `chat-${chatId}`;
+                      createArtifactFromChat(chatTabId, artifactTabId);
+                      console.log(
+                        `[useAgent] Auto-opened ${tabType} tab: ${artifactTabId} merged with ${chatTabId}`,
+                      );
+                    }
+                  } else {
+                    console.warn('[useAgent] No docId found for auto-open:', {
+                      toolName: existingCall.toolName,
+                      args: existingCall.args,
+                      result: payload.result
+                    });
+                  }
+                } catch (parseErr) {
+                  console.warn(
+                    "[useAgent] Could not parse tool result for auto-open:",
+                    parseErr,
+                  );
+                }
               }
             }
           }
@@ -182,54 +357,102 @@ export function useAgent() {
         case "text-delta":
           {
             // Append delta to streaming content
-            const chatId = (chunk as any).chatId;
             const text = (chunk.payload as { text: string }).text || "";
-            streamingContentRef.current += text;
-            pendingChatIdRef.current = chatId;
+            const currentContent = streamingContentRef.current.get(chatId) || "";
+            streamingContentRef.current.set(chatId, currentContent + text);
+            
+            // Also accumulate for sequence tracking
+            const currentSegment = currentTextSegmentRef.current.get(chatId) || "";
+            currentTextSegmentRef.current.set(chatId, currentSegment + text);
             
             // Batch updates to avoid excessive re-renders (update every 50ms max)
-            if (updateBatchRef.current) {
-              clearTimeout(updateBatchRef.current);
+            const existingTimeout = updateBatchRef.current.get(chatId);
+            if (existingTimeout) {
+              clearTimeout(existingTimeout);
             }
-            updateBatchRef.current = setTimeout(() => {
-              if (streamingMessageIdRef.current && pendingChatIdRef.current) {
+            const newTimeout = setTimeout(() => {
+              const streamingMessageId = streamingMessageIdRef.current.get(chatId);
+              const content = streamingContentRef.current.get(chatId);
+              if (streamingMessageId && content !== undefined) {
                 updateStreamingMessage(
-                  streamingMessageIdRef.current,
-                  streamingContentRef.current,
-                  pendingChatIdRef.current,
+                  streamingMessageId,
+                  content,
+                  chatId,
                 );
               }
-              updateBatchRef.current = null;
+              updateBatchRef.current.delete(chatId);
             }, 50); // Update at most every 50ms (20 FPS)
+            updateBatchRef.current.set(chatId, newTimeout);
           }
           break;
 
         case "done":
           {
-            // Clear any pending batch update
-            if (updateBatchRef.current) {
-              clearTimeout(updateBatchRef.current);
-              updateBatchRef.current = null;
+            // Clear any pending batch update for this chat
+            const existingTimeout = updateBatchRef.current.get(chatId);
+            if (existingTimeout) {
+              clearTimeout(existingTimeout);
+              updateBatchRef.current.delete(chatId);
+            }
+            
+            // ✅ SEQUENCE: Build final sequence
+            const currentSegment = currentTextSegmentRef.current.get(chatId) || "";
+            const sequence = sequenceRef.current.get(chatId) || [];
+            const finalReasoning = streamingReasoningRef.current.get(chatId);
+            
+            // Add thinking to beginning of sequence if present
+            if (finalReasoning && finalReasoning.trim() && !sequence.some(item => item.type === 'thinking')) {
+              console.log(`[useAgent] Adding thinking to sequence`);
+              sequence.unshift({ type: 'thinking', data: finalReasoning.trim() });
+            }
+            
+            // Add any remaining text segment (final text after all tools)
+            if (currentSegment.trim()) {
+              console.log(`[useAgent] Adding final text to sequence: "${currentSegment.trim().substring(0, 50)}..."`);
+              sequence.push({ type: 'text', data: currentSegment.trim() });
+              sequenceRef.current.set(chatId, sequence);
             }
             
             // Flush final update immediately
-            const chatId = (chunk as any).chatId;
-            if (streamingMessageIdRef.current) {
-              // One final update with the complete content
-              updateStreamingMessage(
-                streamingMessageIdRef.current,
-                streamingContentRef.current,
-                chatId,
-              );
+            const streamingMessageId = streamingMessageIdRef.current.get(chatId);
+            const content = streamingContentRef.current.get(chatId);
+            const chatToolCalls = toolCallsMapRef.current.get(chatId);
+            
+            if (streamingMessageId) {
+              // Update message with final sequence we built
+              const { chatStates } = useChatStore.getState();
+              const chatState = chatStates.get(chatId);
+              if (chatState) {
+                const toolCallsArray = chatToolCalls ? Array.from(chatToolCalls.values()) : [];
+                console.log(`[useAgent] Finalizing with ${sequence.length} sequence items`);
+                
+                const updatedMessages = chatState.messages.map((msg) =>
+                  msg.id === streamingMessageId
+                    ? {
+                        ...msg,
+                        content: content || "",
+                        reasoning: finalReasoning || msg.reasoning,
+                        toolCalls: toolCallsArray.length > 0 ? toolCallsArray : msg.toolCalls,
+                        sequence: sequence.length > 0 ? sequence : msg.sequence, // Use frontend-built sequence
+                        isStreaming: false,
+                        streamingContent: undefined,
+                        streamingReasoning: undefined,
+                      }
+                    : msg
+                );
+                const newChatStates = new Map(chatStates);
+                newChatStates.set(chatId, { ...chatState, messages: updatedMessages, isStreaming: false });
+                useChatStore.setState({ chatStates: newChatStates });
+              }
               
-              // Then finalize
-              finalizeStreamingMessage(streamingMessageIdRef.current, chatId);
-              streamingMessageIdRef.current = null;
-              streamingContentRef.current = "";
-              streamingReasoningRef.current = "";
-              toolCallsMapRef.current = new Map();
-              pendingChatIdRef.current = null;
+              streamingMessageIdRef.current.delete(chatId);
+              streamingContentRef.current.delete(chatId);
+              streamingReasoningRef.current.delete(chatId);
+              toolCallsMapRef.current.delete(chatId);
+              sequenceRef.current.delete(chatId); // Clear sequence
+              currentTextSegmentRef.current.delete(chatId); // Clear text segment
             }
+            activeStreamRequestByChatRef.current.delete(chatId);
             setSending(chatId, false);  // ✅ Per-chat isSending
             
             // Clear streaming status (blue dot) for THIS chat's tab
@@ -241,19 +464,20 @@ export function useAgent() {
         case "error":
           {
             // Handle error
-            const chatId = (chunk as any).chatId;
             const errorMsg =
               (chunk.payload as { error: string }).error || "Unknown error";
             console.error("[useAgent] Received error chunk:", errorMsg);
             console.error("[useAgent] Full chunk payload:", chunk.payload);
             setError(errorMsg);
-            if (streamingMessageIdRef.current) {
-              finalizeStreamingMessage(streamingMessageIdRef.current, chatId);
-              streamingMessageIdRef.current = null;
-              streamingContentRef.current = "";
-              streamingReasoningRef.current = "";
-              toolCallsMapRef.current = new Map();
+            const streamingMessageId = streamingMessageIdRef.current.get(chatId);
+            if (streamingMessageId) {
+              finalizeStreamingMessage(streamingMessageId, chatId);
+              streamingMessageIdRef.current.delete(chatId);
+              streamingContentRef.current.delete(chatId);
+              streamingReasoningRef.current.delete(chatId);
+              toolCallsMapRef.current.delete(chatId);
             }
+            activeStreamRequestByChatRef.current.delete(chatId);
             setSending(chatId, false);  // ✅ Per-chat isSending
           }
           break;
@@ -261,32 +485,39 @@ export function useAgent() {
         case "tool-error":
           {
             // Handle tool execution error (bash, filesystem, etc.)
-            const chatId = (chunk as any).chatId;
             const toolName = (chunk.payload as any).toolName || "unknown";
             const toolCallId = (chunk.payload as any).toolCallId;
-            const errorMsg = (chunk.payload as { error: string }).error || "Tool execution failed";
+            const rawError = (chunk.payload as { error: unknown }).error;
+            const errorMsg = typeof rawError === "string"
+              ? rawError
+              : rawError != null
+                ? JSON.stringify(rawError)
+                : "Tool execution failed";
             
             console.error(`[useAgent] Tool error (${toolName}):`, errorMsg);
             
             // Update the tool call with the error result
-            if (toolCallId && streamingMessageIdRef.current) {
-              const toolCall = toolCallsMapRef.current.get(toolCallId);
+            const streamingMessageId = streamingMessageIdRef.current.get(chatId);
+            const chatToolCalls = toolCallsMapRef.current.get(chatId);
+            if (toolCallId && streamingMessageId && chatToolCalls) {
+              const toolCall = chatToolCalls.get(toolCallId);
               if (toolCall) {
-                toolCallsMapRef.current.set(toolCallId, {
+                chatToolCalls.set(toolCallId, {
                   ...toolCall,
                   result: `❌ Error: ${errorMsg}`,
                   status: 'error' as const,
                 });
+                toolCallsMapRef.current.set(chatId, chatToolCalls);
                 
                 // Update the message's tool calls
                 const { chatStates } = useChatStore.getState();
                 const chatState = chatStates.get(chatId);
                 if (chatState) {
                   const updatedMessages = chatState.messages.map((msg) =>
-                    msg.id === streamingMessageIdRef.current
+                    msg.id === streamingMessageId
                       ? {
                           ...msg,
-                          toolCalls: Array.from(toolCallsMapRef.current.values()),
+                          toolCalls: Array.from(chatToolCalls.values()),
                         }
                       : msg
                   );
@@ -349,6 +580,26 @@ export function useAgent() {
           
           finalChatId = newChatId; // Use permanent ID for streaming
         }
+
+        const existingChatState = useChatStore.getState().chatStates.get(finalChatId);
+        if (existingChatState?.isSending || existingChatState?.isStreaming) {
+          console.log(`[useAgent] Interrupting active stream for ${finalChatId}`);
+          await gateway.send("agent:stop", { chatId: finalChatId }).catch((stopError) => {
+            console.warn("[useAgent] Failed to stop existing stream:", stopError);
+          });
+
+          const existingStreamingMessageId = streamingMessageIdRef.current.get(finalChatId);
+          if (existingStreamingMessageId) {
+            finalizeStreamingMessage(existingStreamingMessageId, finalChatId);
+          }
+
+          streamingMessageIdRef.current.delete(finalChatId);
+          streamingContentRef.current.delete(finalChatId);
+          streamingReasoningRef.current.delete(finalChatId);
+          toolCallsMapRef.current.delete(finalChatId);
+          setSending(finalChatId, false);
+          setTabStreaming(`chat-${finalChatId}`, false);
+        }
         
         // Set tab streaming status (blue dot) for THIS chat's tab
         setTabStreaming(`chat-${finalChatId}`, true);
@@ -361,11 +612,11 @@ export function useAgent() {
         }, finalChatId);
         console.log("[useAgent] User message added to store");
 
-        // Reset streaming state
-        streamingMessageIdRef.current = null;
-        streamingContentRef.current = "";
-        streamingReasoningRef.current = "";
-        toolCallsMapRef.current = new Map();
+        // Reset streaming state for this chatId
+        streamingMessageIdRef.current.delete(finalChatId);
+        streamingContentRef.current.delete(finalChatId);
+        streamingReasoningRef.current.delete(finalChatId);
+        toolCallsMapRef.current.delete(finalChatId);
 
         setSending(finalChatId, true);  // ✅ Per-chat isSending
         setError(null);
@@ -396,6 +647,9 @@ export function useAgent() {
             config,
           },
           (chunk) => handleStreamChunk(chunk as StreamChunk),
+          (requestId) => {
+            activeStreamRequestByChatRef.current.set(finalChatId, requestId);
+          },
         );
         console.log("[useAgent] gateway.stream completed successfully");
         

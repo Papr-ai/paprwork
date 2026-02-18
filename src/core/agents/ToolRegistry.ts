@@ -61,8 +61,18 @@ export class ToolRegistry {
    * Get tools formatted for Mastra's streamText
    * Returns tools object ready to be passed to AI SDK
    */
-  getToolsForMastra(): Record<string, AnyTool> {
-    return this.getTools();
+  getToolsForMastra(allowedToolIds?: string[]): Record<string, AnyTool> {
+    if (!allowedToolIds || allowedToolIds.length === 0) {
+      return this.getTools();
+    }
+    const allowed = new Set(allowedToolIds);
+    const toolsObject: Record<string, AnyTool> = {};
+    for (const [id, tool] of this.tools) {
+      if (allowed.has(id)) {
+        toolsObject[id] = tool;
+      }
+    }
+    return toolsObject;
   }
 
   /**

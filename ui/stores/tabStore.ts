@@ -391,10 +391,23 @@ export const useTabStore = create<TabState>()(
     // MAX 1 CHILD: If parent already has a child, replace it (max 2 panes total)
     let tabsToRemove: string[] = [];
     if (parent.childTabIds.length > 0) {
+      // Never remove the tab we're about to add — it's already in the right place.
+      // Removing + re-adding the same tab causes a render frame where the tab is
+      // gone from `tabs` but still referenced by `childTabIds` → "Tab not found".
+      const alreadyCorrectChild =
+        parent.childTabIds.length === 1 && parent.childTabIds[0] === childId;
+
+      if (alreadyCorrectChild) {
+        // Nothing to do — tab is already the child of this parent.
+        get().switchToTab(parentId);
+        return;
+      }
+
       console.log(
         `[TabStore] Replacing existing child ${parent.childTabIds[0]} with ${childId}`,
       );
-      tabsToRemove = parent.childTabIds;
+      // Exclude childId itself from removal in case it's in the list
+      tabsToRemove = parent.childTabIds.filter((id) => id !== childId);
     }
 
     set((state) => ({

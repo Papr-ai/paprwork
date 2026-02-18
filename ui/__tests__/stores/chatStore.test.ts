@@ -1,306 +1,292 @@
 /**
- * Tests for Chat Store
- * Tests parallel chat state management and empty chat detection
+ * Chat Store Tests
+ *
+ * Tests the per-chat state management features:
+ * - Per-chat message management (addMessage with chatId)
+ * - Streaming message lifecycle (add → update → finalize)
+ * - Parallel chat state isolation
+ * - Per-chat streaming & sending states
+ * - Default state for uninitialized chats
+ * - Global error/loading state
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { useChatStore } from "../../stores/chatStore";
-import type { ChatMessage } from "../../types/chat";
+import { useChatStore, defaultChatState } from "../../stores/chatStore";
+import type { ChatMessage, ChatState, ChatMetadata } from "../../types/chat";
+
+/** Helper: initialize a chat's per-chat state in the store */
+function initChat(chatId: string, overrides: Partial<ChatState> = {}) {
+  const chatState: ChatState = { ...defaultChatState, ...overrides };
+  useChatStore.setState((state) => {
+    const next = new Map(state.chatStates);
+    next.set(chatId, chatState);
+    return { chatStates: next };
+  });
+}
+
+/** Helper: build a minimal ChatMetadata entry */
+function makeMeta(id: string, overrides: Partial<ChatMetadata> = {}): ChatMetadata {
+  return {
+    id,
+    title: "Chat",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    messageCount: 0,
+    isStreaming: false,
+    hasUnread: false,
+    ...overrides,
+  };
+}
 
 describe("ChatStore", () => {
   beforeEach(() => {
-    // Reset store before each test
-    // const store = useChatStore.getState() // REMOVED - use direct calls;
-    useChatStore.getState().setChats([]);
-    useChatStore.getState().clearMessages();
     useChatStore.setState({
-      activeChat: null,
-      chatStates: new Map(),
       chats: [],
-      messages: [],
+      chatStates: new Map(),
+      isLoading: false,
+      error: null,
     });
   });
 
-  describe("Chat State Initialization", () => {
-    it("should initialize chat state when setActiveChat is called", () => {
-      // const store = useChatStore.getState() // REMOVED - use direct calls;
-      const chatId = "test-chat-1";
+  // ── Per-Chat Message Management ─────────────────────────────────
 
-      // Set active chat
-      useChatStore.getState().setActiveChat(chatId);
+  describe("Per-Chat Message Management", () => {
+    it("should add a message to a specific chat", () => {
+      initChat("chat-1");
 
-      // Chat state should be initialized
-      const chatState = useChatStore.getState().getChatState(chatId);
-      expect(chatState).toBeDefined();
-      expect(chatState.messages).toEqual([]);
-      expect(chatState.isStreaming).toBe(false);
-      expect(chatState.hasUnread).toBe(false);
+      const msg: ChatMessage = { id: "m1", role: "user", content: "Hello" };
+      useChatStore.getState().addMessage(msg, "chat-1");
+
+      const state = useChatStore.getState().getChatState("chat-1");
+      expect(state.messages).toHaveLength(1);
+      expect(state.messages[0].content).toBe("Hello");
     });
 
-    it("should preserve existing chat state when switching chats", () => {
-      // const store = useChatStore.getState() // REMOVED - use direct calls;
-      const chat1 = "test-chat-1";
-      const chat2 = "test-chat-2";
+    it("should keep messages isolated between chats", () => {
+      initChat("chat-1");
+      initChat("chat-2");
 
-      // Initialize chat 1 with messages
-      useChatStore.getState().setActiveChat(chat1);
-      const message: ChatMessage = {
-        role: "user",
-        content: "Test message",
-      };
-      useChatStore.getState().addMessage(message, chat1);
+      useChatStore.getState().addMessage(
+        { id: "m1", role: "user", content: "Chat 1 message" },
+        "chat-1",
+      );
+      useChatStore.getState().addMessage(
+        { id: "m2", role: "user", content: "Chat 2 message" },
+        "chat-2",
+      );
 
-      // Switch to chat 2
-      useChatStore.getState().setActiveChat(chat2);
+      expect(useChatStore.getState().getChatState("chat-1").messages).toHaveLength(1);
+      expect(useChatStore.getState().getChatState("chat-1").messages[0].content).toBe("Chat 1 message");
 
-      // Chat 1 state should still exist
-      const chat1State = useChatStore.getState().getChatState(chat1);
-      expect(chat1State.messages.length).toBe(1);
-      expect(chat1State.messages[0].content).toBe("Test message");
+      expect(useChatStore.getState().getChatState("chat-2").messages).toHaveLength(1);
+      expect(useChatStore.getState().getChatState("chat-2").messages[0].content).toBe("Chat 2 message");
+    });
 
-      // Chat 2 should be empty
-      const chat2State = useChatStore.getState().getChatState(chat2);
-      expect(chat2State.messages.length).toBe(0);
+    it("should auto-create chat state when adding message to unknown chatId", () => {
+      // addMessage lazily creates a chatState entry if one doesn't exist
+      useChatStore.getState().addMessage(
+        { id: "m1", role: "user", content: "First message" },
+        "new-chat",
+      );
+
+      const state = useChatStore.getState().getChatState("new-chat");
+      expect(state.messages).toHaveLength(1);
+    });
+
+    it("should ignore addMessage when no chatId is provided", () => {
+      useChatStore.getState().addMessage({ id: "m1", role: "user", content: "No chat" });
+
+      // No chat states should have been created/modified
+      expect(useChatStore.getState().chatStates.size).toBe(0);
     });
   });
 
-  describe("Empty Chat Detection", () => {
-    it("should correctly identify empty chats", () => {
-      // const store = useChatStore.getState() // REMOVED - use direct calls;
-      const emptyChatId = "empty-chat";
-      const fullChatId = "full-chat";
+  // ── Streaming Message Lifecycle ─────────────────────────────────
 
-      // Initialize empty chat
-      useChatStore.getState().setActiveChat(emptyChatId);
-      const emptyState = useChatStore.getState().getChatState(emptyChatId);
-      expect(emptyState.messages.length).toBe(0);
+  describe("Streaming Message Lifecycle", () => {
+    it("should update streaming message content", () => {
+      initChat("chat-1");
+      useChatStore.getState().addMessage(
+        { id: "msg-1", role: "assistant", content: "Initial" },
+        "chat-1",
+      );
 
-      // Initialize chat with messages
-      useChatStore.getState().setActiveChat(fullChatId);
-      useChatStore
-        .getState()
-        .addMessage({ role: "user", content: "Hello" }, fullChatId);
-      const fullState = useChatStore.getState().getChatState(fullChatId);
-      expect(fullState.messages.length).toBe(1);
+      useChatStore.getState().updateStreamingMessage("msg-1", "Updated content", "chat-1");
+
+      const state = useChatStore.getState().getChatState("chat-1");
+      expect(state.messages[0].content).toBe("Updated content");
+      expect(state.messages[0].isStreaming).toBe(true);
+      expect(state.isStreaming).toBe(true);
     });
 
-    it("should handle multiple empty chats independently", () => {
-      // const store = useChatStore.getState() // REMOVED - use direct calls;
-      const chat1 = "chat-1";
-      const chat2 = "chat-2";
-      const chat3 = "chat-3";
-
-      // Initialize all chats
-      useChatStore.getState().setActiveChat(chat1);
-      useChatStore.getState().setActiveChat(chat2);
-      useChatStore.getState().setActiveChat(chat3);
-
-      // Add message to chat 2
-      useChatStore
-        .getState()
-        .addMessage({ role: "user", content: "Test" }, chat2);
-
-      // Check states
-      expect(useChatStore.getState().getChatState(chat1).messages.length).toBe(
-        0,
+    it("should finalize a streaming message", () => {
+      initChat("chat-1");
+      useChatStore.getState().addMessage(
+        { id: "msg-1", role: "assistant", content: "" },
+        "chat-1",
       );
-      expect(useChatStore.getState().getChatState(chat2).messages.length).toBe(
-        1,
-      );
-      expect(useChatStore.getState().getChatState(chat3).messages.length).toBe(
-        0,
-      );
-    });
-  });
+      useChatStore.getState().updateStreamingMessage("msg-1", "Final content", "chat-1");
+      useChatStore.getState().finalizeStreamingMessage("msg-1", "chat-1");
 
-  describe("Parallel Chat Streaming", () => {
-    it("should track streaming state per chat", () => {
-      // const store = useChatStore.getState() // REMOVED - use direct calls;
-      const chat1 = "chat-1";
-      const chat2 = "chat-2";
-
-      // Initialize chats
-      useChatStore.getState().setActiveChat(chat1);
-      useChatStore.getState().setActiveChat(chat2);
-
-      // Start streaming in chat 1
-      useChatStore.getState().setChatStreaming(chat1, true);
-
-      // Check states
-      expect(useChatStore.getState().getChatState(chat1).isStreaming).toBe(
-        true,
-      );
-      expect(useChatStore.getState().getChatState(chat2).isStreaming).toBe(
-        false,
-      );
-
-      // Stop streaming in chat 1, start in chat 2
-      useChatStore.getState().setChatStreaming(chat1, false);
-      useChatStore.getState().setChatStreaming(chat2, true);
-
-      expect(useChatStore.getState().getChatState(chat1).isStreaming).toBe(
-        false,
-      );
-      expect(useChatStore.getState().getChatState(chat2).isStreaming).toBe(
-        true,
-      );
+      const state = useChatStore.getState().getChatState("chat-1");
+      expect(state.messages[0].isStreaming).toBe(false);
+      expect(state.messages[0].streamingContent).toBeUndefined();
+      expect(state.isStreaming).toBe(false);
     });
 
-    it("should track unread state per chat", () => {
-      // const store = useChatStore.getState() // REMOVED - use direct calls;
-      const chat1 = "chat-1";
-      const chat2 = "chat-2";
+    it("should not modify other messages when updating one", () => {
+      initChat("chat-1");
+      useChatStore.getState().addMessage({ id: "m1", role: "user", content: "User msg" }, "chat-1");
+      useChatStore.getState().addMessage({ id: "m2", role: "assistant", content: "" }, "chat-1");
 
-      // Initialize chats
-      useChatStore.getState().setActiveChat(chat1);
-      useChatStore.getState().setActiveChat(chat2);
+      useChatStore.getState().updateStreamingMessage("m2", "Streaming...", "chat-1");
 
-      // Mark chat 1 as unread
-      useChatStore.getState().setChatUnread(chat1, true);
-
-      // Check states
-      expect(useChatStore.getState().getChatState(chat1).hasUnread).toBe(false); // getChatState doesn't read from chats array
-
-      // Mark as read
-      useChatStore.getState().markChatAsRead(chat1);
-
-      // Should be read now (in chats array)
-      const chat1Meta = useChatStore
-        .getState()
-        .chats.find((c) => c.id === chat1);
-      expect(chat1Meta?.hasUnread).toBe(false);
+      const state = useChatStore.getState().getChatState("chat-1");
+      expect(state.messages[0].content).toBe("User msg");
+      expect(state.messages[0].isStreaming).toBeUndefined();
+      expect(state.messages[1].content).toBe("Streaming...");
+      expect(state.messages[1].isStreaming).toBe(true);
     });
 
-    it("should add streaming messages to inactive chats", () => {
-      // const store = useChatStore.getState() // REMOVED - use direct calls;
-      const activeChat = "active-chat";
-      const inactiveChat = "inactive-chat";
+    it("should be a no-op when messageId does not exist", () => {
+      initChat("chat-1");
+      useChatStore.getState().addMessage({ id: "m1", role: "user", content: "Hello" }, "chat-1");
 
-      // Set active chat
-      useChatStore.getState().setActiveChat(activeChat);
+      useChatStore.getState().updateStreamingMessage("nonexistent", "test", "chat-1");
 
-      // Initialize inactive chat
-      useChatStore.getState().setActiveChat(inactiveChat);
-      useChatStore.getState().setActiveChat(activeChat); // Switch back
-
-      // Add message to inactive chat
-      const message: ChatMessage = {
-        role: "assistant",
-        content: "Streaming message",
-      };
-      useChatStore.getState().addMessage(message, inactiveChat);
-
-      // Check that inactive chat has the message
-      const inactiveChatState = useChatStore
-        .getState()
-        .getChatState(inactiveChat);
-      expect(inactiveChatState.messages.length).toBe(1);
-      expect(inactiveChatState.messages[0].content).toBe("Streaming message");
-
-      // Active chat should still be empty
-      const activeChatState = useChatStore.getState().getChatState(activeChat);
-      expect(activeChatState.messages.length).toBe(0);
+      const state = useChatStore.getState().getChatState("chat-1");
+      expect(state.messages).toHaveLength(1);
+      expect(state.messages[0].content).toBe("Hello");
     });
   });
 
-  describe("Message Management", () => {
-    it("should add messages to the correct chat", () => {
-      // const store = useChatStore.getState() // REMOVED - use direct calls;
-      const chat1 = "chat-1";
-      const chat2 = "chat-2";
+  // ── Per-Chat Streaming State ────────────────────────────────────
 
-      // Initialize chats
-      useChatStore.getState().setActiveChat(chat1);
-      useChatStore.getState().setActiveChat(chat2);
+  describe("Per-Chat Streaming State", () => {
+    it("should track streaming state independently per chat", () => {
+      initChat("chat-1");
+      initChat("chat-2");
 
-      // Add messages to each chat
-      useChatStore
-        .getState()
-        .addMessage({ role: "user", content: "Chat 1 message" }, chat1);
-      useChatStore
-        .getState()
-        .addMessage({ role: "user", content: "Chat 2 message" }, chat2);
+      useChatStore.getState().setChatStreaming("chat-1", true);
 
-      // Check messages
-      const chat1State = useChatStore.getState().getChatState(chat1);
-      const chat2State = useChatStore.getState().getChatState(chat2);
-
-      expect(chat1State.messages.length).toBe(1);
-      expect(chat1State.messages[0].content).toBe("Chat 1 message");
-
-      expect(chat2State.messages.length).toBe(1);
-      expect(chat2State.messages[0].content).toBe("Chat 2 message");
+      expect(useChatStore.getState().getChatState("chat-1").isStreaming).toBe(true);
+      expect(useChatStore.getState().getChatState("chat-2").isStreaming).toBe(false);
     });
 
-    it("should update streaming messages correctly", () => {
-      // const store = useChatStore.getState() // REMOVED - use direct calls;
-      const chatId = "test-chat";
+    it("should toggle streaming on and off", () => {
+      initChat("chat-1");
 
-      // Initialize chat
-      useChatStore.getState().setActiveChat(chatId);
+      useChatStore.getState().setChatStreaming("chat-1", true);
+      expect(useChatStore.getState().getChatState("chat-1").isStreaming).toBe(true);
 
-      // Add streaming message
-      const messageId = "msg-1";
-      useChatStore
-        .getState()
-        .addMessage(
-          { role: "assistant", content: "Initial", id: messageId },
-          chatId,
-        );
-
-      // Update streaming message
-      useChatStore
-        .getState()
-        .updateStreamingMessage(messageId, "Updated content", chatId);
-
-      // Check message
-      const chatState = useChatStore.getState().getChatState(chatId);
-      expect(chatState.messages[0].content).toBe("Updated content");
+      useChatStore.getState().setChatStreaming("chat-1", false);
+      expect(useChatStore.getState().getChatState("chat-1").isStreaming).toBe(false);
     });
 
-    it("should finalize streaming messages", () => {
-      // const store = useChatStore.getState() // REMOVED - use direct calls;
-      const chatId = "test-chat";
+    it("should also update the chats metadata array", () => {
+      useChatStore.setState({ chats: [makeMeta("chat-1")] });
+      initChat("chat-1");
 
-      // Initialize chat
-      useChatStore.getState().setActiveChat(chatId);
+      useChatStore.getState().setChatStreaming("chat-1", true);
 
-      // Add streaming message
-      const messageId = "msg-1";
-      useChatStore
-        .getState()
-        .addMessage(
-          { role: "assistant", content: "Streaming...", id: messageId },
-          chatId,
-        );
-
-      // Start streaming
-      useChatStore.getState().setChatStreaming(chatId, true);
-      expect(useChatStore.getState().getChatState(chatId).isStreaming).toBe(
-        true,
-      );
-
-      // Finalize
-      useChatStore.getState().finalizeStreamingMessage(messageId, chatId);
-
-      // Streaming should stop
-      expect(useChatStore.getState().getChatState(chatId).isStreaming).toBe(
-        false,
-      );
+      const meta = useChatStore.getState().chats.find((c) => c.id === "chat-1");
+      expect(meta?.isStreaming).toBe(true);
     });
   });
+
+  // ── Per-Chat Sending State ──────────────────────────────────────
+
+  describe("Per-Chat Sending State", () => {
+    it("should set sending state for a specific chat", () => {
+      initChat("chat-1");
+
+      useChatStore.getState().setSending("chat-1", true);
+      expect(useChatStore.getState().getChatState("chat-1").isSending).toBe(true);
+
+      useChatStore.getState().setSending("chat-1", false);
+      expect(useChatStore.getState().getChatState("chat-1").isSending).toBe(false);
+    });
+
+    it("should not affect other chats' sending state", () => {
+      initChat("chat-1");
+      initChat("chat-2");
+
+      useChatStore.getState().setSending("chat-1", true);
+
+      expect(useChatStore.getState().getChatState("chat-1").isSending).toBe(true);
+      expect(useChatStore.getState().getChatState("chat-2").isSending).toBe(false);
+    });
+  });
+
+  // ── Unread & Read State ─────────────────────────────────────────
+
+  describe("Unread & Read State", () => {
+    it("should mark a chat as unread in metadata", () => {
+      useChatStore.setState({ chats: [makeMeta("chat-1")] });
+
+      useChatStore.getState().setChatUnread("chat-1", true);
+
+      const meta = useChatStore.getState().chats.find((c) => c.id === "chat-1");
+      expect(meta?.hasUnread).toBe(true);
+    });
+
+    it("should mark a chat as read in metadata", () => {
+      useChatStore.setState({ chats: [makeMeta("chat-1", { hasUnread: true })] });
+
+      useChatStore.getState().markChatAsRead("chat-1");
+
+      const meta = useChatStore.getState().chats.find((c) => c.id === "chat-1");
+      expect(meta?.hasUnread).toBe(false);
+    });
+  });
+
+  // ── Default / Uninitialized Chat State ──────────────────────────
 
   describe("Default State", () => {
-    it("should return default state for uninitialized chats", () => {
-      // const store = useChatStore.getState() // REMOVED - use direct calls;
-      const uninitializedChatId = "uninitialized";
+    it("should return default state for an uninitialized chatId", () => {
+      const state = useChatStore.getState().getChatState("unknown-chat");
 
-      const state = useChatStore.getState().getChatState(uninitializedChatId);
       expect(state.messages).toEqual([]);
       expect(state.isLoading).toBe(false);
       expect(state.isSending).toBe(false);
       expect(state.isStreaming).toBe(false);
       expect(state.hasUnread).toBe(false);
+    });
+
+    it("should return separate default objects for different unknown chats", () => {
+      const a = useChatStore.getState().getChatState("a");
+      const b = useChatStore.getState().getChatState("b");
+
+      // Equal values but different references
+      expect(a).toEqual(b);
+      expect(a).not.toBe(b);
+    });
+  });
+
+  // ── Global State ────────────────────────────────────────────────
+
+  describe("Global State", () => {
+    it("should set and clear global loading", () => {
+      useChatStore.getState().setLoading(true);
+      expect(useChatStore.getState().isLoading).toBe(true);
+
+      useChatStore.getState().setLoading(false);
+      expect(useChatStore.getState().isLoading).toBe(false);
+    });
+
+    it("should set and clear global error", () => {
+      useChatStore.getState().setError("Something broke");
+      expect(useChatStore.getState().error).toBe("Something broke");
+
+      useChatStore.getState().setError(null);
+      expect(useChatStore.getState().error).toBeNull();
+    });
+
+    it("should replace all chat metadata with setChats", () => {
+      useChatStore.getState().setChats([makeMeta("c1"), makeMeta("c2")]);
+
+      expect(useChatStore.getState().chats).toHaveLength(2);
+      expect(useChatStore.getState().chats[0].id).toBe("c1");
     });
   });
 });

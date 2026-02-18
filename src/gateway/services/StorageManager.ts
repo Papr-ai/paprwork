@@ -22,7 +22,6 @@ export interface StorageConfig {
   
   // PAPR config
   paprApiKey?: string;
-  paprBaseUrl?: string;
 }
 
 export class StorageManager {
@@ -51,7 +50,6 @@ export class StorageManager {
         }
         this.provider = new PaprMemoryProvider({
           apiKey: config.paprApiKey,
-          baseUrl: config.paprBaseUrl,
         });
         break;
 
@@ -61,10 +59,7 @@ export class StorageManager {
         }
         this.provider = new HybridStorageProvider(
           config.userDataPath || this.getDefaultUserDataPath(),
-          {
-            apiKey: config.paprApiKey,
-            baseUrl: config.paprBaseUrl,
-          }
+          { apiKey: config.paprApiKey }
         );
         break;
 

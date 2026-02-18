@@ -4,6 +4,14 @@
 
 .favorites-list {
   margin: 12px 8px;
+  border-radius: 8px;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.favorites-list--drag-over {
+  background: rgba(0, 122, 255, 0.08);
+  outline: 2px dashed var(--accent, #007aff);
+  outline-offset: -2px;
 }
 
 .favorites-list__header {
@@ -37,7 +45,22 @@
 }
 
 .favorites-list__title {
-  flex: 1;
+  /* No flex-grow — count stays adjacent to label */
+}
+
+.favorites-list__count {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  background: var(--hover, rgba(0,0,0,0.04));
+  padding: 1px 5px;
+  border-radius: 8px;
+}
+
+.favorites-list__empty {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-style: italic;
 }
 
 .favorites-list__items {
