@@ -9,6 +9,7 @@ import { InputBar, InputBarRef } from "./InputBar";
 import { useAgent } from "../../hooks/useAgent";
 import { useChatStore, defaultChatState } from "../../stores/chatStore";
 import { useTabStore } from "../../stores/tabStore";
+import type { Tab } from "../../stores/tabStore";
 import { CHAT_MODELS } from "../../constants/models";
 import type { AIModel } from "../../constants/models";
 import { mapHistoryMessages } from "../../utils/historyMapper";
@@ -61,6 +62,51 @@ This is a power-user tool. They want results, not hand-holding.
 You're not in a web chat. You're in a native Mac app with Jobs, Skills, and Mini-apps. Use them.
 
 Each conversation is a fresh start. Make it count.`;
+
+interface ArtifactContext {
+  type: "document" | "app";
+  id: string;
+  title: string;
+}
+
+function findMergedArtifact(chatId: string): ArtifactContext | null {
+  const { getTab } = useTabStore.getState();
+  const chatTabId = `chat-${chatId}`;
+  const chatTab = getTab(chatTabId);
+  if (!chatTab) return null;
+
+  const toArtifact = (tab: Tab | undefined): ArtifactContext | null => {
+    if (!tab) return null;
+    if (tab.type === "document") return { type: "document", id: tab.entityId, title: tab.title };
+    if (tab.type === "app") return { type: "app", id: tab.entityId, title: tab.title };
+    return null;
+  };
+
+  // Chat is the parent: artifact is one of its children
+  if (chatTab.displayMode === "parent") {
+    for (const childId of chatTab.childTabIds) {
+      const artifact = toArtifact(getTab(childId));
+      if (artifact) return artifact;
+    }
+  }
+
+  // Chat is a child: artifact may be the parent or a sibling child
+  if (chatTab.displayMode === "child" && chatTab.parentTabId) {
+    const parent = getTab(chatTab.parentTabId);
+    const artifact = toArtifact(parent);
+    if (artifact) return artifact;
+
+    if (parent) {
+      for (const siblingId of parent.childTabIds) {
+        if (siblingId === chatTabId) continue;
+        const sibling = toArtifact(getTab(siblingId));
+        if (sibling) return sibling;
+      }
+    }
+  }
+
+  return null;
+}
 
 interface ChatContainerProps {
   chatId: string;
@@ -239,12 +285,19 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
   );
 
   const handleSendMessage = useCallback(async (message: string) => {
+    const mergedArtifact = findMergedArtifact(chatId);
+
+    const idKey = mergedArtifact?.type === "document" ? "documentId" : "appId";
+    const mergedContext = mergedArtifact
+      ? `\n\n## Active Context\nThe user has merged this chat with a ${mergedArtifact.type} titled "${mergedArtifact.title}" (${idKey}: "${mergedArtifact.id}"). They are viewing and working on this ${mergedArtifact.type} alongside this conversation. Reference it directly when relevant.`
+      : "";
+
     // Create config WITHOUT apiKey - Gateway will fetch it via IPC
     // This keeps keys secure and never sends them over WebSocket
     const config = {
       provider: selectedModel.provider,
       model: selectedModel.id,
-      systemPrompt: DEFAULT_SYSTEM_PROMPT,
+      systemPrompt: DEFAULT_SYSTEM_PROMPT + mergedContext,
       reasoning: selectedModel.reasoning,
       thinkingBudget: selectedModel.defaultThinkingBudget,
       maxTokens: selectedModel.maxTokens, // Output token limit

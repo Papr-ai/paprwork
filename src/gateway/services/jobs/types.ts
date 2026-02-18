@@ -19,6 +19,8 @@ export interface JobRecord {
   name: string;
   type: JobType;
   status: JobStatus;
+  /** Free-form folder label for grouping related jobs (e.g. "ingestion", "reporting"). Agent-assigned. */
+  folder?: string;
   command?: string;
   requirements?: string[];
   dependsOn?: JobDependency[];
@@ -55,6 +57,7 @@ export interface JobRecord {
 export interface CreateJobInput {
   name: string;
   type: JobType;
+  folder?: string;
   command?: string;
   requirements?: string[];
   dependsOn?: JobDependency[];
@@ -71,6 +74,29 @@ export interface CreateJobInput {
   maxTurns?: number;
   memoryPolicy?: JobMemoryPolicy;
   reportChatId?: string;
+}
+
+// ─── Job Graph ────────────────────────────────────────────────────────────────
+
+export interface JobGraphAppLink {
+  name: string;
+  jobIds: string[];
+}
+
+export interface JobGraphEdge {
+  from: string;
+  to: string;
+  onStatus: "completed" | "failed";
+}
+
+export interface JobGraph {
+  version: 1;
+  updatedAt: string;
+  /** folder name → job IDs in that folder */
+  folders: Record<string, string[]>;
+  /** app ID → { name, jobIds } from data-sources.json reverse lookup */
+  appLinks: Record<string, JobGraphAppLink>;
+  edges: JobGraphEdge[];
 }
 
 export interface JobDependency {

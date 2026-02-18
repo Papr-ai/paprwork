@@ -1,0 +1,94 @@
+.jobs-graph-scroll {
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  background: var(--background-secondary);
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  padding: 8px;
+}
+
+.jobs-graph-svg {
+  display: block;
+}
+
+/* Cluster (folder background) */
+.jg-cluster-rect {
+  fill: var(--background-tertiary, rgba(0, 0, 0, 0.03));
+  stroke: var(--border-color);
+  stroke-width: 1;
+  stroke-dasharray: 5 3;
+}
+
+.jg-cluster-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  fill: var(--text-secondary);
+}
+
+/* Arrow markers */
+.jg-arrow-default {
+  fill: var(--border-color);
+}
+
+/* Edge labels */
+.jg-edge-label {
+  font-size: 9px;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+/* Job nodes */
+.jg-node-group {
+  cursor: pointer;
+}
+
+.jg-node {
+  fill: var(--background-color);
+  stroke: var(--border-color);
+  stroke-width: 1;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.06));
+  transition: stroke 0.15s ease, filter 0.15s ease;
+}
+
+.jg-node-group:hover .jg-node {
+  stroke: var(--primary-color);
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.12));
+}
+
+.jg-node--selected {
+  stroke: var(--primary-color) !important;
+  stroke-width: 2 !important;
+}
+
+.jg-node-name {
+  font-size: 12px;
+  font-weight: 600;
+  fill: var(--text-primary);
+  pointer-events: none;
+}
+
+.jg-node-meta {
+  font-size: 10px;
+  fill: var(--text-secondary);
+  pointer-events: none;
+}
+
+.jg-node-folder {
+  font-size: 9px;
+  fill: var(--text-secondary);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+/* Empty state */
+.jobs-graph-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}

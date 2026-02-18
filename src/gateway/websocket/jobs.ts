@@ -15,6 +15,7 @@ import { getApiKeysForSanitization, sanitizeError } from "../../core/tools/secur
 interface CreateJobPayload {
   name: string;
   type: JobType;
+  folder?: string;
   command?: string;
   dependsOn?: JobDependency[];
   retries?: JobRetryPolicy;
@@ -36,6 +37,11 @@ interface JobIdPayload {
   jobId: string;
 }
 
+interface ListJobsPayload {
+  folder?: string;
+  appId?: string;
+}
+
 interface JobLogsPayload {
   jobId: string;
   maxBytes?: number;
@@ -49,6 +55,7 @@ interface DeleteJobPayload {
 interface UpdateJobPayload {
   jobId: string;
   name?: string;
+  folder?: string;
   command?: string;
   requirements?: string[];
   dependsOn?: JobDependency[];
@@ -76,8 +83,23 @@ export async function setupJobsHandlers(
   try {
     switch (message.type) {
       case "jobs:list": {
-        const jobs = await jobsService.listJobs();
+        const listPayload = message.payload as ListJobsPayload | undefined;
+        const jobs = await jobsService.listJobs(
+          listPayload?.folder ?? listPayload?.appId
+            ? { folder: listPayload?.folder, appId: listPayload?.appId }
+            : undefined,
+        );
         sendResponse(ws, { id: message.id, success: true, data: jobs });
+        break;
+      }
+      case "jobs:folders": {
+        const folders = await jobsService.listJobFolders();
+        sendResponse(ws, { id: message.id, success: true, data: { folders } });
+        break;
+      }
+      case "jobs:graph": {
+        const graph = await jobsService.getJobGraph();
+        sendResponse(ws, { id: message.id, success: true, data: { graph } });
         break;
       }
       case "jobs:get": {
@@ -95,6 +117,7 @@ export async function setupJobsHandlers(
         const job = await jobsService.createJob({
           name: payload.name,
           type: payload.type,
+          folder: payload.folder,
           command: payload.command,
           dependsOn: payload.dependsOn,
           retries: payload.retries,

@@ -9,6 +9,9 @@ import { AgentJobExecutor } from "./jobs/executors/AgentJobExecutor.js";
 import type { IJobExecutor } from "./jobs/executors/IJobExecutor.js";
 import type {
   CreateJobInput,
+  JobGraph,
+  JobGraphAppLink,
+  JobGraphEdge,
   JobRecord,
   JobSchedule,
   JobStatus,
@@ -18,6 +21,9 @@ export type {
   CreateJobInput,
   JobDelivery,
   JobDependency,
+  JobGraph,
+  JobGraphAppLink,
+  JobGraphEdge,
   JobMemoryPolicy,
   JobRecord,
   JobRetryPolicy,
@@ -33,6 +39,7 @@ export class JobsService {
   private paprRootDir: string;
   private jobsRootDir: string;
   private jobsIndexPath: string;
+  private graphPath: string;
   private legacyJobsRootDir: string;
   private legacyJobsIndexPath: string;
   private jobs: Map<string, JobRecord>;
@@ -46,6 +53,7 @@ export class JobsService {
     this.paprRootDir = path.join(homeDir, "PAPR");
     this.jobsRootDir = path.join(this.paprRootDir, "jobs");
     this.jobsIndexPath = path.join(this.paprRootDir, "data", "jobs.json");
+    this.graphPath = path.join(this.paprRootDir, "data", "job-graph.json");
     this.legacyJobsRootDir = path.join(homeDir, "papr-jobs");
     this.legacyJobsIndexPath = path.join(homeDir, ".paprwork", "data", "jobs.json");
     this.jobs = new Map();
@@ -159,11 +167,118 @@ export class JobsService {
     return path.join(this.getJobDir(jobId), "logs", "run.log");
   }
 
-  async listJobs(): Promise<JobRecord[]> {
-    return Array.from(this.jobs.values()).sort(
+  async listJobs(filter?: { folder?: string; appId?: string }): Promise<JobRecord[]> {
+    let jobs = Array.from(this.jobs.values()).sort(
       (a, b) =>
         new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
     );
+
+    if (filter?.folder) {
+      jobs = jobs.filter((j) => j.folder === filter.folder);
+    }
+
+    if (filter?.appId) {
+      try {
+        const { getAppService } = await import("./AppService.js");
+        const appService = getAppService();
+        await appService.initialize();
+        const dataSources = await appService.listAppDataSources(filter.appId);
+        const jobIds = new Set(dataSources.map((ds) => ds.jobId));
+        jobs = jobs.filter((j) => jobIds.has(j.id));
+      } catch {
+        jobs = [];
+      }
+    }
+
+    return jobs;
+  }
+
+  /** Returns sorted list of distinct folder labels across all jobs. */
+  async listJobFolders(): Promise<string[]> {
+    const folders = new Set<string>();
+    for (const job of this.jobs.values()) {
+      if (job.folder) folders.add(job.folder);
+    }
+    return [...folders].sort();
+  }
+
+  /** Returns the current job-graph.json. Rebuilds from scratch if missing. */
+  async getJobGraph(): Promise<JobGraph | null> {
+    try {
+      const raw = await fs.readFile(this.graphPath, "utf8");
+      return JSON.parse(raw) as JobGraph;
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === "ENOENT") {
+        await this.rebuildGraph();
+        try {
+          const raw = await fs.readFile(this.graphPath, "utf8");
+          return JSON.parse(raw) as JobGraph;
+        } catch {
+          return null;
+        }
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Rebuilds ~/PAPR/data/job-graph.json from current jobs + app data-sources.
+   * Called fire-and-forget after every job mutation.
+   */
+  private async rebuildGraph(): Promise<void> {
+    try {
+      const jobs = Array.from(this.jobs.values());
+
+      const folders: Record<string, string[]> = {};
+      for (const job of jobs) {
+        if (job.folder) {
+          folders[job.folder] ??= [];
+          folders[job.folder].push(job.id);
+        }
+      }
+
+      const edges: JobGraphEdge[] = [];
+      for (const job of jobs) {
+        for (const dep of job.dependsOn ?? []) {
+          edges.push({ from: dep.jobId, to: job.id, onStatus: dep.onStatus });
+        }
+      }
+
+      const appLinks: Record<string, JobGraphAppLink> = {};
+      try {
+        const { getAppService } = await import("./AppService.js");
+        const appService = getAppService();
+        await appService.initialize();
+        const apps = await appService.listApps();
+        for (const app of apps) {
+          try {
+            const dataSources = await appService.listAppDataSources(app.id);
+            const jobIds = [...new Set(dataSources.map((ds) => ds.jobId))];
+            if (jobIds.length > 0) {
+              appLinks[app.id] = { name: app.title, jobIds };
+            }
+          } catch {
+            // skip apps with no data sources
+          }
+        }
+      } catch {
+        // AppService not yet initialized — skip app links this rebuild
+      }
+
+      const graph: JobGraph = {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        folders,
+        appLinks,
+        edges,
+      };
+
+      await fs.mkdir(path.dirname(this.graphPath), { recursive: true });
+      await fs.writeFile(this.graphPath, JSON.stringify(graph, null, 2), "utf8");
+    } catch (error) {
+      console.warn("[JobsService] Failed to rebuild graph:", error);
+    }
   }
 
   async getJob(jobId: string): Promise<JobRecord | null> {
@@ -178,6 +293,7 @@ export class JobsService {
       name: input.name,
       type: input.type,
       status: "pending",
+      folder: input.folder,
       command: input.command,
       requirements: input.requirements,
       dependsOn: input.dependsOn ?? [],
@@ -220,6 +336,7 @@ export class JobsService {
 
     this.jobs.set(id, job);
     await this.saveJobs();
+    void this.rebuildGraph();
     return job;
   }
 
@@ -628,6 +745,7 @@ export class JobsService {
     updates: Partial<Pick<
       import("./jobs/types.js").JobRecord,
       | "name"
+      | "folder"
       | "command"
       | "requirements"
       | "dependsOn"
@@ -657,6 +775,7 @@ export class JobsService {
     };
     this.jobs.set(jobId, updated);
     await this.saveJobs();
+    void this.rebuildGraph();
 
     // If requirements changed, rewrite requirements.txt so next run picks them up
     if (updates.requirements !== undefined) {
@@ -692,6 +811,7 @@ export class JobsService {
     // Remove from index
     this.jobs.delete(jobId);
     await this.saveJobs();
+    void this.rebuildGraph();
 
     // Optionally remove the job directory (scripts, logs, db)
     if (deleteFiles) {

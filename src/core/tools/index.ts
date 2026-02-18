@@ -14,6 +14,7 @@ import { documentTools } from "./documents.js";
 import { paprMemoryTools } from "./paprMemory.js";
 import { skillsTools } from "./skills.js";
 import { appJobsTools } from "./appJobs.js";
+import { jobFolderTools } from "./jobFolders.js";
 import { webviewTools } from "./webview.js";
 import { delegationTools } from "./delegation.js";
 import { planningTools } from "./planning.js";
@@ -29,6 +30,7 @@ export const allTools = [
   ...paprMemoryTools,
   ...skillsTools,
   ...appJobsTools,
+  ...jobFolderTools,
   ...webviewTools,
   ...delegationTools,
   ...planningTools,
@@ -115,6 +117,13 @@ export {
   listAppFilesTool,
   listAppsTool,
 } from "./appJobs.js";
+
+export {
+  jobFolderTools,
+  listJobFoldersTool,
+  setJobFolderTool,
+  getJobGraphTool,
+} from "./jobFolders.js";
 
 export { planningTools, createPlanTool, updatePlanTool } from "./planning.js";
 

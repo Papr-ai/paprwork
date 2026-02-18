@@ -1146,13 +1146,13 @@ Write like you're texting a friend who asked a good question. Natural language. 
 TONE & STYLE:
 - Concise and direct. No filler, no wind-up, no landing.
 - Lowercase is fine, natural mix it up. Contractions work (you're, don't, here's). "tbh", "imo" fine.
-- Sentence fragment fine. One sentence paragraphs work. 
+- Sentence fragment fine. One sentence paragraphs work. Don't use ; 
 - Get to the point in the first sentence. No intro, no "Great question!", no "Happy to help!".
 - No conclusion or summary at the end. Just stop when you're done.
 - Short paragraphs. 2-4 sentences max per paragraph.
 
 Skip:
-- Opening with "Great [noun]!" or "Hey," or any greeting
+- Opening with "Great [noun]!" or "Hey," or "you're approach sounds promising"
 - Bullet-point essays where prose would work
 - "Here are some thoughts:" lead-ins
 - Restating the question before answering it
@@ -1179,6 +1179,72 @@ Just be direct and useful. Write like you actually know this stuff. Don't format
 **Usage pattern:** Prepend this as the system prompt in the agent job, then pass the original post/comment as the user message along with any context about the product/founder.
 
 ---
+
+---
+
+## Job Folders & Graph
+
+### TL;DR
+
+- **Always** call `get_job_graph()` before creating jobs for an existing pipeline
+- Assign `folder` when creating a job using `create_job({ folder: "ingestion", ... })`
+- Use `set_job_folder` to assign or move existing jobs
+- Folders show as collapsible sections in the UI; apps can filter to their linked jobs
+
+### Folder Conventions
+
+Folders group jobs by **pipeline stage**, not by app. A folder named `ingestion` can feed multiple apps; an app can pull from multiple folders.
+
+| Folder name | Jobs that belong here |
+|-------------|----------------------|
+| `ingestion` | fetch, sync, import, download |
+| `processing` | transform, enrich, aggregate, normalize |
+| `reporting` | build PDFs, populate dashboards, compute metrics |
+| `notifications` | send emails, Slack messages, webhooks |
+| `cleanup` | prune old records, archive data, vacuum |
+
+Avoid naming folders after apps (`sales-dashboard`) — those are linkages, not stages.
+
+### New Tools
+
+| Tool | Purpose |
+|------|---------|
+| `get_job_graph()` | Full dependency graph + folder groupings + app linkages. Read this before building a pipeline. |
+| `list_job_folders()` | Distinct folder names across all jobs. Check this before assigning a new folder name. |
+| `set_job_folder(jobId, folder)` | Assign a job to a folder. Omit `folder` to clear. |
+
+### Updated Tools
+
+- `create_job` — new `folder` param: assign folder at creation time
+- `update_job` — new `folder` param: reassign after the fact
+- `list_jobs` — new `folder` and `appId` filter params
+
+### Workflow for Building a Pipeline
+
+```
+1. get_job_graph()                   → understand what already exists
+2. list_job_folders()                → see current folder names
+3. create_job({ folder: "ingestion", ... })
+4. create_job({ folder: "processing", dependsOn: [{ jobId: "...", onStatus: "completed" }], ... })
+5. link_app_data_source(...)         → wire processing job output to app
+```
+
+### How the Graph Works
+
+`~/PAPR/data/job-graph.json` is automatically rebuilt after every job create/update/delete. It contains:
+
+```json
+{
+  "folders": { "ingestion": ["job-id-1"], "processing": ["job-id-2"] },
+  "appLinks": { "app-id-1": { "name": "Sales Dashboard", "jobIds": ["job-id-2"] } },
+  "edges": [{ "from": "job-id-1", "to": "job-id-2", "onStatus": "completed" }]
+}
+```
+
+The UI uses this for:
+- **App filter chips** — filter the jobs list to only jobs linked to a specific app
+- **Folder sections** — collapsible groups in the list view
+- **Graph view** — visual DAG showing nodes (jobs), edges (dependsOn), clusters (folders)
 
 ## Notes
 

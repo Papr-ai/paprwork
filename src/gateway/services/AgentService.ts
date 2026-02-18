@@ -266,6 +266,11 @@ export class AgentService {
     let toolResults: ToolResultEvent[] = [];
     let sequence: Array<{ type: 'text' | 'tool' | 'thinking'; data: any }> = [];
 
+    // Context pressure monitoring — declared here so catch block can read them
+    // 150k = 75% of Claude's 200k window; safe abort margin for tool-heavy loops
+    const CONTEXT_ABORT_THRESHOLD = 150000;
+    let contextPressureAborted = false;
+
     try {
       // 1. Save user message
       t = performance.now();
@@ -386,33 +391,54 @@ export class AgentService {
       
       // Stream from AI SDK directly with abort signal and tools
       t = performance.now();
+
+      // Effective output token cap — prefer per-model config, fall back to 16k
+      const effectiveMaxTokens = config.maxTokens ?? 16000;
+      console.log(`[AgentService] Setting maxTokens: ${effectiveMaxTokens}`);
+
+      let cumulativeSteps = 0;
+
       const streamTextOptions: any = {
         model,
         messages,
         tools: tools as unknown as ToolSet,
-        // Allow up to maxSteps tool roundtrips before stopping
-        // Default 100 steps provides safety against infinite loops
-        // while allowing complex multi-step agentic workflows
-        // LLMs are smart enough to stop on their own when done
+        maxTokens: effectiveMaxTokens,
+        // Allow up to maxSteps tool roundtrips before stopping.
+        // 100 steps provides safety against infinite loops while allowing
+        // complex multi-step agentic workflows.
         stopWhen: (stopOptions: any) =>
           stopOptions.steps.length >= (options?.maxSteps ?? 100),
         // ⚡ NO TIMEOUT - Allow agents to work as long as needed
         // Protection mechanisms:
         // 1. Step limit prevents infinite loops
-        // 2. User can abort via UI (abortController)
-        // 3. Frontend tracks progress and can warn user
-        // 4. Cost/token tracking can alert if usage is high
+        // 2. Context pressure monitoring (onStepFinish) aborts if prompt
+        //    tokens exceed CONTEXT_ABORT_THRESHOLD
+        // 3. User can abort via UI (abortController)
         abortSignal: abortController.signal,
         ...(providerOptions.openai || providerOptions.google ? { providerOptions } : {}),
+        onStepFinish: async (step: {
+          usage: { promptTokens: number; completionTokens: number; totalTokens: number };
+          stepType: string;
+        }) => {
+          cumulativeSteps++;
+          const { promptTokens, completionTokens } = step.usage;
+          console.log(
+            `[AgentService] 📈 Step ${cumulativeSteps} (${step.stepType}) - prompt: ${promptTokens} tokens, completion: ${completionTokens} tokens`,
+          );
+
+          if (promptTokens > CONTEXT_ABORT_THRESHOLD) {
+            console.warn(
+              `[AgentService] ⚠️ Context pressure at step ${cumulativeSteps}: ` +
+              `${promptTokens} prompt tokens > ${CONTEXT_ABORT_THRESHOLD} threshold. ` +
+              `Aborting stream and triggering compression.`,
+            );
+            contextPressureAborted = true;
+            abortController.abort();
+            // Kick off compression immediately so the next turn starts with a summary
+            this.triggerSummarization(chatId).catch(console.error);
+          }
+        },
       };
-      
-      // Add maxTokens if specified (output token limit)
-      if (config.maxTokens) {
-        streamTextOptions.maxTokens = config.maxTokens;
-        console.log(`[AgentService] Setting maxTokens: ${config.maxTokens}`);
-      } else {
-        console.warn(`[AgentService] No maxTokens set - model will use default (usually 4096)`);
-      }
       
       const result = await streamText(streamTextOptions);
       timings.streamTextInit = performance.now() - t;
@@ -495,7 +521,10 @@ export class AgentService {
     } catch (error) {
       // Save partial assistant message with error indicator
       // This ensures user sees what happened when they reopen the chat
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const contextThresholdStr = CONTEXT_ABORT_THRESHOLD.toLocaleString();
+      const errorMessage = contextPressureAborted
+        ? `Context limit approaching (${contextThresholdStr} prompt tokens). Conversation summary generated — you can continue from where we left off.`
+        : error instanceof Error ? error.message : 'Unknown error';
       
       const errorMsg: StoredMessage = createErrorStoredMessage({
         chatId,

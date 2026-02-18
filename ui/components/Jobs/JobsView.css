@@ -685,3 +685,150 @@
   font-size: 14px;
   color: var(--text-secondary);
 }
+
+/* ─── View toggle ──────────────────────────────────────────────────────────── */
+
+.jobs-view-toggle {
+  display: flex;
+  gap: 4px;
+  background: var(--background-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 3px;
+}
+
+.view-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.view-toggle-btn:hover {
+  background: var(--background-tertiary);
+  color: var(--text-primary);
+}
+
+.view-toggle-btn--active {
+  background: var(--background-color);
+  color: var(--text-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* ─── App filter chips ─────────────────────────────────────────────────────── */
+
+.jobs-app-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.app-chip {
+  padding: 5px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--background-secondary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.app-chip:hover {
+  border-color: var(--primary-color);
+  color: var(--text-primary);
+}
+
+.app-chip--active {
+  background: rgba(0, 113, 227, 0.1);
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+}
+
+/* ─── Folder sections ──────────────────────────────────────────────────────── */
+
+.jobs-folder-section {
+  margin-bottom: 16px;
+}
+
+.jobs-folder-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 8px;
+  background: var(--background-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+  margin-bottom: 8px;
+  transition: background 0.15s;
+  text-align: left;
+}
+
+.jobs-folder-header:hover {
+  background: var(--background-tertiary);
+}
+
+.jobs-folder-header--ungrouped {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.folder-chevron {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  transition: transform 0.2s ease;
+}
+
+.folder-chevron--open {
+  transform: rotate(0deg);
+}
+
+.folder-chevron:not(.folder-chevron--open) {
+  transform: rotate(-90deg);
+}
+
+.jobs-folder-name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  text-transform: capitalize;
+}
+
+.jobs-folder-count {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--background-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.jobs-folder-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-left: 12px;
+}
+
+/* ─── Highlighted job card (from graph click) ──────────────────────────────── */
+
+.job-card--highlighted {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px rgba(0, 113, 227, 0.15);
+}

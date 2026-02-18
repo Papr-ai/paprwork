@@ -40,7 +40,7 @@ export const CHAT_MODELS: AIModel[] = [
     group: "Anthropic",
     supportsThinking: true,
     defaultThinkingBudget: 10000,
-    maxTokens: 64000,
+    maxTokens: 16000,
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
   {
@@ -51,7 +51,7 @@ export const CHAT_MODELS: AIModel[] = [
     group: "Anthropic",
     supportsThinking: true,
     defaultThinkingBudget: 32000,
-    maxTokens: 128000,
+    maxTokens: 16000,
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
   {

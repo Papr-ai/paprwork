@@ -48,6 +48,10 @@ const scheduleSchema = z.object({
 const createJobSchema = z.object({
   name: z.string().min(1),
   type: z.enum(["shell", "bash", "node", "python", "swift", "agent", "subagent"]),
+  folder: z.string().optional().describe(
+    "Folder label to group related jobs (e.g. 'ingestion', 'processing', 'reporting'). " +
+    "Use list_job_folders first to see existing groups. Same name = same folder.",
+  ),
   command: z.string().optional(),
   requirements: z.array(z.string().min(1)).optional().describe(
     "Python/Node packages to install before running. Creates a venv automatically. Example: ['anthropic', 'requests', 'sqlite-utils']"
@@ -205,6 +209,7 @@ export const createJobTool = createTool({
     const job = await jobsService.createJob({
       name: args.name,
       type: args.type,
+      folder: args.folder,
       command: args.command,
       requirements: args.requirements,
       dependsOn: args.dependsOn?.map((dependency) => ({
@@ -398,6 +403,7 @@ const listAppsSchema = z.object({
 const updateJobSchema = z.object({
   jobId: z.string().min(1).describe("ID of the job to update (get it from list_jobs)"),
   name: z.string().min(1).optional().describe("New display name for the job"),
+  folder: z.string().optional().describe("Assign or change the job's folder group (e.g. 'ingestion'). Use set_job_folder for a dedicated tool."),
   command: z.string().optional().describe("New command to run (e.g. 'python3 selector.py')"),
   requirements: z.array(z.string().min(1)).optional().describe(
     "Updated Python/Node packages. Rewrites requirements.txt immediately. Pass [] to clear.",
@@ -425,6 +431,10 @@ const listJobsSchema = z.object({
     .describe("Filter by status. Omit to return all jobs."),
   type: z.enum(["shell", "bash", "node", "python", "swift", "agent", "subagent"]).optional()
     .describe("Filter by runtime type."),
+  folder: z.string().optional()
+    .describe("Filter to jobs in this folder (e.g. 'ingestion'). Use list_job_folders to see available folders."),
+  appId: z.string().optional()
+    .describe("Filter to jobs linked to this app ID via data-sources."),
   limit: z.number().int().min(1).max(200).optional()
     .describe("Max jobs to return (default: 50, newest first)."),
 });
@@ -574,12 +584,13 @@ Common use cases:
   inputSchema: updateJobSchema,
   execute: async (input) => {
     const args = (input as { context?: UpdateJobArgs }).context ?? input;
-    const { jobId, dependsOn, retries, schedule, ...rest } = args;
+    const { jobId, dependsOn, retries, schedule, folder, ...rest } = args;
     const { getJobsService } = await import("../../gateway/services/JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
     const job = await jobsService.updateJob(jobId, {
       ...rest,
+      ...(folder !== undefined ? { folder } : {}),
       ...(dependsOn !== undefined
         ? {
             dependsOn: dependsOn.map((d) => ({
@@ -847,7 +858,11 @@ Returns jobs sorted newest-first. Filter by status or type as needed.`,
     const jobsService = getJobsService();
     await jobsService.initialize();
 
-    let jobs = await jobsService.listJobs();
+    let jobs = await jobsService.listJobs(
+      args.folder ?? args.appId
+        ? { folder: args.folder, appId: args.appId }
+        : undefined,
+    );
 
     if (args.status) {
       jobs = jobs.filter((j) => j.status === args.status);
@@ -868,6 +883,7 @@ Returns jobs sorted newest-first. Filter by status or type as needed.`,
       name: j.name,
       type: j.type,
       status: j.status,
+      folder: j.folder,
       command: j.command,
       requirements: j.requirements?.length ? j.requirements : undefined,
       dependsOn: j.dependsOn?.length
