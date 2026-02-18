@@ -10,10 +10,20 @@
  */
 
 import fs from "fs/promises";
+import os from "os";
 import path from "path";
 import { z } from "zod";
 import { createTool } from "@mastra/core/tools";
 import type { ToolResult } from "../types/tools.js";
+
+/** Expand a leading `~` to the user's home directory. */
+function expandPath(filePath: string): string {
+  if (filePath === "~") return os.homedir();
+  if (filePath.startsWith("~/") || filePath.startsWith("~\\")) {
+    return path.join(os.homedir(), filePath.slice(2));
+  }
+  return filePath;
+}
 
 // ========================================
 // Read File
@@ -38,7 +48,8 @@ async function readFile(
   input: ReadFileInput,
 ): Promise<ToolResult<ReadFileOutput>> {
   try {
-    const { path: filePath, encoding, maxSize } = input;
+    const { path: rawPath, encoding, maxSize } = input;
+    const filePath = expandPath(rawPath);
 
     // Check if file exists
     const stats = await fs.stat(filePath);
@@ -107,7 +118,8 @@ async function writeFile(
   input: WriteFileInput,
 ): Promise<ToolResult<WriteFileOutput>> {
   try {
-    const { path: filePath, content, encoding, backup, createDirs } = input;
+    const { path: rawPath, content, encoding, backup, createDirs } = input;
+    const filePath = expandPath(rawPath);
 
     // Create parent directories if needed
     if (createDirs) {
@@ -189,7 +201,8 @@ async function listDirectory(
   input: ListDirectoryInput,
 ): Promise<ToolResult<ListDirectoryOutput>> {
   try {
-    const { path: dirPath, recursive, pattern, maxDepth } = input;
+    const { path: rawPath, recursive, pattern, maxDepth } = input;
+    const dirPath = expandPath(rawPath);
 
     // Check if directory exists
     const stats = await fs.stat(dirPath);
@@ -302,12 +315,13 @@ async function searchFiles(
 ): Promise<ToolResult<SearchFilesOutput>> {
   try {
     const {
-      path: searchPath,
+      path: rawPath,
       query,
       filePattern,
       caseSensitive,
       maxResults,
     } = input;
+    const searchPath = expandPath(rawPath);
 
     const regex = new RegExp(query, caseSensitive ? "g" : "gi");
     const matches: SearchMatch[] = [];

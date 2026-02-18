@@ -32,3 +32,6 @@ out/
 
 # TypeScript
 *.tsbuildinfo
+
+# Literal ~ directory (created when path expansion fails e.g. ~/PAPR/jobs)
+~/
