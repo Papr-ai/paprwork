@@ -104,7 +104,37 @@ Models Used: ${this.getUniqueModels(messages).join(', ') || 'N/A'}
         minute: '2-digit'
       });
       const role = msg.role === 'user' ? 'User' : 'Assistant';
-      const content = msg.content
+      const parts: string[] = [];
+      
+      // Add main content
+      if (msg.content) {
+        parts.push(msg.content);
+      }
+      
+      // Add thinking if present
+      if (msg.thinking) {
+        parts.push(`\n[Thinking]\n${msg.thinking}`);
+      }
+      
+      // Add tool calls if present
+      if (msg.toolCalls && msg.toolCalls.length > 0) {
+        parts.push('\n[Tool Calls]');
+        for (const tool of msg.toolCalls) {
+          parts.push(`\n• ${tool.name}(${JSON.stringify(tool.args, null, 2)})`);
+          if (tool.result) {
+            const resultStr = typeof tool.result === 'string' 
+              ? tool.result 
+              : JSON.stringify(tool.result, null, 2);
+            // Truncate long results in export
+            const truncated = resultStr.length > 500 
+              ? resultStr.substring(0, 500) + `\n  ... (${resultStr.length - 500} more chars)` 
+              : resultStr;
+            parts.push(`  Result: ${truncated}`);
+          }
+        }
+      }
+      
+      const content = parts.join('\n');
 
       return `[${role} - ${time}]
 ${content}

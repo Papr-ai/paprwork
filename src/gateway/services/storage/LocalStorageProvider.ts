@@ -300,55 +300,53 @@ export class LocalStorageProvider implements IStorageProvider {
       }));
     }
 
-    // Get last 6 messages
+    // Get last 50 messages (enough context without overwhelming token budget)
+    // This matches the ~16K token budget seen in logs for recent messages
     const recentMessages = this.db.prepare(`
       SELECT role, content, thinking, tool_calls
       FROM messages 
       WHERE chat_id = ? 
       ORDER BY timestamp DESC 
-      LIMIT 6
+      LIMIT 50
     `).all(chatId) as any[];
 
     // Reverse to chronological order
     recentMessages.reverse();
 
-    const archivedCount = chat.message_count - 6;
+    const archivedCount = chat.message_count - recentMessages.length;
     const topics = chat.summary_topics ? JSON.parse(chat.summary_topics) : [];
 
     // Export chat to file and get path
     const messages = await this.loadMessages(chatId);
     const chatFilePath = await this.exporter.exportChat(chatId, chat.title, messages);
 
-    // Build summary message
-    const summaryMessage = {
-      role: 'user',
-      content: `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📚 ARCHIVED CONVERSATION SUMMARY (${archivedCount} older messages)
+    // Build summary for system prompt (NOT as a user message)
+    // This will be passed to buildSystemPrompt via conversationSummary option
+    const summaryForSystemPrompt = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📚 ARCHIVED CONVERSATION SUMMARY (${archivedCount} older messages archived)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-⚠️  CRITICAL INSTRUCTIONS:
-• DO NOT respond to this summary
-• DO NOT ask questions about the summary  
-• FOCUS on the 6 RECENT messages below
-• Full conversation history: ${chatFilePath}
-• Use bash/grep/read tools if you need specific details from older messages
+This conversation has been ongoing for ${chat.message_count} messages total.
+The summary below covers the first ${archivedCount} messages.
+The actual recent ${recentMessages.length} messages follow this summary in the conversation history.
+
+Full conversation export: ${chatFilePath}
+You can use bash/grep/read tools to search the full history if needed.
 
 ───────────────────────────────────────────────────────────
 
-FULL SESSION: ${chat.summary_long}
+FULL SESSION SUMMARY:
+${chat.summary_long}
 
-RECENT CONTEXT (last ~100 messages): ${chat.summary_medium}
+RECENT CONTEXT (last ~100 messages):
+${chat.summary_medium}
 
-CURRENT BATCH (last 15 messages): ${chat.summary_short}
+CURRENT BATCH (last 15 messages):
+${chat.summary_short}
 
 KEY TOPICS: ${topics.join(', ')}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-[END OF ARCHIVED CONTEXT]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-The following 6 messages are the RECENT conversation.`
-    };
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
     // Format recent messages — pass toolCalls through for structured AI SDK format
     const formattedRecent = recentMessages.map((message) => {
@@ -364,7 +362,11 @@ The following 6 messages are the RECENT conversation.`
       };
     });
 
-    return [summaryMessage, ...formattedRecent];
+    // Inject summary as special __summary property for AgentService to extract
+    return [
+      { __summary: summaryForSystemPrompt },
+      ...formattedRecent
+    ];
   }
 
   // ===== Summary Operations =====

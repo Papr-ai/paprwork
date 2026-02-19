@@ -341,6 +341,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
 
       <InputBar
         ref={inputBarRef}
+        chatId={chatId}
         onSend={handleSendMessage}
         onStop={handleStopAgent}
         onSlashCommand={handleSlashCommand}

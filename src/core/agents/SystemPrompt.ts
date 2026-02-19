@@ -511,6 +511,8 @@ read_skill({ skillId: "preloaded-SKILL-NAME" })
 | **Documents** | \`create_document\`, \`read_document\`, \`list_documents\`, \`import_document\` |
 | **Filesystem** | \`read_file\`, \`write_file\`, \`list_directory\`, \`search_files\` |
 | **Shell** | \`bash\` |
+| **Web Search** | \`bash - curl\` |
+| **Key Management** | \`get_key\`, \`set_key\`, \`list_keys\`, \`delete_key\` |
 | **Memory** | \`add_agent_memory\`, \`search_agent_memory\`, \`register_schema\` |
 | **Skills** | \`read_skill\`, \`create_skill\` |
 | **Delegation** | \`delegate_task\`, \`create_sub_agent\`, \`list_sub_agents\`, \`delete_sub_agent\` |
@@ -821,17 +823,63 @@ User: "Import my notes from ~/Documents/notes.md"
 
 Read, write, search, and manage files safely.
 
+## CRITICAL: File Reading Strategy
+
+**Default limit: 50KB per file** (to prevent context overflow)
+
+### For Large Files or Code Repos:
+
+**❌ DON'T:**
+\`\`\`typescript
+read_file({ path: "large-file.ts" })  // May fail if >50KB
+\`\`\`
+
+**✅ DO (Option 1): Read in chunks**
+\`\`\`typescript
+// Read first 100 lines to understand structure
+read_file({ path: "large-file.ts", offset: 1, limit: 100 })
+
+// Then read specific sections
+read_file({ path: "large-file.ts", offset: 200, limit: 50 })
+\`\`\`
+
+**✅ DO (Option 2): Use bash for targeted reading**
+\`\`\`bash
+# Read first 50 lines
+head -n 50 large-file.ts
+
+# Read last 50 lines
+tail -n 50 large-file.ts
+
+# Search for specific function
+grep -A 10 "function myFunction" large-file.ts
+
+# Count lines first
+wc -l large-file.ts
+\`\`\`
+
+**✅ DO (Option 3): Use search_files**
+\`\`\`typescript
+search_files({
+  path: "/path/to/repo",
+  pattern: "function myFunction",
+  filePattern: "*.ts"
+})
+\`\`\`
+
 ## Available Tools
 
 ### read_file
 
-Read file contents with encoding support.
+Read file contents (max 50KB default). For large files, use offset/limit or bash.
 
 \`\`\`typescript
 read_file({
   path: "/path/to/file.ts",
-  encoding: "utf8",      // utf8 | base64 | binary
-  maxSize: 10485760      // 10MB default
+  encoding: "utf8",      // utf8 | base64 | binary (default: utf8)
+  maxSize: 50000,        // bytes (default: 50KB)
+  offset: 1,             // start at line N (optional)
+  limit: 100             // read N lines (optional)
 })
 \`\`\`
 
@@ -878,11 +926,12 @@ search_files({
 
 ## Best Practices
 
-1. **Always check file exists** before reading
-2. **Use maxSize** to prevent reading huge files
-3. **Enable createBackup** when modifying important files
-4. **Use appropriate encoding** (utf8 for text, base64 for binary)
-5. **Handle errors gracefully** - files may not exist or be locked`;
+1. **Check file size first** - Use \`ls -lh\` or \`wc -l\` before reading
+2. **Read incrementally** - Start with first 50-100 lines, then read more if needed
+3. **Use search for specific content** - Don't read entire files to find one function
+4. **Enable createBackup** when modifying important files
+5. **Use appropriate encoding** (utf8 for text, base64 for binary)
+6. **Handle errors gracefully** - files may not exist or be locked`;
   }
 
   /**

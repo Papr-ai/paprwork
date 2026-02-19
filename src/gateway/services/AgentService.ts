@@ -13,7 +13,7 @@ import path from "path";
 import os from "os";
 import { v4 as uuidv4 } from 'uuid';
 import { streamText, generateObject, jsonSchema } from 'ai';
-import type { LanguageModel, ToolSet } from "ai";
+import type { LanguageModel, ToolSet, StepResult } from "ai";
 import { ToolRegistry } from "../../core/agents/ToolRegistry.js";
 import {
   allTools,
@@ -268,7 +268,7 @@ export class AgentService {
 
     // Context pressure monitoring — declared here so catch block can read them
     // 150k = 75% of Claude's 200k window; safe abort margin for tool-heavy loops
-    const CONTEXT_ABORT_THRESHOLD = 150000;
+    const CONTEXT_ABORT_THRESHOLD = 120000; // Conservative: leave room for output tokens
     let contextPressureAborted = false;
 
     try {
@@ -287,7 +287,18 @@ export class AgentService {
 
       // 2. Load message history for LLM context
       t = performance.now();
-      const history = await this.storageManager.loadMessagesForLLM(chatId);
+      const historyRaw = await this.storageManager.loadMessagesForLLM(chatId);
+      
+      // Extract summary if present (injected by storage providers)
+      let conversationSummary: string | undefined;
+      const history = historyRaw.filter((msg) => {
+        if (typeof msg === 'object' && msg !== null && '__summary' in msg) {
+          conversationSummary = (msg as { __summary: string }).__summary;
+          return false; // Remove from history
+        }
+        return true; // Keep in history
+      });
+      
       timings.loadHistory = performance.now() - t;
       
       const historyCount = history.length;
@@ -317,9 +328,29 @@ export class AgentService {
       t = performance.now();
       const systemPrompt =
         config.systemPrompt ||
-        await this.buildContextualSystemPrompt(chatId, history, enabledSkills);
+        await this.buildContextualSystemPrompt(chatId, history, enabledSkills, conversationSummary);
       const messages = buildModelMessages(history, userMessage, systemPrompt);
       timings.buildMessages = performance.now() - t;
+      
+      // DEBUG: Log message structure to debug empty content blocks
+      console.log(`[AgentService] 🔍 Built ${messages.length} messages for model:`);
+      messages.forEach((msg, i) => {
+        if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+          const textParts = msg.content.filter((p: any) => p.type === 'text');
+          const toolCallParts = msg.content.filter((p: any) => p.type === 'tool-call');
+          console.log(`  ${i}. assistant: ${textParts.length} text parts, ${toolCallParts.length} tool-call parts`);
+          textParts.forEach((p: any, j: number) => {
+            console.log(`    text[${j}]: "${p.text.substring(0, 50)}${p.text.length > 50 ? '...' : ''}"`);
+          });
+        } else if (msg.role === 'tool') {
+          console.log(`  ${i}. tool: ${Array.isArray(msg.content) ? msg.content.length : 0} results`);
+        } else {
+          const contentPreview = typeof msg.content === 'string' 
+            ? msg.content.substring(0, 50) 
+            : JSON.stringify(msg.content).substring(0, 50);
+          console.log(`  ${i}. ${msg.role}: "${contentPreview}${contentPreview.length >= 50 ? '...' : ''}"`);
+        }
+      });
 
       // Set tool execution context (so tools can access chatId)
       const { setToolContext } = await import("../../core/tools/context.js");
@@ -397,6 +428,7 @@ export class AgentService {
       console.log(`[AgentService] Setting maxTokens: ${effectiveMaxTokens}`);
 
       let cumulativeSteps = 0;
+      let cumulativePromptTokens = 0; // Track actual token usage for adaptive truncation
 
       const streamTextOptions: any = {
         model,
@@ -416,20 +448,176 @@ export class AgentService {
         // 3. User can abort via UI (abortController)
         abortSignal: abortController.signal,
         ...(providerOptions.openai || providerOptions.google ? { providerOptions } : {}),
-        onStepFinish: async (step: {
-          usage: { promptTokens: number; completionTokens: number; totalTokens: number };
-          stepType: string;
+        // Truncate tool results mid-stream to prevent context overflow
+        // Strategy: Adaptive truncation based on ACTUAL token usage from previous steps
+        prepareStep: async (stepOptions: {
+          messages: any[];
+          stepNumber: number;
+          steps: Array<{ usage?: { promptTokens?: number; completionTokens?: number } }>;
         }) => {
-          cumulativeSteps++;
-          const { promptTokens, completionTokens } = step.usage;
+          // Use cumulative tokens tracked from onStepFinish
+          // (stepOptions.steps doesn't have usage data until after the step completes)
+          const totalPromptTokens = cumulativePromptTokens;
+          
           console.log(
-            `[AgentService] 📈 Step ${cumulativeSteps} (${step.stepType}) - prompt: ${promptTokens} tokens, completion: ${completionTokens} tokens`,
+            `[prepareStep] Step ${stepOptions.stepNumber}: ${Math.round(totalPromptTokens / 1000)}K tokens used, ` +
+            `${stepOptions.messages.length} messages in context`
+          );
+          
+          // Determine context pressure level
+          // NOTE: Most models have 128K-200K context windows
+          // - GPT-5.2: ~128K tokens
+          // - Claude Sonnet/Opus: ~200K tokens
+          // - Gemini: ~1M tokens
+          // We use conservative thresholds to leave room for output + safety margin
+          const CONTEXT_PRESSURE_THRESHOLDS = {
+            low: 30000,      // <30K tokens: generous limits
+            medium: 60000,   // 30-60K: moderate limits
+            high: 90000,     // 60-90K: aggressive limits
+            critical: 120000 // >120K: abort (handled by onStepFinish)
+          };
+          
+          let pressureLevel: 'low' | 'medium' | 'high';
+          if (totalPromptTokens < CONTEXT_PRESSURE_THRESHOLDS.low) {
+            pressureLevel = 'low';
+          } else if (totalPromptTokens < CONTEXT_PRESSURE_THRESHOLDS.medium) {
+            pressureLevel = 'medium';
+          } else {
+            pressureLevel = 'high';
+          }
+          
+          console.log(`[prepareStep]   Pressure: ${pressureLevel}`);
+          
+          // Find all tool messages and their indices (to determine recency)
+          const toolMessageIndices: number[] = [];
+          stepOptions.messages.forEach((msg, idx) => {
+            if (msg.role === 'tool') {
+              toolMessageIndices.push(idx);
+            }
+          });
+          
+          const totalToolMessages = toolMessageIndices.length;
+          console.log(`[prepareStep]   Tool messages found: ${totalToolMessages}`);
+          
+          // If no tool messages yet, don't modify anything
+          if (totalToolMessages === 0) {
+            return {};
+          }
+          
+          // Adaptive truncation limits based on context pressure (1 token ≈ 4 chars)
+          const getTruncationLimit = (toolMessagePosition: number): number | null => {
+            const positionFromEnd = totalToolMessages - toolMessagePosition - 1;
+            
+            // Always keep last result unlimited
+            if (positionFromEnd < 1) return null;
+            
+            // Adapt limits based on context pressure
+            if (pressureLevel === 'low') {
+              // Low pressure: generous limits (we have room)
+              if (positionFromEnd < 3) return 12000;  // Next 2: 3000 tokens
+              if (positionFromEnd < 6) return 6000;   // Next 3: 1500 tokens
+              if (positionFromEnd < 11) return 3000;  // Next 5: 750 tokens
+              return 1500;                            // Old: 375 tokens
+            } else if (pressureLevel === 'medium') {
+              // Medium pressure: moderate limits
+              if (positionFromEnd < 3) return 8000;   // Next 2: 2000 tokens
+              if (positionFromEnd < 6) return 4000;   // Next 3: 1000 tokens
+              if (positionFromEnd < 11) return 2000;  // Next 5: 500 tokens
+              return 1000;                            // Old: 250 tokens
+            } else {
+              // High pressure: aggressive limits (context nearly full)
+              if (positionFromEnd < 3) return 4000;   // Next 2: 1000 tokens
+              if (positionFromEnd < 6) return 2000;   // Next 3: 500 tokens
+              if (positionFromEnd < 11) return 1000;  // Next 5: 250 tokens
+              return 500;                             // Old: 125 tokens
+            }
+          };
+          
+          // Process messages to truncate tool results based on recency + context pressure
+          const truncatedMessages = stepOptions.messages.map((msg, msgIdx) => {
+            if (msg.role === 'tool' && Array.isArray(msg.content)) {
+              const toolMessagePosition = toolMessageIndices.indexOf(msgIdx);
+              const maxLength = getTruncationLimit(toolMessagePosition);
+              
+              return {
+                ...msg,
+                content: msg.content.map((part: any) => {
+                  if (part.type === 'tool-result' && typeof part.result === 'string') {
+                    const resultStr = part.result;
+                    
+                    // EMERGENCY: Catch absurdly large results (>50K tokens) regardless of recency
+                    // 50K tokens ≈ 200KB chars - max for any single tool result
+                    const EMERGENCY_LIMIT = 200000; // ~50K tokens
+                    if (resultStr.length > EMERGENCY_LIMIT) {
+                      const truncated = resultStr.substring(0, EMERGENCY_LIMIT);
+                      const omitted = resultStr.length - EMERGENCY_LIMIT;
+                      console.warn(
+                        `[prepareStep] ⚠️ EMERGENCY truncation: tool result was ${Math.round(resultStr.length / 1024)}KB, ` +
+                        `truncated to ${Math.round(EMERGENCY_LIMIT / 1024)}KB`
+                      );
+                      return {
+                        ...part,
+                        result: truncated +
+                          `\n\n[⚠️ EMERGENCY TRUNCATION: Result was ${Math.round(resultStr.length / 1024)}KB (${Math.round(resultStr.length / 4000)}K tokens), ` +
+                          `truncated ${omitted} chars. This is too large for context. ` +
+                          `Use more specific search patterns or incremental reading.]`
+                      };
+                    }
+                    
+                    // Keep unlimited for most recent (unless emergency truncation applied above)
+                    if (maxLength === null) {
+                      return part;
+                    }
+                    
+                    if (resultStr.length > maxLength) {
+                      const truncated = resultStr.substring(0, maxLength);
+                      const omitted = resultStr.length - maxLength;
+                      const positionFromEnd = totalToolMessages - toolMessagePosition - 1;
+                      const estimatedTokens = Math.ceil(maxLength / 4);
+                      return {
+                        ...part,
+                        result: truncated +
+                          `\n\n[... ${omitted} chars truncated (tool #${positionFromEnd + 1} from end, ` +
+                          `limit: ~${estimatedTokens} tokens, context: ${Math.round(totalPromptTokens / 1000)}K/${pressureLevel})]`
+                      };
+                    }
+                  }
+                  return part;
+                })
+              };
+            }
+            return msg;
+          });
+          
+          return { messages: truncatedMessages };
+        },
+        onStepFinish: async (step: StepResult<any>) => {
+          cumulativeSteps++;
+          
+          // Debug: log the actual step structure to see what we're getting
+          if (!step.usage || step.usage.inputTokens === undefined) {
+            console.log(
+              `[AgentService] 📈 Step ${cumulativeSteps} - NO USAGE DATA`,
+              'Available fields:', Object.keys(step)
+            );
+            return;
+          }
+          
+          const { inputTokens, outputTokens } = step.usage;
+          
+          // Update token tracking for next prepareStep
+          // NOTE: inputTokens is already the TOTAL input to the model (not incremental)
+          // so we replace, not add
+          cumulativePromptTokens = inputTokens;
+          
+          console.log(
+            `[AgentService] 📈 Step ${cumulativeSteps} - input: ${inputTokens} tokens, output: ${outputTokens} tokens (current context: ${cumulativePromptTokens})`,
           );
 
-          if (promptTokens > CONTEXT_ABORT_THRESHOLD) {
+          if (inputTokens > CONTEXT_ABORT_THRESHOLD) {
             console.warn(
               `[AgentService] ⚠️ Context pressure at step ${cumulativeSteps}: ` +
-              `${promptTokens} prompt tokens > ${CONTEXT_ABORT_THRESHOLD} threshold. ` +
+              `${inputTokens} input tokens > ${CONTEXT_ABORT_THRESHOLD} threshold. ` +
               `Aborting stream and triggering compression.`,
             );
             contextPressureAborted = true;
@@ -1063,6 +1251,7 @@ ${last15.substring(0, 8_000)}`;
     chatId: string,
     history: unknown[],
     enabledSkills?: Array<{ id: string; name: string; description: string }>,
+    conversationSummary?: string,
   ): Promise<string> {
     const includeExtendedAppPlaybook =
       this.hasAppAutomationContext(history);
@@ -1117,6 +1306,7 @@ ${last15.substring(0, 8_000)}`;
       activeSkills: enabledSkills,
       activePlans,
       workspaceContext,
+      conversationSummary,
     });
   }
 

@@ -329,4 +329,75 @@ describe("ChatContainer", () => {
       });
     });
   });
+
+  describe("Draft Message Persistence", () => {
+    it("should persist draft message when switching between chats", async () => {
+      const CHAT_1 = "chat-1";
+      const CHAT_2 = "chat-2";
+
+      // Initialize two chats
+      initChatState();
+      useChatStore.setState((state) => {
+        const newStates = new Map(state.chatStates);
+        newStates.set(CHAT_1, { ...defaultChatState });
+        newStates.set(CHAT_2, { ...defaultChatState });
+        return { chatStates: newStates };
+      });
+
+      // Render chat 1 and type a draft message
+      const { rerender } = render(<ChatContainer chatId={CHAT_1} />);
+      const input1 = screen.getByTestId("chat-input") as HTMLTextAreaElement;
+      fireEvent.change(input1, { target: { value: "Draft for chat 1" } });
+
+      // Verify the draft is stored
+      await waitFor(() => {
+        expect(useChatStore.getState().getDraftMessage(CHAT_1)).toBe("Draft for chat 1");
+      });
+
+      // Switch to chat 2 and type a different draft
+      rerender(<ChatContainer chatId={CHAT_2} />);
+      const input2 = screen.getByTestId("chat-input") as HTMLTextAreaElement;
+      
+      // Input should be empty for chat 2
+      expect(input2.value).toBe("");
+      
+      fireEvent.change(input2, { target: { value: "Draft for chat 2" } });
+
+      // Verify chat 2's draft is stored
+      await waitFor(() => {
+        expect(useChatStore.getState().getDraftMessage(CHAT_2)).toBe("Draft for chat 2");
+      });
+
+      // Switch back to chat 1
+      rerender(<ChatContainer chatId={CHAT_1} />);
+      const input1Again = screen.getByTestId("chat-input") as HTMLTextAreaElement;
+
+      // Draft message should be restored
+      await waitFor(() => {
+        expect(input1Again.value).toBe("Draft for chat 1");
+      });
+    });
+
+    it("should clear draft message after sending", async () => {
+      render(<ChatContainer chatId={TEST_CHAT_ID} />);
+
+      const input = screen.getByTestId("chat-input") as HTMLTextAreaElement;
+      fireEvent.change(input, { target: { value: "Message to send" } });
+
+      // Verify draft is stored
+      await waitFor(() => {
+        expect(useChatStore.getState().getDraftMessage(TEST_CHAT_ID)).toBe("Message to send");
+      });
+
+      // Send the message
+      const sendButton = screen.getByTestId("send-button");
+      fireEvent.click(sendButton);
+
+      // Verify draft is cleared
+      await waitFor(() => {
+        expect(useChatStore.getState().getDraftMessage(TEST_CHAT_ID)).toBe("");
+        expect(input.value).toBe("");
+      });
+    });
+  });
 });

@@ -31,8 +31,16 @@ function expandPath(filePath: string): string {
 
 const ReadFileSchema = z.object({
   path: z.string().describe("Path to file to read"),
-  encoding: z.enum(["utf8", "base64", "binary"]).describe("File encoding"),
-  maxSize: z.number().describe("Max file size in bytes"),
+  encoding: z.enum(["utf8", "base64", "binary"]).default("utf8").describe("File encoding (default: utf8)"),
+  maxSize: z.number().default(50000).describe(
+    "Max file size in bytes (default: 50KB). For large files, use bash with head/tail/grep instead."
+  ),
+  offset: z.number().int().min(1).optional().describe(
+    "Start reading from line N (1-indexed). Use to read specific portions of large files."
+  ),
+  limit: z.number().int().min(1).optional().describe(
+    "Read only N lines. Use with offset to read file in chunks."
+  ),
 });
 
 export type ReadFileInput = z.infer<typeof ReadFileSchema>;
@@ -48,7 +56,7 @@ async function readFile(
   input: ReadFileInput,
 ): Promise<ToolResult<ReadFileOutput>> {
   try {
-    const { path: rawPath, encoding, maxSize } = input;
+    const { path: rawPath, encoding, maxSize, offset, limit } = input;
     const filePath = expandPath(rawPath);
 
     // Check if file exists
@@ -64,21 +72,70 @@ async function readFile(
 
     // Check file size
     if (stats.size > maxSize) {
+      const sizeKB = Math.round(stats.size / 1024);
+      const maxKB = Math.round(maxSize / 1024);
       return {
         success: false,
-        error: `File too large: ${stats.size} bytes (max ${maxSize})`,
+        error: `File too large: ${sizeKB}KB (max ${maxKB}KB). Use bash with head/tail/grep, or read_file with offset/limit to read in chunks.`,
         type: "size_error",
       };
     }
 
     // Read file
-    const content = await fs.readFile(filePath, encoding as BufferEncoding);
+    let content = await fs.readFile(filePath, encoding as BufferEncoding);
+
+    // Apply line-based offset/limit if requested
+    if (offset !== undefined || limit !== undefined) {
+      const lines = content.toString().split('\n');
+      const startLine = (offset ?? 1) - 1; // Convert to 0-indexed
+      const endLine = limit !== undefined ? startLine + limit : undefined;
+      const selectedLines = lines.slice(startLine, endLine);
+      content = selectedLines.join('\n') as any;
+      
+      // Add metadata about what was read
+      const totalLines = lines.length;
+      const readLines = selectedLines.length;
+      const metadata = `\n\n[Read lines ${offset ?? 1}-${(offset ?? 1) + readLines - 1} of ${totalLines} total lines]`;
+      content = (content + metadata) as any;
+    }
+
+    // Check result size and provide helpful feedback if too large
+    // This helps the agent make better decisions without breaking the UI
+    const contentStr = content.toString();
+    const estimatedTokens = Math.ceil(contentStr.length / 4);
+    const WARN_THRESHOLD_TOKENS = 2000; // ~8KB
+    
+    if (estimatedTokens > WARN_THRESHOLD_TOKENS && !offset && !limit) {
+      const totalLines = contentStr.split('\n').length;
+      const fileName = path.basename(filePath);
+      
+      // Return helpful error to agent (NOT a hard failure)
+      // Agent will see this and can try a better approach
+      return {
+        success: false,
+        error: `File "${fileName}" is ${estimatedTokens} tokens (~${Math.round(contentStr.length / 1024)}KB, ${totalLines} lines).\n\n` +
+          `This exceeds context limits and will be heavily truncated, losing important content.\n\n` +
+          `✅ Better approaches:\n\n` +
+          `1. Read incrementally:\n` +
+          `   read_file({ path: "${rawPath}", offset: 1, limit: 100 })\n` +
+          `   Then read more sections as needed\n\n` +
+          `2. Search for specific content:\n` +
+          `   bash({ command: "grep -A 10 'function_name' ${fileName}" })\n` +
+          `   bash({ command: "grep -A 5 'class MyClass' ${fileName}" })\n\n` +
+          `3. Use search tool:\n` +
+          `   search_files({ path: "${path.dirname(filePath)}", pattern: "pattern", filePattern: "*.ts" })\n\n` +
+          `4. Get file structure:\n` +
+          `   bash({ command: "grep -E '^(export )?(class|function|interface|type) ' ${fileName}" })\n\n` +
+          `Choose the approach that best fits what you need to find.`,
+        type: "size_warning",
+      };
+    }
 
     return {
       success: true,
       data: {
         path: filePath,
-        content: content.toString(),
+        content: contentStr,
         size: stats.size,
         encoding,
       },
@@ -415,7 +472,7 @@ async function searchFiles(
 export const readFileTool = createTool({
   id: "read_file",
   description:
-    "Read contents of a file. Supports UTF-8, base64, and binary encodings.",
+    "Read file contents (max 50KB default). For large files: use offset/limit to read chunks, or bash with head/tail/grep for targeted reading. Supports UTF-8, base64, and binary encodings.",
   inputSchema: ReadFileSchema,
   execute: readFile,
 });

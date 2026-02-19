@@ -11,9 +11,11 @@ import { ContextDropdown } from "./ContextDropdown";
 import { ContextPills } from "./ContextPills";
 import { SlashCommandMenu } from "./SlashCommandMenu";
 import type { Artifact } from "../../stores/artifactsStore";
+import { useChatStore } from "../../stores/chatStore";
 import "./InputBar.css";
 
 interface InputBarProps {
+  chatId: string; // Chat ID for persisting draft messages
   onSend: (message: string, context?: Artifact[]) => void;
   onStop?: () => void;
   onSlashCommand?: (commandId: string) => void;
@@ -28,6 +30,7 @@ export interface InputBarRef {
 }
 
 export const InputBar = forwardRef<InputBarRef, InputBarProps>(({
+  chatId,
   onSend,
   onStop,
   onSlashCommand,
@@ -36,7 +39,12 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(({
   selectedModel,
   onModelChange,
 }, ref) => {
-  const [message, setMessage] = useState("");
+  // Get draft message from store
+  const draftMessage = useChatStore((state) => state.getDraftMessage(chatId));
+  const setDraftMessage = useChatStore((state) => state.setDraftMessage);
+  const clearDraftMessage = useChatStore((state) => state.clearDraftMessage);
+
+  const [message, setMessage] = useState(draftMessage);
   const [isFocused, setIsFocused] = useState(false);
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [showChatHistory, setShowChatHistory] = useState(false);
@@ -50,6 +58,17 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(({
   // Use first model as default if none selected
   const currentModel = selectedModel || CHAT_MODELS[0];
   const modelGroups = getModelGroups();
+
+  // Sync message state with store when chatId changes
+  useEffect(() => {
+    const draft = useChatStore.getState().getDraftMessage(chatId);
+    setMessage(draft);
+  }, [chatId]);
+
+  // Save draft message to store whenever it changes
+  useEffect(() => {
+    setDraftMessage(chatId, message);
+  }, [message, chatId, setDraftMessage]);
 
   // Expose focus method to parent
   useImperativeHandle(ref, () => ({
@@ -97,6 +116,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(({
       
       onSend(trimmedMessage, selectedArtifacts.length > 0 ? selectedArtifacts : undefined);
       setMessage("");
+      clearDraftMessage(chatId); // Clear draft from store
       setSelectedArtifacts([]);
 
       // Reset textarea height

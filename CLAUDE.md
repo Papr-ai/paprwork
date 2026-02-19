@@ -444,6 +444,20 @@ Gateway = ESM (.js)               ← Separate Node process, can use ESM
 - `src/electron/index.cjs` - Added Gateway health check
 **See:** `ELECTRON_MODULE_SYSTEM_FIX.md` for complete details
 
+### Issue 8: Context Length Exceeded - Tool Results Accumulating ✅ FIXED
+**Problem:** Agent hits "context_length_exceeded" error during tool-heavy conversations
+**Root Cause:** Tool results (up to 100KB each) were loaded verbatim into LLM context on every turn, causing rapid context window exhaustion
+**Solution:** Truncate tool results to 2000 chars max when loading into LLM context (full results preserved in storage for UI/debugging)
+**Fix Applied:** 2026-02-19
+**Impact:**
+- **Before:** 10 tool calls with 50KB results each = 500KB = ~125K tokens just for tool results
+- **After:** 10 tool calls truncated to 2KB each = 20KB = ~5K tokens
+- **Savings:** ~120K tokens per conversation with heavy tool usage
+**Files Changed:**
+- `src/gateway/services/agent/historyFormatter.ts` - Added truncation logic with clear truncation markers
+- `docs/TOOL_RESULT_TRUNCATION_FIX.md` - Complete documentation
+**Testing:** Verified with long tool-heavy conversations (15+ tool calls) - no more context errors
+
 ---
 
 ## Resources & References

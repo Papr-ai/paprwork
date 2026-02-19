@@ -116,6 +116,10 @@ export {
   editAppFileTool,
   listAppFilesTool,
   listAppsTool,
+  exportAppBundleTool,
+  importAppBundleTool,
+  listAppBundlesTool,
+  getAppBundleInfoTool,
 } from "./appJobs.js";
 
 export {

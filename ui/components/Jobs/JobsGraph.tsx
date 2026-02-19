@@ -80,12 +80,20 @@ function computeLayout(jobs: JobRecord[], edges: JobGraph["edges"]): NodePos[] {
   const sortedLevels = [...byLevel.keys()].sort((a, b) => a - b);
   for (const level of sortedLevels) {
     const group = byLevel.get(level)!;
-    for (let i = 0; i < group.length; i++) {
+    let y = 0;
+    let lastFolder: string | undefined = undefined;
+    for (const job of group) {
+      // Add a gap when transitioning between folder groups within the same column
+      if (lastFolder !== undefined && job.folder !== lastFolder) {
+        y += ROW_STRIDE * 0.6;
+      }
       positions.push({
-        id: group[i].id,
+        id: job.id,
         x: PADDING + level * COL_STRIDE,
-        y: PADDING + i * ROW_STRIDE,
+        y: PADDING + y,
       });
+      y += ROW_STRIDE;
+      lastFolder = job.folder;
     }
   }
   return positions;
@@ -138,15 +146,28 @@ export function JobsGraph({ jobs, graph, selectedJobId, onJobClick }: JobsGraphP
   const clusters = useMemo(() => {
     const result: Array<{ folder: string; x: number; y: number; w: number; h: number }> = [];
     for (const [folder, folderJobIds] of Object.entries(graph.folders)) {
-      const visible = folderJobIds.filter((id) => posMap.has(id));
-      if (visible.length === 0) continue;
-      const xs = visible.map((id) => posMap.get(id)!.x);
-      const ys = visible.map((id) => posMap.get(id)!.y);
-      const minX = Math.min(...xs) - CLUSTER_PAD_X;
-      const minY = Math.min(...ys) - CLUSTER_PAD_Y;
-      const maxX = Math.max(...xs) + NODE_W + CLUSTER_PAD_X;
-      const maxY = Math.max(...ys) + NODE_H + CLUSTER_PAD_X;
-      result.push({ folder, x: minX, y: minY, w: maxX - minX, h: maxY - minY });
+      // Group nodes in this folder by their column (x position) to draw one box per column
+      const byColumn = new Map<number, NodePos[]>();
+      for (const id of folderJobIds) {
+        const pos = posMap.get(id);
+        if (!pos) continue;
+        const col = pos.x;
+        const group = byColumn.get(col) ?? [];
+        group.push(pos);
+        byColumn.set(col, group);
+      }
+      for (const nodes of byColumn.values()) {
+        if (nodes.length === 0) continue;
+        const ys = nodes.map((n) => n.y);
+        const colX = nodes[0].x;
+        result.push({
+          folder,
+          x: colX - CLUSTER_PAD_X,
+          y: Math.min(...ys) - CLUSTER_PAD_Y,
+          w: NODE_W + CLUSTER_PAD_X * 2,
+          h: Math.max(...ys) + NODE_H + CLUSTER_PAD_X - (Math.min(...ys) - CLUSTER_PAD_Y),
+        });
+      }
     }
     return result;
   }, [graph.folders, posMap]);

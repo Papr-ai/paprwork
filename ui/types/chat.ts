@@ -32,6 +32,7 @@ export interface ChatState {
   isSending: boolean;
   isStreaming: boolean;
   hasUnread: boolean;
+  draftMessage?: string; // Persisted draft message for this chat
 }
 
 export interface CreateChatPayload {

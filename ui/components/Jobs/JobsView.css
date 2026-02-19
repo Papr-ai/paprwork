@@ -759,58 +759,36 @@
 /* ─── Folder sections ──────────────────────────────────────────────────────── */
 
 .jobs-folder-section {
-  margin-bottom: 16px;
+  margin-bottom: 20px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  overflow: hidden;
 }
 
 .jobs-folder-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
-  padding: 10px 14px;
-  border: none;
-  border-radius: 8px;
+  padding: 10px 16px;
   background: var(--background-secondary);
-  color: var(--text-primary);
-  cursor: pointer;
-  margin-bottom: 8px;
-  transition: background 0.15s;
-  text-align: left;
+  border-bottom: 1px solid var(--border-color);
 }
 
-.jobs-folder-header:hover {
-  background: var(--background-tertiary);
-}
-
-.jobs-folder-header--ungrouped {
-  cursor: default;
-  opacity: 0.7;
-}
-
-.folder-chevron {
-  flex-shrink: 0;
-  color: var(--text-secondary);
-  transition: transform 0.2s ease;
-}
-
-.folder-chevron--open {
-  transform: rotate(0deg);
-}
-
-.folder-chevron:not(.folder-chevron--open) {
-  transform: rotate(-90deg);
+.jobs-folder-header--muted {
+  opacity: 0.65;
 }
 
 .jobs-folder-name {
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.2px;
-  text-transform: capitalize;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
 }
 
 .jobs-folder-count {
   margin-left: auto;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
   background: var(--background-tertiary);
@@ -822,8 +800,24 @@
 .jobs-folder-content {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding-left: 12px;
+  gap: 0;
+  background: var(--background-color);
+}
+
+.jobs-folder-content .job-card {
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  border-radius: 0;
+}
+
+.jobs-folder-content .job-card:last-child {
+  border-bottom: none;
+}
+
+.jobs-folder-content .job-card:hover {
+  border-color: transparent;
+  background: var(--background-secondary);
+  box-shadow: none;
 }
 
 /* ─── Highlighted job card (from graph click) ──────────────────────────────── */

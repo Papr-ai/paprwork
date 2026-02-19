@@ -918,6 +918,434 @@ Returns jobs sorted newest-first. Filter by status or type as needed.`,
   },
 });
 
+const exportAppBundleSchema = z.object({
+  appId: z.string().min(1).describe("ID of the app to export"),
+  bundleId: z.string().optional().describe("Optional bundle ID (auto-generated if not provided)"),
+  name: z.string().min(1).describe("Human-readable name for the app bundle"),
+  version: z.string().default("1.0.0").describe("Semantic version (e.g., 1.0.0)"),
+  description: z.string().optional().describe("Description of what this app bundle does"),
+  jobIds: z.array(z.string()).optional().describe("Job IDs to include (auto-detects linked jobs if omitted)"),
+});
+
+const importAppBundleSchema = z.object({
+  source: z.string().min(1).describe("Local path or GitHub URL (e.g., github.com/user/repo or ~/Downloads/app-bundle)"),
+  renameConflicts: z.boolean().default(true).describe("Auto-rename if app/job IDs already exist"),
+});
+
+const getAppBundleInfoSchema = z.object({
+  source: z.string().min(1).describe("Local path or bundleId to preview"),
+});
+
+type ExportAppBundleArgs = z.infer<typeof exportAppBundleSchema>;
+type ImportAppBundleArgs = z.infer<typeof importAppBundleSchema>;
+type GetAppBundleInfoArgs = z.infer<typeof getAppBundleInfoSchema>;
+
+export const exportAppBundleTool = createTool({
+  id: "export_app_bundle",
+  description: `Export a mini-app with its jobs and database schemas as a portable app bundle.
+Creates an app bundle folder at ~/PAPR/bundles/{bundleId}/ containing:
+- manifest.json: App + job metadata, database schemas
+- apps/{appId}/: Mini app HTML/CSS/JS/TS files
+- jobs/{jobId}/: Job code, migrations, SQLite databases
+- README.md: Auto-generated installation instructions
+- .gitignore: Excludes large data files
+
+Use this to share complete mini-apps (with all jobs and schemas) via GitHub, Dropbox, or file transfer.
+After export, you can push the app bundle folder to GitHub and share the URL.`,
+  inputSchema: exportAppBundleSchema,
+  execute: async (input) => {
+    const args = (input as { context?: ExportAppBundleArgs }).context ?? input;
+    const startTime = performance.now();
+
+    try {
+      const { getBundleService } = await import("../../gateway/services/BundleService.js");
+      const { getAppService } = await import("../../gateway/services/AppService.js");
+      const bundleService = getBundleService();
+      const appService = getAppService();
+      await bundleService.initialize();
+      await appService.initialize();
+
+      const bundleId = args.bundleId || `bundle-${Date.now()}`;
+      
+      let jobIds = args.jobIds || [];
+      if (!jobIds.length) {
+        const dataSources = await appService.listAppDataSources(args.appId);
+        jobIds = dataSources.map((ds: { jobId: string }) => ds.jobId);
+      }
+
+      const manifest = await bundleService.exportBundle({
+        appId: args.appId,
+        bundleId,
+        name: args.name,
+        version: args.version,
+        description: args.description,
+        jobIds,
+      });
+
+      const osModule = await import("os");
+      const pathModule = await import("path");
+      const fsModule = await import("fs/promises");
+      const bundlePath = pathModule.default.join(
+        osModule.default.homedir(),
+        "PAPR",
+        "bundles",
+        bundleId,
+      );
+
+      const readmeContent = `# ${args.name}
+
+${args.description || ""}
+
+## Installation
+
+### Option 1: Import via Paprwork Agent
+\`\`\`
+Agent: "Import the bundle from ${bundlePath}"
+\`\`\`
+
+### Option 2: Import from GitHub
+1. Push this bundle to GitHub
+2. Share the URL with others
+3. They import: "Import the bundle from github.com/username/repo"
+
+## Contents
+
+- **App**: ${manifest.app.name} (${manifest.app.id})
+- **Jobs**: ${manifest.jobs.length} job(s)
+${manifest.jobs.map((j) => `  - ${j.name} (${j.type})`).join("\n")}
+
+## Database Schemas
+
+${manifest.sqlite.length ? manifest.sqlite.map((db) => `- ${db.id}: ${db.tables.length} table(s)`).join("\n") : "No SQLite databases included"}
+
+## Requirements
+
+- Paprwork v${manifest.minPaprworkVersion} or later
+${manifest.jobs.some((j) => j.type === "python") ? "- Python 3.8+ for Python jobs" : ""}
+${manifest.jobs.some((j) => j.type === "node") ? "- Node.js 18+ for Node jobs" : ""}
+
+## Version
+
+${args.version} - Created ${new Date().toISOString().split("T")[0]}
+`;
+
+      await fsModule.writeFile(
+        pathModule.default.join(bundlePath, "README.md"),
+        readmeContent,
+        "utf8",
+      );
+
+      const gitignoreContent = `# Large data files
+**/data.db
+**/data.db-shm
+**/data.db-wal
+
+# Python virtual environments
+**/.venv/
+**/venv/
+**/__pycache__/
+
+# Node modules
+**/node_modules/
+
+# Logs
+**/logs/*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+`;
+
+      await fsModule.writeFile(
+        pathModule.default.join(bundlePath, ".gitignore"),
+        gitignoreContent,
+        "utf8",
+      );
+
+      return {
+        success: true,
+        data: {
+          bundleId,
+          bundlePath,
+          manifest,
+          tip: `App bundle exported to ${bundlePath}. To share: 1) cd ${bundlePath} 2) git init && git add . && git commit -m "Initial release" 3) Push to GitHub`,
+        },
+        duration: performance.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      const apiKeys = getApiKeysForSanitization();
+      throw new Error(
+        JSON.stringify({
+          success: false,
+          error: sanitizeError((error as Error).message, apiKeys),
+          duration: performance.now() - startTime,
+          timestamp: new Date().toISOString(),
+        }),
+      );
+    }
+  },
+});
+
+export const importAppBundleTool = createTool({
+  id: "import_app_bundle",
+  description: `Import an app bundle from a local path or GitHub URL.
+Validates manifest, checks for conflicts, and installs the complete app with all jobs and database schemas.
+
+Supports:
+- Local paths: ~/Downloads/my-app-bundle
+- GitHub URLs: github.com/user/repo or https://github.com/user/repo
+
+If app/job IDs conflict with existing ones, auto-renames by default (e.g., app-123 → app-123-imported).`,
+  inputSchema: importAppBundleSchema,
+  execute: async (input) => {
+    const args = (input as { context?: ImportAppBundleArgs }).context ?? input;
+    const startTime = performance.now();
+
+    try {
+      const { getBundleService } = await import("../../gateway/services/BundleService.js");
+      const osModule = await import("os");
+      const pathModule = await import("path");
+      const fsModule = await import("fs/promises");
+      const bundleService = getBundleService();
+      await bundleService.initialize();
+
+      let sourcePath = args.source;
+      let isGitImport = false;
+
+      if (
+        args.source.startsWith("github.com/") ||
+        args.source.startsWith("https://github.com/") ||
+        args.source.includes("github.com")
+      ) {
+        isGitImport = true;
+        let gitUrl = args.source;
+        if (!gitUrl.startsWith("http")) {
+          gitUrl = `https://${gitUrl}`;
+        }
+        if (!gitUrl.endsWith(".git")) {
+          gitUrl = `${gitUrl}.git`;
+        }
+
+        const tempDir = pathModule.default.join(
+          osModule.default.tmpdir(),
+          `papr-app-bundle-${Date.now()}`,
+        );
+        await fsModule.mkdir(tempDir, { recursive: true });
+
+        const { exec } = await import("child_process");
+        const { promisify } = await import("util");
+        const execAsync = promisify(exec);
+        
+        try {
+          await execAsync(`git clone ${gitUrl} ${tempDir}`, {
+            timeout: 60000,
+          });
+        } catch (error) {
+          throw new Error(`Failed to clone repository: ${(error as Error).message}`);
+        }
+
+        sourcePath = tempDir;
+      } else {
+        sourcePath = sourcePath.replace(/^~/, osModule.default.homedir());
+      }
+
+      const manifestPath = pathModule.default.join(sourcePath, "manifest.json");
+      const manifestRaw = await fsModule.readFile(manifestPath, "utf8");
+      const { parseBundleManifest } = await import("../../core/types/bundles.js");
+      const manifest = parseBundleManifest(JSON.parse(manifestRaw));
+
+      const { getAppService } = await import("../../gateway/services/AppService.js");
+      const { getJobsService } = await import("../../gateway/services/JobsService.js");
+      const appService = getAppService();
+      const jobsService = getJobsService();
+      await appService.initialize();
+      await jobsService.initialize();
+
+      const conflicts: string[] = [];
+      const existingApp = await appService.getApp(manifest.app.id);
+      if (existingApp) {
+        conflicts.push(`App ID "${manifest.app.id}" already exists`);
+      }
+
+      for (const jobSpec of manifest.jobs) {
+        const existingJob = await jobsService.getJob(jobSpec.id);
+        if (existingJob) {
+          conflicts.push(`Job ID "${jobSpec.id}" already exists`);
+        }
+      }
+
+      if (conflicts.length > 0 && args.renameConflicts) {
+        const warnings = conflicts.join(", ");
+        const result = await bundleService.importBundle({ sourcePath });
+        
+        return {
+          success: true,
+          data: {
+            bundleId: result.bundleId,
+            appId: result.app.id,
+            jobIds: result.jobs.map((j) => j.id),
+            warnings: `Conflicts detected (${warnings}). Imported with original IDs - you may want to rename manually.`,
+            manifest: result,
+          },
+          duration: performance.now() - startTime,
+          timestamp: new Date().toISOString(),
+        };
+      }
+
+      if (conflicts.length > 0 && !args.renameConflicts) {
+        throw new Error(
+          `Import blocked due to conflicts: ${conflicts.join(", ")}. Set renameConflicts: true to import anyway.`,
+        );
+      }
+
+      const result = await bundleService.importBundle({ sourcePath });
+
+      if (isGitImport) {
+        await fsModule.rm(sourcePath, { recursive: true, force: true });
+      }
+
+      return {
+        success: true,
+        data: {
+          bundleId: result.bundleId,
+          appId: result.app.id,
+          jobIds: result.jobs.map((j) => j.id),
+          manifest: result,
+          tip: "App bundle imported successfully! Use list_apps to see the imported app.",
+        },
+        duration: performance.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      const apiKeys = getApiKeysForSanitization();
+      throw new Error(
+        JSON.stringify({
+          success: false,
+          error: sanitizeError((error as Error).message, apiKeys),
+          duration: performance.now() - startTime,
+          timestamp: new Date().toISOString(),
+        }),
+      );
+    }
+  },
+});
+
+export const listAppBundlesTool = createTool({
+  id: "list_app_bundles",
+  description: `List all installed app bundles in ~/PAPR/bundles/.
+Shows bundle ID, name, version, path, and creation date for each shareable app.`,
+  inputSchema: z.object({}),
+  execute: async () => {
+    const startTime = performance.now();
+
+    try {
+      const { getBundleService } = await import("../../gateway/services/BundleService.js");
+      const bundleService = getBundleService();
+      await bundleService.initialize();
+
+      const bundles = await bundleService.listBundles();
+
+      return {
+        success: true,
+        data: {
+          total: bundles.length,
+          bundles,
+          tip: "Use get_app_bundle_info({ source: bundleId }) to preview an app bundle's contents.",
+        },
+        duration: performance.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      const apiKeys = getApiKeysForSanitization();
+      throw new Error(
+        JSON.stringify({
+          success: false,
+          error: sanitizeError((error as Error).message, apiKeys),
+          duration: performance.now() - startTime,
+          timestamp: new Date().toISOString(),
+        }),
+      );
+    }
+  },
+});
+
+export const getAppBundleInfoTool = createTool({
+  id: "get_app_bundle_info",
+  description: `Preview an app bundle's contents without importing it.
+Reads and parses the manifest.json to show app info, job specs, and database schemas.
+Use this to inspect an app bundle before deciding to import it.`,
+  inputSchema: getAppBundleInfoSchema,
+  execute: async (input) => {
+    const args = (input as { context?: GetAppBundleInfoArgs }).context ?? input;
+    const startTime = performance.now();
+
+    try {
+      const osModule = await import("os");
+      const pathModule = await import("path");
+      const fsModule = await import("fs/promises");
+
+      let sourcePath = args.source;
+      if (!sourcePath.includes("/")) {
+        sourcePath = pathModule.default.join(
+          osModule.default.homedir(),
+          "PAPR",
+          "bundles",
+          sourcePath,
+        );
+      } else {
+        sourcePath = sourcePath.replace(/^~/, osModule.default.homedir());
+      }
+
+      const manifestPath = pathModule.default.join(sourcePath, "manifest.json");
+      const manifestRaw = await fsModule.readFile(manifestPath, "utf8");
+      const { parseBundleManifest } = await import("../../core/types/bundles.js");
+      const manifest = parseBundleManifest(JSON.parse(manifestRaw));
+
+      return {
+        success: true,
+        data: {
+          bundleId: manifest.bundleId,
+          name: manifest.name,
+          version: manifest.version,
+          description: manifest.description,
+          minPaprworkVersion: manifest.minPaprworkVersion,
+          app: {
+            id: manifest.app.id,
+            name: manifest.app.name,
+            description: manifest.app.description,
+          },
+          jobs: manifest.jobs.map((j) => ({
+            id: j.id,
+            name: j.name,
+            type: j.type,
+            command: j.command,
+            dependsOn: j.dependsOn,
+          })),
+          databases: manifest.sqlite.map((db) => ({
+            id: db.id,
+            tables: db.tables.length,
+            tableNames: db.tables.map((t) => t.name),
+          })),
+          createdAt: manifest.createdAt,
+        },
+        duration: performance.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      const apiKeys = getApiKeysForSanitization();
+      throw new Error(
+        JSON.stringify({
+          success: false,
+          error: sanitizeError((error as Error).message, apiKeys),
+          duration: performance.now() - startTime,
+          timestamp: new Date().toISOString(),
+        }),
+      );
+    }
+  },
+});
+
 export const appJobsTools = [
   createAppTool,
   createJobTool,
@@ -935,4 +1363,8 @@ export const appJobsTools = [
   editAppFileTool,
   listAppFilesTool,
   listAppsTool,
+  exportAppBundleTool,
+  importAppBundleTool,
+  listAppBundlesTool,
+  getAppBundleInfoTool,
 ];

@@ -14,7 +14,6 @@ export function JobsView() {
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedJobIds, setExpandedJobIds] = useState<Set<string>>(new Set());
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
-  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
   const [graphSelectedJobId, setGraphSelectedJobId] = useState<string | null>(null);
 
   const runningCount = jobs.filter((job) => job.status === "running").length;
@@ -85,15 +84,6 @@ export function JobsView() {
     });
   };
 
-  const toggleFolder = (folder: string) => {
-    setCollapsedFolders((prev) => {
-      const next = new Set(prev);
-      if (next.has(folder)) next.delete(folder);
-      else next.add(folder);
-      return next;
-    });
-  };
-
   const handleGraphNodeClick = (jobId: string) => {
     setGraphSelectedJobId(jobId);
     setExpandedJobIds((prev) => {
@@ -158,7 +148,14 @@ export function JobsView() {
                 <span className="job-trigger-badge">Triggered</span>
               )}
             </div>
-            {job.command && <p className="job-description">{job.command}</p>}
+            {job.command && (
+              <p className="job-description">
+                {(() => {
+                  const firstLine = job.command.split("\n")[0].trim();
+                  return firstLine.length > 72 ? firstLine.slice(0, 70) + "…" : firstLine;
+                })()}
+              </p>
+            )}
           </div>
           <div className="job-card-actions" onClick={(event) => event.stopPropagation()}>
             {isRunning ? (
@@ -188,6 +185,10 @@ export function JobsView() {
                   ? "btn-job-action btn-job-expand expanded"
                   : "btn-job-action btn-job-expand"
               }
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleDetails(job.id);
+              }}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
                 <polyline points="6 9 12 15 18 9" stroke="currentColor" strokeWidth="1.5" />
@@ -287,25 +288,13 @@ export function JobsView() {
   };
 
   const renderFolderSection = (folder: string, folderJobs: JobRecord[]) => {
-    const isCollapsed = collapsedFolders.has(folder);
     return (
       <div className="jobs-folder-section" key={folder}>
-        <button className="jobs-folder-header" onClick={() => toggleFolder(folder)}>
-          <svg
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            className={isCollapsed ? "folder-chevron" : "folder-chevron folder-chevron--open"}
-          >
-            <polyline points="6 9 12 15 18 9" stroke="currentColor" strokeWidth="2" />
-          </svg>
+        <div className="jobs-folder-header">
           <span className="jobs-folder-name">{folder}</span>
           <span className="jobs-folder-count">{folderJobs.length}</span>
-        </button>
-        {!isCollapsed && (
-          <div className="jobs-folder-content">{folderJobs.map((job) => renderJobCard(job))}</div>
-        )}
+        </div>
+        <div className="jobs-folder-content">{folderJobs.map((job) => renderJobCard(job))}</div>
       </div>
     );
   };
@@ -442,22 +431,20 @@ export function JobsView() {
               )}
 
             {/* Ungrouped jobs */}
-            {groupedJobs.ungrouped.length > 0 && (
-              <>
-                {hasFolders && (
-                  <div className="jobs-folder-section">
-                    <div className="jobs-folder-header jobs-folder-header--ungrouped">
-                      <span className="jobs-folder-name">Ungrouped</span>
-                      <span className="jobs-folder-count">{groupedJobs.ungrouped.length}</span>
-                    </div>
-                    <div className="jobs-folder-content">
-                      {groupedJobs.ungrouped.map((job) => renderJobCard(job))}
-                    </div>
-                  </div>
-                )}
-                {!hasFolders && groupedJobs.ungrouped.map((job) => renderJobCard(job))}
-              </>
+            {groupedJobs.ungrouped.length > 0 && hasFolders && (
+              <div className="jobs-folder-section">
+                <div className="jobs-folder-header jobs-folder-header--muted">
+                  <span className="jobs-folder-name">Ungrouped</span>
+                  <span className="jobs-folder-count">{groupedJobs.ungrouped.length}</span>
+                </div>
+                <div className="jobs-folder-content">
+                  {groupedJobs.ungrouped.map((job) => renderJobCard(job))}
+                </div>
+              </div>
             )}
+            {groupedJobs.ungrouped.length > 0 &&
+              !hasFolders &&
+              groupedJobs.ungrouped.map((job) => renderJobCard(job))}
           </div>
         )}
       </div>

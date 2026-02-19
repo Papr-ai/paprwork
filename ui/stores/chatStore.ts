@@ -39,6 +39,11 @@ interface ChatStore {
   setChatUnread: (chatId: string, hasUnread: boolean) => void;
   markChatAsRead: (chatId: string) => void;
   getChatState: (chatId: string) => ChatState;
+
+  // Draft message management
+  setDraftMessage: (chatId: string, draft: string) => void;
+  getDraftMessage: (chatId: string) => string;
+  clearDraftMessage: (chatId: string) => void;
 }
 
 export const defaultChatState: ChatState = {
@@ -223,6 +228,31 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const state = get();
     return state.chatStates.get(chatId) || { ...defaultChatState };
   },
+
+  // Draft message management
+  setDraftMessage: (chatId, draft) =>
+    set((state) => {
+      const chatState = state.chatStates.get(chatId) || { ...defaultChatState };
+      const newChatStates = new Map(state.chatStates);
+      newChatStates.set(chatId, { ...chatState, draftMessage: draft });
+      return { chatStates: newChatStates };
+    }),
+
+  getDraftMessage: (chatId) => {
+    const state = get();
+    const chatState = state.chatStates.get(chatId);
+    return chatState?.draftMessage || '';
+  },
+
+  clearDraftMessage: (chatId) =>
+    set((state) => {
+      const chatState = state.chatStates.get(chatId);
+      if (!chatState) return state;
+      
+      const newChatStates = new Map(state.chatStates);
+      newChatStates.set(chatId, { ...chatState, draftMessage: '' });
+      return { chatStates: newChatStates };
+    }),
 }));
 
 // Expose chatStore globally for tabStore to access

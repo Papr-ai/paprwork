@@ -133,14 +133,21 @@ export class PaprMemoryProvider implements IStorageProvider {
       if (response.context_for_llm) {
         // PAPR provides pre-formatted context
         const summary = response.summaries;
-        const recentMessages = response.messages.slice(-6); // Last 6 messages
+        // Keep last 50 messages for proper recent context
+        const recentMessages = response.messages.slice(-50);
 
         if (summary) {
+          // Format summary for system prompt (NOT as a user message)
+          const summaryForSystemPrompt = this.formatSummaryForLLM(
+            summary, 
+            response.total_count, 
+            recentMessages.length, 
+            chatId
+          );
+
+          // Inject summary as special __summary property for AgentService to extract
           return [
-            {
-              role: 'user',
-              content: this.formatSummaryForLLM(summary, response.total_count, 6, chatId)
-            },
+            { __summary: summaryForSystemPrompt },
             ...recentMessages.map((m) => ({
               role: m.role,
               content: m.content
@@ -165,31 +172,30 @@ export class PaprMemoryProvider implements IStorageProvider {
     const chatFilePath = `~/PAPR/Chats/${chatId}.txt`;
 
     return `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📚 ARCHIVED CONVERSATION SUMMARY (${archivedCount} older messages)
+📚 ARCHIVED CONVERSATION SUMMARY (${archivedCount} older messages archived)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-⚠️  CRITICAL INSTRUCTIONS:
-• DO NOT respond to this summary
-• DO NOT ask questions about the summary  
-• FOCUS on the ${recentCount} RECENT messages below
-• Full conversation history: ${chatFilePath}
-• Use bash/grep/read tools if you need specific details from older messages
+This conversation has been ongoing for ${totalCount} messages total.
+The summary below covers the first ${archivedCount} messages.
+The actual recent ${recentCount} messages follow this summary in the conversation history.
+
+Full conversation export: ${chatFilePath}
+You can use bash/grep/read tools to search the full history if needed.
 
 ───────────────────────────────────────────────────────────
 
-FULL SESSION: ${summary.long_term}
+FULL SESSION SUMMARY:
+${summary.long_term}
 
-RECENT CONTEXT (last ~100 messages): ${summary.medium_term}
+RECENT CONTEXT (last ~100 messages):
+${summary.medium_term}
 
-CURRENT BATCH (last 15 messages): ${summary.short_term}
+CURRENT BATCH (last 15 messages):
+${summary.short_term}
 
 KEY TOPICS: ${summary.topics?.join(', ') || 'N/A'}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-[END OF ARCHIVED CONTEXT]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-The following ${recentCount} messages are the RECENT conversation.`;
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
   }
 
   // ===== Summary Operations =====

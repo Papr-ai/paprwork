@@ -35,6 +35,10 @@ If the task is tiny and explicit, merge steps. Always explain tradeoffs when ski
 | `list_job_files` / `read_job_file` / `edit_job_file` | Browse and patch job scripts directly |
 | `link_app_data_source` | Wire app to job's SQLite database |
 | `read_app_data_sources` | List linked data sources for an app |
+| `export_app_bundle` | Package app + jobs + schemas as portable app bundle |
+| `import_app_bundle` | Install app bundle from local path or GitHub URL |
+| `list_app_bundles` | List all installed app bundles |
+| `get_app_bundle_info` | Preview app bundle contents without importing |
 
 **Mini-App REST APIs** (called with `fetch()` from within the app — no auth, same-origin):
 
@@ -1179,6 +1183,192 @@ Just be direct and useful. Write like you actually know this stuff. Don't format
 **Usage pattern:** Prepend this as the system prompt in the agent job, then pass the original post/comment as the user message along with any context about the product/founder.
 
 ---
+
+---
+
+## Sharing Mini-Apps via App Bundles
+
+### Overview
+
+App bundles are Paprwork's sharing format - portable packages containing a mini-app with all its jobs, database schemas, and migrations. Use app bundles to:
+- Share complete apps with colleagues or the community
+- Version control entire app+job pipelines
+- Create reusable app templates
+- Distribute apps via GitHub, Dropbox, or file transfer
+
+### App Bundle Tools
+
+| Tool | Purpose |
+|------|---------|
+| `export_app_bundle` | Package an app with its jobs and schemas into a portable app bundle |
+| `import_app_bundle` | Install an app bundle from a local path or GitHub URL |
+| `list_app_bundles` | List all installed app bundles |
+| `get_app_bundle_info` | Preview app bundle contents without importing |
+
+### Exporting an App Bundle
+
+Use `export_app_bundle` to create a shareable app bundle:
+
+```javascript
+export_app_bundle({
+  appId: "app-twitter-dashboard",
+  name: "Twitter Intelligence Suite",
+  version: "1.0.0",
+  description: "Analyze Twitter trends and engagement",
+  // jobIds auto-detected from app's linked data sources if omitted
+})
+```
+
+**What gets created:**
+```
+~/PAPR/bundles/{bundle-id}/
+├── manifest.json      # App + job metadata, schemas, versions
+├── README.md          # Auto-generated installation guide
+├── .gitignore         # Excludes large data files
+├── apps/{appId}/      # Mini app HTML/CSS/JS/TS files
+└── jobs/{jobId}/      # Job code, migrations, SQLite databases
+    ├── code/
+    ├── migrations/    # SQL schema migrations
+    └── data.db        # SQLite database (excluded by .gitignore)
+```
+
+**Auto-detection:** If you don't specify `jobIds`, the tool automatically includes all jobs linked to the app via `data-sources.json`.
+
+### Importing an App Bundle
+
+**From local path:**
+```javascript
+import_app_bundle({
+  source: "~/Downloads/twitter-dashboard-bundle"
+})
+```
+
+**From GitHub URL:**
+```javascript
+import_app_bundle({
+  source: "github.com/username/papr-twitter-dashboard"
+})
+// Also works: https://github.com/username/repo
+```
+
+**Conflict handling:**
+- By default (`renameConflicts: true`), import proceeds even if app/job IDs exist
+- Set `renameConflicts: false` to block import on conflicts
+- Manual rename via `update_job` if needed after import
+
+### Sharing Workflow
+
+**1. Export the app bundle:**
+```
+Agent: "Export my Reddit Studio app as an app bundle"
+```
+
+**2. Push to GitHub:**
+```bash
+cd ~/PAPR/bundles/reddit-studio
+git init
+git add .
+git commit -m "Initial release v1.0.0"
+gh repo create papr-reddit-studio --public --source=.
+git push -u origin main
+```
+
+**3. Share the URL:**
+```
+github.com/username/papr-reddit-studio
+```
+
+**4. Others import:**
+```
+Agent: "Import the app bundle from github.com/username/papr-reddit-studio"
+```
+
+### Preview Before Import
+
+Use `get_app_bundle_info` to inspect an app bundle without installing:
+
+```javascript
+get_app_bundle_info({
+  source: "~/Downloads/app-bundle" // or bundleId for installed bundles
+})
+```
+
+Returns:
+- App metadata (name, description)
+- Job specs (type, dependencies)
+- Database schemas (tables, columns)
+- Version requirements
+
+### List Installed App Bundles
+
+```javascript
+list_app_bundles()
+```
+
+Shows all app bundles in `~/PAPR/bundles/` with:
+- Bundle ID, name, version
+- Creation date
+- Full path
+
+### Best Practices
+
+**Versioning:**
+- Use semantic versioning (1.0.0, 1.1.0, 2.0.0)
+- Update version on breaking schema changes
+- Document changes in README
+
+**Database schemas:**
+- Share via migrations, not data.db (reproducible)
+- Include sample data in separate seed migration if needed
+- Document schema in manifest and README
+
+**Security:**
+- Never commit API keys or credentials
+- Review job code before export
+- .gitignore excludes data.db by default
+
+**Testing:**
+- Test import in clean environment
+- Verify all jobs run successfully after import
+- Check app displays correctly with empty/sample data
+
+### Common Patterns
+
+**Creating app templates:**
+```javascript
+// 1. Create reference app with best practices
+export_app_bundle({ appId: "app-crm-template", name: "CRM Template", ... })
+
+// 2. Share as template
+// Users: import_app_bundle({ source: "github.com/org/crm-template" })
+
+// 3. Customize after import
+update_job({ jobId: "...", command: "..." })
+```
+
+**Versioning an existing app bundle:**
+```javascript
+// Export with incremented version
+export_app_bundle({
+  appId: "app-dashboard",
+  bundleId: "bundle-dashboard-v2",
+  version: "2.0.0",
+  description: "Major update: added forecasting job"
+})
+```
+
+**Forking an app bundle:**
+```javascript
+// 1. Import original
+import_app_bundle({ source: "github.com/user/original" })
+
+// 2. Modify
+edit_app_file({ appId: "...", filename: "style.css", ... })
+update_job({ jobId: "...", ... })
+
+// 3. Export as new app bundle
+export_app_bundle({ appId: "...", bundleId: "my-fork", version: "1.0.0" })
+```
 
 ---
 

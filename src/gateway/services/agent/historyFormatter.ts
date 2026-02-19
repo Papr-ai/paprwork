@@ -8,6 +8,12 @@
  * AI SDK expected message format for tool calls:
  * 1. { role: "assistant", content: [{ type: "text", ... }, { type: "tool-call", ... }] }
  * 2. { role: "tool", content: [{ type: "tool-result", ... }] }
+ *
+ * CONTEXT MANAGEMENT:
+ * - Tool results in storage can be up to 100KB each (MAX_TOOL_RESULT_LENGTH)
+ * - When loading history into LLM context, tool results are truncated to 2000 chars max
+ * - Full results remain in storage for UI display and debugging
+ * - This prevents context length exceeded errors during long tool-heavy conversations
  */
 
 // ---------------------------------------------------------------------------
@@ -193,7 +199,7 @@ export function formatHistoryMessagesForModel(
         // Build structured assistant message with tool call content parts
         const contentParts: AssistantContent = [];
 
-        // Add text content if present
+        // Add text content if present AND non-empty
         const trimmedContent = content.trim();
         if (trimmedContent) {
           contentParts.push({ type: "text", text: trimmedContent });
@@ -202,10 +208,11 @@ export function formatHistoryMessagesForModel(
         // Add tool call parts and collect results
         const toolResultParts: ToolContent = [];
         let toolIndex = 0;
+        const totalToolCalls = toolCalls.length;
 
         for (const tc of toolCalls) {
           const toolCallId =
-            typeof tc.id === "string" ? tc.id : `tc-hist-${toolIndex++}`;
+            typeof tc.id === "string" ? tc.id : `tc-hist-${toolIndex}`;
           const toolName =
             typeof tc.name === "string" ? tc.name : "unknown";
 
@@ -216,22 +223,53 @@ export function formatHistoryMessagesForModel(
             args: tc.args ?? {},
           });
 
-          // Add matching tool result
+          // Add matching tool result (truncate based on recency)
           const resultValue = tc.result ?? "";
+          const resultStr = typeof resultValue === "string"
+            ? resultValue
+            : JSON.stringify(resultValue);
+          
+          // Token-based truncation: Keep more context for recent tool calls
+          // Position from end: 0 = most recent, higher = older
+          // 1 token ≈ 4 chars
+          const positionFromEnd = totalToolCalls - toolIndex - 1;
+          
+          // Token-based limits (matching prepareStep strategy):
+          // - Last 1: UNLIMITED (keep full context)
+          // - Next 2: 2000 tokens (8KB)
+          // - Next 3: 1000 tokens (4KB)
+          // - Next 5: 500 tokens (2KB)
+          // - Remaining: 250 tokens (1KB)
+          const getHistoricalLimit = (pos: number): number | null => {
+            if (pos < 1) return null;  // Last 1: UNLIMITED
+            if (pos < 3) return 8000;  // Next 2: 2000 tokens
+            if (pos < 6) return 4000;  // Next 3: 1000 tokens
+            if (pos < 11) return 2000; // Next 5: 500 tokens
+            return 1000;                // Very old: 250 tokens
+          };
+          
+          const maxLength = getHistoricalLimit(positionFromEnd);
+          
+          let truncatedResult: string;
+          if (maxLength === null) {
+            // Keep unlimited for most recent
+            truncatedResult = resultStr;
+          } else if (resultStr.length > maxLength) {
+            const estimatedTokens = Math.ceil(maxLength / 4);
+            truncatedResult = resultStr.substring(0, maxLength) + 
+              `\n\n[... ${resultStr.length - maxLength} chars truncated (historical tool #${positionFromEnd + 1} from end, limit: ~${estimatedTokens} tokens)]`;
+          } else {
+            truncatedResult = resultStr;
+          }
+          
           toolResultParts.push({
             type: "tool-result",
             toolCallId,
             toolName,
-            result:
-              typeof resultValue === "string"
-                ? resultValue
-                : JSON.stringify(resultValue),
+            result: truncatedResult,
           });
-        }
-
-        // An assistant message with tool calls must have at least one content part
-        if (contentParts.length === 0) {
-          contentParts.push({ type: "text", text: "" });
+          
+          toolIndex++;
         }
 
         messages.push({ role: "assistant", content: contentParts });
@@ -243,7 +281,10 @@ export function formatHistoryMessagesForModel(
         }
       } else {
         // Simple text-only assistant message
-        messages.push({ role: "assistant", content });
+        // Skip if content is empty
+        if (content.trim()) {
+          messages.push({ role: "assistant", content });
+        }
       }
     } else if (role === "user") {
       messages.push({ role: "user", content });
