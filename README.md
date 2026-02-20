@@ -41,8 +41,8 @@
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-org/paprwork-v2.git
-cd paprwork-v2
+git clone https://github.com/Papr-ai/paprwork.git
+cd paprwork
 
 # 2. Use Node v24+ (with nvm)
 nvm use 24
@@ -223,8 +223,8 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## 📞 Support
 
-- **Issues**: [GitHub Issues](https://github.com/your-org/paprwork-v2/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/your-org/paprwork-v2/discussions)
+- **Issues**: [GitHub Issues](https://github.com/Papr-ai/paprwork/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/Papr-ai/paprwork/discussions)
 - **Documentation**: [docs/](docs/)
 
 ---

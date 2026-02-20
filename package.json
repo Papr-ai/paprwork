@@ -47,7 +47,7 @@
     "claude",
     "openai"
   ],
-  "author": "",
+  "author": "Amir Kabbara <amir@papr.ai> (https://github.com/amirkabbara)",
   "license": "MIT",
   "engines": {
     "node": ">=24.0.0",
