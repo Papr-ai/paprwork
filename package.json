@@ -48,7 +48,7 @@
     "openai"
   ],
   "author": "Amir Kabbara <amir@papr.ai> (https://github.com/amirkabbara)",
-  "license": "MIT",
+  "license": "AGPL-3.0",
   "engines": {
     "node": ">=24.0.0",
     "npm": ">=10.0.0"

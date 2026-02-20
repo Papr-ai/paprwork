@@ -135,6 +135,9 @@ interface KeyDisplayItem {
   isDefault: boolean;
   addedAt?: string;
   permission: "always" | "ask";
+  source?: "manual" | "oauth";
+  managedBy?: "oauth";
+  oauthProvider?: "openai" | "anthropic";
 }
 
 function APIKeysTab() {
@@ -177,6 +180,9 @@ function APIKeysTab() {
           isDefault: true,
           addedAt: existing?.createdAt,
           permission: (existing?.permission as "always" | "ask") || "always",
+          source: existing?.source,
+          managedBy: existing?.managedBy,
+          oauthProvider: existing?.oauthProvider,
         };
       }),
       ...customKeys
@@ -190,6 +196,9 @@ function APIKeysTab() {
           isDefault: false,
           addedAt: k.createdAt,
           permission: k.permission as "always" | "ask",
+          source: k.source,
+          managedBy: k.managedBy,
+          oauthProvider: k.oauthProvider,
         })),
     ];
   }, [customKeys]);
@@ -611,7 +620,12 @@ function APIKeysTab() {
                   // View mode
                   <>
                     <div className="api-key-info">
-                      <div className="api-key-name">{keyItem.name}</div>
+                      <div className="api-key-name">
+                        {keyItem.name}
+                        {keyItem.source === "oauth" && (
+                          <span className="oauth-badge">🔒 OAuth</span>
+                        )}
+                      </div>
                       <div className="api-key-hint">{keyItem.hint}</div>
                     </div>
                     <div className="api-key-value">

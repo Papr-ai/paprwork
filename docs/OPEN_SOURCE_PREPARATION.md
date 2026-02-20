@@ -37,7 +37,7 @@
   - `README.md` - Main project documentation
   - `CLAUDE.md` - Developer context and learnings
   - `CONTRIBUTING.md` - Contribution guidelines
-  - `LICENSE` - MIT License
+  - `LICENSE` - AGPL-3.0 License
 
 ### Documentation Structure
 
@@ -46,7 +46,7 @@ paprwork-v2/
 ├── README.md              # Main documentation (NEW)
 ├── CLAUDE.md              # Developer context (CLEANED)
 ├── CONTRIBUTING.md        # Contribution guide (NEW)
-├── LICENSE                # MIT License (NEW)
+├── LICENSE                # AGPL-3.0 License (NEW)
 ├── .env.example           # Environment template (NEW)
 ├── docs/
 │   ├── README.md          # Documentation index
@@ -91,7 +91,7 @@ Added comprehensive patterns:
    - Includes setup instructions
    - No actual credentials
 
-2. **`LICENSE`** - MIT License
+2. **`LICENSE`** - AGPL-3.0 License
    - Clear licensing terms
    - Proper copyright notice
 
@@ -247,7 +247,7 @@ git push origin v2.0.0
 | **Documentation** | ✅ 100% | Comprehensive guides |
 | **Code Quality** | ✅ 100% | TypeScript, tests, linting |
 | **Organization** | ✅ 100% | Clean structure |
-| **License** | ✅ 100% | MIT License added |
+| **License** | ✅ 100% | AGPL-3.0 License added |
 | **Contribution** | ✅ 100% | Clear guidelines |
 
 **Overall:** ✅ **READY FOR OPEN SOURCE**
@@ -287,7 +287,7 @@ Consider creating a social preview image (1280x640) showing:
 ### Created
 - `README.md` - Main project documentation
 - `CONTRIBUTING.md` - Contribution guidelines
-- `LICENSE` - MIT License
+- `LICENSE` - AGPL-3.0 License
 - `.env.example` - Environment variable template
 - `docs/OPEN_SOURCE_PREPARATION.md` - This document
 

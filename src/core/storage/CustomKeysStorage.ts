@@ -16,6 +16,9 @@ export interface CustomKey {
   encryptedValue: string; // Base64 encoded encrypted value
   createdAt: string;
   updatedAt: string;
+  source?: "manual" | "oauth"; // Source of the key (manual or OAuth-managed)
+  managedBy?: "oauth"; // If OAuth-managed, indicates auto-refresh
+  oauthProvider?: "openai" | "anthropic"; // OAuth provider if applicable
 }
 
 export interface CustomKeyInput {
@@ -120,6 +123,9 @@ export class CustomKeysStorage {
       permission: key.permission,
       createdAt: key.createdAt,
       updatedAt: key.updatedAt,
+      source: key.source,
+      managedBy: key.managedBy,
+      oauthProvider: key.oauthProvider,
     }));
   }
 
@@ -156,6 +162,31 @@ export class CustomKeysStorage {
       console.error(`[CustomKeys] Failed to decrypt key ${name}:`, error);
       return null;
     }
+  }
+
+  /**
+   * Get custom key metadata by name (without decrypting value)
+   */
+  async getKeyMetadataByName(name: string): Promise<Omit<CustomKey, "encryptedValue"> | null> {
+    const normalizeKeyName = (input: string): string =>
+      input.trim().toUpperCase();
+    const expectedName = normalizeKeyName(name);
+    const key = Array.from(this.keys.values()).find(
+      (k) => normalizeKeyName(k.name) === expectedName,
+    );
+    if (!key) return null;
+
+    return {
+      id: key.id,
+      name: key.name,
+      description: key.description,
+      permission: key.permission,
+      createdAt: key.createdAt,
+      updatedAt: key.updatedAt,
+      source: key.source,
+      managedBy: key.managedBy,
+      oauthProvider: key.oauthProvider,
+    };
   }
 
   /**

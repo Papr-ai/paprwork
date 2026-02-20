@@ -1340,3 +1340,26 @@
   border-radius: 3px;
   font-size: 12px;
 }
+
+/* OAuth Badge in API Keys List */
+.oauth-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 2px 8px;
+  background: rgba(46, 125, 50, 0.1);
+  border: 1px solid rgba(46, 125, 50, 0.3);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #2e7d32;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.api-key-name {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}

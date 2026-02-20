@@ -42,7 +42,7 @@ async function loadESMModules() {
 
   // Import OAuth IPC module
   const oauthIpcModule =
-    await import("../../dist/electron/ipc/oauth.js");
+    await import("../../dist/electron/electron/ipc/oauth.js");
   initializeOAuthIPC = oauthIpcModule.initializeOAuthIPC;
   cleanupOAuthServers = oauthIpcModule.cleanupOAuthServers;
 }
@@ -416,7 +416,7 @@ function startGateway(customKeysStorage) {
       // Include OAuth tokens if available
       const oauthTokens = {};
       try {
-        const { getOAuthTokenStorage } = await import("../../dist/electron/ipc/oauth.js");
+        const { getOAuthTokenStorage } = await import("../../dist/electron/electron/ipc/oauth.js");
         const oauthStorage = getOAuthTokenStorage();
         
         if (oauthStorage) {
@@ -600,8 +600,8 @@ app.whenReady().then(async () => {
 
   initializeCustomKeysIPC(customKeysStorage);
 
-  // Initialize OAuth IPC handlers
-  await initializeOAuthIPC();
+  // Initialize OAuth IPC handlers (pass customKeysStorage for syncing)
+  await initializeOAuthIPC(customKeysStorage);
 
   // Start Gateway process
   startGateway(customKeysStorage);

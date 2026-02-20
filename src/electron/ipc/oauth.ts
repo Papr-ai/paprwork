@@ -4,11 +4,13 @@
 
 import { ipcMain, shell } from "electron";
 import { OAuthTokenStorage } from "../../core/storage/OAuthTokenStorage.js";
+import type { CustomKeysStorage } from "../../core/storage/CustomKeysStorage.js";
 import { OpenAIOAuthService } from "../../core/services/OpenAIOAuthService.js";
 import { ClaudeOAuthService } from "../../core/services/ClaudeOAuthService.js";
 import { OAuthCallbackServer } from "../../core/services/OAuthCallbackServer.js";
 
 let oauthTokenStorage: OAuthTokenStorage | null = null;
+let customKeysStorage: CustomKeysStorage | null = null;
 let openaiOAuthService: OpenAIOAuthService | null = null;
 let claudeOAuthService: ClaudeOAuthService | null = null;
 
@@ -22,10 +24,108 @@ const activeFlows = new Map<
 >();
 
 /**
+ * Sync OAuth token to CustomKeysStorage as an API key
+ * This makes the OAuth token available to jobs, bash, and agents
+ */
+async function syncOAuthTokenToApiKeys(
+  provider: "openai" | "anthropic",
+  accessToken: string
+): Promise<void> {
+  if (!customKeysStorage) {
+    console.error("[OAuth IPC] CustomKeysStorage not initialized");
+    return;
+  }
+
+  const keyName = provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+  const description =
+    provider === "openai"
+      ? "ChatGPT Plus/Pro OAuth Token (Auto-managed)"
+      : "Claude Pro/Max OAuth Token (Auto-managed)";
+
+  try {
+    // Check if key already exists
+    const existingKeyMetadata = await customKeysStorage.getKeyMetadataByName(keyName);
+
+    if (existingKeyMetadata) {
+      // Update existing key with new token
+      const updatedKey = {
+        ...existingKeyMetadata,
+        description,
+        permission: "always" as const,
+        encryptedValue: (customKeysStorage as any).encryptValue(accessToken),
+        updatedAt: new Date().toISOString(),
+        source: "oauth" as const,
+        managedBy: "oauth" as const,
+        oauthProvider: provider,
+      };
+
+      (customKeysStorage as any).keys.set(existingKeyMetadata.id, updatedKey);
+      await (customKeysStorage as any).saveKeys();
+      console.log(`[OAuth IPC] Updated ${keyName} with OAuth token`);
+    } else {
+      // Create new key
+      const id = `key-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const now = new Date().toISOString();
+
+      const newKey = {
+        id,
+        name: keyName,
+        description,
+        permission: "always" as const,
+        encryptedValue: (customKeysStorage as any).encryptValue(accessToken),
+        createdAt: now,
+        updatedAt: now,
+        source: "oauth" as const,
+        managedBy: "oauth" as const,
+        oauthProvider: provider,
+      };
+
+      (customKeysStorage as any).keys.set(id, newKey);
+      await (customKeysStorage as any).saveKeys();
+      console.log(`[OAuth IPC] Created ${keyName} with OAuth token`);
+    }
+  } catch (error) {
+    console.error(`[OAuth IPC] Failed to sync ${keyName}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Remove OAuth-managed API key from CustomKeysStorage
+ */
+async function removeOAuthManagedApiKey(provider: "openai" | "anthropic"): Promise<void> {
+  if (!customKeysStorage) {
+    console.error("[OAuth IPC] CustomKeysStorage not initialized");
+    return;
+  }
+
+  const keyName = provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+
+  try {
+    const existingKeyMetadata = await customKeysStorage.getKeyMetadataByName(keyName);
+    if (existingKeyMetadata) {
+      // Only delete if it's OAuth-managed
+      if (existingKeyMetadata.source === "oauth" || existingKeyMetadata.managedBy === "oauth") {
+        await customKeysStorage.deleteKey(existingKeyMetadata.id);
+        console.log(`[OAuth IPC] Removed OAuth-managed ${keyName}`);
+      } else {
+        console.log(`[OAuth IPC] Skipping ${keyName} - not OAuth-managed (user added manually)`);
+      }
+    }
+  } catch (error) {
+    console.error(`[OAuth IPC] Failed to remove ${keyName}:`, error);
+  }
+}
+
+
+/**
  * Initialize OAuth IPC handlers
  */
-export async function initializeOAuthIPC() {
+export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
   console.log("[OAuth IPC] Initializing...");
+
+  // Store reference to CustomKeysStorage for syncing
+  customKeysStorage = keysStorage;
 
   // Initialize storage and services
   oauthTokenStorage = new OAuthTokenStorage();
@@ -78,8 +178,11 @@ export async function initializeOAuthIPC() {
               flow.pkce.state
             );
 
-            // Store tokens
+            // Store tokens in OAuthTokenStorage
             await oauthTokenStorage!.storeToken(tokenInput);
+
+            // Sync token to CustomKeysStorage (makes it available as OPENAI_API_KEY)
+            await syncOAuthTokenToApiKeys("openai", tokenInput.accessToken);
 
             console.log("[OAuth IPC] OpenAI OAuth flow completed successfully");
             activeFlows.delete("openai");
@@ -130,8 +233,12 @@ export async function initializeOAuthIPC() {
 
   ipcMain.handle("auth:openai:disconnect", async () => {
     try {
+      // Remove OAuth token from OAuthTokenStorage
       await oauthTokenStorage!.deleteTokenByProvider("openai");
       activeFlows.delete("openai");
+
+      // Remove OAuth-managed API key from CustomKeysStorage
+      await removeOAuthManagedApiKey("openai");
 
       // Stop server if running
       const server = activeServers.get("openai");
@@ -194,8 +301,11 @@ export async function initializeOAuthIPC() {
               flow.pkce.state
             );
 
-            // Store tokens
+            // Store tokens in OAuthTokenStorage
             await oauthTokenStorage!.storeToken(tokenInput);
+
+            // Sync token to CustomKeysStorage (makes it available as ANTHROPIC_API_KEY)
+            await syncOAuthTokenToApiKeys("anthropic", tokenInput.accessToken);
 
             console.log("[OAuth IPC] Claude OAuth flow completed successfully");
             activeFlows.delete("anthropic");
@@ -246,8 +356,12 @@ export async function initializeOAuthIPC() {
 
   ipcMain.handle("auth:claude:disconnect", async () => {
     try {
+      // Remove OAuth token from OAuthTokenStorage
       await oauthTokenStorage!.deleteTokenByProvider("anthropic");
       activeFlows.delete("anthropic");
+
+      // Remove OAuth-managed API key from CustomKeysStorage
+      await removeOAuthManagedApiKey("anthropic");
 
       // Stop server if running
       const server = activeServers.get("anthropic");

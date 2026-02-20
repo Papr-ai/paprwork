@@ -4,7 +4,7 @@
 
 **AI-Powered Desktop Assistant** — Rebuilt with TypeScript and Mastra
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Node Version](https://img.shields.io/badge/node-%3E%3D24.0.0-brightgreen)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-100%25-blue)](https://www.typescriptlang.org/)
 
@@ -208,7 +208,7 @@ We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.
 
 ## 📄 License
 
-MIT License - see [LICENSE](LICENSE) for details.
+GNU Affero General Public License v3.0 - see [LICENSE](LICENSE) for details.
 
 ---
 

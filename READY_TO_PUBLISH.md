@@ -48,7 +48,7 @@ Key Features:
 Documentation:
 - Comprehensive README with quick start
 - Detailed contributing guidelines
-- MIT License
+- AGPL-3.0 License
 - Environment setup guide
 
 Security:
@@ -147,7 +147,7 @@ We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## 📄 License
 
-MIT License - see [LICENSE](LICENSE)
+GNU Affero General Public License v3.0 - see [LICENSE](LICENSE)
 
 ---
 
