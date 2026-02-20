@@ -169,7 +169,7 @@ export class CustomKeysStorage {
       id,
       name: input.name,
       description: input.description,
-      permission: input.permission || "ask",
+      permission: input.permission || "always", // Default to "always" for convenience
       encryptedValue: this.encryptValue(input.value),
       createdAt: now,
       updatedAt: now,
@@ -178,7 +178,9 @@ export class CustomKeysStorage {
     this.keys.set(id, key);
     await this.saveKeys();
 
-    console.log(`[CustomKeys] Added key: ${input.name}`);
+    console.log(
+      `[CustomKeys] Added key: ${input.name} (permission: ${key.permission})`,
+    );
     return key;
   }
 

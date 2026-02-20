@@ -44,7 +44,11 @@ export async function setupBundleHandlers(
         break;
       }
       default:
-        sendError(ws, message.id, `Unknown bundle message type: ${message.type}`);
+        sendError(
+          ws,
+          message.id,
+          `Unknown bundle message type: ${message.type}`,
+        );
     }
   } catch (error) {
     console.error("[Bundle WebSocket] Error:", error);

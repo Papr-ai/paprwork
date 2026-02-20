@@ -328,8 +328,8 @@ export class AgentService {
       t = performance.now();
       const systemPrompt =
         config.systemPrompt ||
-        await this.buildContextualSystemPrompt(chatId, history, enabledSkills, conversationSummary);
-      const messages = buildModelMessages(history, userMessage, systemPrompt);
+        await this.buildContextualSystemPrompt(chatId, history, enabledSkills);
+      const messages = buildModelMessages(history, userMessage, systemPrompt, conversationSummary);
       timings.buildMessages = performance.now() - t;
       
       // DEBUG: Log message structure to debug empty content blocks
@@ -622,8 +622,9 @@ export class AgentService {
             );
             contextPressureAborted = true;
             abortController.abort();
-            // Kick off compression immediately so the next turn starts with a summary
-            this.triggerSummarization(chatId).catch(console.error);
+            
+            // Note: We'll handle compression after the stream finishes
+            // to avoid blocking the stream processing
           }
         },
       };
@@ -676,6 +677,57 @@ export class AgentService {
           console.log(`  Thinking text length: ${thinkingText.length} chars`);
           console.log(`  Tool calls: ${toolCalls.length}`);
           console.log(`  Tool results: ${toolResults.length}`);
+          
+          // If we aborted due to context pressure, handle compression BEFORE breaking
+          if (contextPressureAborted) {
+            // Yield compression start chunk
+            yield {
+              type: "compression-start",
+              payload: { message: "Context limit reached. Compressing conversation history..." },
+              timestamp: new Date().toISOString(),
+              chatId,
+            } as StreamChunk & { chatId: string };
+            
+            // Perform compression
+            console.log(`🔄 Starting compression for chat ${chatId}`);
+            await this.triggerSummarization(chatId);
+            
+            // Yield compression complete chunk
+            yield {
+              type: "compression-complete",
+              payload: { message: "Compression complete. Continuing..." },
+              timestamp: new Date().toISOString(),
+              chatId,
+            } as StreamChunk & { chatId: string };
+            
+            console.log(`✓ Compression complete for chat ${chatId}`);
+            
+            // Save the partial message first
+            const partialMsg: StoredMessage = createAssistantStoredMessage({
+              chatId,
+              model: config.model,
+              assistantText,
+              thinkingText,
+              toolCalls,
+              toolResults,
+              sequence,
+            });
+            await this.storageManager.saveMessage(chatId, partialMsg);
+            console.log(`✓ Saved partial response before retry`);
+            
+            // Now automatically retry with compressed context
+            // The compressed summary will be loaded in the system prompt
+            console.log(`🔄 Automatically retrying with compressed context...`);
+            
+            // Recursively call streamAgent to continue with compressed history
+            // This will load the compressed summary and continue from where we left off
+            for await (const chunk of this.streamAgent(chatId, userMessage, config, options)) {
+              yield chunk;
+            }
+            
+            // Return after the retry completes (don't save message again)
+            return;
+          }
           
           break;
         }
@@ -1201,20 +1253,70 @@ ${last15.substring(0, 8_000)}`;
   }
 
   /**
+   * Set provider API key or OAuth token in environment so AI SDK providers can pick it up.
+   * Prioritizes OAuth tokens over API keys.
+   */
+  private async setProviderAuth(provider: Provider, apiKey?: string): Promise<void> {
+    // First, try to use OAuth token (if available)
+    const { getProviderAuth } = await import("../utils/keyResolver.js");
+
+    if (provider === "openai" || provider === "anthropic") {
+      const auth = await getProviderAuth(provider);
+      
+      if (auth) {
+        if (auth.type === "oauth") {
+          // Set OAuth token as API key (AI SDK uses OPENAI_API_KEY/ANTHROPIC_API_KEY env vars)
+          switch (provider) {
+            case "openai":
+              process.env.OPENAI_API_KEY = auth.token;
+              console.log(`[AgentService] Using OpenAI OAuth token`);
+              break;
+            case "anthropic":
+              process.env.ANTHROPIC_API_KEY = auth.token;
+              console.log(`[AgentService] Using Anthropic OAuth token`);
+              break;
+          }
+          return;
+        } else if (auth.type === "apiKey") {
+          // Use API key
+          switch (provider) {
+            case "openai":
+              process.env.OPENAI_API_KEY = auth.key;
+              console.log(`[AgentService] Using OpenAI API key`);
+              break;
+            case "anthropic":
+              process.env.ANTHROPIC_API_KEY = auth.key;
+              console.log(`[AgentService] Using Anthropic API key`);
+              break;
+          }
+          return;
+        }
+      }
+    }
+
+    // Fall back to provided API key (for non-OAuth providers or when OAuth not available)
+    if (apiKey) {
+      switch (provider) {
+        case "anthropic":
+          process.env.ANTHROPIC_API_KEY = apiKey;
+          break;
+        case "openai":
+          process.env.OPENAI_API_KEY = apiKey;
+          break;
+        case "google":
+          process.env.GOOGLE_GENERATIVE_AI_API_KEY = apiKey;
+          break;
+      }
+    }
+  }
+
+  /**
    * Set provider API key in environment so AI SDK providers can pick it up.
+   * Legacy method - now redirects to setProviderAuth
    */
   private setProviderApiKey(provider: Provider, apiKey: string): void {
-    switch (provider) {
-      case "anthropic":
-        process.env.ANTHROPIC_API_KEY = apiKey;
-        break;
-      case "openai":
-        process.env.OPENAI_API_KEY = apiKey;
-        break;
-      case "google":
-        process.env.GOOGLE_GENERATIVE_AI_API_KEY = apiKey;
-        break;
-    }
+    // Call async method without await (for backward compatibility)
+    this.setProviderAuth(provider, apiKey);
   }
 
   /**
@@ -1251,7 +1353,6 @@ ${last15.substring(0, 8_000)}`;
     chatId: string,
     history: unknown[],
     enabledSkills?: Array<{ id: string; name: string; description: string }>,
-    conversationSummary?: string,
   ): Promise<string> {
     const includeExtendedAppPlaybook =
       this.hasAppAutomationContext(history);
@@ -1306,7 +1407,6 @@ ${last15.substring(0, 8_000)}`;
       activeSkills: enabledSkills,
       activePlans,
       workspaceContext,
-      conversationSummary,
     });
   }
 

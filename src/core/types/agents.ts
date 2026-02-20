@@ -32,13 +32,13 @@ export type ModelId = AnthropicModel | OpenAIModel | GoogleModel;
 
 /**
  * Agent configuration (public interface)
- * 
+ *
  * Note: apiKey is NOT included here - Gateway fetches it internally via IPC
  * This keeps keys secure and never sends them over WebSocket
  */
 export interface AgentConfig {
   provider: Provider;
-  model: ModelId;  // ✅ Now typed! Provides autocomplete and catches obvious typos
+  model: ModelId; // ✅ Now typed! Provides autocomplete and catches obvious typos
   systemPrompt: string;
   maxSteps?: number;
   maxTokens?: number; // Output token limit

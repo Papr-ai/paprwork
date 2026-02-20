@@ -1,6 +1,6 @@
 /**
  * Permission Types
- * 
+ *
  * Types for the permission system that controls:
  * - Tool execution autonomy (permission level)
  * - API key usage permissions (per-key)
@@ -8,7 +8,7 @@
 
 /**
  * Global permission level for tool execution
- * 
+ *
  * - open: Tools run automatically without confirmation
  * - moderate: Some tools require confirmation
  * - strict: All tools require explicit confirmation
@@ -17,7 +17,7 @@ export type PermissionLevel = "open" | "moderate" | "strict";
 
 /**
  * Per-key permission for API key usage in tools
- * 
+ *
  * - ask: Prompt user each time key is used
  * - always: Auto-approve, never prompt
  */

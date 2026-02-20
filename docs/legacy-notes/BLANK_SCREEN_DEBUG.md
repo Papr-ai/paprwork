@@ -35,8 +35,8 @@ Look in the **Console** tab of DevTools for errors. Common errors:
 
 **Check:**
 ```bash
-ls -la /Users/amirkabbara/Documents/GitHub/paprwork-v2/src/electron/preload.cjs
-ls -la /Users/amirkabbara/Documents/GitHub/paprwork-v2/dist/electron/preload.cjs
+ls -la src/electron/preload.cjs
+ls -la dist/electron/preload.cjs
 ```
 
 **If missing, rebuild:**

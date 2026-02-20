@@ -133,7 +133,7 @@ No errors! Context managed successfully ✅
 
 ```bash
 # Method 1: Tail the terminal file
-tail -f /Users/amirkabbara/.cursor/projects/Users-amirkabbara-Documents-GitHub-paprwork-v2/terminals/668841.txt
+tail -f ~/.cursor/projects/YOUR_PROJECT_PATH/terminals/TERMINAL_ID.txt
 
 # Method 2: Watch for specific patterns
 grep -E "(prepareStep|pressure:|truncated)" /path/to/terminal.txt

@@ -31,17 +31,59 @@ function resolveCategory(skill: CatalogSkill): Exclude<SkillCategory, "all"> {
   }
   // Fallback: infer from name + description
   const text = `${skill.name} ${skill.description}`.toLowerCase();
-  if (text.includes("react") || text.includes("frontend") || text.includes("ui") || text.includes("native")) return "frontend";
+  if (
+    text.includes("react") ||
+    text.includes("frontend") ||
+    text.includes("ui") ||
+    text.includes("native")
+  )
+    return "frontend";
   if (text.includes("design") || text.includes("ux")) return "design";
-  if (text.includes("doc") || text.includes("pdf") || text.includes("pptx") || text.includes("xlsx") || text.includes("word")) return "documents";
+  if (
+    text.includes("doc") ||
+    text.includes("pdf") ||
+    text.includes("pptx") ||
+    text.includes("xlsx") ||
+    text.includes("word")
+  )
+    return "documents";
   if (text.includes("test") || text.includes("qa")) return "testing";
-  if (text.includes("marketing") || text.includes("seo") || text.includes("copy") || text.includes("content strat")) return "marketing";
+  if (
+    text.includes("marketing") ||
+    text.includes("seo") ||
+    text.includes("copy") ||
+    text.includes("content strat")
+  )
+    return "marketing";
   if (text.includes("finance") || text.includes("stock")) return "finance";
-  if (text.includes("data") || text.includes("analysis") || text.includes("scraping")) return "data";
-  if (text.includes("sql") || text.includes("server") || text.includes("backend") || text.includes("auth")) return "backend";
-  if (text.includes("calendar") || text.includes("summarize") || text.includes("brainstorm")) return "productivity";
+  if (
+    text.includes("data") ||
+    text.includes("analysis") ||
+    text.includes("scraping")
+  )
+    return "data";
+  if (
+    text.includes("sql") ||
+    text.includes("server") ||
+    text.includes("backend") ||
+    text.includes("auth")
+  )
+    return "backend";
+  if (
+    text.includes("calendar") ||
+    text.includes("summarize") ||
+    text.includes("brainstorm")
+  )
+    return "productivity";
   if (text.includes("github") || text.includes("debug")) return "development";
-  if (text.includes("slack") || text.includes("notion") || text.includes("email") || text.includes("crm") || text.includes("mcp")) return "integrations";
+  if (
+    text.includes("slack") ||
+    text.includes("notion") ||
+    text.includes("email") ||
+    text.includes("crm") ||
+    text.includes("mcp")
+  )
+    return "integrations";
   if (text.includes("search") || text.includes("google")) return "search";
   if (text.includes("image") || text.includes("video")) return "media";
   if (text.includes("stripe") || text.includes("payment")) return "business";
@@ -98,7 +140,10 @@ export function SkillsView() {
     () =>
       new Set(
         skills
-          .filter((skill) => skill.source === "clawhub" || skill.source === "skills.sh")
+          .filter(
+            (skill) =>
+              skill.source === "clawhub" || skill.source === "skills.sh",
+          )
           .map((skill) => `${skill.source}:${skill.externalId ?? skill.id}`),
       ),
     [skills],
@@ -117,9 +162,11 @@ export function SkillsView() {
     return catalogSkills
       .filter((skill) => {
         const category = resolveCategory(skill);
-        if (currentCategory !== "all" && category !== currentCategory) return false;
+        if (currentCategory !== "all" && category !== currentCategory)
+          return false;
         if (!searchQuery.trim()) return true;
-        const haystack = `${skill.name} ${skill.description} ${(skill.tags ?? []).join(" ")}`.toLowerCase();
+        const haystack =
+          `${skill.name} ${skill.description} ${(skill.tags ?? []).join(" ")}`.toLowerCase();
         return haystack.includes(searchQuery.toLowerCase());
       })
       .sort((a, b) => (b.installs ?? 0) - (a.installs ?? 0)); // Sort by popularity
@@ -133,7 +180,9 @@ export function SkillsView() {
           <p className="skills-subtitle">
             Browse and install specialized skills for your agents
             {catalogSkills.length > 0 && (
-              <span className="skills-count">{catalogSkills.length}+ Available</span>
+              <span className="skills-count">
+                {catalogSkills.length}+ Available
+              </span>
             )}
           </p>
         </div>
@@ -146,7 +195,11 @@ export function SkillsView() {
               placeholder="Search skills..."
             />
           </div>
-          <button className="btn-secondary" id="view-installed-btn" onClick={() => setShowInstalled(true)}>
+          <button
+            className="btn-secondary"
+            id="view-installed-btn"
+            onClick={() => setShowInstalled(true)}
+          >
             Installed ({skills.length})
           </button>
         </div>
@@ -155,15 +208,21 @@ export function SkillsView() {
       {!showInstalled && (
         <>
           <div className="skills-categories">
-            {CATEGORIES.filter((cat) => activeCategories.has(cat)).map((category) => (
-              <button
-                key={category}
-                className={currentCategory === category ? "category-btn active" : "category-btn"}
-                onClick={() => setCurrentCategory(category)}
-              >
-                {category}
-              </button>
-            ))}
+            {CATEGORIES.filter((cat) => activeCategories.has(cat)).map(
+              (category) => (
+                <button
+                  key={category}
+                  className={
+                    currentCategory === category
+                      ? "category-btn active"
+                      : "category-btn"
+                  }
+                  onClick={() => setCurrentCategory(category)}
+                >
+                  {category}
+                </button>
+              ),
+            )}
           </div>
 
           {loading && (
@@ -181,17 +240,28 @@ export function SkillsView() {
                 const installed = installedCatalogKeys.has(key);
                 return (
                   <div className="skill-card-compact" key={key}>
-                    <div className="skill-card-icon-compact" style={{ background: categoryGradient(category) }}>
+                    <div
+                      className="skill-card-icon-compact"
+                      style={{ background: categoryGradient(category) }}
+                    >
                       {category.slice(0, 1).toUpperCase()}
                     </div>
                     <div className="skill-card-content-compact">
                       <h3 className="skill-card-name-compact">{skill.name}</h3>
-                      <p className="skill-card-description-compact">{skill.description}</p>
+                      <p className="skill-card-description-compact">
+                        {skill.description}
+                      </p>
                     </div>
                     <button
-                      className={installed ? "skill-action-btn installed" : "skill-action-btn"}
+                      className={
+                        installed
+                          ? "skill-action-btn installed"
+                          : "skill-action-btn"
+                      }
                       disabled={installed}
-                      onClick={() => void installCatalogSkill(skill.source, skill.id)}
+                      onClick={() =>
+                        void installCatalogSkill(skill.source, skill.id)
+                      }
                     >
                       {installed ? "Added" : "Add"}
                     </button>
@@ -212,7 +282,11 @@ export function SkillsView() {
       {showInstalled && (
         <div className="installed-skills-view">
           <div className="installed-header">
-            <button className="back-btn" id="back-to-marketplace" onClick={() => setShowInstalled(false)}>
+            <button
+              className="back-btn"
+              id="back-to-marketplace"
+              onClick={() => setShowInstalled(false)}
+            >
               Back to Marketplace
             </button>
             <h2>Installed Skills ({skills.length})</h2>
@@ -220,12 +294,20 @@ export function SkillsView() {
           <div className="installed-skills-grid" id="installed-skills-grid">
             {skills.map((skill) => (
               <div className="skill-card-compact" key={skill.id}>
-                <div className="skill-card-icon-compact" style={{ background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)" }}>
+                <div
+                  className="skill-card-icon-compact"
+                  style={{
+                    background:
+                      "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                  }}
+                >
                   S
                 </div>
                 <div className="skill-card-content-compact">
                   <h3 className="skill-card-name-compact">{skill.name}</h3>
-                  <p className="skill-card-description-compact">{skill.description}</p>
+                  <p className="skill-card-description-compact">
+                    {skill.description}
+                  </p>
                 </div>
                 <button
                   className="skill-action-btn remove"

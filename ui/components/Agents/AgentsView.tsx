@@ -25,8 +25,17 @@ const modelOptions = [
 ];
 
 export function AgentsView() {
-  const { agents, runs, loading, error, dashboard, loadDashboard, loadRuns, upsertAgent, deleteAgent } =
-    useSubAgents();
+  const {
+    agents,
+    runs,
+    loading,
+    error,
+    dashboard,
+    loadDashboard,
+    loadRuns,
+    upsertAgent,
+    deleteAgent,
+  } = useSubAgents();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [agentName, setAgentName] = useState("");
   const [agentDescription, setAgentDescription] = useState("");
@@ -41,7 +50,9 @@ export function AgentsView() {
     document: true,
     skill: true,
   });
-  const [recentChats, setRecentChats] = useState<Array<{ id: string; title: string; updatedAt: string }>>([]);
+  const [recentChats, setRecentChats] = useState<
+    Array<{ id: string; title: string; updatedAt: string }>
+  >([]);
 
   const { createTab, switchToTab } = useTabStore();
 
@@ -49,10 +60,19 @@ export function AgentsView() {
     const loadChats = async () => {
       try {
         const response = await gateway.send("chat:list");
-        const chats = (response.data as Array<{ id: string; title: string; updatedAt: string }>) ?? [];
+        const chats =
+          (response.data as Array<{
+            id: string;
+            title: string;
+            updatedAt: string;
+          }>) ?? [];
         setRecentChats(
           [...chats]
-            .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+            .sort(
+              (a, b) =>
+                new Date(b.updatedAt).getTime() -
+                new Date(a.updatedAt).getTime(),
+            )
             .slice(0, 10),
         );
       } catch {
@@ -62,10 +82,26 @@ export function AgentsView() {
     void loadChats();
   }, []);
 
+  // Debug logging for data
+  useEffect(() => {
+    console.log("[AgentsView] Debug Info:", {
+      loading,
+      error,
+      agentsCount: agents.length,
+      runsCount: runs.length,
+      hasDashboard: !!dashboard,
+      dashboard,
+      agents: agents.map((a) => ({ id: a.id, name: a.name, runCount: a.runCount })),
+      recentRuns: runs.slice(0, 5).map((r) => ({ id: r.id, status: r.status, agentId: r.agentId })),
+    });
+  }, [agents, runs, dashboard, loading, error]);
+
   const totalAgents = (dashboard?.totalAgents ?? agents.length) + 1;
   const totalRuns = dashboard?.totalRuns ?? runs.length;
   const successRate = Math.round((dashboard?.successRate ?? 0) * 100);
-  const runningRuns = dashboard?.runningRuns ?? runs.filter((run) => run.status === "running").length;
+  const runningRuns =
+    dashboard?.runningRuns ??
+    runs.filter((run) => run.status === "running").length;
   const uniqueSkillCount = useMemo(() => {
     const set = new Set<string>();
     for (const agent of agents) {
@@ -75,7 +111,13 @@ export function AgentsView() {
   }, [agents]);
 
   const sortedRuns = useMemo(
-    () => [...runs].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 10),
+    () =>
+      [...runs]
+        .sort(
+          (a, b) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+        )
+        .slice(0, 10),
     [runs],
   );
 
@@ -99,7 +141,12 @@ export function AgentsView() {
     return "🤖";
   };
 
-  const buildPrompt = (name: string, description: string, tools: string[], skills: string[]): string => {
+  const buildPrompt = (
+    name: string,
+    description: string,
+    tools: string[],
+    skills: string[],
+  ): string => {
     const toolDescriptions: Record<string, string> = {
       bash: "bash and local filesystem operations",
       browser: "browser testing and web exploration",
@@ -108,8 +155,13 @@ export function AgentsView() {
       document: "document creation and edits",
       skill: "installed skill execution",
     };
-    const toolsSection = tools.map((tool) => `- ${toolDescriptions[tool] ?? tool}`).join("\n");
-    const skillsSection = skills.length > 0 ? `\n\nSkills:\n${skills.map((skill) => `- ${skill}`).join("\n")}` : "";
+    const toolsSection = tools
+      .map((tool) => `- ${toolDescriptions[tool] ?? tool}`)
+      .join("\n");
+    const skillsSection =
+      skills.length > 0
+        ? `\n\nSkills:\n${skills.map((skill) => `- ${skill}`).join("\n")}`
+        : "";
     return `You are ${name}, a specialist agent.\n\nPurpose:\n${description}\n\nAvailable tools:\n${toolsSection}${skillsSection}`;
   };
 
@@ -129,7 +181,8 @@ export function AgentsView() {
       id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
       name,
       description,
-      systemPrompt: agentPrompt || buildPrompt(name, description, tools, skills),
+      systemPrompt:
+        agentPrompt || buildPrompt(name, description, tools, skills),
       provider: "openai",
       model: agentModel,
       allowedToolIds: tools,
@@ -172,10 +225,32 @@ export function AgentsView() {
           <h1>Agents</h1>
           <p className="page-subtitle">Your AI workforce and their activity</p>
         </div>
-        <button className="btn-refresh-agents" onClick={() => void Promise.all([loadRuns(), loadDashboard()])}>
+        <button
+          className="btn-refresh-agents"
+          onClick={() => void Promise.all([loadRuns(), loadDashboard()])}
+        >
           Refresh
         </button>
       </div>
+
+      {loading && (
+        <div style={{ padding: "40px", textAlign: "center", color: "var(--text-secondary)" }}>
+          Loading agents data...
+        </div>
+      )}
+
+      {error && (
+        <div style={{ 
+          padding: "20px", 
+          background: "rgba(239, 68, 68, 0.1)", 
+          border: "1px solid rgba(239, 68, 68, 0.3)",
+          borderRadius: "8px",
+          color: "var(--error-color)",
+          marginBottom: "20px"
+        }}>
+          <strong>Error:</strong> {error}
+        </div>
+      )}
 
       <div className="agents-overview-native">
         <div className="stat-card-native">
@@ -228,22 +303,30 @@ export function AgentsView() {
             <div className="metric-item-native">
               <div className="metric-label-native">Delegation Runs</div>
               <div className="metric-value-native">{totalRuns}</div>
-              <div className="metric-subtitle-native">Across all specialists</div>
+              <div className="metric-subtitle-native">
+                Across all specialists
+              </div>
             </div>
             <div className="metric-item-native">
               <div className="metric-label-native">Completed</div>
-              <div className="metric-value-native">{dashboard?.completedRuns ?? 0}</div>
+              <div className="metric-value-native">
+                {dashboard?.completedRuns ?? 0}
+              </div>
               <div className="metric-subtitle-native">Successful outcomes</div>
             </div>
             <div className="metric-item-native">
               <div className="metric-label-native">Failed</div>
-              <div className="metric-value-native">{dashboard?.failedRuns ?? 0}</div>
+              <div className="metric-value-native">
+                {dashboard?.failedRuns ?? 0}
+              </div>
               <div className="metric-subtitle-native">Needs follow-up</div>
             </div>
             <div className="metric-item-native">
               <div className="metric-label-native">Specialists</div>
               <div className="metric-value-native">{agents.length}</div>
-              <div className="metric-subtitle-native">Available for delegation</div>
+              <div className="metric-subtitle-native">
+                Available for delegation
+              </div>
             </div>
           </div>
         </div>
@@ -258,7 +341,9 @@ export function AgentsView() {
           {agents.map((agent) => (
             <div className="specialist-card-native" key={agent.id}>
               <div className="specialist-header-native">
-                <div className="specialist-avatar-native">{getAgentIcon(agent.name)}</div>
+                <div className="specialist-avatar-native">
+                  {getAgentIcon(agent.name)}
+                </div>
                 <div className="specialist-info-native">
                   <h4>{agent.name}</h4>
                   <p>{agent.description}</p>
@@ -272,7 +357,9 @@ export function AgentsView() {
                 <div className="specialist-stat-native">
                   <div className="stat-label-small">Last Active</div>
                   <div className="stat-value-small">
-                    {agent.lastRunAt ? new Date(agent.lastRunAt).toLocaleDateString() : "Never"}
+                    {agent.lastRunAt
+                      ? new Date(agent.lastRunAt).toLocaleDateString()
+                      : "Never"}
                   </div>
                 </div>
               </div>
@@ -281,7 +368,9 @@ export function AgentsView() {
                 <select
                   className="model-select-specialist"
                   value={agent.model ?? "gpt-5-mini"}
-                  onChange={(event) => void updateAgentModel(agent, event.target.value)}
+                  onChange={(event) =>
+                    void updateAgentModel(agent, event.target.value)
+                  }
                 >
                   {modelOptions.map((model) => (
                     <option key={model} value={model}>
@@ -315,7 +404,10 @@ export function AgentsView() {
                 </div>
               )}
               <div className="specialist-actions-native">
-                <button className="btn-delete-agent" onClick={() => void deleteAgent(agent.id)}>
+                <button
+                  className="btn-delete-agent"
+                  onClick={() => void deleteAgent(agent.id)}
+                >
                   Delete
                 </button>
               </div>
@@ -337,7 +429,9 @@ export function AgentsView() {
             <div className="marketplace-content-native">
               <h3>Skills Marketplace</h3>
               <p>Browse and install specialized skills for your agents</p>
-              <div className="marketplace-stats-native">{uniqueSkillCount} skill(s) in specialist use</div>
+              <div className="marketplace-stats-native">
+                {uniqueSkillCount} skill(s) in specialist use
+              </div>
             </div>
             <button className="btn-marketplace-native" onClick={openSkills}>
               Browse Skills →
@@ -347,7 +441,9 @@ export function AgentsView() {
             <div className="marketplace-content-native">
               <h3>Jobs</h3>
               <p>Manage background processes and scheduled automations</p>
-              <div className="marketplace-stats-native">{runningRuns} running now</div>
+              <div className="marketplace-stats-native">
+                {runningRuns} running now
+              </div>
             </div>
             <button className="btn-marketplace-native" onClick={openJobs}>
               View Jobs →
@@ -357,9 +453,14 @@ export function AgentsView() {
             <div className="marketplace-content-native">
               <h3>Create Specialist Agent</h3>
               <p>Build a custom agent for specific tasks</p>
-              <div className="marketplace-stats-native">Custom tools, skills, and behavior</div>
+              <div className="marketplace-stats-native">
+                Custom tools, skills, and behavior
+              </div>
             </div>
-            <button className="btn-marketplace-native" onClick={() => setShowCreateModal(true)}>
+            <button
+              className="btn-marketplace-native"
+              onClick={() => setShowCreateModal(true)}
+            >
               Create Agent +
             </button>
           </div>
@@ -375,17 +476,23 @@ export function AgentsView() {
               <div className="activity-content-native">
                 <div className="activity-header-native">
                   <div className="activity-title-native">{run.agentId}</div>
-                  <div className="activity-time-native">{new Date(run.createdAt).toLocaleString()}</div>
+                  <div className="activity-time-native">
+                    {new Date(run.createdAt).toLocaleString()}
+                  </div>
                 </div>
                 <div className="activity-stats-row-native">
                   <span className="activity-stat-native">{run.status}</span>
                   <span className="activity-stat-native">{run.task}</span>
                 </div>
-                {run.context && <div className="activity-stat-native">{run.context}</div>}
+                {run.context && (
+                  <div className="activity-stat-native">{run.context}</div>
+                )}
               </div>
             </div>
           ))}
-          {sortedRuns.length === 0 && <div className="empty-state-native">No recent activity yet.</div>}
+          {sortedRuns.length === 0 && (
+            <div className="empty-state-native">No recent activity yet.</div>
+          )}
         </div>
       </div>
 
@@ -396,12 +503,20 @@ export function AgentsView() {
             <div className="activity-item-native" key={chat.id}>
               <div className="activity-marker-native" />
               <div className="activity-content-native">
-                <div className="activity-title-native">{chat.title || "Untitled Chat"}</div>
-                <div className="activity-time-native">{new Date(chat.updatedAt).toLocaleString()}</div>
+                <div className="activity-title-native">
+                  {chat.title || "Untitled Chat"}
+                </div>
+                <div className="activity-time-native">
+                  {new Date(chat.updatedAt).toLocaleString()}
+                </div>
               </div>
             </div>
           ))}
-          {recentChats.length === 0 && <div className="empty-state-native">No conversation history yet.</div>}
+          {recentChats.length === 0 && (
+            <div className="empty-state-native">
+              No conversation history yet.
+            </div>
+          )}
         </div>
       </div>
 
@@ -410,14 +525,21 @@ export function AgentsView() {
           <div className="modal-content" style={{ maxWidth: 600 }}>
             <div className="modal-header">
               <h2>Create Specialist Agent</h2>
-              <button className="modal-close" onClick={() => setShowCreateModal(false)}>
+              <button
+                className="modal-close"
+                onClick={() => setShowCreateModal(false)}
+              >
                 ×
               </button>
             </div>
             <div className="modal-body">
               <div className="form-group">
                 <label>Agent Name</label>
-                <input className="form-input" value={agentName} onChange={(event) => setAgentName(event.target.value)} />
+                <input
+                  className="form-input"
+                  value={agentName}
+                  onChange={(event) => setAgentName(event.target.value)}
+                />
               </div>
               <div className="form-group">
                 <label>Description</label>
@@ -450,11 +572,19 @@ export function AgentsView() {
               </div>
               <div className="form-group">
                 <label>Skills (comma-separated)</label>
-                <input className="form-input" value={agentSkills} onChange={(event) => setAgentSkills(event.target.value)} />
+                <input
+                  className="form-input"
+                  value={agentSkills}
+                  onChange={(event) => setAgentSkills(event.target.value)}
+                />
               </div>
               <div className="form-group">
                 <label>AI Model</label>
-                <select className="form-input" value={agentModel} onChange={(event) => setAgentModel(event.target.value)}>
+                <select
+                  className="form-input"
+                  value={agentModel}
+                  onChange={(event) => setAgentModel(event.target.value)}
+                >
                   {modelOptions.map((model) => (
                     <option key={model} value={model}>
                       {model}
@@ -474,10 +604,16 @@ export function AgentsView() {
               </div>
             </div>
             <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => setShowCreateModal(false)}>
+              <button
+                className="btn-secondary"
+                onClick={() => setShowCreateModal(false)}
+              >
                 Cancel
               </button>
-              <button className="btn-marketplace-native" onClick={() => void createSpecialist()}>
+              <button
+                className="btn-marketplace-native"
+                onClick={() => void createSpecialist()}
+              >
                 Create Agent
               </button>
             </div>

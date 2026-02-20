@@ -17,10 +17,10 @@ export const readSkillTool = createTool({
   description: "Read one skill by id/name or list all skills",
   inputSchema: readSkillSchema,
   execute: async (input) => {
-    const args = (input as { context?: z.infer<typeof readSkillSchema> }).context ?? input;
-    const { getSkillService } = await import(
-      "../../gateway/services/SkillService.js"
-    );
+    const args =
+      (input as { context?: z.infer<typeof readSkillSchema> }).context ?? input;
+    const { getSkillService } =
+      await import("../../gateway/services/SkillService.js");
     const service = getSkillService();
 
     if (!args.skillId && !args.name) {
@@ -50,10 +50,11 @@ export const createSkillTool = createTool({
   description: "Create a new reusable skill",
   inputSchema: createSkillSchema,
   execute: async (input) => {
-    const args = (input as { context?: z.infer<typeof createSkillSchema> }).context ?? input;
-    const { getSkillService } = await import(
-      "../../gateway/services/SkillService.js"
-    );
+    const args =
+      (input as { context?: z.infer<typeof createSkillSchema> }).context ??
+      input;
+    const { getSkillService } =
+      await import("../../gateway/services/SkillService.js");
     const service = getSkillService();
     const skill = await service.createSkill({
       name: args.name,

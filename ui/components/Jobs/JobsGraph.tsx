@@ -27,7 +27,9 @@ function computeLayout(jobs: JobRecord[], edges: JobGraph["edges"]): NodePos[] {
   if (jobs.length === 0) return [];
 
   const jobIds = new Set(jobs.map((j) => j.id));
-  const visibleEdges = edges.filter((e) => jobIds.has(e.from) && jobIds.has(e.to));
+  const visibleEdges = edges.filter(
+    (e) => jobIds.has(e.from) && jobIds.has(e.to),
+  );
 
   const inDeg = new Map<string, number>();
   const outAdj = new Map<string, string[]>();
@@ -121,8 +123,16 @@ function truncate(text: string, max: number): string {
   return text.length > max ? text.slice(0, max - 1) + "…" : text;
 }
 
-export function JobsGraph({ jobs, graph, selectedJobId, onJobClick }: JobsGraphProps) {
-  const positions = useMemo(() => computeLayout(jobs, graph.edges), [jobs, graph.edges]);
+export function JobsGraph({
+  jobs,
+  graph,
+  selectedJobId,
+  onJobClick,
+}: JobsGraphProps) {
+  const positions = useMemo(
+    () => computeLayout(jobs, graph.edges),
+    [jobs, graph.edges],
+  );
 
   const posMap = useMemo(() => {
     const m = new Map<string, NodePos>();
@@ -144,7 +154,13 @@ export function JobsGraph({ jobs, graph, selectedJobId, onJobClick }: JobsGraphP
   );
 
   const clusters = useMemo(() => {
-    const result: Array<{ folder: string; x: number; y: number; w: number; h: number }> = [];
+    const result: Array<{
+      folder: string;
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+    }> = [];
     for (const [folder, folderJobIds] of Object.entries(graph.folders)) {
       // Group nodes in this folder by their column (x position) to draw one box per column
       const byColumn = new Map<number, NodePos[]>();
@@ -165,7 +181,11 @@ export function JobsGraph({ jobs, graph, selectedJobId, onJobClick }: JobsGraphP
           x: colX - CLUSTER_PAD_X,
           y: Math.min(...ys) - CLUSTER_PAD_Y,
           w: NODE_W + CLUSTER_PAD_X * 2,
-          h: Math.max(...ys) + NODE_H + CLUSTER_PAD_X - (Math.min(...ys) - CLUSTER_PAD_Y),
+          h:
+            Math.max(...ys) +
+            NODE_H +
+            CLUSTER_PAD_X -
+            (Math.min(...ys) - CLUSTER_PAD_Y),
         });
       }
     }
@@ -238,7 +258,11 @@ export function JobsGraph({ jobs, graph, selectedJobId, onJobClick }: JobsGraphP
               rx={10}
               className="jg-cluster-rect"
             />
-            <text x={cluster.x + 10} y={cluster.y + 16} className="jg-cluster-label">
+            <text
+              x={cluster.x + 10}
+              y={cluster.y + 16}
+              className="jg-cluster-label"
+            >
               {cluster.folder}
             </text>
           </g>
@@ -256,7 +280,9 @@ export function JobsGraph({ jobs, graph, selectedJobId, onJobClick }: JobsGraphP
           const cx = (x1 + x2) / 2;
           const isCompleted = edge.onStatus === "completed";
           const edgeColor = isCompleted ? "#3b82f6" : "#ef4444";
-          const arrowId = isCompleted ? "jg-arrow-completed" : "jg-arrow-failed";
+          const arrowId = isCompleted
+            ? "jg-arrow-completed"
+            : "jg-arrow-failed";
           const labelX = (x1 + x2) / 2;
           const labelY = (y1 + y2) / 2 - 6;
           return (
@@ -314,7 +340,12 @@ export function JobsGraph({ jobs, graph, selectedJobId, onJobClick }: JobsGraphP
               </text>
               {/* Folder badge (if no cluster shown) */}
               {job.folder && clusters.every((c) => c.folder !== job.folder) && (
-                <text x={NODE_W - 6} y={NODE_H - 8} textAnchor="end" className="jg-node-folder">
+                <text
+                  x={NODE_W - 6}
+                  y={NODE_H - 8}
+                  textAnchor="end"
+                  className="jg-node-folder"
+                >
                   {truncate(job.folder, 12)}
                 </text>
               )}

@@ -1,156 +1,238 @@
-# Paprwork V2
+<div align="center">
 
-AI-powered desktop assistant rebuilt with TypeScript, Electron, and Mastra framework.
+# 🚀 Paprwork V2
 
-## ⚠️ Prerequisites
+**AI-Powered Desktop Assistant** — Rebuilt with TypeScript and Mastra
 
-**Node.js v24 or higher is required.** Electron 40 uses Node v24.13.0 internally, and native modules must match.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Node Version](https://img.shields.io/badge/node-%3E%3D24.0.0-brightgreen)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-100%25-blue)](https://www.typescriptlang.org/)
 
-```bash
-# Check your Node version
-node --version  # Should be v24.x.x or higher
+[Features](#-features) • [Quick Start](#-quick-start) • [Architecture](#-architecture) • [Documentation](#-documentation) • [Contributing](#-contributing)
 
-# If using nvm (recommended)
-nvm install 24
-nvm use 24
-nvm alias default 24
-```
+</div>
 
-See [docs/NODE_VERSION_REQUIREMENTS.md](docs/NODE_VERSION_REQUIREMENTS.md) for detailed information.
+---
 
 ## ✨ Features
 
-- **Liquid Glass Design**: Apple-inspired translucent UI with subtle depth
-- **Streaming Chat**: Real-time AI responses with typing indicators
-- **Multi-Provider**: Supports Claude, GPT-4, Gemini
-- **Type-Safe**: 100% TypeScript with zero `any` types
-- **Fast Tools**: Rust-based linting (oxlint) and formatting (oxfmt)
+- **🤖 Multi-Provider AI Support** - Claude, GPT, and Gemini models with seamless switching
+- **⚡ Streaming Responses** - Real-time AI responses with proper tool execution
+- **🛠️ Extensible Tool System** - Bash execution, filesystem operations, document processing
+- **📋 Parallel Chat Sessions** - Multiple concurrent AI conversations
+- **⏱️ Scheduled Jobs & Automation** - Python/Node/Swift jobs with cron scheduling
+- **🧠 Smart Memory System** - Context-aware conversations with Papr Memory integration
+- **🎨 Mini-Apps** - TypeScript apps with SQLite database access
+- **👥 Sub-Agents** - Specialized AI agents for research, code review, and more
+- **🔐 Secure Custom Keys** - Manage your own API keys with encrypted storage
+- **💻 Cross-Platform** - macOS, Windows, and Linux support
+
+---
 
 ## 🚀 Quick Start
 
-```bash
-# 1. Ensure you're using Node v24+
-node --version  # Should show v24.x.x
+### Prerequisites
 
-# 2. Install dependencies (auto-rebuilds native modules)
+- **Node.js v24+** (required for Electron 40)
+- npm v10+
+- macOS, Windows, or Linux
+
+### Installation
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/your-org/paprwork-v2.git
+cd paprwork-v2
+
+# 2. Use Node v24+ (with nvm)
+nvm use 24
+
+# 3. Install dependencies (auto-rebuilds native modules)
 npm install
 
-# 3. Build the app
-npm run build
+# 4. Configure API keys
+cp .env.example .env.local
+# Edit .env.local and add your API keys
 
-# 4. Start the app
+# 5. Start the application
 npm start
+```
 
-# Or for development mode
+### Development Mode
+
+```bash
+# Run in development mode with hot reload
 npm run dev
+
+# In separate terminals:
+npm run gateway:dev  # Gateway process
+npm run ui:dev       # UI with Vite HMR
+npm run electron:dev # Electron app
 ```
 
-**Common Issue:** If you get native module errors, switch to Node v24:
-```bash
-nvm use 24
-npm rebuild
-npm start
-```
-
-## ✅ Before Committing
-
-```bash
-# Run all checks (type-check, lint, format, LOC)
-npm run check
-```
+---
 
 ## 🏗️ Architecture
+
+Paprwork V2 is built with a modern, modular architecture inspired by [OpenClaw](https://github.com/openclaw/openclaw) (179k+ stars):
 
 ```
 paprwork-v2/
 ├── src/
-│   ├── core/          # Shared library (agents, tools, types)
-│   ├── main/          # Electron main process
-│   ├── renderer/      # React UI (Liquid Glass design)
-│   └── gateway/       # Sub-agents & job orchestration
-├── docs/              # Architecture docs
-└── scripts/           # Build & migration scripts
+│   ├── core/               # Shared library (zero duplication!)
+│   │   ├── agents/         # MastraAgent, SessionManager
+│   │   ├── tools/          # Tool implementations
+│   │   └── types/          # Type definitions
+│   ├── electron/           # Main Electron process (CommonJS)
+│   ├── gateway/            # Gateway process for sub-agents & jobs
+│   └── resources/          # Agent docs, skills, templates
+├── ui/                     # React UI (Vite + TypeScript)
+├── docs/                   # Documentation
+└── tests/                  # Comprehensive test suite
 ```
 
-## 🛠️ Tooling
+### Key Design Principles
 
-We use **Rust-based tools** where possible for maximum performance:
+1. **100% TypeScript** - Full type safety, zero `any` types
+2. **Small, Modular Files** - Max 500 lines per file (enforced by CI)
+3. **Shared Core Library** - Zero code duplication between processes
+4. **Mastra Framework** - Reliable multi-provider AI orchestration
+5. **Rust-Based Tools** - `oxlint` and `oxfmt` for 50-100x faster dev workflow
 
-| Tool | Technology | Speed |
-|------|------------|-------|
-| **Linting** | `oxlint` (Rust) | 50-100x faster than ESLint |
-| **Formatting** | `oxfmt` (Rust) | 30x faster than Prettier |
-| **Type Checking** | `tsc --noEmit` | TypeScript native (no Rust alternative) |
-| **Bundling** | Vite (esbuild) | Very fast |
-
-## 📝 Development
-
-```bash
-# Type check only (main + renderer)
-npm run type-check
-
-# Format code
-npm run format
-
-# Lint code
-npm run lint
-
-# Check line count (<500 lines per file)
-npm run check:loc
-
-# Run all checks
-npm run check
-```
-
-## 🎨 Design System
-
-Paprwork uses the **Liquid Glass** design language:
-- Translucent surfaces with `backdrop-filter: blur(14px)`
-- 8pt spacing grid
-- SF Pro Display/Text typography
-- Subtle shadows and borders
-- Smooth 160-220ms transitions
-
-See [`src/renderer/styles/liquid-glass.css`](src/renderer/styles/liquid-glass.css) for the full system.
+---
 
 ## 📚 Documentation
 
-- [CLAUDE.md](CLAUDE.md) - AI assistant context & learnings
-- [PLAN.md](PLAN.md) - Implementation timeline
-- [CONTRIBUTING.md](CONTRIBUTING.md) - Development guidelines
-- [docs/architecture/](docs/architecture/) - Architecture decisions
+- **[Architecture Overview](docs/architecture/SYSTEM_OVERVIEW.md)** - Deep dive into system design
+- **[Development Guide](CLAUDE.md)** - Key learnings and patterns
+- **[API Documentation](docs/README.md)** - Comprehensive API reference
+- **[Testing Guide](docs/TESTING_GUIDE.md)** - Unit, integration, and E2E tests
+- **[Contributing Guidelines](CONTRIBUTING.md)** - How to contribute
 
-## 🧪 Testing
+### Quick Links
+
+- [Setting up Custom API Keys](docs/CUSTOM_KEYS.md)
+- [Creating Jobs & Automation](docs/architecture/PORTABLE_BUNDLE_SPEC.md)
+- [Building Sub-Agents](src/resources/agent-docs/SUBAGENT_CREATION_GUIDE.md)
+- [Tool Development](src/core/tools/README.md)
+
+---
+
+## 🛠️ Development
+
+### Code Quality
 
 ```bash
-npm test              # Run all tests
-npm run test:unit     # Unit tests only
-npm run test:e2e      # E2E tests only
-npm run test:coverage # Coverage report
+# Run all checks (type-check + format + lint + LOC)
+npm run check
+
+# Format code with oxfmt (Rust, 30x faster)
+npm run format
+
+# Lint with oxlint (Rust, 50-100x faster)
+npm run lint
+
+# Type checking (TypeScript)
+npm run type-check
 ```
 
-## 📦 Building
+### Testing
 
 ```bash
-# Build main process
-npm run build:main
+# Run all tests
+npm run test
 
-# Build renderer
-npm run build:renderer
+# Unit tests (backend)
+npm run test:unit
 
-# Build gateway
-npm run build:gateway
+# Unit tests (UI)
+npm run test:ui
 
-# Build everything
+# Integration tests
+npm run test:integration
+
+# E2E tests
+npm run test:e2e
+
+# Watch mode
+npm run test:watch
+```
+
+### Building
+
+```bash
+# Build all components
 npm run build
+
+# Build individual components
+npm run build:gateway
+npm run build:electron
+npm run build:ui
+
+# Package for distribution
+npm run package
 ```
 
-## 🔄 Migrating from V1
+---
 
-```bash
-npm run migrate:v1
-```
+## 🌟 Why V2?
 
-## License
+Paprwork V1 accumulated technical debt over time:
+- 30,335 lines in monolithic files
+- 90% code duplication between processes
+- Fragile with 10+ patches for tool calling
+- No type safety, tight coupling
 
-MIT
+**V2 is a complete greenfield rewrite** focused on:
+- ✅ Production-ready architecture
+- ✅ Comprehensive test coverage
+- ✅ Modern tooling (Rust-based linters/formatters)
+- ✅ Type safety throughout
+- ✅ Modular, maintainable codebase
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
+
+### Quick Contribution Checklist
+
+- [ ] No `any` types - always use proper typing
+- [ ] Files under 500 lines (enforced by `npm run check:loc`)
+- [ ] Add tests for new features
+- [ ] Run `npm run check` before committing
+- [ ] Follow existing code patterns
+
+---
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+---
+
+## 🙏 Acknowledgments
+
+- **[Mastra](https://mastra.ai)** - Multi-provider AI framework
+- **[OpenClaw](https://github.com/openclaw/openclaw)** - Architecture inspiration
+- **[Electron](https://www.electronjs.org/)** - Cross-platform desktop framework
+- **[Papr Memory](https://papr.ai)** - Context-aware memory system
+
+---
+
+## 📞 Support
+
+- **Issues**: [GitHub Issues](https://github.com/your-org/paprwork-v2/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/your-org/paprwork-v2/discussions)
+- **Documentation**: [docs/](docs/)
+
+---
+
+<div align="center">
+
+**Built with ❤️ using TypeScript, Electron, and Mastra**
+
+[⬆ Back to Top](#-paprwork-v2)
+
+</div>

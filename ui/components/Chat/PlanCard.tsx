@@ -45,7 +45,11 @@ export function PlanCard({ data }: PlanCardProps) {
     const c = data.steps.filter(
       (s) => s.status === "completed" || s.status === "skipped",
     ).length;
-    return { completed: c, total: t, percentage: t > 0 ? Math.round((c / t) * 100) : 0 };
+    return {
+      completed: c,
+      total: t,
+      percentage: t > 0 ? Math.round((c / t) * 100) : 0,
+    };
   }, [data.steps]);
 
   return (
@@ -61,7 +65,12 @@ export function PlanCard({ data }: PlanCardProps) {
             height="12"
             viewBox="0 0 12 12"
           >
-            <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" fill="none" />
+            <path
+              d="M3 4.5L6 7.5L9 4.5"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              fill="none"
+            />
           </svg>
           <span className="plan-card__title">{data.title}</span>
         </div>

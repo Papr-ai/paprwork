@@ -37,12 +37,7 @@ const DEFAULTS: SettingsData = {
   permissions: { fileSystem: true, network: true, calendar: false },
 };
 
-const SETTINGS_PATH = path.join(
-  os.homedir(),
-  "PAPR",
-  "data",
-  "settings.json",
-);
+const SETTINGS_PATH = path.join(os.homedir(), "PAPR", "data", "settings.json");
 
 async function loadSettings(): Promise<SettingsData> {
   try {
@@ -175,9 +170,7 @@ async function runV1Migration(
 
     for (const chat of chats) {
       const chatId =
-        typeof chat.id === "string" && chat.id.length > 0
-          ? chat.id
-          : uuidv4();
+        typeof chat.id === "string" && chat.id.length > 0 ? chat.id : uuidv4();
       const title =
         typeof chat.title === "string" ? chat.title : "Imported Chat";
 
@@ -195,12 +188,19 @@ async function runV1Migration(
       // Write meta
       await fs.writeFile(
         path.join(chatDir, "meta.json"),
-        JSON.stringify({ id: chatId, title, createdAt: new Date().toISOString() }, null, 2),
+        JSON.stringify(
+          { id: chatId, title, createdAt: new Date().toISOString() },
+          null,
+          2,
+        ),
       );
 
       // Copy messages
       const stream = createReadStream(sourceFile, { encoding: "utf8" });
-      const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+      const rl = readline.createInterface({
+        input: stream,
+        crlfDelay: Infinity,
+      });
       const messages: string[] = [];
 
       for await (const line of rl) {
@@ -241,7 +241,10 @@ async function runV1Migration(
       result.chats.migrated += 1;
     }
   } catch (err) {
-    console.log("[Migration] No V1 chat index found or error:", (err as Error).message);
+    console.log(
+      "[Migration] No V1 chat index found or error:",
+      (err as Error).message,
+    );
   }
 
   // --- 2. Migrate documents ---
@@ -284,7 +287,10 @@ async function runV1Migration(
       result.documents.migrated += 1;
     }
   } catch (err) {
-    console.log("[Migration] No V1 documents found or error:", (err as Error).message);
+    console.log(
+      "[Migration] No V1 documents found or error:",
+      (err as Error).message,
+    );
   }
 
   // --- 3. Migrate apps ---
@@ -332,12 +338,15 @@ async function runV1Migration(
       result.apps.migrated += 1;
     }
   } catch (err) {
-    console.log("[Migration] No V1 apps found or error:", (err as Error).message);
+    console.log(
+      "[Migration] No V1 apps found or error:",
+      (err as Error).message,
+    );
   }
 
   console.log(
     `[Migration] Complete: ${result.chats.migrated} chats (${result.chats.messages} msgs), ` +
-    `${result.documents.migrated} docs, ${result.apps.migrated} apps`,
+      `${result.documents.migrated} docs, ${result.apps.migrated} apps`,
   );
 
   return result;

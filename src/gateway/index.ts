@@ -5,7 +5,7 @@
  * - WebSocket server for client communication
  * - HTTP server for UI assets
  * - Agent and Chat services
- * 
+ *
  * API Keys:
  * - Passed from Electron via environment variables
  * - Electron fetches them from macOS Keychain
@@ -32,7 +32,10 @@ import { initializeChatService } from "./services/ChatService.js";
 import { initializeDocumentService } from "./services/DocumentService.js";
 import { initializeAppService } from "./services/AppService.js";
 import { getAppService } from "./services/AppService.js";
-import { initializeJobsService, getJobsService } from "./services/JobsService.js";
+import {
+  initializeJobsService,
+  getJobsService,
+} from "./services/JobsService.js";
 import { initializeSkillService } from "./services/SkillService.js";
 import { initializeBundleService } from "./services/BundleService.js";
 import { initializeSubAgentService } from "./services/SubAgentService.js";
@@ -62,20 +65,22 @@ async function initializeServices(): Promise<void> {
   console.log("[Gateway] Initializing services...");
 
   try {
-    // DON'T request keys on startup! 
+    // DON'T request keys on startup!
     // AgentService will lazy-load them when first message is sent
     // This ensures ZERO keychain popups on app startup (matches V1 behavior)
-    
-    let storageMode: 'local' | 'papr' | 'hybrid';
-    
+
+    let storageMode: "local" | "papr" | "hybrid";
+
     if (process.env.STORAGE_MODE) {
       // Use explicit mode if set
-      storageMode = process.env.STORAGE_MODE as 'local' | 'papr' | 'hybrid';
+      storageMode = process.env.STORAGE_MODE as "local" | "papr" | "hybrid";
     } else {
       // Default to local mode on startup
       // AgentService will upgrade to hybrid/papr when keys are available
-      storageMode = 'local';
-      console.log("[Gateway] Starting in local mode (keys will load on first use)");
+      storageMode = "local";
+      console.log(
+        "[Gateway] Starting in local mode (keys will load on first use)",
+      );
     }
 
     await initializeAgentService({
@@ -100,11 +105,14 @@ async function initializeServices(): Promise<void> {
     ]);
 
     // Register built-in sleep job (depends on JobsService being initialized)
-    const { getWorkspaceService } = await import("./services/WorkspaceService.js");
+    const { getWorkspaceService } =
+      await import("./services/WorkspaceService.js");
     await getWorkspaceService().ensureSleepJob();
 
     console.log("[Gateway] All services initialized");
-    console.log(`[Gateway] Storage mode: ${storageMode} (keys will load on demand)`);
+    console.log(
+      `[Gateway] Storage mode: ${storageMode} (keys will load on demand)`,
+    );
   } catch (error) {
     console.error("[Gateway] Failed to initialize services:", error);
     throw error;
@@ -203,10 +211,17 @@ async function startGateway(): Promise<void> {
     ): Promise<import("./services/AppService.js").AppDataSource> {
       // 1. Explicit sourceId
       if (sourceId) {
-        const found = sources.find((s) => s.id === sourceId || s.alias === sourceId);
+        const found = sources.find(
+          (s) => s.id === sourceId || s.alias === sourceId,
+        );
         if (!found) {
           const available = sources.map((s) => s.alias ?? s.id).join(", ");
-          throw Object.assign(new Error(`Data source "${sourceId}" not found. Available: ${available}`), { status: 404 });
+          throw Object.assign(
+            new Error(
+              `Data source "${sourceId}" not found. Available: ${available}`,
+            ),
+            { status: 404 },
+          );
         }
         return found;
       }
@@ -220,10 +235,15 @@ async function startGateway(): Promise<void> {
         const DatabaseCtor = (await import("better-sqlite3")).default;
         for (const source of sources) {
           try {
-            const db = new DatabaseCtor(source.dbPath, { readonly: true, fileMustExist: true });
+            const db = new DatabaseCtor(source.dbPath, {
+              readonly: true,
+              fileMustExist: true,
+            });
             try {
               const row = db
-                .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1")
+                .prepare(
+                  "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+                )
                 .get(tableName) as unknown;
               if (row !== undefined) return source;
             } finally {
@@ -237,7 +257,9 @@ async function startGateway(): Promise<void> {
 
       // 4. Could not auto-route — give a useful error
       const aliases = sources.map((s) => `"${s.alias ?? s.id}"`).join(", ");
-      const tableHint = tableName ? ` Table "${tableName}" was not found in any linked source.` : "";
+      const tableHint = tableName
+        ? ` Table "${tableName}" was not found in any linked source.`
+        : "";
       throw Object.assign(
         new Error(
           `Multiple data sources are linked (${aliases}) and the target could not be determined automatically.${tableHint} Pass sourceId to specify which source to use.`,
@@ -265,19 +287,50 @@ async function startGateway(): Promise<void> {
         const Database = (await import("better-sqlite3")).default;
         const result = sources.map((source) => {
           try {
-            const db = new Database(source.dbPath, { readonly: true, fileMustExist: true });
+            const db = new Database(source.dbPath, {
+              readonly: true,
+              fileMustExist: true,
+            });
             const tables = (
-              db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[]
+              db
+                .prepare(
+                  "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+                )
+                .all() as { name: string }[]
             ).map((row) => {
-              const cols = db.prepare(`PRAGMA table_info(${JSON.stringify(row.name)})`).all() as {
-                cid: number; name: string; type: string; notnull: number; dflt_value: unknown; pk: number;
+              const cols = db
+                .prepare(`PRAGMA table_info(${JSON.stringify(row.name)})`)
+                .all() as {
+                cid: number;
+                name: string;
+                type: string;
+                notnull: number;
+                dflt_value: unknown;
+                pk: number;
               }[];
-              return { table: row.name, columns: cols.map((c) => ({ name: c.name, type: c.type, pk: c.pk === 1 })) };
+              return {
+                table: row.name,
+                columns: cols.map((c) => ({
+                  name: c.name,
+                  type: c.type,
+                  pk: c.pk === 1,
+                })),
+              };
             });
             db.close();
-            return { sourceId: source.id, alias: source.alias, dbPath: source.dbPath, tables };
+            return {
+              sourceId: source.id,
+              alias: source.alias,
+              dbPath: source.dbPath,
+              tables,
+            };
           } catch (err) {
-            return { sourceId: source.id, alias: source.alias, dbPath: source.dbPath, error: (err as Error).message };
+            return {
+              sourceId: source.id,
+              alias: source.alias,
+              dbPath: source.dbPath,
+              error: (err as Error).message,
+            };
           }
         });
 
@@ -305,14 +358,18 @@ async function startGateway(): Promise<void> {
         // Only allow SELECT
         const trimmed = sql.trim().toLowerCase();
         if (!trimmed.startsWith("select") && !trimmed.startsWith("with")) {
-          res.status(403).json({ error: "Only SELECT (and WITH ... SELECT) queries are allowed" });
+          res.status(403).json({
+            error: "Only SELECT (and WITH ... SELECT) queries are allowed",
+          });
           return;
         }
 
         const appService = getAppService();
         const sources = await appService.listAppDataSources(appId);
         if (!sources.length) {
-          res.status(404).json({ error: `No data sources linked to app ${appId}. Use link_app_data_source first.` });
+          res.status(404).json({
+            error: `No data sources linked to app ${appId}. Use link_app_data_source first.`,
+          });
           return;
         }
 
@@ -326,13 +383,18 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        const db = new Database(source.dbPath, { readonly: true, fileMustExist: true });
+        const db = new Database(source.dbPath, {
+          readonly: true,
+          fileMustExist: true,
+        });
 
         try {
           const stmt = db.prepare(sql);
           const rows = stmt.all(...(params ?? [])) as Record<string, unknown>[];
           const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
-          console.log(`[Gateway] /api/db/query app=${appId} source=${source.alias} rows=${rows.length}`);
+          console.log(
+            `[Gateway] /api/db/query app=${appId} source=${source.alias} rows=${rows.length}`,
+          );
           res.json({ rows, columns, count: rows.length, source: source.alias });
         } finally {
           db.close();
@@ -377,16 +439,19 @@ async function startGateway(): Promise<void> {
           trimmed.startsWith("replace") ||
           trimmed.startsWith("upsert");
         if (!isWrite) {
-          res
-            .status(403)
-            .json({ error: "Only INSERT, UPDATE, DELETE, REPLACE, and UPSERT are allowed on /api/db/write. Use /api/db/query for SELECT." });
+          res.status(403).json({
+            error:
+              "Only INSERT, UPDATE, DELETE, REPLACE, and UPSERT are allowed on /api/db/write. Use /api/db/query for SELECT.",
+          });
           return;
         }
 
         const appService = getAppService();
         const sources = await appService.listAppDataSources(appId);
         if (!sources.length) {
-          res.status(404).json({ error: `No data sources linked to app ${appId}. Use link_app_data_source first.` });
+          res.status(404).json({
+            error: `No data sources linked to app ${appId}. Use link_app_data_source first.`,
+          });
           return;
         }
 
@@ -405,7 +470,10 @@ async function startGateway(): Promise<void> {
 
         try {
           const stmt = db.prepare(sql);
-          const result = stmt.run(...(params ?? [])) as { changes: number; lastInsertRowid: number | bigint };
+          const result = stmt.run(...(params ?? [])) as {
+            changes: number;
+            lastInsertRowid: number | bigint;
+          };
           const lastInsertRowid =
             typeof result.lastInsertRowid === "bigint"
               ? Number(result.lastInsertRowid)
@@ -496,12 +564,16 @@ async function startGateway(): Promise<void> {
         // Validate params: keys and values must be strings
         if (params !== undefined) {
           if (typeof params !== "object" || Array.isArray(params)) {
-            res.status(400).json({ error: "params must be a flat object of string key-value pairs" });
+            res.status(400).json({
+              error: "params must be a flat object of string key-value pairs",
+            });
             return;
           }
           for (const [k, v] of Object.entries(params)) {
             if (typeof k !== "string" || typeof v !== "string") {
-              res.status(400).json({ error: `params values must be strings (got ${typeof v} for key "${k}")` });
+              res.status(400).json({
+                error: `params values must be strings (got ${typeof v} for key "${k}")`,
+              });
               return;
             }
           }
@@ -515,11 +587,20 @@ async function startGateway(): Promise<void> {
         if (wait) {
           // Block until the job completes (use for short jobs only)
           const result = await jobsService.runJob(jobId, params);
-          res.json({ jobId, status: result.status, completedAt: result.completedAt, error: result.error, lastOutput: result.lastOutput });
+          res.json({
+            jobId,
+            status: result.status,
+            completedAt: result.completedAt,
+            error: result.error,
+            lastOutput: result.lastOutput,
+          });
         } else {
           // Fire-and-forget: returns immediately, app polls /api/jobs/status/:jobId
           jobsService.runJob(jobId, params).catch((err: unknown) => {
-            console.error(`[Gateway] /api/jobs/run background error for ${jobId}:`, err);
+            console.error(
+              `[Gateway] /api/jobs/run background error for ${jobId}:`,
+              err,
+            );
           });
           res.json({ jobId, status: "running" });
         }
@@ -552,26 +633,34 @@ async function startGateway(): Promise<void> {
         }
         const timeout = Math.min(timeoutMs ?? 30_000, 120_000); // cap at 2 min
         const { exec } = await import("child_process");
-        const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>(
-          (resolve) => {
-            const proc = exec(
-              command,
-              { timeout, env: process.env, shell: "/bin/bash" },
-              (error, stdout, stderr) => {
-                resolve({
-                  stdout: stdout ?? "",
-                  stderr: stderr ?? "",
-                  exitCode: error?.code ?? (error ? 1 : 0),
-                });
-              },
-            );
-            // Ensure the child process is killed on timeout
-            setTimeout(() => {
-              try { proc.kill("SIGTERM"); } catch { /* already done */ }
-            }, timeout);
-          },
+        const result = await new Promise<{
+          stdout: string;
+          stderr: string;
+          exitCode: number;
+        }>((resolve) => {
+          const proc = exec(
+            command,
+            { timeout, env: process.env, shell: "/bin/bash" },
+            (error, stdout, stderr) => {
+              resolve({
+                stdout: stdout ?? "",
+                stderr: stderr ?? "",
+                exitCode: error?.code ?? (error ? 1 : 0),
+              });
+            },
+          );
+          // Ensure the child process is killed on timeout
+          setTimeout(() => {
+            try {
+              proc.kill("SIGTERM");
+            } catch {
+              /* already done */
+            }
+          }, timeout);
+        });
+        console.log(
+          `[Gateway] /api/bash/run exit=${result.exitCode} cmd="${command.slice(0, 80)}"`,
         );
-        console.log(`[Gateway] /api/bash/run exit=${result.exitCode} cmd="${command.slice(0, 80)}"`);
         res.json(result);
       } catch (err) {
         console.error("[Gateway] /api/bash/run error:", err);
@@ -618,8 +707,15 @@ async function startGateway(): Promise<void> {
             });
             content = result.code;
           } catch (transpileError) {
-            console.error(`[Gateway] TypeScript transpile error for ${requestedPath}:`, transpileError);
-            res.status(500).send(`TypeScript compilation error:\n${(transpileError as Error).message}`);
+            console.error(
+              `[Gateway] TypeScript transpile error for ${requestedPath}:`,
+              transpileError,
+            );
+            res
+              .status(500)
+              .send(
+                `TypeScript compilation error:\n${(transpileError as Error).message}`,
+              );
             return;
           }
         }
@@ -648,29 +744,29 @@ async function startGateway(): Promise<void> {
     // Serve UI assets in production
     if (process.env.NODE_ENV === "production") {
       const uiPath = path.join(__dirname, "../ui");
-      
+
       // Serve static files (CSS, JS, images)
       app.use(express.static(uiPath));
-      
+
       // Catch-all route to serve index.html for SPA routing
       // Must be after static files so assets are served first
       app.use((_req, res) => {
         res.sendFile(path.join(uiPath, "index.html"));
       });
-      
+
       console.log("[Gateway] Serving UI from:", uiPath);
     }
 
     // Start server with error handling
     await new Promise<void>((resolve, reject) => {
-      server.on('error', (error: NodeJS.ErrnoException) => {
-        if (error.code === 'EADDRINUSE') {
+      server.on("error", (error: NodeJS.ErrnoException) => {
+        if (error.code === "EADDRINUSE") {
           console.error(`[Gateway] ERROR: Port ${PORT} is already in use!`);
           console.error(`[Gateway] Another Gateway process may be running.`);
           console.error(`[Gateway] Run: npm run kill:gateway`);
           reject(error);
         } else {
-          console.error('[Gateway] Server error:', error);
+          console.error("[Gateway] Server error:", error);
           reject(error);
         }
       });
@@ -684,12 +780,21 @@ async function startGateway(): Promise<void> {
 
     // Handle shutdown
     const shutdown = async () => {
-      console.log("[Gateway] Shutting down...");
+      console.log("[Gateway] Shutting down gracefully...");
+
+      // Stop all running jobs before exit
+      try {
+        const jobsService = getJobsService();
+        await jobsService.stopAllJobs();
+      } catch (error) {
+        console.error("[Gateway] Failed to stop jobs:", error);
+      }
+
       getJobsScheduler().stop();
       server.close();
       process.exit(0);
     };
-    
+
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
     getJobsScheduler().start();

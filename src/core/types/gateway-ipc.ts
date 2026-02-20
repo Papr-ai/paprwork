@@ -13,6 +13,16 @@ export interface KeysResponseMessage {
   type: "KEYS_RESPONSE";
   requestId: string;
   keys: Record<string, string>;
+  oauthTokens?: {
+    openai?: {
+      accessToken: string;
+      expiresAt: string;
+    };
+    anthropic?: {
+      accessToken: string;
+      expiresAt: string;
+    };
+  };
 }
 
 export interface RequestPermissionMessage {

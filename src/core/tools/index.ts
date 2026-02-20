@@ -6,9 +6,7 @@
  */
 
 import { bashTool } from "./bash.js";
-import {
-  filesystemTools,
-} from "./filesystem.js";
+import { filesystemTools } from "./filesystem.js";
 import { browserTools } from "./browser.js";
 import { documentTools } from "./documents.js";
 import { paprMemoryTools } from "./paprMemory.js";
@@ -18,6 +16,7 @@ import { jobFolderTools } from "./jobFolders.js";
 import { webviewTools } from "./webview.js";
 import { delegationTools } from "./delegation.js";
 import { planningTools } from "./planning.js";
+import { keyManagementTools } from "./keyManagement.js";
 
 /**
  * All available tools
@@ -34,6 +33,7 @@ export const allTools = [
   ...webviewTools,
   ...delegationTools,
   ...planningTools,
+  ...keyManagementTools,
 ];
 
 /**
@@ -50,14 +50,13 @@ export const toolsByCategory = {
   automation: appJobsTools,
   delegation: delegationTools,
   planning: planningTools,
+  keyManagement: keyManagementTools,
 } as const;
 
 /**
  * Get tool by ID
  */
-export function getToolById(
-  id: string,
-): (typeof allTools)[number] | undefined {
+export function getToolById(id: string): (typeof allTools)[number] | undefined {
   return allTools.find((tool) => tool.id === id);
 }
 
@@ -114,6 +113,7 @@ export {
   readAppDataSourcesTool,
   readAppFileTool,
   editAppFileTool,
+  editAppFileLinesTool,
   listAppFilesTool,
   listAppsTool,
   exportAppBundleTool,
@@ -130,6 +130,15 @@ export {
 } from "./jobFolders.js";
 
 export { planningTools, createPlanTool, updatePlanTool } from "./planning.js";
+
+export {
+  keyManagementTools,
+  listKeysTool,
+  getKeyTool,
+  setKeyTool,
+  deleteKeyTool,
+  requestKeyTool,
+} from "./keyManagement.js";
 
 // Export security utilities
 export {

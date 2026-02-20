@@ -2,7 +2,11 @@ import { spawn, execSync } from "child_process";
 import { existsSync } from "fs";
 import path from "path";
 import type { JobType } from "../types.js";
-import type { ExecutorLaunchParams, ExecutorLaunchResult, IJobExecutor } from "./IJobExecutor.js";
+import type {
+  ExecutorLaunchParams,
+  ExecutorLaunchResult,
+  IJobExecutor,
+} from "./IJobExecutor.js";
 
 export class CommandJobExecutor implements IJobExecutor {
   private supportedTypes: Set<JobType>;
@@ -35,13 +39,30 @@ export class CommandJobExecutor implements IJobExecutor {
     // ─────────────────────────────────────────────────────────────────────────
 
     // Wrap command with venv activation for Python jobs
-    const finalCommand = params.job.type === "python"
-      ? this.wrapWithVenv(command, params.jobDir)
-      : command;
+    let finalCommand =
+      params.job.type === "python"
+        ? this.wrapWithVenv(command, params.jobDir)
+        : command;
+
+    // ── Substitute custom API keys (${KEY_NAME} syntax) ───────────────────────
+    // Jobs bypass the bash tool, so we need to substitute keys here
+    // For "ask" keys, requests permission before substituting
+    try {
+      const result = await this.substituteCustomKeys(finalCommand, params);
+      finalCommand = result.command;
+      // Do NOT inject customKeys into env - that's a security risk!
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to substitute API keys: ${message}`);
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     const proc = spawn("/bin/bash", ["-lc", finalCommand], {
       cwd: params.jobDir,
-      env: { ...process.env, ...(params.runtimeParams ?? {}) },
+      env: {
+        ...process.env,
+        ...(params.runtimeParams ?? {}),
+      },
     });
 
     return {
@@ -52,6 +73,112 @@ export class CommandJobExecutor implements IJobExecutor {
   }
 
   /**
+   * Substitute custom API keys in command (${KEY_NAME} syntax).
+   * Loads keys from both environment AND CustomKeysStorage.
+   * For keys with permission "ask", requests user approval before substituting.
+   *
+   * SECURITY: Keys are ONLY substituted in command string, NOT injected into env.
+   *
+   * @returns Object with substituted command
+   * @throws Error if permission denied for an "ask" key
+   */
+  private async substituteCustomKeys(
+    command: string,
+    params: ExecutorLaunchParams,
+  ): Promise<{ command: string }> {
+    const customKeys: Record<string, string> = {};
+    const job = params.job;
+
+    // 1. Add keys from environment
+    const commonKeyVars = [
+      "OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "PAPR_API_KEY",
+      "GOOGLE_API_KEY",
+      "GITHUB_TOKEN",
+      "GITLAB_TOKEN",
+    ];
+    for (const varName of commonKeyVars) {
+      const value = process.env[varName];
+      if (value) customKeys[varName] = value;
+    }
+
+    // 2. Add keys from CustomKeysStorage (Settings)
+    const askKeys: string[] = [];
+    try {
+      const { getCustomKeysService } =
+        await import("../../../services/CustomKeysService.js");
+      const service = getCustomKeysService();
+      const storedKeys = await service.listKeys();
+
+      for (const keyMeta of storedKeys) {
+        if (!command.includes(`\${${keyMeta.name}}`)) continue;
+
+        const value = await service.getKeyByName(keyMeta.name);
+        if (!value) continue;
+
+        const permission =
+          (keyMeta as { permission?: string }).permission ?? "always";
+        if (permission === "always") {
+          customKeys[keyMeta.name] = value;
+        } else if (permission === "ask") {
+          askKeys.push(keyMeta.name);
+        }
+      }
+    } catch (error) {
+      console.warn("[CommandJobExecutor] Failed to load custom keys:", error);
+    }
+
+    // 3. Request permission for "ask" keys
+    if (askKeys.length > 0 && params.requestKeyPermission) {
+      await params.onWaitingPermission?.(askKeys);
+
+      for (const keyName of askKeys) {
+        const approved = await params.requestKeyPermission(keyName, {
+          jobId: job.id,
+          jobName: job.name,
+        });
+        if (!approved) {
+          throw new Error(
+            `Job "${job.name}" requires permission for API key ${keyName}. ` +
+              `User denied. Change the key to "Always allow" in Settings → API Keys, or run the job again to approve.`,
+          );
+        }
+        const { getCustomKeysService } =
+          await import("../../../services/CustomKeysService.js");
+        const value = await getCustomKeysService().getKeyByName(keyName);
+        if (value) customKeys[keyName] = value;
+      }
+
+      await params.onResumingAfterPermission?.();
+    } else if (askKeys.length > 0 && !params.requestKeyPermission) {
+      throw new Error(
+        `Job "${job.name}" needs permission for: ${askKeys.join(", ")}. ` +
+          `Run from chat or use an app with permission prompts. Or change keys to "Always allow" in Settings → API Keys.`,
+      );
+    }
+
+    // 4. Substitute ${KEY_NAME} with actual values
+    let result = command;
+    if (command.includes("${")) {
+      for (const [name, value] of Object.entries(customKeys)) {
+        if (value && value.length > 0) {
+          const regex = new RegExp(`\\$\\{${this.escapeRegex(name)}\\}`, "g");
+          result = result.replace(regex, value);
+        }
+      }
+    }
+    return { command: result };
+  }
+
+  /**
+   * Escape special regex characters for safe regex creation.
+   */
+  private escapeRegex(str: string): string {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  /**
    * Ensure a Python venv exists and requirements are installed.
    * Creates the venv only once; subsequent runs reuse it.
    * Installs from requirements.txt if present and changed.
@@ -59,7 +186,11 @@ export class CommandJobExecutor implements IJobExecutor {
   private async ensurePythonVenv(params: ExecutorLaunchParams): Promise<void> {
     const venvDir = path.join(params.jobDir, ".venv");
     const requirementsFile = path.join(params.jobDir, "requirements.txt");
-    const installedMarker = path.join(params.jobDir, ".venv", ".requirements-installed");
+    const installedMarker = path.join(
+      params.jobDir,
+      ".venv",
+      ".requirements-installed",
+    );
 
     // Create venv if it doesn't exist
     if (!existsSync(venvDir)) {
@@ -81,7 +212,9 @@ export class CommandJobExecutor implements IJobExecutor {
     // Install requirements if requirements.txt exists and hasn't been installed yet
     // (or if the file changed since last install)
     if (existsSync(requirementsFile)) {
-      const needsInstall = !existsSync(installedMarker) || this.requirementsChanged(requirementsFile, installedMarker);
+      const needsInstall =
+        !existsSync(installedMarker) ||
+        this.requirementsChanged(requirementsFile, installedMarker);
 
       if (needsInstall) {
         await params.appendLog("Installing Python requirements...");
@@ -106,7 +239,8 @@ export class CommandJobExecutor implements IJobExecutor {
 
           await params.appendLog("Requirements installed successfully.");
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           await params.appendLog(`pip install failed: ${message}`);
           // Don't throw — let the job try to run and fail naturally
         }
@@ -119,7 +253,10 @@ export class CommandJobExecutor implements IJobExecutor {
   /**
    * Check if requirements.txt has changed since last install.
    */
-  private requirementsChanged(requirementsFile: string, markerFile: string): boolean {
+  private requirementsChanged(
+    requirementsFile: string,
+    markerFile: string,
+  ): boolean {
     try {
       const { readFileSync } = require("fs") as typeof import("fs");
       const current = readFileSync(requirementsFile, "utf8");

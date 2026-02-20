@@ -15,6 +15,7 @@ import type { AIModel } from "../../constants/models";
 import { mapHistoryMessages } from "../../utils/historyMapper";
 import { fetchChatHistory } from "../../utils/chatHistoryApi";
 import { gateway } from "../../src/lib/gateway";
+import { JobPermissionBanner } from "./JobPermissionBanner";
 import "./ChatContainer.css";
 
 const DEFAULT_SYSTEM_PROMPT = `You're Papr, an AI assistant running in Paprwork—a native Mac AI workspace.
@@ -77,8 +78,10 @@ function findMergedArtifact(chatId: string): ArtifactContext | null {
 
   const toArtifact = (tab: Tab | undefined): ArtifactContext | null => {
     if (!tab) return null;
-    if (tab.type === "document") return { type: "document", id: tab.entityId, title: tab.title };
-    if (tab.type === "app") return { type: "app", id: tab.entityId, title: tab.title };
+    if (tab.type === "document")
+      return { type: "document", id: tab.entityId, title: tab.title };
+    if (tab.type === "app")
+      return { type: "app", id: tab.entityId, title: tab.title };
     return null;
   };
 
@@ -126,21 +129,23 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
     const chatState = state.chatStates.get(chatId);
     return chatState?.isSending || false;
   });
-  
+
   // Log after getting messages (not inside the selector)
   useEffect(() => {
     const chatState = useChatStore.getState().chatStates.get(chatId);
-    console.log(`[ChatContainer] Rendering chatId=${chatId}, hasChatState=${!!chatState}, messageCount=${chatState?.messages?.length || 0}`);
+    console.log(
+      `[ChatContainer] Rendering chatId=${chatId}, hasChatState=${!!chatState}, messageCount=${chatState?.messages?.length || 0}`,
+    );
   }, [chatId, messages.length]);
 
   const error = useChatStore((state) => state.error);
-  
+
   const { sendMessage } = useAgent();
   const inputBarRef = useRef<InputBarRef>(null);
-  
+
   // Model selection state - default to Claude Sonnet 4.5
   const [selectedModel, setSelectedModel] = useState<AIModel>(
-    CHAT_MODELS.find((m) => m.id === "claude-sonnet-4-6") || CHAT_MODELS[0]
+    CHAT_MODELS.find((m) => m.id === "claude-sonnet-4-6") || CHAT_MODELS[0],
   );
 
   // Focus input when this chat's container mounts
@@ -179,7 +184,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
         const mapped = mapHistoryMessages(history);
 
         useChatStore.setState((state) => {
-          const current = state.chatStates.get(chatId) || { ...defaultChatState };
+          const current = state.chatStates.get(chatId) || {
+            ...defaultChatState,
+          };
           const next = new Map(state.chatStates);
           next.set(chatId, {
             ...current,
@@ -190,11 +197,16 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
         });
       } catch (error) {
         if (!cancelled) {
-          console.error(`[ChatContainer] Failed to hydrate chat ${chatId}:`, error);
+          console.error(
+            `[ChatContainer] Failed to hydrate chat ${chatId}:`,
+            error,
+          );
         }
       } finally {
         useChatStore.setState((state) => {
-          const current = state.chatStates.get(chatId) || { ...defaultChatState };
+          const current = state.chatStates.get(chatId) || {
+            ...defaultChatState,
+          };
           const next = new Map(state.chatStates);
           next.set(chatId, {
             ...current,
@@ -284,28 +296,32 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
     [chatId],
   );
 
-  const handleSendMessage = useCallback(async (message: string) => {
-    const mergedArtifact = findMergedArtifact(chatId);
+  const handleSendMessage = useCallback(
+    async (message: string) => {
+      const mergedArtifact = findMergedArtifact(chatId);
 
-    const idKey = mergedArtifact?.type === "document" ? "documentId" : "appId";
-    const mergedContext = mergedArtifact
-      ? `\n\n## Active Context\nThe user has merged this chat with a ${mergedArtifact.type} titled "${mergedArtifact.title}" (${idKey}: "${mergedArtifact.id}"). They are viewing and working on this ${mergedArtifact.type} alongside this conversation. Reference it directly when relevant.`
-      : "";
+      const idKey =
+        mergedArtifact?.type === "document" ? "documentId" : "appId";
+      const mergedContext = mergedArtifact
+        ? `\n\n## Active Context\nThe user has merged this chat with a ${mergedArtifact.type} titled "${mergedArtifact.title}" (${idKey}: "${mergedArtifact.id}"). They are viewing and working on this ${mergedArtifact.type} alongside this conversation. Reference it directly when relevant.`
+        : "";
 
-    // Create config WITHOUT apiKey - Gateway will fetch it via IPC
-    // This keeps keys secure and never sends them over WebSocket
-    const config = {
-      provider: selectedModel.provider,
-      model: selectedModel.id,
-      systemPrompt: DEFAULT_SYSTEM_PROMPT + mergedContext,
-      reasoning: selectedModel.reasoning,
-      thinkingBudget: selectedModel.defaultThinkingBudget,
-      maxTokens: selectedModel.maxTokens, // Output token limit
-    };
+      // Create config WITHOUT apiKey - Gateway will fetch it via IPC
+      // This keeps keys secure and never sends them over WebSocket
+      const config = {
+        provider: selectedModel.provider,
+        model: selectedModel.id,
+        systemPrompt: DEFAULT_SYSTEM_PROMPT + mergedContext,
+        reasoning: selectedModel.reasoning,
+        thinkingBudget: selectedModel.defaultThinkingBudget,
+        maxTokens: selectedModel.maxTokens, // Output token limit
+      };
 
-    // Send message for THIS chat (not activeChat)
-    await sendMessage(message, config, chatId);
-  }, [selectedModel, sendMessage, chatId]);
+      // Send message for THIS chat (not activeChat)
+      await sendMessage(message, config, chatId);
+    },
+    [selectedModel, sendMessage, chatId],
+  );
 
   const handleStopAgent = useCallback(async () => {
     try {
@@ -313,6 +329,11 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
       console.log(`[ChatContainer] Stopped agent for chat ${chatId}`);
     } catch (error) {
       console.error("[ChatContainer] Failed to stop agent:", error);
+    } finally {
+      // Optimistically reset UI immediately so Stop icon returns to Send
+      useChatStore.getState().setSending(chatId, false);
+      useChatStore.getState().setChatStreaming(chatId, false);
+      useTabStore.getState().setTabStreaming(`chat-${chatId}`, false);
     }
   }, [chatId]);
 
@@ -337,7 +358,13 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
         </div>
       )}
 
-      <MessageList messages={messages} isLoading={chatIsLoading} isSending={isSending} />
+      <JobPermissionBanner />
+
+      <MessageList
+        messages={messages}
+        isLoading={chatIsLoading}
+        isSending={isSending}
+      />
 
       <InputBar
         ref={inputBarRef}

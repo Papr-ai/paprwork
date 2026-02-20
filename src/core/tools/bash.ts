@@ -30,7 +30,7 @@ const BashInputSchema = z.object({
   cwd: z
     .string()
     .optional()
-    .describe('Working directory (optional, defaults to current directory)'),
+    .describe("Working directory (optional, defaults to current directory)"),
   timeout: z
     .number()
     .optional()
@@ -38,7 +38,9 @@ const BashInputSchema = z.object({
   env: z
     .record(z.string())
     .optional()
-    .describe("Environment variables (optional, defaults to system environment)"),
+    .describe(
+      "Environment variables (optional, defaults to system environment)",
+    ),
 });
 
 export type BashInput = z.infer<typeof BashInputSchema>;
@@ -59,7 +61,7 @@ export async function executeBashCommand(
   input: BashInput,
 ): Promise<ToolResult<BashOutput>> {
   const startTime = Date.now();
-  
+
   // Apply defaults for optional parameters
   let { command } = input;
   const cwd = input.cwd || "";
@@ -79,29 +81,53 @@ export async function executeBashCommand(
     // Get API keys for sanitization and substitution
     const apiKeys = getApiKeysForSanitization();
 
-    // Build custom keys map from environment
+    // Build custom keys map from environment AND CustomKeysStorage
     const customKeys: Record<string, string> = {};
+
+    // 1. Add keys from environment
     for (const key of apiKeys) {
       const keyName = Object.keys(process.env).find(
-        (k) => process.env[k] === key
+        (k) => process.env[k] === key,
       );
       if (keyName) {
         customKeys[keyName] = key;
       }
     }
 
+    // 2. Add keys from CustomKeysStorage (user-configured keys)
+    try {
+      const { getCustomKeysService } =
+        await import("../../gateway/services/CustomKeysService.js");
+      const service = getCustomKeysService();
+      const storedKeys = await service.listKeys();
+
+      // Fetch values for all stored keys
+      for (const keyMeta of storedKeys) {
+        const value = await service.getKeyByName(keyMeta.name);
+        if (value) {
+          customKeys[keyMeta.name] = value;
+          // Add to apiKeys array for sanitization
+          if (!apiKeys.includes(value)) {
+            apiKeys.push(value);
+          }
+        }
+      }
+    } catch (error) {
+      console.warn("[Bash Tool] Failed to load custom keys:", error);
+      // Continue without custom keys - env vars still work
+    }
+
     // Check if command uses any keys - if so, request permission
     const usesKeys = Object.keys(customKeys).some((keyName) =>
-      command.includes(`\${${keyName}}`)
+      command.includes(`\${${keyName}}`),
     );
 
     if (usesKeys) {
       try {
         // Use permission-aware substitution
         // The global permission requester is set by Gateway
-        const { requestKeyPermission } = await import(
-          "../../gateway/permissions/PermissionRequester.js"
-        );
+        const { requestKeyPermission } =
+          await import("../../gateway/permissions/PermissionRequester.js");
 
         command = await substituteCustomKeysWithPermission(
           command,
@@ -114,7 +140,7 @@ export async function executeBashCommand(
               isEnvKey: process.env[keyName] !== undefined,
               toolContext: context,
             });
-          }
+          },
         );
       } catch (error) {
         // Permission denied or error requesting permission
@@ -142,8 +168,12 @@ export async function executeBashCommand(
     const duration = Date.now() - startTime;
 
     // Sanitize output before returning
-    const sanitizedStdout = truncateResult(sanitizeError(stdout || "", apiKeys));
-    const sanitizedStderr = truncateResult(sanitizeError(stderr || "", apiKeys));
+    const sanitizedStdout = truncateResult(
+      sanitizeError(stdout || "", apiKeys),
+    );
+    const sanitizedStderr = truncateResult(
+      sanitizeError(stderr || "", apiKeys),
+    );
 
     return {
       success: true,
@@ -173,15 +203,19 @@ export async function executeBashCommand(
       if (execError.killed || execError.signal === "SIGTERM") {
         const sanitizedError = sanitizeError(
           `Command timed out after ${timeout}ms`,
-          apiKeys
+          apiKeys,
         );
         return {
           success: false,
           error: sanitizedError,
           type: "timeout_error",
           data: {
-            stdout: truncateResult(sanitizeError(execError.stdout || "", apiKeys)),
-            stderr: truncateResult(sanitizeError(execError.stderr || "", apiKeys)),
+            stdout: truncateResult(
+              sanitizeError(execError.stdout || "", apiKeys),
+            ),
+            stderr: truncateResult(
+              sanitizeError(execError.stderr || "", apiKeys),
+            ),
             exitCode: execError.code || -1,
             command: sanitizeError(input.command, apiKeys),
             duration,
@@ -192,15 +226,19 @@ export async function executeBashCommand(
       // Non-zero exit code
       const sanitizedError = sanitizeError(
         `Command failed with exit code ${execError.code}`,
-        apiKeys
+        apiKeys,
       );
       return {
         success: false,
         error: sanitizedError,
         type: "execution_error",
         data: {
-          stdout: truncateResult(sanitizeError(execError.stdout || "", apiKeys)),
-          stderr: truncateResult(sanitizeError(execError.stderr || "", apiKeys)),
+          stdout: truncateResult(
+            sanitizeError(execError.stdout || "", apiKeys),
+          ),
+          stderr: truncateResult(
+            sanitizeError(execError.stderr || "", apiKeys),
+          ),
           exitCode: execError.code || 1,
           command: sanitizeError(input.command, apiKeys),
           duration,
@@ -228,7 +266,7 @@ export async function executeBashCommandStreaming(
   onData: (type: "stdout" | "stderr", data: string) => void,
 ): Promise<ToolResult<BashOutput>> {
   const startTime = Date.now();
-  
+
   // Apply defaults for optional parameters
   let command = input.command;
   const cwd = input.cwd || "";
@@ -237,27 +275,53 @@ export async function executeBashCommandStreaming(
 
   // Get API keys for sanitization and substitution
   const apiKeys = getApiKeysForSanitization();
-  
-  // Build custom keys map
+
+  // Build custom keys map from environment AND CustomKeysStorage
   const customKeys: Record<string, string> = {};
+
+  // 1. Add keys from environment
   for (const key of apiKeys) {
-    const keyName = Object.keys(process.env).find((k) => process.env[k] === key);
+    const keyName = Object.keys(process.env).find(
+      (k) => process.env[k] === key,
+    );
     if (keyName) {
       customKeys[keyName] = key;
     }
   }
 
+  // 2. Add keys from CustomKeysStorage (user-configured keys)
+  try {
+    const { getCustomKeysService } =
+      await import("../../gateway/services/CustomKeysService.js");
+    const service = getCustomKeysService();
+    const storedKeys = await service.listKeys();
+
+    // Fetch values for all stored keys
+    for (const keyMeta of storedKeys) {
+      const value = await service.getKeyByName(keyMeta.name);
+      if (value) {
+        customKeys[keyMeta.name] = value;
+        // Add to apiKeys array for sanitization
+        if (!apiKeys.includes(value)) {
+          apiKeys.push(value);
+        }
+      }
+    }
+  } catch (error) {
+    console.warn("[Bash Tool Streaming] Failed to load custom keys:", error);
+    // Continue without custom keys - env vars still work
+  }
+
   // Check if command uses any keys - if so, request permission
   const usesKeys = Object.keys(customKeys).some((keyName) =>
-    command.includes(`\${${keyName}}`)
+    command.includes(`\${${keyName}}`),
   );
 
   if (usesKeys) {
     try {
       // Use permission-aware substitution
-      const { requestKeyPermission } = await import(
-        "../../gateway/permissions/PermissionRequester.js"
-      );
+      const { requestKeyPermission } =
+        await import("../../gateway/permissions/PermissionRequester.js");
 
       command = await substituteCustomKeysWithPermission(
         command,
@@ -270,7 +334,7 @@ export async function executeBashCommandStreaming(
             isEnvKey: process.env[keyName] !== undefined,
             toolContext: context,
           });
-        }
+        },
       );
     } catch (error) {
       // Permission denied - return error immediately
@@ -317,8 +381,12 @@ export async function executeBashCommandStreaming(
       const exitCode = code ?? -1;
 
       // Sanitize and truncate final output
-      const sanitizedStdout = truncateResult(sanitizeError(stdoutData, apiKeys));
-      const sanitizedStderr = truncateResult(sanitizeError(stderrData, apiKeys));
+      const sanitizedStdout = truncateResult(
+        sanitizeError(stdoutData, apiKeys),
+      );
+      const sanitizedStderr = truncateResult(
+        sanitizeError(stderrData, apiKeys),
+      );
       const sanitizedCommand = sanitizeError(input.command, apiKeys);
 
       if (exitCode === 0) {
@@ -337,7 +405,7 @@ export async function executeBashCommandStreaming(
           success: false,
           error: sanitizeError(
             `Command failed with exit code ${exitCode}`,
-            apiKeys
+            apiKeys,
           ),
           type: "execution_error",
           data: {
@@ -354,8 +422,12 @@ export async function executeBashCommandStreaming(
     // Handle errors
     proc.on("error", (error: Error) => {
       const duration = Date.now() - startTime;
-      const sanitizedStdout = truncateResult(sanitizeError(stdoutData, apiKeys));
-      const sanitizedStderr = truncateResult(sanitizeError(stderrData, apiKeys));
+      const sanitizedStdout = truncateResult(
+        sanitizeError(stdoutData, apiKeys),
+      );
+      const sanitizedStderr = truncateResult(
+        sanitizeError(stderrData, apiKeys),
+      );
       const sanitizedCommand = sanitizeError(input.command, apiKeys);
       const sanitizedError = sanitizeError(error.message, apiKeys);
 

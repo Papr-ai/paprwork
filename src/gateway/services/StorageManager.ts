@@ -1,25 +1,30 @@
 /**
  * Storage Manager
- * 
+ *
  * Manages storage provider initialization and provides unified interface
  * for chat persistence. Handles switching between Local/PAPR/Hybrid modes.
  */
 
-import type { IStorageProvider, StoredMessage, StoredSummary, ChatMetadata } from './storage/IStorageProvider.js';
-import { LocalStorageProvider } from './storage/LocalStorageProvider.js';
-import { PaprMemoryProvider } from './storage/PaprMemoryProvider.js';
-import { HybridStorageProvider } from './storage/HybridStorageProvider.js';
-import * as path from 'path';
-import * as os from 'os';
+import type {
+  IStorageProvider,
+  StoredMessage,
+  StoredSummary,
+  ChatMetadata,
+} from "./storage/IStorageProvider.js";
+import { LocalStorageProvider } from "./storage/LocalStorageProvider.js";
+import { PaprMemoryProvider } from "./storage/PaprMemoryProvider.js";
+import { HybridStorageProvider } from "./storage/HybridStorageProvider.js";
+import * as path from "path";
+import * as os from "os";
 
-export type StorageMode = 'local' | 'papr' | 'hybrid';
+export type StorageMode = "local" | "papr" | "hybrid";
 
 export interface StorageConfig {
   mode: StorageMode;
-  
+
   // Local storage config
-  userDataPath?: string;  // Path for SQLite database
-  
+  userDataPath?: string; // Path for SQLite database
+
   // PAPR config
   paprApiKey?: string;
 }
@@ -38,28 +43,28 @@ export class StorageManager {
 
     // Create appropriate provider based on mode
     switch (config.mode) {
-      case 'local':
+      case "local":
         this.provider = new LocalStorageProvider(
-          config.userDataPath || this.getDefaultUserDataPath()
+          config.userDataPath || this.getDefaultUserDataPath(),
         );
         break;
 
-      case 'papr':
+      case "papr":
         if (!config.paprApiKey) {
-          throw new Error('PAPR API key required for PAPR mode');
+          throw new Error("PAPR API key required for PAPR mode");
         }
         this.provider = new PaprMemoryProvider({
           apiKey: config.paprApiKey,
         });
         break;
 
-      case 'hybrid':
+      case "hybrid":
         if (!config.paprApiKey) {
-          throw new Error('PAPR API key required for Hybrid mode');
+          throw new Error("PAPR API key required for Hybrid mode");
         }
         this.provider = new HybridStorageProvider(
           config.userDataPath || this.getDefaultUserDataPath(),
-          { apiKey: config.paprApiKey }
+          { apiKey: config.paprApiKey },
         );
         break;
 
@@ -78,7 +83,7 @@ export class StorageManager {
   private getDefaultUserDataPath(): string {
     // In Electron, this would be app.getPath('userData')
     // For now, use a sensible default
-    return path.join(os.homedir(), '.paprwork-v2');
+    return path.join(os.homedir(), ".paprwork-v2");
   }
 
   /**
@@ -86,7 +91,9 @@ export class StorageManager {
    */
   private ensureInitialized(): IStorageProvider {
     if (!this.provider) {
-      throw new Error('StorageManager not initialized. Call initialize() first.');
+      throw new Error(
+        "StorageManager not initialized. Call initialize() first.",
+      );
     }
     return this.provider;
   }
@@ -104,7 +111,11 @@ export class StorageManager {
   /**
    * Load all messages for a chat
    */
-  async loadMessages(chatId: string, limit?: number, skip?: number): Promise<StoredMessage[]> {
+  async loadMessages(
+    chatId: string,
+    limit?: number,
+    skip?: number,
+  ): Promise<StoredMessage[]> {
     const provider = this.ensureInitialized();
     return await provider.loadMessages(chatId, limit, skip);
   }
@@ -131,7 +142,10 @@ export class StorageManager {
   /**
    * Update chat metadata (title, etc.)
    */
-  async updateChat(chatId: string, updates: Partial<{ title: string }>): Promise<void> {
+  async updateChat(
+    chatId: string,
+    updates: Partial<{ title: string }>,
+  ): Promise<void> {
     const provider = this.ensureInitialized();
     await provider.updateChat(chatId, updates);
   }
@@ -157,15 +171,15 @@ export class StorageManager {
    */
   async getChat(chatId: string): Promise<ChatMetadata | null> {
     const provider = this.ensureInitialized();
-    
+
     // LocalStorageProvider has getChat, others don't
-    if ('getChat' in provider && typeof provider.getChat === 'function') {
+    if ("getChat" in provider && typeof provider.getChat === "function") {
       return await (provider as any).getChat(chatId);
     }
-    
+
     // Fallback: list all and find
     const chats = await provider.listChats();
-    return chats.find(chat => chat.id === chatId) || null;
+    return chats.find((chat) => chat.id === chatId) || null;
   }
 
   /**
@@ -211,10 +225,13 @@ export class StorageManager {
   /**
    * Mark a message as successfully synced to PAPR
    */
-  async markMessageSynced(messageId: string, paprObjectId: string): Promise<void> {
+  async markMessageSynced(
+    messageId: string,
+    paprObjectId: string,
+  ): Promise<void> {
     const provider = this.ensureInitialized();
-    
-    if ('markMessageSynced' in provider) {
+
+    if ("markMessageSynced" in provider) {
       await (provider as any).markMessageSynced(messageId, paprObjectId);
     }
   }
@@ -224,8 +241,8 @@ export class StorageManager {
    */
   async markSyncFailed(messageId: string, error: string): Promise<void> {
     const provider = this.ensureInitialized();
-    
-    if ('markSyncFailed' in provider) {
+
+    if ("markSyncFailed" in provider) {
       await (provider as any).markSyncFailed(messageId, error);
     }
   }
@@ -235,11 +252,11 @@ export class StorageManager {
    */
   async getUnsyncedMessages(chatId: string): Promise<StoredMessage[]> {
     const provider = this.ensureInitialized();
-    
-    if ('getUnsyncedMessages' in provider) {
+
+    if ("getUnsyncedMessages" in provider) {
       return await (provider as any).getUnsyncedMessages(chatId);
     }
-    
+
     return [];
   }
 
@@ -270,7 +287,9 @@ export class StorageManager {
    * Switch storage mode (requires re-initialization)
    */
   async switchMode(newConfig: StorageConfig): Promise<void> {
-    console.log(`Switching storage mode from ${this.currentMode} to ${newConfig.mode}`);
+    console.log(
+      `Switching storage mode from ${this.currentMode} to ${newConfig.mode}`,
+    );
     await this.initialize(newConfig);
   }
 }

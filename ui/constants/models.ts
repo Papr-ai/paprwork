@@ -72,7 +72,8 @@ export const CHAT_MODELS: AIModel[] = [
     id: "gpt-5-mini",
     name: "GPT-5 Mini",
     provider: "openai",
-    description: "Fast, efficient model for simple tasks and high-volume operations",
+    description:
+      "Fast, efficient model for simple tasks and high-volume operations",
     group: "OpenAI",
     supportsThinking: false,
     maxTokens: 16384,
@@ -138,7 +139,8 @@ export const CHAT_MODELS: AIModel[] = [
   {
     id: "gemini-2.5-flash-lite",
     name: "Gemini 2.5 Flash Lite",
-    description: "Fastest flash model optimized for cost-efficiency and high throughput",
+    description:
+      "Fastest flash model optimized for cost-efficiency and high throughput",
     provider: "google",
     group: "Google",
     supportsThinking: true,
@@ -149,7 +151,8 @@ export const CHAT_MODELS: AIModel[] = [
   {
     id: "gemini-2.5-flash",
     name: "Gemini 2.5 Flash",
-    description: "Best price-performance, large scale processing and low-latency",
+    description:
+      "Best price-performance, large scale processing and low-latency",
     provider: "google",
     group: "Google",
     supportsThinking: true,
@@ -160,7 +163,8 @@ export const CHAT_MODELS: AIModel[] = [
   {
     id: "gemini-3-flash-preview",
     name: "Gemini 3 Flash",
-    description: "Balanced model built for speed, scale, and frontier intelligence",
+    description:
+      "Balanced model built for speed, scale, and frontier intelligence",
     provider: "google",
     group: "Google",
     supportsThinking: true,

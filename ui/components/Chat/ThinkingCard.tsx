@@ -38,11 +38,11 @@ export const ThinkingCard: React.FC<ThinkingCardProps> = ({
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const wasStreamingRef = useRef(isStreaming);
-  
+
   // Pick a random phrase when the component mounts (stable across re-renders)
   const thinkingPhrase = useMemo(
     () => THINKING_PHRASES[Math.floor(Math.random() * THINKING_PHRASES.length)],
-    [] // Empty deps - only pick once when component first renders
+    [], // Empty deps - only pick once when component first renders
   );
 
   // Auto-collapse when streaming finishes
@@ -61,21 +61,26 @@ export const ThinkingCard: React.FC<ThinkingCardProps> = ({
 
   return (
     <div className="thinking-card">
-      <div className="thinking-card-header" onClick={() => isCollapsible && setIsCollapsed(!isCollapsed)}>
+      <div
+        className="thinking-card-header"
+        onClick={() => isCollapsible && setIsCollapsed(!isCollapsed)}
+      >
         {isCollapsible && (
-          <span className={`thinking-chevron ${isCollapsed ? "thinking-chevron-collapsed" : ""}`}>
+          <span
+            className={`thinking-chevron ${isCollapsed ? "thinking-chevron-collapsed" : ""}`}
+          >
             ▼
           </span>
         )}
         <span className="thinking-label-text">
-          {isStreaming ? thinkingPhrase : thinkingPhrase.replace('...', '')}
+          {isStreaming ? thinkingPhrase : thinkingPhrase.replace("...", "")}
         </span>
       </div>
-      <div 
+      <div
         className="thinking-card-content"
         style={{
-          maxHeight: isCollapsed ? '0px' : '200px',
-          opacity: isCollapsed ? '0' : '1',
+          maxHeight: isCollapsed ? "0px" : "200px",
+          opacity: isCollapsed ? "0" : "1",
         }}
       >
         {content}

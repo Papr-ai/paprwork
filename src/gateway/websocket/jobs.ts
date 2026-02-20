@@ -10,7 +10,10 @@ import {
   type JobSchedule,
   type JobType,
 } from "../services/JobsService.js";
-import { getApiKeysForSanitization, sanitizeError } from "../../core/tools/security.js";
+import {
+  getApiKeysForSanitization,
+  sanitizeError,
+} from "../../core/tools/security.js";
 
 interface CreateJobPayload {
   name: string;
@@ -85,7 +88,7 @@ export async function setupJobsHandlers(
       case "jobs:list": {
         const listPayload = message.payload as ListJobsPayload | undefined;
         const jobs = await jobsService.listJobs(
-          listPayload?.folder ?? listPayload?.appId
+          (listPayload?.folder ?? listPayload?.appId)
             ? { folder: listPayload?.folder, appId: listPayload?.appId }
             : undefined,
         );
@@ -158,13 +161,19 @@ export async function setupJobsHandlers(
       }
       case "jobs:delete": {
         const payload = message.payload as DeleteJobPayload;
-        const result = await jobsService.deleteJob(payload.jobId, payload.deleteFiles ?? false);
+        const result = await jobsService.deleteJob(
+          payload.jobId,
+          payload.deleteFiles ?? false,
+        );
         sendResponse(ws, { id: message.id, success: true, data: result });
         break;
       }
       case "jobs:logs": {
         const payload = message.payload as JobLogsPayload;
-        const rawLogs = await jobsService.getLogs(payload.jobId, payload.maxBytes);
+        const rawLogs = await jobsService.getLogs(
+          payload.jobId,
+          payload.maxBytes,
+        );
         const logs = sanitizeError(rawLogs, getApiKeysForSanitization());
         sendResponse(ws, {
           id: message.id,

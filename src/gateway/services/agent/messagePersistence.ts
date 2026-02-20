@@ -2,7 +2,9 @@ import { v4 as uuidv4 } from "uuid";
 import type { StoredMessage } from "../storage/IStorageProvider.js";
 import type { ToolCallEvent, ToolResultEvent } from "./streamChunks.js";
 
-export function formatToolResultForStorage(result: unknown): string | undefined {
+export function formatToolResultForStorage(
+  result: unknown,
+): string | undefined {
   if (result === undefined || result === null) {
     return undefined;
   }
@@ -23,7 +25,7 @@ export function createAssistantStoredMessage(args: {
   thinkingText: string;
   toolCalls: ToolCallEvent[];
   toolResults: ToolResultEvent[];
-  sequence?: Array<{ type: 'text' | 'tool' | 'thinking'; data: any }>; // V1-style sequence
+  sequence?: Array<{ type: "text" | "tool" | "thinking"; data: any }>; // V1-style sequence
 }): StoredMessage {
   return {
     id: `msg-${uuidv4()}`,

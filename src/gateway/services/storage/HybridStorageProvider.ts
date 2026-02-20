@@ -1,6 +1,6 @@
 /**
  * Hybrid Storage Provider
- * 
+ *
  * Combines LocalStorageProvider + PaprMemoryProvider for best of both worlds:
  * - Fast local cache for instant UI
  * - Cloud sync for backup and cross-device
@@ -12,9 +12,9 @@ import type {
   StoredMessage,
   StoredSummary,
   ChatMetadata,
-} from './IStorageProvider';
-import { LocalStorageProvider } from './LocalStorageProvider.js';
-import { PaprMemoryProvider, type PaprConfig } from './PaprMemoryProvider.js';
+} from "./IStorageProvider";
+import { LocalStorageProvider } from "./LocalStorageProvider.js";
+import { PaprMemoryProvider, type PaprConfig } from "./PaprMemoryProvider.js";
 
 export class HybridStorageProvider implements IStorageProvider {
   private local: LocalStorageProvider;
@@ -38,19 +38,22 @@ export class HybridStorageProvider implements IStorageProvider {
     // 1. ALWAYS save locally first (fast, reliable)
     await this.local.saveMessage(chatId, {
       ...message,
-      sync_status: 'sync_pending'
+      sync_status: "sync_pending",
     });
 
     // 2. Sync to PAPR in background (non-blocking)
     if (this.syncEnabled) {
-      this.syncMessageToPapr(chatId, message).catch(err => {
+      this.syncMessageToPapr(chatId, message).catch((err) => {
         console.error(`Failed to sync message ${message.id} to PAPR:`, err);
         this.local.markSyncFailed(message.id, err.message);
       });
     }
   }
 
-  private async syncMessageToPapr(chatId: string, message: StoredMessage): Promise<void> {
+  private async syncMessageToPapr(
+    chatId: string,
+    message: StoredMessage,
+  ): Promise<void> {
     try {
       // Save to PAPR
       await this.papr.saveMessage(chatId, message);
@@ -64,7 +67,11 @@ export class HybridStorageProvider implements IStorageProvider {
     }
   }
 
-  async loadMessages(chatId: string, limit?: number, skip?: number): Promise<StoredMessage[]> {
+  async loadMessages(
+    chatId: string,
+    limit?: number,
+    skip?: number,
+  ): Promise<StoredMessage[]> {
     // Try PAPR first if synced
     if (this.syncEnabled) {
       try {
@@ -73,7 +80,7 @@ export class HybridStorageProvider implements IStorageProvider {
           return paprMessages;
         }
       } catch (error) {
-        console.warn('Failed to load from PAPR, using local:', error);
+        console.warn("Failed to load from PAPR, using local:", error);
       }
     }
 
@@ -90,7 +97,7 @@ export class HybridStorageProvider implements IStorageProvider {
           return paprMessages;
         }
       } catch (error) {
-        console.warn('Failed to load from PAPR, using local:', error);
+        console.warn("Failed to load from PAPR, using local:", error);
       }
     }
 
@@ -118,7 +125,7 @@ export class HybridStorageProvider implements IStorageProvider {
 
       return null;
     } catch (error) {
-      console.error('PAPR compress failed, using local fallback:', error);
+      console.error("PAPR compress failed, using local fallback:", error);
 
       // 3. Fallback to local LLM generation (if implemented)
       return this.local.fetchAndCacheSummary(chatId);
@@ -135,7 +142,8 @@ export class HybridStorageProvider implements IStorageProvider {
         ? Date.now() - new Date(cached.last_fetched_at).getTime()
         : Infinity;
 
-      if (cacheAge < 60 * 60 * 1000) { // 1 hour
+      if (cacheAge < 60 * 60 * 1000) {
+        // 1 hour
         return cached;
       }
     }
@@ -147,7 +155,7 @@ export class HybridStorageProvider implements IStorageProvider {
   async saveSummary(chatId: string, summary: StoredSummary): Promise<void> {
     // Save to local cache
     await this.local.saveSummary(chatId, summary);
-    
+
     // PAPR generates summaries automatically, no manual save needed
   }
 
@@ -160,7 +168,10 @@ export class HybridStorageProvider implements IStorageProvider {
     // PAPR creates chat automatically on first message
   }
 
-  async updateChat(chatId: string, updates: Partial<{ title: string }>): Promise<void> {
+  async updateChat(
+    chatId: string,
+    updates: Partial<{ title: string }>,
+  ): Promise<void> {
     // Update locally
     await this.local.updateChat(chatId, updates);
 
@@ -169,7 +180,7 @@ export class HybridStorageProvider implements IStorageProvider {
       try {
         await this.papr.updateChat(chatId, updates);
       } catch (error) {
-        console.error('Failed to sync chat update to PAPR:', error);
+        console.error("Failed to sync chat update to PAPR:", error);
       }
     }
   }
@@ -188,7 +199,10 @@ export class HybridStorageProvider implements IStorageProvider {
 
   // ===== Sync Operations =====
 
-  async markMessageSynced(messageId: string, paprObjectId: string): Promise<void> {
+  async markMessageSynced(
+    messageId: string,
+    paprObjectId: string,
+  ): Promise<void> {
     await this.local.markMessageSynced(messageId, paprObjectId);
   }
 

@@ -18,10 +18,10 @@ export interface ChatMessage extends CoreMessage {
   id: string;
   isStreaming?: boolean;
   streamingContent?: string;
-  
+
   // V1-style sequence for interleaving text and tool calls
   sequence?: Array<{
-    type: 'text' | 'tool' | 'thinking';
+    type: "text" | "tool" | "thinking";
     data: string | Record<string, any>;
   }>;
 }

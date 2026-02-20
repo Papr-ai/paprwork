@@ -10,12 +10,15 @@ const appFileSchema = z.object({
 const createAppSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
-  icon: z.string().optional().describe(
-    "SVG string or emoji for the app logo. Shown in tabs and favorites. " +
-    "Use an inline SVG (e.g. '<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" width=\"14\" height=\"14\">...</svg>') " +
-    "or a single emoji (e.g. '📊'). Alternatively, add a <link rel=\"icon\" href=\"data:image/svg+xml,...\"> tag " +
-    "in your index.html — it will be auto-extracted as the icon."
-  ),
+  icon: z
+    .string()
+    .optional()
+    .describe(
+      "SVG string or emoji for the app logo. Shown in tabs and favorites. " +
+        'Use an inline SVG (e.g. \'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14">...</svg>\') ' +
+        'or a single emoji (e.g. \'📊\'). Alternatively, add a <link rel="icon" href="data:image/svg+xml,..."> tag ' +
+        "in your index.html — it will be auto-extracted as the icon.",
+    ),
   files: z.array(appFileSchema).optional(),
   html: z.string().optional(),
   css: z.string().optional(),
@@ -47,15 +50,29 @@ const scheduleSchema = z.object({
 
 const createJobSchema = z.object({
   name: z.string().min(1),
-  type: z.enum(["shell", "bash", "node", "python", "swift", "agent", "subagent"]),
-  folder: z.string().optional().describe(
-    "Folder label to group related jobs (e.g. 'ingestion', 'processing', 'reporting'). " +
-    "Use list_job_folders first to see existing groups. Same name = same folder.",
-  ),
+  type: z.enum([
+    "shell",
+    "bash",
+    "node",
+    "python",
+    "swift",
+    "agent",
+    "subagent",
+  ]),
+  folder: z
+    .string()
+    .optional()
+    .describe(
+      "Folder label to group related jobs (e.g. 'ingestion', 'processing', 'reporting'). " +
+        "Use list_job_folders first to see existing groups. Same name = same folder.",
+    ),
   command: z.string().optional(),
-  requirements: z.array(z.string().min(1)).optional().describe(
-    "Python/Node packages to install before running. Creates a venv automatically. Example: ['anthropic', 'requests', 'sqlite-utils']"
-  ),
+  requirements: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      "Python/Node packages to install before running. Creates a venv automatically. Example: ['anthropic', 'requests', 'sqlite-utils']",
+    ),
   dependsOn: z.array(dependencySchema).optional(),
   retries: retrySchema.optional(),
   deliver: deliverySchema.optional(),
@@ -114,9 +131,18 @@ async function loadLiquidGlassBase(): Promise<string> {
   const thisDir = pathMod.default.dirname(thisFile);
 
   const candidates = [
-    pathMod.default.resolve(thisDir, "../../resources/app-templates/liquid-glass-base.css"),
-    pathMod.default.resolve(thisDir, "../../../src/resources/app-templates/liquid-glass-base.css"),
-    pathMod.default.resolve(process.cwd(), "src/resources/app-templates/liquid-glass-base.css"),
+    pathMod.default.resolve(
+      thisDir,
+      "../../resources/app-templates/liquid-glass-base.css",
+    ),
+    pathMod.default.resolve(
+      thisDir,
+      "../../../src/resources/app-templates/liquid-glass-base.css",
+    ),
+    pathMod.default.resolve(
+      process.cwd(),
+      "src/resources/app-templates/liquid-glass-base.css",
+    ),
   ];
 
   for (const candidate of candidates) {
@@ -147,14 +173,20 @@ body { font-family: var(--font-sans); font-size: var(--text-md); color: var(--te
 `;
 }
 
-function resolveAppFiles(args: CreateAppArgs): Array<{ filename: string; content: string }> {
+function resolveAppFiles(
+  args: CreateAppArgs,
+): Array<{ filename: string; content: string }> {
   if (args.files && args.files.length > 0) {
     return args.files;
   }
 
-  const html = args.html ?? '<!doctype html>\n<html>\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <div id="app"></div>\n  <script type="module" src="app.ts"></script>\n</body>\n</html>';
+  const html =
+    args.html ??
+    '<!doctype html>\n<html>\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <div id="app"></div>\n  <script type="module" src="app.ts"></script>\n</body>\n</html>';
   const css = args.css ?? null; // Will be resolved async in the tool execute
-  const javascript = args.javascript ?? "const app = document.getElementById('app');\nif (app) {\n  app.textContent = 'App initialized';\n}\n";
+  const javascript =
+    args.javascript ??
+    "const app = document.getElementById('app');\nif (app) {\n  app.textContent = 'App initialized';\n}\n";
 
   const files = [
     { filename: "index.html", content: html },
@@ -170,18 +202,20 @@ function resolveAppFiles(args: CreateAppArgs): Array<{ filename: string; content
 
 export const createAppTool = createTool({
   id: "create_app",
-  description: "Create a mini-app artifact with one or more files. Uses TypeScript (.ts) and Liquid Glass design system by default.",
+  description:
+    "Create a mini-app artifact with one or more files. Uses TypeScript (.ts) and Liquid Glass design system by default.",
   inputSchema: createAppSchema,
   execute: async (input) => {
     const args = (input as { context?: CreateAppArgs }).context ?? input;
-    const { getAppService } = await import("../../gateway/services/AppService.js");
+    const { getAppService } =
+      await import("../../gateway/services/AppService.js");
     const appService = getAppService();
     await appService.initialize();
 
     const files = resolveAppFiles(args);
 
     // Auto-inject Liquid Glass base CSS if no style.css was provided
-    const hasStylesheet = files.some(f => f.filename === "style.css");
+    const hasStylesheet = files.some((f) => f.filename === "style.css");
     if (!hasStylesheet) {
       const baseCss = await loadLiquidGlassBase();
       files.push({ filename: "style.css", content: baseCss });
@@ -199,11 +233,13 @@ export const createAppTool = createTool({
 
 export const createJobTool = createTool({
   id: "create_job",
-  description: "Create a job with optional DAG dependencies, retries, and delivery",
+  description:
+    "Create a job with optional DAG dependencies, retries, and delivery",
   inputSchema: createJobSchema,
   execute: async (input) => {
     const args = (input as { context?: CreateJobArgs }).context ?? input;
-    const { getJobsService } = await import("../../gateway/services/JobsService.js");
+    const { getJobsService } =
+      await import("../../gateway/services/JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
     const job = await jobsService.createJob({
@@ -253,7 +289,8 @@ export const runJobTool = createTool({
   inputSchema: runJobSchema,
   execute: async (input) => {
     const args = (input as { context?: RunJobArgs }).context ?? input;
-    const { getJobsService } = await import("../../gateway/services/JobsService.js");
+    const { getJobsService } =
+      await import("../../gateway/services/JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
     const job = await jobsService.runJob(args.jobId);
@@ -263,11 +300,19 @@ export const runJobTool = createTool({
       apiKeys,
     );
     const dbPath = await jobsService.getJobDatabasePath(args.jobId);
+
+    // Return special format for UI to render JobStatusCard
     return {
       success: true,
       data: {
-        job,
-        logs,
+        type: "job_status", // Special type for UI detection
+        jobId: job.id,
+        jobName: job.name,
+        runId: job.lastExecutionId || "latest",
+        status: job.status,
+        startedAt: job.lastRunAt || new Date().toISOString(),
+        logs: logs.split("\n").slice(-10), // Last 10 lines
+        job, // Full job data for debugging
         dbPath,
       },
     };
@@ -280,7 +325,8 @@ export const readJobLogsTool = createTool({
   inputSchema: readJobLogsSchema,
   execute: async (input) => {
     const args = (input as { context?: ReadJobLogsArgs }).context ?? input;
-    const { getJobsService } = await import("../../gateway/services/JobsService.js");
+    const { getJobsService } =
+      await import("../../gateway/services/JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
     const job = await jobsService.getJob(args.jobId);
@@ -309,10 +355,10 @@ export const linkAppDataSourceTool = createTool({
   execute: async (input) => {
     const args =
       (input as { context?: LinkAppDataSourceArgs }).context ?? input;
-    const { getAppService } = await import("../../gateway/services/AppService.js");
-    const { getJobsService } = await import(
-      "../../gateway/services/JobsService.js"
-    );
+    const { getAppService } =
+      await import("../../gateway/services/AppService.js");
+    const { getJobsService } =
+      await import("../../gateway/services/JobsService.js");
     const appService = getAppService();
     const jobsService = getJobsService();
     await appService.initialize();
@@ -360,7 +406,8 @@ export const readAppDataSourcesTool = createTool({
   execute: async (input) => {
     const args =
       (input as { context?: ReadAppDataSourcesArgs }).context ?? input;
-    const { getAppService } = await import("../../gateway/services/AppService.js");
+    const { getAppService } =
+      await import("../../gateway/services/AppService.js");
     const appService = getAppService();
     await appService.initialize();
     const app = await appService.getApp(args.appId);
@@ -382,14 +429,42 @@ export const readAppDataSourcesTool = createTool({
 
 const readAppFileSchema = z.object({
   appId: z.string().min(1).describe("App UUID"),
-  filename: z.string().min(1).describe("Filename to read (e.g. index.html, style.css, app.js)"),
+  filename: z
+    .string()
+    .min(1)
+    .describe("Filename to read (e.g. index.html, style.css, app.js)"),
 });
 
 const editAppFileSchema = z.object({
   appId: z.string().min(1).describe("App UUID"),
   filename: z.string().min(1).describe("Filename to edit"),
   oldString: z.string().min(1).describe("Exact string to find in the file"),
-  newString: z.string().describe("Replacement string (use empty string to delete)"),
+  newString: z
+    .string()
+    .describe("Replacement string (use empty string to delete)"),
+});
+
+const editAppFileLinesSchema = z.object({
+  appId: z.string().min(1).describe("App UUID"),
+  filename: z
+    .string()
+    .min(1)
+    .describe("Filename to edit (e.g. index.html, style.css, app.js)"),
+  startLine: z
+    .number()
+    .int()
+    .min(1)
+    .describe("Starting line number (1-indexed, inclusive)"),
+  endLine: z
+    .number()
+    .int()
+    .min(1)
+    .describe("Ending line number (1-indexed, inclusive)"),
+  newContent: z
+    .string()
+    .describe(
+      "New content to replace lines startLine through endLine. Use empty string to delete the lines.",
+    ),
 });
 
 const listAppFilesSchema = z.object({
@@ -397,45 +472,108 @@ const listAppFilesSchema = z.object({
 });
 
 const listAppsSchema = z.object({
-  includeCompleted: z.boolean().optional().describe("Include completed/archived apps (default: false)"),
+  includeCompleted: z
+    .boolean()
+    .optional()
+    .describe("Include completed/archived apps (default: false)"),
 });
 
 const updateJobSchema = z.object({
-  jobId: z.string().min(1).describe("ID of the job to update (get it from list_jobs)"),
+  jobId: z
+    .string()
+    .min(1)
+    .describe("ID of the job to update (get it from list_jobs)"),
   name: z.string().min(1).optional().describe("New display name for the job"),
-  folder: z.string().optional().describe("Assign or change the job's folder group (e.g. 'ingestion'). Use set_job_folder for a dedicated tool."),
-  command: z.string().optional().describe("New command to run (e.g. 'python3 selector.py')"),
-  requirements: z.array(z.string().min(1)).optional().describe(
-    "Updated Python/Node packages. Rewrites requirements.txt immediately. Pass [] to clear.",
-  ),
-  dependsOn: z.array(dependencySchema).optional().describe("Replace the full dependency list"),
+  folder: z
+    .string()
+    .optional()
+    .describe(
+      "Assign or change the job's folder group (e.g. 'ingestion'). Use set_job_folder for a dedicated tool.",
+    ),
+  command: z
+    .string()
+    .optional()
+    .describe("New command to run (e.g. 'python3 selector.py')"),
+  requirements: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      "Updated Python/Node packages. Rewrites requirements.txt immediately. Pass [] to clear.",
+    ),
+  dependsOn: z
+    .array(dependencySchema)
+    .optional()
+    .describe("Replace the full dependency list"),
   retries: retrySchema.optional().describe("Update retry policy"),
-  retentionDays: z.number().int().min(1).max(365).optional().describe("How many days to keep job data"),
+  retentionDays: z
+    .number()
+    .int()
+    .min(1)
+    .max(365)
+    .optional()
+    .describe("How many days to keep job data"),
   schedule: scheduleSchema.optional().describe("Update or set a schedule"),
-  outputMode: z.enum(["natural", "structured"]).optional().describe("Change output mode"),
-  outputSchema: z.record(z.string(), z.unknown()).optional().describe("Update structured output schema"),
-  maxTurns: z.number().int().min(1).max(100).optional().describe("Update max turns for agent jobs"),
-  memoryPolicy: z.enum(["none", "summary", "full"]).optional().describe("Update memory policy for agent jobs"),
-  reportChatId: z.string().min(1).optional().describe("Update which chat receives job results"),
+  outputMode: z
+    .enum(["natural", "structured"])
+    .optional()
+    .describe("Change output mode"),
+  outputSchema: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe("Update structured output schema"),
+  maxTurns: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("Update max turns for agent jobs"),
+  memoryPolicy: z
+    .enum(["none", "summary", "full"])
+    .optional()
+    .describe("Update memory policy for agent jobs"),
+  reportChatId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Update which chat receives job results"),
 });
 
 const deleteJobSchema = z.object({
   jobId: z.string().min(1).describe("ID of the job to delete"),
-  deleteFiles: z.boolean().optional().describe(
-    "Also delete the job's directory (scripts, logs, database). Default: false — keeps files on disk but removes the job from the index.",
-  ),
+  deleteFiles: z
+    .boolean()
+    .optional()
+    .describe(
+      "Also delete the job's directory (scripts, logs, database). Default: false — keeps files on disk but removes the job from the index.",
+    ),
 });
 
 const listJobsSchema = z.object({
-  status: z.enum(["pending", "running", "completed", "failed", "cancelled"]).optional()
+  status: z
+    .enum(["pending", "running", "completed", "failed", "cancelled"])
+    .optional()
     .describe("Filter by status. Omit to return all jobs."),
-  type: z.enum(["shell", "bash", "node", "python", "swift", "agent", "subagent"]).optional()
+  type: z
+    .enum(["shell", "bash", "node", "python", "swift", "agent", "subagent"])
+    .optional()
     .describe("Filter by runtime type."),
-  folder: z.string().optional()
-    .describe("Filter to jobs in this folder (e.g. 'ingestion'). Use list_job_folders to see available folders."),
-  appId: z.string().optional()
+  folder: z
+    .string()
+    .optional()
+    .describe(
+      "Filter to jobs in this folder (e.g. 'ingestion'). Use list_job_folders to see available folders.",
+    ),
+  appId: z
+    .string()
+    .optional()
     .describe("Filter to jobs linked to this app ID via data-sources."),
-  limit: z.number().int().min(1).max(200).optional()
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(200)
+    .optional()
     .describe("Max jobs to return (default: 50, newest first)."),
 });
 
@@ -445,18 +583,36 @@ const listJobFilesSchema = z.object({
 
 const readJobFileSchema = z.object({
   jobId: z.string().min(1).describe("Job UUID"),
-  filename: z.string().min(1).describe("Filename relative to the job directory (e.g. selector.py, requirements.txt)"),
+  filename: z
+    .string()
+    .min(1)
+    .describe(
+      "Filename relative to the job directory (e.g. selector.py, requirements.txt)",
+    ),
 });
 
 const editJobFileSchema = z.object({
   jobId: z.string().min(1).describe("Job UUID"),
-  filename: z.string().min(1).describe("Filename to edit (relative to job directory)"),
-  oldString: z.string().min(1).describe("Exact string to find and replace. Must match character-for-character including whitespace."),
-  newString: z.string().describe("Replacement string. Use empty string to delete the matched section."),
+  filename: z
+    .string()
+    .min(1)
+    .describe("Filename to edit (relative to job directory)"),
+  oldString: z
+    .string()
+    .min(1)
+    .describe(
+      "Exact string to find and replace. Must match character-for-character including whitespace.",
+    ),
+  newString: z
+    .string()
+    .describe(
+      "Replacement string. Use empty string to delete the matched section.",
+    ),
 });
 
 type ReadAppFileArgs = z.infer<typeof readAppFileSchema>;
 type EditAppFileArgs = z.infer<typeof editAppFileSchema>;
+type EditAppFileLinesArgs = z.infer<typeof editAppFileLinesSchema>;
 type ListAppFilesArgs = z.infer<typeof listAppFilesSchema>;
 
 export const readAppFileTool = createTool({
@@ -465,7 +621,8 @@ export const readAppFileTool = createTool({
   inputSchema: readAppFileSchema,
   execute: async (input) => {
     const args = (input as { context?: ReadAppFileArgs }).context ?? input;
-    const { getAppService } = await import("../../gateway/services/AppService.js");
+    const { getAppService } =
+      await import("../../gateway/services/AppService.js");
     const appService = getAppService();
     await appService.initialize();
     const content = await appService.readAppFile(args.appId, args.filename);
@@ -478,11 +635,13 @@ export const readAppFileTool = createTool({
 
 export const editAppFileTool = createTool({
   id: "edit_app_file",
-  description: "Edit a mini-app file by replacing an exact string occurrence with a new string",
+  description:
+    "Edit a mini-app file by replacing an exact string occurrence with a new string",
   inputSchema: editAppFileSchema,
   execute: async (input) => {
     const args = (input as { context?: EditAppFileArgs }).context ?? input;
-    const { getAppService } = await import("../../gateway/services/AppService.js");
+    const { getAppService } =
+      await import("../../gateway/services/AppService.js");
     const appService = getAppService();
     await appService.initialize();
 
@@ -503,13 +662,104 @@ export const editAppFileTool = createTool({
   },
 });
 
+export const editAppFileLinesTool = createTool({
+  id: "edit_app_file_lines",
+  description: `Edit a mini-app file by replacing a range of lines with new content.
+This is more reliable than edit_app_file for code changes because:
+- Line numbers are unambiguous (no string matching issues)
+- You can read the file first to see exact line numbers
+- Works even with special characters, escape sequences, etc.
+
+Workflow:
+1. read_app_file to see the content with line numbers
+2. edit_app_file_lines to replace specific line range
+3. Verify with read_app_file or webview_snapshot
+
+Example: Replace lines 168-215 in index.html with new HTML structure`,
+  inputSchema: editAppFileLinesSchema,
+  execute: async (input) => {
+    const args =
+      (input as { context?: EditAppFileLinesArgs }).context ?? input;
+    const { getAppService } =
+      await import("../../gateway/services/AppService.js");
+    const appService = getAppService();
+    await appService.initialize();
+
+    const content = await appService.readAppFile(args.appId, args.filename);
+    if (content === null) {
+      throw new Error(`File not found: ${args.filename} in app ${args.appId}`);
+    }
+
+    const lines = content.split("\n");
+    const totalLines = lines.length;
+
+    // Validate line numbers
+    if (args.startLine < 1) {
+      throw new Error(
+        `Invalid startLine: ${args.startLine}. Line numbers start at 1.`,
+      );
+    }
+    if (args.endLine < args.startLine) {
+      throw new Error(
+        `Invalid range: startLine ${args.startLine} > endLine ${args.endLine}`,
+      );
+    }
+    if (args.startLine > totalLines) {
+      throw new Error(
+        `startLine ${args.startLine} exceeds file length (${totalLines} lines). Use read_app_file to see current content.`,
+      );
+    }
+    if (args.endLine > totalLines) {
+      throw new Error(
+        `endLine ${args.endLine} exceeds file length (${totalLines} lines). File has ${totalLines} lines.`,
+      );
+    }
+
+    // Convert to 0-indexed for array operations
+    const startIdx = args.startLine - 1;
+    const endIdx = args.endLine; // endLine is inclusive, so this is the line after the last one to replace
+
+    // Build new content
+    const before = lines.slice(0, startIdx);
+    const after = lines.slice(endIdx);
+    const newLines = args.newContent ? args.newContent.split("\n") : [];
+
+    const newContent = [...before, ...newLines, ...after].join("\n");
+
+    await appService.writeAppFile(args.appId, args.filename, newContent);
+
+    const newTotalLines = newContent.split("\n").length;
+    const linesRemoved = args.endLine - args.startLine + 1;
+    const linesAdded = newLines.length;
+    const netChange = linesAdded - linesRemoved;
+
+    return {
+      success: true,
+      data: {
+        filename: args.filename,
+        updated: true,
+        originalLines: totalLines,
+        newLines: newTotalLines,
+        linesRemoved,
+        linesAdded,
+        netChange,
+        tip:
+          netChange !== 0
+            ? `File now has ${newTotalLines} lines (${netChange > 0 ? "+" : ""}${netChange}). Line numbers after ${args.startLine} have shifted.`
+            : `File still has ${newTotalLines} lines. Line numbers unchanged.`,
+      },
+    };
+  },
+});
+
 export const listAppFilesTool = createTool({
   id: "list_app_files",
   description: "List all files in a mini-app",
   inputSchema: listAppFilesSchema,
   execute: async (input) => {
     const args = (input as { context?: ListAppFilesArgs }).context ?? input;
-    const { getAppService } = await import("../../gateway/services/AppService.js");
+    const { getAppService } =
+      await import("../../gateway/services/AppService.js");
     const appService = getAppService();
     await appService.initialize();
     const app = await appService.getApp(args.appId);
@@ -540,7 +790,8 @@ export const listAppsTool = createTool({
     "List all mini-apps. **ALWAYS call this BEFORE creating a new app** to check if a similar app already exists that you can update instead.",
   inputSchema: listAppsSchema,
   execute: async () => {
-    const { getAppService } = await import("../../gateway/services/AppService.js");
+    const { getAppService } =
+      await import("../../gateway/services/AppService.js");
     const appService = getAppService();
     await appService.initialize();
     const apps = await appService.listApps();
@@ -585,7 +836,8 @@ Common use cases:
   execute: async (input) => {
     const args = (input as { context?: UpdateJobArgs }).context ?? input;
     const { jobId, dependsOn, retries, schedule, folder, ...rest } = args;
-    const { getJobsService } = await import("../../gateway/services/JobsService.js");
+    const { getJobsService } =
+      await import("../../gateway/services/JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
     const job = await jobsService.updateJob(jobId, {
@@ -632,10 +884,14 @@ Does NOT affect other jobs that depend on this job; update or recreate those sep
   inputSchema: deleteJobSchema,
   execute: async (input) => {
     const args = (input as { context?: DeleteJobArgs }).context ?? input;
-    const { getJobsService } = await import("../../gateway/services/JobsService.js");
+    const { getJobsService } =
+      await import("../../gateway/services/JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
-    const result = await jobsService.deleteJob(args.jobId, args.deleteFiles ?? false);
+    const result = await jobsService.deleteJob(
+      args.jobId,
+      args.deleteFiles ?? false,
+    );
     return {
       success: true,
       data: {
@@ -651,16 +907,23 @@ Does NOT affect other jobs that depend on this job; update or recreate those sep
 async function getJobDir(jobId: string): Promise<string> {
   const osModule = await import("os");
   const pathModule = await import("path");
-  return pathModule.default.join(osModule.default.homedir(), "PAPR", "jobs", jobId);
+  return pathModule.default.join(
+    osModule.default.homedir(),
+    "PAPR",
+    "jobs",
+    jobId,
+  );
 }
 
 export const listJobFilesTool = createTool({
   id: "list_job_files",
-  description: "List all files in a job's directory — scripts, logs, requirements.txt, etc. Use this before read_job_file or edit_job_file to confirm filenames.",
+  description:
+    "List all files in a job's directory — scripts, logs, requirements.txt, etc. Use this before read_job_file or edit_job_file to confirm filenames.",
   inputSchema: listJobFilesSchema,
   execute: async (input) => {
     const args = (input as { context?: ListJobFilesArgs }).context ?? input;
-    const { getJobsService } = await import("../../gateway/services/JobsService.js");
+    const { getJobsService } =
+      await import("../../gateway/services/JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
 
@@ -682,7 +945,10 @@ export const listJobFilesTool = createTool({
         for (const item of items) {
           const rel = base ? `${base}/${item.name}` : item.name;
           if (item.isDirectory()) {
-            const sub = await walk(pathModule.default.join(dir, item.name), rel);
+            const sub = await walk(
+              pathModule.default.join(dir, item.name),
+              rel,
+            );
             entries = entries.concat(sub);
           } else {
             entries.push(rel);
@@ -695,7 +961,9 @@ export const listJobFilesTool = createTool({
     };
 
     const files = await walk(jobDir, "");
-    console.log(`[list_job_files] Found ${files.length} file(s) for job ${args.jobId}`);
+    console.log(
+      `[list_job_files] Found ${files.length} file(s) for job ${args.jobId}`,
+    );
 
     return {
       success: true,
@@ -712,11 +980,13 @@ export const listJobFilesTool = createTool({
 
 export const readJobFileTool = createTool({
   id: "read_job_file",
-  description: "Read a source file from a job's directory (e.g. the Python/Node script). Use list_job_files first to confirm the filename.",
+  description:
+    "Read a source file from a job's directory (e.g. the Python/Node script). Use list_job_files first to confirm the filename.",
   inputSchema: readJobFileSchema,
   execute: async (input) => {
     const args = (input as { context?: ReadJobFileArgs }).context ?? input;
-    const { getJobsService } = await import("../../gateway/services/JobsService.js");
+    const { getJobsService } =
+      await import("../../gateway/services/JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
 
@@ -733,7 +1003,10 @@ export const readJobFileTool = createTool({
     // Safety: ensure the resolved path stays inside the job directory
     const resolvedPath = pathModule.default.resolve(filePath);
     const resolvedDir = pathModule.default.resolve(jobDir);
-    if (!resolvedPath.startsWith(resolvedDir + pathModule.default.sep) && resolvedPath !== resolvedDir) {
+    if (
+      !resolvedPath.startsWith(resolvedDir + pathModule.default.sep) &&
+      resolvedPath !== resolvedDir
+    ) {
       throw new Error(`Path traversal rejected: ${args.filename}`);
     }
 
@@ -745,12 +1018,16 @@ export const readJobFileTool = createTool({
     } catch (err) {
       const e = err as NodeJS.ErrnoException;
       if (e.code === "ENOENT") {
-        throw new Error(`File not found: ${args.filename} in job ${args.jobId}. Call list_job_files to see what exists.`);
+        throw new Error(
+          `File not found: ${args.filename} in job ${args.jobId}. Call list_job_files to see what exists.`,
+        );
       }
       throw err;
     }
 
-    console.log(`[read_job_file] Read ${content.length} chars from ${args.filename}`);
+    console.log(
+      `[read_job_file] Read ${content.length} chars from ${args.filename}`,
+    );
     return {
       success: true,
       data: {
@@ -773,7 +1050,8 @@ After editing, run_job to test the changes, then read_job_logs to verify.`,
   inputSchema: editJobFileSchema,
   execute: async (input) => {
     const args = (input as { context?: EditJobFileArgs }).context ?? input;
-    const { getJobsService } = await import("../../gateway/services/JobsService.js");
+    const { getJobsService } =
+      await import("../../gateway/services/JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
 
@@ -782,7 +1060,9 @@ After editing, run_job to test the changes, then read_job_logs to verify.`,
       throw new Error(`Job not found: ${args.jobId}`);
     }
     if (job.status === "running") {
-      throw new Error(`Job ${args.jobId} is currently running. Wait for it to finish before editing its files.`);
+      throw new Error(
+        `Job ${args.jobId} is currently running. Wait for it to finish before editing its files.`,
+      );
     }
 
     const { promises: fsPromises } = await import("fs");
@@ -793,7 +1073,10 @@ After editing, run_job to test the changes, then read_job_logs to verify.`,
     // Safety: path traversal guard
     const resolvedPath = pathModule.default.resolve(filePath);
     const resolvedDir = pathModule.default.resolve(jobDir);
-    if (!resolvedPath.startsWith(resolvedDir + pathModule.default.sep) && resolvedPath !== resolvedDir) {
+    if (
+      !resolvedPath.startsWith(resolvedDir + pathModule.default.sep) &&
+      resolvedPath !== resolvedDir
+    ) {
       throw new Error(`Path traversal rejected: ${args.filename}`);
     }
 
@@ -805,28 +1088,36 @@ After editing, run_job to test the changes, then read_job_logs to verify.`,
     } catch (err) {
       const e = err as NodeJS.ErrnoException;
       if (e.code === "ENOENT") {
-        throw new Error(`File not found: ${args.filename} in job ${args.jobId}. Call list_job_files to see what exists.`);
+        throw new Error(
+          `File not found: ${args.filename} in job ${args.jobId}. Call list_job_files to see what exists.`,
+        );
       }
       throw err;
     }
 
     if (!content.includes(args.oldString)) {
-      console.error(`[edit_job_file] oldString not found in ${args.filename}. File length: ${content.length} chars.`);
+      console.error(
+        `[edit_job_file] oldString not found in ${args.filename}. File length: ${content.length} chars.`,
+      );
       throw new Error(
         `String not found in ${args.filename}. The oldString must match exactly including whitespace and indentation. ` +
-        `Use read_job_file to get the current content first.`,
+          `Use read_job_file to get the current content first.`,
       );
     }
 
     const occurrences = content.split(args.oldString).length - 1;
     if (occurrences > 1) {
-      console.warn(`[edit_job_file] oldString appears ${occurrences} times in ${args.filename} — replacing first occurrence only`);
+      console.warn(
+        `[edit_job_file] oldString appears ${occurrences} times in ${args.filename} — replacing first occurrence only`,
+      );
     }
 
     const newContent = content.replace(args.oldString, args.newString);
     await fsPromises.writeFile(resolvedPath, newContent, "utf8");
 
-    console.log(`[edit_job_file] Successfully patched ${args.filename} (${occurrences} occurrence replaced)`);
+    console.log(
+      `[edit_job_file] Successfully patched ${args.filename} (${occurrences} occurrence replaced)`,
+    );
 
     return {
       success: true,
@@ -850,16 +1141,18 @@ Use this to:
 - Find a jobId to pass to run_job or read_job_logs
 - Understand the dependency graph of a pipeline
 - Check which jobs are running, failed, or completed
+- Detect jobs stuck in waiting_permission (need API key approval) — check waitingPermissionKeys
 Returns jobs sorted newest-first. Filter by status or type as needed.`,
   inputSchema: listJobsSchema,
   execute: async (input) => {
     const args = (input as { context?: ListJobsArgs }).context ?? input;
-    const { getJobsService } = await import("../../gateway/services/JobsService.js");
+    const { getJobsService } =
+      await import("../../gateway/services/JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
 
     let jobs = await jobsService.listJobs(
-      args.folder ?? args.appId
+      (args.folder ?? args.appId)
         ? { folder: args.folder, appId: args.appId }
         : undefined,
     );
@@ -876,13 +1169,19 @@ Returns jobs sorted newest-first. Filter by status or type as needed.`,
 
     const osModule = await import("os");
     const pathModule = await import("path");
-    const jobsRoot = pathModule.default.join(osModule.default.homedir(), "PAPR", "jobs");
+    const jobsRoot = pathModule.default.join(
+      osModule.default.homedir(),
+      "PAPR",
+      "jobs",
+    );
 
     const jobsSummary = jobs.map((j) => ({
       id: j.id,
       name: j.name,
       type: j.type,
       status: j.status,
+      waitingPermissionKeys:
+        j.status === "waiting_permission" ? j.waitingPermissionKeys : undefined,
       folder: j.folder,
       command: j.command,
       requirements: j.requirements?.length ? j.requirements : undefined,
@@ -896,9 +1195,10 @@ Returns jobs sorted newest-first. Filter by status or type as needed.`,
             atTime: j.schedule.atTime,
           }
         : undefined,
-      retries: j.retries?.maxAttempts && j.retries.maxAttempts > 1
-        ? j.retries
-        : undefined,
+      retries:
+        j.retries?.maxAttempts && j.retries.maxAttempts > 1
+          ? j.retries
+          : undefined,
       dir: pathModule.default.join(jobsRoot, j.id),
       createdAt: j.createdAt,
       updatedAt: j.updatedAt,
@@ -920,16 +1220,36 @@ Returns jobs sorted newest-first. Filter by status or type as needed.`,
 
 const exportAppBundleSchema = z.object({
   appId: z.string().min(1).describe("ID of the app to export"),
-  bundleId: z.string().optional().describe("Optional bundle ID (auto-generated if not provided)"),
+  bundleId: z
+    .string()
+    .optional()
+    .describe("Optional bundle ID (auto-generated if not provided)"),
   name: z.string().min(1).describe("Human-readable name for the app bundle"),
-  version: z.string().default("1.0.0").describe("Semantic version (e.g., 1.0.0)"),
-  description: z.string().optional().describe("Description of what this app bundle does"),
-  jobIds: z.array(z.string()).optional().describe("Job IDs to include (auto-detects linked jobs if omitted)"),
+  version: z
+    .string()
+    .default("1.0.0")
+    .describe("Semantic version (e.g., 1.0.0)"),
+  description: z
+    .string()
+    .optional()
+    .describe("Description of what this app bundle does"),
+  jobIds: z
+    .array(z.string())
+    .optional()
+    .describe("Job IDs to include (auto-detects linked jobs if omitted)"),
 });
 
 const importAppBundleSchema = z.object({
-  source: z.string().min(1).describe("Local path or GitHub URL (e.g., github.com/user/repo or ~/Downloads/app-bundle)"),
-  renameConflicts: z.boolean().default(true).describe("Auto-rename if app/job IDs already exist"),
+  source: z
+    .string()
+    .min(1)
+    .describe(
+      "Local path or GitHub URL (e.g., github.com/user/repo or ~/Downloads/app-bundle)",
+    ),
+  renameConflicts: z
+    .boolean()
+    .default(true)
+    .describe("Auto-rename if app/job IDs already exist"),
 });
 
 const getAppBundleInfoSchema = z.object({
@@ -958,15 +1278,17 @@ After export, you can push the app bundle folder to GitHub and share the URL.`,
     const startTime = performance.now();
 
     try {
-      const { getBundleService } = await import("../../gateway/services/BundleService.js");
-      const { getAppService } = await import("../../gateway/services/AppService.js");
+      const { getBundleService } =
+        await import("../../gateway/services/BundleService.js");
+      const { getAppService } =
+        await import("../../gateway/services/AppService.js");
       const bundleService = getBundleService();
       const appService = getAppService();
       await bundleService.initialize();
       await appService.initialize();
 
       const bundleId = args.bundleId || `bundle-${Date.now()}`;
-      
+
       let jobIds = args.jobIds || [];
       if (!jobIds.length) {
         const dataSources = await appService.listAppDataSources(args.appId);
@@ -1103,7 +1425,8 @@ If app/job IDs conflict with existing ones, auto-renames by default (e.g., app-1
     const startTime = performance.now();
 
     try {
-      const { getBundleService } = await import("../../gateway/services/BundleService.js");
+      const { getBundleService } =
+        await import("../../gateway/services/BundleService.js");
       const osModule = await import("os");
       const pathModule = await import("path");
       const fsModule = await import("fs/promises");
@@ -1136,13 +1459,15 @@ If app/job IDs conflict with existing ones, auto-renames by default (e.g., app-1
         const { exec } = await import("child_process");
         const { promisify } = await import("util");
         const execAsync = promisify(exec);
-        
+
         try {
           await execAsync(`git clone ${gitUrl} ${tempDir}`, {
             timeout: 60000,
           });
         } catch (error) {
-          throw new Error(`Failed to clone repository: ${(error as Error).message}`);
+          throw new Error(
+            `Failed to clone repository: ${(error as Error).message}`,
+          );
         }
 
         sourcePath = tempDir;
@@ -1152,11 +1477,14 @@ If app/job IDs conflict with existing ones, auto-renames by default (e.g., app-1
 
       const manifestPath = pathModule.default.join(sourcePath, "manifest.json");
       const manifestRaw = await fsModule.readFile(manifestPath, "utf8");
-      const { parseBundleManifest } = await import("../../core/types/bundles.js");
+      const { parseBundleManifest } =
+        await import("../../core/types/bundles.js");
       const manifest = parseBundleManifest(JSON.parse(manifestRaw));
 
-      const { getAppService } = await import("../../gateway/services/AppService.js");
-      const { getJobsService } = await import("../../gateway/services/JobsService.js");
+      const { getAppService } =
+        await import("../../gateway/services/AppService.js");
+      const { getJobsService } =
+        await import("../../gateway/services/JobsService.js");
       const appService = getAppService();
       const jobsService = getJobsService();
       await appService.initialize();
@@ -1178,7 +1506,7 @@ If app/job IDs conflict with existing ones, auto-renames by default (e.g., app-1
       if (conflicts.length > 0 && args.renameConflicts) {
         const warnings = conflicts.join(", ");
         const result = await bundleService.importBundle({ sourcePath });
-        
+
         return {
           success: true,
           data: {
@@ -1240,7 +1568,8 @@ Shows bundle ID, name, version, path, and creation date for each shareable app.`
     const startTime = performance.now();
 
     try {
-      const { getBundleService } = await import("../../gateway/services/BundleService.js");
+      const { getBundleService } =
+        await import("../../gateway/services/BundleService.js");
       const bundleService = getBundleService();
       await bundleService.initialize();
 
@@ -1299,7 +1628,8 @@ Use this to inspect an app bundle before deciding to import it.`,
 
       const manifestPath = pathModule.default.join(sourcePath, "manifest.json");
       const manifestRaw = await fsModule.readFile(manifestPath, "utf8");
-      const { parseBundleManifest } = await import("../../core/types/bundles.js");
+      const { parseBundleManifest } =
+        await import("../../core/types/bundles.js");
       const manifest = parseBundleManifest(JSON.parse(manifestRaw));
 
       return {
@@ -1361,6 +1691,7 @@ export const appJobsTools = [
   readAppDataSourcesTool,
   readAppFileTool,
   editAppFileTool,
+  editAppFileLinesTool,
   listAppFilesTool,
   listAppsTool,
   exportAppBundleTool,

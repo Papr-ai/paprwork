@@ -7,13 +7,22 @@ release/
 
 # Environment
 .env
-.env.local
+.env.*
+!.env.example
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
 
 # OS
 .DS_Store

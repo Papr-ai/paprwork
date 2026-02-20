@@ -92,6 +92,19 @@ export function useCustomKeys() {
     }
   };
 
+  /**
+   * Get key value by ID (for editing - shows masked, then reveal with eye)
+   */
+  const getKeyValue = async (keyId: string): Promise<string | null> => {
+    try {
+      if (!window.electronAPI?.customKeys?.get) return null;
+      return await window.electronAPI.customKeys.get(keyId);
+    } catch (err) {
+      console.error("[useCustomKeys] Get value error:", err);
+      return null;
+    }
+  };
+
   return {
     keys,
     loading,
@@ -100,5 +113,6 @@ export function useCustomKeys() {
     addKey,
     updateKey,
     deleteKey,
+    getKeyValue,
   };
 }

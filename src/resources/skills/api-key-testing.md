@@ -11,15 +11,34 @@ description: Test-first protocol for external API integration — always probe b
 
 ## Step 0: Check Available Keys FIRST
 
-Before requesting any API key, check what already exists:
+Before requesting any API key, **use the key management tools** to check what already exists:
 
-```bash
-# List custom keys the user has configured
-bash({ command: "env | grep -E 'KEY|TOKEN|SECRET' | sort" })
+```javascript
+// Check what custom keys are configured
+list_keys()
+// Returns: { keys: [{ name: "AMPLITUDE_API_KEY", permission: "always", ... }], count: 1 }
 ```
 
 **If key EXISTS** — proceed to testing.  
-**If key MISSING** — tell the user they need to add it in Settings > Custom API Keys. Provide the URL where they can find their key.
+**If key MISSING** — use `request_key` to show an inline input card:
+
+```javascript
+request_key({
+  name: "AMPLITUDE_API_KEY",
+  description: "Amplitude API key for event data export",
+  sourceUrl: "analytics.amplitude.com/settings/projects",
+  requiredScopes: ["read:events"],
+  permission: "always"
+})
+```
+
+This shows an **inline card in chat** where the user can:
+- Click the source URL to get their key
+- Enter the key value securely (password field)
+- Select permission level (always/ask)
+- Submit without leaving the conversation
+
+**Alternative (fallback):** Direct to Settings → API Keys → Custom API Keys if `request_key` fails.
 
 ---
 
@@ -93,6 +112,29 @@ Do NOT proceed until user confirms:
 
 Only after confirmation, create the job with `create_job` and the verified field names.
 
+**Use the right job type and key pattern:**
+- **Python job** (`type: "python"`) — For scripts with logic, API calls, data processing. Pass keys as CLI args in the command.
+- **Bash job** (`type: "bash"`) — For simple one-liners like `curl`, `git`, `jq`. Use `${KEY_NAME}` directly in the command.
+
+```javascript
+// ✅ Python job with API key — keys in COMMAND, not in Python source
+create_job({
+  name: "Amplitude Sync",
+  type: "python",
+  command: "python3 code/main.py --amplitude-key ${AMPLITUDE_API_KEY}",
+  requirements: ["requests"]
+})
+
+// ✅ Bash job — ${KEY} works in command directly
+create_job({
+  name: "Quick Export",
+  type: "bash",
+  command: "curl -H 'Authorization: Bearer ${STRIPE_KEY}' ... | jq '.'"
+})
+```
+
+**❌ CRITICAL: Do NOT put `${KEY_NAME}` in Python source code.** Substitution only happens in the command string at spawn time. In Python, use `argparse` and receive the value as a CLI argument.
+
 ---
 
 ## Red Flags (Stop and Ask)
@@ -118,18 +160,22 @@ Is there another field I should use?
 
 ## V2 Execution Pattern
 
-1. `bash` with `curl` for small probe calls (key substitution works automatically)
-2. `create_job` only after data shape is validated
-3. `run_job` to verify output and logs
-4. `link_app_data_source` only after verified outputs
+1. `list_keys` to check what keys exist; `request_key` if missing
+2. `bash` with `curl` for small probe calls (`${KEY_NAME}` substitution works automatically)
+3. `create_job` only after data shape is validated — use `type: "python"` for scripts with API keys, pass keys as CLI args
+4. `run_job` to verify output and logs
+5. `link_app_data_source` only after verified outputs
 
 ## Quick Checklist
 
-- [ ] Probe query succeeds with real data
+- [ ] `list_keys` called to check existing keys before testing
+- [ ] Probe query succeeds with real data (bash + curl with `${KEY_NAME}`)
 - [ ] Response shape confirmed with actual sample
 - [ ] Required fields mapped to SQLite columns
 - [ ] Pagination/rate-limit assumptions documented
 - [ ] User intent and metric definitions confirmed
+- [ ] Job created with correct type: `python` for scripts, `bash` for one-liners
+- [ ] Python jobs: keys passed as CLI args in command, NOT in source code
 - [ ] Only then: write the job code
 
 ---

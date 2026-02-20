@@ -109,17 +109,47 @@ export function ArtifactCard({
 
     return (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-        <rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
-        <rect x="14" y="3" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
-        <rect x="3" y="14" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
-        <rect x="14" y="14" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
+        <rect
+          x="3"
+          y="3"
+          width="7"
+          height="7"
+          rx="1"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+        <rect
+          x="14"
+          y="3"
+          width="7"
+          height="7"
+          rx="1"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+        <rect
+          x="3"
+          y="14"
+          width="7"
+          height="7"
+          rx="1"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+        <rect
+          x="14"
+          y="14"
+          width="7"
+          height="7"
+          rx="1"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
       </svg>
     );
   };
 
-  const previewLines = artifact.preview
-    ? artifact.preview.slice(0, 120)
-    : "";
+  const previewLines = artifact.preview ? artifact.preview.slice(0, 120) : "";
 
   return (
     <div

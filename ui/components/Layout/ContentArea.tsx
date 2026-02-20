@@ -14,6 +14,8 @@ import { MiniAppView } from "../Apps/MiniAppView";
 import { SkillsView } from "../Skills/SkillsView";
 import { AgentsView } from "../Agents/AgentsView";
 import { MeetingsView } from "../Meetings/MeetingsView";
+import { ViewsView } from "../Views/ViewsView";
+import { TableView } from "../Views/TableView";
 import "./ContentArea.css";
 
 export function ContentArea() {
@@ -56,25 +58,28 @@ export function ContentArea() {
   }
 
   // Handle split view resize with stable event handlers
-  const handleMouseMove = useCallback((moveEvent: MouseEvent) => {
-    if (!isDraggingRef.current) return;
-    
-    moveEvent.preventDefault();
-    const deltaX = moveEvent.clientX - startXRef.current;
-    const deltaRatio = deltaX / containerWidthRef.current;
-    const newRatio = startRatioRef.current + deltaRatio;
-    const clampedRatio = Math.max(0.2, Math.min(0.8, newRatio));
-    setSplitRatio(clampedRatio);
-  }, [setSplitRatio]);
+  const handleMouseMove = useCallback(
+    (moveEvent: MouseEvent) => {
+      if (!isDraggingRef.current) return;
+
+      moveEvent.preventDefault();
+      const deltaX = moveEvent.clientX - startXRef.current;
+      const deltaRatio = deltaX / containerWidthRef.current;
+      const newRatio = startRatioRef.current + deltaRatio;
+      const clampedRatio = Math.max(0.2, Math.min(0.8, newRatio));
+      setSplitRatio(clampedRatio);
+    },
+    [setSplitRatio],
+  );
 
   const handleMouseUp = useCallback(() => {
     if (!isDraggingRef.current) return;
-    
+
     isDraggingRef.current = false;
     document.body.style.cursor = "";
     document.body.style.userSelect = "";
     document.body.classList.remove("resizing");
-    
+
     // Remove iframe blocker overlay
     const overlay = document.getElementById("resize-overlay");
     if (overlay) {
@@ -86,7 +91,7 @@ export function ContentArea() {
   useEffect(() => {
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("mouseup", handleMouseUp);
-    
+
     return () => {
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
@@ -96,7 +101,7 @@ export function ContentArea() {
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
         document.body.classList.remove("resizing");
-        
+
         // Remove iframe blocker overlay if it exists
         const overlay = document.getElementById("resize-overlay");
         if (overlay) {
@@ -123,7 +128,7 @@ export function ContentArea() {
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
     document.body.classList.add("resizing");
-    
+
     // Create overlay to block iframe pointer events during resize
     // This prevents iframes from capturing mousemove/mouseup events
     const overlay = document.createElement("div");
@@ -154,6 +159,10 @@ export function ContentArea() {
         return <DocumentView documentId={tab.entityId} />;
       case "artifacts":
         return <ArtifactsView />;
+      case "views":
+        return <ViewsView />;
+      case "view":
+        return <TableView entityId={tab.entityId} />;
       case "app":
         return <MiniAppView appId={tab.entityId} />;
       case "home":

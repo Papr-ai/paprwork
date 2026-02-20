@@ -52,7 +52,12 @@ export class AppService {
     this.appsDir = path.join(this.paprRootDir, "apps");
     this.appsIndexPath = path.join(this.paprRootDir, "data", "apps.json");
     this.legacyAppsDir = path.join(homeDir, ".paprwork", "apps");
-    this.legacyAppsIndexPath = path.join(homeDir, ".paprwork", "data", "apps.json");
+    this.legacyAppsIndexPath = path.join(
+      homeDir,
+      ".paprwork",
+      "data",
+      "apps.json",
+    );
     this.apps = new Map();
     this.initialized = false;
   }
@@ -149,7 +154,10 @@ export class AppService {
       return null;
     }
 
-    if (!svgContent.trim().startsWith("<svg") || !svgContent.includes("</svg>")) {
+    if (
+      !svgContent.trim().startsWith("<svg") ||
+      !svgContent.includes("</svg>")
+    ) {
       return null;
     }
 
@@ -206,25 +214,27 @@ export class AppService {
           await fs.mkdir(dir, { recursive: true });
         }
         await fs.writeFile(filePath, file.content, { flush: true });
-      })
+      }),
     );
 
     // Verify critical file (index.html) exists and is readable
     // This ensures files are actually on disk before returning
-    const indexPath = path.join(appPath, 'index.html');
+    const indexPath = path.join(appPath, "index.html");
     try {
       await fs.access(indexPath, fs.constants.R_OK);
     } catch (error) {
       throw new Error(
         `Failed to create app: index.html not accessible after write. ` +
-        `This may indicate a filesystem sync issue.`
+          `This may indicate a filesystem sync issue.`,
       );
     }
 
     this.apps.set(app.id, app);
     await this.saveApps();
 
-    console.log(`[AppService] Created app: ${app.id} - ${title} (verified files on disk)`);
+    console.log(
+      `[AppService] Created app: ${app.id} - ${title} (verified files on disk)`,
+    );
     return app;
   }
 
@@ -334,7 +344,9 @@ export class AppService {
           type: "app:file-changed",
           data: { appId, filename, timestamp: Date.now() },
         });
-        console.log(`[AppService] Broadcasted file change: ${appId}/${filename}`);
+        console.log(
+          `[AppService] Broadcasted file change: ${appId}/${filename}`,
+        );
       })
       .catch((error) => {
         console.warn("[AppService] Failed to broadcast file change:", error);

@@ -130,7 +130,11 @@ export async function setupSkillHandlers(
         break;
       }
       default:
-        sendError(ws, message.id, `Unknown skill message type: ${message.type}`);
+        sendError(
+          ws,
+          message.id,
+          `Unknown skill message type: ${message.type}`,
+        );
     }
   } catch (error) {
     console.error("[Skill WebSocket] Error:", error);

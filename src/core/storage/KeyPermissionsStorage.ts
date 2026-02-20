@@ -1,9 +1,9 @@
 /**
  * Key Permissions Storage
- * 
+ *
  * Manages permission settings for environment API keys.
  * Determines if keys require user approval before use in tools.
- * 
+ *
  * Separate from CustomKeysStorage because:
  * - Custom keys have permission in their definition
  * - Environment keys need runtime permission tracking

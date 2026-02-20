@@ -11,11 +11,7 @@ import {
   BUNDLE_SCHEMA_VERSION,
   parseBundleManifest,
 } from "../../core/types/bundles.js";
-import {
-  AppService,
-  getAppService,
-  type MiniApp,
-} from "./AppService.js";
+import { AppService, getAppService, type MiniApp } from "./AppService.js";
 import {
   JobsService,
   getJobsService,
@@ -55,7 +51,13 @@ function mapJobTypeToRuntime(type: JobType): RuntimeType {
   if (type === "subagent") {
     return "agent";
   }
-  if (type === "bash" || type === "node" || type === "python" || type === "swift" || type === "agent") {
+  if (
+    type === "bash" ||
+    type === "node" ||
+    type === "python" ||
+    type === "swift" ||
+    type === "agent"
+  ) {
     return type;
   }
   return "bash";
@@ -65,7 +67,12 @@ function mapRuntimeToJobType(type: RuntimeType): JobType {
   if (type === "bash") {
     return "bash";
   }
-  if (type === "node" || type === "python" || type === "swift" || type === "agent") {
+  if (
+    type === "node" ||
+    type === "python" ||
+    type === "swift" ||
+    type === "agent"
+  ) {
     return type;
   }
   return "shell";
@@ -236,7 +243,9 @@ export class BundleService {
 
   async listBundles(): Promise<BundleSummary[]> {
     await this.initialize();
-    const entries = await fs.readdir(this.bundlesRootPath, { withFileTypes: true });
+    const entries = await fs.readdir(this.bundlesRootPath, {
+      withFileTypes: true,
+    });
     const summaries: BundleSummary[] = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) {
@@ -259,7 +268,8 @@ export class BundleService {
       }
     }
     return summaries.sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
     );
   }
 }

@@ -1,0 +1,149 @@
+/**
+ * Job Status Card - Compact (like PlanCard)
+ */
+
+.job-status-card--compact {
+  background: var(--glass-bg, rgba(0, 0, 0, 0.03));
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 8px 0;
+}
+
+.job-status-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  gap: 12px;
+}
+
+.job-status-card__header--no-expand {
+  cursor: default;
+}
+
+.job-status-card__header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.job-status-card__chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s;
+  transform: rotate(-90deg);
+  color: var(--text-secondary);
+}
+
+.job-status-card__chevron--expanded {
+  transform: rotate(0deg);
+}
+
+.job-status-card__icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.job-status-card__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.job-status-card__badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  text-transform: capitalize;
+}
+
+.job-status-card__badge--running {
+  background: rgba(0, 122, 255, 0.15);
+  color: var(--primary-color, #007aff);
+}
+
+.job-status-card__badge--waiting_permission {
+  background: rgba(245, 158, 11, 0.2);
+  color: #b45309;
+}
+
+.job-status-card__badge--completed {
+  background: rgba(52, 199, 89, 0.2);
+  color: #248a3d;
+}
+
+.job-status-card__badge--failed {
+  background: rgba(255, 59, 48, 0.15);
+  color: #d70015;
+}
+
+.job-status-card__body {
+  padding: 0 14px 10px;
+}
+
+.job-status-card__waiting-keys {
+  font-size: 12px;
+  color: #b45309;
+  padding: 8px 10px;
+  background: rgba(245, 158, 11, 0.12);
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+
+.job-status-card__logs {
+  font-size: 12px;
+}
+
+.job-status-card__logs-content {
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.job-status-card__log-line {
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 2px 0;
+}
+
+.job-status-card__logs-link {
+  margin-top: 6px;
+  background: none;
+  border: none;
+  color: var(--primary-color, #007aff);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0;
+}
+
+.job-status-card__logs-link:hover {
+  text-decoration: underline;
+}
+
+@media (prefers-color-scheme: dark) {
+  .job-status-card--compact {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .job-status-card__logs-content {
+    background: rgba(255, 255, 255, 0.05);
+  }
+}

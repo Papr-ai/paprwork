@@ -35,14 +35,14 @@ export const MessageList: React.FC<MessageListProps> = ({
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = listElement;
       const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
-      
+
       // If user scrolled more than 100px from bottom, disable auto-scroll
       // If they scroll back to within 100px of bottom, re-enable
       autoScrollEnabled.current = distanceFromBottom < 100;
     };
 
-    listElement.addEventListener('scroll', handleScroll);
-    return () => listElement.removeEventListener('scroll', handleScroll);
+    listElement.addEventListener("scroll", handleScroll);
+    return () => listElement.removeEventListener("scroll", handleScroll);
   }, []);
 
   // Auto-scroll to bottom on any content change (messages, streaming, tool calls)
@@ -52,7 +52,7 @@ export const MessageList: React.FC<MessageListProps> = ({
     if (!listElement || !autoScrollEnabled.current) return;
 
     const currentScrollHeight = listElement.scrollHeight;
-    
+
     // Only scroll if content actually grew (new tokens, tool calls, etc)
     if (currentScrollHeight !== lastScrollHeight.current) {
       listElement.scrollTop = currentScrollHeight;
@@ -67,8 +67,8 @@ export const MessageList: React.FC<MessageListProps> = ({
     if (!listElement || !autoScrollEnabled.current) return;
 
     // Check if any message is currently streaming
-    const hasStreamingMessage = messages.some(m => m.isStreaming);
-    
+    const hasStreamingMessage = messages.some((m) => m.isStreaming);
+
     if (hasStreamingMessage) {
       // Use requestAnimationFrame for smooth scroll during rapid updates
       const scrollToBottom = () => {
@@ -78,7 +78,7 @@ export const MessageList: React.FC<MessageListProps> = ({
           lastScrollHeight.current = currentScrollHeight;
         }
       };
-      
+
       const rafId = requestAnimationFrame(scrollToBottom);
       return () => cancelAnimationFrame(rafId);
     }
@@ -86,7 +86,10 @@ export const MessageList: React.FC<MessageListProps> = ({
 
   if (messages.length === 0 && !isLoading) {
     return (
-      <div className="message-list message-list-empty" data-testid="message-list">
+      <div
+        className="message-list message-list-empty"
+        data-testid="message-list"
+      >
         <WelcomeMessage />
       </div>
     );
@@ -129,7 +132,7 @@ export const MessageList: React.FC<MessageListProps> = ({
           </div>
         </div>
       )}
-      {isSending && !messages.some(m => m.isStreaming) && (
+      {isSending && !messages.some((m) => m.isStreaming) && (
         <div className="message-item">
           <div className="message-avatar-container">
             <div className="message-avatar-assistant">

@@ -20,7 +20,9 @@ function compactContent(input: MemoryWritebackInput): string {
   return input.content.slice(0, 1000);
 }
 
-export async function writeRunMemory(input: MemoryWritebackInput): Promise<void> {
+export async function writeRunMemory(
+  input: MemoryWritebackInput,
+): Promise<void> {
   if (input.policy === "none" || input.content.trim().length === 0) {
     return;
   }

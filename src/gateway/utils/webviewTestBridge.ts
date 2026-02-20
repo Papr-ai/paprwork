@@ -47,7 +47,9 @@ export async function requestWebviewTest(
   ipcProcess: IpcProcessLike = process,
 ): Promise<WebviewTestResponse> {
   if (!ipcProcess.send) {
-    throw new Error("Webview testing requires Gateway running as Electron child process");
+    throw new Error(
+      "Webview testing requires Gateway running as Electron child process",
+    );
   }
   initializeWebviewTestBridge(ipcProcess);
   const requestId = `webview-${Date.now()}-${++requestCounter}`;

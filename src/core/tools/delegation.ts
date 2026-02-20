@@ -52,9 +52,8 @@ export const listSubAgentsTool = createTool({
   // OpenAI function tools require parameters schema to always be an object.
   inputSchema: z.object({}),
   execute: async () => {
-    const { getSubAgentService } = await import(
-      "../../gateway/services/SubAgentService.js"
-    );
+    const { getSubAgentService } =
+      await import("../../gateway/services/SubAgentService.js");
     const service = getSubAgentService();
     const agents = await service.listAgents();
     return { success: true, data: { agents } };
@@ -63,21 +62,25 @@ export const listSubAgentsTool = createTool({
 
 export const createSubAgentTool = createTool({
   id: "create_sub_agent",
-  description: "Create or update a persistent sub-agent profile. If allowedToolIds not specified, defaults to ['bash', 'read_file', 'write_file'] for basic file and database access.",
+  description:
+    "Create or update a persistent sub-agent profile. If allowedToolIds not specified, defaults to ['bash', 'read_file', 'write_file'] for basic file and database access.",
   inputSchema: createSubAgentSchema,
   execute: async (input) => {
     const args = (input as { context?: CreateSubAgentArgs }).context ?? input;
-    const { getSubAgentService } = await import(
-      "../../gateway/services/SubAgentService.js"
-    );
+    const { getSubAgentService } =
+      await import("../../gateway/services/SubAgentService.js");
     const service = getSubAgentService();
-    
+
     // Apply default tools if not specified
     const argsWithDefaults = {
       ...args,
-      allowedToolIds: args.allowedToolIds || ["bash", "read_file", "write_file"],
+      allowedToolIds: args.allowedToolIds || [
+        "bash",
+        "read_file",
+        "write_file",
+      ],
     };
-    
+
     const agent = await service.createOrUpdateAgent(argsWithDefaults);
     return { success: true, data: agent };
   },
@@ -89,9 +92,8 @@ export const deleteSubAgentTool = createTool({
   inputSchema: deleteSubAgentSchema,
   execute: async (input) => {
     const args = (input as { context?: DeleteSubAgentArgs }).context ?? input;
-    const { getSubAgentService } = await import(
-      "../../gateway/services/SubAgentService.js"
-    );
+    const { getSubAgentService } =
+      await import("../../gateway/services/SubAgentService.js");
     const service = getSubAgentService();
     const deleted = await service.deleteAgent(args.agentId);
     return { success: true, data: { agentId: args.agentId, deleted } };
@@ -105,9 +107,8 @@ export const delegateTaskTool = createTool({
   inputSchema: delegateTaskSchema,
   execute: async (input) => {
     const args = (input as { context?: DelegateTaskArgs }).context ?? input;
-    const { getSubAgentService } = await import(
-      "../../gateway/services/SubAgentService.js"
-    );
+    const { getSubAgentService } =
+      await import("../../gateway/services/SubAgentService.js");
     const service = getSubAgentService();
     const run = await service.delegateTask(args);
     return { success: true, data: run };
@@ -120,9 +121,8 @@ export const getDelegationRunTool = createTool({
   inputSchema: getDelegationRunSchema,
   execute: async (input) => {
     const args = (input as { context?: GetDelegationRunArgs }).context ?? input;
-    const { getSubAgentService } = await import(
-      "../../gateway/services/SubAgentService.js"
-    );
+    const { getSubAgentService } =
+      await import("../../gateway/services/SubAgentService.js");
     const service = getSubAgentService();
     const run = await service.getRun(args.runId);
     if (!run) {
@@ -139,9 +139,8 @@ export const listDelegationRunsTool = createTool({
   execute: async (input) => {
     const args =
       (input as { context?: ListDelegationRunsArgs }).context ?? input;
-    const { getSubAgentService } = await import(
-      "../../gateway/services/SubAgentService.js"
-    );
+    const { getSubAgentService } =
+      await import("../../gateway/services/SubAgentService.js");
     const service = getSubAgentService();
     const runs = await service.listRuns(args.limit ?? 50);
     return { success: true, data: { runs } };

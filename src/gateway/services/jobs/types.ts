@@ -10,6 +10,7 @@ export type JobType =
 export type JobStatus =
   | "pending"
   | "running"
+  | "waiting_permission"
   | "completed"
   | "failed"
   | "cancelled";
@@ -52,6 +53,8 @@ export interface JobRecord {
   nextRetryAt?: string;
   /** Captured stdout from the last completed run (capped at 32KB). Available via WebSocket and wait:true response. */
   lastOutput?: string;
+  /** When status is waiting_permission, lists the API key names awaiting user approval. */
+  waitingPermissionKeys?: string[];
 }
 
 export interface CreateJobInput {
@@ -74,6 +77,7 @@ export interface CreateJobInput {
   maxTurns?: number;
   memoryPolicy?: JobMemoryPolicy;
   reportChatId?: string;
+  useCheckpointTemplate?: boolean;
 }
 
 // ─── Job Graph ────────────────────────────────────────────────────────────────

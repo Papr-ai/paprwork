@@ -25,7 +25,10 @@ If the task is tiny and explicit, merge steps. Always explain tradeoffs when ski
 |------|---------|
 | `list_apps` | List all existing mini-apps (ALWAYS call this first!) |
 | `create_app` | Create a mini-app with HTML/CSS/JS files |
-| `read_app_file` / `edit_app_file` / `list_app_files` | Read, edit, list app files |
+| `read_app_file` | Read app file content with line numbers |
+| `edit_app_file` | Edit via string replacement (simple text changes) |
+| `edit_app_file_lines` | Edit via line ranges (RECOMMENDED for code) |
+| `list_app_files` | List all files in an app |
 | `list_jobs` | List all jobs with status, deps, dir path (call before create!) |
 | `create_job` | Create a job with retries, dependencies, delivery |
 | `update_job` | Patch job config (command, requirements, schedule, deps) |
@@ -144,7 +147,79 @@ fetch('http://localhost:18789/api/jobs/list')
 "
 ```
 
-**Rule:** use `bash` + `curl` to test, then `edit_app_file` to write the working code into the app. Never use `webview_execute` for this — it's for visual inspection only.
+**Rule:** use `bash` + `curl` to test, then write the working code into the app. Never use `webview_execute` for this — it's for visual inspection only.
+
+---
+
+## Editing App Files: Which Tool to Use?
+
+### Use `edit_app_file_lines` (RECOMMENDED for most edits)
+
+**When:** Making any code changes — HTML structure, JavaScript functions, CSS blocks
+
+**Why:** Line-based editing is more reliable:
+- No string matching issues (line numbers are unambiguous)
+- Works with special characters, escape sequences, whitespace
+- Better error messages show exactly what went wrong
+- Tells you how line numbers shifted after the edit
+
+**Workflow:**
+```javascript
+// 1. Read file to see line numbers
+read_app_file({ appId: "abc-123", filename: "index.html" })
+// Returns numbered lines like: "45|    <div class='old-structure'>..."
+
+// 2. Replace lines 45-60 with new structure
+edit_app_file_lines({
+  appId: "abc-123",
+  filename: "index.html",
+  startLine: 45,
+  endLine: 60,
+  newContent: `    <div class="new-structure">
+      <span>Updated content</span>
+    </div>`
+})
+
+// Returns: { linesRemoved: 16, linesAdded: 3, netChange: -13, tip: "..." }
+```
+
+### Use `edit_app_file` (Only for simple text replacements)
+
+**When:** Changing a simple string value, URL, or variable that appears once
+
+**Why:** Faster for obvious one-off changes like:
+- Updating an API endpoint URL
+- Changing a hardcoded value
+- Replacing a class name that appears in one place
+
+**Workflow:**
+```javascript
+// Quick replacement - no line numbers needed
+edit_app_file({
+  appId: "abc-123",
+  filename: "app.js",
+  oldString: "const API_URL = 'http://localhost:3000'",
+  newString: "const API_URL = 'http://localhost:18789'"
+})
+```
+
+**⚠️ Limitations:**
+- Fails if string doesn't match exactly (including whitespace)
+- Replaces only first occurrence
+- Poor error messages when string not found
+- Doesn't handle escape sequences well
+
+### Decision Tree
+
+```
+Need to edit app file?
+├─ Changing HTML structure / JS function / CSS block?
+│  └─ Use edit_app_file_lines (read file first for line numbers)
+├─ Replacing simple text that appears once?
+│  └─ Use edit_app_file (if you know exact string)
+└─ Complex multi-step refactor?
+   └─ Use bash with sed/awk OR multiple edit_app_file_lines calls
+```
 
 ---
 
@@ -490,12 +565,27 @@ async function regenReply(threadId: string): Promise<void> {
 
 ## Job Types
 
-- `shell` / `bash` — Shell commands
-- `python` — Python scripts (auto-creates venv, auto-installs requirements)
+- `shell` / `bash` — Simple shell commands (use for curl, git, quick one-liners)
+- `python` — Python scripts (auto-creates venv, auto-installs requirements) ← **USE THIS for scripts**
 - `node` — Node.js scripts (auto-installs from package.json)
 - `swift` — Swift scripts
 - `agent` — AI agent with tool access (autonomous multi-step reasoning)
 - `subagent` — Delegated to a sub-agent profile
+
+**When to use each:**
+
+| Use Case | Job Type | Example |
+|----------|----------|---------|
+| Python script with logic | `python` | Data processing, API calls, ML |
+| Simple API call | `bash` | `curl https://api.com/data` |
+| Git operations | `bash` | `git clone`, `git pull` |
+| Node.js script | `node` | TypeScript apps, npm scripts |
+| Multi-step AI task | `agent` | Research, code review |
+
+**IMPORTANT: For Python scripts with API keys:**
+- Type: `python` (NOT `bash`)
+- Command: `python3 code/main.py --token ${KEY_NAME}`
+- The script uses argparse to receive the key
 
 ### Python Job: Auto Venv + Requirements
 
@@ -515,12 +605,83 @@ What happens automatically:
 2. Writes `requirements.txt` and runs `pip install` (only when requirements change)
 3. Wraps the command to use venv Python: `python3` → `.venv/bin/python3`
 
-**API keys are available via environment variables:**
-- `os.environ['ANTHROPIC_API_KEY']`
-- `os.environ['OPENAI_API_KEY']`
-- `os.environ['GOOGLE_API_KEY']`
+**API keys are passed as CLI arguments (secure):**
 
-These are inherited from the gateway process — no extra setup needed.
+```python
+# ✅ CORRECT: Keys passed as CLI arguments in the COMMAND field
+# Job command:
+create_job({
+  command: "python3 code/main.py --anthropic-key ${ANTHROPIC_API_KEY} --github-token ${GITHUB_TOKEN}"
+  //                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Substitution happens HERE
+})
+
+# code/main.py - Script receives substituted values as CLI args:
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--anthropic-key', required=True)
+parser.add_argument('--github-token', required=True)
+args = parser.parse_args()
+
+# Use the keys - they're already substituted with real values!
+client = anthropic.Client(api_key=args.anthropic_key)  # ✅ Has actual key value
+```
+
+**❌ CRITICAL ANTI-PATTERN: Do NOT put ${KEY} in Python source code!**
+
+```python
+# ❌ WRONG - Don't write ${KEY_NAME} in the Python file itself!
+# code/main.py
+token = "${GITHUB_TOKEN}"  # This is LITERAL TEXT, not substituted!
+
+# When the script runs, token will be the STRING "${GITHUB_TOKEN}", not the actual key!
+# This is the most common mistake agents make.
+```
+
+**Why this doesn't work:**
+- `${KEY_NAME}` substitution ONLY happens in bash command strings
+- It does NOT work inside Python/Node source files
+- The Python file would see literal text `"${GITHUB_TOKEN}"`
+- Bash substitution happens at spawn time, not when writing files
+
+**The correct mental model:**
+
+1. **Write Python file with argparse** (no keys in source):
+   ```python
+   parser.add_argument('--github-token', required=True)
+   args = parser.parse_args()
+   token = args.github_token  # ← Will receive actual value
+   ```
+
+2. **Create job with ${KEY} in command** (substitution happens here):
+   ```javascript
+   command: "python3 code/main.py --github-token ${GITHUB_TOKEN}"
+   ```
+
+3. **At spawn time**, bash substitutes:
+   ```bash
+   python3 code/main.py --github-token ghp_abc123...  # ← Real value injected
+   ```
+
+**❌ ALSO INCORRECT: Do NOT use os.environ for API keys**
+```python
+# ❌ This won't work - custom keys are NOT in environment
+import os
+key = os.getenv('GITHUB_TOKEN')  # Returns None!
+```
+
+**Why CLI args?**
+- ✅ More secure (keys not in job environment, can't be leaked to files)
+- ✅ Explicit (clear which keys each job uses)
+- ✅ Cloud-ready (matches AWS/GCP/Kubernetes patterns)
+- ✅ Keys substituted at runtime: `${GITHUB_TOKEN}` → actual value
+
+**Environment keys (inherited from gateway):**
+- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` (from `.env.local`)
+- These CAN be used via `os.environ` (but CLI args are still preferred)
+
+**Runtime params** (job-specific config like `THREAD_ID`, `ACTION`):
+- These ARE available via `os.environ` - use them freely!
 
 ---
 
@@ -912,14 +1073,19 @@ create_job({
   name: "Reddit Selector",
   type: "python",
   requirements: ["anthropic"],
-  command: "python3 code/selector.py",
+  command: "python3 code/selector.py --anthropic-key ${ANTHROPIC_API_KEY}",
   dependsOn: [{ jobId: "scraper-id", onStatus: "completed" }]
 })
 ```
 
 ```python
 # code/selector.py
-import os, json, sqlite3, anthropic
+import os, json, sqlite3, anthropic, argparse
+
+# Parse CLI arguments (for API keys)
+parser = argparse.ArgumentParser()
+parser.add_argument('--anthropic-key', required=True)
+args = parser.parse_args()
 
 # Step 1: SQL query (deterministic, fast)
 db = sqlite3.connect(os.environ.get('DEP_SCRAPER_DB', '../scraper/data/data.db'))
@@ -1123,6 +1289,273 @@ When a run fails:
 - [ ] All four UX states (loading, empty, error, success) implemented
 - [ ] Retry policy configured for jobs
 - [ ] Retention policy set for job data
+
+---
+
+## Job Resilience & Patterns
+
+### Three Job Patterns
+
+1. **One-shot / Transient Failure Jobs**
+   - API calls, data fetches, notifications
+   - Failures are transient (rate limits, network timeouts)
+   - Solution: Use `retries` with exponential backoff
+   - Example: Fetch GitHub repos, send Slack message
+
+2. **Long-running / Processing Jobs**
+   - Process large datasets (1M records), multi-step workflows
+   - Failures lose partial progress without checkpointing
+   - Solution: Script implements checkpointing + retries
+   - Example: ETL pipeline, ML training, multi-hour scraping
+
+3. **Always-on / Service Jobs**
+   - HTTP servers, webhook listeners, scheduled watchers
+   - Should survive app restarts (future: detached mode)
+   - Solution: Use scheduled jobs (cron/interval) with auto-restart
+   - Example: Dashboard server, webhook receiver
+
+### When to Use Retries
+
+**Use `retries` for transient failures:**
+
+```javascript
+create_job({
+  name: "Fetch GitHub Repos",
+  type: "python",
+  command: "python3 code/fetch.py",
+  retries: { maxAttempts: 3, backoffMs: 2000 }
+  // Attempt 1 fails → wait 2s
+  // Attempt 2 fails → wait 4s
+  // Attempt 3 fails → mark as failed
+})
+```
+
+**Good for:**
+- API rate limits (429 errors)
+- Network timeouts
+- Temporary service outages
+- Database connection issues
+
+**Not good for:**
+- Logic errors in your script (retries won't help)
+- Processing large datasets (retries restart from beginning)
+
+### How to Add Checkpointing for Resumable Work
+
+For jobs processing large datasets, implement checkpointing in your script:
+
+**Pattern 1: Track last processed ID**
+
+```python
+import sqlite3
+from pathlib import Path
+
+db_path = Path(__file__).parent.parent / "data" / "data.db"
+conn = sqlite3.connect(db_path)
+cur = conn.cursor()
+
+# Initialize schema
+cur.execute("""
+CREATE TABLE IF NOT EXISTS items (
+  id INTEGER PRIMARY KEY,
+  data TEXT,
+  processed_at TEXT
+)
+""")
+cur.execute("""
+CREATE TABLE IF NOT EXISTS checkpoint (
+  key TEXT PRIMARY KEY,
+  value TEXT
+)
+""")
+conn.commit()
+
+# Load checkpoint
+cur.execute("SELECT value FROM checkpoint WHERE key='last_id'")
+row = cur.fetchone()
+last_id = int(row[0]) if row else 0
+
+print(f"Resuming from ID {last_id}")
+
+# Process items
+for item_id in range(last_id + 1, 1_000_000):
+    # Fetch and process item
+    data = fetch_item(item_id)
+    cur.execute(
+        "INSERT INTO items (id, data, processed_at) VALUES (?, ?, datetime('now'))",
+        (item_id, data)
+    )
+    
+    # Save checkpoint every 100 items
+    if item_id % 100 == 0:
+        cur.execute(
+            "INSERT OR REPLACE INTO checkpoint (key, value) VALUES ('last_id', ?)",
+            (str(item_id),)
+        )
+        conn.commit()
+        print(f"Checkpoint: {item_id}/1,000,000")
+
+# Final checkpoint
+cur.execute("INSERT OR REPLACE INTO checkpoint (key, value) VALUES ('last_id', ?)", (str(1_000_000),))
+conn.commit()
+print("Processing complete!")
+```
+
+**Pattern 2: Status column approach**
+
+```python
+# Mark items as pending/processing/complete
+cur.execute("UPDATE items SET status='processing' WHERE id=?", (item_id,))
+# ... process item ...
+cur.execute("UPDATE items SET status='complete', result=? WHERE id=?", (result, item_id))
+conn.commit()
+
+# On restart, resume from pending items
+cur.execute("SELECT id FROM items WHERE status IN ('pending', 'processing') ORDER BY id")
+```
+
+**Pattern 3: Work queue table**
+
+```python
+# Separate queue table tracks work items
+cur.execute("""
+CREATE TABLE IF NOT EXISTS work_queue (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_type TEXT,
+  payload TEXT,
+  status TEXT DEFAULT 'pending',
+  attempts INTEGER DEFAULT 0,
+  max_attempts INTEGER DEFAULT 3,
+  error TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  completed_at TEXT
+)
+""")
+
+# Pop next pending item
+cur.execute("""
+  UPDATE work_queue
+  SET status='processing', attempts=attempts+1
+  WHERE id = (
+    SELECT id FROM work_queue
+    WHERE status='pending' AND attempts < max_attempts
+    ORDER BY created_at
+    LIMIT 1
+  )
+  RETURNING id, payload
+""")
+```
+
+### Combining Retries + Checkpointing
+
+For maximum resilience:
+
+```javascript
+create_job({
+  name: "Process 1M Records",
+  type: "python",
+  command: "python3 code/processor.py",
+  retries: { maxAttempts: 3, backoffMs: 5000 }
+  // Script has checkpointing → retries continue from checkpoint
+})
+```
+
+If the job fails:
+1. Attempt 1: Processes 300K records → crashes at 300K
+2. Attempt 2: Resumes from checkpoint (300K) → crashes at 700K
+3. Attempt 3: Resumes from checkpoint (700K) → completes
+
+### App Closures & Job Interruptions
+
+**What happens when the app closes while a job is running:**
+
+1. Job process is killed (SIGTERM on graceful shutdown)
+2. Job marked as "cancelled" (graceful) or "failed" (crash)
+3. On next app start:
+   - **Scheduled jobs (cron/interval):** Auto-run on next schedule
+   - **Manual jobs with retries:** Show "X retries remaining - click Run to retry"
+   - **Jobs with checkpointing:** Resume from last checkpoint when re-run
+
+**Design for interruptions:**
+- Use scheduled jobs (cron/interval) for auto-recovery
+- Add checkpointing for long-running work
+- Set `catchUpMissed: true` on cron jobs to run missed occurrences
+
+### Example: Resilient ETL Pipeline
+
+```javascript
+// Step 1: Create job with retries + checkpointing
+create_job({
+  name: "Ingest HackerNews Posts",
+  type: "python",
+  command: "python3 code/ingest.py",
+  requirements: ["requests", "beautifulsoup4"],
+  retries: { maxAttempts: 3, backoffMs: 5000 },
+  schedule: {
+    enabled: true,
+    cron: "0 */6 * * *",  // Every 6 hours
+    catchUpMissed: true    // Run on startup if missed
+  }
+})
+
+// Step 2: Write checkpointing script
+bash({ command: `cat > ~/PAPR/jobs/<jobId>/code/ingest.py << 'EOF'
+import sqlite3
+import requests
+from pathlib import Path
+
+db_path = Path(__file__).parent.parent / "data" / "data.db"
+conn = sqlite3.connect(db_path)
+cur = conn.cursor()
+
+# Schema + checkpoint table
+cur.execute("""
+CREATE TABLE IF NOT EXISTS posts (
+  id INTEGER PRIMARY KEY,
+  title TEXT,
+  url TEXT,
+  score INTEGER,
+  fetched_at TEXT
+)
+""")
+cur.execute("""
+CREATE TABLE IF NOT EXISTS checkpoint (
+  key TEXT PRIMARY KEY,
+  value TEXT
+)
+""")
+conn.commit()
+
+# Load last processed page
+cur.execute("SELECT value FROM checkpoint WHERE key='last_page'")
+row = cur.fetchone()
+start_page = int(row[0]) if row else 1
+
+# Fetch pages with checkpointing
+for page in range(start_page, 100):
+    response = requests.get(f"https://news.ycombinator.com/news?p={page}")
+    # ... parse and insert posts ...
+    
+    # Checkpoint every page
+    cur.execute(
+        "INSERT OR REPLACE INTO checkpoint (key, value) VALUES ('last_page', ?)",
+        (str(page),)
+    )
+    conn.commit()
+    print(f"Page {page}/100 complete")
+
+print("Ingestion complete!")
+EOF` })
+
+// Step 3: Test resilience
+run_job({ jobId: "<jobId>" })
+```
+
+**Resilience benefits:**
+- **Transient failures:** Retries handle network timeouts
+- **App crashes:** Checkpointing preserves progress
+- **Missed runs:** `catchUpMissed: true` runs on startup
+- **Scheduled recovery:** Runs every 6 hours automatically
 
 ---
 

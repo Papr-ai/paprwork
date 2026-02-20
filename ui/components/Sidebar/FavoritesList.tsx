@@ -45,7 +45,8 @@ export function FavoritesList() {
 
   const handleOpen = useCallback(
     (fav: Favorite) => {
-      const tabType = fav.type === "chat" ? "chat" : fav.type === "app" ? "app" : "document";
+      const tabType =
+        fav.type === "chat" ? "chat" : fav.type === "app" ? "app" : "document";
       const tabId = createTab(tabType, fav.id, fav.title);
       switchToTab(tabId);
     },
@@ -160,9 +161,7 @@ export function FavoritesList() {
       {isExpanded && (
         <div className="favorites-list__items">
           {favorites.length === 0 && (
-            <div className="favorites-list__empty">
-              Drag artifacts here
-            </div>
+            <div className="favorites-list__empty">Drag artifacts here</div>
           )}
           {favorites.map((favorite) => (
             <div

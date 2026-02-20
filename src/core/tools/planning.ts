@@ -3,7 +3,7 @@
  *
  * Allows the agent to create and update step-by-step plans
  * that render as PlanCards in the UI.
- * 
+ *
  * Plans are persisted to SQLite and associated with chatId so:
  * - Plans survive app restarts
  * - Agent can resume where it left off
@@ -19,7 +19,11 @@ const planStepSchema = z.object({
 });
 
 const createPlanSchema = z.object({
-  chatId: z.string().min(1).optional().describe("Chat ID (auto-detected if not provided)"),
+  chatId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Chat ID (auto-detected if not provided)"),
   title: z.string().min(1).describe("Plan title"),
   steps: z.array(planStepSchema).min(1).describe("Ordered plan steps"),
 });
@@ -61,20 +65,23 @@ export const createPlanTool = createTool({
   inputSchema: createPlanSchema,
   execute: async (input) => {
     const args = (input as { context?: CreatePlanArgs }).context ?? input;
-    const { getPlanService } = await import("../../gateway/services/PlanService.js");
+    const { getPlanService } =
+      await import("../../gateway/services/PlanService.js");
     const { getCurrentChatId } = await import("./context.js");
-    
+
     const planService = getPlanService();
     await planService.initialize();
 
     // Get chatId from args or ambient context
     const chatId = args.chatId || getCurrentChatId();
     if (!chatId) {
-      throw new Error("chatId is required but not provided and not available in context");
+      throw new Error(
+        "chatId is required but not provided and not available in context",
+      );
     }
 
     const planId = `plan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    
+
     const steps: PlanStep[] = args.steps.map((s) => ({
       id: s.id,
       description: s.description,
@@ -85,7 +92,7 @@ export const createPlanTool = createTool({
       planId,
       chatId,
       args.title,
-      steps
+      steps,
     );
 
     return {
@@ -102,7 +109,8 @@ export const updatePlanTool = createTool({
   inputSchema: updatePlanSchema,
   execute: async (input) => {
     const args = (input as { context?: UpdatePlanArgs }).context ?? input;
-    const { getPlanService } = await import("../../gateway/services/PlanService.js");
+    const { getPlanService } =
+      await import("../../gateway/services/PlanService.js");
     const planService = getPlanService();
     await planService.initialize();
 
@@ -121,12 +129,12 @@ export const updatePlanTool = createTool({
 
     // Check if all steps are completed
     const allCompleted = plan.steps.every(
-      (s) => s.status === "completed" || s.status === "skipped"
+      (s) => s.status === "completed" || s.status === "skipped",
     );
 
     // Update plan in database
     const updatedPlan = await planService.updatePlan(args.planId, plan.steps);
-    
+
     // Mark plan as completed if all steps are done
     if (allCompleted && updatedPlan) {
       await planService.updatePlanStatus(args.planId, "completed");

@@ -5,8 +5,16 @@ import path from "path";
 import os from "os";
 
 const createDocumentSchema = z.object({
-  title: z.string().min(1).describe("Human-readable document title (e.g. 'Knowledge Graphs Overview', not an ID)"),
-  content: z.string().optional().describe("Initial markdown content for the document"),
+  title: z
+    .string()
+    .min(1)
+    .describe(
+      "Human-readable document title (e.g. 'Knowledge Graphs Overview', not an ID)",
+    ),
+  content: z
+    .string()
+    .optional()
+    .describe("Initial markdown content for the document"),
 });
 
 const importDocumentSchema = z.object({
@@ -29,7 +37,10 @@ const readDocumentSchema = z.object({
 });
 
 const listDocumentsSchema = z.object({
-  query: z.string().optional().describe("Optional search query to filter documents"),
+  query: z
+    .string()
+    .optional()
+    .describe("Optional search query to filter documents"),
 });
 
 export const createDocumentTool = createTool({
@@ -42,9 +53,8 @@ export const createDocumentTool = createTool({
     const args =
       (input as { context?: z.infer<typeof createDocumentSchema> }).context ??
       input;
-    const { getDocumentService } = await import(
-      "../../gateway/services/DocumentService.js"
-    );
+    const { getDocumentService } =
+      await import("../../gateway/services/DocumentService.js");
     const service = getDocumentService();
     const document = await service.createDocument(
       args.title,
@@ -73,9 +83,8 @@ export const readDocumentTool = createTool({
     const args =
       (input as { context?: z.infer<typeof readDocumentSchema> }).context ??
       input;
-    const { getDocumentService } = await import(
-      "../../gateway/services/DocumentService.js"
-    );
+    const { getDocumentService } =
+      await import("../../gateway/services/DocumentService.js");
     const service = getDocumentService();
     const document = await service.getDocument(args.documentId);
     if (!document) {
@@ -106,9 +115,8 @@ export const listDocumentsTool = createTool({
     const args =
       (input as { context?: z.infer<typeof listDocumentsSchema> }).context ??
       input;
-    const { getDocumentService } = await import(
-      "../../gateway/services/DocumentService.js"
-    );
+    const { getDocumentService } =
+      await import("../../gateway/services/DocumentService.js");
     const service = getDocumentService();
     const documents = args.query
       ? await service.searchDocuments(args.query)
@@ -163,13 +171,11 @@ export const importDocumentTool = createTool({
 
     // Determine title
     const title =
-      args.title ??
-      path.basename(resolvedPath, path.extname(resolvedPath));
+      args.title ?? path.basename(resolvedPath, path.extname(resolvedPath));
 
     // Create the Papr document
-    const { getDocumentService } = await import(
-      "../../gateway/services/DocumentService.js"
-    );
+    const { getDocumentService } =
+      await import("../../gateway/services/DocumentService.js");
     const service = getDocumentService();
     const document = await service.createDocument(title, content);
 

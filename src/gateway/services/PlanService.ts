@@ -1,6 +1,6 @@
 /**
  * PlanService - Persistent storage for agent plans
- * 
+ *
  * Plans are stored in SQLite and associated with chatId so:
  * - Plans persist across app restarts
  * - Agent can resume where it left off
@@ -80,7 +80,7 @@ export class PlanService {
     planId: string,
     chatId: string,
     title: string,
-    steps: PlanStep[]
+    steps: PlanStep[],
   ): Promise<Plan> {
     if (!this.db) throw new Error("PlanService not initialized");
 
@@ -107,7 +107,7 @@ export class PlanService {
       JSON.stringify(plan.steps),
       plan.status,
       plan.createdAt,
-      plan.updatedAt
+      plan.updatedAt,
     );
 
     console.log(`[PlanService] Created plan: ${planId} for chat: ${chatId}`);
@@ -141,7 +141,7 @@ export class PlanService {
    */
   async updatePlanStatus(
     planId: string,
-    status: "active" | "completed" | "cancelled"
+    status: "active" | "completed" | "cancelled",
   ): Promise<Plan | null> {
     if (!this.db) throw new Error("PlanService not initialized");
 

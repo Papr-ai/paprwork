@@ -73,8 +73,7 @@ export function parseToolCallChunk(chunk: unknown): ToolCallEvent | null {
     return null;
   }
 
-  const parsedArgs =
-    getRecord(input) ??
+  const parsedArgs = getRecord(input) ??
     getRecord(args) ?? {
       value: input ?? args ?? {},
     };

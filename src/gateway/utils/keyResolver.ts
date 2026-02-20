@@ -1,12 +1,13 @@
 /**
  * Key Resolver - Lazy loading of API keys
- * 
+ *
  * In production (packaged app):
  * - Requests keys from Electron main process via IPC (triggers keychain only when needed)
- * 
+ * - Includes OAuth tokens if available (prioritized over API keys)
+ *
  * In development:
  * - Falls back to process.env / .env.local
- * 
+ *
  * This matches V1's approach - no upfront decryption, only on-demand
  */
 
@@ -14,6 +15,10 @@ import type { RequestKeysMessage } from "../../core/types/gateway-ipc.js";
 import { isKeysResponseMessage } from "../../core/types/gateway-ipc.js";
 
 let keyCache: Record<string, string> = {};
+let oauthTokenCache: {
+  openai?: { accessToken: string; expiresAt: string };
+  anthropic?: { accessToken: string; expiresAt: string };
+} = {};
 let requestId = 0;
 
 interface IpcProcessLike {
@@ -44,6 +49,10 @@ async function requestKeysViaIPC(
     const messageHandler = (message: unknown) => {
       if (isKeysResponseMessage(message) && message.requestId === reqId) {
         cleanup();
+        // Cache OAuth tokens if available
+        if (message.oauthTokens) {
+          oauthTokenCache = message.oauthTokens;
+        }
         resolve(message.keys || {});
       }
     };
@@ -65,7 +74,7 @@ async function requestKeysViaIPC(
 
 /**
  * Get API keys (lazy loading)
- * 
+ *
  * @param keyNames - Array of key names to fetch
  * @returns Record of key names to values
  */
@@ -102,7 +111,9 @@ export async function getApiKeys(
       const resolved = await requestKeysViaIPC(uncachedKeys, ipcProcess);
       Object.assign(keyCache, resolved);
       missingAfterIpc = uncachedKeys.filter((keyName) => !resolved[keyName]);
-      console.log(`[KeyResolver] Received ${Object.keys(resolved).length} keys`);
+      console.log(
+        `[KeyResolver] Received ${Object.keys(resolved).length} keys`,
+      );
     } catch (error) {
       console.error("[KeyResolver] Failed to resolve keys via IPC:", error);
     }
@@ -140,4 +151,61 @@ export async function getApiKey(keyName: string): Promise<string | undefined> {
  */
 export function clearKeyCache(): void {
   keyCache = {};
+}
+
+/**
+ * Get OAuth token for a provider (if available)
+ */
+export function getOAuthToken(
+  provider: "openai" | "anthropic",
+): { accessToken: string; expiresAt: string } | undefined {
+  return oauthTokenCache[provider];
+}
+
+/**
+ * Check if OAuth token is available and not expired
+ */
+export function hasValidOAuthToken(provider: "openai" | "anthropic"): boolean {
+  const token = oauthTokenCache[provider];
+  if (!token) return false;
+
+  const expiresAt = new Date(token.expiresAt).getTime();
+  const now = Date.now();
+  const buffer = 5 * 60 * 1000; // 5 minutes buffer
+
+  return now < expiresAt - buffer;
+}
+
+/**
+ * Get authentication for a provider (prioritizes OAuth over API key)
+ * Returns { type: 'oauth', token } or { type: 'apiKey', key } or null
+ */
+export async function getProviderAuth(
+  provider: "openai" | "anthropic",
+): Promise<
+  | { type: "oauth"; token: string }
+  | { type: "apiKey"; key: string }
+  | null
+> {
+  // Check OAuth first
+  if (hasValidOAuthToken(provider)) {
+    const token = getOAuthToken(provider);
+    if (token) {
+      console.log(`[KeyResolver] Using OAuth token for ${provider}`);
+      return { type: "oauth", token: token.accessToken };
+    }
+  }
+
+  // Fall back to API key
+  const keyName =
+    provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+  const keys = await getApiKeys([keyName]);
+
+  if (keys[keyName]) {
+    console.log(`[KeyResolver] Using API key for ${provider}`);
+    return { type: "apiKey", key: keys[keyName] };
+  }
+
+  console.log(`[KeyResolver] No authentication found for ${provider}`);
+  return null;
 }

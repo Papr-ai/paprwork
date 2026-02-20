@@ -1,6 +1,6 @@
 /**
  * useApp Hook - Mini-app file watching and reload management
- * 
+ *
  * Watches for app file changes and triggers iframe reload with debouncing
  * Similar to useDocument's file watching pattern
  */
@@ -16,10 +16,10 @@ export function useApp(appId: string | null) {
     if (reloadTimer.current) {
       clearTimeout(reloadTimer.current);
     }
-    
+
     // Debounce reload by 500ms (in case multiple files change)
     reloadTimer.current = setTimeout(() => {
-      setReloadKey(prev => prev + 1);
+      setReloadKey((prev) => prev + 1);
       console.log(`[useApp] Reloading app: ${appId}`);
     }, 500);
   }, [appId]);
@@ -32,11 +32,8 @@ export function useApp(appId: string | null) {
     const handler = (event: Event) => {
       const customEvent = event as CustomEvent;
       const data = customEvent.detail;
-      
-      if (
-        data.type === "app:file-changed" &&
-        data.data?.appId === appId
-      ) {
+
+      if (data.type === "app:file-changed" && data.data?.appId === appId) {
         console.log(`[useApp] File changed detected for app: ${appId}`);
         triggerReload();
       }

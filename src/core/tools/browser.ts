@@ -34,9 +34,8 @@ let browserSession: BrowserSessionState | null = null;
 
 async function requestBrowserPermission(action: string): Promise<void> {
   try {
-    const { requestKeyPermission } = await import(
-      "../../gateway/permissions/PermissionRequester.js"
-    );
+    const { requestKeyPermission } =
+      await import("../../gateway/permissions/PermissionRequester.js");
     const response = await requestKeyPermission({
       keyName: "BROWSER_TOOL",
       description: `Allow browser automation action: ${action}?`,
@@ -51,7 +50,9 @@ async function requestBrowserPermission(action: string): Promise<void> {
     }
   } catch (error) {
     throw new Error(
-      error instanceof Error ? error.message : "Browser permission request failed",
+      error instanceof Error
+        ? error.message
+        : "Browser permission request failed",
     );
   }
 }
@@ -143,7 +144,8 @@ export const browserNavigateTool = createTool({
   description: "Navigate the browser session to a URL",
   inputSchema: navigateSchema,
   execute: async (input) => {
-    const args = (input as { context?: z.infer<typeof navigateSchema> }).context ?? input;
+    const args =
+      (input as { context?: z.infer<typeof navigateSchema> }).context ?? input;
     await requestBrowserPermission(`navigate:${args.url}`);
     const session = await getBrowserSession();
     await session.page.goto(args.url, { waitUntil: "domcontentloaded" });
@@ -162,7 +164,8 @@ export const browserSnapshotTool = createTool({
   description: "Capture a compact HTML snapshot from current page",
   inputSchema: snapshotSchema,
   execute: async (input) => {
-    const args = (input as { context?: z.infer<typeof snapshotSchema> }).context ?? input;
+    const args =
+      (input as { context?: z.infer<typeof snapshotSchema> }).context ?? input;
     await requestBrowserPermission("snapshot");
     const session = await getBrowserSession();
     const html = await session.page.content();
@@ -189,7 +192,8 @@ export const browserClickTool = createTool({
   description: "Click an element on the current browser page",
   inputSchema: clickSchema,
   execute: async (input) => {
-    const args = (input as { context?: z.infer<typeof clickSchema> }).context ?? input;
+    const args =
+      (input as { context?: z.infer<typeof clickSchema> }).context ?? input;
     await requestBrowserPermission(`click:${args.selector}`);
     const session = await getBrowserSession();
     await session.page.click(args.selector);
@@ -202,7 +206,8 @@ export const browserTypeTool = createTool({
   description: "Fill text into an element on the current browser page",
   inputSchema: typeSchema,
   execute: async (input) => {
-    const args = (input as { context?: z.infer<typeof typeSchema> }).context ?? input;
+    const args =
+      (input as { context?: z.infer<typeof typeSchema> }).context ?? input;
     await requestBrowserPermission(`type:${args.selector}`);
     const session = await getBrowserSession();
     await session.page.fill(args.selector, args.text);
@@ -215,7 +220,8 @@ export const browserTabsTool = createTool({
   description: "List or close browser sessions",
   inputSchema: tabsSchema,
   execute: async (input) => {
-    const args = (input as { context?: z.infer<typeof tabsSchema> }).context ?? input;
+    const args =
+      (input as { context?: z.infer<typeof tabsSchema> }).context ?? input;
     await requestBrowserPermission(`tabs:${args.action}`);
     if (args.action === "close") {
       if (browserSession) {
@@ -251,7 +257,8 @@ export const browserConsoleLogsTool = createTool({
   inputSchema: browserLogsSchema,
   execute: async (input) => {
     const args =
-      (input as { context?: z.infer<typeof browserLogsSchema> }).context ?? input;
+      (input as { context?: z.infer<typeof browserLogsSchema> }).context ??
+      input;
     await requestBrowserPermission("console_logs");
     const session = await getBrowserSession();
     const limit = args.limit ?? 50;
@@ -278,7 +285,8 @@ export const browserNetworkLogsTool = createTool({
   inputSchema: browserLogsSchema,
   execute: async (input) => {
     const args =
-      (input as { context?: z.infer<typeof browserLogsSchema> }).context ?? input;
+      (input as { context?: z.infer<typeof browserLogsSchema> }).context ??
+      input;
     await requestBrowserPermission("network_logs");
     const session = await getBrowserSession();
     const limit = args.limit ?? 50;
@@ -301,12 +309,12 @@ export const browserNetworkLogsTool = createTool({
 
 export const browserEvaluateScriptTool = createTool({
   id: "browser_test_script",
-  description:
-    "Run a browser page script for UI testing and return the result",
+  description: "Run a browser page script for UI testing and return the result",
   inputSchema: browserScriptSchema,
   execute: async (input) => {
     const args =
-      (input as { context?: z.infer<typeof browserScriptSchema> }).context ?? input;
+      (input as { context?: z.infer<typeof browserScriptSchema> }).context ??
+      input;
     await requestBrowserPermission("test_script");
     const session = await getBrowserSession();
     const result = await session.page.evaluate(args.script);

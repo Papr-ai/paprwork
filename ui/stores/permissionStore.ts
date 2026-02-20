@@ -37,11 +37,16 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
 
     console.log("[PermissionStore] Responding:", response);
 
-    window.electronAPI.permissions.respondToRequest({
-      requestId: activeRequest.requestId,
-      keyName: activeRequest.keyName,
-      response,
-    });
+    // Check if running in Electron
+    if (window.electronAPI?.permissions) {
+      window.electronAPI.permissions.respondToRequest({
+        requestId: activeRequest.requestId,
+        keyName: activeRequest.keyName,
+        response,
+      });
+    } else {
+      console.warn("[PermissionStore] Not running in Electron, cannot respond to permission request");
+    }
 
     set({ activeRequest: null, claimedByChat: false });
   },
@@ -51,6 +56,12 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
  * Call once at app root to wire the Electron IPC listener into the store.
  */
 export function initPermissionListener(): void {
+  // Check if running in Electron
+  if (!window.electronAPI?.permissions) {
+    console.warn("[PermissionStore] Not running in Electron, skipping permission listener");
+    return;
+  }
+
   window.electronAPI.permissions.onKeyRequest(
     (
       _event: unknown,

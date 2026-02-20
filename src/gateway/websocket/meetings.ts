@@ -6,7 +6,10 @@ import type { WebSocket } from "ws";
 import type { WSMessage } from "./index.js";
 import { sendResponse, sendError } from "./index.js";
 import { getMeetingsService } from "../services/MeetingsService.js";
-import type { MeetingCreateInput, MeetingUpdateInput } from "../services/MeetingsService.js";
+import type {
+  MeetingCreateInput,
+  MeetingUpdateInput,
+} from "../services/MeetingsService.js";
 
 export async function setupMeetingsHandlers(
   ws: WebSocket,
@@ -44,7 +47,9 @@ export async function setupMeetingsHandlers(
       }
 
       case "meetings:update": {
-        const { meetingId, ...updates } = message.payload as { meetingId: string } & MeetingUpdateInput;
+        const { meetingId, ...updates } = message.payload as {
+          meetingId: string;
+        } & MeetingUpdateInput;
         const meeting = await service.updateMeeting(meetingId, updates);
         sendResponse(ws, { id: message.id, success: true, data: meeting });
         break;
@@ -65,21 +70,30 @@ export async function setupMeetingsHandlers(
       }
 
       case "meetings:stop-recording": {
-        const { meetingId, duration } = message.payload as { meetingId: string; duration: number };
+        const { meetingId, duration } = message.payload as {
+          meetingId: string;
+          duration: number;
+        };
         const meeting = await service.stopRecording(meetingId, duration);
         sendResponse(ws, { id: message.id, success: true, data: meeting });
         break;
       }
 
       case "meetings:set-transcript": {
-        const { meetingId, transcript } = message.payload as { meetingId: string; transcript: string };
+        const { meetingId, transcript } = message.payload as {
+          meetingId: string;
+          transcript: string;
+        };
         const meeting = await service.setTranscript(meetingId, transcript);
         sendResponse(ws, { id: message.id, success: true, data: meeting });
         break;
       }
 
       case "meetings:set-summary": {
-        const { meetingId, summary } = message.payload as { meetingId: string; summary: string };
+        const { meetingId, summary } = message.payload as {
+          meetingId: string;
+          summary: string;
+        };
         const meeting = await service.setSummary(meetingId, summary);
         sendResponse(ws, { id: message.id, success: true, data: meeting });
         break;

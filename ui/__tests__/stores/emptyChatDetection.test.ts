@@ -60,14 +60,18 @@ describe("Empty Chat Detection in TabStore", () => {
       initChat("temp-111");
       syncGlobal();
 
-      const tab1 = useTabStore.getState().createTab("chat", "temp-111", "New Chat");
+      const tab1 = useTabStore
+        .getState()
+        .createTab("chat", "temp-111", "New Chat");
       expect(useTabStore.getState().tabs).toHaveLength(1);
 
       // Try to create a second temp chat → should reuse the first
       initChat("temp-222");
       syncGlobal();
 
-      const tab2 = useTabStore.getState().createTab("chat", "temp-222", "New Chat");
+      const tab2 = useTabStore
+        .getState()
+        .createTab("chat", "temp-222", "New Chat");
       expect(useTabStore.getState().tabs).toHaveLength(1);
       expect(tab2).toBe(tab1);
     });
@@ -86,7 +90,9 @@ describe("Empty Chat Detection in TabStore", () => {
       initChat("temp-222");
       syncGlobal();
 
-      const tab2 = useTabStore.getState().createTab("chat", "temp-222", "Chat 2");
+      const tab2 = useTabStore
+        .getState()
+        .createTab("chat", "temp-222", "Chat 2");
       expect(useTabStore.getState().tabs).toHaveLength(2);
       expect(tab2).toBe("chat-temp-222");
     });
@@ -129,7 +135,9 @@ describe("Empty Chat Detection in TabStore", () => {
       // Try to create another temp chat → reuse Chat 2 (empty)
       initChat("temp-444");
       syncGlobal();
-      const reusedTab = useTabStore.getState().createTab("chat", "temp-444", "Chat 4");
+      const reusedTab = useTabStore
+        .getState()
+        .createTab("chat", "temp-444", "Chat 4");
 
       expect(useTabStore.getState().tabs).toHaveLength(3);
       expect(reusedTab).toBe("chat-temp-222");
@@ -140,8 +148,12 @@ describe("Empty Chat Detection in TabStore", () => {
 
   describe("Non-Chat Tabs", () => {
     it("should not apply empty detection to non-chat tabs", () => {
-      const tab1 = useTabStore.getState().createTab("document", "doc-1", "Document 1");
-      const tab2 = useTabStore.getState().createTab("document", "doc-2", "Document 2");
+      const tab1 = useTabStore
+        .getState()
+        .createTab("document", "doc-1", "Document 1");
+      const tab2 = useTabStore
+        .getState()
+        .createTab("document", "doc-2", "Document 2");
 
       expect(useTabStore.getState().tabs).toHaveLength(2);
       expect(tab1).toBe("document-doc-1");
@@ -149,8 +161,12 @@ describe("Empty Chat Detection in TabStore", () => {
     });
 
     it("should reuse static tabs like artifacts and settings", () => {
-      const tab1 = useTabStore.getState().createTab("document", "artifacts", "Artifacts");
-      const tab2 = useTabStore.getState().createTab("document", "artifacts", "Artifacts");
+      const tab1 = useTabStore
+        .getState()
+        .createTab("document", "artifacts", "Artifacts");
+      const tab2 = useTabStore
+        .getState()
+        .createTab("document", "artifacts", "Artifacts");
 
       expect(useTabStore.getState().tabs).toHaveLength(1);
       expect(tab2).toBe(tab1);

@@ -33,7 +33,8 @@ export const listJobFoldersTool = createTool({
     "List all distinct folder names currently assigned to jobs. Call this before creating or assigning folders to understand existing groupings and avoid duplicates.",
   inputSchema: listJobFoldersSchema,
   execute: async () => {
-    const { getJobsService } = await import("../../gateway/services/JobsService.js");
+    const { getJobsService } =
+      await import("../../gateway/services/JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
     const folders = await jobsService.listJobFolders();
@@ -62,10 +63,13 @@ Avoid naming folders after apps (apps can link to jobs from multiple folders). O
   inputSchema: setJobFolderSchema,
   execute: async (input) => {
     const args = (input as { context?: SetJobFolderArgs }).context ?? input;
-    const { getJobsService } = await import("../../gateway/services/JobsService.js");
+    const { getJobsService } =
+      await import("../../gateway/services/JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
-    const job = await jobsService.updateJob(args.jobId, { folder: args.folder });
+    const job = await jobsService.updateJob(args.jobId, {
+      folder: args.folder,
+    });
     return {
       success: true,
       data: { jobId: job.id, name: job.name, folder: job.folder ?? null },
@@ -88,7 +92,8 @@ Optionally filter to a specific app to see only its relevant jobs.`,
   inputSchema: getJobGraphSchema,
   execute: async (input) => {
     const args = (input as { context?: GetJobGraphArgs }).context ?? input;
-    const { getJobsService } = await import("../../gateway/services/JobsService.js");
+    const { getJobsService } =
+      await import("../../gateway/services/JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
 
@@ -129,4 +134,8 @@ Optionally filter to a specific app to see only its relevant jobs.`,
   },
 });
 
-export const jobFolderTools = [listJobFoldersTool, setJobFolderTool, getJobGraphTool];
+export const jobFolderTools = [
+  listJobFoldersTool,
+  setJobFolderTool,
+  getJobGraphTool,
+];

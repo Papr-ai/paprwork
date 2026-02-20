@@ -16,6 +16,7 @@ import { setupTemplateHandlers } from "./template.js";
 import { setupSubAgentHandlers } from "./subagent.js";
 import { setupSettingsHandlers } from "./settings.js";
 import { setupMeetingsHandlers } from "./meetings.js";
+import { setupDbHandlers } from "./db.js";
 
 export interface WSMessage {
   id: string;
@@ -45,7 +46,7 @@ export function setWebSocketServer(wss: WebSocketServer): void {
  */
 export function broadcast(message: { type: string; data?: unknown }): void {
   if (!wssInstance) {
-    console.warn('[WebSocket] Cannot broadcast - server not initialized');
+    console.warn("[WebSocket] Cannot broadcast - server not initialized");
     return;
   }
 
@@ -87,7 +88,7 @@ export function sendError(
  */
 export function setupWebSocketHandlers(wss: WebSocketServer): void {
   console.log("[WebSocket] Setting up handlers...");
-  
+
   // Store WSS instance for broadcasting
   setWebSocketServer(wss);
 
@@ -122,6 +123,8 @@ export function setupWebSocketHandlers(wss: WebSocketServer): void {
           await setupSettingsHandlers(ws, message);
         } else if (message.type.startsWith("meetings:")) {
           await setupMeetingsHandlers(ws, message);
+        } else if (message.type.startsWith("db:")) {
+          await setupDbHandlers(ws, message);
         } else if (message.type.startsWith("custom-keys:")) {
           // Custom keys are now handled via Electron IPC, not WebSocket
           // No action needed here - handled in customKeys.ts

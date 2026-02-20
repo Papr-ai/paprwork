@@ -7,6 +7,8 @@ export type TabType =
   | "document"
   | "app"
   | "artifacts"
+  | "views"
+  | "view"
   | "home"
   | "meetings"
   | "jobs"

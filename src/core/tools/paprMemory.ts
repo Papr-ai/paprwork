@@ -28,13 +28,22 @@ const addMemorySchema = z.object({
 });
 
 const searchMemorySchema = z.object({
-  query: z.string().min(1).describe(
-    "2-3 sentence query for best results. Include specific details, context, and time frame."
-  ),
+  query: z
+    .string()
+    .min(1)
+    .describe(
+      "2-3 sentence query for best results. Include specific details, context, and time frame.",
+    ),
   externalUserId: z.string().optional(),
-  maxMemories: z.number().int().min(1).max(30).optional().describe(
-    "Number of memories to return. Default 20. Use 15-20 for comprehensive results."
-  ),
+  maxMemories: z
+    .number()
+    .int()
+    .min(1)
+    .max(30)
+    .optional()
+    .describe(
+      "Number of memories to return. Default 20. Use 15-20 for comprehensive results.",
+    ),
 });
 
 const registerSchemaSchema = z.object({
@@ -65,7 +74,8 @@ export const addAgentMemoryTool = createTool({
     // Build customMetadata for fields not in the MemoryMetadata spec
     const customMetadata: Record<string, string> = {};
     if (args.sourceAgentId) customMetadata.sourceAgentId = args.sourceAgentId;
-    if (args.sourceAgentName) customMetadata.sourceAgentName = args.sourceAgentName;
+    if (args.sourceAgentName)
+      customMetadata.sourceAgentName = args.sourceAgentName;
     if (args.runId) customMetadata.runId = args.runId;
     if (args.jobId) customMetadata.jobId = args.jobId;
     if (args.chatId) customMetadata.chatId = args.chatId;
@@ -86,7 +96,8 @@ export const addAgentMemoryTool = createTool({
 
 export const searchAgentMemoryTool = createTool({
   id: "search_agent_memory",
-  description: "Search relevant memories from PAPR memory. Use 2-3 sentence queries for best results.",
+  description:
+    "Search relevant memories from PAPR memory. Use 2-3 sentence queries for best results.",
   inputSchema: searchMemorySchema,
   execute: async (args) => {
     const client = await getPaprClient();

@@ -32,6 +32,28 @@
   font-weight: 500;
 }
 
+.job-permission-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: rgba(245, 158, 11, 0.12);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.3);
+  color: #b45309;
+  font-size: 13px;
+  animation: slideDown 0.25s var(--ease);
+}
+
+.job-permission-banner-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.job-permission-banner-text {
+  flex: 1;
+  font-weight: 500;
+}
+
 @keyframes slideDown {
   from {
     transform: translateY(-100%);

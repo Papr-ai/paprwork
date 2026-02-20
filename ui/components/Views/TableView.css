@@ -1,0 +1,129 @@
+/**
+ * TableView - Table data display
+ */
+
+.table-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.table-view__header {
+  flex-shrink: 0;
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.table-view__title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.table-view__count {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.table-view__table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.table-view__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table-view__table th,
+.table-view__table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  word-wrap: break-word;
+}
+
+.table-view__table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.table-view__table thead th {
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--background-tertiary);
+  box-shadow: 0 1px 0 var(--border);
+}
+
+.table-view__table td {
+  color: var(--text-primary);
+}
+
+.table-view__empty {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.table-view__loading,
+.table-view__error {
+  padding: var(--space-4);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.table-view__loading-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.table-view__retry {
+  padding: var(--space-2) var(--space-3);
+  font-size: 13px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: var(--r-md);
+  cursor: pointer;
+}
+
+.table-view__error {
+  color: var(--error-color);
+}
+
+.table-view__pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  padding: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.table-view__pagination button {
+  padding: var(--space-2) var(--space-3);
+  font-size: 13px;
+  background: var(--glass-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  cursor: pointer;
+}
+
+.table-view__pagination button:hover:not(:disabled) {
+  background: var(--glass-bg-hover);
+}
+
+.table-view__pagination button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

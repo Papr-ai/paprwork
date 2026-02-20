@@ -31,41 +31,44 @@ export const ExploringCard: React.FC<ExploringCardProps> = ({
 
   return (
     <div className="exploring-card">
-      <div className="exploring-card-header" onClick={() => setIsCollapsed(!isCollapsed)}>
-        <span className={`exploring-chevron ${isCollapsed ? "exploring-chevron-collapsed" : ""}`}>
+      <div
+        className="exploring-card-header"
+        onClick={() => setIsCollapsed(!isCollapsed)}
+      >
+        <span
+          className={`exploring-chevron ${isCollapsed ? "exploring-chevron-collapsed" : ""}`}
+        >
           ▼
         </span>
-        <span className="exploring-label-text">
-          Exploring
-        </span>
+        <span className="exploring-label-text">Exploring</span>
       </div>
-      <div 
+      <div
         className="exploring-card-content"
         style={{
-          maxHeight: isCollapsed ? '0px' : '200px',
-          opacity: isCollapsed ? '0' : '1',
+          maxHeight: isCollapsed ? "0px" : "200px",
+          opacity: isCollapsed ? "0" : "1",
         }}
       >
         {toolCalls.map((toolCall, index) => {
           const displayText = getToolDisplayLabel(toolCall);
-          
+
           // Determine status indicator
           let statusIndicator = null;
-          if (toolCall.status === 'calling') {
+          if (toolCall.status === "calling") {
             // Loading indicator - liquid glass style pulsing dot
             statusIndicator = (
               <span className="exploring-tool-loading">
                 <span className="exploring-tool-dot"></span>
               </span>
             );
-          } else if (toolCall.status === 'success') {
+          } else if (toolCall.status === "success") {
             // Success checkmark
             statusIndicator = <span className="exploring-tool-success">✓</span>;
-          } else if (toolCall.status === 'error') {
+          } else if (toolCall.status === "error") {
             // Error X
             statusIndicator = <span className="exploring-tool-error">✗</span>;
           }
-          
+
           return (
             <div key={toolCall.id || index} className="exploring-tool-item">
               <span className="exploring-tool-arrow">→</span>
@@ -74,13 +77,9 @@ export const ExploringCard: React.FC<ExploringCardProps> = ({
             </div>
           );
         })}
-        
+
         {/* Show agent narration after tool calls */}
-        {narration && (
-          <div className="exploring-narration">
-            {narration}
-          </div>
-        )}
+        {narration && <div className="exploring-narration">{narration}</div>}
       </div>
     </div>
   );

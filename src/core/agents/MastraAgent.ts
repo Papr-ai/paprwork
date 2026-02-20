@@ -96,7 +96,10 @@ export class MastraAgent {
         // Map UI model ID to API model ID
         // All GPT-5-2 variants (except codex) use the same API ID "gpt-5-2"
         let apiModelId = config.model;
-        if (config.model.startsWith("gpt-5-2-") && config.model !== "gpt-5-2-codex") {
+        if (
+          config.model.startsWith("gpt-5-2-") &&
+          config.model !== "gpt-5-2-codex"
+        ) {
           apiModelId = "gpt-5-2"; // Map gpt-5-2-low, gpt-5-2-high, gpt-5-2-xhigh to gpt-5-2
         }
 
@@ -128,9 +131,13 @@ export class MastraAgent {
             reasoningEffort: config.reasoning.effort, // "low" | "medium" | "high" | "xhigh"
           };
         }
-        
+
         // For Google Gemini models with thinking capabilities
-        if (config.provider === "google" && config.thinkingBudget !== undefined && config.thinkingBudget > 0) {
+        if (
+          config.provider === "google" &&
+          config.thinkingBudget !== undefined &&
+          config.thinkingBudget > 0
+        ) {
           providerOptions.google = {
             thinkingConfig: {
               includeThoughts: true, // Enable thought summaries in stream
@@ -142,7 +149,10 @@ export class MastraAgent {
         // Stream with Mastra
         const streamResult = await agent.stream(mastraMessages, {
           maxSteps: config.maxSteps || 50,
-          providerOptions: Object.keys(providerOptions).length > 0 ? (providerOptions as any) : undefined,
+          providerOptions:
+            Object.keys(providerOptions).length > 0
+              ? (providerOptions as any)
+              : undefined,
         });
 
         // Stream chunks - use proper Mastra types
@@ -152,7 +162,8 @@ export class MastraAgent {
           // Map Mastra chunk types to our StreamChunk types
           switch (mastraChunk.type) {
             case "text-delta": {
-              const payload = mastraChunk.payload as unknown as MastraTextDeltaPayload;
+              const payload =
+                mastraChunk.payload as unknown as MastraTextDeltaPayload;
               if (payload?.text) {
                 const textChunk: StreamChunk = {
                   type: "text-delta",
@@ -171,7 +182,8 @@ export class MastraAgent {
             }
 
             case "reasoning-delta": {
-              const payload = mastraChunk.payload as unknown as MastraReasoningDeltaPayload;
+              const payload =
+                mastraChunk.payload as unknown as MastraReasoningDeltaPayload;
               if (payload?.text) {
                 const thinkingChunk: StreamChunk = {
                   type: "reasoning-delta",
@@ -186,7 +198,8 @@ export class MastraAgent {
             }
 
             case "tool-call": {
-              const payload = mastraChunk.payload as unknown as MastraToolCallPayload;
+              const payload =
+                mastraChunk.payload as unknown as MastraToolCallPayload;
               if (payload?.toolName) {
                 const toolChunk: StreamChunk = {
                   type: "tool-call",

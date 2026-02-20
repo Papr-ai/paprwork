@@ -16,7 +16,7 @@ export function useKeyPermissions() {
   useEffect(() => {
     const handler = (
       _event: any,
-      request: KeyPermissionRequest & { requestId: string }
+      request: KeyPermissionRequest & { requestId: string },
     ) => {
       console.log("[useKeyPermissions] Permission request received:", request);
       setActiveRequest(request);
@@ -42,7 +42,7 @@ export function useKeyPermissions() {
 
       setActiveRequest(null);
     },
-    [activeRequest]
+    [activeRequest],
   );
 
   return {

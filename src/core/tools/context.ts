@@ -1,6 +1,6 @@
 /**
  * Tool Execution Context
- * 
+ *
  * Provides ambient context to tools (like chatId) without requiring
  * it as an explicit parameter in every tool call.
  */

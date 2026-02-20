@@ -18,7 +18,7 @@ export interface StreamOrchestratorResult {
   thinkingText: string;
   toolCalls: ToolCallEvent[];
   toolResults: ToolResultEvent[];
-  sequence: Array<{ type: 'text' | 'tool' | 'thinking'; data: any }>; // V1-style sequence for interleaving
+  sequence: Array<{ type: "text" | "tool" | "thinking"; data: any }>; // V1-style sequence for interleaving
 }
 
 export async function* orchestrateModelStream(
@@ -34,9 +34,9 @@ export async function* orchestrateModelStream(
   let thinkingText = "";
   const toolCalls: ToolCallEvent[] = [];
   const toolResults: ToolResultEvent[] = [];
-  
+
   // Build V1-style sequence for interleaving text and tool calls
-  const sequence: Array<{ type: 'text' | 'tool' | 'thinking'; data: any }> = [];
+  const sequence: Array<{ type: "text" | "tool" | "thinking"; data: any }> = [];
   let currentTextSegment = ""; // Accumulate text between tool calls
 
   for await (const rawChunk of fullStream) {
@@ -44,7 +44,11 @@ export async function* orchestrateModelStream(
       continue;
     }
 
-    const chunk = rawChunk as { type?: unknown; text?: unknown; error?: unknown };
+    const chunk = rawChunk as {
+      type?: unknown;
+      text?: unknown;
+      error?: unknown;
+    };
     const chunkType = chunk.type;
     if (chunkType !== "text-delta") {
       console.log(`[AgentService] Received chunk type: ${String(chunkType)}`);
@@ -57,7 +61,7 @@ export async function* orchestrateModelStream(
         console.log("[StreamOrchestrator] Step starting...");
         break;
       }
-      
+
       case "text-delta": {
         const text = typeof chunk.text === "string" ? chunk.text : "";
         assistantText += text;
@@ -65,23 +69,35 @@ export async function* orchestrateModelStream(
         currentTextSegment += text; // Accumulate for sequence
 
         if (textBuffer.length >= TEXT_BUFFER_MIN) {
-          yield createChatStreamChunk("text-delta", { text: textBuffer }, chatId);
+          yield createChatStreamChunk(
+            "text-delta",
+            { text: textBuffer },
+            chatId,
+          );
           textBuffer = "";
         }
         break;
       }
-      
+
       case "text-end": {
         // Text for this step is complete - it will be followed by tool-call
         // Flush any remaining text buffer to ensure UI gets complete text before tool call
         if (textBuffer.length > 0) {
-          console.log(`[StreamOrchestrator] Flushing text buffer (${textBuffer.length} chars) at text-end`);
-          yield createChatStreamChunk("text-delta", { text: textBuffer }, chatId);
+          console.log(
+            `[StreamOrchestrator] Flushing text buffer (${textBuffer.length} chars) at text-end`,
+          );
+          yield createChatStreamChunk(
+            "text-delta",
+            { text: textBuffer },
+            chatId,
+          );
           textBuffer = "";
         }
         const trimmed = currentTextSegment.trim();
         if (trimmed) {
-          console.log(`[StreamOrchestrator] Text segment complete (before tool): "${trimmed.substring(0, 50)}..."`);
+          console.log(
+            `[StreamOrchestrator] Text segment complete (before tool): "${trimmed.substring(0, 50)}..."`,
+          );
         }
         break;
       }
@@ -90,8 +106,14 @@ export async function* orchestrateModelStream(
         console.log("[AgentService] Reasoning started");
         // Flush text buffer before reasoning starts
         if (textBuffer.length > 0) {
-          console.log(`[StreamOrchestrator] Flushing text buffer (${textBuffer.length} chars) before reasoning`);
-          yield createChatStreamChunk("text-delta", { text: textBuffer }, chatId);
+          console.log(
+            `[StreamOrchestrator] Flushing text buffer (${textBuffer.length} chars) before reasoning`,
+          );
+          yield createChatStreamChunk(
+            "text-delta",
+            { text: textBuffer },
+            chatId,
+          );
           textBuffer = "";
         }
         break;
@@ -125,7 +147,7 @@ export async function* orchestrateModelStream(
         }
         // Add thinking to sequence when complete
         if (thinkingText) {
-          sequence.push({ type: 'thinking', data: thinkingText });
+          sequence.push({ type: "thinking", data: thinkingText });
         }
         break;
       }
@@ -135,35 +157,45 @@ export async function* orchestrateModelStream(
         if (!toolCall) break;
 
         toolCalls.push(toolCall);
-        
+
         // CRITICAL: Flush text buffer to UI before tool call
         // This ensures all text before the tool call is sent to the UI first
         if (textBuffer.length > 0) {
-          console.log(`[StreamOrchestrator] Flushing text buffer (${textBuffer.length} chars) before tool call`);
-          yield createChatStreamChunk("text-delta", { text: textBuffer }, chatId);
+          console.log(
+            `[StreamOrchestrator] Flushing text buffer (${textBuffer.length} chars) before tool call`,
+          );
+          yield createChatStreamChunk(
+            "text-delta",
+            { text: textBuffer },
+            chatId,
+          );
           textBuffer = "";
         }
-        
+
         // Flush accumulated text from this step's narration (comes before tool-call)
         if (currentTextSegment.trim()) {
           const trimmed = currentTextSegment.trim();
-          console.log(`[StreamOrchestrator] Adding text to sequence (#${sequence.length + 1}): "${trimmed.substring(0, 50)}..."`);
-          sequence.push({ type: 'text', data: trimmed });
+          console.log(
+            `[StreamOrchestrator] Adding text to sequence (#${sequence.length + 1}): "${trimmed.substring(0, 50)}..."`,
+          );
+          sequence.push({ type: "text", data: trimmed });
           currentTextSegment = ""; // Reset for next step
         }
-        
+
         // Add tool to sequence immediately (will update with result later)
-        console.log(`[StreamOrchestrator] Adding tool to sequence (#${sequence.length + 1}): ${toolCall.toolName}`);
+        console.log(
+          `[StreamOrchestrator] Adding tool to sequence (#${sequence.length + 1}): ${toolCall.toolName}`,
+        );
         sequence.push({
-          type: 'tool',
+          type: "tool",
           data: {
             name: toolCall.toolName,
             input: toolCall.args,
-            status: 'calling', // Tool is running
+            status: "calling", // Tool is running
             toolCallId: toolCall.toolCallId, // Keep for reliable result matching
           },
         });
-        
+
         yield createChatStreamChunk(
           "tool-call",
           {
@@ -202,22 +234,27 @@ export async function* orchestrateModelStream(
           result: sanitizedResult,
         };
         toolResults.push(toolResult);
-        
+
         // Update existing tool in sequence with result — match by toolCallId (reliable)
-        const toolCall = toolCalls.find(tc => tc.toolCallId === toolResult.toolCallId);
+        const toolCall = toolCalls.find(
+          (tc) => tc.toolCallId === toolResult.toolCallId,
+        );
         if (toolCall) {
           const toolIndex = sequence.findIndex(
-            item => item.type === 'tool' &&
-            (item.data as any).toolCallId === toolResult.toolCallId
+            (item) =>
+              item.type === "tool" &&
+              (item.data as any).toolCallId === toolResult.toolCallId,
           );
-          
+
           if (toolIndex !== -1) {
-            console.log(`[StreamOrchestrator] Updating tool in sequence at index ${toolIndex} with result`);
+            console.log(
+              `[StreamOrchestrator] Updating tool in sequence at index ${toolIndex} with result`,
+            );
             sequence[toolIndex].data = {
               name: toolCall.toolName,
               input: toolCall.args,
               output: toolResult.result,
-              status: 'success',
+              status: "success",
               toolCallId: toolResult.toolCallId, // Preserve for any future lookups
             };
           }
@@ -273,9 +310,13 @@ export async function* orchestrateModelStream(
 
       case "finish": {
         const finishReason = (rawChunk as any).finishReason;
-        console.log(`[StreamOrchestrator] 🏁 Finish chunk received, reason: ${finishReason || 'unknown'}`);
-        if (finishReason === 'length') {
-          console.warn(`[StreamOrchestrator] ⚠️ Model stopped due to TOKEN LIMIT! Consider increasing maxTokens.`);
+        console.log(
+          `[StreamOrchestrator] 🏁 Finish chunk received, reason: ${finishReason || "unknown"}`,
+        );
+        if (finishReason === "length") {
+          console.warn(
+            `[StreamOrchestrator] ⚠️ Model stopped due to TOKEN LIMIT! Consider increasing maxTokens.`,
+          );
         }
         break;
       }
@@ -294,10 +335,10 @@ export async function* orchestrateModelStream(
       chatId,
     );
   }
-  
+
   // Add any remaining text segment to sequence (final text after all tools)
   if (currentTextSegment.trim()) {
-    sequence.push({ type: 'text', data: currentTextSegment.trim() });
+    sequence.push({ type: "text", data: currentTextSegment.trim() });
   }
 
   return {

@@ -14,7 +14,10 @@ import { useChatStore, defaultChatState } from "../../stores/chatStore";
 import type { ChatMetadata } from "../../types/chat";
 
 /** Build a ChatMetadata entry with sensible defaults */
-function makeMeta(id: string, overrides: Partial<ChatMetadata> = {}): ChatMetadata {
+function makeMeta(
+  id: string,
+  overrides: Partial<ChatMetadata> = {},
+): ChatMetadata {
   const now = new Date().toISOString();
   return {
     id,
@@ -111,7 +114,9 @@ describe("Chat Metadata", () => {
     });
 
     it("should mark a chat as read", () => {
-      useChatStore.getState().setChats([makeMeta("chat-1", { hasUnread: true })]);
+      useChatStore
+        .getState()
+        .setChats([makeMeta("chat-1", { hasUnread: true })]);
 
       useChatStore.getState().markChatAsRead("chat-1");
 
@@ -123,8 +128,12 @@ describe("Chat Metadata", () => {
 
       useChatStore.getState().setChatUnread("a", true);
 
-      expect(useChatStore.getState().chats.find((c) => c.id === "a")?.hasUnread).toBe(true);
-      expect(useChatStore.getState().chats.find((c) => c.id === "b")?.hasUnread).toBe(false);
+      expect(
+        useChatStore.getState().chats.find((c) => c.id === "a")?.hasUnread,
+      ).toBe(true);
+      expect(
+        useChatStore.getState().chats.find((c) => c.id === "b")?.hasUnread,
+      ).toBe(false);
     });
   });
 
@@ -145,13 +154,23 @@ describe("Chat Metadata", () => {
     });
 
     it("should clear isStreaming on metadata via finalizeStreamingMessage", () => {
-      useChatStore.getState().setChats([makeMeta("chat-1", { isStreaming: true })]);
+      useChatStore
+        .getState()
+        .setChats([makeMeta("chat-1", { isStreaming: true })]);
       useChatStore.setState((s) => {
         const next = new Map(s.chatStates);
         next.set("chat-1", {
           ...defaultChatState,
           isStreaming: true,
-          messages: [{ id: "m1", role: "assistant", content: "", isStreaming: true, streamingContent: "Final" }],
+          messages: [
+            {
+              id: "m1",
+              role: "assistant",
+              content: "",
+              isStreaming: true,
+              streamingContent: "Final",
+            },
+          ],
         });
         return { chatStates: next };
       });

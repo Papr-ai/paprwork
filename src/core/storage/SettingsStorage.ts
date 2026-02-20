@@ -175,7 +175,10 @@ export class SettingsStorage {
    * Set permission level
    */
   setPermissionLevel(level: PermissionLevel): void {
-    const permissions = this.store.get("permissions", DEFAULT_PERMISSION_SETTINGS);
+    const permissions = this.store.get(
+      "permissions",
+      DEFAULT_PERMISSION_SETTINGS,
+    );
     this.store.set("permissions", { ...permissions, permissionLevel: level });
   }
 

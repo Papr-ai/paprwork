@@ -60,7 +60,12 @@ export function ArtifactsView() {
     await toggleFavorite(id, type);
   };
 
-  const handleOpen = (id: string, type: ArtifactType, title: string, icon?: string) => {
+  const handleOpen = (
+    id: string,
+    type: ArtifactType,
+    title: string,
+    icon?: string,
+  ) => {
     const tabType = type === "app" ? "app" : "document";
     const tabId = createTab(tabType, id, title, icon ? { icon } : {});
     switchToTab(tabId);
@@ -149,14 +154,18 @@ export function ArtifactsView() {
   viewArtifacts = [...viewArtifacts].sort((a, b) => {
     switch (sortBy) {
       case "oldest":
-        return new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
+        return (
+          new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime()
+        );
       case "name-asc":
         return a.title.localeCompare(b.title);
       case "name-desc":
         return b.title.localeCompare(a.title);
       case "recent":
       default:
-        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+        return (
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        );
     }
   });
 
@@ -198,7 +207,14 @@ export function ArtifactsView() {
             onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}
             title="Show favorites only"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill={showFavoritesOnly ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill={showFavoritesOnly ? "currentColor" : "none"}
+              stroke="currentColor"
+              strokeWidth="1.5"
+            >
               <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
             </svg>
           </button>
@@ -221,7 +237,14 @@ export function ArtifactsView() {
             onClick={() => setViewMode("grid")}
             title="Grid view"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            >
               <rect x="3" y="3" width="7" height="7" rx="1" />
               <rect x="14" y="3" width="7" height="7" rx="1" />
               <rect x="3" y="14" width="7" height="7" rx="1" />
@@ -233,7 +256,14 @@ export function ArtifactsView() {
             onClick={() => setViewMode("list")}
             title="List view"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            >
               <line x1="8" y1="6" x2="21" y2="6" />
               <line x1="8" y1="12" x2="21" y2="12" />
               <line x1="8" y1="18" x2="21" y2="18" />
@@ -269,7 +299,10 @@ export function ArtifactsView() {
             }}
             autoFocus
           />
-          <button className="filter-pill filter-pill--active" onClick={() => void handleCreateDoc()}>
+          <button
+            className="filter-pill filter-pill--active"
+            onClick={() => void handleCreateDoc()}
+          >
             Create
           </button>
         </div>
@@ -291,7 +324,10 @@ export function ArtifactsView() {
             value={newAppDescription}
             onChange={(event) => setNewAppDescription(event.target.value)}
           />
-          <button className="filter-pill filter-pill--active" onClick={() => void handleCreateApp()}>
+          <button
+            className="filter-pill filter-pill--active"
+            onClick={() => void handleCreateApp()}
+          >
             Create App
           </button>
           {showTemplateShortcut && (
@@ -320,12 +356,37 @@ export function ArtifactsView() {
               fill="none"
               opacity="0.4"
             >
-              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" />
-              <line x1="12" y1="8" x2="12" y2="12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-              <line x1="12" y1="16" x2="12.01" y2="16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              <circle
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              />
+              <line
+                x1="12"
+                y1="8"
+                x2="12"
+                y2="12"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+              <line
+                x1="12"
+                y1="16"
+                x2="12.01"
+                y2="16"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
             </svg>
             <p>{error}</p>
-            <button className="artifacts-view__retry-btn" onClick={loadArtifacts}>
+            <button
+              className="artifacts-view__retry-btn"
+              onClick={loadArtifacts}
+            >
               Retry
             </button>
           </div>
@@ -333,7 +394,13 @@ export function ArtifactsView() {
 
         {!loading && !error && viewArtifacts.length === 0 && (
           <div className="artifacts-view__empty">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" opacity="0.3">
+            <svg
+              width="48"
+              height="48"
+              viewBox="0 0 24 24"
+              fill="none"
+              opacity="0.3"
+            >
               {view === "documents" ? (
                 <>
                   <path
@@ -345,9 +412,31 @@ export function ArtifactsView() {
                 </>
               ) : (
                 <>
-                  <rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="1.5" />
-                  <line x1="3" y1="9" x2="21" y2="9" stroke="currentColor" strokeWidth="1.5" />
-                  <line x1="9" y1="21" x2="9" y2="9" stroke="currentColor" strokeWidth="1.5" />
+                  <rect
+                    x="3"
+                    y="3"
+                    width="18"
+                    height="18"
+                    rx="2"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                  />
+                  <line
+                    x1="3"
+                    y1="9"
+                    x2="21"
+                    y2="9"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                  />
+                  <line
+                    x1="9"
+                    y1="21"
+                    x2="9"
+                    y2="9"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                  />
                 </>
               )}
             </svg>
@@ -384,7 +473,12 @@ export function ArtifactsView() {
                   handleToggleFavorite(artifact.id, artifact.type)
                 }
                 onOpen={() =>
-                  handleOpen(artifact.id, artifact.type, artifact.title, artifact.icon)
+                  handleOpen(
+                    artifact.id,
+                    artifact.type,
+                    artifact.title,
+                    artifact.icon,
+                  )
                 }
                 onRename={(title) =>
                   handleRename(artifact.id, artifact.type, title)

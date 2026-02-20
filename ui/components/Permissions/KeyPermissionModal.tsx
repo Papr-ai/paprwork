@@ -1,6 +1,6 @@
 /**
  * Key Permission Modal
- * 
+ *
  * Shows permission request to user when a tool tries to use an API key.
  * Allows user to approve/deny and optionally set "always allow".
  */

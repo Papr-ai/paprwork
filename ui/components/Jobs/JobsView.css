@@ -486,6 +486,20 @@
   color: #6b7280;
 }
 
+.job-status-indicator.status-waiting-permission svg {
+  color: #f59e0b;
+}
+
+.job-card-waiting-keys {
+  font-size: 12px;
+  color: #f59e0b;
+  padding: 6px 10px;
+  margin: 0 0 8px;
+  background: rgba(245, 158, 11, 0.12);
+  border-radius: 8px;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
 .job-title {
   font-size: 16px;
   font-weight: 600;

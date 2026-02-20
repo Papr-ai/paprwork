@@ -57,7 +57,12 @@ export class TranscriptionService {
     options?: TranscriptionOptions,
   ): Promise<TranscriptionResult> {
     const audioBuffer = await fs.readFile(filePath);
-    return this.transcribeBuffer(audioBuffer, path.basename(filePath), apiKey, options);
+    return this.transcribeBuffer(
+      audioBuffer,
+      path.basename(filePath),
+      apiKey,
+      options,
+    );
   }
 
   /**
@@ -70,14 +75,22 @@ export class TranscriptionService {
     options?: TranscriptionOptions,
   ): Promise<TranscriptionResult> {
     const formData = new FormData();
-    const arrayBuf = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
-    const blob = new Blob([arrayBuf], { type: this.mimeTypeFromFilename(filename) });
+    const arrayBuf = buffer.buffer.slice(
+      buffer.byteOffset,
+      buffer.byteOffset + buffer.byteLength,
+    ) as ArrayBuffer;
+    const blob = new Blob([arrayBuf], {
+      type: this.mimeTypeFromFilename(filename),
+    });
     formData.append("file", blob, filename);
     formData.append("model", "whisper-1");
 
     if (options?.language) formData.append("language", options.language);
     if (options?.prompt) formData.append("prompt", options.prompt);
-    formData.append("response_format", options?.responseFormat ?? "verbose_json");
+    formData.append(
+      "response_format",
+      options?.responseFormat ?? "verbose_json",
+    );
 
     const response = await fetch(
       "https://api.openai.com/v1/audio/transcriptions",
@@ -93,7 +106,7 @@ export class TranscriptionService {
       throw new Error(`Whisper API error (${response.status}): ${errorText}`);
     }
 
-    const data = await response.json() as Record<string, unknown>;
+    const data = (await response.json()) as Record<string, unknown>;
     return this.parseWhisperResponse(data);
   }
 
@@ -140,15 +153,19 @@ export class TranscriptionService {
     data: Record<string, unknown>,
   ): TranscriptionResult {
     const text = (data.text as string) ?? "";
-    const duration = (data.duration as number | undefined);
-    const language = (data.language as string | undefined);
-    const rawSegments = data.segments as Array<Record<string, unknown>> | undefined;
+    const duration = data.duration as number | undefined;
+    const language = data.language as string | undefined;
+    const rawSegments = data.segments as
+      | Array<Record<string, unknown>>
+      | undefined;
 
-    const segments: TranscriptionSegment[] | undefined = rawSegments?.map((s) => ({
-      start: s.start as number,
-      end: s.end as number,
-      text: s.text as string,
-    }));
+    const segments: TranscriptionSegment[] | undefined = rawSegments?.map(
+      (s) => ({
+        start: s.start as number,
+        end: s.end as number,
+        text: s.text as string,
+      }),
+    );
 
     return { text, segments, duration, language };
   }

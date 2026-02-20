@@ -131,7 +131,11 @@ export class SkillService {
       (a, b) =>
         new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
     );
-    await fs.writeFile(this.skillIndexPath, JSON.stringify(list, null, 2), "utf8");
+    await fs.writeFile(
+      this.skillIndexPath,
+      JSON.stringify(list, null, 2),
+      "utf8",
+    );
   }
 
   private async loadPreloadedSkillDefs(): Promise<PreloadedSkillDef[]> {
@@ -174,7 +178,10 @@ export class SkillService {
       const existing = this.skills.get(baseSkill.id);
       if (existing) {
         // Update content if the bundled skill has changed
-        if (existing.source === "preloaded" && existing.content !== baseSkill.content) {
+        if (
+          existing.source === "preloaded" &&
+          existing.content !== baseSkill.content
+        ) {
           this.skills.set(baseSkill.id, {
             ...existing,
             name: baseSkill.name,
@@ -208,13 +215,19 @@ export class SkillService {
   private async ensureCatalogCached(): Promise<void> {
     const destPath = path.join(this.paprRootDir, "skills-catalog.json");
     const thisDir = path.dirname(fileURLToPath(import.meta.url));
-    const srcPath = path.resolve(thisDir, "../../resources/skills-catalog.json");
+    const srcPath = path.resolve(
+      thisDir,
+      "../../resources/skills-catalog.json",
+    );
 
     try {
       await fs.copyFile(srcPath, destPath);
       console.log("[SkillService] Cached skills catalog →", destPath);
     } catch {
-      console.warn("[SkillService] Could not cache skills catalog from:", srcPath);
+      console.warn(
+        "[SkillService] Could not cache skills catalog from:",
+        srcPath,
+      );
     }
   }
 
@@ -282,8 +295,12 @@ export class SkillService {
     const skillsShUrl = process.env.SKILLS_SH_CATALOG_URL;
 
     const [clawhub, skillsSh] = await Promise.all([
-      clawhubUrl ? this.fetchCatalog("clawhub", clawhubUrl) : Promise.resolve([]),
-      skillsShUrl ? this.fetchCatalog("skills.sh", skillsShUrl) : Promise.resolve([]),
+      clawhubUrl
+        ? this.fetchCatalog("clawhub", clawhubUrl)
+        : Promise.resolve([]),
+      skillsShUrl
+        ? this.fetchCatalog("skills.sh", skillsShUrl)
+        : Promise.resolve([]),
     ]);
 
     let merged = [...clawhub, ...skillsSh];
@@ -311,7 +328,10 @@ export class SkillService {
     // Try user-data copy first, then bundled resource
     const userCopy = path.join(this.paprRootDir, "skills-catalog.json");
     const thisDir = path.dirname(fileURLToPath(import.meta.url));
-    const bundledCopy = path.resolve(thisDir, "../../resources/skills-catalog.json");
+    const bundledCopy = path.resolve(
+      thisDir,
+      "../../resources/skills-catalog.json",
+    );
 
     for (const filePath of [userCopy, bundledCopy]) {
       try {
@@ -324,11 +344,19 @@ export class SkillService {
           const row = entry as Record<string, unknown>;
           const id = typeof row.id === "string" ? row.id : null;
           const name = typeof row.name === "string" ? row.name : null;
-          const description = typeof row.description === "string" ? row.description : "";
-          const source = row.source === "clawhub" ? "clawhub" as const : "skills.sh" as const;
-          const category = typeof row.category === "string" ? row.category : undefined;
-          const tags = Array.isArray(row.tags) ? (row.tags as string[]) : undefined;
-          const installs = typeof row.installs === "number" ? row.installs : undefined;
+          const description =
+            typeof row.description === "string" ? row.description : "";
+          const source =
+            row.source === "clawhub"
+              ? ("clawhub" as const)
+              : ("skills.sh" as const);
+          const category =
+            typeof row.category === "string" ? row.category : undefined;
+          const tags = Array.isArray(row.tags)
+            ? (row.tags as string[])
+            : undefined;
+          const installs =
+            typeof row.installs === "number" ? row.installs : undefined;
           if (!id || !name) continue;
           result.push({
             id,
@@ -342,7 +370,9 @@ export class SkillService {
           });
         }
         if (result.length > 0) {
-          console.log(`[SkillService] Loaded ${result.length} catalog skills from cache: ${filePath}`);
+          console.log(
+            `[SkillService] Loaded ${result.length} catalog skills from cache: ${filePath}`,
+          );
           return result;
         }
       } catch {
@@ -413,7 +443,10 @@ export class SkillService {
     return deleted;
   }
 
-  async setEnabled(skillId: string, enabled: boolean): Promise<SkillRecord | null> {
+  async setEnabled(
+    skillId: string,
+    enabled: boolean,
+  ): Promise<SkillRecord | null> {
     return this.updateSkill(skillId, { enabled });
   }
 
@@ -422,7 +455,9 @@ export class SkillService {
     agentIds: string[],
   ): Promise<SkillRecord | null> {
     const deduped = Array.from(
-      new Set(agentIds.map((item) => item.trim()).filter((item) => item.length > 0)),
+      new Set(
+        agentIds.map((item) => item.trim()).filter((item) => item.length > 0),
+      ),
     );
     return this.updateSkill(skillId, { assignedAgentIds: deduped });
   }
@@ -441,9 +476,7 @@ export class SkillService {
     }
 
     const existing = Array.from(this.skills.values()).find(
-      (skill) =>
-        skill.externalId === match.id &&
-        skill.source === match.source,
+      (skill) => skill.externalId === match.id && skill.source === match.source,
     );
     if (existing) {
       return existing;

@@ -106,14 +106,20 @@ export class WorkspaceService {
           console.log(`[WorkspaceService] Created template: ${filename}`);
         } else {
           // Fallback: create minimal placeholder
-          await fs.writeFile(destPath, `# ${filename.replace(".md", "")}\n\n`, "utf8");
+          await fs.writeFile(
+            destPath,
+            `# ${filename.replace(".md", "")}\n\n`,
+            "utf8",
+          );
           console.log(`[WorkspaceService] Created placeholder: ${filename}`);
         }
       }
     }
 
     this.initialized = true;
-    console.log(`[WorkspaceService] Workspace initialized at ${this.workspaceDir}`);
+    console.log(
+      `[WorkspaceService] Workspace initialized at ${this.workspaceDir}`,
+    );
   }
 
   /**
@@ -129,7 +135,11 @@ export class WorkspaceService {
       if (totalChars >= MAX_TOTAL_CHARS) break;
 
       const filePath = path.join(this.workspaceDir, filename);
-      const loaded = await this.loadAndTruncate(filePath, filename, MAX_TOTAL_CHARS - totalChars);
+      const loaded = await this.loadAndTruncate(
+        filePath,
+        filename,
+        MAX_TOTAL_CHARS - totalChars,
+      );
       if (loaded) {
         files.push(loaded);
         totalChars += loaded.content.length;
@@ -144,7 +154,10 @@ export class WorkspaceService {
 
     // Check onboarding status
     const onboardPath = path.join(this.workspaceDir, "ONBOARD.md");
-    const onboardCompletedPath = path.join(this.workspaceDir, "ONBOARD.completed.md");
+    const onboardCompletedPath = path.join(
+      this.workspaceDir,
+      "ONBOARD.completed.md",
+    );
     const onboardExists = await this.fileExists(onboardPath);
     const onboardCompleted = await this.fileExists(onboardCompletedPath);
     const onboardingPending = onboardExists && !onboardCompleted;
@@ -154,8 +167,9 @@ export class WorkspaceService {
       try {
         onboardContent = await fs.readFile(onboardPath, "utf8");
         if (onboardContent.length > MAX_CHARS_PER_FILE) {
-          onboardContent = onboardContent.substring(0, MAX_CHARS_PER_FILE)
-            + "\n\n[... truncated at 20,000 chars ...]";
+          onboardContent =
+            onboardContent.substring(0, MAX_CHARS_PER_FILE) +
+            "\n\n[... truncated at 20,000 chars ...]";
         }
       } catch {
         // File read error — skip onboarding content
@@ -190,7 +204,9 @@ export class WorkspaceService {
   /**
    * Load today's and yesterday's daily memory logs.
    */
-  private async loadDailyLogs(remainingBudget: number): Promise<WorkspaceFile[]> {
+  private async loadDailyLogs(
+    remainingBudget: number,
+  ): Promise<WorkspaceFile[]> {
     const logs: WorkspaceFile[] = [];
     let budget = remainingBudget;
 
@@ -209,7 +225,11 @@ export class WorkspaceService {
       const dateStr = date.toISOString().split("T")[0]; // YYYY-MM-DD
       const filename = `${dateStr}.md`;
       const filePath = path.join(this.memoryDir, filename);
-      const loaded = await this.loadAndTruncate(filePath, `memory/${filename} (${label})`, budget);
+      const loaded = await this.loadAndTruncate(
+        filePath,
+        `memory/${filename} (${label})`,
+        budget,
+      );
       if (loaded) {
         logs.push(loaded);
         budget -= loaded.content.length;
@@ -239,7 +259,9 @@ export class WorkspaceService {
       let truncated = false;
 
       if (content.length > maxChars) {
-        content = content.substring(0, maxChars) + "\n\n[... truncated at 20,000 chars ...]";
+        content =
+          content.substring(0, maxChars) +
+          "\n\n[... truncated at 20,000 chars ...]";
         truncated = true;
       }
 
@@ -309,7 +331,8 @@ export class WorkspaceService {
         sleepPrompt = await fs.readFile(sleepMdPath, "utf8");
       } catch {
         // Fallback if SLEEP.md is missing for some reason
-        sleepPrompt = "Review daily logs in ~/PAPR/workspace/memory/, distill learnings into MEMORY.md/IDENTITY.md/AGENTS.md/TOOLS.md, archive logs older than 14 days.";
+        sleepPrompt =
+          "Review daily logs in ~/PAPR/workspace/memory/, distill learnings into MEMORY.md/IDENTITY.md/AGENTS.md/TOOLS.md, archive logs older than 14 days.";
       }
 
       const job = await jobsService.createJob({
@@ -327,18 +350,182 @@ export class WorkspaceService {
       // Write task.md alongside job.json for user visibility and customisation
       const jobDir = await jobsService.getJobPath(job.id);
       if (jobDir) {
-        await fs.writeFile(
-          path.join(jobDir, "task.md"),
-          sleepPrompt,
-          "utf8",
-        );
+        await fs.writeFile(path.join(jobDir, "task.md"), sleepPrompt, "utf8");
       }
 
-      console.log("[WorkspaceService] Created papr-sleep agent job (daily at 7pm)");
+      console.log(
+        "[WorkspaceService] Created papr-sleep agent job (daily at 7pm)",
+      );
     } catch (error) {
       console.warn("[WorkspaceService] Failed to create sleep job:", error);
       // Non-fatal: workspace still works without the sleep job
     }
+  }
+
+  /**
+   * Create checkpoint-aware job template in job directory.
+   * Called by JobsService after job creation if template is requested.
+   */
+  async createCheckpointJobTemplate(
+    jobDir: string,
+    jobType: "python" | "node",
+  ): Promise<void> {
+    if (jobType === "python") {
+      const templatePath = path.join(jobDir, "code", "main.py");
+      const template = `#!/usr/bin/env python3
+"""
+Checkpoint-aware job template.
+
+This template shows how to implement resumable processing for large datasets.
+The job saves progress after every batch, so it can resume from where it left
+off if interrupted or if retries are triggered.
+"""
+
+import sqlite3
+from pathlib import Path
+from datetime import datetime
+
+# Database path (relative to this script)
+db_path = Path(__file__).parent.parent / "data" / "data.db"
+
+def initialize_schema(conn):
+    """Create tables on first run."""
+    cur = conn.cursor()
+    
+    # Main data table
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      data TEXT NOT NULL,
+      processed_at TEXT NOT NULL
+    )
+    """)
+    
+    # Checkpoint table tracks progress
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS checkpoint (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+    """)
+    
+    conn.commit()
+
+def load_checkpoint(conn, key, default=0):
+    """Load checkpoint value, or return default if not found."""
+    cur = conn.cursor()
+    cur.execute("SELECT value FROM checkpoint WHERE key=?", (key,))
+    row = cur.fetchone()
+    return int(row[0]) if row else default
+
+def save_checkpoint(conn, key, value):
+    """Save checkpoint value."""
+    cur = conn.cursor()
+    cur.execute("""
+    INSERT OR REPLACE INTO checkpoint (key, value, updated_at)
+    VALUES (?, ?, ?)
+    """, (key, str(value), datetime.utcnow().isoformat()))
+    conn.commit()
+
+def process_batch(conn, start_id, batch_size):
+    """
+    Process a batch of items.
+    Replace this with your actual processing logic.
+    """
+    cur = conn.cursor()
+    
+    for i in range(batch_size):
+        item_id = start_id + i
+        
+        # TODO: Replace with your processing logic
+        # Example: fetch from API, transform data, etc.
+        data = f"Processed item {item_id}"
+        
+        cur.execute(
+            "INSERT INTO items (data, processed_at) VALUES (?, ?)",
+            (data, datetime.utcnow().isoformat())
+        )
+    
+    conn.commit()
+
+def main():
+    """Main processing loop with checkpointing."""
+    conn = sqlite3.connect(db_path)
+    
+    # Initialize schema on first run
+    initialize_schema(conn)
+    
+    # Load checkpoint
+    last_id = load_checkpoint(conn, "last_processed_id", default=0)
+    print(f"Resuming from ID {last_id}")
+    
+    # Process in batches
+    BATCH_SIZE = 100
+    TOTAL_ITEMS = 10_000  # TODO: Replace with your total item count
+    
+    current_id = last_id
+    while current_id < TOTAL_ITEMS:
+        batch_size = min(BATCH_SIZE, TOTAL_ITEMS - current_id)
+        
+        # Process batch
+        process_batch(conn, current_id, batch_size)
+        current_id += batch_size
+        
+        # Save checkpoint after each batch
+        save_checkpoint(conn, "last_processed_id", current_id)
+        
+        print(f"Checkpoint: {current_id}/{TOTAL_ITEMS} items processed")
+    
+    print(f"Processing complete! Total: {TOTAL_ITEMS} items")
+    conn.close()
+
+if __name__ == "__main__":
+    main()
+`;
+
+      await fs.writeFile(templatePath, template, "utf8");
+
+      // Also create README explaining the pattern
+      const readmePath = path.join(jobDir, "README.md");
+      const readme = `# Checkpoint-Aware Job Template
+
+This job implements checkpointing for resumable processing.
+
+## How it works
+
+1. **Checkpoint table** tracks progress (last processed ID)
+2. **Batch processing** saves checkpoint after every 100 items
+3. **Resume on retry** loads last checkpoint and continues
+
+## Testing resilience
+
+\`\`\`bash
+# Run normally
+python3 code/main.py
+
+# Simulate crash (Ctrl+C during run)
+# Then run again - it resumes from last checkpoint
+
+# View progress
+sqlite3 data/data.db "SELECT * FROM checkpoint"
+\`\`\`
+
+## Adapting for your use case
+
+Replace the \`process_batch()\` function with your actual logic:
+- API calls
+- Data transformations
+- File processing
+- Database operations
+
+The checkpoint pattern works for any sequential processing task.
+`;
+
+      await fs.writeFile(readmePath, readme, "utf8");
+    }
+
+    // TODO: Add Node.js template if needed
   }
 }
 

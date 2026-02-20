@@ -145,17 +145,11 @@ export class MeetingsService {
     return this.updateMeeting(id, { status: "recording" });
   }
 
-  async stopRecording(
-    id: string,
-    duration: number,
-  ): Promise<Meeting | null> {
+  async stopRecording(id: string, duration: number): Promise<Meeting | null> {
     return this.updateMeeting(id, { status: "completed", duration });
   }
 
-  async setTranscript(
-    id: string,
-    transcript: string,
-  ): Promise<Meeting | null> {
+  async setTranscript(id: string, transcript: string): Promise<Meeting | null> {
     return this.updateMeeting(id, { transcript });
   }
 

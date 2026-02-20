@@ -1,7 +1,7 @@
 /**
  * Preload Script - Exposes safe Electron APIs to the renderer
  * Runs in isolated context with access to both Node.js and DOM
- * 
+ *
  * IMPORTANT: Uses CommonJS for maximum Electron compatibility
  * This is the recommended pattern for preload scripts
  */
@@ -54,10 +54,24 @@ contextBridge.exposeInMainWorld("electronAPI", {
     // Set permission level
     setLevel: (level) => ipcRenderer.invoke("permissions:set-level", level),
   },
-  
+
+  // OAuth API
+  oauth: {
+    openai: {
+      startOAuth: () => ipcRenderer.invoke("auth:openai:start-oauth"),
+      getStatus: () => ipcRenderer.invoke("auth:openai:get-status"),
+      disconnect: () => ipcRenderer.invoke("auth:openai:disconnect"),
+    },
+    claude: {
+      startOAuth: () => ipcRenderer.invoke("auth:claude:start-oauth"),
+      getStatus: () => ipcRenderer.invoke("auth:claude:get-status"),
+      disconnect: () => ipcRenderer.invoke("auth:claude:disconnect"),
+    },
+  },
+
   // Environment info
   env: {
-    NODE_ENV: process.env.NODE_ENV || 'production',
-    GATEWAY_PORT: process.env.GATEWAY_PORT || '18789',
+    NODE_ENV: process.env.NODE_ENV || "production",
+    GATEWAY_PORT: process.env.GATEWAY_PORT || "18789",
   },
 });

@@ -1,0 +1,271 @@
+/**
+ * Key Request Card Styles
+ * Inline card for requesting API keys from the user
+ */
+
+.key-request-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  background: var(--glass-background, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.1));
+  border-radius: 12px;
+  backdrop-filter: blur(20px);
+  max-width: 500px;
+  margin: 12px 0;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+}
+
+.key-request-icon {
+  font-size: 32px;
+  text-align: center;
+}
+
+.key-request-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.key-request-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary, #fff);
+}
+
+.key-request-description {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.7));
+  line-height: 1.5;
+}
+
+.key-request-source,
+.key-request-scopes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+}
+
+.key-request-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.key-request-link {
+  color: var(--primary-color, #007aff);
+  text-decoration: none;
+  font-size: 14px;
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+}
+
+.key-request-link:hover {
+  text-decoration: underline;
+}
+
+.key-request-scopes-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.key-request-scope {
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  color: var(--text-primary, #fff);
+}
+
+.key-request-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.key-request-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.key-request-input {
+  flex: 1;
+  padding: 12px 40px 12px 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  color: var(--text-primary, #fff);
+  font-size: 14px;
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.key-request-input:focus {
+  border-color: var(--primary-color, #007aff);
+}
+
+.key-request-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.key-request-input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.key-request-toggle-visibility {
+  position: absolute;
+  right: 8px;
+  padding: 6px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+
+.key-request-toggle-visibility:hover {
+  opacity: 1;
+}
+
+.key-request-permission {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+}
+
+.key-request-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-primary, #fff);
+}
+
+.key-request-checkbox input[type="radio"] {
+  cursor: pointer;
+}
+
+.key-request-checkbox input[type="radio"]:disabled {
+  cursor: not-allowed;
+}
+
+.key-request-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.key-request-security-note {
+  font-size: 12px;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.5));
+  text-align: center;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Success state */
+.key-request-card-success {
+  border-color: rgba(52, 199, 89, 0.3);
+  background: rgba(52, 199, 89, 0.1);
+}
+
+.key-request-card-success .key-request-icon {
+  color: #34c759;
+}
+
+/* Cancelled state */
+.key-request-card-cancelled {
+  border-color: rgba(255, 149, 0, 0.3);
+  background: rgba(255, 149, 0, 0.1);
+}
+
+.key-request-card-cancelled .key-request-icon {
+  color: #ff9500;
+}
+
+/* Button styles */
+.key-request-card .btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: none;
+  outline: none;
+}
+
+.key-request-card .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.key-request-card .btn-primary {
+  background: var(--primary-color, #007aff);
+  color: #fff;
+}
+
+.key-request-card .btn-primary:hover:not(:disabled) {
+  background: var(--primary-color-hover, #0051d5);
+}
+
+.key-request-card .btn-secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary, #fff);
+}
+
+.key-request-card .btn-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Dark mode adjustments */
+@media (prefers-color-scheme: dark) {
+  .key-request-card {
+    background: rgba(30, 30, 30, 0.8);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+}
+
+/* Light mode adjustments */
+@media (prefers-color-scheme: light) {
+  .key-request-card {
+    background: rgba(255, 255, 255, 0.9);
+    border-color: rgba(0, 0, 0, 0.1);
+  }
+
+  .key-request-title {
+    color: #000;
+  }
+
+  .key-request-description {
+    color: rgba(0, 0, 0, 0.6);
+  }
+
+  .key-request-input {
+    background: rgba(0, 0, 0, 0.05);
+    border-color: rgba(0, 0, 0, 0.2);
+    color: #000;
+  }
+
+  .key-request-checkbox {
+    color: #000;
+  }
+}

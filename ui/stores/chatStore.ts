@@ -66,7 +66,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   addMessage: (message, chatId) =>
     set((state) => {
       if (!chatId) {
-        console.warn('[chatStore] addMessage called without chatId');
+        console.warn("[chatStore] addMessage called without chatId");
         return state;
       }
 
@@ -91,7 +91,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   updateStreamingMessage: (messageId, content, chatId) =>
     set((state) => {
       if (!chatId) {
-        console.warn('[chatStore] updateStreamingMessage called without chatId');
+        console.warn(
+          "[chatStore] updateStreamingMessage called without chatId",
+        );
         return state;
       }
 
@@ -102,9 +104,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       }
 
       // Find the message index for efficient update
-      const messageIndex = chatState.messages.findIndex(msg => msg.id === messageId);
+      const messageIndex = chatState.messages.findIndex(
+        (msg) => msg.id === messageId,
+      );
       if (messageIndex === -1) {
-        console.warn(`[chatStore] Message ${messageId} not found in chat ${chatId}`);
+        console.warn(
+          `[chatStore] Message ${messageId} not found in chat ${chatId}`,
+        );
         return state;
       }
 
@@ -134,7 +140,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   finalizeStreamingMessage: (messageId, chatId) =>
     set((state) => {
       if (!chatId) {
-        console.warn('[chatStore] finalizeStreamingMessage called without chatId');
+        console.warn(
+          "[chatStore] finalizeStreamingMessage called without chatId",
+        );
         return state;
       }
 
@@ -241,16 +249,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   getDraftMessage: (chatId) => {
     const state = get();
     const chatState = state.chatStates.get(chatId);
-    return chatState?.draftMessage || '';
+    return chatState?.draftMessage || "";
   },
 
   clearDraftMessage: (chatId) =>
     set((state) => {
       const chatState = state.chatStates.get(chatId);
       if (!chatState) return state;
-      
+
       const newChatStates = new Map(state.chatStates);
-      newChatStates.set(chatId, { ...chatState, draftMessage: '' });
+      newChatStates.set(chatId, { ...chatState, draftMessage: "" });
       return { chatStates: newChatStates };
     }),
 }));

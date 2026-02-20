@@ -71,7 +71,11 @@ export class JobDatabase {
       // Fallback for environments where native sqlite module isn't available.
       // Keep deterministic file structure so jobs remain portable/testable.
       await fs.writeFile(dbPath, "", { flag: "a" });
-      const baselineMigration = path.join(jobDir, "migrations", "0001_baseline.sql");
+      const baselineMigration = path.join(
+        jobDir,
+        "migrations",
+        "0001_baseline.sql",
+      );
       await fs.writeFile(
         baselineMigration,
         "-- baseline schema created by fallback path\n",

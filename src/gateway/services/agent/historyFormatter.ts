@@ -208,7 +208,6 @@ export function formatHistoryMessagesForModel(
         // Add tool call parts and collect results
         const toolResultParts: ToolContent = [];
         let toolIndex = 0;
-        const totalToolCalls = toolCalls.length;
 
         for (const tc of toolCalls) {
           const toolCallId =
@@ -223,41 +222,24 @@ export function formatHistoryMessagesForModel(
             args: tc.args ?? {},
           });
 
-          // Add matching tool result (truncate based on recency)
+          // Add matching tool result (truncate aggressively for history)
+          // History strategy: Keep tool calls (what the agent did) but heavily truncate results
+          // This preserves the "commands used" while minimizing context usage
           const resultValue = tc.result ?? "";
           const resultStr = typeof resultValue === "string"
             ? resultValue
             : JSON.stringify(resultValue);
           
-          // Token-based truncation: Keep more context for recent tool calls
-          // Position from end: 0 = most recent, higher = older
-          // 1 token ≈ 4 chars
-          const positionFromEnd = totalToolCalls - toolIndex - 1;
-          
-          // Token-based limits (matching prepareStep strategy):
-          // - Last 1: UNLIMITED (keep full context)
-          // - Next 2: 2000 tokens (8KB)
-          // - Next 3: 1000 tokens (4KB)
-          // - Next 5: 500 tokens (2KB)
-          // - Remaining: 250 tokens (1KB)
-          const getHistoricalLimit = (pos: number): number | null => {
-            if (pos < 1) return null;  // Last 1: UNLIMITED
-            if (pos < 3) return 8000;  // Next 2: 2000 tokens
-            if (pos < 6) return 4000;  // Next 3: 1000 tokens
-            if (pos < 11) return 2000; // Next 5: 500 tokens
-            return 1000;                // Very old: 250 tokens
-          };
-          
-          const maxLength = getHistoricalLimit(positionFromEnd);
+          // AGGRESSIVE truncation for history: 100 tokens max (~400 chars)
+          // This is much more aggressive than prepareStep's recency-based approach
+          // Rationale: Historical tool results are less important than recent ones
+          const HISTORY_MAX_TOKENS = 100;
+          const HISTORY_MAX_CHARS = HISTORY_MAX_TOKENS * 4; // ~400 chars
           
           let truncatedResult: string;
-          if (maxLength === null) {
-            // Keep unlimited for most recent
-            truncatedResult = resultStr;
-          } else if (resultStr.length > maxLength) {
-            const estimatedTokens = Math.ceil(maxLength / 4);
-            truncatedResult = resultStr.substring(0, maxLength) + 
-              `\n\n[... ${resultStr.length - maxLength} chars truncated (historical tool #${positionFromEnd + 1} from end, limit: ~${estimatedTokens} tokens)]`;
+          if (resultStr.length > HISTORY_MAX_CHARS) {
+            truncatedResult = resultStr.substring(0, HISTORY_MAX_CHARS) + 
+              `\n[... ${resultStr.length - HISTORY_MAX_CHARS} chars truncated from history]`;
           } else {
             truncatedResult = resultStr;
           }
@@ -308,9 +290,11 @@ export function buildModelMessages(
   history: unknown[],
   userMessage: string,
   systemPrompt: string,
+  conversationSummary?: string,
 ): AIModelMessage[] {
   const messages = formatHistoryMessagesForModel(history);
 
+  // Add system prompt if not already present
   if (systemPrompt && !messages.some((message) => message.role === "system")) {
     messages.unshift({
       role: "system",
@@ -318,6 +302,20 @@ export function buildModelMessages(
     });
   }
 
+  // If we have a compressed summary, inject it as a user message BEFORE the recent history
+  // This gives the model context about what happened earlier in the conversation
+  if (conversationSummary) {
+    messages.push({
+      role: "user",
+      content: `[CONVERSATION CONTEXT - Earlier messages have been compressed for efficiency]
+
+${conversationSummary}
+
+[The messages below are the most recent conversation history]`,
+    });
+  }
+
+  // Add the current user message at the end
   messages.push({
     role: "user",
     content: userMessage,

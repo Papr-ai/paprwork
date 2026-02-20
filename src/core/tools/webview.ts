@@ -48,9 +48,8 @@ async function request(
   action: WebviewTestRequest["action"],
   payload: Record<string, unknown>,
 ) {
-  const { requestWebviewTest } = await import(
-    "../../gateway/utils/webviewTestBridge.js"
-  );
+  const { requestWebviewTest } =
+    await import("../../gateway/utils/webviewTestBridge.js");
   const response = await requestWebviewTest({ action, payload });
   if (!response.success) {
     throw new Error(response.error || `Webview action failed: ${action}`);
@@ -60,11 +59,11 @@ async function request(
 
 export const webviewLaunchAppTool = createTool({
   id: "webview_launch_app",
-  description:
-    "Launch a mini-app in Electron webview test context",
+  description: "Launch a mini-app in Electron webview test context",
   inputSchema: launchSchema,
   execute: async (input) => {
-    const args = (input as { context?: z.infer<typeof launchSchema> }).context ?? input;
+    const args =
+      (input as { context?: z.infer<typeof launchSchema> }).context ?? input;
     const data = await request("launch", {
       appId: args.appId,
       visible: args.visible ?? false,
@@ -80,7 +79,8 @@ export const webviewSnapshotTool = createTool({
   description: "Capture HTML/text snapshot from webview app test context",
   inputSchema: snapshotSchema,
   execute: async (input) => {
-    const args = (input as { context?: z.infer<typeof snapshotSchema> }).context ?? input;
+    const args =
+      (input as { context?: z.infer<typeof snapshotSchema> }).context ?? input;
     const data = await request("snapshot", {
       webviewId: args.webviewId,
       maxHtmlChars: args.maxHtmlChars ?? 80000,
@@ -95,7 +95,8 @@ export const webviewExecuteTool = createTool({
   description: "Execute JavaScript in active webview test context",
   inputSchema: executeSchema,
   execute: async (input) => {
-    const args = (input as { context?: z.infer<typeof executeSchema> }).context ?? input;
+    const args =
+      (input as { context?: z.infer<typeof executeSchema> }).context ?? input;
     const data = await request("execute", {
       webviewId: args.webviewId,
       script: args.script,
@@ -109,7 +110,8 @@ export const webviewGetConsoleTool = createTool({
   description: "Read captured webview console logs",
   inputSchema: logsSchema,
   execute: async (input) => {
-    const args = (input as { context?: z.infer<typeof logsSchema> }).context ?? input;
+    const args =
+      (input as { context?: z.infer<typeof logsSchema> }).context ?? input;
     const data = await request("get_console", {
       webviewId: args.webviewId,
       limit: args.limit ?? 100,
@@ -124,7 +126,8 @@ export const webviewGetNetworkTool = createTool({
   description: "Read captured webview network logs",
   inputSchema: logsSchema,
   execute: async (input) => {
-    const args = (input as { context?: z.infer<typeof logsSchema> }).context ?? input;
+    const args =
+      (input as { context?: z.infer<typeof logsSchema> }).context ?? input;
     const data = await request("get_network", {
       webviewId: args.webviewId,
       limit: args.limit ?? 100,
@@ -149,7 +152,8 @@ export const webviewCloseTool = createTool({
   description: "Close a webview test session",
   inputSchema: closeSchema,
   execute: async (input) => {
-    const args = (input as { context?: z.infer<typeof closeSchema> }).context ?? input;
+    const args =
+      (input as { context?: z.infer<typeof closeSchema> }).context ?? input;
     const data = await request("close", { webviewId: args.webviewId });
     return { success: true, data };
   },

@@ -47,7 +47,7 @@ export interface ElectronAPI {
   // Permissions API
   permissions: {
     onKeyRequest: (
-      callback: (event: any, request: KeyPermissionRequest) => void
+      callback: (event: any, request: KeyPermissionRequest) => void,
     ) => void;
     respondToRequest: (response: {
       requestId: string;
@@ -62,6 +62,32 @@ export interface ElectronAPI {
     resetKey: (keyName: string) => Promise<void>;
     getLevel: () => Promise<PermissionLevel>;
     setLevel: (level: PermissionLevel) => Promise<void>;
+  };
+
+  // OAuth API
+  oauth: {
+    openai: {
+      startOAuth: () => Promise<{ success: boolean; url?: string; error?: string }>;
+      getStatus: () => Promise<{
+        connected: boolean;
+        accountId?: string;
+        expiresAt?: string;
+        isExpired?: boolean;
+        error?: string;
+      }>;
+      disconnect: () => Promise<{ success: boolean; error?: string }>;
+    };
+    claude: {
+      startOAuth: () => Promise<{ success: boolean; url?: string; error?: string }>;
+      getStatus: () => Promise<{
+        connected: boolean;
+        accountId?: string;
+        expiresAt?: string;
+        isExpired?: boolean;
+        error?: string;
+      }>;
+      disconnect: () => Promise<{ success: boolean; error?: string }>;
+    };
   };
 
   // Legacy agent/chat APIs (not currently used - UI uses WebSocket Gateway)

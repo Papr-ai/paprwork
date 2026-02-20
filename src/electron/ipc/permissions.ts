@@ -1,6 +1,6 @@
 /**
  * Permissions IPC Handlers
- * 
+ *
  * Handles communication between:
  * - Gateway → Main (permission requests)
  * - Main → Renderer (show permission modal)
@@ -43,17 +43,19 @@ async function requestPermissionViaRenderer(
   request: KeyPermissionRequest,
   keyPermStorage: KeyPermissionsStorage,
   settingsStorage: SettingsStorage,
-  mainWindow: BrowserWindow
+  mainWindow: BrowserWindow,
 ): Promise<KeyPermissionResponse> {
   if (mainWindow.isDestroyed()) {
-    console.warn("[Permissions IPC] Main window unavailable - denying permission");
+    console.warn(
+      "[Permissions IPC] Main window unavailable - denying permission",
+    );
     return { approved: false };
   }
 
   // Check if key already has "always" permission (works for both env keys and tool keys like BROWSER_TOOL)
   if (keyPermStorage.getPermission(request.keyName) === "always") {
     console.log(
-      `[Permissions IPC]   ✓ Key ${request.keyName} has "always" permission`
+      `[Permissions IPC]   ✓ Key ${request.keyName} has "always" permission`,
     );
     return { approved: true };
   }
@@ -62,21 +64,20 @@ async function requestPermissionViaRenderer(
   const permissionSettings = settingsStorage.getPermissionSettings();
   const permissionLevel = permissionSettings?.permissionLevel || "moderate";
 
-  console.log(
-    `[Permissions IPC]   Permission level: ${permissionLevel}`
-  );
+  console.log(`[Permissions IPC]   Permission level: ${permissionLevel}`);
 
   // For "open" mode, auto-approve browser and most tools (except destructive operations)
   if (permissionLevel === "open") {
     const toolName = request.toolContext?.toolName || "";
-    const isDestructive = toolName === "bash" && 
-      (request.toolContext?.command?.includes("rm ") || 
-       request.toolContext?.command?.includes("sudo ") ||
-       request.toolContext?.command?.includes("kill "));
+    const isDestructive =
+      toolName === "bash" &&
+      (request.toolContext?.command?.includes("rm ") ||
+        request.toolContext?.command?.includes("sudo ") ||
+        request.toolContext?.command?.includes("kill "));
 
     if (!isDestructive) {
       console.log(
-        `[Permissions IPC]   ✓ Auto-approved (Open mode, non-destructive)`
+        `[Permissions IPC]   ✓ Auto-approved (Open mode, non-destructive)`,
       );
       return { approved: true };
     }
@@ -86,7 +87,7 @@ async function requestPermissionViaRenderer(
   const requestId = `perm-${Date.now()}-${Math.random()}`;
 
   console.log(
-    `[Permissions IPC]   → Sending request to renderer (ID: ${requestId})`
+    `[Permissions IPC]   → Sending request to renderer (ID: ${requestId})`,
   );
 
   // Send to renderer
@@ -100,7 +101,7 @@ async function requestPermissionViaRenderer(
     const timeout = setTimeout(() => {
       if (pendingRequests.has(requestId)) {
         console.log(
-          `[Permissions IPC]   ✗ Request ${requestId} timed out - denying`
+          `[Permissions IPC]   ✗ Request ${requestId} timed out - denying`,
         );
         pendingRequests.delete(requestId);
         resolve({ approved: false });
@@ -112,7 +113,7 @@ async function requestPermissionViaRenderer(
         // Save "always allow" if requested (works for env keys and tool keys like BROWSER_TOOL)
         if (response.approved && response.alwaysAllow) {
           console.log(
-            `[Permissions IPC]   ✓ Saving "always" permission for ${request.keyName}`
+            `[Permissions IPC]   ✓ Saving "always" permission for ${request.keyName}`,
           );
           keyPermStorage.setPermission(request.keyName, "always");
         }
@@ -125,11 +126,11 @@ async function requestPermissionViaRenderer(
 }
 
 export async function requestPermissionFromGateway(
-  request: KeyPermissionRequest
+  request: KeyPermissionRequest,
 ): Promise<KeyPermissionResponse> {
   if (!requestPermissionFromGatewayHandler) {
     console.warn(
-      "[Permissions IPC] Gateway requested permission before handlers initialized"
+      "[Permissions IPC] Gateway requested permission before handlers initialized",
     );
     return { approved: false };
   }
@@ -143,17 +144,22 @@ export async function requestPermissionFromGateway(
 export function initializePermissionsIPC(
   keyPermStorage: KeyPermissionsStorage,
   settingsStorage: SettingsStorage,
-  mainWindow: BrowserWindow
+  mainWindow: BrowserWindow,
 ): void {
   console.log("[Permissions IPC] Initializing handlers...");
 
   requestPermissionFromGatewayHandler = async (
-    request: KeyPermissionRequest
+    request: KeyPermissionRequest,
   ): Promise<KeyPermissionResponse> => {
     console.log(
-      `[Permissions IPC] Gateway permission requested: ${request.keyName}`
+      `[Permissions IPC] Gateway permission requested: ${request.keyName}`,
     );
-    return requestPermissionViaRenderer(request, keyPermStorage, settingsStorage, mainWindow);
+    return requestPermissionViaRenderer(
+      request,
+      keyPermStorage,
+      settingsStorage,
+      mainWindow,
+    );
   };
 
   // ===== From Renderer: Request permission for a key =====
@@ -161,24 +167,26 @@ export function initializePermissionsIPC(
     "permissions:request-key",
     async (
       _event,
-      request: KeyPermissionRequest
+      request: KeyPermissionRequest,
     ): Promise<KeyPermissionResponse> => {
       console.log(
-        `[Permissions IPC] Key permission requested: ${request.keyName}`
+        `[Permissions IPC] Key permission requested: ${request.keyName}`,
       );
-      return requestPermissionViaRenderer(request, keyPermStorage, settingsStorage, mainWindow);
-    }
+      return requestPermissionViaRenderer(
+        request,
+        keyPermStorage,
+        settingsStorage,
+        mainWindow,
+      );
+    },
   );
 
   // ===== From Renderer: User's response to permission request =====
   ipcMain.on(
     "permissions:key-response",
-    (
-      _event,
-      data: RendererPermissionResponsePayload
-    ) => {
+    (_event, data: RendererPermissionResponsePayload) => {
       console.log(
-        `[Permissions IPC] Response received for ${data.keyName}: ${data.response.approved ? "approved" : "denied"}`
+        `[Permissions IPC] Response received for ${data.keyName}: ${data.response.approved ? "approved" : "denied"}`,
       );
 
       const pending = pendingRequests.get(data.requestId);
@@ -189,10 +197,10 @@ export function initializePermissionsIPC(
         pendingRequests.delete(data.requestId);
       } else {
         console.warn(
-          `[Permissions IPC]   ⚠ No pending request found for ID: ${data.requestId}`
+          `[Permissions IPC]   ⚠ No pending request found for ID: ${data.requestId}`,
         );
       }
-    }
+    },
   );
 
   // ===== Get all permissions =====
@@ -211,7 +219,7 @@ export function initializePermissionsIPC(
     async (_event, settings: Partial<PermissionSettings>) => {
       console.log("[Permissions IPC] Updating permission settings");
       settingsStorage.setPermissionSettings(settings);
-    }
+    },
   );
 
   // ===== Reset key permission =====

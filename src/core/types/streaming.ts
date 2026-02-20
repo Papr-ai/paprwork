@@ -12,6 +12,8 @@ export type StreamChunkType =
   | "tool-call-delta"
   | "tool-result"
   | "tool-error"
+  | "compression-start"
+  | "compression-complete"
   | "error"
   | "done";
 
@@ -95,6 +97,13 @@ export interface DonePayload {
     output: number;
     total: number;
   };
+}
+
+/**
+ * Compression status payload
+ */
+export interface CompressionPayload {
+  message: string;
 }
 
 /**

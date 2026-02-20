@@ -22,9 +22,9 @@ const BundleAppSchema = z.object({
 
 const JobDependencySchema = z.object({
   jobId: z.string().min(1),
-  onStatus: z.array(
-    z.enum(["completed", "failed", "cancelled", "timed_out"]),
-  ).default(["completed"]),
+  onStatus: z
+    .array(z.enum(["completed", "failed", "cancelled", "timed_out"]))
+    .default(["completed"]),
 });
 
 const JobResourceSchema = z.object({

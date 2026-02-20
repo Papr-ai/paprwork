@@ -11,7 +11,8 @@ export function mapHistoryMessages(
         : {};
 
     const role = candidate.role === "assistant" ? "assistant" : "user";
-    const content = typeof candidate.content === "string" ? candidate.content : "";
+    const content =
+      typeof candidate.content === "string" ? candidate.content : "";
     const reasoning =
       typeof candidate.reasoning === "string"
         ? candidate.reasoning
@@ -19,7 +20,9 @@ export function mapHistoryMessages(
           ? candidate.thinking
           : undefined;
 
-    const toolCallsRaw = Array.isArray(candidate.toolCalls) ? candidate.toolCalls : [];
+    const toolCallsRaw = Array.isArray(candidate.toolCalls)
+      ? candidate.toolCalls
+      : [];
     const toolCalls =
       toolCallsRaw.length > 0
         ? toolCallsRaw.map((rawToolCall, toolIndex) => {
@@ -66,9 +69,11 @@ export function mapHistoryMessages(
             };
           })
         : undefined;
-    
+
     // Parse V1-style sequence if present
-    const sequenceRaw = Array.isArray(candidate.sequence) ? candidate.sequence : undefined;
+    const sequenceRaw = Array.isArray(candidate.sequence)
+      ? candidate.sequence
+      : undefined;
 
     return {
       id:

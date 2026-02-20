@@ -1,4 +1,8 @@
-import type { ExecutorLaunchParams, ExecutorLaunchResult, IJobExecutor } from "./IJobExecutor.js";
+import type {
+  ExecutorLaunchParams,
+  ExecutorLaunchResult,
+  IJobExecutor,
+} from "./IJobExecutor.js";
 import type { JobType } from "../types.js";
 import { getAgentService } from "../../AgentService.js";
 import { getJobsService } from "../../JobsService.js";
@@ -64,7 +68,9 @@ export class AgentJobExecutor implements IJobExecutor {
           ? `\nContext:\n${params.job.delegationContext}`
           : "",
         `\nTask:\n${params.job.delegationTask ?? prompt}`,
-      ].filter(Boolean).join("\n");
+      ]
+        .filter(Boolean)
+        .join("\n");
     } else {
       prompt = [envBlock, prompt].filter(Boolean).join("\n");
     }
@@ -80,7 +86,9 @@ export class AgentJobExecutor implements IJobExecutor {
       // ✅ Proper structured output via AI SDK generateObject
       // The model is constrained at the decoding level to produce valid JSON
       // matching the schema — no prompt hacks, no post-hoc parsing needed.
-      await params.appendLog("Using generateObject for structured output (model-level schema enforcement)");
+      await params.appendLog(
+        "Using generateObject for structured output (model-level schema enforcement)",
+      );
 
       const structuredResult = await agentService.runStructuredJobSession({
         jobId: params.job.id,
@@ -94,7 +102,9 @@ export class AgentJobExecutor implements IJobExecutor {
       });
 
       outputText = JSON.stringify(structuredResult.object, null, 2);
-      await params.appendLog("Structured output generated and validated by model.");
+      await params.appendLog(
+        "Structured output generated and validated by model.",
+      );
     } else {
       // Free-form text output via streamText (existing path)
       const response = await agentService.runIsolatedJobSession({
@@ -111,17 +121,19 @@ export class AgentJobExecutor implements IJobExecutor {
     // ─────────────────────────────────────────────────────────────────────────
 
     if (params.job.deliver?.channel === "chat") {
-      await agentService.getStorageManager().saveMessage(params.job.deliver.targetId, {
-        id: `msg-${uuidv4()}`,
-        chat_id: params.job.deliver.targetId,
-        role: "assistant",
-        content:
-          outputText.length > 0
-            ? outputText
-            : `Agent job ${params.job.name} finished with no textual output.`,
-        timestamp: new Date().toISOString(),
-        sync_status: "local",
-      });
+      await agentService
+        .getStorageManager()
+        .saveMessage(params.job.deliver.targetId, {
+          id: `msg-${uuidv4()}`,
+          chat_id: params.job.deliver.targetId,
+          role: "assistant",
+          content:
+            outputText.length > 0
+              ? outputText
+              : `Agent job ${params.job.name} finished with no textual output.`,
+          timestamp: new Date().toISOString(),
+          sync_status: "local",
+        });
       await params.appendLog(
         `Delivered result to chat: ${params.job.deliver.targetId}`,
       );
@@ -154,7 +166,9 @@ export class AgentJobExecutor implements IJobExecutor {
    * Build the environment block that tells agents where their own data
    * and dependency data lives. Solves the "cross-job file access" problem.
    */
-  private async buildEnvironmentBlock(params: ExecutorLaunchParams): Promise<string> {
+  private async buildEnvironmentBlock(
+    params: ExecutorLaunchParams,
+  ): Promise<string> {
     const jobsService = getJobsService();
     await jobsService.initialize();
 
@@ -167,7 +181,7 @@ export class AgentJobExecutor implements IJobExecutor {
     for (const dep of params.job.dependsOn ?? []) {
       const depJob = await jobsService.getJob(dep.jobId);
       const depDir = await jobsService.getJobPath(dep.jobId);
-      const depDb  = await jobsService.getJobDatabasePath(dep.jobId);
+      const depDb = await jobsService.getJobDatabasePath(dep.jobId);
       if (depJob && depDir) {
         const key = depJob.name.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
         envLines.push(`DEP_${key}_DIR="${depDir}"`);

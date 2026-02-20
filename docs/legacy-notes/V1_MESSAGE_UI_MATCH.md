@@ -144,7 +144,7 @@ flex items-start gap-3 w-full
 
 Currently using a placeholder SVG gradient layers icon. Need to:
 1. Copy actual `/images/papr-logo.svg` from v1
-2. Save to `/Users/amirkabbara/Documents/GitHub/paprwork-v2/ui/public/images/papr-logo.svg`
+2. Save to `ui/public/images/papr-logo.svg`
 3. Update MessageItem to use `<img src="/images/papr-logo.svg" />`
 
 **Temporary Solution**: Using inline SVG with blue-to-purple gradient that approximates the Papr logo style.

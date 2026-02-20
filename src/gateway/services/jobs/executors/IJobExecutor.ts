@@ -14,6 +14,24 @@ export interface ExecutorLaunchParams {
    * e.g. { THREAD_ID: "abc123", MODE: "regen" }
    */
   runtimeParams?: Record<string, string>;
+  /**
+   * Called before requesting permission for "ask" keys. Allows JobsService to
+   * set status to waiting_permission and broadcast so chat/job page can surface.
+   */
+  onWaitingPermission?: (keys: string[]) => Promise<void>;
+  /**
+   * Called after all "ask" keys have been approved. Allows JobsService to
+   * set status back to running before the job command is executed.
+   */
+  onResumingAfterPermission?: () => Promise<void>;
+  /**
+   * Request permission for an API key. Returns true if approved, false if denied.
+   * Used when job command has ${KEY_NAME} and key has permission "ask".
+   */
+  requestKeyPermission?: (
+    keyName: string,
+    context: { jobId: string; jobName: string },
+  ) => Promise<boolean>;
 }
 
 export interface ExecutorLaunchResult {

@@ -59,8 +59,12 @@ describe("Creator Stays Logic (Simplified UX)", () => {
     it("should allow chat as parent with document on right", () => {
       initChat("chat-1");
 
-      const chatTab = useTabStore.getState().createTab("chat", "chat-1", "Chat");
-      const docTab = useTabStore.getState().createTab("document", "doc-1", "Document");
+      const chatTab = useTabStore
+        .getState()
+        .createTab("chat", "chat-1", "Chat");
+      const docTab = useTabStore
+        .getState()
+        .createTab("document", "doc-1", "Document");
 
       useTabStore.getState().addChild(chatTab, docTab, "right");
 
@@ -74,10 +78,14 @@ describe("Creator Stays Logic (Simplified UX)", () => {
     });
 
     it("should allow chat as child (no auto-swap)", () => {
-      const docTab = useTabStore.getState().createTab("document", "doc-1", "Document");
+      const docTab = useTabStore
+        .getState()
+        .createTab("document", "doc-1", "Document");
 
       initChat("chat-1");
-      const chatTab = useTabStore.getState().createTab("chat", "chat-1", "Chat");
+      const chatTab = useTabStore
+        .getState()
+        .createTab("chat", "chat-1", "Chat");
 
       useTabStore.getState().addChild(docTab, chatTab, "right");
 
@@ -98,14 +106,20 @@ describe("Creator Stays Logic (Simplified UX)", () => {
     it("should keep chat and replace artifact when chat is parent", () => {
       initChat("chat-1");
 
-      const chatTab = useTabStore.getState().createTab("chat", "chat-1", "Chat");
-      const doc1Tab = useTabStore.getState().createTab("document", "doc-1", "Document 1");
+      const chatTab = useTabStore
+        .getState()
+        .createTab("chat", "chat-1", "Chat");
+      const doc1Tab = useTabStore
+        .getState()
+        .createTab("document", "doc-1", "Document 1");
 
       useTabStore.getState().createArtifactFromChat(chatTab, doc1Tab);
       expect(useTabStore.getState().tabs).toHaveLength(2);
 
       // Second artifact replaces first
-      const doc2Tab = useTabStore.getState().createTab("document", "doc-2", "Document 2");
+      const doc2Tab = useTabStore
+        .getState()
+        .createTab("document", "doc-2", "Document 2");
       useTabStore.getState().createArtifactFromChat(chatTab, doc2Tab);
 
       const chat = useTabStore.getState().getTab(chatTab);
@@ -117,17 +131,23 @@ describe("Creator Stays Logic (Simplified UX)", () => {
     });
 
     it("should keep chat in same position when replacing parent with artifact", () => {
-      const docTab = useTabStore.getState().createTab("document", "doc-1", "Document");
+      const docTab = useTabStore
+        .getState()
+        .createTab("document", "doc-1", "Document");
 
       initChat("chat-1");
-      const chatTab = useTabStore.getState().createTab("chat", "chat-1", "Chat");
+      const chatTab = useTabStore
+        .getState()
+        .createTab("chat", "chat-1", "Chat");
 
       useTabStore.getState().addChild(docTab, chatTab, "right");
       expect(useTabStore.getState().getTab(chatTab)?.displayMode).toBe("child");
       expect(useTabStore.getState().getTab(chatTab)?.position).toBe("right");
 
       // Chat creates artifact → artifact becomes parent, chat stays as child on right
-      const artifactTab = useTabStore.getState().createTab("document", "artifact-1", "Artifact");
+      const artifactTab = useTabStore
+        .getState()
+        .createTab("document", "artifact-1", "Artifact");
       useTabStore.getState().createArtifactFromChat(chatTab, artifactTab);
 
       const chat = useTabStore.getState().getTab(chatTab);
@@ -151,38 +171,56 @@ describe("Creator Stays Logic (Simplified UX)", () => {
   describe("Creator Stays: Sequential Artifacts", () => {
     it("should replace artifacts sequentially (max 1 child)", () => {
       initChat("chat-1");
-      const chatTab = useTabStore.getState().createTab("chat", "chat-1", "Chat");
+      const chatTab = useTabStore
+        .getState()
+        .createTab("chat", "chat-1", "Chat");
 
-      const art1 = useTabStore.getState().createTab("document", "doc-1", "Artifact 1");
+      const art1 = useTabStore
+        .getState()
+        .createTab("document", "doc-1", "Artifact 1");
       useTabStore.getState().createArtifactFromChat(chatTab, art1);
       expect(useTabStore.getState().tabs).toHaveLength(2);
 
-      const art2 = useTabStore.getState().createTab("document", "doc-2", "Artifact 2");
+      const art2 = useTabStore
+        .getState()
+        .createTab("document", "doc-2", "Artifact 2");
       useTabStore.getState().createArtifactFromChat(chatTab, art2);
 
       expect(useTabStore.getState().tabs).toHaveLength(2);
       expect(useTabStore.getState().getTab(art1)).toBeUndefined();
-      expect(useTabStore.getState().getTab(chatTab)?.childTabIds).toEqual([art2]);
+      expect(useTabStore.getState().getTab(chatTab)?.childTabIds).toEqual([
+        art2,
+      ]);
     });
 
     it("should create third artifact, replacing second", () => {
       initChat("chat-1");
-      const chatTab = useTabStore.getState().createTab("chat", "chat-1", "Chat");
+      const chatTab = useTabStore
+        .getState()
+        .createTab("chat", "chat-1", "Chat");
 
-      const art1 = useTabStore.getState().createTab("document", "art-1", "Artifact 1");
+      const art1 = useTabStore
+        .getState()
+        .createTab("document", "art-1", "Artifact 1");
       useTabStore.getState().createArtifactFromChat(chatTab, art1);
 
-      const art2 = useTabStore.getState().createTab("document", "art-2", "Artifact 2");
+      const art2 = useTabStore
+        .getState()
+        .createTab("document", "art-2", "Artifact 2");
       useTabStore.getState().createArtifactFromChat(chatTab, art2);
 
-      const art3 = useTabStore.getState().createTab("document", "art-3", "Artifact 3");
+      const art3 = useTabStore
+        .getState()
+        .createTab("document", "art-3", "Artifact 3");
       useTabStore.getState().createArtifactFromChat(chatTab, art3);
 
       expect(useTabStore.getState().tabs).toHaveLength(2);
       expect(useTabStore.getState().getTab(art1)).toBeUndefined();
       expect(useTabStore.getState().getTab(art2)).toBeUndefined();
       expect(useTabStore.getState().getTab(art3)).toBeDefined();
-      expect(useTabStore.getState().getTab(chatTab)?.childTabIds).toEqual([art3]);
+      expect(useTabStore.getState().getTab(chatTab)?.childTabIds).toEqual([
+        art3,
+      ]);
     });
   });
 
@@ -190,20 +228,30 @@ describe("Creator Stays Logic (Simplified UX)", () => {
 
   describe("Flexible Tab Types", () => {
     it("should allow any tab type as parent or child", () => {
-      const meetingTab = useTabStore.getState().createTab("meeting", "meet-1", "Meeting");
-      const docTab = useTabStore.getState().createTab("document", "doc-1", "Document");
+      const meetingTab = useTabStore
+        .getState()
+        .createTab("meeting", "meet-1", "Meeting");
+      const docTab = useTabStore
+        .getState()
+        .createTab("document", "doc-1", "Document");
 
       useTabStore.getState().addChild(meetingTab, docTab, "right");
 
-      expect(useTabStore.getState().getTab(meetingTab)?.displayMode).toBe("parent");
+      expect(useTabStore.getState().getTab(meetingTab)?.displayMode).toBe(
+        "parent",
+      );
       expect(useTabStore.getState().getTab(docTab)?.displayMode).toBe("child");
     });
 
     it("should allow document as parent with chat as child", () => {
-      const docTab = useTabStore.getState().createTab("document", "doc-1", "Document");
+      const docTab = useTabStore
+        .getState()
+        .createTab("document", "doc-1", "Document");
 
       initChat("chat-1");
-      const chatTab = useTabStore.getState().createTab("chat", "chat-1", "Chat");
+      const chatTab = useTabStore
+        .getState()
+        .createTab("chat", "chat-1", "Chat");
 
       useTabStore.getState().addChild(docTab, chatTab, "right");
 

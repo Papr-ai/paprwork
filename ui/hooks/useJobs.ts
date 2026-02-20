@@ -12,6 +12,7 @@ export type JobType =
 export type JobStatus =
   | "pending"
   | "running"
+  | "waiting_permission"
   | "completed"
   | "failed"
   | "cancelled";
@@ -40,6 +41,7 @@ export interface JobRecord {
   completedAt?: string;
   exitCode?: number;
   error?: string;
+  waitingPermissionKeys?: string[];
 }
 
 export interface JobGraphAppLink {
@@ -97,7 +99,11 @@ export function useJobs() {
   const createJob = useCallback(
     async (name: string, type: JobType, command?: string) => {
       setError(null);
-      const response = await gateway.send("jobs:create", { name, type, command });
+      const response = await gateway.send("jobs:create", {
+        name,
+        type,
+        command,
+      });
       const job = response.data as JobRecord;
       setJobs((prev) => [job, ...prev.filter((item) => item.id !== job.id)]);
       void loadGraph();
@@ -146,7 +152,10 @@ export function useJobs() {
 
   const loadLogs = useCallback(async (jobId: string) => {
     setSelectedJobId(jobId);
-    const response = await gateway.send("jobs:logs", { jobId, maxBytes: 50000 });
+    const response = await gateway.send("jobs:logs", {
+      jobId,
+      maxBytes: 50000,
+    });
     const payload = response.data as { logs?: string };
     setLogs(payload.logs ?? "");
   }, []);
@@ -157,7 +166,35 @@ export function useJobs() {
     const timer = setInterval(() => {
       void loadJobs();
     }, 10000);
-    return () => clearInterval(timer);
+
+    const handler = (
+      event: CustomEvent<{ type: string; data?: Record<string, unknown> }>,
+    ) => {
+      const { type, data } = event.detail ?? {};
+      if (type === "jobs:status-changed" && data?.jobId) {
+        const jobId = data.jobId as string;
+        setJobs((prev) =>
+          prev.map((j) => {
+            if (j.id !== jobId) return j;
+            return {
+              ...j,
+              status: (data.status as JobStatus) ?? j.status,
+              completedAt: data.completedAt as string | undefined,
+              error: data.error as string | undefined,
+              lastOutput: data.lastOutput as string | undefined,
+              waitingPermissionKeys: data.waitingPermissionKeys as
+                | string[]
+                | undefined,
+            };
+          }),
+        );
+      }
+    };
+    window.addEventListener("gateway-broadcast", handler as EventListener);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("gateway-broadcast", handler as EventListener);
+    };
   }, [loadJobs, loadGraph]);
 
   return {

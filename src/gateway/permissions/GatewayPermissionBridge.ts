@@ -1,6 +1,6 @@
 /**
  * Gateway Permission Bridge
- * 
+ *
  * Bridges permission requests from Gateway to Main process.
  * Gateway runs as a subprocess and communicates with Main via process IPC.
  */
@@ -39,7 +39,7 @@ export async function requestPermissionFromMain(
   // Check if we're running as a subprocess (with parent process)
   if (!ipcProcess.send) {
     console.warn(
-      "[GatewayPermissionBridge] Not running as subprocess, auto-approving permission"
+      "[GatewayPermissionBridge] Not running as subprocess, auto-approving permission",
     );
     return { approved: true };
   }
@@ -47,7 +47,7 @@ export async function requestPermissionFromMain(
   const requestId = `gateway-perm-${++requestIdCounter}-${Date.now()}`;
 
   console.log(
-    `[GatewayPermissionBridge] Requesting permission for ${request.keyName} (ID: ${requestId})`
+    `[GatewayPermissionBridge] Requesting permission for ${request.keyName} (ID: ${requestId})`,
   );
 
   // Send permission request to Main process
@@ -65,7 +65,7 @@ export async function requestPermissionFromMain(
       const pending = pendingRequests.get(requestId);
       if (pending) {
         console.warn(
-          `[GatewayPermissionBridge] Permission request ${requestId} timed out`
+          `[GatewayPermissionBridge] Permission request ${requestId} timed out`,
         );
         pendingRequests.delete(requestId);
         pending.reject(new Error("Permission request timed out"));
@@ -82,11 +82,11 @@ export async function requestPermissionFromMain(
  */
 export function handlePermissionResponse(
   requestId: string,
-  response: KeyPermissionResponse
+  response: KeyPermissionResponse,
 ): void {
   console.log(
     `[GatewayPermissionBridge] Received response for ${requestId}:`,
-    response.approved ? "approved" : "denied"
+    response.approved ? "approved" : "denied",
   );
 
   const pending = pendingRequests.get(requestId);
@@ -98,7 +98,7 @@ export function handlePermissionResponse(
     pendingRequests.delete(requestId);
   } else {
     console.warn(
-      `[GatewayPermissionBridge] No pending request found for ${requestId}`
+      `[GatewayPermissionBridge] No pending request found for ${requestId}`,
     );
   }
 }
@@ -112,7 +112,7 @@ export function initializePermissionBridge(
 ): void {
   if (!ipcProcess.send) {
     console.warn(
-      "[GatewayPermissionBridge] Not running as subprocess, permission bridge disabled"
+      "[GatewayPermissionBridge] Not running as subprocess, permission bridge disabled",
     );
     return;
   }
@@ -124,7 +124,5 @@ export function initializePermissionBridge(
     }
   });
 
-  console.log(
-    "[GatewayPermissionBridge] Permission bridge initialized ✓"
-  );
+  console.log("[GatewayPermissionBridge] Permission bridge initialized ✓");
 }

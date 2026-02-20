@@ -104,7 +104,8 @@ export function DocumentView({ documentId }: DocumentViewProps) {
       const clampedLeft = Math.max(minLeft, Math.min(maxLeft, idealCenter));
 
       // Position above the selection; if too close to top, show below instead
-      const topAbove = start.top - wrapperRect.top + wrapper.scrollTop - MENU_HEIGHT - GAP;
+      const topAbove =
+        start.top - wrapperRect.top + wrapper.scrollTop - MENU_HEIGHT - GAP;
       const topBelow = end.bottom - wrapperRect.top + wrapper.scrollTop + GAP;
       const top = topAbove < 0 ? topBelow : topAbove;
 
@@ -223,7 +224,13 @@ export function DocumentView({ documentId }: DocumentViewProps) {
       error?.includes("not connected") || error?.includes("timeout");
     return (
       <div className="document-view document-view--error">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" opacity="0.35">
+        <svg
+          width="48"
+          height="48"
+          viewBox="0 0 24 24"
+          fill="none"
+          opacity="0.35"
+        >
           {isConnectionError ? (
             <path
               d="M1 1l22 22M16.72 11.06A10.94 10.94 0 0119 12.55M5 12.55a10.94 10.94 0 015.17-2.39M10.71 5.05A16 16 0 0122.56 9M1.42 9a15.91 15.91 0 014.7-2.88M8.53 16.11a6 6 0 016.95 0M12 20h.01"
@@ -234,7 +241,11 @@ export function DocumentView({ documentId }: DocumentViewProps) {
             />
           ) : (
             <>
-              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" strokeWidth="1.5" />
+              <path
+                d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              />
               <path d="M14 2v6h6" stroke="currentColor" strokeWidth="1.5" />
             </>
           )}
@@ -280,18 +291,29 @@ export function DocumentView({ documentId }: DocumentViewProps) {
           )}
           <span className="document-view__meta">
             {document.wordCount} words
-            {saving && <span className="document-view__save-dot" title="Saving..." />}
+            {saving && (
+              <span className="document-view__save-dot" title="Saving..." />
+            )}
           </span>
         </div>
 
         <div className="document-view__header-actions">
-          {saving && <span className="document-view__save-status">Saving...</span>}
+          {saving && (
+            <span className="document-view__save-status">Saving...</span>
+          )}
           <button
             className="document-view__action-btn"
             onClick={toggleVersions}
             title="Version History"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            >
               <circle cx="12" cy="12" r="10" />
               <polyline points="12 6 12 12 16 14" />
             </svg>
@@ -301,7 +323,14 @@ export function DocumentView({ documentId }: DocumentViewProps) {
             onClick={handleExport}
             title="Export as DOCX"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            >
               <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
               <polyline points="7 10 12 15 17 10" />
               <line x1="12" y1="15" x2="12" y2="3" />
@@ -357,13 +386,17 @@ export function DocumentView({ documentId }: DocumentViewProps) {
                 label="H1"
                 title="Heading 1"
                 active={editor.isActive("heading", { level: 1 })}
-                onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
+                onClick={() =>
+                  editor.chain().focus().toggleHeading({ level: 1 }).run()
+                }
               />
               <BubbleButton
                 label="H2"
                 title="Heading 2"
                 active={editor.isActive("heading", { level: 2 })}
-                onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
+                onClick={() =>
+                  editor.chain().focus().toggleHeading({ level: 2 }).run()
+                }
               />
               <BubbleButton
                 label="❝"
@@ -401,7 +434,15 @@ interface BubbleButtonProps {
   strike?: boolean;
 }
 
-function BubbleButton({ label, title, active, onClick, italic, underline, strike }: BubbleButtonProps) {
+function BubbleButton({
+  label,
+  title,
+  active,
+  onClick,
+  italic,
+  underline,
+  strike,
+}: BubbleButtonProps) {
   let style: React.CSSProperties | undefined;
   if (italic) style = { fontStyle: "italic" };
   if (underline) style = { textDecoration: "underline" };

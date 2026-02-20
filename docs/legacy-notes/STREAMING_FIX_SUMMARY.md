@@ -11,7 +11,7 @@
 - Added support for `reasoning-delta` and `tool-call` chunks
 
 ### ✅ **Test Infrastructure Created**
-- Created `/Users/amirkabbara/Documents/GitHub/paprwork-v2/.env.local` for API keys
+- Created `.env.local` for API keys
 - Built comprehensive LLM streaming test suite (`tests/llm-streaming.test.ts`)
 - Added `npm run test:llm-streaming` command
 - Created `README_TESTING.md` with instructions

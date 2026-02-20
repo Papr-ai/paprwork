@@ -52,16 +52,16 @@ export async function setupChatHandlers(
       case "chat:list": {
         // Get chats from storage manager
         const chats = await agentService.listChats();
-        
+
         // Transform snake_case to camelCase for UI
-        const transformedChats = chats.map(chat => ({
+        const transformedChats = chats.map((chat) => ({
           id: chat.id,
           title: chat.title,
           createdAt: chat.created_at,
           updatedAt: chat.updated_at,
           messageCount: chat.message_count,
         }));
-        
+
         sendResponse(ws, {
           id: message.id,
           success: true,
@@ -73,11 +73,11 @@ export async function setupChatHandlers(
       case "chat:create": {
         const { chatId, title } = (message.payload as CreateChatPayload) || {};
         const newChatId = await agentService.createChat(chatId, title);
-        
+
         sendResponse(ws, {
           id: message.id,
           success: true,
-          data: { chatId: newChatId, title: title || 'New Chat' },
+          data: { chatId: newChatId, title: title || "New Chat" },
         });
         break;
       }
@@ -85,12 +85,12 @@ export async function setupChatHandlers(
       case "chat:get": {
         const { chatId } = message.payload as GetChatPayload;
         const chat = await agentService.getStorageManager().getChat(chatId);
-        
+
         if (!chat) {
           sendError(ws, message.id, `Chat not found: ${chatId}`);
           return;
         }
-        
+
         sendResponse(ws, {
           id: message.id,
           success: true,
@@ -102,7 +102,7 @@ export async function setupChatHandlers(
       case "chat:update": {
         const { chatId, title } = message.payload as UpdateChatPayload;
         await agentService.updateChatTitle(chatId, title);
-        
+
         sendResponse(ws, {
           id: message.id,
           success: true,
@@ -114,7 +114,7 @@ export async function setupChatHandlers(
       case "chat:delete": {
         const { chatId } = message.payload as DeleteChatPayload;
         await agentService.deleteChat(chatId);
-        
+
         sendResponse(ws, {
           id: message.id,
           success: true,
@@ -125,7 +125,7 @@ export async function setupChatHandlers(
       case "chat:messages": {
         const { chatId, limit, skip } = message.payload as GetMessagesPayload;
         const messages = await agentService.getChatHistory(chatId);
-        
+
         // Apply limit/skip if provided
         let result = messages;
         if (skip) {
@@ -134,7 +134,7 @@ export async function setupChatHandlers(
         if (limit) {
           result = result.slice(0, limit);
         }
-        
+
         sendResponse(ws, {
           id: message.id,
           success: true,
@@ -146,7 +146,7 @@ export async function setupChatHandlers(
       case "chat:stats": {
         const { chatId } = message.payload as GetStatsPayload;
         const stats = await agentService.getChatStats(chatId);
-        
+
         sendResponse(ws, {
           id: message.id,
           success: true,
@@ -156,32 +156,55 @@ export async function setupChatHandlers(
       }
 
       case "chat:export": {
-        const { chatId, format } = message.payload as { chatId: string; format?: "json" | "markdown" };
+        const { chatId, format } = message.payload as {
+          chatId: string;
+          format?: "json" | "markdown";
+        };
         const chat = await agentService.getStorageManager().getChat(chatId);
         const messages = await agentService.getChatHistory(chatId);
         const title = chat?.title || "Untitled Chat";
         const exportedAt = new Date().toISOString();
 
         if (format === "markdown") {
-          const lines: string[] = [`# ${title}`, "", `> Exported ${new Date(exportedAt).toLocaleString()}`, ""];
+          const lines: string[] = [
+            `# ${title}`,
+            "",
+            `> Exported ${new Date(exportedAt).toLocaleString()}`,
+            "",
+          ];
           for (const msg of messages) {
-            const role = (msg as unknown as Record<string, unknown>).role as string;
-            const content = (msg as unknown as Record<string, unknown>).content as string;
+            const role = (msg as unknown as Record<string, unknown>)
+              .role as string;
+            const content = (msg as unknown as Record<string, unknown>)
+              .content as string;
             if (role && content) {
-              lines.push(`## ${role === "user" ? "User" : "Assistant"}`, "", content, "");
+              lines.push(
+                `## ${role === "user" ? "User" : "Assistant"}`,
+                "",
+                content,
+                "",
+              );
             }
           }
           sendResponse(ws, {
             id: message.id,
             success: true,
-            data: { content: lines.join("\n"), filename: `${title}.md`, mimeType: "text/markdown" },
+            data: {
+              content: lines.join("\n"),
+              filename: `${title}.md`,
+              mimeType: "text/markdown",
+            },
           });
         } else {
           sendResponse(ws, {
             id: message.id,
             success: true,
             data: {
-              content: JSON.stringify({ chatId, title, exportedAt, messages }, null, 2),
+              content: JSON.stringify(
+                { chatId, title, exportedAt, messages },
+                null,
+                2,
+              ),
               filename: `${title}.json`,
               mimeType: "application/json",
             },

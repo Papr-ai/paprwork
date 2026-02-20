@@ -92,7 +92,9 @@ export function useSubAgents() {
       const data = response.data as { agents?: SubAgentProfile[] };
       setAgents(data.agents ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load sub-agents");
+      setError(
+        err instanceof Error ? err.message : "Failed to load sub-agents",
+      );
     } finally {
       setLoading(false);
     }
@@ -119,21 +121,18 @@ export function useSubAgents() {
     }
   }, []);
 
-  const upsertAgent = useCallback(
-    async (input: UpsertSubAgentInput) => {
-      setError(null);
-      const response = await gateway.send("subagent:upsert", input);
-      const data = response.data as { agent?: SubAgentProfile };
-      if (data.agent) {
-        setAgents((prev) => {
-          const next = prev.filter((item) => item.id !== data.agent?.id);
-          return [data.agent as SubAgentProfile, ...next];
-        });
-      }
-      return data.agent;
-    },
-    [],
-  );
+  const upsertAgent = useCallback(async (input: UpsertSubAgentInput) => {
+    setError(null);
+    const response = await gateway.send("subagent:upsert", input);
+    const data = response.data as { agent?: SubAgentProfile };
+    if (data.agent) {
+      setAgents((prev) => {
+        const next = prev.filter((item) => item.id !== data.agent?.id);
+        return [data.agent as SubAgentProfile, ...next];
+      });
+    }
+    return data.agent;
+  }, []);
 
   const deleteAgent = useCallback(async (agentId: string) => {
     setError(null);

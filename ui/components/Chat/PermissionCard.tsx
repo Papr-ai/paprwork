@@ -93,10 +93,16 @@ export const PermissionCard: React.FC = () => {
       </div>
 
       <div className="permission-card-actions">
-        <button className="permission-btn permission-btn-deny" onClick={handleDeny}>
+        <button
+          className="permission-btn permission-btn-deny"
+          onClick={handleDeny}
+        >
           Deny
         </button>
-        <button className="permission-btn permission-btn-allow" onClick={handleApprove}>
+        <button
+          className="permission-btn permission-btn-allow"
+          onClick={handleApprove}
+        >
           Allow
         </button>
       </div>

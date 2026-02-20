@@ -19,6 +19,8 @@ let KeyPermissionsStorage;
 let SettingsStorage;
 let initializeCustomKeysIPC;
 let initializePermissionsIPC;
+let initializeOAuthIPC;
+let cleanupOAuthServers;
 let requestPermissionFromGateway;
 
 async function loadESMModules() {
@@ -28,12 +30,21 @@ async function loadESMModules() {
   KeyPermissionsStorage = storageModule.KeyPermissionsStorage;
   SettingsStorage = storageModule.SettingsStorage;
 
-  const customKeysIpcModule = await import("../../dist/electron/electron/ipc/customKeys.js");
+  const customKeysIpcModule =
+    await import("../../dist/electron/electron/ipc/customKeys.js");
   initializeCustomKeysIPC = customKeysIpcModule.initializeCustomKeysIPC;
 
-  const permissionsIpcModule = await import("../../dist/electron/electron/ipc/permissions.js");
+  const permissionsIpcModule =
+    await import("../../dist/electron/electron/ipc/permissions.js");
   initializePermissionsIPC = permissionsIpcModule.initializePermissionsIPC;
-  requestPermissionFromGateway = permissionsIpcModule.requestPermissionFromGateway;
+  requestPermissionFromGateway =
+    permissionsIpcModule.requestPermissionFromGateway;
+
+  // Import OAuth IPC module
+  const oauthIpcModule =
+    await import("../../dist/electron/ipc/oauth.js");
+  initializeOAuthIPC = oauthIpcModule.initializeOAuthIPC;
+  cleanupOAuthServers = oauthIpcModule.cleanupOAuthServers;
 }
 
 // Configuration
@@ -141,9 +152,9 @@ async function handleWebviewTestRequest(request) {
         url.startsWith(`http://127.0.0.1:${GATEWAY_PORT}`);
       if (!isInternal) {
         shell.openExternal(url).catch(() => {});
-        return { action: 'deny' };
+        return { action: "deny" };
       }
-      return { action: 'allow' };
+      return { action: "allow" };
     });
 
     const entry = {
@@ -192,7 +203,9 @@ async function handleWebviewTestRequest(request) {
     win.on("closed", () => {
       // Remove the session-level network listener so it never fires on a dead window.
       // webRequest.onCompleted(null) clears the listener for this session.
-      try { session.webRequest.onCompleted(null); } catch (_) {}
+      try {
+        session.webRequest.onCompleted(null);
+      } catch (_) {}
       webviewSessions.delete(id);
       if (defaultWebviewId === id) {
         defaultWebviewId = null;
@@ -235,10 +248,8 @@ async function handleWebviewTestRequest(request) {
         webviewId: id,
         url: win.webContents.getURL(),
         title: win.webContents.getTitle(),
-        html:
-          typeof html === "string" ? html.slice(0, maxHtmlChars) : "",
-        text:
-          typeof text === "string" ? text.slice(0, maxTextChars) : "",
+        html: typeof html === "string" ? html.slice(0, maxHtmlChars) : "",
+        text: typeof text === "string" ? text.slice(0, maxTextChars) : "",
       },
     };
   }
@@ -284,7 +295,7 @@ async function handleWebviewTestRequest(request) {
 function createMainWindow() {
   const preloadPath = path.join(__dirname, "preload.cjs");
   console.log(`[Electron] Preload script path: ${preloadPath}`);
-  
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -302,21 +313,26 @@ function createMainWindow() {
   // Hide default menu
   Menu.setApplicationMenu(null);
 
-  const uiUrl = IS_PRODUCTION
-    ? `http://localhost:${GATEWAY_PORT}`
-    : UI_DEV_URL;
+  const uiUrl = IS_PRODUCTION ? `http://localhost:${GATEWAY_PORT}` : UI_DEV_URL;
 
   console.log(`[Electron] Loading UI from: ${uiUrl}`);
-  
+
   // Add error handler for load failures
-  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-    console.error(`[Electron] Failed to load UI: ${errorCode} - ${errorDescription}`);
-    console.error(`[Electron] Attempted URL: ${uiUrl}`);
-    console.error(`[Electron] Is Gateway running? Check port ${GATEWAY_PORT}`);
-  });
-  
-  mainWindow.loadURL(uiUrl).catch(err => {
-    console.error('[Electron] loadURL failed:', err);
+  mainWindow.webContents.on(
+    "did-fail-load",
+    (event, errorCode, errorDescription) => {
+      console.error(
+        `[Electron] Failed to load UI: ${errorCode} - ${errorDescription}`,
+      );
+      console.error(`[Electron] Attempted URL: ${uiUrl}`);
+      console.error(
+        `[Electron] Is Gateway running? Check port ${GATEWAY_PORT}`,
+      );
+    },
+  );
+
+  mainWindow.loadURL(uiUrl).catch((err) => {
+    console.error("[Electron] loadURL failed:", err);
   });
 
   // Intercept window.open() calls from mini-app iframes (target="_blank" links, etc.)
@@ -327,12 +343,12 @@ function createMainWindow() {
       url.startsWith(`http://localhost:${GATEWAY_PORT}`) ||
       url.startsWith(`http://127.0.0.1:${GATEWAY_PORT}`);
     if (!isInternal) {
-      shell.openExternal(url).catch(err => {
+      shell.openExternal(url).catch((err) => {
         console.error(`[Electron] Failed to open external URL: ${url}`, err);
       });
-      return { action: 'deny' };
+      return { action: "deny" };
     }
-    return { action: 'allow' };
+    return { action: "allow" };
   });
 
   // Keep DevTools development-only to avoid exposing internals in production.
@@ -385,7 +401,9 @@ function startGateway(customKeysStorage) {
             const envFallback = process.env[keyName];
             if (envFallback) {
               resolvedKeys[keyName] = envFallback;
-              console.log(`[Electron]   ✓ Resolved ${keyName} from env fallback`);
+              console.log(
+                `[Electron]   ✓ Resolved ${keyName} from env fallback`,
+              );
             } else {
               console.log(`[Electron]   ✗ Key ${keyName} not found`);
             }
@@ -395,13 +413,45 @@ function startGateway(customKeysStorage) {
         }
       }
 
+      // Include OAuth tokens if available
+      const oauthTokens = {};
+      try {
+        const { getOAuthTokenStorage } = await import("../../dist/electron/ipc/oauth.js");
+        const oauthStorage = getOAuthTokenStorage();
+        
+        if (oauthStorage) {
+          // Check OpenAI OAuth token
+          const openaiToken = oauthStorage.getTokenByProvider("openai");
+          if (openaiToken && !oauthStorage.isTokenExpired(openaiToken)) {
+            oauthTokens.openai = {
+              accessToken: openaiToken.accessToken,
+              expiresAt: openaiToken.expiresAt,
+            };
+            console.log("[Electron]   ✓ OpenAI OAuth token available");
+          }
+
+          // Check Claude OAuth token
+          const claudeToken = oauthStorage.getTokenByProvider("anthropic");
+          if (claudeToken && !oauthStorage.isTokenExpired(claudeToken)) {
+            oauthTokens.anthropic = {
+              accessToken: claudeToken.accessToken,
+              expiresAt: claudeToken.expiresAt,
+            };
+            console.log("[Electron]   ✓ Claude OAuth token available");
+          }
+        }
+      } catch (error) {
+        console.error("[Electron] Failed to load OAuth tokens:", error);
+      }
+
       gatewayProcess.send({
         type: "KEYS_RESPONSE",
         requestId: msg.requestId,
         keys: resolvedKeys,
+        oauthTokens: Object.keys(oauthTokens).length > 0 ? oauthTokens : undefined,
       });
     }
-    
+
     // Handle permission requests from Gateway (new)
     else if (isRequestPermissionMessage(msg)) {
       console.log("[Electron] Gateway requested permission:", msg.request);
@@ -426,8 +476,7 @@ function startGateway(customKeysStorage) {
           response: { approved: false },
         });
       }
-    }
-    else if (isRequestWebviewTestMessage(msg)) {
+    } else if (isRequestWebviewTestMessage(msg)) {
       try {
         const response = await handleWebviewTestRequest(msg.request);
         gatewayProcess.send({
@@ -443,6 +492,71 @@ function startGateway(customKeysStorage) {
             success: false,
             error: error instanceof Error ? error.message : String(error),
           },
+        });
+      }
+    }
+    // Handle custom keys requests from Gateway
+    else if (msg.type === "CUSTOM_KEYS_LIST") {
+      try {
+        const keys = await customKeysStorage.listKeys();
+        gatewayProcess.send({
+          type: "CUSTOM_KEYS_RESPONSE",
+          requestId: msg.requestId,
+          keys,
+        });
+      } catch (error) {
+        console.error("[Electron] custom-keys:list error:", error);
+        gatewayProcess.send({
+          type: "CUSTOM_KEYS_RESPONSE",
+          requestId: msg.requestId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } else if (msg.type === "CUSTOM_KEYS_GET_BY_NAME") {
+      try {
+        const value = await customKeysStorage.getKeyByName(msg.name);
+        gatewayProcess.send({
+          type: "CUSTOM_KEYS_RESPONSE",
+          requestId: msg.requestId,
+          value,
+        });
+      } catch (error) {
+        console.error("[Electron] custom-keys:get-by-name error:", error);
+        gatewayProcess.send({
+          type: "CUSTOM_KEYS_RESPONSE",
+          requestId: msg.requestId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } else if (msg.type === "CUSTOM_KEYS_ADD") {
+      try {
+        const key = await customKeysStorage.addKey(msg.input);
+        gatewayProcess.send({
+          type: "CUSTOM_KEYS_RESPONSE",
+          requestId: msg.requestId,
+          key,
+        });
+      } catch (error) {
+        console.error("[Electron] custom-keys:add error:", error);
+        gatewayProcess.send({
+          type: "CUSTOM_KEYS_RESPONSE",
+          requestId: msg.requestId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } else if (msg.type === "CUSTOM_KEYS_DELETE") {
+      try {
+        await customKeysStorage.deleteKey(msg.keyId);
+        gatewayProcess.send({
+          type: "CUSTOM_KEYS_RESPONSE",
+          requestId: msg.requestId,
+        });
+      } catch (error) {
+        console.error("[Electron] custom-keys:delete error:", error);
+        gatewayProcess.send({
+          type: "CUSTOM_KEYS_RESPONSE",
+          requestId: msg.requestId,
+          error: error instanceof Error ? error.message : String(error),
         });
       }
     }
@@ -486,6 +600,9 @@ app.whenReady().then(async () => {
 
   initializeCustomKeysIPC(customKeysStorage);
 
+  // Initialize OAuth IPC handlers
+  await initializeOAuthIPC();
+
   // Start Gateway process
   startGateway(customKeysStorage);
 
@@ -493,36 +610,44 @@ app.whenReady().then(async () => {
   let attempts = 0;
   const maxAttempts = 20; // 10 seconds max
   let gatewayReady = false; // guard against multiple in-flight requests all resolving
-  
+
   const checkGateway = setInterval(() => {
     attempts++;
-    
+
     // Try to connect to Gateway
-    const http = require('http');
+    const http = require("http");
     const req = http.get(`http://localhost:${GATEWAY_PORT}/`, (res) => {
       if (gatewayReady) return; // already handled — discard duplicate response
       gatewayReady = true;
       console.log(`[Electron] Gateway is ready (status: ${res.statusCode})`);
       clearInterval(checkGateway);
       createMainWindow();
-      
+
       // Initialize permissions IPC after window is created
-      initializePermissionsIPC(keyPermissionsStorage, settingsStorage, mainWindow);
+      initializePermissionsIPC(
+        keyPermissionsStorage,
+        settingsStorage,
+        mainWindow,
+      );
     });
-    
-    req.on('error', (err) => {
+
+    req.on("error", (err) => {
       if (gatewayReady) return;
       if (attempts >= maxAttempts) {
         gatewayReady = true;
-        console.error(`[Electron] Gateway failed to start after ${maxAttempts} attempts`);
+        console.error(
+          `[Electron] Gateway failed to start after ${maxAttempts} attempts`,
+        );
         clearInterval(checkGateway);
         // Try to create window anyway
         createMainWindow();
       } else {
-        console.log(`[Electron] Waiting for Gateway... (${attempts}/${maxAttempts})`);
+        console.log(
+          `[Electron] Waiting for Gateway... (${attempts}/${maxAttempts})`,
+        );
       }
     });
-    
+
     req.end();
   }, 500);
 
@@ -541,6 +666,10 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   console.log("[Electron] App quitting...");
+  // Cleanup OAuth servers before stopping gateway
+  if (cleanupOAuthServers) {
+    cleanupOAuthServers();
+  }
   stopGateway();
 });
 

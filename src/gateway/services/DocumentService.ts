@@ -127,10 +127,7 @@ export class DocumentService {
 
   // ===== CRUD =====
 
-  async createDocument(
-    title: string,
-    content: string = "",
-  ): Promise<Document> {
+  async createDocument(title: string, content: string = ""): Promise<Document> {
     const id = await this.generateUniqueSlug(title);
     const now = new Date().toISOString();
 
@@ -385,7 +382,10 @@ export class DocumentService {
     }
   }
 
-  async restoreVersion(docId: string, versionId: string): Promise<Document | null> {
+  async restoreVersion(
+    docId: string,
+    versionId: string,
+  ): Promise<Document | null> {
     const version = await this.getVersion(docId, versionId);
     if (!version) return null;
 
@@ -409,12 +409,21 @@ export class DocumentService {
     const doc = await this.getDocument(docId);
     if (!doc) throw new Error(`Document not found: ${docId}`);
 
-    const { Document: DocxDocument, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } = await import("docx");
+    const {
+      Document: DocxDocument,
+      Packer,
+      Paragraph,
+      TextRun,
+      HeadingLevel,
+      AlignmentType,
+    } = await import("docx");
 
-    const paragraphs = markdownToDocxParagraphs(
-      doc.content,
-      { Paragraph, TextRun, HeadingLevel, AlignmentType },
-    );
+    const paragraphs = markdownToDocxParagraphs(doc.content, {
+      Paragraph,
+      TextRun,
+      HeadingLevel,
+      AlignmentType,
+    });
 
     const docxDoc = new DocxDocument({
       sections: [{ properties: {}, children: paragraphs }],
@@ -454,7 +463,11 @@ export class DocumentService {
   }
 
   private async writeMeta(id: string, meta: DocumentMeta): Promise<void> {
-    await fs.writeFile(this.metaPath(id), JSON.stringify(meta, null, 2), "utf-8");
+    await fs.writeFile(
+      this.metaPath(id),
+      JSON.stringify(meta, null, 2),
+      "utf-8",
+    );
   }
 
   private async listDocIds(): Promise<string[]> {
@@ -516,10 +529,7 @@ export class DocumentService {
           `[DocumentService] Migrated ${migrated} documents from legacy JSON`,
         );
         // Rename legacy file so we don't migrate again
-        await fs.rename(
-          this.legacyJsonPath,
-          this.legacyJsonPath + ".migrated",
-        );
+        await fs.rename(this.legacyJsonPath, this.legacyJsonPath + ".migrated");
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -552,7 +562,10 @@ function markdownToDocxParagraphs(
   let inCodeBlock = false;
   let codeLines: string[] = [];
 
-  const headingLevelMap: Record<number, (typeof HeadingLevel)[keyof typeof HeadingLevel]> = {
+  const headingLevelMap: Record<
+    number,
+    (typeof HeadingLevel)[keyof typeof HeadingLevel]
+  > = {
     1: HeadingLevel.HEADING_1,
     2: HeadingLevel.HEADING_2,
     3: HeadingLevel.HEADING_3,
@@ -566,7 +579,8 @@ function markdownToDocxParagraphs(
   ): InstanceType<typeof import("docx").TextRun>[] => {
     const runs: InstanceType<typeof import("docx").TextRun>[] = [];
     // Simple regex-based inline parsing
-    const regex = /(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|`(.+?)`|__(.+?)__|_(.+?)_)/g;
+    const regex =
+      /(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|`(.+?)`|__(.+?)__|_(.+?)_)/g;
     let lastIndex = 0;
     let match: RegExpExecArray | null;
 
@@ -590,7 +604,9 @@ function markdownToDocxParagraphs(
         runs.push(new TextRun({ text: match[5], strike: true }));
       } else if (match[6]) {
         // `code`
-        runs.push(new TextRun({ text: match[6], font: { name: "Courier New" } }));
+        runs.push(
+          new TextRun({ text: match[6], font: { name: "Courier New" } }),
+        );
       } else if (match[7]) {
         // __underline__
         runs.push(new TextRun({ text: match[7], underline: {} }));
@@ -689,9 +705,7 @@ function markdownToDocxParagraphs(
       paragraphs.push(
         new Paragraph({
           indent: { left: 720 },
-          children: [
-            new TextRun({ text, italics: true, color: "666666" }),
-          ],
+          children: [new TextRun({ text, italics: true, color: "666666" })],
         }),
       );
       continue;
@@ -710,9 +724,7 @@ function markdownToDocxParagraphs(
     }
 
     // Normal paragraph
-    paragraphs.push(
-      new Paragraph({ children: parseInlineRuns(line) }),
-    );
+    paragraphs.push(new Paragraph({ children: parseInlineRuns(line) }));
   }
 
   // Flush remaining code block
@@ -737,15 +749,17 @@ function markdownToDocxParagraphs(
 
 /** Convert a title to a URL-safe slug for use as a folder name. */
 function slugify(title: string): string {
-  return title
-    .toLowerCase()
-    .trim()
-    .replace(/[^\w\s-]/g, "")      // Remove non-word chars (except spaces and hyphens)
-    .replace(/\s+/g, "-")           // Spaces to hyphens
-    .replace(/-+/g, "-")            // Collapse multiple hyphens
-    .replace(/^-|-$/g, "")          // Trim leading/trailing hyphens
-    .slice(0, 80)                   // Cap length
-    || "untitled";                  // Fallback
+  return (
+    title
+      .toLowerCase()
+      .trim()
+      .replace(/[^\w\s-]/g, "") // Remove non-word chars (except spaces and hyphens)
+      .replace(/\s+/g, "-") // Spaces to hyphens
+      .replace(/-+/g, "-") // Collapse multiple hyphens
+      .replace(/^-|-$/g, "") // Trim leading/trailing hyphens
+      .slice(0, 80) || // Cap length
+    "untitled"
+  ); // Fallback
 }
 
 function wordCount(text: string): number {
@@ -763,7 +777,10 @@ function versionIdToTimestamp(versionId: string): string {
     const datePart = parts.slice(0, 6).join("-");
     // YYYY-MM-DDTHH-MM-SS-sssZ -> YYYY-MM-DDTHH:MM:SS.sssZ
     const iso = datePart
-      .replace(/^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})/, "$1-$2-$3T$4:$5:$6")
+      .replace(
+        /^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})/,
+        "$1-$2-$3T$4:$5:$6",
+      )
       .replace(/-(\d{3})Z/, ".$1Z");
     const d = new Date(iso);
     if (!isNaN(d.getTime())) return d.toISOString();

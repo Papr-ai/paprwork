@@ -1,17 +1,17 @@
 /**
  * Chat Session Manager
- * 
+ *
  * Manages parallel chat sessions for concurrent streaming.
  * Each chat gets its own Mastra agent instance and abort controller.
  * Based on Paprwork V1's chatSessions architecture.
  */
 
-import { Agent } from '@mastra/core/agent';
-import { anthropic } from '@ai-sdk/anthropic';
-import { openai } from '@ai-sdk/openai';
-import { google } from '@ai-sdk/google';
-import type { AgentConfigInternal } from '../../core/types/agents.js';
-import type { StorageManager } from './StorageManager.js';
+import { Agent } from "@mastra/core/agent";
+import { anthropic } from "@ai-sdk/anthropic";
+import { openai } from "@ai-sdk/openai";
+import { google } from "@ai-sdk/google";
+import type { AgentConfigInternal } from "../../core/types/agents.js";
+import type { StorageManager } from "./StorageManager.js";
 
 export interface ChatSession {
   chatId: string;
@@ -33,23 +33,26 @@ export class ChatSessionManager {
    * Get or create a chat session
    * Each chat gets its own agent instance for parallel streaming
    */
-  async getSession(chatId: string, config: AgentConfigInternal): Promise<ChatSession> {
+  async getSession(
+    chatId: string,
+    config: AgentConfigInternal,
+  ): Promise<ChatSession> {
     // Return existing session if same config
     if (this.sessions.has(chatId)) {
       const session = this.sessions.get(chatId)!;
-      
+
       // Check if config changed (model or provider)
       if (this.isSameConfig(session.config, config)) {
         return session;
       }
-      
+
       // Config changed, recreate session
       await this.clearSession(chatId);
     }
 
     // Create new session
     const agent = this.createAgent(config);
-    
+
     const session: ChatSession = {
       chatId,
       agent,
@@ -60,8 +63,10 @@ export class ChatSessionManager {
     };
 
     this.sessions.set(chatId, session);
-    console.log(`✓ Created chat session for ${chatId} with ${config.provider}/${config.model}`);
-    
+    console.log(
+      `✓ Created chat session for ${chatId} with ${config.provider}/${config.model}`,
+    );
+
     return session;
   }
 
@@ -70,46 +75,46 @@ export class ChatSessionManager {
    */
   private createAgent(config: AgentConfigInternal): Agent {
     // Set API keys in environment for AI SDK providers
-    if (config.provider === 'anthropic') {
+    if (config.provider === "anthropic") {
       process.env.ANTHROPIC_API_KEY = config.apiKey;
-    } else if (config.provider === 'openai') {
+    } else if (config.provider === "openai") {
       process.env.OPENAI_API_KEY = config.apiKey;
-    } else if (config.provider === 'google') {
+    } else if (config.provider === "google") {
       process.env.GOOGLE_GENERATIVE_AI_API_KEY = config.apiKey;
     }
-    
+
     // Select the appropriate AI SDK provider
     let model;
-    
+
     switch (config.provider) {
-      case 'anthropic':
+      case "anthropic":
         model = anthropic(config.model);
         break;
-        
-      case 'openai':
+
+      case "openai":
         // For GPT-5.x models with reasoning, normalize the model name
         // UI sends: "gpt-5-2-low" -> API expects: "gpt-5-2" with reasoning effort in providerOptions
         let normalizedModel = config.model;
-        if (config.model.startsWith('gpt-5-2-')) {
+        if (config.model.startsWith("gpt-5-2-")) {
           // Extract base model (e.g., "gpt-5-2-low" -> "gpt-5-2")
-          normalizedModel = 'gpt-5-2';
-        } else if (config.model.startsWith('gpt-5-2')) {
+          normalizedModel = "gpt-5-2";
+        } else if (config.model.startsWith("gpt-5-2")) {
           // Keep as is for base "gpt-5-2"
           normalizedModel = config.model;
         }
-        
+
         // Use Responses API for GPT-5 reasoning models (enables reasoning token streaming)
-        if (normalizedModel.startsWith('gpt-5')) {
+        if (normalizedModel.startsWith("gpt-5")) {
           model = openai.responses(normalizedModel);
         } else {
           model = openai(normalizedModel);
         }
         break;
-        
-      case 'google':
+
+      case "google":
         model = google(config.model);
         break;
-        
+
       default:
         throw new Error(`Unsupported provider: ${config.provider}`);
     }
@@ -117,7 +122,7 @@ export class ChatSessionManager {
     // Create Mastra agent
     const agent = new Agent({
       id: `agent-${Date.now()}`,
-      name: 'paprwork-agent',
+      name: "paprwork-agent",
       instructions: config.systemPrompt || this.getDefaultSystemPrompt(),
       model,
     });
@@ -135,7 +140,10 @@ export class ChatSessionManager {
   /**
    * Check if two configs are the same
    */
-  private isSameConfig(config1: AgentConfigInternal, config2: AgentConfigInternal): boolean {
+  private isSameConfig(
+    config1: AgentConfigInternal,
+    config2: AgentConfigInternal,
+  ): boolean {
     return (
       config1.provider === config2.provider &&
       config1.model === config2.model &&
@@ -148,7 +156,7 @@ export class ChatSessionManager {
    */
   async abortSession(chatId: string): Promise<void> {
     const session = this.sessions.get(chatId);
-    
+
     if (!session) {
       console.warn(`No session found for chat ${chatId}`);
       return;
@@ -167,13 +175,13 @@ export class ChatSessionManager {
    */
   async clearSession(chatId: string): Promise<void> {
     const session = this.sessions.get(chatId);
-    
+
     if (session) {
       // Abort any active streaming
       if (session.abortController) {
         session.abortController.abort();
       }
-      
+
       this.sessions.delete(chatId);
       console.log(`✓ Cleared session for chat ${chatId}`);
     }
@@ -190,7 +198,7 @@ export class ChatSessionManager {
    * Get all streaming sessions
    */
   getStreamingSessions(): ChatSession[] {
-    return Array.from(this.sessions.values()).filter(s => s.isStreaming);
+    return Array.from(this.sessions.values()).filter((s) => s.isStreaming);
   }
 
   /**
@@ -229,7 +237,7 @@ export class ChatSessionManager {
       await this.abortSession(chatId);
     }
     this.sessions.clear();
-    console.log('✓ Cleared all chat sessions');
+    console.log("✓ Cleared all chat sessions");
   }
 
   /**

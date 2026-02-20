@@ -68,9 +68,11 @@ class GatewayClient {
           // Handle broadcast messages (no matching ID)
           if (!response.id && response.type) {
             // Dispatch as a custom event that React components can listen to
-            window.dispatchEvent(new CustomEvent('gateway-broadcast', {
-              detail: response
-            }));
+            window.dispatchEvent(
+              new CustomEvent("gateway-broadcast", {
+                detail: response,
+              }),
+            );
             return;
           }
 

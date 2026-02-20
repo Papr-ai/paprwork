@@ -31,8 +31,6 @@ export interface SystemPromptOptions {
   availableTools: string[];
   customKeys: Array<{ name: string; description?: string }>;
   includeExtendedAppPlaybook?: boolean;
-  /** Conversation summary from Papr Memory /compress or local cache */
-  conversationSummary?: string;
   /** Active skills the agent can reference */
   activeSkills?: Array<{ id: string; name: string; description: string }>;
   /** Top-level workspace directory listing for context */
@@ -506,7 +504,7 @@ read_skill({ skillId: "preloaded-SKILL-NAME" })
 
 | Category | Tools |
 |----------|-------|
-| **Apps** | \`list_apps\`, \`create_app\`, \`read_app_file\`, \`edit_app_file\`, \`list_app_files\`, \`link_app_data_source\`, \`read_app_data_sources\` |
+| **Apps** | \`list_apps\`, \`create_app\`, \`read_app_file\`, \`edit_app_file\`, \`edit_app_file_lines\`, \`list_app_files\`, \`link_app_data_source\`, \`read_app_data_sources\` |
 | **Jobs** | \`list_jobs\`, \`create_job\`, \`update_job\`, \`run_job\`, \`read_job_logs\`, \`list_job_files\`, \`read_job_file\`, \`edit_job_file\` |
 | **Documents** | \`create_document\`, \`read_document\`, \`list_documents\`, \`import_document\` |
 | **Filesystem** | \`read_file\`, \`write_file\`, \`list_directory\`, \`search_files\` |
@@ -1174,11 +1172,33 @@ When users ask for outcomes like "track", "monitor", "summarize", "dashboard", o
 list_apps()
 
 // 2. If similar app exists, UPDATE it instead of creating new one
-edit_app_file({ appId: "...", filename: "app.js", oldString: "...", newString: "..." })
+
+// Option A: Line-based editing (RECOMMENDED - more reliable)
+read_app_file({ appId: "...", filename: "app.js" }) // Get line numbers
+edit_app_file_lines({ 
+  appId: "...", 
+  filename: "app.js", 
+  startLine: 45, 
+  endLine: 60, 
+  newContent: "// new code here" 
+})
+
+// Option B: String replacement (for simple text changes)
+edit_app_file({ 
+  appId: "...", 
+  filename: "app.js", 
+  oldString: "const oldValue = 5", 
+  newString: "const oldValue = 10" 
+})
 
 // 3. Only create NEW app if no similar functionality exists
 create_app({ ... })
 \`\`\`
+
+**Editing Strategy:**
+- Use \`edit_app_file_lines\` for code changes (HTML structure, JS functions, CSS blocks)
+- Use \`edit_app_file\` only for simple text replacements (variable values, strings)
+- Always \`read_app_file\` first to see exact line numbers and content
 
 **Why:** Prevents duplicate apps, preserves user's data, faster than building from scratch.
 
@@ -1501,16 +1521,6 @@ For any implementation task:
   private buildDynamicContextSections(): string[] {
     const sections: string[] = [];
 
-    // Conversation summary
-    if (this.options.conversationSummary) {
-      sections.push(`# Conversation Context
-
-The following is a summary of the earlier conversation with this user.
-Use it as context but don't mention you received a summary — just act on it naturally.
-
-${this.options.conversationSummary}`);
-    }
-
     // Active plans (unfinished work)
     if (this.options.activePlans && this.options.activePlans.length > 0) {
       const plansText = this.options.activePlans.map(plan => {
@@ -1609,7 +1619,6 @@ export function buildSystemPrompt(options: Partial<SystemPromptOptions> = {}): s
     availableTools: options.availableTools || ["bash", "read_file", "write_file", "list_directory", "search_files"],
     customKeys: options.customKeys || [],
     includeExtendedAppPlaybook: options.includeExtendedAppPlaybook ?? true,
-    conversationSummary: options.conversationSummary,
     activeSkills: options.activeSkills,
     workspaceFiles: options.workspaceFiles,
     activePlans: options.activePlans,

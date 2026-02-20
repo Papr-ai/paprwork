@@ -22,11 +22,36 @@ export interface SlashCommand {
 
 const ALL_COMMANDS: SlashCommand[] = [
   { id: "new", label: "/new", description: "Create a new chat", icon: "+" },
-  { id: "export", label: "/export", description: "Export this conversation", icon: "↓" },
-  { id: "summarize", label: "/summarize", description: "Summarize conversation", icon: "Σ" },
-  { id: "context", label: "/context", description: "Show token & message count", icon: "#" },
-  { id: "help", label: "/help", description: "Show available commands", icon: "?" },
-  { id: "settings", label: "/settings", description: "Open settings", icon: "⚙" },
+  {
+    id: "export",
+    label: "/export",
+    description: "Export this conversation",
+    icon: "↓",
+  },
+  {
+    id: "summarize",
+    label: "/summarize",
+    description: "Summarize conversation",
+    icon: "Σ",
+  },
+  {
+    id: "context",
+    label: "/context",
+    description: "Show token & message count",
+    icon: "#",
+  },
+  {
+    id: "help",
+    label: "/help",
+    description: "Show available commands",
+    icon: "?",
+  },
+  {
+    id: "settings",
+    label: "/settings",
+    description: "Open settings",
+    icon: "⚙",
+  },
 ];
 
 interface SlashCommandMenuProps {

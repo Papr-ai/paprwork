@@ -32,7 +32,11 @@ function loadState(): OnboardingState {
   } catch {
     // ignore
   }
-  return { step1Completed: false, step2Completed: false, step3Completed: false };
+  return {
+    step1Completed: false,
+    step2Completed: false,
+    step3Completed: false,
+  };
 }
 
 function saveState(state: OnboardingState): void {
@@ -47,7 +51,10 @@ function dismiss(): void {
   localStorage.setItem(DISMISSED_KEY, "true");
 }
 
-export function OnboardingCard({ onOpenSettings, onSendMessage }: OnboardingCardProps) {
+export function OnboardingCard({
+  onOpenSettings,
+  onSendMessage,
+}: OnboardingCardProps) {
   const [hidden, setHidden] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const [state, setState] = useState<OnboardingState>(loadState);
@@ -139,20 +146,13 @@ export function OnboardingCard({ onOpenSettings, onSendMessage }: OnboardingCard
   if (hidden) return null;
 
   return (
-    <div
-      className={`onboarding-card-compact${slideOut ? " slide-out" : ""}`}
-    >
+    <div className={`onboarding-card-compact${slideOut ? " slide-out" : ""}`}>
       <div
         className="onboarding-compact-header"
         onClick={() => setExpanded((prev) => !prev)}
       >
         <span className="onboarding-icon">
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-          >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
             <path
               d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"
               stroke="currentColor"
@@ -168,9 +168,7 @@ export function OnboardingCard({ onOpenSettings, onSendMessage }: OnboardingCard
             {progressPercent}%
           </span>
         </div>
-        <span
-          className={`onboarding-chevron${expanded ? " expanded" : ""}`}
-        >
+        <span className={`onboarding-chevron${expanded ? " expanded" : ""}`}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
             <path
               d="M4 6l4 4 4-4"
@@ -200,12 +198,7 @@ export function OnboardingCard({ onOpenSettings, onSendMessage }: OnboardingCard
             >
               <div className="step-number-compact">1</div>
               <div className="step-icon">
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
                   <path
                     d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
                     stroke="currentColor"
@@ -225,12 +218,7 @@ export function OnboardingCard({ onOpenSettings, onSendMessage }: OnboardingCard
             >
               <div className="step-number-compact">2</div>
               <div className="step-icon">
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
                   <path
                     d="M12 2L2 7l10 5 10-5-10-5z"
                     stroke="currentColor"
@@ -257,12 +245,7 @@ export function OnboardingCard({ onOpenSettings, onSendMessage }: OnboardingCard
             >
               <div className="step-number-compact">3</div>
               <div className="step-icon">
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
                   <path
                     d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"
                     stroke="currentColor"

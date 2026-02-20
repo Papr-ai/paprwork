@@ -18,7 +18,8 @@ function validateAgainstSchema(
       return "Expected object";
     }
     const required =
-      Array.isArray(schema.required) && schema.required.every((item) => typeof item === "string")
+      Array.isArray(schema.required) &&
+      schema.required.every((item) => typeof item === "string")
         ? (schema.required as string[])
         : [];
     for (const key of required) {
@@ -26,8 +27,9 @@ function validateAgainstSchema(
         return `Missing required key: ${key}`;
       }
     }
-    const properties =
-      isRecord(schema.properties) ? schema.properties : undefined;
+    const properties = isRecord(schema.properties)
+      ? schema.properties
+      : undefined;
     if (properties) {
       for (const [key, propertySchema] of Object.entries(properties)) {
         if (!(key in value)) {
@@ -50,10 +52,7 @@ function validateAgainstSchema(
     }
     if (isRecord(schema.items)) {
       for (let index = 0; index < value.length; index += 1) {
-        const nestedError = validateAgainstSchema(
-          schema.items,
-          value[index],
-        );
+        const nestedError = validateAgainstSchema(schema.items, value[index]);
         if (nestedError) {
           return `[${index}]: ${nestedError}`;
         }
@@ -67,7 +66,10 @@ function validateAgainstSchema(
   if (type === "number" && typeof value !== "number") {
     return "Expected number";
   }
-  if (type === "integer" && (!Number.isInteger(value) || typeof value !== "number")) {
+  if (
+    type === "integer" &&
+    (!Number.isInteger(value) || typeof value !== "number")
+  ) {
     return "Expected integer";
   }
   if (type === "boolean" && typeof value !== "boolean") {

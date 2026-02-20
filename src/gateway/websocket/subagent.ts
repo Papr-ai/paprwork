@@ -86,7 +86,11 @@ export async function setupSubAgentHandlers(
         const payload = message.payload as GetRunPayload;
         const run = await service.getRun(payload.runId);
         if (!run) {
-          sendError(ws, message.id, `Delegation run not found: ${payload.runId}`);
+          sendError(
+            ws,
+            message.id,
+            `Delegation run not found: ${payload.runId}`,
+          );
           return;
         }
         sendResponse(ws, { id: message.id, success: true, data: { run } });

@@ -15,7 +15,14 @@ import { NewChatButton } from "./NewChatButton.tsx";
 import { OnboardingCard } from "./OnboardingCard.tsx";
 import "./Sidebar.css";
 
-type View = "chat" | "artifacts" | "meetings" | "agents" | "jobs" | "skills";
+type View =
+  | "chat"
+  | "artifacts"
+  | "views"
+  | "meetings"
+  | "agents"
+  | "jobs"
+  | "skills";
 
 /** Map tab types to sidebar nav views */
 function tabTypeToView(type: TabType | undefined): View {
@@ -26,6 +33,9 @@ function tabTypeToView(type: TabType | undefined): View {
     case "app":
     case "artifacts":
       return "artifacts";
+    case "views":
+    case "view":
+      return "views";
     case "meetings":
       return "meetings";
     case "agents":
@@ -114,6 +124,8 @@ export function Sidebar() {
       tabId = createTab("jobs", "jobs", "Jobs");
     } else if (view === "skills") {
       tabId = createTab("skills", "skills", "Skills");
+    } else if (view === "views") {
+      tabId = createTab("views", "views", "Views");
     } else if (view === "chat") {
       // For chat, create a new chat
       handleNewChat();
@@ -129,9 +141,7 @@ export function Sidebar() {
   return (
     <div className="sidebar">
       <div className="sidebar__header">
-        <h1 className="sidebar__title" style={{ marginLeft: "70px" }}>
-          
-        </h1>
+        <h1 className="sidebar__title" style={{ marginLeft: "70px" }}></h1>
       </div>
 
       <div className="sidebar__content">
@@ -178,6 +188,67 @@ export function Sidebar() {
             label="Artifacts"
             isActive={activeView === "artifacts"}
             onClick={() => handleNavClick("artifacts")}
+          />
+          <NavButton
+            icon={
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                <rect
+                  x="3"
+                  y="3"
+                  width="7"
+                  height="7"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <rect
+                  x="14"
+                  y="3"
+                  width="7"
+                  height="7"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <line
+                  x1="3"
+                  y1="14"
+                  x2="10"
+                  y2="14"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                />
+                <line
+                  x1="14"
+                  y1="14"
+                  x2="21"
+                  y2="14"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                />
+                <line
+                  x1="3"
+                  y1="18"
+                  x2="10"
+                  y2="18"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                />
+                <line
+                  x1="14"
+                  y1="18"
+                  x2="21"
+                  y2="18"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                />
+              </svg>
+            }
+            label="Views"
+            isActive={activeView === "views"}
+            onClick={() => handleNavClick("views")}
           />
           <NavButton
             icon={
@@ -296,6 +367,17 @@ export function Sidebar() {
             }}
           >
             Click a tab above to view artifacts
+          </div>
+        )}
+        {activeView === "views" && (
+          <div
+            style={{
+              padding: "16px",
+              color: "var(--text-secondary)",
+              fontSize: "13px",
+            }}
+          >
+            Click a table card to view data
           </div>
         )}
         {activeView === "meetings" && (

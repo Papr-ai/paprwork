@@ -1,0 +1,114 @@
+/**
+ * ViewsView - Tables by app
+ */
+
+.views-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+
+.views-view__header {
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.views-view__title {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.views-view__refresh {
+  padding: var(--space-2) var(--space-3);
+  font-size: 13px;
+  background: var(--glass-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.views-view__refresh:hover {
+  background: var(--glass-bg-hover);
+  color: var(--text-primary);
+}
+
+.views-view__content {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+
+.views-view__loading,
+.views-view__error,
+.views-view__empty {
+  padding: var(--space-4);
+  color: var(--text-secondary);
+}
+
+.views-view__error button {
+  margin-left: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: var(--r-md);
+  cursor: pointer;
+}
+
+.views-view__empty-hint {
+  margin-top: var(--space-3);
+  font-size: 13px;
+}
+
+.views-view__empty-hint code {
+  background: var(--background-tertiary);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.views-view__app-section {
+  margin-bottom: var(--space-6);
+}
+
+.views-view__app-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 var(--space-3);
+}
+
+.views-view__tables {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.views-view__table-card {
+  padding: var(--space-3) var(--space-4);
+  background: var(--glass-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+}
+
+.views-view__table-card:hover {
+  background: var(--glass-bg-hover);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.views-view__table-name {
+  font-weight: 500;
+}

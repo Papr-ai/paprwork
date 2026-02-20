@@ -18,7 +18,7 @@ export function useChat() {
   const { activeLeftTab, activeTabId, getTab } = useTabStore();
   const selectedTabId = activeLeftTab || activeTabId;
   const activeTab = selectedTabId ? getTab(selectedTabId) : null;
-  const activeChat = activeTab?.type === 'chat' ? activeTab.entityId : null;
+  const activeChat = activeTab?.type === "chat" ? activeTab.entityId : null;
 
   // Get messages for the ACTIVE chat specifically (not global messages array)
   // Use selector to only re-render when THIS chat's messages change
@@ -36,48 +36,51 @@ export function useChat() {
   });
 
   // Subscribe to each piece of state separately to avoid unnecessary re-renders
-  const chats = useChatStore(s => s.chats);
-  const isLoading = useChatStore(s => s.isLoading);
-  const error = useChatStore(s => s.error);
-  const setChats = useChatStore(s => s.setChats);
-  const setLoading = useChatStore(s => s.setLoading);
+  const chats = useChatStore((s) => s.chats);
+  const isLoading = useChatStore((s) => s.isLoading);
+  const error = useChatStore((s) => s.error);
+  const setChats = useChatStore((s) => s.setChats);
+  const setLoading = useChatStore((s) => s.setLoading);
 
   // Load all chats
-  const loadChats = useCallback(async (force: boolean = false) => {
-    if (hasLoadedChatsOnce && !force) {
-      return;
-    }
-    if (loadChatsPromise && !force) {
-      await loadChatsPromise;
-      return;
-    }
-
-    loadChatsPromise = (async () => {
-    try {
-      setLoading(true);
-      const response = await gateway.send("chat:list");
-      const chatsList = response.data as Array<{
-        id: string;
-        title: string;
-        createdAt: string;
-        updatedAt: string;
-      }>;
-
-      if (chatsList) {
-        setChats(chatsList);
-        hasLoadedChatsOnce = true;
-        // Note: No setActiveChat - tabStore manages active state
+  const loadChats = useCallback(
+    async (force: boolean = false) => {
+      if (hasLoadedChatsOnce && !force) {
+        return;
       }
-    } catch (error) {
-      console.error("Failed to load chats:", error);
-    } finally {
-      setLoading(false);
-      loadChatsPromise = null;
-    }
-    })();
+      if (loadChatsPromise && !force) {
+        await loadChatsPromise;
+        return;
+      }
 
-    await loadChatsPromise;
-  }, [setChats, setLoading]); // Fixed: removed activeChat and setActiveChat
+      loadChatsPromise = (async () => {
+        try {
+          setLoading(true);
+          const response = await gateway.send("chat:list");
+          const chatsList = response.data as Array<{
+            id: string;
+            title: string;
+            createdAt: string;
+            updatedAt: string;
+          }>;
+
+          if (chatsList) {
+            setChats(chatsList);
+            hasLoadedChatsOnce = true;
+            // Note: No setActiveChat - tabStore manages active state
+          }
+        } catch (error) {
+          console.error("Failed to load chats:", error);
+        } finally {
+          setLoading(false);
+          loadChatsPromise = null;
+        }
+      })();
+
+      await loadChatsPromise;
+    },
+    [setChats, setLoading],
+  ); // Fixed: removed activeChat and setActiveChat
 
   // Load messages for a chat
   const loadMessages = useCallback(
@@ -85,7 +88,9 @@ export function useChat() {
       try {
         setLoading(true);
         useChatStore.setState((state) => {
-          const existingState = state.chatStates.get(chatId) || { ...defaultChatState };
+          const existingState = state.chatStates.get(chatId) || {
+            ...defaultChatState,
+          };
           const newChatStates = new Map(state.chatStates);
           newChatStates.set(chatId, {
             ...existingState,
@@ -97,10 +102,12 @@ export function useChat() {
         const history = await fetchChatHistory(chatId);
 
         const messages = mapHistoryMessages(history);
-        
+
         // Store messages in the specific chat's state using set() with updater function
         useChatStore.setState((state) => {
-          const existingState = state.chatStates.get(chatId) || { ...defaultChatState };
+          const existingState = state.chatStates.get(chatId) || {
+            ...defaultChatState,
+          };
           const newChatStates = new Map(state.chatStates);
           newChatStates.set(chatId, {
             ...existingState,
@@ -113,7 +120,9 @@ export function useChat() {
         console.error("Failed to load messages:", error);
       } finally {
         useChatStore.setState((state) => {
-          const existingState = state.chatStates.get(chatId) || { ...defaultChatState };
+          const existingState = state.chatStates.get(chatId) || {
+            ...defaultChatState,
+          };
           const newChatStates = new Map(state.chatStates);
           newChatStates.set(chatId, {
             ...existingState,
@@ -192,14 +201,11 @@ export function useChat() {
   );
 
   // Switch to different chat
-  const switchChat = useCallback(
-    (chatId: string) => {
-      // V1 APPROACH: Use tabStore to switch tabs (which switches chats)
-      const { switchToTab } = useTabStore.getState();
-      switchToTab(`chat-${chatId}`);
-    },
-    [],
-  );
+  const switchChat = useCallback((chatId: string) => {
+    // V1 APPROACH: Use tabStore to switch tabs (which switches chats)
+    const { switchToTab } = useTabStore.getState();
+    switchToTab(`chat-${chatId}`);
+  }, []);
 
   // Update chat title
   const updateChatTitle = useCallback(

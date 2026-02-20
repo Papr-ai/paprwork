@@ -469,9 +469,9 @@ Gateway = ESM (.js)               ← Separate Node process, can use ESM
 - [AI SDK Documentation](https://sdk.vercel.ai/docs)
 
 ### Internal
-- V1 codebase: `/Users/amirkabbara/Documents/GitHub/paprwork`
-- V1 docs: `/Users/amirkabbara/Documents/GitHub/paprwork/docs`
-- V1 architecture analysis: `MASTRA_MIGRATION_PLAN.md`
+- V1 codebase: `../paprwork` (legacy version)
+- V1 docs: `../paprwork/docs` (legacy docs)
+- V1 architecture analysis: Legacy migration notes (see `docs/legacy-notes/`)
 
 ---
 

@@ -7,6 +7,7 @@ import { JobDatabase } from "./jobs/JobDatabase.js";
 import { CommandJobExecutor } from "./jobs/executors/CommandJobExecutor.js";
 import { AgentJobExecutor } from "./jobs/executors/AgentJobExecutor.js";
 import type { IJobExecutor } from "./jobs/executors/IJobExecutor.js";
+import { sanitizeError } from "../../core/tools/security.js";
 import type {
   CreateJobInput,
   JobGraph,
@@ -55,7 +56,12 @@ export class JobsService {
     this.jobsIndexPath = path.join(this.paprRootDir, "data", "jobs.json");
     this.graphPath = path.join(this.paprRootDir, "data", "job-graph.json");
     this.legacyJobsRootDir = path.join(homeDir, "papr-jobs");
-    this.legacyJobsIndexPath = path.join(homeDir, ".paprwork", "data", "jobs.json");
+    this.legacyJobsIndexPath = path.join(
+      homeDir,
+      ".paprwork",
+      "data",
+      "jobs.json",
+    );
     this.jobs = new Map();
     this.running = new Map();
     this.jobDatabase = new JobDatabase();
@@ -102,7 +108,9 @@ export class JobsService {
 
     if (!hasNewJobsDir && hasLegacyJobsDir) {
       await fs.mkdir(path.dirname(this.jobsRootDir), { recursive: true });
-      await fs.cp(this.legacyJobsRootDir, this.jobsRootDir, { recursive: true });
+      await fs.cp(this.legacyJobsRootDir, this.jobsRootDir, {
+        recursive: true,
+      });
     }
   }
 
@@ -114,6 +122,10 @@ export class JobsService {
     await fs.mkdir(this.jobsRootDir, { recursive: true });
     await fs.mkdir(path.dirname(this.jobsIndexPath), { recursive: true });
     await this.loadJobs();
+    
+    // Reconcile interrupted jobs from previous session
+    await this.reconcileInterruptedJobs();
+    
     this.initialized = true;
   }
 
@@ -136,7 +148,11 @@ export class JobsService {
       (a, b) =>
         new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
     );
-    await fs.writeFile(this.jobsIndexPath, JSON.stringify(list, null, 2), "utf8");
+    await fs.writeFile(
+      this.jobsIndexPath,
+      JSON.stringify(list, null, 2),
+      "utf8",
+    );
   }
 
   private getJobDir(jobId: string): string {
@@ -167,7 +183,10 @@ export class JobsService {
     return path.join(this.getJobDir(jobId), "logs", "run.log");
   }
 
-  async listJobs(filter?: { folder?: string; appId?: string }): Promise<JobRecord[]> {
+  async listJobs(filter?: {
+    folder?: string;
+    appId?: string;
+  }): Promise<JobRecord[]> {
     let jobs = Array.from(this.jobs.values()).sort(
       (a, b) =>
         new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
@@ -275,7 +294,11 @@ export class JobsService {
       };
 
       await fs.mkdir(path.dirname(this.graphPath), { recursive: true });
-      await fs.writeFile(this.graphPath, JSON.stringify(graph, null, 2), "utf8");
+      await fs.writeFile(
+        this.graphPath,
+        JSON.stringify(graph, null, 2),
+        "utf8",
+      );
     } catch (error) {
       console.warn("[JobsService] Failed to rebuild graph:", error);
     }
@@ -323,7 +346,10 @@ export class JobsService {
     await fs.mkdir(path.join(jobDir, "migrations"), { recursive: true });
     await fs.mkdir(path.join(jobDir, "data"), { recursive: true });
     await this.jobDatabase.ensureDatabase(jobDir);
-    await fs.writeFile(path.join(jobDir, "job.json"), JSON.stringify(job, null, 2));
+    await fs.writeFile(
+      path.join(jobDir, "job.json"),
+      JSON.stringify(job, null, 2),
+    );
 
     // Write requirements.txt if requirements are specified
     if (input.requirements && input.requirements.length > 0) {
@@ -332,6 +358,19 @@ export class JobsService {
         input.requirements.join("\n") + "\n",
         "utf8",
       );
+    }
+
+    // Write checkpoint template if requested
+    if (
+      input.useCheckpointTemplate &&
+      (input.type === "python" || input.type === "node")
+    ) {
+      const { getWorkspaceService } = await import("./WorkspaceService.js");
+      await getWorkspaceService().createCheckpointJobTemplate(
+        jobDir,
+        input.type,
+      );
+      console.log(`[JobsService] Created checkpoint template for ${id}`);
     }
 
     this.jobs.set(id, job);
@@ -362,8 +401,10 @@ export class JobsService {
       status,
       updatedAt: now,
       ...(status === "running" ? { lastRunAt: now, error: undefined } : {}),
-      ...(status === "completed" || status === "failed" || status === "cancelled"
-        ? { 
+      ...(status === "completed" ||
+      status === "failed" ||
+      status === "cancelled"
+        ? {
             completedAt: now,
             // Clear retry tracking on terminal states (if not overridden by updates)
             currentAttempt: updates.currentAttempt,
@@ -394,6 +435,20 @@ export class JobsService {
   }
 
   /**
+   * Broadcast a log line for a running job. Allows chat/UI to stream logs in real time.
+   */
+  private broadcastJobLogLine(jobId: string, line: string): void {
+    import("../websocket/index.js")
+      .then(({ broadcast }) => {
+        broadcast({
+          type: "jobs:log-line",
+          data: { jobId, line },
+        });
+      })
+      .catch(() => {});
+  }
+
+  /**
    * Broadcast job status change to all connected clients.
    * Mini-apps listen for `jobs:status-changed` on their own WebSocket connection
    * to ws://localhost:18789 and refresh data when their job completes — no polling needed.
@@ -410,6 +465,9 @@ export class JobsService {
             completedAt: job.completedAt,
             error: job.error,
             lastOutput: job.lastOutput,
+            ...(job.status === "waiting_permission" && job.waitingPermissionKeys
+              ? { waitingPermissionKeys: job.waitingPermissionKeys }
+              : {}),
           },
         });
       })
@@ -502,7 +560,10 @@ export class JobsService {
     runId: string,
     runtimeParams?: Record<string, string>,
   ): Promise<{ exitCode: number; errorMessage?: string; lastOutput?: string }> {
-    const defaultCommandByType: Record<Exclude<JobType, "agent" | "subagent">, string> = {
+    const defaultCommandByType: Record<
+      Exclude<JobType, "agent" | "subagent">,
+      string
+    > = {
       shell: "echo 'shell job ran successfully'",
       bash: "echo 'bash job ran successfully'",
       node: "node -e \"console.log('node job ran successfully')\"",
@@ -524,13 +585,14 @@ export class JobsService {
     const appendRunLog = async (line: string): Promise<void> => {
       await this.appendLog(job.id, line);
       await this.jobDatabase.appendEvent(jobDir, runId, "info", line);
+      this.broadcastJobLogLine(job.id, line);
     };
     if (appliedMigrations.length > 0) {
-      await appendRunLog(
-        `Applied migrations: ${appliedMigrations.join(", ")}`,
-      );
+      await appendRunLog(`Applied migrations: ${appliedMigrations.join(", ")}`);
     }
 
+    const { requestKeyPermission: requestKeyPermissionFromMain } =
+      await import("../permissions/PermissionRequester.js");
     const launch = await executor.launch({
       runId,
       job,
@@ -538,9 +600,41 @@ export class JobsService {
       defaultCommandByType,
       appendLog: appendRunLog,
       runtimeParams,
+      onWaitingPermission: async (keys: string[]) => {
+        await this.setJobStatus(job.id, "waiting_permission", {
+          waitingPermissionKeys: keys,
+        });
+        await appendRunLog(
+          `Waiting for user approval for API keys: ${keys.join(", ")}`,
+        );
+      },
+      onResumingAfterPermission: async () => {
+        await this.setJobStatus(job.id, "running", {
+          waitingPermissionKeys: undefined,
+        });
+      },
+      requestKeyPermission: async (
+        keyName: string,
+        context: { jobId: string; jobName: string },
+      ) => {
+        const response = await requestKeyPermissionFromMain({
+          keyName,
+          description: `Job "${context.jobName}" needs ${keyName} to run.`,
+          isEnvKey: false,
+          toolContext: {
+            toolName: "job",
+            command: job.command,
+          },
+        });
+        return response.approved;
+      },
     });
 
-    await appendRunLog(`Starting command: ${launch.command}`);
+    // Sanitize command before logging (replace API key values with ***)
+    const sanitizedCommand = await this.sanitizeCommandForLogging(
+      launch.command,
+    );
+    await appendRunLog(`Starting command: ${sanitizedCommand}`);
 
     if (launch.mode === "immediate") {
       if (launch.outputMessage) {
@@ -569,22 +663,28 @@ export class JobsService {
     let outputSize = 0;
 
     return new Promise((resolve) => {
-      proc.stdout.on("data", (chunk: Buffer) => {
+      proc.stdout.on("data", async (chunk: Buffer) => {
         const text = chunk.toString("utf8").trimEnd();
-        void appendRunLog(text);
+        // Sanitize stdout before logging
+        const sanitized = await this.sanitizeCommandForLogging(text);
+        void appendRunLog(sanitized);
         if (outputSize < MAX_OUTPUT_BYTES) {
-          outputChunks.push(text);
-          outputSize += text.length;
+          outputChunks.push(sanitized);
+          outputSize += sanitized.length;
         }
       });
-      proc.stderr.on("data", (chunk: Buffer) => {
-        void appendRunLog(`[stderr] ${chunk.toString("utf8").trimEnd()}`);
+      proc.stderr.on("data", async (chunk: Buffer) => {
+        const text = chunk.toString("utf8").trimEnd();
+        // Sanitize stderr before logging
+        const sanitized = await this.sanitizeCommandForLogging(text);
+        void appendRunLog(`[stderr] ${sanitized}`);
       });
       proc.on("close", (code: number | null) => {
         this.running.delete(job.id);
         const exitCode = code ?? -1;
         void appendRunLog(`Process exited with code ${exitCode}`);
-        const lastOutput = outputChunks.join("\n").slice(0, MAX_OUTPUT_BYTES) || undefined;
+        const lastOutput =
+          outputChunks.join("\n").slice(0, MAX_OUTPUT_BYTES) || undefined;
         resolve({ exitCode, lastOutput });
       });
       proc.on("error", (error: Error) => {
@@ -619,7 +719,7 @@ export class JobsService {
 
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         const runId = `${job.id}-${Date.now()}-a${attempt}`;
-        
+
         // Track execution state and retry attempts
         await this.setJobStatus(job.id, "running", {
           currentExecutionId: runId,
@@ -627,15 +727,16 @@ export class JobsService {
           maxAttempts: maxAttempts,
           nextRetryAt: undefined, // Clear since we're running now
         });
-        
+
         await this.appendLog(
           job.id,
           `[attempt ${attempt}/${maxAttempts}] Starting execution ${runId}`,
         );
 
         const result = await this.runSingleAttempt(job, runId, runtimeParams);
-        const status: JobStatus = result.exitCode === 0 ? "completed" : "failed";
-        
+        const status: JobStatus =
+          result.exitCode === 0 ? "completed" : "failed";
+
         // Update with execution results
         const updated = await this.setJobStatus(job.id, status, {
           exitCode: result.exitCode,
@@ -646,7 +747,7 @@ export class JobsService {
           currentAttempt: status === "completed" ? undefined : attempt,
           maxAttempts: status === "completed" ? undefined : maxAttempts,
         });
-        
+
         await this.jobDatabase.recordRunFinish(
           this.getJobDir(job.id),
           runId,
@@ -677,11 +778,11 @@ export class JobsService {
         if (attempt < maxAttempts) {
           const backoff = backoffMs * Math.pow(2, attempt - 1);
           const nextRetryAt = new Date(Date.now() + backoff).toISOString();
-          
+
           await this.setJobStatus(job.id, "failed", {
             nextRetryAt: nextRetryAt,
           });
-          
+
           await this.appendLog(
             job.id,
             `Attempt ${attempt}/${maxAttempts} failed. Next retry at ${nextRetryAt} (in ${backoff}ms)`,
@@ -702,11 +803,17 @@ export class JobsService {
     }
   }
 
-  async runJob(jobId: string, runtimeParams?: Record<string, string>): Promise<JobRecord> {
+  async runJob(
+    jobId: string,
+    runtimeParams?: Record<string, string>,
+  ): Promise<JobRecord> {
     return this.runJobWithDependencies(jobId, new Set<string>(), runtimeParams);
   }
 
-  async runJobFromScheduler(jobId: string, triggeredAt: string): Promise<JobRecord> {
+  async runJobFromScheduler(
+    jobId: string,
+    triggeredAt: string,
+  ): Promise<JobRecord> {
     const existing = await this.getJob(jobId);
     if (!existing) {
       throw new Error(`Job not found: ${jobId}`);
@@ -714,7 +821,7 @@ export class JobsService {
     if (existing.schedule?.enabled) {
       // Generate idempotency key to prevent duplicate scheduled runs
       const idempotencyKey = `${jobId}-${triggeredAt}`;
-      
+
       // Check if we already ran this scheduled execution
       if (existing.scheduleState?.currentIdempotencyKey === idempotencyKey) {
         await this.appendLog(
@@ -742,30 +849,34 @@ export class JobsService {
 
   async updateJob(
     jobId: string,
-    updates: Partial<Pick<
-      import("./jobs/types.js").JobRecord,
-      | "name"
-      | "folder"
-      | "command"
-      | "requirements"
-      | "dependsOn"
-      | "retries"
-      | "deliver"
-      | "retentionDays"
-      | "schedule"
-      | "outputMode"
-      | "outputSchema"
-      | "maxTurns"
-      | "memoryPolicy"
-      | "reportChatId"
-    >>,
+    updates: Partial<
+      Pick<
+        import("./jobs/types.js").JobRecord,
+        | "name"
+        | "folder"
+        | "command"
+        | "requirements"
+        | "dependsOn"
+        | "retries"
+        | "deliver"
+        | "retentionDays"
+        | "schedule"
+        | "outputMode"
+        | "outputSchema"
+        | "maxTurns"
+        | "memoryPolicy"
+        | "reportChatId"
+      >
+    >,
   ): Promise<import("./jobs/types.js").JobRecord> {
     const job = this.jobs.get(jobId);
     if (!job) {
       throw new Error(`Job not found: ${jobId}`);
     }
     if (job.status === "running") {
-      throw new Error(`Cannot update job ${jobId} while it is running. Stop it first.`);
+      throw new Error(
+        `Cannot update job ${jobId} while it is running. Stop it first.`,
+      );
     }
 
     const updated: import("./jobs/types.js").JobRecord = {
@@ -782,7 +893,11 @@ export class JobsService {
       const jobDir = this.getJobDir(jobId);
       const reqPath = path.join(jobDir, "requirements.txt");
       if (updates.requirements.length > 0) {
-        await fs.writeFile(reqPath, updates.requirements.join("\n") + "\n", "utf8");
+        await fs.writeFile(
+          reqPath,
+          updates.requirements.join("\n") + "\n",
+          "utf8",
+        );
       } else {
         try {
           await fs.unlink(reqPath);
@@ -795,7 +910,10 @@ export class JobsService {
     return updated;
   }
 
-  async deleteJob(jobId: string, deleteFiles = false): Promise<{ id: string; name: string }> {
+  async deleteJob(
+    jobId: string,
+    deleteFiles = false,
+  ): Promise<{ id: string; name: string }> {
     const job = this.jobs.get(jobId);
     if (!job) {
       throw new Error(`Job not found: ${jobId}`);
@@ -819,7 +937,10 @@ export class JobsService {
       try {
         await fs.rm(jobDir, { recursive: true, force: true });
       } catch (error) {
-        console.warn(`[JobsService] Could not remove job dir ${jobDir}:`, error);
+        console.warn(
+          `[JobsService] Could not remove job dir ${jobDir}:`,
+          error,
+        );
       }
     }
 
@@ -841,6 +962,91 @@ export class JobsService {
     return this.setJobStatus(jobId, "cancelled", { exitCode: -1 });
   }
 
+  /**
+   * Reconcile jobs that were interrupted by app closure.
+   * Called on startup to mark "running" jobs as failed with clear messaging.
+   */
+  private async reconcileInterruptedJobs(): Promise<void> {
+    const now = new Date().toISOString();
+    let needsSave = false;
+
+    for (const [jobId, job] of this.jobs.entries()) {
+      if (job.status === "running" || job.status === "waiting_permission") {
+        const currentAttempt = job.currentAttempt ?? 1;
+        const maxAttempts = job.maxAttempts ?? job.retries?.maxAttempts ?? 1;
+        const retriesRemaining = maxAttempts - currentAttempt;
+
+        console.log(
+          `[JobsService] Reconciling interrupted job ${jobId} ` +
+            `(attempt ${currentAttempt}/${maxAttempts}, ${retriesRemaining} retries remaining)`,
+        );
+
+        const updated = {
+          ...job,
+          status: "failed" as const,
+          error:
+            retriesRemaining > 0
+              ? `Interrupted (app closed during execution). ${retriesRemaining} retries remaining - click Run to retry.`
+              : "Interrupted (app closed) - all retries exhausted.",
+          completedAt: retriesRemaining > 0 ? undefined : now,
+          updatedAt: now,
+          currentExecutionId: undefined,
+          // Preserve retry state so manual re-run continues from current attempt
+          currentAttempt: retriesRemaining > 0 ? currentAttempt : undefined,
+          maxAttempts: retriesRemaining > 0 ? maxAttempts : undefined,
+          waitingPermissionKeys: undefined,
+        };
+
+        this.jobs.set(jobId, updated);
+
+        await fs.writeFile(
+          path.join(this.getJobDir(jobId), "job.json"),
+          JSON.stringify(updated, null, 2),
+          "utf8",
+        );
+
+        needsSave = true;
+      }
+    }
+
+    if (needsSave) {
+      await this.saveJobs();
+    }
+  }
+
+  /**
+   * Stop all running jobs (called on graceful shutdown).
+   * Kills processes and marks as cancelled.
+   */
+  async stopAllJobs(): Promise<void> {
+    const running = Array.from(this.running.entries());
+
+    if (running.length === 0) {
+      console.log("[JobsService] No running jobs to stop");
+      return;
+    }
+
+    console.log(`[JobsService] Stopping ${running.length} running job(s)...`);
+
+    for (const [jobId, proc] of running) {
+      try {
+        console.log(`[JobsService] Stopping job ${jobId}`);
+        proc.kill("SIGTERM");
+        this.running.delete(jobId);
+
+        await this.setJobStatus(jobId, "cancelled", {
+          error: "Job stopped due to app shutdown",
+          completedAt: new Date().toISOString(),
+          currentExecutionId: undefined,
+        });
+      } catch (error) {
+        console.error(`[JobsService] Failed to stop job ${jobId}:`, error);
+      }
+    }
+
+    console.log("[JobsService] All running jobs stopped");
+  }
+
   async getLogs(jobId: string, maxBytes = 20000): Promise<string> {
     const logPath = this.getJobLogPath(jobId);
     try {
@@ -856,6 +1062,51 @@ export class JobsService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Sanitize command string for logging by replacing API key values with ***
+   * CRITICAL for security - prevents key leakage in job logs
+   */
+  private async sanitizeCommandForLogging(command: string): Promise<string> {
+    const apiKeys: string[] = [];
+
+    // 1. Collect environment keys (from .env.local)
+    const envKeys = [
+      "OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "GOOGLE_API_KEY",
+      "PAPR_API_KEY",
+    ];
+
+    for (const keyName of envKeys) {
+      const value = process.env[keyName];
+      if (value) {
+        apiKeys.push(value);
+      }
+    }
+
+    // 2. Collect custom keys from CustomKeysStorage
+    try {
+      const { getCustomKeysService } = await import("./CustomKeysService.js");
+      const service = getCustomKeysService();
+      const storedKeys = await service.listKeys();
+
+      for (const keyMeta of storedKeys) {
+        const value = await service.getKeyByName(keyMeta.name);
+        if (value) {
+          apiKeys.push(value);
+        }
+      }
+    } catch (error) {
+      console.warn(
+        "[JobsService] Failed to load custom keys for sanitization:",
+        error,
+      );
+    }
+
+    // 3. Sanitize command by replacing all key values with ***
+    return sanitizeError(command, apiKeys);
   }
 
   async upsertJob(job: JobRecord, sourceDir?: string): Promise<JobRecord> {

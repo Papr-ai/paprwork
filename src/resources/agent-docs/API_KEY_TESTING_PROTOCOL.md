@@ -8,10 +8,39 @@ When working with external APIs (Amplitude, Stripe, Attio, CRMs, ads, analytics)
 
 ## Step 0: Check Available Keys FIRST
 
-Before requesting any API key, check what already exists. Use `bash` to inspect available custom keys.
+Before requesting any API key, **use the key management tools** to check what already exists:
+
+```javascript
+// Check what custom keys are configured
+list_keys()
+// Returns: { keys: [{ name: "AMPLITUDE_API_KEY", permission: "always", ... }], count: 1 }
+
+// Or check a specific key
+get_key({ name: "AMPLITUDE_API_KEY" })
+// Returns: { exists: true, valueLength: 32 }
+```
 
 **If key EXISTS** — proceed to testing.
-**If key MISSING** — inform the user they need to add it in Settings > Custom API Keys. Provide the URL where they can find their key.
+
+**If key MISSING** — use `request_key` to show an inline input card:
+
+```javascript
+request_key({
+  name: "AMPLITUDE_API_KEY",
+  description: "Amplitude API key for event data export",
+  sourceUrl: "analytics.amplitude.com/settings/projects",
+  requiredScopes: ["read:events"],
+  permission: "always"
+})
+```
+
+This shows an **inline card in chat** where the user can:
+- Click the source URL link to get their key
+- Enter the key value securely (password field with show/hide)
+- Select permission level (always allow / ask each time)
+- Submit directly without leaving the conversation
+
+**Fallback:** If `request_key` fails or times out, direct user to Settings → API Keys → Custom API Keys.
 
 ---
 

@@ -37,10 +37,7 @@ export class JobsScheduler {
     return `schedule:${jobId}`;
   }
 
-  private getCronNextRunAt(
-    cron: string,
-    fromDate: Date,
-  ): string | undefined {
+  private getCronNextRunAt(cron: string, fromDate: Date): string | undefined {
     try {
       const expression = CronParser.parse(cron, { currentDate: fromDate });
       const next = expression.next().toISOString();
@@ -74,9 +71,16 @@ export class JobsScheduler {
       return false;
     }
     if (schedule.cron) {
-      const fromDate = job.scheduleState?.lastScheduledRunAt
+      // Determine base time for next cron calculation
+      const lastRun = job.scheduleState?.lastScheduledRunAt
         ? new Date(job.scheduleState.lastScheduledRunAt)
-        : new Date(now.getTime() - this.tickMs);
+        : undefined;
+
+      const fromDate =
+        schedule.catchUpMissed && lastRun
+          ? lastRun // Check from last actual run (enables catch-up)
+          : new Date(now.getTime() - this.tickMs); // Default: recent window only
+
       const nextCronAt = this.getCronNextRunAt(schedule.cron, fromDate);
       if (!nextCronAt) {
         return false;
@@ -97,9 +101,7 @@ export class JobsScheduler {
         ...job,
         scheduleState: {
           ...job.scheduleState,
-          nextRunAt: new Date(
-            Date.now() + schedule.intervalMs,
-          ).toISOString(),
+          nextRunAt: new Date(Date.now() + schedule.intervalMs).toISOString(),
           lastTriggeredAt: nowIso,
         },
         updatedAt: new Date().toISOString(),
@@ -155,7 +157,11 @@ export class JobsScheduler {
         const triggeredAt = new Date().toISOString();
         try {
           await jobsService.runJobFromScheduler(job.id, triggeredAt);
-          await this.patchNextRun(job, job.schedule as JobSchedule, triggeredAt);
+          await this.patchNextRun(
+            job,
+            job.schedule as JobSchedule,
+            triggeredAt,
+          );
         } catch (error) {
           // Dependency still running — skip this tick silently, it will retry next tick.
           if (error instanceof JobsService.DependencyRunningError) {

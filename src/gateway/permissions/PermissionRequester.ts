@@ -1,6 +1,6 @@
 /**
  * Permission Requester
- * 
+ *
  * Handles permission requests from tools in the Gateway process.
  * Communicates with Main process via IPC to show permission prompts to user.
  */
@@ -11,7 +11,7 @@ import type {
 } from "../../core/types/permissions.js";
 
 type PermissionRequestCallback = (
-  request: KeyPermissionRequest
+  request: KeyPermissionRequest,
 ) => Promise<KeyPermissionResponse>;
 
 /**
@@ -25,7 +25,7 @@ let globalPermissionRequester: PermissionRequestCallback | null = null;
  * Should be called once by Gateway during initialization
  */
 export function setPermissionRequester(
-  requester: PermissionRequestCallback
+  requester: PermissionRequestCallback,
 ): void {
   globalPermissionRequester = requester;
 }
@@ -33,19 +33,19 @@ export function setPermissionRequester(
 /**
  * Request permission for an API key
  * Used by tools (bash, etc.) to request user permission before using keys
- * 
+ *
  * @param request - Permission request details
  * @returns Promise<KeyPermissionResponse>
  * @throws Error if permission requester not initialized
  */
 export async function requestKeyPermission(
-  request: KeyPermissionRequest
+  request: KeyPermissionRequest,
 ): Promise<KeyPermissionResponse> {
   if (!globalPermissionRequester) {
     // If no requester is set, assume permission is granted
     // This happens in test/dev mode without Electron
     console.warn(
-      "[PermissionRequester] No permission requester set, auto-approving"
+      "[PermissionRequester] No permission requester set, auto-approving",
     );
     return { approved: true };
   }

@@ -1,32 +1,34 @@
 /**
  * PAPR Memory Provider
- * 
+ *
  * Integrates with PAPR Memory API for cloud storage and auto-summarization.
  * Uses PAPR's /messages endpoint for storage and /compress for summaries.
- * 
+ *
  * Now using official @papr/memory SDK v2.0.0
  */
 
-import Papr from '@papr/memory';
+import Papr from "@papr/memory";
 import type {
   IStorageProvider,
   StoredMessage,
   StoredSummary,
   ChatMetadata,
-} from './IStorageProvider';
+} from "./IStorageProvider";
 
 export interface PaprConfig {
-  apiKey: string;       // X-API-Key from macOS Keychain
+  apiKey: string; // X-API-Key from macOS Keychain
 }
 
 export class PaprMemoryProvider implements IStorageProvider {
   private client: Papr;
   // Expose client for testing
-  public get _client() { return this.client; }
+  public get _client() {
+    return this.client;
+  }
 
   constructor(config: PaprConfig) {
     this.client = new Papr({
-      xAPIKey: config.apiKey,  // X-API-Key header from macOS Keychain
+      xAPIKey: config.apiKey, // X-API-Key header from macOS Keychain
       maxRetries: 3,
       timeout: 30000, // 30 seconds
     });
@@ -42,15 +44,18 @@ export class PaprMemoryProvider implements IStorageProvider {
     try {
       // Build customMetadata: only string | number | boolean | Array<string> allowed
       // This goes in metadata.customMetadata per the MemoryMetadata SDK type
-      const customMetadata: Record<string, string | number | boolean | Array<string>> = {
-        sourceAgentId: message.source_agent_id || 'main-agent',
-        sourceAgentName: message.source_agent_name || 'Paprwork Assistant',
-        model: message.model || 'unknown',
+      const customMetadata: Record<
+        string,
+        string | number | boolean | Array<string>
+      > = {
+        sourceAgentId: message.source_agent_id || "main-agent",
+        sourceAgentName: message.source_agent_name || "Paprwork Assistant",
+        model: message.model || "unknown",
       };
 
       if (message.toolCalls && message.toolCalls.length > 0) {
         // Array<string> is allowed
-        customMetadata.toolsUsed = message.toolCalls.map(tc => tc.name);
+        customMetadata.toolsUsed = message.toolCalls.map((tc) => tc.name);
         customMetadata.toolCallsCount = message.toolCalls.length;
       }
 
@@ -91,36 +96,46 @@ export class PaprMemoryProvider implements IStorageProvider {
 
       // Store the PAPR objectId in the message
       message.papr_message_id = response.objectId;
-      message.sync_status = 'synced';
+      message.sync_status = "synced";
     } catch (error) {
       if (error instanceof Papr.AuthenticationError) {
-        console.error('Invalid PAPR_API_KEY - check Settings');
+        console.error("Invalid PAPR_API_KEY - check Settings");
       } else if (error instanceof Papr.RateLimitError) {
-        console.error('PAPR rate limit exceeded, retrying...');
+        console.error("PAPR rate limit exceeded, retrying...");
       }
       throw error;
     }
   }
 
-  async loadMessages(chatId: string, limit = 100, skip = 0): Promise<StoredMessage[]> {
+  async loadMessages(
+    chatId: string,
+    limit = 100,
+    skip = 0,
+  ): Promise<StoredMessage[]> {
     try {
       // GET from PAPR /v1/messages/sessions/{sessionId} using SDK
-      const response = await this.client.messages.sessions.retrieveHistory(chatId, {
-        limit,
-        skip,
-      });
+      const response = await this.client.messages.sessions.retrieveHistory(
+        chatId,
+        {
+          limit,
+          skip,
+        },
+      );
 
       return response.messages.map((msg) => ({
         id: msg.objectId,
         chat_id: chatId,
         role: msg.role,
-        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+        content:
+          typeof msg.content === "string"
+            ? msg.content
+            : JSON.stringify(msg.content),
         timestamp: msg.createdAt,
-        sync_status: 'synced' as const,
+        sync_status: "synced" as const,
         papr_message_id: msg.objectId,
       }));
     } catch (error) {
-      console.error('Failed to load messages from PAPR:', error);
+      console.error("Failed to load messages from PAPR:", error);
       return [];
     }
   }
@@ -128,7 +143,8 @@ export class PaprMemoryProvider implements IStorageProvider {
   async loadMessagesForLLM(chatId: string): Promise<any[]> {
     try {
       // Get messages and check for summary using SDK
-      const response = await this.client.messages.sessions.retrieveHistory(chatId);
+      const response =
+        await this.client.messages.sessions.retrieveHistory(chatId);
 
       if (response.context_for_llm) {
         // PAPR provides pre-formatted context
@@ -139,10 +155,10 @@ export class PaprMemoryProvider implements IStorageProvider {
         if (summary) {
           // Format summary for system prompt (NOT as a user message)
           const summaryForSystemPrompt = this.formatSummaryForLLM(
-            summary, 
-            response.total_count, 
-            recentMessages.length, 
-            chatId
+            summary,
+            response.total_count,
+            recentMessages.length,
+            chatId,
           );
 
           // Inject summary as special __summary property for AgentService to extract
@@ -150,8 +166,8 @@ export class PaprMemoryProvider implements IStorageProvider {
             { __summary: summaryForSystemPrompt },
             ...recentMessages.map((m) => ({
               role: m.role,
-              content: m.content
-            }))
+              content: m.content,
+            })),
           ];
         }
       }
@@ -159,15 +175,20 @@ export class PaprMemoryProvider implements IStorageProvider {
       // No summary, return all messages
       return response.messages.map((m) => ({
         role: m.role,
-        content: m.content
+        content: m.content,
       }));
     } catch (error) {
-      console.error('Failed to load messages for LLM:', error);
+      console.error("Failed to load messages for LLM:", error);
       return [];
     }
   }
 
-  private formatSummaryForLLM(summary: any, totalCount: number, recentCount: number, chatId: string): string {
+  private formatSummaryForLLM(
+    summary: any,
+    totalCount: number,
+    recentCount: number,
+    chatId: string,
+  ): string {
     const archivedCount = totalCount - recentCount;
     const chatFilePath = `~/PAPR/Chats/${chatId}.txt`;
 
@@ -193,7 +214,7 @@ ${summary.medium_term}
 CURRENT BATCH (last 15 messages):
 ${summary.short_term}
 
-KEY TOPICS: ${summary.topics?.join(', ') || 'N/A'}
+KEY TOPICS: ${summary.topics?.join(", ") || "N/A"}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
   }
@@ -207,11 +228,12 @@ KEY TOPICS: ${summary.topics?.join(', ') || 'N/A'}
 
       if (response.summaries) {
         return {
-          short_term: response.summaries.short_term || '',
-          medium_term: response.summaries.medium_term || '',
-          long_term: response.summaries.long_term || '',
+          short_term: response.summaries.short_term || "",
+          medium_term: response.summaries.medium_term || "",
+          long_term: response.summaries.long_term || "",
           topics: response.summaries.topics || [],
-          last_updated: response.summaries.last_updated || new Date().toISOString(),
+          last_updated:
+            response.summaries.last_updated || new Date().toISOString(),
           fetched_from_papr: true,
           last_fetched_at: new Date().toISOString(),
         };
@@ -219,7 +241,7 @@ KEY TOPICS: ${summary.topics?.join(', ') || 'N/A'}
 
       return null;
     } catch (error) {
-      console.error('Failed to fetch summary from PAPR:', error);
+      console.error("Failed to fetch summary from PAPR:", error);
       return null;
     }
   }
@@ -244,11 +266,16 @@ KEY TOPICS: ${summary.topics?.join(', ') || 'N/A'}
     }
   }
 
-  async updateChat(chatId: string, updates: Partial<{ title: string }>): Promise<void> {
+  async updateChat(
+    chatId: string,
+    updates: Partial<{ title: string }>,
+  ): Promise<void> {
     // Note: PAPR SDK v2.0.0 doesn't expose a dedicated updateChat endpoint
     // Title can be set when storing first message
     if (updates.title) {
-      console.log(`Chat title update requested for ${chatId}: ${updates.title}`);
+      console.log(
+        `Chat title update requested for ${chatId}: ${updates.title}`,
+      );
       // TODO: Check if PAPR API supports title updates in future versions
     }
   }
@@ -266,7 +293,10 @@ KEY TOPICS: ${summary.topics?.join(', ') || 'N/A'}
 
   // ===== Sync Operations =====
 
-  async markMessageSynced(_messageId: string, _paprObjectId: string): Promise<void> {
+  async markMessageSynced(
+    _messageId: string,
+    _paprObjectId: string,
+  ): Promise<void> {
     // Not applicable for PAPR-only mode (messages are already synced)
   }
 
@@ -285,9 +315,12 @@ KEY TOPICS: ${summary.topics?.join(', ') || 'N/A'}
     has_summary: boolean;
   }> {
     try {
-      const response = await this.client.messages.sessions.retrieveHistory(chatId, {
-        limit: 1
-      });
+      const response = await this.client.messages.sessions.retrieveHistory(
+        chatId,
+        {
+          limit: 1,
+        },
+      );
 
       return {
         message_count: response.total_count || 0,

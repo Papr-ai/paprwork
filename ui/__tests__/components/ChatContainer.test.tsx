@@ -40,7 +40,10 @@ vi.mock("../../stores/permissionStore", () => ({
 
 const TEST_CHAT_ID = "test-chat-1";
 
-function initChatState(messages: ChatMessage[] = [], overrides: Partial<typeof defaultChatState> = {}) {
+function initChatState(
+  messages: ChatMessage[] = [],
+  overrides: Partial<typeof defaultChatState> = {},
+) {
   const chatState = { ...defaultChatState, messages, ...overrides };
   useChatStore.setState({
     chats: [
@@ -193,9 +196,7 @@ describe("ChatContainer", () => {
       fireEvent.focus(input);
       fireEvent.change(input, { target: { value: "Test" } });
 
-      const sendButton = screen.getByTestId(
-        "send-button",
-      ) as HTMLButtonElement;
+      const sendButton = screen.getByTestId("send-button") as HTMLButtonElement;
       expect(sendButton.disabled).toBe(false);
     });
 
@@ -205,9 +206,7 @@ describe("ChatContainer", () => {
       const input = screen.getByTestId("chat-input");
       fireEvent.focus(input);
 
-      const sendButton = screen.getByTestId(
-        "send-button",
-      ) as HTMLButtonElement;
+      const sendButton = screen.getByTestId("send-button") as HTMLButtonElement;
       expect(sendButton.disabled).toBe(true);
     });
 
@@ -287,9 +286,7 @@ describe("ChatContainer", () => {
     });
 
     it("should show send button when not streaming", () => {
-      initChatState([
-        { role: "assistant", content: "Response" },
-      ]);
+      initChatState([{ role: "assistant", content: "Response" }]);
       render(<ChatContainer chatId={TEST_CHAT_ID} />);
 
       const input = screen.getByTestId("chat-input");
@@ -351,26 +348,32 @@ describe("ChatContainer", () => {
 
       // Verify the draft is stored
       await waitFor(() => {
-        expect(useChatStore.getState().getDraftMessage(CHAT_1)).toBe("Draft for chat 1");
+        expect(useChatStore.getState().getDraftMessage(CHAT_1)).toBe(
+          "Draft for chat 1",
+        );
       });
 
       // Switch to chat 2 and type a different draft
       rerender(<ChatContainer chatId={CHAT_2} />);
       const input2 = screen.getByTestId("chat-input") as HTMLTextAreaElement;
-      
+
       // Input should be empty for chat 2
       expect(input2.value).toBe("");
-      
+
       fireEvent.change(input2, { target: { value: "Draft for chat 2" } });
 
       // Verify chat 2's draft is stored
       await waitFor(() => {
-        expect(useChatStore.getState().getDraftMessage(CHAT_2)).toBe("Draft for chat 2");
+        expect(useChatStore.getState().getDraftMessage(CHAT_2)).toBe(
+          "Draft for chat 2",
+        );
       });
 
       // Switch back to chat 1
       rerender(<ChatContainer chatId={CHAT_1} />);
-      const input1Again = screen.getByTestId("chat-input") as HTMLTextAreaElement;
+      const input1Again = screen.getByTestId(
+        "chat-input",
+      ) as HTMLTextAreaElement;
 
       // Draft message should be restored
       await waitFor(() => {
@@ -386,7 +389,9 @@ describe("ChatContainer", () => {
 
       // Verify draft is stored
       await waitFor(() => {
-        expect(useChatStore.getState().getDraftMessage(TEST_CHAT_ID)).toBe("Message to send");
+        expect(useChatStore.getState().getDraftMessage(TEST_CHAT_ID)).toBe(
+          "Message to send",
+        );
       });
 
       // Send the message

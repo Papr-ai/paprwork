@@ -28,45 +28,51 @@ interface CreateSubAgentInput {
 
 let subAgentServiceInstance: SubAgentService | null = null;
 
-const DEFAULT_SUB_AGENTS: Array<Omit<SubAgentProfile, "createdAt" | "updatedAt" | "runCount">> =
-  [
-    {
-      id: "research-specialist",
-      name: "Research Specialist",
-      description: "Investigates and summarizes complex topics",
-      systemPrompt:
-        "You are a focused research sub-agent. Gather evidence, summarize clearly, and highlight uncertainty.",
-      provider: "openai",
-      model: "gpt-5-mini",
-      allowedToolIds: ["bash", "read_file", "search_files", "search_agent_memory"],
-      assignedSkills: [],
-      outputMode: "natural",
-      maxTurns: 12,
-      memoryPolicy: "summary",
-      lastRunAt: undefined,
-    },
-    {
-      id: "implementation-specialist",
-      name: "Implementation Specialist",
-      description: "Implements and validates code changes",
-      systemPrompt:
-        "You are a coding sub-agent. Produce practical implementation steps and validate outcomes.",
-      provider: "openai",
-      model: "gpt-5-mini",
-      allowedToolIds: [
-        "bash",
-        "read_file",
-        "write_file",
-        "search_files",
-        "search_agent_memory",
-      ],
-      assignedSkills: [],
-      outputMode: "natural",
-      maxTurns: 12,
-      memoryPolicy: "summary",
-      lastRunAt: undefined,
-    },
-  ];
+const DEFAULT_SUB_AGENTS: Array<
+  Omit<SubAgentProfile, "createdAt" | "updatedAt" | "runCount">
+> = [
+  {
+    id: "research-specialist",
+    name: "Research Specialist",
+    description: "Investigates and summarizes complex topics",
+    systemPrompt:
+      "You are a focused research sub-agent. Gather evidence, summarize clearly, and highlight uncertainty.",
+    provider: "openai",
+    model: "gpt-5-mini",
+    allowedToolIds: [
+      "bash",
+      "read_file",
+      "search_files",
+      "search_agent_memory",
+    ],
+    assignedSkills: [],
+    outputMode: "natural",
+    maxTurns: 12,
+    memoryPolicy: "summary",
+    lastRunAt: undefined,
+  },
+  {
+    id: "implementation-specialist",
+    name: "Implementation Specialist",
+    description: "Implements and validates code changes",
+    systemPrompt:
+      "You are a coding sub-agent. Produce practical implementation steps and validate outcomes.",
+    provider: "openai",
+    model: "gpt-5-mini",
+    allowedToolIds: [
+      "bash",
+      "read_file",
+      "write_file",
+      "search_files",
+      "search_agent_memory",
+    ],
+    assignedSkills: [],
+    outputMode: "natural",
+    maxTurns: 12,
+    memoryPolicy: "summary",
+    lastRunAt: undefined,
+  },
+];
 
 export class SubAgentService {
   private profilePath: string;
@@ -277,7 +283,9 @@ export class SubAgentService {
   }> {
     const agents = await this.listAgents();
     const runs = await this.listRuns(limit);
-    const completedRuns = runs.filter((run) => run.status === "completed").length;
+    const completedRuns = runs.filter(
+      (run) => run.status === "completed",
+    ).length;
     const failedRuns = runs.filter((run) => run.status === "failed").length;
     const runningRuns = runs.filter((run) => run.status === "running").length;
     const totalRuns = runs.length;
@@ -306,7 +314,9 @@ export class SubAgentService {
         completed: stats.completed,
         failed: stats.failed,
         successRate:
-          stats.runs > 0 ? Number((stats.completed / stats.runs).toFixed(2)) : 0,
+          stats.runs > 0
+            ? Number((stats.completed / stats.runs).toFixed(2))
+            : 0,
       }))
       .sort((a, b) => b.runs - a.runs)
       .slice(0, 8);

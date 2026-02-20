@@ -25,7 +25,10 @@ function initChat(chatId: string, overrides: Partial<ChatState> = {}) {
 }
 
 /** Helper: build a minimal ChatMetadata entry */
-function makeMeta(id: string, overrides: Partial<ChatMetadata> = {}): ChatMetadata {
+function makeMeta(
+  id: string,
+  overrides: Partial<ChatMetadata> = {},
+): ChatMetadata {
   return {
     id,
     title: "Chat",
@@ -66,35 +69,51 @@ describe("ChatStore", () => {
       initChat("chat-1");
       initChat("chat-2");
 
-      useChatStore.getState().addMessage(
-        { id: "m1", role: "user", content: "Chat 1 message" },
-        "chat-1",
-      );
-      useChatStore.getState().addMessage(
-        { id: "m2", role: "user", content: "Chat 2 message" },
-        "chat-2",
-      );
+      useChatStore
+        .getState()
+        .addMessage(
+          { id: "m1", role: "user", content: "Chat 1 message" },
+          "chat-1",
+        );
+      useChatStore
+        .getState()
+        .addMessage(
+          { id: "m2", role: "user", content: "Chat 2 message" },
+          "chat-2",
+        );
 
-      expect(useChatStore.getState().getChatState("chat-1").messages).toHaveLength(1);
-      expect(useChatStore.getState().getChatState("chat-1").messages[0].content).toBe("Chat 1 message");
+      expect(
+        useChatStore.getState().getChatState("chat-1").messages,
+      ).toHaveLength(1);
+      expect(
+        useChatStore.getState().getChatState("chat-1").messages[0].content,
+      ).toBe("Chat 1 message");
 
-      expect(useChatStore.getState().getChatState("chat-2").messages).toHaveLength(1);
-      expect(useChatStore.getState().getChatState("chat-2").messages[0].content).toBe("Chat 2 message");
+      expect(
+        useChatStore.getState().getChatState("chat-2").messages,
+      ).toHaveLength(1);
+      expect(
+        useChatStore.getState().getChatState("chat-2").messages[0].content,
+      ).toBe("Chat 2 message");
     });
 
     it("should auto-create chat state when adding message to unknown chatId", () => {
       // addMessage lazily creates a chatState entry if one doesn't exist
-      useChatStore.getState().addMessage(
-        { id: "m1", role: "user", content: "First message" },
-        "new-chat",
-      );
+      useChatStore
+        .getState()
+        .addMessage(
+          { id: "m1", role: "user", content: "First message" },
+          "new-chat",
+        );
 
       const state = useChatStore.getState().getChatState("new-chat");
       expect(state.messages).toHaveLength(1);
     });
 
     it("should ignore addMessage when no chatId is provided", () => {
-      useChatStore.getState().addMessage({ id: "m1", role: "user", content: "No chat" });
+      useChatStore
+        .getState()
+        .addMessage({ id: "m1", role: "user", content: "No chat" });
 
       // No chat states should have been created/modified
       expect(useChatStore.getState().chatStates.size).toBe(0);
@@ -106,12 +125,16 @@ describe("ChatStore", () => {
   describe("Streaming Message Lifecycle", () => {
     it("should update streaming message content", () => {
       initChat("chat-1");
-      useChatStore.getState().addMessage(
-        { id: "msg-1", role: "assistant", content: "Initial" },
-        "chat-1",
-      );
+      useChatStore
+        .getState()
+        .addMessage(
+          { id: "msg-1", role: "assistant", content: "Initial" },
+          "chat-1",
+        );
 
-      useChatStore.getState().updateStreamingMessage("msg-1", "Updated content", "chat-1");
+      useChatStore
+        .getState()
+        .updateStreamingMessage("msg-1", "Updated content", "chat-1");
 
       const state = useChatStore.getState().getChatState("chat-1");
       expect(state.messages[0].content).toBe("Updated content");
@@ -121,11 +144,12 @@ describe("ChatStore", () => {
 
     it("should finalize a streaming message", () => {
       initChat("chat-1");
-      useChatStore.getState().addMessage(
-        { id: "msg-1", role: "assistant", content: "" },
-        "chat-1",
-      );
-      useChatStore.getState().updateStreamingMessage("msg-1", "Final content", "chat-1");
+      useChatStore
+        .getState()
+        .addMessage({ id: "msg-1", role: "assistant", content: "" }, "chat-1");
+      useChatStore
+        .getState()
+        .updateStreamingMessage("msg-1", "Final content", "chat-1");
       useChatStore.getState().finalizeStreamingMessage("msg-1", "chat-1");
 
       const state = useChatStore.getState().getChatState("chat-1");
@@ -136,10 +160,16 @@ describe("ChatStore", () => {
 
     it("should not modify other messages when updating one", () => {
       initChat("chat-1");
-      useChatStore.getState().addMessage({ id: "m1", role: "user", content: "User msg" }, "chat-1");
-      useChatStore.getState().addMessage({ id: "m2", role: "assistant", content: "" }, "chat-1");
+      useChatStore
+        .getState()
+        .addMessage({ id: "m1", role: "user", content: "User msg" }, "chat-1");
+      useChatStore
+        .getState()
+        .addMessage({ id: "m2", role: "assistant", content: "" }, "chat-1");
 
-      useChatStore.getState().updateStreamingMessage("m2", "Streaming...", "chat-1");
+      useChatStore
+        .getState()
+        .updateStreamingMessage("m2", "Streaming...", "chat-1");
 
       const state = useChatStore.getState().getChatState("chat-1");
       expect(state.messages[0].content).toBe("User msg");
@@ -150,9 +180,13 @@ describe("ChatStore", () => {
 
     it("should be a no-op when messageId does not exist", () => {
       initChat("chat-1");
-      useChatStore.getState().addMessage({ id: "m1", role: "user", content: "Hello" }, "chat-1");
+      useChatStore
+        .getState()
+        .addMessage({ id: "m1", role: "user", content: "Hello" }, "chat-1");
 
-      useChatStore.getState().updateStreamingMessage("nonexistent", "test", "chat-1");
+      useChatStore
+        .getState()
+        .updateStreamingMessage("nonexistent", "test", "chat-1");
 
       const state = useChatStore.getState().getChatState("chat-1");
       expect(state.messages).toHaveLength(1);
@@ -169,18 +203,26 @@ describe("ChatStore", () => {
 
       useChatStore.getState().setChatStreaming("chat-1", true);
 
-      expect(useChatStore.getState().getChatState("chat-1").isStreaming).toBe(true);
-      expect(useChatStore.getState().getChatState("chat-2").isStreaming).toBe(false);
+      expect(useChatStore.getState().getChatState("chat-1").isStreaming).toBe(
+        true,
+      );
+      expect(useChatStore.getState().getChatState("chat-2").isStreaming).toBe(
+        false,
+      );
     });
 
     it("should toggle streaming on and off", () => {
       initChat("chat-1");
 
       useChatStore.getState().setChatStreaming("chat-1", true);
-      expect(useChatStore.getState().getChatState("chat-1").isStreaming).toBe(true);
+      expect(useChatStore.getState().getChatState("chat-1").isStreaming).toBe(
+        true,
+      );
 
       useChatStore.getState().setChatStreaming("chat-1", false);
-      expect(useChatStore.getState().getChatState("chat-1").isStreaming).toBe(false);
+      expect(useChatStore.getState().getChatState("chat-1").isStreaming).toBe(
+        false,
+      );
     });
 
     it("should also update the chats metadata array", () => {
@@ -201,10 +243,14 @@ describe("ChatStore", () => {
       initChat("chat-1");
 
       useChatStore.getState().setSending("chat-1", true);
-      expect(useChatStore.getState().getChatState("chat-1").isSending).toBe(true);
+      expect(useChatStore.getState().getChatState("chat-1").isSending).toBe(
+        true,
+      );
 
       useChatStore.getState().setSending("chat-1", false);
-      expect(useChatStore.getState().getChatState("chat-1").isSending).toBe(false);
+      expect(useChatStore.getState().getChatState("chat-1").isSending).toBe(
+        false,
+      );
     });
 
     it("should not affect other chats' sending state", () => {
@@ -213,8 +259,12 @@ describe("ChatStore", () => {
 
       useChatStore.getState().setSending("chat-1", true);
 
-      expect(useChatStore.getState().getChatState("chat-1").isSending).toBe(true);
-      expect(useChatStore.getState().getChatState("chat-2").isSending).toBe(false);
+      expect(useChatStore.getState().getChatState("chat-1").isSending).toBe(
+        true,
+      );
+      expect(useChatStore.getState().getChatState("chat-2").isSending).toBe(
+        false,
+      );
     });
   });
 
@@ -231,7 +281,9 @@ describe("ChatStore", () => {
     });
 
     it("should mark a chat as read in metadata", () => {
-      useChatStore.setState({ chats: [makeMeta("chat-1", { hasUnread: true })] });
+      useChatStore.setState({
+        chats: [makeMeta("chat-1", { hasUnread: true })],
+      });
 
       useChatStore.getState().markChatAsRead("chat-1");
 

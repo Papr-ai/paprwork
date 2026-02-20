@@ -27,7 +27,7 @@ export const StickyUserMessage: React.FC<StickyUserMessageProps> = ({
       {
         threshold: 0,
         rootMargin: "-1px 0px 0px 0px", // Trigger just before leaving viewport
-      }
+      },
     );
 
     if (sentinelRef.current) {
@@ -43,7 +43,9 @@ export const StickyUserMessage: React.FC<StickyUserMessageProps> = ({
       <div ref={sentinelRef} className="sticky-sentinel" />
 
       {/* Sticky message */}
-      <div className={`sticky-user-message ${isSticky ? "sticky-user-message--active" : ""}`}>
+      <div
+        className={`sticky-user-message ${isSticky ? "sticky-user-message--active" : ""}`}
+      >
         <div className="sticky-user-message-content">
           <img
             src={`https://avatar.vercel.sh/${userEmail}`}

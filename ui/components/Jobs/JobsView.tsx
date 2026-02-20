@@ -8,16 +8,23 @@ type JobFilter = "all" | "running" | "idle" | "scheduled" | "disabled";
 type ViewMode = "list" | "graph";
 
 export function JobsView() {
-  const { jobs, graph, loading, error, runJob, stopJob, loadLogs, logs } = useJobs();
+  const { jobs, graph, loading, error, runJob, stopJob, loadLogs, logs } =
+    useJobs();
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [currentFilter, setCurrentFilter] = useState<JobFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedJobIds, setExpandedJobIds] = useState<Set<string>>(new Set());
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
-  const [graphSelectedJobId, setGraphSelectedJobId] = useState<string | null>(null);
+  const [graphSelectedJobId, setGraphSelectedJobId] = useState<string | null>(
+    null,
+  );
 
-  const runningCount = jobs.filter((job) => job.status === "running").length;
-  const idleCount = jobs.filter((job) => job.status !== "running").length;
+  const runningCount = jobs.filter(
+    (job) => job.status === "running" || job.status === "waiting_permission",
+  ).length;
+  const idleCount = jobs.filter(
+    (job) => job.status !== "running" && job.status !== "waiting_permission",
+  ).length;
   const scheduledCount = jobs.filter((job) => job.schedule?.enabled).length;
 
   // Jobs visible for selected app (from graph appLinks)
@@ -28,20 +35,25 @@ export function JobsView() {
 
   // Status + type + app + search filtered jobs
   const filteredJobs = useMemo(() => {
+    const isActive = (j: JobRecord) =>
+      j.status === "running" || j.status === "waiting_permission";
     const sorted = [...jobs].sort((a, b) => {
-      if (a.status === "running" && b.status !== "running") return -1;
-      if (a.status !== "running" && b.status === "running") return 1;
+      if (isActive(a) && !isActive(b)) return -1;
+      if (!isActive(a) && isActive(b)) return 1;
       return a.name.localeCompare(b.name);
     });
 
     return sorted.filter((job) => {
       if (appFilteredJobIds && !appFilteredJobIds.has(job.id)) return false;
-      if (currentFilter === "running" && job.status !== "running") return false;
-      if (currentFilter === "idle" && job.status === "running") return false;
+      const isActive =
+        job.status === "running" || job.status === "waiting_permission";
+      if (currentFilter === "running" && !isActive) return false;
+      if (currentFilter === "idle" && isActive) return false;
       if (currentFilter === "scheduled" && !job.schedule?.enabled) return false;
       if (currentFilter === "disabled") return false;
       if (!searchQuery.trim()) return true;
-      const haystack = `${job.name} ${job.type} ${job.command ?? ""}`.toLowerCase();
+      const haystack =
+        `${job.name} ${job.type} ${job.command ?? ""}`.toLowerCase();
       return haystack.includes(searchQuery.toLowerCase());
     });
   }, [jobs, currentFilter, searchQuery, appFilteredJobIds]);
@@ -62,7 +74,9 @@ export function JobsView() {
     }
 
     // Sort folders alphabetically
-    const sortedFolders = [...folderMap.entries()].sort(([a], [b]) => a.localeCompare(b));
+    const sortedFolders = [...folderMap.entries()].sort(([a], [b]) =>
+      a.localeCompare(b),
+    );
     return { folders: sortedFolders, ungrouped };
   }, [filteredJobs]);
 
@@ -119,20 +133,29 @@ export function JobsView() {
 
   const renderJobCard = (job: JobRecord) => {
     const isRunning = job.status === "running";
+    const isWaitingPermission = job.status === "waiting_permission";
+    const isActive = isRunning || isWaitingPermission;
     const isExpanded = expandedJobIds.has(job.id);
     const dependencies = job.dependsOn ?? [];
     const isGraphSelected = job.id === graphSelectedJobId;
 
     return (
-      <div className={isGraphSelected ? "job-card job-card--highlighted" : "job-card"} key={job.id}>
+      <div
+        className={
+          isGraphSelected ? "job-card job-card--highlighted" : "job-card"
+        }
+        key={job.id}
+      >
         <div className="job-card-header" onClick={() => toggleDetails(job.id)}>
           <div className="job-card-main">
             <div className="job-title-row">
               <div
                 className={
-                  isRunning
-                    ? "job-status-indicator status-running"
-                    : "job-status-indicator status-idle"
+                  isWaitingPermission
+                    ? "job-status-indicator status-waiting-permission"
+                    : isRunning
+                      ? "job-status-indicator status-running"
+                      : "job-status-indicator status-idle"
                 }
               >
                 <svg width="10" height="10" viewBox="0 0 10 10">
@@ -152,33 +175,55 @@ export function JobsView() {
               <p className="job-description">
                 {(() => {
                   const firstLine = job.command.split("\n")[0].trim();
-                  return firstLine.length > 72 ? firstLine.slice(0, 70) + "…" : firstLine;
+                  return firstLine.length > 72
+                    ? firstLine.slice(0, 70) + "…"
+                    : firstLine;
                 })()}
               </p>
             )}
           </div>
-          <div className="job-card-actions" onClick={(event) => event.stopPropagation()}>
-            {isRunning ? (
+          {isWaitingPermission && job.waitingPermissionKeys?.length ? (
+            <div className="job-card-waiting-keys">
+              Waiting for approval: {job.waitingPermissionKeys.join(", ")}
+            </div>
+          ) : null}
+          <div
+            className="job-card-actions"
+            onClick={(event) => event.stopPropagation()}
+          >
+            {isActive ? (
               <button
                 className="btn-job-action btn-job-delete"
                 title="Stop Job"
                 onClick={() => void stopJob(job.id)}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                  <rect x="6" y="6" width="12" height="12" stroke="currentColor" strokeWidth="1.5" />
+                  <rect
+                    x="6"
+                    y="6"
+                    width="12"
+                    height="12"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                  />
                 </svg>
               </button>
-            ) : (
+            ) : null}
+            {!isActive ? (
               <button
                 className="btn-job-action btn-job-test"
                 title="Test Job (Run Once)"
                 onClick={() => void runJob(job.id)}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                  <path d="M8 5v14l11-7-11-7z" stroke="currentColor" strokeWidth="1.5" />
+                  <path
+                    d="M8 5v14l11-7-11-7z"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                  />
                 </svg>
               </button>
-            )}
+            ) : null}
             <button
               className={
                 isExpanded
@@ -191,7 +236,11 @@ export function JobsView() {
               }}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                <polyline points="6 9 12 15 18 9" stroke="currentColor" strokeWidth="1.5" />
+                <polyline
+                  points="6 9 12 15 18 9"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                />
               </svg>
             </button>
           </div>
@@ -200,11 +249,15 @@ export function JobsView() {
         <div className="job-card-meta">
           <div className="job-meta-item">
             <span className="meta-label">Last Run:</span>
-            <span className="meta-value">{formatRelativeTime(job.lastRunAt)}</span>
+            <span className="meta-value">
+              {formatRelativeTime(job.lastRunAt)}
+            </span>
           </div>
           <div className="job-meta-item">
             <span className="meta-label">Updated:</span>
-            <span className="meta-value">{formatRelativeTime(job.updatedAt)}</span>
+            <span className="meta-value">
+              {formatRelativeTime(job.updatedAt)}
+            </span>
           </div>
         </div>
 
@@ -274,7 +327,11 @@ export function JobsView() {
                 </pre>
                 <button
                   className="btn-job-action"
-                  style={{ marginTop: 8, width: "fit-content", paddingInline: 10 }}
+                  style={{
+                    marginTop: 8,
+                    width: "fit-content",
+                    paddingInline: 10,
+                  }}
                   onClick={() => void loadLogs(job.id)}
                 >
                   Load Logs
@@ -294,7 +351,9 @@ export function JobsView() {
           <span className="jobs-folder-name">{folder}</span>
           <span className="jobs-folder-count">{folderJobs.length}</span>
         </div>
-        <div className="jobs-folder-content">{folderJobs.map((job) => renderJobCard(job))}</div>
+        <div className="jobs-folder-content">
+          {folderJobs.map((job) => renderJobCard(job))}
+        </div>
       </div>
     );
   };
@@ -308,7 +367,9 @@ export function JobsView() {
       <div className="jobs-header-native">
         <div className="jobs-header-left">
           <h1>Background Jobs</h1>
-          <p className="jobs-subtitle">Manage scheduled tasks and background processes</p>
+          <p className="jobs-subtitle">
+            Manage scheduled tasks and background processes
+          </p>
         </div>
         <div className="jobs-header-right">
           <div className="jobs-stats">
@@ -328,28 +389,89 @@ export function JobsView() {
           {/* View toggle */}
           <div className="jobs-view-toggle">
             <button
-              className={viewMode === "list" ? "view-toggle-btn view-toggle-btn--active" : "view-toggle-btn"}
+              className={
+                viewMode === "list"
+                  ? "view-toggle-btn view-toggle-btn--active"
+                  : "view-toggle-btn"
+              }
               onClick={() => setViewMode("list")}
               title="List view"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                <line x1="3" y1="6" x2="21" y2="6" stroke="currentColor" strokeWidth="2" />
-                <line x1="3" y1="12" x2="21" y2="12" stroke="currentColor" strokeWidth="2" />
-                <line x1="3" y1="18" x2="21" y2="18" stroke="currentColor" strokeWidth="2" />
+                <line
+                  x1="3"
+                  y1="6"
+                  x2="21"
+                  y2="6"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                />
+                <line
+                  x1="3"
+                  y1="12"
+                  x2="21"
+                  y2="12"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                />
+                <line
+                  x1="3"
+                  y1="18"
+                  x2="21"
+                  y2="18"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                />
               </svg>
               List
             </button>
             <button
-              className={viewMode === "graph" ? "view-toggle-btn view-toggle-btn--active" : "view-toggle-btn"}
+              className={
+                viewMode === "graph"
+                  ? "view-toggle-btn view-toggle-btn--active"
+                  : "view-toggle-btn"
+              }
               onClick={() => setViewMode("graph")}
               title="Graph view"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                <circle cx="5" cy="12" r="2" stroke="currentColor" strokeWidth="1.5" />
-                <circle cx="19" cy="6" r="2" stroke="currentColor" strokeWidth="1.5" />
-                <circle cx="19" cy="18" r="2" stroke="currentColor" strokeWidth="1.5" />
-                <line x1="7" y1="11" x2="17" y2="7" stroke="currentColor" strokeWidth="1.5" />
-                <line x1="7" y1="13" x2="17" y2="17" stroke="currentColor" strokeWidth="1.5" />
+                <circle
+                  cx="5"
+                  cy="12"
+                  r="2"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                />
+                <circle
+                  cx="19"
+                  cy="6"
+                  r="2"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                />
+                <circle
+                  cx="19"
+                  cy="18"
+                  r="2"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                />
+                <line
+                  x1="7"
+                  y1="11"
+                  x2="17"
+                  y2="7"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                />
+                <line
+                  x1="7"
+                  y1="13"
+                  x2="17"
+                  y2="17"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                />
               </svg>
               Graph
             </button>
@@ -361,7 +483,9 @@ export function JobsView() {
       {appChips.length > 0 && (
         <div className="jobs-app-filter">
           <button
-            className={selectedAppId === null ? "app-chip app-chip--active" : "app-chip"}
+            className={
+              selectedAppId === null ? "app-chip app-chip--active" : "app-chip"
+            }
             onClick={() => setSelectedAppId(null)}
           >
             All Apps
@@ -369,8 +493,14 @@ export function JobsView() {
           {appChips.map(({ appId, name }) => (
             <button
               key={appId}
-              className={selectedAppId === appId ? "app-chip app-chip--active" : "app-chip"}
-              onClick={() => setSelectedAppId(selectedAppId === appId ? null : appId)}
+              className={
+                selectedAppId === appId
+                  ? "app-chip app-chip--active"
+                  : "app-chip"
+              }
+              onClick={() =>
+                setSelectedAppId(selectedAppId === appId ? null : appId)
+              }
             >
               {name}
             </button>
@@ -381,13 +511,19 @@ export function JobsView() {
       {/* Status filters + search */}
       <div className="jobs-filters">
         <div className="filter-tabs">
-          {(["all", "running", "idle", "scheduled", "disabled"] as JobFilter[]).map((filter) => (
+          {(
+            ["all", "running", "idle", "scheduled", "disabled"] as JobFilter[]
+          ).map((filter) => (
             <button
               key={filter}
-              className={currentFilter === filter ? "filter-tab active" : "filter-tab"}
+              className={
+                currentFilter === filter ? "filter-tab active" : "filter-tab"
+              }
               onClick={() => setCurrentFilter(filter)}
             >
-              {filter === "all" ? "All Jobs" : filter.charAt(0).toUpperCase() + filter.slice(1)}
+              {filter === "all"
+                ? "All Jobs"
+                : filter.charAt(0).toUpperCase() + filter.slice(1)}
             </button>
           ))}
         </div>
@@ -435,7 +571,9 @@ export function JobsView() {
               <div className="jobs-folder-section">
                 <div className="jobs-folder-header jobs-folder-header--muted">
                   <span className="jobs-folder-name">Ungrouped</span>
-                  <span className="jobs-folder-count">{groupedJobs.ungrouped.length}</span>
+                  <span className="jobs-folder-count">
+                    {groupedJobs.ungrouped.length}
+                  </span>
                 </div>
                 <div className="jobs-folder-content">
                   {groupedJobs.ungrouped.map((job) => renderJobCard(job))}

@@ -210,8 +210,14 @@ describe("Comprehensive Feature Tests", () => {
         const store = useChatStore.getState();
 
         // Add messages to different chats (creates chat states on-demand)
-        store.addMessage({ id: "test-1", role: "user", content: "Msg 1" }, "chat-1");
-        store.addMessage({ id: "test-2", role: "user", content: "Msg 2" }, "chat-2");
+        store.addMessage(
+          { id: "test-1", role: "user", content: "Msg 1" },
+          "chat-1",
+        );
+        store.addMessage(
+          { id: "test-2", role: "user", content: "Msg 2" },
+          "chat-2",
+        );
 
         // Verify independent state
         expect(store.getChatState("chat-1").messages.length).toBe(1);
@@ -236,7 +242,10 @@ describe("Comprehensive Feature Tests", () => {
         const store = useChatStore.getState();
 
         // Add message to chat-1
-        store.addMessage({ id: "test-4", role: "assistant", content: "Response" }, "chat-1");
+        store.addMessage(
+          { id: "test-4", role: "assistant", content: "Response" },
+          "chat-1",
+        );
 
         // Update global reference
         (global.window as any).__chatStore__ = store;
@@ -250,7 +259,10 @@ describe("Comprehensive Feature Tests", () => {
         const store = useChatStore.getState();
 
         // Add message to chat-1
-        store.addMessage({ id: "test-4", role: "assistant", content: "Response" }, "chat-1");
+        store.addMessage(
+          { id: "test-4", role: "assistant", content: "Response" },
+          "chat-1",
+        );
 
         // Mark as read
         store.markChatAsRead("chat-1");
@@ -284,7 +296,10 @@ describe("Comprehensive Feature Tests", () => {
       it("should create new chat when existing has messages", () => {
         const chatStore = useChatStore.getState();
         useTabStore.getState().createTab("chat", "temp-123", "Chat 1");
-        chatStore.addMessage({ id: "test-5", role: "user", content: "Hello" }, "temp-123");
+        chatStore.addMessage(
+          { id: "test-5", role: "user", content: "Hello" },
+          "temp-123",
+        );
 
         (global.window as any).__chatStore__ = chatStore;
 
@@ -356,7 +371,10 @@ describe("Comprehensive Feature Tests", () => {
       expect(useTabStore.getState().tabs.length).toBe(1);
 
       // 2. Send message
-      chatStore.addMessage({ id: "test-6", role: "user", content: "Create a document" }, "temp-123");
+      chatStore.addMessage(
+        { id: "test-6", role: "user", content: "Create a document" },
+        "temp-123",
+      );
 
       // 3. Create artifact and merge
       const docTab = useTabStore

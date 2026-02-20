@@ -1,354 +1,553 @@
 # Contributing to Paprwork V2
 
-## Code Quality Standards
+Thank you for your interest in contributing to Paprwork V2! This document provides guidelines and best practices for contributing to the project.
 
-### 1. TypeScript Safety (CRITICAL)
+## Table of Contents
 
-**Rule: NEVER use `any` type**
+- [Code of Conduct](#code-of-conduct)
+- [Getting Started](#getting-started)
+- [Development Workflow](#development-workflow)
+- [Code Standards](#code-standards)
+- [Testing](#testing)
+- [Submitting Changes](#submitting-changes)
+- [Project Structure](#project-structure)
 
-```typescript
-// ❌ BAD - Using any
-function process(data: any) {
-  return data.value;
-}
+---
 
-// ✅ GOOD - Proper typing
-interface ProcessData {
-  value: string;
-}
+## Code of Conduct
 
-function process(data: ProcessData): string {
-  return data.value;
-}
+We are committed to providing a welcoming and inclusive environment. Please be respectful and professional in all interactions.
 
-// ✅ GOOD - Unknown with type guards
-function process(data: unknown): string {
-  if (isProcessData(data)) {
-    return data.value;
-  }
-  throw new Error('Invalid data');
-}
+---
 
-function isProcessData(obj: unknown): obj is ProcessData {
-  return (
-    typeof obj === 'object' &&
-    obj !== null &&
-    'value' in obj &&
-    typeof (obj as ProcessData).value === 'string'
-  );
-}
+## Getting Started
+
+### Prerequisites
+
+- **Node.js v24+** (required for Electron 40)
+- npm v10+
+- Git
+- Basic understanding of TypeScript, React, and Electron
+
+### Setup
+
+```bash
+# 1. Fork and clone the repository
+git clone https://github.com/your-username/paprwork-v2.git
+cd paprwork-v2
+
+# 2. Use Node v24
+nvm use 24
+
+# 3. Install dependencies
+npm install
+
+# 4. Configure environment
+cp .env.example .env.local
+# Add your API keys to .env.local
+
+# 5. Run in development mode
+npm run dev
 ```
 
-**ESLint enforces this:**
-- `@typescript-eslint/no-explicit-any`: error
-- Code will not pass linting with `any` types
+---
 
-### 2. Small Modular Components
+## Development Workflow
 
-**Rule: Keep files under 300 lines**
+### Branch Strategy
 
-Each file should have a single responsibility:
+- `master` - Production-ready code
+- `develop` - Integration branch for features
+- `feature/*` - New features
+- `fix/*` - Bug fixes
+- `docs/*` - Documentation updates
+
+### Creating a Feature Branch
+
+```bash
+git checkout -b feature/your-feature-name
+```
+
+### Making Changes
+
+1. Write code following our [Code Standards](#code-standards)
+2. Add tests for new functionality
+3. Run quality checks: `npm run check`
+4. Commit with clear messages
+
+### Development Commands
+
+```bash
+# Run all quality checks (required before commit)
+npm run check
+
+# Format code
+npm run format
+
+# Lint code
+npm run lint
+
+# Type checking
+npm run type-check
+
+# Run tests
+npm run test
+
+# Run in development mode
+npm run dev
+```
+
+---
+
+## Code Standards
+
+### TypeScript Guidelines
+
+1. **Never use `any` type**
+   ```typescript
+   // ❌ BAD
+   function process(data: any) { ... }
+   
+   // ✅ GOOD
+   function process(data: CoreMessage | CompactionEntry): void {
+     if ('role' in data) {
+       // TypeScript knows it's CoreMessage
+     }
+   }
+   ```
+
+2. **Use proper imports**
+   ```typescript
+   // ❌ BAD
+   import { X } from './X';
+   
+   // ✅ GOOD (ES modules need .js extension)
+   import { X } from './X.js';
+   ```
+
+3. **Type all function parameters and return values**
+   ```typescript
+   // ✅ GOOD
+   async function loadData(id: string): Promise<UserData> {
+     // ...
+   }
+   ```
+
+### File Size Limits
+
+- **Maximum 500 lines per file** (enforced by `npm run check:loc`)
+- If a file exceeds the limit, break it into smaller modules
+- Focus on single responsibility principle
+
+### Code Organization
 
 ```
-✅ GOOD structure:
-src/core/agents/
-├── MastraAgent.ts (250 lines)
-├── SessionManager.ts (180 lines)
-├── ToolRegistry.ts (120 lines)
-└── ModelFallback.ts (160 lines)
-
-❌ BAD structure:
 src/core/
-└── agent.ts (2000 lines - everything in one file)
+├── agents/           # Agent implementations
+├── tools/            # Tool implementations
+├── types/            # Type definitions
+└── services/         # Business logic services
 ```
 
-**Benefits:**
-- Easy to understand
-- Easy to test
-- Easy to maintain
-- Easy to review in PRs
-
-### 3. Proper Type Imports
-
-Always use `type` imports for types:
+### Tool Implementation Pattern
 
 ```typescript
-// ✅ GOOD
-import type { CoreMessage, AgentConfig } from '../types';
-import { MastraAgent } from './MastraAgent';
+import { createTool } from '@mastra/core/tools';
+import { z } from 'zod';
 
-// ❌ BAD
-import { CoreMessage, AgentConfig } from '../types';
-```
+export const myTool = createTool({
+  id: 'my_tool',
+  description: 'Clear description of what tool does',
+  inputSchema: z.object({
+    param: z.string().describe('Parameter description')
+  }),
+  execute: async (inputData): Promise<ToolResult> => {
+    const args = inputData.context || inputData;
+    const startTime = performance.now();
 
-### 4. Never Use Type Assertions
-
-Avoid `as` assertions unless absolutely necessary:
-
-```typescript
-// ❌ BAD
-const data = JSON.parse(str) as MyType;
-
-// ✅ GOOD
-function parseData(str: string): MyType {
-  const data: unknown = JSON.parse(str);
-  
-  if (!isMyType(data)) {
-    throw new Error('Invalid data format');
-  }
-  
-  return data;
-}
-```
-
-### 5. Exhaustive Switch Statements
-
-Use TypeScript's exhaustiveness checking:
-
-```typescript
-function getModel(provider: Provider): string {
-  switch (provider) {
-    case 'anthropic':
-      return 'claude-sonnet-4';
-    case 'openai':
-      return 'gpt-4o';
-    case 'google':
-      return 'gemini-2.0-flash';
-    default: {
-      // This ensures we handle all Provider types
-      const exhaustiveCheck: never = provider;
-      throw new Error(`Unknown provider: ${exhaustiveCheck}`);
+    try {
+      const result = await doWork(args.param);
+      return {
+        success: true,
+        data: result,
+        duration: performance.now() - startTime,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      throw new Error(JSON.stringify({
+        success: false,
+        error: (error as Error).message,
+        duration: performance.now() - startTime,
+        timestamp: new Date().toISOString()
+      }));
     }
   }
-}
-```
-
-## File Organization
-
-### Directory Structure
-
-```
-src/
-├── core/               # Shared library (main + gateway)
-│   ├── types/         # All TypeScript types
-│   ├── agents/        # Agent logic
-│   ├── storage/       # Persistence
-│   └── tools/         # Tool implementations
-├── main/              # Electron main process
-│   ├── services/      # Business logic
-│   ├── ipc/           # IPC handlers
-│   └── index.ts       # Entry point
-├── renderer/          # React UI
-│   ├── components/    # UI components
-│   ├── hooks/         # Custom hooks
-│   ├── services/      # API calls
-│   └── stores/        # State management
-└── gateway/           # Sub-agent process
-    ├── services/      # Gateway logic
-    └── handlers/      # Request handlers
-```
-
-### File Naming
-
-- Components: `PascalCase.tsx` (e.g., `ChatContainer.tsx`)
-- Utilities: `camelCase.ts` (e.g., `formatMessage.ts`)
-- Types: `camelCase.ts` in `types/` folder
-- Tests: `*.test.ts` alongside source files
-
-## Testing Requirements
-
-### Unit Tests
-
-Every module must have unit tests:
-
-```typescript
-// SessionManager.test.ts
-import { describe, it, expect, beforeEach } from 'vitest';
-import { SessionManager } from './SessionManager';
-
-describe('SessionManager', () => {
-  let manager: SessionManager;
-
-  beforeEach(() => {
-    manager = new SessionManager('/tmp/test');
-  });
-
-  it('should load empty session for new chat', async () => {
-    const messages = await manager.loadSession('new-chat');
-    expect(messages).toEqual([]);
-  });
-
-  // More tests...
 });
 ```
 
-### Coverage Requirements
-
-- Core library: 80%+ coverage
-- Main process services: 70%+ coverage
-- Renderer hooks: 60%+ coverage
-
-## Electron Best Practices
-
-### 1. IPC Type Safety
-
-Define clear interfaces for IPC:
+### React Component Pattern
 
 ```typescript
-// types/ipc.ts
-export interface AgentStreamParams {
-  chatId: string;
-  message: string;
-  config: AgentConfig;
+interface MyComponentProps {
+  id: string;
+  onUpdate: (data: MyData) => void;
 }
 
-export interface AgentStreamResult {
-  success: boolean;
-  error?: string;
-}
+export const MyComponent: React.FC<MyComponentProps> = ({ id, onUpdate }) => {
+  const [data, setData] = useState<MyData | null>(null);
+  const [loading, setLoading] = useState(true);
 
-// main/ipc/agent.ts
-ipcMain.handle(
-  'agent:stream',
-  async (_event, params: AgentStreamParams): Promise<AgentStreamResult> => {
-    // Implementation
+  useEffect(() => {
+    loadData();
+  }, [id]);
+
+  async function loadData() {
+    try {
+      const result = await MyAPI.load(id);
+      setData(result);
+    } catch (error) {
+      console.error('Failed to load:', error);
+    } finally {
+      setLoading(false);
+    }
   }
-);
+
+  if (loading) return <LoadingSpinner />;
+  if (!data) return <ErrorMessage />;
+
+  return <div>{/* Component content */}</div>;
+};
 ```
 
-### 2. Memory Management
+---
 
-Always clean up resources:
+## Testing
+
+### Test Strategy
+
+- **Unit Tests** - Test individual functions/components in isolation
+- **Integration Tests** - Test IPC communication and service interactions
+- **E2E Tests** - Test full user workflows with Playwright
+
+### Writing Tests
 
 ```typescript
-export class ChatService {
-  private sessions: Map<string, SessionState> = new Map();
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-  dispose(): void {
-    this.sessions.clear();
-  }
-}
+describe('MyService', () => {
+  let service: MyService;
+
+  beforeEach(() => {
+    service = new MyService();
+  });
+
+  afterEach(() => {
+    service.cleanup();
+  });
+
+  it('should process data correctly', async () => {
+    const result = await service.process({ id: '123' });
+    expect(result.success).toBe(true);
+    expect(result.data).toBeDefined();
+  });
+});
 ```
 
-### 3. Error Handling
-
-Always handle errors gracefully:
-
-```typescript
-try {
-  await riskyOperation();
-} catch (error) {
-  if (error instanceof SpecificError) {
-    // Handle specific error
-  } else {
-    console.error('Unexpected error:', error);
-    throw error;
-  }
-}
-```
-
-## macOS-Specific Considerations
-
-### 1. File Paths
-
-Use `app.getPath()` for user data:
-
-```typescript
-import { app } from 'electron';
-
-const userDataPath = app.getPath('userData');
-const chatsPath = path.join(userDataPath, 'chats');
-```
-
-### 2. Entitlements
-
-Update `build/entitlements.mac.plist` for permissions:
-- Microphone: `com.apple.security.device.audio-input`
-- Camera: `com.apple.security.device.camera`
-- Calendar: `com.apple.security.personal-information.calendars`
-
-### 3. Code Signing
-
-Production builds must be signed:
+### Running Tests
 
 ```bash
-# Handled by electron-builder
-npm run build
+# Run all tests
+npm run test
+
+# Run specific test suites
+npm run test:unit        # Backend unit tests
+npm run test:ui          # UI unit tests
+npm run test:integration # Integration tests
+npm run test:e2e         # End-to-end tests
+
+# Watch mode for development
+npm run test:watch
+
+# Coverage report
+npm run test:coverage
 ```
 
-## Pull Request Checklist
+### Test Coverage Requirements
 
-Before submitting a PR:
+- Aim for 80%+ coverage on new code
+- All critical paths must be tested
+- Edge cases and error handling must be covered
 
-- [ ] All files are TypeScript (no `.js` files)
-- [ ] No `any` types used (lint passes)
-- [ ] All files under 300 lines
-- [ ] Added unit tests (if applicable)
-- [ ] Tests pass (`npm test`)
-- [ ] Type checking passes (`npm run type-check`)
-- [ ] Linting passes (`npm run lint`)
-- [ ] PR description explains what and why
+---
+
+## Submitting Changes
+
+### Before Submitting
+
+1. **Run quality checks**
+   ```bash
+   npm run check
+   ```
+
+2. **Run tests**
+   ```bash
+   npm run test
+   ```
+
+3. **Test manually** in development mode
+   ```bash
+   npm run dev
+   ```
+
+### Commit Messages
+
+Follow conventional commits format:
+
+```
+type(scope): brief description
+
+Detailed explanation of changes (if needed)
+
+Closes #issue-number
+```
+
+**Types:**
+- `feat` - New feature
+- `fix` - Bug fix
+- `docs` - Documentation changes
+- `style` - Code style changes (formatting, etc.)
+- `refactor` - Code refactoring
+- `test` - Adding or updating tests
+- `chore` - Maintenance tasks
+
+**Examples:**
+```
+feat(tools): add new document processing tool
+
+Implements PDF and DOCX parsing with Mammoth and custom handlers.
+Includes comprehensive tests and error handling.
+
+Closes #123
+```
+
+```
+fix(agent): resolve context length exceeded error
+
+Truncate tool results to 2000 chars max when loading into LLM context.
+Full results preserved in storage for UI/debugging.
+
+Closes #456
+```
+
+### Pull Request Process
+
+1. **Create a pull request** against the `develop` branch
+2. **Fill out the PR template** completely
+3. **Link related issues** using `Closes #123` or `Fixes #456`
+4. **Wait for review** - Address feedback promptly
+5. **Ensure CI passes** - All checks must be green
+
+### Pull Request Template
+
+```markdown
+## Description
+Brief description of changes
+
+## Type of Change
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Breaking change
+- [ ] Documentation update
+
+## Testing
+- [ ] Unit tests added/updated
+- [ ] Integration tests added/updated
+- [ ] Manual testing completed
+- [ ] All tests passing
+
+## Checklist
+- [ ] Code follows style guidelines
+- [ ] Self-review completed
+- [ ] Comments added for complex code
+- [ ] Documentation updated
+- [ ] No new warnings
+- [ ] Files under 500 lines
+```
+
+---
+
+## Project Structure
+
+### Core Architecture
+
+```
+src/
+├── core/                 # Shared library (used by both main & gateway)
+│   ├── agents/           # MastraAgent, SessionManager, ToolRegistry
+│   ├── tools/            # Tool implementations
+│   ├── types/            # Type definitions
+│   └── services/         # Business logic services
+├── electron/             # Main Electron process (CommonJS)
+│   ├── index.cjs         # Main process entry
+│   ├── preload.cjs       # Preload script
+│   ├── ipc/              # IPC handlers
+│   └── main.js           # Electron app initialization
+├── gateway/              # Gateway process (sub-agents, jobs)
+│   ├── index.ts          # Gateway entry
+│   ├── services/         # Gateway services
+│   └── websocket/        # WebSocket handlers
+└── resources/            # Agent docs, skills, templates
+    ├── agent-docs/       # Documentation for agents
+    ├── skills/           # Skill definitions
+    └── workspace-templates/ # Workspace templates
+```
+
+### UI Structure
+
+```
+ui/
+├── components/           # React components
+│   ├── Chat/             # Chat interface
+│   ├── Sidebar/          # Sidebar navigation
+│   ├── Settings/         # Settings UI
+│   └── common/           # Shared components
+├── hooks/                # Custom React hooks
+├── stores/               # Zustand state management
+├── types/                # UI-specific types
+└── utils/                # Utility functions
+```
+
+---
 
 ## Common Patterns
 
-### 1. Async Generators for Streaming
+### IPC Handler Pattern
 
 ```typescript
-async *streamData(): AsyncGenerator<DataChunk, void, undefined> {
-  for await (const chunk of source) {
-    yield processChunk(chunk);
-  }
+export function registerMyHandlers(
+  service: MyService,
+  window: BrowserWindow
+) {
+  ipcMain.handle('my:action', async (event, params: MyParams) => {
+    try {
+      const result = await service.doAction(params);
+      return { success: true, data: result };
+    } catch (error) {
+      return { success: false, error: (error as Error).message };
+    }
+  });
 }
 ```
 
-### 2. Service Classes
+### WebSocket Handler Pattern
 
 ```typescript
-export class MyService {
-  private dependency: Dependency;
-
-  constructor(config: MyServiceConfig) {
-    this.dependency = new Dependency(config);
-  }
-
-  async performAction(input: Input): Promise<Output> {
-    // Implementation
-  }
-
-  dispose(): void {
-    // Cleanup
-  }
+export function registerWebSocketHandlers(
+  wss: WebSocket.Server,
+  service: MyService
+) {
+  wss.on('connection', (ws) => {
+    ws.on('message', async (data) => {
+      const message = JSON.parse(data.toString());
+      
+      if (message.type === 'my:action') {
+        const result = await service.doAction(message.data);
+        ws.send(JSON.stringify({ type: 'my:result', data: result }));
+      }
+    });
+  });
 }
 ```
 
-### 3. React Hooks
+---
 
-```typescript
-export function useCustomHook(param: string): HookResult {
-  const [state, setState] = useState<StateType>(initialValue);
+## Performance Guidelines
 
-  useEffect(() => {
-    // Side effects
-    return () => {
-      // Cleanup
-    };
-  }, [param]);
+### Optimization Targets
 
-  return { state, setState };
-}
-```
+- Cold start: <2 seconds
+- First message response: <1 second
+- Memory usage (idle): <200MB
+- No memory leaks (24h+ runtime)
+
+### Best Practices
+
+1. **Avoid blocking the main thread**
+2. **Use streaming for large responses**
+3. **Implement proper cleanup in useEffect**
+4. **Debounce expensive operations**
+5. **Lazy load heavy components**
+
+---
+
+## Security Guidelines
+
+### API Key Management
+
+- **Never commit API keys** to version control
+- Use `.env.local` for local development
+- Use electron-store with encryption for production
+
+### Tool Execution
+
+- **Validate all inputs** before execution
+- **Implement timeouts** for long-running operations
+- **Sanitize outputs** to prevent data leaks
+
+### IPC Security
+
+- **Validate all renderer inputs**
+- **Never expose Node APIs directly**
+- **Use contextBridge in preload**
+
+---
+
+## Documentation
+
+### When to Update Docs
+
+- New features added
+- API changes
+- Breaking changes
+- Architecture updates
+
+### Documentation Structure
+
+- **README.md** - Project overview and quick start
+- **CLAUDE.md** - Developer context and learnings
+- **docs/** - Comprehensive documentation
+  - `architecture/` - System design docs
+  - `API_*.md` - API documentation
+  - `*_GUIDE.md` - How-to guides
+
+---
 
 ## Getting Help
 
-If you have questions:
-1. Check existing code for patterns
-2. Review this contributing guide
-3. Ask in PR comments
-4. Reference V1 code for feature behavior (but NOT implementation)
+### Resources
 
-## Resources
+- **Documentation**: [docs/](docs/)
+- **GitHub Issues**: Report bugs or request features
+- **GitHub Discussions**: Ask questions or discuss ideas
+- **CLAUDE.md**: Key learnings and patterns
 
-- [TypeScript Deep Dive](https://basarat.gitbook.io/typescript/)
-- [Electron Documentation](https://www.electronjs.org/docs/latest/)
-- [Mastra Framework](https://mastra.ai/docs)
-- [React TypeScript Cheatsheet](https://react-typescript-cheatsheet.netlify.app/)
+### Before Asking
+
+1. Check existing issues
+2. Read relevant documentation
+3. Search discussions
+4. Review CLAUDE.md for patterns
+
+---
+
+## License
+
+By contributing to Paprwork V2, you agree that your contributions will be licensed under the MIT License.
+
+---
+
+## Recognition
+
+Contributors are recognized in our [CONTRIBUTORS.md](CONTRIBUTORS.md) file.
+
+Thank you for helping make Paprwork V2 better! 🎉

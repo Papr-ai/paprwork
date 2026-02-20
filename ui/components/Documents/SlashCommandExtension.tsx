@@ -5,11 +5,20 @@
  * Uses @tiptap/suggestion + tippy.js for positioning.
  */
 
-import React, { useState, useEffect, useImperativeHandle, forwardRef } from "react";
+import React, {
+  useState,
+  useEffect,
+  useImperativeHandle,
+  forwardRef,
+} from "react";
 import { Extension } from "@tiptap/core";
 import { ReactRenderer } from "@tiptap/react";
 import Suggestion from "@tiptap/suggestion";
-import type { SuggestionOptions, SuggestionProps, SuggestionKeyDownProps } from "@tiptap/suggestion";
+import type {
+  SuggestionOptions,
+  SuggestionProps,
+  SuggestionKeyDownProps,
+} from "@tiptap/suggestion";
 import tippy from "tippy.js";
 import type { Instance as TippyInstance } from "tippy.js";
 import { PluginKey } from "@tiptap/pm/state";
@@ -20,7 +29,10 @@ interface SlashCommandItem {
   title: string;
   description: string;
   icon: string;
-  command: (opts: { editor: SuggestionProps["editor"]; range: SuggestionProps["range"] }) => void;
+  command: (opts: {
+    editor: SuggestionProps["editor"];
+    range: SuggestionProps["range"];
+  }) => void;
 }
 
 function getSlashCommands(query: string): SlashCommandItem[] {
@@ -30,7 +42,12 @@ function getSlashCommands(query: string): SlashCommandItem[] {
       description: "Large section heading",
       icon: "H1",
       command: ({ editor, range }) => {
-        editor.chain().focus().deleteRange(range).setNode("heading", { level: 1 }).run();
+        editor
+          .chain()
+          .focus()
+          .deleteRange(range)
+          .setNode("heading", { level: 1 })
+          .run();
       },
     },
     {
@@ -38,7 +55,12 @@ function getSlashCommands(query: string): SlashCommandItem[] {
       description: "Medium section heading",
       icon: "H2",
       command: ({ editor, range }) => {
-        editor.chain().focus().deleteRange(range).setNode("heading", { level: 2 }).run();
+        editor
+          .chain()
+          .focus()
+          .deleteRange(range)
+          .setNode("heading", { level: 2 })
+          .run();
       },
     },
     {
@@ -46,7 +68,12 @@ function getSlashCommands(query: string): SlashCommandItem[] {
       description: "Small section heading",
       icon: "H3",
       command: ({ editor, range }) => {
-        editor.chain().focus().deleteRange(range).setNode("heading", { level: 3 }).run();
+        editor
+          .chain()
+          .focus()
+          .deleteRange(range)
+          .setNode("heading", { level: 3 })
+          .run();
       },
     },
     {
@@ -154,7 +181,9 @@ const CommandsList = forwardRef<CommandsListRef, CommandsListProps>(
             <span className="slash-menu__icon">{item.icon}</span>
             <div className="slash-menu__text">
               <span className="slash-menu__title">{item.title}</span>
-              <span className="slash-menu__description">{item.description}</span>
+              <span className="slash-menu__description">
+                {item.description}
+              </span>
             </div>
           </button>
         ))}
@@ -173,7 +202,10 @@ export const SlashCommandExtension = Extension.create({
   name: "slashCommand",
 
   addProseMirrorPlugins() {
-    const suggestionConfig: Omit<SuggestionOptions<SlashCommandItem>, "editor"> = {
+    const suggestionConfig: Omit<
+      SuggestionOptions<SlashCommandItem>,
+      "editor"
+    > = {
       char: "/",
       startOfLine: true,
       pluginKey: slashCommandPluginKey,
@@ -206,7 +238,10 @@ export const SlashCommandExtension = Extension.create({
           },
 
           onUpdate(props: SuggestionProps<SlashCommandItem>) {
-            component?.updateProps({ items: props.items, command: props.command });
+            component?.updateProps({
+              items: props.items,
+              command: props.command,
+            });
 
             if (!props.clientRect || !popup?.[0]) return;
             popup[0].setProps({

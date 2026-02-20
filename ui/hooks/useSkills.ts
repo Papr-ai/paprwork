@@ -74,7 +74,10 @@ export function useSkills() {
         content,
       });
       const skill = response.data as SkillRecord;
-      setSkills((prev) => [skill, ...prev.filter((item) => item.id !== skill.id)]);
+      setSkills((prev) => [
+        skill,
+        ...prev.filter((item) => item.id !== skill.id),
+      ]);
       return skill;
     },
     [],
@@ -92,7 +95,10 @@ export function useSkills() {
         catalogId,
       });
       const installed = response.data as SkillRecord;
-      setSkills((prev) => [installed, ...prev.filter((s) => s.id !== installed.id)]);
+      setSkills((prev) => [
+        installed,
+        ...prev.filter((s) => s.id !== installed.id),
+      ]);
       return installed;
     },
     [],

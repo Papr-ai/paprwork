@@ -50,6 +50,27 @@ If the task is explicit and small, merge steps. Always explain tradeoffs when sk
 
 ---
 
+## Job Resilience Quick Reference
+
+When creating jobs, consider resilience needs:
+
+**One-shot jobs (API calls):**
+- Add `retries: { maxAttempts: 3, backoffMs: 2000 }`
+- Handles rate limits, network timeouts
+
+**Long-running jobs (large datasets):**
+- Use `useCheckpointTemplate: true` to generate resumable code
+- Add retries for max resilience
+- Script saves progress every N items
+
+**Scheduled jobs:**
+- Set `catchUpMissed: true` on cron schedules
+- Runs missed occurrences on app startup
+
+See full patterns in APP_AND_JOBS_GUIDE.md → "Job Resilience & Patterns"
+
+---
+
 ## File Structure
 
 ```
@@ -157,6 +178,51 @@ const { lastInsertRowid } = await fetch('/api/db/write', {
 
 ---
 
+## Job Types (choose correctly)
+
+| Type | Use for | Example |
+|------|---------|---------|
+| `python` | Scripts with logic, API calls, data processing, ML | `command: "python3 code/main.py --token ${GITHUB_TOKEN}"` |
+| `bash` | Simple shell one-liners | `command: "curl -H 'Authorization: Bearer ${KEY}' ..."` |
+| `node` | Node.js/TypeScript scripts | `command: "node code/main.js --api-key ${KEY}"` |
+
+**Use `type: "python"` when:** The job has multi-step logic, API calls, data processing, or needs pip packages. Pass API keys as CLI arguments in the command.
+
+**Use `type: "bash"` when:** The job is a simple command or one-liner (curl, git, jq). Keys go directly in the command string.
+
+---
+
+## API Keys in Jobs
+
+**Custom API keys (from Settings) are NOT in the job environment.** Pass them as CLI arguments:
+
+```javascript
+// ✅ Python job — keys as CLI args
+create_job({
+  name: "GitHub Sync",
+  type: "python",
+  command: "python3 code/fetch.py --github-token ${GITHUB_TOKEN}",
+  requirements: ["requests"]
+})
+```
+
+```python
+# code/fetch.py
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument('--github-token', required=True)
+args = parser.parse_args()
+token = args.github_token  # ✅ Receives actual value
+```
+
+**❌ Do NOT:** Put `${GITHUB_TOKEN}` in the Python file. Substitution happens in the command string only.
+
+**❌ Do NOT:** Use `os.getenv('GITHUB_TOKEN')` for custom keys — they are not in the environment.
+
+**Runtime params** (THREAD_ID, ACTION, etc.) ARE in the environment — use `os.environ.get('THREAD_ID')` for those.
+
+---
+
 ## Job Design Principles
 
 When a job will be triggered by a button click:
@@ -165,13 +231,13 @@ When a job will be triggered by a button click:
 3. **Fast** (<30s) — long jobs should update a `status` column in SQLite so app shows progress
 4. **Three environment layers** — don't confuse them:
 
-| Layer | Set by | Available |
-|-------|--------|-----------|
-| API keys (`OPENAI_API_KEY` etc.) | User keychain → gateway | Always, every run |
-| Job config env (`SUBREDDIT=python`) | `create_job` / `update_job` | Every run of this job |
-| Runtime params (`THREAD_ID=abc123`) | `params` in `/api/jobs/run` POST body | This invocation only |
+| Layer | Set by | Available in job |
+|-------|--------|-------------------|
+| API keys (custom from Settings) | `create_job` command | Pass as CLI args: `--token ${KEY_NAME}` |
+| Job config env (`SUBREDDIT=python`) | `create_job` / `update_job` | `os.environ`, `$VAR` |
+| Runtime params (`THREAD_ID=abc123`) | `params` in `/api/jobs/run` | `os.environ.get('THREAD_ID')`, `$THREAD_ID` |
 
-Runtime params in Python: `os.environ.get('THREAD_ID')`. In bash: `$THREAD_ID`.
+Runtime params: `os.environ.get('THREAD_ID')`. API keys: pass via CLI args, parse with `argparse`.
 
 ---
 
@@ -189,12 +255,27 @@ Runtime params in Python: `os.environ.get('THREAD_ID')`. In bash: `$THREAD_ID`.
 
 Use when the job produces a short text result (a draft, a summary, an answer). The job's stdout is captured and returned in the HTTP response — no SQLite, no WebSocket needed.
 
+**Job config** (API key via CLI arg, runtime param via env):
+```javascript
+create_job({
+  name: "Draft Generator",
+  type: "python",
+  command: "python3 code/main.py --anthropic-key ${ANTHROPIC_API_KEY}",
+  requirements: ["anthropic"]
+})
+```
+
 **Job script:**
 ```python
-# Python job — just print the result
-import json, os
-thread_id = os.environ.get('THREAD_ID', '')
-draft = generate_reply(thread_id)  # your logic here
+# Python job — API key from argparse, runtime param from os.environ
+import json, os, argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--anthropic-key', required=True)
+args = parser.parse_args()
+
+thread_id = os.environ.get('THREAD_ID', '')  # Runtime param — from /api/jobs/run params
+draft = generate_reply(thread_id, args.anthropic_key)  # API key from CLI
 print(json.dumps({ "draft": draft, "threadId": thread_id }))
 ```
 
@@ -321,6 +402,18 @@ const { stdout } = await fetch('/api/bash/run', {
 ## Anti-Patterns (never do these)
 
 ```javascript
+// ❌ Using bash job for Python script with API calls
+create_job({ type: "bash", command: "pip3 install requests && python3 fetch.py" })
+// → Use type: "python" for scripts. Bash jobs don't get venv or proper key injection.
+
+// ❌ Putting ${KEY_NAME} in Python source code
+// code/main.py: token = "${GITHUB_TOKEN}"
+// → Substitution only works in the command string. Use argparse + CLI args.
+
+// ❌ Using os.getenv for custom API keys
+// Python: token = os.getenv('GITHUB_TOKEN')
+// → Custom keys from Settings are NOT in env. Pass as CLI args.
+
 // ❌ Building a separate HTTP server job as a bridge
 create_job({ name: "api-bridge", type: "node", command: "node server.js" })
 // → fragile, port conflicts, completely unnecessary — use /api/jobs/run directly
@@ -386,6 +479,9 @@ const { rows } = await fetch('/api/db/query', {
 
 - [ ] `list_apps` called before `create_app` (avoid duplicates)
 - [ ] `list_jobs` called before `create_job` (avoid duplicates)
+- [ ] `list_keys` called before jobs that need API keys
+- [ ] Job type correct: `python` for scripts, `bash` for one-liners
+- [ ] Python jobs with API keys: command uses `--token ${KEY_NAME}`, script uses argparse
 - [ ] Design system loaded (`read_skill({ skillId: "preloaded-paprwork-design-system" })`)
 - [ ] `link_app_data_source` called after job has run at least once
 - [ ] App uses APP_ID constant (not hardcoded string scattered everywhere)
@@ -393,4 +489,4 @@ const { rows } = await fetch('/api/db/query', {
 - [ ] Button has loading/disabled state during job execution
 - [ ] WebSocket listener set up for job completion push
 - [ ] Error states handled in UI (not just happy path)
-- [ ] Tested with `curl` before wiring into app
+- [ ] Tested with `curl` or `bash` probe before wiring into app
