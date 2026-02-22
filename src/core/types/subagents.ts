@@ -1,5 +1,13 @@
 import type { Provider } from "./agents.js";
 
+/** Predefined icon names for sub-agents (sidebar-style SVGs) */
+export type SubAgentIconName =
+  | "robot"
+  | "search"
+  | "code"
+  | "pen"
+  | "chart";
+
 export interface SubAgentProfile {
   id: string;
   name: string;
@@ -13,6 +21,8 @@ export interface SubAgentProfile {
   outputSchema?: Record<string, unknown>;
   maxTurns?: number;
   memoryPolicy?: "none" | "summary" | "full";
+  /** Icon name for sidebar/mini-chat (robot, search, code, pen, chart) */
+  icon?: SubAgentIconName;
   createdAt: string;
   updatedAt: string;
   runCount: number;
@@ -30,6 +40,8 @@ export interface DelegationRunRecord {
   agentId: string;
   /** Display name of the sub-agent (e.g. "Research Specialist") */
   agentName?: string;
+  /** Icon name for mini-chat (robot, search, code, pen, chart) */
+  agentIcon?: SubAgentIconName;
   task: string;
   context?: string;
   status: DelegationRunStatus;

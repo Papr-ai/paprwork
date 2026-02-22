@@ -152,12 +152,25 @@ export async function setupSubAgentHandlers(
 
       case "subagent:get-messages": {
         const payload = message.payload as GetMessagesPayload;
-        // TODO: Retrieve messages from sub-agent chat session
-        // For now, return empty array as placeholder
+        const stored = await service.loadDelegationChatMessages(
+          payload.delegationId,
+          payload.limit ?? 50,
+        );
+        const messages = stored.map((m) => ({
+          role: m.role as "user" | "assistant",
+          author:
+            m.role === "assistant"
+              ? ("sub-agent" as const)
+              : m.source_agent_id === "main-agent"
+                ? ("main-agent" as const)
+                : ("user" as const),
+          content: m.content,
+          timestamp: m.timestamp,
+        }));
         sendResponse(ws, {
           id: message.id,
           success: true,
-          data: { messages: [], delegationId: payload.delegationId },
+          data: { messages, delegationId: payload.delegationId },
         });
         break;
       }

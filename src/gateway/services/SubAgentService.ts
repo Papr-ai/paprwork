@@ -10,6 +10,19 @@ import type {
 import type { Provider } from "../../core/types/agents.js";
 import { getJobsService } from "./JobsService.js";
 import type { JobRecord, JobStatus } from "./jobs/types.js";
+import type { StoredMessage } from "./storage/IStorageProvider.js";
+
+/** Chat ID prefix for delegation sub-agent ↔ main-agent conversations */
+export const DELEGATION_CHAT_PREFIX = "delegation:";
+
+/** Max time to wait for main-agent response (ms) */
+const RESPONSE_WAIT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+interface PendingQuestion {
+  resolve: (response: string) => void;
+  reject: (err: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
 
 interface CreateSubAgentInput {
   id?: string;
@@ -24,6 +37,7 @@ interface CreateSubAgentInput {
   outputSchema?: Record<string, unknown>;
   maxTurns?: number;
   memoryPolicy?: "none" | "summary" | "full";
+  icon?: import("../../core/types/subagents.js").SubAgentIconName;
 }
 
 let subAgentServiceInstance: SubAgentService | null = null;
@@ -49,6 +63,7 @@ const DEFAULT_SUB_AGENTS: Array<
     outputMode: "natural",
     maxTurns: 12,
     memoryPolicy: "summary",
+    icon: "search",
     lastRunAt: undefined,
   },
   {
@@ -70,6 +85,7 @@ const DEFAULT_SUB_AGENTS: Array<
     outputMode: "natural",
     maxTurns: 12,
     memoryPolicy: "summary",
+    icon: "code",
     lastRunAt: undefined,
   },
 ];
@@ -80,6 +96,7 @@ export class SubAgentService {
   private profiles: Map<string, SubAgentProfile>;
   private legacyRuns: Map<string, DelegationRunRecord>;
   private initialized: boolean;
+  private readonly pendingQuestions = new Map<string, PendingQuestion>();
 
   constructor() {
     const root = path.join(os.homedir(), "PAPR", "data");
@@ -227,6 +244,7 @@ export class SubAgentService {
       outputSchema: input.outputSchema ?? existing?.outputSchema,
       maxTurns: input.maxTurns ?? existing?.maxTurns ?? 12,
       memoryPolicy: input.memoryPolicy ?? existing?.memoryPolicy ?? "summary",
+      icon: input.icon ?? existing?.icon,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       runCount: existing?.runCount ?? 0,
@@ -354,10 +372,14 @@ export class SubAgentService {
   private mapJobToRun(job: JobRecord): DelegationRunRecord {
     const agentName =
       job.name?.replace(/^Delegation: /, "").trim() || undefined;
+    const profile = job.subAgentId
+      ? this.profiles.get(job.subAgentId)
+      : undefined;
     return {
       id: job.id,
       agentId: job.subAgentId ?? "unknown",
       agentName,
+      agentIcon: profile?.icon,
       task: job.delegationTask ?? job.command ?? "",
       context: job.delegationContext,
       status: this.mapStatus(job.status),
@@ -423,9 +445,105 @@ export class SubAgentService {
 
   // ===== Multi-Turn Sub-Agent Communication =====
 
+  /** Get chat ID for delegation sub-agent ↔ main-agent conversation */
+  getDelegationChatId(delegationId: string): string {
+    return `${DELEGATION_CHAT_PREFIX}${delegationId}`;
+  }
+
   /**
-   * Send question from sub-agent to main agent
-   * Broadcasts via WebSocket to show in MiniChatCard
+   * Save message to delegation chat (chat DB + Papr memory via StorageManager)
+   */
+  private async saveToDelegationChat(
+    delegationId: string,
+    message: Omit<StoredMessage, "chat_id" | "sync_status"> & {
+      sync_status?: StoredMessage["sync_status"];
+    },
+  ): Promise<void> {
+    const chatId = this.getDelegationChatId(delegationId);
+    const { getAgentService } = await import("./AgentService.js");
+    const storage = getAgentService().getStorageManager();
+    const fullMsg: StoredMessage = {
+      ...message,
+      chat_id: chatId,
+      sync_status: message.sync_status ?? "local",
+    };
+    await storage.saveMessage(chatId, fullMsg);
+  }
+
+  /**
+   * Send question from sub-agent to main agent and wait for response.
+   * Saves to delegation chat (chat DB + Papr memory), broadcasts, triggers main agent,
+   * then blocks until main agent/user responds or timeout.
+   */
+  async sendQuestionAndWaitForResponse(
+    delegationId: string,
+    question: string,
+    urgency: "low" | "medium" | "high",
+  ): Promise<string> {
+    let sourceAgentId: string | undefined;
+    let sourceAgentName: string | undefined;
+    try {
+      const jobsService = getJobsService();
+      const job = await jobsService.getJob(delegationId);
+      if (job?.subAgentId) {
+        const profile = this.profiles.get(job.subAgentId);
+        sourceAgentId = job.subAgentId;
+        sourceAgentName = profile?.name ?? job.subAgentId;
+      }
+    } catch {
+      // Ignore - use defaults
+    }
+    console.log(
+      `[SubAgentService] Sub-agent question (waiting): ${question} (delegationId: ${delegationId})`,
+    );
+
+    // Save question to delegation chat (chat DB + Papr memory)
+    await this.saveToDelegationChat(delegationId, {
+      id: `msg-${uuidv4()}`,
+      role: "assistant",
+      content: question,
+      timestamp: new Date().toISOString(),
+      source_agent_id: sourceAgentId,
+      source_agent_name: sourceAgentName,
+    });
+
+    const { broadcast } = await import("../websocket/index.js");
+    broadcast({
+      type: "subagent-chat:question",
+      data: {
+        question,
+        urgency,
+        delegationId,
+        timestamp: new Date().toISOString(),
+      },
+    });
+
+    // Trigger main agent to automatically respond
+    const { triggerMainAgentResponse } =
+      await import("./SubAgentResponseTrigger.js");
+    void triggerMainAgentResponse(delegationId, question);
+
+    // Block until response or timeout
+    return new Promise<string>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingQuestions.delete(delegationId);
+        reject(
+          new Error(
+            `Timeout waiting for main-agent response (${RESPONSE_WAIT_TIMEOUT_MS / 1000}s)`,
+          ),
+        );
+      }, RESPONSE_WAIT_TIMEOUT_MS);
+
+      this.pendingQuestions.set(delegationId, {
+        resolve,
+        reject,
+        timeout,
+      });
+    });
+  }
+
+  /**
+   * Send question from sub-agent to main agent (fire-and-forget, no wait)
    */
   async sendQuestionToMainAgent(
     question: string,
@@ -447,7 +565,6 @@ export class SubAgentService {
       },
     });
 
-    // Trigger main agent to automatically respond
     if (delegationId) {
       const { triggerMainAgentResponse } =
         await import("./SubAgentResponseTrigger.js");
@@ -456,8 +573,9 @@ export class SubAgentService {
   }
 
   /**
-   * Main agent or user responds to sub-agent question
-   * Resumes sub-agent execution with new context
+   * Main agent or user responds to sub-agent question.
+   * Saves to delegation chat (chat DB + Papr memory), broadcasts, and unblocks
+   * the waiting sub-agent so it can continue with the response.
    */
   async respondToSubAgent(
     delegationId: string,
@@ -468,7 +586,17 @@ export class SubAgentService {
       `[SubAgentService] ${author} responding to ${delegationId}: ${message}`,
     );
 
-    // Broadcast response
+    // Save response to delegation chat (chat DB + Papr memory)
+    await this.saveToDelegationChat(delegationId, {
+      id: `msg-${uuidv4()}`,
+      role: "user",
+      content: message,
+      timestamp: new Date().toISOString(),
+      source_agent_id: author,
+      source_agent_name: author === "main-agent" ? "Main Agent" : "User",
+    });
+
+    // Broadcast to UI
     const { broadcast } = await import("../websocket/index.js");
     broadcast({
       type: "subagent-chat:message",
@@ -483,7 +611,33 @@ export class SubAgentService {
       },
     });
 
-    // TODO: Send message to sub-agent chat session and resume execution
+    // Unblock waiting sub-agent (if any)
+    const pending = this.pendingQuestions.get(delegationId);
+    if (pending) {
+      clearTimeout(pending.timeout);
+      this.pendingQuestions.delete(delegationId);
+      pending.resolve(message);
+    }
+
+    // When user sends, trigger main agent to respond (same as sub-agent questions)
+    if (author === "user") {
+      const { triggerMainAgentResponse } =
+        await import("./SubAgentResponseTrigger.js");
+      void triggerMainAgentResponse(delegationId, message, "user");
+    }
+  }
+
+  /**
+   * Load delegation chat messages (for UI or debugging)
+   */
+  async loadDelegationChatMessages(
+    delegationId: string,
+    limit = 50,
+  ): Promise<StoredMessage[]> {
+    const chatId = this.getDelegationChatId(delegationId);
+    const { getAgentService } = await import("./AgentService.js");
+    const storage = getAgentService().getStorageManager();
+    return storage.loadMessages(chatId, limit, 0);
   }
 
   /**

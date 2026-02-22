@@ -1148,9 +1148,11 @@ See \`APP_AND_JOBS_GUIDE.md\` for full workflow, WebSocket push patterns, and te
 
 ## Sub-Agent Creation Requirements
 
-When creating sub-agents with \`create_sub_agent\`, you can optionally specify \`allowedToolIds\`.
+When creating sub-agents with \`create_sub_agent\`, you can optionally specify \`allowedToolIds\` and \`icon\`.
 
 **Default tools (if not specified):** \`["bash", "read_file", "write_file"]\`
+
+**Icon (optional):** \`robot\`, \`search\`, \`code\`, \`pen\`, or \`chart\` — sidebar-style SVG for mini-chat (not emoji). Use \`search\` for research, \`code\` for implementation, \`pen\` for writing.
 
 This gives basic file and database access. Override for specific needs:
 
@@ -1271,6 +1273,8 @@ create_job({
 - Relevant prior findings
 
 **When delegating work the user should see:** Omit \`reportChatId\` to auto-use the current chat (result delivered to chat + inline mini-chat with Join). Or pass \`reportChatId\` explicitly. Omit entirely for logs-only (no chat delivery).
+
+**When a sub-agent asks a question (request_agent_input):** Answer it yourself using your knowledge and context. Use \`respond_to_sub_agent\` with your answer. Only ask the user if you truly cannot answer (e.g. missing credentials, subjective preference, or information only they have).
 
 **Example - Complete context:**
 \`\`\`javascript

@@ -1424,6 +1424,8 @@ ${last15.substring(0, 8_000)}`;
     allowedToolIds?: string[];
     maxTurns?: number;
     appendLog?: (line: string) => Promise<void>;
+    /** When set (sub-agent job), broadcast thinking/tool activity to MiniChatCard */
+    delegationId?: string;
   }): Promise<{ chatId: string; text: string }> {
     if (!this.initialized) {
       throw new Error("AgentService not initialized");
@@ -1544,6 +1546,22 @@ ${last15.substring(0, 8_000)}`;
               `❌ Error: ${typeof payload.error === "string" ? payload.error : JSON.stringify(payload.error)}`,
             );
           }
+        }
+
+        // Broadcast sub-agent activity to MiniChatCard (thinking, tool calls, results)
+        if (input.delegationId) {
+          const { broadcast } = await import("../websocket/index.js");
+          broadcast({
+            type: "subagent-chat:activity",
+            data: {
+              delegationId: input.delegationId,
+              chunk: {
+                type: chunk.type,
+                payload: chunk.payload,
+                timestamp: chunk.timestamp,
+              },
+            },
+          });
         }
 
         if (chunk.type !== "text-delta") {

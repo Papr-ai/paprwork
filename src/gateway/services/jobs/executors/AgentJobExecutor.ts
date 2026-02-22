@@ -122,7 +122,9 @@ export class AgentJobExecutor implements IJobExecutor {
         model,
         allowedToolIds,
         maxTurns: params.job.maxTurns,
-        appendLog: params.appendLog, // Pass appendLog for structured activity logging
+        appendLog: params.appendLog,
+        delegationId:
+          params.job.type === "subagent" ? params.job.id : undefined,
       });
       outputText = response.text;
     }

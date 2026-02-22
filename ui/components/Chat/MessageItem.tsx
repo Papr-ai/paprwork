@@ -278,6 +278,7 @@ function renderSequence(
                   context={delegationData.context}
                   resultText={delegationData.resultText}
                   error={delegationData.error}
+                  subAgentIcon={delegationData.agentIcon}
                 />
               ) : (
                 <DelegationCard

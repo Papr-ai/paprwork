@@ -109,6 +109,75 @@
   color: var(--text-secondary);
 }
 
+.mini-chat-card__activity {
+  margin-top: 8px;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.02);
+  border-radius: 8px;
+}
+
+.mini-chat-card__activity .thinking-card {
+  margin-bottom: 8px;
+}
+
+.mini-chat-card__tool-calls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.mini-chat-card__tool-call {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.mini-chat-card__tool-call--success {
+  background: rgba(52, 199, 89, 0.1);
+  border-color: rgba(52, 199, 89, 0.2);
+}
+
+.mini-chat-card__tool-call--error {
+  background: rgba(255, 59, 48, 0.08);
+  border-color: rgba(255, 59, 48, 0.2);
+}
+
+.mini-chat-card__tool-name {
+  color: var(--text-secondary);
+}
+
+.mini-chat-card__tool-status {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.mini-chat-card__tool-call--success .mini-chat-card__tool-status {
+  color: #248a3d;
+}
+
+.mini-chat-card__tool-call--error .mini-chat-card__tool-status {
+  color: #d70015;
+}
+
+.mini-chat-card__msg-avatar--sub {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+}
+
+.mini-chat-card__papr-logo-svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
 .mini-chat-card__messages {
   margin-top: 8px;
   padding: 8px;
@@ -130,6 +199,7 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 10px;
 }
 
@@ -137,18 +207,9 @@
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  max-width: 95%;
-}
-
-.mini-chat-card__message--sub-agent {
+  max-width: 100%;
   align-self: flex-start;
   flex-direction: row;
-}
-
-.mini-chat-card__message--main-agent,
-.mini-chat-card__message--user {
-  align-self: flex-end;
-  flex-direction: row-reverse;
 }
 
 .mini-chat-card__msg-avatar-wrap {
@@ -162,10 +223,6 @@
   background: rgba(0, 0, 0, 0.04);
 }
 
-.mini-chat-card__msg-avatar-wrap--end {
-  order: 1;
-}
-
 .mini-chat-card__msg-avatar {
   color: var(--text-tertiary);
 }
@@ -176,6 +233,13 @@
 
 .mini-chat-card__msg-avatar--user {
   color: #248a3d;
+}
+
+.mini-chat-card__msg-avatar--user-img {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: cover;
 }
 
 .mini-chat-card__message-bubble {

@@ -18,6 +18,8 @@ const SUBAGENT_MODEL_IDS = [
   "gemini-3-flash-preview",
 ] as const;
 
+const SUBAGENT_ICON_NAMES = ["robot", "search", "code", "pen", "chart"] as const;
+
 const createSubAgentSchema = z.object({
   id: z.string().min(1).optional(),
   name: z.string().min(1),
@@ -33,6 +35,12 @@ const createSubAgentSchema = z.object({
   outputSchema: z.record(z.string(), z.unknown()).optional(),
   maxTurns: z.number().int().min(1).max(100).optional(),
   memoryPolicy: z.enum(["none", "summary", "full"]).optional(),
+  icon: z
+    .enum(SUBAGENT_ICON_NAMES)
+    .optional()
+    .describe(
+      "Icon for sidebar/mini-chat: robot, search, code, pen, or chart (sidebar-style SVG, not emoji)",
+    ),
 });
 
 const deleteSubAgentSchema = z.object({
@@ -88,7 +96,7 @@ export const listSubAgentsTool = createTool({
 export const createSubAgentTool = createTool({
   id: "create_sub_agent",
   description:
-    "Create or update a persistent sub-agent profile. If allowedToolIds not specified, defaults to ['bash', 'read_file', 'write_file'] for basic file and database access.",
+    "Create or update a persistent sub-agent profile. Specify icon (robot, search, code, pen, chart) for sidebar/mini-chat. If allowedToolIds not specified, defaults to ['bash', 'read_file', 'write_file'].",
   inputSchema: createSubAgentSchema,
   execute: async (input) => {
     const args = (input as { context?: CreateSubAgentArgs }).context ?? input;
@@ -212,12 +220,13 @@ type CompleteDelegationArgs = z.infer<typeof completeDelegationSchema>;
 
 /**
  * Tool for sub-agents to ask questions to the main agent
- * Creates a pause in execution until main agent responds
+ * When delegationId is provided (injected by executor): blocks until main agent responds, then returns the response.
+ * When delegationId is absent: fire-and-forget (legacy).
  */
 export const requestAgentInputTool = createTool({
   id: "request_agent_input",
   description:
-    "Ask the main agent for clarification or guidance. Use when you need additional context to complete your task. The main agent will see your question in the mini-chat and can respond.",
+    "Ask the main agent for clarification or guidance. Use when you need additional context to complete your task. The main agent will see your question in the mini-chat and respond. You will receive their response and can continue.",
   inputSchema: requestAgentInputSchema,
   execute: async (input) => {
     const args =
@@ -226,13 +235,42 @@ export const requestAgentInputTool = createTool({
       await import("../../gateway/services/SubAgentService.js");
     const service = getSubAgentService();
 
-    // Send question to parent chat via WebSocket (delegationId routes to correct MiniChatCard)
+    if (args.delegationId) {
+      // Block until main agent responds; return response so sub-agent can continue
+      try {
+        const response = await service.sendQuestionAndWaitForResponse(
+          args.delegationId,
+          args.question,
+          args.urgency || "medium",
+        );
+        return {
+          success: true,
+          data: {
+            message: `Main agent responded: ${response}`,
+            question: args.question,
+            response,
+            status: "resumed",
+          },
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          success: false,
+          data: {
+            message: `Failed to get response: ${msg}`,
+            question: args.question,
+            status: "timeout",
+          },
+        };
+      }
+    }
+
+    // Fallback: fire-and-forget without delegationId
     await service.sendQuestionToMainAgent(
       args.question,
       args.urgency || "medium",
       args.delegationId,
     );
-
     return {
       success: true,
       data: {
@@ -251,7 +289,7 @@ export const requestAgentInputTool = createTool({
 export const respondToSubAgentTool = createTool({
   id: "respond_to_sub_agent",
   description:
-    "Respond to a sub-agent's question or provide guidance during delegation. The sub-agent will receive your message and continue with this additional context.",
+    "Respond to a sub-agent's question. Answer yourself using your knowledge and context; only ask the user if you truly cannot answer (e.g. missing credentials, subjective preference, or info only they have). The sub-agent receives your message and continues.",
   inputSchema: respondToSubAgentSchema,
   execute: async (input) => {
     const args =

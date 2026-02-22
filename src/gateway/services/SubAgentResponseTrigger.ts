@@ -12,12 +12,13 @@ import { getProviderAuth } from "../utils/keyResolver.js";
 import { getApiKeys } from "../utils/keyResolver.js";
 
 /**
- * Trigger main agent to respond to a sub-agent question.
+ * Trigger main agent to respond. Used for both sub-agent questions and user messages.
  * Gets chatId from job's reportChatId, runs streamAgent, broadcasts chunks.
  */
 export async function triggerMainAgentResponse(
   delegationId: string,
-  question: string,
+  message: string,
+  source: "sub-agent" | "user" = "sub-agent",
 ): Promise<void> {
   const jobsService = getJobsService();
   const agentService = getAgentService();
@@ -74,7 +75,10 @@ export async function triggerMainAgentResponse(
     };
   }
 
-  const syntheticMessage = `[Sub-agent question for delegation ${delegationId}]\n\n${question}\n\nRespond using the respond_to_sub_agent tool with delegationId "${delegationId}" and your response message.`;
+  const syntheticMessage =
+    source === "user"
+      ? `[User message in sub-agent chat for delegation ${delegationId}]\n\nThe user joined the mini-chat and sent: "${message}"\n\n**Your job:** Respond to the user. Use respond_to_sub_agent with delegationId "${delegationId}" and your response. Be helpful and explain what's happening with the sub-agent if relevant.`
+      : `[Sub-agent question for delegation ${delegationId}]\n\n${message}\n\n**Your job:** Answer the sub-agent's question yourself using your knowledge and context. Use respond_to_sub_agent with delegationId "${delegationId}" and your answer. Only ask the user for help if you truly cannot answer (e.g. missing credentials, subjective preference, or information only they have).`;
 
   console.log(
     `[SubAgentResponseTrigger] Triggering main agent for chat ${chatId}`,

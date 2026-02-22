@@ -14,6 +14,8 @@ export interface DelegationData {
   id: string;
   agentId: string;
   agentName?: string;
+  /** Icon for mini-chat (robot, search, code, pen, chart) */
+  agentIcon?: string;
   task: string;
   context?: string;
   status: "pending" | "running" | "completed" | "failed";
@@ -211,6 +213,7 @@ export function parseDelegationFromToolResult(
       id: String(id),
       agentId: (data.agentId ?? data.subAgentId ?? "unknown") as string,
       agentName: data.agentName as string | undefined,
+      agentIcon: data.agentIcon as string | undefined,
       task: String(task),
       context: data.context as string | undefined,
       status:
