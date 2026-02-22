@@ -192,6 +192,229 @@ const { lastInsertRowid } = await fetch('/api/db/write', {
 
 ---
 
+## OAuth vs API Key for Jobs
+
+| Job type | OAuth (ChatGPT/Claude subscription) | API key (Platform) |
+|----------|-------------------------------------|--------------------|
+| **Agent jobs** | ✅ Works — Paprwork routes to pi-ai automatically | ✅ Works — uses AI SDK |
+| **Bash/Python jobs** calling OpenAI/Anthropic | ❌ OAuth token won't work | ✅ Needs Platform API key |
+
+**Agent jobs** — No setup needed. Paprwork detects OAuth vs API key and routes to the right backend (pi-ai for OAuth, AI SDK for API key). When creating sub-agents for agent jobs, use models from `preloaded-subagent-guide` — pick ones the user has access to (OAuth or API key). Default: `gpt-5.2` or `claude-sonnet-4-6`.
+
+**Bash/Python jobs** that call `openai` Python SDK or `curl api.openai.com` — Require a **Platform API key** in Settings. OAuth tokens are for the ChatGPT backend, not the Platform API. If the user only has OAuth, tell them: "For Python/bash jobs that call the OpenAI API, add an OpenAI Platform API key in Settings → API Keys. Your ChatGPT subscription works for chat and agent jobs, but scripts need the Platform key."
+
+### ⚠️ CRITICAL: Don't call LLMs directly from Python/bash jobs!
+
+**❌ WRONG - Calling OpenAI/Anthropic APIs directly:**
+```python
+# DON'T DO THIS - bypasses Paprwork's OAuth/API key routing
+import openai
+response = openai.chat.completions.create(
+    model="gpt-5.2",
+    messages=[{"role": "user", "content": prompt}]
+)
+```
+
+**Why this fails:**
+- OAuth tokens (ChatGPT subscription) don't work with Platform API endpoints
+- Requires Platform API key even if user has OAuth
+- No automatic fallback from OAuth → API key
+- No rate limit handling
+
+**✅ CORRECT - Use agent jobs instead:**
+
+When you need LLM calls in a pipeline, use **agent jobs** (type: "agent" or "subagent"), not Python/bash jobs with direct API calls:
+
+```javascript
+// Create a sub-agent for the LLM task
+create_sub_agent({
+  id: "reviewer-agent",
+  name: "Content Reviewer",
+  description: "Reviews and polishes content",
+  systemPrompt: "You review content for clarity, tone, and accuracy. Output only the polished version.",
+  provider: "openai",
+  model: "gpt-5.2"
+})
+
+// Create an agent job that uses the sub-agent
+create_job({
+  name: "Review Posts",
+  type: "subagent",
+  subAgentId: "reviewer-agent",
+  command: "Review the following post for clarity and fix any issues: [post content]",
+  outputMode: "natural"
+})
+```
+
+**Benefits of agent jobs:**
+- ✅ Automatic OAuth → API key routing (uses ChatGPT subscription first, falls back to Platform API)
+- ✅ Rate limit handling (auto-retries with API key if OAuth rate limited)
+- ✅ Works whether user has OAuth, API key, or both
+- ✅ No manual API code needed
+- ✅ Consistent with chat behavior
+
+**When to use Python/bash jobs:**
+- ✅ Data processing (pandas, SQL, file parsing)
+- ✅ External API calls (Reddit, GitHub, etc.)
+- ✅ System commands (git, curl non-LLM endpoints)
+- ✅ Data transformation before/after LLM calls
+
+**Pipeline pattern:**
+```javascript
+// 1. Python job: Fetch data
+create_job({
+  name: "Fetch Reddit Posts",
+  type: "python",
+  command: "python3 code/fetch.py --reddit-token ${REDDIT_TOKEN}",
+  // Writes posts to SQLite
+})
+
+// 2. Agent job: Process with LLM
+create_job({
+  name: "Review Posts",
+  type: "subagent",
+  subAgentId: "reviewer-agent",
+  dependsOn: [{ jobId: "fetch-reddit-posts" }],
+  // Reads from fetch job's SQLite, processes with LLM, writes results
+})
+
+// 3. Python job: Format output
+create_job({
+  name: "Export Results",
+  type: "python",
+  command: "python3 code/export.py",
+  dependsOn: [{ jobId: "review-posts" }],
+  // Reads reviewed posts, formats for delivery
+})
+```
+
+### Calling Agent Jobs from Python Scripts
+
+**Two patterns for using LLMs in jobs:**
+
+| Pattern | Structure | Use Dependencies? | Use Case |
+|---------|-----------|-------------------|----------|
+| **Pipeline** | 3 separate jobs: Python → Agent → Python | ✅ YES: `dependsOn` in job config | Simple linear flow, retry steps separately |
+| **Embedded Call** | 1 Python job that calls agent job via HTTP | ❌ NO: HTTP call in Python code | LLM calls in loops, complex control flow |
+
+#### Pattern 1: Pipeline (with dependencies)
+
+Create 3 separate jobs with `dependsOn`:
+
+```javascript
+create_job({ name: "Fetch", type: "python" })
+create_job({ 
+  name: "Review", 
+  type: "subagent", 
+  dependsOn: [{ jobId: "fetch" }]  // ← Runs after Fetch completes
+})
+create_job({ 
+  name: "Export", 
+  type: "python", 
+  dependsOn: [{ jobId: "review" }]  // ← Runs after Review completes
+})
+```
+
+**Flow:** Job executor runs them in order automatically.
+
+#### Pattern 2: Embedded Call (Python calls agent)
+
+**Yes, you can call agent jobs from within a Python script!** This is perfect when you need LLM calls in the middle of data processing.
+
+Create 2 separate jobs with NO dependencies:
+
+```javascript
+// 1. Create agent job (reusable LLM service)
+create_sub_agent({
+  id: "post-reviewer",
+  name: "Post Reviewer",
+  systemPrompt: "Review posts. Return JSON: {\"content\": \"reviewed text\"}",
+  provider: "openai",
+  model: "gpt-5.2"
+})
+
+create_job({
+  name: "Review Post Agent",
+  type: "subagent",
+  subAgentId: "post-reviewer",
+  command: "Review this post: ${POST_CONTENT}"
+  // NO dependsOn - this is a standalone service
+})
+
+// 2. Create Python job (calls agent via HTTP)
+create_job({
+  name: "Process Posts",
+  type: "python",
+  command: "python3 code/main.py",
+  requirements: ["requests"]
+  // NO dependsOn - makes HTTP calls internally
+})
+```
+
+**Python script that calls the agent job:**
+
+```python
+# Python job that calls an agent job for LLM work
+import requests
+import json
+
+# 1. Fetch and process data
+posts = fetch_reddit_posts()
+
+# 2. Call agent job to review each post (LLM call with OAuth/API key routing)
+for post in posts:
+    response = requests.post('http://localhost:18789/api/jobs/run', json={
+        'jobId': 'review-post-agent',  # The agent job we created
+        'wait': True,  # Block until completion
+        'params': {
+            'POST_CONTENT': post['content'],
+            'POST_ID': post['id']
+        }
+    })
+    
+    result = response.json()
+    if result['status'] == 'completed' and result.get('lastOutput'):
+        # Get LLM result from agent job
+        reviewed = json.loads(result['lastOutput'])
+        post['reviewed_content'] = reviewed['content']
+        print(f"✓ Reviewed post {post['id']}")
+    else:
+        print(f"✗ Failed: {result.get('error')}")
+
+# 3. Continue processing with LLM results
+save_to_database(posts)
+```
+
+**Flow:** Python script makes HTTP requests to `/api/jobs/run` - just like calling any API.
+
+**How it works:**
+1. Python job calls `/api/jobs/run` with `wait: true`
+2. Agent job runs with OAuth → API key routing (automatic fallback)
+3. Python job receives `lastOutput` from agent job
+4. Python continues with LLM results
+
+**Benefits:**
+- ✅ Single job handles entire workflow
+- ✅ LLM calls get proper OAuth/API key handling
+- ✅ Rate limit fallback works automatically
+- ✅ Can process items in a loop with LLM calls
+- ✅ Agent job is reusable - any job can call it
+
+**When to use each pattern:**
+
+Use **Pipeline** when:
+- Simple fetch → process all → export
+- Want to retry steps independently
+- Each step is a distinct phase
+
+Use **Embedded Call** when:
+- Need LLM calls inside a loop (process 100 posts one-by-one)
+- LLM call depends on intermediate computation
+- Complex control flow (if/else, retries, batching)
+- Single atomic job is clearer than pipeline
+
+---
+
 ## API Keys in Jobs
 
 **Custom API keys (from Settings) are NOT in the job environment.** Pass them as CLI arguments:

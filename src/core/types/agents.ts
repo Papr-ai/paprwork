@@ -7,7 +7,7 @@ import type { AnthropicProvider } from "@ai-sdk/anthropic";
 import type { OpenAIProvider } from "@ai-sdk/openai";
 import type { GoogleGenerativeAIProvider } from "@ai-sdk/google";
 
-export type Provider = "anthropic" | "openai" | "google";
+export type Provider = "anthropic" | "openai" | "openai-codex" | "google";
 
 /**
  * Typed model IDs extracted directly from the AI SDK provider types.
@@ -54,6 +54,8 @@ export interface AgentConfig {
  */
 export interface AgentConfigInternal extends AgentConfig {
   apiKey: string; // Fetched internally via IPC, never sent over network
+  /** When OAuth is used for openai/anthropic; used to route to pi-ai vs AI SDK */
+  authType?: "oauth" | "apiKey";
 }
 
 /**

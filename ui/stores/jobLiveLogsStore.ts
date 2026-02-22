@@ -3,20 +3,27 @@
  *
  * When a job runs, the Gateway broadcasts `jobs:log-line` for each line.
  * This store accumulates them so JobStatusCard can display live output.
+ * Also tracks job names from status-changed broadcasts.
  */
 
 import { create } from "zustand";
 
 type LogsState = Map<string, string[]>;
+type NamesState = Map<string, string>;
 
 interface JobLiveLogsStore {
   logsByJobId: LogsState;
+  namesByJobId: NamesState;
   appendLine: (jobId: string, line: string) => void;
+  setJobName: (jobId: string, name: string) => void;
+  getJobName: (jobId: string) => string | undefined;
+  fetchJobName: (jobId: string) => Promise<string | undefined>;
   clearJob: (jobId: string) => void;
 }
 
-export const useJobLiveLogsStore = create<JobLiveLogsStore>((set) => ({
+export const useJobLiveLogsStore = create<JobLiveLogsStore>((set, get) => ({
   logsByJobId: new Map(),
+  namesByJobId: new Map(),
 
   appendLine: (jobId, line) =>
     set((state) => {
@@ -26,11 +33,45 @@ export const useJobLiveLogsStore = create<JobLiveLogsStore>((set) => ({
       return { logsByJobId: next };
     }),
 
+  setJobName: (jobId, name) =>
+    set((state) => {
+      const next = new Map(state.namesByJobId);
+      next.set(jobId, name);
+      return { namesByJobId: next };
+    }),
+
+  getJobName: (jobId) => get().namesByJobId.get(jobId),
+
+  fetchJobName: async (jobId) => {
+    // Check if we already have it
+    const existing = get().namesByJobId.get(jobId);
+    if (existing) return existing;
+
+    // Fetch from gateway
+    try {
+      const { gateway } = await import("../src/lib/gateway.js");
+      const response = await gateway.send("jobs:get", { jobId });
+      const job = response.data as { name?: string };
+      if (job?.name) {
+        get().setJobName(jobId, job.name);
+        return job.name;
+      }
+    } catch (error) {
+      console.warn(
+        `[jobLiveLogsStore] Failed to fetch job name for ${jobId}:`,
+        error,
+      );
+    }
+    return undefined;
+  },
+
   clearJob: (jobId) =>
     set((state) => {
-      const next = new Map(state.logsByJobId);
-      next.delete(jobId);
-      return { logsByJobId: next };
+      const nextLogs = new Map(state.logsByJobId);
+      const nextNames = new Map(state.namesByJobId);
+      nextLogs.delete(jobId);
+      nextNames.delete(jobId);
+      return { logsByJobId: nextLogs, namesByJobId: nextNames };
     }),
 }));
 
@@ -51,11 +92,15 @@ export function initJobLiveLogsListener(): void {
     if (type === "jobs:log-line" && data.line !== undefined) {
       const line = String(data.line);
       useJobLiveLogsStore.getState().appendLine(jobId, line);
-    } else if (
-      type === "jobs:status-changed" &&
-      ["completed", "failed", "cancelled"].includes(String(data.status))
-    ) {
-      useJobLiveLogsStore.getState().clearJob(jobId);
+    } else if (type === "jobs:status-changed") {
+      // Track job name from status-changed broadcasts
+      if (data.name) {
+        useJobLiveLogsStore.getState().setJobName(jobId, String(data.name));
+      }
+      // Clear logs when job finishes
+      if (["completed", "failed", "cancelled"].includes(String(data.status))) {
+        useJobLiveLogsStore.getState().clearJob(jobId);
+      }
     }
   };
 

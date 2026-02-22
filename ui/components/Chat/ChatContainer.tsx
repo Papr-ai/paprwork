@@ -7,10 +7,15 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { MessageList } from "./MessageList";
 import { InputBar, InputBarRef } from "./InputBar";
 import { useAgent } from "../../hooks/useAgent";
+import { useAuthStatus } from "../../hooks/useAuthStatus";
 import { useChatStore, defaultChatState } from "../../stores/chatStore";
 import { useTabStore } from "../../stores/tabStore";
 import type { Tab } from "../../stores/tabStore";
-import { CHAT_MODELS } from "../../constants/models";
+import {
+  CHAT_MODELS,
+  getModelById,
+  DEFAULT_MODEL_IDS,
+} from "../../constants/models";
 import type { AIModel } from "../../constants/models";
 import { mapHistoryMessages } from "../../utils/historyMapper";
 import { fetchChatHistory } from "../../utils/chatHistoryApi";
@@ -142,11 +147,31 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
 
   const { sendMessage } = useAgent();
   const inputBarRef = useRef<InputBarRef>(null);
+  const { isModelAvailable, status } = useAuthStatus();
+  const fallbackModel =
+    CHAT_MODELS.find((m) => m.id === "claude-sonnet-4-6") || CHAT_MODELS[0];
 
-  // Model selection state - default to Claude Sonnet 4.5
-  const [selectedModel, setSelectedModel] = useState<AIModel>(
-    CHAT_MODELS.find((m) => m.id === "claude-sonnet-4-6") || CHAT_MODELS[0],
-  );
+  const [selectedModel, setSelectedModel] = useState<AIModel>(fallbackModel);
+
+  // When chatId or auth status changes: pick best default
+  // Priority: last selected (persisted in localStorage) > default order (sonnet-4-6 → gpt-5.2 → gemini-3-flash) > first available
+  useEffect(() => {
+    setSelectedModel((prev) => {
+      const lastId = useChatStore.getState().getLastSelectedModel(chatId);
+      if (lastId) {
+        const lastModel = getModelById(lastId);
+        if (lastModel && isModelAvailable(lastModel)) return lastModel;
+      }
+      const defaultAvailable = DEFAULT_MODEL_IDS.map(getModelById).find(
+        (m) => m && isModelAvailable(m),
+      );
+      if (defaultAvailable) return defaultAvailable;
+      const firstAvailable = CHAT_MODELS.find((m) => isModelAvailable(m));
+      if (firstAvailable) return firstAvailable;
+      if (!isModelAvailable(prev)) return fallbackModel;
+      return prev;
+    });
+  }, [chatId, status]);
 
   // Focus input when this chat's container mounts
   useEffect(() => {
@@ -296,6 +321,19 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
     [chatId],
   );
 
+  const handleModelChange = useCallback(
+    (model: AIModel) => {
+      setSelectedModel(model);
+      useChatStore.getState().setLastSelectedModel(chatId, model.id);
+    },
+    [chatId],
+  );
+
+  const handleOpenSettings = useCallback(() => {
+    const { createTab } = useTabStore.getState();
+    createTab("settings", "settings", "Settings");
+  }, []);
+
   const handleSendMessage = useCallback(
     async (message: string) => {
       const mergedArtifact = findMergedArtifact(chatId);
@@ -375,7 +413,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
         isSending={isSending}
         placeholder="Type a message..."
         selectedModel={selectedModel}
-        onModelChange={setSelectedModel}
+        onModelChange={handleModelChange}
+        isModelAvailable={isModelAvailable}
+        onOpenSettings={handleOpenSettings}
       />
     </div>
   );

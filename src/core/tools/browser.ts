@@ -1,11 +1,7 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import type { Browser, Page } from "playwright";
-import {
-  getApiKeysForSanitization,
-  sanitizeToolOutput,
-  truncateResult,
-} from "./security.js";
+import { getApiKeysForSanitization, sanitizeToolOutput } from "./security.js";
 
 interface BrowserSessionState {
   browser: Browser;
@@ -133,9 +129,7 @@ const browserScriptSchema = z.object({
 function sanitizeBrowserData(data: unknown): unknown {
   const apiKeys = getApiKeysForSanitization();
   const sanitized = sanitizeToolOutput(data, apiKeys);
-  if (typeof sanitized === "string") {
-    return truncateResult(sanitized, 40000);
-  }
+  // No truncation - prepareStep keeps last tool result full
   return sanitized;
 }
 

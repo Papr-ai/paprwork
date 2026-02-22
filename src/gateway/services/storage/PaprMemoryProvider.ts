@@ -312,6 +312,7 @@ KEY TOPICS: ${summary.topics?.join(", ") || "N/A"}
   async getChatStats(chatId: string): Promise<{
     message_count: number;
     token_count: number;
+    cost_total: number;
     has_summary: boolean;
   }> {
     try {
@@ -325,10 +326,98 @@ KEY TOPICS: ${summary.topics?.join(", ") || "N/A"}
       return {
         message_count: response.total_count || 0,
         token_count: 0, // PAPR doesn't expose token count
+        cost_total: 0, // PAPR doesn't expose cost
         has_summary: !!response.summaries?.short_term,
       };
     } catch (error) {
-      return { message_count: 0, token_count: 0, has_summary: false };
+      return {
+        message_count: 0,
+        token_count: 0,
+        cost_total: 0,
+        has_summary: false,
+      };
     }
+  }
+
+  async getChatCost(_chatId: string): Promise<{
+    total: number;
+    byModel: Record<string, number>;
+    messageCount: number;
+    avgCostPerMessage: number;
+  }> {
+    // PAPR doesn't provide cost data
+    return {
+      total: 0,
+      byModel: {},
+      messageCount: 0,
+      avgCostPerMessage: 0,
+    };
+  }
+
+  async getGlobalCostStats(): Promise<{
+    today: number;
+    thisWeek: number;
+    thisMonth: number;
+    total: number;
+    totalMessages: number;
+    topModels: Array<{ model: string; cost: number; count: number }>;
+  }> {
+    // PAPR doesn't provide global cost stats
+    return {
+      today: 0,
+      thisWeek: 0,
+      thisMonth: 0,
+      total: 0,
+      totalMessages: 0,
+      topModels: [],
+    };
+  }
+
+  async getDailyCostTrends(
+    _days?: number,
+  ): Promise<Array<{ date: string; cost: number; messages: number }>> {
+    // PAPR doesn't provide cost trends
+    return [];
+  }
+
+  async getModelDistribution(): Promise<
+    Array<{ model: string; percentage: number; cost: number; messages: number }>
+  > {
+    // PAPR doesn't provide model distribution
+    return [];
+  }
+
+  async getAgentStats(_agentId: string): Promise<{
+    totalMessages: number;
+    totalTokens: number;
+    totalCost: number;
+    toolCallsCount: number;
+    avgTokensPerMessage: number;
+    avgCostPerMessage: number;
+    mostUsedTools: Array<{ tool: string; count: number }>;
+  }> {
+    // PAPR doesn't provide agent stats
+    return {
+      totalMessages: 0,
+      totalTokens: 0,
+      totalCost: 0,
+      toolCallsCount: 0,
+      avgTokensPerMessage: 0,
+      avgCostPerMessage: 0,
+      mostUsedTools: [],
+    };
+  }
+
+  async getAgentOutputs(_agentId?: string): Promise<{
+    documents: Array<{ id: string; title: string; createdAt: string }>;
+    apps: Array<{ id: string; title: string; createdAt: string }>;
+    plans: Array<{ planId: string; title: string; createdAt: string }>;
+  }> {
+    // PAPR doesn't track agent outputs
+    return {
+      documents: [],
+      apps: [],
+      plans: [],
+    };
   }
 }

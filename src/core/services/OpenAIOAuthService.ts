@@ -20,13 +20,54 @@ export interface OAuthConfig {
   scopes: string;
 }
 
+/** JWT claim path for ChatGPT account ID (per OpenAI / pi-ai) */
+const JWT_CLAIM_PATH = "https://api.openai.com/auth";
+
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const payload = parts[1];
+    if (!payload) return null;
+    const decoded = Buffer.from(payload, "base64url").toString("utf-8");
+    return JSON.parse(decoded) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/** Extract ChatGPT account ID from access token JWT (primary, per pi-ai) */
+function extractAccountIdFromAccessToken(
+  accessToken: string,
+): string | undefined {
+  const payload = decodeJwtPayload(accessToken);
+  if (!payload) return undefined;
+  const auth = payload[JWT_CLAIM_PATH] as
+    | { chatgpt_account_id?: string }
+    | undefined;
+  const accountId = auth?.chatgpt_account_id;
+  return typeof accountId === "string" && accountId.length > 0
+    ? accountId
+    : undefined;
+}
+
+/** Fallback: extract sub from id_token if access token doesn't have chatgpt_account_id */
+function extractAccountIdFromIdToken(idToken?: string): string | undefined {
+  if (!idToken) return undefined;
+  const payload = decodeJwtPayload(idToken);
+  const sub = payload?.sub;
+  return typeof sub === "string" && sub.length > 0 ? sub : undefined;
+}
+
 export class OpenAIOAuthService {
   private config: OAuthConfig = {
-    clientId: "", // TODO: Needs to be configured via OpenAI developer console
+    // From @mariozechner/pi-ai openai-codex.js - public client for ChatGPT/Codex OAuth
+    clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
     authorizationUrl: "https://auth.openai.com/oauth/authorize",
     tokenUrl: "https://auth.openai.com/oauth/token",
-    redirectUri: "http://127.0.0.1:1455/auth/callback",
-    scopes: "openid profile email", // TODO: Verify correct scopes for ChatGPT subscription
+    // Must match pi-ai / OpenAI registration - localhost (not 127.0.0.1)
+    redirectUri: "http://localhost:1455/auth/callback",
+    scopes: "openid profile email offline_access",
   };
 
   /**
@@ -34,10 +75,7 @@ export class OpenAIOAuthService {
    */
   generatePKCE(): PKCEChallenge {
     // Generate code verifier (43-128 characters, base64url)
-    const verifier = crypto
-      .randomBytes(32)
-      .toString("base64url")
-      .slice(0, 128);
+    const verifier = crypto.randomBytes(32).toString("base64url").slice(0, 128);
 
     // Generate code challenge (SHA256 hash of verifier, base64url)
     const challenge = crypto
@@ -57,18 +95,22 @@ export class OpenAIOAuthService {
 
   /**
    * Start OAuth flow - returns authorization URL
+   * Extra params (id_token_add_organizations, codex_cli_simplified_flow, originator) per pi-ai
    */
   startOAuthFlow(): { url: string; pkce: PKCEChallenge } {
     const pkce = this.generatePKCE();
 
     const params = new URLSearchParams({
-      client_id: this.config.clientId,
       response_type: "code",
+      client_id: this.config.clientId,
       redirect_uri: this.config.redirectUri,
       scope: this.config.scopes,
       code_challenge: pkce.challenge,
       code_challenge_method: "S256",
       state: pkce.state,
+      id_token_add_organizations: "true",
+      codex_cli_simplified_flow: "true",
+      originator: "paprwork",
     });
 
     const url = `${this.config.authorizationUrl}?${params.toString()}`;
@@ -83,7 +125,7 @@ export class OpenAIOAuthService {
     code: string,
     verifier: string,
     state: string,
-    expectedState: string
+    expectedState: string,
   ): Promise<OAuthTokenInput> {
     // Verify state matches (CSRF protection)
     if (state !== expectedState) {
@@ -118,18 +160,10 @@ export class OpenAIOAuthService {
       id_token?: string;
     };
 
-    // Parse ID token to get account ID if available
-    let accountId: string | undefined;
-    if (data.id_token) {
-      try {
-        const payload = JSON.parse(
-          Buffer.from(data.id_token.split(".")[1], "base64").toString()
-        );
-        accountId = payload.sub;
-      } catch (error) {
-        console.warn("[OpenAIOAuth] Failed to parse ID token:", error);
-      }
-    }
+    // Extract account ID from access token JWT (per pi-ai: https://api.openai.com/auth → chatgpt_account_id)
+    const accountId =
+      extractAccountIdFromAccessToken(data.access_token) ??
+      extractAccountIdFromIdToken(data.id_token);
 
     return {
       provider: "openai",

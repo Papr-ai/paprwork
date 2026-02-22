@@ -320,16 +320,44 @@ function createMainWindow() {
   // Add error handler for load failures
   mainWindow.webContents.on(
     "did-fail-load",
-    (event, errorCode, errorDescription) => {
+    (event, errorCode, errorDescription, validatedUrl) => {
       console.error(
         `[Electron] Failed to load UI: ${errorCode} - ${errorDescription}`,
       );
-      console.error(`[Electron] Attempted URL: ${uiUrl}`);
+      console.error(`[Electron] Attempted URL: ${validatedUrl || uiUrl}`);
       console.error(
         `[Electron] Is Gateway running? Check port ${GATEWAY_PORT}`,
       );
     },
   );
+
+  // Capture preload script errors (often the cause of blank window)
+  mainWindow.webContents.on("preload-error", (event, preloadPath, error) => {
+    console.error("[Electron] Preload script error:", preloadPath, error);
+  });
+
+  // Capture renderer process crashes
+  mainWindow.webContents.on("render-process-gone", (event, details) => {
+    console.error("[Electron] Render process gone:", details.reason, details);
+  });
+
+  // Forward renderer console to terminal (helps debug when window is blank)
+  const openDevTools = process.env.ELECTRON_OPEN_DEVTOOLS === "1";
+  if (openDevTools) {
+    console.log("[Electron] Opening DevTools (ELECTRON_OPEN_DEVTOOLS=1)");
+    mainWindow.webContents.openDevTools();
+  }
+  mainWindow.webContents.on("console-message", (event, level, message) => {
+    const levelName = ["verbose", "info", "warning", "error"][level] || "log";
+    if (levelName === "error" || levelName === "warning" || openDevTools) {
+      try {
+        console.log(`[Renderer ${levelName}]`, message);
+      } catch (err) {
+        // EPIPE can occur when stdout is disconnected (e.g. launched from GUI)
+        if (err?.code !== "EPIPE") throw err;
+      }
+    }
+  });
 
   mainWindow.loadURL(uiUrl).catch((err) => {
     console.error("[Electron] loadURL failed:", err);
@@ -351,8 +379,8 @@ function createMainWindow() {
     return { action: "allow" };
   });
 
-  // Keep DevTools development-only to avoid exposing internals in production.
-  if (!IS_PRODUCTION) {
+  // Keep DevTools development-only, or when ELECTRON_OPEN_DEVTOOLS=1 for debugging
+  if (!IS_PRODUCTION || openDevTools) {
     mainWindow.webContents.openDevTools();
   }
 
@@ -416,9 +444,10 @@ function startGateway(customKeysStorage) {
       // Include OAuth tokens if available
       const oauthTokens = {};
       try {
-        const { getOAuthTokenStorage } = await import("../../dist/electron/electron/ipc/oauth.js");
+        const { getOAuthTokenStorage } =
+          await import("../../dist/electron/electron/ipc/oauth.js");
         const oauthStorage = getOAuthTokenStorage();
-        
+
         if (oauthStorage) {
           // Check OpenAI OAuth token
           const openaiToken = oauthStorage.getTokenByProvider("openai");
@@ -448,7 +477,8 @@ function startGateway(customKeysStorage) {
         type: "KEYS_RESPONSE",
         requestId: msg.requestId,
         keys: resolvedKeys,
-        oauthTokens: Object.keys(oauthTokens).length > 0 ? oauthTokens : undefined,
+        oauthTokens:
+          Object.keys(oauthTokens).length > 0 ? oauthTokens : undefined,
       });
     }
 

@@ -83,26 +83,51 @@ async function initializeServices(): Promise<void> {
       );
     }
 
+    console.log("[Gateway] Initializing AgentService...");
     await initializeAgentService({
       mode: storageMode,
       paprApiKey: undefined, // Will be loaded lazily
       openaiApiKey: undefined, // Will be loaded lazily
     });
+    console.log("[Gateway] AgentService initialized");
 
     // Initialize workspace (creates ~/PAPR/workspace/ and templates on first run)
+    console.log("[Gateway] Initializing WorkspaceService...");
     await initializeWorkspaceService();
+    console.log("[Gateway] WorkspaceService initialized");
 
     // Initialize other services
-    await Promise.all([
-      initializeChatService(),
-      initializeDocumentService(),
-      initializeAppService(),
-      initializeJobsService(),
-      initializeSkillService(),
-      initializeBundleService(),
-      initializeSubAgentService(),
-      initializePlanService(),
-    ]);
+    console.log("[Gateway] Initializing ChatService...");
+    await initializeChatService();
+    console.log("[Gateway] ChatService initialized");
+
+    console.log("[Gateway] Initializing DocumentService...");
+    await initializeDocumentService();
+    console.log("[Gateway] DocumentService initialized");
+
+    console.log("[Gateway] Initializing AppService...");
+    await initializeAppService();
+    console.log("[Gateway] AppService initialized");
+
+    console.log("[Gateway] Initializing JobsService...");
+    await initializeJobsService();
+    console.log("[Gateway] JobsService initialized");
+
+    console.log("[Gateway] Initializing SkillService...");
+    await initializeSkillService();
+    console.log("[Gateway] SkillService initialized");
+
+    console.log("[Gateway] Initializing BundleService...");
+    await initializeBundleService();
+    console.log("[Gateway] BundleService initialized");
+
+    console.log("[Gateway] Initializing SubAgentService...");
+    await initializeSubAgentService();
+    console.log("[Gateway] SubAgentService initialized");
+
+    console.log("[Gateway] Initializing PlanService...");
+    await initializePlanService();
+    console.log("[Gateway] PlanService initialized");
 
     // Register built-in sleep job (depends on JobsService being initialized)
     const { getWorkspaceService } =

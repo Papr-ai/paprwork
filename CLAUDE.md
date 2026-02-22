@@ -822,6 +822,50 @@ Gateway Process
 
 ---
 
+## 📋 Plan Enforcement for Mini-Apps & Jobs
+
+**CRITICAL:** Agents MUST create plans before working on mini-apps or jobs (creating OR updating).
+
+### Why Plans Matter
+1. ✅ **User Transparency** - Shows approach before implementation
+2. ✅ **Progress Tracking** - Visible checkboxes in UI
+3. ✅ **Resumability** - Continue work after chat closes/reopens
+4. ✅ **Professionalism** - Structured, organized workflow
+
+### Multi-Layer Enforcement Strategy
+
+We enforce plan creation through **4 reinforcing layers**:
+
+1. **Tool Catalog** - Planning marked as "REQUIRED" in capability matrix
+2. **Tool Description** - `create_plan` description emphasizes requirement
+3. **Always-On Reminder** - Section in every system prompt about plan requirement
+4. **App Creation Playbook** - STEP 0: Create Plan (REQUIRED)
+
+### When Plans Are Required
+
+✅ **ALWAYS create plan for:**
+- Creating new mini-apps
+- Creating new jobs (Python/Node/Agent)
+- Updating existing apps (adding features, refactoring)
+- Updating existing jobs (changing logic)
+- Any multi-step task (3+ steps)
+
+🔶 **Exception (no plan needed):**
+- Trivial text-only changes (typos, color tweaks, static strings)
+
+**Rule of thumb:** If it involves logic, structure, or could break functionality → CREATE A PLAN FIRST.
+
+### Plan Persistence & Resumption
+
+- **Storage:** `~/PAPR/data/plans.db` (SQLite)
+- **Associated with:** `chatId`
+- **Status:** `active`, `completed`, or `cancelled`
+- **On chat reopen:** Active plans automatically loaded into system prompt with progress indicators (☑/▶/☐)
+
+**See:** [PLAN_ENFORCEMENT_STRATEGY.md](docs/PLAN_ENFORCEMENT_STRATEGY.md) for complete details, examples, and verification checklist.
+
+---
+
 ## Contributing Guidelines
 
 1. **TypeScript Only** - No JavaScript files

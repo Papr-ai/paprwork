@@ -7,7 +7,7 @@ export interface AIModel {
   id: string;
   name: string;
   description: string;
-  provider: "anthropic" | "openai" | "google";
+  provider: "anthropic" | "openai" | "openai-codex" | "google";
   group: string;
   supportsThinking?: boolean;
   defaultThinkingBudget?: number;
@@ -69,17 +69,6 @@ export const CHAT_MODELS: AIModel[] = [
 
   // OpenAI — weakest to strongest
   {
-    id: "gpt-5-mini",
-    name: "GPT-5 Mini",
-    provider: "openai",
-    description:
-      "Fast, efficient model for simple tasks and high-volume operations",
-    group: "OpenAI",
-    supportsThinking: false,
-    maxTokens: 16384,
-    requiresApiKey: "OPENAI_API_KEY",
-  },
-  {
     id: "gpt-5.2-low",
     name: "GPT-5.2 (Low Reasoning)",
     provider: "openai",
@@ -113,17 +102,6 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "OPENAI_API_KEY",
   },
   {
-    id: "gpt-5.2-xhigh",
-    name: "GPT-5.2 (Extra High Reasoning)",
-    provider: "openai",
-    description: "Latest model with maximum reasoning",
-    group: "OpenAI",
-    supportsThinking: true,
-    reasoning: { effort: "xhigh" },
-    maxTokens: 16384,
-    requiresApiKey: "OPENAI_API_KEY",
-  },
-  {
     id: "gpt-5.2-codex",
     name: "GPT-5.2 Codex",
     provider: "openai",
@@ -133,6 +111,17 @@ export const CHAT_MODELS: AIModel[] = [
     reasoning: { effort: "medium" },
     maxTokens: 16384,
     requiresApiKey: "OPENAI_API_KEY",
+  },
+  {
+    id: "gpt-5.3-codex",
+    name: "GPT-5.3 Codex",
+    provider: "openai-codex",
+    description: "Latest Codex model via OAuth",
+    group: "OpenAI",
+    supportsThinking: true,
+    reasoning: { effort: "medium" },
+    maxTokens: 16384,
+    requiresApiKey: "OPENAI_OAUTH",
   },
 
   // Google — weakest to strongest
@@ -203,3 +192,18 @@ export const getModelGroups = (): Record<string, AIModel[]> => {
 export const getModelById = (id: string): AIModel | undefined => {
   return CHAT_MODELS.find((m) => m.id === id);
 };
+
+/** Mid-tier model IDs per provider, in preference order for default selection */
+export const MID_TIER_MODEL_IDS = [
+  "claude-sonnet-4-6", // Anthropic mid
+  "gpt-5.2", // OpenAI mid
+  "gpt-5.3-codex", // OpenAI Codex (OAuth)
+  "gemini-2.5-flash", // Google mid
+];
+
+/** Default model IDs when no saved preference - first available wins */
+export const DEFAULT_MODEL_IDS = [
+  "claude-sonnet-4-6", // Anthropic
+  "gpt-5.2", // OpenAI
+  "gemini-3-flash-preview", // Google
+];

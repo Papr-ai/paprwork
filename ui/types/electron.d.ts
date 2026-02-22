@@ -67,7 +67,11 @@ export interface ElectronAPI {
   // OAuth API
   oauth: {
     openai: {
-      startOAuth: () => Promise<{ success: boolean; url?: string; error?: string }>;
+      startOAuth: () => Promise<{
+        success: boolean;
+        url?: string;
+        error?: string;
+      }>;
       getStatus: () => Promise<{
         connected: boolean;
         accountId?: string;
@@ -78,7 +82,11 @@ export interface ElectronAPI {
       disconnect: () => Promise<{ success: boolean; error?: string }>;
     };
     claude: {
-      startOAuth: () => Promise<{ success: boolean; url?: string; error?: string }>;
+      startOAuth: () => Promise<{
+        success: boolean;
+        url?: string;
+        error?: string;
+      }>;
       getStatus: () => Promise<{
         connected: boolean;
         accountId?: string;

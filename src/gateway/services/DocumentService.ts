@@ -27,6 +27,8 @@ export interface DocumentMeta {
   favorite: boolean;
   preview: string;
   wordCount: number;
+  createdByAgentId?: string;
+  createdByAgentName?: string;
 }
 
 /** Full document (meta + content). Returned by getDocument(). */
@@ -127,7 +129,12 @@ export class DocumentService {
 
   // ===== CRUD =====
 
-  async createDocument(title: string, content: string = ""): Promise<Document> {
+  async createDocument(
+    title: string,
+    content: string = "",
+    createdByAgentId?: string,
+    createdByAgentName?: string,
+  ): Promise<Document> {
     const id = await this.generateUniqueSlug(title);
     const now = new Date().toISOString();
 
@@ -141,6 +148,8 @@ export class DocumentService {
       favorite: false,
       preview: content.slice(0, 200),
       wordCount: wordCount(content),
+      createdByAgentId,
+      createdByAgentName,
     };
 
     const docDir = this.docDir(id);

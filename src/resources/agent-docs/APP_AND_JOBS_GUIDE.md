@@ -677,8 +677,88 @@ key = os.getenv('GITHUB_TOKEN')  # Returns None!
 - ✅ Keys substituted at runtime: `${GITHUB_TOKEN}` → actual value
 
 **Environment keys (inherited from gateway):**
-- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` (from `.env.local`)
+- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` (from Settings or `.env.local`)
 - These CAN be used via `os.environ` (but CLI args are still preferred)
+
+**OAuth vs API key for jobs:**
+- **Agent jobs** — Paprwork routes automatically. OAuth (ChatGPT/Claude subscription) → pi-ai. API key → AI SDK. No setup needed.
+- **Python/bash jobs that call LLM APIs** — ❌ **DON'T DO THIS!** Use agent jobs instead (see below).
+
+### ⚠️ Use Agent Jobs for LLM Calls, Not Python/Bash Scripts
+
+**❌ WRONG:**
+```python
+# DON'T call OpenAI/Anthropic APIs from Python jobs
+import openai
+response = openai.chat.completions.create(...)
+```
+
+**Problems:**
+- OAuth tokens don't work with Platform API
+- No automatic OAuth → API key fallback
+- Requires Platform API key even if user has OAuth subscription
+
+**✅ CORRECT:** Use agent jobs (type: "agent" or "subagent")
+
+Agent jobs automatically handle:
+- OAuth → API key routing (uses subscription first, falls back to Platform API)
+- Rate limit fallback (retries with API key if OAuth rate limited)
+- Works with OAuth, API key, or both
+
+**Example:**
+```javascript
+// Create sub-agent for LLM task
+create_sub_agent({
+  id: "reviewer",
+  name: "Content Reviewer",
+  systemPrompt: "Review and polish content for clarity",
+  provider: "openai",
+  model: "gpt-5.2"
+})
+
+// Use in pipeline
+create_job({
+  name: "Review Posts",
+  type: "subagent",
+  subAgentId: "reviewer",
+  dependsOn: [{ jobId: "fetch-data" }]
+})
+```
+
+**Pipeline pattern:** Python (data fetch) → Agent job (LLM) → Python (format output)
+
+### Calling Agent Jobs from Python Scripts
+
+**Yes!** Python jobs can call agent jobs mid-script:
+
+```python
+import requests, json
+
+# Fetch data
+posts = fetch_reddit_posts()
+
+# Call agent job for each post (gets OAuth/API key routing)
+for post in posts:
+    response = requests.post('http://localhost:18789/api/jobs/run', json={
+        'jobId': 'review-post-agent',
+        'wait': True,  # Wait for result
+        'params': {'POST_CONTENT': post['content']}
+    })
+    
+    result = response.json()
+    if result['status'] == 'completed':
+        reviewed = json.loads(result['lastOutput'])
+        post['reviewed'] = reviewed['content']
+
+# Continue with LLM results
+save_to_database(posts)
+```
+
+**When to use:**
+- LLM calls in middle of processing
+- Processing items in a loop
+- Single atomic job clearer than pipeline
+- **Bash/Python jobs** calling OpenAI/Anthropic — Require a **Platform API key**. OAuth tokens won't work (they use a different backend). If user only has OAuth, tell them to add a Platform key in Settings for script use.
 
 **Runtime params** (job-specific config like `THREAD_ID`, `ACTION`):
 - These ARE available via `os.environ` - use them freely!
@@ -1098,7 +1178,7 @@ db.close()
 # Step 2: One LLM call for judgment (the AI part)
 client = anthropic.Anthropic()  # picks up ANTHROPIC_API_KEY from env
 response = client.messages.create(
-    model="claude-sonnet-4-5",
+    model="claude-sonnet-4-6",
     max_tokens=1024,
     messages=[{"role": "user", "content": f"Pick 5-7 best threads to engage with: {json.dumps(rows)}"}]
 )

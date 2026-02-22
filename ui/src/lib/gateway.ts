@@ -227,7 +227,8 @@ class GatewayClient {
           onChunk(payloadData);
         } else if (response.type === "agent:complete" || response.success) {
           // Stream completed successfully
-          // Send final "done" chunk to UI
+          // Send final "done" chunk with finalMessage so UI can show sequence/reasoning/toolCalls
+          // even when streaming chunks were missed (e.g. Codex provider)
           const completeData =
             typeof response.data === "object" && response.data !== null
               ? (response.data as Record<string, unknown>)
@@ -236,6 +237,9 @@ class GatewayClient {
             type: "done",
             chatId: completeData.chatId,
             requestId: id,
+            payload: {
+              finalMessage: completeData.finalMessage,
+            },
           });
           this.handlers.delete(id);
           resolve();

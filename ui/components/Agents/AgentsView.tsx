@@ -2,27 +2,14 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useSubAgents, type SubAgentProfile } from "../../hooks/useSubAgents";
 import { gateway } from "../../src/lib/gateway";
 import { useTabStore } from "../../stores/tabStore";
+import { CHAT_MODELS } from "../../constants/models";
+import { CostTrends } from "./CostTrends";
 import "./AgentsView.css";
 
-const modelOptions = [
-  // Anthropic — weakest to strongest
-  "claude-haiku-4-5",
-  "claude-sonnet-4-6",
-  "claude-opus-4-6",
-  "claude-opus-4-5-thinking",
-  // OpenAI — weakest to strongest
-  "gpt-5-mini",
-  "gpt-5-2-low",
-  "gpt-5-2",
-  "gpt-5-2-high",
-  "gpt-5-2-xhigh",
-  "gpt-5-2-codex",
-  // Google — weakest to strongest
-  "gemini-2-5-flash-lite",
-  "gemini-2-5-flash",
-  "gemini-3-flash-preview",
-  "gemini-3-pro-preview",
-];
+// Use CHAT_MODELS as single source of truth (excludes openai-codex for agents)
+const modelOptions = CHAT_MODELS.filter(
+  (m) => m.provider !== "openai-codex",
+).map((m) => m.id);
 
 export function AgentsView() {
   const {
@@ -40,7 +27,7 @@ export function AgentsView() {
   const [agentName, setAgentName] = useState("");
   const [agentDescription, setAgentDescription] = useState("");
   const [agentSkills, setAgentSkills] = useState("");
-  const [agentModel, setAgentModel] = useState("gpt-5-mini");
+  const [agentModel, setAgentModel] = useState("gpt-5.2");
   const [agentPrompt, setAgentPrompt] = useState("");
   const [selectedTools, setSelectedTools] = useState<Record<string, boolean>>({
     bash: true,
@@ -54,7 +41,32 @@ export function AgentsView() {
     Array<{ id: string; title: string; updatedAt: string }>
   >([]);
 
+  // Cost tracking state
+  const [costStats, setCostStats] = useState<{
+    today: number;
+    thisWeek: number;
+    thisMonth: number;
+    total: number;
+    totalMessages: number;
+    topModels: Array<{ model: string; cost: number; count: number }>;
+  } | null>(null);
+
   const { createTab, switchToTab } = useTabStore();
+
+  // Load cost stats on mount
+  useEffect(() => {
+    const loadCostStats = async () => {
+      try {
+        const response = await gateway.send("agent:get-cost-stats");
+        if (response.success && response.data) {
+          setCostStats(response.data);
+        }
+      } catch (error) {
+        console.error("[AgentsView] Failed to load cost stats:", error);
+      }
+    };
+    void loadCostStats();
+  }, []);
 
   useEffect(() => {
     const loadChats = async () => {
@@ -91,8 +103,14 @@ export function AgentsView() {
       runsCount: runs.length,
       hasDashboard: !!dashboard,
       dashboard,
-      agents: agents.map((a) => ({ id: a.id, name: a.name, runCount: a.runCount })),
-      recentRuns: runs.slice(0, 5).map((r) => ({ id: r.id, status: r.status, agentId: r.agentId })),
+      agents: agents.map((a) => ({
+        id: a.id,
+        name: a.name,
+        runCount: a.runCount,
+      })),
+      recentRuns: runs
+        .slice(0, 5)
+        .map((r) => ({ id: r.id, status: r.status, agentId: r.agentId })),
     });
   }, [agents, runs, dashboard, loading, error]);
 
@@ -195,7 +213,7 @@ export function AgentsView() {
     setAgentName("");
     setAgentDescription("");
     setAgentSkills("");
-    setAgentModel("gpt-5-mini");
+    setAgentModel("gpt-5.2");
     setAgentPrompt("");
   };
 
@@ -234,20 +252,28 @@ export function AgentsView() {
       </div>
 
       {loading && (
-        <div style={{ padding: "40px", textAlign: "center", color: "var(--text-secondary)" }}>
+        <div
+          style={{
+            padding: "40px",
+            textAlign: "center",
+            color: "var(--text-secondary)",
+          }}
+        >
           Loading agents data...
         </div>
       )}
 
       {error && (
-        <div style={{ 
-          padding: "20px", 
-          background: "rgba(239, 68, 68, 0.1)", 
-          border: "1px solid rgba(239, 68, 68, 0.3)",
-          borderRadius: "8px",
-          color: "var(--error-color)",
-          marginBottom: "20px"
-        }}>
+        <div
+          style={{
+            padding: "20px",
+            background: "rgba(239, 68, 68, 0.1)",
+            border: "1px solid rgba(239, 68, 68, 0.3)",
+            borderRadius: "8px",
+            color: "var(--error-color)",
+            marginBottom: "20px",
+          }}
+        >
           <strong>Error:</strong> {error}
         </div>
       )}
@@ -284,6 +310,146 @@ export function AgentsView() {
           </div>
         </div>
       </div>
+
+      {/* Cost Dashboard */}
+      {costStats && (
+        <div className="agents-section-native">
+          <h2 className="section-title-native">💰 Cost Analytics</h2>
+          <div className="cost-stats-grid">
+            <div className="cost-card-native">
+              <div className="cost-content-native">
+                <div className="cost-label-native">Today</div>
+                <div className="cost-value-native">
+                  ${costStats.today.toFixed(3)}
+                </div>
+              </div>
+            </div>
+            <div className="cost-card-native">
+              <div className="cost-content-native">
+                <div className="cost-label-native">This Week</div>
+                <div className="cost-value-native">
+                  ${costStats.thisWeek.toFixed(2)}
+                </div>
+              </div>
+            </div>
+            <div className="cost-card-native">
+              <div className="cost-content-native">
+                <div className="cost-label-native">This Month</div>
+                <div className="cost-value-native">
+                  ${costStats.thisMonth.toFixed(2)}
+                </div>
+              </div>
+            </div>
+            <div className="cost-card-native">
+              <div className="cost-content-native">
+                <div className="cost-label-native">Total Spend</div>
+                <div className="cost-value-native">
+                  ${costStats.total.toFixed(2)}
+                </div>
+                <div className="cost-sublabel-native">
+                  {costStats.totalMessages.toLocaleString()} messages
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Top Models by Cost */}
+          {(costStats.topModels ?? []).length > 0 && (
+            <div className="top-models-section">
+              <h3 className="subsection-title-native">Top Models by Cost</h3>
+              <div className="top-models-list">
+                {(costStats.topModels ?? [])
+                  .slice(0, 5)
+                  .map((modelStat, idx) => {
+                    const percentage =
+                      costStats.total > 0
+                        ? ((modelStat.cost / costStats.total) * 100).toFixed(1)
+                        : "0";
+                    const avgCostPerMessage =
+                      modelStat.count > 0
+                        ? (modelStat.cost / modelStat.count).toFixed(4)
+                        : "0";
+
+                    return (
+                      <div key={modelStat.model} className="model-cost-item">
+                        <div className="model-rank">{idx + 1}</div>
+                        <div className="model-info-cost">
+                          <div className="model-name-cost">
+                            {modelStat.model}
+                          </div>
+                          <div className="model-stats-cost">
+                            {modelStat.count} messages · ${avgCostPerMessage}
+                            /msg
+                          </div>
+                        </div>
+                        <div className="model-cost-details">
+                          <div className="model-cost-value">
+                            ${modelStat.cost.toFixed(2)}
+                          </div>
+                          <div className="model-cost-percentage">
+                            {percentage}%
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+
+          {/* Cost Optimization Tips */}
+          {costStats.total > 0 && (
+            <div className="cost-tips-section">
+              <h3 className="subsection-title-native">💡 Optimization Tips</h3>
+              <div className="cost-tips-list">
+                {(costStats.topModels ?? []).some(
+                  (m) =>
+                    m.model?.includes("opus") || m.model?.includes("xhigh"),
+                ) && (
+                  <div className="cost-tip">
+                    <span className="tip-icon">⚡</span>
+                    <div className="tip-content">
+                      <div className="tip-title">
+                        Consider using faster models
+                      </div>
+                      <div className="tip-description">
+                        You're using premium models. Try `gpt-5.2-low` or
+                        `claude-haiku-4-5` for routine tasks to save up to 95%.
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {costStats.thisMonth > 10 && (
+                  <div className="cost-tip">
+                    <span className="tip-icon">📊</span>
+                    <div className="tip-content">
+                      <div className="tip-title">Track your spending</div>
+                      <div className="tip-description">
+                        You're spending ${costStats.thisMonth.toFixed(2)}/month.
+                        {costStats.thisMonth > 50 &&
+                          " Consider setting up budget alerts."}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div className="cost-tip">
+                  <span className="tip-icon">🎯</span>
+                  <div className="tip-content">
+                    <div className="tip-title">Right tool for the job</div>
+                    <div className="tip-description">
+                      Use cheaper models for quick tasks, save premium models
+                      for complex reasoning.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Cost Trends & Visualizations */}
+      <CostTrends />
 
       <div className="agents-section-native">
         <h2 className="section-title-native">Pen</h2>
@@ -367,7 +533,7 @@ export function AgentsView() {
                 <div className="model-label-small">Model:</div>
                 <select
                   className="model-select-specialist"
-                  value={agent.model ?? "gpt-5-mini"}
+                  value={agent.model ?? "gpt-5.2"}
                   onChange={(event) =>
                     void updateAgentModel(agent, event.target.value)
                   }

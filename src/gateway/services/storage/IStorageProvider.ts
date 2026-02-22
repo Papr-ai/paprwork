@@ -36,6 +36,7 @@ export interface StoredMessage {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
+  cost?: number; // USD cost of this response
 
   // Error tracking
   error?: string; // Error message if response failed
@@ -189,6 +190,54 @@ export interface IStorageProvider {
   getChatStats(chatId: string): Promise<{
     message_count: number;
     token_count: number;
+    cost_total: number;
     has_summary: boolean;
+  }>;
+
+  /**
+   * Get cost statistics for a chat
+   * @param chatId - Chat session ID
+   */
+  getChatCost(chatId: string): Promise<{
+    total: number;
+    byModel: Record<string, number>;
+    messageCount: number;
+    avgCostPerMessage: number;
+  }>;
+
+  /**
+   * Get global cost statistics across all chats
+   */
+  getGlobalCostStats(): Promise<{
+    today: number;
+    thisWeek: number;
+    thisMonth: number;
+    total: number;
+    totalMessages: number;
+    topModels: Array<{ model: string; cost: number; count: number }>;
+  }>;
+
+  getDailyCostTrends(
+    days?: number,
+  ): Promise<Array<{ date: string; cost: number; messages: number }>>;
+
+  getModelDistribution(): Promise<
+    Array<{ model: string; percentage: number; cost: number; messages: number }>
+  >;
+
+  getAgentStats(agentId: string): Promise<{
+    totalMessages: number;
+    totalTokens: number;
+    totalCost: number;
+    toolCallsCount: number;
+    avgTokensPerMessage: number;
+    avgCostPerMessage: number;
+    mostUsedTools: Array<{ tool: string; count: number }>;
+  }>;
+
+  getAgentOutputs(agentId?: string): Promise<{
+    documents: Array<{ id: string; title: string; createdAt: string }>;
+    apps: Array<{ id: string; title: string; createdAt: string }>;
+    plans: Array<{ planId: string; title: string; createdAt: string }>;
   }>;
 }

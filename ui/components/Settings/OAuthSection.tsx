@@ -112,9 +112,7 @@ export function OAuthSection({
           )}
 
           {status.error && (
-            <div className="oauth-error">
-              Error: {status.error}
-            </div>
+            <div className="oauth-error">Error: {status.error}</div>
           )}
         </div>
 
@@ -142,8 +140,8 @@ export function OAuthSection({
           </p>
 
           <div className="oauth-api-key-note">
-            <strong>Note:</strong> Configure <code>{apiKeyName}</code> in the API
-            Keys list below
+            <strong>Note:</strong> Configure <code>{apiKeyName}</code> in the
+            API Keys list below
           </div>
         </div>
       </div>

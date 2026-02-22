@@ -79,6 +79,16 @@ const AVAILABLE_MODELS: Record<Provider, ModelInfo[]> = {
       supportsVision: true,
     },
   ],
+  "openai-codex": [
+    {
+      id: "gpt-5.3-codex",
+      name: "GPT-5.3 Codex",
+      provider: "openai-codex",
+      contextWindow: 128000,
+      supportsThinking: true,
+      supportsVision: true,
+    },
+  ],
   google: [
     {
       id: "gemini-2-0-flash",

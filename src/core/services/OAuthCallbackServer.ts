@@ -173,7 +173,9 @@ export class OAuthCallbackServer {
       });
 
       this.server.listen(this.port, "127.0.0.1", () => {
-        console.log(`[OAuthCallback] Listening on http://127.0.0.1:${this.port}/auth/callback`);
+        console.log(
+          `[OAuthCallback] Listening on http://127.0.0.1:${this.port}/auth/callback`,
+        );
 
         // Set timeout to auto-close
         this.timeoutHandle = setTimeout(() => {

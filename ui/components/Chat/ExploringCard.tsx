@@ -7,6 +7,7 @@
 import React, { useState } from "react";
 import type { ToolCall } from "../../types/core";
 import { getToolDisplayLabel } from "../../utils/toolDisplay";
+import { PaprLogoIcon } from "./PaprLogoIcon";
 import "./ExploringCard.css";
 
 interface ExploringCardProps {
@@ -20,27 +21,41 @@ export const ExploringCard: React.FC<ExploringCardProps> = ({
   isStreaming = false,
   narration,
 }) => {
-  // Start collapsed (can be manually expanded by user)
-  // V1 behavior: Keep card open showing completed tool calls, with assistant text below
+  // Auto-collapse when streaming ends (V1 behavior)
+  // Start expanded during streaming, then collapse when done
+  const [manuallyToggled, setManuallyToggled] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
+
+  // Auto-collapse when streaming ends (unless user manually expanded/collapsed)
+  React.useEffect(() => {
+    if (!isStreaming && !manuallyToggled) {
+      setIsCollapsed(true);
+    }
+  }, [isStreaming, manuallyToggled]);
 
   // Don't show if there are no tool calls
   if (toolCalls.length === 0) {
     return null;
   }
 
+  const handleToggle = () => {
+    setIsCollapsed(!isCollapsed);
+    setManuallyToggled(true);
+  };
+
+  const isExploring =
+    isStreaming || toolCalls.some((t) => t.status === "calling");
+
   return (
     <div className="exploring-card">
-      <div
-        className="exploring-card-header"
-        onClick={() => setIsCollapsed(!isCollapsed)}
-      >
+      <div className="exploring-card-header" onClick={handleToggle}>
         <span
           className={`exploring-chevron ${isCollapsed ? "exploring-chevron-collapsed" : ""}`}
         >
           ▼
         </span>
-        <span className="exploring-label-text">Exploring</span>
+        <span className="exploring-label-text">Working</span>
+        {isExploring && <PaprLogoIcon />}
       </div>
       <div
         className="exploring-card-content"

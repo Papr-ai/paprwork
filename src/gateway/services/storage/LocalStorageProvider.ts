@@ -28,20 +28,28 @@ export class LocalStorageProvider implements IStorageProvider {
   }
 
   async initialize(): Promise<void> {
+    console.log("[LocalStorageProvider] Ensuring directory exists...");
     // Ensure directory exists
     await fs.ensureDir(path.dirname(this.dbPath));
+    console.log(`[LocalStorageProvider] Opening database: ${this.dbPath}`);
 
     // Initialize SQLite database
     this.db = new Database(this.dbPath);
+    console.log("[LocalStorageProvider] Database opened");
 
     // Enable WAL mode for better concurrency
     this.db.pragma("journal_mode = WAL");
+    console.log("[LocalStorageProvider] WAL mode enabled");
 
     // Create schema
+    console.log("[LocalStorageProvider] Creating schema...");
     this.createSchema();
+    console.log("[LocalStorageProvider] Schema created");
 
     // Initialize PAPR folder structure
+    console.log("[LocalStorageProvider] Initializing chat exporter...");
     await this.exporter.initialize();
+    console.log("[LocalStorageProvider] Chat exporter initialized");
   }
 
   private createSchema(): void {
@@ -92,6 +100,7 @@ export class LocalStorageProvider implements IStorageProvider {
         prompt_tokens INTEGER DEFAULT 0,
         completion_tokens INTEGER DEFAULT 0,
         total_tokens INTEGER DEFAULT 0,
+        cost REAL DEFAULT 0,
         
         -- Sync tracking
         sync_status TEXT DEFAULT 'local', -- 'local' | 'synced' | 'sync_pending' | 'sync_failed'
@@ -168,6 +177,12 @@ export class LocalStorageProvider implements IStorageProvider {
       );
     }
 
+    // Add cost column if missing
+    if (!columnNames.includes("cost")) {
+      console.log('[LocalStorage] Adding "cost" column to messages table...');
+      this.db.exec("ALTER TABLE messages ADD COLUMN cost REAL DEFAULT 0");
+    }
+
     // Add sequence column if missing (V1-style interleaved text/tool sequence)
     if (!columnNames.includes("sequence")) {
       console.log(
@@ -209,11 +224,11 @@ export class LocalStorageProvider implements IStorageProvider {
       INSERT INTO messages (
         id, chat_id, role, content, timestamp,
         thinking, tool_calls, error, incomplete,
-        model, prompt_tokens, completion_tokens, total_tokens,
+        model, prompt_tokens, completion_tokens, total_tokens, cost,
         sync_status, papr_message_id,
         source_agent_id, source_agent_name,
         sequence
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
       .run(
         message.id || uuidv4(),
@@ -229,6 +244,7 @@ export class LocalStorageProvider implements IStorageProvider {
         message.prompt_tokens || 0,
         message.completion_tokens || 0,
         message.total_tokens || 0,
+        message.cost || 0,
         message.sync_status || "local",
         message.papr_message_id || null,
         message.source_agent_id || "main-agent",
@@ -298,6 +314,7 @@ export class LocalStorageProvider implements IStorageProvider {
       prompt_tokens: row.prompt_tokens,
       completion_tokens: row.completion_tokens,
       total_tokens: row.total_tokens,
+      cost: row.cost,
       sync_status: row.sync_status as any,
       papr_message_id: row.papr_message_id,
       last_sync_attempt: row.last_sync_attempt,
@@ -339,7 +356,7 @@ export class LocalStorageProvider implements IStorageProvider {
     // because the summary covers all earlier context
     // Without summary, load more messages (50) for full context
     const recentMessageLimit = chat.summary_long ? 15 : 50;
-    
+
     const recentMessages = this.db
       .prepare(`
       SELECT role, content, thinking, tool_calls
@@ -617,6 +634,7 @@ KEY TOPICS: ${topics.join(", ")}
   async getChatStats(chatId: string): Promise<{
     message_count: number;
     token_count: number;
+    cost_total: number;
     has_summary: boolean;
   }> {
     const chat = this.db
@@ -626,18 +644,360 @@ KEY TOPICS: ${topics.join(", ")}
       .get(chatId) as any;
 
     if (!chat) {
-      return { message_count: 0, token_count: 0, has_summary: false };
+      return {
+        message_count: 0,
+        token_count: 0,
+        cost_total: 0,
+        has_summary: false,
+      };
     }
 
-    // Calculate token count (rough estimate)
-    const messages = await this.loadMessages(chatId);
-    const totalChars = messages.reduce((sum, m) => sum + m.content.length, 0);
-    const token_count = Math.ceil(totalChars / 4); // 1 token ≈ 4 chars
+    // Get token and cost stats from database
+    const tokenStats = this.db
+      .prepare(
+        `SELECT 
+          COALESCE(SUM(total_tokens), 0) as token_count,
+          COALESCE(SUM(cost), 0) as cost_total
+        FROM messages 
+        WHERE chat_id = ?`,
+      )
+      .get(chatId) as any;
 
     return {
       message_count: chat.message_count,
-      token_count,
+      token_count: tokenStats?.token_count || 0,
+      cost_total: tokenStats?.cost_total || 0,
       has_summary: !!chat.summary_long,
+    };
+  }
+
+  async getChatCost(chatId: string): Promise<{
+    total: number;
+    byModel: Record<string, number>;
+    messageCount: number;
+    avgCostPerMessage: number;
+  }> {
+    // Get total cost and message count
+    const totals = this.db
+      .prepare(
+        `SELECT 
+          COALESCE(SUM(cost), 0) as total,
+          COUNT(*) as count
+        FROM messages 
+        WHERE chat_id = ? AND role = 'assistant'`,
+      )
+      .get(chatId) as any;
+
+    // Get cost by model
+    const byModelRows = this.db
+      .prepare(
+        `SELECT 
+          model,
+          COALESCE(SUM(cost), 0) as cost
+        FROM messages 
+        WHERE chat_id = ? AND role = 'assistant' AND model IS NOT NULL
+        GROUP BY model`,
+      )
+      .all(chatId) as any[];
+
+    const byModel: Record<string, number> = {};
+    for (const row of byModelRows) {
+      byModel[row.model] = row.cost;
+    }
+
+    const total = totals?.total || 0;
+    const messageCount = totals?.count || 0;
+
+    return {
+      total,
+      byModel,
+      messageCount,
+      avgCostPerMessage: messageCount > 0 ? total / messageCount : 0,
+    };
+  }
+
+  async getGlobalCostStats(): Promise<{
+    today: number;
+    thisWeek: number;
+    thisMonth: number;
+    total: number;
+    totalMessages: number;
+    topModels: Array<{ model: string; cost: number; count: number }>;
+  }> {
+    const now = new Date();
+    const todayStart = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    ).toISOString();
+    const weekStart = new Date(
+      now.getTime() - 7 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const monthStart = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      1,
+    ).toISOString();
+
+    // Today's cost
+    const todayStats = this.db
+      .prepare(
+        `SELECT COALESCE(SUM(cost), 0) as cost
+        FROM messages 
+        WHERE role = 'assistant' AND timestamp >= ?`,
+      )
+      .get(todayStart) as any;
+
+    // This week's cost
+    const weekStats = this.db
+      .prepare(
+        `SELECT COALESCE(SUM(cost), 0) as cost
+        FROM messages 
+        WHERE role = 'assistant' AND timestamp >= ?`,
+      )
+      .get(weekStart) as any;
+
+    // This month's cost
+    const monthStats = this.db
+      .prepare(
+        `SELECT COALESCE(SUM(cost), 0) as cost
+        FROM messages 
+        WHERE role = 'assistant' AND timestamp >= ?`,
+      )
+      .get(monthStart) as any;
+
+    // Total cost and messages
+    const totalStats = this.db
+      .prepare(
+        `SELECT 
+          COALESCE(SUM(cost), 0) as cost,
+          COUNT(*) as count
+        FROM messages 
+        WHERE role = 'assistant'`,
+      )
+      .get() as any;
+
+    // Top models by cost
+    const topModelsRows = this.db
+      .prepare(
+        `SELECT 
+          model,
+          COALESCE(SUM(cost), 0) as cost,
+          COUNT(*) as count
+        FROM messages 
+        WHERE role = 'assistant' AND model IS NOT NULL
+        GROUP BY model
+        ORDER BY cost DESC
+        LIMIT 10`,
+      )
+      .all() as any[];
+
+    return {
+      today: todayStats?.cost || 0,
+      thisWeek: weekStats?.cost || 0,
+      thisMonth: monthStats?.cost || 0,
+      total: totalStats?.cost || 0,
+      totalMessages: totalStats?.count || 0,
+      topModels: topModelsRows.map((row) => ({
+        model: row.model,
+        cost: row.cost,
+        count: row.count,
+      })),
+    };
+  }
+
+  /**
+   * Get daily cost trends for the last N days
+   */
+  async getDailyCostTrends(
+    days: number = 30,
+  ): Promise<Array<{ date: string; cost: number; messages: number }>> {
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    const startDateStr = startDate.toISOString();
+
+    const dailyStats = this.db
+      .prepare(
+        `SELECT
+          DATE(timestamp) as date,
+          COALESCE(SUM(cost), 0) as cost,
+          COUNT(*) as messages
+        FROM messages
+        WHERE role = 'assistant' AND timestamp >= ?
+        GROUP BY DATE(timestamp)
+        ORDER BY date ASC`,
+      )
+      .all(startDateStr) as any[];
+
+    return dailyStats.map((row) => ({
+      date: row.date,
+      cost: row.cost,
+      messages: row.messages,
+    }));
+  }
+
+  /**
+   * Get model usage distribution (for pie chart)
+   */
+  async getModelDistribution(): Promise<
+    Array<{ model: string; percentage: number; cost: number; messages: number }>
+  > {
+    const totalStats = this.db
+      .prepare(
+        `SELECT COALESCE(SUM(cost), 0) as total_cost
+        FROM messages
+        WHERE role = 'assistant'`,
+      )
+      .get() as any;
+
+    const totalCost = totalStats?.total_cost || 0;
+
+    if (totalCost === 0) {
+      return [];
+    }
+
+    const modelStats = this.db
+      .prepare(
+        `SELECT
+          model,
+          COALESCE(SUM(cost), 0) as cost,
+          COUNT(*) as messages
+        FROM messages
+        WHERE role = 'assistant' AND model IS NOT NULL
+        GROUP BY model
+        ORDER BY cost DESC`,
+      )
+      .all() as any[];
+
+    return modelStats.map((row) => ({
+      model: row.model,
+      percentage: (row.cost / totalCost) * 100,
+      cost: row.cost,
+      messages: row.messages,
+    }));
+  }
+
+  /**
+   * Get per-agent statistics
+   */
+  async getAgentStats(agentId: string): Promise<{
+    totalMessages: number;
+    totalTokens: number;
+    totalCost: number;
+    toolCallsCount: number;
+    avgTokensPerMessage: number;
+    avgCostPerMessage: number;
+    mostUsedTools: Array<{ tool: string; count: number }>;
+  }> {
+    // Get basic stats
+    const stats = this.db
+      .prepare(
+        `SELECT
+          COUNT(*) as message_count,
+          COALESCE(SUM(total_tokens), 0) as total_tokens,
+          COALESCE(SUM(cost), 0) as total_cost,
+          COALESCE(SUM(CASE WHEN tool_calls IS NOT NULL AND tool_calls != '' THEN 1 ELSE 0 END), 0) as tool_calls_count
+        FROM messages
+        WHERE source_agent_id = ? AND role = 'assistant'`,
+      )
+      .get(agentId) as any;
+
+    const messageCount = stats?.message_count || 0;
+    const totalTokens = stats?.total_tokens || 0;
+    const totalCost = stats?.total_cost || 0;
+    const toolCallsCount = stats?.tool_calls_count || 0;
+
+    // Get tool usage stats
+    const messages = this.db
+      .prepare(
+        `SELECT tool_calls
+        FROM messages
+        WHERE source_agent_id = ? AND role = 'assistant' AND tool_calls IS NOT NULL AND tool_calls != ''`,
+      )
+      .all(agentId) as any[];
+
+    const toolCounts: Record<string, number> = {};
+    for (const msg of messages) {
+      try {
+        const toolCalls = JSON.parse(msg.tool_calls) as Array<{ name: string }>;
+        for (const call of toolCalls) {
+          toolCounts[call.name] = (toolCounts[call.name] || 0) + 1;
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+
+    const mostUsedTools = Object.entries(toolCounts)
+      .map(([tool, count]) => ({ tool, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+
+    return {
+      totalMessages: messageCount,
+      totalTokens,
+      totalCost,
+      toolCallsCount,
+      avgTokensPerMessage: messageCount > 0 ? totalTokens / messageCount : 0,
+      avgCostPerMessage: messageCount > 0 ? totalCost / messageCount : 0,
+      mostUsedTools,
+    };
+  }
+
+  async getAgentOutputs(agentId?: string): Promise<{
+    documents: Array<{ id: string; title: string; createdAt: string }>;
+    apps: Array<{ id: string; title: string; createdAt: string }>;
+    plans: Array<{ planId: string; title: string; createdAt: string }>;
+  }> {
+    // Import services
+    const { getDocumentService } = await import("../DocumentService.js");
+    const { getAppService } = await import("../AppService.js");
+
+    const documentService = getDocumentService();
+    const appService = getAppService();
+
+    // Get documents
+    const allDocsMeta = await documentService.listDocuments();
+    const documents = agentId
+      ? allDocsMeta
+          .filter((doc) => doc.createdByAgentId === agentId)
+          .map((doc) => ({
+            id: doc.id,
+            title: doc.title,
+            createdAt: doc.createdAt,
+          }))
+      : allDocsMeta.map((doc) => ({
+          id: doc.id,
+          title: doc.title,
+          createdAt: doc.createdAt,
+        }));
+
+    // Get apps
+    const allApps = await appService.listApps();
+    const apps = agentId
+      ? allApps
+          .filter((app) => app.createdByAgentId === agentId)
+          .map((app) => ({
+            id: app.id,
+            title: app.title,
+            createdAt: app.createdAt,
+          }))
+      : allApps.map((app) => ({
+          id: app.id,
+          title: app.title,
+          createdAt: app.createdAt,
+        }));
+
+    // Get plans - we need to query all plans across all chats
+    // This is a limitation: PlanService only has getPlansForChat
+    // For now, return empty array (can be improved later)
+    const plans: Array<{ planId: string; title: string; createdAt: string }> =
+      [];
+
+    return {
+      documents,
+      apps,
+      plans,
     };
   }
 

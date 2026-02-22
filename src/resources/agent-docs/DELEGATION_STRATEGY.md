@@ -34,11 +34,10 @@ Create purpose-built agents with `create_sub_agent` for recurring specialized ta
 // Check available agents first
 list_sub_agents()
 
-// Delegate to existing specialist
+// Delegate to existing specialist (reportChatId omitted = auto-uses current chat, user sees result + mini-chat)
 delegate_task({
   task: "Review the authentication code in ~/project/auth.js for security issues",
-  agentId: "research-specialist",
-  tools: ["bash"]
+  useAgentId: "research-specialist",
 })
 ```
 
@@ -56,7 +55,7 @@ create_sub_agent({
 // Then delegate to it
 delegate_task({
   task: "Scrape product data from these 50 e-commerce sites",
-  agentId: "e-commerce-scraper"
+  useAgentId: "e-commerce-scraper"
 })
 ```
 
@@ -65,8 +64,7 @@ delegate_task({
 ```javascript
 // One-off tasks don't need a saved specialist
 delegate_task({
-  task: "Research the top 10 AI startups and summarize their key metrics",
-  tools: ["bash", "browser"]
+  task: "Research the top 10 AI startups and summarize their key metrics"
 })
 ```
 
@@ -113,9 +111,9 @@ Users see checkboxes getting checked off in real-time. This makes you look profe
 ## Agent Management Decision Tree
 
 1. `list_sub_agents` -> See available specialists
-2. Task matches existing specialist? -> Use `delegate_task` with `agentId`
+2. Task matches existing specialist? -> Use `delegate_task` with `useAgentId`
 3. Task is recurring/specialized? -> `create_sub_agent`, then delegate
-4. Task is one-off? -> `delegate_task` without `agentId` (ephemeral)
+4. Task is one-off? -> `delegate_task` without `useAgentId` (ephemeral)
 
 ## Key Principles
 
@@ -262,20 +260,20 @@ console.log(result.data.resultText)
 ```javascript
 delegate_task({
   task: "Research user authentication best practices",
-  reportChatId: currentChatId,  // ← Key: delivers to chat
+  // reportChatId omitted = auto-uses current chat
   background: false
 })
 
 // Result appears as assistant message in chat
+// MiniChatCard shows inline (user can Join to participate)
 // Main agent ALSO gets result in tool return
-// User sees sub-agent's output
 ```
 
 **Option 3: Background execution**
 ```javascript
 delegate_task({
   task: "Daily data sync from APIs",
-  reportChatId: currentChatId,
+  // reportChatId omitted = auto-uses current chat
   background: true  // ← Key: don't wait
 })
 

@@ -24,7 +24,12 @@ export class AgentJobExecutor implements IJobExecutor {
       params.job.command?.trim() ||
       `Execute agent job "${params.job.name}" and return key outcomes.`;
 
-    let provider: "anthropic" | "openai" | "google" | undefined;
+    let provider:
+      | "anthropic"
+      | "openai"
+      | "openai-codex"
+      | "google"
+      | undefined;
     let model: string | undefined;
     let allowedToolIds: string[] | undefined;
     let sourceAgentId = "main-agent";
@@ -60,10 +65,12 @@ export class AgentJobExecutor implements IJobExecutor {
 
     // ── Build final prompt ────────────────────────────────────────────────────
     if (params.job.type === "subagent") {
+      const delegationIdBlock = `\n[Delegation ID: ${params.job.id}]\nWhen using request_agent_input, always pass delegationId: "${params.job.id}" so your question appears in the correct chat.`;
       prompt = [
         `[Sub-Agent: ${subAgentName!}]`,
         subAgentSystemPrompt!,
         envBlock,
+        delegationIdBlock,
         params.job.delegationContext
           ? `\nContext:\n${params.job.delegationContext}`
           : "",
@@ -115,6 +122,7 @@ export class AgentJobExecutor implements IJobExecutor {
         model,
         allowedToolIds,
         maxTurns: params.job.maxTurns,
+        appendLog: params.appendLog, // Pass appendLog for structured activity logging
       });
       outputText = response.text;
     }
@@ -148,6 +156,17 @@ export class AgentJobExecutor implements IJobExecutor {
       jobId: params.job.id,
       chatId: params.job.reportChatId ?? params.job.deliver?.targetId,
     });
+
+    if (outputText.length === 0) {
+      const modelInfo =
+        provider && model
+          ? ` (${provider}/${model})`
+          : " (default openai/gpt-5.2)";
+      await params.appendLog(
+        `[WARN] Agent job produced no model output${modelInfo}. ` +
+          "Check: OAuth connected or API key set in Settings; see Gateway logs for API errors.",
+      );
+    }
 
     const output =
       outputText.length > 0

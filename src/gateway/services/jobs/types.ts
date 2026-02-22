@@ -25,6 +25,8 @@ export interface JobRecord {
   command?: string;
   requirements?: string[];
   dependsOn?: JobDependency[];
+  /** Job IDs this job calls at runtime via /api/jobs/run (for visualization only - not enforced) */
+  runtimeCalls?: string[];
   retries?: JobRetryPolicy;
   deliver?: JobDelivery;
   retentionDays?: number;
@@ -64,6 +66,8 @@ export interface CreateJobInput {
   command?: string;
   requirements?: string[];
   dependsOn?: JobDependency[];
+  /** Job IDs this job calls at runtime via /api/jobs/run (for visualization - shows dashed arrows in graph) */
+  runtimeCalls?: string[];
   retries?: JobRetryPolicy;
   deliver?: JobDelivery;
   retentionDays?: number;
@@ -91,6 +95,8 @@ export interface JobGraphEdge {
   from: string;
   to: string;
   onStatus: "completed" | "failed";
+  /** True if this is a runtime call (dashed arrow), false/undefined if dependency (solid arrow) */
+  isRuntimeCall?: boolean;
 }
 
 export interface JobGraph {

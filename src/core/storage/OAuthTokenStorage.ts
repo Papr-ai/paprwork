@@ -52,7 +52,7 @@ export class OAuthTokenStorage {
   private encryptValue(value: string): string {
     if (!safeStorage.isEncryptionAvailable()) {
       console.warn(
-        "[OAuthTokens] Encryption not available, using base64 encoding"
+        "[OAuthTokens] Encryption not available, using base64 encoding",
       );
       return Buffer.from(value).toString("base64");
     }
@@ -123,11 +123,11 @@ export class OAuthTokenStorage {
           Object.entries(data).map(([id, tokenData]) => [
             id,
             this.decryptToken(tokenData),
-          ])
+          ]),
         );
 
         console.log(
-          `[OAuthTokens] Loaded ${this.tokens.size} OAuth tokens from storage`
+          `[OAuthTokens] Loaded ${this.tokens.size} OAuth tokens from storage`,
         );
       }
     } catch (error) {
@@ -145,7 +145,7 @@ export class OAuthTokenStorage {
         Array.from(this.tokens.entries()).map(([id, token]) => [
           id,
           this.encryptToken(token),
-        ])
+        ]),
       );
 
       const tempFile = `${this.tokensFile}.tmp`;
@@ -168,7 +168,7 @@ export class OAuthTokenStorage {
     const id = `oauth-${input.provider}-${Date.now()}`;
     const now = new Date().toISOString();
     const expiresAt = new Date(
-      Date.now() + input.expiresIn * 1000
+      Date.now() + input.expiresIn * 1000,
     ).toISOString();
 
     const token: OAuthToken = {
@@ -204,13 +204,13 @@ export class OAuthTokenStorage {
       accessToken: string;
       refreshToken?: string;
       expiresIn: number;
-    }
+    },
   ): Promise<OAuthToken | null> {
     const token = this.tokens.get(tokenId);
     if (!token) return null;
 
     const expiresAt = new Date(
-      Date.now() + updates.expiresIn * 1000
+      Date.now() + updates.expiresIn * 1000,
     ).toISOString();
 
     const updatedToken: OAuthToken = {
@@ -231,11 +231,9 @@ export class OAuthTokenStorage {
   /**
    * Get token by provider
    */
-  getTokenByProvider(
-    provider: "openai" | "anthropic"
-  ): OAuthToken | undefined {
+  getTokenByProvider(provider: "openai" | "anthropic"): OAuthToken | undefined {
     return Array.from(this.tokens.values()).find(
-      (token) => token.provider === provider
+      (token) => token.provider === provider,
     );
   }
 
@@ -260,7 +258,7 @@ export class OAuthTokenStorage {
    * Delete a token by provider
    */
   async deleteTokenByProvider(
-    provider: "openai" | "anthropic"
+    provider: "openai" | "anthropic",
   ): Promise<boolean> {
     const token = this.getTokenByProvider(provider);
     if (!token) return false;

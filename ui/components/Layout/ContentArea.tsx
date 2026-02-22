@@ -12,7 +12,7 @@ import { SettingsView } from "../Settings/SettingsView";
 import { JobsView } from "../Jobs/JobsView";
 import { MiniAppView } from "../Apps/MiniAppView";
 import { SkillsView } from "../Skills/SkillsView";
-import { AgentsView } from "../Agents/AgentsView";
+import { AgentsView } from "../Agents/AgentsViewCards";
 import { MeetingsView } from "../Meetings/MeetingsView";
 import { ViewsView } from "../Views/ViewsView";
 import { TableView } from "../Views/TableView";

@@ -61,7 +61,7 @@ export interface Plan {
 export const createPlanTool = createTool({
   id: "create_plan",
   description:
-    "Create a step-by-step plan that will be shown to the user as a progress card. Plans are persisted and associated with the chat. Returns the plan with step statuses.",
+    "REQUIRED for any multi-step task, especially app/job creation or updates. Create a step-by-step plan shown to the user as a progress card. Plans are persisted and associated with the chat. Use BEFORE starting any mini-app or job work (creating OR updating). Returns the plan with step statuses.",
   inputSchema: createPlanSchema,
   execute: async (input) => {
     const args = (input as { context?: CreatePlanArgs }).context ?? input;

@@ -167,7 +167,9 @@ export class CustomKeysStorage {
   /**
    * Get custom key metadata by name (without decrypting value)
    */
-  async getKeyMetadataByName(name: string): Promise<Omit<CustomKey, "encryptedValue"> | null> {
+  async getKeyMetadataByName(
+    name: string,
+  ): Promise<Omit<CustomKey, "encryptedValue"> | null> {
     const normalizeKeyName = (input: string): string =>
       input.trim().toUpperCase();
     const expectedName = normalizeKeyName(name);

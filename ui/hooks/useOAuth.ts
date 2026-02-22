@@ -18,7 +18,8 @@ export function useOAuth(provider: "openai" | "anthropic") {
   const [loading, setLoading] = useState(false);
 
   // Get the correct OAuth API
-  const oauthAPI = window.electronAPI.oauth[provider === "openai" ? "openai" : "claude"];
+  const oauthAPI =
+    window.electronAPI.oauth[provider === "openai" ? "openai" : "claude"];
 
   /**
    * Load OAuth status
@@ -40,7 +41,7 @@ export function useOAuth(provider: "openai" | "anthropic") {
     setLoading(true);
     try {
       const result = await oauthAPI.startOAuth();
-      
+
       if (!result.success) {
         throw new Error(result.error || "OAuth flow failed");
       }
@@ -67,7 +68,6 @@ export function useOAuth(provider: "openai" | "anthropic") {
           setLoading(false);
         }
       }, 2000);
-
     } catch (error) {
       console.error(`[useOAuth] Failed to start ${provider} OAuth:`, error);
       setStatus({ connected: false, error: (error as Error).message });
@@ -82,7 +82,7 @@ export function useOAuth(provider: "openai" | "anthropic") {
     setLoading(true);
     try {
       const result = await oauthAPI.disconnect();
-      
+
       if (!result.success) {
         throw new Error(result.error || "Disconnect failed");
       }
@@ -90,9 +90,9 @@ export function useOAuth(provider: "openai" | "anthropic") {
       setStatus({ connected: false });
     } catch (error) {
       console.error(`[useOAuth] Failed to disconnect ${provider}:`, error);
-      setStatus({ 
-        connected: false, 
-        error: (error as Error).message 
+      setStatus({
+        connected: false,
+        error: (error as Error).message,
       });
     } finally {
       setLoading(false);

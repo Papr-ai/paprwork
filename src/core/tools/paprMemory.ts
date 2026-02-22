@@ -3,29 +3,44 @@ import type { Memory } from "@papr/memory/resources/memory.js";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
-const addMemorySchema = z.object({
-  content: z.string().min(1),
-  externalUserId: z.string().optional(),
-  role: z.enum(["user", "assistant"]).optional(),
-  category: z
-    .enum([
-      "preference",
-      "task",
-      "goal",
-      "fact",
-      "context",
-      "skills",
-      "learning",
-    ])
-    .optional(),
-  // Agent/job attribution fields (stored in customMetadata)
-  sourceAgentId: z.string().optional(),
-  sourceAgentName: z.string().optional(),
-  runId: z.string().optional(),
-  jobId: z.string().optional(),
-  chatId: z.string().optional(),
-  workspaceId: z.string().optional(),
-});
+const addMemorySchema = z
+  .object({
+    content: z.string().min(1),
+    externalUserId: z.string().optional(),
+    role: z.enum(["user", "assistant"]).optional(),
+    category: z
+      .enum([
+        "preference",
+        "task",
+        "goal",
+        "fact",
+        "context",
+        "skills",
+        "learning",
+      ])
+      .optional(),
+    // Agent/job attribution fields (stored in customMetadata)
+    sourceAgentId: z.string().optional(),
+    sourceAgentName: z.string().optional(),
+    runId: z.string().optional(),
+    jobId: z.string().optional(),
+    chatId: z.string().optional(),
+    workspaceId: z.string().optional(),
+  })
+  .refine(
+    (data) => {
+      // PAPR API requires role when category is "context"
+      if (data.category === "context" && !data.role) {
+        return false;
+      }
+      return true;
+    },
+    {
+      message:
+        'When category is "context", role field is required (must be "user" or "assistant")',
+      path: ["role"],
+    },
+  );
 
 const searchMemorySchema = z.object({
   query: z
@@ -66,7 +81,8 @@ async function getPaprClient(): Promise<Papr> {
 
 export const addAgentMemoryTool = createTool({
   id: "add_agent_memory",
-  description: "Store a structured memory item in PAPR memory",
+  description:
+    "Store a structured memory item in PAPR memory. IMPORTANT: When using category='context', you MUST provide role ('user' or 'assistant').",
   inputSchema: addMemorySchema,
   execute: async (args) => {
     const client = await getPaprClient();

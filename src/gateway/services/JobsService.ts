@@ -122,10 +122,10 @@ export class JobsService {
     await fs.mkdir(this.jobsRootDir, { recursive: true });
     await fs.mkdir(path.dirname(this.jobsIndexPath), { recursive: true });
     await this.loadJobs();
-    
+
     // Reconcile interrupted jobs from previous session
     await this.reconcileInterruptedJobs();
-    
+
     this.initialized = true;
   }
 
@@ -259,8 +259,18 @@ export class JobsService {
 
       const edges: JobGraphEdge[] = [];
       for (const job of jobs) {
+        // Add dependency edges (solid arrows)
         for (const dep of job.dependsOn ?? []) {
           edges.push({ from: dep.jobId, to: job.id, onStatus: dep.onStatus });
+        }
+        // Add runtime call edges (dashed arrows)
+        for (const calleeId of job.runtimeCalls ?? []) {
+          edges.push({
+            from: job.id,
+            to: calleeId,
+            onStatus: "completed",
+            isRuntimeCall: true,
+          });
         }
       }
 
@@ -383,6 +393,9 @@ export class JobsService {
     const logPath = this.getJobLogPath(jobId);
     const stamped = `[${new Date().toISOString()}] ${line}\n`;
     await fs.appendFile(logPath, stamped, "utf8");
+
+    // Broadcast log line to UI for real-time streaming
+    this.broadcastJobLogLine(jobId, line);
   }
 
   private async setJobStatus(

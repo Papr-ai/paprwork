@@ -31,6 +31,10 @@ interface InputBarProps {
   placeholder?: string;
   selectedModel?: AIModel;
   onModelChange?: (model: AIModel) => void;
+  /** Returns true if user has API key or OAuth for this model */
+  isModelAvailable?: (model: AIModel) => boolean;
+  /** Called when user clicks a locked model - open settings to add key/OAuth */
+  onOpenSettings?: () => void;
 }
 
 export interface InputBarRef {
@@ -48,6 +52,8 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       placeholder = "Type a message...",
       selectedModel,
       onModelChange,
+      isModelAvailable,
+      onOpenSettings,
     },
     ref,
   ) => {
@@ -313,42 +319,74 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                         <div className="model-picker-group-label">
                           {groupName}
                         </div>
-                        {models.map((model) => (
-                          <button
-                            key={model.id}
-                            className={`model-picker-item ${currentModel.id === model.id ? "model-picker-item--selected" : ""}`}
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={() => {
-                              onModelChange?.(model);
-                              setShowModelPicker(false);
-                              textareaRef.current?.focus();
-                            }}
-                          >
-                            <div className="model-picker-item-content">
-                              <div className="model-picker-item-name">
-                                {model.name}
-                                {model.supportsThinking && (
-                                  <span className="model-badge-thinking">
-                                    thinking
-                                  </span>
-                                )}
+                        {models.map((model) => {
+                          const available = isModelAvailable?.(model) ?? true;
+                          return (
+                            <button
+                              key={model.id}
+                              className={`model-picker-item ${currentModel.id === model.id ? "model-picker-item--selected" : ""} ${!available ? "model-picker-item--locked" : ""}`}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => {
+                                if (available) {
+                                  onModelChange?.(model);
+                                  setShowModelPicker(false);
+                                  textareaRef.current?.focus();
+                                } else {
+                                  onOpenSettings?.();
+                                  setShowModelPicker(false);
+                                }
+                              }}
+                              title={
+                                !available
+                                  ? "Add API key or connect OAuth in Settings"
+                                  : undefined
+                              }
+                            >
+                              <div className="model-picker-item-content">
+                                <div className="model-picker-item-name">
+                                  {model.name}
+                                  {!available && (
+                                    <span
+                                      className="model-badge-locked"
+                                      title="Add API key or connect OAuth"
+                                    >
+                                      <svg
+                                        width="12"
+                                        height="12"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="1.5"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      >
+                                        <path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                                      </svg>
+                                    </span>
+                                  )}
+                                  {model.supportsThinking && available && (
+                                    <span className="model-badge-thinking">
+                                      thinking
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="model-picker-item-desc">
+                                  {model.description}
+                                </div>
                               </div>
-                              <div className="model-picker-item-desc">
-                                {model.description}
-                              </div>
-                            </div>
-                            {currentModel.id === model.id && (
-                              <svg
-                                width="16"
-                                height="16"
-                                viewBox="0 0 24 24"
-                                fill="currentColor"
-                              >
-                                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />
-                              </svg>
-                            )}
-                          </button>
-                        ))}
+                              {currentModel.id === model.id && available && (
+                                <svg
+                                  width="16"
+                                  height="16"
+                                  viewBox="0 0 24 24"
+                                  fill="currentColor"
+                                >
+                                  <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />
+                                </svg>
+                              )}
+                            </button>
+                          );
+                        })}
                       </div>
                     ))}
                   </div>

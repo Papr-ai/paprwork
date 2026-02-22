@@ -1,6 +1,6 @@
 /**
  * System Prompt Builder for Paprwork V2
- * 
+ *
  * Builds the system prompt that instructs the AI agent on:
  * - Identity and capabilities
  * - Tool usage (bash, filesystem, future tools)
@@ -59,11 +59,11 @@ export class SystemPromptBuilder {
   build(): string {
     const sections = [
       this.buildIdentitySection(),
-      this.buildWorkspaceContextSection(),  // Early: persistent memory & context
+      this.buildWorkspaceContextSection(), // Early: persistent memory & context
       this.buildCapabilityMatrixSection(),
       this.buildToolCallStyleSection(),
-      this.buildAgentDocsSection(),  // Add early so it's never truncated
-      this.buildSkillsSection(),      // Add early so it's never truncated
+      this.buildAgentDocsSection(), // Add early so it's never truncated
+      this.buildSkillsSection(), // Add early so it's never truncated
       this.buildApiKeysSection(),
       this.buildBashToolSection(),
       this.buildDocumentToolsSection(),
@@ -219,7 +219,9 @@ ${ctx.onboardContent}
     if (ctx.files.length > 0) {
       const fileContents = ctx.files
         .map((f) => {
-          const truncNote = f.truncated ? ` (truncated from ${f.rawLength} chars)` : "";
+          const truncNote = f.truncated
+            ? ` (truncated from ${f.rawLength} chars)`
+            : "";
           return `## ${f.name}${truncNote}\n\n${f.content}`;
         })
         .join("\n\n---\n\n");
@@ -265,7 +267,10 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
   private buildCapabilityMatrixSection(): string {
     const tools = [...this.options.availableTools].sort();
     const has = (toolId: string): boolean => tools.includes(toolId);
-    const toolList = tools.length > 0 ? tools.map((tool) => `- ${tool}`).join("\n") : "- (none)";
+    const toolList =
+      tools.length > 0
+        ? tools.map((tool) => `- ${tool}`).join("\n")
+        : "- (none)";
 
     const rows = [
       {
@@ -275,8 +280,13 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
       },
       {
         area: "Documents",
-        enabled: has("create_document") || has("read_document") || has("list_documents") || has("import_document"),
-        details: "create/read/list/import documents — ALWAYS use create_document for writing documents, import_document for device files",
+        enabled:
+          has("create_document") ||
+          has("read_document") ||
+          has("list_documents") ||
+          has("import_document"),
+        details:
+          "create/read/list/import documents — ALWAYS use create_document for writing documents, import_document for device files",
       },
       {
         area: "Memory",
@@ -291,12 +301,14 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
       {
         area: "Browser",
         enabled: has("browser_navigate") || has("browser_snapshot"),
-        details: "navigate/snapshot/click/type/tabs — use ONLY for visual/interactive browsing, NOT for simple searches or data retrieval (use bash curl instead)",
+        details:
+          "navigate/snapshot/click/type/tabs — use ONLY for visual/interactive browsing, NOT for simple searches or data retrieval (use bash curl instead)",
       },
       {
         area: "Apps + Jobs",
         enabled: has("create_app") || has("create_job"),
-        details: "mini-app and job creation; use list_jobs to see existing jobs before creating new ones",
+        details:
+          "mini-app and job creation; use list_jobs to see existing jobs before creating new ones",
       },
       {
         area: "Sub-agents",
@@ -306,12 +318,16 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
       {
         area: "Planning",
         enabled: has("create_plan") || has("update_plan"),
-        details: "REQUIRED for any multi-step task — create_plan shows visible progress cards in the UI; update_plan marks steps complete as you go",
+        details:
+          "REQUIRED for any multi-step task — create_plan shows visible progress cards in the UI; update_plan marks steps complete as you go",
       },
     ];
 
     const matrix = rows
-      .map((row) => `- ${row.area}: ${row.enabled ? "ENABLED" : "NOT ENABLED"} (${row.details})`)
+      .map(
+        (row) =>
+          `- ${row.area}: ${row.enabled ? "ENABLED" : "NOT ENABLED"} (${row.details})`,
+      )
       .join("\n");
 
     return `# Capability Matrix
@@ -526,7 +542,10 @@ read_skill({ skillId: "preloaded-SKILL-NAME" })
   private buildSkillsSection(): string {
     if (this.options.activeSkills && this.options.activeSkills.length > 0) {
       const skillsList = this.options.activeSkills
-        .map((s) => `- **${s.name}** (\`${s.id}\`): ${s.description}\n  - **Load:** \`read_skill({ skillId: "${s.id}" })\``)
+        .map(
+          (s) =>
+            `- **${s.name}** (\`${s.id}\`): ${s.description}\n  - **Load:** \`read_skill({ skillId: "${s.id}" })\``,
+        )
         .join("\n");
       return `# Installed Skills Directory
 
@@ -558,9 +577,15 @@ ${skillsList}
    * API key management workflow
    */
   private buildApiKeysSection(): string {
-    const customKeysList = this.options.customKeys.length > 0
-      ? this.options.customKeys.map(k => `  - ${k.name}${k.description ? `: ${k.description}` : ''}`).join('\n')
-      : '  (No custom keys configured yet)';
+    const customKeysList =
+      this.options.customKeys.length > 0
+        ? this.options.customKeys
+            .map(
+              (k) =>
+                `  - ${k.name}${k.description ? `: ${k.description}` : ""}`,
+            )
+            .join("\n")
+        : "  (No custom keys configured yet)";
 
     return `# 🔑 API Keys & Credentials
 
@@ -1245,6 +1270,8 @@ create_job({
 - Expected output format
 - Relevant prior findings
 
+**When delegating work the user should see:** Omit \`reportChatId\` to auto-use the current chat (result delivered to chat + inline mini-chat with Join). Or pass \`reportChatId\` explicitly. Omit entirely for logs-only (no chat delivery).
+
 **Example - Complete context:**
 \`\`\`javascript
 delegate_task({
@@ -1257,7 +1284,7 @@ delegate_task({
     Expected: < 500ms login, maintain security
   \`,
   useAgentId: "security-specialist",
-  reportChatId: currentChatId  // Deliver result to chat
+  // reportChatId omitted = auto-uses current chat (user sees result + mini-chat)
 })
 \`\`\`
 
@@ -1324,7 +1351,6 @@ See \`AGENT_JOB_OUTPUT_GUIDE.md\` for complete examples and patterns.`;
    * Always-on lightweight reminder for app creation tasks
    */
   private buildAppCreationReminderSection(): string {
-
     return `# App Automation Reminder
 
 When users ask for outcomes like "track", "monitor", "summarize", "dashboard", or "automate", treat it as potential app+job work even if wording is non-technical.
@@ -1368,14 +1394,11 @@ create_app({ ... })
 
 **Why:** Prevents duplicate apps, preserves user's data, faster than building from scratch.
 
-## CRITICAL: Always Create a Plan for Mini-Apps
+## CRITICAL: Always Create a Plan for Mini-Apps & Jobs
 
-Before building any mini-app, ALWAYS use \`create_plan\` to:
-1. Show the user your approach
-2. Track progress with visible checkboxes
-3. Make the process professional and organized
+**BEFORE creating OR updating any mini-app or job, ALWAYS use \`create_plan\`:**
 
-Example:
+**For NEW apps/jobs:**
 \`\`\`javascript
 create_plan({
   title: "Build [App Name] Mini-App",
@@ -1390,6 +1413,27 @@ create_plan({
   ]
 })
 \`\`\`
+
+**For UPDATING existing apps/jobs:**
+\`\`\`javascript
+create_plan({
+  title: "Update [App Name] - Add [Feature]",
+  steps: [
+    { id: "review", description: "Review current app code" },
+    { id: "plan", description: "Plan changes to existing structure" },
+    { id: "backup", description: "Document current behavior" },
+    { id: "implement", description: "Make changes to app files" },
+    { id: "test", description: "Test updated functionality" }
+  ]
+})
+\`\`\`
+
+**Why plans are required:**
+1. ✅ Shows the user your approach transparently
+2. ✅ Tracks progress with visible checkboxes in the UI
+3. ✅ Makes the process professional and organized
+4. ✅ Prevents rushing into changes without thinking through the steps
+5. ✅ Allows resuming work if chat is closed and reopened
 
 Note: Steps are created with "pending" status automatically. Update with \`update_plan({ planId: "...", updates: [{ stepId: "check", status: "completed" }] })\` as you progress.
 
@@ -1455,8 +1499,9 @@ Default to a staged workflow, but keep flexibility based on task constraints.
 
 ## STEP 0: Create Plan (REQUIRED)
 
-Before any implementation, create a plan with \`create_plan\`:
+**CRITICAL: ALWAYS create a plan before ANY app/job work (creating OR updating).**
 
+**For NEW apps/jobs:**
 \`\`\`javascript
 create_plan({
   title: "Build [App Name]",
@@ -1471,6 +1516,21 @@ create_plan({
   ]
 })
 \`\`\`
+
+**For UPDATING existing apps/jobs:**
+\`\`\`javascript
+create_plan({
+  title: "Update [App Name] - [What's Changing]",
+  steps: [
+    { id: "review", description: "Review current implementation" },
+    { id: "plan", description: "Plan changes to existing code" },
+    { id: "implement", description: "Make the changes" },
+    { id: "test", description: "Test updated functionality" }
+  ]
+})
+\`\`\`
+
+**Exception:** Only skip the plan for trivial text changes (typo fixes, color tweaks). For ANY logic changes, new features, or restructuring: CREATE A PLAN FIRST.
 
 Update plan status as you complete each step with \`update_plan\`.
 
@@ -1689,23 +1749,33 @@ For any implementation task:
 
     // Active plans (unfinished work)
     if (this.options.activePlans && this.options.activePlans.length > 0) {
-      const plansText = this.options.activePlans.map(plan => {
-        const completedCount = plan.steps.filter(s => s.status === 'completed').length;
-        const totalCount = plan.steps.length;
-        const progress = `${completedCount}/${totalCount}`;
-        
-        const stepsText = plan.steps.map(step => {
-          const icon = step.status === 'completed' ? '☑' : 
-                      step.status === 'in_progress' ? '▶' : '☐';
-          return `  ${icon} ${step.description}`;
-        }).join('\n');
-        
-        return `### ${plan.title} (${progress} completed)
+      const plansText = this.options.activePlans
+        .map((plan) => {
+          const completedCount = plan.steps.filter(
+            (s) => s.status === "completed",
+          ).length;
+          const totalCount = plan.steps.length;
+          const progress = `${completedCount}/${totalCount}`;
+
+          const stepsText = plan.steps
+            .map((step) => {
+              const icon =
+                step.status === "completed"
+                  ? "☑"
+                  : step.status === "in_progress"
+                    ? "▶"
+                    : "☐";
+              return `  ${icon} ${step.description}`;
+            })
+            .join("\n");
+
+          return `### ${plan.title} (${progress} completed)
 Plan ID: \`${plan.planId}\`
 Created: ${new Date(plan.createdAt).toLocaleString()}
 
 ${stepsText}`;
-      }).join('\n\n');
+        })
+        .join("\n\n");
 
       sections.push(`# Active Plans (Unfinished Work)
 
@@ -1778,11 +1848,19 @@ Use these paths to navigate the codebase. Explore deeper with list_directory or 
 /**
  * Build system prompt with default options
  */
-export function buildSystemPrompt(options: Partial<SystemPromptOptions> = {}): string {
+export function buildSystemPrompt(
+  options: Partial<SystemPromptOptions> = {},
+): string {
   const builder = new SystemPromptBuilder({
     userDataPath: options.userDataPath || "~/.paprwork-v2",
     workspacePath: options.workspacePath || process.cwd(),
-    availableTools: options.availableTools || ["bash", "read_file", "write_file", "list_directory", "search_files"],
+    availableTools: options.availableTools || [
+      "bash",
+      "read_file",
+      "write_file",
+      "list_directory",
+      "search_files",
+    ],
     customKeys: options.customKeys || [],
     includeExtendedAppPlaybook: options.includeExtendedAppPlaybook ?? true,
     activeSkills: options.activeSkills,

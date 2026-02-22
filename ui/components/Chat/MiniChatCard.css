@@ -1,0 +1,319 @@
+/* MiniChatCard - Multi-turn sub-agent conversation */
+
+.mini-chat-card {
+  background: var(--glass-bg, rgba(0, 0, 0, 0.03));
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 8px 0;
+}
+
+.mini-chat-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  gap: 12px;
+}
+
+.mini-chat-card__header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mini-chat-card__header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.mini-chat-card__chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s;
+  transform: rotate(-90deg);
+  color: var(--text-secondary);
+}
+
+.mini-chat-card__chevron--expanded {
+  transform: rotate(0deg);
+}
+
+.mini-chat-card__icon {
+  flex-shrink: 0;
+  color: var(--primary-color, #007aff);
+}
+
+.mini-chat-card__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mini-chat-card__join-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--primary-color, #007aff);
+  background: transparent;
+  color: var(--primary-color, #007aff);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.mini-chat-card__join-btn:hover {
+  background: rgba(0, 122, 255, 0.1);
+}
+
+.mini-chat-card__badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: capitalize;
+}
+
+.mini-chat-card__badge--active {
+  background: rgba(0, 122, 255, 0.15);
+  color: var(--primary-color, #007aff);
+}
+
+.mini-chat-card__badge--completed {
+  background: rgba(52, 199, 89, 0.2);
+  color: #248a3d;
+}
+
+.mini-chat-card__badge--failed {
+  background: rgba(255, 59, 48, 0.15);
+  color: #d70015;
+}
+
+.mini-chat-card__body {
+  padding: 0 14px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.mini-chat-card__context {
+  padding: 6px 0;
+  color: var(--text-secondary);
+}
+
+.mini-chat-card__messages {
+  margin-top: 8px;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.02);
+  border-radius: 8px;
+}
+
+.mini-chat-card__messages-header {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.mini-chat-card__messages-content {
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mini-chat-card__message {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 95%;
+}
+
+.mini-chat-card__message--sub-agent {
+  align-self: flex-start;
+  flex-direction: row;
+}
+
+.mini-chat-card__message--main-agent,
+.mini-chat-card__message--user {
+  align-self: flex-end;
+  flex-direction: row-reverse;
+}
+
+.mini-chat-card__msg-avatar-wrap {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.mini-chat-card__msg-avatar-wrap--end {
+  order: 1;
+}
+
+.mini-chat-card__msg-avatar {
+  color: var(--text-tertiary);
+}
+
+.mini-chat-card__msg-avatar--main {
+  color: var(--primary-color, #007aff);
+}
+
+.mini-chat-card__msg-avatar--user {
+  color: #248a3d;
+}
+
+.mini-chat-card__message-bubble {
+  padding: 8px 12px;
+  border-radius: 8px;
+}
+
+.mini-chat-card__message--main-agent .mini-chat-card__message-bubble {
+  background: rgba(0, 122, 255, 0.12);
+  border: 1px solid rgba(0, 122, 255, 0.2);
+}
+
+.mini-chat-card__message--sub-agent .mini-chat-card__message-bubble {
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.mini-chat-card__message--user .mini-chat-card__message-bubble {
+  background: rgba(52, 199, 89, 0.12);
+  border: 1px solid rgba(52, 199, 89, 0.2);
+}
+
+.mini-chat-card__message-author {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  margin-bottom: 4px;
+}
+
+.mini-chat-card__message-content {
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.mini-chat-card__message-content p {
+  margin: 0 0 4px;
+}
+
+.mini-chat-card__message-content p:last-child {
+  margin-bottom: 0;
+}
+
+.mini-chat-card__error {
+  margin-top: 8px;
+  padding: 6px 0;
+  color: #d70015;
+}
+
+.mini-chat-card__result {
+  margin-top: 8px;
+  max-height: 160px;
+  overflow-y: auto;
+  color: var(--text-secondary);
+}
+
+.mini-chat-card__result p {
+  margin: 0 0 6px;
+}
+
+.mini-chat-card__result p:last-child {
+  margin-bottom: 0;
+}
+
+.mini-chat-card__input {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color, #e5e5e5);
+}
+
+.mini-chat-card__input input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 8px;
+  font-size: 13px;
+  background: var(--input-bg, #fff);
+  color: var(--text-primary);
+}
+
+.mini-chat-card__input input:focus {
+  outline: none;
+  border-color: var(--primary-color, #007aff);
+}
+
+.mini-chat-card__input input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.mini-chat-card__input input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.mini-chat-card__input button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 8px;
+  background: var(--primary-color, #007aff);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.mini-chat-card__input button:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.mini-chat-card__input button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (prefers-color-scheme: dark) {
+  .mini-chat-card {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .mini-chat-card__messages {
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .mini-chat-card__message--sub-agent {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .mini-chat-card__input {
+    border-top-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .mini-chat-card__input input {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+}

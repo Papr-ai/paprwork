@@ -38,7 +38,7 @@ const DEFAULT_SUB_AGENTS: Array<
     systemPrompt:
       "You are a focused research sub-agent. Gather evidence, summarize clearly, and highlight uncertainty.",
     provider: "openai",
-    model: "gpt-5-mini",
+    model: "gpt-5.2",
     allowedToolIds: [
       "bash",
       "read_file",
@@ -58,7 +58,7 @@ const DEFAULT_SUB_AGENTS: Array<
     systemPrompt:
       "You are a coding sub-agent. Produce practical implementation steps and validate outcomes.",
     provider: "openai",
-    model: "gpt-5-mini",
+    model: "gpt-5.2",
     allowedToolIds: [
       "bash",
       "read_file",
@@ -352,9 +352,12 @@ export class SubAgentService {
   }
 
   private mapJobToRun(job: JobRecord): DelegationRunRecord {
+    const agentName =
+      job.name?.replace(/^Delegation: /, "").trim() || undefined;
     return {
       id: job.id,
       agentId: job.subAgentId ?? "unknown",
+      agentName,
       task: job.delegationTask ?? job.command ?? "",
       context: job.delegationContext,
       status: this.mapStatus(job.status),
@@ -362,7 +365,7 @@ export class SubAgentService {
       createdAt: job.createdAt,
       startedAt: job.lastRunAt,
       completedAt: job.completedAt,
-      resultText: undefined,
+      resultText: job.lastOutput,
       error: job.error,
     };
   }
@@ -416,6 +419,94 @@ export class SubAgentService {
     });
     await this.saveProfiles();
     return this.mapJobToRun(completed);
+  }
+
+  // ===== Multi-Turn Sub-Agent Communication =====
+
+  /**
+   * Send question from sub-agent to main agent
+   * Broadcasts via WebSocket to show in MiniChatCard
+   */
+  async sendQuestionToMainAgent(
+    question: string,
+    urgency: "low" | "medium" | "high",
+    delegationId?: string,
+  ): Promise<void> {
+    console.log(
+      `[SubAgentService] Sub-agent question: ${question} (urgency: ${urgency}, delegationId: ${delegationId ?? "none"})`,
+    );
+
+    const { broadcast } = await import("../websocket/index.js");
+    broadcast({
+      type: "subagent-chat:question",
+      data: {
+        question,
+        urgency,
+        delegationId,
+        timestamp: new Date().toISOString(),
+      },
+    });
+
+    // Trigger main agent to automatically respond
+    if (delegationId) {
+      const { triggerMainAgentResponse } =
+        await import("./SubAgentResponseTrigger.js");
+      void triggerMainAgentResponse(delegationId, question);
+    }
+  }
+
+  /**
+   * Main agent or user responds to sub-agent question
+   * Resumes sub-agent execution with new context
+   */
+  async respondToSubAgent(
+    delegationId: string,
+    message: string,
+    author: "main-agent" | "user" = "main-agent",
+  ): Promise<void> {
+    console.log(
+      `[SubAgentService] ${author} responding to ${delegationId}: ${message}`,
+    );
+
+    // Broadcast response
+    const { broadcast } = await import("../websocket/index.js");
+    broadcast({
+      type: "subagent-chat:message",
+      data: {
+        delegationId,
+        message: {
+          role: "user",
+          author,
+          content: message,
+          timestamp: new Date().toISOString(),
+        },
+      },
+    });
+
+    // TODO: Send message to sub-agent chat session and resume execution
+  }
+
+  /**
+   * Sub-agent marks delegation as complete
+   * Closes session and returns result
+   */
+  async completeDelegation(result: string, summary?: string): Promise<void> {
+    console.log(
+      `[SubAgentService] Completing delegation with result (${result.length} chars)`,
+    );
+
+    // TODO: Get current delegation context and mark job as completed
+    // For now, this is a placeholder
+
+    const { broadcast } = await import("../websocket/index.js");
+    broadcast({
+      type: "subagent-chat:completed",
+      data: {
+        result,
+        summary,
+        timestamp: new Date().toISOString(),
+      },
+    });
   }
 }
 

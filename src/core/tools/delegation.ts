@@ -1,13 +1,32 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
+/** Valid model IDs for sub-agents — prevents agent from typing name/id in model field */
+const SUBAGENT_MODEL_IDS = [
+  "gpt-5.2-low",
+  "gpt-5.2",
+  "gpt-5.2-high",
+  "gpt-5.2-codex",
+  "gpt-5.3-codex",
+  "claude-haiku-4-5",
+  "claude-sonnet-4-6",
+  "claude-sonnet-4-5",
+  "claude-opus-4-6",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+  "gemini-3-pro-preview",
+  "gemini-3-flash-preview",
+] as const;
+
 const createSubAgentSchema = z.object({
   id: z.string().min(1).optional(),
   name: z.string().min(1),
   description: z.string().min(1),
   systemPrompt: z.string().min(1),
-  provider: z.enum(["anthropic", "openai", "google"]).optional(),
-  model: z.string().min(1).optional(),
+  provider: z
+    .enum(["anthropic", "openai", "openai-codex", "google"])
+    .optional(),
+  model: z.enum(SUBAGENT_MODEL_IDS).optional(),
   allowedToolIds: z.array(z.string().min(1)).optional(),
   assignedSkills: z.array(z.string().min(1)).optional(),
   outputMode: z.enum(["natural", "structured"]).optional(),
@@ -24,7 +43,13 @@ const delegateTaskSchema = z.object({
   task: z.string().min(1),
   context: z.string().optional(),
   useAgentId: z.string().min(1).optional(),
-  reportChatId: z.string().min(1).optional(),
+  reportChatId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Chat ID to deliver result to. Omit for logs-only. When delegating work the user should see, pass this or leave empty to auto-use current chat.",
+    ),
   background: z.boolean().optional(),
   outputMode: z.enum(["natural", "structured"]).optional(),
   outputSchema: z.record(z.string(), z.unknown()).optional(),
@@ -109,8 +134,14 @@ export const delegateTaskTool = createTool({
     const args = (input as { context?: DelegateTaskArgs }).context ?? input;
     const { getSubAgentService } =
       await import("../../gateway/services/SubAgentService.js");
+    const { getCurrentChatId } = await import("./context.js");
     const service = getSubAgentService();
-    const run = await service.delegateTask(args);
+    // Auto-inject reportChatId from context when omitted (user-facing delegations default to current chat)
+    const ctx = getCurrentChatId();
+    const reportChatId =
+      args.reportChatId?.trim() ||
+      (ctx && !ctx.startsWith("job:") ? ctx : undefined);
+    const run = await service.delegateTask({ ...args, reportChatId });
     return { success: true, data: run };
   },
 });
@@ -147,6 +178,132 @@ export const listDelegationRunsTool = createTool({
   },
 });
 
+// ========== Multi-Turn Sub-Agent Communication Tools ==========
+
+const requestAgentInputSchema = z.object({
+  question: z.string().min(1).describe("Question for the main agent"),
+  urgency: z
+    .enum(["low", "medium", "high"])
+    .optional()
+    .describe("Priority level"),
+  delegationId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Delegation/job ID (injected by executor)"),
+});
+
+const respondToSubAgentSchema = z.object({
+  delegationId: z
+    .string()
+    .min(1)
+    .describe("ID of the delegation to respond to"),
+  message: z.string().min(1).describe("Response message"),
+});
+
+const completeDelegationSchema = z.object({
+  result: z.string().min(1).describe("Final result to return to main agent"),
+  summary: z.string().optional().describe("Optional brief summary"),
+});
+
+type RequestAgentInputArgs = z.infer<typeof requestAgentInputSchema>;
+type RespondToSubAgentArgs = z.infer<typeof respondToSubAgentSchema>;
+type CompleteDelegationArgs = z.infer<typeof completeDelegationSchema>;
+
+/**
+ * Tool for sub-agents to ask questions to the main agent
+ * Creates a pause in execution until main agent responds
+ */
+export const requestAgentInputTool = createTool({
+  id: "request_agent_input",
+  description:
+    "Ask the main agent for clarification or guidance. Use when you need additional context to complete your task. The main agent will see your question in the mini-chat and can respond.",
+  inputSchema: requestAgentInputSchema,
+  execute: async (input) => {
+    const args =
+      (input as { context?: RequestAgentInputArgs }).context ?? input;
+    const { getSubAgentService } =
+      await import("../../gateway/services/SubAgentService.js");
+    const service = getSubAgentService();
+
+    // Send question to parent chat via WebSocket (delegationId routes to correct MiniChatCard)
+    await service.sendQuestionToMainAgent(
+      args.question,
+      args.urgency || "medium",
+      args.delegationId,
+    );
+
+    return {
+      success: true,
+      data: {
+        message: "Question sent to main agent. Waiting for response...",
+        question: args.question,
+        status: "waiting",
+      },
+    };
+  },
+});
+
+/**
+ * Tool for main agent to respond to sub-agent questions
+ * Resumes sub-agent execution with the provided context
+ */
+export const respondToSubAgentTool = createTool({
+  id: "respond_to_sub_agent",
+  description:
+    "Respond to a sub-agent's question or provide guidance during delegation. The sub-agent will receive your message and continue with this additional context.",
+  inputSchema: respondToSubAgentSchema,
+  execute: async (input) => {
+    const args =
+      (input as { context?: RespondToSubAgentArgs }).context ?? input;
+    const { getSubAgentService } =
+      await import("../../gateway/services/SubAgentService.js");
+    const service = getSubAgentService();
+
+    // Send response to sub-agent chat
+    await service.respondToSubAgent(args.delegationId, args.message);
+
+    return {
+      success: true,
+      data: {
+        delegationId: args.delegationId,
+        message: "Response sent to sub-agent",
+        status: "resumed",
+      },
+    };
+  },
+});
+
+/**
+ * Tool for sub-agents to mark delegation as complete
+ * Closes the sub-agent chat session and returns final result
+ */
+export const completeDelegationTool = createTool({
+  id: "complete_delegation",
+  description:
+    "Mark your delegation task as complete and return the final result. Use this when you have finished the assigned task and have a result to deliver.",
+  inputSchema: completeDelegationSchema,
+  execute: async (input) => {
+    const args =
+      (input as { context?: CompleteDelegationArgs }).context ?? input;
+    const { getSubAgentService } =
+      await import("../../gateway/services/SubAgentService.js");
+    const service = getSubAgentService();
+
+    // Mark delegation as completed and close session
+    await service.completeDelegation(args.result, args.summary);
+
+    return {
+      success: true,
+      data: {
+        result: args.result,
+        summary: args.summary,
+        status: "completed",
+      },
+    };
+  },
+});
+
 export const delegationTools = [
   listSubAgentsTool,
   createSubAgentTool,
@@ -154,4 +311,7 @@ export const delegationTools = [
   delegateTaskTool,
   getDelegationRunTool,
   listDelegationRunsTool,
+  requestAgentInputTool,
+  respondToSubAgentTool,
+  completeDelegationTool,
 ];

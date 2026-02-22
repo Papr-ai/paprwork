@@ -63,13 +63,15 @@ export async function setupAgentHandlers(
         timings.sessionLookup = performance.now() - t1;
 
         let apiKey: string;
+        let authType: "oauth" | "apiKey" | undefined;
 
         if (
           existingSession &&
           agentService.isSameProvider(existingSession.config, config)
         ) {
-          // Reuse API key from existing session (ZERO keychain access!)
+          // Reuse API key and auth type from existing session (ZERO keychain access!)
           apiKey = existingSession.config.apiKey;
+          authType = existingSession.config.authType;
           console.log(
             `[Agent WS] Reusing cached API key for chat ${chatId} (${config.provider})`,
           );
@@ -79,15 +81,42 @@ export async function setupAgentHandlers(
           // Only happens on first message or when switching providers
           const t2 = performance.now();
           try {
-            const { getApiKeys } = await import("../utils/keyResolver.js");
-            const keyName = `${config.provider.toUpperCase()}_API_KEY`;
-            const keys = await getApiKeys([keyName]);
-            apiKey = keys[keyName];
+            // For openai, openai-codex, and anthropic, use getProviderAuth which handles OAuth
+            if (
+              config.provider === "openai" ||
+              config.provider === "openai-codex" ||
+              config.provider === "anthropic"
+            ) {
+              const { getProviderAuth } =
+                await import("../utils/keyResolver.js");
+              const authProvider =
+                config.provider === "openai-codex" ? "openai" : config.provider;
+              const auth = await getProviderAuth(authProvider);
 
-            if (!apiKey) {
-              sendError(ws, message.id, `API key not found: ${keyName}`);
-              return;
+              if (!auth) {
+                sendError(
+                  ws,
+                  message.id,
+                  `No authentication found for provider: ${config.provider}`,
+                );
+                return;
+              }
+
+              apiKey = auth.type === "oauth" ? auth.token : auth.key;
+              authType = auth.type;
+            } else {
+              // For other providers, use standard key lookup
+              const { getApiKeys } = await import("../utils/keyResolver.js");
+              const keyName = `${config.provider.toUpperCase()}_API_KEY`;
+              const keys = await getApiKeys([keyName]);
+              apiKey = keys[keyName];
+
+              if (!apiKey) {
+                sendError(ws, message.id, `API key not found: ${keyName}`);
+                return;
+              }
             }
+
             timings.keyFetch = performance.now() - t2;
             console.log(
               `[Agent WS] Fetched API key for chat ${chatId} (${config.provider}) in ${timings.keyFetch.toFixed(2)}ms`,
@@ -99,8 +128,8 @@ export async function setupAgentHandlers(
           }
         }
 
-        // Create internal config with API key
-        const configInternal = { ...config, apiKey };
+        // Create internal config with API key and auth type (for OAuth vs API key routing)
+        const configInternal = { ...config, apiKey, authType };
 
         // Track time until first chunk
         const t3 = performance.now();
@@ -273,6 +302,82 @@ export async function setupAgentHandlers(
               provider: s.config.provider,
             })),
           },
+        });
+        break;
+      }
+
+      case "agent:get-cost-stats": {
+        const globalStats = await agentService.getGlobalCostStats();
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: globalStats,
+        });
+        break;
+      }
+
+      case "agent:get-chat-cost": {
+        const payload = message.payload as { chatId?: string };
+        const chatId = payload?.chatId;
+        if (!chatId) {
+          sendError(ws, message.id, "chatId is required");
+          return;
+        }
+        const chatCost = await agentService.getChatCost(chatId);
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: chatCost,
+        });
+        break;
+      }
+
+      case "agent:get-cost-trends": {
+        const payload = message.payload as { days?: number };
+        const days = payload?.days || 30;
+        const trends = await agentService.getDailyCostTrends(days);
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: trends,
+        });
+        break;
+      }
+
+      case "agent:get-model-distribution": {
+        const distribution = await agentService.getModelDistribution();
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: distribution,
+        });
+        break;
+      }
+
+      case "agent:get-agent-stats": {
+        const payload = message.payload as { agentId?: string };
+        const agentId = payload?.agentId;
+        if (!agentId) {
+          sendError(ws, message.id, "agentId is required");
+          return;
+        }
+        const stats = await agentService.getAgentStats(agentId);
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: stats,
+        });
+        break;
+      }
+
+      case "agent:get-outputs": {
+        const payload = message.payload as { agentId?: string };
+        const agentId = payload?.agentId;
+        const outputs = await agentService.getAgentOutputs(agentId);
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: outputs,
         });
         break;
       }

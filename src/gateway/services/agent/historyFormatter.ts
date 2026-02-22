@@ -86,7 +86,9 @@ interface HistoryMessageLike {
   toolCalls?: unknown;
 }
 
-function extractRole(message: HistoryMessageLike): "user" | "assistant" | "system" | null {
+function extractRole(
+  message: HistoryMessageLike,
+): "user" | "assistant" | "system" | null {
   const role = message.role ?? message.message_role;
   if (role === "user" || role === "assistant" || role === "system") {
     return role;
@@ -141,7 +143,9 @@ function extractToolCalls(message: HistoryMessageLike): ToolCallLike[] {
  * Tool calls are summarized briefly to avoid training the model to
  * generate fake tool call text.
  */
-export function formatMessageContentForModel(message: HistoryMessageLike): string | null {
+export function formatMessageContentForModel(
+  message: HistoryMessageLike,
+): string | null {
   const content = extractContent(message);
   if (!content) {
     return null;
@@ -212,8 +216,7 @@ export function formatHistoryMessagesForModel(
         for (const tc of toolCalls) {
           const toolCallId =
             typeof tc.id === "string" ? tc.id : `tc-hist-${toolIndex}`;
-          const toolName =
-            typeof tc.name === "string" ? tc.name : "unknown";
+          const toolName = typeof tc.name === "string" ? tc.name : "unknown";
 
           contentParts.push({
             type: "tool-call",
@@ -226,31 +229,33 @@ export function formatHistoryMessagesForModel(
           // History strategy: Keep tool calls (what the agent did) but heavily truncate results
           // This preserves the "commands used" while minimizing context usage
           const resultValue = tc.result ?? "";
-          const resultStr = typeof resultValue === "string"
-            ? resultValue
-            : JSON.stringify(resultValue);
-          
+          const resultStr =
+            typeof resultValue === "string"
+              ? resultValue
+              : JSON.stringify(resultValue);
+
           // AGGRESSIVE truncation for history: 100 tokens max (~400 chars)
           // This is much more aggressive than prepareStep's recency-based approach
           // Rationale: Historical tool results are less important than recent ones
           const HISTORY_MAX_TOKENS = 100;
           const HISTORY_MAX_CHARS = HISTORY_MAX_TOKENS * 4; // ~400 chars
-          
+
           let truncatedResult: string;
           if (resultStr.length > HISTORY_MAX_CHARS) {
-            truncatedResult = resultStr.substring(0, HISTORY_MAX_CHARS) + 
+            truncatedResult =
+              resultStr.substring(0, HISTORY_MAX_CHARS) +
               `\n[... ${resultStr.length - HISTORY_MAX_CHARS} chars truncated from history]`;
           } else {
             truncatedResult = resultStr;
           }
-          
+
           toolResultParts.push({
             type: "tool-result",
             toolCallId,
             toolName,
             result: truncatedResult,
           });
-          
+
           toolIndex++;
         }
 

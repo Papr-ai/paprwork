@@ -16,7 +16,14 @@ type ChatStreamChunkPayload =
   | ToolCallPayload
   | ToolResultPayload
   | ToolErrorPayload
-  | ErrorPayload;
+  | ErrorPayload
+  | {
+      usage?: {
+        promptTokens: number;
+        completionTokens: number;
+        totalTokens: number;
+      };
+    }; // Done payload
 
 export type ChatStreamChunk = StreamChunk<ChatStreamChunkPayload> & {
   chatId: string;

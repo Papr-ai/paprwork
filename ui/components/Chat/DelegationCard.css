@@ -1,0 +1,176 @@
+/* DelegationCard - Compact (like PlanCard) */
+
+.delegation-card {
+  background: var(--glass-bg, rgba(0, 0, 0, 0.03));
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 8px 0;
+}
+
+.delegation-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  gap: 12px;
+}
+
+.delegation-card__header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.delegation-card__chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s;
+  transform: rotate(-90deg);
+  color: var(--text-secondary);
+}
+
+.delegation-card__chevron--expanded {
+  transform: rotate(0deg);
+}
+
+.delegation-card__icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.delegation-card__icon--pending {
+  color: var(--text-tertiary);
+}
+
+.delegation-card__icon--running {
+  color: var(--primary-color, #007aff);
+}
+
+.delegation-card__icon--completed {
+  color: #34c759;
+}
+
+.delegation-card__icon--failed {
+  color: #ff3b30;
+}
+
+.delegation-card__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.delegation-card__badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  text-transform: capitalize;
+}
+
+.delegation-card__badge--pending {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text-tertiary);
+}
+
+.delegation-card__badge--running {
+  background: rgba(0, 122, 255, 0.15);
+  color: var(--primary-color, #007aff);
+}
+
+.delegation-card__badge--completed {
+  background: rgba(52, 199, 89, 0.2);
+  color: #248a3d;
+}
+
+.delegation-card__badge--failed {
+  background: rgba(255, 59, 48, 0.15);
+  color: #d70015;
+}
+
+.delegation-card__body {
+  padding: 0 14px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.delegation-card__context,
+.delegation-card__error,
+.delegation-card__result {
+  padding: 6px 0;
+  color: var(--text-secondary);
+}
+
+.delegation-card__error {
+  color: #d70015;
+}
+
+.delegation-card__result {
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.delegation-card__result p {
+  margin: 0 0 6px;
+}
+
+.delegation-card__result p:last-child {
+  margin-bottom: 0;
+}
+
+/* Live logs section (matches JobStatusCard style) */
+.delegation-card__logs {
+  margin-top: 4px;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.02);
+  border-radius: 6px;
+  font-family: "SF Mono", Monaco, Menlo, Consolas, "Courier New", monospace;
+  font-size: 11px;
+}
+
+.delegation-card__logs-header {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.delegation-card__logs-content {
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.delegation-card__log-line {
+  color: var(--text-secondary);
+  line-height: 1.4;
+  padding: 2px 0;
+  word-break: break-word;
+}
+
+@media (prefers-color-scheme: dark) {
+  .delegation-card {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .delegation-card__badge--pending {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .delegation-card__logs {
+    background: rgba(255, 255, 255, 0.04);
+  }
+}

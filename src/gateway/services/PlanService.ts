@@ -27,6 +27,8 @@ export interface Plan {
   status: "active" | "completed" | "cancelled";
   createdAt: string;
   updatedAt: string;
+  sourceAgentId?: string;
+  sourceAgentName?: string;
 }
 
 let planServiceInstance: PlanService | null = null;
@@ -69,6 +71,34 @@ export class PlanService {
       CREATE INDEX IF NOT EXISTS idx_plans_chat_status ON plans(chat_id, status);
     `);
 
+    // Add migration for source_agent_id and source_agent_name columns
+    try {
+      this.db.exec(`
+        ALTER TABLE plans ADD COLUMN source_agent_id TEXT;
+      `);
+      console.log("[PlanService] Added source_agent_id column");
+    } catch (error) {
+      // Column already exists, ignore
+    }
+
+    try {
+      this.db.exec(`
+        ALTER TABLE plans ADD COLUMN source_agent_name TEXT;
+      `);
+      console.log("[PlanService] Added source_agent_name column");
+    } catch (error) {
+      // Column already exists, ignore
+    }
+
+    // Create index for source_agent_id
+    try {
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_plans_source_agent ON plans(source_agent_id);
+      `);
+    } catch (error) {
+      // Index may already exist
+    }
+
     this.initialized = true;
     console.log("[PlanService] Initialized");
   }
@@ -81,6 +111,8 @@ export class PlanService {
     chatId: string,
     title: string,
     steps: PlanStep[],
+    sourceAgentId?: string,
+    sourceAgentName?: string,
   ): Promise<Plan> {
     if (!this.db) throw new Error("PlanService not initialized");
 
@@ -93,11 +125,13 @@ export class PlanService {
       status: "active",
       createdAt: now,
       updatedAt: now,
+      sourceAgentId,
+      sourceAgentName,
     };
 
     const stmt = this.db.prepare(`
-      INSERT INTO plans (plan_id, chat_id, title, steps, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO plans (plan_id, chat_id, title, steps, status, created_at, updated_at, source_agent_id, source_agent_name)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -108,6 +142,8 @@ export class PlanService {
       plan.status,
       plan.createdAt,
       plan.updatedAt,
+      plan.sourceAgentId ?? null,
+      plan.sourceAgentName ?? null,
     );
 
     console.log(`[PlanService] Created plan: ${planId} for chat: ${chatId}`);
@@ -182,6 +218,8 @@ export class PlanService {
       status: row.status,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      sourceAgentId: row.source_agent_id,
+      sourceAgentName: row.source_agent_name,
     };
   }
 
@@ -207,6 +245,8 @@ export class PlanService {
       status: row.status,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      sourceAgentId: row.source_agent_id,
+      sourceAgentName: row.source_agent_name,
     }));
   }
 

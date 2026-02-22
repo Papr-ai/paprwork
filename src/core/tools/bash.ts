@@ -19,7 +19,6 @@ import {
   substituteCustomKeysWithPermission,
   sanitizeError,
   getApiKeysForSanitization,
-  truncateResult,
 } from "./security.js";
 
 const execAsync = promisify(exec);
@@ -52,6 +51,70 @@ export interface BashOutput {
   exitCode: number;
   command: string;
   duration: number;
+}
+
+/** Matches ~/PAPR/apps/{appId}/{filename} or $HOME/PAPR/apps/... or /path/PAPR/apps/... */
+const APP_PATH_REGEX =
+  /PAPR\/apps\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([^\s"'`;|&<>]+)/gi;
+
+/** Write indicators: redirects, sed -i, tee, cp, mv */
+const WRITE_INDICATORS = [
+  />\s*\S|>>\s*\S/, // > file or >> file
+  /sed\s+-i/, // sed -i (in-place edit)
+  /\btee\b/, // tee
+  /\bcp\s+/, // cp src dest
+  /\bmv\s+/, // mv src dest
+];
+
+/**
+ * Detect if a bash command modifies files in ~/PAPR/apps/{appId}/.
+ * Returns [{ appId, filename }] for each app file that appears to be written.
+ */
+function detectAppFileEditsFromBashCommand(
+  command: string,
+): { appId: string; filename: string }[] {
+  const hasWrite = WRITE_INDICATORS.some((re) => re.test(command));
+  if (!hasWrite) return [];
+
+  const matches: { appId: string; filename: string }[] = [];
+  const seen = new Set<string>();
+  let m: RegExpExecArray | null;
+  const re = new RegExp(APP_PATH_REGEX.source, "gi");
+  while ((m = re.exec(command)) !== null) {
+    const appId = m[1];
+    const filename = m[2].replace(/^["']|["']$/g, "").trim();
+    if (!filename) continue;
+    const key = `${appId}/${filename}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      matches.push({ appId, filename });
+    }
+  }
+  return matches;
+}
+
+/**
+ * Broadcast app:file-changed for each edited app file (triggers iframe reload).
+ * Called when bash modifies files in ~/PAPR/apps/.
+ */
+async function broadcastAppFileChanges(
+  edits: { appId: string; filename: string }[],
+): Promise<void> {
+  if (edits.length === 0) return;
+  try {
+    const { broadcast } = await import("../../gateway/websocket/index.js");
+    for (const { appId, filename } of edits) {
+      broadcast({
+        type: "app:file-changed",
+        data: { appId, filename, timestamp: Date.now() },
+      });
+      console.log(
+        `[Bash] Broadcasted app file change (bash edit): ${appId}/${filename}`,
+      );
+    }
+  } catch (err) {
+    console.warn("[Bash] Failed to broadcast app file changes:", err);
+  }
 }
 
 /**
@@ -167,13 +230,15 @@ export async function executeBashCommand(
 
     const duration = Date.now() - startTime;
 
-    // Sanitize output before returning
-    const sanitizedStdout = truncateResult(
-      sanitizeError(stdout || "", apiKeys),
-    );
-    const sanitizedStderr = truncateResult(
-      sanitizeError(stderr || "", apiKeys),
-    );
+    // Sanitize output before returning (no truncation - prepareStep keeps last full)
+    const sanitizedStdout = sanitizeError(stdout || "", apiKeys);
+    const sanitizedStderr = sanitizeError(stderr || "", apiKeys);
+
+    // If bash modified app files (e.g. sed, cat >, tee), broadcast so iframe reloads
+    const appEdits = detectAppFileEditsFromBashCommand(input.command);
+    if (appEdits.length > 0) {
+      void broadcastAppFileChanges(appEdits);
+    }
 
     return {
       success: true,
@@ -210,12 +275,8 @@ export async function executeBashCommand(
           error: sanitizedError,
           type: "timeout_error",
           data: {
-            stdout: truncateResult(
-              sanitizeError(execError.stdout || "", apiKeys),
-            ),
-            stderr: truncateResult(
-              sanitizeError(execError.stderr || "", apiKeys),
-            ),
+            stdout: sanitizeError(execError.stdout || "", apiKeys),
+            stderr: sanitizeError(execError.stderr || "", apiKeys),
             exitCode: execError.code || -1,
             command: sanitizeError(input.command, apiKeys),
             duration,
@@ -233,12 +294,8 @@ export async function executeBashCommand(
         error: sanitizedError,
         type: "execution_error",
         data: {
-          stdout: truncateResult(
-            sanitizeError(execError.stdout || "", apiKeys),
-          ),
-          stderr: truncateResult(
-            sanitizeError(execError.stderr || "", apiKeys),
-          ),
+          stdout: sanitizeError(execError.stdout || "", apiKeys),
+          stderr: sanitizeError(execError.stderr || "", apiKeys),
           exitCode: execError.code || 1,
           command: sanitizeError(input.command, apiKeys),
           duration,
@@ -380,16 +437,17 @@ export async function executeBashCommandStreaming(
       const duration = Date.now() - startTime;
       const exitCode = code ?? -1;
 
-      // Sanitize and truncate final output
-      const sanitizedStdout = truncateResult(
-        sanitizeError(stdoutData, apiKeys),
-      );
-      const sanitizedStderr = truncateResult(
-        sanitizeError(stderrData, apiKeys),
-      );
+      // Sanitize final output (no truncation - prepareStep keeps last full)
+      const sanitizedStdout = sanitizeError(stdoutData, apiKeys);
+      const sanitizedStderr = sanitizeError(stderrData, apiKeys);
       const sanitizedCommand = sanitizeError(input.command, apiKeys);
 
       if (exitCode === 0) {
+        // If bash modified app files, broadcast so iframe reloads
+        const appEdits = detectAppFileEditsFromBashCommand(input.command);
+        if (appEdits.length > 0) {
+          void broadcastAppFileChanges(appEdits);
+        }
         resolve({
           success: true,
           data: {
@@ -422,12 +480,8 @@ export async function executeBashCommandStreaming(
     // Handle errors
     proc.on("error", (error: Error) => {
       const duration = Date.now() - startTime;
-      const sanitizedStdout = truncateResult(
-        sanitizeError(stdoutData, apiKeys),
-      );
-      const sanitizedStderr = truncateResult(
-        sanitizeError(stderrData, apiKeys),
-      );
+      const sanitizedStdout = sanitizeError(stdoutData, apiKeys);
+      const sanitizedStderr = sanitizeError(stderrData, apiKeys);
       const sanitizedCommand = sanitizeError(input.command, apiKeys);
       const sanitizedError = sanitizeError(error.message, apiKeys);
 

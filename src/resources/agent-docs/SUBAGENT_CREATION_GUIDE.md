@@ -54,7 +54,7 @@ create_sub_agent({
   description: "Investigates complex topics with evidence",
   systemPrompt: "You are a focused researcher. Gather evidence, cite sources, and highlight uncertainty."
 })
-// Result: Uses default provider (openai) and model (gpt-5-mini)
+// Result: Uses default provider (openai) and model (gpt-5.2)
 ```
 
 ### Full Example (All Options)
@@ -94,17 +94,23 @@ Always cite sources and explain your reasoning.`,
 
 ## Available Models for Sub-Agents
 
+**OAuth vs API key:** Sub-agents and agent jobs work with both. Paprwork routes automatically:
+- **OAuth** (ChatGPT/Claude subscription) → pi-ai backend
+- **API key** (Platform) → AI SDK backend
+
+Pick models the user has access to. Default to `gpt-5.2` or `claude-sonnet-4-6` when unspecified.
+
 ### When to Specify a Model?
 
-**Use defaults (gpt-5-mini) for:**
+**Use defaults (gpt-5.2 or claude-sonnet-4-6) for:**
 - ✅ Fast, simple tasks
 - ✅ Data processing
 - ✅ Cost-sensitive operations
 - ✅ High-volume work
 
 **Specify a model for:**
-- ✅ Complex reasoning (Claude Opus, GPT-5.2)
-- ✅ Code tasks (GPT-5.2 Codex)
+- ✅ Complex reasoning (Claude Opus, GPT-5.2-high)
+- ✅ Code tasks (GPT-5.2 Codex, GPT 5.3)
 - ✅ Extended thinking (Claude Thinking models)
 
 ### Anthropic Claude Models
@@ -114,10 +120,10 @@ Always cite sources and explain your reasoning.`,
 model: "claude-haiku-4-5"
 
 // Balanced (default for Anthropic)
-model: "claude-sonnet-4-5"
+model: "claude-sonnet-4-6"
 
 // Most capable
-model: "claude-opus-4-5"
+model: "claude-opus-4-6"
 
 // Extended thinking for deep analysis
 model: "claude-opus-4-5-thinking"
@@ -126,33 +132,30 @@ model: "claude-opus-4-5-thinking"
 ### OpenAI GPT Models
 
 ```javascript
-// Fast, efficient (default) ⭐ RECOMMENDED
-model: "gpt-5-mini"
+// Fast reasoning
+model: "gpt-5.2-low"
 
-// Balanced reasoning
-model: "gpt-5-2"
+// Balanced (default) ⭐ RECOMMENDED
+model: "gpt-5.2"
 
-// Lower reasoning effort (faster)
-model: "gpt-5-2-low"
-
-// Higher reasoning effort
-model: "gpt-5-2-high"
-
-// Maximum reasoning effort
-model: "gpt-5-2-xhigh"
+// Deep reasoning
+model: "gpt-5.2-high"
 
 // Specialized for code
-model: "gpt-5-2-codex"
+model: "gpt-5.2-codex"
+
+// Latest Codex (OAuth only)
+model: "gpt-5.3-codex"
 ```
 
 ### Google Gemini Models
 
 ```javascript
 // Fast, capable (default for Google)
-model: "gemini-2-5-flash"
+model: "gemini-2.5-flash"
 
 // Lightweight, very fast
-model: "gemini-2-5-flash-lite"
+model: "gemini-2.5-flash-lite"
 
 // Most capable (experimental)
 model: "gemini-3-pro-preview"
@@ -248,7 +251,7 @@ Focus on:
 Provide specific, actionable feedback with examples.`,
   
   provider: "anthropic",
-  model: "claude-sonnet-4-5",
+  model: "claude-sonnet-4-6",
   allowedToolIds: ["bash", "read_file", "search_files"]
 })
 ```
@@ -270,7 +273,7 @@ Your process:
 
 Always validate data quality before analysis.`,
   
-  model: "gpt-5-mini",  // Fast for data processing
+  model: "gpt-5.2",  // Fast for data processing
   allowedToolIds: ["bash", "read_file"]
 })
 ```
@@ -314,7 +317,7 @@ Responsibilities:
 
 Always validate jobs completed successfully before starting dependent jobs.`,
   
-  model: "gpt-5-mini",
+  model: "gpt-5.2",
   allowedToolIds: ["bash", "create_job", "run_job", "read_job_logs", "read_file"]
 })
 ```
@@ -330,7 +333,7 @@ To update a sub-agent, call `create_sub_agent` with the **same ID**:
 create_sub_agent({
   id: "researcher",
   name: "Researcher",
-  model: "gpt-5-mini",
+  model: "gpt-5.2",
   // ...
 })
 
@@ -422,7 +425,7 @@ allowedToolIds: ["bash", "read_file", "search_files"]
 model: "claude-opus-4-5-thinking"  // Expensive!
 
 // ✅ Right-sized
-model: "gpt-5-mini"  // Fast, cheap, sufficient
+model: "gpt-5.2"  // Fast, cheap, sufficient
 ```
 
 ### 5. **Include Context in System Prompt**
@@ -507,7 +510,7 @@ model: "claude-3-opus"    // ← Old model
 // Good: Correct current model IDs
 model: "claude-opus-4-5"
 model: "gpt-5-2"
-model: "claude-sonnet-4-5"
+model: "claude-sonnet-4-6"
 ```
 
 ---

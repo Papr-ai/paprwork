@@ -74,6 +74,14 @@ const createJobSchema = z.object({
       "Python/Node packages to install before running. Creates a venv automatically. Example: ['anthropic', 'requests', 'sqlite-utils']",
     ),
   dependsOn: z.array(dependencySchema).optional(),
+  runtimeCalls: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      "Job IDs this job calls at runtime via HTTP (POST /api/jobs/run). " +
+        "Used for visualization only (shows dashed arrows in graph). " +
+        "Example: ['agent_summarizer', 'data_validator']",
+    ),
   retries: retrySchema.optional(),
   deliver: deliverySchema.optional(),
   retentionDays: z.number().int().min(1).max(365).optional(),
@@ -678,8 +686,7 @@ Workflow:
 Example: Replace lines 168-215 in index.html with new HTML structure`,
   inputSchema: editAppFileLinesSchema,
   execute: async (input) => {
-    const args =
-      (input as { context?: EditAppFileLinesArgs }).context ?? input;
+    const args = (input as { context?: EditAppFileLinesArgs }).context ?? input;
     const { getAppService } =
       await import("../../gateway/services/AppService.js");
     const appService = getAppService();

@@ -44,6 +44,10 @@ interface ChatStore {
   setDraftMessage: (chatId: string, draft: string) => void;
   getDraftMessage: (chatId: string) => string;
   clearDraftMessage: (chatId: string) => void;
+
+  // Model selection per chat
+  setLastSelectedModel: (chatId: string, modelId: string) => void;
+  getLastSelectedModel: (chatId: string) => string | undefined;
 }
 
 export const defaultChatState: ChatState = {
@@ -261,6 +265,36 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       newChatStates.set(chatId, { ...chatState, draftMessage: "" });
       return { chatStates: newChatStates };
     }),
+
+  setLastSelectedModel: (chatId, modelId) =>
+    set((state) => {
+      const chatState = state.chatStates.get(chatId) || { ...defaultChatState };
+      const newChatStates = new Map(state.chatStates);
+      newChatStates.set(chatId, { ...chatState, lastSelectedModelId: modelId });
+      if (typeof window !== "undefined") {
+        try {
+          localStorage.setItem("paprwork_last_model_id", modelId);
+        } catch {
+          /* ignore */
+        }
+      }
+      return { chatStates: newChatStates };
+    }),
+
+  getLastSelectedModel: (chatId) => {
+    const state = get();
+    const fromChat = state.chatStates.get(chatId)?.lastSelectedModelId;
+    if (fromChat) return fromChat;
+    if (typeof window !== "undefined") {
+      try {
+        const persisted = localStorage.getItem("paprwork_last_model_id");
+        if (persisted) return persisted;
+      } catch {
+        /* ignore */
+      }
+    }
+    return undefined;
+  },
 }));
 
 // Expose chatStore globally for tabStore to access

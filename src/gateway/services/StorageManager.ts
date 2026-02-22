@@ -41,6 +41,7 @@ export class StorageManager {
     this.config = config;
     this.currentMode = config.mode;
 
+    console.log(`[StorageManager] Creating provider for mode: ${config.mode}`);
     // Create appropriate provider based on mode
     switch (config.mode) {
       case "local":
@@ -72,6 +73,7 @@ export class StorageManager {
         throw new Error(`Unknown storage mode: ${config.mode}`);
     }
 
+    console.log(`[StorageManager] Provider created, initializing...`);
     // Initialize the provider
     await this.provider.initialize();
     console.log(`✓ StorageManager initialized in ${config.mode} mode`);
@@ -96,6 +98,13 @@ export class StorageManager {
       );
     }
     return this.provider;
+  }
+
+  /**
+   * Get current provider (for direct access when needed)
+   */
+  get currentProvider(): IStorageProvider {
+    return this.ensureInitialized();
   }
 
   // ===== Message Operations =====
@@ -188,10 +197,69 @@ export class StorageManager {
   async getChatStats(chatId: string): Promise<{
     message_count: number;
     token_count: number;
+    cost_total: number;
     has_summary: boolean;
   }> {
     const provider = this.ensureInitialized();
     return await provider.getChatStats(chatId);
+  }
+
+  async getGlobalCostStats(): Promise<{
+    today: number;
+    thisWeek: number;
+    thisMonth: number;
+    total: number;
+    totalMessages: number;
+    topModels: Array<{ model: string; cost: number; count: number }>;
+  }> {
+    const provider = this.ensureInitialized();
+    return await provider.getGlobalCostStats();
+  }
+
+  async getChatCost(chatId: string): Promise<{
+    total: number;
+    byModel: Record<string, number>;
+    messageCount: number;
+    avgCostPerMessage: number;
+  }> {
+    const provider = this.ensureInitialized();
+    return await provider.getChatCost(chatId);
+  }
+
+  async getDailyCostTrends(
+    days?: number,
+  ): Promise<Array<{ date: string; cost: number; messages: number }>> {
+    const provider = this.ensureInitialized();
+    return await provider.getDailyCostTrends(days);
+  }
+
+  async getModelDistribution(): Promise<
+    Array<{ model: string; percentage: number; cost: number; messages: number }>
+  > {
+    const provider = this.ensureInitialized();
+    return await provider.getModelDistribution();
+  }
+
+  async getAgentStats(agentId: string): Promise<{
+    totalMessages: number;
+    totalTokens: number;
+    totalCost: number;
+    toolCallsCount: number;
+    avgTokensPerMessage: number;
+    avgCostPerMessage: number;
+    mostUsedTools: Array<{ tool: string; count: number }>;
+  }> {
+    const provider = this.ensureInitialized();
+    return await provider.getAgentStats(agentId);
+  }
+
+  async getAgentOutputs(agentId?: string): Promise<{
+    documents: Array<{ id: string; title: string; createdAt: string }>;
+    apps: Array<{ id: string; title: string; createdAt: string }>;
+    plans: Array<{ planId: string; title: string; createdAt: string }>;
+  }> {
+    const provider = this.ensureInitialized();
+    return await provider.getAgentOutputs(agentId);
   }
 
   // ===== Summary Operations =====

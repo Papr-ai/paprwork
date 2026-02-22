@@ -462,23 +462,107 @@ export function useAgent() {
               updateBatchRef.current.delete(chatId);
             }
 
-            // ✅ SEQUENCE: Build final sequence
+            // ✅ Use finalMessage from backend when available (Codex, or when streaming chunks missed)
+            const payload = (
+              chunk as { payload?: { finalMessage?: Record<string, unknown> } }
+            ).payload;
+            const finalMessageFromBackend = payload?.finalMessage;
+
+            // ✅ SEQUENCE: Build final sequence from streaming refs OR fallback to backend's finalMessage
             const currentSegment =
               currentTextSegmentRef.current.get(chatId) || "";
-            const sequence = sequenceRef.current.get(chatId) || [];
-            const finalReasoning = streamingReasoningRef.current.get(chatId);
+            let sequence = sequenceRef.current.get(chatId) || [];
+            let finalReasoning = streamingReasoningRef.current.get(chatId);
+            let content = streamingContentRef.current.get(chatId);
+            let chatToolCalls = toolCallsMapRef.current.get(chatId);
 
-            // Add thinking to beginning of sequence if present
+            // If backend sent finalMessage and we have little/no streaming data, use it
+            if (
+              finalMessageFromBackend &&
+              typeof finalMessageFromBackend === "object" &&
+              (sequence.length === 0 || !finalReasoning) &&
+              (finalMessageFromBackend.sequence ||
+                finalMessageFromBackend.reasoning ||
+                finalMessageFromBackend.toolCalls)
+            ) {
+              const fm = finalMessageFromBackend as {
+                sequence?: Array<{ type: string; data: unknown }>;
+                reasoning?: string;
+                toolCalls?: Array<{
+                  id: string;
+                  toolName: string;
+                  args?: unknown;
+                  status: string;
+                  result?: string;
+                }>;
+                content?: string;
+              };
+              if (fm.sequence && fm.sequence.length > 0) {
+                // Only replace sequence if client-side sequence is empty
+                // This prevents losing delegation cards and other client-side state
+                if (sequence.length === 0) {
+                  sequence = fm.sequence;
+                  console.log(
+                    `[useAgent] Using backend sequence (${sequence.length} items)`,
+                  );
+                } else {
+                  console.log(
+                    `[useAgent] Keeping client-side sequence (${sequence.length} items), backend had ${fm.sequence.length} items`,
+                  );
+                }
+              }
+              if (
+                (fm.reasoning || (fm as { thinking?: string }).thinking) &&
+                !finalReasoning
+              ) {
+                finalReasoning =
+                  fm.reasoning || (fm as { thinking?: string }).thinking;
+              }
+              if (
+                fm.toolCalls &&
+                fm.toolCalls.length > 0 &&
+                (!chatToolCalls || chatToolCalls.size === 0)
+              ) {
+                const map = new Map<
+                  string,
+                  {
+                    id: string;
+                    toolName: string;
+                    args?: unknown;
+                    status: string;
+                    result?: string;
+                  }
+                >();
+                fm.toolCalls.forEach((tc) => {
+                  const id =
+                    tc.id || `tool-${Date.now()}-${tc.toolName || tc.name}`;
+                  map.set(id, {
+                    id,
+                    toolName:
+                      tc.toolName || (tc as { name?: string }).name || "tool",
+                    args: tc.args,
+                    status: tc.status || "success",
+                    result: tc.result,
+                  });
+                });
+                chatToolCalls = map;
+              }
+              if (fm.content && !content) {
+                content = fm.content;
+              }
+            }
+
+            // Add thinking to beginning of sequence if present (from streaming)
             if (
               finalReasoning &&
               finalReasoning.trim() &&
               !sequence.some((item) => item.type === "thinking")
             ) {
               console.log(`[useAgent] Adding thinking to sequence`);
-              sequence.unshift({
-                type: "thinking",
-                data: finalReasoning.trim(),
-              });
+              sequence = [
+                { type: "thinking", data: finalReasoning.trim() },
+                ...sequence,
+              ];
             }
 
             // Add any remaining text segment (final text after all tools)
@@ -486,15 +570,16 @@ export function useAgent() {
               console.log(
                 `[useAgent] Adding final text to sequence: "${currentSegment.trim().substring(0, 50)}..."`,
               );
-              sequence.push({ type: "text", data: currentSegment.trim() });
+              sequence = [
+                ...sequence,
+                { type: "text", data: currentSegment.trim() },
+              ];
               sequenceRef.current.set(chatId, sequence);
             }
 
             // Flush final update immediately
             const streamingMessageId =
               streamingMessageIdRef.current.get(chatId);
-            const content = streamingContentRef.current.get(chatId);
-            const chatToolCalls = toolCallsMapRef.current.get(chatId);
 
             if (streamingMessageId) {
               // Update message with final sequence we built
@@ -553,11 +638,45 @@ export function useAgent() {
         case "error":
           {
             // Handle error
-            const errorMsg =
-              (chunk.payload as { error: string }).error || "Unknown error";
-            console.error("[useAgent] Received error chunk:", errorMsg);
-            console.error("[useAgent] Full chunk payload:", chunk.payload);
-            setError(errorMsg);
+            const payload = chunk.payload as { error: string };
+            const rawError = payload.error || "Unknown error";
+
+            // Don't show abort errors - expected when user stops or sends new message
+            const isAbortError =
+              rawError.includes("aborted") ||
+              rawError.includes("abort") ||
+              rawError.toLowerCase().includes("the user aborted");
+            if (isAbortError) {
+              console.log(
+                "[useAgent] Ignoring expected abort error (user stopped or sent new message)",
+              );
+              // Still clean up state below
+            } else {
+              // Extract provider-specific error messages
+              let errorMsg = rawError;
+
+              // Pattern: "Your credit balance is too low to access the X API"
+              if (rawError.includes("credit balance is too low")) {
+                const providerMatch = rawError.match(/access the (\w+) API/);
+                const provider = providerMatch ? providerMatch[1] : "provider";
+                errorMsg = `Credit balance too low for ${provider}. Please add credits or switch to a different model.`;
+              }
+              // Pattern: Generic API key errors
+              else if (rawError.includes("API key")) {
+                errorMsg = `API key error: ${rawError}`;
+              }
+              // Pattern: Rate limit errors
+              else if (
+                rawError.includes("rate limit") ||
+                rawError.includes("429")
+              ) {
+                errorMsg = `Rate limit exceeded. Please try again in a moment.`;
+              }
+
+              console.error("[useAgent] Received error chunk:", errorMsg);
+              console.error("[useAgent] Full chunk payload:", chunk.payload);
+              setError(errorMsg);
+            }
             const streamingMessageId =
               streamingMessageIdRef.current.get(chatId);
             if (streamingMessageId) {
@@ -634,6 +753,44 @@ export function useAgent() {
       setError,
     ],
   );
+
+  // Listen for broadcast agent chunks (e.g. auto-response to sub-agent questions)
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ type: string; data?: unknown }>)
+        .detail;
+      if (!detail?.type?.startsWith("agent:")) return;
+
+      if (detail.type === "agent:chunk" && detail.data) {
+        const chunk = detail.data as Record<string, unknown>;
+        handleStreamChunk(chunk as StreamChunk);
+      } else if (detail.type === "agent:complete" && detail.data) {
+        const data = detail.data as Record<string, unknown>;
+        const chatId = data.chatId as string | undefined;
+        if (chatId) {
+          handleStreamChunk({
+            type: "done",
+            chatId,
+            payload: { finalMessage: data.finalMessage },
+          } as StreamChunk);
+        }
+      } else if (detail.type === "agent:error" && detail.data) {
+        const data = detail.data as Record<string, unknown>;
+        const chatId = data.chatId as string | undefined;
+        const error = data.error as string | undefined;
+        if (chatId) {
+          handleStreamChunk({
+            type: "error",
+            chatId,
+            payload: { error: error || "Stream error" },
+          } as StreamChunk);
+        }
+      }
+    };
+
+    window.addEventListener("gateway-broadcast", handler);
+    return () => window.removeEventListener("gateway-broadcast", handler);
+  }, [handleStreamChunk]);
 
   // Send message to agent
   const sendMessage = useCallback(
@@ -778,14 +935,23 @@ export function useAgent() {
           setTabUnread(newTabId, true);
         }
       } catch (error) {
-        // Log full error with stack trace for debugging
-        console.error("[useAgent] sendMessage error:", error);
-        if (error instanceof Error) {
-          console.error("[useAgent] Stack trace:", error.stack);
-        }
         const errorMessage =
           error instanceof Error ? error.message : String(error);
-        setError(errorMessage);
+        const isAbortError =
+          errorMessage.includes("aborted") ||
+          errorMessage.includes("abort") ||
+          errorMessage.toLowerCase().includes("the user aborted");
+        if (isAbortError) {
+          console.log(
+            "[useAgent] Ignoring expected abort (user stopped or sent new message)",
+          );
+        } else {
+          console.error("[useAgent] sendMessage error:", error);
+          if (error instanceof Error) {
+            console.error("[useAgent] Stack trace:", error.stack);
+          }
+          setError(errorMessage);
+        }
         setSending(finalChatId, false); // ✅ Per-chat isSending
 
         // Clear streaming status on error for THIS chat's tab

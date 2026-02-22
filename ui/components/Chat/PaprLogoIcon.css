@@ -1,0 +1,24 @@
+/**
+ * Papr Logo Icon - Draw from bottom up, dotted, black/white
+ */
+
+.papr-logo-icon {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+}
+
+.papr-logo-icon-path {
+  stroke-dashoffset: 500;
+  animation: paprLogoDraw 3.2s ease-out infinite;
+  will-change: stroke-dashoffset;
+}
+
+@keyframes paprLogoDraw {
+  0% {
+    stroke-dashoffset: 500;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}

@@ -30,6 +30,10 @@ export function JobStatusCard({ data }: Props) {
     data.status === "running" || data.status === "waiting_permission",
   );
 
+  // Get job name from store (updated via broadcast)
+  const jobNameFromStore = useJobLiveLogsStore((s) => s.getJobName(data.jobId));
+  const displayName = jobNameFromStore || data.jobName;
+
   // Live logs stream in while job is running
   const liveLogs = useJobLiveLogsStore((s) =>
     data.status === "running" ? (s.logsByJobId.get(data.jobId) ?? []) : [],
@@ -45,14 +49,93 @@ export function JobStatusCard({ data }: Props) {
     }
   }, [data.status, logLines.length]);
 
-  const statusIcon =
-    {
-      running: "🔄",
-      waiting_permission: "🔑",
-      completed: "✅",
-      failed: "❌",
-      pending: "⏸️",
-    }[data.status] || "📋";
+  const statusIcon = {
+    running: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+        <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.5" />
+        <path
+          d="M12 1v6m0 6v6M4.22 4.22l4.24 4.24m5.08 5.08l4.24 4.24M1 12h6m6 0h6M4.22 19.78l4.24-4.24m5.08-5.08l4.24-4.24"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+      </svg>
+    ),
+    waiting_permission: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+        <rect
+          x="5"
+          y="11"
+          width="14"
+          height="10"
+          rx="2"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+        <path
+          d="M12 15v2"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+        />
+        <path
+          d="M7 11V7a5 5 0 0110 0v4"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+        />
+      </svg>
+    ),
+    completed: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+        <path
+          d="M20 6L9 17l-5-5"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    ),
+    failed: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+        <circle
+          cx="12"
+          cy="12"
+          r="10"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+        <path
+          d="M15 9l-6 6M9 9l6 6"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+        />
+      </svg>
+    ),
+    pending: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+        <circle
+          cx="12"
+          cy="12"
+          r="10"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+        <path
+          d="M10 9h4v4"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    ),
+  }[data.status] || (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
 
   const statusClass =
     {
@@ -66,7 +149,8 @@ export function JobStatusCard({ data }: Props) {
     logLines.length > 0 ||
     (data.status === "waiting_permission" &&
       data.waitingPermissionKeys &&
-      data.waitingPermissionKeys.length > 0);
+      data.waitingPermissionKeys.length > 0) ||
+    data.status === "running"; // Always expandable when running so user sees log area
   const displayStatus =
     data.status === "completed"
       ? "Completed"
@@ -102,7 +186,7 @@ export function JobStatusCard({ data }: Props) {
             </svg>
           )}
           <span className="job-status-card__icon">{statusIcon}</span>
-          <span className="job-status-card__title">{data.jobName}</span>
+          <span className="job-status-card__title">{displayName}</span>
         </div>
         <span
           className={`job-status-card__badge job-status-card__badge--${data.status}`}
@@ -121,25 +205,36 @@ export function JobStatusCard({ data }: Props) {
               </div>
             )}
 
-          {logLines.length > 0 ? (
+          {logLines.length > 0 || data.status === "running" ? (
             <div className="job-status-card__logs">
               <div className="job-status-card__logs-content">
-                {logLines.slice(-24).map((log, i) => (
-                  <div key={i} className="job-status-card__log-line">
-                    {log}
+                {logLines.length > 0 ? (
+                  <>
+                    {(logLines ?? []).slice(-24).map((log, i) => (
+                      <div key={i} className="job-status-card__log-line">
+                        {log}
+                      </div>
+                    ))}
+                    <div ref={logsEndRef} />
+                  </>
+                ) : (
+                  <div className="job-status-card__logs-placeholder">
+                    <span className="job-status-card__logs-placeholder-dot" />
+                    Waiting for output…
                   </div>
-                ))}
-                <div ref={logsEndRef} />
+                )}
               </div>
-              <button
-                type="button"
-                className="job-status-card__logs-link"
-                onClick={() => {
-                  // TODO: Open full logs
-                }}
-              >
-                View logs →
-              </button>
+              {logLines.length > 0 && (
+                <button
+                  type="button"
+                  className="job-status-card__logs-link"
+                  onClick={() => {
+                    // TODO: Open full logs
+                  }}
+                >
+                  View logs →
+                </button>
+              )}
             </div>
           ) : null}
         </div>

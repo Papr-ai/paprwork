@@ -28,6 +28,8 @@ export type DelegationRunStatus =
 export interface DelegationRunRecord {
   id: string;
   agentId: string;
+  /** Display name of the sub-agent (e.g. "Research Specialist") */
+  agentName?: string;
   task: string;
   context?: string;
   status: DelegationRunStatus;
@@ -49,4 +51,30 @@ export interface DelegateTaskInput {
   outputSchema?: Record<string, unknown>;
   maxTurns?: number;
   memoryPolicy?: "none" | "summary" | "full";
+}
+
+/**
+ * Sub-agent chat session for multi-turn interaction
+ * Enables main agent and user to communicate with sub-agent in real-time
+ */
+export interface SubAgentChatSession {
+  delegationId: string; // Links to delegation run (job ID)
+  chatId: string; // "subagent:{delegationId}"
+  parentChatId: string; // Main chat where delegation was triggered
+  subAgentId: string; // Which sub-agent profile is running
+  participants: string[]; // ["main-agent", "sub-agent", ...user if joined]
+  status: "active" | "completed" | "failed";
+  createdAt: string;
+  completedAt?: string;
+}
+
+/**
+ * Message in a sub-agent chat session
+ */
+export interface SubAgentChatMessage {
+  role: "user" | "assistant";
+  author: "main-agent" | "sub-agent" | "user";
+  content: string;
+  timestamp: string;
+  chatId: string; // "subagent:{delegationId}"
 }

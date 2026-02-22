@@ -18,6 +18,8 @@ export interface MiniApp {
   icon?: string;
   favorite?: boolean;
   preview?: string;
+  createdByAgentId?: string;
+  createdByAgentName?: string;
 }
 
 export interface AppFile {
@@ -177,6 +179,8 @@ export class AppService {
     description: string,
     files: AppFile[],
     icon?: string,
+    createdByAgentId?: string,
+    createdByAgentName?: string,
   ): Promise<MiniApp> {
     const now = new Date().toISOString();
 
@@ -198,6 +202,8 @@ export class AppService {
       updatedAt: now,
       favorite: false,
       ...(resolvedIcon ? { icon: resolvedIcon } : {}),
+      createdByAgentId,
+      createdByAgentName,
     };
 
     // Create app directory

@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import type { StoredMessage } from "../storage/IStorageProvider.js";
 import type { ToolCallEvent, ToolResultEvent } from "./streamChunks.js";
+import { calculateCost } from "../CostCalculation.js";
 
 export function formatToolResultForStorage(
   result: unknown,
@@ -26,7 +27,21 @@ export function createAssistantStoredMessage(args: {
   toolCalls: ToolCallEvent[];
   toolResults: ToolResultEvent[];
   sequence?: Array<{ type: "text" | "tool" | "thinking"; data: any }>; // V1-style sequence
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
 }): StoredMessage {
+  // Calculate cost if usage data available
+  const cost = args.usage
+    ? calculateCost(
+        args.model,
+        args.usage.promptTokens,
+        args.usage.completionTokens,
+      )
+    : undefined;
+
   return {
     id: `msg-${uuidv4()}`,
     chat_id: args.chatId,
@@ -50,6 +65,10 @@ export function createAssistantStoredMessage(args: {
     sequence: args.sequence, // Include V1-style sequence for interleaving
     timestamp: new Date().toISOString(),
     model: args.model,
+    prompt_tokens: args.usage?.promptTokens,
+    completion_tokens: args.usage?.completionTokens,
+    total_tokens: args.usage?.totalTokens,
+    cost,
     sync_status: "local",
   };
 }
@@ -78,7 +97,21 @@ export function createErrorStoredMessage(args: {
   toolCalls: ToolCallEvent[];
   toolResults: ToolResultEvent[];
   errorMessage: string;
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
 }): StoredMessage {
+  // Calculate cost if usage data available (even for errors)
+  const cost = args.usage
+    ? calculateCost(
+        args.model,
+        args.usage.promptTokens,
+        args.usage.completionTokens,
+      )
+    : undefined;
+
   return {
     id: `msg-${uuidv4()}`,
     chat_id: args.chatId,
@@ -107,6 +140,10 @@ export function createErrorStoredMessage(args: {
     incomplete: true,
     timestamp: new Date().toISOString(),
     model: args.model,
+    prompt_tokens: args.usage?.promptTokens,
+    completion_tokens: args.usage?.completionTokens,
+    total_tokens: args.usage?.totalTokens,
+    cost,
     sync_status: "local",
   };
 }

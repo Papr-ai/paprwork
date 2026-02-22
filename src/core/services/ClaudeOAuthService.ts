@@ -36,10 +36,7 @@ export class ClaudeOAuthService {
    */
   generatePKCE(): PKCEChallenge {
     // Generate code verifier (43-128 characters, base64url)
-    const verifier = crypto
-      .randomBytes(32)
-      .toString("base64url")
-      .slice(0, 128);
+    const verifier = crypto.randomBytes(32).toString("base64url").slice(0, 128);
 
     // Generate code challenge (SHA256 hash of verifier, base64url)
     const challenge = crypto
@@ -86,7 +83,7 @@ export class ClaudeOAuthService {
   async handleCallback(
     codeWithState: string,
     verifier: string,
-    expectedState: string
+    expectedState: string,
   ): Promise<OAuthTokenInput> {
     // Split code and state (Claude format: "code#state")
     const [code, state] = codeWithState.split("#");

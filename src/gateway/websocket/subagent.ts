@@ -32,6 +32,21 @@ interface GetRunPayload {
   runId: string;
 }
 
+interface SendMessagePayload {
+  delegationId: string;
+  message: string;
+  author: "main-agent" | "user";
+}
+
+interface JoinChatPayload {
+  delegationId: string;
+}
+
+interface GetMessagesPayload {
+  delegationId: string;
+  limit?: number;
+}
+
 export async function setupSubAgentHandlers(
   ws: WebSocket,
   message: WSMessage,
@@ -96,6 +111,57 @@ export async function setupSubAgentHandlers(
         sendResponse(ws, { id: message.id, success: true, data: { run } });
         break;
       }
+
+      // ===== Mini-Chat Communication Handlers =====
+
+      case "subagent:send-message": {
+        const payload = message.payload as SendMessagePayload;
+        const author = payload.author ?? "main-agent";
+        await service.respondToSubAgent(
+          payload.delegationId,
+          payload.message,
+          author,
+        );
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: { delegationId: payload.delegationId, sent: true },
+        });
+        break;
+      }
+
+      case "subagent:join-chat": {
+        const payload = message.payload as JoinChatPayload;
+        // TODO: Track user as participant in sub-agent chat
+        const { broadcast } = await import("./index.js");
+        broadcast({
+          type: "subagent-chat:user-joined",
+          data: {
+            delegationId: payload.delegationId,
+            userId: "user", // TODO: Get actual user ID
+            timestamp: new Date().toISOString(),
+          },
+        });
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: { delegationId: payload.delegationId, joined: true },
+        });
+        break;
+      }
+
+      case "subagent:get-messages": {
+        const payload = message.payload as GetMessagesPayload;
+        // TODO: Retrieve messages from sub-agent chat session
+        // For now, return empty array as placeholder
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: { messages: [], delegationId: payload.delegationId },
+        });
+        break;
+      }
+
       default:
         sendError(
           ws,

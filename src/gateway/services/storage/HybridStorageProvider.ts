@@ -217,10 +217,64 @@ export class HybridStorageProvider implements IStorageProvider {
   async getChatStats(chatId: string): Promise<{
     message_count: number;
     token_count: number;
+    cost_total: number;
     has_summary: boolean;
   }> {
     // Use local stats (faster)
     return this.local.getChatStats(chatId);
+  }
+
+  async getChatCost(chatId: string): Promise<{
+    total: number;
+    byModel: Record<string, number>;
+    messageCount: number;
+    avgCostPerMessage: number;
+  }> {
+    return this.local.getChatCost(chatId);
+  }
+
+  async getGlobalCostStats(): Promise<{
+    today: number;
+    thisWeek: number;
+    thisMonth: number;
+    total: number;
+    totalMessages: number;
+    topModels: Array<{ model: string; cost: number; count: number }>;
+  }> {
+    return this.local.getGlobalCostStats();
+  }
+
+  async getDailyCostTrends(
+    days?: number,
+  ): Promise<Array<{ date: string; cost: number; messages: number }>> {
+    return this.local.getDailyCostTrends(days);
+  }
+
+  async getModelDistribution(): Promise<
+    Array<{ model: string; percentage: number; cost: number; messages: number }>
+  > {
+    return this.local.getModelDistribution();
+  }
+
+  async getAgentStats(agentId: string): Promise<{
+    totalMessages: number;
+    totalTokens: number;
+    totalCost: number;
+    toolCallsCount: number;
+    avgTokensPerMessage: number;
+    avgCostPerMessage: number;
+    mostUsedTools: Array<{ tool: string; count: number }>;
+  }> {
+    return this.local.getAgentStats(agentId);
+  }
+
+  async getAgentOutputs(agentId?: string): Promise<{
+    documents: Array<{ id: string; title: string; createdAt: string }>;
+    apps: Array<{ id: string; title: string; createdAt: string }>;
+    plans: Array<{ planId: string; title: string; createdAt: string }>;
+  }> {
+    // Use local for agent outputs (tracked locally)
+    return this.local.getAgentOutputs(agentId);
   }
 
   // ===== Sync Management =====

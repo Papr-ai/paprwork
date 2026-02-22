@@ -21,12 +21,72 @@ export interface StreamOrchestratorResult {
   sequence: Array<{ type: "text" | "tool" | "thinking"; data: any }>; // V1-style sequence for interleaving
 }
 
+/**
+ * Extract a user-friendly error message from API errors
+ * Handles cases where error is an object with nested error details
+ */
+function extractErrorMessage(error: unknown): string {
+  // If it's already a string, return it
+  if (typeof error === "string") {
+    return error;
+  }
+
+  // If it's an Error object, return message
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  // If it's an object, try to extract meaningful error info
+  if (typeof error === "object" && error !== null) {
+    const errorObj = error as Record<string, unknown>;
+
+    // Check for common API error patterns
+    // Pattern 1: { message: "..." }
+    if (typeof errorObj.message === "string") {
+      return errorObj.message;
+    }
+
+    // Pattern 2: { error: { message: "..." } }
+    if (
+      typeof errorObj.error === "object" &&
+      errorObj.error !== null &&
+      typeof (errorObj.error as Record<string, unknown>).message === "string"
+    ) {
+      return (errorObj.error as Record<string, unknown>).message as string;
+    }
+
+    // Pattern 3: { data: { error: { message: "..." } } }
+    if (
+      typeof errorObj.data === "object" &&
+      errorObj.data !== null &&
+      typeof (errorObj.data as Record<string, unknown>).error === "object" &&
+      (errorObj.data as Record<string, unknown>).error !== null
+    ) {
+      const dataError = (errorObj.data as Record<string, unknown>)
+        .error as Record<string, unknown>;
+      if (typeof dataError.message === "string") {
+        return dataError.message;
+      }
+    }
+
+    // Try to stringify if we haven't found a message
+    try {
+      return JSON.stringify(errorObj);
+    } catch {
+      return "[Unserializable error object]";
+    }
+  }
+
+  return "Unknown error";
+}
+
 export async function* orchestrateModelStream(
   fullStream: AsyncIterable<unknown>,
   chatId: string,
   apiKeys: string[],
 ): AsyncGenerator<ChatStreamChunk, StreamOrchestratorResult> {
   const TEXT_BUFFER_MIN = 50;
+  const REASONING_BUFFER_MIN = 1; // Stream reasoning in real-time (no batching)
   let textBuffer = "";
   let reasoningBuffer = "";
 
@@ -35,9 +95,69 @@ export async function* orchestrateModelStream(
   const toolCalls: ToolCallEvent[] = [];
   const toolResults: ToolResultEvent[] = [];
 
+  // Buffer tool results so we can keep the last one full (truncate only prior ones)
+  const toolResultBuffer: Array<{
+    toolCallId: string;
+    toolName: string;
+    result: unknown;
+  }> = [];
+
   // Build V1-style sequence for interleaving text and tool calls
   const sequence: Array<{ type: "text" | "tool" | "thinking"; data: any }> = [];
   let currentTextSegment = ""; // Accumulate text between tool calls
+
+  function* flushToolResultBuffer(): Generator<ChatStreamChunk> {
+    if (toolResultBuffer.length === 0) return;
+    const lastIdx = toolResultBuffer.length - 1;
+    for (let i = 0; i < toolResultBuffer.length; i++) {
+      const item = toolResultBuffer[i];
+      let result = item.result;
+      if (i < lastIdx) {
+        if (typeof result === "string") {
+          result = truncateResult(result);
+        } else if (result && typeof result === "object") {
+          result = truncateStringsInUnknown(result);
+        }
+      }
+      const toolResult: ToolResultEvent = {
+        toolCallId: item.toolCallId,
+        toolName: item.toolName,
+        result,
+      };
+      toolResults.push(toolResult);
+      const toolCall = toolCalls.find(
+        (tc) => tc.toolCallId === toolResult.toolCallId,
+      );
+      if (toolCall) {
+        const toolIndex = sequence.findIndex(
+          (s) =>
+            s.type === "tool" &&
+            (s.data as { toolCallId?: string }).toolCallId ===
+              toolResult.toolCallId,
+        );
+        if (toolIndex !== -1) {
+          sequence[toolIndex].data = {
+            name: toolCall.toolName,
+            input: toolCall.args,
+            output: toolResult.result,
+            status: "success",
+            toolCallId: toolResult.toolCallId,
+          };
+        }
+      }
+      yield createChatStreamChunk(
+        "tool-result",
+        {
+          toolCallId: toolResult.toolCallId,
+          toolName: toolResult.toolName,
+          result: toolResult.result,
+          success: true,
+        },
+        chatId,
+      );
+    }
+    toolResultBuffer.length = 0;
+  }
 
   for await (const rawChunk of fullStream) {
     if (typeof rawChunk !== "object" || rawChunk === null) {
@@ -52,6 +172,11 @@ export async function* orchestrateModelStream(
     const chunkType = chunk.type;
     if (chunkType !== "text-delta") {
       console.log(`[AgentService] Received chunk type: ${String(chunkType)}`);
+    }
+
+    // Flush buffered tool results before non-tool-result chunks (keeps last full)
+    if (chunkType !== "tool-result") {
+      yield* flushToolResultBuffer();
     }
 
     switch (chunkType) {
@@ -124,7 +249,7 @@ export async function* orchestrateModelStream(
         thinkingText += reasoningText;
         reasoningBuffer += reasoningText;
 
-        if (reasoningBuffer.length >= TEXT_BUFFER_MIN) {
+        if (reasoningBuffer.length >= REASONING_BUFFER_MIN) {
           yield createChatStreamChunk(
             "reasoning-delta",
             { text: reasoningBuffer },
@@ -213,7 +338,7 @@ export async function* orchestrateModelStream(
         if (!parsedToolResult) break;
 
         const rawResult = parsedToolResult.result;
-        let sanitizedResult = sanitizeToolOutput(rawResult, apiKeys);
+        const sanitizedResult = sanitizeToolOutput(rawResult, apiKeys);
         const rawSize =
           typeof rawResult === "string"
             ? rawResult.length
@@ -222,64 +347,19 @@ export async function* orchestrateModelStream(
           `[AgentService] Tool ${parsedToolResult.toolName} raw result: ${rawSize} chars`,
         );
 
-        if (typeof sanitizedResult === "string") {
-          sanitizedResult = truncateResult(sanitizedResult);
-        } else if (sanitizedResult && typeof sanitizedResult === "object") {
-          sanitizedResult = truncateStringsInUnknown(sanitizedResult);
-        }
-
-        const toolResult: ToolResultEvent = {
+        // Buffer for flush - last one stays full
+        toolResultBuffer.push({
           toolCallId: parsedToolResult.toolCallId,
           toolName: parsedToolResult.toolName,
           result: sanitizedResult,
-        };
-        toolResults.push(toolResult);
-
-        // Update existing tool in sequence with result — match by toolCallId (reliable)
-        const toolCall = toolCalls.find(
-          (tc) => tc.toolCallId === toolResult.toolCallId,
-        );
-        if (toolCall) {
-          const toolIndex = sequence.findIndex(
-            (item) =>
-              item.type === "tool" &&
-              (item.data as any).toolCallId === toolResult.toolCallId,
-          );
-
-          if (toolIndex !== -1) {
-            console.log(
-              `[StreamOrchestrator] Updating tool in sequence at index ${toolIndex} with result`,
-            );
-            sequence[toolIndex].data = {
-              name: toolCall.toolName,
-              input: toolCall.args,
-              output: toolResult.result,
-              status: "success",
-              toolCallId: toolResult.toolCallId, // Preserve for any future lookups
-            };
-          }
-        }
-
-        yield createChatStreamChunk(
-          "tool-result",
-          {
-            toolCallId: toolResult.toolCallId,
-            toolName: toolResult.toolName,
-            result: toolResult.result,
-            success: true,
-          },
-          chatId,
-        );
+        });
         break;
       }
 
       case "error": {
         const sanitizedError = sanitizeToolOutput(chunk.error, apiKeys);
-        yield createChatStreamChunk(
-          "error",
-          { error: String(sanitizedError) },
-          chatId,
-        );
+        const errorMessage = extractErrorMessage(sanitizedError);
+        yield createChatStreamChunk("error", { error: errorMessage }, chatId);
         break;
       }
 
@@ -308,11 +388,40 @@ export async function* orchestrateModelStream(
         break;
       }
 
-      case "finish": {
-        const finishReason = (rawChunk as any).finishReason;
-        console.log(
-          `[StreamOrchestrator] 🏁 Finish chunk received, reason: ${finishReason || "unknown"}`,
-        );
+      case "finish-step": {
+        // AI SDK provides usage data in finish-step events
+        const finishStepChunk = rawChunk as {
+          usage?: {
+            inputTokens?: number;
+            outputTokens?: number;
+            totalTokens?: number;
+          };
+          finishReason?: string;
+        };
+
+        if (finishStepChunk.usage) {
+          const usage = finishStepChunk.usage;
+          console.log(
+            `[StreamOrchestrator] 💰 Usage from finish-step: ` +
+              `${usage.totalTokens || 0} total ` +
+              `(${usage.inputTokens || 0} input + ${usage.outputTokens || 0} output)`,
+          );
+
+          // Yield a done chunk with usage for AgentService to capture
+          yield createChatStreamChunk(
+            "done",
+            {
+              usage: {
+                promptTokens: usage.inputTokens || 0,
+                completionTokens: usage.outputTokens || 0,
+                totalTokens: usage.totalTokens || 0,
+              },
+            },
+            chatId,
+          );
+        }
+
+        const finishReason = finishStepChunk.finishReason;
         if (finishReason === "length") {
           console.warn(
             `[StreamOrchestrator] ⚠️ Model stopped due to TOKEN LIMIT! Consider increasing maxTokens.`,
@@ -320,10 +429,21 @@ export async function* orchestrateModelStream(
         }
         break;
       }
+
+      case "finish": {
+        const finishReason = (rawChunk as any).finishReason;
+        console.log(
+          `[StreamOrchestrator] 🏁 Finish chunk received, reason: ${finishReason || "unknown"}`,
+        );
+        break;
+      }
       default:
         break;
     }
   }
+
+  // Flush any remaining tool results (e.g. stream ended after last tool-result)
+  yield* flushToolResultBuffer();
 
   if (textBuffer.length > 0) {
     yield createChatStreamChunk("text-delta", { text: textBuffer }, chatId);

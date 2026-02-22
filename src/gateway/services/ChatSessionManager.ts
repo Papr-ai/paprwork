@@ -12,6 +12,10 @@ import { openai } from "@ai-sdk/openai";
 import { google } from "@ai-sdk/google";
 import type { AgentConfigInternal } from "../../core/types/agents.js";
 import type { StorageManager } from "./StorageManager.js";
+import {
+  normalizeOpenAIModelId,
+  normalizeGoogleModelId,
+} from "../utils/modelNormalizer.js";
 
 export interface ChatSession {
   chatId: string;
@@ -77,10 +81,22 @@ export class ChatSessionManager {
     // Set API keys in environment for AI SDK providers
     if (config.provider === "anthropic") {
       process.env.ANTHROPIC_API_KEY = config.apiKey;
-    } else if (config.provider === "openai") {
+      console.log(
+        `[ChatSessionManager] Set ANTHROPIC_API_KEY in env (authType=${config.authType}, length=${config.apiKey?.length || 0})`,
+      );
+    } else if (
+      config.provider === "openai" ||
+      config.provider === "openai-codex"
+    ) {
       process.env.OPENAI_API_KEY = config.apiKey;
+      console.log(
+        `[ChatSessionManager] Set OPENAI_API_KEY in env (provider=${config.provider}, authType=${config.authType}, length=${config.apiKey?.length || 0})`,
+      );
     } else if (config.provider === "google") {
       process.env.GOOGLE_GENERATIVE_AI_API_KEY = config.apiKey;
+      console.log(
+        `[ChatSessionManager] Set GOOGLE_GENERATIVE_AI_API_KEY in env (authType=${config.authType}, length=${config.apiKey?.length || 0})`,
+      );
     }
 
     // Select the appropriate AI SDK provider
@@ -92,16 +108,9 @@ export class ChatSessionManager {
         break;
 
       case "openai":
-        // For GPT-5.x models with reasoning, normalize the model name
-        // UI sends: "gpt-5-2-low" -> API expects: "gpt-5-2" with reasoning effort in providerOptions
-        let normalizedModel = config.model;
-        if (config.model.startsWith("gpt-5-2-")) {
-          // Extract base model (e.g., "gpt-5-2-low" -> "gpt-5-2")
-          normalizedModel = "gpt-5-2";
-        } else if (config.model.startsWith("gpt-5-2")) {
-          // Keep as is for base "gpt-5-2"
-          normalizedModel = config.model;
-        }
+        // Normalize model ID: accept both gpt-5.2-* (dots) and gpt-5-2-* (dashes)
+        // API expects dots (gpt-5.2); reasoning effort comes from config.reasoning via providerOptions
+        const normalizedModel = normalizeOpenAIModelId(config.model);
 
         // Use Responses API for GPT-5 reasoning models (enables reasoning token streaming)
         if (normalizedModel.startsWith("gpt-5")) {
@@ -111,8 +120,14 @@ export class ChatSessionManager {
         }
         break;
 
+      case "openai-codex":
+        // OpenAI Codex uses OAuth token (already set in OPENAI_API_KEY above)
+        // Use Responses API for Codex models (gpt-5.3-codex)
+        model = openai.responses(config.model);
+        break;
+
       case "google":
-        model = google(config.model);
+        model = google(normalizeGoogleModelId(config.model));
         break;
 
       default:
@@ -147,7 +162,8 @@ export class ChatSessionManager {
     return (
       config1.provider === config2.provider &&
       config1.model === config2.model &&
-      config1.apiKey === config2.apiKey
+      config1.apiKey === config2.apiKey &&
+      config1.authType === config2.authType
     );
   }
 

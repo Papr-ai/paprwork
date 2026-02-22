@@ -9,6 +9,24 @@ description: Test-first protocol for external API integration — always probe b
 
 ---
 
+## OAuth vs API Key: Which Path for What
+
+Users can authenticate with **OAuth** (ChatGPT/Claude subscription) or **API keys** (Platform API). Paprwork routes automatically based on what the user has:
+
+| Context | OAuth (subscription) | API key (Platform) |
+|---------|----------------------|--------------------|
+| **Chat** | ✅ Uses pi-ai (ChatGPT/Claude backend) | ✅ Uses AI SDK (Platform API) |
+| **Agent jobs** | ✅ Uses pi-ai — works with subscription | ✅ Uses AI SDK — needs Platform key |
+| **Bash/Python jobs** | ❌ OAuth token won't work | ✅ Needs Platform API key |
+
+**Why?** OAuth tokens use the ChatGPT/Claude subscription backend (different API). The `openai` Python SDK and `curl api.openai.com` use the **Platform API** — they require a Platform API key (`sk-proj-...`), not an OAuth token.
+
+**When building jobs:**
+- **Agent jobs** — No action needed. Paprwork routes to pi-ai when OAuth is connected, AI SDK when API key is used.
+- **Bash/Python jobs that call OpenAI/Anthropic** — User must add a **Platform API key** in Settings. OAuth alone won't work for scripts. If user only has OAuth, suggest: "For this Python job to call the OpenAI API, you'll need to add an OpenAI Platform API key in Settings → API Keys. Your ChatGPT subscription (OAuth) works for chat and agent jobs, but scripts use the Platform API which needs a separate key."
+
+---
+
 ## Step 0: Check Available Keys FIRST
 
 Before requesting any API key, **use the key management tools** to check what already exists:

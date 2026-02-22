@@ -282,6 +282,28 @@
   background: var(--link-hover);
 }
 
+.model-picker-item--locked {
+  opacity: 0.6;
+  cursor: pointer;
+}
+
+.model-picker-item--locked:hover {
+  opacity: 0.85;
+  background: var(--hover-bg);
+}
+
+.model-badge-locked {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  opacity: 0.7;
+  color: var(--text-secondary);
+}
+
+.model-badge-locked svg {
+  flex-shrink: 0;
+}
+
 .model-picker-item-content {
   flex: 1;
   display: flex;

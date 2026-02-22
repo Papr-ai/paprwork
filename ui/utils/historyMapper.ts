@@ -61,7 +61,10 @@ export function mapHistoryMessages(
               result:
                 typeof toolCandidate.result === "string"
                   ? toolCandidate.result
-                  : undefined,
+                  : typeof toolCandidate.result === "object" &&
+                      toolCandidate.result !== null
+                    ? JSON.stringify(toolCandidate.result)
+                    : undefined,
               error:
                 typeof toolCandidate.error === "string"
                   ? toolCandidate.error

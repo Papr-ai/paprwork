@@ -33,6 +33,7 @@ export interface ChatState {
   isStreaming: boolean;
   hasUnread: boolean;
   draftMessage?: string; // Persisted draft message for this chat
+  lastSelectedModelId?: string; // Last model user chose for this chat
 }
 
 export interface CreateChatPayload {

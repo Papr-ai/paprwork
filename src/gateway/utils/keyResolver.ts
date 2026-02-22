@@ -183,11 +183,15 @@ export function hasValidOAuthToken(provider: "openai" | "anthropic"): boolean {
 export async function getProviderAuth(
   provider: "openai" | "anthropic",
 ): Promise<
-  | { type: "oauth"; token: string }
-  | { type: "apiKey"; key: string }
-  | null
+  { type: "oauth"; token: string } | { type: "apiKey"; key: string } | null
 > {
-  // Check OAuth first
+  const keyName =
+    provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+
+  // Request keys first - IPC response populates oauthTokenCache when main process sends oauthTokens
+  const keys = await getApiKeys([keyName]);
+
+  // Now check OAuth (cache populated by IPC response above)
   if (hasValidOAuthToken(provider)) {
     const token = getOAuthToken(provider);
     if (token) {
@@ -197,10 +201,6 @@ export async function getProviderAuth(
   }
 
   // Fall back to API key
-  const keyName =
-    provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
-  const keys = await getApiKeys([keyName]);
-
   if (keys[keyName]) {
     console.log(`[KeyResolver] Using API key for ${provider}`);
     return { type: "apiKey", key: keys[keyName] };

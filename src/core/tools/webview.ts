@@ -1,11 +1,7 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import type { WebviewTestRequest } from "../types/gateway-ipc.js";
-import {
-  getApiKeysForSanitization,
-  sanitizeToolOutput,
-  truncateResult,
-} from "./security.js";
+import { getApiKeysForSanitization, sanitizeToolOutput } from "./security.js";
 
 const launchSchema = z.object({
   appId: z.string().min(1),
@@ -38,9 +34,7 @@ const closeSchema = z.object({
 function sanitizeWebviewResult(data: unknown): unknown {
   const apiKeys = getApiKeysForSanitization();
   const sanitized = sanitizeToolOutput(data, apiKeys);
-  if (typeof sanitized === "string") {
-    return truncateResult(sanitized, 80000);
-  }
+  // No truncation - prepareStep keeps last tool result full
   return sanitized;
 }
 

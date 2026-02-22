@@ -31,16 +31,30 @@ function expandPath(filePath: string): string {
 
 const ReadFileSchema = z.object({
   path: z.string().describe("Path to file to read"),
-  encoding: z.enum(["utf8", "base64", "binary"]).default("utf8").describe("File encoding (default: utf8)"),
-  maxSize: z.number().default(50000).describe(
-    "Max file size in bytes (default: 50KB). For large files, use bash with head/tail/grep instead."
-  ),
-  offset: z.number().int().min(1).optional().describe(
-    "Start reading from line N (1-indexed). Use to read specific portions of large files."
-  ),
-  limit: z.number().int().min(1).optional().describe(
-    "Read only N lines. Use with offset to read file in chunks."
-  ),
+  encoding: z
+    .enum(["utf8", "base64", "binary"])
+    .default("utf8")
+    .describe("File encoding (default: utf8)"),
+  maxSize: z
+    .number()
+    .default(50000)
+    .describe(
+      "Max file size in bytes (default: 50KB). For large files, use bash with head/tail/grep instead.",
+    ),
+  offset: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe(
+      "Start reading from line N (1-indexed). Use to read specific portions of large files.",
+    ),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe("Read only N lines. Use with offset to read file in chunks."),
 });
 
 export type ReadFileInput = z.infer<typeof ReadFileSchema>;
@@ -86,12 +100,12 @@ async function readFile(
 
     // Apply line-based offset/limit if requested
     if (offset !== undefined || limit !== undefined) {
-      const lines = content.toString().split('\n');
+      const lines = content.toString().split("\n");
       const startLine = (offset ?? 1) - 1; // Convert to 0-indexed
       const endLine = limit !== undefined ? startLine + limit : undefined;
       const selectedLines = lines.slice(startLine, endLine);
-      content = selectedLines.join('\n') as any;
-      
+      content = selectedLines.join("\n") as any;
+
       // Add metadata about what was read
       const totalLines = lines.length;
       const readLines = selectedLines.length;
@@ -104,16 +118,17 @@ async function readFile(
     const contentStr = content.toString();
     const estimatedTokens = Math.ceil(contentStr.length / 4);
     const WARN_THRESHOLD_TOKENS = 2000; // ~8KB
-    
+
     if (estimatedTokens > WARN_THRESHOLD_TOKENS && !offset && !limit) {
-      const totalLines = contentStr.split('\n').length;
+      const totalLines = contentStr.split("\n").length;
       const fileName = path.basename(filePath);
-      
+
       // Return helpful error to agent (NOT a hard failure)
       // Agent will see this and can try a better approach
       return {
         success: false,
-        error: `File "${fileName}" is ${estimatedTokens} tokens (~${Math.round(contentStr.length / 1024)}KB, ${totalLines} lines).\n\n` +
+        error:
+          `File "${fileName}" is ${estimatedTokens} tokens (~${Math.round(contentStr.length / 1024)}KB, ${totalLines} lines).\n\n` +
           `This exceeds context limits and will be heavily truncated, losing important content.\n\n` +
           `✅ Better approaches:\n\n` +
           `1. Read incrementally:\n` +

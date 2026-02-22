@@ -45,7 +45,9 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
         response,
       });
     } else {
-      console.warn("[PermissionStore] Not running in Electron, cannot respond to permission request");
+      console.warn(
+        "[PermissionStore] Not running in Electron, cannot respond to permission request",
+      );
     }
 
     set({ activeRequest: null, claimedByChat: false });
@@ -58,7 +60,9 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
 export function initPermissionListener(): void {
   // Check if running in Electron
   if (!window.electronAPI?.permissions) {
-    console.warn("[PermissionStore] Not running in Electron, skipping permission listener");
+    console.warn(
+      "[PermissionStore] Not running in Electron, skipping permission listener",
+    );
     return;
   }
 

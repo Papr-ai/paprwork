@@ -54,7 +54,7 @@ create_sub_agent({
   description: "Investigates complex topics with evidence",
   systemPrompt: "You are a focused researcher. Gather evidence, cite sources, and highlight uncertainty."
 })
-// Uses default provider (openai) and model (gpt-5-mini)
+// Uses default provider (openai) and model (gpt-5.2)
 ```
 
 ### Full Example (All Options)
@@ -94,43 +94,48 @@ Always cite sources and explain your reasoning.`,
 
 ## Available Models
 
+**OAuth vs API key:** Sub-agents and agent jobs work with both. Paprwork routes automatically:
+- **OAuth** (ChatGPT/Claude subscription) → pi-ai backend
+- **API key** (Platform) → AI SDK backend
+
+Pick models the user has access to. If they have OAuth, OpenAI models (gpt-5.2*, gpt-5.3-codex) and Claude models work. If they have API key, same models work. Default to `gpt-5.2` or `claude-sonnet-4-6` when unspecified.
+
 ### When to specify a model?
 
-**Use defaults (gpt-5-mini) for:**
+**Use defaults (gpt-5.2 or claude-sonnet-4-6) for:**
 - Fast, simple tasks
 - Data processing
 - Cost-sensitive, high-volume work
 
 **Specify a model for:**
-- Complex reasoning → Claude Opus, GPT-5.2
+- Complex reasoning → Claude Opus, GPT-5.2-high
 - Extended thinking → Claude Thinking models
-- Code tasks → GPT-5.2 Codex
+- Code tasks → GPT-5.2 Codex, GPT 5.3
 
 ### Anthropic Claude
 
 ```javascript
 model: "claude-haiku-4-5"          // Fast, efficient
-model: "claude-sonnet-4-5"         // Balanced (default for Anthropic)
-model: "claude-opus-4-5"           // Most capable
+model: "claude-sonnet-4-6"         // Balanced (default for Anthropic)
+model: "claude-opus-4-6"           // Most capable
 model: "claude-opus-4-5-thinking"  // Extended thinking for deep analysis
 ```
 
 ### OpenAI GPT
 
 ```javascript
-model: "gpt-5-mini"       // Fast, efficient ⭐ RECOMMENDED DEFAULT
-model: "gpt-5-2"          // Balanced reasoning
-model: "gpt-5-2-low"      // Lower reasoning effort (faster)
-model: "gpt-5-2-high"     // Higher reasoning effort
-model: "gpt-5-2-xhigh"    // Maximum reasoning effort
-model: "gpt-5-2-codex"    // Specialized for code
+model: "gpt-5.2-low"      // Fast reasoning
+model: "gpt-5.2"          // Balanced ⭐ RECOMMENDED DEFAULT
+model: "gpt-5.2-high"     // Deep reasoning
+model: "gpt-5.2-codex"    // Specialized for code
+model: "gpt-5.3-codex"    // Latest Codex (OAuth only)
 ```
 
 ### Google Gemini
 
 ```javascript
-model: "gemini-2-5-flash"          // Fast, capable (default for Google)
-model: "gemini-2-5-flash-lite"     // Very fast, lightweight
+model: "gemini-2.5-flash"          // Fast, capable (default for Google)
+model: "gemini-2.5-flash-lite"     // Very fast, lightweight
 model: "gemini-3-pro-preview"      // Most capable (experimental)
 model: "gemini-3-flash-preview"    // Latest (experimental)
 ```
@@ -187,7 +192,7 @@ create_sub_agent({
   description: "Reviews code for quality, security, and best practices",
   systemPrompt: `You are a senior code reviewer. Focus on: security vulnerabilities, performance, clarity, best practices, edge cases. Provide specific, actionable feedback with examples.`,
   provider: "anthropic",
-  model: "claude-sonnet-4-5",
+  model: "claude-sonnet-4-6",
   allowedToolIds: ["bash", "read_file", "search_files"]
 })
 ```
@@ -198,7 +203,7 @@ create_sub_agent({
   name: "Data Analyst",
   description: "Analyzes SQLite data and generates insights",
   systemPrompt: `You are a data analyst specializing in business intelligence. Process: understand question → query efficiently (use indexes) → identify patterns → provide recommendations. Always validate data quality first.`,
-  model: "gpt-5-mini",
+  model: "gpt-5.2",
   allowedToolIds: ["bash", "read_file"]
 })
 ```
@@ -219,7 +224,7 @@ create_sub_agent({
 create_sub_agent({
   name: "Pipeline Manager",
   systemPrompt: `You are a pipeline orchestrator. Create jobs with proper dependencies, monitor status and logs, handle errors, report progress. Always validate jobs completed successfully before starting dependent jobs.`,
-  model: "gpt-5-mini",
+  model: "gpt-5.2",
   allowedToolIds: ["bash", "create_job", "run_job", "read_job_logs", "read_file"]
 })
 ```

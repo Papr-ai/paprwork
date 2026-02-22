@@ -285,6 +285,11 @@ export function JobsGraph({
             : "jg-arrow-failed";
           const labelX = (x1 + x2) / 2;
           const labelY = (y1 + y2) / 2 - 6;
+
+          // Use dashed stroke for runtime calls, solid for dependencies
+          const strokeDasharray = edge.isRuntimeCall ? "6,4" : undefined;
+          const strokeOpacity = edge.isRuntimeCall ? 0.35 : 0.55;
+
           return (
             <g key={i}>
               <path
@@ -292,18 +297,21 @@ export function JobsGraph({
                 fill="none"
                 stroke={edgeColor}
                 strokeWidth={1.5}
-                strokeOpacity={0.55}
+                strokeOpacity={strokeOpacity}
+                strokeDasharray={strokeDasharray}
                 markerEnd={`url(#${arrowId})`}
               />
-              <text
-                x={labelX}
-                y={labelY}
-                textAnchor="middle"
-                className="jg-edge-label"
-                fill={edgeColor}
-              >
-                {edge.onStatus}
-              </text>
+              {!edge.isRuntimeCall && (
+                <text
+                  x={labelX}
+                  y={labelY}
+                  textAnchor="middle"
+                  className="jg-edge-label"
+                  fill={edgeColor}
+                >
+                  {edge.onStatus}
+                </text>
+              )}
             </g>
           );
         })}

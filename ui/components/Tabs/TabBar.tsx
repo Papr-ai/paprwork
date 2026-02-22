@@ -28,6 +28,25 @@ export function TabBar() {
   const [dropIndicatorOnTop, setDropIndicatorOnTop] = useState(false);
   const tabBarRef = useRef<HTMLDivElement>(null);
 
+  // Scroll active tab into view when it changes
+  useEffect(() => {
+    if (!activeLeftTab || !tabBarRef.current) return;
+
+    // Find the active tab element
+    const activeTabElement = tabBarRef.current.querySelector(
+      `.tab--active`,
+    ) as HTMLElement;
+
+    if (activeTabElement) {
+      // Scroll the active tab into view with smooth behavior
+      activeTabElement.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+        inline: "nearest",
+      });
+    }
+  }, [activeLeftTab]);
+
   // Define handleNewTab before useEffect so it can be in the dependency array
   const handleNewTab = async () => {
     // Create new chat - createTab will handle empty chat detection automatically
