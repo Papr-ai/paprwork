@@ -69,6 +69,7 @@ export class SystemPromptBuilder {
       this.buildDocumentToolsSection(),
       this.buildFilesystemToolsSection(),
       this.buildAutomationArchitectureSection(),
+      this.buildJobOutputStrategySection(),
       this.buildAppCreationReminderSection(),
       ...(this.options.includeExtendedAppPlaybook
         ? [this.buildAppCreationPlaybookSection()]
@@ -568,8 +569,8 @@ ${skillsList}
 ## Available Keys
 
 Environment keys (from system):
-  - OPENAI_API_KEY: OpenAI API access
-  - ANTHROPIC_API_KEY: Anthropic Claude API access
+  - OPENAI_API_KEY: OpenAI API access (Platform key or OAuth token when connected)
+  - ANTHROPIC_API_KEY: Anthropic Claude API access (Platform key or OAuth token when connected)
   - PAPR_API_KEY: Papr Cloud features
   - (and any other environment variables)
 
@@ -611,6 +612,12 @@ When you use a key for the first time, the user will see a permission request wi
 - Option to "Always allow this key"
 
 **Important:** If permission is denied, the command will fail with a clear error.
+
+## OAuth vs API Key (OpenAI/Anthropic)
+
+Users may have **OAuth** (ChatGPT/Claude subscription) or **API keys** (Platform API). Paprwork routes automatically:
+- **Chat and agent jobs** — OAuth → pi-ai (subscription backend). API key → AI SDK (Platform API). Both work.
+- **Bash/Python jobs** calling OpenAI/Anthropic — Require a **Platform API key**. OAuth tokens won't work (different backend). If user only has OAuth, suggest adding a Platform key in Settings for script use.
 
 ## Best Practices
 
@@ -1152,6 +1159,165 @@ create_sub_agent({
 - **Read-only research:** \`["bash", "read_file", "search_files"]\`
 - **Job orchestration:** \`["bash", "create_job", "run_job"]\`
 - **Memory-focused:** \`["bash", "search_agent_memory", "add_agent_memory"]\``;
+  }
+
+  /**
+   * Job output and delivery strategy guidance
+   */
+  private buildJobOutputStrategySection(): string {
+    return `# Job Output & Delivery Strategy
+
+Choose the right output mode and delivery mechanism based on the use case:
+
+## Output Modes Decision
+
+**Natural Output (default):**
+- Human-readable text
+- Examples: Research summaries, code reviews, analysis
+- No \`outputMode\` needed (default)
+
+**Structured Output:**
+- Machine-parseable JSON with schema enforcement
+- Examples: Data extraction, API responses, configuration
+- Set \`outputMode: "structured"\` + \`outputSchema: {...}\`
+- **Access via:** \`read_job_file({ jobId, filePath: "job.json" })\` → parse \`lastOutput\`
+
+**Tool-Based (Artifacts):**
+- Creating files, apps, or code
+- Agent uses \`write_file\`, \`create_app\`, \`bash\` during execution
+- Natural text summary goes to \`lastOutput\`, artifacts persist in filesystem
+
+**SQLite Output:**
+- UI will query/display data
+- Job writes to \`$JOB_DB\` (~/PAPR/jobs/{jobId}/data/data.db)
+- Link to app: \`link_app_data_source({ appId, jobId })\`
+- UI reads via REST API or TableView
+
+## Delivery Mechanisms
+
+**Chat Delivery** (user-facing results):
+\`\`\`javascript
+create_job({
+  name: "Research Task",
+  prompt: "...",
+  deliver: {
+    channel: "chat",
+    targetId: currentChatId  // Result appears in this chat
+  }
+})
+\`\`\`
+
+**Job Record Only** (background/scheduled):
+\`\`\`javascript
+create_job({
+  name: "Daily Analytics",
+  prompt: "...",
+  schedule: { cron: "0 9 * * *" }
+  // No deliver = runs in background, access via read_job_logs
+})
+\`\`\`
+
+**Memory Writeback** (build knowledge):
+\`\`\`javascript
+create_job({
+  name: "Competitor Analysis",
+  prompt: "...",
+  memoryPolicy: "summary"  // or "full" or "none"
+})
+\`\`\`
+
+## Sub-Agent Context Rules
+
+**CRITICAL:** Sub-agents run in isolated sessions. They CANNOT:
+- ❌ Access your conversation history
+- ❌ Ask user questions mid-execution
+- ❌ See other sub-agent results
+
+**They ONLY see:**
+- ✅ \`task\` parameter (your instruction)
+- ✅ \`context\` parameter (extra info you provide)
+- ✅ Their systemPrompt
+- ✅ Environment variables (\`JOB_DIR\`, \`JOB_DB\`)
+
+**Always include in \`context\`:**
+- File paths (absolute or ~/relative)
+- User preferences or constraints
+- Expected output format
+- Relevant prior findings
+
+**Example - Complete context:**
+\`\`\`javascript
+delegate_task({
+  task: "Review authentication code for security issues",
+  context: \`
+    File: ~/project/src/auth.js
+    User concern: Login takes 3-5 seconds
+    Current: bcrypt rounds=15
+    Focus: Password hashing, DB queries, session creation
+    Expected: < 500ms login, maintain security
+  \`,
+  useAgentId: "security-specialist",
+  reportChatId: currentChatId  // Deliver result to chat
+})
+\`\`\`
+
+## Structured Output Consumption Pattern
+
+When agent job uses \`outputMode: "structured"\`:
+
+\`\`\`javascript
+// Step 1: Agent extracts data (structured)
+create_job({
+  name: "extract-products",
+  type: "agent",
+  outputMode: "structured",
+  outputSchema: {
+    type: "object",
+    properties: {
+      products: {
+        type: "array",
+        items: { /* ... */ }
+      }
+    }
+  }
+})
+
+// Step 2: Python/Node job reads the output
+create_job({
+  name: "process-products",
+  type: "python",
+  command: "python3 main.py"
+})
+
+// In main.py:
+// import json
+// from pathlib import Path
+// job_json = Path.home() / "PAPR" / "jobs" / "extract-products" / "job.json"
+// data = json.loads(json.load(open(job_json))["lastOutput"])
+// # Process data and write to SQLite...
+\`\`\`
+
+Or use \`read_job_file\` from agent:
+\`\`\`javascript
+const jobData = read_job_file({
+  jobId: "extract-products",
+  filePath: "job.json"
+})
+const output = JSON.parse(jobData.lastOutput)
+// Use the structured data...
+\`\`\`
+
+## Quick Decision Tree
+
+\`\`\`
+User-facing text? → Natural + deliver: { channel: "chat" }
+Code will parse it? → Structured + downstream job reads lastOutput
+Creating artifacts? → Tool-based (write_file, create_app)
+UI needs to query? → SQLite + link_app_data_source
+Needs specialization? → delegate_task with complete context
+\`\`\`
+
+See \`AGENT_JOB_OUTPUT_GUIDE.md\` for complete examples and patterns.`;
   }
 
   /**

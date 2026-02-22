@@ -1,6 +1,6 @@
 # CLAUDE.md - Project Context & Learnings
 
-**Last Updated:** 2026-02-09
+**Last Updated:** 2026-02-20
 
 This file tracks key learnings, architectural decisions, and context for AI assistants working on Paprwork V2.
 
@@ -458,6 +458,95 @@ Gateway = ESM (.js)               ← Separate Node process, can use ESM
 - `docs/TOOL_RESULT_TRUNCATION_FIX.md` - Complete documentation
 **Testing:** Verified with long tool-heavy conversations (15+ tool calls) - no more context errors
 
+### Issue 9: Gateway Hangs on Startup - Database Migration Blocked ✅ FIXED
+**Problem:** Gateway process hangs during initialization, never completes startup. App shows "Gateway failed to start after 20 attempts" and UI won't load.
+**Root Cause:** Stale SQLite WAL (Write-Ahead Log) files from previous session blocking database migration when new schema columns are added. The `better-sqlite3` native module hangs when trying to open the database with uncommitted WAL changes.
+**Symptoms:**
+- Gateway logs show: `[LocalStorageProvider] Opening database: ~/.paprwork-v2/chats.db` but never prints `[LocalStorageProvider] Database opened`
+- WAL files exist: `chats.db-shm` (shared memory) and `chats.db-wal` (write-ahead log)
+- Typically happens after adding new columns to the messages table schema
+
+**Solution (Quick Fix):**
+```bash
+# Stop all processes
+pkill -f "npm start" && pkill -f "electron" && sleep 2
+
+# Backup and clear WAL files
+cd ~/.paprwork-v2
+mv chats.db chats.db.backup
+mv chats.db-shm chats.db-shm.backup 2>/dev/null
+mv chats.db-wal chats.db-wal.backup 2>/dev/null
+
+# Start app (creates fresh DB with migration)
+npm start
+
+# If successful, restore data
+# Stop app, then:
+rm -f chats.db chats.db-shm chats.db-wal
+cp chats.db.backup chats.db
+npm start  # Migration runs on restored data
+```
+
+**Solution (Rebuild Native Module):**
+```bash
+# If WAL cleanup doesn't work, rebuild better-sqlite3
+npx @electron/rebuild -f -w better-sqlite3
+```
+
+**Prevention:**
+- Ensure proper Gateway shutdown (wait for `SIGTERM` handler to complete)
+- Database connections should be closed in shutdown handler
+- WAL mode is necessary for concurrency but requires clean shutdowns
+
+**Fix Applied:** 2026-02-20
+**Files Changed:**
+- Added detailed logging to `LocalStorageProvider.ts` to identify hang point
+- Added logging to `StorageManager.ts` and `AgentService.ts` for initialization tracking
+**Why It Happens:**
+- Schema migrations add columns via `ALTER TABLE` 
+- If WAL has uncommitted transactions, SQLite blocks waiting for them
+- Child process (Gateway) doesn't have access to clean up parent's WAL state
+**Long-term Fix:** Add database cleanup in Gateway shutdown handler to properly close connections and checkpoint WAL files before exit.
+
+---
+
+## OAuth & pi-ai Architecture
+
+Users can use **subscription OAuth** (ChatGPT Plus/Pro, Claude Pro/Max) or **API keys** for OpenAI and Anthropic models. Routing depends on auth type:
+
+### Routing Logic
+
+| Auth Type | OpenAI (gpt-5.2, gpt-5.3-codex) | Anthropic (Claude) | Google (Gemini) |
+|-----------|----------------------------------|--------------------|-----------------|
+| **OAuth** | pi-ai (`openai-codex`)           | pi-ai (`anthropic`) | N/A (API key only) |
+| **API key** | AI SDK (Platform API)          | AI SDK (Mastra)    | AI SDK (Mastra) |
+
+**Why two paths?** The OpenAI Platform API requires `api.responses.write` scope and Platform API keys. ChatGPT OAuth tokens use a different backend (`chatgpt.com/backend-api`) and don't have those scopes. pi-ai's `openai-codex` provider talks to the ChatGPT backend directly. Same idea for Claude: OAuth uses a different endpoint than the Platform API.
+
+### Key Flow
+
+1. **Key resolution** (`keyResolver.ts`): `getProviderAuth()` must request keys first (triggers IPC), then check OAuth. The main process sends `oauthTokens` in the KEYS_RESPONSE; the gateway caches them. If we checked OAuth before requesting keys, the cache would be empty and we'd incorrectly return `apiKey` type → wrong routing.
+
+2. **Agent WebSocket** (`agent.ts`): Fetches auth via `getProviderAuth()`, passes `authType: "oauth" | "apiKey"` into `configInternal`.
+
+3. **AgentService** (`AgentService.ts`): Uses `config.authType` to decide:
+   - `authType === "oauth"` for OpenAI or Anthropic → pi-ai (subscription APIs)
+   - Otherwise → AI SDK (Platform API, Mastra)
+
+### Files
+
+- `src/gateway/utils/keyResolver.ts` - `getProviderAuth()` (request keys first, then check OAuth)
+- `src/gateway/websocket/agent.ts` - Resolves auth, passes `authType` to config
+- `src/gateway/services/AgentService.ts` - Routing: pi-ai vs AI SDK
+- `src/gateway/services/providers/` - PiCodexStreamWithToolLoop, piAiHelpers
+- `src/electron/index.cjs` - Sends `oauthTokens` in KEYS_RESPONSE when OAuth connected
+
+### Model Mapping (OpenAI OAuth)
+
+For `openai` provider with OAuth, model IDs are normalized for pi-ai:
+- `gpt-5.2-low`, `gpt-5.2-high` → `gpt-5.2` (reasoning effort passed separately)
+- `gpt-5.2-codex`, `gpt-5.3-codex` → passed through as-is
+
 ---
 
 ## Resources & References
@@ -468,10 +557,18 @@ Gateway = ESM (.js)               ← Separate Node process, can use ESM
 - [OpenClaw Repository](https://github.com/openclaw/openclaw)
 - [AI SDK Documentation](https://sdk.vercel.ai/docs)
 
-### Internal
+### Internal - Agent Documentation
+- `src/resources/agent-docs/AGENT_JOB_OUTPUT_GUIDE.md` - Complete guide to job outputs and delivery
+- `src/resources/agent-docs/DELEGATION_STRATEGY.md` - Sub-agent delegation patterns
+- `src/resources/agent-docs/APP_AND_JOBS_GUIDE.md` - Apps and jobs architecture
+- `src/resources/agent-docs/SUBAGENT_CREATION_GUIDE.md` - Creating specialized sub-agents
+- `src/resources/agent-docs/00-START-HERE.md` - Complete tool reference
+
+### Internal - Implementation Docs
 - V1 codebase: `../paprwork` (legacy version)
 - V1 docs: `../paprwork/docs` (legacy docs)
 - V1 architecture analysis: Legacy migration notes (see `docs/legacy-notes/`)
+- `docs/AGENT_JOB_OUTPUT_IMPLEMENTATION.md` - Job output patterns (2026-02-19)
 
 ---
 
