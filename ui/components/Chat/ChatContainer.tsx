@@ -248,6 +248,50 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
     };
   }, [chatId]);
 
+  // Listen for new messages delivered from jobs/sub-agents
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (!detail?.type || detail.type !== "chat:message-received") return;
+      if (detail.data?.chatId !== chatId) return;
+
+      const incomingMessage = detail.data.message;
+      if (!incomingMessage) return;
+
+      // Add message to this chat's state
+      useChatStore.setState((state) => {
+        const current = state.chatStates.get(chatId) || { ...defaultChatState };
+        const existingMessages = current.messages;
+
+        // Check for duplicate (by ID or recent content)
+        const isDup = existingMessages.some(
+          (m) =>
+            m.id === incomingMessage.id ||
+            (m.content === incomingMessage.content &&
+              Math.abs(
+                new Date(m.timestamp).getTime() -
+                  new Date(incomingMessage.timestamp).getTime(),
+              ) < 3000),
+        );
+
+        if (isDup) return state;
+
+        const mappedMessage = mapHistoryMessages([incomingMessage])[0];
+        if (!mappedMessage) return state;
+
+        const next = new Map(state.chatStates);
+        next.set(chatId, {
+          ...current,
+          messages: [...existingMessages, mappedMessage],
+        });
+        return { chatStates: next };
+      });
+    };
+
+    window.addEventListener("gateway-broadcast", handler);
+    return () => window.removeEventListener("gateway-broadcast", handler);
+  }, [chatId]);
+
   // Slash command handler
   const handleSlashCommand = useCallback(
     async (commandId: string) => {
@@ -399,6 +443,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
       <JobPermissionBanner />
 
       <MessageList
+        chatId={chatId}
         messages={messages}
         isLoading={chatIsLoading}
         isSending={isSending}

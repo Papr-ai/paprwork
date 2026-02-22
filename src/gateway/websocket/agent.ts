@@ -137,42 +137,49 @@ export async function setupAgentHandlers(
 
         // Stream response chunks back to client
         // Each chunk includes chatId for frontend routing
+        // Wrap in runWithToolContext so delegate_task and other tools get chatId via getCurrentChatId()
         console.log(
           `[Agent WS] Starting stream for chat ${chatId} (setup took ${timings.beforeStream.toFixed(2)}ms)`,
         );
         let chunkCount = 0;
         let firstChunkTime: number | null = null;
 
+        const { runWithToolContext } = await import(
+          "../../core/tools/context.js"
+        );
+
         try {
-          for await (const chunk of agentService.streamAgent(
-            chatId,
-            userMessage,
-            configInternal,
-          )) {
-            if (firstChunkTime === null) {
-              firstChunkTime = performance.now() - t3;
-              timings.timeToFirstChunk = firstChunkTime;
-              console.log(
-                `[Agent WS] ⚡ First chunk received in ${firstChunkTime.toFixed(2)}ms (type: ${chunk.type})`,
-              );
-            }
+          await runWithToolContext(chatId, async () => {
+            for await (const chunk of agentService.streamAgent(
+              chatId,
+              userMessage,
+              configInternal,
+            )) {
+              if (firstChunkTime === null) {
+                firstChunkTime = performance.now() - t3;
+                timings.timeToFirstChunk = firstChunkTime;
+                console.log(
+                  `[Agent WS] ⚡ First chunk received in ${firstChunkTime.toFixed(2)}ms (type: ${chunk.type})`,
+                );
+              }
 
-            chunkCount++;
+              chunkCount++;
 
-            if (ws.readyState === ws.OPEN) {
-              // Send chunk with chatId for parallel stream routing
-              ws.send(
-                JSON.stringify({
-                  id: message.id,
-                  type: "agent:chunk",
-                  data: chunk, // chunk already includes chatId from streamAgent
-                }),
-              );
-            } else {
-              console.warn(`[Agent WS] WebSocket closed for chat ${chatId}`);
-              break;
+              if (ws.readyState === ws.OPEN) {
+                // Send chunk with chatId for parallel stream routing
+                ws.send(
+                  JSON.stringify({
+                    id: message.id,
+                    type: "agent:chunk",
+                    data: chunk, // chunk already includes chatId from streamAgent
+                  }),
+                );
+              } else {
+                console.warn(`[Agent WS] WebSocket closed for chat ${chatId}`);
+                break;
+              }
             }
-          }
+          });
 
           timings.totalStreamTime = performance.now() - perfStart;
 

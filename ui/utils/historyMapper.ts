@@ -1,10 +1,46 @@
 import type { ChatMessage } from "../types/chat";
 
+/** Synthetic user messages injected by SubAgentResponseTrigger - shown only in MiniChatCard, not main chat */
+function isSyntheticSubAgentMessage(msg: unknown): boolean {
+  if (typeof msg !== "object" || msg === null) return false;
+  const role = (msg as Record<string, unknown>).role;
+  const content =
+    typeof (msg as Record<string, unknown>).content === "string"
+      ? ((msg as Record<string, unknown>).content as string)
+      : "";
+  if (role !== "user") return false;
+  return (
+    content.startsWith("[Sub-agent question for delegation ") ||
+    content.startsWith("[User message in sub-agent chat for delegation ")
+  );
+}
+
+/** Filter out synthetic sub-agent exchange (user + assistant response) - shown only in MiniChatCard */
+function filterSyntheticSubAgentExchange(history: unknown[]): unknown[] {
+  const result: unknown[] = [];
+  for (let i = 0; i < history.length; i++) {
+    const msg = history[i];
+    if (isSyntheticSubAgentMessage(msg)) {
+      // Skip synthetic user message and the immediately following assistant response
+      const next = history[i + 1];
+      const nextIsAssistant =
+        typeof next === "object" &&
+        next !== null &&
+        (next as Record<string, unknown>).role === "assistant";
+      if (nextIsAssistant) i++; // Skip next too
+      continue;
+    }
+    result.push(msg);
+  }
+  return result;
+}
+
 export function mapHistoryMessages(
   history: unknown[],
   timestampSeed: number = Date.now(),
 ): ChatMessage[] {
-  return history.map((msg, index) => {
+  const filtered = filterSyntheticSubAgentExchange(history);
+  return filtered.map((msg, index) => {
     const candidate =
       typeof msg === "object" && msg !== null
         ? (msg as Record<string, unknown>)

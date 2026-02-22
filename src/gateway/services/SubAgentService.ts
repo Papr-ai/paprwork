@@ -392,18 +392,45 @@ export class SubAgentService {
     };
   }
 
+  /**
+   * Resolve sub-agent by id or by name (case-insensitive).
+   * Handles agent passing display name (e.g. "Strategic Question Agent") instead of id.
+   */
+  private resolveSubAgent(
+    profiles: SubAgentProfile[],
+    useAgentId: string | undefined,
+  ): SubAgentProfile | null {
+    if (!useAgentId?.trim()) return profiles[0] ?? null;
+    const id = useAgentId.trim();
+    // Exact id match
+    const byId = profiles.find((p) => p.id === id);
+    if (byId) return byId;
+    // Case-insensitive name match (handles "Strategic Question Agent" vs "Strategic Question Agent")
+    const byName = profiles.find(
+      (p) => p.name.toLowerCase() === id.toLowerCase(),
+    );
+    if (byName) return byName;
+    // Normalized id match: "strategic question agent" -> "strategic-question-agent"
+    const normalized = id.toLowerCase().replace(/\s+/g, "-");
+    const byNormalized = profiles.find(
+      (p) => p.id.toLowerCase() === normalized,
+    );
+    if (byNormalized) return byNormalized;
+    return null;
+  }
+
   async delegateTask(input: DelegateTaskInput): Promise<DelegationRunRecord> {
     await this.initialize();
     const profiles = await this.listAgents();
     if (profiles.length === 0) {
       throw new Error("No sub-agents available");
     }
-    const selected =
-      (input.useAgentId
-        ? profiles.find((item) => item.id === input.useAgentId)
-        : profiles[0]) ?? null;
+    const selected = this.resolveSubAgent(profiles, input.useAgentId);
     if (!selected) {
-      throw new Error(`Sub-agent not found: ${input.useAgentId}`);
+      throw new Error(
+        `Sub-agent not found: ${input.useAgentId ?? "(none)"}. ` +
+          `Available: ${profiles.map((p) => `${p.id} (${p.name})`).join(", ")}`,
+      );
     }
 
     const jobsService = getJobsService();
@@ -619,11 +646,19 @@ export class SubAgentService {
       pending.resolve(message);
     }
 
-    // When user sends, trigger main agent to respond (same as sub-agent questions)
+    // When user sends, trigger sub-agent to respond (not main agent)
     if (author === "user") {
-      const { triggerMainAgentResponse } =
-        await import("./SubAgentResponseTrigger.js");
-      void triggerMainAgentResponse(delegationId, message, "user");
+      // Resume the sub-agent job so it can respond to user's message
+      const jobsService = getJobsService();
+      const job = await jobsService.getJob(delegationId);
+      if (job && job.status === "running") {
+        console.log(
+          `[SubAgentService] User sent message to running delegation ${delegationId}, sub-agent will receive it in its session`,
+        );
+        // The sub-agent's session is already running and will see this message
+        // via loadDelegationChatMessages() or sendQuestionAndWaitForResponse()
+        // No additional trigger needed - the response is already in the delegation chat
+      }
     }
   }
 

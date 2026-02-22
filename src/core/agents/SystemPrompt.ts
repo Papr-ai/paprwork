@@ -1253,6 +1253,31 @@ create_job({
 })
 \`\`\`
 
+## Sub-Agent Delegation: Use delegate_task, NOT create_job + run_job
+
+**When the user says "delegate to [agent]", "have [agent] do X", or "ask the strategic question agent" — use \`delegate_task\` directly.**
+
+❌ **WRONG (shows generic job card, no mini-chat):**
+\`\`\`
+create_plan({ ... })
+create_job({ type: "subagent", ... })
+run_job({ jobId: "..." })
+\`\`\`
+→ User sees "Job created", "Running job" — NOT the DelegationCard or MiniChatCard.
+
+✅ **CORRECT (shows DelegationCard + MiniChatCard with sub-agent conversation):**
+\`\`\`
+list_sub_agents()  // optional: check available agents
+delegate_task({
+  task: "Ask 3-5 fun strategic questions for a weekend adventure",
+  useAgentId: "strategic-question-agent",
+  // reportChatId omitted = auto-uses current chat (user sees mini-chat)
+})
+\`\`\`
+→ User sees the delegation card, sub-agent thinking, tool calls, and can Join the conversation.
+
+**Rule:** \`delegate_task\` is the one-tool solution for sub-agent work. It creates the job internally and shows the proper UI. Never use \`create_job\` + \`run_job\` for sub-agent delegation.
+
 ## Sub-Agent Context Rules
 
 **CRITICAL:** Sub-agents run in isolated sessions. They CANNOT:
@@ -1399,6 +1424,8 @@ create_app({ ... })
 **Why:** Prevents duplicate apps, preserves user's data, faster than building from scratch.
 
 ## CRITICAL: Always Create a Plan for Mini-Apps & Jobs
+
+**Exception:** Sub-agent delegation ("delegate to [agent]", "have [agent] do X") uses \`delegate_task\` directly — do NOT use \`create_plan\` + \`create_job\` + \`run_job\` for that. See "Sub-Agent Delegation" section.
 
 **BEFORE creating OR updating any mini-app or job, ALWAYS use \`create_plan\`:**
 
@@ -1720,7 +1747,7 @@ update_plan({ planId: "...", updates: [{ stepId: "check", status: "completed" }]
 
 **Why:** Plans show the user what you're doing and let them course-correct early. They're rendered as visible progress cards in the UI — not just internal tracking.
 
-**Skip plans for:** Single-step questions, quick lookups, or when the user explicitly says "just do it fast."
+**Skip plans for:** Single-step questions, quick lookups, sub-agent delegation (use \`delegate_task\` directly), or when the user explicitly says "just do it fast."
 
 ## Validation-First Protocol
 

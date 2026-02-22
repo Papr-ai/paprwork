@@ -11,12 +11,14 @@ import type { ChatMessage } from "../../stores/chatStore";
 import "./MessageList.css";
 
 interface MessageListProps {
+  chatId: string;
   messages: ChatMessage[];
   isLoading?: boolean;
   isSending?: boolean;
 }
 
 export const MessageList: React.FC<MessageListProps> = ({
+  chatId,
   messages,
   isLoading,
   isSending,
@@ -26,6 +28,27 @@ export const MessageList: React.FC<MessageListProps> = ({
   const activeRequest = usePermissionStore((s) => s.activeRequest);
   const autoScrollEnabled = useRef(true);
   const lastScrollHeight = useRef(0);
+
+  // Filter out sub-agent trigger messages from main chat (they appear in MiniChatCard)
+  const filteredMessages = messages.filter((msg) => {
+    // Hide synthetic sub-agent user messages
+    if (
+      msg.role === "user" &&
+      (msg.content.startsWith("[Sub-agent question for delegation ") ||
+        msg.content.startsWith("[User message in sub-agent chat for delegation "))
+    ) {
+      return false;
+    }
+    // Hide assistant responses that use respond_to_sub_agent (sub-agent interactions)
+    if (
+      msg.role === "assistant" &&
+      msg.toolCalls &&
+      msg.toolCalls.some((tc) => tc.toolName === "respond_to_sub_agent")
+    ) {
+      return false;
+    }
+    return true;
+  });
 
   // Detect if user has manually scrolled up (want to disable auto-scroll)
   useEffect(() => {
@@ -58,7 +81,7 @@ export const MessageList: React.FC<MessageListProps> = ({
       listElement.scrollTop = currentScrollHeight;
       lastScrollHeight.current = currentScrollHeight;
     }
-  }, [messages, activeRequest, isLoading]);
+  }, [filteredMessages, activeRequest, isLoading]);
 
   // Also scroll on any re-render when streaming (covers thinking/tool updates)
   // This ensures we scroll even if messages array reference doesn't change
@@ -67,7 +90,7 @@ export const MessageList: React.FC<MessageListProps> = ({
     if (!listElement || !autoScrollEnabled.current) return;
 
     // Check if any message is currently streaming
-    const hasStreamingMessage = messages.some((m) => m.isStreaming);
+    const hasStreamingMessage = filteredMessages.some((m) => m.isStreaming);
 
     if (hasStreamingMessage) {
       // Use requestAnimationFrame for smooth scroll during rapid updates
@@ -84,7 +107,7 @@ export const MessageList: React.FC<MessageListProps> = ({
     }
   }); // No deps - runs on every render to catch streaming updates
 
-  if (messages.length === 0 && !isLoading) {
+  if (filteredMessages.length === 0 && !isLoading) {
     return (
       <div
         className="message-list message-list-empty"
@@ -97,8 +120,8 @@ export const MessageList: React.FC<MessageListProps> = ({
 
   return (
     <div className="message-list" ref={listRef} data-testid="message-list">
-      {messages.map((message) => (
-        <MessageItem key={message.id} message={message} />
+      {filteredMessages.map((message) => (
+        <MessageItem key={message.id} chatId={chatId} message={message} />
       ))}
       {activeRequest && (
         <div className="message-item">
@@ -132,7 +155,7 @@ export const MessageList: React.FC<MessageListProps> = ({
           </div>
         </div>
       )}
-      {isSending && !messages.some((m) => m.isStreaming) && (
+      {isSending && !filteredMessages.some((m) => m.isStreaming) && (
         <div className="message-item">
           <div className="message-avatar-container">
             <div className="message-avatar-assistant">

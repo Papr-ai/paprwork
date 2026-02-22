@@ -18,7 +18,7 @@
 
 /* Panes */
 .content-pane {
-  overflow: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   /* Subtle frosted glass — shows app-layout background with soft tint */

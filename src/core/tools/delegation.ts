@@ -144,12 +144,19 @@ export const delegateTaskTool = createTool({
       await import("../../gateway/services/SubAgentService.js");
     const { getCurrentChatId } = await import("./context.js");
     const service = getSubAgentService();
-    // Auto-inject reportChatId from context when omitted (user-facing delegations default to current chat)
-    const ctx = getCurrentChatId();
+    
+    // CRITICAL: Capture chatId from tool context at delegation creation time
+    // This ensures the delegation reports to the chat that initiated it,
+    // not whatever chat happens to be active when the job completes
+    const contextChatId = getCurrentChatId();
+    
+    // Determine reportChatId: use explicit arg, or context chat (if not a job), or undefined
     const reportChatId =
       args.reportChatId?.trim() ||
-      (ctx && !ctx.startsWith("job:") ? ctx : undefined);
-    const run = await service.delegateTask({ ...args, reportChatId });
+      (contextChatId && !contextChatId.startsWith("job:") ? contextChatId : undefined);
+    
+    // ALWAYS run in background so tool returns immediately with job ID (enables real-time UI updates)
+    const run = await service.delegateTask({ ...args, reportChatId, background: true });
     return { success: true, data: run };
   },
 });

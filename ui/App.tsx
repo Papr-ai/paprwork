@@ -18,6 +18,7 @@ import {
 } from "./stores/permissionStore";
 import { initJobPermissionListener } from "./stores/jobPermissionStore";
 import { initJobLiveLogsListener } from "./stores/jobLiveLogsStore";
+import { initSubagentJobStore } from "./stores/subagentJobStore";
 import { KeyPermissionModal } from "./components/Permissions/KeyPermissionModal";
 import "./styles/liquid-glass.css";
 import "./App.css";
@@ -55,6 +56,11 @@ export function App() {
   // Initialize job live logs listener for streaming log display
   useEffect(() => {
     initJobLiveLogsListener();
+  }, []);
+
+  // Initialize subagent job store (reportChatId → jobId for MiniChatCard during run)
+  useEffect(() => {
+    initSubagentJobStore();
   }, []);
 
   // Wait for Zustand persist to finish loading from localStorage

@@ -78,7 +78,7 @@ export async function triggerMainAgentResponse(
   const syntheticMessage =
     source === "user"
       ? `[User message in sub-agent chat for delegation ${delegationId}]\n\nThe user joined the mini-chat and sent: "${message}"\n\n**Your job:** Respond to the user. Use respond_to_sub_agent with delegationId "${delegationId}" and your response. Be helpful and explain what's happening with the sub-agent if relevant.`
-      : `[Sub-agent question for delegation ${delegationId}]\n\n${message}\n\n**Your job:** Answer the sub-agent's question yourself using your knowledge and context. Use respond_to_sub_agent with delegationId "${delegationId}" and your answer. Only ask the user for help if you truly cannot answer (e.g. missing credentials, subjective preference, or information only they have).`;
+      : `[Sub-agent question for delegation ${delegationId}]\n\n${message}\n\n**Your job:** Answer the sub-agent's question yourself using your knowledge and context. Use respond_to_sub_agent with delegationId "${delegationId}" and your answer.\n\n**If you need user help:** If you truly cannot answer (e.g. missing credentials, subjective preference, or information only they have), respond in the MAIN CHAT without using respond_to_sub_agent. Just explain the situation to the user directly. Do NOT use respond_to_sub_agent when asking the user for help - that tool is only for answering the sub-agent.`;
 
   console.log(
     `[SubAgentResponseTrigger] Triggering main agent for chat ${chatId}`,

@@ -64,40 +64,41 @@ function ChatIcon() {
   );
 }
 
-/** Sub-agent avatar - uses icon name or default robot */
+/** Sub-agent avatar - matches main chat style with 32px circle container */
 function SubAgentAvatar({ icon }: { icon?: string }) {
   if (icon && SUBAGENT_ICONS[icon]) {
     const Svg = SUBAGENT_ICONS[icon];
     return (
-      <span className="mini-chat-card__msg-avatar mini-chat-card__msg-avatar--sub">
+      <div className="mini-chat-card__msg-avatar-assistant mini-chat-card__msg-avatar-assistant--sub">
         <Svg />
-      </span>
+      </div>
     );
   }
   return (
-    <svg
-      className="mini-chat-card__msg-avatar"
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="3" y="11" width="18" height="10" rx="2" />
-      <circle cx="12" cy="5" r="2" />
-      <path d="M8 15h.01" />
-      <path d="M16 15h.01" />
-    </svg>
+    <div className="mini-chat-card__msg-avatar-assistant mini-chat-card__msg-avatar-assistant--sub">
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <rect x="3" y="11" width="18" height="10" rx="2" />
+        <circle cx="12" cy="5" r="2" />
+        <path d="M8 15h.01" />
+        <path d="M16 15h.01" />
+      </svg>
+    </div>
   );
 }
 
-/** Main agent avatar - Papr logo from main chat (gradient, no animation) */
+/** Main agent avatar - Papr logo matching main chat exactly (32px circle with border) */
 function MainAgentAvatar() {
   return (
-    <span className="mini-chat-card__msg-avatar mini-chat-card__msg-avatar--main">
+    <div className="mini-chat-card__msg-avatar-assistant">
       <svg
         width="16"
         height="16"
@@ -128,7 +129,7 @@ function MainAgentAvatar() {
           </linearGradient>
         </defs>
       </svg>
-    </span>
+    </div>
   );
 }
 
@@ -373,16 +374,7 @@ export function MiniChatCard({
         author: "user",
       });
       setInputValue("");
-      // Optimistic: add user message to UI (backend will broadcast; we could also add locally)
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "user",
-          author: "user",
-          content: trimmed,
-          timestamp: new Date().toISOString(),
-        },
-      ]);
+      // Don't add optimistically - broadcast will handle it to avoid duplicates
     } catch (err) {
       console.error("[MiniChatCard] Failed to send message:", err);
     } finally {
@@ -421,7 +413,7 @@ export function MiniChatCard({
           </span>
         </div>
         <div className="mini-chat-card__header-right">
-          {!hasJoined && (status === "active" || messages.length > 0) && (
+          {!hasJoined && status === "active" && (
             <button
               type="button"
               className="mini-chat-card__join-btn"
@@ -490,22 +482,21 @@ export function MiniChatCard({
                     key={`${msg.timestamp}-${i}`}
                     className={`mini-chat-card__message mini-chat-card__message--${msg.author}`}
                   >
-                    <div className="mini-chat-card__msg-avatar-wrap">
-                      {msg.author === "sub-agent" ? (
-                        <SubAgentAvatar icon={subAgentIcon} />
-                      ) : msg.author === "main-agent" ? (
-                        <MainAgentAvatar />
-                      ) : (
-                        <UserAvatar />
-                      )}
-                    </div>
+                    {msg.author === "sub-agent" ? (
+                      <SubAgentAvatar icon={subAgentIcon} />
+                    ) : msg.author === "user" ? (
+                      <UserAvatar />
+                    ) : (
+                      // main-agent or undefined (default to main-agent in delegation chat)
+                      <MainAgentAvatar />
+                    )}
                     <div className="mini-chat-card__message-bubble">
                       <div className="mini-chat-card__message-author">
-                        {msg.author === "main-agent"
-                          ? "Main Agent"
-                          : msg.author === "sub-agent"
-                            ? subAgentName
-                            : "You"}
+                        {msg.author === "sub-agent"
+                          ? subAgentName
+                          : msg.author === "user"
+                            ? "You"
+                            : "Pen"}
                       </div>
                       <div className="mini-chat-card__message-content">
                         <Markdown>{msg.content}</Markdown>

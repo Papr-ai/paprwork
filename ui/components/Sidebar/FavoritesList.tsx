@@ -4,6 +4,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { useTabs } from "../../hooks/useTabs";
+import { useArtifactsStore } from "../../stores/artifactsStore";
 import "./FavoritesList.css";
 
 interface Favorite {
@@ -18,7 +19,9 @@ export function FavoritesList() {
   const [favorites, setFavorites] = useState<Favorite[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const { createTab, switchToTab } = useTabs();
+  const { artifacts } = useArtifactsStore();
 
+  // Load favorites from localStorage
   useEffect(() => {
     const stored = localStorage.getItem("paprwork-favorites");
     if (stored) {
@@ -29,6 +32,38 @@ export function FavoritesList() {
       }
     }
   }, []);
+
+  // Sync favorites with current artifact data (auto-update icons/titles)
+  useEffect(() => {
+    if (favorites.length === 0 || artifacts.length === 0) return;
+
+    let updated = false;
+    const synced = favorites.map((fav) => {
+      // Only sync apps and documents (skip chats)
+      if (fav.type !== "app" && fav.type !== "document") return fav;
+
+      const artifact = artifacts.find((a) => a.id === fav.id && a.type === fav.type);
+      if (!artifact) return fav;
+
+      // Check if icon or title changed
+      if (artifact.icon !== fav.icon || artifact.title !== fav.title) {
+        updated = true;
+        console.log(`[FavoritesList] Auto-syncing favorite: ${fav.id} (icon/title changed)`);
+        return {
+          ...fav,
+          title: artifact.title,
+          icon: artifact.icon,
+        };
+      }
+
+      return fav;
+    });
+
+    if (updated) {
+      setFavorites(synced);
+      localStorage.setItem("paprwork-favorites", JSON.stringify(synced));
+    }
+  }, [artifacts, favorites]);
 
   const saveFavorites = useCallback((updated: Favorite[]) => {
     setFavorites(updated);
@@ -99,9 +134,6 @@ export function FavoritesList() {
         const validTypes: Favorite["type"][] = ["chat", "document", "app"];
         if (!validTypes.includes(entityType as Favorite["type"])) return;
 
-        // Don't add duplicates
-        if (favorites.some((f) => f.id === entityId)) return;
-
         const newFav: Favorite = {
           id: entityId,
           type: entityType as Favorite["type"],
@@ -109,6 +141,17 @@ export function FavoritesList() {
           icon: typeof data.icon === "string" ? data.icon : undefined,
         };
 
+        // Check if favorite already exists and update it (to refresh icon/title)
+        const existingIndex = favorites.findIndex((f) => f.id === entityId);
+        if (existingIndex !== -1) {
+          const updated = [...favorites];
+          updated[existingIndex] = newFav;
+          saveFavorites(updated);
+          console.log(`[FavoritesList] Updated existing favorite: ${entityId}`);
+          return;
+        }
+
+        // Add new favorite
         saveFavorites([...favorites, newFav]);
       } catch {
         /* invalid drop data */

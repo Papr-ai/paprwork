@@ -6,6 +6,8 @@
   border-radius: 10px;
   overflow: hidden;
   margin: 8px 0;
+  flex-shrink: 0; /* Don't shrink in ExploringCard flex layout - preserve full height */
+  min-height: 0; /* Allow flex child to participate in overflow correctly */
 }
 
 .mini-chat-card__header {
@@ -102,6 +104,13 @@
   padding: 0 14px 10px;
   font-size: 12px;
   line-height: 1.5;
+  max-height: 480px;
+  overflow-y: auto;
+  overflow-anchor: none; /* Prevent auto-scroll from fighting user scroll to top */
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  -webkit-overflow-scrolling: touch; /* Smooth scroll on iOS */
 }
 
 .mini-chat-card__context {
@@ -195,12 +204,12 @@
 }
 
 .mini-chat-card__messages-content {
-  max-height: 240px;
-  overflow-y: auto;
+  /* No max-height/overflow here - parent body scrolls; allows scrolling to top */
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 10px;
+  min-height: 0;
 }
 
 .mini-chat-card__message {
@@ -221,6 +230,37 @@
   justify-content: center;
   border-radius: 50%;
   background: rgba(0, 0, 0, 0.04);
+}
+
+/* Main agent avatar - matches main chat MessageItem avatar exactly */
+.mini-chat-card__msg-avatar-assistant {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--background-color);
+  border: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+/* Sub-agent avatar variant - same structure, different styling */
+.mini-chat-card__msg-avatar-assistant--sub {
+  background: rgba(139, 92, 246, 0.08);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+}
+
+.mini-chat-card__msg-avatar-assistant--sub svg {
+  width: 16px;
+  height: 16px;
+  color: #8b5cf6;
+}
+
+.mini-chat-card__papr-logo-svg {
+  width: 16px;
+  height: 16px;
+  color: var(--primary-color);
 }
 
 .mini-chat-card__msg-avatar {
@@ -291,8 +331,7 @@
 
 .mini-chat-card__result {
   margin-top: 8px;
-  max-height: 160px;
-  overflow-y: auto;
+  /* No overflow - parent body scrolls so user can reach beginning */
   color: var(--text-secondary);
 }
 

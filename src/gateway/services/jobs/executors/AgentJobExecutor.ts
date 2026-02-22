@@ -86,6 +86,26 @@ export class AgentJobExecutor implements IJobExecutor {
     await params.appendLog(`Starting isolated agent run: ${params.runId}`);
     await params.appendLog(`Environment: ${envBlock}`);
 
+    // Set tool execution context so tools can access the reportChatId
+    // This ensures nested delegations (sub-agent delegating to another sub-agent) inherit the correct chatId
+    if (params.job.reportChatId) {
+      const { setToolContext } = await import("../../../../core/tools/context.js");
+      setToolContext(params.job.reportChatId);
+    }
+
+    // Broadcast subagent-job-started so UI can show MiniChatCard during run (receives activity)
+    if (params.job.type === "subagent") {
+      const reportChatId =
+        params.job.reportChatId ?? params.job.deliver?.targetId;
+      if (reportChatId) {
+        const { broadcast } = await import("../../../websocket/index.js");
+        broadcast({
+          type: "subagent-job-started",
+          data: { jobId: params.job.id, reportChatId },
+        });
+      }
+    }
+
     // ── Choose execution path: structured (generateObject) vs free-form (streamText)
     let outputText: string;
 
@@ -131,22 +151,33 @@ export class AgentJobExecutor implements IJobExecutor {
     // ─────────────────────────────────────────────────────────────────────────
 
     if (params.job.deliver?.channel === "chat") {
+      const deliveryMessage = {
+        id: `msg-${uuidv4()}`,
+        chat_id: params.job.deliver.targetId,
+        role: "assistant" as const,
+        content:
+          outputText.length > 0
+            ? outputText
+            : `Agent job ${params.job.name} finished with no textual output.`,
+        timestamp: new Date().toISOString(),
+        sync_status: "local" as const,
+      };
       await agentService
         .getStorageManager()
-        .saveMessage(params.job.deliver.targetId, {
-          id: `msg-${uuidv4()}`,
-          chat_id: params.job.deliver.targetId,
-          role: "assistant",
-          content:
-            outputText.length > 0
-              ? outputText
-              : `Agent job ${params.job.name} finished with no textual output.`,
-          timestamp: new Date().toISOString(),
-          sync_status: "local",
-        });
+        .saveMessage(params.job.deliver.targetId, deliveryMessage);
       await params.appendLog(
         `Delivered result to chat: ${params.job.deliver.targetId}`,
       );
+
+      // Broadcast to UI so the message appears immediately without needing app restart
+      const { broadcast } = await import("../../../websocket/index.js");
+      broadcast({
+        type: "chat:message-received",
+        data: {
+          chatId: params.job.deliver.targetId,
+          message: deliveryMessage,
+        },
+      });
     }
 
     await writeRunMemory({

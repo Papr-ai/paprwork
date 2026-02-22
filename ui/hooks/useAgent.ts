@@ -66,6 +66,17 @@ export function useAgent() {
         return;
       }
 
+      // Sub-agent trigger responses: only hide delegation chat messages, NOT main chat messages
+      // When sub-agent asks main agent a question, main agent may respond in BOTH:
+      // 1. Delegation chat (delegation:xxx) - hide these from main UI
+      // 2. Main chat (user's chat) - SHOW these! Main agent asking user for help
+      if (
+        streamChunk.isSubAgentTrigger === true &&
+        chatId.startsWith("delegation:")
+      ) {
+        return;
+      }
+
       if (requestId) {
         const activeRequestId =
           activeStreamRequestByChatRef.current.get(chatId);

@@ -36,7 +36,7 @@
   font-size: 12px;
   color: var(--text-secondary);
   line-height: 1.5;
-  max-height: 200px;
+  max-height: 420px;
   overflow-y: auto;
   transition: max-height 0.3s ease, opacity 0.3s ease;
   display: flex;

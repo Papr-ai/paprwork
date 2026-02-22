@@ -39,21 +39,21 @@ describe("MessageList", () => {
 
   describe("Rendering", () => {
     it("should render MessageList component", () => {
-      render(<MessageList messages={mockMessages} isStreaming={false} />);
+      render(<MessageList chatId="test-chat" messages={mockMessages} isStreaming={false} />);
 
       const messageList = screen.getByTestId("message-list");
       expect(messageList).toBeDefined();
     });
 
     it("should render all messages", () => {
-      render(<MessageList messages={mockMessages} isStreaming={false} />);
+      render(<MessageList chatId="test-chat" messages={mockMessages} isStreaming={false} />);
 
       const messages = screen.getAllByTestId(/^message-item-/);
       expect(messages.length).toBeGreaterThanOrEqual(mockMessages.length);
     });
 
     it("should render empty state when no messages", () => {
-      render(<MessageList messages={[]} isStreaming={false} />);
+      render(<MessageList chatId="test-chat" messages={[]} isStreaming={false} />);
 
       const messageList = screen.getByTestId("message-list");
       expect(messageList).toBeDefined();
@@ -66,7 +66,7 @@ describe("MessageList", () => {
 
   describe("Message Types", () => {
     it("should distinguish between user and assistant messages", () => {
-      render(<MessageList messages={mockMessages} isStreaming={false} />);
+      render(<MessageList chatId="test-chat" messages={mockMessages} isStreaming={false} />);
 
       const userMessages = screen.getAllByTestId(/message-item-user/);
       const assistantMessages = screen.getAllByTestId(/message-item-assistant/);
@@ -76,14 +76,14 @@ describe("MessageList", () => {
     });
 
     it("should display user message content correctly", () => {
-      render(<MessageList messages={mockMessages} isStreaming={false} />);
+      render(<MessageList chatId="test-chat" messages={mockMessages} isStreaming={false} />);
 
       const userMessage = screen.getByText("Hello, how are you?");
       expect(userMessage).toBeDefined();
     });
 
     it("should display assistant message content correctly", () => {
-      render(<MessageList messages={mockMessages} isStreaming={false} />);
+      render(<MessageList chatId="test-chat" messages={mockMessages} isStreaming={false} />);
 
       const assistantMessage = screen.getByText(/I am doing well, thank you/);
       expect(assistantMessage).toBeDefined();
@@ -92,14 +92,14 @@ describe("MessageList", () => {
 
   describe("Streaming State", () => {
     it("should show thinking indicator when streaming", () => {
-      render(<MessageList messages={mockMessages} isStreaming={true} />);
+      render(<MessageList chatId="test-chat" messages={mockMessages} isStreaming={true} />);
 
       const thinkingCard = screen.queryByTestId("thinking-card");
       expect(thinkingCard).toBeDefined();
     });
 
     it("should not show thinking indicator when not streaming", () => {
-      render(<MessageList messages={mockMessages} isStreaming={false} />);
+      render(<MessageList chatId="test-chat" messages={mockMessages} isStreaming={false} />);
 
       const thinkingCard = screen.queryByTestId("thinking-card");
       expect(thinkingCard).toBeNull();
@@ -116,7 +116,7 @@ describe("MessageList", () => {
         },
       ];
 
-      render(<MessageList messages={streamingMessages} isStreaming={true} />);
+      render(<MessageList chatId="test-chat" messages={streamingMessages} isStreaming={true} />);
 
       const streamingMessage = screen.getByText(/This is a streaming response/);
       expect(streamingMessage).toBeDefined();
@@ -125,7 +125,7 @@ describe("MessageList", () => {
 
   describe("Message Timestamps", () => {
     it("should display message timestamps", () => {
-      render(<MessageList messages={mockMessages} isStreaming={false} />);
+      render(<MessageList chatId="test-chat" messages={mockMessages} isStreaming={false} />);
 
       // Look for timestamp elements (implementation-dependent)
       const timestamps = screen.queryAllByTestId(/timestamp/);
@@ -144,7 +144,7 @@ describe("MessageList", () => {
       ];
 
       render(
-        <MessageList messages={messagesWithTimestamp} isStreaming={false} />,
+        <MessageList chatId="test-chat" messages={messagesWithTimestamp} isStreaming={false} />,
       );
 
       // Timestamp should be formatted (implementation-dependent)
@@ -163,7 +163,7 @@ describe("MessageList", () => {
         },
       ];
 
-      render(<MessageList messages={markdownMessages} isStreaming={false} />);
+      render(<MessageList chatId="test-chat" messages={markdownMessages} isStreaming={false} />);
 
       // Look for formatted content
       const message = screen.getByText(/Bold text/);
@@ -179,7 +179,7 @@ describe("MessageList", () => {
         },
       ];
 
-      render(<MessageList messages={codeMessages} isStreaming={false} />);
+      render(<MessageList chatId="test-chat" messages={codeMessages} isStreaming={false} />);
 
       // Look for code block
       const codeBlock = screen.queryByText(/const hello/);
@@ -195,7 +195,7 @@ describe("MessageList", () => {
         },
       ];
 
-      render(<MessageList messages={inlineCodeMessages} isStreaming={false} />);
+      render(<MessageList chatId="test-chat" messages={inlineCodeMessages} isStreaming={false} />);
 
       const message = screen.getByText(/useState/);
       expect(message).toBeDefined();
@@ -205,7 +205,7 @@ describe("MessageList", () => {
   describe("Scroll Behavior", () => {
     it("should scroll to bottom on mount", () => {
       const { container } = render(
-        <MessageList messages={mockMessages} isStreaming={false} />,
+        <MessageList chatId="test-chat" messages={mockMessages} isStreaming={false} />,
       );
 
       const messageList = container.querySelector(
@@ -218,7 +218,7 @@ describe("MessageList", () => {
 
     it("should auto-scroll when new message arrives", () => {
       const { rerender } = render(
-        <MessageList messages={mockMessages} isStreaming={false} />,
+        <MessageList chatId="test-chat" messages={mockMessages} isStreaming={false} />,
       );
 
       // Add new message
@@ -231,7 +231,7 @@ describe("MessageList", () => {
         },
       ];
 
-      rerender(<MessageList messages={newMessages} isStreaming={false} />);
+      rerender(<MessageList chatId="test-chat" messages={newMessages} isStreaming={false} />);
 
       // Should include new message
       const newMessage = screen.getByText("New message");
@@ -248,7 +248,7 @@ describe("MessageList", () => {
         { role: "assistant", content: "Response", timestamp: new Date() },
       ];
 
-      render(<MessageList messages={groupedMessages} isStreaming={false} />);
+      render(<MessageList chatId="test-chat" messages={groupedMessages} isStreaming={false} />);
 
       // All messages should be rendered
       const messages = screen.getAllByTestId(/^message-item-/);
@@ -266,7 +266,7 @@ describe("MessageList", () => {
         },
       ];
 
-      render(<MessageList messages={errorMessages} isStreaming={false} />);
+      render(<MessageList chatId="test-chat" messages={errorMessages} isStreaming={false} />);
 
       const errorMessage = screen.queryByText(/Failed to connect/);
       expect(errorMessage).toBeDefined();
@@ -282,7 +282,7 @@ describe("MessageList", () => {
       ];
 
       const { container } = render(
-        <MessageList messages={errorMessages} isStreaming={false} />,
+        <MessageList chatId="test-chat" messages={errorMessages} isStreaming={false} />,
       );
 
       // Look for error styling
@@ -302,7 +302,7 @@ describe("MessageList", () => {
         }),
       );
 
-      render(<MessageList messages={manyMessages} isStreaming={false} />);
+      render(<MessageList chatId="test-chat" messages={manyMessages} isStreaming={false} />);
 
       const messageList = screen.getByTestId("message-list");
       expect(messageList).toBeDefined();
@@ -312,7 +312,7 @@ describe("MessageList", () => {
 
     it("should update efficiently when new message added", () => {
       const { rerender } = render(
-        <MessageList messages={mockMessages} isStreaming={false} />,
+        <MessageList chatId="test-chat" messages={mockMessages} isStreaming={false} />,
       );
 
       // Add messages incrementally
@@ -326,7 +326,7 @@ describe("MessageList", () => {
           })),
         ];
 
-        rerender(<MessageList messages={newMessages} isStreaming={false} />);
+        rerender(<MessageList chatId="test-chat" messages={newMessages} isStreaming={false} />);
       }
 
       // Should update without issues
