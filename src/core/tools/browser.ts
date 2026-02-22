@@ -2,6 +2,7 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import type { Browser, Page } from "playwright";
 import { getApiKeysForSanitization, sanitizeToolOutput } from "./security.js";
+import { wrapUntrustedContent } from "./contentProvenance.js";
 
 interface BrowserSessionState {
   browser: Browser;
@@ -143,11 +144,14 @@ export const browserNavigateTool = createTool({
     await requestBrowserPermission(`navigate:${args.url}`);
     const session = await getBrowserSession();
     await session.page.goto(args.url, { waitUntil: "domcontentloaded" });
+    const url = session.page.url();
+    const title = await session.page.title();
+    const ctx = `url: ${url}`;
     return sanitizeBrowserData({
       success: true,
       data: {
-        url: session.page.url(),
-        title: await session.page.title(),
+        url: wrapUntrustedContent("browser", ctx, url),
+        title: wrapUntrustedContent("browser", ctx, title),
       },
     }) as { success: boolean; data: { url: string; title: string } };
   },
@@ -164,15 +168,19 @@ export const browserSnapshotTool = createTool({
     const session = await getBrowserSession();
     const html = await session.page.content();
     const maxChars = args.maxChars ?? 8000;
+    const url = session.page.url();
+    const title = await session.page.title();
+    const rawHtml =
+      html.length > maxChars
+        ? `${html.slice(0, maxChars)}\n<!-- truncated -->`
+        : html;
+    const ctx = `url: ${url}`;
     return sanitizeBrowserData({
       success: true,
       data: {
-        url: session.page.url(),
-        title: await session.page.title(),
-        html:
-          html.length > maxChars
-            ? `${html.slice(0, maxChars)}\n<!-- truncated -->`
-            : html,
+        url: wrapUntrustedContent("browser", ctx, url),
+        title: wrapUntrustedContent("browser", ctx, title),
+        html: wrapUntrustedContent("browser", ctx, rawHtml),
       },
     }) as {
       success: boolean;

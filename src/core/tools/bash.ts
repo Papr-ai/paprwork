@@ -20,6 +20,17 @@ import {
   sanitizeError,
   getApiKeysForSanitization,
 } from "./security.js";
+import { wrapUntrustedContent } from "./contentProvenance.js";
+
+/** Commands that fetch or produce external content - wrap stdout for prompt injection defense */
+const CURL_WGET_REGEX = /\b(curl|wget)\b/i;
+const PYTHON_REGEX = /\b(python3?)\b/i;
+
+function shouldWrapBashOutput(command: string): "curl" | "python" | null {
+  if (CURL_WGET_REGEX.test(command)) return "curl";
+  if (PYTHON_REGEX.test(command)) return "python";
+  return null;
+}
 
 const execAsync = promisify(exec);
 
@@ -231,8 +242,14 @@ export async function executeBashCommand(
     const duration = Date.now() - startTime;
 
     // Sanitize output before returning (no truncation - prepareStep keeps last full)
-    const sanitizedStdout = sanitizeError(stdout || "", apiKeys);
+    let sanitizedStdout = sanitizeError(stdout || "", apiKeys);
     const sanitizedStderr = sanitizeError(stderr || "", apiKeys);
+
+    // Wrap stdout from curl/wget/python - external content may contain prompt injections
+    const wrapSource = shouldWrapBashOutput(input.command);
+    if (wrapSource && sanitizedStdout) {
+      sanitizedStdout = wrapUntrustedContent(wrapSource, "", sanitizedStdout);
+    }
 
     // If bash modified app files (e.g. sed, cat >, tee), broadcast so iframe reloads
     const appEdits = detectAppFileEditsFromBashCommand(input.command);
@@ -270,12 +287,17 @@ export async function executeBashCommand(
           `Command timed out after ${timeout}ms`,
           apiKeys,
         );
+        let errStdout = sanitizeError(execError.stdout || "", apiKeys);
+        const wrapSource = shouldWrapBashOutput(input.command);
+        if (wrapSource && errStdout) {
+          errStdout = wrapUntrustedContent(wrapSource, "", errStdout);
+        }
         return {
           success: false,
           error: sanitizedError,
           type: "timeout_error",
           data: {
-            stdout: sanitizeError(execError.stdout || "", apiKeys),
+            stdout: errStdout,
             stderr: sanitizeError(execError.stderr || "", apiKeys),
             exitCode: execError.code || -1,
             command: sanitizeError(input.command, apiKeys),
@@ -289,12 +311,17 @@ export async function executeBashCommand(
         `Command failed with exit code ${execError.code}`,
         apiKeys,
       );
+      let errStdout = sanitizeError(execError.stdout || "", apiKeys);
+      const wrapSource = shouldWrapBashOutput(input.command);
+      if (wrapSource && errStdout) {
+        errStdout = wrapUntrustedContent(wrapSource, "", errStdout);
+      }
       return {
         success: false,
         error: sanitizedError,
         type: "execution_error",
         data: {
-          stdout: sanitizeError(execError.stdout || "", apiKeys),
+          stdout: errStdout,
           stderr: sanitizeError(execError.stderr || "", apiKeys),
           exitCode: execError.code || 1,
           command: sanitizeError(input.command, apiKeys),
@@ -438,9 +465,15 @@ export async function executeBashCommandStreaming(
       const exitCode = code ?? -1;
 
       // Sanitize final output (no truncation - prepareStep keeps last full)
-      const sanitizedStdout = sanitizeError(stdoutData, apiKeys);
+      let sanitizedStdout = sanitizeError(stdoutData, apiKeys);
       const sanitizedStderr = sanitizeError(stderrData, apiKeys);
       const sanitizedCommand = sanitizeError(input.command, apiKeys);
+
+      // Wrap stdout from curl/wget/python - external content may contain prompt injections
+      const wrapSource = shouldWrapBashOutput(input.command);
+      if (wrapSource && sanitizedStdout) {
+        sanitizedStdout = wrapUntrustedContent(wrapSource, "", sanitizedStdout);
+      }
 
       if (exitCode === 0) {
         // If bash modified app files, broadcast so iframe reloads
@@ -480,10 +513,15 @@ export async function executeBashCommandStreaming(
     // Handle errors
     proc.on("error", (error: Error) => {
       const duration = Date.now() - startTime;
-      const sanitizedStdout = sanitizeError(stdoutData, apiKeys);
+      let sanitizedStdout = sanitizeError(stdoutData, apiKeys);
       const sanitizedStderr = sanitizeError(stderrData, apiKeys);
       const sanitizedCommand = sanitizeError(input.command, apiKeys);
       const sanitizedError = sanitizeError(error.message, apiKeys);
+
+      const wrapSource = shouldWrapBashOutput(input.command);
+      if (wrapSource && sanitizedStdout) {
+        sanitizedStdout = wrapUntrustedContent(wrapSource, "", sanitizedStdout);
+      }
 
       resolve({
         success: false,
