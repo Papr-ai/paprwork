@@ -9,25 +9,28 @@
   gap: 8px;
   width: calc(100% - 24px);
   margin: 0 12px 16px 12px;
-  padding: 8px 16px;
-  background: #1C1C1E;
+  padding: 10px 16px;
+  background: #0161E0;
   border: none;
-  border-radius: 8px;
+  border-radius: 10px;
   color: #FFFFFF;
   font-family: var(--font-body);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: background-color 0.15s var(--ease), transform 0.15s var(--ease);
+  transition: background-color 0.15s var(--ease), transform 0.15s var(--ease), box-shadow 0.15s var(--ease);
+  box-shadow: 0 2px 8px rgba(1, 97, 224, 0.25);
 }
 
 .new-chat-button:hover {
-  background: #2C2C2E;
+  background: #0050C0;
   transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(1, 97, 224, 0.35);
 }
 
 .new-chat-button:active {
   transform: translateY(0);
+  box-shadow: 0 1px 4px rgba(1, 97, 224, 0.20);
 }
 
 .new-chat-button__icon {
@@ -40,14 +43,16 @@
   font-weight: 600;
 }
 
-/* Dark mode */
+/* Dark mode - keep brand blue */
 @media (prefers-color-scheme: dark) {
   .new-chat-button {
-    background: #F2F2F7;
-    color: #1C1C1E;
+    background: #0161E0;
+    color: #FFFFFF;
+    box-shadow: 0 2px 8px rgba(1, 97, 224, 0.35);
   }
-  
+
   .new-chat-button:hover {
-    background: #E5E5EA;
+    background: #0C7AFF;
+    box-shadow: 0 4px 14px rgba(1, 97, 224, 0.45);
   }
 }

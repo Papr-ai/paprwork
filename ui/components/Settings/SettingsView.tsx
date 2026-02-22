@@ -3,8 +3,9 @@
  * Reference: Paprwork v1 settings modal
  */
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useCustomKeys } from "../../hooks/useCustomKeys";
+import { useProfileStore } from "../../stores/profileStore";
 import { gateway } from "../../src/lib/gateway";
 import type { CustomKeyInput, SettingsTab } from "../../types/settings";
 import { OAuthSection } from "./OAuthSection";
@@ -709,6 +710,8 @@ function ProfileTab() {
   const [imageUrl, setImageUrl] = useState("");
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const profileStore = useProfileStore();
 
   // Load profile on mount
   useEffect(() => {
@@ -731,10 +734,37 @@ function ProfileTab() {
     })();
   }, []);
 
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type and size
+    if (!file.type.startsWith("image/")) return;
+    if (file.size > 5 * 1024 * 1024) {
+      alert("Image must be under 5MB");
+      return;
+    }
+
+    // Convert to base64 data URL for storage
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      setImageUrl(dataUrl);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemovePhoto = () => {
+    setImageUrl("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
       await gateway.send("settings:save-profile", { name, email, imageUrl });
+      // Update the global profile store so chat reflects changes immediately
+      profileStore.setProfile({ name, email, imageUrl });
     } catch (err) {
       console.error("[ProfileTab] Save error:", err);
     } finally {
@@ -755,8 +785,59 @@ function ProfileTab() {
       <div className="settings-section">
         <h2 className="settings-section__title">Your Profile</h2>
         <p className="settings-section__description">
-          This information helps personalize your experience
+          This information helps personalize your experience and chat messages
         </p>
+
+        {/* Profile Photo Upload */}
+        <div className="form-group">
+          <label className="form-label">Profile Photo</label>
+          <div className="profile-photo-upload">
+            <div
+              className="profile-photo-preview"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              {imageUrl ? (
+                <img src={imageUrl} alt="Profile" className="profile-photo-img" />
+              ) : (
+                <div className="profile-photo-placeholder">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                    <circle cx="12" cy="7" r="4" />
+                  </svg>
+                </div>
+              )}
+              <div className="profile-photo-overlay">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                  <circle cx="12" cy="13" r="4" />
+                </svg>
+              </div>
+            </div>
+            <div className="profile-photo-actions">
+              <button
+                className="settings-btn settings-btn--secondary"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {imageUrl ? "Change Photo" : "Upload Photo"}
+              </button>
+              {imageUrl && (
+                <button
+                  className="settings-btn settings-btn--ghost"
+                  onClick={handleRemovePhoto}
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handlePhotoUpload}
+              style={{ display: "none" }}
+            />
+          </div>
+        </div>
 
         <div className="form-group">
           <label className="form-label">Name</label>
@@ -779,20 +860,6 @@ function ProfileTab() {
             placeholder="your@email.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-          />
-        </div>
-
-        <div className="form-group">
-          <label className="form-label">
-            Profile Image URL{" "}
-            <span className="form-label__optional">(optional)</span>
-          </label>
-          <input
-            type="url"
-            className="form-input"
-            placeholder="https://..."
-            value={imageUrl}
-            onChange={(e) => setImageUrl(e.target.value)}
           />
         </div>
       </div>

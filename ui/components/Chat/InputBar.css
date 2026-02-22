@@ -198,15 +198,21 @@
   background: var(--error-hover, #c0392b);
 }
 
-/* Model Picker Dropdown */
+/* Model Picker Dropdown — Apple Liquid Glass "popover" variant:
+   Popovers use stronger glass (higher opacity + blur) since they overlay content */
 .model-picker-dropdown {
   position: absolute;
   bottom: calc(100% + 8px); /* Position above the button with gap */
   left: 0;
-  background: var(--background-color);
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.18);
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.30);
+  border-radius: 14px;
+  box-shadow:
+    0 8px 30px rgba(0, 0, 0, 0.18),
+    0 0 0 0.5px rgba(0, 0, 0, 0.06),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.50);
   min-width: 260px;
   max-width: 320px;
   max-height: 420px;
@@ -328,4 +334,16 @@
 
 .model-picker-item--selected .model-picker-item-desc {
   color: rgba(255, 255, 255, 0.75);
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  .model-picker-dropdown {
+    background: rgba(28, 28, 30, 0.88);
+    border-color: rgba(255, 255, 255, 0.10);
+    box-shadow:
+      0 8px 30px rgba(0, 0, 0, 0.50),
+      0 0 0 0.5px rgba(255, 255, 255, 0.06),
+      inset 0 0.5px 0 rgba(255, 255, 255, 0.10);
+  }
 }

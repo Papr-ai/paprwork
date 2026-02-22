@@ -21,8 +21,10 @@
   overflow: auto;
   display: flex;
   flex-direction: column;
-  /* Fully transparent - shows app-layout background through */
-  background: transparent;
+  /* Subtle frosted glass — shows app-layout background with soft tint */
+  background: rgba(255, 255, 255, 0.10);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .content-pane--full {
@@ -99,6 +101,10 @@ body.resizing .content-area__resize-line {
 
 /* Dark mode */
 @media (prefers-color-scheme: dark) {
+  .content-pane {
+    background: rgba(0, 0, 0, 0.10);
+  }
+
   .content-area__resize-handle:hover {
     background: rgba(255, 255, 255, 0.03);
   }

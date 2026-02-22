@@ -4,8 +4,9 @@
  * Matches Paprwork v1 design with sequence-based rendering
  */
 
-import React from "react";
+import React, { useEffect } from "react";
 import type { ChatMessage } from "../../stores/chatStore";
+import { useProfileStore } from "../../stores/profileStore";
 import { ThinkingCard } from "./ThinkingCard";
 import { ExploringCard } from "./ExploringCard";
 import { PlanCard, parsePlanFromToolResult } from "./PlanCard";
@@ -258,8 +259,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
     ? message.streamingReasoning || message.reasoning
     : message.reasoning;
 
-  // TODO: Get user info from session/settings
-  const userEmail = "user@example.com"; // Placeholder
+  // Load user profile from settings
+  const { name: userName, email: userEmail, imageUrl: userImageUrl, loadProfile } = useProfileStore();
+  useEffect(() => { loadProfile(); }, [loadProfile]);
 
   // Check if message has V1-style sequence
   const hasSequence = message.sequence && message.sequence.length > 0;
@@ -282,12 +284,18 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
       {/* Avatar - matches v1 exactly */}
       <div className="message-avatar-container">
         {isUser ? (
-          // User avatar - uses Vercel avatar service as fallback
-          <img
-            src={`https://avatar.vercel.sh/${userEmail}`}
-            alt="User Avatar"
-            className="message-avatar-user"
-          />
+          // User avatar - profile photo or initials fallback
+          userImageUrl ? (
+            <img
+              src={userImageUrl}
+              alt={userName || "User"}
+              className="message-avatar-user"
+            />
+          ) : (
+            <div className="message-avatar-user message-avatar-user--initials">
+              {(userName || userEmail || "U").charAt(0).toUpperCase()}
+            </div>
+          )
         ) : (
           // Assistant avatar - Papr logo (actual v1 logo)
           <div className="message-avatar-assistant">
@@ -327,6 +335,10 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
 
       {/* Message content */}
       <div className="message-content">
+        {/* Name label */}
+        <span className="message-sender-name">
+          {isUser ? (userName || "You") : "Pen"}
+        </span>
         {/* V1-STYLE SEQUENCE RENDERING */}
         {hasSequence && !isUser ? (
           renderSequence(message.sequence!, message)

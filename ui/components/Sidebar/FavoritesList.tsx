@@ -47,7 +47,7 @@ export function FavoritesList() {
     (fav: Favorite) => {
       const tabType =
         fav.type === "chat" ? "chat" : fav.type === "app" ? "app" : "document";
-      const tabId = createTab(tabType, fav.id, fav.title);
+      const tabId = createTab(tabType, fav.id, fav.title, fav.icon ? { icon: fav.icon } : {});
       switchToTab(tabId);
     },
     [createTab, switchToTab],
@@ -118,6 +118,35 @@ export function FavoritesList() {
   );
 
   const getIcon = (favorite: Favorite) => {
+    // App-type favorites: wrap icon in liquid glass orb (matches Tab.tsx)
+    if (favorite.type === "app") {
+      const innerIcon = favorite.icon ? (
+        <span
+          className="favorite-item__orb-icon"
+          dangerouslySetInnerHTML={{ __html: favorite.icon }}
+        />
+      ) : (
+        <svg
+          className="favorite-item__orb-icon"
+          width="10"
+          height="10"
+          viewBox="0 0 24 24"
+          fill="none"
+        >
+          <rect x="3" y="3" width="7" height="7" rx="2" stroke="currentColor" strokeWidth="1.5" />
+          <rect x="14" y="3" width="7" height="7" rx="2" stroke="currentColor" strokeWidth="1.5" />
+          <rect x="3" y="14" width="7" height="7" rx="2" stroke="currentColor" strokeWidth="1.5" />
+          <rect x="14" y="14" width="7" height="7" rx="2" stroke="currentColor" strokeWidth="1.5" />
+        </svg>
+      );
+
+      return (
+        <span className="favorite-item__glass-orb">
+          {innerIcon}
+        </span>
+      );
+    }
+
     if (favorite.icon) {
       return <span dangerouslySetInnerHTML={{ __html: favorite.icon }} />;
     }
@@ -126,10 +155,9 @@ export function FavoritesList() {
       chat: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="1.5"/></svg>',
       document:
         '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" stroke-width="1.5"/><path d="M14 2v6h6" stroke="currentColor" stroke-width="1.5"/></svg>',
-      app: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/></svg>',
     };
 
-    return <span dangerouslySetInnerHTML={{ __html: icons[favorite.type] }} />;
+    return <span dangerouslySetInnerHTML={{ __html: icons[favorite.type] || icons.document }} />;
   };
 
   return (

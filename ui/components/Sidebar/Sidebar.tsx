@@ -15,35 +15,15 @@ import { NewChatButton } from "./NewChatButton.tsx";
 import { OnboardingCard } from "./OnboardingCard.tsx";
 import "./Sidebar.css";
 
-type View =
-  | "chat"
-  | "artifacts"
-  | "views"
-  | "meetings"
-  | "agents"
-  | "jobs"
-  | "skills";
+type View = "chat" | "apps";
 
 /** Map tab types to sidebar nav views */
 function tabTypeToView(type: TabType | undefined): View {
   switch (type) {
-    case "chat":
-      return "chat";
-    case "document":
     case "app":
-    case "artifacts":
-      return "artifacts";
-    case "views":
-    case "view":
-      return "views";
-    case "meetings":
-      return "meetings";
-    case "agents":
-      return "agents";
-    case "jobs":
-      return "jobs";
-    case "skills":
-      return "skills";
+    case "apps":
+      return "apps";
+    case "chat":
     default:
       return "chat";
   }
@@ -112,27 +92,14 @@ export function Sidebar() {
   );
 
   const handleNavClick = (view: View) => {
-    // Create appropriate tab when clicking navigation and switch to it
     let tabId: string | undefined;
-    if (view === "artifacts") {
-      tabId = createTab("artifacts", "artifacts", "Artifacts");
-    } else if (view === "agents") {
-      tabId = createTab("agents", "agents", "Agents");
-    } else if (view === "meetings") {
-      tabId = createTab("meetings", "meetings", "Meetings");
-    } else if (view === "jobs") {
-      tabId = createTab("jobs", "jobs", "Jobs");
-    } else if (view === "skills") {
-      tabId = createTab("skills", "skills", "Skills");
-    } else if (view === "views") {
-      tabId = createTab("views", "views", "Views");
+    if (view === "apps") {
+      tabId = createTab("apps" as TabType, "apps", "Apps");
     } else if (view === "chat") {
-      // For chat, create a new chat
       handleNewChat();
       return;
     }
 
-    // Switch to the created tab
     if (tabId) {
       switchToTab(tabId);
     }
@@ -147,7 +114,7 @@ export function Sidebar() {
       <div className="sidebar__content">
         <WeatherWidget />
 
-        <NewChatButton onClick={handleNewChat} />
+        <NewChatButton onClick={() => handleNavClick("apps")} />
 
         <div className="sidebar__nav">
           <NavButton
@@ -169,228 +136,53 @@ export function Sidebar() {
           <NavButton
             icon={
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                <path
-                  d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <path
-                  d="M14 2v6h6"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            }
-            label="Artifacts"
-            isActive={activeView === "artifacts"}
-            onClick={() => handleNavClick("artifacts")}
-          />
-          <NavButton
-            icon={
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
                 <rect
                   x="3"
                   y="3"
                   width="7"
                   height="7"
+                  rx="2"
                   stroke="currentColor"
                   strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
                 />
                 <rect
                   x="14"
                   y="3"
                   width="7"
                   height="7"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <line
-                  x1="3"
-                  y1="14"
-                  x2="10"
-                  y2="14"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-                <line
-                  x1="14"
-                  y1="14"
-                  x2="21"
-                  y2="14"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-                <line
-                  x1="3"
-                  y1="18"
-                  x2="10"
-                  y2="18"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-                <line
-                  x1="14"
-                  y1="18"
-                  x2="21"
-                  y2="18"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-              </svg>
-            }
-            label="Views"
-            isActive={activeView === "views"}
-            onClick={() => handleNavClick("views")}
-          />
-          <NavButton
-            icon={
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                <rect
-                  x="3"
-                  y="4"
-                  width="18"
-                  height="18"
                   rx="2"
                   stroke="currentColor"
                   strokeWidth="1.5"
                 />
-                <line
-                  x1="3"
-                  y1="10"
-                  x2="21"
-                  y2="10"
+                <rect
+                  x="3"
+                  y="14"
+                  width="7"
+                  height="7"
+                  rx="2"
                   stroke="currentColor"
                   strokeWidth="1.5"
                 />
-                <line
-                  x1="8"
-                  y1="2"
-                  x2="8"
-                  y2="6"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-                <line
-                  x1="16"
-                  y1="2"
-                  x2="16"
-                  y2="6"
+                <rect
+                  x="14"
+                  y="14"
+                  width="7"
+                  height="7"
+                  rx="2"
                   stroke="currentColor"
                   strokeWidth="1.5"
                 />
               </svg>
             }
-            label="Meetings"
-            isActive={activeView === "meetings"}
-            onClick={() => handleNavClick("meetings")}
-          />
-          <NavButton
-            icon={
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                <circle
-                  cx="12"
-                  cy="8"
-                  r="4"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-                <path
-                  d="M6 21v-2a4 4 0 014-4h4a4 4 0 014 4v2"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-              </svg>
-            }
-            label="Agents"
-            isActive={activeView === "agents"}
-            onClick={() => handleNavClick("agents")}
-          />
-          <NavButton
-            icon={
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                <circle
-                  cx="12"
-                  cy="12"
-                  r="3"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-                <path
-                  d="M12 1v6m0 6v6M4.22 4.22l4.24 4.24m5.08 5.08l4.24 4.24M1 12h6m6 0h6M4.22 19.78l4.24-4.24m5.08-5.08l4.24-4.24"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-              </svg>
-            }
-            label="Jobs"
-            isActive={activeView === "jobs"}
-            onClick={() => handleNavClick("jobs")}
-          />
-          <NavButton
-            icon={
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                <path
-                  d="M13 2L3 14h8l-1 8 10-12h-8l1-8z"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            }
-            label="Skills"
-            isActive={activeView === "skills"}
-            onClick={() => handleNavClick("skills")}
+            label="Apps"
+            isActive={activeView === "apps"}
+            onClick={() => handleNavClick("apps")}
           />
         </div>
 
         <FavoritesList />
 
-        {/* Don't show chat list when in chat mode - chats are in tabs */}
-        {activeView !== "chat" && activeView === "artifacts" && (
-          <div className="section-divider" />
-        )}
-        {activeView === "artifacts" && (
-          <div
-            style={{
-              padding: "16px",
-              color: "var(--text-secondary)",
-              fontSize: "13px",
-            }}
-          >
-            Click a tab above to view artifacts
-          </div>
-        )}
-        {activeView === "views" && (
-          <div
-            style={{
-              padding: "16px",
-              color: "var(--text-secondary)",
-              fontSize: "13px",
-            }}
-          >
-            Click a table card to view data
-          </div>
-        )}
-        {activeView === "meetings" && (
-          <div
-            style={{
-              padding: "16px",
-              color: "var(--text-secondary)",
-              fontSize: "13px",
-            }}
-          >
-            Coming soon
-          </div>
-        )}
+        {/* Spacer between nav and favorites */}
       </div>
 
       <div className="sidebar__footer">
