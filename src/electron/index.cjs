@@ -308,6 +308,8 @@ function createMainWindow() {
     trafficLightPosition: { x: 16, y: 16 },
     transparent: true, // Enable window transparency for Liquid Glass
     backgroundColor: "#00000000", // Fully transparent background
+    vibrancy: "under-window", // macOS native blur of desktop behind window
+    visualEffectState: "active", // Keep blur active even when window loses focus
   });
 
   // Hide default menu

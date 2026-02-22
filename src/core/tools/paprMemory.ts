@@ -123,6 +123,7 @@ export const searchAgentMemoryTool = createTool({
       max_memories: args.maxMemories ?? 20,
       max_nodes: 15,
       enable_agentic_graph: true,
+      rank_results: true,
       response_format: "toon", // 30-60% token reduction for LLM contexts
     });
     return { success: true, data: response };

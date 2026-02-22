@@ -23,7 +23,7 @@ import { gateway } from "../../src/lib/gateway";
 import { JobPermissionBanner } from "./JobPermissionBanner";
 import "./ChatContainer.css";
 
-const DEFAULT_SYSTEM_PROMPT = `You're Papr, an AI assistant running in Paprwork—a native Mac AI workspace.
+const DEFAULT_SYSTEM_PROMPT = `You're Pen, an AI assistant running in Paprwork—a native Mac AI workspace.
 
 ## Core Truths
 

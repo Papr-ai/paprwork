@@ -8,6 +8,7 @@ import { AppLayout } from "./components/Layout/AppLayout";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { TabBar } from "./components/Tabs/TabBar";
 import { ContentArea } from "./components/Layout/ContentArea";
+import { CommandPalette } from "./components/CommandPalette/CommandPalette";
 import { useChat } from "./hooks/useChat";
 import { useTabs } from "./hooks/useTabs";
 import { useTabStore } from "./stores/tabStore";
@@ -27,6 +28,19 @@ export function App() {
   const { activeTabId, activeLeftTab } = useTabStore();
   const { activeRequest, claimedByChat, respond } = usePermissionStore();
   const [hydrated, setHydrated] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+
+  // Cmd+K to open command palette
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setCommandPaletteOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   // Initialize the Electron IPC permission listener once
   useEffect(() => {
@@ -181,6 +195,10 @@ export function App() {
       {activeRequest && !claimedByChat && (
         <KeyPermissionModal request={activeRequest} onResponse={respond} />
       )}
+      <CommandPalette
+        isOpen={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+      />
     </>
   );
 }

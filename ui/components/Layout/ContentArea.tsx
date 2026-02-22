@@ -7,6 +7,7 @@ import React, { useRef, useCallback, useEffect } from "react";
 import { useTabs } from "../../hooks/useTabs";
 import { ChatContainer } from "../Chat/ChatContainer";
 import { ArtifactsView } from "../Artifacts/ArtifactsView";
+import { AppsView } from "../Apps/AppsView";
 import { DocumentView } from "../Documents/DocumentView";
 import { SettingsView } from "../Settings/SettingsView";
 import { JobsView } from "../Jobs/JobsView";
@@ -157,6 +158,8 @@ export function ContentArea() {
         return <ChatContainer chatId={tab.entityId} />;
       case "document":
         return <DocumentView documentId={tab.entityId} />;
+      case "apps":
+        return <AppsView />;
       case "artifacts":
         return <ArtifactsView />;
       case "views":

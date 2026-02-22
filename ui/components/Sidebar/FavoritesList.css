@@ -97,6 +97,78 @@
   color: var(--text-tertiary);
 }
 
+/* Expand icon container when glass orb is present */
+.favorite-item__icon:has(.favorite-item__glass-orb) {
+  width: 20px;
+  height: 20px;
+}
+
+/* Mini Liquid Glass Orb for App Favorites (matches Tab.tsx glass orb) */
+.favorite-item__glass-orb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: linear-gradient(
+    135deg,
+    rgba(1, 97, 224, 0.40),
+    rgba(12, 205, 255, 0.30),
+    rgba(0, 254, 254, 0.25)
+  );
+  border: 0.5px solid rgba(12, 205, 255, 0.30);
+  box-shadow:
+    0 1px 3px rgba(1, 97, 224, 0.20),
+    inset 0 1px 1px rgba(255, 255, 255, 0.35);
+  flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.favorite-item__glass-orb::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  left: 15%;
+  width: 70%;
+  height: 40%;
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.45), transparent);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.favorite-item__orb-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 10px;
+  color: rgba(255, 255, 255, 0.95);
+  position: relative;
+  z-index: 1;
+}
+
+.favorite-item__orb-icon svg {
+  width: 10px;
+  height: 10px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .favorite-item__glass-orb {
+    background: linear-gradient(
+      135deg,
+      rgba(1, 97, 224, 0.50),
+      rgba(12, 205, 255, 0.40),
+      rgba(0, 254, 254, 0.30)
+    );
+    border-color: rgba(12, 205, 255, 0.40);
+    box-shadow:
+      0 1px 3px rgba(0, 0, 0, 0.30),
+      inset 0 1px 1px rgba(255, 255, 255, 0.20);
+  }
+}
+
 .favorite-item__title {
   flex: 1;
   font-size: 13px;

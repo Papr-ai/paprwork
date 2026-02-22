@@ -26,7 +26,7 @@ export function NewChatButton({ onClick }: NewChatButtonProps) {
           strokeLinecap="round"
         />
       </svg>
-      <span className="new-chat-button__label">New Note</span>
+      <span className="new-chat-button__label">New App</span>
     </button>
   );
 }

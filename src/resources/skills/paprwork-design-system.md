@@ -122,6 +122,29 @@ Use the token system below. Build from primitives (Button, Card, Header, Modal, 
 
 Stop when the primary action is obvious in 2 seconds.
 
+### Apple Liquid Glass Guidelines (WWDC 2025)
+
+The "water drop" effect — translucent, not transparent or opaque:
+- **Background alpha: 5-20%** white/dark tint on the surface itself
+- **backdrop-filter: blur(20px) saturate(180%)** — makes background visible as soft color tint but unreadable
+- **Layered glass**: sidebar, content, and panels each add their own tint on top of the base
+- **Never fully opaque** — desktop wallpaper should bleed through as subtle color
+- **Never fully transparent** — text must remain readable (WCAG AA contrast)
+
+**Opacity ranges by element:**
+| Element | Light Mode | Dark Mode | Blur |
+|---------|-----------|-----------|------|
+| App background gradient | 72-78% | 72-78% | 20px |
+| Sidebar | 55% white | 55% black | 20px |
+| Content pane | 10% white | 10% black | 8px |
+| Glass panel | 65% white | 55% dark | 14-20px |
+| Active tab | 88% | 88% | 30px |
+| Inactive tab | 65% | 65% | 20px |
+| **Popover/Dropdown** | **88% white** | **88% dark** | **40px** |
+| **Modal overlay** | **varies** | **varies** | **24px** |
+
+**Popovers & dropdowns** overlay content, so they need stronger glass (88% + blur 40px) to ensure text is fully readable. Add `inset 0 0.5px 0 rgba(255,255,255,0.50)` for the Apple inner-shine edge. Use `border-radius: 14px` for popover containers.
+
 ### Design Tokens
 
 ```css
@@ -134,8 +157,10 @@ Stop when the primary action is obvious in 2 seconds.
   --ease: cubic-bezier(.2,.8,.2,1);
   --accent: #0161E0; --accent-2: #4f46e5;
 
-  /* Light */
-  --bg: #ffffff; --bg-2: #fafbfc; --text: #14161a; --muted: #667085;
+  /* Light — Liquid Glass */
+  --bg: linear-gradient(135deg, rgba(232,234,240,0.78), rgba(255,255,255,0.72), rgba(229,232,240,0.78));
+  --bg-2: rgba(249,249,249,0.78);
+  --text: #14161a; --muted: #667085;
   --border: rgba(15,23,42,0.10);
   --glass: rgba(255,255,255,0.65); --glass-2: rgba(255,255,255,0.45);
   --glass-border: rgba(15,23,42,0.12);
@@ -144,7 +169,8 @@ Stop when the primary action is obvious in 2 seconds.
 
 @media (prefers-color-scheme: dark){
   :root{
-    --bg: #05070b; --bg-2: rgba(255,255,255,0.03);
+    --bg: linear-gradient(135deg, rgba(10,12,16,0.78), rgba(20,22,28,0.72), rgba(18,20,26,0.78));
+    --bg-2: rgba(28,28,30,0.78);
     --text: rgba(255,255,255,0.92); --muted: rgba(255,255,255,0.55);
     --border: rgba(255,255,255,0.10);
     --glass: rgba(14,18,28,0.55); --glass-2: rgba(14,18,28,0.35);
@@ -162,8 +188,38 @@ Stop when the primary action is obvious in 2 seconds.
   background: var(--glass);
   border: 1px solid var(--glass-border);
   box-shadow: var(--shadow-1);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+}
+```
+
+**App Icon Glass Orb** (used in tabs, favorites, command palette)
+```css
+.glass-orb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(1,97,224,0.40), rgba(12,205,255,0.30), rgba(0,254,254,0.25));
+  border: 0.5px solid rgba(12,205,255,0.30);
+  box-shadow: 0 1px 3px rgba(1,97,224,0.20), inset 0 1px 1px rgba(255,255,255,0.35);
+  overflow: hidden;
+  position: relative;
+}
+.glass-orb::after {
+  content: '';
+  position: absolute;
+  top: 1px; left: 15%; width: 70%; height: 40%;
+  background: linear-gradient(to bottom, rgba(255,255,255,0.45), transparent);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.glass-orb__icon {
+  width: 10px; height: 10px;
+  color: rgba(255,255,255,0.95);
+  position: relative; z-index: 1;
 }
 ```
 

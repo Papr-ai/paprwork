@@ -31,6 +31,18 @@
   object-fit: cover;
 }
 
+/* Initials fallback when no profile photo */
+.message-avatar-user--initials {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #0161E0, #0CCDFF);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: var(--font-body);
+}
+
 /* Assistant Avatar - ring border + background */
 .message-avatar-assistant {
   width: 32px;
@@ -55,6 +67,14 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.message-sender-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1;
+  margin-bottom: 2px;
 }
 
 .message-tool-calls {
