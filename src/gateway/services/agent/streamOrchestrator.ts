@@ -92,6 +92,11 @@ export async function* orchestrateModelStream(
 
   let assistantText = "";
   let thinkingText = "";
+  
+  // Memory safety: Track size and enforce per-stream caps
+  const MAX_REASONING_SIZE = 100_000; // 100KB max reasoning per stream (enough for most cases)
+  const MAX_TEXT_SIZE = 500_000; // 500KB max assistant text per stream
+  
   const toolCalls: ToolCallEvent[] = [];
   const toolResults: ToolResultEvent[] = [];
 
@@ -189,9 +194,22 @@ export async function* orchestrateModelStream(
 
       case "text-delta": {
         const text = typeof chunk.text === "string" ? chunk.text : "";
-        assistantText += text;
         textBuffer += text;
         currentTextSegment += text; // Accumulate for sequence
+
+        // Memory safety: Cap per-stream text to prevent OOM with concurrent streams
+        if (assistantText.length + text.length > MAX_TEXT_SIZE) {
+          console.warn(
+            `[StreamOrchestrator] Chat ${chatId}: Text capped at ${(MAX_TEXT_SIZE / 1000).toFixed(0)}KB to prevent OOM (${assistantText.length + text.length} bytes requested)`,
+          );
+          // Truncate to fit within cap
+          const remaining = MAX_TEXT_SIZE - assistantText.length;
+          if (remaining > 0) {
+            assistantText += text.substring(0, remaining);
+          }
+        } else {
+          assistantText += text;
+        }
 
         if (textBuffer.length >= TEXT_BUFFER_MIN) {
           yield createChatStreamChunk(
@@ -246,8 +264,25 @@ export async function* orchestrateModelStream(
 
       case "reasoning-delta": {
         const reasoningText = typeof chunk.text === "string" ? chunk.text : "";
-        thinkingText += reasoningText;
         reasoningBuffer += reasoningText;
+
+        // Memory safety: Cap per-stream reasoning to prevent OOM with concurrent streams
+        if (thinkingText.length + reasoningText.length > MAX_REASONING_SIZE) {
+          if (thinkingText.length < MAX_REASONING_SIZE) {
+            // First time hitting cap - log warning
+            console.warn(
+              `[StreamOrchestrator] Chat ${chatId}: Reasoning capped at ${(MAX_REASONING_SIZE / 1000).toFixed(0)}KB to prevent OOM`,
+            );
+          }
+          // Truncate to fit within cap
+          const remaining = MAX_REASONING_SIZE - thinkingText.length;
+          if (remaining > 0) {
+            thinkingText += reasoningText.substring(0, remaining);
+          }
+          // Still stream to UI (user sees it), but don't store beyond cap
+        } else {
+          thinkingText += reasoningText;
+        }
 
         if (reasoningBuffer.length >= REASONING_BUFFER_MIN) {
           yield createChatStreamChunk(
@@ -261,7 +296,9 @@ export async function* orchestrateModelStream(
       }
 
       case "reasoning-end": {
-        console.log("[AgentService] Reasoning ended");
+        console.log(
+          `[AgentService] Chat ${chatId}: Reasoning ended (${(thinkingText.length / 1000).toFixed(0)}KB)`,
+        );
         if (reasoningBuffer.length > 0) {
           yield createChatStreamChunk(
             "reasoning-delta",
@@ -460,6 +497,10 @@ export async function* orchestrateModelStream(
   if (currentTextSegment.trim()) {
     sequence.push({ type: "text", data: currentTextSegment.trim() });
   }
+
+  console.log(
+    `[StreamOrchestrator] Chat ${chatId}: Stream complete - Text: ${(assistantText.length / 1000).toFixed(0)}KB, Thinking: ${(thinkingText.length / 1000).toFixed(0)}KB`,
+  );
 
   return {
     assistantText,

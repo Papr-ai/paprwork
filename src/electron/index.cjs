@@ -393,6 +393,29 @@ function createMainWindow() {
 
 // Launch Gateway as subprocess
 function startGateway(customKeysStorage) {
+  // Kill any orphaned Gateway processes first
+  const { execSync } = require("child_process");
+  try {
+    console.log("[Electron] Checking for orphaned Gateway processes...");
+    
+    // Kill any process on Gateway port
+    try {
+      const pid = execSync(`lsof -ti:${GATEWAY_PORT}`, { encoding: "utf8" }).trim();
+      if (pid) {
+        console.log(`[Electron] Found orphaned process ${pid} on port ${GATEWAY_PORT}`);
+        execSync(`kill -9 ${pid}`);
+        // Wait a moment for port to be released
+        execSync("sleep 0.5");
+        console.log("[Electron] ✓ Orphaned process killed");
+      }
+    } catch (e) {
+      // No process found - good!
+      console.log("[Electron] ✓ Port ${GATEWAY_PORT} is free");
+    }
+  } catch (error) {
+    console.warn("[Electron] Cleanup warning:", error.message);
+  }
+
   // Gateway is compiled to dist/gateway/ from project root
   const gatewayScript = path.join(__dirname, "../../dist/gateway/index.js");
 
