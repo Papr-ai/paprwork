@@ -106,6 +106,46 @@ SyntaxError: Named export 'X' not found. The requested module is a CommonJS modu
 
 ## Build Issues
 
+### Missing Dependencies / Cannot Resolve Import
+
+**Error:**
+```
+[vite]: Rollup failed to resolve import "remark-gfm" from "ui/components/common/Markdown.tsx"
+```
+
+**Cause:**
+- Dependencies not installed properly
+- Corrupted `node_modules` or `package-lock.json`
+- Workspaces not configured correctly
+
+**Solution:**
+
+1. **Clean reinstall (recommended):**
+   ```bash
+   rm -rf node_modules ui/node_modules package-lock.json
+   npm install
+   npm run build
+   ```
+
+2. **Verify Node version:**
+   ```bash
+   node -v  # Should be v24.x.x or higher
+   nvm use 24
+   ```
+
+3. **Check workspace setup:**
+   ```bash
+   # Verify root package.json has workspaces field
+   grep -A2 '"workspaces"' package.json
+   
+   # Should show:
+   # "workspaces": [
+   #   "ui"
+   # ]
+   ```
+
+**Note:** This project uses npm workspaces. Running `npm install` at the root automatically installs all dependencies (including UI dependencies). You don't need to run `npm install` separately in the `ui/` folder. See [docs/NPM_WORKSPACES_SETUP.md](NPM_WORKSPACES_SETUP.md) for details.
+
 ### TypeScript Compilation Errors
 
 **Symptom:**
@@ -258,4 +298,4 @@ tail -f ~/.papr/logs/gateway.log  # (if logging enabled)
 
 ---
 
-**Last Updated:** 2026-02-11
+**Last Updated:** 2026-02-24

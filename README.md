@@ -47,7 +47,7 @@ cd paprwork
 # 2. Use Node v24+ (with nvm)
 nvm use 24
 
-# 3. Install dependencies (auto-rebuilds native modules)
+# 3. Install all dependencies (includes UI workspace)
 npm install
 
 # 4. Configure API keys
@@ -57,6 +57,12 @@ cp .env.example .env.local
 # 5. Start the application
 npm start
 ```
+
+**Note:** This project uses [npm workspaces](https://docs.npmjs.com/cli/v10/using-npm/workspaces). Running `npm install` at the root automatically installs dependencies for both the main app and the `ui/` workspace. You don't need to run `npm install` separately in the `ui/` folder.
+
+**Troubleshooting:**
+- If you get "cannot find module" errors during build, delete `node_modules` and `ui/node_modules`, then run `npm install` again
+- Make sure you're using Node v24+ (`node -v` should show v24.x.x)
 
 ### Development Mode
 

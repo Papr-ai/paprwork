@@ -508,6 +508,26 @@ npx @electron/rebuild -f -w better-sqlite3
 - Child process (Gateway) doesn't have access to clean up parent's WAL state
 **Long-term Fix:** Add database cleanup in Gateway shutdown handler to properly close connections and checkpoint WAL files before exit.
 
+### Issue 10: npm install Not Installing UI Dependencies ✅ FIXED
+**Problem:** Users running `npm install` then `npm run build` getting errors like:
+```
+[vite]: Rollup failed to resolve import "remark-gfm" from "ui/components/common/Markdown.tsx"
+```
+**Root Cause:** Project had two separate `package.json` files (root and `ui/`). When users ran `npm install` at root, it only installed root dependencies, not the nested `ui/package.json` dependencies. When Vite tried to build the UI, it couldn't find the UI packages.
+**Solution:** Configure npm workspaces to make `npm install` handle all nested package.json files automatically.
+**Fix Applied:** 2026-02-24
+**Files Changed:**
+- `package.json` - Added `"workspaces": ["ui"]` field
+- `ui/package.json` - Added `"private": true`, moved all UI-specific dependencies here (TipTap, markdown rendering, syntax highlighting)
+- `README.md` - Added workspace installation instructions
+- `docs/NPM_WORKSPACES_SETUP.md` - Complete documentation
+**How It Works:**
+- Root `npm install` now installs dependencies from both `package.json` and `ui/package.json`
+- All packages hoisted to root `node_modules/` (deduplication)
+- No separate `ui/node_modules/` needed
+- Single `package-lock.json` tracks everything
+**User Instructions:** Just run `npm install` once at root. No need to `cd ui && npm install` separately!
+
 ---
 
 ## OAuth & pi-ai Architecture

@@ -4,6 +4,9 @@
   "description": "AI-powered desktop assistant - Rebuilt with TypeScript and Mastra",
   "main": "./src/electron/main.js",
   "type": "module",
+  "workspaces": [
+    "ui"
+  ],
   "scripts": {
     "postinstall": "npx @electron/rebuild",
     "dev": "concurrently \"npm run gateway:dev\" \"npm run ui:dev\" \"npm run electron:dev\"",
