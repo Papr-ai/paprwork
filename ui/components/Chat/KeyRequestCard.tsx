@@ -5,7 +5,7 @@
  * User can enter the key value directly without leaving the conversation.
  */
 
-import React, { useState } from "react";
+import { useState } from "react";
 import "./KeyRequestCard.css";
 
 export interface KeyRequestData {
@@ -58,7 +58,17 @@ export function KeyRequestCard({ data, onSubmit, onCancel }: Props) {
   if (data.status === "submitted") {
     return (
       <div className="key-request-card key-request-card-success">
-        <div className="key-request-icon">✓</div>
+        <div className="key-request-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M20 6L9 17l-5-5"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </div>
         <div className="key-request-content">
           <h3 className="key-request-title">Key Added Successfully</h3>
           <p className="key-request-description">
@@ -72,7 +82,17 @@ export function KeyRequestCard({ data, onSubmit, onCancel }: Props) {
   if (data.status === "cancelled") {
     return (
       <div className="key-request-card key-request-card-cancelled">
-        <div className="key-request-icon">✕</div>
+        <div className="key-request-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M18 6L6 18M6 6l12 12"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </div>
         <div className="key-request-content">
           <h3 className="key-request-title">Request Cancelled</h3>
           <p className="key-request-description">
@@ -85,7 +105,31 @@ export function KeyRequestCard({ data, onSubmit, onCancel }: Props) {
 
   return (
     <div className="key-request-card">
-      <div className="key-request-icon">🔑</div>
+      <div className="key-request-icon">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+          <rect
+            x="5"
+            y="11"
+            width="14"
+            height="10"
+            rx="2"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          />
+          <path
+            d="M12 15v2"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
+          <path
+            d="M7 11V7a5 5 0 0110 0v4"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
+        </svg>
+      </div>
 
       <div className="key-request-content">
         <h3 className="key-request-title">API Key Required</h3>
@@ -148,7 +192,46 @@ export function KeyRequestCard({ data, onSubmit, onCancel }: Props) {
               onClick={() => setShowValue(!showValue)}
               aria-label={showValue ? "Hide key" : "Show key"}
             >
-              {showValue ? "👁️" : "👁️‍🗨️"}
+              {showValue ? (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                  <path
+                    d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="3"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              ) : (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                  <path
+                    d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <line
+                    x1="1"
+                    y1="1"
+                    x2="23"
+                    y2="23"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              )}
             </button>
           </div>
         </div>
@@ -200,4 +283,37 @@ export function KeyRequestCard({ data, onSubmit, onCancel }: Props) {
       </div>
     </div>
   );
+}
+
+/**
+ * Parse key request data from request_key tool result
+ * Similar to parsePlanFromToolResult and parseJobStatusFromToolResult
+ */
+export function parseKeyRequestFromToolResult(
+  toolName: string,
+  result: string | unknown,
+): KeyRequestData | null {
+  if (toolName !== "request_key") return null;
+
+  try {
+    const parsed = typeof result === "string" ? JSON.parse(result) : result;
+    const data = parsed.data || parsed;
+
+    if (data.type === "key_request") {
+      return {
+        type: "key_request",
+        name: data.name,
+        description: data.description,
+        sourceUrl: data.sourceUrl,
+        requiredScopes: data.requiredScopes,
+        suggestedPermission: data.suggestedPermission || "ask",
+        status: data.status || "awaiting_user_input",
+        message: data.message || `Waiting for user to provide ${data.name}...`,
+      };
+    }
+  } catch (e) {
+    // Not a key request result
+  }
+
+  return null;
 }

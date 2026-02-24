@@ -9,6 +9,9 @@ export interface CustomKey {
   permission: "always" | "ask";
   createdAt: string;
   updatedAt: string;
+  source?: "manual" | "oauth";
+  managedBy?: "oauth";
+  oauthProvider?: "openai" | "anthropic";
 }
 
 export interface CustomKeyInput {

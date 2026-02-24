@@ -16,6 +16,10 @@ import {
   DelegationCard,
   parseDelegationFromToolResult,
 } from "./DelegationCard";
+import {
+  KeyRequestCard,
+  parseKeyRequestFromToolResult,
+} from "./KeyRequestCard";
 import { MiniChatCard } from "./MiniChatCard";
 import { Markdown } from "../common/Markdown";
 import { getToolDisplayLabel } from "../../utils/toolDisplay";
@@ -50,6 +54,31 @@ function renderSequence(
   );
 
   const elements: React.ReactNode[] = [];
+
+  // Define handlers for key request cards
+  const handleKeySubmit = async (
+    name: string,
+    value: string,
+    permission: "always" | "ask",
+  ) => {
+    try {
+      await window.electronAPI.customKeys.add({
+        name,
+        value,
+        permission,
+        description: "",
+      });
+      // Card will update to "submitted" status via the tool result
+      // TODO: Optionally trigger a re-render to show success state immediately
+    } catch (error) {
+      console.error("[MessageItem] Failed to add custom key:", error);
+    }
+  };
+
+  const handleKeyCancel = () => {
+    // Card will update to "cancelled" status
+    // TODO: Optionally trigger a re-render to show cancelled state immediately
+  };
 
   // Find if there are any tools in the sequence
   const hasTools = sequence.some((item) => item.type === "tool");
@@ -95,6 +124,11 @@ function renderSequence(
     const jobStatusCardMap = new Map<
       string,
       Parameters<typeof JobStatusCard>[0]["data"]
+    >();
+    // Map of keyName → latest KeyRequestData — ensures one card per key per response
+    const keyRequestCardMap = new Map<
+      string,
+      Parameters<typeof KeyRequestCard>[0]["data"]
     >();
     // Track which jobs/delegations we've already added to exploringItems (to prevent duplicates)
     const addedJobIds = new Set<string>();
@@ -160,6 +194,17 @@ function renderSequence(
           );
           if (planData) {
             planCardMap.set(planData.planId, planData);
+          }
+        }
+
+        // Parse request_key – show card when key is requested
+        if (toolName === "request_key" && toolCall.result) {
+          const keyRequestData = parseKeyRequestFromToolResult(
+            toolName,
+            toolCall.result,
+          );
+          if (keyRequestData) {
+            keyRequestCardMap.set(keyRequestData.name, keyRequestData);
           }
         }
 
@@ -307,6 +352,20 @@ function renderSequence(
     if (planCardMap.size > 0) {
       planCardMap.forEach((planData, planId) => {
         elements.push(<PlanCard key={`plan-${planId}`} data={planData} />);
+      });
+    }
+
+    // Render key request cards (OUTSIDE exploring card, always visible)
+    if (keyRequestCardMap.size > 0) {
+      keyRequestCardMap.forEach((keyRequestData, keyName) => {
+        elements.push(
+          <KeyRequestCard
+            key={`key-request-${keyName}`}
+            data={keyRequestData}
+            onSubmit={handleKeySubmit}
+            onCancel={handleKeyCancel}
+          />,
+        );
       });
     }
 
@@ -502,6 +561,56 @@ export const MessageItem: React.FC<MessageItemProps> = ({ chatId, message }) => 
                 });
                 return Array.from(planMap.values()).map((plan) => (
                   <PlanCard key={plan.planId} data={plan} />
+                ));
+              })()}
+
+            {/* Key request cards - one per keyName (latest state wins) */}
+            {!isUser &&
+              (() => {
+                const keyRequestMap = new Map<
+                  string,
+                  Parameters<typeof KeyRequestCard>[0]["data"]
+                >();
+                message.toolCalls?.forEach((tc) => {
+                  const keyRequest = parseKeyRequestFromToolResult(
+                    tc.toolName,
+                    tc.result,
+                  );
+                  if (keyRequest) keyRequestMap.set(keyRequest.name, keyRequest);
+                });
+
+                // Define handlers for fallback section
+                const handleKeySubmit = async (
+                  name: string,
+                  value: string,
+                  permission: "always" | "ask",
+                ) => {
+                  try {
+                    await window.electronAPI.customKeys.add({
+                      name,
+                      value,
+                      permission,
+                      description: "",
+                    });
+                  } catch (error) {
+                    console.error(
+                      "[MessageItem] Failed to add custom key:",
+                      error,
+                    );
+                  }
+                };
+
+                const handleKeyCancel = () => {
+                  // Card will update to "cancelled" status
+                };
+
+                return Array.from(keyRequestMap.values()).map((keyRequest) => (
+                  <KeyRequestCard
+                    key={`key-request-fallback-${keyRequest.name}`}
+                    data={keyRequest}
+                    onSubmit={handleKeySubmit}
+                    onCancel={handleKeyCancel}
+                  />
                 ));
               })()}
 

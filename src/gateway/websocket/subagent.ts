@@ -18,6 +18,11 @@ interface UpsertSubAgentPayload {
   outputSchema?: Record<string, unknown>;
   maxTurns?: number;
   memoryPolicy?: "none" | "summary" | "full";
+  icon?: import("../../core/types/subagents.js").SubAgentIconName;
+}
+
+interface GetSubAgentPayload {
+  agentId: string;
 }
 
 interface DeleteSubAgentPayload {
@@ -59,7 +64,18 @@ export async function setupSubAgentHandlers(
         sendResponse(ws, { id: message.id, success: true, data: { agents } });
         break;
       }
-      case "subagent:upsert": {
+      case "subagent:get": {
+        const payload = message.payload as GetSubAgentPayload;
+        const agent = await service.getAgent(payload.agentId);
+        if (!agent) {
+          sendError(ws, message.id, `Sub-agent not found: ${payload.agentId}`);
+          return;
+        }
+        sendResponse(ws, { id: message.id, success: true, data: agent });
+        break;
+      }
+      case "subagent:upsert":
+      case "subagent:update": {
         const payload = message.payload as UpsertSubAgentPayload;
         const agent = await service.createOrUpdateAgent(payload);
         sendResponse(ws, { id: message.id, success: true, data: { agent } });
@@ -81,10 +97,11 @@ export async function setupSubAgentHandlers(
         sendResponse(ws, { id: message.id, success: true, data: { run } });
         break;
       }
-      case "subagent:runs": {
+      case "subagent:runs":
+      case "subagent:list-runs": {
         const payload = (message.payload ?? {}) as ListRunsPayload;
         const runs = await service.listRuns(payload.limit ?? 50);
-        sendResponse(ws, { id: message.id, success: true, data: { runs } });
+        sendResponse(ws, { id: message.id, success: true, data: runs });
         break;
       }
       case "subagent:dashboard": {

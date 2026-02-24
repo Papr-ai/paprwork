@@ -17,6 +17,7 @@ import { AgentsView } from "../Agents/AgentsViewCards";
 import { MeetingsView } from "../Meetings/MeetingsView";
 import { ViewsView } from "../Views/ViewsView";
 import { TableView } from "../Views/TableView";
+import { ChatGPTConvHistoryView } from "../ChatGPT/ChatGPTConvHistoryView";
 import "./ContentArea.css";
 
 export function ContentArea() {
@@ -184,6 +185,8 @@ export function ContentArea() {
         return <SkillsView />;
       case "settings":
         return <SettingsView />;
+      case "chatgpt-conv-history":
+        return <ChatGPTConvHistoryView />;
       default:
         return <div className="content-area__empty">Unknown tab type</div>;
     }

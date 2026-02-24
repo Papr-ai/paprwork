@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useState } from "react";
+import { AgentProfileModal } from "../AgentProfileModal";
 
 interface AgentStats {
   totalMessages: number;
@@ -49,6 +50,7 @@ interface Props {
 }
 
 export function AgentRosterCard({ agents, agentStats, runs }: Props) {
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const getActiveCount = (agentId: string) => {
     return runs.filter(
       (r) =>
@@ -58,58 +60,64 @@ export function AgentRosterCard({ agents, agentStats, runs }: Props) {
   };
 
   return (
-    <div className="metric-card full-width">
-      <div className="card-header">
-        <div className="card-title">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <circle cx="9" cy="7" r="4" stroke="currentColor" strokeWidth="2" />
-            <path
-              d="M3 21v-2a4 4 0 014-4h4a4 4 0 014 4v2"
-              stroke="currentColor"
-              strokeWidth="2"
-            />
-            <circle
-              cx="17"
-              cy="7"
-              r="2"
-              stroke="currentColor"
-              strokeWidth="2"
-            />
-            <path
-              d="M21 21v-1a3 3 0 00-3-3h-1"
-              stroke="currentColor"
-              strokeWidth="2"
-            />
-          </svg>
-          Agent Roster
-        </div>
-        <div className="card-badge">{agents.length} agents</div>
-      </div>
-
-      <div className="card-content">
-        <div className="roster-table">
-          {/* Table Header */}
-          <div className="roster-header">
-            <div className="roster-col-agent">Agent</div>
-            <div className="roster-col-tools">Tools</div>
-            <div className="roster-col-skills">Skills</div>
-            <div className="roster-col-messages">Messages</div>
-            <div className="roster-col-tokens">Tokens</div>
-            <div className="roster-col-cost">Cost</div>
-            <div className="roster-col-active">Last Active</div>
+    <>
+      <div className="metric-card full-width">
+        <div className="card-header">
+          <div className="card-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <circle cx="9" cy="7" r="4" stroke="currentColor" strokeWidth="2" />
+              <path
+                d="M3 21v-2a4 4 0 014-4h4a4 4 0 014 4v2"
+                stroke="currentColor"
+                strokeWidth="2"
+              />
+              <circle
+                cx="17"
+                cy="7"
+                r="2"
+                stroke="currentColor"
+                strokeWidth="2"
+              />
+              <path
+                d="M21 21v-1a3 3 0 00-3-3h-1"
+                stroke="currentColor"
+                strokeWidth="2"
+              />
+            </svg>
+            Agent Roster
           </div>
+          <div className="card-badge">{agents.length} agents</div>
+        </div>
 
-          {/* Table Body */}
-          <div className="roster-body">
-            {agents.map((agent) => {
-              const stats = agentStats[agent.id];
-              const activeCount = getActiveCount(agent.id);
-              const toolCount = agent.allowedToolIds?.length ?? 0;
-              const skillCount = agent.assignedSkills?.length ?? 0;
+        <div className="card-content">
+          <div className="roster-table">
+            {/* Table Header */}
+            <div className="roster-header">
+              <div className="roster-col-agent">Agent</div>
+              <div className="roster-col-tools">Tools</div>
+              <div className="roster-col-skills">Skills</div>
+              <div className="roster-col-messages">Messages</div>
+              <div className="roster-col-tokens">Tokens</div>
+              <div className="roster-col-cost">Cost</div>
+              <div className="roster-col-active">Last Active</div>
+            </div>
 
-              return (
-                <div key={agent.id} className="roster-row">
-                  <div className="roster-col-agent">
+            {/* Table Body */}
+            <div className="roster-body">
+              {agents.map((agent) => {
+                const stats = agentStats[agent.id];
+                const activeCount = getActiveCount(agent.id);
+                const toolCount = agent.allowedToolIds?.length ?? 0;
+                const skillCount = agent.assignedSkills?.length ?? 0;
+
+                return (
+                  <div
+                    key={agent.id}
+                    className="roster-row"
+                    onClick={() => setSelectedAgentId(agent.id)}
+                    style={{ cursor: "pointer" }}
+                  >
+                    <div className="roster-col-agent">
                     <div className="agent-avatar">{agent.name.charAt(0)}</div>
                     <div className="agent-info">
                       <div className="agent-name-row">
@@ -359,6 +367,14 @@ export function AgentRosterCard({ agents, agentStats, runs }: Props) {
         }
       `}</style>
     </div>
+
+    {selectedAgentId && (
+      <AgentProfileModal
+        agentId={selectedAgentId}
+        onClose={() => setSelectedAgentId(null)}
+      />
+    )}
+  </>
   );
 }
 

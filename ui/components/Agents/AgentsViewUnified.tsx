@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useSubAgents } from "../../hooks/useSubAgents";
 import { gateway } from "../../src/lib/gateway";
+import { AgentProfileModal } from "./AgentProfileModal";
 import "./AgentsViewUnified.css";
 
 interface AgentStats {
@@ -26,6 +27,7 @@ export function AgentsView() {
   const { agents, runs, loading, error, dashboard } = useSubAgents();
   const [costStats, setCostStats] = useState<CostStats | null>(null);
   const [agentStats, setAgentStats] = useState<Record<string, AgentStats>>({});
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
 
   useEffect(() => {
     const loadData = async () => {
@@ -266,6 +268,8 @@ export function AgentsView() {
                   <div
                     key={agent.id}
                     className={`table-row ${isActive ? "active" : ""}`}
+                    onClick={() => setSelectedAgentId(agent.id)}
+                    style={{ cursor: "pointer" }}
                   >
                     <div className="col-agent">
                       <div className="agent-status" />
@@ -497,6 +501,13 @@ export function AgentsView() {
           </div>
         </div>
       </div>
+
+      {selectedAgentId && (
+        <AgentProfileModal
+          agentId={selectedAgentId}
+          onClose={() => setSelectedAgentId(null)}
+        />
+      )}
     </div>
   );
 }

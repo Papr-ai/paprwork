@@ -15,7 +15,8 @@ export type TabType =
   | "jobs"
   | "agents"
   | "skills"
-  | "settings";
+  | "settings"
+  | "chatgpt-conv-history";
 
 export type DisplayMode = "standalone" | "parent" | "child";
 

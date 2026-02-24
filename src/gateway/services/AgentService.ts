@@ -1487,6 +1487,7 @@ ${last15.substring(0, 8_000)}`;
 
     let text = "";
     let retryWithApiKey = false;
+    let thinkingBuffer = ""; // Accumulate thinking tokens for job logs
 
     try {
       for await (const chunk of this.streamAgent(chatId, input.prompt, config, {
@@ -1520,10 +1521,15 @@ ${last15.substring(0, 8_000)}`;
         if (input.appendLog) {
           if (chunk.type === "reasoning-delta") {
             const payload = chunk.payload as ReasoningDeltaPayload;
-            if (typeof payload.text === "string" && payload.text.trim()) {
-              await input.appendLog(`💭 Thinking: ${payload.text.trim()}`);
+            if (typeof payload.text === "string") {
+              thinkingBuffer += payload.text;
             }
           } else if (chunk.type === "tool-call") {
+            // Flush thinking buffer before logging tool call
+            if (thinkingBuffer.trim()) {
+              await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
+              thinkingBuffer = "";
+            }
             const payload = chunk.payload as ToolCallPayload;
             const argsStr = payload.args
               ? JSON.stringify(payload.args).slice(0, 200)
@@ -1545,6 +1551,12 @@ ${last15.substring(0, 8_000)}`;
             await input.appendLog(
               `❌ Error: ${typeof payload.error === "string" ? payload.error : JSON.stringify(payload.error)}`,
             );
+          } else if (chunk.type === "text-delta") {
+            // Flush thinking buffer when text starts (thinking is done)
+            if (thinkingBuffer.trim()) {
+              await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
+              thinkingBuffer = "";
+            }
           }
         }
 
@@ -1571,6 +1583,12 @@ ${last15.substring(0, 8_000)}`;
         if (typeof payload.text === "string") {
           text += payload.text;
         }
+      }
+
+      // Flush any remaining thinking buffer at end of stream
+      if (input.appendLog && thinkingBuffer.trim()) {
+        await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
+        thinkingBuffer = "";
       }
     } catch (err) {
       // If error wasn't a rate limit, rethrow
@@ -1605,6 +1623,7 @@ ${last15.substring(0, 8_000)}`;
 
       // Create new chatId for retry to avoid session cache
       const retryChatId = `${chatId}-retry`;
+      thinkingBuffer = ""; // Reset thinking buffer for retry
 
       for await (const chunk of this.streamAgent(
         retryChatId,
@@ -1622,6 +1641,64 @@ ${last15.substring(0, 8_000)}`;
             `Agent job model error (${provider}/${model}) after API key fallback: ${errMsg}`,
           );
         }
+
+        // Log structured activity to job logs (same as main path)
+        if (input.appendLog) {
+          if (chunk.type === "reasoning-delta") {
+            const payload = chunk.payload as ReasoningDeltaPayload;
+            if (typeof payload.text === "string") {
+              thinkingBuffer += payload.text;
+            }
+          } else if (chunk.type === "tool-call") {
+            if (thinkingBuffer.trim()) {
+              await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
+              thinkingBuffer = "";
+            }
+            const payload = chunk.payload as ToolCallPayload;
+            const argsStr = payload.args
+              ? JSON.stringify(payload.args).slice(0, 200)
+              : "";
+            await input.appendLog(
+              `🔧 Tool: ${payload.toolName}${argsStr ? `(${argsStr}${argsStr.length >= 200 ? "..." : ""})` : "()"}`,
+            );
+          } else if (chunk.type === "tool-result") {
+            const payload = chunk.payload as ToolResultPayload;
+            const resultStr =
+              typeof payload.result === "string"
+                ? payload.result.slice(0, 300)
+                : JSON.stringify(payload.result).slice(0, 300);
+            await input.appendLog(
+              `✅ Result: ${resultStr}${resultStr.length >= 300 ? "..." : ""}`,
+            );
+          } else if (chunk.type === "tool-error") {
+            const payload = chunk.payload as ErrorPayload;
+            await input.appendLog(
+              `❌ Error: ${typeof payload.error === "string" ? payload.error : JSON.stringify(payload.error)}`,
+            );
+          } else if (chunk.type === "text-delta") {
+            if (thinkingBuffer.trim()) {
+              await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
+              thinkingBuffer = "";
+            }
+          }
+        }
+
+        // Broadcast sub-agent activity to MiniChatCard (same as main path)
+        if (input.delegationId) {
+          const { broadcast } = await import("../websocket/index.js");
+          broadcast({
+            type: "subagent-chat:activity",
+            data: {
+              delegationId: input.delegationId,
+              chunk: {
+                type: chunk.type,
+                payload: chunk.payload,
+                timestamp: chunk.timestamp,
+              },
+            },
+          });
+        }
+
         if (chunk.type !== "text-delta") {
           continue;
         }
@@ -1629,6 +1706,12 @@ ${last15.substring(0, 8_000)}`;
         if (typeof payload.text === "string") {
           text += payload.text;
         }
+      }
+
+      // Flush any remaining thinking buffer at end of retry stream
+      if (input.appendLog && thinkingBuffer.trim()) {
+        await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
+        thinkingBuffer = "";
       }
     }
 
