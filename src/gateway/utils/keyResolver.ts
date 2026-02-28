@@ -4,6 +4,7 @@
  * In production (packaged app):
  * - Requests keys from Electron main process via IPC (triggers keychain only when needed)
  * - Includes OAuth tokens if available (prioritized over API keys)
+ * - Listens for cache invalidation messages when keys are updated
  *
  * In development:
  * - Falls back to process.env / .env.local
@@ -12,7 +13,10 @@
  */
 
 import type { RequestKeysMessage } from "../../core/types/gateway-ipc.js";
-import { isKeysResponseMessage } from "../../core/types/gateway-ipc.js";
+import {
+  isKeysResponseMessage,
+  isInvalidateKeyCacheMessage,
+} from "../../core/types/gateway-ipc.js";
 
 let keyCache: Record<string, string> = {};
 let oauthTokenCache: {
@@ -147,10 +151,38 @@ export async function getApiKey(keyName: string): Promise<string | undefined> {
 }
 
 /**
- * Clear the key cache (useful for testing)
+ * Clear the key cache (useful for testing or when keys are updated)
+ * @param keyName - Optional specific key to clear, or undefined to clear all
  */
-export function clearKeyCache(): void {
-  keyCache = {};
+export function clearKeyCache(keyName?: string): void {
+  if (keyName) {
+    delete keyCache[keyName];
+    console.log(`[KeyResolver] Cleared cache for key: ${keyName}`);
+  } else {
+    keyCache = {};
+    console.log("[KeyResolver] Cleared entire key cache");
+  }
+}
+
+/**
+ * Set up listener for cache invalidation messages from Electron
+ * This should be called once during Gateway initialization
+ */
+export function setupKeyCacheInvalidationListener(
+  ipcProcess: IpcProcessLike = process,
+): void {
+  const messageHandler = (message: unknown) => {
+    if (isInvalidateKeyCacheMessage(message)) {
+      console.log(
+        "[KeyResolver] Received cache invalidation:",
+        message.keyName || "all keys",
+      );
+      clearKeyCache(message.keyName);
+    }
+  };
+
+  ipcProcess.on("message", messageHandler);
+  console.log("[KeyResolver] Cache invalidation listener registered");
 }
 
 /**

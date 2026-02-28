@@ -66,6 +66,14 @@ const registerSchemaSchema = z.object({
   description: z.string().optional(),
 });
 
+const listSchemasSchema = z.object({
+  statusFilter: z
+    .enum(["draft", "active", "deprecated", "archived"])
+    .optional()
+    .describe("Filter schemas by status"),
+  workspaceId: z.string().optional().describe("Filter schemas by workspace ID"),
+});
+
 async function getPaprClient(): Promise<Papr> {
   const { getApiKey } = await import("../../gateway/utils/keyResolver.js");
   const apiKey = await getApiKey("PAPR_API_KEY");
@@ -132,7 +140,8 @@ export const searchAgentMemoryTool = createTool({
 
 export const registerSchemaTool = createTool({
   id: "register_schema",
-  description: "Register a PAPR memory schema for custom entity types",
+  description:
+    "Register a PAPR memory schema for custom entity types. Creates node types and relationships for structured knowledge graphs.",
   inputSchema: registerSchemaSchema,
   execute: async (args) => {
     const client = await getPaprClient();
@@ -144,10 +153,26 @@ export const registerSchemaTool = createTool({
   },
 });
 
+export const listSchemasTool = createTool({
+  id: "list_schemas",
+  description:
+    "List all memory schemas accessible to the user. Returns schema definitions with node types, relationships, and metadata.",
+  inputSchema: listSchemasSchema,
+  execute: async (args) => {
+    const client = await getPaprClient();
+    const response = await client.schemas.list({
+      status_filter: args.statusFilter,
+      workspace_id: args.workspaceId,
+    });
+    return { success: true, data: response };
+  },
+});
+
 export const paprMemoryTools = [
   addAgentMemoryTool,
   searchAgentMemoryTool,
   registerSchemaTool,
+  listSchemasTool,
 ];
 
 // Re-export SDK types for use in other files

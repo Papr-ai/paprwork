@@ -18,6 +18,7 @@ let CustomKeysStorage;
 let KeyPermissionsStorage;
 let SettingsStorage;
 let initializeCustomKeysIPC;
+let setGatewayProcess;
 let initializePermissionsIPC;
 let initializeOAuthIPC;
 let cleanupOAuthServers;
@@ -33,6 +34,7 @@ async function loadESMModules() {
   const customKeysIpcModule =
     await import("../../dist/electron/electron/ipc/customKeys.js");
   initializeCustomKeysIPC = customKeysIpcModule.initializeCustomKeysIPC;
+  setGatewayProcess = customKeysIpcModule.setGatewayProcess;
 
   const permissionsIpcModule =
     await import("../../dist/electron/electron/ipc/permissions.js");
@@ -436,6 +438,9 @@ function startGateway(customKeysStorage) {
       ELECTRON_RUN_AS_NODE: "1", // Run Electron as Node.js
     },
   });
+
+  // Set Gateway process reference for cache invalidation
+  setGatewayProcess(gatewayProcess);
 
   // Set up IPC for Gateway communication
   gatewayProcess.on("message", async (msg) => {

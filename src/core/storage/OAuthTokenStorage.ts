@@ -28,10 +28,24 @@ export interface OAuthTokenInput {
   expiresIn: number; // Seconds until expiry
 }
 
+/**
+ * Encrypted token data stored in memory (not decrypted until needed)
+ */
+interface EncryptedOAuthToken {
+  id: string;
+  provider: "openai" | "anthropic";
+  accountId?: string;
+  encryptedAccessToken: string; // Base64 encrypted
+  encryptedRefreshToken: string; // Base64 encrypted
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export class OAuthTokenStorage {
   private dataDir: string;
   private tokensFile: string;
-  private tokens: Map<string, OAuthToken> = new Map();
+  private tokens: Map<string, EncryptedOAuthToken> = new Map(); // Store encrypted!
 
   constructor() {
     this.dataDir = path.join(app.getPath("userData"), "data");
@@ -71,15 +85,15 @@ export class OAuthTokenStorage {
   }
 
   /**
-   * Encrypt token data before storage
+   * Encrypt token data before storage (returns encrypted structure)
    */
-  private encryptToken(token: OAuthToken): Record<string, unknown> {
+  private encryptToken(token: OAuthToken): EncryptedOAuthToken {
     return {
       id: token.id,
       provider: token.provider,
       accountId: token.accountId,
-      accessToken: this.encryptValue(token.accessToken),
-      refreshToken: this.encryptValue(token.refreshToken),
+      encryptedAccessToken: this.encryptValue(token.accessToken),
+      encryptedRefreshToken: this.encryptValue(token.refreshToken),
       expiresAt: token.expiresAt,
       createdAt: token.createdAt,
       updatedAt: token.updatedAt,
@@ -87,23 +101,24 @@ export class OAuthTokenStorage {
   }
 
   /**
-   * Decrypt token data after loading
+   * Decrypt token data on-demand (LAZY - only when actually needed)
+   * This triggers keychain access!
    */
-  private decryptToken(data: Record<string, unknown>): OAuthToken {
+  private decryptToken(encryptedToken: EncryptedOAuthToken): OAuthToken {
     return {
-      id: data.id as string,
-      provider: data.provider as "openai" | "anthropic",
-      accountId: data.accountId as string | undefined,
-      accessToken: this.decryptValue(data.accessToken as string),
-      refreshToken: this.decryptValue(data.refreshToken as string),
-      expiresAt: data.expiresAt as string,
-      createdAt: data.createdAt as string,
-      updatedAt: data.updatedAt as string,
+      id: encryptedToken.id,
+      provider: encryptedToken.provider,
+      accountId: encryptedToken.accountId,
+      accessToken: this.decryptValue(encryptedToken.encryptedAccessToken),
+      refreshToken: this.decryptValue(encryptedToken.encryptedRefreshToken),
+      expiresAt: encryptedToken.expiresAt,
+      createdAt: encryptedToken.createdAt,
+      updatedAt: encryptedToken.updatedAt,
     };
   }
 
   /**
-   * Load tokens from file
+   * Load tokens from file (LAZY - stores encrypted, no keychain access!)
    */
   private async loadTokens(): Promise<void> {
     try {
@@ -119,15 +134,25 @@ export class OAuthTokenStorage {
           Record<string, unknown>
         >;
 
+        // Store encrypted tokens directly - NO DECRYPTION on load!
         this.tokens = new Map(
           Object.entries(data).map(([id, tokenData]) => [
             id,
-            this.decryptToken(tokenData),
+            {
+              id: tokenData.id as string,
+              provider: tokenData.provider as "openai" | "anthropic",
+              accountId: tokenData.accountId as string | undefined,
+              encryptedAccessToken: tokenData.accessToken as string,
+              encryptedRefreshToken: tokenData.refreshToken as string,
+              expiresAt: tokenData.expiresAt as string,
+              createdAt: tokenData.createdAt as string,
+              updatedAt: tokenData.updatedAt as string,
+            } as EncryptedOAuthToken,
           ]),
         );
 
         console.log(
-          `[OAuthTokens] Loaded ${this.tokens.size} OAuth tokens from storage`,
+          `[OAuthTokens] Loaded ${this.tokens.size} OAuth tokens (encrypted, not decrypted)`,
         );
       }
     } catch (error) {
@@ -138,13 +163,23 @@ export class OAuthTokenStorage {
 
   /**
    * Save tokens to file (atomic write)
+   * Tokens are already encrypted in memory, just convert format
    */
   private async saveTokens(): Promise<void> {
     try {
       const data = Object.fromEntries(
-        Array.from(this.tokens.entries()).map(([id, token]) => [
+        Array.from(this.tokens.entries()).map(([id, encryptedToken]) => [
           id,
-          this.encryptToken(token),
+          {
+            id: encryptedToken.id,
+            provider: encryptedToken.provider,
+            accountId: encryptedToken.accountId,
+            accessToken: encryptedToken.encryptedAccessToken,
+            refreshToken: encryptedToken.encryptedRefreshToken,
+            expiresAt: encryptedToken.expiresAt,
+            createdAt: encryptedToken.createdAt,
+            updatedAt: encryptedToken.updatedAt,
+          },
         ]),
       );
 
@@ -162,7 +197,7 @@ export class OAuthTokenStorage {
   }
 
   /**
-   * Store a new OAuth token
+   * Store a new OAuth token (encrypts and stores in memory)
    */
   async storeToken(input: OAuthTokenInput): Promise<OAuthToken> {
     const id = `oauth-${input.provider}-${Date.now()}`;
@@ -183,16 +218,18 @@ export class OAuthTokenStorage {
     };
 
     // Remove old token for same provider
-    const oldToken = this.getTokenByProvider(input.provider);
+    const oldToken = this.getEncryptedTokenByProvider(input.provider);
     if (oldToken) {
       this.tokens.delete(oldToken.id);
     }
 
-    this.tokens.set(id, token);
+    // Encrypt and store
+    const encryptedToken = this.encryptToken(token);
+    this.tokens.set(id, encryptedToken);
     await this.saveTokens();
 
-    console.log(`[OAuthTokens] Stored ${input.provider} OAuth token`);
-    return token;
+    console.log(`[OAuthTokens] Stored ${input.provider} OAuth token (encrypted)`);
+    return token; // Return decrypted for immediate use
   }
 
   /**
@@ -206,52 +243,91 @@ export class OAuthTokenStorage {
       expiresIn: number;
     },
   ): Promise<OAuthToken | null> {
-    const token = this.tokens.get(tokenId);
-    if (!token) return null;
+    const encryptedToken = this.tokens.get(tokenId);
+    if (!encryptedToken) return null;
 
+    // Decrypt current token to get refresh token if not provided
+    const currentToken = this.decryptToken(encryptedToken);
+    
     const expiresAt = new Date(
       Date.now() + updates.expiresIn * 1000,
     ).toISOString();
 
     const updatedToken: OAuthToken = {
-      ...token,
+      ...currentToken,
       accessToken: updates.accessToken,
-      refreshToken: updates.refreshToken || token.refreshToken,
+      refreshToken: updates.refreshToken || currentToken.refreshToken,
       expiresAt,
       updatedAt: new Date().toISOString(),
     };
 
-    this.tokens.set(tokenId, updatedToken);
+    // Encrypt and store
+    const newEncryptedToken = this.encryptToken(updatedToken);
+    this.tokens.set(tokenId, newEncryptedToken);
     await this.saveTokens();
 
-    console.log(`[OAuthTokens] Updated ${token.provider} OAuth token`);
+    console.log(`[OAuthTokens] Updated ${encryptedToken.provider} OAuth token`);
     return updatedToken;
   }
 
   /**
-   * Get token by provider
+   * Get encrypted token by provider (internal helper, no decryption)
    */
-  getTokenByProvider(provider: "openai" | "anthropic"): OAuthToken | undefined {
+  private getEncryptedTokenByProvider(
+    provider: "openai" | "anthropic",
+  ): EncryptedOAuthToken | undefined {
     return Array.from(this.tokens.values()).find(
       (token) => token.provider === provider,
     );
   }
 
   /**
-   * Get token by ID
+   * Get token by provider (LAZY DECRYPT - triggers keychain!)
    */
-  getTokenById(tokenId: string): OAuthToken | undefined {
-    return this.tokens.get(tokenId);
+  getTokenByProvider(provider: "openai" | "anthropic"): OAuthToken | undefined {
+    const encryptedToken = this.getEncryptedTokenByProvider(provider);
+    if (!encryptedToken) return undefined;
+
+    console.log(`[OAuthTokens] Decrypting ${provider} token (keychain access)`);
+    return this.decryptToken(encryptedToken);
   }
 
   /**
-   * Check if a token is expired or about to expire
+   * Get token by ID (LAZY DECRYPT - triggers keychain!)
    */
-  isTokenExpired(token: OAuthToken, bufferMinutes: number = 5): boolean {
+  getTokenById(tokenId: string): OAuthToken | undefined {
+    const encryptedToken = this.tokens.get(tokenId);
+    if (!encryptedToken) return undefined;
+
+    console.log(
+      `[OAuthTokens] Decrypting token ${tokenId} (keychain access)`,
+    );
+    return this.decryptToken(encryptedToken);
+  }
+
+  /**
+   * Check if a token is expired or about to expire (works on encrypted token metadata)
+   */
+  isTokenExpired(
+    token: OAuthToken | EncryptedOAuthToken,
+    bufferMinutes: number = 5,
+  ): boolean {
     const expiresAt = new Date(token.expiresAt).getTime();
     const now = Date.now();
     const buffer = bufferMinutes * 60 * 1000;
     return now >= expiresAt - buffer;
+  }
+
+  /**
+   * Check if a token is expired by provider (no decryption needed!)
+   */
+  isTokenExpiredByProvider(
+    provider: "openai" | "anthropic",
+    bufferMinutes: number = 5,
+  ): boolean {
+    const encryptedToken = this.getEncryptedTokenByProvider(provider);
+    if (!encryptedToken) return true;
+    return this.isTokenExpired(encryptedToken, bufferMinutes);
   }
 
   /**
@@ -260,10 +336,10 @@ export class OAuthTokenStorage {
   async deleteTokenByProvider(
     provider: "openai" | "anthropic",
   ): Promise<boolean> {
-    const token = this.getTokenByProvider(provider);
-    if (!token) return false;
+    const encryptedToken = this.getEncryptedTokenByProvider(provider);
+    if (!encryptedToken) return false;
 
-    const existed = this.tokens.delete(token.id);
+    const existed = this.tokens.delete(encryptedToken.id);
     if (existed) {
       await this.saveTokens();
       console.log(`[OAuthTokens] Deleted ${provider} OAuth token`);
@@ -284,21 +360,21 @@ export class OAuthTokenStorage {
   }
 
   /**
-   * List all tokens (without sensitive data)
+   * List all tokens (without sensitive data, no decryption!)
    */
   listTokens(): Array<
     Omit<OAuthToken, "accessToken" | "refreshToken"> & {
       isExpired: boolean;
     }
   > {
-    return Array.from(this.tokens.values()).map((token) => ({
-      id: token.id,
-      provider: token.provider,
-      accountId: token.accountId,
-      expiresAt: token.expiresAt,
-      createdAt: token.createdAt,
-      updatedAt: token.updatedAt,
-      isExpired: this.isTokenExpired(token, 0), // No buffer for listing
+    return Array.from(this.tokens.values()).map((encryptedToken) => ({
+      id: encryptedToken.id,
+      provider: encryptedToken.provider,
+      accountId: encryptedToken.accountId,
+      expiresAt: encryptedToken.expiresAt,
+      createdAt: encryptedToken.createdAt,
+      updatedAt: encryptedToken.updatedAt,
+      isExpired: this.isTokenExpired(encryptedToken, 0), // No buffer for listing
     }));
   }
 

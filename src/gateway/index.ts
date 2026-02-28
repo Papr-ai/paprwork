@@ -161,6 +161,14 @@ async function startGateway(): Promise<void> {
     });
     console.log("[Gateway] Permission system initialized");
 
+    // Set up key cache invalidation listener
+    console.log("[Gateway] Setting up key cache invalidation listener...");
+    const { setupKeyCacheInvalidationListener } = await import(
+      "./utils/keyResolver.js"
+    );
+    setupKeyCacheInvalidationListener();
+    console.log("[Gateway] Key cache invalidation listener ready");
+
     // Initialize services first
     await initializeServices();
 

@@ -7,10 +7,37 @@ import * as electron from "electron";
 const { ipcMain } = electron;
 import { CustomKeysStorage } from "../../core/storage/CustomKeysStorage.js";
 import type { CustomKeyInput } from "../../core/storage/CustomKeysStorage.js";
+import type { ChildProcess } from "child_process";
 
 let customKeysStorage: CustomKeysStorage;
+let gatewayProcess: ChildProcess | null = null;
 
-export function initializeCustomKeysIPC(storage: CustomKeysStorage) {
+/**
+ * Set the Gateway process reference for cache invalidation
+ */
+export function setGatewayProcess(gateway: ChildProcess): void {
+  gatewayProcess = gateway;
+  console.log("[IPC] Gateway process reference set for cache invalidation");
+}
+
+/**
+ * Send cache invalidation message to Gateway
+ */
+function invalidateKeyCache(keyName?: string): void {
+  if (gatewayProcess?.send) {
+    console.log(
+      `[IPC] Invalidating key cache: ${keyName || "all keys"}`,
+    );
+    gatewayProcess.send({
+      type: "INVALIDATE_KEY_CACHE",
+      keyName,
+    });
+  }
+}
+
+export function initializeCustomKeysIPC(
+  storage: CustomKeysStorage,
+) {
   customKeysStorage = storage;
 
   // List all custom keys (metadata only, no values)
@@ -46,7 +73,10 @@ export function initializeCustomKeysIPC(storage: CustomKeysStorage) {
   // Add new custom key
   ipcMain.handle("custom-keys:add", async (_, input: CustomKeyInput) => {
     try {
-      return await customKeysStorage.addKey(input);
+      const result = await customKeysStorage.addKey(input);
+      // Invalidate cache for this key
+      invalidateKeyCache(input.name);
+      return result;
     } catch (error) {
       console.error("[IPC] custom-keys:add error:", error);
       throw error;
@@ -58,7 +88,18 @@ export function initializeCustomKeysIPC(storage: CustomKeysStorage) {
     "custom-keys:update",
     async (_, keyId: string, updates: Partial<CustomKeyInput>) => {
       try {
-        return await customKeysStorage.updateKey(keyId, updates);
+        // Get key name before updating (for cache invalidation)
+        const keys = await customKeysStorage.listKeys();
+        const existingKey = keys.find((k) => k.id === keyId);
+        const keyName = updates.name || existingKey?.name;
+
+        const result = await customKeysStorage.updateKey(keyId, updates);
+
+        // Invalidate cache for this key
+        if (keyName) {
+          invalidateKeyCache(keyName);
+        }
+        return result;
       } catch (error) {
         console.error("[IPC] custom-keys:update error:", error);
         throw error;
@@ -69,7 +110,17 @@ export function initializeCustomKeysIPC(storage: CustomKeysStorage) {
   // Delete custom key
   ipcMain.handle("custom-keys:delete", async (_, keyId: string) => {
     try {
-      return await customKeysStorage.deleteKey(keyId);
+      // Get key name before deleting (for cache invalidation)
+      const keys = await customKeysStorage.listKeys();
+      const existingKey = keys.find((k) => k.id === keyId);
+
+      const result = await customKeysStorage.deleteKey(keyId);
+
+      // Invalidate cache for this key
+      if (existingKey) {
+        invalidateKeyCache(existingKey.name);
+      }
+      return result;
     } catch (error) {
       console.error("[IPC] custom-keys:delete error:", error);
       throw error;

@@ -67,6 +67,11 @@ export interface WebviewTestResponseMessage {
   response: WebviewTestResponse;
 }
 
+export interface InvalidateKeyCacheMessage {
+  type: "INVALIDATE_KEY_CACHE";
+  keyName?: string; // Specific key to invalidate, or undefined for all keys
+}
+
 export type GatewayToElectronIpcMessage =
   | RequestKeysMessage
   | RequestPermissionMessage
@@ -75,7 +80,8 @@ export type GatewayToElectronIpcMessage =
 export type ElectronToGatewayIpcMessage =
   | KeysResponseMessage
   | PermissionResponseMessage
-  | WebviewTestResponseMessage;
+  | WebviewTestResponseMessage
+  | InvalidateKeyCacheMessage;
 
 export function isKeysResponseMessage(
   message: unknown,
@@ -122,5 +128,19 @@ export function isWebviewTestResponseMessage(
     typeof candidate.requestId === "string" &&
     typeof candidate.response === "object" &&
     candidate.response !== null
+  );
+}
+
+export function isInvalidateKeyCacheMessage(
+  message: unknown,
+): message is InvalidateKeyCacheMessage {
+  if (typeof message !== "object" || message === null) {
+    return false;
+  }
+
+  const candidate = message as Record<string, unknown>;
+  return (
+    candidate.type === "INVALIDATE_KEY_CACHE" &&
+    (candidate.keyName === undefined || typeof candidate.keyName === "string")
   );
 }
