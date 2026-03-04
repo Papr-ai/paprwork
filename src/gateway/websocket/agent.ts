@@ -81,8 +81,13 @@ export async function setupAgentHandlers(
           // Only happens on first message or when switching providers
           const t2 = performance.now();
           try {
+            // Ollama doesn't require an API key (runs locally)
+            if (config.provider === "ollama") {
+              apiKey = ""; // No API key needed for local Ollama
+              authType = "apiKey"; // Use apiKey type for consistency
+            }
             // For openai, openai-codex, and anthropic, use getProviderAuth which handles OAuth
-            if (
+            else if (
               config.provider === "openai" ||
               config.provider === "openai-codex" ||
               config.provider === "anthropic"

@@ -20,6 +20,7 @@ import { ContextPills } from "./ContextPills";
 import { SlashCommandMenu } from "./SlashCommandMenu";
 import type { Artifact } from "../../stores/artifactsStore";
 import { useChatStore } from "../../stores/chatStore";
+import { useOllama } from "../../hooks/useOllama";
 import "./InputBar.css";
 
 interface InputBarProps {
@@ -61,6 +62,9 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     const draftMessage = useChatStore((state) => state.getDraftMessage(chatId));
     const setDraftMessage = useChatStore((state) => state.setDraftMessage);
     const clearDraftMessage = useChatStore((state) => state.clearDraftMessage);
+
+    // Ollama status for showing install indicator
+    const { hasModel } = useOllama();
 
     const [message, setMessage] = useState(draftMessage);
     const [isFocused, setIsFocused] = useState(false);
@@ -321,10 +325,13 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                         </div>
                         {models.map((model) => {
                           const available = isModelAvailable?.(model) ?? true;
+                          const isOllama = model.provider === 'ollama';
+                          const needsInstall = isOllama && !hasModel(model.id);
+                          
                           return (
                             <button
                               key={model.id}
-                              className={`model-picker-item ${currentModel.id === model.id ? "model-picker-item--selected" : ""} ${!available ? "model-picker-item--locked" : ""}`}
+                              className={`model-picker-item ${currentModel.id === model.id ? "model-picker-item--selected" : ""} ${!available ? "model-picker-item--locked" : ""} ${needsInstall ? "model-picker-item--needs-install" : ""}`}
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() => {
                                 if (available) {
@@ -339,7 +346,9 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                               title={
                                 !available
                                   ? "Add API key or connect OAuth in Settings"
-                                  : undefined
+                                  : needsInstall
+                                    ? "Click to download and install"
+                                    : undefined
                               }
                             >
                               <div className="model-picker-item-content">
@@ -361,6 +370,25 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                                         strokeLinejoin="round"
                                       >
                                         <path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                                      </svg>
+                                    </span>
+                                  )}
+                                  {needsInstall && available && (
+                                    <span
+                                      className="model-badge-install"
+                                      title="Download required"
+                                    >
+                                      <svg
+                                        width="12"
+                                        height="12"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      >
+                                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
                                       </svg>
                                     </span>
                                   )}

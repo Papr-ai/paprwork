@@ -69,6 +69,21 @@ contextBridge.exposeInMainWorld("electronAPI", {
     },
   },
 
+  // Ollama API - Auto-install and manage local AI models
+  ollama: {
+    checkStatus: () => ipcRenderer.invoke("ollama:check-status"),
+    ensureModel: (modelName) => ipcRenderer.invoke("ollama:ensure-model", modelName),
+    listModels: () => ipcRenderer.invoke("ollama:list-models"),
+    hasModel: (modelName) => ipcRenderer.invoke("ollama:has-model", modelName),
+    start: () => ipcRenderer.invoke("ollama:start"),
+    onDownloadProgress: (callback) => {
+      ipcRenderer.on("ollama:download-progress", (_event, data) => callback(data));
+    },
+    removeDownloadProgressListener: (callback) => {
+      ipcRenderer.removeListener("ollama:download-progress", callback);
+    },
+  },
+
   // Environment info
   env: {
     NODE_ENV: process.env.NODE_ENV || "production",

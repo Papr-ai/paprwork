@@ -107,6 +107,48 @@ const AVAILABLE_MODELS: Record<Provider, ModelInfo[]> = {
       supportsVision: true,
     },
   ],
+  ollama: [
+    {
+      id: "qwen3.5:0.8b",
+      name: "Qwen 3.5 0.8B",
+      provider: "ollama",
+      contextWindow: 256000,
+      supportsThinking: false,
+      supportsVision: false,
+    },
+    {
+      id: "qwen3.5:2b",
+      name: "Qwen 3.5 2B",
+      provider: "ollama",
+      contextWindow: 256000,
+      supportsThinking: false,
+      supportsVision: false,
+    },
+    {
+      id: "qwen3.5:4b",
+      name: "Qwen 3.5 4B",
+      provider: "ollama",
+      contextWindow: 256000,
+      supportsThinking: false,
+      supportsVision: false,
+    },
+    {
+      id: "qwen3.5:latest",
+      name: "Qwen 3.5 9B",
+      provider: "ollama",
+      contextWindow: 256000,
+      supportsThinking: false,
+      supportsVision: false,
+    },
+    {
+      id: "qwen3.5:27b",
+      name: "Qwen 3.5 27B",
+      provider: "ollama",
+      contextWindow: 256000,
+      supportsThinking: false,
+      supportsVision: false,
+    },
+  ],
 };
 
 export class ModelFallback {

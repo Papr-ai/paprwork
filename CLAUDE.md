@@ -12,6 +12,7 @@ This file tracks key learnings, architectural decisions, and context for AI assi
 - **Core App:** Electron + TypeScript (cross-platform: Mac, Windows, Linux)
 - **Companion Apps:** Swift for native macOS/iOS features (future)
 - **Dev Tools:** Rust-based tools for faster development
+- **Local AI:** Ollama integration for on-device inference (privacy + zero cost)
 
 **⚠️ CRITICAL: Node Version Requirement**
 - **Requires Node v24+** (matches Electron 40's embedded Node v24.13.0)
@@ -508,7 +509,25 @@ npx @electron/rebuild -f -w better-sqlite3
 - Child process (Gateway) doesn't have access to clean up parent's WAL state
 **Long-term Fix:** Add database cleanup in Gateway shutdown handler to properly close connections and checkpoint WAL files before exit.
 
-### Issue 10: npm install Not Installing UI Dependencies ✅ FIXED
+### Issue 10: OAuth Context Management ✅ FIXED
+**Problem:** ChatGPT/Claude OAuth routes hit "context_length_exceeded" errors during tool-heavy conversations
+**Root Cause:** Pi-ai OAuth path (`PiCodexStreamWithToolLoop`) lacked context truncation and summarization that AI SDK path had
+**Solution:** 
+1. Added adaptive tool result truncation to `appendToolTurnToContext()` (matches AI SDK's `prepareStep` logic)
+2. Added context pressure monitoring to `createPiCodexStreamWithToolLoop()` (tracks cumulative tokens, aborts at 120K)
+3. Added auto-summarization callback from AgentService (triggers compression + retry on pressure)
+**Fix Applied:** 2026-03-03
+**Impact:**
+- **Before:** OAuth routes crashed after 10-15 tool calls with large results
+- **After:** Adaptive truncation + auto-summarization at 120K tokens (same as API key route)
+- **Result:** OAuth and API key routes now have identical context management
+**Files Changed:**
+- `src/gateway/services/providers/PiCodexStreamWithToolLoop.ts` - Added truncation + monitoring
+- `src/gateway/services/AgentService.ts` - Added context pressure callback for pi-ai path
+- `docs/OAUTH_CONTEXT_MANAGEMENT.md` - Complete documentation
+**Testing:** Verified with 15+ tool calls in ChatGPT OAuth sessions - no more context errors, auto-compression works
+
+### Issue 11: npm install Not Installing UI Dependencies ✅ FIXED
 **Problem:** Users running `npm install` then `npm run build` getting errors like:
 ```
 [vite]: Rollup failed to resolve import "remark-gfm" from "ui/components/common/Markdown.tsx"
@@ -527,6 +546,30 @@ npx @electron/rebuild -f -w better-sqlite3
 - No separate `ui/node_modules/` needed
 - Single `package-lock.json` tracks everything
 **User Instructions:** Just run `npm install` once at root. No need to `cd ui && npm install` separately!
+
+### Issue 12: Multi-Step Streaming Creating Multiple UI Cards ✅ FIXED
+**Problem:** Multiple "Working/Thinking" cards displayed for single assistant response during multi-step tool calling
+**Root Cause:** The AI SDK's `finish-step` chunk was yielding a `done` chunk, triggering premature frontend finalization and clearing the streaming message ref. The next `start-step` would then create a NEW message instead of continuing the existing one.
+**Solution:** Changed `finish-step` to yield `step-usage` instead of `done`. Only the final `finish` triggers `done`.
+**Fix Applied:** 2026-03-04
+**Files Changed:**
+- `src/gateway/services/agent/streamOrchestrator.ts` - Changed `finish-step` to yield `step-usage`
+- `src/gateway/services/AgentService.ts` - Extract usage from both `done` and `step-usage`
+- `src/core/types/streaming.ts` - Added `step-usage` to `StreamChunkType` union
+- `docs/MULTI_STEP_STREAMING_FIX.md` - Complete documentation
+**Impact:** Now shows ONE "Working on it..." card per assistant response, consolidating all thinking/tools/text
+
+### Issue 13: Qwen Context Window Too Small - Tool Schema Truncation ✅ FIXED
+**Problem:** Qwen 3.5 9B only seeing subset of tools (delegation/planning) and claiming no access to core tools (bash, filesystem, browser)
+**Root Cause:** Ollama's default `num_ctx` is 4096 tokens. With 70 tools consuming ~8.5K tokens, Ollama was truncating the prompt from 11,483 tokens to 4,096, cutting off most tool schemas.
+**Evidence:** `[Ollama] level=WARN msg="truncating input prompt" limit=4096 prompt=11483 keep=4 new=4096`
+**Solution:** Set `num_ctx: 32768` in Ollama provider options (Qwen 3.5 supports up to 128K)
+**Fix Applied:** 2026-03-04
+**Files Changed:**
+- `src/gateway/services/AgentService.ts` - Added `options: { num_ctx: 32768 }` to `providerOptions.ollama`
+- `docs/QWEN_CONTEXT_WINDOW_FIX.md` - Complete documentation with context window guidelines
+**Impact:** Qwen now sees all 70 tools, can use core tools like bash/filesystem/browser
+**Prevention:** Always set `num_ctx` to at least 4x tool schema size for Ollama models
 
 ---
 
@@ -883,6 +926,66 @@ We enforce plan creation through **4 reinforcing layers**:
 - **On chat reopen:** Active plans automatically loaded into system prompt with progress indicators (☑/▶/☐)
 
 **See:** [PLAN_ENFORCEMENT_STRATEGY.md](docs/PLAN_ENFORCEMENT_STRATEGY.md) for complete details, examples, and verification checklist.
+
+---
+
+## 🖥️ On-Device AI with Ollama
+
+**Added:** 2026-03-03
+
+Paprwork V2 supports running AI models locally using Ollama for complete privacy and zero API costs.
+
+### Supported Models
+
+- **Qwen 3.5 (0.8B - 27B)** - Multiple model sizes for different hardware
+- 256K context window
+- Runs completely on-device (no internet required)
+- No API keys needed
+
+### Quick Model Selection
+
+| Your RAM | Recommended Model | Download Size |
+|----------|-------------------|---------------|
+| 8GB | Qwen 3.5 2B | 2.7 GB |
+| 16GB | **Qwen 3.5 9B** ⭐ | 6.6 GB |
+| 32GB+ | Qwen 3.5 27B | 17 GB |
+
+**🌟 Most Popular:** Qwen 3.5 9B - best quality/performance balance for modern machines
+
+### Key Benefits
+
+1. ✅ **Complete Privacy** - All inference happens locally, no data sent to cloud
+2. ✅ **Zero API Costs** - No per-token charges
+3. ✅ **Offline Capable** - Works without internet connection
+4. ✅ **Always Available** - No rate limits or quotas
+5. ✅ **Auto-Install** - Just select a model, everything else is automatic
+
+### Quick Start
+
+```bash
+# No manual installation needed!
+# Just select a Qwen model in Paprwork:
+# 1. Open model picker in chat
+# 2. Select from "Ollama (On-Device)" group
+# 3. Wait for auto-download (shows progress)
+# 4. Chat runs 100% locally!
+```
+
+### Architecture Integration
+
+- **Provider:** `ollama` (added to `Provider` union type)
+- **Authentication:** None required (local inference)
+- **SDK:** `ollama-ai-provider-v2` (AI SDK compatible)
+- **Auto-Install:** `electron-ollama` (auto-downloads Ollama binaries)
+- **Default Host:** `http://localhost:11434/api`
+- **UI:** Always available in model picker (no API key check)
+- **Storage:** Binaries in `userData/ollama`, models in Ollama's data directory
+
+**See:** 
+- [QWEN_MODEL_SELECTION_GUIDE.md](docs/QWEN_MODEL_SELECTION_GUIDE.md) - **Choosing the right model for your device**
+- [OLLAMA_DOWNLOAD_TIME_EXPLANATION.md](docs/OLLAMA_DOWNLOAD_TIME_EXPLANATION.md) - **Why downloads take time & what we do about it**
+- [OLLAMA_QWEN_SETUP.md](docs/OLLAMA_QWEN_SETUP.md) - Complete setup guide & troubleshooting
+- [OLLAMA_AUTO_INSTALL_IMPLEMENTATION.md](docs/OLLAMA_AUTO_INSTALL_IMPLEMENTATION.md) - Technical architecture details
 
 ---
 

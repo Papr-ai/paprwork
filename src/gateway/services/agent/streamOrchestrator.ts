@@ -427,6 +427,8 @@ export async function* orchestrateModelStream(
 
       case "finish-step": {
         // AI SDK provides usage data in finish-step events
+        // IMPORTANT: Don't yield "done" here - that would trigger frontend to finalize
+        // and create a new message for the next step! Only yield "done" on final "finish".
         const finishStepChunk = rawChunk as {
           usage?: {
             inputTokens?: number;
@@ -444,9 +446,10 @@ export async function* orchestrateModelStream(
               `(${usage.inputTokens || 0} input + ${usage.outputTokens || 0} output)`,
           );
 
-          // Yield a done chunk with usage for AgentService to capture
+          // Yield a step-usage chunk (NOT "done") for AgentService to capture
+          // This prevents frontend from finalizing prematurely
           yield createChatStreamChunk(
-            "done",
+            "step-usage",
             {
               usage: {
                 promptTokens: usage.inputTokens || 0,

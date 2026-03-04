@@ -7,7 +7,7 @@ import type { AnthropicProvider } from "@ai-sdk/anthropic";
 import type { OpenAIProvider } from "@ai-sdk/openai";
 import type { GoogleGenerativeAIProvider } from "@ai-sdk/google";
 
-export type Provider = "anthropic" | "openai" | "openai-codex" | "google";
+export type Provider = "anthropic" | "openai" | "openai-codex" | "google" | "ollama";
 
 /**
  * Typed model IDs extracted directly from the AI SDK provider types.

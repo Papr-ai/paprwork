@@ -8,6 +8,7 @@ import { MessageList } from "./MessageList";
 import { InputBar, InputBarRef } from "./InputBar";
 import { useAgent } from "../../hooks/useAgent";
 import { useAuthStatus } from "../../hooks/useAuthStatus";
+import { useOllama } from "../../hooks/useOllama";
 import { useChatStore, defaultChatState } from "../../stores/chatStore";
 import { useTabStore } from "../../stores/tabStore";
 import type { Tab } from "../../stores/tabStore";
@@ -147,11 +148,16 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
 
   const { sendMessage } = useAgent();
   const inputBarRef = useRef<InputBarRef>(null);
-  const { isModelAvailable, status } = useAuthStatus();
+  const { isModelAvailable, status: authStatus } = useAuthStatus();
+  const { ensureModel, progress, installing, status: ollamaStatus } = useOllama();
   const fallbackModel =
     CHAT_MODELS.find((m) => m.id === "claude-sonnet-4-6") || CHAT_MODELS[0];
 
   const [selectedModel, setSelectedModel] = useState<AIModel>(fallbackModel);
+  
+  // Only block THIS chat if it's waiting for an Ollama model that's currently being installed
+  // Don't block on initial load - only block when actively installing/starting
+  const isWaitingForModel = selectedModel.provider === 'ollama' && installing === selectedModel.id;
 
   // When chatId or auth status changes: pick best default
   // Priority: last selected (persisted in localStorage) > default order (sonnet-4-6 → gpt-5.2 → gemini-3-flash) > first available
@@ -171,7 +177,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
       if (!isModelAvailable(prev)) return fallbackModel;
       return prev;
     });
-  }, [chatId, status]);
+  }, [chatId, authStatus]);
 
   // Focus input when this chat's container mounts
   useEffect(() => {
@@ -366,11 +372,23 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
   );
 
   const handleModelChange = useCallback(
-    (model: AIModel) => {
+    async (model: AIModel) => {
       setSelectedModel(model);
       useChatStore.getState().setLastSelectedModel(chatId, model.id);
+
+      // Auto-install Ollama models when selected
+      if (model.provider === 'ollama') {
+        try {
+          const success = await ensureModel(model.id);
+          if (!success) {
+            console.error(`[ChatContainer] Failed to ensure Ollama model: ${model.id}`);
+          }
+        } catch (error) {
+          console.error('[ChatContainer] ensureModel error:', error);
+        }
+      }
     },
-    [chatId],
+    [chatId, ensureModel],
   );
 
   const handleOpenSettings = useCallback(() => {
@@ -388,6 +406,21 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
         ? `\n\n## Active Context\nThe user has merged this chat with a ${mergedArtifact.type} titled "${mergedArtifact.title}" (${idKey}: "${mergedArtifact.id}"). They are viewing and working on this ${mergedArtifact.type} alongside this conversation. Reference it directly when relevant.`
         : "";
 
+      // Ensure Ollama model is ready before sending message
+      if (selectedModel.provider === 'ollama') {
+        try {
+          console.log(`[ChatContainer] Ensuring Ollama model before sending: ${selectedModel.id}`);
+          const success = await ensureModel(selectedModel.id);
+          if (!success) {
+            console.error(`[ChatContainer] Failed to ensure Ollama model: ${selectedModel.id}`);
+            return; // Don't send message if model can't be ensured
+          }
+        } catch (error) {
+          console.error('[ChatContainer] ensureModel error before send:', error);
+          return; // Don't send message if model can't be ensured
+        }
+      }
+
       // Create config WITHOUT apiKey - Gateway will fetch it via IPC
       // This keeps keys secure and never sends them over WebSocket
       const config = {
@@ -402,7 +435,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
       // Send message for THIS chat (not activeChat)
       await sendMessage(message, config, chatId);
     },
-    [selectedModel, sendMessage, chatId],
+    [selectedModel, sendMessage, chatId, ensureModel],
   );
 
   const handleStopAgent = useCallback(async () => {
@@ -440,13 +473,50 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
         </div>
       )}
 
+      {/* Ollama model download progress */}
+      {progress && progress.status !== 'complete' && (
+        <div className="ollama-progress-banner">
+          <svg className="progress-icon" width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path 
+              d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" 
+              stroke="currentColor" 
+              strokeWidth="2" 
+              strokeLinecap="round" 
+              strokeLinejoin="round"
+            />
+          </svg>
+          <div className="progress-content">
+            <span className="progress-text">
+              {progress.percent === 0 
+                ? `Installing Ollama (first time setup)...`
+                : progress.status === 'downloading' 
+                  ? `Downloading ${progress.modelName}...`
+                  : `Extracting ${progress.modelName}...`
+              }
+            </span>
+            <div className="progress-bar">
+              <div 
+                className="progress-bar-fill" 
+                style={{ 
+                  width: progress.percent === 0 ? '100%' : `${progress.percent}%`,
+                  animation: progress.percent === 0 ? 'indeterminate 2s infinite' : 'none'
+                }}
+              />
+            </div>
+            {progress.percent > 0 && (
+              <span className="progress-percent">{progress.percent}%</span>
+            )}
+          </div>
+        </div>
+      )}
+
       <JobPermissionBanner />
 
       <MessageList
         chatId={chatId}
         messages={messages}
         isLoading={chatIsLoading}
-        isSending={isSending}
+        isSending={isSending || isWaitingForModel}
       />
 
       <InputBar
@@ -455,8 +525,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
         onSend={handleSendMessage}
         onStop={handleStopAgent}
         onSlashCommand={handleSlashCommand}
-        isSending={isSending}
-        placeholder="Type a message..."
+        isSending={isSending || isWaitingForModel}
+        placeholder={isWaitingForModel ? `Preparing ${selectedModel.name}...` : "Type a message..."}
         selectedModel={selectedModel}
         onModelChange={handleModelChange}
         isModelAvailable={isModelAvailable}

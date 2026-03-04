@@ -73,6 +73,10 @@ export function useAuthStatus() {
 
   const isModelAvailable = useCallback(
     (model: { provider: string; requiresApiKey: string }) => {
+      // Ollama runs locally, always available (no API key required)
+      if (model.provider === "ollama") {
+        return true;
+      }
       if (model.provider === "openai-codex") {
         return status.openai.oauth;
       }

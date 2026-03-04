@@ -111,13 +111,9 @@ export class AgentService {
     await this.chatExporter.initialize();
     console.log("[AgentService] Chat exporter initialized");
 
-    // Initialize title service if OpenAI key is available
-    if (storageConfig.openaiApiKey) {
-      this.titleService = new TitleGenerationService(
-        storageConfig.openaiApiKey,
-      );
-      this.keysLoaded = true;
-    }
+    // Initialize title service (no API key needed, handles OAuth/API key routing internally)
+    this.titleService = new TitleGenerationService();
+    console.log("[AgentService] Title service initialized");
 
     console.log("[AgentService] Registering tools...");
     // Register all available tools
@@ -178,9 +174,9 @@ export class AgentService {
         console.log("[AgentService] No PAPR key found - staying in local mode");
       }
 
-      // Initialize title service if OpenAI key is available
-      if (keys.OPENAI_API_KEY && !this.titleService) {
-        this.titleService = new TitleGenerationService(keys.OPENAI_API_KEY);
+      // Title service initialized at startup (handles OAuth/API key routing internally)
+      if (!this.titleService) {
+        this.titleService = new TitleGenerationService();
         console.log("[AgentService] Title generation enabled");
       }
 
@@ -422,6 +418,16 @@ export class AgentService {
             thinkingBudget?: number;
           };
         };
+        ollama?: {
+          think: boolean;
+          options?: {
+            num_ctx?: number; // Context window size (default: 4096)
+            seed?: number;
+            repeat_penalty?: number;
+            top_k?: number;
+            min_p?: number;
+          };
+        };
       } = {};
 
       // For OpenAI GPT-5.x models with reasoning effort and summary
@@ -442,6 +448,17 @@ export class AgentService {
           thinkingConfig: {
             includeThoughts: true, // Enable thought summaries in stream
             thinkingBudget: config.thinkingBudget, // Token budget for thinking
+          },
+        };
+      }
+
+      // For Ollama models - enable thinking mode and increase context window
+      if (config.provider === "ollama") {
+        providerOptions.ollama = {
+          think: true, // Enable thinking mode for Qwen models (required for tool calling)
+          options: {
+            num_ctx: 32768, // Set context window to 32K (Qwen 3.5 supports up to 128K)
+            // Default is 4096 which is too small for 70 tools (~8.5K tokens)
           },
         };
       }
@@ -513,7 +530,7 @@ export class AgentService {
         //    tokens exceed CONTEXT_ABORT_THRESHOLD
         // 3. User can abort via UI (abortController)
         abortSignal: abortController.signal,
-        ...(providerOptions.openai || providerOptions.google
+        ...(providerOptions.openai || providerOptions.google || providerOptions.ollama
           ? { providerOptions }
           : {}),
         // Truncate tool results mid-stream to prevent context overflow
@@ -607,6 +624,60 @@ export class AgentService {
             }
           };
 
+          // Helper function to truncate tool result (works for both strings and objects)
+          const truncateToolResult = (
+            result: unknown,
+            maxLength: number | null,
+            toolMessagePosition: number,
+          ): unknown => {
+            // Handle undefined/null results
+            if (result === undefined || result === null) {
+              return result;
+            }
+
+            // Convert result to string for size check
+            const resultStr =
+              typeof result === "string" ? result : JSON.stringify(result);
+
+            // EMERGENCY: Catch absurdly large results (>50K tokens) regardless of recency
+            // 50K tokens ≈ 200KB chars - max for any single tool result
+            const EMERGENCY_LIMIT = 200000; // ~50K tokens
+            if (resultStr.length > EMERGENCY_LIMIT) {
+              const truncated = resultStr.substring(0, EMERGENCY_LIMIT);
+              const omitted = resultStr.length - EMERGENCY_LIMIT;
+              console.warn(
+                `[prepareStep] ⚠️ EMERGENCY truncation: tool result was ${Math.round(resultStr.length / 1024)}KB, ` +
+                  `truncated to ${Math.round(EMERGENCY_LIMIT / 1024)}KB`,
+              );
+              return (
+                truncated +
+                `\n\n[⚠️ EMERGENCY TRUNCATION: Result was ${Math.round(resultStr.length / 1024)}KB (${Math.round(resultStr.length / 4000)}K tokens), ` +
+                `truncated ${omitted} chars. This is too large for context. ` +
+                `Use more specific search patterns or incremental reading.]`
+              );
+            }
+
+            // Keep unlimited for most recent (unless emergency truncation applied above)
+            if (maxLength === null) {
+              return result;
+            }
+
+            if (resultStr.length > maxLength) {
+              const truncated = resultStr.substring(0, maxLength);
+              const omitted = resultStr.length - maxLength;
+              const positionFromEnd =
+                totalToolMessages - toolMessagePosition - 1;
+              const estimatedTokens = Math.ceil(maxLength / 4);
+              return (
+                truncated +
+                `\n\n[... ${omitted} chars truncated (tool #${positionFromEnd + 1} from end, ` +
+                `limit: ~${estimatedTokens} tokens, context: ${Math.round(totalPromptTokens / 1000)}K/${pressureLevel})]`
+              );
+            }
+
+            return result;
+          };
+
           // Process messages to truncate tool results based on recency + context pressure
           const truncatedMessages = stepOptions.messages.map((msg, msgIdx) => {
             if (msg.role === "tool" && Array.isArray(msg.content)) {
@@ -616,51 +687,18 @@ export class AgentService {
               return {
                 ...msg,
                 content: msg.content.map((part: any) => {
-                  if (
-                    part.type === "tool-result" &&
-                    typeof part.result === "string"
-                  ) {
-                    const resultStr = part.result;
+                  if (part.type === "tool-result") {
+                    // Truncate result (works for both strings and objects)
+                    const truncatedResult = truncateToolResult(
+                      part.result,
+                      maxLength,
+                      toolMessagePosition,
+                    );
 
-                    // EMERGENCY: Catch absurdly large results (>50K tokens) regardless of recency
-                    // 50K tokens ≈ 200KB chars - max for any single tool result
-                    const EMERGENCY_LIMIT = 200000; // ~50K tokens
-                    if (resultStr.length > EMERGENCY_LIMIT) {
-                      const truncated = resultStr.substring(0, EMERGENCY_LIMIT);
-                      const omitted = resultStr.length - EMERGENCY_LIMIT;
-                      console.warn(
-                        `[prepareStep] ⚠️ EMERGENCY truncation: tool result was ${Math.round(resultStr.length / 1024)}KB, ` +
-                          `truncated to ${Math.round(EMERGENCY_LIMIT / 1024)}KB`,
-                      );
-                      return {
-                        ...part,
-                        result:
-                          truncated +
-                          `\n\n[⚠️ EMERGENCY TRUNCATION: Result was ${Math.round(resultStr.length / 1024)}KB (${Math.round(resultStr.length / 4000)}K tokens), ` +
-                          `truncated ${omitted} chars. This is too large for context. ` +
-                          `Use more specific search patterns or incremental reading.]`,
-                      };
-                    }
-
-                    // Keep unlimited for most recent (unless emergency truncation applied above)
-                    if (maxLength === null) {
-                      return part;
-                    }
-
-                    if (resultStr.length > maxLength) {
-                      const truncated = resultStr.substring(0, maxLength);
-                      const omitted = resultStr.length - maxLength;
-                      const positionFromEnd =
-                        totalToolMessages - toolMessagePosition - 1;
-                      const estimatedTokens = Math.ceil(maxLength / 4);
-                      return {
-                        ...part,
-                        result:
-                          truncated +
-                          `\n\n[... ${omitted} chars truncated (tool #${positionFromEnd + 1} from end, ` +
-                          `limit: ~${estimatedTokens} tokens, context: ${Math.round(totalPromptTokens / 1000)}K/${pressureLevel})]`,
-                      };
-                    }
+                    return {
+                      ...part,
+                      result: truncatedResult,
+                    };
                   }
                   return part;
                 }),
@@ -805,6 +843,13 @@ export class AgentService {
         const apiKeys = getApiKeysForSanitization();
         const maxSteps = options?.maxSteps ?? 100;
 
+        // Context pressure callback for pi-ai path (triggers summarization)
+        const onContextPressure = async () => {
+          console.log(`🔄 Pi-ai context pressure detected for chat ${chatId}`);
+          contextPressureAborted = true;
+          abortController.abort();
+        };
+
         fullStream = createPiCodexStreamWithToolLoop(
           streamSimple as any,
           piModel,
@@ -816,6 +861,7 @@ export class AgentService {
           >,
           apiKeys,
           maxSteps,
+          onContextPressure, // Pass callback to enable summarization
         );
         timings.streamTextInit = performance.now() - t;
         console.log(
@@ -945,8 +991,8 @@ export class AgentService {
           break;
         }
 
-        // Extract token usage from done chunk
-        if (next.value.type === "done") {
+        // Extract token usage from done or step-usage chunks
+        if (next.value.type === "done" || next.value.type === "step-usage") {
           const payload = next.value.payload as any;
           if (payload?.usage) {
             tokenUsage = {
@@ -1398,13 +1444,14 @@ ${last15.substring(0, 8_000)}`;
 
   /**
    * Update OpenAI API key (for title generation)
+   * Note: Title generation now handles OAuth/API key routing internally,
+   * but keep this method for backwards compatibility
    */
-  setOpenAIApiKey(apiKey: string): void {
+  setOpenAIApiKey(_apiKey: string): void {
     if (!this.titleService) {
-      this.titleService = new TitleGenerationService(apiKey);
-    } else {
-      this.titleService.setApiKey(apiKey);
+      this.titleService = new TitleGenerationService();
     }
+    // No need to pass API key - service handles auth internally
   }
 
   /**
@@ -1439,6 +1486,7 @@ ${last15.substring(0, 8_000)}`;
       "openai-codex": "gpt-5.3-codex",
       anthropic: "claude-sonnet-4-6",
       google: "gemini-2.5-flash",
+      ollama: "qwen3.5:latest",
     };
     const model = input.model ?? defaultModelByProvider[provider];
 
@@ -1755,6 +1803,7 @@ ${last15.substring(0, 8_000)}`;
       "openai-codex": "gpt-5.3-codex",
       anthropic: "claude-sonnet-4-6",
       google: "gemini-2.5-flash",
+      ollama: "qwen3.5:latest",
     };
     const modelId = input.model ?? defaultModelByProvider[provider];
 
@@ -1913,6 +1962,12 @@ ${last15.substring(0, 8_000)}`;
     provider: Provider,
     apiKey?: string,
   ): Promise<void> {
+    // Ollama runs locally, no authentication needed
+    if (provider === "ollama") {
+      console.log(`[AgentService] Ollama provider - no authentication needed`);
+      return;
+    }
+
     // First, try to use OAuth token (if available)
     const { getProviderAuth } = await import("../utils/keyResolver.js");
 
@@ -2014,6 +2069,10 @@ ${last15.substring(0, 8_000)}`;
         const { normalizeGoogleModelId } =
           await import("../utils/modelNormalizer.js");
         return google(normalizeGoogleModelId(modelId)) as LanguageModel;
+      }
+      case "ollama": {
+        const { ollama } = await import("ollama-ai-provider-v2");
+        return ollama(modelId) as LanguageModel;
       }
       default:
         throw new Error(`Unsupported provider: ${provider}`);

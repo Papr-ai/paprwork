@@ -89,10 +89,12 @@ export function useAgent() {
       }
 
       // Ensure we have a streaming message for all chunk types
+      // Note: start-step should continue existing message, not create a new one
       if (
         !streamingMessageIdRef.current.has(chatId) &&
         chunk.type !== "done" &&
-        chunk.type !== "error"
+        chunk.type !== "error" &&
+        chunk.type !== "start-step"
       ) {
         const messageId = `msg-${Date.now()}`;
         streamingMessageIdRef.current.set(chatId, messageId);

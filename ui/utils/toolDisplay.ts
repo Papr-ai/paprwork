@@ -371,6 +371,62 @@ export function getToolDisplayLabel(toolCall: ToolCallLike): string {
     return getBashCommandDescription(toolCall.args.command, isRunning);
   }
 
+  // Browser tools - show URL/domain
+  if (toolName === "browser_navigate" && typeof toolCall.args?.url === "string") {
+    const url = toolCall.args.url as string;
+    try {
+      const domain = new URL(url).hostname.replace(/^www\./, "");
+      return isRunning ? `Navigating to ${domain}` : `Navigated to ${domain}`;
+    } catch {
+      return isRunning ? "Navigating browser" : "Browser navigated";
+    }
+  }
+
+  if (toolName === "browser_snapshot") {
+    return isRunning ? "Reading page" : "Page read";
+  }
+
+  if (toolName === "browser_click" && typeof toolCall.args?.ref === "string") {
+    const ref = toolCall.args.ref as string;
+    // Extract meaningful text if available (e.g., "ref-123 (Submit)")
+    return isRunning ? "Clicking element" : "Clicked element";
+  }
+
+  if (toolName === "browser_type" && typeof toolCall.args?.text === "string") {
+    const text = (toolCall.args.text as string).substring(0, 20);
+    return isRunning ? `Typing "${text}"${text.length > 20 ? "..." : ""}` : "Text entered";
+  }
+
+  // Search tools - show what we're searching for
+  if (toolName === "search_files" && typeof toolCall.args?.query === "string") {
+    const query = (toolCall.args.query as string).substring(0, 30);
+    return isRunning 
+      ? `Searching for "${query}"${query.length > 30 ? "..." : ""}`
+      : `Searched for "${query}"${query.length > 30 ? "..." : ""}`;
+  }
+
+  if (toolName === "search_agent_memory" && typeof toolCall.args?.query === "string") {
+    const query = (toolCall.args.query as string).substring(0, 30);
+    return isRunning 
+      ? `Searching memory for "${query}"${query.length > 30 ? "..." : ""}`
+      : `Found in memory`;
+  }
+
+  // File operations - show filename
+  if ((toolName === "read_file" || toolName === "write_file") && typeof toolCall.args?.path === "string") {
+    const filename = getDisplayFilename(toolCall.args.path as string);
+    if (filename) {
+      return toolName === "read_file"
+        ? (isRunning ? `Reading ${filename}` : `Read ${filename}`)
+        : (isRunning ? `Writing ${filename}` : `Wrote ${filename}`);
+    }
+  }
+
+  if (toolName === "list_directory" && typeof toolCall.args?.path === "string") {
+    const dirname = getDisplayFilename(toolCall.args.path as string) || "directory";
+    return isRunning ? `Listing ${dirname}` : `Listed ${dirname}`;
+  }
+
   const desc = TOOL_DESCRIPTIONS[toolName];
   if (desc) return isRunning ? desc.running : desc.complete;
 

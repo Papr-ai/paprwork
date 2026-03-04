@@ -98,6 +98,44 @@ export interface ElectronAPI {
     };
   };
 
+  // Ollama API - Auto-install and manage local AI models
+  ollama: {
+    checkStatus: () => Promise<{
+      success: boolean;
+      isRunning?: boolean;
+      models?: string[];
+      error?: string;
+    }>;
+    ensureModel: (modelName: string) => Promise<{
+      success: boolean;
+      error?: string;
+    }>;
+    listModels: () => Promise<{
+      success: boolean;
+      models?: string[];
+      error?: string;
+    }>;
+    hasModel: (modelName: string) => Promise<{
+      success: boolean;
+      hasModel?: boolean;
+      error?: string;
+    }>;
+    start: () => Promise<{
+      success: boolean;
+      started?: boolean;
+      error?: string;
+    }>;
+    onDownloadProgress: (callback: (data: {
+      modelName: string;
+      status: 'downloading' | 'extracting' | 'complete' | 'error';
+      percent: number;
+      total?: number;
+      completed?: number;
+      error?: string;
+    }) => void) => void;
+    removeDownloadProgressListener: (callback: Function) => void;
+  };
+
   // Legacy agent/chat APIs (not currently used - UI uses WebSocket Gateway)
   agent: {
     stream: (params: {

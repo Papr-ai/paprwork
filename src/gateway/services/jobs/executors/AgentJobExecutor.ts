@@ -29,6 +29,7 @@ export class AgentJobExecutor implements IJobExecutor {
       | "openai"
       | "openai-codex"
       | "google"
+      | "ollama"
       | undefined;
     let model: string | undefined;
     let allowedToolIds: string[] | undefined;

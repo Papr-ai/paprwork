@@ -55,7 +55,7 @@ export class ChatSessionManager {
     }
 
     // Create new session
-    const agent = this.createAgent(config);
+    const agent = await this.createAgent(config);
 
     const session: ChatSession = {
       chatId,
@@ -77,7 +77,7 @@ export class ChatSessionManager {
   /**
    * Create a Mastra agent with the specified config
    */
-  private createAgent(config: AgentConfigInternal): Agent {
+  private async createAgent(config: AgentConfigInternal): Promise<Agent> {
     // Set API keys in environment for AI SDK providers
     if (config.provider === "anthropic") {
       process.env.ANTHROPIC_API_KEY = config.apiKey;
@@ -96,6 +96,10 @@ export class ChatSessionManager {
       process.env.GOOGLE_GENERATIVE_AI_API_KEY = config.apiKey;
       console.log(
         `[ChatSessionManager] Set GOOGLE_GENERATIVE_AI_API_KEY in env (authType=${config.authType}, length=${config.apiKey?.length || 0})`,
+      );
+    } else if (config.provider === "ollama") {
+      console.log(
+        `[ChatSessionManager] Ollama provider - no API key needed (local inference)`,
       );
     }
 
@@ -129,6 +133,13 @@ export class ChatSessionManager {
       case "google":
         model = google(normalizeGoogleModelId(config.model));
         break;
+
+      case "ollama": {
+        // Ollama runs locally, no API key needed
+        const { ollama: ollamaProvider } = await import("ollama-ai-provider-v2");
+        model = ollamaProvider(config.model);
+        break;
+      }
 
       default:
         throw new Error(`Unsupported provider: ${config.provider}`);

@@ -14,6 +14,7 @@ export type StreamChunkType =
   | "tool-error"
   | "compression-start"
   | "compression-complete"
+  | "step-usage" // Token usage from intermediate steps (not final)
   | "error"
   | "done";
 

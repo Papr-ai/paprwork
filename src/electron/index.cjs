@@ -23,6 +23,8 @@ let initializePermissionsIPC;
 let initializeOAuthIPC;
 let cleanupOAuthServers;
 let requestPermissionFromGateway;
+let initializeOllamaIPC;
+let cleanupOllama;
 
 async function loadESMModules() {
   // Import from compiled dist directory
@@ -47,6 +49,17 @@ async function loadESMModules() {
     await import("../../dist/electron/electron/ipc/oauth.js");
   initializeOAuthIPC = oauthIpcModule.initializeOAuthIPC;
   cleanupOAuthServers = oauthIpcModule.cleanupOAuthServers;
+
+  // Import Ollama IPC module
+  const ollamaIpcModule =
+    await import("../../dist/electron/electron/electron/ipc/ollama.js");
+  initializeOllamaIPC = ollamaIpcModule.initializeOllamaIPC;
+
+  // Import Ollama Manager for cleanup
+  const ollamaManagerModule =
+    await import("../../dist/electron/electron/electron/services/OllamaManager.js");
+  const ollamaManager = ollamaManagerModule.getOllamaManager();
+  cleanupOllama = () => ollamaManager.cleanup();
 }
 
 // Configuration
@@ -689,6 +702,11 @@ app.whenReady().then(async () => {
         settingsStorage,
         mainWindow,
       );
+
+      // Initialize Ollama IPC handlers
+      if (initializeOllamaIPC) {
+        initializeOllamaIPC(mainWindow);
+      }
     });
 
     req.on("error", (err) => {
@@ -724,11 +742,15 @@ app.on("window-all-closed", () => {
   }
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", async () => {
   console.log("[Electron] App quitting...");
   // Cleanup OAuth servers before stopping gateway
   if (cleanupOAuthServers) {
     cleanupOAuthServers();
+  }
+  // Cleanup Ollama (stop managed instance)
+  if (cleanupOllama) {
+    await cleanupOllama();
   }
   stopGateway();
 });

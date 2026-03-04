@@ -7,7 +7,7 @@ export interface AIModel {
   id: string;
   name: string;
   description: string;
-  provider: "anthropic" | "openai" | "openai-codex" | "google";
+  provider: "anthropic" | "openai" | "openai-codex" | "google" | "ollama";
   group: string;
   supportsThinking?: boolean;
   defaultThinkingBudget?: number;
@@ -52,18 +52,6 @@ export const CHAT_MODELS: AIModel[] = [
     supportsThinking: true,
     defaultThinkingBudget: 32000,
     maxTokens: 16000,
-    requiresApiKey: "ANTHROPIC_API_KEY",
-  },
-  {
-    id: "claude-opus-4-5-thinking",
-    name: "Claude Opus 4.5 (Deep Thinking)",
-    provider: "anthropic",
-    description: "Extended thinking for complex problems",
-    group: "Anthropic",
-    supportsThinking: true,
-    defaultThinkingBudget: 32000,
-    extendedThinking: true,
-    maxTokens: 8192,
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
 
@@ -172,6 +160,58 @@ export const CHAT_MODELS: AIModel[] = [
     maxTokens: 8192,
     requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
   },
+
+  // Ollama (On-Device) — smallest to largest
+  {
+    id: "qwen3.5:0.8b",
+    name: "Qwen 3.5 0.8B",
+    provider: "ollama",
+    description: "Fastest • 4GB+ RAM • Ultra-low resource usage",
+    group: "Ollama (On-Device)",
+    supportsThinking: false,
+    maxTokens: 8192,
+    requiresApiKey: "NONE",
+  },
+  {
+    id: "qwen3.5:2b",
+    name: "Qwen 3.5 2B",
+    provider: "ollama",
+    description: "Balanced • 8GB+ RAM • Great for laptops",
+    group: "Ollama (On-Device)",
+    supportsThinking: false,
+    maxTokens: 8192,
+    requiresApiKey: "NONE",
+  },
+  {
+    id: "qwen3.5:4b",
+    name: "Qwen 3.5 4B",
+    provider: "ollama",
+    description: "Good quality • 12GB+ RAM",
+    group: "Ollama (On-Device)",
+    supportsThinking: false,
+    maxTokens: 8192,
+    requiresApiKey: "NONE",
+  },
+  {
+    id: "qwen3.5:latest",
+    name: "Qwen 3.5 9B",
+    provider: "ollama",
+    description: "Best quality • 16GB+ RAM • Recommended",
+    group: "Ollama (On-Device)",
+    supportsThinking: false,
+    maxTokens: 8192,
+    requiresApiKey: "NONE",
+  },
+  {
+    id: "qwen3.5:27b",
+    name: "Qwen 3.5 27B",
+    provider: "ollama",
+    description: "Highest quality • 32GB+ RAM • Slower",
+    group: "Ollama (On-Device)",
+    supportsThinking: false,
+    maxTokens: 8192,
+    requiresApiKey: "NONE",
+  },
 ];
 
 // Group models by provider
@@ -207,3 +247,36 @@ export const DEFAULT_MODEL_IDS = [
   "gpt-5.2", // OpenAI
   "gemini-3-flash-preview", // Google
 ];
+
+/**
+ * Get recommended Qwen model based on system RAM
+ * @returns Model ID of recommended Qwen variant
+ */
+export function getRecommendedQwenModel(): string {
+  // Default to 9B (best quality, works on most modern machines)
+  // Note: System memory detection must be done via Electron IPC from main process
+  // This function just returns the safe default
+  return "qwen3.5:latest";
+}
+
+/**
+ * RAM requirements for each Qwen model (in GB)
+ */
+export const QWEN_RAM_REQUIREMENTS: Record<string, number> = {
+  "qwen3.5:0.8b": 4,
+  "qwen3.5:2b": 8,
+  "qwen3.5:4b": 12,
+  "qwen3.5:latest": 16,
+  "qwen3.5:27b": 32,
+};
+
+/**
+ * Model download sizes (in GB)
+ */
+export const QWEN_MODEL_SIZES: Record<string, number> = {
+  "qwen3.5:0.8b": 1.0,
+  "qwen3.5:2b": 2.7,
+  "qwen3.5:4b": 3.4,
+  "qwen3.5:latest": 6.6,
+  "qwen3.5:27b": 17,
+};

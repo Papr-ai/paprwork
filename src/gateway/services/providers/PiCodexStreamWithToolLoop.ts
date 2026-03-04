@@ -87,7 +87,8 @@ async function executeToolCall(
 }
 
 /**
- * Add assistant message and tool results to pi-ai context
+ * Add assistant message and tool results to pi-ai context with adaptive truncation
+ * Matches the truncation strategy from AI SDK's prepareStep
  */
 function appendToolTurnToContext(
   context: { messages: unknown[] },
@@ -101,14 +102,70 @@ function appendToolTurnToContext(
     timestamp: number;
   },
   toolResults: Array<{ toolCallId: string; toolName: string; result: unknown }>,
+  cumulativeTokens: number,
 ): void {
   context.messages.push(assistantMessage);
   const now = Date.now();
+
+  // Adaptive truncation based on context pressure (matching AI SDK's prepareStep logic)
+  const CONTEXT_PRESSURE_THRESHOLDS = {
+    low: 30000,
+    medium: 60000,
+    high: 90000,
+  };
+
+  let pressureLevel: "low" | "medium" | "high";
+  if (cumulativeTokens < CONTEXT_PRESSURE_THRESHOLDS.low) {
+    pressureLevel = "low";
+  } else if (cumulativeTokens < CONTEXT_PRESSURE_THRESHOLDS.medium) {
+    pressureLevel = "medium";
+  } else {
+    pressureLevel = "high";
+  }
+
+  // Determine truncation limits based on pressure
+  const getTruncationLimit = (): number | null => {
+    if (pressureLevel === "low") {
+      return 12000; // 3000 tokens
+    } else if (pressureLevel === "medium") {
+      return 8000; // 2000 tokens
+    } else {
+      return 4000; // 1000 tokens
+    }
+  };
+
+  const maxLength = getTruncationLimit();
+
   for (const tr of toolResults) {
-    const text =
+    let text =
       typeof tr.result === "string"
         ? tr.result
         : JSON.stringify(tr.result ?? "");
+
+    // Apply truncation if needed
+    const EMERGENCY_LIMIT = 200000; // ~50K tokens
+    if (text.length > EMERGENCY_LIMIT) {
+      const truncated = text.substring(0, EMERGENCY_LIMIT);
+      const omitted = text.length - EMERGENCY_LIMIT;
+      console.warn(
+        `[PiCodexToolLoop] ⚠️ EMERGENCY truncation: tool result was ${Math.round(text.length / 1024)}KB, ` +
+          `truncated to ${Math.round(EMERGENCY_LIMIT / 1024)}KB`,
+      );
+      text =
+        truncated +
+        `\n\n[⚠️ EMERGENCY TRUNCATION: Result was ${Math.round(text.length / 1024)}KB (${Math.round(text.length / 4000)}K tokens), ` +
+        `truncated ${omitted} chars. This is too large for context. ` +
+        `Use more specific search patterns or incremental reading.]`;
+    } else if (maxLength && text.length > maxLength) {
+      const truncated = text.substring(0, maxLength);
+      const omitted = text.length - maxLength;
+      const estimatedTokens = Math.ceil(maxLength / 4);
+      text =
+        truncated +
+        `\n\n[... ${omitted} chars truncated (context: ${Math.round(cumulativeTokens / 1000)}K/${pressureLevel}, ` +
+        `limit: ~${estimatedTokens} tokens)]`;
+    }
+
     context.messages.push({
       role: "toolResult",
       toolCallId: tr.toolCallId,
@@ -122,6 +179,7 @@ function appendToolTurnToContext(
 
 /**
  * Create a stream that runs multiple pi-ai turns when the model returns tool calls
+ * Now includes context pressure monitoring and auto-summarization
  */
 export async function* createPiCodexStreamWithToolLoop(
   streamSimple: (
@@ -147,6 +205,7 @@ export async function* createPiCodexStreamWithToolLoop(
   >,
   apiKeys: string[],
   maxSteps: number,
+  onContextPressure?: () => Promise<void>, // Callback to trigger summarization
 ): AsyncGenerator<OurChunk> {
   const context = {
     ...initialContext,
@@ -154,7 +213,44 @@ export async function* createPiCodexStreamWithToolLoop(
   };
 
   let step = 0;
+  let cumulativeTokens = 0; // Track token usage for adaptive truncation
+  const CONTEXT_ABORT_THRESHOLD = 120000; // Same as AI SDK path
+
+  // Estimate initial context tokens
+  const initialContextStr = JSON.stringify(context.messages);
+  cumulativeTokens = Math.ceil(initialContextStr.length / 4);
+
+  console.log(
+    `[PiCodexToolLoop] Starting with ~${Math.round(cumulativeTokens / 1000)}K tokens`,
+  );
+
   while (step < maxSteps) {
+    // Check context pressure before each step
+    if (cumulativeTokens > CONTEXT_ABORT_THRESHOLD) {
+      console.warn(
+        `[PiCodexToolLoop] ⚠️ Context pressure at step ${step}: ` +
+          `${cumulativeTokens} tokens > ${CONTEXT_ABORT_THRESHOLD} threshold. ` +
+          `Aborting stream and triggering compression.`,
+      );
+
+      // Yield error to trigger summarization in parent
+      yield {
+        type: "error",
+        error: {
+          type: "context_length_exceeded",
+          message:
+            "Context limit approaching. Conversation will be summarized automatically.",
+        },
+      };
+
+      // Trigger summarization callback if provided
+      if (onContextPressure) {
+        await onContextPressure();
+      }
+
+      break; // Stop loop - parent will handle retry with compressed context
+    }
+
     if (step > 0) {
       yield { type: "start-step" };
     }
@@ -188,6 +284,16 @@ export async function* createPiCodexStreamWithToolLoop(
               ? "length"
               : "stop";
         finalMessage = event.message as any;
+
+        // Extract token usage if available
+        const usage = (event as any).usage;
+        if (usage?.input_tokens) {
+          cumulativeTokens = usage.input_tokens;
+          console.log(
+            `[PiCodexToolLoop] Step ${step}: ${Math.round(cumulativeTokens / 1000)}K tokens used`,
+          );
+        }
+
         // Don't yield "finish" when toolUse - we're continuing the loop
         if (event.reason === "toolUse") continue;
       }
@@ -218,10 +324,23 @@ export async function* createPiCodexStreamWithToolLoop(
         };
       }
 
-      appendToolTurnToContext(context, finalMessage, toolResults);
+      // Append with adaptive truncation based on context pressure
+      appendToolTurnToContext(context, finalMessage, toolResults, cumulativeTokens);
+
+      // Update cumulative tokens with estimated added context
+      const addedContext = toolResults
+        .map((tr) =>
+          typeof tr.result === "string"
+            ? tr.result
+            : JSON.stringify(tr.result ?? ""),
+        )
+        .join("");
+      cumulativeTokens += Math.ceil(addedContext.length / 4);
+
       step++;
       console.log(
-        `[PiCodexToolLoop] Step ${step}: executed ${toolCallsThisTurn.length} tools, continuing...`,
+        `[PiCodexToolLoop] Step ${step}: executed ${toolCallsThisTurn.length} tools, ` +
+          `cumulative context: ~${Math.round(cumulativeTokens / 1000)}K tokens`,
       );
     } else {
       // Done - no more tool turns

@@ -73,7 +73,15 @@ export const Markdown: React.FC<MarkdownProps> = memo(
       <div className={`markdown-content ${className || ""}`}>
         <ReactMarkdown
           remarkPlugins={[remarkGfm, remarkMath]}
-          rehypePlugins={[rehypeKatex]}
+          rehypePlugins={[
+            [
+              rehypeKatex,
+              {
+                strict: false, // Allow Unicode characters like en-dash (–)
+                throwOnError: false, // Don't throw on LaTeX errors
+              },
+            ],
+          ]}
           components={components}
         >
           {cleanedContent}

@@ -50,17 +50,27 @@ export function createAssistantStoredMessage(args: {
     thinking: args.thinkingText || undefined,
     toolCalls:
       args.toolCalls.length > 0
-        ? args.toolCalls.map((toolCall) => ({
-            id: toolCall.toolCallId,
-            name: toolCall.toolName,
-            args: toolCall.args,
-            result: formatToolResultForStorage(
-              args.toolResults.find(
-                (toolResult) => toolResult.toolCallId === toolCall.toolCallId,
-              )?.result,
-            ),
-            status: "success" as const,
-          }))
+        ? args.toolCalls.map((toolCall) => {
+            // Debug: Log what we're saving
+            console.log(`[MessagePersistence] Saving tool call:`, {
+              id: toolCall.toolCallId,
+              name: toolCall.toolName,
+              hasArgs: !!toolCall.args,
+              argsKeys: toolCall.args ? Object.keys(toolCall.args) : [],
+            });
+            
+            return {
+              id: toolCall.toolCallId,
+              name: toolCall.toolName,
+              args: toolCall.args,
+              result: formatToolResultForStorage(
+                args.toolResults.find(
+                  (toolResult) => toolResult.toolCallId === toolCall.toolCallId,
+                )?.result,
+              ),
+              status: "success" as const,
+            };
+          })
         : undefined,
     sequence: args.sequence, // Include V1-style sequence for interleaving
     timestamp: new Date().toISOString(),

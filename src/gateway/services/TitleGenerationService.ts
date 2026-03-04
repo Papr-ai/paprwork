@@ -2,6 +2,7 @@
  * Title Generation Service
  *
  * Generates concise chat titles using gpt-5-mini-2025-08-07.
+ * Handles both OAuth (via pi-ai) and API key (via AI SDK) routing.
  * Based on Paprwork V1's title generation logic.
  */
 
@@ -9,45 +10,95 @@ import { openai } from "@ai-sdk/openai";
 import { generateText } from "ai";
 
 export class TitleGenerationService {
-  private apiKey: string;
-
-  constructor(apiKey: string) {
-    this.apiKey = apiKey;
-  }
-
   /**
    * Generate a concise title from the first user message
    * Uses gpt-5-mini-2025-08-07 for fast, cheap title generation
+   * 
+   * Handles OAuth routing: If user is using OpenAI OAuth, routes to pi-ai
+   * Otherwise uses AI SDK with API key
    */
   async generateTitle(firstMessage: string): Promise<string> {
     try {
-      // Set OpenAI API key
-      process.env.OPENAI_API_KEY = this.apiKey;
+      // Check if using OAuth or API key (same logic as chat)
+      const { getProviderAuth } = await import("../utils/keyResolver.js");
+      const auth = await getProviderAuth("openai");
 
-      // Use gpt-5-mini for title generation (fast & cheap)
-      // Use Responses API for GPT-5 models
-      const model = openai.responses("gpt-5-mini");
+      if (!auth) {
+        console.log("[TitleGenerationService] No OpenAI auth available, using fallback");
+        return this.fallbackTitle(firstMessage);
+      }
 
-      const { text } = await generateText({
-        model,
-        messages: [
-          {
-            role: "system",
-            content: `Generate a concise title that summarizes the user's message. Rules:
+      const systemPrompt = `Generate a concise title that summarizes the user's message. Rules:
 - Maximum 40 characters
 - No quotes, colons, or prefixes like "Here is" or "Title:"
 - Just return the title directly
 - Make it descriptive and clear
-- Use title case`,
-          },
+- Use title case`;
+
+      const userPrompt = firstMessage.substring(0, 500); // Limit input for efficiency
+
+      let text: string;
+
+      if (auth.type === "oauth") {
+        // OAuth: Route to pi-ai (ChatGPT backend)
+        console.log("[TitleGenerationService] Using OpenAI OAuth via pi-ai");
+        
+        const { getModel, streamSimple } = await import("@mariozechner/pi-ai");
+        
+        // Set token in environment (pi-ai reads from env)
+        process.env.OPENAI_API_KEY = auth.token;
+        
+        // Get pi-ai model
+        const piModel = getModel("openai-codex", "gpt-5.2");
+        
+        // Build messages for pi-ai
+        const messages = [
           {
-            role: "user",
-            content: firstMessage.substring(0, 500), // Limit input for efficiency
+            role: "user" as const,
+            content: `${systemPrompt}\n\n${userPrompt}`,
+            timestamp: Date.now(),
           },
-        ],
-        // Note: temperature not supported for reasoning models like gpt-5-mini
-        // Note: maxTokens/maxCompletionTokens not needed - model will auto-limit
-      });
+        ];
+        
+        // Stream response from pi-ai
+        const stream = streamSimple(piModel, { 
+          messages,
+          tools: undefined,
+        });
+        
+        // Collect text from stream
+        let collectedText = "";
+        for await (const event of stream) {
+          if (event.type === "text_delta" && event.delta) {
+            collectedText += event.delta;
+          }
+          if (event.type === "done") {
+            break;
+          }
+          if (event.type === "error") {
+            const errorMsg = (event as any).error?.errorMessage || "pi-ai streaming error";
+            throw new Error(errorMsg);
+          }
+        }
+        
+        text = collectedText;
+      } else {
+        // API Key: Use AI SDK
+        console.log("[TitleGenerationService] Using OpenAI API key via AI SDK");
+        process.env.OPENAI_API_KEY = auth.key;
+
+        const model = openai("gpt-5-mini-2025-08-07");
+
+        const result = await generateText({
+          model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+        });
+
+        text = result.text;
+      }
 
       const title = text.trim();
 
@@ -112,10 +163,4 @@ export class TitleGenerationService {
     return title || "New Chat";
   }
 
-  /**
-   * Update API key (when user changes settings)
-   */
-  setApiKey(apiKey: string): void {
-    this.apiKey = apiKey;
-  }
 }

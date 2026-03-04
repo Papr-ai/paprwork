@@ -110,7 +110,7 @@ export function WeatherWidget() {
               await fetchWeather(lat, lon, locationName);
             },
             async (error) => {
-              console.error("[Weather] Geolocation denied or failed:", error);
+              console.warn("[Weather] Geolocation denied or unavailable:", error.message);
               // Fallback to IP-based geolocation via Gateway
               try {
                 console.log(
@@ -140,9 +140,9 @@ export function WeatherWidget() {
                   throw new Error(response.error || "IP geolocation failed");
                 }
               } catch (ipError) {
-                console.error("[Weather] IP geolocation failed:", ipError);
+                console.warn("[Weather] IP geolocation also failed, using fallback");
                 // Last resort: default location (New York)
-                console.warn("[Weather] Using fallback location: New York");
+                console.log("[Weather] Using fallback location: New York");
                 await fetchWeather(40.7128, -74.006, "New York");
               }
             },
