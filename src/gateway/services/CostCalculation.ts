@@ -32,6 +32,8 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "gpt-5.2-xhigh": { input: 20.0, output: 60.0 },
   "gpt-5.2-codex": { input: 15.0, output: 45.0 },
   "gpt-5.3-codex": { input: 15.0, output: 45.0 },
+  "gpt-5.4": { input: 2.5, output: 15.0 }, // GPT-5.4 Thinking
+  "gpt-5.4-pro": { input: 30.0, output: 180.0 }, // GPT-5.4 Pro
 
   // Anthropic Claude 4 Series
   "claude-haiku-4-5": { input: 0.8, output: 4.0 },

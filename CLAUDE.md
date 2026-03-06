@@ -989,6 +989,52 @@ Paprwork V2 supports running AI models locally using Ollama for complete privacy
 
 ---
 
+## 🚀 GPT-5.4 Support (Latest Model)
+
+**Added:** 2026-03-05
+
+Paprwork V2 now supports OpenAI's latest GPT-5.4 models with native computer use capabilities.
+
+### Supported Models
+
+- **GPT-5.4 Thinking** (`gpt-5.4`) - Latest model with 47% improved efficiency, native computer use
+- **GPT-5.4 Pro** (`gpt-5.4-pro`) - Most powerful model for complex multi-step workflows
+
+### Key Capabilities
+
+1. ✅ **Native Computer Use** - Screenshot + keyboard/mouse control, Playwright automation
+2. ✅ **Tool Search** - 47% token reduction on large tool sets (MCP Atlas benchmark)
+3. ✅ **Enhanced Accuracy** - 33% fewer false claims vs GPT-5.2
+4. ✅ **Large Context** - 1M token window (272K default, 2× pricing after)
+5. ✅ **128K Output** - Massive output capability for long-form content
+
+### Availability
+
+| Route | Auth Method | Models Available |
+|-------|-------------|------------------|
+| AI SDK | API Key | gpt-5.4, gpt-5.4-pro ✅ |
+| pi-ai | OAuth (ChatGPT Plus/Pro) | gpt-5.4, gpt-5.4-pro ✅ |
+
+**Note:** GPT-5.4 models work with OAuth via manual model object creation. The model registry lookup is bypassed when needed, and model objects are created programmatically with the correct structure for ChatGPT's backend.
+
+### Pricing (API)
+
+- **GPT-5.4:** $2.50/$15.00 per 1M tokens (input/output)
+- **GPT-5.4 Pro:** $30.00/$180.00 per 1M tokens (input/output)
+- **Note:** 2× rate for inputs exceeding 272K tokens
+
+### Architecture Integration
+
+- **Model Definitions** - Added to `ui/constants/models.ts` with proper metadata
+- **Cost Calculation** - Pricing added to `src/gateway/services/CostCalculation.ts`
+- **Model Normalizer** - Added to `OPENAI_CODEX_MODELS` for OAuth routing
+- **Delegation Tool** - Available for sub-agent creation
+- **Auto-Handling** - ChatSessionManager, AgentService, streaming all work automatically
+
+**See:** [GPT_5_4_INTEGRATION.md](docs/GPT_5_4_INTEGRATION.md) for complete documentation, usage examples, and benchmarks
+
+---
+
 ## Contributing Guidelines
 
 1. **TypeScript Only** - No JavaScript files

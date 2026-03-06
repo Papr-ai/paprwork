@@ -22,6 +22,7 @@ import { mapHistoryMessages } from "../../utils/historyMapper";
 import { fetchChatHistory } from "../../utils/chatHistoryApi";
 import { gateway } from "../../src/lib/gateway";
 import { JobPermissionBanner } from "./JobPermissionBanner";
+import { ContextInspectorModal } from "./ContextInspectorModal";
 import "./ChatContainer.css";
 
 const DEFAULT_SYSTEM_PROMPT = `You're Pen, an AI assistant running in Paprwork—a native Mac AI workspace.
@@ -154,6 +155,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
     CHAT_MODELS.find((m) => m.id === "claude-sonnet-4-6") || CHAT_MODELS[0];
 
   const [selectedModel, setSelectedModel] = useState<AIModel>(fallbackModel);
+  const [contextInfo, setContextInfo] = useState<unknown | null>(null);
   
   // Only block THIS chat if it's waiting for an Ollama model that's currently being installed
   // Don't block on initial load - only block when actively installing/starting
@@ -345,13 +347,14 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
         }
         case "context": {
           try {
-            const response = await gateway.send("chat:stats", { chatId });
-            const stats = response.data as Record<string, unknown>;
-            alert(
-              `Messages: ${stats.messageCount ?? "N/A"}\nTokens (est): ${stats.tokenCount ?? "N/A"}`,
-            );
+            const response = await gateway.send("chat:inspect-context", {
+              chatId,
+              model: selectedModel.id,
+            });
+            setContextInfo(response.data);
           } catch (err) {
-            console.error("[ChatContainer] Context stats error:", err);
+            console.error("[ChatContainer] Context inspection error:", err);
+            alert("Failed to load context information. Check console for details.");
           }
           break;
         }
@@ -532,6 +535,13 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
         isModelAvailable={isModelAvailable}
         onOpenSettings={handleOpenSettings}
       />
+
+      {contextInfo && (
+        <ContextInspectorModal
+          contextInfo={contextInfo as any}
+          onClose={() => setContextInfo(null)}
+        />
+      )}
     </div>
   );
 };

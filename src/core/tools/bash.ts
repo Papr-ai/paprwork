@@ -46,7 +46,7 @@ const BashInputSchema = z.object({
     .optional()
     .describe("Timeout in milliseconds (optional, defaults to 60000)"),
   env: z
-    .record(z.string())
+    .record(z.string(), z.string())
     .optional()
     .describe(
       "Environment variables (optional, defaults to system environment)",
@@ -235,7 +235,9 @@ export async function executeBashCommand(
       timeout,
       maxBuffer: 10 * 1024 * 1024, // 10MB buffer
       env:
-        Object.keys(env).length > 0 ? { ...process.env, ...env } : process.env,
+        Object.keys(env).length > 0 
+          ? { ...process.env, ...(env as Record<string, string>) } 
+          : process.env,
       shell: "/bin/bash",
     });
 
@@ -439,7 +441,7 @@ export async function executeBashCommandStreaming(
 
     const proc = spawn("/bin/bash", ["-c", command], {
       cwd: cwd || process.cwd(),
-      env: env ? { ...process.env, ...env } : process.env,
+      env: env ? { ...process.env, ...(env as Record<string, string>) } : process.env,
       timeout,
     });
 

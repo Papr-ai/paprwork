@@ -118,6 +118,15 @@ export async function getApiKeys(
       console.log(
         `[KeyResolver] Received ${Object.keys(resolved).length} keys`,
       );
+      
+      // Trigger lazy code indexing if PAPR_API_KEY was just resolved
+      if (resolved.PAPR_API_KEY) {
+        console.log('[KeyResolver] PAPR_API_KEY resolved, triggering code indexing...');
+        const { ensureIndexingStarted } = await import('../services/CodeIndexingService.js');
+        ensureIndexingStarted(resolved.PAPR_API_KEY).catch((error) => {
+          console.error('[KeyResolver] Failed to start code indexing:', error);
+        });
+      }
     } catch (error) {
       console.error("[KeyResolver] Failed to resolve keys via IPC:", error);
     }

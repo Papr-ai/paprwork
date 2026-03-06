@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useCustomKeys } from "../../hooks/useCustomKeys";
 import { useProfileStore } from "../../stores/profileStore";
+import { useCodeIndexing } from "../../hooks/useCodeIndexing";
 import { gateway } from "../../src/lib/gateway";
 import type { CustomKeyInput, SettingsTab } from "../../types/settings";
 import { OAuthSection } from "./OAuthSection";
@@ -73,8 +74,8 @@ export function SettingsView() {
           Permissions
         </button>
         <button
-          className={`settings-tab ${activeTab === "data" ? "settings-tab--active" : ""}`}
-          onClick={() => setActiveTab("data")}
+          className={`settings-tab ${activeTab === "memory" ? "settings-tab--active" : ""}`}
+          onClick={() => setActiveTab("memory")}
         >
           <svg
             width="16"
@@ -84,11 +85,11 @@ export function SettingsView() {
             stroke="currentColor"
             strokeWidth="2"
           >
-            <ellipse cx="12" cy="5" rx="9" ry="3" />
-            <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
-            <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+            <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+            <line x1="12" y1="22.08" x2="12" y2="12" />
           </svg>
-          Data
+          Memory
         </button>
       </div>
 
@@ -97,7 +98,7 @@ export function SettingsView() {
         {activeTab === "keys" && <APIKeysTab />}
         {activeTab === "profile" && <ProfileTab />}
         {activeTab === "permissions" && <PermissionsTab />}
-        {activeTab === "data" && <DataTab />}
+        {activeTab === "memory" && <MemoryTab />}
       </div>
     </div>
   );
@@ -291,23 +292,32 @@ function APIKeysTab() {
   };
 
   return (
-    <div className="settings-content">
-      {/* OAuth Authentication Sections */}
-      <OAuthSection
-        provider="openai"
-        title="OpenAI"
-        subscriptionName="ChatGPT Plus/Pro"
-        apiKeyName="OPENAI_API_KEY"
-        apiKeyHint="platform.openai.com/api-keys"
-      />
+    <div className="settings-content settings-content--full-width">
+      {/* OAuth Section - Connect to Subscriptions */}
+      <div className="settings-section">
+        <h2 className="settings-section__title">Connect Your Accounts</h2>
+        <p className="settings-section__description">
+          Sign in with OpenAI or Claude to use your subscription
+        </p>
+        
+        <div className="oauth-grid">
+          <OAuthSection
+            provider="openai"
+            title="OpenAI"
+            subscriptionName="ChatGPT Plus/Pro"
+            apiKeyName="OPENAI_API_KEY"
+            apiKeyHint="platform.openai.com/api-keys"
+          />
 
-      <OAuthSection
-        provider="anthropic"
-        title="Claude"
-        subscriptionName="Claude Pro/Max"
-        apiKeyName="ANTHROPIC_API_KEY"
-        apiKeyHint="console.anthropic.com"
-      />
+          <OAuthSection
+            provider="anthropic"
+            title="Claude"
+            subscriptionName="Claude Pro/Max"
+            apiKeyName="ANTHROPIC_API_KEY"
+            apiKeyHint="console.anthropic.com"
+          />
+        </div>
+      </div>
 
       {/* API Keys Section */}
       <div className="settings-section">
@@ -926,14 +936,11 @@ function PermissionsTab() {
   }
 
   return (
-    <div className="settings-content">
+    <div className="settings-content settings-content--full-width">
       <div className="settings-section">
         <h2 className="settings-section__title">Agent Permissions</h2>
-        <p className="settings-section__description">
-          Control how much autonomy agents have
-        </p>
 
-        <div className="permission-level-selector">
+        <div className="permission-level-grid">
           {/* Open */}
           <label className="permission-option">
             <input
@@ -1057,102 +1064,155 @@ function PermissionsTab() {
   );
 }
 
-// ===== Data & Migration Tab =====
+// ===== Memory Tab =====
 
-interface MigrationResult {
-  chats: { migrated: number; messages: number };
-  documents: { migrated: number };
-  apps: { migrated: number };
-}
+function MemoryTab() {
+  const { status, loading, error } = useCodeIndexing();
+  const [workspaceFiles, setWorkspaceFiles] = useState<string[]>([]);
 
-function DataTab() {
-  const [migrating, setMigrating] = useState(false);
-  const [migrationResult, setMigrationResult] =
-    useState<MigrationResult | null>(null);
-  const [migrationError, setMigrationError] = useState<string | null>(null);
+  // Load workspace files on mount
+  useEffect(() => {
+    loadWorkspaceFiles();
+  }, []);
 
-  const handleMigrate = async () => {
-    setMigrating(true);
-    setMigrationResult(null);
-    setMigrationError(null);
-
+  const loadWorkspaceFiles = async () => {
     try {
-      const response = await gateway.send("settings:migrate-v1", {});
+      const response = await gateway.send("memory:list-workspace-files", {});
       if (response.success && response.data) {
-        setMigrationResult(response.data as MigrationResult);
-      } else {
-        setMigrationError("Migration failed. Check the console for details.");
+        setWorkspaceFiles((response.data as { files: string[] }).files);
       }
     } catch (err) {
-      setMigrationError((err as Error).message);
-    } finally {
-      setMigrating(false);
+      console.error("Failed to load workspace files:", err);
+    }
+  };
+
+  const openFolder = async (folderPath: string) => {
+    try {
+      await gateway.send("memory:open-folder", { folderPath });
+    } catch (err) {
+      console.error("Failed to open folder:", err);
+      alert(`Failed to open folder: ${folderPath}`);
     }
   };
 
   return (
-    <div className="settings-content">
+    <div className="settings-content settings-content--full-width">
       <div className="settings-section">
-        <h2 className="settings-section__title">Data Management</h2>
-        <p className="settings-section__description">
-          Import data from Paprwork V1 or manage your stored data
-        </p>
+        <h2 className="settings-section__title">Memory</h2>
 
-        {/* V1 Migration */}
-        <div className="data-card">
-          <div className="data-card__header">
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="7 10 12 15 17 10" />
-              <line x1="12" y1="15" x2="12" y2="3" />
-            </svg>
-            <div>
-              <h3>Import from Paprwork V1</h3>
-              <p>
-                Migrate your chats, documents, and mini-apps from V1. This reads
-                from <code>~/.paprwork/</code> and imports into the V2 data
-                directory.
-              </p>
+        {/* Top Grid: Workspace Context (left) + PAPR Folder (right) */}
+        <div className="memory-grid-top">
+          {/* Workspace Context */}
+          <div className="data-card">
+            <div className="data-card__header">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+                <line x1="16" y1="13" x2="8" y2="13" />
+                <line x1="16" y1="17" x2="8" y2="17" />
+                <polyline points="10 9 9 9 8 9" />
+              </svg>
+              <div>
+                <h3>Workspace Context</h3>
+                <p>Context files for AI agents</p>
+              </div>
+            </div>
+
+            <div className="workspace-files">
+              {workspaceFiles.length > 0 ? (
+                workspaceFiles.map((file) => (
+                  <div key={file} className="workspace-file-item">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <polyline points="14 2 14 8 20 8" />
+                    </svg>
+                    <span>{file}</span>
+                  </div>
+                ))
+              ) : (
+                <div className="workspace-file-item">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                  </svg>
+                  <span>No files yet</span>
+                </div>
+              )}
+            </div>
+
+            <div className="workspace-actions">
+              <button
+                className="settings-btn"
+                onClick={() => openFolder("~/PAPR/workspace/")}
+              >
+                Open Folder
+              </button>
             </div>
           </div>
 
-          <button
-            className="settings-btn settings-btn--primary"
-            onClick={handleMigrate}
-            disabled={migrating}
-          >
-            {migrating ? "Migrating..." : "Start Migration"}
-          </button>
-
-          {migrationResult && (
-            <div className="migration-result">
-              <h4>Migration Complete</h4>
-              <ul>
-                <li>
-                  Chats: {migrationResult.chats.migrated} imported (
-                  {migrationResult.chats.messages} messages)
-                </li>
-                <li>
-                  Documents: {migrationResult.documents.migrated} imported
-                </li>
-                <li>Apps: {migrationResult.apps.migrated} imported</li>
-              </ul>
+          {/* PAPR Folder */}
+          <div className="data-card">
+            <div className="data-card__header">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              </svg>
+              <div>
+                <h3>PAPR Folder</h3>
+                <p>
+                  <code>~/PAPR/</code> - chats, apps, jobs, workspace
+                </p>
+              </div>
             </div>
-          )}
 
-          {migrationError && (
-            <div className="migration-error">Error: {migrationError}</div>
-          )}
+            <div className="folder-structure">
+              <div className="folder-item">
+                <span className="folder-icon">📁</span>
+                <span className="folder-name">apps/</span>
+                <span className="folder-desc">Mini-apps</span>
+              </div>
+              <div className="folder-item">
+                <span className="folder-icon">📁</span>
+                <span className="folder-name">Jobs/</span>
+                <span className="folder-desc">Automated jobs</span>
+              </div>
+              <div className="folder-item">
+                <span className="folder-icon">📁</span>
+                <span className="folder-name">workspace/</span>
+                <span className="folder-desc">Context files</span>
+              </div>
+              <div className="folder-item">
+                <span className="folder-icon">📄</span>
+                <span className="folder-name">chats.db</span>
+                <span className="folder-desc">Chat history</span>
+              </div>
+            </div>
+
+            <div className="folder-actions">
+              <button
+                className="settings-btn settings-btn--primary"
+                onClick={() => openFolder("~/PAPR/")}
+              >
+                Open PAPR Folder
+              </button>
+            </div>
+          </div>
         </div>
 
-        {/* Storage info */}
+        {/* Memory Indexing - Wide card with 3 columns */}
         <div className="data-card">
           <div className="data-card__header">
             <svg
@@ -1163,16 +1223,170 @@ function DataTab() {
               stroke="currentColor"
               strokeWidth="2"
             >
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+              <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+              <line x1="12" y1="22.08" x2="12" y2="12" />
             </svg>
             <div>
-              <h3>Data Location</h3>
+              <h3>Memory Indexing</h3>
               <p>
-                Your V2 data is stored at <code>~/PAPR/</code>. This includes
-                chats, documents, apps, settings, and meeting data.
+                Automatic indexing to PAPR Memory Cloud for semantic search
               </p>
             </div>
+            {status && (
+              <div className="memory-status-badge">
+                {status.enabled ? (
+                  <span className="status-badge status-badge--active">
+                    ✓ Active
+                  </span>
+                ) : (
+                  <span className="status-badge status-badge--inactive">
+                    Inactive
+                  </span>
+                )}
+              </div>
+            )}
           </div>
+
+          {loading && (
+            <div className="memory-loading">Loading status...</div>
+          )}
+
+          {error && (
+            <div className="memory-error">Failed to load status: {error}</div>
+          )}
+
+          {status && (
+            <div className="memory-grid-categories">
+              {/* Chat Memories */}
+              <div className="memory-category">
+                <div className="memory-category-header">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                  </svg>
+                  <h4>Chat</h4>
+                </div>
+                <div className="memory-stats">
+                  <div className="stat-item">
+                    <span className="stat-label">Conversations</span>
+                    <span className="stat-value">
+                      {status.chat_stats?.total_chats ?? 0}
+                    </span>
+                  </div>
+                  <div className="stat-item">
+                    <span className="stat-label">Messages</span>
+                    <span className="stat-value">
+                      {status.chat_stats?.total_messages ?? 0}
+                    </span>
+                  </div>
+                  <div className="stat-item stat-item--full">
+                    <span className="stat-label">Last Indexed</span>
+                    <span className="stat-value">
+                      {status.chat_stats?.last_indexed
+                        ? new Date(status.chat_stats.last_indexed).toLocaleString()
+                        : 'Not available'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Code Memories */}
+              <div className="memory-category">
+                <div className="memory-category-header">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <polyline points="16 18 22 12 16 6" />
+                    <polyline points="8 6 2 12 8 18" />
+                  </svg>
+                  <h4>Code</h4>
+                  {status.status?.is_indexing && (
+                    <div className="indexing-indicator">
+                      <div className="spinner" />
+                      <span>Indexing...</span>
+                    </div>
+                  )}
+                </div>
+                <div className="memory-stats">
+                  <div className="stat-item">
+                    <span className="stat-label">Mini-apps</span>
+                    <span className="stat-value">
+                      {Math.floor((status.status?.stats.total_projects ?? 0) / 2)} apps
+                    </span>
+                  </div>
+                  <div className="stat-item">
+                    <span className="stat-label">Jobs</span>
+                    <span className="stat-value">
+                      {Math.ceil((status.status?.stats.total_projects ?? 0) / 2)} jobs
+                    </span>
+                  </div>
+                  <div className="stat-item">
+                    <span className="stat-label">Total Files</span>
+                    <span className="stat-value">
+                      {status.status?.stats.total_files ?? 0}
+                    </span>
+                  </div>
+                  <div className="stat-item">
+                    <span className="stat-label">Queue</span>
+                    <span className="stat-value">
+                      {status.status?.stats.queue_size ?? 0}
+                    </span>
+                  </div>
+                  {status.status?.stats.last_indexed_at && (
+                    <div className="stat-item stat-item--full">
+                      <span className="stat-label">Last Indexed</span>
+                      <span className="stat-value">
+                        {new Date(
+                          status.status.stats.last_indexed_at
+                        ).toLocaleString()}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Document Memories */}
+              <div className="memory-category memory-category--disabled">
+                <div className="memory-category-header">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                    <line x1="16" y1="13" x2="8" y2="13" />
+                    <line x1="16" y1="17" x2="8" y2="17" />
+                    <polyline points="10 9 9 9 8 9" />
+                  </svg>
+                  <h4>Documents</h4>
+                  <span className="coming-soon-badge">Coming soon</span>
+                </div>
+                <div className="memory-stats">
+                  <div className="stat-item stat-item--full">
+                    <span className="stat-value coming-soon-text">
+                      Document indexing available in a future update
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

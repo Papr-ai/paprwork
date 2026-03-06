@@ -2,7 +2,7 @@
  * OAuthSection - OAuth authentication UI for OpenAI and Claude
  */
 
-import React from "react";
+import React, { useState } from "react";
 import { useOAuth } from "../../hooks/useOAuth";
 import "./SettingsView.css";
 
@@ -22,6 +22,7 @@ export function OAuthSection({
   apiKeyHint,
 }: OAuthSectionProps) {
   const { status, loading, startOAuthLogin, disconnect } = useOAuth(provider);
+  const [useApiKey, setUseApiKey] = useState(false);
 
   const formatExpiry = (expiresAt?: string) => {
     if (!expiresAt) return "";
@@ -39,56 +40,32 @@ export function OAuthSection({
   };
 
   return (
-    <div className="oauth-section">
-      <div className="oauth-section__header">
-        <h3 className="oauth-section__title">{title}</h3>
+    <div className="oauth-card">
+      <div className="oauth-card__header">
+        <h3>{title}</h3>
+        {status.connected && (
+          <span className="oauth-badge oauth-badge--connected">
+            ✓ Connected
+          </span>
+        )}
       </div>
 
-      <div className="oauth-section__content">
-        {/* OAuth Subscription Option */}
-        <div className="oauth-option">
-          <div className="oauth-option__header">
-            <div className="oauth-option__radio">
-              <input
-                type="radio"
-                name={`${provider}-auth-method`}
-                checked={status.connected}
-                readOnly
-              />
-              <label>{subscriptionName} (OAuth)</label>
-            </div>
-            {status.connected && !status.isExpired && (
-              <span className="oauth-status oauth-status--connected">
-                ✓ Connected
-              </span>
-            )}
-            {status.connected && status.isExpired && (
-              <span className="oauth-status oauth-status--expired">
-                ⚠ Expired
-              </span>
-            )}
-          </div>
-
-          <p className="oauth-option__description">
-            Use your $20-200/month subscription instead of pay-per-use billing
-          </p>
-
+      {!useApiKey ? (
+        <>
           {status.connected ? (
-            <div className="oauth-connected">
+            <div className="oauth-connected-info">
               {status.accountId && (
-                <div className="oauth-info">
-                  <span className="oauth-info__label">Account:</span>
-                  <span className="oauth-info__value">
-                    {status.accountId.substring(0, 12)}...
+                <div className="oauth-detail">
+                  <span className="oauth-detail-label">Account:</span>
+                  <span className="oauth-detail-value">
+                    {status.accountId.substring(0, 16)}...
                   </span>
                 </div>
               )}
               {status.expiresAt && (
-                <div className="oauth-info">
-                  <span className="oauth-info__label">Token:</span>
-                  <span
-                    className={`oauth-info__value ${status.isExpired ? "oauth-info__value--expired" : ""}`}
-                  >
+                <div className="oauth-detail">
+                  <span className="oauth-detail-label">Token:</span>
+                  <span className="oauth-detail-value">
                     {formatExpiry(status.expiresAt)}
                   </span>
                 </div>
@@ -102,49 +79,49 @@ export function OAuthSection({
               </button>
             </div>
           ) : (
-            <button
-              className="settings-btn settings-btn--primary"
-              onClick={startOAuthLogin}
-              disabled={loading}
-            >
-              {loading ? "Connecting..." : `Sign in with ${title}`}
-            </button>
+            <>
+              <p className="oauth-card__description">
+                Use your {subscriptionName} subscription
+              </p>
+              <button
+                className="settings-btn settings-btn--primary"
+                onClick={startOAuthLogin}
+                disabled={loading}
+              >
+                {loading ? "Connecting..." : `Sign in with ${title}`}
+              </button>
+            </>
           )}
 
-          {status.error && (
-            <div className="oauth-error">Error: {status.error}</div>
-          )}
-        </div>
-
-        {/* Divider */}
-        <div className="oauth-divider">
-          <span>OR</span>
-        </div>
-
-        {/* API Key Option */}
-        <div className="oauth-option">
-          <div className="oauth-option__header">
-            <div className="oauth-option__radio">
-              <input
-                type="radio"
-                name={`${provider}-auth-method`}
-                checked={!status.connected}
-                readOnly
-              />
-              <label>API Key (Pay-as-you-go)</label>
-            </div>
+        </>
+      ) : (
+        <>
+          <div className="oauth-api-key-info">
+            <p>Configure <code>{apiKeyName}</code> in the API Keys section below</p>
           </div>
+        </>
+      )}
 
-          <p className="oauth-option__description">
-            Use API key from {apiKeyHint}
-          </p>
-
-          <div className="oauth-api-key-note">
-            <strong>Note:</strong> Configure <code>{apiKeyName}</code> in the
-            API Keys list below
-          </div>
-        </div>
+      {/* Toggle Switch */}
+      <div className="oauth-toggle-container">
+        <span className={`oauth-toggle-label ${!useApiKey ? 'active' : ''}`}>
+          OAuth
+        </span>
+        <button
+          className="oauth-toggle-switch"
+          onClick={() => setUseApiKey(!useApiKey)}
+          aria-label="Toggle between OAuth and API Key"
+        >
+          <span className={`oauth-toggle-slider ${useApiKey ? 'right' : 'left'}`} />
+        </button>
+        <span className={`oauth-toggle-label ${useApiKey ? 'active' : ''}`}>
+          API Key
+        </span>
       </div>
+
+      {status.error && (
+        <div className="oauth-error">Error: {status.error}</div>
+      )}
     </div>
   );
 }

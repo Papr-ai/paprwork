@@ -18,6 +18,8 @@ import { setupSettingsHandlers } from "./settings.js";
 import { setupMeetingsHandlers } from "./meetings.js";
 import { setupDbHandlers } from "./db.js";
 import { setupChatGPTHandlers } from "./chatgpt.js";
+import { setupCodeIndexingHandlers } from "./code-indexing.js";
+import { setupMemoryHandlers } from "./memory.js";
 
 export interface WSMessage {
   id: string;
@@ -128,6 +130,10 @@ export function setupWebSocketHandlers(wss: WebSocketServer): void {
           await setupDbHandlers(ws, message);
         } else if (message.type.startsWith("chatgpt:")) {
           await setupChatGPTHandlers(ws, message);
+        } else if (message.type.startsWith("code-indexing:")) {
+          await setupCodeIndexingHandlers(ws, message);
+        } else if (message.type.startsWith("memory:")) {
+          await setupMemoryHandlers(ws, message);
         } else if (message.type.startsWith("custom-keys:")) {
           // Custom keys are now handled via Electron IPC, not WebSocket
           // No action needed here - handled in customKeys.ts

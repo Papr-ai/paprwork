@@ -6,10 +6,10 @@
   left: 0;
   right: 0;
   margin-bottom: 4px;
-  background: var(--panel-bg, #fff);
-  border: 1px solid var(--border-color, #e5e5e5);
+  background: #ffffff;
+  border: 1px solid #e5e5e5;
   border-radius: 10px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
   overflow: hidden;
   z-index: 100;
   max-height: 260px;
@@ -31,7 +31,7 @@
 
 .slash-command-item:hover,
 .slash-command-item--active {
-  background: var(--glass-bg-hover, rgba(0, 0, 0, 0.04));
+  background: #f3f4f6;
 }
 
 .slash-command-icon {
@@ -41,9 +41,9 @@
   width: 24px;
   height: 24px;
   border-radius: 6px;
-  background: var(--glass-bg, rgba(0, 0, 0, 0.04));
+  background: #f3f4f6;
   font-size: 13px;
-  color: var(--text-secondary);
+  color: #6b7280;
   flex-shrink: 0;
 }
 
@@ -56,19 +56,37 @@
 .slash-command-label {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-primary);
+  color: #111827;
   font-family: "SF Mono", monospace;
 }
 
 .slash-command-desc {
   font-size: 11px;
-  color: var(--text-tertiary);
+  color: #6b7280;
 }
 
 @media (prefers-color-scheme: dark) {
   .slash-command-menu {
-    background: var(--panel-bg, #2a2a2a);
-    border-color: var(--border-color, #444);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    background: #2a2a2a;
+    border-color: #444444;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  }
+  
+  .slash-command-item:hover,
+  .slash-command-item--active {
+    background: #333333;
+  }
+  
+  .slash-command-icon {
+    background: #333333;
+    color: #9ca3af;
+  }
+  
+  .slash-command-label {
+    color: #f9fafb;
+  }
+  
+  .slash-command-desc {
+    color: #9ca3af;
   }
 }

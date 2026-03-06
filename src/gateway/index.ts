@@ -96,6 +96,9 @@ async function initializeServices(): Promise<void> {
     await initializeWorkspaceService();
     console.log("[Gateway] WorkspaceService initialized");
 
+    // Note: Code indexing now uses lazy initialization
+    // It will start automatically when PAPR_API_KEY is first used by an agent
+
     // Initialize other services
     console.log("[Gateway] Initializing ChatService...");
     await initializeChatService();
@@ -814,6 +817,16 @@ async function startGateway(): Promise<void> {
     // Handle shutdown
     const shutdown = async () => {
       console.log("[Gateway] Shutting down gracefully...");
+
+      // Stop code indexing
+      try {
+        const { stopCodeIndexing } = await import(
+          "./services/CodeIndexingService.js"
+        );
+        stopCodeIndexing();
+      } catch (error) {
+        console.error("[Gateway] Failed to stop code indexing:", error);
+      }
 
       // Stop all running jobs before exit
       try {

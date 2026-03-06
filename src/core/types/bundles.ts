@@ -41,7 +41,7 @@ const JobSpecSchema = z.object({
   command: z.string().optional(),
   schedule: z.string().optional(),
   dependsOn: z.array(JobDependencySchema).default([]),
-  env: z.record(z.string()).default({}),
+  env: z.record(z.string(), z.string()).default({}),
   resources: JobResourceSchema.optional(),
   outputTables: z.array(z.string()).default([]),
 });
@@ -76,7 +76,7 @@ const DeploymentProfileSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   runtimeTarget: z.enum(["local", "cloud", "hybrid"]),
-  environment: z.record(z.string()).default({}),
+  environment: z.record(z.string(), z.string()).default({}),
   notes: z.string().optional(),
 });
 

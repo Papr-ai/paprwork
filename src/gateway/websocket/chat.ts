@@ -155,6 +155,21 @@ export async function setupChatHandlers(
         break;
       }
 
+      case "chat:inspect-context": {
+        const { chatId, model } = message.payload as {
+          chatId: string;
+          model: string;
+        };
+        const contextInfo = await agentService.inspectContext(chatId, model);
+
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: contextInfo,
+        });
+        break;
+      }
+
       case "chat:export": {
         const { chatId, format } = message.payload as {
           chatId: string;

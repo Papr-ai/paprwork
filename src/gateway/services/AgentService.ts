@@ -751,16 +751,24 @@ export class AgentService {
       // Choose streaming method based on provider and auth
       // OAuth → pi-ai (ChatGPT/Claude subscription). API key only → AI SDK/Mastra
       let fullStream: AsyncIterable<unknown>;
+      
+      // Check if model is actually supported by pi-ai before using OAuth route
+      const { isOpenAICodexModel } = await import("../utils/modelNormalizer.js");
+      const modelSupportsPiAi = config.provider === "openai" || config.provider === "openai-codex"
+        ? isOpenAICodexModel(config.model)
+        : true; // Anthropic models always support pi-ai
+      
       const usePiAiOpenAI =
         (config.provider === "openai" || config.provider === "openai-codex") &&
-        config.authType === "oauth";
+        config.authType === "oauth" &&
+        modelSupportsPiAi; // Only use pi-ai if model is supported
       const usePiAiAnthropic =
         config.provider === "anthropic" && config.authType === "oauth";
       const usePiAi = usePiAiOpenAI || usePiAiAnthropic;
 
       console.log(
         `[AgentService] Routing decision: provider=${config.provider} authType=${config.authType} ` +
-          `usePiAiOpenAI=${usePiAiOpenAI} usePiAiAnthropic=${usePiAiAnthropic} usePiAi=${usePiAi}`,
+          `modelSupportsPiAi=${modelSupportsPiAi} usePiAiOpenAI=${usePiAiOpenAI} usePiAiAnthropic=${usePiAiAnthropic} usePiAi=${usePiAi}`,
       );
 
       if (usePiAi) {
@@ -801,6 +809,35 @@ export class AgentService {
           piProvider,
           piModelId,
         );
+        
+        // If model not found in pi-ai registry (e.g., GPT-5.4), create it manually
+        // ChatGPT backend supports any model, pi-ai just doesn't have it registered yet
+        let finalModel = piModel;
+        if (!piModel && useCodex) {
+          console.log(
+            `[AgentService] Model ${piModelId} not in pi-ai registry, creating manually for ChatGPT backend`,
+          );
+          
+          // Create model object matching pi-ai's Model interface
+          // Based on GPT-5.2 structure but with GPT-5.4 pricing
+          finalModel = {
+            id: piModelId,
+            name: piModelId === "gpt-5.4-pro" ? "GPT-5.4 Pro" : "GPT-5.4 Thinking",
+            api: piApiId,
+            provider: piProvider,
+            baseUrl: "https://chatgpt.com/backend-api",
+            reasoning: true,
+            input: ["text", "image"],
+            cost: {
+              input: piModelId === "gpt-5.4-pro" ? 30.0 : 2.5,
+              output: piModelId === "gpt-5.4-pro" ? 180.0 : 15.0,
+              cacheRead: piModelId === "gpt-5.4-pro" ? 3.0 : 0.25,
+              cacheWrite: 0,
+            },
+            contextWindow: 1000000, // 1M tokens
+            maxTokens: 128000,
+          };
+        }
         const piContext = buildPiContext({
           messages: messages as any[],
           tools: tools as any,
@@ -852,7 +889,7 @@ export class AgentService {
 
         fullStream = createPiCodexStreamWithToolLoop(
           streamSimple as any,
-          piModel,
+          finalModel,
           piContext,
           streamOpts,
           tools as Record<
@@ -1386,6 +1423,226 @@ ${last15.substring(0, 8_000)}`;
    */
   async getChatStats(chatId: string) {
     return await this.storageManager.getChatStats(chatId);
+  }
+
+  /**
+   * Get detailed context breakdown for inspection
+   * Shows what will be sent to the LLM on next turn
+   */
+  async inspectContext(chatId: string, selectedModel: string) {
+    // Load history
+    const history = await this.storageManager.loadMessagesForLLM(chatId);
+
+    // Check if conversation was compressed - get from storage provider directly
+    let conversationSummary: string | undefined;
+    try {
+      const chat = await this.storageManager.getChat(chatId);
+      if (chat) {
+        // Try to get summary from the storage provider's internal structure
+        const chatAny = chat as any;
+        conversationSummary = chatAny.summary_long;
+      }
+    } catch {
+      // No summary
+    }
+
+    // Load skills
+    let enabledSkills: Array<{ id: string; name: string; description: string }> =
+      [];
+    try {
+      const { getSkillService } = await import("./SkillService.js");
+      const skillService = getSkillService();
+      const skills = await skillService.listSkills();
+      enabledSkills = skills
+        .filter((s: any) => s.enabled)
+        .map((s: any) => ({
+          id: s.id,
+          name: s.name,
+          description: s.description,
+        }));
+    } catch {
+      // Skills not initialized yet
+    }
+
+    // Build system prompt (same as actual agent run)
+    const systemPrompt = await this.buildContextualSystemPrompt(
+      chatId,
+      history,
+      enabledSkills,
+    );
+
+    // Get all available tools
+    const allTools = this.toolRegistry.getTools();
+    const toolSchemas = Object.entries(allTools).map(([id, tool]: [string, any]) => ({
+      id,
+      description: tool.description,
+      // Simplified schema for display
+      parameters: tool.inputSchema
+        ? JSON.parse(JSON.stringify(tool.inputSchema))
+        : null,
+    }));
+
+    // Load workspace context separately for display
+    // NOTE: Workspace files are ALREADY in the system prompt
+    // We load them separately here just to show users what's included
+    let workspaceFiles: Array<{ name: string; content: string; size: number }> =
+      [];
+    try {
+      const workspaceService = getWorkspaceService();
+      const ctx = await workspaceService.loadWorkspaceContext();
+      workspaceFiles = ctx.files.map((f) => ({
+        name: f.name,
+        content: f.content,
+        size: f.content.length,
+      }));
+      // Add daily logs
+      ctx.dailyLogs.forEach((log) => {
+        workspaceFiles.push({
+          name: log.name,
+          content: log.content,
+          size: log.content.length,
+        });
+      });
+    } catch {
+      // No workspace context
+    }
+
+    // Load active plans
+    let activePlans: Array<{
+      planId: string;
+      title: string;
+      steps: Array<{ id: string; description: string; status: string }>;
+    }> = [];
+    try {
+      const { getPlanService } = await import("./PlanService.js");
+      const planService = getPlanService();
+      await planService.initialize();
+      const plans = await planService.getActivePlansForChat(chatId);
+      activePlans = plans.map((p) => ({
+        planId: p.planId,
+        title: p.title,
+        steps: p.steps,
+      }));
+    } catch {
+      // No plans
+    }
+
+    // Format messages for model (same as actual run)
+    const messages = buildModelMessages(
+      history,
+      "[Next user message will appear here]",
+      systemPrompt,
+      conversationSummary,
+    );
+
+    // Count tokens (rough estimate: 1 token ≈ 4 chars)
+    const estimateTokens = (text: string) => Math.ceil(text.length / 4);
+
+    // Break down token counts
+    const systemPromptTokens = estimateTokens(systemPrompt);
+    
+    // Conversation summary is injected as a USER message, not in system prompt
+    const conversationSummaryTokens = conversationSummary
+      ? estimateTokens(conversationSummary)
+      : 0;
+
+    let historyTokens = 0;
+    const messageBreakdown: Array<{
+      role: string;
+      tokens: number;
+      preview: string;
+    }> = [];
+
+    for (const msg of messages) {
+      let content = "";
+      if (typeof msg.content === "string") {
+        content = msg.content;
+      } else if (Array.isArray(msg.content)) {
+        // Handle structured content (tool calls, etc)
+        content = JSON.stringify(msg.content);
+      }
+
+      const tokens = estimateTokens(content);
+      if (msg.role !== "system") {
+        historyTokens += tokens;
+      }
+
+      messageBreakdown.push({
+        role: msg.role,
+        tokens,
+        preview: content.substring(0, 100),
+      });
+    }
+
+    const toolSchemaText = JSON.stringify(toolSchemas);
+    const toolTokens = estimateTokens(toolSchemaText);
+
+    // Workspace files are ALREADY counted in systemPromptTokens
+    // We don't add them separately to total
+    // Just showing them for user visibility
+
+    const totalTokens =
+      systemPromptTokens +
+      conversationSummaryTokens +
+      historyTokens +
+      toolTokens;
+
+    return {
+      model: selectedModel,
+      totalTokens,
+      breakdown: {
+        systemPrompt: {
+          tokens: systemPromptTokens,
+          content: systemPrompt,
+          note: "Includes workspace files (MEMORY.md, IDENTITY.md, daily logs, etc.)",
+        },
+        conversationSummary: conversationSummary
+          ? {
+              tokens: conversationSummaryTokens,
+              content: conversationSummary,
+              note: "Injected as a user message before recent history",
+            }
+          : null,
+        messages: {
+          tokens: historyTokens,
+          count: messages.filter((m) => m.role !== "system").length,
+          breakdown: messageBreakdown,
+        },
+        tools: {
+          tokens: toolTokens,
+          count: toolSchemas.length,
+          schemas: toolSchemas,
+        },
+        workspaceFiles: {
+          tokens: 0, // Already counted in system prompt
+          count: workspaceFiles.length,
+          files: workspaceFiles,
+          note: "These files are embedded in the system prompt above (not counted separately)",
+        },
+        skills: {
+          tokens: enabledSkills.reduce(
+            (sum, s) => sum + estimateTokens(`${s.name}: ${s.description}`),
+            0,
+          ),
+          count: enabledSkills.length,
+          skills: enabledSkills,
+          note: "Skill references are in system prompt (counted there)",
+        },
+        plans: {
+          tokens: activePlans.reduce(
+            (sum, p) =>
+              sum +
+              estimateTokens(
+                `${p.title}: ${p.steps.map((s) => s.description).join(", ")}`,
+              ),
+            0,
+          ),
+          count: activePlans.length,
+          plans: activePlans,
+          note: "Plan references are in system prompt (counted there)",
+        },
+      },
+    };
   }
 
   // ===== Session Management =====

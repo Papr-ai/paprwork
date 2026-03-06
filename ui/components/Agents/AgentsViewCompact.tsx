@@ -13,6 +13,8 @@ const COMPACT_MODEL_IDS = [
   "claude-opus-4-6",
   "gpt-5.2-low",
   "gpt-5.2",
+  "gpt-5.4",
+  "gpt-5.4-pro",
   "gemini-2.5-flash-lite",
   "gemini-2.5-flash",
 ];

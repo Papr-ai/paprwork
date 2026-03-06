@@ -12,14 +12,19 @@
  * Normalize OpenAI model ID for API calls.
  * Accepts both gpt-5.2-* (dots) and gpt-5-2-* (dashes).
  *
- * @returns API model ID (e.g. "gpt-5.2", "gpt-5.2-codex", "gpt-5-mini")
+ * @returns API model ID (e.g. "gpt-5.2", "gpt-5.2-codex", "gpt-5.4", "gpt-5-mini")
  */
 export function normalizeOpenAIModelId(modelId: string): string {
   // Normalize dashes to dots for comparison
   const normalized = modelId.replace(/gpt-5-2/g, "gpt-5.2");
 
-  // gpt-5.2-codex is a separate model - keep as-is (API format)
-  if (normalized === "gpt-5.2-codex" || normalized === "gpt-5.3-codex") {
+  // gpt-5.x-codex and gpt-5.x-pro models are separate - keep as-is (API format)
+  if (
+    normalized === "gpt-5.2-codex" ||
+    normalized === "gpt-5.3-codex" ||
+    normalized === "gpt-5.4" ||
+    normalized === "gpt-5.4-pro"
+  ) {
     return normalized;
   }
 
@@ -65,6 +70,8 @@ const OPENAI_CODEX_MODELS = new Set([
   "gpt-5.1-codex-max",
   "gpt-5.3-codex",
   "gpt-5.3-codex-spark",
+  "gpt-5.4", // Manually created in AgentService
+  "gpt-5.4-pro", // Manually created in AgentService
 ]);
 
 /**

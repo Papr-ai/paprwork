@@ -59,6 +59,12 @@ const searchMemorySchema = z.object({
     .describe(
       "Number of memories to return. Default 20. Use 15-20 for comprehensive results.",
     ),
+  category: z
+    .enum(["agent_memory", "code"])
+    .optional()
+    .describe(
+      "Filter by memory category. 'agent_memory' for conversation memories, 'code' for code files and projects.",
+    ),
 });
 
 const registerSchemaSchema = z.object({
@@ -133,6 +139,12 @@ export const searchAgentMemoryTool = createTool({
       enable_agentic_graph: true,
       rank_results: true,
       response_format: "toon", // 30-60% token reduction for LLM contexts
+      // Filter by category if specified
+      ...(args.category && { 
+        filters: { 
+          category: args.category === 'code' ? 'code' : undefined 
+        } 
+      }),
     });
     return { success: true, data: response };
   },
