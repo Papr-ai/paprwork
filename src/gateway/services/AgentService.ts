@@ -220,6 +220,11 @@ export class AgentService {
 
       const fallback = generateFallbackTitle(firstMessage);
       await this.storageManager.updateChat(chatId, { title: fallback });
+      
+      // Broadcast chat list update
+      const { broadcast } = await import("../websocket/index.js");
+      broadcast({ type: "chat:list-updated" });
+      
       return fallback;
     }
 
@@ -228,6 +233,11 @@ export class AgentService {
     await this.storageManager.updateChat(chatId, { title });
 
     console.log(`✓ Generated title for ${chatId}: "${title}"`);
+    
+    // Broadcast chat list update
+    const { broadcast } = await import("../websocket/index.js");
+    broadcast({ type: "chat:list-updated" });
+    
     return title;
   }
 
@@ -236,6 +246,10 @@ export class AgentService {
    */
   async updateChatTitle(chatId: string, title: string): Promise<void> {
     await this.storageManager.updateChat(chatId, { title });
+    
+    // Broadcast chat list update
+    const { broadcast } = await import("../websocket/index.js");
+    broadcast({ type: "chat:list-updated" });
   }
 
   // ===== Streaming with Parallel Support =====

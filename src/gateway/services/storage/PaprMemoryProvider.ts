@@ -131,7 +131,9 @@ export class PaprMemoryProvider implements IStorageProvider {
         },
       );
 
-      return response.messages.map((msg) => ({
+      // IMPORTANT: PAPR returns messages in REVERSE chronological order (newest first)
+      // Reverse to chronological order (oldest first) for UI display
+      return response.messages.reverse().map((msg) => ({
         id: msg.objectId,
         chat_id: chatId,
         role: msg.role,

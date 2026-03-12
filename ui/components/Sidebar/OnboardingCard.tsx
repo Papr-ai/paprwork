@@ -168,6 +168,137 @@ export function OnboardingCard({
 
   if (hidden) return null;
 
+  // Show as modal if no steps completed (force onboarding)
+  const showAsModal = !state.step1Completed && !state.step2Completed && !state.step3Completed && isInitialized;
+
+  if (showAsModal) {
+    return (
+      <>
+        {/* Backdrop */}
+        <div className="onboarding-modal-backdrop" />
+        
+        {/* Modal */}
+        <div className="onboarding-modal">
+          <div className="onboarding-modal-content">
+            <div className="onboarding-modal-header">
+              <span className="onboarding-modal-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+                  <path
+                    d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </span>
+              <h2 className="onboarding-modal-title">Welcome to Paprwork!</h2>
+              <p className="onboarding-modal-subtitle">
+                Let's get you set up in 3 quick steps
+              </p>
+            </div>
+
+            <div className="onboarding-modal-steps">
+              {/* Step 1: Configure API Keys */}
+              <div
+                className={`onboarding-step-modal ${getStepState(1)}`}
+                onClick={() => handleStepClick(1)}
+              >
+                <div className="step-number-modal">1</div>
+                <div className="step-content-modal">
+                  <div className="step-icon-modal">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                      <path
+                        d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </div>
+                  <div className="step-text-modal">
+                    <h3 className="step-title-modal">Configure API Keys</h3>
+                    <p className="step-description-modal">
+                      Add your OpenAI, Anthropic, or Google API keys to get started
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Step 2: Setup Your Agents */}
+              <div
+                className={`onboarding-step-modal ${getStepState(2)}`}
+                onClick={() => handleStepClick(2)}
+              >
+                <div className="step-number-modal">2</div>
+                <div className="step-content-modal">
+                  <div className="step-icon-modal">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                      <path
+                        d="M12 2L2 7l10 5 10-5-10-5z"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d="M2 17l10 5 10-5M2 12l10 5 10-5"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </div>
+                  <div className="step-text-modal">
+                    <h3 className="step-title-modal">Setup Your Agents</h3>
+                    <p className="step-description-modal">
+                      Tell us about your work so we can configure your AI agents
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Step 3: Complete First Task */}
+              <div
+                className={`onboarding-step-modal ${getStepState(3)}`}
+                onClick={() => handleStepClick(3)}
+              >
+                <div className="step-number-modal">3</div>
+                <div className="step-content-modal">
+                  <div className="step-icon-modal">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                      <path
+                        d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </div>
+                  <div className="step-text-modal">
+                    <h3 className="step-title-modal">Complete First Task</h3>
+                    <p className="step-description-modal">
+                      Try your first task or let us build you a helpful app
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="onboarding-modal-footer">
+              <p className="onboarding-modal-hint">
+                <strong>Start here:</strong> Click "Configure API Keys" to begin
+              </p>
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
   return (
     <div className={`onboarding-card-compact${slideOut ? " slide-out" : ""}`}>
       <div

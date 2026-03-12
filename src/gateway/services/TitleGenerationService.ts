@@ -1,30 +1,41 @@
 /**
  * Title Generation Service
  *
- * Generates concise chat titles using gpt-5-mini-2025-08-07.
+ * Generates concise chat titles using AI models.
  * Handles both OAuth (via pi-ai) and API key (via AI SDK) routing.
+ * Supports OpenAI (gpt-5-mini) and Anthropic (claude-3.5-haiku).
  * Based on Paprwork V1's title generation logic.
  */
 
 import { openai } from "@ai-sdk/openai";
+import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 
 export class TitleGenerationService {
   /**
    * Generate a concise title from the first user message
-   * Uses gpt-5-mini-2025-08-07 for fast, cheap title generation
+   * Uses gpt-5-mini-2025-08-07 (OpenAI) or claude-3.5-haiku (Claude)
    * 
-   * Handles OAuth routing: If user is using OpenAI OAuth, routes to pi-ai
+   * Handles OAuth routing: If user is using OAuth, routes to pi-ai
    * Otherwise uses AI SDK with API key
    */
   async generateTitle(firstMessage: string): Promise<string> {
     try {
-      // Check if using OAuth or API key (same logic as chat)
+      // Check auth availability (prioritizes OAuth, falls back to API key)
       const { getProviderAuth } = await import("../utils/keyResolver.js");
-      const auth = await getProviderAuth("openai");
+      
+      // Try OpenAI first (cheaper)
+      let auth = await getProviderAuth("openai");
+      let provider: "openai" | "anthropic" = "openai";
+      
+      // If no OpenAI auth, try Claude
+      if (!auth) {
+        auth = await getProviderAuth("anthropic");
+        provider = "anthropic";
+      }
 
       if (!auth) {
-        console.log("[TitleGenerationService] No OpenAI auth available, using fallback");
+        console.log("[TitleGenerationService] No AI auth available, using fallback");
         return this.fallbackTitle(firstMessage);
       }
 
@@ -40,16 +51,22 @@ export class TitleGenerationService {
       let text: string;
 
       if (auth.type === "oauth") {
-        // OAuth: Route to pi-ai (ChatGPT backend)
-        console.log("[TitleGenerationService] Using OpenAI OAuth via pi-ai");
+        // OAuth: Route to pi-ai (ChatGPT/Claude backend)
+        console.log(`[TitleGenerationService] Using ${provider} OAuth via pi-ai`);
         
         const { getModel, streamSimple } = await import("@mariozechner/pi-ai");
         
         // Set token in environment (pi-ai reads from env)
-        process.env.OPENAI_API_KEY = auth.token;
+        if (provider === "openai") {
+          process.env.OPENAI_API_KEY = auth.token;
+        } else {
+          process.env.ANTHROPIC_API_KEY = auth.token;
+        }
         
-        // Get pi-ai model
-        const piModel = getModel("openai-codex", "gpt-5.2");
+        // Get pi-ai model (openai-codex for ChatGPT, anthropic for Claude)
+        const modelType = provider === "openai" ? "openai-codex" : "anthropic";
+        const modelName = provider === "openai" ? "gpt-5.2" : "claude-3-5-sonnet-20241022";
+        const piModel = getModel(modelType as any, modelName as any);
         
         // Build messages for pi-ai
         const messages = [
@@ -84,20 +101,36 @@ export class TitleGenerationService {
         text = collectedText;
       } else {
         // API Key: Use AI SDK
-        console.log("[TitleGenerationService] Using OpenAI API key via AI SDK");
-        process.env.OPENAI_API_KEY = auth.key;
-
-        const model = openai("gpt-5-mini-2025-08-07");
-
-        const result = await generateText({
-          model,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-        });
-
-        text = result.text;
+        console.log(`[TitleGenerationService] Using ${provider} API key via AI SDK`);
+        
+        if (provider === "openai") {
+          process.env.OPENAI_API_KEY = auth.key;
+          const model = openai("gpt-5-mini-2025-08-07");
+          
+          const result = await generateText({
+            model,
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userPrompt },
+            ],
+          });
+          
+          text = result.text;
+        } else {
+          // Claude
+          process.env.ANTHROPIC_API_KEY = auth.key;
+          const model = anthropic("claude-3-5-haiku-20241022");
+          
+          const result = await generateText({
+            model,
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userPrompt },
+            ],
+          });
+          
+          text = result.text;
+        }
       }
 
       const title = text.trim();

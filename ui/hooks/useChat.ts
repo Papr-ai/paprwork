@@ -142,6 +142,22 @@ export function useChat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Run once on mount
 
+  // Listen for chat list updates broadcast from Gateway
+  useEffect(() => {
+    const handleBroadcast = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      if (customEvent.detail?.type === "chat:list-updated") {
+        console.log("[useChat] Received chat list update broadcast, reloading...");
+        loadChats(true); // Force reload
+      }
+    };
+
+    window.addEventListener("gateway-broadcast", handleBroadcast);
+    return () => {
+      window.removeEventListener("gateway-broadcast", handleBroadcast);
+    };
+  }, [loadChats]);
+
   // IMPORTANT:
   // Message hydration is handled by each ChatContainer instance per chatId.
   // Keeping it there avoids duplicate fetch storms from multiple useChat consumers.

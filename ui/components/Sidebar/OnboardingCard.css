@@ -191,3 +191,229 @@
   color: var(--text-color);
   flex: 1;
 }
+
+/* ========== MODAL STYLES ========== */
+
+.onboarding-modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(8px);
+  z-index: 10000;
+  animation: fadeIn 0.3s ease;
+}
+
+.onboarding-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 10001;
+  max-width: 520px;
+  width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
+  animation: slideUp 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -40%);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
+}
+
+.onboarding-modal-content {
+  background: var(--sidebar-bg, #1e1e1e);
+  border-radius: 16px;
+  padding: 32px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.onboarding-modal-header {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.onboarding-modal-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.2) 0%, rgba(118, 75, 162, 0.2) 100%);
+  border-radius: 16px;
+  color: #667eea;
+  margin-bottom: 16px;
+}
+
+.onboarding-modal-title {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--text-color);
+  margin: 0 0 8px;
+}
+
+.onboarding-modal-subtitle {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.onboarding-modal-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+/* Modal step cards */
+.onboarding-step-modal {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 16px;
+  background: var(--card-background, rgba(255, 255, 255, 0.04));
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 2px solid transparent;
+}
+
+.onboarding-step-modal:hover:not(.locked):not(.completed) {
+  background: var(--card-background-hover, rgba(255, 255, 255, 0.08));
+  border-color: rgba(102, 126, 234, 0.3);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+/* Modal step states */
+.onboarding-step-modal.completed {
+  opacity: 0.6;
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.onboarding-step-modal.active {
+  background: rgba(102, 126, 234, 0.15);
+  border-color: rgba(102, 126, 234, 0.5);
+  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+}
+
+.onboarding-step-modal.locked {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.step-number-modal {
+  width: 32px;
+  height: 32px;
+  background: var(--sidebar-bg, var(--card-background));
+  border: 2px solid var(--border-color, rgba(255, 255, 255, 0.2));
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-color);
+  flex-shrink: 0;
+}
+
+.onboarding-step-modal.completed .step-number-modal {
+  background: #10b981;
+  color: white;
+  border-color: #10b981;
+  font-size: 0;
+}
+
+.onboarding-step-modal.completed .step-number-modal::after {
+  content: '\2713';
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.onboarding-step-modal.active .step-number-modal {
+  background: #667eea;
+  color: white;
+  border-color: #667eea;
+}
+
+.step-content-modal {
+  flex: 1;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.step-icon-modal {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.onboarding-step-modal.completed .step-icon-modal {
+  color: #10b981;
+}
+
+.onboarding-step-modal.active .step-icon-modal {
+  color: #667eea;
+}
+
+.step-text-modal {
+  flex: 1;
+}
+
+.step-title-modal {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-color);
+  margin: 0 0 4px;
+}
+
+.onboarding-step-modal.completed .step-title-modal {
+  text-decoration: line-through;
+}
+
+.step-description-modal {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.onboarding-modal-footer {
+  padding-top: 24px;
+  border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  text-align: center;
+}
+
+.onboarding-modal-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.onboarding-modal-hint strong {
+  color: var(--text-color);
+  font-weight: 600;
+}
