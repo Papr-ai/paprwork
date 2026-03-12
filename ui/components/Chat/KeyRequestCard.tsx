@@ -36,15 +36,29 @@ export function KeyRequestCard({ data, onSubmit, onCancel }: Props) {
   );
   const [showValue, setShowValue] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [localStatus, setLocalStatus] = useState<KeyRequestData["status"]>(data.status);
 
   const handleSubmit = async () => {
+    console.log("[KeyRequestCard] handleSubmit called", {
+      hasKeyValue: !!keyValue.trim(),
+      keyName: data.name,
+      permission,
+    });
+
     if (!keyValue.trim()) {
+      console.warn("[KeyRequestCard] No key value provided, aborting");
       return;
     }
 
     setIsSubmitting(true);
     try {
+      console.log("[KeyRequestCard] Calling onSubmit...");
       await onSubmit(data.name, keyValue.trim(), permission);
+      console.log("[KeyRequestCard] onSubmit completed successfully");
+      // Update local status to show success immediately
+      setLocalStatus("submitted");
+    } catch (error) {
+      console.error("[KeyRequestCard] onSubmit failed:", error);
     } finally {
       setIsSubmitting(false);
     }
@@ -52,10 +66,14 @@ export function KeyRequestCard({ data, onSubmit, onCancel }: Props) {
 
   const handleCancel = () => {
     setKeyValue("");
+    setLocalStatus("cancelled");
     onCancel();
   };
 
-  if (data.status === "submitted") {
+  // Use local status if it's been updated, otherwise use data.status
+  const currentStatus = localStatus !== data.status ? localStatus : data.status;
+
+  if (currentStatus === "submitted") {
     return (
       <div className="key-request-card key-request-card-success">
         <div className="key-request-icon">
@@ -79,7 +97,7 @@ export function KeyRequestCard({ data, onSubmit, onCancel }: Props) {
     );
   }
 
-  if (data.status === "cancelled") {
+  if (currentStatus === "cancelled") {
     return (
       <div className="key-request-card key-request-card-cancelled">
         <div className="key-request-icon">
@@ -270,8 +288,16 @@ export function KeyRequestCard({ data, onSubmit, onCancel }: Props) {
         </button>
         <button
           className="btn btn-primary"
-          onClick={handleSubmit}
+          onClick={(e) => {
+            console.log("[KeyRequestCard] Button clicked!", {
+              event: e,
+              keyValue: keyValue.trim(),
+              isSubmitting,
+            });
+            handleSubmit();
+          }}
           disabled={!keyValue.trim() || isSubmitting}
+          type="button"
         >
           {isSubmitting ? "Adding..." : "Add Key"}
         </button>

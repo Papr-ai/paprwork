@@ -289,7 +289,7 @@ export function formatHistoryMessagesForModel(
  * Combines:
  * 1. System prompt (if not already in history)
  * 2. Formatted history with proper tool call structure
- * 3. New user message
+ * 3. New user message (only if not already in history)
  */
 export function buildModelMessages(
   history: unknown[],
@@ -307,10 +307,14 @@ export function buildModelMessages(
     });
   }
 
-  // If we have a compressed summary, inject it as a user message BEFORE the recent history
+  // If we have a compressed summary, inject it as a user message AFTER system prompt but BEFORE recent history
   // This gives the model context about what happened earlier in the conversation
   if (conversationSummary) {
-    messages.push({
+    // Find index after system prompt (should be index 1 if system exists, 0 if not)
+    const systemIndex = messages.findIndex((m) => m.role === "system");
+    const insertIndex = systemIndex >= 0 ? systemIndex + 1 : 0;
+    
+    messages.splice(insertIndex, 0, {
       role: "user",
       content: `[CONVERSATION CONTEXT - Earlier messages have been compressed for efficiency]
 

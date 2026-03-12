@@ -17,7 +17,8 @@ export type { Tab, TabType, DisplayMode };
 interface TabState {
   tabs: Tab[];
   activeTabId: string | null; // Active parent or standalone tab
-  splitRatio: number; // 0.5 = 50/50
+  splitRatio: number; // DEPRECATED: Global split ratio (kept for backward compat)
+  splitRatios: Record<string, number>; // Per-tab split ratios (tabId → ratio)
 
   // Navigation History
   history: string[]; // Array of tab IDs
@@ -60,6 +61,7 @@ interface TabState {
 
   // Split View
   setSplitRatio: (ratio: number) => void;
+  getSplitRatio: (tabId: string | null) => number;
 
   // Tab Status Indicators (for chat streaming)
   setTabStreaming: (tabId: string, isStreaming: boolean) => void;
@@ -80,7 +82,8 @@ export const useTabStore = create<TabState>()(
     (set, get) => ({
       tabs: [],
       activeTabId: null,
-      splitRatio: 0.5,
+      splitRatio: 0.5, // DEPRECATED: kept for backward compat
+      splitRatios: {}, // Per-tab split ratios
 
       // Navigation History
       history: [],
@@ -385,7 +388,31 @@ export const useTabStore = create<TabState>()(
       },
 
       setSplitRatio: (ratio) => {
-        set({ splitRatio: Math.max(0.2, Math.min(0.8, ratio)) });
+        const clampedRatio = Math.max(0.2, Math.min(0.8, ratio));
+        const state = get();
+        const activeTabId = state.activeTabId;
+        
+        if (activeTabId) {
+          // Store ratio per tab
+          set({ 
+            splitRatio: clampedRatio, // Update global for backward compat
+            splitRatios: {
+              ...state.splitRatios,
+              [activeTabId]: clampedRatio,
+            },
+          });
+        } else {
+          // Fallback to global if no active tab
+          set({ splitRatio: clampedRatio });
+        }
+      },
+
+      getSplitRatio: (tabId) => {
+        const state = get();
+        if (!tabId) return state.splitRatio;
+        
+        // Return tab-specific ratio if it exists, otherwise return global default
+        return state.splitRatios[tabId] ?? state.splitRatio;
       },
 
       getTab: (tabId) => {
@@ -814,6 +841,7 @@ export const useTabStore = create<TabState>()(
         tabs: state.tabs,
         activeTabId: state.activeTabId,
         splitRatio: state.splitRatio,
+        splitRatios: state.splitRatios, // Persist per-tab ratios
         history: state.history,
         historyIndex: state.historyIndex,
       }),

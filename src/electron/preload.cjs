@@ -66,6 +66,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
       startOAuth: () => ipcRenderer.invoke("auth:claude:start-oauth"),
       getStatus: () => ipcRenderer.invoke("auth:claude:get-status"),
       disconnect: () => ipcRenderer.invoke("auth:claude:disconnect"),
+      pasteToken: (token) => ipcRenderer.invoke("auth:claude:paste-token", token),
+    },
+    // Generic paste token that maps providers correctly
+    pasteToken: (provider, token) => {
+      const channel = provider === "anthropic" ? "auth:claude:paste-token" : `auth:${provider}:paste-token`;
+      return ipcRenderer.invoke(channel, token);
     },
   },
 

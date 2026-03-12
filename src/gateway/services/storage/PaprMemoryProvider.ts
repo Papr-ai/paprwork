@@ -100,8 +100,17 @@ export class PaprMemoryProvider implements IStorageProvider {
     } catch (error) {
       if (error instanceof Papr.AuthenticationError) {
         console.error("Invalid PAPR_API_KEY - check Settings");
+        throw new Error("Invalid PAPR API key. Please check your Settings.");
       } else if (error instanceof Papr.RateLimitError) {
-        console.error("PAPR rate limit exceeded, retrying...");
+        console.error("PAPR Memory quota exceeded. Please upgrade your account.");
+        throw new Error(
+          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings"
+        );
+      } else if (error instanceof Papr.PermissionDeniedError) {
+        console.error("PAPR Memory access denied - quota may be exceeded.");
+        throw new Error(
+          "PAPR Memory access denied. Your account may have exceeded its quota. Please upgrade at https://platform.papr.ai/settings"
+        );
       }
       throw error;
     }
@@ -146,11 +155,33 @@ export class PaprMemoryProvider implements IStorageProvider {
       const response =
         await this.client.messages.sessions.retrieveHistory(chatId);
 
+      console.log(`[PaprMemoryProvider] 📥 Retrieved ${response.messages?.length || 0} messages from PAPR for chat ${chatId}`);
+      console.log(`[PaprMemoryProvider] 📊 Total count: ${response.total_count}, Has summary: ${!!response.summaries}`);
+      
+      // Log first and last messages to check ordering
+      if (response.messages && response.messages.length > 0) {
+        const first = response.messages[0] as any;
+        const last = response.messages[response.messages.length - 1] as any;
+        console.log(`[PaprMemoryProvider] 🔍 First message: [${first.timestamp || first.createdAt}] ${first.role}`);
+        console.log(`[PaprMemoryProvider] 🔍 Last message: [${last.timestamp || last.createdAt}] ${last.role}`);
+      }
+
       if (response.context_for_llm) {
         // PAPR provides pre-formatted context
         const summary = response.summaries;
         // Keep last 50 messages for proper recent context
-        const recentMessages = response.messages.slice(-50);
+        // IMPORTANT: PAPR returns messages in REVERSE chronological order (newest first)
+        // We need to reverse them to chronological order (oldest first) for LLM
+        const recentMessages = response.messages.slice(-50).reverse();
+        
+        console.log(`[PaprMemoryProvider] 📤 Returning ${recentMessages.length} recent messages (reversed to chronological order)`);
+        
+        // Log first and last after reversing to verify order
+        if (recentMessages.length > 0) {
+          const first = recentMessages[0] as any;
+          const last = recentMessages[recentMessages.length - 1] as any;
+          console.log(`[PaprMemoryProvider] ✅ After reverse - First: [${first.timestamp || first.createdAt}], Last: [${last.timestamp || last.createdAt}]`);
+        }
 
         if (summary) {
           // Format summary for system prompt (NOT as a user message)
@@ -164,18 +195,22 @@ export class PaprMemoryProvider implements IStorageProvider {
           // Inject summary as special __summary property for AgentService to extract
           return [
             { __summary: summaryForSystemPrompt },
-            ...recentMessages.map((m) => ({
+            ...recentMessages.map((m: any) => ({
               role: m.role,
               content: m.content,
+              timestamp: m.timestamp || m.createdAt, // Preserve timestamp if available
             })),
           ];
         }
       }
 
       // No summary, return all messages
-      return response.messages.map((m) => ({
+      // IMPORTANT: PAPR returns messages in REVERSE chronological order (newest first)
+      // Reverse to chronological order (oldest first) for LLM
+      return response.messages.reverse().map((m: any) => ({
         role: m.role,
         content: m.content,
+        timestamp: m.timestamp || m.createdAt, // Preserve timestamp if available
       }));
     } catch (error) {
       console.error("Failed to load messages for LLM:", error);

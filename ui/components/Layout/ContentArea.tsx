@@ -8,6 +8,7 @@ import { useTabs } from "../../hooks/useTabs";
 import { ChatContainer } from "../Chat/ChatContainer";
 import { ArtifactsView } from "../Artifacts/ArtifactsView";
 import { AppsView } from "../Apps/AppsView";
+import { DocumentsView } from "../Documents/DocumentsView";
 import { DocumentView } from "../Documents/DocumentView";
 import { SettingsView } from "../Settings/SettingsView";
 import { JobsView } from "../Jobs/JobsView";
@@ -29,6 +30,7 @@ export function ContentArea() {
     splitRatio,
     getTab,
     setSplitRatio,
+    getSplitRatio,
   } = useTabs();
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -40,6 +42,9 @@ export function ContentArea() {
   // Get the actual active tab and its children (if parent)
   const activeTab = getTab(activeTabId || "");
   const isParentTab = activeTab?.displayMode === "parent";
+
+  // Get tab-specific split ratio (or default to global)
+  const currentSplitRatio = getSplitRatio(activeTabId);
 
   // Determine what to render in each pane
   let leftPaneTabId: string | null = activeLeftTab;
@@ -123,7 +128,7 @@ export function ContentArea() {
 
     isDraggingRef.current = true;
     startXRef.current = e.clientX;
-    startRatioRef.current = splitRatio;
+    startRatioRef.current = currentSplitRatio; // Use tab-specific ratio
     containerWidthRef.current = containerRef.current.offsetWidth;
 
     // Prevent text selection during drag
@@ -159,6 +164,8 @@ export function ContentArea() {
         return <ChatContainer chatId={tab.entityId} />;
       case "document":
         return <DocumentView documentId={tab.entityId} />;
+      case "documents":
+        return <DocumentsView />;
       case "apps":
         return <AppsView />;
       case "artifacts":
@@ -206,7 +213,7 @@ export function ContentArea() {
     <div
       ref={containerRef}
       className="content-area content-area--split"
-      style={{ "--split-ratio": splitRatio } as React.CSSProperties}
+      style={{ "--split-ratio": currentSplitRatio } as React.CSSProperties}
     >
       <div className="content-pane content-pane--left">
         {renderView(leftPaneTabId)}

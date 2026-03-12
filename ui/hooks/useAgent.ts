@@ -674,6 +674,14 @@ export function useAgent() {
                 const provider = providerMatch ? providerMatch[1] : "provider";
                 errorMsg = `Credit balance too low for ${provider}. Please add credits or switch to a different model.`;
               }
+              // Pattern: Overloaded errors (Anthropic server capacity issues)
+              else if (
+                rawError.includes("overloaded_error") ||
+                rawError.includes("Overloaded") ||
+                rawError.includes('"type":"overloaded_error"')
+              ) {
+                errorMsg = `🔄 Claude servers are temporarily overloaded. This is an issue from Anthropic, not your connection. Please wait a moment and try again, or switch to a different model (Sonnet/Haiku).`;
+              }
               // Pattern: Generic API key errors
               else if (rawError.includes("API key")) {
                 errorMsg = `API key error: ${rawError}`;

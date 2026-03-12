@@ -6,18 +6,18 @@ import { ipcMain, shell } from "electron";
 import { OAuthTokenStorage } from "../../core/storage/OAuthTokenStorage.js";
 import type { CustomKeysStorage } from "../../core/storage/CustomKeysStorage.js";
 import { OpenAIOAuthService } from "../../core/services/OpenAIOAuthService.js";
-import { ClaudeOAuthService } from "../../core/services/ClaudeOAuthService.js";
+import { ClaudeSetupTokenService } from "../../core/services/ClaudeSetupTokenService.js";
 import { OAuthCallbackServer } from "../../core/services/OAuthCallbackServer.js";
 
 let oauthTokenStorage: OAuthTokenStorage | null = null;
 let customKeysStorage: CustomKeysStorage | null = null;
 let openaiOAuthService: OpenAIOAuthService | null = null;
-let claudeOAuthService: ClaudeOAuthService | null = null;
+let claudeSetupTokenService: ClaudeSetupTokenService | null = null;
 
-// Active callback servers
+// Active callback servers (for OpenAI OAuth only)
 const activeServers = new Map<string, OAuthCallbackServer>();
 
-// Active OAuth flows (store PKCE data)
+// Active OAuth flows (store PKCE data for OpenAI)
 const activeFlows = new Map<
   string,
   {
@@ -162,9 +162,15 @@ async function refreshTokenIfNeeded(
 
     console.log(`[OAuth IPC] Refreshing ${provider} token (expires soon)`);
 
-    // Get the appropriate OAuth service
-    const service =
-      provider === "openai" ? openaiOAuthService : claudeOAuthService;
+    // Claude OAuth tokens can't be refreshed (1-year validity)
+    // Only OpenAI tokens support refresh
+    if (provider === "anthropic") {
+      console.log("[OAuth IPC] Claude OAuth tokens cannot be refreshed - user must regenerate after 1 year");
+      return false;
+    }
+
+    // Get OpenAI OAuth service for refresh
+    const service = openaiOAuthService;
     if (!service) {
       console.error(
         `[OAuth IPC] OAuth service for ${provider} not initialized`,
@@ -252,7 +258,7 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
   await oauthTokenStorage.initialize();
 
   openaiOAuthService = new OpenAIOAuthService();
-  claudeOAuthService = new ClaudeOAuthService();
+  claudeSetupTokenService = new ClaudeSetupTokenService();
 
   // OpenAI OAuth handlers
   ipcMain.handle("auth:openai:start-oauth", async () => {
@@ -377,72 +383,41 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
     }
   });
 
-  // Claude OAuth handlers
+  // Claude OAuth handlers (using automated token generation)
   ipcMain.handle("auth:claude:start-oauth", async () => {
     try {
-      console.log("[OAuth IPC] Starting Claude OAuth flow");
+      console.log("[OAuth IPC] Starting automated Claude OAuth token generation");
 
-      // Stop any existing server
-      const existingServer = activeServers.get("anthropic");
-      if (existingServer) {
-        existingServer.stop();
-        activeServers.delete("anthropic");
+      // Run automated setup (installs CLI if needed + generates token)
+      const result = await claudeSetupTokenService!.automatedSetup();
+
+      if (result.success && result.token) {
+        // Automatically store the token
+        const tokenInput = {
+          provider: "anthropic" as const,
+          accessToken: result.token,
+          refreshToken: result.token,
+          expiresIn: 365 * 24 * 60 * 60, // 1 year
+        };
+
+        await oauthTokenStorage!.storeToken(tokenInput);
+        await syncOAuthTokenToApiKeys("anthropic", result.token);
+
+        console.log("[OAuth IPC] Claude OAuth completed successfully");
+        return { success: true };
       }
 
-      // Start OAuth flow
-      const { url, pkce } = claudeOAuthService!.startOAuthFlow();
+      if (result.requiresInstall) {
+        return {
+          success: false,
+          error: "Claude Code CLI needs to be installed. Click 'Install CLI' first.",
+        };
+      }
 
-      // Store PKCE data for callback
-      activeFlows.set("anthropic", {
-        pkce: { verifier: pkce.verifier, state: pkce.state },
-        provider: "anthropic",
-      });
-
-      // Start callback server (use different port or handle redirect)
-      // Note: Claude's redirect URI is console.anthropic.com, so we need to handle this differently
-      // For now, we'll use a local server and ask user to copy the code
-      const server = new OAuthCallbackServer({
-        port: 1456,
-        timeout: 300000, // 5 minutes
-        onCallback: async (params) => {
-          try {
-            const codeWithState = params.get("code");
-            const flow = activeFlows.get("anthropic");
-
-            if (!codeWithState || !flow) {
-              console.error("[OAuth IPC] Missing code or flow data");
-              return;
-            }
-
-            // Exchange code for tokens
-            const tokenInput = await claudeOAuthService!.handleCallback(
-              codeWithState,
-              flow.pkce.verifier,
-              flow.pkce.state,
-            );
-
-            // Store tokens in OAuthTokenStorage
-            await oauthTokenStorage!.storeToken(tokenInput);
-
-            // Sync token to CustomKeysStorage (makes it available as ANTHROPIC_API_KEY)
-            await syncOAuthTokenToApiKeys("anthropic", tokenInput.accessToken);
-
-            console.log("[OAuth IPC] Claude OAuth flow completed successfully");
-            activeFlows.delete("anthropic");
-          } catch (error) {
-            console.error("[OAuth IPC] Claude callback error:", error);
-            activeFlows.delete("anthropic");
-          }
-        },
-      });
-
-      await server.start();
-      activeServers.set("anthropic", server);
-
-      // Open browser to authorization URL
-      await shell.openExternal(url);
-
-      return { success: true, url };
+      return {
+        success: false,
+        error: result.error || "Failed to generate OAuth token",
+      };
     } catch (error) {
       console.error("[OAuth IPC] Failed to start Claude OAuth:", error);
       return {
@@ -500,6 +475,51 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
     }
   });
 
+  // Claude OAuth: Paste token (alternative to full OAuth flow)
+  ipcMain.handle("auth:claude:paste-token", async (_event, token: string) => {
+    try {
+      console.log("[OAuth IPC] Pasting Claude OAuth token");
+
+      // Validate token format (Claude OAuth tokens start with sk-ant-oat)
+      if (!token || typeof token !== "string") {
+        return {
+          success: false,
+          error: "Token is required",
+        };
+      }
+
+      if (!token.startsWith("sk-ant-oat")) {
+        return {
+          success: false,
+          error:
+            "Invalid token format. Claude OAuth tokens start with sk-ant-oat",
+        };
+      }
+
+      // Store as OAuth token (1 year expiry)
+      const tokenInput = {
+        provider: "anthropic" as const,
+        accessToken: token,
+        refreshToken: token, // OAuth tokens are self-contained
+        expiresIn: 365 * 24 * 60 * 60, // 1 year in seconds
+      };
+
+      await oauthTokenStorage!.storeToken(tokenInput);
+
+      // Sync to CustomKeysStorage (makes it available as ANTHROPIC_API_KEY for jobs/bash)
+      await syncOAuthTokenToApiKeys("anthropic", token);
+
+      console.log("[OAuth IPC] Claude OAuth token stored successfully");
+      return { success: true };
+    } catch (error) {
+      console.error("[OAuth IPC] Failed to paste Claude token:", error);
+      return {
+        success: false,
+        error: (error as Error).message,
+      };
+    }
+  });
+
   // Start the token refresh timer
   startRefreshTimer();
 
@@ -520,7 +540,7 @@ export function cleanupOAuthServers(): void {
   // Stop refresh timer
   stopRefreshTimer();
 
-  // Stop callback servers
+  // Stop callback servers (OpenAI only)
   for (const [provider, server] of activeServers.entries()) {
     console.log(`[OAuth IPC] Stopping ${provider} callback server`);
     server.stop();

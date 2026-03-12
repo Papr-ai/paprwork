@@ -198,6 +198,14 @@ export class ChatSessionManager {
   }
 
   /**
+   * Get session if it exists (for inspection/debugging)
+   * Returns null if session doesn't exist
+   */
+  getSessionIfExists(chatId: string): ChatSession | null {
+    return this.sessions.get(chatId) || null;
+  }
+
+  /**
    * Clear a session (remove from memory)
    */
   async clearSession(chatId: string): Promise<void> {

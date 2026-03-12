@@ -99,28 +99,41 @@ export const addAgentMemoryTool = createTool({
     "Store a structured memory item in PAPR memory. IMPORTANT: When using category='context', you MUST provide role ('user' or 'assistant').",
   inputSchema: addMemorySchema,
   execute: async (args) => {
-    const client = await getPaprClient();
+    try {
+      const client = await getPaprClient();
 
-    // Build customMetadata for fields not in the MemoryMetadata spec
-    const customMetadata: Record<string, string> = {};
-    if (args.sourceAgentId) customMetadata.sourceAgentId = args.sourceAgentId;
-    if (args.sourceAgentName)
-      customMetadata.sourceAgentName = args.sourceAgentName;
-    if (args.runId) customMetadata.runId = args.runId;
-    if (args.jobId) customMetadata.jobId = args.jobId;
-    if (args.chatId) customMetadata.chatId = args.chatId;
-    if (args.workspaceId) customMetadata.workspaceId = args.workspaceId;
+      // Build customMetadata for fields not in the MemoryMetadata spec
+      const customMetadata: Record<string, string> = {};
+      if (args.sourceAgentId) customMetadata.sourceAgentId = args.sourceAgentId;
+      if (args.sourceAgentName)
+        customMetadata.sourceAgentName = args.sourceAgentName;
+      if (args.runId) customMetadata.runId = args.runId;
+      if (args.jobId) customMetadata.jobId = args.jobId;
+      if (args.chatId) customMetadata.chatId = args.chatId;
+      if (args.workspaceId) customMetadata.workspaceId = args.workspaceId;
 
-    const response = await client.memory.add({
-      content: args.content,
-      external_user_id: args.externalUserId,
-      metadata: {
-        role: args.role,
-        category: args.category,
-        ...(Object.keys(customMetadata).length > 0 ? { customMetadata } : {}),
-      },
-    });
-    return { success: true, data: response };
+      const response = await client.memory.add({
+        content: args.content,
+        external_user_id: args.externalUserId,
+        metadata: {
+          role: args.role,
+          category: args.category,
+          ...(Object.keys(customMetadata).length > 0 ? { customMetadata } : {}),
+        },
+      });
+      return { success: true, data: response };
+    } catch (error) {
+      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
+        throw new Error(
+          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
+        );
+      } else if (error instanceof Papr.AuthenticationError) {
+        throw new Error(
+          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct."
+        );
+      }
+      throw error;
+    }
   },
 });
 
@@ -130,23 +143,36 @@ export const searchAgentMemoryTool = createTool({
     "Search relevant memories from PAPR memory. Use 2-3 sentence queries for best results.",
   inputSchema: searchMemorySchema,
   execute: async (args) => {
-    const client = await getPaprClient();
-    const response = await client.memory.search({
-      query: args.query,
-      external_user_id: args.externalUserId,
-      max_memories: args.maxMemories ?? 20,
-      max_nodes: 15,
-      enable_agentic_graph: true,
-      rank_results: true,
-      response_format: "toon", // 30-60% token reduction for LLM contexts
-      // Filter by category if specified
-      ...(args.category && { 
-        filters: { 
-          category: args.category === 'code' ? 'code' : undefined 
-        } 
-      }),
-    });
-    return { success: true, data: response };
+    try {
+      const client = await getPaprClient();
+      const response = await client.memory.search({
+        query: args.query,
+        external_user_id: args.externalUserId,
+        max_memories: args.maxMemories ?? 20,
+        max_nodes: 15,
+        enable_agentic_graph: true,
+        rank_results: true,
+        response_format: "toon", // 30-60% token reduction for LLM contexts
+        // Filter by category if specified
+        ...(args.category && { 
+          filters: { 
+            category: args.category === 'code' ? 'code' : undefined 
+          } 
+        }),
+      });
+      return { success: true, data: response };
+    } catch (error) {
+      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
+        throw new Error(
+          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
+        );
+      } else if (error instanceof Papr.AuthenticationError) {
+        throw new Error(
+          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct."
+        );
+      }
+      throw error;
+    }
   },
 });
 
@@ -156,12 +182,25 @@ export const registerSchemaTool = createTool({
     "Register a PAPR memory schema for custom entity types. Creates node types and relationships for structured knowledge graphs.",
   inputSchema: registerSchemaSchema,
   execute: async (args) => {
-    const client = await getPaprClient();
-    const response = await client.schemas.create({
-      name: args.name,
-      description: args.description,
-    });
-    return { success: true, data: response };
+    try {
+      const client = await getPaprClient();
+      const response = await client.schemas.create({
+        name: args.name,
+        description: args.description,
+      });
+      return { success: true, data: response };
+    } catch (error) {
+      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
+        throw new Error(
+          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
+        );
+      } else if (error instanceof Papr.AuthenticationError) {
+        throw new Error(
+          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct."
+        );
+      }
+      throw error;
+    }
   },
 });
 
@@ -171,12 +210,25 @@ export const listSchemasTool = createTool({
     "List all memory schemas accessible to the user. Returns schema definitions with node types, relationships, and metadata.",
   inputSchema: listSchemasSchema,
   execute: async (args) => {
-    const client = await getPaprClient();
-    const response = await client.schemas.list({
-      status_filter: args.statusFilter,
-      workspace_id: args.workspaceId,
-    });
-    return { success: true, data: response };
+    try {
+      const client = await getPaprClient();
+      const response = await client.schemas.list({
+        status_filter: args.statusFilter,
+        workspace_id: args.workspaceId,
+      });
+      return { success: true, data: response };
+    } catch (error) {
+      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
+        throw new Error(
+          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
+        );
+      } else if (error instanceof Papr.AuthenticationError) {
+        throw new Error(
+          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct."
+        );
+      }
+      throw error;
+    }
   },
 });
 

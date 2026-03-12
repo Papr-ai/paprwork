@@ -7,6 +7,7 @@ export type TabType =
   | "document"
   | "app"
   | "apps"
+  | "documents"
   | "artifacts"
   | "views"
   | "view"
@@ -36,6 +37,9 @@ export interface Tab {
   // Status indicators (for chat tabs)
   isStreaming?: boolean; // Blue pulsing dot
   hasUnread?: boolean; // Green static dot (when streaming finished in bg tab)
+
+  // Favorites
+  isFavorite?: boolean; // Whether this tab is favorited
 
   metadata?: Record<string, unknown>;
 }

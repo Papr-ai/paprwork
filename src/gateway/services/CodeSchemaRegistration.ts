@@ -519,6 +519,8 @@ export async function registerCodeSchema(client: Papr): Promise<{ schema_id: str
     name: schema.name,
     version: schema.version,
     description: schema.description,
+    status: 'active', // Set to active so it can be used immediately
+    scope: 'namespace', // Scope to user's namespace (not organization-wide)
     memory_policy: schema.memory_policy,
     node_types: nodeTypesDict,
     relationship_types: relationshipTypesDict

@@ -844,6 +844,24 @@ async function startGateway(): Promise<void> {
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
     getJobsScheduler().start();
+    
+    // Start code indexing after a delay (non-blocking)
+    setTimeout(async () => {
+      try {
+        const { getApiKey } = await import('./utils/keyResolver.js');
+        const paprKey = await getApiKey('PAPR_API_KEY');
+        
+        if (paprKey) {
+          console.log('[Gateway] Starting code indexing...');
+          const { ensureIndexingStarted } = await import('./services/CodeIndexingService.js');
+          await ensureIndexingStarted(paprKey);
+        } else {
+          console.log('[Gateway] No PAPR_API_KEY found, skipping code indexing');
+        }
+      } catch (error) {
+        console.error('[Gateway] Failed to start code indexing:', error);
+      }
+    }, 3000); // Wait 3 seconds after Gateway starts
   } catch (error) {
     console.error("[Gateway] Failed to start:", error);
     process.exit(1);

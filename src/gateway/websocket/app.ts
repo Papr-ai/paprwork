@@ -6,6 +6,9 @@ import type { WebSocket } from "ws";
 import type { WSMessage } from "./index.js";
 import { getAppService } from "../services/AppService.js";
 import type { AppFile } from "../services/AppService.js";
+import { getAppStateStorage, type TabMetadata, type AppState } from "../services/storage/AppStateStorage.js";
+
+const appStateStorage = getAppStateStorage();
 
 interface CreateAppPayload {
   title: string;
@@ -187,6 +190,85 @@ export async function setupAppHandlers(
             type: "app:toggle-favorite:response",
             success: true,
             data: app,
+          }),
+        );
+        break;
+      }
+
+      // ========== APP STATE PERSISTENCE ==========
+      case "app:save_tabs": {
+        const tabs = message.payload as TabMetadata[];
+        appStateStorage.saveTabs(tabs);
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:save_tabs:response",
+            success: true,
+          }),
+        );
+        break;
+      }
+
+      case "app:load_tabs": {
+        const tabs = appStateStorage.loadTabs();
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:load_tabs:response",
+            success: true,
+            data: tabs,
+          }),
+        );
+        break;
+      }
+
+      case "app:save_state": {
+        const state = message.payload as AppState;
+        appStateStorage.saveAppState(state);
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:save_state:response",
+            success: true,
+          }),
+        );
+        break;
+      }
+
+      case "app:load_state": {
+        const state = appStateStorage.loadAppState();
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:load_state:response",
+            success: true,
+            data: state,
+          }),
+        );
+        break;
+      }
+
+      case "app:toggle_favorite_tab": {
+        const { tabId } = message.payload as { tabId: string };
+        appStateStorage.toggleFavorite(tabId);
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:toggle_favorite_tab:response",
+            success: true,
+          }),
+        );
+        break;
+      }
+
+      case "app:get_favorites": {
+        const favorites = appStateStorage.getFavorites();
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:get_favorites:response",
+            success: true,
+            data: favorites,
           }),
         );
         break;

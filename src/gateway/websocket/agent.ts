@@ -109,6 +109,11 @@ export async function setupAgentHandlers(
 
               apiKey = auth.type === "oauth" ? auth.token : auth.key;
               authType = auth.type;
+              
+              console.log(
+                `[Agent WS] Auth resolved for ${config.provider}: type=${authType} tokenLength=${apiKey?.length || 0} ` +
+                `tokenPrefix=${apiKey?.substring(0, 15)}...`
+              );
             } else {
               // For other providers, use standard key lookup
               const { getApiKeys } = await import("../utils/keyResolver.js");

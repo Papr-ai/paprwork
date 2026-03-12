@@ -25,10 +25,11 @@ export class ClaudeOAuthService {
   private config: OAuthConfig = {
     // From OpenClaw research - official Claude Code client ID
     clientId: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+    // Use claude.ai for authorization (where the user actually authenticates)
     authorizationUrl: "https://claude.ai/oauth/authorize",
-    tokenUrl: "https://console.anthropic.com/v1/oauth/token",
-    redirectUri: "https://console.anthropic.com/oauth/code/callback",
-    scopes: "org:create_api_key user:profile user:inference",
+    tokenUrl: "https://claude.ai/api/oauth/token",
+    redirectUri: "http://127.0.0.1:1456/auth/callback",
+    scopes: "user:profile user:inference",
   };
 
   /**
@@ -56,12 +57,13 @@ export class ClaudeOAuthService {
 
   /**
    * Start OAuth flow - returns authorization URL
+   * Note: Claude expects code=true parameter in addition to response_type=code
    */
   startOAuthFlow(): { url: string; pkce: PKCEChallenge } {
     const pkce = this.generatePKCE();
 
     const params = new URLSearchParams({
-      code: "true",
+      code: "true", // Claude-specific: indicates authorization code flow
       client_id: this.config.clientId,
       response_type: "code",
       redirect_uri: this.config.redirectUri,
@@ -78,36 +80,29 @@ export class ClaudeOAuthService {
 
   /**
    * Exchange authorization code for tokens
-   * Note: Claude returns code in format "code#state"
+   * Note: Claude returns code and state as separate query parameters
+   * IMPORTANT: Must use application/x-www-form-urlencoded per OAuth 2.0 RFC 6749 Section 4.1.3
    */
   async handleCallback(
-    codeWithState: string,
+    code: string,
     verifier: string,
-    expectedState: string,
+    _state: string, // State validation handled by IPC layer
   ): Promise<OAuthTokenInput> {
-    // Split code and state (Claude format: "code#state")
-    const [code, state] = codeWithState.split("#");
-
-    // Verify state matches (CSRF protection)
-    if (state !== expectedState) {
-      throw new Error("State mismatch - possible CSRF attack");
-    }
-
-    const payload = {
+    // OAuth 2.0 RFC 6749 requires form-urlencoded, not JSON!
+    const params = new URLSearchParams({
       code,
-      state,
       grant_type: "authorization_code",
       client_id: this.config.clientId,
       redirect_uri: this.config.redirectUri,
       code_verifier: verifier,
-    };
+    });
 
     const response = await fetch(this.config.tokenUrl, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: JSON.stringify(payload),
+      body: params.toString(),
     });
 
     if (!response.ok) {
@@ -131,20 +126,22 @@ export class ClaudeOAuthService {
 
   /**
    * Refresh access token using refresh token
+   * IMPORTANT: Must use application/x-www-form-urlencoded per OAuth 2.0 RFC 6749
    */
   async refreshToken(refreshToken: string): Promise<OAuthTokenInput> {
-    const payload = {
+    // OAuth 2.0 RFC 6749 requires form-urlencoded, not JSON!
+    const params = new URLSearchParams({
       grant_type: "refresh_token",
       refresh_token: refreshToken,
       client_id: this.config.clientId,
-    };
+    });
 
     const response = await fetch(this.config.tokenUrl, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: JSON.stringify(payload),
+      body: params.toString(),
     });
 
     if (!response.ok) {

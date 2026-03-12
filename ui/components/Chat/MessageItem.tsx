@@ -48,10 +48,7 @@ function renderSequence(
   getJobName: (jobId: string) => string | undefined,
   getAgentName: (agentId: string) => string,
 ): React.ReactNode {
-  console.log(
-    "[MessageItem] Rendering sequence:",
-    JSON.stringify(sequence, null, 2),
-  );
+
 
   const elements: React.ReactNode[] = [];
 
@@ -61,13 +58,16 @@ function renderSequence(
     value: string,
     permission: "always" | "ask",
   ) => {
+    console.log("[MessageItem] handleKeySubmit called", { name, permission });
     try {
-      await window.electronAPI.customKeys.add({
+      console.log("[MessageItem] Calling window.electronAPI.customKeys.add...");
+      const result = await window.electronAPI.customKeys.add({
         name,
         value,
         permission,
         description: "",
       });
+      console.log("[MessageItem] Key added successfully:", result);
       // Card will update to "submitted" status via the tool result
       // TODO: Optionally trigger a re-render to show success state immediately
     } catch (error) {
@@ -452,15 +452,6 @@ export const MessageItem: React.FC<MessageItemProps> = ({ chatId, message }) => 
   // Check if message has V1-style sequence
   const hasSequence = message.sequence && message.sequence.length > 0;
 
-  // Debug logging
-  if (!isUser) {
-    console.log("[MessageItem] Message:", {
-      hasSequence,
-      sequenceLength: message.sequence?.length,
-      toolCallsLength: message.toolCalls?.length,
-      contentLength: content?.length,
-    });
-  }
 
   return (
     <div
@@ -585,16 +576,19 @@ export const MessageItem: React.FC<MessageItemProps> = ({ chatId, message }) => 
                   value: string,
                   permission: "always" | "ask",
                 ) => {
+                  console.log("[MessageItem:Fallback] handleKeySubmit called", { name, permission });
                   try {
-                    await window.electronAPI.customKeys.add({
+                    console.log("[MessageItem:Fallback] Calling window.electronAPI.customKeys.add...");
+                    const result = await window.electronAPI.customKeys.add({
                       name,
                       value,
                       permission,
                       description: "",
                     });
+                    console.log("[MessageItem:Fallback] Key added successfully:", result);
                   } catch (error) {
                     console.error(
-                      "[MessageItem] Failed to add custom key:",
+                      "[MessageItem:Fallback] Failed to add custom key:",
                       error,
                     );
                   }

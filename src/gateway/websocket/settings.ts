@@ -27,19 +27,56 @@ interface PermissionData {
   calendar: boolean;
 }
 
+interface CodeIndexingSettings {
+  enabled: boolean;
+  excludedFolders: string[]; // Folders to exclude from indexing (e.g., "papr_repo")
+}
+
+interface UIPreferences {
+  lastModelId: string | null; // Last selected model
+  onboardingDismissed: boolean; // Whether onboarding was dismissed
+  onboardingStep1Completed: boolean; // Configure API keys
+  onboardingStep2Completed: boolean; // Setup your agents
+  onboardingStep3Completed: boolean; // Complete first task
+}
+
 interface SettingsData {
   profile: ProfileData;
   permissions: PermissionData;
+  codeIndexing: CodeIndexingSettings;
+  uiPreferences: UIPreferences;
 }
 
 const DEFAULTS: SettingsData = {
   profile: { name: "", email: "", imageUrl: "" },
   permissions: { fileSystem: true, network: true, calendar: false },
+  codeIndexing: {
+    enabled: true,
+    excludedFolders: [
+      "papr_repo",      // Cloned repositories
+      "node_modules",   // NPM dependencies
+      ".venv",          // Python virtual environments
+      "venv",
+      ".git",           // Git history
+      "dist",           // Build outputs
+      "build",
+      "__pycache__",    // Python cache
+      ".next",          // Next.js build
+      ".nuxt",          // Nuxt build
+    ],
+  },
+  uiPreferences: {
+    lastModelId: null,
+    onboardingDismissed: false,
+    onboardingStep1Completed: false,
+    onboardingStep2Completed: false,
+    onboardingStep3Completed: false,
+  },
 };
 
 const SETTINGS_PATH = path.join(os.homedir(), "PAPR", "data", "settings.json");
 
-async function loadSettings(): Promise<SettingsData> {
+export async function loadSettings(): Promise<SettingsData> {
   try {
     const raw = await fs.readFile(SETTINGS_PATH, "utf-8");
     return { ...DEFAULTS, ...JSON.parse(raw) };
@@ -87,6 +124,37 @@ export async function setupSettingsHandlers(
           id: message.id,
           success: true,
           data: settings.permissions,
+        });
+        break;
+      }
+
+      case "settings:save-code-indexing": {
+        const payload = message.payload as Partial<CodeIndexingSettings>;
+        const settings = await loadSettings();
+        settings.codeIndexing = { ...settings.codeIndexing, ...payload };
+        await saveSettings(settings);
+        
+        // If indexing was toggled or excluded folders changed, notify CodeIndexingService
+        // TODO: Add hot reload for code indexing config
+        
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: settings.codeIndexing,
+        });
+        break;
+      }
+
+      case "settings:save-ui-preferences": {
+        const payload = message.payload as Partial<UIPreferences>;
+        const settings = await loadSettings();
+        settings.uiPreferences = { ...settings.uiPreferences, ...payload };
+        await saveSettings(settings);
+        
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: settings.uiPreferences,
         });
         break;
       }

@@ -96,12 +96,15 @@ export function setupWebSocketHandlers(wss: WebSocketServer): void {
   setWebSocketServer(wss);
 
   wss.on("connection", (ws: WebSocket) => {
-    console.log("[WebSocket] Client connected");
+    const connectionTime = Date.now();
+    console.log(`[WebSocket] Client connected at ${new Date(connectionTime).toISOString()}`);
 
     // Setup message handlers
     ws.on("message", async (data: Buffer) => {
+      //const messageStartTime = Date.now();
       try {
         const message: WSMessage = JSON.parse(data.toString());
+        //console.log(`[WebSocket] Received ${message.type} at +${messageStartTime - connectionTime}ms`);
 
         // Route to appropriate handler
         if (message.type.startsWith("agent:")) {

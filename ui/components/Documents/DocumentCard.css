@@ -1,0 +1,332 @@
+/**
+ * DocumentCard Styles - Liquid Glass Orb Design (mirrors AppCard with document-specific gradient)
+ * Document orb uses a purple/pink gradient instead of blue
+ */
+
+.document-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  /* True Liquid Glass: translucent card with blur */
+  background: rgba(255, 255, 255, 0.35);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.30);
+  border-radius: 18px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 220ms var(--ease, cubic-bezier(.2,.8,.2,1)),
+              box-shadow 220ms var(--ease, cubic-bezier(.2,.8,.2,1)),
+              background 220ms ease;
+}
+
+.document-card:hover {
+  transform: translateY(-3px) scale(1.01);
+  background: rgba(255, 255, 255, 0.45);
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.08),
+    0 0 0 1px rgba(255, 255, 255, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.30);
+}
+
+/* Featured card variant */
+.document-card--featured {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.40);
+}
+
+.document-card--featured:hover {
+  background: rgba(255, 255, 255, 0.50);
+}
+
+.document-card--featured .document-card__preview {
+  width: 280px;
+  min-width: 280px;
+  height: auto;
+  min-height: 200px;
+}
+
+.document-card--featured .document-card__orb {
+  width: 140px;
+  height: 140px;
+}
+
+.document-card--featured .document-card__orb-icon svg {
+  width: 56px;
+  height: 56px;
+}
+
+.document-card--featured .document-card__content {
+  padding: 32px;
+  justify-content: center;
+}
+
+.document-card--featured .document-card__title {
+  font-size: 22px;
+}
+
+.document-card--featured .document-card__preview-text {
+  font-size: 15px;
+  -webkit-line-clamp: 3;
+}
+
+/* Preview area with glass orb */
+.document-card__preview {
+  width: 100%;
+  height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+}
+
+/* Glass orb - Purple/Pink gradient for documents */
+.document-card__orb {
+  position: relative;
+  width: 110px;
+  height: 110px;
+  border-radius: 50%;
+  /* Purple → Pink gradient for documents */
+  background: linear-gradient(
+    135deg,
+    rgba(139, 92, 246, 0.45) 0%,
+    rgba(217, 70, 239, 0.35) 60%,
+    rgba(236, 72, 153, 0.30) 100%
+  );
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  border: 1px solid rgba(217, 70, 239, 0.35);
+  box-shadow:
+    0 6px 24px rgba(139, 92, 246, 0.18),
+    0 2px 8px rgba(236, 72, 153, 0.10),
+    inset 0 1px 2px rgba(255, 255, 255, 0.45);
+  transition: transform 220ms var(--ease, cubic-bezier(.2,.8,.2,1)),
+              box-shadow 220ms var(--ease, cubic-bezier(.2,.8,.2,1));
+}
+
+.document-card:hover .document-card__orb {
+  transform: scale(1.06);
+  box-shadow:
+    0 10px 36px rgba(139, 92, 246, 0.25),
+    0 4px 12px rgba(236, 72, 153, 0.15),
+    inset 0 1px 3px rgba(255, 255, 255, 0.55);
+}
+
+/* Orb inner: centers the icon */
+.document-card__orb-inner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(139, 92, 246, 0.80);
+}
+
+/* Refraction highlight on top of orb - glass lensing effect */
+.document-card__orb-highlight {
+  position: absolute;
+  top: 8px;
+  left: 14px;
+  right: 14px;
+  height: 40%;
+  border-radius: 50%;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.55) 0%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  pointer-events: none;
+}
+
+/* Icon inside orb */
+.document-card__orb-icon {
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.document-card__orb-icon svg {
+  width: 44px;
+  height: 44px;
+}
+
+/* Content area */
+.document-card__content {
+  padding: 16px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.document-card__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: -0.01em;
+}
+
+.document-card__title-input {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  border: none;
+  border-bottom: 2px solid var(--accent);
+  background: transparent;
+  outline: none;
+  padding: 0;
+  margin: 0;
+  width: 100%;
+}
+
+.document-card__preview-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.document-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.document-card__date {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.document-card__meta-divider {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  opacity: 0.5;
+}
+
+.document-card__word-count {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+/* Hover actions */
+.document-card__actions {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+
+.document-card__actions--visible {
+  opacity: 1;
+}
+
+.document-card__action {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--glass-bg);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--glass-border, var(--border));
+  border-radius: 8px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.document-card__action:hover {
+  background: var(--glass-bg-hover);
+  color: var(--text-primary);
+}
+
+.document-card__action--favorited {
+  color: #FFD700;
+}
+
+.document-card__action--delete:hover {
+  background: var(--error);
+  border-color: var(--error);
+  color: white;
+}
+
+/* Drag state */
+.document-card[draggable="true"] {
+  cursor: grab;
+}
+
+.document-card[draggable="true"]:active {
+  cursor: grabbing;
+  opacity: 0.7;
+}
+
+/* Dark mode adjustments */
+@media (prefers-color-scheme: dark) {
+  .document-card {
+    background: rgba(20, 22, 28, 0.40);
+    border-color: rgba(255, 255, 255, 0.10);
+  }
+
+  .document-card:hover {
+    background: rgba(20, 22, 28, 0.55);
+    box-shadow:
+      0 12px 40px rgba(0, 0, 0, 0.30),
+      0 0 0 1px rgba(255, 255, 255, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+
+  .document-card--featured {
+    background: rgba(20, 22, 28, 0.45);
+  }
+
+  .document-card__orb {
+    /* Purple/Pink gradient - dark mode: deeper tones */
+    background: linear-gradient(
+      135deg,
+      rgba(139, 92, 246, 0.50) 0%,
+      rgba(217, 70, 239, 0.35) 60%,
+      rgba(236, 72, 153, 0.25) 100%
+    );
+    border-color: rgba(217, 70, 239, 0.25);
+    box-shadow:
+      0 6px 24px rgba(139, 92, 246, 0.30),
+      0 2px 8px rgba(236, 72, 153, 0.12),
+      inset 0 1px 1px rgba(255, 255, 255, 0.12);
+  }
+
+  .document-card:hover .document-card__orb {
+    box-shadow:
+      0 10px 36px rgba(139, 92, 246, 0.40),
+      0 4px 12px rgba(236, 72, 153, 0.18),
+      inset 0 1px 2px rgba(255, 255, 255, 0.18);
+  }
+
+  .document-card__orb-inner {
+    color: rgba(217, 70, 239, 0.90);
+  }
+
+  .document-card__orb-highlight {
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.18) 0%,
+      rgba(255, 255, 255, 0) 100%
+    );
+  }
+}

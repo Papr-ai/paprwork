@@ -311,6 +311,16 @@ export class AgentService {
 
       // Extract summary if present (injected by storage providers)
       let conversationSummary: string | undefined;
+      
+      // DEBUG: Check historyRaw before filtering
+      if (historyRaw.length > 0) {
+        console.log(`[AgentService] 🔍 historyRaw[0] keys:`, Object.keys(historyRaw[0]));
+        if (historyRaw.length > 1) {
+          console.log(`[AgentService] 🔍 historyRaw[1] keys:`, Object.keys(historyRaw[1]));
+          console.log(`[AgentService] 🔍 historyRaw[1]:`, JSON.stringify(historyRaw[1]).substring(0, 200));
+        }
+      }
+      
       const history = historyRaw.filter((msg) => {
         if (typeof msg === "object" && msg !== null && "__summary" in msg) {
           conversationSummary = (msg as { __summary: string }).__summary;
@@ -320,6 +330,35 @@ export class AgentService {
       });
 
       timings.loadHistory = performance.now() - t;
+
+      console.log(`[AgentService] 📥 Loaded ${historyRaw.length} messages from storage (before summary extraction)`);
+      console.log(`[AgentService] 📥 After summary extraction: ${history.length} messages`);
+      
+      // DEBUG: Check what fields exist in first message
+      if (history.length > 0) {
+        console.log(`[AgentService] 🔍 First message keys:`, Object.keys(history[0]));
+        console.log(`[AgentService] 🔍 First message:`, JSON.stringify(history[0]).substring(0, 200));
+      }
+      
+      // Log FIRST 5 and LAST 10 messages from raw history to debug ordering
+      console.log(`[AgentService] 📋 FIRST 5 messages in history array:`);
+      history.slice(0, 5).forEach((msg: any, i: number) => {
+        const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+        const preview = content.substring(0, 60);
+        // Try to extract timestamp if available
+        const timestamp = msg.timestamp || msg.createdAt || 'no-timestamp';
+        console.log(`  [${i}] ${msg.role} [${timestamp}]: ${preview}...`);
+      });
+      
+      console.log(`[AgentService] 📋 LAST 10 messages in history array:`);
+      const startIdx = Math.max(0, history.length - 10);
+      history.slice(startIdx).forEach((msg: any, i: number) => {
+        const actualIdx = startIdx + i;
+        const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+        const preview = content.substring(0, 60);
+        const timestamp = msg.timestamp || msg.createdAt || 'no-timestamp';
+        console.log(`  [${actualIdx}] ${msg.role} [${timestamp}]: ${preview}...`);
+      });
 
       const historyCount = history.length;
       const historySize = JSON.stringify(history).length;
@@ -334,14 +373,17 @@ export class AgentService {
         const skillService = getSkillService();
         const allSkills = await skillService.listSkills();
         const active = allSkills.filter((s: SkillRecord) => s.enabled);
+        console.log(`[AgentService] 📚 Loaded ${active.length} enabled skills for system prompt`);
         if (active.length > 0) {
           enabledSkills = active.map((s: SkillRecord) => ({
             id: s.id,
             name: s.name,
             description: s.description,
           }));
+          console.log(`[AgentService] Skills sample: ${enabledSkills.slice(0, 3).map(s => s.name).join(', ')}...`);
         }
-      } catch {
+      } catch (error) {
+        console.warn('[AgentService] ⚠️  Skills not initialized yet:', (error as Error).message);
         // Skills not initialized yet — proceed without them
       }
       timings.loadSkills = performance.now() - t;
@@ -794,50 +836,111 @@ export class AgentService {
           ? "openai-codex-responses"
           : "anthropic-messages";
         const envKey = useCodex ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
-        const token = process.env[envKey];
+        
+        // Use apiKey from config (which includes OAuth tokens)
+        const token = config.apiKey || process.env[envKey];
         const errorHint = useCodex
           ? "Please connect your ChatGPT subscription."
           : "Please connect your Claude Pro/Max subscription or add an API key.";
+
+        console.log(
+          `[AgentService] Pi-ai token check: provider=${piProvider} ` +
+          `hasConfigApiKey=${!!config.apiKey} hasEnvKey=${!!process.env[envKey]} ` +
+          `tokenLength=${token?.length || 0}`
+        );
 
         if (!token) {
           throw new Error(
             `${piProvider === "anthropic" ? "Anthropic" : "OpenAI"} token not found. ${errorHint}`,
           );
         }
+        
+        // Set token in environment for pi-ai (it reads from process.env)
+        process.env[envKey] = token;
+        console.log(`[AgentService] Set ${envKey} in process.env (length: ${token.length})`);
 
         const piModel = (getModel as (p: string, m: string) => unknown)(
           piProvider,
           piModelId,
         );
         
-        // If model not found in pi-ai registry (e.g., GPT-5.4), create it manually
-        // ChatGPT backend supports any model, pi-ai just doesn't have it registered yet
+        // If model not found in pi-ai registry, create it manually
+        // Both ChatGPT and Claude backends support models not yet in pi-ai registry
         let finalModel = piModel;
-        if (!piModel && useCodex) {
-          console.log(
-            `[AgentService] Model ${piModelId} not in pi-ai registry, creating manually for ChatGPT backend`,
-          );
-          
-          // Create model object matching pi-ai's Model interface
-          // Based on GPT-5.2 structure but with GPT-5.4 pricing
-          finalModel = {
-            id: piModelId,
-            name: piModelId === "gpt-5.4-pro" ? "GPT-5.4 Pro" : "GPT-5.4 Thinking",
-            api: piApiId,
-            provider: piProvider,
-            baseUrl: "https://chatgpt.com/backend-api",
-            reasoning: true,
-            input: ["text", "image"],
-            cost: {
-              input: piModelId === "gpt-5.4-pro" ? 30.0 : 2.5,
-              output: piModelId === "gpt-5.4-pro" ? 180.0 : 15.0,
-              cacheRead: piModelId === "gpt-5.4-pro" ? 3.0 : 0.25,
-              cacheWrite: 0,
-            },
-            contextWindow: 1000000, // 1M tokens
-            maxTokens: 128000,
-          };
+        if (!piModel) {
+          if (useCodex) {
+            console.log(
+              `[AgentService] Model ${piModelId} not in pi-ai registry, creating manually for ChatGPT backend`,
+            );
+            
+            // Create model object matching pi-ai's Model interface
+            // Based on GPT-5.2 structure but with GPT-5.4 pricing
+            finalModel = {
+              id: piModelId,
+              name: piModelId === "gpt-5.4-pro" ? "GPT-5.4 Pro" : "GPT-5.4 Thinking",
+              api: piApiId,
+              provider: piProvider,
+              baseUrl: "https://chatgpt.com/backend-api",
+              reasoning: true,
+              input: ["text", "image"],
+              cost: {
+                input: piModelId === "gpt-5.4-pro" ? 30.0 : 2.5,
+                output: piModelId === "gpt-5.4-pro" ? 180.0 : 15.0,
+                cacheRead: piModelId === "gpt-5.4-pro" ? 3.0 : 0.25,
+                cacheWrite: 0,
+              },
+              contextWindow: 1000000, // 1M tokens
+              maxTokens: 128000,
+            };
+          } else {
+            // Create manual model for Anthropic
+            console.log(
+              `[AgentService] Model ${piModelId} not in pi-ai registry, creating manually for Anthropic backend`,
+            );
+            
+            // Map model ID to display name and pricing
+            const modelInfo = piModelId.includes("opus") ? {
+              name: "Claude Opus 4.6",
+              inputCost: 5.0,
+              outputCost: 25.0,
+              contextWindow: 200000,
+            } : piModelId.includes("sonnet") ? {
+              name: "Claude Sonnet 4.6", 
+              inputCost: 3.0,
+              outputCost: 15.0,
+              contextWindow: 200000,
+            } : {
+              name: "Claude Haiku 4.5",
+              inputCost: 1.0,
+              outputCost: 5.0,
+              contextWindow: 200000,
+            };
+            
+            finalModel = {
+              id: piModelId,
+              name: modelInfo.name,
+              api: piApiId, // CRITICAL: "anthropic-messages" routes to /v1/messages
+              provider: piProvider,
+              baseUrl: "https://api.anthropic.com",
+              reasoning: piModelId.includes("opus") || piModelId.includes("sonnet"),
+              input: ["text", "image"],
+              cost: {
+                input: modelInfo.inputCost,
+                output: modelInfo.outputCost,
+                cacheRead: modelInfo.inputCost * 0.1, // 10% of input cost
+                cacheWrite: modelInfo.inputCost * 1.25, // 25% markup for write
+              },
+              contextWindow: modelInfo.contextWindow,
+              maxTokens: 8192,
+            };
+          }
         }
+        
+        console.log(
+          `[AgentService] Using pi-ai model: ${finalModel ? (finalModel as any).id : 'null'} ` +
+          `api=${finalModel ? (finalModel as any).api : 'null'} ` +
+          `baseUrl=${finalModel ? (finalModel as any).baseUrl : 'null'}`
+        );
         const piContext = buildPiContext({
           messages: messages as any[],
           tools: tools as any,
@@ -845,6 +948,40 @@ export class AgentService {
           providerId: piProvider,
           modelId: piModelId,
         });
+
+        // 🔍 LOG EXACT CONTEXT SENT TO PI-AI
+        console.log(`\n${'='.repeat(80)}`);
+        console.log(`📤 [PI-AI] EXACT CONTEXT BEING SENT TO LLM`);
+        console.log(`${'='.repeat(80)}`);
+        console.log(`Model: ${piModelId}`);
+        console.log(`Provider: ${piProvider}`);
+        console.log(`Total messages: ${piContext.messages?.length || 0}`);
+        console.log(`\nFIRST 5 MESSAGES (should be oldest):`);
+        console.log(`${'─'.repeat(80)}`);
+        if (piContext.messages && Array.isArray(piContext.messages)) {
+          piContext.messages.slice(0, 5).forEach((msg: any, i: number) => {
+            const contentPreview = typeof msg.content === 'string' 
+              ? msg.content.substring(0, 80)
+              : JSON.stringify(msg.content).substring(0, 80);
+            const timestamp = msg.timestamp || 'no-timestamp';
+            console.log(`[${i}] ${msg.role} [ts:${timestamp}]: ${contentPreview}...`);
+          });
+        }
+        console.log(`\nLAST 10 MESSAGES (should be newest):`);
+        console.log(`${'─'.repeat(80)}`);
+        if (piContext.messages && Array.isArray(piContext.messages)) {
+          const startIdx = Math.max(0, piContext.messages.length - 10);
+          piContext.messages.slice(startIdx).forEach((msg: any, i: number) => {
+            const actualIdx = startIdx + i;
+            const contentPreview = typeof msg.content === 'string' 
+              ? msg.content.substring(0, 80)
+              : JSON.stringify(msg.content).substring(0, 80);
+            const timestamp = msg.timestamp || 'no-timestamp';
+            console.log(`[${actualIdx}] ${msg.role} [ts:${timestamp}]: ${contentPreview}...`);
+          });
+        }
+        console.log(`\nTools available: ${Object.keys(tools).length}`);
+        console.log(`${'='.repeat(80)}\n`);
 
         const reasoningLevel = (config.reasoning?.effort ?? "medium") as
           | "minimal"
@@ -906,6 +1043,42 @@ export class AgentService {
         );
       } else {
         // Use AI SDK for standard providers (OpenAI Platform, Anthropic, Google)
+        
+        // 🔍 LOG EXACT CONTEXT SENT TO AI SDK
+        console.log(`\n${'='.repeat(80)}`);
+        console.log(`📤 [AI SDK] EXACT CONTEXT BEING SENT TO LLM`);
+        console.log(`${'='.repeat(80)}`);
+        console.log(`Model: ${config.model}`);
+        console.log(`Provider: ${config.provider}`);
+        console.log(`Total messages: ${streamTextOptions.messages.length}`);
+        console.log(`\nFULL MESSAGE CONTENT (not truncated):`);
+        console.log(`${'='.repeat(80)}`);
+        streamTextOptions.messages.forEach((msg: any, i: number) => {
+          console.log(`\n[Message ${i}] Role: ${msg.role}`);
+          if (msg.role === 'system') {
+            console.log(`Content:\n${msg.content}`);
+          } else if (msg.role === 'user') {
+            const contentStr = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
+            console.log(`Content:\n${contentStr}`);
+          } else if (msg.role === 'assistant') {
+            if (Array.isArray(msg.content)) {
+              console.log(`Content (structured):\n${JSON.stringify(msg.content, null, 2)}`);
+            } else {
+              const contentStr = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
+              console.log(`Content:\n${contentStr}`);
+            }
+          } else if (msg.role === 'tool') {
+            console.log(`Content (tool results):\n${JSON.stringify(msg.content, null, 2)}`);
+          } else {
+            console.log(`Content:\n${JSON.stringify(msg, null, 2)}`);
+          }
+          console.log(`${'─'.repeat(80)}`);
+        });
+        console.log(`\nTools available: ${Object.keys(streamTextOptions.tools || {}).length}`);
+        console.log(`Max tokens: ${streamTextOptions.maxTokens}`);
+        console.log(`Max steps: ${streamTextOptions.stopWhen ? 'custom' : 'default'}`);
+        console.log(`${'='.repeat(80)}\n`);
+        
         const result = await streamText(streamTextOptions);
         fullStream = result.fullStream;
         timings.streamTextInit = performance.now() - t;
@@ -1007,14 +1180,21 @@ export class AgentService {
             console.log(`✓ Saved partial response before retry`);
 
             // Now automatically retry with compressed context
-            // The compressed summary will be loaded in the system prompt
+            // IMPORTANT: Don't add the user message again - it's already in history!
+            // The agent will see:
+            // 1. [Compressed summary]
+            // 2. User: original request
+            // 3. Assistant: partial work (saved above)
+            // 4. [Continues from here]
             console.log(`🔄 Automatically retrying with compressed context...`);
+            
+            // Create a continuation message that acknowledges the partial work
+            const continuationPrompt = "Continue from where you left off. You've already made progress on this task.";
 
-            // Recursively call streamAgent to continue with compressed history
-            // This will load the compressed summary and continue from where we left off
+            // Recursively call streamAgent with continuation prompt
             for await (const chunk of this.streamAgent(
               chatId,
-              userMessage,
+              continuationPrompt,
               config,
               options,
             )) {
@@ -1071,9 +1251,14 @@ export class AgentService {
 
       // 6. Check if summarization is needed (50K tokens threshold)
       const stats = await this.storageManager.getChatStats(chatId);
+      console.log(`[AgentService] 📊 Chat stats after stream: message_count=${stats.message_count}, token_count=${stats.token_count}, has_summary=${stats.has_summary}`);
+      
       if (stats.token_count > 50000) {
+        console.log(`[AgentService] 🔄 Token count (${stats.token_count}) > 50K threshold - triggering summarization`);
         // Trigger summarization in background (don't await)
         this.triggerSummarization(chatId).catch(console.error);
+      } else {
+        console.log(`[AgentService] ℹ️  Token count (${stats.token_count}) below 50K threshold - no summarization needed`);
       }
     } catch (error) {
       // Save partial assistant message with error indicator
@@ -1428,23 +1613,34 @@ ${last15.substring(0, 8_000)}`;
   /**
    * Get detailed context breakdown for inspection
    * Shows what will be sent to the LLM on next turn
+   * 
+   * CRITICAL: This MUST use the exact same logic as streamText() to ensure
+   * the context inspector shows exactly what the LLM sees
    */
   async inspectContext(chatId: string, selectedModel: string) {
-    // Load history
-    const history = await this.storageManager.loadMessagesForLLM(chatId);
-
-    // Check if conversation was compressed - get from storage provider directly
-    let conversationSummary: string | undefined;
-    try {
-      const chat = await this.storageManager.getChat(chatId);
-      if (chat) {
-        // Try to get summary from the storage provider's internal structure
-        const chatAny = chat as any;
-        conversationSummary = chatAny.summary_long;
-      }
-    } catch {
-      // No summary
+    // Get actual model from active session if it exists, otherwise use selectedModel
+    let actualModel = selectedModel;
+    const session = this.sessionManager.getSessionIfExists(chatId);
+    if (session) {
+      actualModel = session.config.model;
+      console.log(`[AgentService] Context inspector: using session model ${actualModel} instead of UI model ${selectedModel}`);
+    } else {
+      console.log(`[AgentService] Context inspector: no active session, using UI model ${selectedModel}`);
     }
+
+    // Load history - EXACTLY the same way as the actual agent run
+    const historyRaw = await this.storageManager.loadMessagesForLLM(chatId);
+
+    // Extract summary if present (injected by storage providers)
+    // This MUST match the logic in streamText() to show exactly what LLM sees
+    let conversationSummary: string | undefined;
+    const history = historyRaw.filter((msg) => {
+      if (typeof msg === "object" && msg !== null && "__summary" in msg) {
+        conversationSummary = (msg as { __summary: string }).__summary;
+        return false; // Remove __summary from history
+      }
+      return true; // Keep in history
+    });
 
     // Load skills
     let enabledSkills: Array<{ id: string; name: string; description: string }> =
@@ -1553,24 +1749,84 @@ ${last15.substring(0, 8_000)}`;
       preview: string;
     }> = [];
 
-    for (const msg of messages) {
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+
+      // Skip system prompt (shown in separate section)
+      if (msg.role === "system") {
+        continue;
+      }
+
+      // Skip conversation summary user message (shown in separate section)
+      if (
+        msg.role === "user" &&
+        typeof msg.content === "string" &&
+        msg.content.startsWith("[CONVERSATION CONTEXT - Earlier messages")
+      ) {
+        continue;
+      }
+
+      // Skip tool messages - they'll be merged with their associated assistant message
+      if (msg.role === "tool") {
+        continue;
+      }
+
+      // Handle user and assistant messages
       let content = "";
       if (typeof msg.content === "string") {
         content = msg.content;
       } else if (Array.isArray(msg.content)) {
-        // Handle structured content (tool calls, etc)
-        content = JSON.stringify(msg.content);
+        // Structured content (assistant with tool-calls)
+        const textParts = msg.content.filter((p: any) => p.type === "text");
+        const toolCallParts = msg.content.filter(
+          (p: any) => p.type === "tool-call",
+        );
+
+        if (textParts.length > 0) {
+          content = textParts.map((p: any) => p.text).join(" ");
+        }
+        
+        // If this assistant message has tool-calls, look for the next tool message
+        if (toolCallParts.length > 0) {
+          const toolNames = toolCallParts.map((p: any) => p.toolName).join(", ");
+          content += `\n→ Called tools: ${toolNames}`;
+          
+          // Look ahead for the tool results message (should be next)
+          if (i + 1 < messages.length && messages[i + 1].role === "tool") {
+            const toolMsg = messages[i + 1];
+            if (Array.isArray(toolMsg.content)) {
+              const toolResultParts = toolMsg.content.filter(
+                (p: any) => p.type === "tool-result",
+              );
+              if (toolResultParts.length > 0) {
+                // Show more useful preview (500 chars per result - matches LLM history truncation)
+                // This gives enough context to understand what happened without overwhelming the UI
+                const resultSummaries = toolResultParts.map((p: any) => {
+                  const resultStr =
+                    typeof p.result === "string"
+                      ? p.result
+                      : JSON.stringify(p.result);
+                  const PREVIEW_LENGTH = 500; // ~125 tokens, matches history truncation
+                  const truncated = resultStr.substring(0, PREVIEW_LENGTH);
+                  const suffix = resultStr.length > PREVIEW_LENGTH 
+                    ? `... [+${resultStr.length - PREVIEW_LENGTH} chars]` 
+                    : "";
+                  return `${p.toolName}: ${truncated}${suffix}`;
+                });
+                content += `\n→ Tool results:\n${resultSummaries.join("\n")}`;
+              }
+            }
+          }
+        }
       }
 
       const tokens = estimateTokens(content);
-      if (msg.role !== "system") {
-        historyTokens += tokens;
-      }
+      historyTokens += tokens;
 
       messageBreakdown.push({
         role: msg.role,
         tokens,
-        preview: content.substring(0, 100),
+        preview: content.substring(0, 2000), // Allow longer preview for tool results
       });
     }
 
@@ -1588,7 +1844,7 @@ ${last15.substring(0, 8_000)}`;
       toolTokens;
 
     return {
-      model: selectedModel,
+      model: actualModel,
       totalTokens,
       breakdown: {
         systemPrompt: {
@@ -1605,7 +1861,7 @@ ${last15.substring(0, 8_000)}`;
           : null,
         messages: {
           tokens: historyTokens,
-          count: messages.filter((m) => m.role !== "system").length,
+          count: messageBreakdown.length, // Count only what we actually show
           breakdown: messageBreakdown,
         },
         tools: {

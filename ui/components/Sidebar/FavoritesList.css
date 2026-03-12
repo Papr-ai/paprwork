@@ -103,7 +103,7 @@
   height: 20px;
 }
 
-/* Mini Liquid Glass Orb for App Favorites (matches Tab.tsx glass orb) */
+/* Mini Liquid Glass Orb for App and Document Favorites (matches Tab.tsx glass orb) */
 .favorite-item__glass-orb {
   display: flex;
   align-items: center;
@@ -111,6 +111,7 @@
   width: 20px;
   height: 20px;
   border-radius: 50%;
+  /* Default: Blue gradient for apps */
   background: linear-gradient(
     135deg,
     rgba(1, 97, 224, 0.40),
@@ -124,6 +125,20 @@
   flex-shrink: 0;
   position: relative;
   overflow: hidden;
+}
+
+/* Purple gradient for document favorites */
+.favorite-item__glass-orb--document {
+  background: linear-gradient(
+    135deg,
+    rgba(139, 92, 246, 0.40),
+    rgba(217, 70, 239, 0.30),
+    rgba(236, 72, 153, 0.25)
+  );
+  border: 0.5px solid rgba(217, 70, 239, 0.30);
+  box-shadow:
+    0 1px 3px rgba(139, 92, 246, 0.20),
+    inset 0 1px 1px rgba(255, 255, 255, 0.35);
 }
 
 .favorite-item__glass-orb::after {
@@ -163,6 +178,19 @@
       rgba(0, 254, 254, 0.30)
     );
     border-color: rgba(12, 205, 255, 0.40);
+    box-shadow:
+      0 1px 3px rgba(0, 0, 0, 0.30),
+      inset 0 1px 1px rgba(255, 255, 255, 0.20);
+  }
+
+  .favorite-item__glass-orb--document {
+    background: linear-gradient(
+      135deg,
+      rgba(139, 92, 246, 0.50),
+      rgba(217, 70, 239, 0.40),
+      rgba(236, 72, 153, 0.30)
+    );
+    border-color: rgba(217, 70, 239, 0.40);
     box-shadow:
       0 1px 3px rgba(0, 0, 0, 0.30),
       inset 0 1px 1px rgba(255, 255, 255, 0.20);

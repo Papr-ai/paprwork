@@ -124,6 +124,46 @@ export class CodeIndexerService {
   }
   
   /**
+   * Index a single mini-app project
+   */
+  async indexSingleMiniApp(appId: string): Promise<void> {
+    const appPath = path.join(this.paprDir, 'apps', appId);
+    if (!fs.existsSync(appPath)) {
+      throw new Error(`Mini-app not found: ${appId}`);
+    }
+    
+    const metadata = await this.extractMiniAppMetadata(appPath, appId);
+    await this.indexProject(metadata);
+    
+    // Index code files
+    const codeFiles = this.findCodeFiles(appPath);
+    for (const filePath of codeFiles) {
+      const fileMetadata = this.extractCodeFileMetadata(filePath, metadata);
+      await this.indexCodeFile(fileMetadata, metadata);
+    }
+  }
+
+  /**
+   * Index a single job project
+   */
+  async indexSingleJob(jobId: string): Promise<void> {
+    const jobPath = path.join(this.paprDir, 'Jobs', jobId);
+    if (!fs.existsSync(jobPath)) {
+      throw new Error(`Job not found: ${jobId}`);
+    }
+    
+    const metadata = await this.extractJobMetadata(jobPath, jobId);
+    await this.indexProject(metadata);
+    
+    // Index code files
+    const codeFiles = this.findCodeFiles(jobPath);
+    for (const filePath of codeFiles) {
+      const fileMetadata = this.extractCodeFileMetadata(filePath, metadata);
+      await this.indexCodeFile(fileMetadata, metadata);
+    }
+  }
+  
+  /**
    * Index all mini-apps
    */
   private async indexMiniApps(appsDir: string): Promise<{

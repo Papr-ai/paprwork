@@ -2,7 +2,7 @@
  * PlanCard - Renders a plan with step progress from create_plan/update_plan tool results
  */
 
-import React, { useState, useMemo } from "react";
+import { useState, useMemo } from "react";
 import "./PlanCard.css";
 
 interface PlanStep {
@@ -45,6 +45,7 @@ export function PlanCard({ data }: PlanCardProps) {
     const c = data.steps.filter(
       (s) => s.status === "completed" || s.status === "skipped",
     ).length;
+
     return {
       completed: c,
       total: t,
@@ -123,15 +124,27 @@ export function parsePlanFromToolResult(
   try {
     const parsed = JSON.parse(result) as { data?: PlanData; success?: boolean };
     if (parsed?.data?.planId && parsed?.data?.steps) {
+
       return parsed.data;
     }
     // Maybe the result is the plan directly
     const direct = parsed as unknown as PlanData;
     if (direct?.planId && direct?.steps) {
+
       return direct;
     }
-  } catch {
-    /* not JSON */
+  } catch (e) {
+    // If parsing fails, try to extract from stringified JSON
+    // Sometimes tools return JSON.stringify(object) instead of object
+    try {
+      // Result might be double-stringified
+      const doubleString = JSON.parse(result);
+      if (typeof doubleString === 'string') {
+        return parsePlanFromToolResult(toolName, doubleString);
+      }
+    } catch {
+      /* not double-stringified */
+    }
   }
 
   return null;

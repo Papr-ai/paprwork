@@ -20,16 +20,82 @@ import { initJobPermissionListener } from "./stores/jobPermissionStore";
 import { initJobLiveLogsListener } from "./stores/jobLiveLogsStore";
 import { initSubagentJobStore } from "./stores/subagentJobStore";
 import { KeyPermissionModal } from "./components/Permissions/KeyPermissionModal";
+import { useAppStatePersistence } from "./hooks/useAppStatePersistence";
 import "./styles/liquid-glass.css";
 import "./App.css";
 
 export function App() {
+  // Track React initialization timing
+  const appStartTime = performance.now();
+  console.log(`[React] App component mounting at ${appStartTime.toFixed(2)}ms`);
+
+  // ALL HOOKS MUST COME BEFORE ANY CONDITIONAL RETURNS
+  
+  // Initialize SQLite persistence for tabs/favorites (fast!)
+  useAppStatePersistence();
+
+  // Load UI preferences from settings BEFORE first render
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
+  const [sqliteLoaded, setSqliteLoaded] = useState(false);
+  
+  useEffect(() => {
+    const loadUIPreferences = async () => {
+      try {
+        const { gateway } = await import('./src/lib/gateway.js');
+        
+        // Always load from settings (source of truth)
+        const response = await gateway.send('settings:get', {});
+        
+        if (response.success && response.data?.uiPreferences) {
+          const { lastModelId } = response.data.uiPreferences;
+          
+          // Populate localStorage for fast access (model selection only)
+          if (lastModelId) {
+            localStorage.setItem("paprwork_last_model_id", lastModelId);
+          }
+          
+          console.log('[App] UI preferences loaded from settings:', { lastModelId });
+        } else {
+          console.log('[App] No UI preferences found in settings, using defaults');
+        }
+        
+        setPreferencesLoaded(true);
+      } catch (error) {
+        console.error('[App] Failed to load UI preferences:', error);
+        setPreferencesLoaded(true); // Continue anyway
+      }
+    };
+    
+    loadUIPreferences();
+  }, []);
+
+  // Listen for SQLite load completion
+  useEffect(() => {
+    const handleSqliteLoaded = () => {
+      console.log('[App] SQLite persistence loaded');
+      setSqliteLoaded(true);
+    };
+    
+    window.addEventListener('papr-sqlite-loaded', handleSqliteLoaded);
+    
+    // If already loaded (race condition), mark as loaded
+    if ((window as any).__paprSqliteLoaded) {
+      setSqliteLoaded(true);
+    }
+    
+    return () => window.removeEventListener('papr-sqlite-loaded', handleSqliteLoaded);
+  }, []);
+
   const { chats, createChat } = useChat();
   const { tabs, createTab } = useTabs();
   const { activeTabId, activeLeftTab } = useTabStore();
   const { activeRequest, claimedByChat, respond } = usePermissionStore();
-  const [hydrated, setHydrated] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+
+  // Log when React finishes first render
+  useEffect(() => {
+    console.log(`[React] App component mounted at +${(performance.now() - appStartTime).toFixed(2)}ms`);
+  }, [appStartTime]);
 
   // Cmd+K to open command palette
   useEffect(() => {
@@ -43,153 +109,22 @@ export function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Initialize the Electron IPC permission listener once
+  // Initialize permission listeners
   useEffect(() => {
     initPermissionListener();
-  }, []);
-
-  // Initialize job permission broadcast listener (Gateway WebSocket)
-  useEffect(() => {
     initJobPermissionListener();
-  }, []);
-
-  // Initialize job live logs listener for streaming log display
-  useEffect(() => {
     initJobLiveLogsListener();
-  }, []);
-
-  // Initialize subagent job store (reportChatId → jobId for MiniChatCard during run)
-  useEffect(() => {
     initSubagentJobStore();
   }, []);
 
-  // Wait for Zustand persist to finish loading from localStorage
-  useEffect(() => {
-    const unsubscribe = useTabStore.persist.onFinishHydration(() => {
-      console.log("[App] ✅ Tab store hydrated from localStorage");
-      setHydrated(true);
-    });
+  // Don't render app until preferences AND SQLite are loaded
+  if (!preferencesLoaded || !sqliteLoaded) {
+    return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: '#fff' }}>
+      Loading {!preferencesLoaded && 'preferences'}{!preferencesLoaded && !sqliteLoaded && ' and '}{!sqliteLoaded && 'app state'}...
+    </div>;
+  }
 
-    // If already hydrated (e.g., hot reload), set immediately
-    if (useTabStore.persist.hasHydrated()) {
-      console.log("[App] ✅ Tab store already hydrated");
-      setHydrated(true);
-    }
-
-    return unsubscribe;
-  }, []);
-
-  // Initialize a default chat and tab on mount (V1 approach)
-  // Only runs AFTER hydration completes
-  useEffect(() => {
-    if (!hydrated) {
-      console.log("[App.useEffect] ⏳ Waiting for hydration...");
-      return;
-    }
-    console.log("[App.useEffect] ========== START ==========");
-
-    const initialize = async () => {
-      console.log(`[App.useEffect] Checking if initialization needed...`);
-      console.log(`[App.useEffect] Current tabs.length: ${tabs.length}`);
-      console.log(`[App.useEffect] Current activeTabId: ${activeTabId}`);
-
-      // If no tabs exist, create a new temp chat with a tab
-      if (tabs.length === 0) {
-        console.log("[App.useEffect] ✅ No tabs found, creating initial tab");
-
-        try {
-          console.log("[App.useEffect] Step 1: Calling createChat()...");
-          const tempChatId = await createChat(); // Creates temp chat
-          console.log(
-            `[App.useEffect] Step 1 DONE: tempChatId = ${tempChatId}`,
-          );
-
-          if (tempChatId) {
-            console.log("[App.useEffect] Step 2: Calling createTab()...");
-            const tabId = createTab("chat", tempChatId, "New Chat");
-            console.log(`[App.useEffect] Step 2 DONE: tabId = ${tabId}`);
-
-            // Verify it was set
-            console.log("[App.useEffect] Step 3: Verifying state...");
-            const currentState = useTabStore.getState();
-            console.log(
-              `[App.useEffect] Step 3: activeTabId = ${currentState.activeTabId}`,
-            );
-            console.log(
-              `[App.useEffect] Step 3: tabs count = ${currentState.tabs.length}`,
-            );
-
-            if (!currentState.activeTabId) {
-              console.error(
-                "[App.useEffect] ❌ ERROR: activeTabId is STILL null/undefined after createTab!",
-              );
-              console.error("[App.useEffect] Full state:", currentState);
-            } else {
-              console.log(
-                "[App.useEffect] ✅ SUCCESS: Tab created and activated!",
-              );
-            }
-          } else {
-            console.error(
-              "[App.useEffect] ❌ ERROR: createChat() returned null/undefined",
-            );
-          }
-        } catch (error) {
-          console.error(
-            "[App.useEffect] ❌ ERROR during initialization:",
-            error,
-          );
-        }
-      } else {
-        console.log(`[App.useEffect] ⏭️  Tabs already exist (${tabs.length})`);
-        console.log(`[App.useEffect] Current activeTabId:`, activeTabId);
-
-        // If tabs exist but no active tab, restore from history or select first tab
-        if (tabs.length > 0 && (!activeTabId || !activeLeftTab)) {
-          console.log(
-            "[App.useEffect] ⚠️  Missing active tab/pane selection despite existing tabs, restoring...",
-          );
-          const { history, historyIndex, switchToTab } = useTabStore.getState();
-
-          console.log(`[App.useEffect] Tab history:`, {
-            historyLength: history.length,
-            historyIndex,
-            history,
-          });
-
-          // First preference: restore persisted activeTabId when available.
-          if (activeTabId) {
-            console.log(
-              `[App.useEffect] Restoring from activeTabId: ${activeTabId}`,
-            );
-            switchToTab(activeTabId, true);
-          }
-          // Otherwise restore from history.
-          else if (history.length > 0 && historyIndex >= 0) {
-            const lastActiveTabId = history[historyIndex];
-            console.log(
-              `[App.useEffect] Restoring from history: ${lastActiveTabId}`,
-            );
-            switchToTab(lastActiveTabId, true); // Skip adding to history
-          } else {
-            // Fallback to first tab
-            console.log(
-              `[App.useEffect] No history, selecting first tab: ${tabs[0].id}`,
-            );
-            switchToTab(tabs[0].id, true);
-          }
-        } else if (activeTabId) {
-          console.log(
-            `[App.useEffect] ✅ Active tab already persisted from localStorage: ${activeTabId}`,
-          );
-        }
-      }
-
-      console.log("[App.useEffect] ========== END ==========");
-    };
-
-    initialize();
-  }, [hydrated, tabs.length, activeTabId, activeLeftTab]); // Re-run after hydration or tab selection changes
+  const activeTab = tabs.find((t) => t.id === activeTabId);
 
   return (
     <>

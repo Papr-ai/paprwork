@@ -1119,10 +1119,16 @@ function MemoryTab() {
                 <line x1="16" y1="17" x2="8" y2="17" />
                 <polyline points="10 9 9 9 8 9" />
               </svg>
-              <div>
+              <div className="data-card__title-group">
                 <h3>Workspace Context</h3>
                 <p>Context files for AI agents</p>
               </div>
+              <button
+                className="settings-btn settings-btn--primary"
+                onClick={() => openFolder("~/PAPR/workspace/")}
+              >
+                Open Folder
+              </button>
             </div>
 
             <div className="workspace-files">
@@ -1146,15 +1152,6 @@ function MemoryTab() {
                 </div>
               )}
             </div>
-
-            <div className="workspace-actions">
-              <button
-                className="settings-btn"
-                onClick={() => openFolder("~/PAPR/workspace/")}
-              >
-                Open Folder
-              </button>
-            </div>
           </div>
 
           {/* PAPR Folder */}
@@ -1170,12 +1167,18 @@ function MemoryTab() {
               >
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
               </svg>
-              <div>
+              <div className="data-card__title-group">
                 <h3>PAPR Folder</h3>
                 <p>
                   <code>~/PAPR/</code> - chats, apps, jobs, workspace
                 </p>
               </div>
+              <button
+                className="settings-btn settings-btn--primary"
+                onClick={() => openFolder("~/PAPR/")}
+              >
+                Open Folder
+              </button>
             </div>
 
             <div className="folder-structure">
@@ -1199,15 +1202,6 @@ function MemoryTab() {
                 <span className="folder-name">chats.db</span>
                 <span className="folder-desc">Chat history</span>
               </div>
-            </div>
-
-            <div className="folder-actions">
-              <button
-                className="settings-btn settings-btn--primary"
-                onClick={() => openFolder("~/PAPR/")}
-              >
-                Open PAPR Folder
-              </button>
             </div>
           </div>
         </div>

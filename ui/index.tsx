@@ -25,12 +25,22 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 
+console.log('[React] Entry point reached - starting React initialization');
+const reactStartTime = performance.now();
+
+// Hide loading screen once React starts
+document.body.classList.add('react-loaded');
+
 const root = ReactDOM.createRoot(
   document.getElementById("root") as HTMLElement,
 );
+
+console.log(`[React] Root created at +${(performance.now() - reactStartTime).toFixed(2)}ms`);
 
 root.render(
   <React.StrictMode>
     <App />
   </React.StrictMode>,
 );
+
+console.log(`[React] Render called at +${(performance.now() - reactStartTime).toFixed(2)}ms`);

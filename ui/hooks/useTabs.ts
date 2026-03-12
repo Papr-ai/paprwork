@@ -27,6 +27,7 @@ export function useTabs() {
     promoteToStandalone,
     createArtifactFromChat,
     setSplitRatio,
+    getSplitRatio,
     enableSplitView,
     disableSplitView,
     goBack,
@@ -64,6 +65,7 @@ export function useTabs() {
 
     // Split view
     setSplitRatio,
+    getSplitRatio,
     enableSplitView,
     disableSplitView,
 

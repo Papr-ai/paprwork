@@ -274,6 +274,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       if (typeof window !== "undefined") {
         try {
           localStorage.setItem("paprwork_last_model_id", modelId);
+          // Also save to Gateway settings for reliable persistence
+          import('../src/lib/gateway.js').then(({ gateway }) => {
+            gateway.send('settings:save-ui-preferences', { lastModelId: modelId }).catch(() => {});
+          });
         } catch {
           /* ignore */
         }
@@ -294,6 +298,23 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       }
     }
     return undefined;
+  },
+
+  // Load UI preferences from settings (called on app mount)
+  loadUIPreferences: async () => {
+    try {
+      const { gateway } = await import('../src/lib/gateway.js');
+      const response = await gateway.send('settings:get', {});
+      if (response.success && response.data?.uiPreferences) {
+        const { lastModelId } = response.data.uiPreferences;
+        if (lastModelId) {
+          // Store in localStorage for fast access
+          localStorage.setItem("paprwork_last_model_id", lastModelId);
+        }
+      }
+    } catch (error) {
+      console.error('[ChatStore] Failed to load UI preferences:', error);
+    }
   },
 }));
 

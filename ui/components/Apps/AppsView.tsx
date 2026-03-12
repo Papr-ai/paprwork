@@ -92,7 +92,7 @@ export function AppsView() {
     }
   };
 
-  // Filter to apps only, then sort
+  // Filter to apps only, then sort/filter
   const apps = useMemo(() => {
     let result = filteredArtifacts.filter((a) => a.type === "app");
 
@@ -101,13 +101,12 @@ export function AppsView() {
         result = [...result].sort((a, b) => a.title.localeCompare(b.title));
         break;
       case "favorites":
-        result = [...result].sort((a, b) => {
-          if (a.favorite && !b.favorite) return -1;
-          if (!a.favorite && b.favorite) return 1;
-          return (
-            new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-          );
-        });
+        // Filter to show only favorited items, sorted by most recent
+        result = result.filter((a) => a.favorite);
+        result = [...result].sort(
+          (a, b) =>
+            new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+        );
         break;
       case "recent":
       default:

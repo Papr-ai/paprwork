@@ -35,20 +35,37 @@ export async function writeRunMemory(
     maxRetries: 2,
     timeout: 30000,
   });
-  await client.memory.add({
-    content: compactContent(input),
-    external_user_id: input.externalUserId,
-    metadata: {
-      category: "learning",
-      role: "assistant",
-      customMetadata: {
-        sourceAgentId: input.sourceAgentId,
-        sourceAgentName: input.sourceAgentName,
-        runId: input.runId,
-        jobId: input.jobId,
-        ...(input.chatId ? { chatId: input.chatId } : {}),
-        writebackPolicy: input.policy,
+  
+  try {
+    await client.memory.add({
+      content: compactContent(input),
+      external_user_id: input.externalUserId,
+      metadata: {
+        category: "learning",
+        role: "assistant",
+        customMetadata: {
+          sourceAgentId: input.sourceAgentId,
+          sourceAgentName: input.sourceAgentName,
+          runId: input.runId,
+          jobId: input.jobId,
+          ...(input.chatId ? { chatId: input.chatId } : {}),
+          writebackPolicy: input.policy,
+        },
       },
-    },
-  });
+    });
+  } catch (error) {
+    if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
+      console.error(`[PaprMemoryWritebackService] Memory quota exceeded for job ${input.jobId}`);
+      console.error(`[PaprMemoryWritebackService] Please upgrade your PAPR Memory account at: https://platform.papr.ai/settings`);
+      throw new Error(
+        "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
+      );
+    } else if (error instanceof Papr.AuthenticationError) {
+      console.error(`[PaprMemoryWritebackService] Invalid PAPR API key`);
+      throw new Error(
+        "Invalid PAPR API key. Please check your Settings and ensure your API key is correct."
+      );
+    }
+    throw error;
+  }
 }

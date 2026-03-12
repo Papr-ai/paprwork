@@ -23,6 +23,38 @@ export function OAuthSection({
 }: OAuthSectionProps) {
   const { status, loading, startOAuthLogin, disconnect } = useOAuth(provider);
   const [useApiKey, setUseApiKey] = useState(false);
+  const [showPasteToken, setShowPasteToken] = useState(false);
+  const [pastedToken, setPastedToken] = useState("");
+  const [pasting, setPasting] = useState(false);
+
+  const handlePasteToken = async () => {
+    const trimmedToken = pastedToken.trim();
+    if (!trimmedToken) return;
+    
+    // Validate token format before sending
+    if (!trimmedToken.startsWith("sk-ant-oat")) {
+      alert("Invalid token format. Claude OAuth tokens should start with sk-ant-oat01-");
+      return;
+    }
+    
+    setPasting(true);
+    try {
+      const result = await window.electronAPI.oauth.pasteToken(provider, trimmedToken);
+      if (result.success) {
+        setPastedToken("");
+        setShowPasteToken(false);
+        alert("Token saved successfully! Refreshing...");
+        // Refresh the page to show updated status
+        window.location.reload();
+      } else {
+        alert(`Failed to save token: ${result.error}`);
+      }
+    } catch (error) {
+      alert(`Error: ${error}`);
+    } finally {
+      setPasting(false);
+    }
+  };
 
   const formatExpiry = (expiresAt?: string) => {
     if (!expiresAt) return "";
@@ -83,13 +115,68 @@ export function OAuthSection({
               <p className="oauth-card__description">
                 Use your {subscriptionName} subscription
               </p>
-              <button
-                className="settings-btn settings-btn--primary"
-                onClick={startOAuthLogin}
-                disabled={loading}
-              >
-                {loading ? "Connecting..." : `Sign in with ${title}`}
-              </button>
+              
+              {provider === "anthropic" && !showPasteToken && (
+                <div style={{ marginBottom: "12px" }}>
+                  <p style={{ fontSize: "13px", color: "#666", marginBottom: "8px" }}>
+                    <strong>Note:</strong> Due to Claude Code CLI limitations, automated setup may not work.
+                    If the button below fails, manually run <code style={{ background: "#f5f5f5", padding: "2px 6px", borderRadius: "3px" }}>claude setup-token</code> in your terminal and paste the token below.
+                  </p>
+                </div>
+              )}
+              
+              <div style={{ display: "flex", gap: "8px", flexDirection: "column" }}>
+                <button
+                  className="settings-btn settings-btn--primary"
+                  onClick={startOAuthLogin}
+                  disabled={loading}
+                  style={{ width: "100%" }}
+                >
+                  {loading ? "Connecting..." : `Sign in with ${title}`}
+                </button>
+                
+                {provider === "anthropic" && (
+                  <button
+                    className="settings-btn settings-btn--secondary"
+                    onClick={() => setShowPasteToken(!showPasteToken)}
+                    style={{ width: "100%" }}
+                  >
+                    {showPasteToken ? "Cancel" : "Paste Token Instead"}
+                  </button>
+                )}
+              </div>
+              
+              {showPasteToken && provider === "anthropic" && (
+                <div style={{ marginTop: "12px" }}>
+                  <p style={{ fontSize: "13px", marginBottom: "8px" }}>
+                    Run <code style={{ background: "#f5f5f5", padding: "2px 6px", borderRadius: "3px" }}>claude setup-token</code> in your terminal,
+                    copy the full token (starts with <code>sk-ant-oat01-</code>), and paste it below:
+                  </p>
+                  <textarea
+                    value={pastedToken}
+                    onChange={(e) => setPastedToken(e.target.value)}
+                    placeholder="Paste your Claude OAuth token here..."
+                    style={{
+                      width: "100%",
+                      minHeight: "80px",
+                      padding: "8px",
+                      fontFamily: "monospace",
+                      fontSize: "12px",
+                      border: "1px solid #ddd",
+                      borderRadius: "4px",
+                      marginBottom: "8px"
+                    }}
+                  />
+                  <button
+                    className="settings-btn settings-btn--primary"
+                    onClick={handlePasteToken}
+                    disabled={!pastedToken.trim() || pasting}
+                    style={{ width: "100%" }}
+                  >
+                    {pasting ? "Saving..." : "Save Token"}
+                  </button>
+                </div>
+              )}
             </>
           )}
 

@@ -2,9 +2,12 @@
  * OnboardingCard - Compact collapsible card in sidebar footer
  * Matches V1's exact 3-step onboarding design
  * Reference: Paprwork v1 index.html lines 146-201, style.css lines 1004-1182
+ * 
+ * State is persisted to settings.json via Gateway WebSocket
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import { gateway } from "../../src/lib/gateway";
 import "./OnboardingCard.css";
 
 type StepState = "locked" | "active" | "completed";
@@ -22,55 +25,73 @@ interface OnboardingCardProps {
   onSendMessage: (message: string) => void;
 }
 
-const STORAGE_KEY = "papr-onboarding-state";
-const DISMISSED_KEY = "papr-onboarding-dismissed";
-
-function loadState(): OnboardingState {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw) as OnboardingState;
-  } catch {
-    // ignore
-  }
-  return {
-    step1Completed: false,
-    step2Completed: false,
-    step3Completed: false,
-  };
-}
-
-function saveState(state: OnboardingState): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
-function isDismissed(): boolean {
-  return localStorage.getItem(DISMISSED_KEY) === "true";
-}
-
-function dismiss(): void {
-  localStorage.setItem(DISMISSED_KEY, "true");
-}
-
 export function OnboardingCard({
   onOpenSettings,
   onSendMessage,
 }: OnboardingCardProps) {
   const [hidden, setHidden] = useState(true);
   const [expanded, setExpanded] = useState(false);
-  const [state, setState] = useState<OnboardingState>(loadState);
+  const [state, setState] = useState<OnboardingState>({
+    step1Completed: false,
+    step2Completed: false,
+    step3Completed: false,
+  });
   const [slideOut, setSlideOut] = useState(false);
+  const [isInitialized, setIsInitialized] = useState(false);
 
-  // Show card only if not dismissed
+  // Load state from settings (populated by App.tsx on mount)
   useEffect(() => {
-    if (!isDismissed()) {
-      setHidden(false);
-    }
+    console.log('[OnboardingCard] Component mounted, reading localStorage...');
+    const dismissed = localStorage.getItem("papr-onboarding-dismissed") === "true";
+    const step1 = localStorage.getItem("papr-onboarding-step1") === "true";
+    const step2 = localStorage.getItem("papr-onboarding-step2") === "true";
+    const step3 = localStorage.getItem("papr-onboarding-step3") === "true";
+    
+    console.log('[OnboardingCard] localStorage values:', {
+      dismissed,
+      step1Raw: localStorage.getItem("papr-onboarding-step1"),
+      step2Raw: localStorage.getItem("papr-onboarding-step2"),
+      step3Raw: localStorage.getItem("papr-onboarding-step3"),
+      step1,
+      step2,
+      step3
+    });
+    
+    setHidden(dismissed);
+    setState({
+      step1Completed: step1,
+      step2Completed: step2,
+      step3Completed: step3,
+    });
+    
+    console.log('[OnboardingCard] State set to:', {
+      hidden: dismissed,
+      step1Completed: step1,
+      step2Completed: step2,
+      step3Completed: step3
+    });
+    
+    // Mark as initialized after loading from localStorage
+    setIsInitialized(true);
   }, []);
 
-  // Persist state changes
+  // Persist state changes to localStorage only
+  // useAppStatePersistence will pick up changes and save to SQLite
+  // SKIP on initial mount to avoid overwriting SQLite data!
   useEffect(() => {
-    saveState(state);
-  }, [state]);
+    if (!isInitialized) {
+      console.log('[OnboardingCard] Skipping save - component not initialized yet');
+      return;
+    }
+    
+    console.log('[OnboardingCard] Saving state changes to localStorage...');
+    localStorage.setItem("papr-onboarding-step1", state.step1Completed.toString());
+    localStorage.setItem("papr-onboarding-step2", state.step2Completed.toString());
+    localStorage.setItem("papr-onboarding-step3", state.step3Completed.toString());
+    
+    // Dispatch custom event to trigger save
+    window.dispatchEvent(new CustomEvent('papr-onboarding-changed'));
+  }, [state, isInitialized]);
 
   // Auto-dismiss when all 3 steps complete
   useEffect(() => {
@@ -78,7 +99,9 @@ export function OnboardingCard({
       const timer = setTimeout(() => {
         setSlideOut(true);
         setTimeout(() => {
-          dismiss();
+          // Dismiss
+          localStorage.setItem("papr-onboarding-dismissed", "true");
+          window.dispatchEvent(new CustomEvent('papr-onboarding-changed'));
           setHidden(true);
         }, 300);
       }, 2000);

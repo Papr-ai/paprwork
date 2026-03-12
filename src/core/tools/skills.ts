@@ -14,7 +14,8 @@ const createSkillSchema = z.object({
 
 export const readSkillTool = createTool({
   id: "read_skill",
-  description: "Read one skill by id/name or list all skills",
+  description:
+    "Read a skill's full content by ID/name, or list ALL installed skills. Call with NO arguments to discover all 26+ available skills (returns just name/description). Example: read_skill() returns directory, read_skill({ skillId: 'preloaded-social-media-auth' }) loads full content.",
   inputSchema: readSkillSchema,
   execute: async (input) => {
     const args =
@@ -24,8 +25,18 @@ export const readSkillTool = createTool({
     const service = getSkillService();
 
     if (!args.skillId && !args.name) {
+      // List mode: Return summary without full content
       const skills = await service.listSkills();
-      return { success: true, data: skills };
+      const summary = skills
+        .filter((s) => s.enabled)
+        .map((s) => ({
+          id: s.id,
+          name: s.name,
+          description: s.description,
+          enabled: s.enabled,
+          source: s.source,
+        }));
+      return { success: true, data: summary, count: summary.length };
     }
 
     if (args.skillId) {

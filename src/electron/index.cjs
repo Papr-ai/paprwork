@@ -332,7 +332,8 @@ function createMainWindow() {
 
   const uiUrl = IS_PRODUCTION ? `http://localhost:${GATEWAY_PORT}` : UI_DEV_URL;
 
-  console.log(`[Electron] Loading UI from: ${uiUrl}`);
+  const loadStartTime = Date.now();
+  console.log(`[Electron] Loading UI from: ${uiUrl} at ${new Date(loadStartTime).toISOString()}`);
 
   // Add error handler for load failures
   mainWindow.webContents.on(
@@ -378,6 +379,19 @@ function createMainWindow() {
 
   mainWindow.loadURL(uiUrl).catch((err) => {
     console.error("[Electron] loadURL failed:", err);
+  });
+
+  // Track page load timing
+  mainWindow.webContents.on('did-start-loading', () => {
+    console.log(`[Electron] Page started loading at +${Date.now() - loadStartTime}ms`);
+  });
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    console.log(`[Electron] Page finished loading at +${Date.now() - loadStartTime}ms`);
+  });
+
+  mainWindow.webContents.on('dom-ready', () => {
+    console.log(`[Electron] DOM ready at +${Date.now() - loadStartTime}ms`);
   });
 
   // Intercept window.open() calls from mini-app iframes (target="_blank" links, etc.)
@@ -505,11 +519,18 @@ function startGateway(customKeysStorage) {
           // Check Claude OAuth token
           const claudeToken = oauthStorage.getTokenByProvider("anthropic");
           if (claudeToken && !oauthStorage.isTokenExpired(claudeToken)) {
+            console.log(`[Electron]   Claude OAuth token details: length=${claudeToken.accessToken.length}, prefix=${claudeToken.accessToken.substring(0, 30)}...`);
             oauthTokens.anthropic = {
               accessToken: claudeToken.accessToken,
               expiresAt: claudeToken.expiresAt,
             };
             console.log("[Electron]   ✓ Claude OAuth token available");
+          } else {
+            if (!claudeToken) {
+              console.log("[Electron]   ✗ No Claude OAuth token found");
+            } else {
+              console.log("[Electron]   ✗ Claude OAuth token expired");
+            }
           }
         }
       } catch (error) {

@@ -9,7 +9,7 @@
  */
 
 import { Papr } from '@papr/memory';
-// import { CodeIndexerService } from './CodeIndexerService.js'; // TODO: Use for advanced indexing
+import { CodeIndexerService } from './CodeIndexerService.js';
 import { CodeIndexTracker } from './CodeIndexTracker.js';
 import { CodeFileWatcher } from './CodeFileWatcher.js';
 import * as path from 'path';
@@ -27,11 +27,12 @@ export interface IndexManagerConfig {
 export class SmartCodeIndexManager {
   private config: Required<IndexManagerConfig>;
   private tracker: CodeIndexTracker;
-  // private _indexer: CodeIndexerService; // TODO: Use for advanced project-level indexing
+  private indexer: CodeIndexerService;
   private watcher: CodeFileWatcher;
   
   private debounceTimer: NodeJS.Timeout | null = null;
   private isIndexing: boolean = false;
+  private rateLimitHit: boolean = false;
   
   constructor(client: Papr, config: IndexManagerConfig) {
     this.config = {
@@ -43,7 +44,7 @@ export class SmartCodeIndexManager {
     };
     
     this.tracker = new CodeIndexTracker(this.config.dataDir);
-    // this._indexer = new CodeIndexerService(client, this.config.schemaId, this.config.paprDir);
+    this.indexer = new CodeIndexerService(client, this.config.schemaId, this.config.paprDir);
     this.watcher = new CodeFileWatcher(client, this.config.schemaId, this.config.paprDir);
   }
   
@@ -130,20 +131,29 @@ export class SmartCodeIndexManager {
   private scanAllFiles(): string[] {
     const files: string[] = [];
     const codeExtensions = ['.ts', '.tsx', '.js', '.jsx', '.py'];
-    const excludeDirs = ['node_modules', '.venv', 'venv', '.git', 'dist', 'build', 'data'];
+    
+    // Load excluded folders from settings (will be done dynamically in real implementation)
+    // For now, use the default list + any folder containing "repo" in the name
+    const excludeDirs = [
+      'node_modules', '.venv', 'venv', '.git', 'dist', 'build', 'data',
+      '__pycache__', '.next', '.nuxt', 'papr_repo'
+    ];
     
     const scanDir = (dir: string) => {
       if (!fs.existsSync(dir)) return;
       
       const entries = fs.readdirSync(dir);
       for (const entry of entries) {
+        // Skip excluded folders
+        if (excludeDirs.includes(entry) || entry.includes('_repo')) {
+          continue;
+        }
+        
         const fullPath = path.join(dir, entry);
         const stat = fs.statSync(fullPath);
         
         if (stat.isDirectory()) {
-          if (!excludeDirs.includes(entry)) {
-            scanDir(fullPath);
-          }
+          scanDir(fullPath);
         } else if (stat.isFile()) {
           const ext = path.extname(entry);
           if (codeExtensions.includes(ext)) {
@@ -188,6 +198,13 @@ export class SmartCodeIndexManager {
    * Trigger batch indexing
    */
   private async triggerBatchIndex(): Promise<void> {
+    if (this.rateLimitHit) {
+      console.log('   🛑 Indexing paused - PAPR Memory quota exceeded.');
+      console.log('   💡 Please upgrade your account at: https://platform.papr.ai/settings');
+      console.log('   💡 Restart the app after upgrading to resume indexing.');
+      return;
+    }
+    
     if (this.isIndexing) {
       console.log('   ⏸️  Already indexing, will retry in 5s...');
       setTimeout(() => this.triggerBatchIndex(), 5000);
@@ -209,8 +226,8 @@ export class SmartCodeIndexManager {
     } finally {
       this.isIndexing = false;
       
-      // If queue still has items, schedule next batch
-      if (this.tracker.getQueueSize() > 0) {
+      // Only schedule next batch if we haven't hit rate limit
+      if (!this.rateLimitHit && this.tracker.getQueueSize() > 0) {
         setTimeout(() => this.triggerBatchIndex(), 1000);
       }
     }
@@ -221,6 +238,7 @@ export class SmartCodeIndexManager {
    */
   private async processBatch(): Promise<void> {
     const files = this.tracker.getQueuedFiles(this.config.batchSize);
+    let hitRateLimit = false;
     
     for (const queuedFile of files) {
       try {
@@ -247,8 +265,47 @@ export class SmartCodeIndexManager {
         console.log(`   ✅ Indexed: ${path.basename(queuedFile.file_path)}`);
         
       } catch (error) {
-        console.error(`   ❌ Failed to index ${queuedFile.file_path}:`, (error as Error).message);
-        // Keep in queue for retry
+        const err = error as Error;
+        
+        // Check if it's a rate limit error from PAPR Memory
+        const isRateLimitError = error instanceof Papr.RateLimitError || 
+                                  error instanceof Papr.PermissionDeniedError ||
+                                  err.message.includes('403') || 
+                                  err.message.includes('limit') ||
+                                  err.message.includes('quota');
+        
+        if (isRateLimitError) {
+          // Extract the actual error message from PAPR API
+          let errorMessage = err.message;
+          if (error instanceof Papr.RateLimitError) {
+            // PAPR returns upgrade message in the error body
+            errorMessage = err.message;
+          }
+          
+          console.error(`   ❌ Failed to index ${queuedFile.file_path}: ${errorMessage}`);
+          console.error('   💡 You need to upgrade your PAPR Memory account to continue indexing.');
+          console.error('   💡 Visit https://platform.papr.ai/settings to upgrade.');
+          
+          // Remove from queue on rate limit - don't retry
+          this.tracker.dequeueFile(queuedFile.file_path);
+          hitRateLimit = true;
+          break; // Stop processing batch entirely
+        } else {
+          console.error(`   ❌ Failed to index ${queuedFile.file_path}: ${err.message}`);
+          // Keep in queue for retry on other errors
+        }
+      }
+    }
+    
+    // If we hit rate limit, clear remaining queue to prevent retry loop
+    if (hitRateLimit) {
+      this.rateLimitHit = true;
+      const remaining = this.tracker.getQueueSize();
+      if (remaining > 0) {
+        console.log(`\n   🛑 Indexing paused - PAPR Memory quota exceeded.`);
+        console.log(`   💡 ${remaining} files remain in queue.`);
+        console.log(`   💡 Please upgrade your PAPR Memory account at: https://platform.papr.ai/settings`);
+        console.log(`   💡 Restart the app after upgrading to resume indexing.\n`);
       }
     }
   }
@@ -257,9 +314,6 @@ export class SmartCodeIndexManager {
    * Index a single file
    */
   private async indexSingleFile(filePath: string): Promise<void> {
-    // Extract metadata and index to PAPR
-    // (Simplified - in production, would use CodeIndexerService methods)
-    
     const hash = this.tracker.calculateFileHash(filePath);
     const content = fs.readFileSync(filePath, 'utf-8');
     
@@ -269,7 +323,19 @@ export class SmartCodeIndexManager {
       throw new Error('Could not determine project ID');
     }
     
-    // Record in tracker
+    // Use CodeIndexerService to actually index to PAPR Memory API
+    const isJob = filePath.includes('/Jobs/');
+    const isMiniApp = filePath.includes('/apps/');
+    
+    if (isJob) {
+      await this.indexer.indexSingleJob(projectId);
+    } else if (isMiniApp) {
+      await this.indexer.indexSingleMiniApp(projectId);
+    } else {
+      throw new Error('File not in Jobs or apps folder');
+    }
+    
+    // Record in tracker after successful API indexing
     this.tracker.recordIndexedFile({
       file_path: filePath,
       content_hash: hash,

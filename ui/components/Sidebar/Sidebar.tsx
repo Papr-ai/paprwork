@@ -3,19 +3,18 @@
  * Reference: Paprwork v1 index.html lines 21-215
  */
 
-import React, { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useChat } from "../../hooks/useChat";
 import { useTabs } from "../../hooks/useTabs";
 import type { TabType } from "../../types/tabs";
-import { WeatherWidget } from "./WeatherWidget.tsx";
-import { NavButton } from "./NavButton.tsx";
-import { FavoritesList } from "./FavoritesList.tsx";
-import { ChatList } from "./ChatList.tsx";
-import { NewChatButton } from "./NewChatButton.tsx";
-import { OnboardingCard } from "./OnboardingCard.tsx";
+import { WeatherWidget } from "./WeatherWidget";
+import { NavButton } from "./NavButton";
+import { FavoritesList } from "./FavoritesList";
+import { NewChatButton } from "./NewChatButton";
+import { OnboardingCard } from "./OnboardingCard";
 import "./Sidebar.css";
 
-type View = "chat" | "apps";
+type View = "chat" | "apps" | "artifacts";
 
 /** Map tab types to sidebar nav views */
 function tabTypeToView(type: TabType | undefined): View {
@@ -23,6 +22,9 @@ function tabTypeToView(type: TabType | undefined): View {
     case "app":
     case "apps":
       return "apps";
+    case "document":
+    case "documents":
+      return "artifacts";
     case "chat":
     default:
       return "chat";
@@ -95,6 +97,8 @@ export function Sidebar() {
     let tabId: string | undefined;
     if (view === "apps") {
       tabId = createTab("apps" as TabType, "apps", "Apps");
+    } else if (view === "artifacts") {
+      tabId = createTab("documents" as TabType, "documents", "Artifacts");
     } else if (view === "chat") {
       handleNewChat();
       return;
@@ -177,6 +181,47 @@ export function Sidebar() {
             label="Apps"
             isActive={activeView === "apps"}
             onClick={() => handleNavClick("apps")}
+          />
+          <NavButton
+            icon={
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M14 2v6h6"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <line
+                  x1="9"
+                  y1="13"
+                  x2="15"
+                  y2="13"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                />
+                <line
+                  x1="9"
+                  y1="17"
+                  x2="15"
+                  y2="17"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                />
+              </svg>
+            }
+            label="Artifacts"
+            isActive={activeView === "artifacts"}
+            onClick={() => handleNavClick("artifacts")}
           />
         </div>
 

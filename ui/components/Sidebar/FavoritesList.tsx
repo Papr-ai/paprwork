@@ -1,10 +1,13 @@
 /**
  * FavoritesList - Collapsible favorites section with drag-and-drop support
+ * Now uses SQLite for persistence (faster than localStorage)
  */
 
 import React, { useState, useEffect, useCallback } from "react";
 import { useTabs } from "../../hooks/useTabs";
 import { useArtifactsStore } from "../../stores/artifactsStore";
+import { useTabStore } from "../../stores/tabStore";
+import { gateway } from "../../src/lib/gateway";
 import "./FavoritesList.css";
 
 interface Favorite {
@@ -16,76 +19,97 @@ interface Favorite {
 
 export function FavoritesList() {
   const [isExpanded, setIsExpanded] = useState(true);
-  const [favorites, setFavorites] = useState<Favorite[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const { createTab, switchToTab } = useTabs();
   const { artifacts } = useArtifactsStore();
+  const { tabs } = useTabStore();
 
-  // Load favorites from localStorage
-  useEffect(() => {
-    const stored = localStorage.getItem("paprwork-favorites");
-    if (stored) {
-      try {
-        setFavorites(JSON.parse(stored));
-      } catch (error) {
-        console.error("Failed to load favorites:", error);
-      }
-    }
-  }, []);
+  // HYBRID APPROACH: Favorites from two sources
+  // 1. Artifacts (document/app) - read from artifacts store (single source of truth)
+  // 2. Non-artifacts (chat/jobs/settings) - read from tabs with isFavorite flag
+  
+  const artifactFavorites: Favorite[] = artifacts
+    .filter(artifact => artifact.favorite)
+    .map(artifact => ({
+      id: artifact.id,
+      type: artifact.type as "document" | "app",
+      title: artifact.title,
+      icon: artifact.icon,
+    }));
 
-  // Sync favorites with current artifact data (auto-update icons/titles)
-  useEffect(() => {
-    if (favorites.length === 0 || artifacts.length === 0) return;
+  const nonArtifactFavorites: Favorite[] = tabs
+    .filter(tab => 
+      tab.isFavorite && 
+      !['document', 'app', 'artifacts', 'documents', 'apps'].includes(tab.type)
+    )
+    .map(tab => ({
+      id: tab.id,
+      type: tab.type as "chat" | "document" | "app",
+      title: tab.title,
+      icon: tab.icon,
+    }));
 
-    let updated = false;
-    const synced = favorites.map((fav) => {
-      // Only sync apps and documents (skip chats)
-      if (fav.type !== "app" && fav.type !== "document") return fav;
-
-      const artifact = artifacts.find((a) => a.id === fav.id && a.type === fav.type);
-      if (!artifact) return fav;
-
-      // Check if icon or title changed
-      if (artifact.icon !== fav.icon || artifact.title !== fav.title) {
-        updated = true;
-        console.log(`[FavoritesList] Auto-syncing favorite: ${fav.id} (icon/title changed)`);
-        return {
-          ...fav,
-          title: artifact.title,
-          icon: artifact.icon,
-        };
-      }
-
-      return fav;
-    });
-
-    if (updated) {
-      setFavorites(synced);
-      localStorage.setItem("paprwork-favorites", JSON.stringify(synced));
-    }
-  }, [artifacts, favorites]);
-
-  const saveFavorites = useCallback((updated: Favorite[]) => {
-    setFavorites(updated);
-    localStorage.setItem("paprwork-favorites", JSON.stringify(updated));
-  }, []);
+  const favorites: Favorite[] = [...artifactFavorites, ...nonArtifactFavorites];
 
   const toggleExpanded = () => {
     setIsExpanded(!isExpanded);
   };
 
   const removeFavorite = (id: string) => {
-    saveFavorites(favorites.filter((f) => f.id !== id));
+    // Check if this is an artifact favorite or a tab favorite
+    const artifact = artifacts.find(a => a.id === id);
+    
+    if (artifact) {
+      // Artifact favorite - dispatch event so useArtifacts hook can handle the API call
+      console.log(`[FavoritesList] Removing artifact favorite: ${id}`);
+      window.dispatchEvent(
+        new CustomEvent("papr-favorite-removed-from-sidebar", {
+          detail: { id, type: artifact.type },
+        }),
+      );
+    } else {
+      // Non-artifact favorite (chat, jobs, settings, etc.) - update tab
+      console.log(`[FavoritesList] Removing tab favorite: ${id}`);
+      const { tabs } = useTabStore.getState();
+      const updatedTabs = tabs.map(t => 
+        t.id === id ? { ...t, isFavorite: false } : t
+      );
+      useTabStore.setState({ tabs: updatedTabs });
+      
+      // Save to SQLite
+      gateway.send('app:toggle_favorite_tab', { tabId: id }).catch((error: Error) => {
+        console.error("Failed to remove favorite:", error);
+      });
+    }
   };
 
   const handleOpen = useCallback(
     (fav: Favorite) => {
-      const tabType =
-        fav.type === "chat" ? "chat" : fav.type === "app" ? "app" : "document";
-      const tabId = createTab(tabType, fav.id, fav.title, fav.icon ? { icon: fav.icon } : {});
-      switchToTab(tabId);
+      console.log(`[FavoritesList] Opening favorite: ${fav.id} (${fav.type})`);
+      
+      // Check if this is an artifact or a tab
+      const artifact = artifacts.find(a => a.id === fav.id);
+      
+      if (artifact) {
+        // Artifact - create tab using artifact ID
+        const tabId = createTab(
+          fav.type, 
+          fav.id,  // Use artifact ID as entityId
+          fav.title, 
+          fav.icon ? { icon: fav.icon } : {}
+        );
+        switchToTab(tabId);
+      } else {
+        // Non-artifact tab - just switch to it
+        const existingTab = tabs.find(t => t.id === fav.id);
+        if (existingTab) {
+          switchToTab(fav.id);
+        } else {
+          console.error(`[FavoritesList] Cannot open favorite ${fav.id} - not found`);
+        }
+      }
     },
-    [createTab, switchToTab],
+    [artifacts, tabs, createTab, switchToTab],
   );
 
   // Drag-and-drop handlers
@@ -110,8 +134,6 @@ export function FavoritesList() {
       e.preventDefault();
       setIsDragOver(false);
 
-      // Try application/json first (tab drag or artifact card drag)
-      // then fall back to text/plain for legacy drag sources
       let raw = e.dataTransfer.getData("application/json");
       if (!raw) {
         raw = e.dataTransfer.getData("text/plain");
@@ -121,54 +143,70 @@ export function FavoritesList() {
       try {
         const data = JSON.parse(raw) as Record<string, unknown>;
 
-        // Determine the entity id and type
-        // Tab drag provides { id (entityId), type, title }
-        // Artifact card drag provides { id, type, title, icon }
         const entityId = (data.id ?? data.tabId) as string | undefined;
         const entityType = data.type as string | undefined;
         const entityTitle = data.title as string | undefined;
 
         if (!entityId || !entityType || !entityTitle) return;
 
-        // Accept chat, document, and app types
         const validTypes: Favorite["type"][] = ["chat", "document", "app"];
         if (!validTypes.includes(entityType as Favorite["type"])) return;
 
-        const newFav: Favorite = {
-          id: entityId,
-          type: entityType as Favorite["type"],
-          title: entityTitle,
-          icon: typeof data.icon === "string" ? data.icon : undefined,
-        };
-
-        // Check if favorite already exists and update it (to refresh icon/title)
-        const existingIndex = favorites.findIndex((f) => f.id === entityId);
-        if (existingIndex !== -1) {
-          const updated = [...favorites];
-          updated[existingIndex] = newFav;
-          saveFavorites(updated);
-          console.log(`[FavoritesList] Updated existing favorite: ${entityId}`);
-          return;
+        // Check if this is an artifact or a tab
+        const artifact = artifacts.find(a => a.id === entityId);
+        
+        if (artifact) {
+          // Artifact - check if already favorited
+          if (artifact.favorite) {
+            console.log(`[FavoritesList] Already favorited: ${entityId}`);
+            return;
+          }
+          
+          // Favorite the artifact
+          console.log(`[FavoritesList] Favoriting artifact via drag: ${entityId}`);
+          window.dispatchEvent(
+            new CustomEvent("papr-favorite-drag-add", {
+              detail: { id: entityId, type: entityType },
+            }),
+          );
+        } else {
+          // Non-artifact tab - update tab isFavorite
+          console.log(`[FavoritesList] Favoriting tab via drag: ${entityId}`);
+          const { tabs } = useTabStore.getState();
+          
+          // Check if already favorited
+          const existingTab = tabs.find(t => t.id === entityId);
+          if (existingTab?.isFavorite) {
+            console.log(`[FavoritesList] Already favorited: ${entityId}`);
+            return;
+          }
+          
+          const updatedTabs = tabs.map(t => 
+            t.id === entityId ? { ...t, isFavorite: true } : t
+          );
+          useTabStore.setState({ tabs: updatedTabs });
+          
+          // Save to SQLite
+          gateway.send('app:toggle_favorite_tab', { tabId: entityId }).catch((error: Error) => {
+            console.error("Failed to add favorite:", error);
+          });
         }
-
-        // Add new favorite
-        saveFavorites([...favorites, newFav]);
       } catch {
         /* invalid drop data */
       }
     },
-    [favorites, saveFavorites],
+    [artifacts],
   );
 
   const getIcon = (favorite: Favorite) => {
-    // App-type favorites: wrap icon in liquid glass orb (matches Tab.tsx)
-    if (favorite.type === "app") {
+    // App and document-type favorites: wrap icon in liquid glass orb (matches Tab.tsx)
+    if (favorite.type === "app" || favorite.type === "document") {
       const innerIcon = favorite.icon ? (
         <span
           className="favorite-item__orb-icon"
           dangerouslySetInnerHTML={{ __html: favorite.icon }}
         />
-      ) : (
+      ) : favorite.type === "app" ? (
         <svg
           className="favorite-item__orb-icon"
           width="10"
@@ -181,10 +219,21 @@ export function FavoritesList() {
           <rect x="3" y="14" width="7" height="7" rx="2" stroke="currentColor" strokeWidth="1.5" />
           <rect x="14" y="14" width="7" height="7" rx="2" stroke="currentColor" strokeWidth="1.5" />
         </svg>
+      ) : (
+        <svg
+          className="favorite-item__orb-icon"
+          width="10"
+          height="10"
+          viewBox="0 0 24 24"
+          fill="none"
+        >
+          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" strokeWidth="1.5" />
+          <path d="M14 2v6h6" stroke="currentColor" strokeWidth="1.5" />
+        </svg>
       );
 
       return (
-        <span className="favorite-item__glass-orb">
+        <span className={`favorite-item__glass-orb ${favorite.type === "document" ? "favorite-item__glass-orb--document" : ""}`}>
           {innerIcon}
         </span>
       );

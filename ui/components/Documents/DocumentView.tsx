@@ -49,6 +49,13 @@ export function DocumentView({ documentId }: DocumentViewProps) {
   const [showBubbleMenu, setShowBubbleMenu] = useState(false);
   const [bubbleMenuPos, setBubbleMenuPos] = useState({ top: 0, left: 0 });
   const editorWrapperRef = useRef<HTMLDivElement>(null);
+  const [currentWordCount, setCurrentWordCount] = useState(0);
+
+  // Calculate word count from text
+  const calculateWordCount = useCallback((text: string): number => {
+    if (!text.trim()) return 0;
+    return text.trim().split(/\s+/).length;
+  }, []);
 
   // TipTap editor with slash commands
   const editor = useEditor({
@@ -68,6 +75,10 @@ export function DocumentView({ documentId }: DocumentViewProps) {
       if (isLoadingContent.current) return;
       const markdown =
         (ed.storage.markdown?.getMarkdown() as string) ?? ed.getText();
+      
+      // Update word count in real-time
+      setCurrentWordCount(calculateWordCount(markdown));
+      
       debouncedSave(markdown);
     },
   });
@@ -134,9 +145,12 @@ export function DocumentView({ documentId }: DocumentViewProps) {
         preserveWhitespace: "full",
       });
       isLoadingContent.current = false;
+      
+      // Update word count when loading new content
+      setCurrentWordCount(calculateWordCount(document.content || ""));
     }
     setTitleValue(document.title);
-  }, [document, editor]);
+  }, [document, editor, calculateWordCount]);
 
   // Title editing
   const startEditingTitle = useCallback(() => {
@@ -290,7 +304,7 @@ export function DocumentView({ documentId }: DocumentViewProps) {
             </h1>
           )}
           <span className="document-view__meta">
-            {document.wordCount} words
+            {currentWordCount.toLocaleString()} words
             {saving && (
               <span className="document-view__save-dot" title="Saving..." />
             )}

@@ -236,14 +236,20 @@ export async function getProviderAuth(
   if (hasValidOAuthToken(provider)) {
     const token = getOAuthToken(provider);
     if (token) {
-      console.log(`[KeyResolver] Using OAuth token for ${provider}`);
+      console.log(
+        `[KeyResolver] Using OAuth token for ${provider} ` +
+        `(length: ${token.accessToken.length}, prefix: ${token.accessToken.substring(0, 20)}...)`
+      );
       return { type: "oauth", token: token.accessToken };
     }
   }
 
   // Fall back to API key
   if (keys[keyName]) {
-    console.log(`[KeyResolver] Using API key for ${provider}`);
+    console.log(
+      `[KeyResolver] Using API key for ${provider} ` +
+      `(length: ${keys[keyName].length}, prefix: ${keys[keyName].substring(0, 20)}...)`
+    );
     return { type: "apiKey", key: keys[keyName] };
   }
 

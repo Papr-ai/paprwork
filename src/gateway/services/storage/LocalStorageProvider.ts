@@ -209,9 +209,28 @@ export class LocalStorageProvider implements IStorageProvider {
     // Ensure chat exists
     await this.ensureChatExists(chatId);
 
-    console.log(`[LocalStorage] Saving message to chat ${chatId}:`, {
+    const timestamp = message.timestamp || new Date().toISOString();
+    
+    // Estimate tokens for user messages if not provided
+    // This ensures token_count accurately reflects context size for summarization
+    let totalTokens = message.total_tokens || 0;
+    let promptTokens = message.prompt_tokens || 0;
+    let completionTokens = message.completion_tokens || 0;
+    
+    if (message.role === 'user' && totalTokens === 0) {
+      // Estimate: 1 token ≈ 4 characters (rough but good enough for thresholds)
+      const estimatedTokens = Math.ceil((message.content?.length || 0) / 4);
+      totalTokens = estimatedTokens;
+      promptTokens = estimatedTokens;
+      console.log(`[LocalStorage] 📐 Estimated ${estimatedTokens} tokens for user message (${message.content?.length || 0} chars)`);
+    }
+    
+    console.log(`[LocalStorage] 💾 Saving message to chat ${chatId}:`, {
       id: message.id,
       role: message.role,
+      timestamp: timestamp,
+      contentPreview: message.content?.substring(0, 50) + '...',
+      total_tokens: totalTokens,
       hasThinking: !!message.thinking,
       hasToolCalls: !!message.toolCalls,
       hasError: !!message.error,
@@ -235,15 +254,15 @@ export class LocalStorageProvider implements IStorageProvider {
         chatId,
         message.role,
         message.content,
-        message.timestamp || new Date().toISOString(),
+        timestamp,
         message.thinking || null,
         message.toolCalls ? JSON.stringify(message.toolCalls) : null,
         message.error || null,
         message.incomplete ? 1 : 0,
         message.model || null,
-        message.prompt_tokens || 0,
-        message.completion_tokens || 0,
-        message.total_tokens || 0,
+        promptTokens,
+        completionTokens,
+        totalTokens,
         message.cost || 0,
         message.sync_status || "local",
         message.papr_message_id || null,
@@ -253,7 +272,7 @@ export class LocalStorageProvider implements IStorageProvider {
       );
 
     // Update chat message count and updated_at
-    this.db
+    const updateResult = this.db
       .prepare(`
       UPDATE chats 
       SET message_count = message_count + 1,
@@ -261,6 +280,14 @@ export class LocalStorageProvider implements IStorageProvider {
       WHERE id = ?
     `)
       .run(new Date().toISOString(), chatId);
+    
+    // Verify the update worked
+    const updatedChat = this.db
+      .prepare(`SELECT id, message_count FROM chats WHERE id = ?`)
+      .get(chatId) as { id: string; message_count: number } | undefined;
+    
+    console.log(`[LocalStorage] ✅ Message saved successfully`);
+    console.log(`[LocalStorage] 📊 Chat stats after save: message_count=${updatedChat?.message_count || 0} (changes=${updateResult.changes})`);
   }
 
   async loadMessages(
@@ -339,17 +366,32 @@ export class LocalStorageProvider implements IStorageProvider {
       return [];
     }
 
+    console.log(`[LocalStorage] 📥 loadMessagesForLLM called for chat ${chatId}`);
+    console.log(`[LocalStorage] 📊 Chat metadata: message_count=${chat.message_count}, has_summary=${!!chat.summary_long}`);
+
     // If no summary, return all messages with toolCalls intact
     // IMPORTANT: Pass toolCalls as a separate field so historyFormatter
     // can produce proper AI SDK structured messages (not [tool_activity] text)
     if (!chat.summary_long) {
+      console.log(`[LocalStorage] 🔀 Taking NO SUMMARY path`);
       const messages = await this.loadMessages(chatId);
+      console.log(`[LocalStorage] ✅ No summary - returning all ${messages.length} messages`);
+      
+      // Log first and last messages with timestamps to verify order
+      if (messages.length > 0) {
+        console.log(`[LocalStorage] 🔍 First message: [${messages[0].timestamp}] ${messages[0].role}`);
+        console.log(`[LocalStorage] 🔍 Last message: [${messages[messages.length - 1].timestamp}] ${messages[messages.length - 1].role}`);
+      }
+      
       return messages.map((message) => ({
         role: message.role,
         content: message.content,
         toolCalls: message.toolCalls,
+        timestamp: message.timestamp, // Preserve timestamp for debugging/ordering verification
       }));
     }
+
+    console.log(`[LocalStorage] 🔀 Taking WITH SUMMARY path`);
 
     // Get recent messages AFTER summary
     // When we have a summary, we only need the most recent messages (10-15)
@@ -357,15 +399,24 @@ export class LocalStorageProvider implements IStorageProvider {
     // Without summary, load more messages (50) for full context
     const recentMessageLimit = chat.summary_long ? 15 : 50;
 
+    console.log(`[LocalStorage] 🔎 Summary exists - querying for ${recentMessageLimit} most recent messages...`);
+
     const recentMessages = this.db
       .prepare(`
-      SELECT role, content, thinking, tool_calls
+      SELECT role, content, thinking, tool_calls, timestamp
       FROM messages 
       WHERE chat_id = ? 
       ORDER BY timestamp DESC 
       LIMIT ?
     `)
       .all(chatId, recentMessageLimit) as any[];
+
+    // Log what we actually got BEFORE reversing
+    console.log(`[LocalStorage] 🔍 Query returned ${recentMessages.length} messages (DESC order):`);
+    recentMessages.forEach((msg, i) => {
+      const preview = typeof msg.content === 'string' ? msg.content.substring(0, 50) : '';
+      console.log(`  ${i}. [${msg.timestamp}] ${msg.role}: "${preview}..."`);
+    });
 
     // Reverse to chronological order
     recentMessages.reverse();
@@ -374,10 +425,11 @@ export class LocalStorageProvider implements IStorageProvider {
     const topics = chat.summary_topics ? JSON.parse(chat.summary_topics) : [];
 
     console.log(`[LocalStorage] Loading LLM context for chat ${chatId}:`);
-    console.log(`  Total messages: ${chat.message_count}`);
+    console.log(`  Total messages in DB: ${chat.message_count}`);
     console.log(`  Archived (in summary): ${archivedCount}`);
     console.log(`  Recent (loaded): ${recentMessages.length}`);
     console.log(`  Summary exists: ${!!chat.summary_long}`);
+    console.log(`  Recent message limit: ${recentMessageLimit}`);
 
     // Export chat to file and get path
     const messages = await this.loadMessages(chatId);
@@ -425,6 +477,7 @@ KEY TOPICS: ${topics.join(", ")}
         role: typeof message.role === "string" ? message.role : "assistant",
         content: typeof message.content === "string" ? message.content : "",
         toolCalls: parsedToolCalls,
+        timestamp: message.timestamp, // Preserve timestamp for debugging/ordering verification
       };
     });
 
@@ -657,11 +710,19 @@ KEY TOPICS: ${topics.join(", ")}
       .prepare(
         `SELECT 
           COALESCE(SUM(total_tokens), 0) as token_count,
-          COALESCE(SUM(cost), 0) as cost_total
+          COALESCE(SUM(cost), 0) as cost_total,
+          COUNT(*) as messages_with_tokens
         FROM messages 
-        WHERE chat_id = ?`,
+        WHERE chat_id = ? AND total_tokens > 0`,
       )
       .get(chatId) as any;
+
+    console.log(`[LocalStorage] 📊 getChatStats for ${chatId}:`, {
+      message_count: chat.message_count,
+      token_count: tokenStats?.token_count || 0,
+      messages_with_tokens: tokenStats?.messages_with_tokens || 0,
+      has_summary: !!chat.summary_long,
+    });
 
     return {
       message_count: chat.message_count,

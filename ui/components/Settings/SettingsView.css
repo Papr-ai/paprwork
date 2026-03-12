@@ -1103,6 +1103,11 @@
   height: 16px;
 }
 
+.data-card__title-group {
+  flex: 1;
+  min-width: 0;
+}
+
 .data-card__header h3 {
   font-size: 13px;
   font-weight: 600;
@@ -1115,6 +1120,13 @@
   line-height: 1.3;
   color: var(--text-secondary, #a1a1aa);
   margin: 0;
+}
+
+.data-card__header .settings-btn {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  font-size: 12px;
+  min-height: 28px;
 }
 
 .data-card__header code {
@@ -1688,11 +1700,7 @@
   overflow-y: auto;
 }
 
-.workspace-actions {
-  display: flex;
-  gap: 6px;
-  margin-top: 8px;
-}
+/* Removed - actions now in header */
 
 /* ===== PAPR Folder ===== */
 .folder-structure {
@@ -1732,9 +1740,7 @@
   color: var(--text-secondary);
 }
 
-.folder-actions {
-  margin-top: 8px;
-}
+/* Removed - actions now in header */
 
 /* ===== Memory Categories ===== */
 .memory-status-badge {
