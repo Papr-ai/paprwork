@@ -36,6 +36,8 @@ export function useDocument(documentId: string | null) {
   const [versions, setVersions] = useState<DocumentVersion[]>([]);
   const [saving, setSaving] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const savingRef = useRef(false);
 
   // Fetch the document
   const loadDocument = useCallback(async () => {
@@ -58,6 +60,7 @@ export function useDocument(documentId: string | null) {
     async (content: string) => {
       if (!documentId) return;
       setSaving(true);
+      savingRef.current = true;
 
       try {
         // Save a version first
@@ -77,6 +80,11 @@ export function useDocument(documentId: string | null) {
         console.error("[useDocument] Save error:", err);
       } finally {
         setSaving(false);
+        // Delay clearing the flag so the file-watcher event
+        // triggered by our own write gets ignored
+        setTimeout(() => {
+          savingRef.current = false;
+        }, 500);
       }
     },
     [documentId],
@@ -158,7 +166,7 @@ export function useDocument(documentId: string | null) {
     [documentId],
   );
 
-  // Watch for external file changes
+  // Watch for external file changes (e.g. agent editing via bash)
   useEffect(() => {
     if (!documentId) return;
 
@@ -166,26 +174,33 @@ export function useDocument(documentId: string | null) {
       /* watching is best-effort */
     });
 
-    // Listen for content-changed events
-    const handler = (event: MessageEvent) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (
-          data.type === "document:content-changed" &&
-          data.data?.documentId === documentId
-        ) {
+    // The gateway client dispatches broadcast messages (no id) as
+    // CustomEvent("gateway-broadcast") on window. Listen for document changes.
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail as {
+        type?: string;
+        data?: { documentId?: string };
+      } | undefined;
+      if (
+        detail?.type === "document:content-changed" &&
+        detail.data?.documentId === documentId
+      ) {
+        // Skip if the user is currently saving (avoids save → watch → reload loop)
+        if (savingRef.current) return;
+
+        // Debounce: fs.watch can fire multiple times per write
+        if (reloadTimer.current) clearTimeout(reloadTimer.current);
+        reloadTimer.current = setTimeout(() => {
           loadDocument();
-        }
-      } catch {
-        /* ignore parse errors */
+        }, 300);
       }
     };
 
-    // The gateway client pushes events via its internal ws
-    // We'll use the gateway's subscribe mechanism if available, or poll
-    // For now, the WS handler sends content-changed events which the gateway client forwards
+    window.addEventListener("gateway-broadcast", handler);
 
     return () => {
+      window.removeEventListener("gateway-broadcast", handler);
+      if (reloadTimer.current) clearTimeout(reloadTimer.current);
       gateway.send("document:unwatch", { documentId }).catch(() => {});
     };
   }, [documentId, loadDocument]);

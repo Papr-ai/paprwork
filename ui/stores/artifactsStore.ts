@@ -12,11 +12,18 @@ export interface Artifact {
   type: ArtifactType;
   createdAt: string;
   updatedAt: string;
+  content?: string;
   preview?: string;
   icon?: string;
   favorite?: boolean;
   tags?: string[];
   wordCount?: number;
+  metadata?: {
+    filePath?: string;
+    fileSize?: number;
+    fileType?: string;
+    [key: string]: any;
+  };
 }
 
 interface ArtifactsState {

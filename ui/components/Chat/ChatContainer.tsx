@@ -400,7 +400,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
   }, []);
 
   const handleSendMessage = useCallback(
-    async (message: string) => {
+    async (message: string, contextArtifacts?: Artifact[]) => {
       const mergedArtifact = findMergedArtifact(chatId);
 
       const idKey =
@@ -408,6 +408,28 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
       const mergedContext = mergedArtifact
         ? `\n\n## Active Context\nThe user has merged this chat with a ${mergedArtifact.type} titled "${mergedArtifact.title}" (${idKey}: "${mergedArtifact.id}"). They are viewing and working on this ${mergedArtifact.type} alongside this conversation. Reference it directly when relevant.`
         : "";
+
+      // Format context artifacts (including file uploads) for LLM
+      let artifactsContext = "";
+      if (contextArtifacts && contextArtifacts.length > 0) {
+        artifactsContext = "\n\n## Attached Context\n";
+        for (const artifact of contextArtifacts) {
+          artifactsContext += `\n### ${artifact.title}\n`;
+          artifactsContext += `Type: ${artifact.type === "document" ? "Document" : "App"}\n`;
+          
+          // Include file path if this is a file upload
+          if (artifact.metadata?.filePath) {
+            artifactsContext += `File Path: ${artifact.metadata.filePath}\n`;
+            if (artifact.metadata.fileType) {
+              artifactsContext += `File Type: ${artifact.metadata.fileType}\n`;
+            }
+            artifactsContext += `\nThe user has attached this file. You can read it using the read_file tool with the file path provided above.\n`;
+          } else if (artifact.content) {
+            // Include content for non-file artifacts
+            artifactsContext += `\n${artifact.content}\n`;
+          }
+        }
+      }
 
       // Ensure Ollama model is ready before sending message
       if (selectedModel.provider === 'ollama') {
@@ -429,7 +451,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
       const config = {
         provider: selectedModel.provider,
         model: selectedModel.id,
-        systemPrompt: DEFAULT_SYSTEM_PROMPT + mergedContext,
+        systemPrompt: DEFAULT_SYSTEM_PROMPT + mergedContext + artifactsContext,
         reasoning: selectedModel.reasoning,
         thinkingBudget: selectedModel.defaultThinkingBudget,
         maxTokens: selectedModel.maxTokens, // Output token limit
