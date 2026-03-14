@@ -67,7 +67,7 @@ echo "Packaging for macOS (arm64)..."
 echo "This will: code sign -> create DMG -> notarize with Apple -> staple ticket"
 echo "(Notarization typically takes 2-5 minutes)"
 echo ""
-npx electron-builder --mac --arm64 --output "$BUILD_OUTPUT"
+npx electron-builder --mac --arm64 -c.directories.output="$BUILD_OUTPUT"
 
 # Copy artifacts back to project for convenience
 echo ""
