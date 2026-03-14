@@ -40,9 +40,14 @@ if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "$CSC_NAME";
 fi
 echo "Certificate found: $(security find-identity -v -p codesigning 2>/dev/null | grep "$CSC_NAME" | sed 's/.*"\(.*\)"/\1/')"
 
-# Clean previous build output (resource forks cause codesign failures)
+# Build into /tmp to avoid iCloud Drive extended attributes
+# ~/Documents/ is iCloud-synced — macOS fileprovider adds com.apple.FinderInfo and
+# com.apple.fileprovider.fpfs#P xattrs to new directories, which breaks codesign with:
+# "resource fork, Finder information, or similar detritus not allowed"
+BUILD_OUTPUT="/tmp/paprwork-release"
 echo ""
-echo "Cleaning previous build output..."
+echo "Using non-iCloud build directory: $BUILD_OUTPUT"
+rm -rf "$BUILD_OUTPUT"
 rm -rf release/
 
 # Build the app (TypeScript + Vite UI)
@@ -50,10 +55,7 @@ echo ""
 echo "Building app..."
 npm run build
 
-# Strip macOS extended attributes / resource forks from node_modules
-# (Finder copy/paste creates "@ 2" duplicates with xattrs that break codesign)
-echo ""
-echo "Stripping extended attributes from node_modules..."
+# Strip macOS extended attributes from source dirs (belt and suspenders)
 xattr -cr node_modules 2>/dev/null || true
 xattr -cr dist 2>/dev/null || true
 xattr -cr src/electron 2>/dev/null || true
@@ -65,7 +67,13 @@ echo "Packaging for macOS (arm64)..."
 echo "This will: code sign -> create DMG -> notarize with Apple -> staple ticket"
 echo "(Notarization typically takes 2-5 minutes)"
 echo ""
-npx electron-builder --mac --arm64
+npx electron-builder --mac --arm64 --output "$BUILD_OUTPUT"
+
+# Copy artifacts back to project for convenience
+echo ""
+echo "Copying artifacts to ./release/..."
+mkdir -p release
+cp -R "$BUILD_OUTPUT"/* release/
 
 echo ""
 echo "============================================"
