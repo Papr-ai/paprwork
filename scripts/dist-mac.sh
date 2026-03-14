@@ -40,10 +40,24 @@ if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "$CSC_NAME";
 fi
 echo "Certificate found: $(security find-identity -v -p codesigning 2>/dev/null | grep "$CSC_NAME" | sed 's/.*"\(.*\)"/\1/')"
 
+# Clean previous build output (resource forks cause codesign failures)
+echo ""
+echo "Cleaning previous build output..."
+rm -rf release/
+
 # Build the app (TypeScript + Vite UI)
 echo ""
 echo "Building app..."
 npm run build
+
+# Strip macOS extended attributes / resource forks from node_modules
+# (Finder copy/paste creates "@ 2" duplicates with xattrs that break codesign)
+echo ""
+echo "Stripping extended attributes from node_modules..."
+xattr -cr node_modules 2>/dev/null || true
+xattr -cr dist 2>/dev/null || true
+xattr -cr src/electron 2>/dev/null || true
+xattr -cr build 2>/dev/null || true
 
 # Package, sign, notarize for Apple Silicon
 echo ""
