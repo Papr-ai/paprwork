@@ -43,7 +43,10 @@
     "test:watch": "vitest --project unit-backend --project unit-ui --reporter=verbose",
     "test:perf": "node scripts/run-perf-tests.mjs",
     "test:llm-streaming": "tsx tests/llm-streaming.test.ts",
-    "migrate:v1": "tsx scripts/migrate-v1-data.ts"
+    "migrate:v1": "tsx scripts/migrate-v1-data.ts",
+    "dist": "npm run build && electron-builder",
+    "dist:mac": "npm run build && electron-builder --mac --arm64",
+    "dist:mac:universal": "npm run build && electron-builder --mac --arm64 --x64"
   },
   "keywords": [
     "electron",
@@ -133,33 +136,5 @@
     "vite": "^6.4.1",
     "vite-plugin-node-polyfills": "^0.25.0",
     "vitest": "^2.1.9"
-  },
-  "build": {
-    "appId": "com.paprwork.v2",
-    "productName": "Papr Work",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "dist/**/*",
-      "package.json"
-    ],
-    "mac": {
-      "category": "public.app-category.productivity",
-      "target": [
-        "dmg",
-        "zip"
-      ]
-    },
-    "win": {
-      "target": [
-        "nsis"
-      ]
-    },
-    "linux": {
-      "target": [
-        "AppImage"
-      ]
-    }
   }
 }
