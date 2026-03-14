@@ -26,9 +26,7 @@
     "gatekeeperAssess": false,
     "entitlements": "build/entitlements.mac.plist",
     "entitlementsInherit": "build/entitlements.mac.inherit.plist",
-    "notarize": {
-      "teamId": "W73RAM957L"
-    },
+    "notarize": true,
     "extendInfo": {
       "NSMicrophoneUsageDescription": "Paprwork needs access to your microphone for meeting recording.",
       "NSCameraUsageDescription": "Paprwork needs access to your camera for meeting recording.",
