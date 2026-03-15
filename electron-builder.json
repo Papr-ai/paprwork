@@ -7,7 +7,7 @@
   },
   "files": [
     "dist/**/*",
-    "src/electron/main.js",
+    "src/electron/main.cjs",
     "src/electron/index.cjs",
     "src/electron/preload.cjs",
     "package.json"
