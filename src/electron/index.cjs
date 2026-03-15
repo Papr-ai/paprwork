@@ -65,7 +65,7 @@ async function loadESMModules() {
 // Configuration
 const UI_DEV_URL = process.env.UI_DEV_URL || "http://localhost:5173";
 const GATEWAY_PORT = parseInt(process.env.GATEWAY_PORT || "18789", 10);
-const IS_PRODUCTION = process.env.NODE_ENV === "production";
+const IS_PRODUCTION = process.env.NODE_ENV === "production" || require("path").dirname(__dirname).includes("app.asar");
 
 let mainWindow = null;
 let gatewayProcess = null;
