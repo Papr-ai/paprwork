@@ -12,6 +12,10 @@
     "src/electron/preload.cjs",
     "package.json"
   ],
+  "asarUnpack": [
+    "node_modules/esbuild/**",
+    "node_modules/@esbuild/**"
+  ],
   "mac": {
     "category": "public.app-category.productivity",
     "target": [
