@@ -1,0 +1,53 @@
+/**
+ * Gateway Process Supervisor — Pure Logic Functions
+ *
+ * Extracted for unit testing without Electron dependencies.
+ * Used by GatewayProcessSupervisor in index.cjs.
+ */
+
+function calculateBackoff(restartCount, baseMs = 500, maxMs = 30000) {
+  return Math.min(baseMs * Math.pow(2, restartCount), maxMs);
+}
+
+function isCircuitBroken(timestamps, now, windowMs = 300000, maxRestarts = 5) {
+  const recent = timestamps.filter((t) => now - t < windowMs);
+  return recent.length >= maxRestarts;
+}
+
+function pruneTimestamps(timestamps, now, windowMs = 300000) {
+  return timestamps.filter((t) => now - t < windowMs);
+}
+
+function getNotificationType(restartCount, silentThreshold = 2, bannerThreshold = 4) {
+  if (restartCount <= silentThreshold) return "silent";
+  if (restartCount <= bannerThreshold) return "banner";
+  return "dialog";
+}
+
+function shouldKillProcess(consecutiveFailures, isSuccess, threshold = 3) {
+  if (isSuccess) return { newCount: 0, shouldKill: false };
+  const newCount = consecutiveFailures + 1;
+  return { newCount, shouldKill: newCount >= threshold };
+}
+
+const VALID_STATE_TRANSITIONS = {
+  stopped: ["starting"],
+  starting: ["running", "backoff", "stopped"],
+  running: ["backoff", "stopped"],
+  backoff: ["starting", "failed", "stopped"],
+  failed: ["starting", "stopped"],
+};
+
+function isValidTransition(from, to) {
+  return (VALID_STATE_TRANSITIONS[from] || []).includes(to);
+}
+
+module.exports = {
+  calculateBackoff,
+  isCircuitBroken,
+  pruneTimestamps,
+  getNotificationType,
+  shouldKillProcess,
+  isValidTransition,
+  VALID_STATE_TRANSITIONS,
+};
