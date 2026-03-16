@@ -27,10 +27,11 @@ jobs:
         run: npm run build
 
       - name: Build Mac distributables
-        run: npx electron-builder --mac --arm64 --x64
+        run: npx electron-builder --mac --arm64 --x64 --publish never
         env:
           CSC_LINK: ${{ secrets.MAC_CERTIFICATE_P12 }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.MAC_CERTIFICATE_P12 != '' }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -48,6 +49,9 @@ jobs:
   build-windows:
     runs-on: windows-latest
     timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -63,7 +67,7 @@ jobs:
         run: npm run build
 
       - name: Build Windows distributables
-        run: npx electron-builder --win
+        run: npx electron-builder --win --publish never
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
@@ -91,7 +95,7 @@ jobs:
         run: npm run build
 
       - name: Build Linux distributables
-        run: npx electron-builder --linux
+        run: npx electron-builder --linux --publish never
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
