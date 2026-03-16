@@ -9,6 +9,46 @@ import { promisify } from "util";
 
 const execAsync = promisify(exec);
 
+// Electron apps don't inherit the user's shell PATH, so npm/node/claude
+// won't be found. Resolve the user's real PATH via their login shell.
+function getShellEnv(): Record<string, string> {
+  const home = process.env.HOME || "";
+
+  // Try to get the real PATH from the user's login shell
+  let shellPath = "";
+  try {
+    const { execSync } = require("child_process");
+    const shell = process.env.SHELL || "/bin/zsh";
+    shellPath = execSync(`${shell} -ilc 'echo $PATH'`, {
+      encoding: "utf8",
+      timeout: 5000,
+    }).trim();
+  } catch {
+    // Fallback to common paths
+  }
+
+  const fallbackPaths = [
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    `${home}/.volta/bin`,
+    `${home}/.local/bin`,
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+  ];
+
+  const pathValue = shellPath
+    ? shellPath
+    : [...fallbackPaths, process.env.PATH || ""].join(":");
+
+  return {
+    ...process.env,
+    PATH: pathValue,
+  } as Record<string, string>;
+}
+
 export interface TokenGenerationResult {
   success: boolean;
   token?: string;
@@ -22,7 +62,7 @@ export class ClaudeSetupTokenService {
    */
   async isClaudeCLIInstalled(): Promise<boolean> {
     try {
-      await execAsync("which claude");
+      await execAsync("which claude", { env: getShellEnv() });
       return true;
     } catch {
       return false;
@@ -41,6 +81,7 @@ export class ClaudeSetupTokenService {
         "npm install -g @anthropic-ai/claude-code",
         {
           timeout: 120000, // 2 minutes timeout
+          env: getShellEnv(),
         },
       );
 
@@ -94,6 +135,7 @@ export class ClaudeSetupTokenService {
         const process = spawn("claude", ["setup-token"], {
           shell: true,
           stdio: ["inherit", "pipe", "pipe"], // inherit stdin for interactive, pipe stdout/stderr
+          env: getShellEnv(),
         });
 
         let stdout = "";
@@ -275,10 +317,13 @@ export class ClaudeSetupTokenService {
           // Parse the credentials JSON
           const credentials = JSON.parse(credentialsJson);
           
-          // Extract access token
-          if (credentials.accessToken && typeof credentials.accessToken === 'string') {
+          // Extract access token (structure: { claudeAiOauth: { accessToken: "..." } })
+          const token =
+            credentials?.claudeAiOauth?.accessToken ||
+            credentials?.accessToken;
+          if (token && typeof token === 'string') {
             console.log("[ClaudeSetupToken] Found token in Keychain");
-            return credentials.accessToken;
+            return token;
           }
         }
       } catch (keychainError) {
@@ -334,8 +379,18 @@ export class ClaudeSetupTokenService {
 
   /**
    * Complete automated flow: Install CLI (if needed) + Generate token
+   * Tries Keychain first to avoid CLI version incompatibilities.
    */
   async automatedSetup(): Promise<TokenGenerationResult> {
+    // Step 0: Try reading existing token from Keychain/storage first
+    // This avoids running the CLI entirely (which can fail due to Node version mismatches)
+    console.log("[ClaudeSetupToken] Checking for existing token in storage...");
+    const existingToken = await this.readTokenFromCLIStorage();
+    if (existingToken) {
+      console.log("[ClaudeSetupToken] Found existing token — skipping CLI");
+      return { success: true, token: existingToken };
+    }
+
     // Step 1: Check if CLI is installed
     const isInstalled = await this.isClaudeCLIInstalled();
 

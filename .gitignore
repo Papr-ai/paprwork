@@ -44,3 +44,4 @@ out/
 
 # Literal ~ directory (created when path expansion fails e.g. ~/PAPR/jobs)
 ~/
+.env.build
