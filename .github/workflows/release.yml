@@ -27,11 +27,16 @@ jobs:
         run: npm run build
 
       - name: Build Mac distributables
-        run: npx electron-builder --mac --arm64 --x64 --publish never
+        run: |
+          if [ -n "$CSC_LINK_VALUE" ]; then
+            export CSC_LINK="$CSC_LINK_VALUE"
+            export CSC_KEY_PASSWORD="$CSC_KEY_PASSWORD_VALUE"
+          fi
+          npx electron-builder --mac --arm64 --x64 --publish never
         env:
-          CSC_LINK: ${{ secrets.MAC_CERTIFICATE_P12 }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.MAC_CERTIFICATE_P12 != '' }}
+          CSC_LINK_VALUE: ${{ secrets.MAC_CERTIFICATE_P12 }}
+          CSC_KEY_PASSWORD_VALUE: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -64,7 +69,9 @@ jobs:
         run: npm ci
 
       - name: Build app
-        run: npm run build
+        run: |
+          npm config set script-shell "$(which bash)"
+          npm run build
 
       - name: Build Windows distributables
         run: npx electron-builder --win --publish never
