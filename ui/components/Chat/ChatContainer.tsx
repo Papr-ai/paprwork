@@ -156,7 +156,21 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
 
   const [selectedModel, setSelectedModel] = useState<AIModel>(fallbackModel);
   const [contextInfo, setContextInfo] = useState<unknown | null>(null);
-  
+  const [gatewayStatus, setGatewayStatus] = useState<{ status: string; message?: string } | null>(null);
+
+  // Listen for gateway supervisor status changes (restart notifications)
+  useEffect(() => {
+    const api = (window as unknown as { electronAPI?: { gateway?: { onStatusChange?: (cb: (data: { status: string; message?: string }) => void) => void; removeStatusListener?: () => void } } }).electronAPI;
+    if (api?.gateway?.onStatusChange) {
+      api.gateway.onStatusChange((data) => {
+        setGatewayStatus(data.status === "restarting" ? data : null);
+      });
+      return () => {
+        api.gateway?.removeStatusListener?.();
+      };
+    }
+  }, []);
+
   // Only block THIS chat if it's waiting for an Ollama model that's currently being installed
   // Don't block on initial load - only block when actively installing/starting
   const isWaitingForModel = selectedModel.provider === 'ollama' && installing === selectedModel.id;
@@ -495,6 +509,13 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
         <div className="error-banner">
           <span className="error-icon">⚠️</span>
           <span className="error-message">{error}</span>
+        </div>
+      )}
+
+      {gatewayStatus && (
+        <div className="reconnecting-banner">
+          <span className="reconnecting-icon">↻</span>
+          <span className="reconnecting-message">{gatewayStatus.message || "Reconnecting to Gateway..."}</span>
         </div>
       )}
 

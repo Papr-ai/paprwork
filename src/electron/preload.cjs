@@ -90,6 +90,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
     },
   },
 
+  // Gateway status notifications (supervisor → renderer)
+  gateway: {
+    onStatusChange: (callback) => {
+      ipcRenderer.on("gateway:status", (_event, data) => callback(data));
+    },
+    removeStatusListener: () => {
+      ipcRenderer.removeAllListeners("gateway:status");
+    },
+  },
+
   // Environment info
   env: {
     NODE_ENV: process.env.NODE_ENV || "production",

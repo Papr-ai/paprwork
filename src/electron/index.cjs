@@ -5,9 +5,10 @@
  * CommonJS format - Electron's require() is more reliable than ESM
  */
 
-const { app, BrowserWindow, Menu, shell } = require("electron");
-const { spawn } = require("child_process");
+const { app, BrowserWindow, Menu, shell, dialog } = require("electron");
+const { spawn, execSync } = require("child_process");
 const path = require("path");
+const http = require("http");
 
 // Set app name for macOS Keychain (must be before any safeStorage usage)
 // This determines the keychain entry name: "Papr Work Safe Storage"
@@ -420,275 +421,478 @@ function createMainWindow() {
   });
 }
 
-// Launch Gateway as subprocess
-function startGateway(customKeysStorage) {
-  // Kill any orphaned Gateway processes first
-  const { execSync } = require("child_process");
-  try {
-    console.log("[Electron] Checking for orphaned Gateway processes...");
-    
-    // Kill any process on Gateway port
+// ---------------------------------------------------------------------------
+//  Gateway Process Supervisor
+//
+//  Manages the Gateway subprocess lifecycle with:
+//  - Auto-restart with exponential backoff
+//  - Circuit breaker (max 5 restarts in 5 minutes)
+//  - HTTP health probes (ping /health every 10s)
+//  - Tiered user notifications (silent → banner → dialog)
+// ---------------------------------------------------------------------------
+
+// Pure logic functions — imported from separate file for unit testing
+const {
+  calculateBackoff,
+  isCircuitBroken,
+  pruneTimestamps,
+  getNotificationType,
+  shouldKillProcess,
+  isValidTransition,
+} = require("./supervisor-logic.cjs");
+
+class GatewayProcessSupervisor {
+  constructor(options) {
+    this.gatewayScript = options.gatewayScript;
+    this.electronNodePath = options.electronNodePath;
+    this.gatewayEnv = options.gatewayEnv;
+    this.port = options.port;
+    this.customKeysStorage = options.customKeysStorage;
+
+    // State
+    this.state = "stopped";
+    this.process = null;
+    this.restartCount = 0;
+    this.restartTimestamps = [];
+    this.healthCheckTimer = null;
+    this.healthFailures = 0;
+    this.backoffTimer = null;
+    this.isStopping = false;
+
+    // Config
+    this.BACKOFF_BASE_MS = 500;
+    this.BACKOFF_MAX_MS = 30000;
+    this.CIRCUIT_BREAKER_MAX = 5;
+    this.CIRCUIT_BREAKER_WINDOW_MS = 5 * 60 * 1000;
+    this.HEALTH_INTERVAL_MS = 10000;
+    this.HEALTH_FAILURE_THRESHOLD = 3;
+    this.SILENT_RESTART_THRESHOLD = 2;
+    this.BANNER_RESTART_THRESHOLD = 4;
+  }
+
+  getProcess() {
+    return this.process;
+  }
+
+  _transitionTo(newState) {
+    if (!isValidTransition(this.state, newState)) {
+      console.warn(`[Supervisor] Invalid transition: ${this.state} → ${newState}`);
+      return;
+    }
+    console.log(`[Supervisor] ${this.state} → ${newState}`);
+    this.state = newState;
+  }
+
+  async start() {
+    this.isStopping = false;
+    this._transitionTo("starting");
+    this._killOrphans();
+    this._spawnProcess();
+    await this._waitForReady();
+    this._transitionTo("running");
+    this._startHealthCheck();
+  }
+
+  stop() {
+    this.isStopping = true;
+    this._stopHealthCheck();
+    if (this.backoffTimer) {
+      clearTimeout(this.backoffTimer);
+      this.backoffTimer = null;
+    }
+    if (this.process) {
+      console.log("[Supervisor] Stopping Gateway...");
+      this.process.kill("SIGTERM");
+      this.process = null;
+      gatewayProcess = null;
+    }
+    this._transitionTo("stopped");
+  }
+
+  _killOrphans() {
     try {
-      const pid = execSync(`lsof -ti:${GATEWAY_PORT}`, { encoding: "utf8" }).trim();
-      if (pid) {
-        console.log(`[Electron] Found orphaned process ${pid} on port ${GATEWAY_PORT}`);
-        execSync(`kill -9 ${pid}`);
-        // Wait a moment for port to be released
-        execSync("sleep 0.5");
-        console.log("[Electron] ✓ Orphaned process killed");
+      console.log("[Supervisor] Checking for orphaned Gateway processes...");
+      try {
+        const pid = execSync(`lsof -ti:${this.port}`, { encoding: "utf8" }).trim();
+        if (pid) {
+          console.log(`[Supervisor] Found orphaned process ${pid} on port ${this.port}`);
+          execSync(`kill -9 ${pid}`);
+          execSync("sleep 0.5");
+          console.log("[Supervisor] Orphaned process killed");
+        }
+      } catch (e) {
+        // No process on port — good
       }
-    } catch (e) {
-      // No process found - good!
-      console.log("[Electron] ✓ Port ${GATEWAY_PORT} is free");
-    }
-  } catch (error) {
-    console.warn("[Electron] Cleanup warning:", error.message);
-  }
-
-  // Gateway is compiled to dist/gateway/ from project root
-  const gatewayScript = path.join(__dirname, "../../dist/gateway/index.js");
-
-  console.log(`[Electron] Starting Gateway...`);
-  console.log(`[Electron] Gateway path: ${gatewayScript}`);
-  console.log(`[Electron] Gateway port: ${GATEWAY_PORT}`);
-  console.log(`[Electron] Working directory: ${process.cwd()}`);
-
-  // Use Electron's embedded Node.js to ensure version consistency (Node v24)
-  const electronNodePath = process.execPath; // Path to electron binary
-
-  // Resolve esbuild binary path for asar-unpacked native binary
-  const gatewayEnv = {
-    ...process.env,
-    GATEWAY_PORT: String(GATEWAY_PORT),
-    NODE_ENV: IS_PRODUCTION ? "production" : "development",
-    ELECTRON_RUN_AS_NODE: "1", // Run Electron as Node.js
-  };
-  if (IS_PRODUCTION) {
-    // esbuild's native binary is unpacked from asar but require.resolve
-    // still points inside app.asar. Set ESBUILD_BINARY_PATH explicitly.
-    const asarUnpacked = path.join(__dirname, "../..").replace("app.asar", "app.asar.unpacked");
-    const esbuildBin = path.join(asarUnpacked, "node_modules/@esbuild", `${process.platform}-${process.arch}`, "bin/esbuild");
-    if (require("fs").existsSync(esbuildBin)) {
-      gatewayEnv.ESBUILD_BINARY_PATH = esbuildBin;
-      console.log(`[Electron] esbuild binary: ${esbuildBin}`);
+    } catch (error) {
+      console.warn("[Supervisor] Cleanup warning:", error.message);
     }
   }
 
-  gatewayProcess = spawn(electronNodePath, [gatewayScript], {
-    stdio: ["inherit", "inherit", "inherit", "ipc"], // Enable IPC
-    env: gatewayEnv,
-  });
+  _spawnProcess() {
+    console.log(`[Supervisor] Starting Gateway on port ${this.port}...`);
 
-  // Set Gateway process reference for cache invalidation
-  setGatewayProcess(gatewayProcess);
+    this.process = spawn(this.electronNodePath, [this.gatewayScript], {
+      stdio: ["inherit", "inherit", "inherit", "ipc"],
+      env: this.gatewayEnv,
+    });
 
-  // Set up IPC for Gateway communication
-  gatewayProcess.on("message", async (msg) => {
-    // Handle key resolution requests (existing)
-    if (isRequestKeysMessage(msg)) {
-      console.log("[Electron] Gateway requested keys:", msg.keys);
+    // Update module-level reference for backward compatibility
+    gatewayProcess = this.process;
+    if (setGatewayProcess) {
+      setGatewayProcess(this.process);
+    }
 
-      const resolvedKeys = {};
-      for (const keyName of msg.keys || []) {
-        try {
-          const value = await customKeysStorage.getKeyByName(keyName);
-          if (value !== null) {
-            resolvedKeys[keyName] = value;
-            console.log(`[Electron]   ✓ Resolved ${keyName}`);
-          } else {
-            const envFallback = process.env[keyName];
-            if (envFallback) {
-              resolvedKeys[keyName] = envFallback;
-              console.log(
-                `[Electron]   ✓ Resolved ${keyName} from env fallback`,
-              );
+    this._setupIpcHandlers();
+
+    this.process.on("error", (err) => this._onProcessError(err));
+    this.process.on("exit", (code) => this._onProcessExit(code));
+  }
+
+  _setupIpcHandlers() {
+    const proc = this.process;
+    const storage = this.customKeysStorage;
+
+    proc.on("message", async (msg) => {
+      // Guard: if process was replaced during async handling, skip
+      if (proc !== this.process) return;
+
+      if (isRequestKeysMessage(msg)) {
+        console.log("[Electron] Gateway requested keys:", msg.keys);
+
+        const resolvedKeys = {};
+        for (const keyName of msg.keys || []) {
+          try {
+            const value = await storage.getKeyByName(keyName);
+            if (value !== null) {
+              resolvedKeys[keyName] = value;
+              console.log(`[Electron]   ✓ Resolved ${keyName}`);
             } else {
-              console.log(`[Electron]   ✗ Key ${keyName} not found`);
+              const envFallback = process.env[keyName];
+              if (envFallback) {
+                resolvedKeys[keyName] = envFallback;
+                console.log(`[Electron]   ✓ Resolved ${keyName} from env fallback`);
+              } else {
+                console.log(`[Electron]   ✗ Key ${keyName} not found`);
+              }
+            }
+          } catch (error) {
+            console.error(`[Electron]   ✗ Error resolving ${keyName}:`, error);
+          }
+        }
+
+        // Include OAuth tokens if available
+        const oauthTokens = {};
+        try {
+          const { getOAuthTokenStorage } =
+            await import("../../dist/electron/electron/ipc/oauth.js");
+          const oauthStorage = getOAuthTokenStorage();
+
+          if (oauthStorage) {
+            const openaiToken = oauthStorage.getTokenByProvider("openai");
+            if (openaiToken && !oauthStorage.isTokenExpired(openaiToken)) {
+              oauthTokens.openai = {
+                accessToken: openaiToken.accessToken,
+                expiresAt: openaiToken.expiresAt,
+              };
+              console.log("[Electron]   ✓ OpenAI OAuth token available");
+            }
+
+            const claudeToken = oauthStorage.getTokenByProvider("anthropic");
+            if (claudeToken && !oauthStorage.isTokenExpired(claudeToken)) {
+              console.log(`[Electron]   Claude OAuth token details: length=${claudeToken.accessToken.length}, prefix=${claudeToken.accessToken.substring(0, 30)}...`);
+              oauthTokens.anthropic = {
+                accessToken: claudeToken.accessToken,
+                expiresAt: claudeToken.expiresAt,
+              };
+              console.log("[Electron]   ✓ Claude OAuth token available");
+            } else {
+              if (!claudeToken) {
+                console.log("[Electron]   ✗ No Claude OAuth token found");
+              } else {
+                console.log("[Electron]   ✗ Claude OAuth token expired");
+              }
             }
           }
         } catch (error) {
-          console.error(`[Electron]   ✗ Error resolving ${keyName}:`, error);
+          console.error("[Electron] Failed to load OAuth tokens:", error);
         }
-      }
 
-      // Include OAuth tokens if available
-      const oauthTokens = {};
-      try {
-        const { getOAuthTokenStorage } =
-          await import("../../dist/electron/electron/ipc/oauth.js");
-        const oauthStorage = getOAuthTokenStorage();
-
-        if (oauthStorage) {
-          // Check OpenAI OAuth token
-          const openaiToken = oauthStorage.getTokenByProvider("openai");
-          if (openaiToken && !oauthStorage.isTokenExpired(openaiToken)) {
-            oauthTokens.openai = {
-              accessToken: openaiToken.accessToken,
-              expiresAt: openaiToken.expiresAt,
-            };
-            console.log("[Electron]   ✓ OpenAI OAuth token available");
+        if (proc === this.process) {
+          proc.send({
+            type: "KEYS_RESPONSE",
+            requestId: msg.requestId,
+            keys: resolvedKeys,
+            oauthTokens: Object.keys(oauthTokens).length > 0 ? oauthTokens : undefined,
+          });
+        }
+      } else if (isRequestPermissionMessage(msg)) {
+        console.log("[Electron] Gateway requested permission:", msg.request);
+        try {
+          if (!requestPermissionFromGateway) {
+            throw new Error("Permission IPC module not initialized");
           }
-
-          // Check Claude OAuth token
-          const claudeToken = oauthStorage.getTokenByProvider("anthropic");
-          if (claudeToken && !oauthStorage.isTokenExpired(claudeToken)) {
-            console.log(`[Electron]   Claude OAuth token details: length=${claudeToken.accessToken.length}, prefix=${claudeToken.accessToken.substring(0, 30)}...`);
-            oauthTokens.anthropic = {
-              accessToken: claudeToken.accessToken,
-              expiresAt: claudeToken.expiresAt,
-            };
-            console.log("[Electron]   ✓ Claude OAuth token available");
-          } else {
-            if (!claudeToken) {
-              console.log("[Electron]   ✗ No Claude OAuth token found");
-            } else {
-              console.log("[Electron]   ✗ Claude OAuth token expired");
-            }
+          const response = await requestPermissionFromGateway(msg.request);
+          if (proc === this.process) {
+            proc.send({ type: "PERMISSION_RESPONSE", requestId: msg.requestId, response });
+          }
+        } catch (error) {
+          console.error("[Electron]   ✗ Error requesting permission:", error);
+          if (proc === this.process) {
+            proc.send({ type: "PERMISSION_RESPONSE", requestId: msg.requestId, response: { approved: false } });
           }
         }
-      } catch (error) {
-        console.error("[Electron] Failed to load OAuth tokens:", error);
-      }
-
-      gatewayProcess.send({
-        type: "KEYS_RESPONSE",
-        requestId: msg.requestId,
-        keys: resolvedKeys,
-        oauthTokens:
-          Object.keys(oauthTokens).length > 0 ? oauthTokens : undefined,
-      });
-    }
-
-    // Handle permission requests from Gateway (new)
-    else if (isRequestPermissionMessage(msg)) {
-      console.log("[Electron] Gateway requested permission:", msg.request);
-
-      try {
-        if (!requestPermissionFromGateway) {
-          throw new Error("Permission IPC module not initialized");
+      } else if (isRequestWebviewTestMessage(msg)) {
+        try {
+          const response = await handleWebviewTestRequest(msg.request);
+          if (proc === this.process) {
+            proc.send({ type: "WEBVIEW_TEST_RESPONSE", requestId: msg.requestId, response });
+          }
+        } catch (error) {
+          if (proc === this.process) {
+            proc.send({
+              type: "WEBVIEW_TEST_RESPONSE",
+              requestId: msg.requestId,
+              response: { success: false, error: error instanceof Error ? error.message : String(error) },
+            });
+          }
         }
+      } else if (msg.type === "CUSTOM_KEYS_LIST") {
+        try {
+          const keys = await storage.listKeys();
+          if (proc === this.process) proc.send({ type: "CUSTOM_KEYS_RESPONSE", requestId: msg.requestId, keys });
+        } catch (error) {
+          console.error("[Electron] custom-keys:list error:", error);
+          if (proc === this.process) proc.send({ type: "CUSTOM_KEYS_RESPONSE", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
+        }
+      } else if (msg.type === "CUSTOM_KEYS_GET_BY_NAME") {
+        try {
+          const value = await storage.getKeyByName(msg.name);
+          if (proc === this.process) proc.send({ type: "CUSTOM_KEYS_RESPONSE", requestId: msg.requestId, value });
+        } catch (error) {
+          console.error("[Electron] custom-keys:get-by-name error:", error);
+          if (proc === this.process) proc.send({ type: "CUSTOM_KEYS_RESPONSE", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
+        }
+      } else if (msg.type === "CUSTOM_KEYS_ADD") {
+        try {
+          const key = await storage.addKey(msg.input);
+          if (proc === this.process) proc.send({ type: "CUSTOM_KEYS_RESPONSE", requestId: msg.requestId, key });
+        } catch (error) {
+          console.error("[Electron] custom-keys:add error:", error);
+          if (proc === this.process) proc.send({ type: "CUSTOM_KEYS_RESPONSE", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
+        }
+      } else if (msg.type === "CUSTOM_KEYS_DELETE") {
+        try {
+          await storage.deleteKey(msg.keyId);
+          if (proc === this.process) proc.send({ type: "CUSTOM_KEYS_RESPONSE", requestId: msg.requestId });
+        } catch (error) {
+          console.error("[Electron] custom-keys:delete error:", error);
+          if (proc === this.process) proc.send({ type: "CUSTOM_KEYS_RESPONSE", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+    });
+  }
 
-        const response = await requestPermissionFromGateway(msg.request);
+  _onProcessError(err) {
+    console.error("[Supervisor] Gateway failed to start:", err);
+  }
 
-        gatewayProcess.send({
-          type: "PERMISSION_RESPONSE",
-          requestId: msg.requestId,
-          response,
-        });
-      } catch (error) {
-        console.error("[Electron]   ✗ Error requesting permission:", error);
-        gatewayProcess.send({
-          type: "PERMISSION_RESPONSE",
-          requestId: msg.requestId,
-          response: { approved: false },
-        });
-      }
-    } else if (isRequestWebviewTestMessage(msg)) {
-      try {
-        const response = await handleWebviewTestRequest(msg.request);
-        gatewayProcess.send({
-          type: "WEBVIEW_TEST_RESPONSE",
-          requestId: msg.requestId,
-          response,
-        });
-      } catch (error) {
-        gatewayProcess.send({
-          type: "WEBVIEW_TEST_RESPONSE",
-          requestId: msg.requestId,
-          response: {
-            success: false,
-            error: error instanceof Error ? error.message : String(error),
-          },
-        });
-      }
-    }
-    // Handle custom keys requests from Gateway
-    else if (msg.type === "CUSTOM_KEYS_LIST") {
-      try {
-        const keys = await customKeysStorage.listKeys();
-        gatewayProcess.send({
-          type: "CUSTOM_KEYS_RESPONSE",
-          requestId: msg.requestId,
-          keys,
-        });
-      } catch (error) {
-        console.error("[Electron] custom-keys:list error:", error);
-        gatewayProcess.send({
-          type: "CUSTOM_KEYS_RESPONSE",
-          requestId: msg.requestId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    } else if (msg.type === "CUSTOM_KEYS_GET_BY_NAME") {
-      try {
-        const value = await customKeysStorage.getKeyByName(msg.name);
-        gatewayProcess.send({
-          type: "CUSTOM_KEYS_RESPONSE",
-          requestId: msg.requestId,
-          value,
-        });
-      } catch (error) {
-        console.error("[Electron] custom-keys:get-by-name error:", error);
-        gatewayProcess.send({
-          type: "CUSTOM_KEYS_RESPONSE",
-          requestId: msg.requestId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    } else if (msg.type === "CUSTOM_KEYS_ADD") {
-      try {
-        const key = await customKeysStorage.addKey(msg.input);
-        gatewayProcess.send({
-          type: "CUSTOM_KEYS_RESPONSE",
-          requestId: msg.requestId,
-          key,
-        });
-      } catch (error) {
-        console.error("[Electron] custom-keys:add error:", error);
-        gatewayProcess.send({
-          type: "CUSTOM_KEYS_RESPONSE",
-          requestId: msg.requestId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    } else if (msg.type === "CUSTOM_KEYS_DELETE") {
-      try {
-        await customKeysStorage.deleteKey(msg.keyId);
-        gatewayProcess.send({
-          type: "CUSTOM_KEYS_RESPONSE",
-          requestId: msg.requestId,
-        });
-      } catch (error) {
-        console.error("[Electron] custom-keys:delete error:", error);
-        gatewayProcess.send({
-          type: "CUSTOM_KEYS_RESPONSE",
-          requestId: msg.requestId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-  });
-
-  gatewayProcess.on("error", (err) => {
-    console.error("[Electron] Gateway failed to start:", err);
-  });
-
-  gatewayProcess.on("exit", (code) => {
-    console.log(`[Electron] Gateway exited with code: ${code}`);
-    if (code !== 0 && code !== null) {
-      app.quit();
-    }
-  });
-}
-
-// Gracefully shutdown Gateway
-function stopGateway() {
-  if (gatewayProcess) {
-    console.log("[Electron] Stopping Gateway...");
-    gatewayProcess.kill("SIGTERM");
+  _onProcessExit(code) {
+    console.log(`[Supervisor] Gateway exited with code: ${code}`);
+    this._stopHealthCheck();
+    this.process = null;
     gatewayProcess = null;
+
+    if (this.isStopping) return;
+
+    this._scheduleRestart();
+  }
+
+  _scheduleRestart() {
+    const now = Date.now();
+    this.restartTimestamps.push(now);
+    this.restartTimestamps = pruneTimestamps(this.restartTimestamps, now, this.CIRCUIT_BREAKER_WINDOW_MS);
+
+    if (isCircuitBroken(this.restartTimestamps, now, this.CIRCUIT_BREAKER_WINDOW_MS, this.CIRCUIT_BREAKER_MAX)) {
+      // Force state to backoff first so backoff→failed is valid
+      if (this.state === "running" || this.state === "starting") {
+        this.state = "backoff";
+        console.log(`[Supervisor] ${this.state} → backoff (forced for circuit breaker)`);
+      }
+      this._transitionTo("failed");
+      this._notifyUser("circuit_broken");
+      return;
+    }
+
+    this.restartCount++;
+    const delay = calculateBackoff(this.restartCount - 1, this.BACKOFF_BASE_MS, this.BACKOFF_MAX_MS);
+
+    console.log(`[Supervisor] Scheduling restart #${this.restartCount} in ${delay}ms`);
+
+    // Transition to backoff
+    if (this.state !== "backoff") {
+      if (this.state === "running" || this.state === "starting") {
+        this._transitionTo("backoff");
+      }
+    }
+
+    this._notifyUser(this.restartCount);
+
+    this.backoffTimer = setTimeout(() => {
+      this.backoffTimer = null;
+      if (this.isStopping) return;
+      this._performRestart();
+    }, delay);
+  }
+
+  async _performRestart() {
+    this._transitionTo("starting");
+    this._killOrphans();
+    this._spawnProcess();
+    await this._waitForReady();
+    if (this.isStopping) return;
+    this._transitionTo("running");
+    this.restartCount = 0; // Reset on successful start
+    this._startHealthCheck();
+
+    // Notify UI that gateway is back
+    this._sendStatusToRenderer("running", "Gateway reconnected");
+  }
+
+  _startHealthCheck() {
+    this.healthFailures = 0;
+    this._stopHealthCheck();
+    this.healthCheckTimer = setInterval(() => {
+      const req = http.get(`http://localhost:${this.port}/health`, (res) => {
+        let body = "";
+        res.on("data", (d) => (body += d));
+        res.on("end", () => {
+          try {
+            const parsed = JSON.parse(body);
+            this._onHealthCheckResult(parsed.status === "ok");
+          } catch {
+            this._onHealthCheckResult(false);
+          }
+        });
+      });
+      req.on("error", () => this._onHealthCheckResult(false));
+      req.setTimeout(5000, () => {
+        req.destroy();
+        this._onHealthCheckResult(false);
+      });
+    }, this.HEALTH_INTERVAL_MS);
+  }
+
+  _stopHealthCheck() {
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+      this.healthCheckTimer = null;
+    }
+  }
+
+  _onHealthCheckResult(ok) {
+    const result = shouldKillProcess(this.healthFailures, ok, this.HEALTH_FAILURE_THRESHOLD);
+    this.healthFailures = result.newCount;
+
+    if (result.shouldKill) {
+      console.error(`[Supervisor] Health check failed ${this.HEALTH_FAILURE_THRESHOLD} times, killing gateway`);
+      this._stopHealthCheck();
+      if (this.process) {
+        this.process.kill("SIGKILL");
+        // _onProcessExit will handle restart scheduling
+      }
+    } else if (!ok) {
+      console.warn(`[Supervisor] Health check failed (${this.healthFailures}/${this.HEALTH_FAILURE_THRESHOLD})`);
+    }
+  }
+
+  _notifyUser(restartCountOrEvent) {
+    if (restartCountOrEvent === "circuit_broken") {
+      // Show modal dialog
+      const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+      const options = {
+        type: "error",
+        title: "Gateway Failed",
+        message: "The Gateway process has failed repeatedly and cannot recover.",
+        detail: "The internal service that powers Paprwork has crashed multiple times. You can try restarting it, or quit the application.",
+        buttons: ["Restart", "Quit"],
+        defaultId: 0,
+        cancelId: 1,
+      };
+
+      const showDialog = win
+        ? dialog.showMessageBox(win, options)
+        : dialog.showMessageBox(options);
+
+      showDialog.then(({ response }) => {
+        if (response === 0) {
+          // Reset and try again
+          this.restartTimestamps = [];
+          this.restartCount = 0;
+          this.state = "failed"; // Ensure we can transition failed→starting
+          this._performRestart();
+        } else {
+          app.quit();
+        }
+      });
+      return;
+    }
+
+    const count = restartCountOrEvent;
+    const type = getNotificationType(count, this.SILENT_RESTART_THRESHOLD, this.BANNER_RESTART_THRESHOLD);
+
+    if (type === "silent") {
+      console.log(`[Supervisor] Silent restart #${count}`);
+      return;
+    }
+
+    if (type === "banner") {
+      this._sendStatusToRenderer("restarting", `Gateway is restarting (attempt ${count})...`);
+    }
+  }
+
+  _sendStatusToRenderer(status, message) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("gateway:status", { status, message });
+    }
+  }
+
+  _waitForReady(maxAttempts = 20, intervalMs = 500) {
+    return new Promise((resolve) => {
+      let attempts = 0;
+      let resolved = false;
+
+      const check = setInterval(() => {
+        if (this.isStopping) {
+          clearInterval(check);
+          resolve();
+          return;
+        }
+        attempts++;
+        const req = http.get(`http://localhost:${this.port}/`, (res) => {
+          if (resolved) return;
+          resolved = true;
+          clearInterval(check);
+          console.log(`[Supervisor] Gateway is ready (status: ${res.statusCode})`);
+          resolve();
+        });
+        req.on("error", () => {
+          if (resolved) return;
+          if (attempts >= maxAttempts) {
+            resolved = true;
+            clearInterval(check);
+            console.error(`[Supervisor] Gateway failed to respond after ${maxAttempts} attempts`);
+            resolve();
+          } else {
+            console.log(`[Supervisor] Waiting for Gateway... (${attempts}/${maxAttempts})`);
+          }
+        });
+        req.end();
+      }, intervalMs);
+    });
   }
 }
+
+let supervisor = null;
 
 // App lifecycle
 app.whenReady().then(async () => {
@@ -710,58 +914,41 @@ app.whenReady().then(async () => {
   // Initialize OAuth IPC handlers (pass customKeysStorage for syncing)
   await initializeOAuthIPC(customKeysStorage);
 
-  // Start Gateway process
-  startGateway(customKeysStorage);
+  // Build gateway environment
+  const gatewayEnv = {
+    ...process.env,
+    GATEWAY_PORT: String(GATEWAY_PORT),
+    NODE_ENV: IS_PRODUCTION ? "production" : "development",
+    ELECTRON_RUN_AS_NODE: "1",
+  };
+  if (IS_PRODUCTION) {
+    const asarUnpacked = path.join(__dirname, "../..").replace("app.asar", "app.asar.unpacked");
+    const esbuildBin = path.join(asarUnpacked, "node_modules/@esbuild", `${process.platform}-${process.arch}`, "bin/esbuild");
+    if (require("fs").existsSync(esbuildBin)) {
+      gatewayEnv.ESBUILD_BINARY_PATH = esbuildBin;
+      console.log(`[Electron] esbuild binary: ${esbuildBin}`);
+    }
+  }
 
-  // Wait for Gateway to start (check if it's actually running)
-  let attempts = 0;
-  const maxAttempts = 20; // 10 seconds max
-  let gatewayReady = false; // guard against multiple in-flight requests all resolving
+  // Start Gateway with process supervisor
+  supervisor = new GatewayProcessSupervisor({
+    gatewayScript: path.join(__dirname, "../../dist/gateway/index.js"),
+    electronNodePath: process.execPath,
+    gatewayEnv,
+    port: GATEWAY_PORT,
+    customKeysStorage,
+  });
 
-  const checkGateway = setInterval(() => {
-    attempts++;
+  await supervisor.start();
+  createMainWindow();
 
-    // Try to connect to Gateway
-    const http = require("http");
-    const req = http.get(`http://localhost:${GATEWAY_PORT}/`, (res) => {
-      if (gatewayReady) return; // already handled — discard duplicate response
-      gatewayReady = true;
-      console.log(`[Electron] Gateway is ready (status: ${res.statusCode})`);
-      clearInterval(checkGateway);
-      createMainWindow();
+  // Initialize permissions IPC after window is created
+  initializePermissionsIPC(keyPermissionsStorage, settingsStorage, mainWindow);
 
-      // Initialize permissions IPC after window is created
-      initializePermissionsIPC(
-        keyPermissionsStorage,
-        settingsStorage,
-        mainWindow,
-      );
-
-      // Initialize Ollama IPC handlers
-      if (initializeOllamaIPC) {
-        initializeOllamaIPC(mainWindow);
-      }
-    });
-
-    req.on("error", (err) => {
-      if (gatewayReady) return;
-      if (attempts >= maxAttempts) {
-        gatewayReady = true;
-        console.error(
-          `[Electron] Gateway failed to start after ${maxAttempts} attempts`,
-        );
-        clearInterval(checkGateway);
-        // Try to create window anyway
-        createMainWindow();
-      } else {
-        console.log(
-          `[Electron] Waiting for Gateway... (${attempts}/${maxAttempts})`,
-        );
-      }
-    });
-
-    req.end();
-  }, 500);
+  // Initialize Ollama IPC handlers
+  if (initializeOllamaIPC) {
+    initializeOllamaIPC(mainWindow);
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -786,17 +973,17 @@ app.on("before-quit", async () => {
   if (cleanupOllama) {
     await cleanupOllama();
   }
-  stopGateway();
+  if (supervisor) supervisor.stop();
 });
 
 process.on("SIGINT", () => {
   console.log("[Electron] Received SIGINT, shutting down...");
-  stopGateway();
+  if (supervisor) supervisor.stop();
   app.quit();
 });
 
 process.on("SIGTERM", () => {
   console.log("[Electron] Received SIGTERM, shutting down...");
-  stopGateway();
+  if (supervisor) supervisor.stop();
   app.quit();
 });
