@@ -26,20 +26,46 @@ jobs:
       - name: Build app
         run: npm run build
 
-      - name: Build Mac distributables
-        run: |
-          if [ -n "$CSC_LINK_VALUE" ]; then
-            export CSC_LINK="$CSC_LINK_VALUE"
-            export CSC_KEY_PASSWORD="$CSC_KEY_PASSWORD_VALUE"
-          fi
-          npx electron-builder --mac --arm64 --x64 --publish never
+      - name: Import signing certificate
         env:
-          CSC_LINK_VALUE: ${{ secrets.MAC_CERTIFICATE_P12 }}
-          CSC_KEY_PASSWORD_VALUE: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+          MAC_CERTIFICATE_P12: ${{ secrets.MAC_CERTIFICATE_P12 }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+        run: |
+          CERT_PATH=$RUNNER_TEMP/certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          # Decode certificate from base64
+          echo "$MAC_CERTIFICATE_P12" | base64 --decode > "$CERT_PATH"
+          echo "Certificate file size: $(wc -c < "$CERT_PATH") bytes"
+
+          # Create temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import certificate into keychain
+          security import "$CERT_PATH" -P "$MAC_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Add to search list so codesign finds it
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+          # Verify the certificate is available
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Build Mac distributables
+        run: npx electron-builder --mac --arm64 --x64 --publish never
+        env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain $RUNNER_TEMP/build.keychain-db 2>/dev/null || true
+          rm -f $RUNNER_TEMP/certificate.p12
 
       - name: Upload Mac artifacts
         uses: actions/upload-artifact@v4
