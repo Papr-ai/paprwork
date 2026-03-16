@@ -7,7 +7,14 @@
   },
   "files": [
     "dist/**/*",
+    "src/electron/main.cjs",
+    "src/electron/index.cjs",
+    "src/electron/preload.cjs",
     "package.json"
+  ],
+  "asarUnpack": [
+    "node_modules/esbuild/**",
+    "node_modules/@esbuild/**"
   ],
   "mac": {
     "category": "public.app-category.productivity",
@@ -26,6 +33,7 @@
     "gatekeeperAssess": false,
     "entitlements": "build/entitlements.mac.plist",
     "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+    "notarize": true,
     "extendInfo": {
       "NSMicrophoneUsageDescription": "Paprwork needs access to your microphone for meeting recording.",
       "NSCameraUsageDescription": "Paprwork needs access to your camera for meeting recording.",
@@ -72,5 +80,6 @@
   "nsis": {
     "oneClick": false,
     "allowToChangeInstallationDirectory": true
-  }
+  },
+  "afterPack": "./scripts/afterPack.cjs"
 }

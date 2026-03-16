@@ -65,7 +65,7 @@ async function loadESMModules() {
 // Configuration
 const UI_DEV_URL = process.env.UI_DEV_URL || "http://localhost:5173";
 const GATEWAY_PORT = parseInt(process.env.GATEWAY_PORT || "18789", 10);
-const IS_PRODUCTION = process.env.NODE_ENV === "production";
+const IS_PRODUCTION = process.env.NODE_ENV === "production" || require("path").dirname(__dirname).includes("app.asar");
 
 let mainWindow = null;
 let gatewayProcess = null;
@@ -456,14 +456,27 @@ function startGateway(customKeysStorage) {
   // Use Electron's embedded Node.js to ensure version consistency (Node v24)
   const electronNodePath = process.execPath; // Path to electron binary
 
+  // Resolve esbuild binary path for asar-unpacked native binary
+  const gatewayEnv = {
+    ...process.env,
+    GATEWAY_PORT: String(GATEWAY_PORT),
+    NODE_ENV: IS_PRODUCTION ? "production" : "development",
+    ELECTRON_RUN_AS_NODE: "1", // Run Electron as Node.js
+  };
+  if (IS_PRODUCTION) {
+    // esbuild's native binary is unpacked from asar but require.resolve
+    // still points inside app.asar. Set ESBUILD_BINARY_PATH explicitly.
+    const asarUnpacked = path.join(__dirname, "../..").replace("app.asar", "app.asar.unpacked");
+    const esbuildBin = path.join(asarUnpacked, "node_modules/@esbuild", `${process.platform}-${process.arch}`, "bin/esbuild");
+    if (require("fs").existsSync(esbuildBin)) {
+      gatewayEnv.ESBUILD_BINARY_PATH = esbuildBin;
+      console.log(`[Electron] esbuild binary: ${esbuildBin}`);
+    }
+  }
+
   gatewayProcess = spawn(electronNodePath, [gatewayScript], {
     stdio: ["inherit", "inherit", "inherit", "ipc"], // Enable IPC
-    env: {
-      ...process.env,
-      GATEWAY_PORT: String(GATEWAY_PORT),
-      NODE_ENV: IS_PRODUCTION ? "production" : "development",
-      ELECTRON_RUN_AS_NODE: "1", // Run Electron as Node.js
-    },
+    env: gatewayEnv,
   });
 
   // Set Gateway process reference for cache invalidation

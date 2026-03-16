@@ -141,7 +141,6 @@ export function useArtifacts() {
         const response = await gateway.send(messageType, { [payloadKey]: id });
         const updated = response.data as Artifact;
         updateArtifact(id, { favorite: updated.favorite });
-        toggleFavoriteLocal(id);
 
         // Auto-add to favorites sidebar when favoriting
         if (updated.favorite) {
