@@ -571,6 +571,24 @@ npx @electron/rebuild -f -w better-sqlite3
 **Impact:** Qwen now sees all 70 tools, can use core tools like bash/filesystem/browser
 **Prevention:** Always set `num_ctx` to at least 4x tool schema size for Ollama models
 
+### Issue 14: IPC Channel Closed - Gateway Crashes ✅ FIXED
+**Problem:** Gateway process crashes with `ERR_IPC_CHANNEL_CLOSED` when bash tool tries to access custom keys
+**Root Cause:** `CustomKeysService.listKeys()` called `process.send()` without checking if IPC channel was still open. When main process disconnects (shutdown, termination), the gateway throws unhandled exception.
+**Error:** `Error [ERR_IPC_CHANNEL_CLOSED]: Channel closed at target.send (node:internal/child_process:753:16)`
+**Solution:** 
+1. Added `checkIpcAvailable()` method checking `process.send` and `process.connected`
+2. Added `safeSend()` wrapper with try-catch for `ERR_IPC_CHANNEL_CLOSED`
+3. Added `ipcAvailable` state tracking to avoid repeated failed attempts
+4. All IPC methods now fall back gracefully to dev mode (env vars, empty arrays)
+**Fix Applied:** 2026-03-16
+**Files Changed:**
+- `src/gateway/services/CustomKeysService.ts` - Added graceful IPC channel handling
+- `docs/IPC_CHANNEL_CLOSED_FIX.md` - Complete documentation and prevention guidelines
+**Impact:**
+- **Before:** Gateway crashes, agent stops, user sees error, must restart app
+- **After:** Gateway continues, bash tool uses env vars, agent execution smooth, only warning logged
+**Prevention:** Always check `process.connected` before `process.send()`, wrap in try-catch, provide fallbacks
+
 ---
 
 ## OAuth & pi-ai Architecture

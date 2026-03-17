@@ -23,11 +23,50 @@ interface CustomKey {
  */
 export class CustomKeysService {
   private initialized = false;
+  private ipcAvailable = false;
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
     this.initialized = true;
-    console.log("[CustomKeysService] Initialized");
+    this.ipcAvailable = this.checkIpcAvailable();
+    console.log(
+      `[CustomKeysService] Initialized (IPC: ${this.ipcAvailable ? "available" : "unavailable"})`
+    );
+  }
+
+  /**
+   * Check if IPC channel is available and connected
+   */
+  private checkIpcAvailable(): boolean {
+    if (!process.send || !process.connected) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Safe IPC send - returns false if channel closed
+   */
+  private safeSend(message: any): boolean {
+    if (!this.checkIpcAvailable()) {
+      return false;
+    }
+    try {
+      process.send!(message);
+      return true;
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ERR_IPC_CHANNEL_CLOSED"
+      ) {
+        console.warn("[CustomKeysService] IPC channel closed");
+        this.ipcAvailable = false;
+      } else {
+        console.error("[CustomKeysService] IPC send error:", error);
+      }
+      return false;
+    }
   }
 
   /**
@@ -39,7 +78,7 @@ export class CustomKeysService {
     }
 
     // Gateway → Electron IPC
-    if (process.send) {
+    if (this.ipcAvailable) {
       return new Promise((resolve, reject) => {
         const requestId = `custom-keys-list-${Date.now()}`;
         const timeout = setTimeout(() => {
@@ -67,10 +106,15 @@ export class CustomKeysService {
         };
 
         process.on("message", messageHandler);
-        process.send!({
-          type: "CUSTOM_KEYS_LIST",
-          requestId,
-        });
+
+        // Try to send - fall back to dev mode if channel closed
+        if (!this.safeSend({ type: "CUSTOM_KEYS_LIST", requestId })) {
+          cleanup();
+          console.warn(
+            "[CustomKeysService] IPC channel closed - falling back to dev mode"
+          );
+          resolve([]);
+        }
       });
     }
 
@@ -88,7 +132,7 @@ export class CustomKeysService {
     }
 
     // Gateway → Electron IPC
-    if (process.send) {
+    if (this.ipcAvailable) {
       return new Promise((resolve, reject) => {
         const requestId = `custom-keys-get-${Date.now()}`;
         const timeout = setTimeout(() => {
@@ -116,11 +160,21 @@ export class CustomKeysService {
         };
 
         process.on("message", messageHandler);
-        process.send!({
-          type: "CUSTOM_KEYS_GET_BY_NAME",
-          requestId,
-          name,
-        });
+
+        // Try to send - fall back to env vars if channel closed
+        if (
+          !this.safeSend({
+            type: "CUSTOM_KEYS_GET_BY_NAME",
+            requestId,
+            name,
+          })
+        ) {
+          cleanup();
+          console.warn(
+            `[CustomKeysService] IPC channel closed - checking env for ${name}`
+          );
+          resolve(process.env[name] || null);
+        }
       });
     }
 
@@ -138,7 +192,7 @@ export class CustomKeysService {
     }
 
     // Gateway → Electron IPC
-    if (process.send) {
+    if (this.ipcAvailable) {
       return new Promise((resolve, reject) => {
         const requestId = `custom-keys-add-${Date.now()}`;
         const timeout = setTimeout(() => {
@@ -166,11 +220,20 @@ export class CustomKeysService {
         };
 
         process.on("message", messageHandler);
-        process.send!({
-          type: "CUSTOM_KEYS_ADD",
-          requestId,
-          input,
-        });
+
+        // Try to send - fail if channel closed
+        if (
+          !this.safeSend({
+            type: "CUSTOM_KEYS_ADD",
+            requestId,
+            input,
+          })
+        ) {
+          cleanup();
+          reject(
+            new Error("Cannot add keys - IPC channel closed (dev mode)")
+          );
+        }
       });
     }
 
@@ -193,7 +256,7 @@ export class CustomKeysService {
     }
 
     // Gateway → Electron IPC
-    if (process.send) {
+    if (this.ipcAvailable) {
       return new Promise((resolve, reject) => {
         const requestId = `custom-keys-delete-${Date.now()}`;
         const timeout = setTimeout(() => {
@@ -221,11 +284,20 @@ export class CustomKeysService {
         };
 
         process.on("message", messageHandler);
-        process.send!({
-          type: "CUSTOM_KEYS_DELETE",
-          requestId,
-          keyId: key.id,
-        });
+
+        // Try to send - fail if channel closed
+        if (
+          !this.safeSend({
+            type: "CUSTOM_KEYS_DELETE",
+            requestId,
+            keyId: key.id,
+          })
+        ) {
+          cleanup();
+          reject(
+            new Error("Cannot delete keys - IPC channel closed (dev mode)")
+          );
+        }
       });
     }
 

@@ -77,6 +77,23 @@ interface JobDbInfoPayload {
   jobId: string;
 }
 
+interface JobFileVersionsPayload {
+  jobId: string;
+  filename: string;
+}
+
+interface JobFileVersionPayload {
+  jobId: string;
+  filename: string;
+  versionId: string;
+}
+
+interface RestoreJobFileVersionPayload {
+  jobId: string;
+  filename: string;
+  versionId: string;
+}
+
 export async function setupJobsHandlers(
   ws: WebSocket,
   message: WSMessage,
@@ -196,6 +213,51 @@ export async function setupJobsHandlers(
         });
         break;
       }
+      // ========== FILE VERSION HISTORY ==========
+      case "jobs:file-versions": {
+        const payload = message.payload as JobFileVersionsPayload;
+        const versions = await jobsService.getJobFileVersionHistory(
+          payload.jobId,
+          payload.filename,
+        );
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: versions,
+        });
+        break;
+      }
+
+      case "jobs:file-version": {
+        const payload = message.payload as JobFileVersionPayload;
+        const version = await jobsService.getJobFileVersion(
+          payload.jobId,
+          payload.filename,
+          payload.versionId,
+        );
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: version,
+        });
+        break;
+      }
+
+      case "jobs:restore-file-version": {
+        const payload = message.payload as RestoreJobFileVersionPayload;
+        const restored = await jobsService.restoreJobFileVersion(
+          payload.jobId,
+          payload.filename,
+          payload.versionId,
+        );
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: { restored },
+        });
+        break;
+      }
+
       default:
         sendError(ws, message.id, `Unknown jobs message type: ${message.type}`);
     }

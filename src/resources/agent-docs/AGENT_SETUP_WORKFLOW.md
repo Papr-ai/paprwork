@@ -116,9 +116,25 @@ create_job({
 })
 ```
 
-### 5. Create Starter Apps
+### 5. Import Community Apps or Create Starter Apps
 
-Build 1-2 simple apps that provide immediate value:
+**Step A: Check the community app registry for relevant pre-built apps**
+
+Before building apps from scratch, check if a community bundle already solves the user's need. Browse available bundles:
+
+```javascript
+list_app_bundles()
+```
+
+If a relevant community app exists (e.g., expense tracker for finance users), import it directly:
+
+```javascript
+import_app_bundle({ source: "https://github.com/Papr-ai/paprwork-community-apps/bundles/expense-tracker" })
+```
+
+The community repo at `https://github.com/Papr-ai/paprwork-community-apps` contains curated app bundles organized by category. Each bundle includes the app, optional jobs, and database schemas — ready to use immediately.
+
+**Step B: Create custom apps for needs not covered by community bundles**
 
 ```javascript
 create_app({
@@ -126,6 +142,8 @@ create_app({
   description: "View and manage customer data from Papr Memory"
 })
 ```
+
+Prefer importing community apps over building from scratch — they're tested, well-designed, and ready to use. Only create custom apps when the user's needs aren't met by existing community bundles.
 
 ### 6. Create Initial Documents
 
@@ -205,7 +223,10 @@ create_job({
   deliver: { channel: "chat", targetId: "main" }
 })
 
-// 5. Create dashboard app
+// 5. Check community apps first, then create custom ones
+list_app_bundles()  // See what's available
+// Import relevant community apps if they match user needs
+// Then create custom apps for anything not covered:
 create_app({
   title: "Property Dashboard",
   description: "Track properties and leads in one place"
@@ -225,7 +246,7 @@ create_document({
 1. **Be thorough in the interview** — Don't skip questions. Understand their workflow deeply
 2. **Read the skills catalog** — Use `read_file("~/PAPR/skills-catalog.json")` to find relevant skills. Never browse the web for skills
 3. **Match skills to their domain** — Install only what's relevant to what they told you
-4. **Create practical apps** — Focus on immediate time-savers based on their pain points
+4. **Community apps first** — Check community bundles at `https://github.com/Papr-ai/paprwork-community-apps` before building apps from scratch. Import pre-built apps when they fit the user's needs, create custom apps only for unmet needs
 5. **Always use create_document** — Never create DOCX files directly
 6. **Test everything** — Walk them through each feature you configured
 7. **Provide a summary** — Create a document summarizing what was configured

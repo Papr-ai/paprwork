@@ -261,7 +261,12 @@ export class JobsService {
       for (const job of jobs) {
         // Add dependency edges (solid arrows)
         for (const dep of job.dependsOn ?? []) {
-          edges.push({ from: dep.jobId, to: job.id, onStatus: dep.onStatus });
+          edges.push({
+            from: dep.jobId,
+            to: job.id,
+            onStatus: dep.onStatus,
+            ...(dep.autoTrigger ? { autoTrigger: true } : {}),
+          });
         }
         // Add runtime call edges (dashed arrows)
         for (const calleeId of job.runtimeCalls ?? []) {
@@ -444,7 +449,53 @@ export class JobsService {
     // Broadcast job status change to all connected WebSocket clients (including mini-apps)
     this.broadcastJobStatus(next);
 
+    // Auto-trigger downstream jobs that depend on this job with autoTrigger enabled
+    if (status === "completed" || status === "failed") {
+      void this.triggerDownstreamJobs(next);
+    }
+
     return next;
+  }
+
+  /**
+   * Scan all jobs for ones that depend on `parentJob` with `autoTrigger: true`
+   * and matching `onStatus`, then run them in the background.
+   */
+  private async triggerDownstreamJobs(parentJob: JobRecord): Promise<void> {
+    const downstream: JobRecord[] = [];
+    for (const job of this.jobs.values()) {
+      if (job.id === parentJob.id) continue;
+      if (job.status === "running") continue;
+      for (const dep of job.dependsOn ?? []) {
+        if (
+          dep.jobId === parentJob.id &&
+          dep.autoTrigger === true &&
+          dep.onStatus === parentJob.status
+        ) {
+          downstream.push(job);
+          break;
+        }
+      }
+    }
+    for (const job of downstream) {
+      console.log(
+        `[JobsService] Auto-triggering "${job.name}" (${job.id}) — parent "${parentJob.name}" reached ${parentJob.status}`,
+      );
+      void this.appendLog(
+        job.id,
+        `Auto-triggered: dependency "${parentJob.name}" (${parentJob.id}) reached ${parentJob.status}`,
+      );
+      this.runJobWithDependencies(job.id, new Set<string>()).catch((error) => {
+        console.error(
+          `[JobsService] Auto-trigger failed for "${job.name}" (${job.id}):`,
+          error,
+        );
+        void this.appendLog(
+          job.id,
+          `Auto-trigger failed: ${(error as Error).message}`,
+        );
+      });
+    }
   }
 
   /**
@@ -1122,6 +1173,121 @@ export class JobsService {
     return sanitizeError(command, apiKeys);
   }
 
+  // ===== Job File Version History =====
+
+  private getJobFileVersionsDir(jobId: string, filename: string): string {
+    const safeFilename = filename.replace(/\//g, "__");
+    return path.join(this.getJobDir(jobId), ".versions", safeFilename);
+  }
+
+  async getJobFileVersionHistory(
+    jobId: string,
+    filename: string,
+  ): Promise<Array<{ versionId: string; filename: string; timestamp: string; reason: string; preview: string }>> {
+    const versionsDir = this.getJobFileVersionsDir(jobId, filename);
+
+    let files: string[];
+    try {
+      files = await fs.readdir(versionsDir);
+    } catch {
+      return [];
+    }
+
+    const versions = files
+      .map((f) => {
+        const firstUnderscore = f.indexOf("_");
+        const reason = firstUnderscore >= 0 ? f.slice(firstUnderscore + 1) : "auto";
+        return {
+          versionId: f,
+          filename,
+          timestamp: jobVersionIdToTimestamp(f),
+          reason,
+          preview: "",
+        };
+      })
+      .sort(
+        (a, b) =>
+          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+      );
+
+    for (const v of versions.slice(0, 20)) {
+      try {
+        const content = await fs.readFile(
+          path.join(versionsDir, v.versionId),
+          "utf-8",
+        );
+        v.preview = content.slice(0, 200);
+      } catch {
+        /* noop */
+      }
+    }
+
+    return versions;
+  }
+
+  async getJobFileVersion(
+    jobId: string,
+    filename: string,
+    versionId: string,
+  ): Promise<{ versionId: string; filename: string; timestamp: string; reason: string; preview: string; content: string } | null> {
+    const versionPath = path.join(
+      this.getJobFileVersionsDir(jobId, filename),
+      versionId,
+    );
+
+    try {
+      const content = await fs.readFile(versionPath, "utf-8");
+      return {
+        versionId,
+        filename,
+        timestamp: jobVersionIdToTimestamp(versionId),
+        reason: versionId.slice(versionId.indexOf("_") + 1) || "auto",
+        preview: content.slice(0, 200),
+        content,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async restoreJobFileVersion(
+    jobId: string,
+    filename: string,
+    versionId: string,
+  ): Promise<boolean> {
+    const version = await this.getJobFileVersion(jobId, filename, versionId);
+    if (!version) return false;
+
+    const jobDir = this.getJobDir(jobId);
+    const filePath = path.join(jobDir, filename);
+
+    // Save current content as "before-restore"
+    try {
+      const currentContent = await fs.readFile(filePath, "utf-8");
+      if (currentContent) {
+        const safeFilename = filename.replace(/\//g, "__");
+        const versionsDir = path.join(jobDir, ".versions", safeFilename);
+        await fs.mkdir(versionsDir, { recursive: true });
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+        await fs.writeFile(
+          path.join(versionsDir, `${timestamp}_before-restore`),
+          currentContent,
+          "utf-8",
+        );
+      }
+    } catch {
+      /* file may not exist */
+    }
+
+    // Write restored content
+    const dir = path.dirname(filePath);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(filePath, version.content, "utf-8");
+
+    console.log(`[JobsService] Restored ${filename} to version ${versionId} for job ${jobId}`);
+    return true;
+  }
+
   async upsertJob(job: JobRecord, sourceDir?: string): Promise<JobRecord> {
     const destination = this.getJobDir(job.id);
     await fs.mkdir(destination, { recursive: true });
@@ -1133,6 +1299,12 @@ export class JobsService {
     await this.saveJobs();
     return job;
   }
+}
+
+function jobVersionIdToTimestamp(versionId: string): string {
+  const firstUnderscore = versionId.indexOf("_");
+  const raw = firstUnderscore >= 0 ? versionId.slice(0, firstUnderscore) : versionId;
+  return raw.replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z/, "T$1:$2:$3.$4Z");
 }
 
 export function getJobsService(): JobsService {

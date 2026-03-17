@@ -15,7 +15,6 @@ import { setupBundleHandlers } from "./bundle.js";
 import { setupTemplateHandlers } from "./template.js";
 import { setupSubAgentHandlers } from "./subagent.js";
 import { setupSettingsHandlers } from "./settings.js";
-import { setupMeetingsHandlers } from "./meetings.js";
 import { setupDbHandlers } from "./db.js";
 import { setupChatGPTHandlers } from "./chatgpt.js";
 import { setupCodeIndexingHandlers } from "./code-indexing.js";
@@ -127,8 +126,6 @@ export function setupWebSocketHandlers(wss: WebSocketServer): void {
           await setupSubAgentHandlers(ws, message);
         } else if (message.type.startsWith("settings:")) {
           await setupSettingsHandlers(ws, message);
-        } else if (message.type.startsWith("meetings:")) {
-          await setupMeetingsHandlers(ws, message);
         } else if (message.type.startsWith("db:")) {
           await setupDbHandlers(ws, message);
         } else if (message.type.startsWith("chatgpt:")) {

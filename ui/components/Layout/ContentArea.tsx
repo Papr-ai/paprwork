@@ -15,7 +15,6 @@ import { JobsView } from "../Jobs/JobsView";
 import { MiniAppView } from "../Apps/MiniAppView";
 import { SkillsView } from "../Skills/SkillsView";
 import { AgentsView } from "../Agents/AgentsViewCards";
-import { MeetingsView } from "../Meetings/MeetingsView";
 import { ViewsView } from "../Views/ViewsView";
 import { TableView } from "../Views/TableView";
 import { ChatGPTConvHistoryView } from "../ChatGPT/ChatGPTConvHistoryView";
@@ -182,8 +181,6 @@ export function ContentArea() {
             Agent Lounge (Coming Soon)
           </div>
         );
-      case "meetings":
-        return <MeetingsView />;
       case "jobs":
         return <JobsView />;
       case "agents":

@@ -23,6 +23,7 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
         src={src}
         title={`mini-app-${appId}`}
         sandbox="allow-scripts allow-forms allow-modals allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+        allow="microphone; camera; speech-recognition"
       />
     </div>
   );

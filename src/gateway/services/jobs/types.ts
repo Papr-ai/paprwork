@@ -97,6 +97,8 @@ export interface JobGraphEdge {
   onStatus: "completed" | "failed";
   /** True if this is a runtime call (dashed arrow), false/undefined if dependency (solid arrow) */
   isRuntimeCall?: boolean;
+  /** True if the child job auto-triggers when the parent reaches onStatus */
+  autoTrigger?: boolean;
 }
 
 export interface JobGraph {
@@ -112,6 +114,8 @@ export interface JobGraph {
 export interface JobDependency {
   jobId: string;
   onStatus: "completed" | "failed";
+  /** When true, this job is automatically triggered when the dependency reaches `onStatus`. */
+  autoTrigger?: boolean;
 }
 
 export interface JobRetryPolicy {

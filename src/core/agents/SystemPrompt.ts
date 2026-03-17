@@ -67,6 +67,7 @@ export class SystemPromptBuilder {
       this.buildApiKeysSection(),
       this.buildBashToolSection(),
       this.buildDocumentToolsSection(),
+      this.buildMemoryToolsSection(),
       this.buildFilesystemToolsSection(),
       this.buildAutomationArchitectureSection(),
       this.buildJobOutputStrategySection(),
@@ -243,7 +244,8 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
       {
         area: "Memory",
         enabled: has("add_agent_memory") || has("search_agent_memory"),
-        details: "PAPR memory add/search/schema",
+        details:
+          "PAPR memory add/search/schema/GraphQL — use search_agent_memory for semantic recall, introspect_memory_graph + query_memory_graph for structured graph queries",
       },
       {
         area: "Skills",
@@ -260,7 +262,7 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
         area: "Apps + Jobs",
         enabled: has("create_app") || has("create_job"),
         details:
-          "mini-app and job creation; use list_jobs to see existing jobs before creating new ones",
+          "mini-app and job creation; use list_jobs to see existing jobs before creating new ones. File version history is automatic — use list_app_file_versions / list_job_file_versions to see previous versions, restore_app_file_version / restore_job_file_version to revert.",
       },
       {
         area: "Sub-agents",
@@ -535,6 +537,59 @@ Use \`bash\` to edit the Markdown file directly at \`filePath\`. Document editor
   }
 
   /**
+   * PAPR Memory tools — semantic search vs GraphQL
+   */
+  private buildMemoryToolsSection(): string {
+    return `# PAPR Memory Tools
+
+**Requires PAPR_API_KEY.** If not configured, tell the user they can get a free API key at **https://dashboard.papr.ai** and set it in Settings. Memory tools will fail without this key.
+
+## When to Use Each Tool
+
+| Goal | Tool |
+|------|------|
+| Recall past conversations, preferences, facts | \`search_agent_memory\` (semantic search) |
+| Store a new memory for future recall | \`add_agent_memory\` |
+| Explore the knowledge graph structure | \`introspect_memory_graph\` |
+| Query specific nodes, relationships, or traverse the graph | \`query_memory_graph\` |
+| **Find code** across indexed projects | \`search_agent_memory({ query: "...", category: "code" })\` |
+
+## Code Search Strategy
+
+**ALWAYS try PAPR Memory first for code search, then fall back to local files.**
+
+PAPR indexes code files with semantic understanding — it finds code by meaning, not just text matching.
+
+1. **First:** \`search_agent_memory({ query: "function that handles user authentication", category: "code" })\`
+2. **If no results or PAPR_API_KEY not set:** Fall back to local search: \`search_files\`, \`bash({ command: "grep -r 'pattern' src/" })\`
+3. **For exact symbols:** Local grep is faster — \`bash({ command: "grep -rn 'className' src/" })\`
+
+**Rule of thumb:** Semantic questions ("where do we handle X?") → PAPR first. Exact text match ("find all uses of myFunction") → local grep.
+
+## GraphQL Knowledge Graph
+
+PAPR stores memories as a Neo4j knowledge graph with typed nodes and relationships. The GraphQL endpoint lets you query this graph directly.
+
+**Workflow:**
+1. \`introspect_memory_graph()\` — discover available types and fields (run once per session)
+2. \`introspect_memory_graph({ typeName: "SomeType" })\` — drill into a specific type
+3. \`query_memory_graph({ query: "{ ... }" })\` — execute queries using discovered schema
+
+**When to prefer GraphQL over semantic search:**
+- You need to traverse relationships between entities (e.g., "which projects use this library?")
+- You need structured filtering (by date, type, status, etc.)
+- You need to aggregate or count graph nodes
+- Semantic search returns too broad results and you need precision
+
+**When to prefer semantic search:**
+- Quick recall of relevant memories by topic
+- Fuzzy/natural-language matching
+- You don't know the graph structure yet and need a quick answer
+
+All GraphQL queries are automatically scoped to the user's data — no cross-tenant access.`;
+  }
+
+  /**
    * Filesystem tools documentation
    */
   private buildFilesystemToolsSection(): string {
@@ -705,13 +760,16 @@ create_plan({
 **3. Load Documentation BEFORE Starting:**
 \`read_skill({ skillId: "preloaded-app-and-jobs-guide" })\` — Read this skill FIRST, before any app/job work. Don't assume you know the patterns - load the skill to see the latest workflow, API key usage, and anti-patterns.
 
-**4. CRITICAL: Load Design System for Frontend Work:**
-\`read_skill({ skillId: "preloaded-paprwork-design-system" })\` — REQUIRED before creating or editing any UI/frontend code (mini-apps, components, styling). This includes:
+**4. ALWAYS Load Design System for ANY Frontend Work — NO EXCEPTIONS:**
+\`read_skill({ skillId: "preloaded-paprwork-design-system" })\`
+
+This is NOT optional. You MUST call this BEFORE writing a single line of UI code. Every time. No shortcuts.
+
+**Applies to ALL of these:**
 - Creating new mini-apps (\`create_app\`)
-- Editing app HTML/CSS/TypeScript files
-- Updating UI components
-- Styling work
-- Any visual/frontend changes
+- Editing ANY app HTML/CSS/TypeScript files
+- Updating UI components or styling
+- Any visual/frontend change, no matter how small
 
 **The design system defines:**
 - Liquid Glass visual identity (colors, typography, spacing)
@@ -719,15 +777,35 @@ create_plan({
 - Layout principles and responsive design
 - Button states, form patterns, card styles
 
-**Don't build UI without it** - you'll create inconsistent designs that don't match the Paprwork aesthetic.
+**If you skip this, you WILL create inconsistent, off-brand designs. Load it every time.**
 
-**5. Use TypeScript & Modular Files:**
+**5. Product Design Philosophy — Focus Above All:**
+
+Design mini-apps like Steve Jobs and Elon Musk would: **ruthlessly focused, zero clutter.**
+
+- **One mini-app = one use case.** Don't build a Swiss Army knife. Build a scalpel.
+- **One screen = one job to be done.** Each screen should answer exactly ONE question or complete ONE task. If a screen does two things, split it into two screens.
+- **Say no to features.** The hardest part of design is deciding what to leave out. If a feature doesn't serve the core use case, cut it.
+- **Visible simplicity, hidden complexity.** The UI should feel obvious. All complexity lives in the data layer and jobs, not in the interface.
+- **Every element earns its place.** If you can't explain why a button, label, or section exists in one sentence tied to the core use case, remove it.
+
+❌ **BAD:** A "Social Media Dashboard" that shows analytics, drafts posts, manages accounts, AND tracks competitors on one screen.
+✅ **GOOD:** A "Tweet Performance Tracker" that shows your top-performing tweets with one clear metric per card.
+
+**6. Use TypeScript & Modular Files:**
 - \`.ts\` files (NOT \`.js\`)
 - Max 150 lines per file
 - Split into \`components/\`, \`utils/\`, \`types.ts\`
 
 **Workflow order:**
-1. Load design system (if UI work) → 2. Load app guide → 3. Create plan → 4. Check existing apps → 5. Start work → 6. Update plan after each step
+1. **ALWAYS** load design system → 2. Load app guide → 3. Create plan → 4. Check existing apps → 5. Start work → 6. Update plan after each step
+
+**7. File Version History (Undo/Revert):**
+Every file edit is automatically versioned. If you or the user needs to undo changes:
+- \`list_app_file_versions({ appId, filename })\` — see all saved versions (newest first)
+- \`restore_app_file_version({ appId, filename, versionId })\` — revert to a previous version
+- \`list_job_file_versions({ jobId, filename })\` / \`restore_job_file_version({ jobId, filename, versionId })\` — same for job files
+Current content is auto-saved as "before-restore" so restores are always reversible.
 
 **For complete workflow, stage flow, patterns, and anti-patterns, read:**
 \`read_skill({ skillId: "preloaded-app-and-jobs-guide" })\``;

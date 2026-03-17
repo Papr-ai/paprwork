@@ -5,6 +5,7 @@ import {
   getBundleService,
   type ExportBundleInput,
   type ImportBundleInput,
+  type ImportCommunityBundleInput,
 } from "../services/BundleService.js";
 
 export async function setupBundleHandlers(
@@ -36,6 +37,25 @@ export async function setupBundleHandlers(
       case "bundle:import": {
         const payload = message.payload as ImportBundleInput;
         const manifest = await bundleService.importBundle(payload);
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: manifest,
+        });
+        break;
+      }
+      case "bundle:fetch-registry": {
+        const registry = await bundleService.fetchCommunityRegistry();
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: registry,
+        });
+        break;
+      }
+      case "bundle:import-community": {
+        const payload = message.payload as ImportCommunityBundleInput;
+        const manifest = await bundleService.importCommunityBundle(payload);
         sendResponse(ws, {
           id: message.id,
           success: true,

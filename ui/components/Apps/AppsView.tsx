@@ -8,9 +8,11 @@ import { useArtifacts } from "../../hooks/useArtifacts";
 import { useTabs } from "../../hooks/useTabs";
 import { gateway } from "../../src/lib/gateway";
 import { AppCard } from "./AppCard";
+import { CommunityAppsView } from "./CommunityAppsView";
 import type { Artifact } from "../../stores/artifactsStore";
 import "./AppsView.css";
 
+type ViewTab = "my-apps" | "community";
 type SortOption = "recent" | "name" | "favorites";
 
 export function AppsView() {
@@ -27,6 +29,7 @@ export function AppsView() {
   } = useArtifacts();
   const { createTab, switchToTab } = useTabs();
 
+  const [viewTab, setViewTab] = useState<ViewTab>("my-apps");
   const [sortBy, setSortBy] = useState<SortOption>("recent");
   const [newAppTitle, setNewAppTitle] = useState("");
 
@@ -138,16 +141,29 @@ export function AppsView() {
         <h2 className="apps-view__title">Apps</h2>
 
         <div className="apps-view__header-actions">
-          <input
-            type="text"
-            className="apps-view__search"
-            placeholder="Search apps..."
-            value={searchQuery}
-            onChange={handleSearch}
-          />
+          <div className="apps-view__tabs">
+            <button
+              className={`apps-view__tab ${viewTab === "my-apps" ? "apps-view__tab--active" : ""}`}
+              onClick={() => setViewTab("my-apps")}
+            >
+              My Apps
+            </button>
+            <button
+              className={`apps-view__tab ${viewTab === "community" ? "apps-view__tab--active" : ""}`}
+              onClick={() => setViewTab("community")}
+            >
+              Community
+            </button>
+          </div>
         </div>
       </div>
 
+      {viewTab === "community" ? (
+        <div className="apps-view__content">
+          <CommunityAppsView />
+        </div>
+      ) : (
+      <>
       {/* Create bar */}
       <div className="apps-view__create">
         <input
@@ -167,6 +183,14 @@ export function AppsView() {
         >
           Create
         </button>
+
+        <input
+          type="text"
+          className="apps-view__search"
+          placeholder="Search apps..."
+          value={searchQuery}
+          onChange={handleSearch}
+        />
       </div>
 
       {/* Sort controls */}
@@ -253,8 +277,41 @@ export function AppsView() {
             </svg>
             <p className="apps-view__empty-title">No apps yet</p>
             <p className="apps-view__empty-subtitle">
-              Ask the AI to build one for you, or create one above.
+              Import apps built by the community, ask the AI to create one,
+              or build your own above.
             </p>
+            <button
+              className="apps-view__empty-community-btn"
+              onClick={() => setViewTab("community")}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <polyline
+                  points="7 10 12 15 17 10"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <line
+                  x1="12"
+                  y1="15"
+                  x2="12"
+                  y2="3"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              Browse Community Apps
+            </button>
           </div>
         )}
 
@@ -306,6 +363,8 @@ export function AppsView() {
           </>
         )}
       </div>
+      </>
+      )}
     </div>
   );
 }

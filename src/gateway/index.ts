@@ -49,6 +49,7 @@ import {
 } from "./permissions/GatewayPermissionBridge.js";
 import { setPermissionRequester } from "./permissions/PermissionRequester.js";
 import type { KeyPermissionRequest } from "../core/types/permissions.js";
+import { initializeDbPool } from "./services/DbQueryPool.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -192,11 +193,14 @@ async function startGateway(): Promise<void> {
     });
 
     // ── Mini-app SQLite query API ────────────────────────────────────────────
+    // All synchronous better-sqlite3 calls run in a worker-thread pool so they
+    // never block the main event loop (keeps health checks & WebSocket alive).
+    //
     // Apps call: fetch('/api/db/query', { method: 'POST', body: JSON.stringify({ appId, sql, params }) })
     // Apps call: fetch('/api/db/schema?appId=<id>') to list tables and columns
     //
     // Security:
-    //  - Only SELECT statements allowed (read-only)
+    //  - Only SELECT statements allowed on /query (read-only)
     //  - Only db paths that are registered in the app's data-sources.json
     //  - Path traversal blocked at the linked dbPath level
     //
@@ -205,6 +209,10 @@ async function startGateway(): Promise<void> {
     //  - Multiple sources → extract primary table from SQL, find which source has it
     //  - If ambiguous → error lists available aliases so the caller can add sourceId
     // ─────────────────────────────────────────────────────────────────────────
+
+    const dbPool = initializeDbPool(
+      new URL("./workers/db-query-worker.js", import.meta.url),
+    );
 
     /**
      * Extract the primary table name from a SQL statement for auto-routing across
@@ -234,18 +242,14 @@ async function startGateway(): Promise<void> {
      * 1. Explicit sourceId (by id or alias) — exact match.
      * 2. Single source — use it automatically.
      * 3. Multiple sources + SQL provided — extract table name, check sqlite_master
-     *    on each source, pick the first that has the table.
+     *    on each source via the worker pool, pick the first that has the table.
      * 4. Multiple sources + no match — throw a descriptive error listing aliases.
-     *
-     * This means apps never need to hardcode a sourceId UUID; they just write
-     * normal SQL and the platform finds the right database.
      */
     async function resolveDataSource(
       sources: import("./services/AppService.js").AppDataSource[],
       sourceId?: string,
       sql?: string,
     ): Promise<import("./services/AppService.js").AppDataSource> {
-      // 1. Explicit sourceId
       if (sourceId) {
         const found = sources.find(
           (s) => s.id === sourceId || s.alias === sourceId,
@@ -262,28 +266,14 @@ async function startGateway(): Promise<void> {
         return found;
       }
 
-      // 2. Single source — no ambiguity
       if (sources.length === 1) return sources[0];
 
-      // 3. Multiple sources — auto-route by table name
       const tableName = sql ? extractPrimaryTable(sql) : null;
       if (tableName) {
-        const DatabaseCtor = (await import("better-sqlite3")).default;
         for (const source of sources) {
           try {
-            const db = new DatabaseCtor(source.dbPath, {
-              readonly: true,
-              fileMustExist: true,
-            });
-            try {
-              const row = db
-                .prepare(
-                  "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
-                )
-                .get(tableName) as unknown;
-              if (row !== undefined) return source;
-            } finally {
-              db.close();
+            if (await dbPool.tableExists(source.dbPath, tableName)) {
+              return source;
             }
           } catch {
             // source unreadable — skip
@@ -291,7 +281,6 @@ async function startGateway(): Promise<void> {
         }
       }
 
-      // 4. Could not auto-route — give a useful error
       const aliases = sources.map((s) => `"${s.alias ?? s.id}"`).join(", ");
       const tableHint = tableName
         ? ` Table "${tableName}" was not found in any linked source.`
@@ -320,55 +309,26 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        const Database = (await import("better-sqlite3")).default;
-        const result = sources.map((source) => {
-          try {
-            const db = new Database(source.dbPath, {
-              readonly: true,
-              fileMustExist: true,
-            });
-            const tables = (
-              db
-                .prepare(
-                  "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
-                )
-                .all() as { name: string }[]
-            ).map((row) => {
-              const cols = db
-                .prepare(`PRAGMA table_info(${JSON.stringify(row.name)})`)
-                .all() as {
-                cid: number;
-                name: string;
-                type: string;
-                notnull: number;
-                dflt_value: unknown;
-                pk: number;
-              }[];
+        const result = await Promise.all(
+          sources.map(async (source) => {
+            try {
+              const schema = await dbPool.schema(source.dbPath);
               return {
-                table: row.name,
-                columns: cols.map((c) => ({
-                  name: c.name,
-                  type: c.type,
-                  pk: c.pk === 1,
-                })),
+                sourceId: source.id,
+                alias: source.alias,
+                dbPath: source.dbPath,
+                tables: schema.tables,
               };
-            });
-            db.close();
-            return {
-              sourceId: source.id,
-              alias: source.alias,
-              dbPath: source.dbPath,
-              tables,
-            };
-          } catch (err) {
-            return {
-              sourceId: source.id,
-              alias: source.alias,
-              dbPath: source.dbPath,
-              error: (err as Error).message,
-            };
-          }
-        });
+            } catch (err) {
+              return {
+                sourceId: source.id,
+                alias: source.alias,
+                dbPath: source.dbPath,
+                error: (err as Error).message,
+              };
+            }
+          }),
+        );
 
         res.json({ sources: result });
       } catch (err) {
@@ -391,7 +351,6 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        // Only allow SELECT
         const trimmed = sql.trim().toLowerCase();
         if (!trimmed.startsWith("select") && !trimmed.startsWith("with")) {
           res.status(403).json({
@@ -409,7 +368,6 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        const Database = (await import("better-sqlite3")).default;
         let source: import("./services/AppService.js").AppDataSource;
         try {
           source = await resolveDataSource(sources, sourceId, sql);
@@ -419,22 +377,11 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        const db = new Database(source.dbPath, {
-          readonly: true,
-          fileMustExist: true,
-        });
-
-        try {
-          const stmt = db.prepare(sql);
-          const rows = stmt.all(...(params ?? [])) as Record<string, unknown>[];
-          const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
-          console.log(
-            `[Gateway] /api/db/query app=${appId} source=${source.alias} rows=${rows.length}`,
-          );
-          res.json({ rows, columns, count: rows.length, source: source.alias });
-        } finally {
-          db.close();
-        }
+        const result = await dbPool.query(appId, source.dbPath, sql, params);
+        console.log(
+          `[Gateway] /api/db/query app=${appId} source=${source.alias} rows=${result.count}`,
+        );
+        res.json({ ...result, source: source.alias });
       } catch (err) {
         console.error("[Gateway] /api/db/query error:", err);
         res.status(500).json({ error: (err as Error).message });
@@ -466,7 +413,6 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        // Only allow write operations — block reads and DDL
         const trimmed = sql.trim().toLowerCase();
         const isWrite =
           trimmed.startsWith("insert") ||
@@ -491,7 +437,6 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        const Database = (await import("better-sqlite3")).default;
         let source: import("./services/AppService.js").AppDataSource;
         try {
           source = await resolveDataSource(sources, sourceId, sql);
@@ -501,28 +446,60 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        // Open read-write (not readonly)
-        const db = new Database(source.dbPath, { fileMustExist: true });
-
-        try {
-          const stmt = db.prepare(sql);
-          const result = stmt.run(...(params ?? [])) as {
-            changes: number;
-            lastInsertRowid: number | bigint;
-          };
-          const lastInsertRowid =
-            typeof result.lastInsertRowid === "bigint"
-              ? Number(result.lastInsertRowid)
-              : result.lastInsertRowid;
-          console.log(
-            `[Gateway] /api/db/write app=${appId} source=${source.alias} changes=${result.changes}`,
-          );
-          res.json({ changes: result.changes, lastInsertRowid });
-        } finally {
-          db.close();
-        }
+        const result = await dbPool.write(appId, source.dbPath, sql, params);
+        console.log(
+          `[Gateway] /api/db/write app=${appId} source=${source.alias} changes=${result.changes}`,
+        );
+        res.json(result);
       } catch (err) {
         console.error("[Gateway] /api/db/write error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Mini-app SQLite DDL API ──────────────────────────────────────────────
+    // Apps call: fetch('/api/db/exec', { method: 'POST', body: JSON.stringify({ appId, sql }) })
+    // Only CREATE TABLE IF NOT EXISTS is allowed (safe schema bootstrapping).
+    // ─────────────────────────────────────────────────────────────────────────
+    app.post("/api/db/exec", async (req, res) => {
+      try {
+        const { appId, sql } = req.body as {
+          appId?: string;
+          sql?: string;
+        };
+
+        if (!appId || !sql) {
+          res.status(400).json({ error: "appId and sql are required" });
+          return;
+        }
+
+        const trimmed = sql.trim().toLowerCase();
+        if (!trimmed.startsWith("create table if not exists")) {
+          res.status(403).json({
+            error:
+              "Only CREATE TABLE IF NOT EXISTS is allowed on /api/db/exec.",
+          });
+          return;
+        }
+
+        const appService = getAppService();
+        const sources = await appService.listAppDataSources(appId);
+        if (!sources.length) {
+          res.status(404).json({
+            error: `No data sources linked to app ${appId}.`,
+          });
+          return;
+        }
+
+        const source = sources[0];
+        await dbPool.exec(appId, source.dbPath, sql);
+        console.log(
+          `[Gateway] /api/db/exec app=${appId} source=${source.alias}`,
+        );
+        res.json({ success: true });
+      } catch (err) {
+        console.error("[Gateway] /api/db/exec error:", err);
         res.status(500).json({ error: (err as Error).message });
       }
     });
@@ -837,6 +814,7 @@ async function startGateway(): Promise<void> {
       }
 
       getJobsScheduler().stop();
+      dbPool.terminate();
       server.close();
       process.exit(0);
     };

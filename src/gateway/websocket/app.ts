@@ -50,6 +50,23 @@ interface ToggleFavoritePayload {
   appId: string;
 }
 
+interface FileVersionsPayload {
+  appId: string;
+  filename: string;
+}
+
+interface FileVersionPayload {
+  appId: string;
+  filename: string;
+  versionId: string;
+}
+
+interface RestoreFileVersionPayload {
+  appId: string;
+  filename: string;
+  versionId: string;
+}
+
 export async function setupAppHandlers(
   ws: WebSocket,
   message: WSMessage,
@@ -269,6 +286,60 @@ export async function setupAppHandlers(
             type: "app:get_favorites:response",
             success: true,
             data: favorites,
+          }),
+        );
+        break;
+      }
+
+      // ========== FILE VERSION HISTORY ==========
+      case "app:file-versions": {
+        const payload = message.payload as FileVersionsPayload;
+        const versions = await appService.getFileVersionHistory(
+          payload.appId,
+          payload.filename,
+        );
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:file-versions:response",
+            success: true,
+            data: versions,
+          }),
+        );
+        break;
+      }
+
+      case "app:file-version": {
+        const payload = message.payload as FileVersionPayload;
+        const version = await appService.getFileVersion(
+          payload.appId,
+          payload.filename,
+          payload.versionId,
+        );
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:file-version:response",
+            success: true,
+            data: version,
+          }),
+        );
+        break;
+      }
+
+      case "app:restore-file-version": {
+        const payload = message.payload as RestoreFileVersionPayload;
+        const restored = await appService.restoreFileVersion(
+          payload.appId,
+          payload.filename,
+          payload.versionId,
+        );
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:restore-file-version:response",
+            success: true,
+            data: { restored },
           }),
         );
         break;

@@ -42,6 +42,34 @@ export interface BundleSummary {
   createdAt: string;
 }
 
+export interface CommunityRegistryEntry {
+  bundleId: string;
+  name: string;
+  description: string;
+  version: string;
+  author: string;
+  tags: string[];
+  minPaprworkVersion: string;
+  path: string;
+  icon?: string;
+  requirements?: string[];
+}
+
+export interface CommunityRegistry {
+  schemaVersion: string;
+  bundles: CommunityRegistryEntry[];
+}
+
+export interface ImportCommunityBundleInput {
+  bundleId: string;
+  repoPath: string;
+}
+
+const COMMUNITY_REGISTRY_URL =
+  "https://raw.githubusercontent.com/Papr-ai/paprwork-community-apps/main/registry.json";
+const COMMUNITY_REPO_URL =
+  "https://github.com/Papr-ai/paprwork-community-apps.git";
+
 let bundleServiceInstance: BundleService | null = null;
 
 function mapJobTypeToRuntime(type: JobType): RuntimeType {
@@ -239,6 +267,65 @@ export class BundleService {
     }
 
     return manifest;
+  }
+
+  async fetchCommunityRegistry(): Promise<CommunityRegistry> {
+    const response = await fetch(COMMUNITY_REGISTRY_URL);
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch community registry: HTTP ${response.status}`,
+      );
+    }
+    const data = (await response.json()) as CommunityRegistry;
+    if (!data.schemaVersion || !Array.isArray(data.bundles)) {
+      throw new Error("Invalid community registry format");
+    }
+    return data;
+  }
+
+  async importCommunityBundle(
+    input: ImportCommunityBundleInput,
+  ): Promise<BundleManifest> {
+    await this.initialize();
+
+    const tempDir = path.join(
+      os.tmpdir(),
+      `papr-community-bundle-${Date.now()}`,
+    );
+    await fs.mkdir(tempDir, { recursive: true });
+
+    const { exec } = await import("child_process");
+    const { promisify } = await import("util");
+    const execAsync = promisify(exec);
+
+    try {
+      await execAsync(
+        `git clone --depth 1 ${COMMUNITY_REPO_URL} ${tempDir}`,
+        { timeout: 120000 },
+      );
+    } catch (error) {
+      throw new Error(
+        `Failed to clone community repo: ${(error as Error).message}`,
+      );
+    }
+
+    const bundlePath = path.join(tempDir, input.repoPath);
+    try {
+      await fs.access(path.join(bundlePath, "manifest.json"));
+    } catch {
+      throw new Error(
+        `Bundle not found at path: ${input.repoPath}`,
+      );
+    }
+
+    try {
+      const manifest = await this.importBundle({ sourcePath: bundlePath });
+      return manifest;
+    } finally {
+      fs.rm(tempDir, { recursive: true, force: true }).catch(() => {
+        /* best-effort cleanup */
+      });
+    }
   }
 
   async listBundles(): Promise<BundleSummary[]> {

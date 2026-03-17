@@ -10,6 +10,7 @@ import type { WSMessage } from "./index.js";
 import { sendResponse, sendError } from "./index.js";
 import { getAppService } from "../services/AppService.js";
 import type { AppDataSource } from "../services/AppService.js";
+import { getDbPool } from "../services/DbQueryPool.js";
 
 function extractPrimaryTable(sql: string): string | null {
   const s = sql.trim();
@@ -47,22 +48,11 @@ async function resolveDataSource(
   if (sources.length === 1) return sources[0];
   const tableName = sql ? extractPrimaryTable(sql) : null;
   if (tableName) {
-    const DatabaseCtor = (await import("better-sqlite3")).default;
+    const pool = getDbPool();
     for (const source of sources) {
       try {
-        const db = new DatabaseCtor(source.dbPath, {
-          readonly: true,
-          fileMustExist: true,
-        });
-        try {
-          const row = db
-            .prepare(
-              "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
-            )
-            .get(tableName) as unknown;
-          if (row !== undefined) return source;
-        } finally {
-          db.close();
+        if (await pool.tableExists(source.dbPath, tableName)) {
+          return source;
         }
       } catch {
         /* skip unreadable source */
@@ -111,9 +101,9 @@ export async function setupDbHandlers(
   try {
     switch (message.type) {
       case "db:list-all-views": {
+        const pool = getDbPool();
         const apps = await appService.listApps();
         const result: AppViewEntry[] = [];
-        const DatabaseCtor = (await import("better-sqlite3")).default;
 
         for (const app of apps) {
           let sources;
@@ -132,22 +122,11 @@ export async function setupDbHandlers(
 
           for (const source of sources) {
             try {
-              const db = new DatabaseCtor(source.dbPath, {
-                readonly: true,
-                fileMustExist: true,
-              });
-              const tableNames = (
-                db
-                  .prepare(
-                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
-                  )
-                  .all() as { name: string }[]
-              ).map((r) => ({ table: r.name }));
-              db.close();
+              const schema = await pool.schema(source.dbPath);
               appEntry.sources.push({
                 sourceId: source.id,
                 alias: source.alias,
-                tables: tableNames,
+                tables: schema.tables.map((t) => ({ table: t.table })),
               });
             } catch {
               appEntry.sources.push({
@@ -169,6 +148,7 @@ export async function setupDbHandlers(
       }
 
       case "db:schema": {
+        const schemaPool = getDbPool();
         const payload = message.payload as DbSchemaPayload;
         const appId = payload?.appId;
         if (!appId) {
@@ -184,64 +164,36 @@ export async function setupDbHandlers(
           });
           return;
         }
-        const DatabaseCtor = (await import("better-sqlite3")).default;
-        const result = sources.map((source) => {
-          try {
-            const db = new DatabaseCtor(source.dbPath, {
-              readonly: true,
-              fileMustExist: true,
-            });
-            const tables = (
-              db
-                .prepare(
-                  "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
-                )
-                .all() as { name: string }[]
-            ).map((row) => {
-              const cols = db
-                .prepare(`PRAGMA table_info(${JSON.stringify(row.name)})`)
-                .all() as {
-                cid: number;
-                name: string;
-                type: string;
-                notnull: number;
-                dflt_value: unknown;
-                pk: number;
-              }[];
+        const schemaResult = await Promise.all(
+          sources.map(async (source) => {
+            try {
+              const schema = await schemaPool.schema(source.dbPath);
               return {
-                table: row.name,
-                columns: cols.map((c) => ({
-                  name: c.name,
-                  type: c.type,
-                  pk: c.pk === 1,
-                })),
+                sourceId: source.id,
+                alias: source.alias,
+                dbPath: source.dbPath,
+                tables: schema.tables,
               };
-            });
-            db.close();
-            return {
-              sourceId: source.id,
-              alias: source.alias,
-              dbPath: source.dbPath,
-              tables,
-            };
-          } catch (err) {
-            return {
-              sourceId: source.id,
-              alias: source.alias,
-              dbPath: source.dbPath,
-              error: (err as Error).message,
-            };
-          }
-        });
+            } catch (err) {
+              return {
+                sourceId: source.id,
+                alias: source.alias,
+                dbPath: source.dbPath,
+                error: (err as Error).message,
+              };
+            }
+          }),
+        );
         sendResponse(ws, {
           id: message.id,
           success: true,
-          data: { sources: result },
+          data: { sources: schemaResult },
         });
         break;
       }
 
       case "db:query": {
+        const queryPool = getDbPool();
         const payload = message.payload as DbQueryPayload;
         const { appId, sql, params, sourceId } = payload ?? {};
         if (!appId || !sql) {
@@ -267,30 +219,17 @@ export async function setupDbHandlers(
           return;
         }
         const source = await resolveDataSource(sources, sourceId, sql);
-        const DatabaseCtor = (await import("better-sqlite3")).default;
-        const db = new DatabaseCtor(source.dbPath, {
-          readonly: true,
-          fileMustExist: true,
+        const queryResult = await queryPool.query(
+          appId,
+          source.dbPath,
+          sql,
+          Array.isArray(params) ? params : undefined,
+        );
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: { ...queryResult, source: source.alias },
         });
-        try {
-          const stmt = db.prepare(sql);
-          const rows = stmt.all(
-            ...(Array.isArray(params) ? params : []),
-          ) as Record<string, unknown>[];
-          const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
-          sendResponse(ws, {
-            id: message.id,
-            success: true,
-            data: {
-              rows,
-              columns,
-              count: rows.length,
-              source: source.alias,
-            },
-          });
-        } finally {
-          db.close();
-        }
         break;
       }
 

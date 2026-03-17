@@ -465,7 +465,7 @@ class GatewayProcessSupervisor {
     this.CIRCUIT_BREAKER_MAX = 5;
     this.CIRCUIT_BREAKER_WINDOW_MS = 5 * 60 * 1000;
     this.HEALTH_INTERVAL_MS = 10000;
-    this.HEALTH_FAILURE_THRESHOLD = 3;
+    this.HEALTH_FAILURE_THRESHOLD = 5;
     this.SILENT_RESTART_THRESHOLD = 2;
     this.BANNER_RESTART_THRESHOLD = 4;
   }

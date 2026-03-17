@@ -28,6 +28,13 @@ const createAppSchema = z.object({
 const dependencySchema = z.object({
   jobId: z.string().min(1),
   onStatus: z.enum(["completed", "failed"]).default("completed"),
+  autoTrigger: z
+    .boolean()
+    .optional()
+    .describe(
+      "When true, this job automatically runs when the dependency reaches onStatus. " +
+        "Without this, dependsOn only guarantees ordering when the job is triggered manually or by schedule.",
+    ),
 });
 
 const retrySchema = z.object({
@@ -259,6 +266,7 @@ export const createJobTool = createTool({
       dependsOn: args.dependsOn?.map((dependency) => ({
         jobId: dependency.jobId,
         onStatus: dependency.onStatus ?? "completed",
+        ...(dependency.autoTrigger ? { autoTrigger: true } : {}),
       })),
       retries: args.retries
         ? {
@@ -785,7 +793,7 @@ export const listAppFilesTool = createTool({
     );
     const entries = await fsPromises.readdir(appDir);
     const files = entries.filter(
-      (e) => !e.startsWith(".") && e !== "data-sources.json",
+      (e) => !e.startsWith(".") && e !== "data-sources.json" && e !== ".versions",
     );
     return { success: true, data: { appId: args.appId, files } };
   },
@@ -855,6 +863,7 @@ Common use cases:
             dependsOn: dependsOn.map((d) => ({
               jobId: d.jobId,
               onStatus: d.onStatus ?? "completed",
+              ...(d.autoTrigger ? { autoTrigger: true } : {}),
             })),
           }
         : {}),
@@ -922,6 +931,54 @@ async function getJobDir(jobId: string): Promise<string> {
   );
 }
 
+/**
+ * Save a version snapshot of a job file before overwriting.
+ * Stored in ~/PAPR/jobs/{jobId}/.versions/{filename}/{timestamp}_{reason}
+ */
+async function saveJobFileVersion(
+  jobId: string,
+  filename: string,
+  content: string,
+  reason: string = "auto",
+): Promise<string> {
+  const { promises: fsP } = await import("fs");
+  const pathModule = await import("path");
+  const jobDir = await getJobDir(jobId);
+
+  const safeFilename = filename.replace(/\//g, "__");
+  const versionsDir = pathModule.default.join(jobDir, ".versions", safeFilename);
+  await fsP.mkdir(versionsDir, { recursive: true });
+
+  const timestamp = new Date().toISOString();
+  const safeTimestamp = timestamp.replace(/[:.]/g, "-");
+  const versionId = `${safeTimestamp}_${reason}`;
+
+  // Deduplicate: check if latest version is identical
+  try {
+    const existing = await fsP.readdir(versionsDir);
+    if (existing.length > 0) {
+      const sorted = existing.sort().reverse();
+      const latestContent = await fsP.readFile(
+        pathModule.default.join(versionsDir, sorted[0]),
+        "utf-8",
+      );
+      if (latestContent === content) {
+        return sorted[0];
+      }
+    }
+  } catch {
+    /* first version */
+  }
+
+  await fsP.writeFile(
+    pathModule.default.join(versionsDir, versionId),
+    content,
+    "utf-8",
+  );
+  console.log(`[Jobs] Saved version ${versionId} for ${jobId}/${filename}`);
+  return versionId;
+}
+
 export const listJobFilesTool = createTool({
   id: "list_job_files",
   description:
@@ -950,6 +1007,7 @@ export const listJobFilesTool = createTool({
       try {
         const items = await fsPromises.readdir(dir, { withFileTypes: true });
         for (const item of items) {
+          if (item.name === ".versions") continue;
           const rel = base ? `${base}/${item.name}` : item.name;
           if (item.isDirectory()) {
             const sub = await walk(
@@ -1119,6 +1177,9 @@ After editing, run_job to test the changes, then read_job_logs to verify.`,
       );
     }
 
+    // Save version before editing
+    await saveJobFileVersion(args.jobId, args.filename, content, "before-edit");
+
     const newContent = content.replace(args.oldString, args.newString);
     await fsPromises.writeFile(resolvedPath, newContent, "utf8");
 
@@ -1193,7 +1254,11 @@ Returns jobs sorted newest-first. Filter by status or type as needed.`,
       command: j.command,
       requirements: j.requirements?.length ? j.requirements : undefined,
       dependsOn: j.dependsOn?.length
-        ? j.dependsOn.map((d) => ({ jobId: d.jobId, onStatus: d.onStatus }))
+        ? j.dependsOn.map((d) => ({
+            jobId: d.jobId,
+            onStatus: d.onStatus,
+            ...(d.autoTrigger ? { autoTrigger: true } : {}),
+          }))
         : undefined,
       schedule: j.schedule?.enabled
         ? {
@@ -1683,6 +1748,195 @@ Use this to inspect an app bundle before deciding to import it.`,
   },
 });
 
+// ===== File version history tools =====
+
+const appFileVersionsSchema = z.object({
+  appId: z.string().min(1).describe("App UUID"),
+  filename: z.string().min(1).describe("Filename to get version history for"),
+});
+
+const appFileVersionSchema = z.object({
+  appId: z.string().min(1).describe("App UUID"),
+  filename: z.string().min(1).describe("Filename"),
+  versionId: z.string().min(1).describe("Version ID from list_app_file_versions"),
+});
+
+const restoreAppFileVersionSchema = z.object({
+  appId: z.string().min(1).describe("App UUID"),
+  filename: z.string().min(1).describe("Filename to restore"),
+  versionId: z.string().min(1).describe("Version ID to restore to"),
+});
+
+const jobFileVersionsSchema = z.object({
+  jobId: z.string().min(1).describe("Job UUID"),
+  filename: z.string().min(1).describe("Filename to get version history for"),
+});
+
+const jobFileVersionSchema = z.object({
+  jobId: z.string().min(1).describe("Job UUID"),
+  filename: z.string().min(1).describe("Filename"),
+  versionId: z.string().min(1).describe("Version ID from list_job_file_versions"),
+});
+
+const restoreJobFileVersionSchema = z.object({
+  jobId: z.string().min(1).describe("Job UUID"),
+  filename: z.string().min(1).describe("Filename to restore"),
+  versionId: z.string().min(1).describe("Version ID to restore to"),
+});
+
+type AppFileVersionsArgs = z.infer<typeof appFileVersionsSchema>;
+type AppFileVersionArgs = z.infer<typeof appFileVersionSchema>;
+type RestoreAppFileVersionArgs = z.infer<typeof restoreAppFileVersionSchema>;
+type JobFileVersionsArgs = z.infer<typeof jobFileVersionsSchema>;
+type JobFileVersionArgs = z.infer<typeof jobFileVersionSchema>;
+type RestoreJobFileVersionArgs = z.infer<typeof restoreJobFileVersionSchema>;
+
+export const listAppFileVersionsTool = createTool({
+  id: "list_app_file_versions",
+  description: `List all saved versions of a mini-app file (newest first).
+Every time a file is edited, the previous content is automatically saved.
+Use this to see what changed and when, or to find a version to restore.`,
+  inputSchema: appFileVersionsSchema,
+  execute: async (input) => {
+    const args = (input as { context?: AppFileVersionsArgs }).context ?? input;
+    const { getAppService } =
+      await import("../../gateway/services/AppService.js");
+    const appService = getAppService();
+    await appService.initialize();
+    const versions = await appService.getFileVersionHistory(args.appId, args.filename);
+    return {
+      success: true,
+      data: {
+        appId: args.appId,
+        filename: args.filename,
+        versions,
+        count: versions.length,
+        tip: versions.length > 0
+          ? "Use get_app_file_version to see full content, or restore_app_file_version to revert."
+          : "No versions yet. Versions are created automatically when the file is edited.",
+      },
+    };
+  },
+});
+
+export const getAppFileVersionTool = createTool({
+  id: "get_app_file_version",
+  description: "Get the full content of a specific saved version of a mini-app file",
+  inputSchema: appFileVersionSchema,
+  execute: async (input) => {
+    const args = (input as { context?: AppFileVersionArgs }).context ?? input;
+    const { getAppService } =
+      await import("../../gateway/services/AppService.js");
+    const appService = getAppService();
+    await appService.initialize();
+    const version = await appService.getFileVersion(args.appId, args.filename, args.versionId);
+    if (!version) {
+      throw new Error(`Version not found: ${args.versionId} for ${args.filename} in app ${args.appId}`);
+    }
+    return { success: true, data: version };
+  },
+});
+
+export const restoreAppFileVersionTool = createTool({
+  id: "restore_app_file_version",
+  description: `Restore a mini-app file to a previous version. The current content is saved as a "before-restore" version first (so you can undo the restore if needed).
+Use list_app_file_versions first to find the versionId.`,
+  inputSchema: restoreAppFileVersionSchema,
+  execute: async (input) => {
+    const args = (input as { context?: RestoreAppFileVersionArgs }).context ?? input;
+    const { getAppService } =
+      await import("../../gateway/services/AppService.js");
+    const appService = getAppService();
+    await appService.initialize();
+    const restored = await appService.restoreFileVersion(args.appId, args.filename, args.versionId);
+    if (!restored) {
+      throw new Error(`Failed to restore: version ${args.versionId} not found for ${args.filename} in app ${args.appId}`);
+    }
+    return {
+      success: true,
+      data: {
+        appId: args.appId,
+        filename: args.filename,
+        restoredVersionId: args.versionId,
+        tip: "Current content was saved as 'before-restore' version. Use list_app_file_versions to see it.",
+      },
+    };
+  },
+});
+
+export const listJobFileVersionsTool = createTool({
+  id: "list_job_file_versions",
+  description: `List all saved versions of a job file (newest first).
+Every time a job file is edited, the previous content is automatically saved.
+Use this to see what changed and when, or to find a version to restore.`,
+  inputSchema: jobFileVersionsSchema,
+  execute: async (input) => {
+    const args = (input as { context?: JobFileVersionsArgs }).context ?? input;
+    const { getJobsService } =
+      await import("../../gateway/services/JobsService.js");
+    const jobsService = getJobsService();
+    await jobsService.initialize();
+    const versions = await jobsService.getJobFileVersionHistory(args.jobId, args.filename);
+    return {
+      success: true,
+      data: {
+        jobId: args.jobId,
+        filename: args.filename,
+        versions,
+        count: versions.length,
+        tip: versions.length > 0
+          ? "Use get_job_file_version to see full content, or restore_job_file_version to revert."
+          : "No versions yet. Versions are created automatically when the file is edited.",
+      },
+    };
+  },
+});
+
+export const getJobFileVersionTool = createTool({
+  id: "get_job_file_version",
+  description: "Get the full content of a specific saved version of a job file",
+  inputSchema: jobFileVersionSchema,
+  execute: async (input) => {
+    const args = (input as { context?: JobFileVersionArgs }).context ?? input;
+    const { getJobsService } =
+      await import("../../gateway/services/JobsService.js");
+    const jobsService = getJobsService();
+    await jobsService.initialize();
+    const version = await jobsService.getJobFileVersion(args.jobId, args.filename, args.versionId);
+    if (!version) {
+      throw new Error(`Version not found: ${args.versionId} for ${args.filename} in job ${args.jobId}`);
+    }
+    return { success: true, data: version };
+  },
+});
+
+export const restoreJobFileVersionTool = createTool({
+  id: "restore_job_file_version",
+  description: `Restore a job file to a previous version. The current content is saved as a "before-restore" version first (so you can undo the restore if needed).
+Use list_job_file_versions first to find the versionId.`,
+  inputSchema: restoreJobFileVersionSchema,
+  execute: async (input) => {
+    const args = (input as { context?: RestoreJobFileVersionArgs }).context ?? input;
+    const { getJobsService } =
+      await import("../../gateway/services/JobsService.js");
+    const jobsService = getJobsService();
+    await jobsService.initialize();
+    const restored = await jobsService.restoreJobFileVersion(args.jobId, args.filename, args.versionId);
+    if (!restored) {
+      throw new Error(`Failed to restore: version ${args.versionId} not found for ${args.filename} in job ${args.jobId}`);
+    }
+    return {
+      success: true,
+      data: {
+        jobId: args.jobId,
+        filename: args.filename,
+        restoredVersionId: args.versionId,
+        tip: "Current content was saved as 'before-restore' version. Use list_job_file_versions to see it.",
+      },
+    };
+  },
+});
+
 export const appJobsTools = [
   createAppTool,
   createJobTool,
@@ -1705,4 +1959,10 @@ export const appJobsTools = [
   importAppBundleTool,
   listAppBundlesTool,
   getAppBundleInfoTool,
+  listAppFileVersionsTool,
+  getAppFileVersionTool,
+  restoreAppFileVersionTool,
+  listJobFileVersionsTool,
+  getJobFileVersionTool,
+  restoreJobFileVersionTool,
 ];

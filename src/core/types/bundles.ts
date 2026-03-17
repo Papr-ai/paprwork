@@ -89,6 +89,8 @@ export const BundleManifestSchema = z.object({
   createdBy: z.string().min(1).optional(),
   minPaprworkVersion: z.string().min(1),
   description: z.string().optional(),
+  icon: z.string().optional(),
+  requirements: z.array(z.string()).default([]),
   app: BundleAppSchema,
   jobs: z.array(JobSpecSchema).default([]),
   sqlite: z.array(SqliteDatabaseSchema).default([]),

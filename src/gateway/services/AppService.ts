@@ -27,6 +27,18 @@ export interface AppFile {
   content: string;
 }
 
+export interface AppFileVersion {
+  versionId: string;
+  filename: string;
+  timestamp: string;
+  reason: string;
+  preview: string;
+}
+
+export interface AppFileVersionFull extends AppFileVersion {
+  content: string;
+}
+
 export interface AppDataSource {
   id: string;
   type: "sqlite";
@@ -320,6 +332,14 @@ export class AppService {
 
     const filePath = path.join(this.appsDir, appId, filename);
     try {
+      // Save a version of the current file before overwriting
+      try {
+        const existing = await fs.readFile(filePath, "utf-8");
+        await this.saveFileVersion(appId, filename, existing, "auto");
+      } catch {
+        // File doesn't exist yet (first write) — no version to save
+      }
+
       // Ensure parent directories exist (for components/foo.ts, utils/bar.ts, etc.)
       const dir = path.dirname(filePath);
       await fs.mkdir(dir, { recursive: true });
@@ -358,6 +378,147 @@ export class AppService {
         console.warn("[AppService] Failed to broadcast file change:", error);
         // Non-fatal - file was still written successfully
       });
+  }
+
+  // ===== File Version History =====
+
+  private getVersionsDir(appId: string, filename: string): string {
+    const safeFilename = filename.replace(/\//g, "__");
+    return path.join(this.appsDir, appId, ".versions", safeFilename);
+  }
+
+  async saveFileVersion(
+    appId: string,
+    filename: string,
+    content: string,
+    reason: string = "auto",
+  ): Promise<string> {
+    const versionsDir = this.getVersionsDir(appId, filename);
+    await fs.mkdir(versionsDir, { recursive: true });
+
+    const timestamp = new Date().toISOString();
+    const safeTimestamp = timestamp.replace(/[:.]/g, "-");
+    const versionId = `${safeTimestamp}_${reason}`;
+
+    // Deduplicate: skip if latest version has identical content
+    const existing = await this.getFileVersionHistory(appId, filename);
+    if (existing.length > 0) {
+      const latest = await this.getFileVersion(appId, filename, existing[0].versionId);
+      if (latest && latest.content === content) {
+        return existing[0].versionId;
+      }
+    }
+
+    const versionPath = path.join(versionsDir, versionId);
+    await fs.writeFile(versionPath, content, "utf-8");
+    console.log(`[AppService] Saved version ${versionId} for ${appId}/${filename}`);
+    return versionId;
+  }
+
+  async getFileVersionHistory(
+    appId: string,
+    filename: string,
+  ): Promise<AppFileVersion[]> {
+    const versionsDir = this.getVersionsDir(appId, filename);
+
+    let files: string[];
+    try {
+      files = await fs.readdir(versionsDir);
+    } catch {
+      return [];
+    }
+
+    const versions: AppFileVersion[] = files
+      .map((f) => {
+        const firstUnderscore = f.indexOf("_");
+        const reason = firstUnderscore >= 0 ? f.slice(firstUnderscore + 1) : "auto";
+        return {
+          versionId: f,
+          filename,
+          timestamp: versionIdToTimestamp(f),
+          reason,
+          preview: "",
+        };
+      })
+      .sort(
+        (a, b) =>
+          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+      );
+
+    // Load previews for first 20 versions
+    for (const v of versions.slice(0, 20)) {
+      try {
+        const content = await fs.readFile(
+          path.join(versionsDir, v.versionId),
+          "utf-8",
+        );
+        v.preview = content.slice(0, 200);
+      } catch {
+        /* noop */
+      }
+    }
+
+    return versions;
+  }
+
+  async getFileVersion(
+    appId: string,
+    filename: string,
+    versionId: string,
+  ): Promise<AppFileVersionFull | null> {
+    const versionPath = path.join(
+      this.getVersionsDir(appId, filename),
+      versionId,
+    );
+
+    try {
+      const content = await fs.readFile(versionPath, "utf-8");
+      return {
+        versionId,
+        filename,
+        timestamp: versionIdToTimestamp(versionId),
+        reason: versionId.slice(versionId.indexOf("_") + 1) || "auto",
+        preview: content.slice(0, 200),
+        content,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async restoreFileVersion(
+    appId: string,
+    filename: string,
+    versionId: string,
+  ): Promise<boolean> {
+    const version = await this.getFileVersion(appId, filename, versionId);
+    if (!version) return false;
+
+    // Save current content as "before-restore" version first
+    const filePath = path.join(this.appsDir, appId, filename);
+    try {
+      const currentContent = await fs.readFile(filePath, "utf-8");
+      if (currentContent) {
+        await this.saveFileVersion(appId, filename, currentContent, "before-restore");
+      }
+    } catch {
+      /* file may not exist */
+    }
+
+    // Write the restored content (bypasses writeAppFile to avoid double-versioning)
+    const dir = path.dirname(filePath);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(filePath, version.content, { flush: true });
+
+    const app = this.apps.get(appId);
+    if (app) {
+      app.updatedAt = new Date().toISOString();
+      await this.saveApps();
+    }
+
+    this.broadcastFileChange(appId, filename);
+    console.log(`[AppService] Restored ${filename} to version ${versionId} for app ${appId}`);
+    return true;
   }
 
   async getAppPath(appId: string): Promise<string | null> {
@@ -449,6 +610,16 @@ export class AppService {
 
     return app;
   }
+}
+
+/**
+ * Parse a version ID like "2026-03-17T12-30-00-000Z_auto" back into an ISO timestamp.
+ */
+function versionIdToTimestamp(versionId: string): string {
+  // Version ID format: "2026-03-17T15-23-56-289Z_reason"
+  const firstUnderscore = versionId.indexOf("_");
+  const raw = firstUnderscore >= 0 ? versionId.slice(0, firstUnderscore) : versionId;
+  return raw.replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z/, "T$1:$2:$3.$4Z");
 }
 
 /**
