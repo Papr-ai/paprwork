@@ -6,6 +6,7 @@ import { ipcMain, shell } from "electron";
 import { OAuthTokenStorage } from "../../core/storage/OAuthTokenStorage.js";
 import type { CustomKeysStorage } from "../../core/storage/CustomKeysStorage.js";
 import { OpenAIOAuthService } from "../../core/services/OpenAIOAuthService.js";
+import { ClaudeOAuthService } from "../../core/services/ClaudeOAuthService.js";
 import { ClaudeSetupTokenService } from "../../core/services/ClaudeSetupTokenService.js";
 import { OAuthCallbackServer } from "../../core/services/OAuthCallbackServer.js";
 
@@ -13,6 +14,7 @@ let oauthTokenStorage: OAuthTokenStorage | null = null;
 let customKeysStorage: CustomKeysStorage | null = null;
 let openaiOAuthService: OpenAIOAuthService | null = null;
 let claudeSetupTokenService: ClaudeSetupTokenService | null = null;
+let claudeOAuthService: ClaudeOAuthService | null = null;
 
 // Active callback servers (for OpenAI OAuth only)
 const activeServers = new Map<string, OAuthCallbackServer>();
@@ -28,8 +30,8 @@ const activeFlows = new Map<
 
 // Token refresh timer
 let refreshTimer: NodeJS.Timeout | null = null;
-const REFRESH_CHECK_INTERVAL = 5 * 60 * 1000; // Check every 5 minutes
-const REFRESH_BUFFER = 5 * 60; // Refresh 5 minutes before expiry
+const REFRESH_CHECK_INTERVAL = 2 * 60 * 1000; // Check every 2 minutes
+const REFRESH_BUFFER = 15 * 60; // Refresh 15 minutes before expiry
 
 /**
  * Sync OAuth token to CustomKeysStorage as an API key
@@ -162,24 +164,21 @@ async function refreshTokenIfNeeded(
 
     console.log(`[OAuth IPC] Refreshing ${provider} token (expires soon)`);
 
-    // Claude OAuth tokens can't be refreshed (1-year validity)
-    // Only OpenAI tokens support refresh
+    // Get the appropriate OAuth service for refresh
+    let tokenInput;
     if (provider === "anthropic") {
-      console.log("[OAuth IPC] Claude OAuth tokens cannot be refreshed - user must regenerate after 1 year");
-      return false;
+      if (!claudeOAuthService) {
+        console.error("[OAuth IPC] Claude OAuth service not initialized");
+        return false;
+      }
+      tokenInput = await claudeOAuthService.refreshToken(token.refreshToken);
+    } else {
+      if (!openaiOAuthService) {
+        console.error("[OAuth IPC] OpenAI OAuth service not initialized");
+        return false;
+      }
+      tokenInput = await openaiOAuthService.refreshToken(token.refreshToken);
     }
-
-    // Get OpenAI OAuth service for refresh
-    const service = openaiOAuthService;
-    if (!service) {
-      console.error(
-        `[OAuth IPC] OAuth service for ${provider} not initialized`,
-      );
-      return false;
-    }
-
-    // Refresh the token
-    const tokenInput = await service.refreshToken(token.refreshToken);
 
     // Update token in OAuthTokenStorage
     await oauthTokenStorage.updateToken(token.id, {
@@ -259,6 +258,7 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
 
   openaiOAuthService = new OpenAIOAuthService();
   claudeSetupTokenService = new ClaudeSetupTokenService();
+  claudeOAuthService = new ClaudeOAuthService();
 
   // OpenAI OAuth handlers
   ipcMain.handle("auth:openai:start-oauth", async () => {
@@ -517,6 +517,42 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
         success: false,
         error: (error as Error).message,
       };
+    }
+  });
+
+  // Force-refresh handler (called by gateway on 401)
+  ipcMain.handle("auth:force-refresh", async (_event, provider: "openai" | "anthropic") => {
+    try {
+      console.log(`[OAuth IPC] Force-refreshing ${provider} token (triggered by 401)`);
+      const refreshed = await refreshTokenIfNeeded(provider);
+      if (!refreshed) {
+        // Token wasn't near expiry but we got a 401 — force it anyway
+        if (!oauthTokenStorage) return { success: false, error: "Storage not initialized" };
+        const token = oauthTokenStorage.getTokenByProvider(provider);
+        if (!token) return { success: false, error: "No token found" };
+
+        let tokenInput;
+        if (provider === "anthropic" && claudeOAuthService) {
+          tokenInput = await claudeOAuthService.refreshToken(token.refreshToken);
+        } else if (provider === "openai" && openaiOAuthService) {
+          tokenInput = await openaiOAuthService.refreshToken(token.refreshToken);
+        } else {
+          return { success: false, error: "OAuth service not initialized" };
+        }
+
+        await oauthTokenStorage.updateToken(token.id, {
+          accessToken: tokenInput.accessToken,
+          refreshToken: tokenInput.refreshToken,
+          expiresIn: tokenInput.expiresIn,
+        });
+        await syncOAuthTokenToApiKeys(provider, tokenInput.accessToken);
+        console.log(`[OAuth IPC] Force-refreshed ${provider} token successfully`);
+        return { success: true, accessToken: tokenInput.accessToken };
+      }
+      return { success: true };
+    } catch (error) {
+      console.error(`[OAuth IPC] Force-refresh failed for ${provider}:`, error);
+      return { success: false, error: (error as Error).message };
     }
   });
 
