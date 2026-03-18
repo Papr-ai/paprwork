@@ -100,6 +100,22 @@ contextBridge.exposeInMainWorld("electronAPI", {
     },
   },
 
+  // Auto-updater API
+  updater: {
+    onStatus: (callback) => {
+      ipcRenderer.on("updater:status", (_event, data) => callback(data));
+    },
+    removeStatusListener: () => {
+      ipcRenderer.removeAllListeners("updater:status");
+    },
+    install: () => {
+      ipcRenderer.send("updater:install");
+    },
+    check: () => {
+      ipcRenderer.send("updater:check");
+    },
+  },
+
   // Environment info
   env: {
     NODE_ENV: process.env.NODE_ENV || "production",

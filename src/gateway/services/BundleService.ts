@@ -921,6 +921,7 @@ export class BundleService {
       createdAt: new Date().toISOString(),
       minPaprworkVersion: input.minPaprworkVersion ?? "2.0.0",
       description: input.description,
+      ...(app.icon ? { icon: app.icon } : {}),
       requirements: detectedKeys,
       platform: detectedPlatform,
       app: {

@@ -1532,6 +1532,7 @@ Thumbs.db
           ? ` Pipeline auto-discovery: found ${resolvedJobIds.length} total jobs (${resolvedJobIds.length - jobIds.length} additional upstream jobs discovered via dependsOn/runtimeCalls). All ${resolvedJobIds.length} jobs included in the bundle.`
           : "";
 
+      const appRecord = await appService.getApp(args.appId);
       const registryEntry = {
         bundleId,
         name: args.name,
@@ -1541,7 +1542,7 @@ Thumbs.db
         tags: [] as string[],
         minPaprworkVersion: "2.0.0",
         path: `bundles/${bundleId}`,
-        icon: "",
+        icon: appRecord?.icon ?? "",
         requirements: detectedKeys,
         platform: detectedPlatform,
       };

@@ -5,10 +5,11 @@
  * CommonJS format - Electron's require() is more reliable than ESM
  */
 
-const { app, BrowserWindow, Menu, shell, dialog } = require("electron");
+const { app, BrowserWindow, Menu, shell, dialog, ipcMain } = require("electron");
 const { spawn, execSync } = require("child_process");
 const path = require("path");
 const http = require("http");
+const { autoUpdater } = require("electron-updater");
 
 // Set app name for macOS Keychain (must be before any safeStorage usage)
 // This determines the keychain entry name: "Papr Work Safe Storage"
@@ -892,6 +893,81 @@ class GatewayProcessSupervisor {
   }
 }
 
+// ---------------------------------------------------------------------------
+//  Auto-Updater
+//
+//  Checks GitHub Releases for new versions on launch and periodically.
+//  Sends status to renderer via IPC so the UI can show an update banner.
+// ---------------------------------------------------------------------------
+
+function setupAutoUpdater() {
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.logger = null; // We handle logging ourselves
+
+  autoUpdater.on("checking-for-update", () => {
+    console.log("[AutoUpdater] Checking for updates...");
+    sendUpdateStatus("checking");
+  });
+
+  autoUpdater.on("update-available", (info) => {
+    console.log(`[AutoUpdater] Update available: v${info.version}`);
+    sendUpdateStatus("available", { version: info.version, releaseNotes: info.releaseNotes });
+  });
+
+  autoUpdater.on("update-not-available", () => {
+    console.log("[AutoUpdater] App is up to date");
+    sendUpdateStatus("not-available");
+  });
+
+  autoUpdater.on("download-progress", (progress) => {
+    sendUpdateStatus("downloading", { percent: Math.round(progress.percent) });
+  });
+
+  autoUpdater.on("update-downloaded", (info) => {
+    console.log(`[AutoUpdater] Update downloaded: v${info.version}`);
+    sendUpdateStatus("ready", { version: info.version });
+  });
+
+  autoUpdater.on("error", (err) => {
+    console.error("[AutoUpdater] Error:", err.message);
+    sendUpdateStatus("error", { error: err.message });
+  });
+
+  // IPC: renderer can request "install now" (quit & install)
+  ipcMain.on("updater:install", () => {
+    console.log("[AutoUpdater] User requested install, quitting and installing...");
+    autoUpdater.quitAndInstall(false, true);
+  });
+
+  // IPC: renderer can manually trigger a check
+  ipcMain.on("updater:check", () => {
+    autoUpdater.checkForUpdates().catch((err) => {
+      console.error("[AutoUpdater] Manual check failed:", err.message);
+    });
+  });
+
+  // Check on launch (after a short delay to not block startup)
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch((err) => {
+      console.error("[AutoUpdater] Initial check failed:", err.message);
+    });
+  }, 5000);
+
+  // Check every 4 hours
+  setInterval(() => {
+    autoUpdater.checkForUpdates().catch((err) => {
+      console.error("[AutoUpdater] Periodic check failed:", err.message);
+    });
+  }, 4 * 60 * 60 * 1000);
+}
+
+function sendUpdateStatus(status, data) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("updater:status", { status, ...data });
+  }
+}
+
 let supervisor = null;
 
 // App lifecycle
@@ -941,6 +1017,7 @@ app.whenReady().then(async () => {
 
   await supervisor.start();
   createMainWindow();
+  setupAutoUpdater();
 
   // Initialize permissions IPC after window is created
   initializePermissionsIPC(keyPermissionsStorage, settingsStorage, mainWindow);

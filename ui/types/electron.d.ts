@@ -28,6 +28,14 @@ interface CustomKeyInput {
   permission?: "always" | "ask";
 }
 
+export interface UpdateStatus {
+  status: "checking" | "available" | "not-available" | "downloading" | "ready" | "error";
+  version?: string;
+  releaseNotes?: string;
+  percent?: number;
+  error?: string;
+}
+
 export interface ElectronAPI {
   // Custom Keys API (secure storage via macOS Keychain)
   customKeys: {
@@ -134,6 +142,14 @@ export interface ElectronAPI {
       error?: string;
     }) => void) => void;
     removeDownloadProgressListener: (callback: Function) => void;
+  };
+
+  // Auto-updater API
+  updater: {
+    onStatus: (callback: (data: UpdateStatus) => void) => void;
+    removeStatusListener: () => void;
+    install: () => void;
+    check: () => void;
   };
 
   // Legacy agent/chat APIs (not currently used - UI uses WebSocket Gateway)

@@ -20,6 +20,7 @@ import { initJobPermissionListener } from "./stores/jobPermissionStore";
 import { initJobLiveLogsListener } from "./stores/jobLiveLogsStore";
 import { initSubagentJobStore } from "./stores/subagentJobStore";
 import { KeyPermissionModal } from "./components/Permissions/KeyPermissionModal";
+import { UpdateBanner } from "./components/UpdateBanner/UpdateBanner";
 import { useAppStatePersistence } from "./hooks/useAppStatePersistence";
 import "./styles/liquid-glass.css";
 import "./App.css";
@@ -177,6 +178,7 @@ export function App() {
         isOpen={commandPaletteOpen}
         onClose={() => setCommandPaletteOpen(false)}
       />
+      <UpdateBanner />
     </>
   );
 }

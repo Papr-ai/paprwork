@@ -1014,9 +1014,9 @@ create_app({
 - Use Liquid Glass design tokens (see Liquid Glass Design skill)
 - Test with `webview_launch_app` + `webview_snapshot`
 
-#### App Logo / Icon — Shown in Tabs and Favorites
+#### App Logo / Icon — Shown in Tabs, Favorites, and Bundles
 
-Every mini-app should have a logo. It appears in the tab bar and in the sidebar favorites list. There are two ways to set it:
+Every mini-app **MUST** have an icon. It appears in the tab bar, sidebar favorites, artifact cards, and is automatically included in bundle manifests when exported. There are two ways to set it:
 
 **Option A — `icon` parameter (recommended):** Pass an SVG string or emoji directly to `create_app`:
 
@@ -1046,10 +1046,74 @@ create_app({
 </head>
 ```
 
-**Tips:**
-- If both `icon` param and `<link rel="icon">` are present, the explicit `icon` param wins
-- Keep SVGs small (14×14px viewBox), use `stroke="currentColor"` so they adapt to dark/light mode
-- The icon shows in: tab bar, sidebar favorites, artifact card preview
+**Priority order:** explicit `icon` param > `<link rel="icon">` in HTML > `logo.svg` / `icon.svg` / `favicon.svg` file in app directory.
+
+##### Icon Design Guidelines
+
+**SVG Rules:**
+- **Size:** `width="14" height="14"` with `viewBox="0 0 24 24"` — the 24×24 viewBox gives you a comfortable design grid, while 14px rendering keeps it crisp at tab/sidebar scale
+- **Stroke style:** `stroke="currentColor"` with `stroke-width="1.5"` or `"2"` — adapts to dark/light themes automatically
+- **Fill:** Use `fill="none"` for outlined icons (preferred) or `fill="currentColor"` for solid icons — never use hardcoded colors
+- **Line caps:** `stroke-linecap="round" stroke-linejoin="round"` for a polished look
+- **Keep it simple:** 1-3 recognizable shapes. The icon renders at 14px — fine details disappear
+
+**Design Approach — Think Lucide/Feather:**
+Design icons in the same spirit as [Lucide](https://lucide.dev) icons: clean, minimal, stroke-based, universally readable. Pick 1-2 distinctive shapes that communicate the app's purpose at a glance.
+
+##### Icon Examples by App Type
+
+**Expense Tracker** (receipt/dollar):
+```
+<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="M12 11h4"/><path d="M12 15h4"/><path d="M8 11h.01"/><path d="M8 15h.01"/></svg>
+```
+
+**Hello World / Getting Started** (waving hand):
+```
+<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 11v-1a4 4 0 0 1 4-4h0a4 4 0 0 1 4 4v5"/><path d="M11 7V4a2 2 0 1 1 4 0v3"/><path d="M7 11a2 2 0 0 0-4 0v4a8 8 0 0 0 16 0v-2a2 2 0 1 0-4 0"/><path d="M7 11V8a2 2 0 1 0-4 0v3"/></svg>
+```
+
+**Dashboard / Analytics** (bar chart):
+```
+<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+```
+
+**Task Manager / Todo** (check-square):
+```
+<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+```
+
+**Calendar / Schedule** (calendar):
+```
+<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>
+```
+
+**Notes / Writing** (pen-line):
+```
+<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.376 3.622a1 1 0 0 1 3.002 3.002L7.368 18.635a2 2 0 0 1-.855.506l-2.872.838.838-2.872a2 2 0 0 1 .506-.855z"/></svg>
+```
+
+**Weather** (cloud-sun):
+```
+<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="M20 12h2"/><path d="m19.07 4.93-1.41 1.41"/><path d="M15.947 12.65a4 4 0 0 0-5.925-4.128"/><path d="M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z"/></svg>
+```
+
+**Fitness / Health** (heart-pulse):
+```
+<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 12.572 12 20l-7.5-7.428A5 5 0 1 1 12 6.006a5 5 0 1 1 7.5 6.572"/><path d="M5 12h2l2-3 3 6 2-3h2"/></svg>
+```
+
+##### When to Use Emoji vs SVG
+
+| Use Case | Recommendation |
+|----------|---------------|
+| Quick prototype / demo app | Emoji (`"📊"`, `"⛅"`, `"✅"`) |
+| Production / polished app | SVG (matches Liquid Glass aesthetic) |
+| Community bundle / shared app | SVG (looks professional in registry) |
+| App with dark/light mode | SVG with `currentColor` (adapts automatically) |
+
+**Emoji examples:** `"💰"` (finance), `"📝"` (notes), `"🏋️"` (fitness), `"🌤️"` (weather), `"📅"` (calendar), `"🛒"` (shopping), `"🎵"` (music), `"📸"` (photos)
+
+The icon shows in: tab bar, sidebar favorites, artifact card preview, and bundle manifests (auto-included on export)
 
 ---
 
