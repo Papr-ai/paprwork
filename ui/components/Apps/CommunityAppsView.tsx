@@ -5,6 +5,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { gateway } from "../../src/lib/gateway";
 import { useArtifacts } from "../../hooks/useArtifacts";
+import { useChat } from "../../hooks/useChat";
+import { useTabs } from "../../hooks/useTabs";
 import "./CommunityAppsView.css";
 
 /**
@@ -38,8 +40,6 @@ interface CommunityRegistry {
   bundles: CommunityRegistryEntry[];
 }
 
-type ImportStatus = "idle" | "importing" | "imported" | "error";
-
 function detectUserPlatform(): "macos" | "windows" | "linux" {
   const ua = navigator.userAgent.toLowerCase();
   if (ua.includes("mac")) return "macos";
@@ -52,11 +52,10 @@ export function CommunityAppsView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [importStatus, setImportStatus] = useState<
-    Record<string, ImportStatus>
-  >({});
   const [showAllPlatforms, setShowAllPlatforms] = useState(false);
-  const { filteredArtifacts, loadArtifacts } = useArtifacts();
+  const { filteredArtifacts } = useArtifacts();
+  const { createChat } = useChat();
+  const { createTab, switchToTab } = useTabs();
   const userPlatform = detectUserPlatform();
 
   const installedAppIds = new Set(
@@ -83,17 +82,28 @@ export function CommunityAppsView() {
   }, [fetchRegistry]);
 
   const handleImport = async (entry: CommunityRegistryEntry) => {
-    setImportStatus((prev) => ({ ...prev, [entry.bundleId]: "importing" }));
-    try {
-      await gateway.send("bundle:import-community", {
-        bundleId: entry.bundleId,
-        repoPath: entry.path,
-      });
-      setImportStatus((prev) => ({ ...prev, [entry.bundleId]: "imported" }));
-      loadArtifacts();
-    } catch {
-      setImportStatus((prev) => ({ ...prev, [entry.bundleId]: "error" }));
-    }
+    const chatId = await createChat();
+    if (!chatId) return;
+
+    const tabId = createTab("chat", chatId, "New Chat");
+    switchToTab(tabId);
+
+    const requirements = entry.requirements ?? [];
+    const reqNote = requirements.length > 0
+      ? ` This app requires: ${requirements.join(", ")}.`
+      : "";
+
+    const message =
+      `Import the community app "${entry.name}" (bundleId: ${entry.bundleId}). ` +
+      `It's in the Papr-ai/paprwork-community-apps repo at path: ${entry.path}.${reqNote} ` +
+      `Please handle the full setup — clone the community repo, import the bundle, ` +
+      `set up any virtual environments, install dependencies, and verify everything works.`;
+
+    setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent("papr-onboarding-send", { detail: { message } }),
+      );
+    }, 300);
   };
 
   const filteredBundles =
@@ -191,14 +201,12 @@ export function CommunityAppsView() {
 
       <div className="community-apps__grid">
         {filteredBundles.map((entry) => {
-          const status = importStatus[entry.bundleId] ?? "idle";
           const isInstalled = installedAppIds.has(entry.bundleId);
 
           return (
             <CommunityAppCard
               key={entry.bundleId}
               entry={entry}
-              status={status}
               isInstalled={isInstalled}
               onImport={() => void handleImport(entry)}
             />
@@ -211,31 +219,18 @@ export function CommunityAppsView() {
 
 interface CommunityAppCardProps {
   entry: CommunityRegistryEntry;
-  status: ImportStatus;
   isInstalled: boolean;
   onImport: () => void;
 }
 
 function CommunityAppCard({
   entry,
-  status,
   isInstalled,
   onImport,
 }: CommunityAppCardProps) {
   const [showDetails, setShowDetails] = useState(false);
 
-  const buttonLabel = isInstalled
-    ? "Installed"
-    : status === "importing"
-      ? "Importing..."
-      : status === "imported"
-        ? "Imported"
-        : status === "error"
-          ? "Retry"
-          : "Import";
-
-  const isDisabled =
-    isInstalled || status === "importing" || status === "imported";
+  const buttonLabel = isInstalled ? "Installed" : "Import";
 
   const requirements = entry.requirements ?? [];
   const hasNoRequirements = requirements.length === 0;
@@ -340,13 +335,10 @@ function CommunityAppCard({
       </div>
 
       <button
-        className={`community-card__import-btn ${isDisabled ? "community-card__import-btn--disabled" : ""} ${status === "imported" || isInstalled ? "community-card__import-btn--success" : ""} ${status === "error" ? "community-card__import-btn--error" : ""}`}
+        className={`community-card__import-btn ${isInstalled ? "community-card__import-btn--disabled community-card__import-btn--success" : ""}`}
         onClick={onImport}
-        disabled={isDisabled}
+        disabled={isInstalled}
       >
-        {status === "importing" && (
-          <span className="community-card__import-spinner" />
-        )}
         {buttonLabel}
       </button>
     </div>
