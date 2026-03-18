@@ -1296,7 +1296,12 @@ const exportAppBundleSchema = z.object({
     .string()
     .optional()
     .describe("Optional bundle ID (auto-generated if not provided)"),
-  name: z.string().min(1).describe("Human-readable name for the app bundle"),
+  name: z
+    .string()
+    .optional()
+    .describe(
+      "Human-readable name for the app bundle (auto-derived from app title if omitted)",
+    ),
   version: z
     .string()
     .default("1.0.0")
@@ -1329,6 +1334,12 @@ const importAppBundleSchema = z.object({
     .min(1)
     .describe(
       "Local path or GitHub URL (e.g., github.com/user/repo or ~/Downloads/app-bundle)",
+    ),
+  subPath: z
+    .string()
+    .optional()
+    .describe(
+      "Subdirectory within the repo containing the bundle (e.g., 'bundles/meetings-manager'). Required for community repo imports where the bundle isn't at the repo root.",
     ),
   renameConflicts: z
     .boolean()
@@ -1386,6 +1397,12 @@ This makes the app available in Paprwork's "Community Apps" tab for all users.`,
 
       const bundleId = args.bundleId || `bundle-${Date.now()}`;
 
+      let bundleName = args.name;
+      if (!bundleName) {
+        const app = await appService.getApp(args.appId);
+        bundleName = app?.title || `App ${args.appId.slice(0, 8)}`;
+      }
+
       let jobIds = args.jobIds || [];
       if (!jobIds.length) {
         const dataSources = await appService.listAppDataSources(args.appId);
@@ -1402,7 +1419,7 @@ This makes the app available in Paprwork's "Community Apps" tab for all users.`,
       } = await bundleService.exportBundle({
         appId: args.appId,
         bundleId,
-        name: args.name,
+        name: bundleName,
         version: args.version,
         description: args.description,
         jobIds,
@@ -1588,8 +1605,15 @@ Validates manifest, checks for conflicts, and installs the complete app with all
 Supports:
 - Local paths: ~/Downloads/my-app-bundle
 - GitHub URLs: github.com/user/repo or https://github.com/user/repo
+- Community repo with subPath: source="github.com/Papr-ai/paprwork-community-apps" subPath="bundles/meetings-manager"
 
-If app/job IDs conflict with existing ones, auto-renames by default (e.g., app-123 → app-123-imported).`,
+Use subPath when the bundle is inside a subdirectory of the repo (e.g., the Paprwork community apps repo).
+If app/job IDs conflict with existing ones, auto-renames by default (e.g., app-123 → app-123-imported).
+
+After import, check the result for:
+- requirements: API keys the app needs (configure in Settings → Custom Keys)
+- platform: which OS the app supports
+- pythonJobs: Python jobs that will auto-create venvs on first run`,
   inputSchema: importAppBundleSchema,
   execute: async (input) => {
     const args = (input as { context?: ImportAppBundleArgs }).context ?? input;
@@ -1605,14 +1629,13 @@ If app/job IDs conflict with existing ones, auto-renames by default (e.g., app-1
       await bundleService.initialize();
 
       let sourcePath = args.source;
-      let isGitImport = false;
+      let gitCloneDir: string | undefined;
 
       if (
         args.source.startsWith("github.com/") ||
         args.source.startsWith("https://github.com/") ||
         args.source.includes("github.com")
       ) {
-        isGitImport = true;
         let gitUrl = args.source;
         if (!gitUrl.startsWith("http")) {
           gitUrl = `https://${gitUrl}`;
@@ -1621,19 +1644,19 @@ If app/job IDs conflict with existing ones, auto-renames by default (e.g., app-1
           gitUrl = `${gitUrl}.git`;
         }
 
-        const tempDir = pathModule.default.join(
+        gitCloneDir = pathModule.default.join(
           osModule.default.tmpdir(),
           `papr-app-bundle-${Date.now()}`,
         );
-        await fsModule.mkdir(tempDir, { recursive: true });
+        await fsModule.mkdir(gitCloneDir, { recursive: true });
 
         const { exec } = await import("child_process");
         const { promisify } = await import("util");
         const execAsync = promisify(exec);
 
         try {
-          await execAsync(`git clone ${gitUrl} ${tempDir}`, {
-            timeout: 60000,
+          await execAsync(`git clone --depth 1 ${gitUrl} ${gitCloneDir}`, {
+            timeout: 120000,
           });
         } catch (error) {
           throw new Error(
@@ -1641,9 +1664,14 @@ If app/job IDs conflict with existing ones, auto-renames by default (e.g., app-1
           );
         }
 
-        sourcePath = tempDir;
+        sourcePath = args.subPath
+          ? pathModule.default.join(gitCloneDir, args.subPath)
+          : gitCloneDir;
       } else {
         sourcePath = sourcePath.replace(/^~/, osModule.default.homedir());
+        if (args.subPath) {
+          sourcePath = pathModule.default.join(sourcePath, args.subPath);
+        }
       }
 
       const manifestPath = pathModule.default.join(sourcePath, "manifest.json");
@@ -1674,24 +1702,6 @@ If app/job IDs conflict with existing ones, auto-renames by default (e.g., app-1
         }
       }
 
-      if (conflicts.length > 0 && args.renameConflicts) {
-        const warnings = conflicts.join(", ");
-        const result = await bundleService.importBundle({ sourcePath });
-
-        return {
-          success: true,
-          data: {
-            bundleId: result.bundleId,
-            appId: result.app.id,
-            jobIds: result.jobs.map((j) => j.id),
-            warnings: `Conflicts detected (${warnings}). Imported with original IDs - you may want to rename manually.`,
-            manifest: result,
-          },
-          duration: performance.now() - startTime,
-          timestamp: new Date().toISOString(),
-        };
-      }
-
       if (conflicts.length > 0 && !args.renameConflicts) {
         throw new Error(
           `Import blocked due to conflicts: ${conflicts.join(", ")}. Set renameConflicts: true to import anyway.`,
@@ -1700,8 +1710,45 @@ If app/job IDs conflict with existing ones, auto-renames by default (e.g., app-1
 
       const result = await bundleService.importBundle({ sourcePath });
 
-      if (isGitImport) {
-        await fsModule.rm(sourcePath, { recursive: true, force: true });
+      if (gitCloneDir) {
+        await fsModule.rm(gitCloneDir, { recursive: true, force: true });
+      }
+
+      const pythonJobs = result.jobs
+        .filter((j) => j.type === "python")
+        .map((j) => j.name);
+      const nodeJobs = result.jobs
+        .filter((j) => j.type === "node")
+        .map((j) => j.name);
+      const requirements = result.requirements ?? [];
+      const platform = result.platform ?? [];
+
+      const userPlatform =
+        process.platform === "darwin"
+          ? "macos"
+          : process.platform === "win32"
+            ? "windows"
+            : "linux";
+      const platformWarning =
+        platform.length > 0 && !platform.includes(userPlatform)
+          ? `WARNING: This bundle targets ${platform.join(", ")} but you are on ${userPlatform}. Some features may not work.`
+          : undefined;
+
+      const postImportSteps: string[] = [];
+      if (requirements.length > 0) {
+        postImportSteps.push(
+          `Configure required API keys in Settings → Custom Keys: ${requirements.join(", ")}`,
+        );
+      }
+      if (pythonJobs.length > 0) {
+        postImportSteps.push(
+          `Python jobs (${pythonJobs.join(", ")}) will auto-create virtual environments on first run`,
+        );
+      }
+      if (nodeJobs.length > 0) {
+        postImportSteps.push(
+          `Node jobs (${nodeJobs.join(", ")}) will auto-install dependencies on first run`,
+        );
       }
 
       return {
@@ -1709,9 +1756,21 @@ If app/job IDs conflict with existing ones, auto-renames by default (e.g., app-1
         data: {
           bundleId: result.bundleId,
           appId: result.app.id,
+          appName: result.app.name,
           jobIds: result.jobs.map((j) => j.id),
-          manifest: result,
-          tip: "App bundle imported successfully! Use list_apps to see the imported app.",
+          jobSummary: result.jobs.map((j) => ({
+            id: j.id,
+            name: j.name,
+            type: j.type,
+          })),
+          requirements,
+          platform,
+          platformWarning,
+          postImportSteps,
+          warnings:
+            conflicts.length > 0
+              ? `Conflicts detected (${conflicts.join(", ")}). Imported with original IDs.`
+              : undefined,
         },
         duration: performance.now() - startTime,
         timestamp: new Date().toISOString(),

@@ -261,6 +261,36 @@ const PROVIDER_KEY_MAP: Record<string, string> = {
   google: "GOOGLE_API_KEY",
 };
 
+/**
+ * Items that look like env var names but are NOT API keys.
+ * These get picked up from job.requirements or file scanning but shouldn't
+ * appear in the bundle's requirements array.
+ */
+const KNOWN_NON_KEYS = new Set([
+  "JOB_DIR",
+  "JOB_DB",
+  "HOME",
+  "PATH",
+  "USER",
+  "SHELL",
+  "LANG",
+  "TERM",
+  "PYTHONPATH",
+  "NODE_PATH",
+  "VIRTUAL_ENV",
+]);
+
+/**
+ * Returns true if the string looks like an API key environment variable name.
+ * Must be ALL_UPPERCASE_WITH_UNDERSCORES (allows digits). Rejects lowercase
+ * package names (openai, pyobjc-framework-EventKit, ffmpeg, etc.) and
+ * known built-in env vars.
+ */
+function isApiKeyName(name: string): boolean {
+  if (!name || KNOWN_NON_KEYS.has(name)) return false;
+  return /^[A-Z][A-Z0-9_]{2,}$/.test(name);
+}
+
 /** Patterns that indicate API key usage in source files */
 const KEY_USAGE_PATTERNS = [
   /\$\{([A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET))\}/g,
@@ -314,9 +344,11 @@ async function detectRequiredKeys(
       }
     }
 
-    // 3. Explicit requirements on the job record
+    // 3. Explicit requirements on the job record — only include API-key-shaped names
     for (const req of job.requirements ?? []) {
-      keys.add(req);
+      if (isApiKeyName(req)) {
+        keys.add(req);
+      }
     }
   }
 
@@ -355,9 +387,12 @@ async function detectRequiredKeys(
   }
   await scanDir(bundlePath);
 
-  // Remove JOB_DIR/JOB_DB — those are Paprwork built-ins, not API keys
-  keys.delete("JOB_DIR");
-  keys.delete("JOB_DB");
+  // Final pass: remove anything that isn't an API-key-shaped name
+  for (const key of keys) {
+    if (!isApiKeyName(key)) {
+      keys.delete(key);
+    }
+  }
 
   return [...keys].sort();
 }
@@ -379,6 +414,25 @@ const MACOS_INDICATORS = [
   /\.app\b/,
   /\bsox\b/,
   /\brec\b.*\baudio\b/i,
+  // Apple frameworks and bridge packages
+  /\bEventKit\b/,
+  /\bCoreAudio\b/,
+  /\bAVFoundation\b/,
+  /\bNSWorkspace\b/,
+  /\bAppKit\b/,
+  /\bCocoa\b/,
+  /\bpyobjc\b/i,
+  // macOS-specific tools
+  /\bterminal-notifier\b/,
+  /\bstat\s+-f%/,
+  /\bsecurity\s+(find-identity|import|create-keychain)\b/,
+  /\bcodesign\b/,
+  /\bxcrun\b/,
+  /\bxcode-select\b/,
+  /\bmdfind\b/,
+  /\bmdls\b/,
+  // macOS paths
+  /\/Library\/(Application Support|Preferences|LaunchAgents)\//,
 ];
 
 const WINDOWS_INDICATORS = [
