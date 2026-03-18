@@ -1315,6 +1315,12 @@ const exportAppBundleSchema = z.object({
     .describe(
       "If true, keeps database files, logs, and caches in the bundle (user explicitly wants to share their data). Default false = auto-scrub all private data.",
     ),
+  platform: z
+    .array(z.enum(["macos", "windows", "linux"]))
+    .optional()
+    .describe(
+      "Target platforms for the bundle. Auto-detected from job types and source files if omitted. Override when you know the app is platform-specific.",
+    ),
 });
 
 const importAppBundleSchema = z.object({
@@ -1359,7 +1365,7 @@ After export, publish the bundle to the official community repo so other Paprwor
 
 1. Fork & clone: gh repo fork Papr-ai/paprwork-community-apps --clone --remote (NEVER clone the main repo directly)
 2. Copy the exported bundle folder into bundles/{bundleId}/ in the forked clone
-3. Add YOUR entry to registry.json — do NOT modify or remove existing entries. All fields are Zod-validated; entries that fail are silently dropped. Required: bundleId, name, description, version, author (run "gh api user -q .login" to get the actual GitHub username — NEVER hardcode "paprwork-team"), tags (string[]), minPaprworkVersion, path. Optional: icon (string), requirements (string[] — MUST be a flat string array like ["OPENAI_API_KEY"], NOT objects).
+3. Add YOUR entry to registry.json — do NOT modify or remove existing entries. IMPORTANT: Use the pre-built "registryEntry" JSON from the export result (just fill in author and tags). All fields are Zod-validated; entries that fail validation are SILENTLY DROPPED and won't appear in Community Apps. Required: bundleId, name, description, version, author (run "gh api user -q .login" to get the actual GitHub username — NEVER hardcode "paprwork-team"), tags (string[]), minPaprworkVersion, path. Optional: icon (string), requirements (string[] — MUST be a flat string array like ["OPENAI_API_KEY"], NOT objects), platform (string[] — MUST be a flat string array like ["macos"], NOT a bare string).
 4. Commit, push to the fork, then open a PR to Papr-ai/paprwork-community-apps
 
 This makes the app available in Paprwork's "Community Apps" tab for all users.`,
@@ -1401,6 +1407,7 @@ This makes the app available in Paprwork's "Community Apps" tab for all users.`,
         description: args.description,
         jobIds,
         includeData: args.includeData,
+        platform: args.platform,
       });
 
       const osModule = await import("os");
@@ -1525,6 +1532,20 @@ Thumbs.db
           ? ` Pipeline auto-discovery: found ${resolvedJobIds.length} total jobs (${resolvedJobIds.length - jobIds.length} additional upstream jobs discovered via dependsOn/runtimeCalls). All ${resolvedJobIds.length} jobs included in the bundle.`
           : "";
 
+      const registryEntry = {
+        bundleId,
+        name: args.name,
+        description: args.description ?? "",
+        version: args.version,
+        author: "<FILL_IN: run 'gh api user -q .login' to get your GitHub username>",
+        tags: [] as string[],
+        minPaprworkVersion: "2.0.0",
+        path: `bundles/${bundleId}`,
+        icon: "",
+        requirements: detectedKeys,
+        platform: detectedPlatform,
+      };
+
       return {
         success: true,
         data: {
@@ -1537,8 +1558,9 @@ Thumbs.db
           detectedPlatform,
           resolvedJobIds,
           seedJobIds: jobIds,
+          registryEntry,
           privacyScrub: scrubSummary || "No private data found.",
-          tip: `App bundle exported to ${bundlePath}.${scrubNote}${portabilityNote}${keysNote}${platformNote}${pipelineNote} To publish to the Paprwork community: 1) gh repo fork Papr-ai/paprwork-community-apps --clone --remote -- /tmp/paprwork-community-apps 2) cp -r ${bundlePath} /tmp/paprwork-community-apps/bundles/${bundleId} 3) Add YOUR entry to /tmp/paprwork-community-apps/registry.json (do NOT modify existing entries) — use the detectedKeys as the requirements array and the detectedPlatform as the platform array 4) cd /tmp/paprwork-community-apps && git checkout -b add-${bundleId} && git add . && git commit -m "Add ${args.name}" && git push -u origin add-${bundleId} 5) gh pr create --repo Papr-ai/paprwork-community-apps --title "Add ${args.name}" --body "New community app"`,
+          tip: `App bundle exported to ${bundlePath}.${scrubNote}${portabilityNote}${keysNote}${platformNote}${pipelineNote} To publish to the Paprwork community: 1) gh repo fork Papr-ai/paprwork-community-apps --clone --remote -- /tmp/paprwork-community-apps 2) cp -r ${bundlePath} /tmp/paprwork-community-apps/bundles/${bundleId} 3) Use the "registryEntry" JSON from this result — just fill in "author" (run "gh api user -q .login") and "tags", then append it to the bundles array in /tmp/paprwork-community-apps/registry.json (do NOT modify existing entries). The registryEntry already has the correct types for requirements (string[]) and platform (string[]) — do NOT flatten these to bare strings. 4) cd /tmp/paprwork-community-apps && git checkout -b add-${bundleId} && git add . && git commit -m "Add ${args.name}" && git push -u origin add-${bundleId} 5) gh pr create --repo Papr-ai/paprwork-community-apps --title "Add ${args.name}" --body "New community app"`,
         },
         duration: performance.now() - startTime,
         timestamp: new Date().toISOString(),
@@ -2044,13 +2066,24 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
     const result = await appService.validateApp(args.appId);
     
     if (!result.valid) {
-      // Format issues for display
       const errorCount = result.issues.filter(i => i.severity === 'error').length;
       const warningCount = result.issues.filter(i => i.severity === 'warning').length;
       
+      const issueList = result.issues.map(issue => 
+        `- ${issue.severity === 'error' ? '❌' : '⚠️'} ${issue.file}: ${issue.message}`
+      ).join('\n');
+
       return {
         success: false,
-        error: `Validation failed with ${errorCount} error(s) and ${warningCount} warning(s)`,
+        error: [
+          `⛔ VALIDATION FAILED — ${errorCount} error(s), ${warningCount} warning(s). You MUST fix these before proceeding.`,
+          '',
+          issueList,
+          '',
+          errorCount > 0
+            ? 'ACTION REQUIRED: Fix all ❌ errors now. For files over the 100-line limit, extract code into smaller component files (components/, utils/, types.ts). Do NOT continue with other work until errors are resolved.'
+            : 'Warnings found. Fix if possible before proceeding.',
+        ].join('\n'),
         data: {
           valid: false,
           filesChecked: result.filesChecked,

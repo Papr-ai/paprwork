@@ -1851,7 +1851,9 @@ cp -r ~/PAPR/bundles/{bundleId} /tmp/paprwork-community-apps/bundles/{bundleId}
 
 **5. Add entry to registry.json (only YOUR new entry — do NOT modify or remove existing entries):**
 
-Edit `/tmp/paprwork-community-apps/registry.json` and add a new entry to the `bundles` array:
+**PREFERRED:** Use the pre-built `registryEntry` JSON from the `export_app_bundle` tool result. It already has the correct types for all array fields (`requirements`, `platform`). Just fill in `author` (run `gh api user -q .login`) and `tags`, then append it to the `bundles` array.
+
+**Manual fallback** (if registryEntry not available): Edit `/tmp/paprwork-community-apps/registry.json` and add a new entry to the `bundles` array:
 ```json
 {
   "bundleId": "my-app-name",
@@ -1887,15 +1889,17 @@ Edit `/tmp/paprwork-community-apps/registry.json` and add a new entry to the `bu
 - **Linux only:** `apt-get`/`apt install`, `systemctl`, `journalctl`, `yum`/`dnf`/`pacman` package managers
 If only macOS indicators are found, the bundle is tagged `["macos"]`. If no platform-specific signals are found, it defaults to `["macos", "windows", "linux"]` (cross-platform). Always use the `detectedPlatform` from the tool result in registry.json.
 
-**CRITICAL: `requirements` must be a flat string array, NOT objects.**
+**CRITICAL: `requirements` AND `platform` must be flat string arrays, NOT objects or bare strings.**
 ```
-❌ WRONG (entry will be rejected and not displayed):
+❌ WRONG (entry will be silently rejected and NOT displayed in Community Apps):
 "requirements": [{ "key": "OPENAI_API_KEY", "label": "OpenAI Key", "required": true }]
+"platform": "macos"
 
 ✅ CORRECT:
 "requirements": ["OPENAI_API_KEY"]
+"platform": ["macos"]
 
-✅ ALSO CORRECT (no requirements):
+✅ ALSO CORRECT (no requirements, platform omitted defaults to all):
 "requirements": []
 ```
 

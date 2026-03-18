@@ -32,6 +32,8 @@ export interface ExportBundleInput {
   sqlite?: BundleDatabaseSpec[];
   /** Keep database files, logs, and caches in the bundle (user explicitly wants to share data) */
   includeData?: boolean;
+  /** Override auto-detected platform. If omitted, platforms are detected from job types and source files. */
+  platform?: Platform[];
 }
 
 export interface ImportBundleInput {
@@ -896,15 +898,20 @@ export class BundleService {
     // Auto-detect API keys required by the bundle
     const detectedKeys = await detectRequiredKeys(jobRecords, destinationPath);
 
-    // Auto-detect platform compatibility
-    const jobsForPlatformCheck = jobRecords.map((j) => ({
-      command: j.command ?? undefined,
-      type: j.type,
-    }));
-    const detectedPlatform = await detectPlatforms(
-      jobsForPlatformCheck,
-      destinationPath,
-    );
+    // Use explicit platform override or auto-detect from job types and source files
+    let detectedPlatform: Platform[];
+    if (input.platform && input.platform.length > 0) {
+      detectedPlatform = input.platform;
+    } else {
+      const jobsForPlatformCheck = jobRecords.map((j) => ({
+        command: j.command ?? undefined,
+        type: j.type,
+      }));
+      detectedPlatform = await detectPlatforms(
+        jobsForPlatformCheck,
+        destinationPath,
+      );
+    }
 
     const manifest: BundleManifest = parseBundleManifest({
       schemaVersion: BUNDLE_SCHEMA_VERSION,

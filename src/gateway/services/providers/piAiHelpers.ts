@@ -87,12 +87,16 @@ export function buildPiContext(input: PiContextInput): {
           typeof r.result === "string"
             ? r.result
             : JSON.stringify(r.result ?? "");
+        const resultObj = r.result && typeof r.result === "object" ? r.result as Record<string, unknown> : null;
+        const hasError = resultObj
+          ? resultObj.success === false || typeof resultObj.error === "string"
+          : false;
         piMessages.push({
           role: "toolResult",
           toolCallId: r.toolCallId ?? "",
           toolName: r.toolName ?? r.name ?? "",
           content: [{ type: "text" as const, text }],
-          isError: false,
+          isError: hasError,
           timestamp: now,
         });
       }

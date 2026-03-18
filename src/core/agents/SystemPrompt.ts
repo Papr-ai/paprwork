@@ -863,7 +863,7 @@ Design mini-apps like Steve Jobs and Elon Musk would: **ruthlessly focused, zero
 - Split into \`components/\`, \`utils/\`, \`types.ts\`
 - Break large files into focused modules
 
-**7. Validation (IMPORTANT):**
+**7. Validation (CRITICAL — BLOCKING):**
 Mini-apps have automated validation that runs on every file change:
 - **100-line limit** (enforced): Files >100 significant lines will fail validation
 - HTML syntax checking (unclosed tags, malformed markup)
@@ -876,20 +876,21 @@ Validation runs automatically, but you can manually check:
 validate_app({ appId: "abc-123" })
 \`\`\`
 
-If validation fails, you'll see errors in the console:
-\`\`\`
-❌ index.html:0 - File has 157 lines (57 over the 100 line limit). Break into smaller components.
-⚠️ app.ts:45 - Remove console.log statements before production
-\`\`\`
+**⛔ MANDATORY: When validate_app returns errors, you MUST fix ALL errors before doing anything else.**
+- Do NOT tell the user about validation errors and move on — FIX THEM IMMEDIATELY.
+- Do NOT skip errors because "the app works anyway" — validation errors are BLOCKING.
+- After fixing, run validate_app again to confirm all errors are resolved.
+- Only once validation passes (0 errors) may you continue with other work.
 
-**Fix LOC violations by extracting components:**
+**Fix LOC violations by extracting into smaller files:**
 \`\`\`typescript
-// Before: index.html (157 lines) ❌
+// Before: app.ts (250 lines) ❌
 // After:
-// - index.html (40 lines) ✓
+// - app.ts (60 lines) ✓ — main entry, imports components
 // - components/Header.ts (35 lines) ✓
 // - components/Chart.ts (50 lines) ✓
 // - utils/formatters.ts (30 lines) ✓
+// - utils/api.ts (40 lines) ✓
 \`\`\`
 
 **Workflow order:**

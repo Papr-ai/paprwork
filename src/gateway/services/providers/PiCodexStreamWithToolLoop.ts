@@ -42,6 +42,32 @@ type OurChunk =
   | { type: "error"; error: unknown };
 
 /**
+ * Coerce arg types that models commonly get wrong:
+ * - Numeric strings → numbers ("5" → 5)
+ * - Stringified JSON arrays/objects → parsed values
+ * Applied before Mastra validation so tools don't silently fail.
+ */
+function coerceArgTypes(args: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === "string") {
+      // "123" or "0" → number (but not "" or "hello")
+      if (/^-?\d+(\.\d+)?$/.test(value)) {
+        result[key] = Number(value);
+        continue;
+      }
+      // "true"/"false" → boolean
+      if (value === "true" || value === "false") {
+        result[key] = value === "true";
+        continue;
+      }
+    }
+    result[key] = value;
+  }
+  return result;
+}
+
+/**
  * Execute a single tool call using Mastra tools
  * @param skipTruncation - When true (last tool in step), return full result for model context
  */
@@ -63,7 +89,7 @@ async function executeToolCall(
     };
   }
   try {
-    const rawResult = await tool.execute(toolCall.args);
+    const rawResult = await tool.execute(coerceArgTypes(toolCall.args));
 
     // Detect Mastra validation errors (returned as result, not thrown)
     if (
@@ -185,12 +211,17 @@ function appendToolTurnToContext(
         `limit: ~${estimatedTokens} tokens)]`;
     }
 
+    const resultObj = tr.result && typeof tr.result === "object" ? tr.result as Record<string, unknown> : null;
+    const isError = resultObj
+      ? resultObj.success === false || typeof resultObj.error === "string"
+      : false;
+
     context.messages.push({
       role: "toolResult",
       toolCallId: tr.toolCallId,
       toolName: tr.toolName,
       content: [{ type: "text" as const, text }],
-      isError: false,
+      isError,
       timestamp: now,
     });
   }
