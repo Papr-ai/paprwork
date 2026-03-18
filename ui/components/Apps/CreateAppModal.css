@@ -1,0 +1,161 @@
+/**
+ * CreateAppModal Styles - Liquid Glass modal for app creation
+ */
+
+.create-app-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  animation: modalBackdropIn 150ms ease;
+}
+
+@keyframes modalBackdropIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.create-app-modal {
+  width: 90%;
+  max-width: 440px;
+  background: var(--glass-bg, rgba(30, 30, 30, 0.95));
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border, var(--border));
+  border-radius: 16px;
+  padding: 28px;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.3),
+              0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+  animation: modalSlideIn 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes modalSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.create-app-modal__title {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.create-app-modal__subtitle {
+  margin: 0 0 20px;
+  font-size: 13px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+}
+
+.create-app-modal__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.create-app-modal__label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.create-app-modal__optional {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-tertiary);
+  margin-left: 6px;
+}
+
+.create-app-modal__input,
+.create-app-modal__textarea {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--input-bg, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--glass-border, var(--border));
+  border-radius: 10px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: var(--font-body);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+  box-sizing: border-box;
+}
+
+.create-app-modal__input:focus,
+.create-app-modal__textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb, 0, 113, 227), 0.12);
+}
+
+.create-app-modal__input::placeholder,
+.create-app-modal__textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+.create-app-modal__textarea {
+  resize: vertical;
+  min-height: 60px;
+  max-height: 140px;
+}
+
+.create-app-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+.create-app-modal__cancel {
+  padding: 8px 18px;
+  background: transparent;
+  border: 1px solid var(--glass-border, var(--border));
+  border-radius: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.create-app-modal__cancel:hover {
+  background: var(--hover);
+  color: var(--text-primary);
+}
+
+.create-app-modal__submit {
+  padding: 8px 20px;
+  background: linear-gradient(135deg, var(--accent, #0071E3), var(--accent-color, #4f46e5));
+  border: none;
+  border-radius: 10px;
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 150ms ease, box-shadow 150ms ease, opacity 150ms ease;
+}
+
+.create-app-modal__submit:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0, 113, 227, 0.25);
+}
+
+.create-app-modal__submit:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

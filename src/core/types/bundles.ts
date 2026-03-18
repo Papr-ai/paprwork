@@ -91,6 +91,9 @@ export const BundleManifestSchema = z.object({
   description: z.string().optional(),
   icon: z.string().optional(),
   requirements: z.array(z.string()).default([]),
+  platform: z
+    .array(z.enum(["macos", "windows", "linux"]))
+    .default(["macos", "windows", "linux"]),
   app: BundleAppSchema,
   jobs: z.array(JobSpecSchema).default([]),
   sqlite: z.array(SqliteDatabaseSchema).default([]),
@@ -110,4 +113,52 @@ export type BundleDeploymentProfile = z.infer<typeof DeploymentProfileSchema>;
 
 export function parseBundleManifest(input: unknown): BundleManifest {
   return BundleManifestSchema.parse(input);
+}
+
+/**
+ * Community registry entry schema — validated when fetching from GitHub.
+ * Entries that don't pass validation are silently dropped so malformed
+ * or malicious contributions never reach the UI.
+ */
+export const CommunityRegistryEntrySchema = z.object({
+  bundleId: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string().min(1),
+  version: z.string().min(1),
+  author: z.string().min(1),
+  tags: z.array(z.string()).default([]),
+  minPaprworkVersion: z.string().min(1),
+  path: z.string().min(1),
+  icon: z.string().optional(),
+  requirements: z.array(z.string()).default([]),
+  platform: z
+    .array(z.enum(["macos", "windows", "linux"]))
+    .default(["macos", "windows", "linux"]),
+});
+
+export type CommunityRegistryEntry = z.infer<
+  typeof CommunityRegistryEntrySchema
+>;
+
+export const CommunityRegistrySchema = z.object({
+  schemaVersion: z.string().min(1),
+  bundles: z.array(z.unknown()).default([]),
+});
+
+/**
+ * Parse and validate a community registry. Invalid entries are filtered out
+ * rather than crashing the whole page.
+ */
+export function parseValidRegistryEntries(
+  raw: unknown,
+): { schemaVersion: string; bundles: CommunityRegistryEntry[] } {
+  const registry = CommunityRegistrySchema.parse(raw);
+  const valid: CommunityRegistryEntry[] = [];
+  for (const entry of registry.bundles) {
+    const result = CommunityRegistryEntrySchema.safeParse(entry);
+    if (result.success) {
+      valid.push(result.data);
+    }
+  }
+  return { schemaVersion: registry.schemaVersion, bundles: valid };
 }

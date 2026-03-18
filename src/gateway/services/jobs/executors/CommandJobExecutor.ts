@@ -57,10 +57,13 @@ export class CommandJobExecutor implements IJobExecutor {
     }
     // ─────────────────────────────────────────────────────────────────────────
 
+    const jobDbPath = path.join(params.jobDir, "data", "data.db");
     const proc = spawn("/bin/bash", ["-lc", finalCommand], {
       cwd: params.jobDir,
       env: {
         ...process.env,
+        JOB_DIR: params.jobDir,
+        JOB_DB: jobDbPath,
         ...(params.runtimeParams ?? {}),
       },
     });

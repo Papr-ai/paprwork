@@ -1309,6 +1309,12 @@ const exportAppBundleSchema = z.object({
     .array(z.string())
     .optional()
     .describe("Job IDs to include (auto-detects linked jobs if omitted)"),
+  includeData: z
+    .boolean()
+    .default(false)
+    .describe(
+      "If true, keeps database files, logs, and caches in the bundle (user explicitly wants to share their data). Default false = auto-scrub all private data.",
+    ),
 });
 
 const importAppBundleSchema = z.object({
@@ -1338,12 +1344,25 @@ export const exportAppBundleTool = createTool({
 Creates an app bundle folder at ~/PAPR/bundles/{bundleId}/ containing:
 - manifest.json: App + job metadata, database schemas
 - apps/{appId}/: Mini app HTML/CSS/JS/TS files
-- jobs/{jobId}/: Job code, migrations, SQLite databases
+- jobs/{jobId}/: Job code, migrations
 - README.md: Auto-generated installation instructions
 - .gitignore: Excludes large data files
 
+Automatically discovers the FULL job pipeline via three methods: (1) scans app source files for job IDs referenced in code (e.g. fetch('/api/jobs/run', { jobId })), (2) walks dependsOn dependency chains, and (3) walks runtimeCalls chains. All discovered jobs are included — not just the directly linked ones. Check resolvedJobIds in the result.
+
+By default, automatically scrubs private data (databases, logs, WAL files, venvs, caches) from the bundle. The scrub report is returned so you can tell the user what was removed. If the user explicitly wants to share data files (sample datasets, demo databases), set includeData: true.
+
 Use this to share complete mini-apps (with all jobs and schemas) via GitHub, Dropbox, or file transfer.
-After export, you can push the app bundle folder to GitHub and share the URL.`,
+
+**Publishing to the Paprwork Community:**
+After export, publish the bundle to the official community repo so other Paprwork users can discover and install it:
+
+1. Fork & clone: gh repo fork Papr-ai/paprwork-community-apps --clone --remote (NEVER clone the main repo directly)
+2. Copy the exported bundle folder into bundles/{bundleId}/ in the forked clone
+3. Add YOUR entry to registry.json — do NOT modify or remove existing entries. All fields are Zod-validated; entries that fail are silently dropped. Required: bundleId, name, description, version, author (run "gh api user -q .login" to get the actual GitHub username — NEVER hardcode "paprwork-team"), tags (string[]), minPaprworkVersion, path. Optional: icon (string), requirements (string[] — MUST be a flat string array like ["OPENAI_API_KEY"], NOT objects).
+4. Commit, push to the fork, then open a PR to Papr-ai/paprwork-community-apps
+
+This makes the app available in Paprwork's "Community Apps" tab for all users.`,
   inputSchema: exportAppBundleSchema,
   execute: async (input) => {
     const args = (input as { context?: ExportAppBundleArgs }).context ?? input;
@@ -1367,13 +1386,21 @@ After export, you can push the app bundle folder to GitHub and share the URL.`,
         jobIds = dataSources.map((ds: { jobId: string }) => ds.jobId);
       }
 
-      const manifest = await bundleService.exportBundle({
+      const {
+        manifest,
+        scrubReport,
+        portabilityReport,
+        detectedKeys,
+        detectedPlatform,
+        resolvedJobIds,
+      } = await bundleService.exportBundle({
         appId: args.appId,
         bundleId,
         name: args.name,
         version: args.version,
         description: args.description,
         jobIds,
+        includeData: args.includeData,
       });
 
       const osModule = await import("os");
@@ -1385,6 +1412,11 @@ After export, you can push the app bundle folder to GitHub and share the URL.`,
         "bundles",
         bundleId,
       );
+
+      const scrubSummary =
+        scrubReport.removedFiles.length + scrubReport.removedDirs.length > 0
+          ? `\n## Privacy Scrub\n\nThe following private data was automatically removed during export:\n${[...scrubReport.removedFiles, ...scrubReport.removedDirs.map((d) => `${d}/`)].map((f) => `- ${f}`).join("\n")}\n\nTotal removed: ${(scrubReport.totalBytesRemoved / 1024).toFixed(1)}KB\n`
+          : "";
 
       const readmeContent = `# ${args.name}
 
@@ -1408,10 +1440,6 @@ Agent: "Import the bundle from ${bundlePath}"
 - **Jobs**: ${manifest.jobs.length} job(s)
 ${manifest.jobs.map((j) => `  - ${j.name} (${j.type})`).join("\n")}
 
-## Database Schemas
-
-${manifest.sqlite.length ? manifest.sqlite.map((db) => `- ${db.id}: ${db.tables.length} table(s)`).join("\n") : "No SQLite databases included"}
-
 ## Requirements
 
 - Paprwork v${manifest.minPaprworkVersion} or later
@@ -1429,10 +1457,16 @@ ${args.version} - Created ${new Date().toISOString().split("T")[0]}
         "utf8",
       );
 
-      const gitignoreContent = `# Large data files
-**/data.db
-**/data.db-shm
-**/data.db-wal
+      const gitignoreContent = `# Databases (contain user data)
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/*.sqlite
+**/*.sqlite3
+
+# Logs (may contain private info)
+**/*.log
+**/logs/
 
 # Python virtual environments
 **/.venv/
@@ -1442,8 +1476,11 @@ ${args.version} - Created ${new Date().toISOString().split("T")[0]}
 # Node modules
 **/node_modules/
 
-# Logs
-**/logs/*.log
+# Version history
+**/.versions/
+
+# Data directories
+**/data/
 
 # OS files
 .DS_Store
@@ -1456,13 +1493,52 @@ Thumbs.db
         "utf8",
       );
 
+      const scrubNote =
+        scrubReport.removedFiles.length + scrubReport.removedDirs.length > 0
+          ? ` Privacy scrub removed ${scrubReport.removedFiles.length} file(s) and ${scrubReport.removedDirs.length} dir(s) totaling ${(scrubReport.totalBytesRemoved / 1024).toFixed(1)}KB (databases, logs, venvs, caches).`
+          : " No private data files found to scrub.";
+
+      const portabilityNote = portabilityReport.portable
+        ? " Portability check passed — no hardcoded paths found."
+        : ` PORTABILITY WARNING: Found ${portabilityReport.warnings.length} hardcoded path(s) that will break on other machines. You MUST fix these before publishing:\n${portabilityReport.warnings.map((w) => `  - ${w.file}:${w.line}: ${w.issue} → "${w.snippet}"`).join("\n")}`;
+
+      const keysNote =
+        detectedKeys.length > 0
+          ? ` Auto-detected API key requirements: ${detectedKeys.join(", ")}. These have been added to the manifest. Use these as the "requirements" array in registry.json when publishing.`
+          : " No API keys detected — if the bundle needs keys, add them to the registry.json requirements manually.";
+
+      const allPlatforms = ["macos", "windows", "linux"] as const;
+      const isUniversal =
+        detectedPlatform.length === allPlatforms.length &&
+        allPlatforms.every((p) =>
+          (detectedPlatform as readonly string[]).includes(p),
+        );
+      const platformJson = detectedPlatform
+        .map((p: string) => '"' + p + '"')
+        .join(", ");
+      const platformNote = isUniversal
+        ? " Platform: cross-platform (all platforms supported)."
+        : ` Platform: ${detectedPlatform.join(", ")} only. This bundle uses platform-specific features. Include "platform": [${platformJson}] in registry.json.`;
+
+      const pipelineNote =
+        resolvedJobIds.length > jobIds.length
+          ? ` Pipeline auto-discovery: found ${resolvedJobIds.length} total jobs (${resolvedJobIds.length - jobIds.length} additional upstream jobs discovered via dependsOn/runtimeCalls). All ${resolvedJobIds.length} jobs included in the bundle.`
+          : "";
+
       return {
         success: true,
         data: {
           bundleId,
           bundlePath,
           manifest,
-          tip: `App bundle exported to ${bundlePath}. To share: 1) cd ${bundlePath} 2) git init && git add . && git commit -m "Initial release" 3) Push to GitHub`,
+          scrubReport,
+          portabilityReport,
+          detectedKeys,
+          detectedPlatform,
+          resolvedJobIds,
+          seedJobIds: jobIds,
+          privacyScrub: scrubSummary || "No private data found.",
+          tip: `App bundle exported to ${bundlePath}.${scrubNote}${portabilityNote}${keysNote}${platformNote}${pipelineNote} To publish to the Paprwork community: 1) gh repo fork Papr-ai/paprwork-community-apps --clone --remote -- /tmp/paprwork-community-apps 2) cp -r ${bundlePath} /tmp/paprwork-community-apps/bundles/${bundleId} 3) Add YOUR entry to /tmp/paprwork-community-apps/registry.json (do NOT modify existing entries) — use the detectedKeys as the requirements array and the detectedPlatform as the platform array 4) cd /tmp/paprwork-community-apps && git checkout -b add-${bundleId} && git add . && git commit -m "Add ${args.name}" && git push -u origin add-${bundleId} 5) gh pr create --repo Papr-ai/paprwork-community-apps --title "Add ${args.name}" --body "New community app"`,
         },
         duration: performance.now() - startTime,
         timestamp: new Date().toISOString(),
@@ -1937,6 +2013,70 @@ Use list_job_file_versions first to find the versionId.`,
   },
 });
 
+// ==================== MINI-APP VALIDATION ====================
+
+const validateAppSchema = z.object({
+  appId: z.string().describe("The ID of the mini-app to validate"),
+});
+
+type ValidateAppArgs = z.infer<typeof validateAppSchema>;
+
+export const validateAppTool = createTool({
+  id: "validate_app",
+  description: `Validate a mini-app for code quality issues and enforcement rules.
+Checks:
+- **100-line limit per file** (enforced): Files must be ≤100 significant lines. Break large files into components.
+- **HTML syntax**: Unclosed tags, malformed markup
+- **CSS syntax**: Mismatched braces, double semicolons
+- **JavaScript/TypeScript syntax**: Mismatched delimiters (braces, parens, brackets)
+- **Code quality**: console.log statements (should be removed)
+
+Returns validation result with list of issues (errors and warnings).
+IMPORTANT: Run this after creating/editing app files to catch issues early!`,
+  inputSchema: validateAppSchema,
+  execute: async (input) => {
+    const args = (input as { context?: ValidateAppArgs }).context ?? input;
+    const { getAppService } =
+      await import("../../gateway/services/AppService.js");
+    const appService = getAppService();
+    await appService.initialize();
+    
+    const result = await appService.validateApp(args.appId);
+    
+    if (!result.valid) {
+      // Format issues for display
+      const errorCount = result.issues.filter(i => i.severity === 'error').length;
+      const warningCount = result.issues.filter(i => i.severity === 'warning').length;
+      
+      return {
+        success: false,
+        error: `Validation failed with ${errorCount} error(s) and ${warningCount} warning(s)`,
+        data: {
+          valid: false,
+          filesChecked: result.filesChecked,
+          issues: result.issues.map(issue => ({
+            file: issue.file,
+            line: issue.line,
+            severity: issue.severity,
+            message: issue.message,
+            rule: issue.rule,
+          })),
+          summary: `${errorCount} error(s), ${warningCount} warning(s)`,
+        },
+      };
+    }
+    
+    return {
+      success: true,
+      data: {
+        valid: true,
+        filesChecked: result.filesChecked,
+        message: `✓ All ${result.filesChecked} files passed validation`,
+      },
+    };
+  },
+});
+
 export const appJobsTools = [
   createAppTool,
   createJobTool,
@@ -1955,6 +2095,7 @@ export const appJobsTools = [
   editAppFileLinesTool,
   listAppFilesTool,
   listAppsTool,
+  validateAppTool,
   exportAppBundleTool,
   importAppBundleTool,
   listAppBundlesTool,

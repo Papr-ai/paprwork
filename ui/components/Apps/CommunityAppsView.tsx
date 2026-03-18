@@ -7,6 +7,11 @@ import { gateway } from "../../src/lib/gateway";
 import { useArtifacts } from "../../hooks/useArtifacts";
 import "./CommunityAppsView.css";
 
+/**
+ * Registry entries are Zod-validated server-side (parseValidRegistryEntries).
+ * Only entries with correct schema reach the UI. Fields like `requirements`
+ * are guaranteed to be string[] — objects or other shapes are rejected.
+ */
 interface CommunityRegistryEntry {
   bundleId: string;
   name: string;
@@ -18,6 +23,14 @@ interface CommunityRegistryEntry {
   path: string;
   icon?: string;
   requirements?: string[];
+  platform?: string[];
+}
+
+/** Sanitize an icon string — strip scripts and event handlers from untrusted HTML */
+function sanitizeIcon(raw: string): string {
+  return raw
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/on\w+\s*=/gi, "data-blocked=");
 }
 
 interface CommunityRegistry {
@@ -27,6 +40,13 @@ interface CommunityRegistry {
 
 type ImportStatus = "idle" | "importing" | "imported" | "error";
 
+function detectUserPlatform(): "macos" | "windows" | "linux" {
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes("mac")) return "macos";
+  if (ua.includes("win")) return "windows";
+  return "linux";
+}
+
 export function CommunityAppsView() {
   const [registry, setRegistry] = useState<CommunityRegistry | null>(null);
   const [loading, setLoading] = useState(true);
@@ -35,7 +55,9 @@ export function CommunityAppsView() {
   const [importStatus, setImportStatus] = useState<
     Record<string, ImportStatus>
   >({});
+  const [showAllPlatforms, setShowAllPlatforms] = useState(false);
   const { filteredArtifacts, loadArtifacts } = useArtifacts();
+  const userPlatform = detectUserPlatform();
 
   const installedAppIds = new Set(
     filteredArtifacts.filter((a) => a.type === "app").map((a) => a.id),
@@ -76,6 +98,10 @@ export function CommunityAppsView() {
 
   const filteredBundles =
     registry?.bundles.filter((b) => {
+      if (!showAllPlatforms) {
+        const platforms = b.platform ?? ["macos", "windows", "linux"];
+        if (!platforms.includes(userPlatform)) return false;
+      }
       if (!searchQuery) return true;
       const q = searchQuery.toLowerCase();
       return (
@@ -84,6 +110,13 @@ export function CommunityAppsView() {
         b.tags.some((t) => t.toLowerCase().includes(q))
       );
     }) ?? [];
+
+  const hiddenByPlatform = showAllPlatforms
+    ? 0
+    : (registry?.bundles.filter((b) => {
+        const platforms = b.platform ?? ["macos", "windows", "linux"];
+        return !platforms.includes(userPlatform);
+      }).length ?? 0);
 
   if (loading) {
     return (
@@ -134,6 +167,17 @@ export function CommunityAppsView() {
           </svg>
         </button>
       </div>
+
+      {hiddenByPlatform > 0 && (
+        <button
+          className="community-apps__platform-toggle"
+          onClick={() => setShowAllPlatforms(!showAllPlatforms)}
+        >
+          {showAllPlatforms
+            ? "Show compatible only"
+            : `Show all platforms (+${hiddenByPlatform} hidden)`}
+        </button>
+      )}
 
       {filteredBundles.length === 0 && (
         <div className="community-apps__status">
@@ -194,16 +238,28 @@ function CommunityAppCard({
     isInstalled || status === "importing" || status === "imported";
 
   const requirements = entry.requirements ?? [];
-  const hasNoRequirements =
-    requirements.length === 0 ||
-    requirements.every((r) => r.toLowerCase().includes("no api") || r.toLowerCase() === "none");
+  const hasNoRequirements = requirements.length === 0;
+
+  const allPlatforms = ["macos", "windows", "linux"];
+  const platforms = entry.platform ?? allPlatforms;
+  const isCrossPlatform =
+    platforms.length === allPlatforms.length &&
+    allPlatforms.every((p) => platforms.includes(p));
+
+  const platformLabel = isCrossPlatform
+    ? "All Platforms"
+    : platforms
+        .map((p) =>
+          p === "macos" ? "macOS" : p === "windows" ? "Windows" : "Linux",
+        )
+        .join(", ");
 
   const renderIcon = () => {
     if (entry.icon) {
       return (
         <span
           className="community-card__orb-icon"
-          dangerouslySetInnerHTML={{ __html: entry.icon }}
+          dangerouslySetInnerHTML={{ __html: sanitizeIcon(entry.icon) }}
         />
       );
     }
@@ -248,6 +304,11 @@ function CommunityAppCard({
               {tag}
             </span>
           ))}
+          {!isCrossPlatform && (
+            <span className="community-card__platform-badge">
+              {platformLabel}
+            </span>
+          )}
         </div>
 
         {showDetails && (
@@ -258,6 +319,14 @@ function CommunityAppCard({
                 className={`community-card__detail-value ${hasNoRequirements ? "community-card__detail-value--good" : "community-card__detail-value--warn"}`}
               >
                 {requirements.length > 0 ? requirements.join(", ") : "No API keys needed"}
+              </span>
+            </div>
+            <div className="community-card__detail-row">
+              <span className="community-card__detail-label">Platform</span>
+              <span
+                className={`community-card__detail-value ${isCrossPlatform ? "community-card__detail-value--good" : ""}`}
+              >
+                {platformLabel}
               </span>
             </div>
             <div className="community-card__detail-row">

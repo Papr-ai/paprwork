@@ -398,14 +398,78 @@ export_app_bundle({
 
 ## Distribution Channels
 
-### 1. GitHub (Recommended)
+### 1. Paprwork Community Apps (Recommended)
+
+**The official way to share apps with the Paprwork community.** Published apps appear in the "Community Apps" tab inside Paprwork for one-click install.
+
+**Repository:** [github.com/Papr-ai/paprwork-community-apps](https://github.com/Papr-ai/paprwork-community-apps)
+
+**Advantages:**
+- Discoverable by all Paprwork users (Community Apps tab)
+- One-click import from the app
+- Centralized registry with search/filter
+- Version tracking and author attribution
+
+**Publishing workflow:**
+
+```bash
+# 1. Clone the community repo
+git clone https://github.com/Papr-ai/paprwork-community-apps.git /tmp/paprwork-community-apps
+
+# 2. Copy your exported bundle into the repo
+cp -r ~/PAPR/bundles/my-bundle /tmp/paprwork-community-apps/bundles/my-bundle
+
+# 3. Add entry to registry.json (see registry format below)
+# Edit /tmp/paprwork-community-apps/registry.json
+
+# 4. Commit and open a PR
+cd /tmp/paprwork-community-apps
+git checkout -b add-my-bundle
+git add .
+git commit -m "Add My Bundle v1.0.0"
+git push -u origin add-my-bundle
+gh pr create --title "Add My Bundle" --body "Description of what this app does"
+```
+
+**Registry entry format (`registry.json`):**
+
+```json
+{
+  "bundleId": "my-bundle-id",
+  "name": "My App Name",
+  "description": "Short description for the community apps grid",
+  "version": "1.0.0",
+  "author": "your-github-username",
+  "tags": ["category1", "category2"],
+  "minPaprworkVersion": "2.0.0",
+  "path": "bundles/my-bundle-id",
+  "icon": "<svg>...</svg>",
+  "requirements": ["OPENAI_API_KEY"]
+}
+```
+
+**Fields:**
+- `bundleId`: Unique kebab-case identifier (must match folder name)
+- `name`: Human-readable display name
+- `description`: 1-2 sentence description shown on the app card
+- `tags`: Category tags shown as chips (e.g., "finance", "productivity", "data")
+- `path`: Always `bundles/{bundleId}` (relative to repo root)
+- `icon`: SVG string or emoji for the app card orb
+- `requirements`: API keys or dependencies needed (empty array `[]` if none)
+
+**Importing (for users):**
+
+Users browse the Community Apps tab inside Paprwork and click "Import" — no URL needed.
+
+### 2. Standalone GitHub Repo (Private/Custom Sharing)
+
+**Use when:** sharing privately, with a specific team, or when the app isn't ready for the community.
 
 **Advantages:**
 - Free hosting
 - Version control built-in
-- Familiar to developers
+- Can be private or public
 - Easy to fork and contribute
-- Can use GitHub Releases for versioning
 
 **Setup:**
 
@@ -424,7 +488,7 @@ git push -u origin main
 Agent: "Import from github.com/username/my-papr-bundle"
 ```
 
-### 2. Direct File Sharing
+### 3. Direct File Sharing
 
 **Advantages:**
 - Works offline
@@ -442,17 +506,6 @@ Agent: "Import from github.com/username/my-papr-bundle"
 ```
 Agent: "Import from ~/Downloads/my-app-bundle"
 ```
-
-### 3. App Bundle Registry (Future)
-
-Paprwork will eventually have a public app bundle registry similar to npm or VS Code extensions:
-
-- Browse bundles by category
-- One-click install
-- Ratings and reviews
-- Automatic updates
-
-For now, use GitHub and share URLs manually.
 
 ---
 
@@ -551,13 +604,12 @@ bash({ command: "sqlite3 ~/PAPR/jobs/{jobId}/data/data.db 'SELECT COUNT(*) FROM 
 
 ### Contributing
 
-Found a useful app bundle pattern? Share it!
+Found a useful app bundle pattern? Publish it to the community!
 
 1. Create well-documented app bundle
 2. Test thoroughly
-3. Push to GitHub
-4. Share in community channels
-5. Consider adding to awesome-papr-bundles list
+3. Publish to [paprwork-community-apps](https://github.com/Papr-ai/paprwork-community-apps) via PR
+4. Your app appears in the Community Apps tab for all Paprwork users
 
 ### App Bundle Guidelines
 

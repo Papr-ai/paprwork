@@ -65,6 +65,29 @@ const searchMemorySchema = z.object({
     .describe(
       "Filter by memory category. 'agent_memory' for conversation memories, 'code' for code files and projects.",
     ),
+  projectId: z
+    .string()
+    .optional()
+    .describe(
+      "Filter code search to a specific app or job by its ID (e.g. 'app-my-dashboard' or a job UUID). " +
+      "Use with category='code' to find code within a specific mini-app or job.",
+    ),
+  projectType: z
+    .enum(["mini_app", "job"])
+    .optional()
+    .describe(
+      "Filter code search by project type: 'mini_app' for apps, 'job' for jobs.",
+    ),
+  language: z
+    .enum(["TypeScript", "JavaScript", "Python"])
+    .optional()
+    .describe("Filter code search by programming language."),
+  fileName: z
+    .string()
+    .optional()
+    .describe(
+      "Filter code search by file name (e.g. 'app.ts', 'main.py'). Exact match on file_name metadata.",
+    ),
 });
 
 const registerSchemaSchema = z.object({
@@ -140,11 +163,24 @@ export const addAgentMemoryTool = createTool({
 export const searchAgentMemoryTool = createTool({
   id: "search_agent_memory",
   description:
-    "Search relevant memories from PAPR memory. Use 2-3 sentence queries for best results.",
+    "Search relevant memories from PAPR memory. Use 2-3 sentence queries for best results. " +
+    "For code search: set category='code' and optionally filter by projectId (appId/jobId), " +
+    "projectType ('mini_app'/'job'), language, or fileName to narrow results to a specific app or job.",
   inputSchema: searchMemorySchema,
   execute: async (args) => {
     try {
       const client = await getPaprClient();
+
+      // Build customMetadata filters from code search params
+      const customMetadata: Record<string, string | number | boolean> = {};
+      if (args.projectId) customMetadata.project_id = args.projectId;
+      if (args.projectType) customMetadata.project_type = args.projectType;
+      if (args.language) customMetadata.language = args.language;
+      if (args.fileName) customMetadata.file_name = args.fileName;
+      if (args.category === "code") customMetadata.source = "code_indexer";
+
+      const hasMetadataFilters = Object.keys(customMetadata).length > 0;
+
       const response = await client.memory.search({
         query: args.query,
         external_user_id: args.externalUserId,
@@ -152,13 +188,18 @@ export const searchAgentMemoryTool = createTool({
         max_nodes: 15,
         enable_agentic_graph: true,
         rank_results: true,
-        response_format: "toon", // 30-60% token reduction for LLM contexts
-        // Filter by category if specified
-        ...(args.category && { 
-          filters: { 
-            category: args.category === 'code' ? 'code' : undefined 
-          } 
-        }),
+        response_format: "toon",
+        // Pass filters via SDK's metadata.customMetadata + category
+        ...(args.category || hasMetadataFilters
+          ? {
+              metadata: {
+                ...(args.category === "code"
+                  ? { category: "learning" as const }
+                  : {}),
+                ...(hasMetadataFilters ? { customMetadata } : {}),
+              },
+            }
+          : {}),
       });
       return { success: true, data: response };
     } catch (error) {

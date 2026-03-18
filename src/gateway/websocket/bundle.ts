@@ -26,11 +26,25 @@ export async function setupBundleHandlers(
       }
       case "bundle:export": {
         const payload = message.payload as ExportBundleInput;
-        const manifest = await bundleService.exportBundle(payload);
+        const {
+          manifest,
+          scrubReport,
+          portabilityReport,
+          detectedKeys,
+          detectedPlatform,
+          resolvedJobIds,
+        } = await bundleService.exportBundle(payload);
         sendResponse(ws, {
           id: message.id,
           success: true,
-          data: manifest,
+          data: {
+            manifest,
+            scrubReport,
+            portabilityReport,
+            detectedKeys,
+            detectedPlatform,
+            resolvedJobIds,
+          },
         });
         break;
       }

@@ -28,14 +28,46 @@ const createPlanSchema = z.object({
   steps: z.array(planStepSchema).min(1).describe("Array of step objects. Each step must be an object with 'id' and 'description' fields. Example: [{ id: 'design', description: 'Design UI' }, { id: 'build', description: 'Build components' }]"),
 });
 
+const STATUS_ALIASES: Record<string, PlanStep["status"]> = {
+  pending: "pending",
+  in_progress: "in_progress",
+  "in-progress": "in_progress",
+  inprogress: "in_progress",
+  started: "in_progress",
+  working: "in_progress",
+  completed: "completed",
+  complete: "completed",
+  done: "completed",
+  finished: "completed",
+  skipped: "skipped",
+  skip: "skipped",
+};
+
 const stepUpdateSchema = z.object({
   stepId: z.string().min(1),
-  status: z.enum(["pending", "in_progress", "completed", "skipped"]),
+  status: z.string().min(1).transform((val): PlanStep["status"] => {
+    const normalized = STATUS_ALIASES[val.toLowerCase().trim()];
+    if (!normalized) {
+      return "pending";
+    }
+    return normalized;
+  }),
 });
 
 const updatePlanSchema = z.object({
   planId: z.string().min(1).describe("Plan ID returned by create_plan"),
-  updates: z.array(stepUpdateSchema).min(1).describe("Step status updates"),
+  updates: z.preprocess(
+    (val) => {
+      if (typeof val === "string") {
+        try { val = JSON.parse(val); } catch { /* leave as-is */ }
+      }
+      if (val && typeof val === "object" && !Array.isArray(val)) {
+        return [val];
+      }
+      return val;
+    },
+    z.array(stepUpdateSchema).min(1),
+  ).describe("Step status updates"),
 });
 
 type CreatePlanArgs = z.infer<typeof createPlanSchema>;
@@ -110,7 +142,7 @@ export const createPlanTool = createTool({
 export const updatePlanTool = createTool({
   id: "update_plan",
   description:
-    "Update step statuses in an existing plan. CRITICAL: Call this AFTER EACH STEP completes, not at the end. This shows real-time progress to the user. Mark steps as in_progress when starting, completed when done. Plans are persisted to disk.",
+    "Update step statuses in an existing plan. CRITICAL: Call this AFTER EACH STEP completes, not at the end. This shows real-time progress to the user. Mark steps as in_progress when starting, completed when done. Plans are persisted to disk. The stepId must EXACTLY match the id you used in create_plan.",
   inputSchema: updatePlanSchema,
   execute: async (input) => {
     const args = (input as { context?: UpdatePlanArgs }).context ?? input;
@@ -124,36 +156,71 @@ export const updatePlanTool = createTool({
       throw new Error(`Plan not found: ${args.planId}`);
     }
 
-    // Update step statuses
+    const validStepIds = plan.steps.map((s) => s.id);
+    const matched: string[] = [];
+    const unmatched: string[] = [];
+
     for (const update of args.updates) {
       const step = plan.steps.find((s) => s.id === update.stepId);
       if (step) {
         step.status = update.status;
+        matched.push(`${update.stepId} → ${update.status}`);
+      } else {
+        unmatched.push(update.stepId);
       }
     }
 
-    // Check if all steps are completed
-    const allCompleted = plan.steps.every(
-      (s) => s.status === "completed" || s.status === "skipped",
-    );
+    if (unmatched.length > 0) {
+      console.warn(
+        `[update_plan] Step ID mismatch for plan ${args.planId}: ` +
+          `provided=[${unmatched.join(", ")}], valid=[${validStepIds.join(", ")}]`,
+      );
+    }
 
-    // Update plan in database
-    const updatedPlan = await planService.updatePlan(args.planId, plan.steps);
+    if (matched.length > 0) {
+      console.log(
+        `[update_plan] Updated ${matched.length} step(s): ${matched.join(", ")}`,
+      );
+    }
 
-    // Mark plan as completed if all steps are done
-    if (allCompleted && updatedPlan) {
-      await planService.updatePlanStatus(args.planId, "completed");
-      updatedPlan.status = "completed";
+    // Only write to DB if at least one step was actually updated
+    let updatedPlan: Plan | null = plan as Plan;
+    if (matched.length > 0) {
+      const allCompleted = plan.steps.every(
+        (s) => s.status === "completed" || s.status === "skipped",
+      );
+
+      updatedPlan = await planService.updatePlan(args.planId, plan.steps);
+
+      if (allCompleted && updatedPlan) {
+        await planService.updatePlanStatus(args.planId, "completed");
+        updatedPlan.status = "completed";
+      }
     }
 
     const completedCount = plan.steps.filter(
       (s) => s.status === "completed" || s.status === "skipped",
     ).length;
 
-    const message = `✓ Plan updated: ${completedCount}/${plan.steps.length} steps complete${allCompleted ? " (All steps finished!)" : ""}\nPlan ID: ${args.planId}\n\n${allCompleted ? "Great job completing all steps!" : "Continue with the next pending step."}`;
+    const parts: string[] = [];
+    if (matched.length > 0) {
+      parts.push(`Updated: ${matched.join(", ")}`);
+    }
+    if (unmatched.length > 0) {
+      parts.push(
+        `WARNING: stepId(s) not found: [${unmatched.join(", ")}]. Valid IDs are: [${validStepIds.join(", ")}]`,
+      );
+    }
+    parts.push(`Progress: ${completedCount}/${plan.steps.length} complete`);
+
+    const allDone = plan.steps.every(
+      (s) => s.status === "completed" || s.status === "skipped",
+    );
+
+    const message = `${matched.length > 0 ? "✓" : "⚠"} Plan "${plan.title}" — ${parts.join(". ")}${allDone ? " (All done!)" : ""}`;
 
     return JSON.stringify({
-      success: true,
+      success: matched.length > 0,
       message,
       data: updatedPlan,
     });

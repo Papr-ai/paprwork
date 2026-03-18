@@ -9,7 +9,7 @@ import { useTabs } from "../../hooks/useTabs";
 import { gateway } from "../../src/lib/gateway";
 import { AppCard } from "./AppCard";
 import { CommunityAppsView } from "./CommunityAppsView";
-import type { Artifact } from "../../stores/artifactsStore";
+import { CreateAppModal } from "./CreateAppModal";
 import "./AppsView.css";
 
 type ViewTab = "my-apps" | "community";
@@ -24,14 +24,13 @@ export function AppsView() {
     setSearchQuery,
     deleteArtifact,
     toggleFavorite,
-    createApp,
     loadArtifacts,
   } = useArtifacts();
   const { createTab, switchToTab } = useTabs();
 
   const [viewTab, setViewTab] = useState<ViewTab>("my-apps");
   const [sortBy, setSortBy] = useState<SortOption>("recent");
-  const [newAppTitle, setNewAppTitle] = useState("");
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchQuery(e.target.value);
@@ -59,41 +58,6 @@ export function AppsView() {
     },
     [loadArtifacts],
   );
-
-  const handleCreateApp = async () => {
-    const title = newAppTitle.trim();
-    if (!title) return;
-
-    const app = await createApp(
-      title,
-      "Generated mini app",
-      [
-        {
-          filename: "index.html",
-          content: `<!doctype html>
-<html>
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>${title}</title>
-    <style>
-      body { font-family: -apple-system, sans-serif; margin: 24px; color: #1d1d1f; }
-      h1 { margin: 0 0 12px; }
-    </style>
-  </head>
-  <body>
-    <h1>${title}</h1>
-    <p>New Papr mini-app</p>
-  </body>
-</html>`,
-        },
-      ],
-    );
-    if (app) {
-      setNewAppTitle("");
-      handleOpen(app.id, app.title);
-    }
-  };
 
   // Filter to apps only, then sort/filter
   const apps = useMemo(() => {
@@ -140,21 +104,19 @@ export function AppsView() {
       <div className="apps-view__header">
         <h2 className="apps-view__title">Apps</h2>
 
-        <div className="apps-view__header-actions">
-          <div className="apps-view__tabs">
-            <button
-              className={`apps-view__tab ${viewTab === "my-apps" ? "apps-view__tab--active" : ""}`}
-              onClick={() => setViewTab("my-apps")}
-            >
-              My Apps
-            </button>
-            <button
-              className={`apps-view__tab ${viewTab === "community" ? "apps-view__tab--active" : ""}`}
-              onClick={() => setViewTab("community")}
-            >
-              Community
-            </button>
-          </div>
+        <div className="apps-view__tabs">
+          <button
+            className={`apps-view__tab ${viewTab === "my-apps" ? "apps-view__tab--active" : ""}`}
+            onClick={() => setViewTab("my-apps")}
+          >
+            My Apps
+          </button>
+          <button
+            className={`apps-view__tab ${viewTab === "community" ? "apps-view__tab--active" : ""}`}
+            onClick={() => setViewTab("community")}
+          >
+            Community
+          </button>
         </div>
       </div>
 
@@ -164,52 +126,43 @@ export function AppsView() {
         </div>
       ) : (
       <>
-      {/* Create bar */}
-      <div className="apps-view__create">
-        <input
-          type="text"
-          className="apps-view__create-input"
-          placeholder="New app name..."
-          value={newAppTitle}
-          onChange={(e) => setNewAppTitle(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") handleCreateApp();
-          }}
-        />
+      {/* Controls: search left, sort center, create right */}
+      <div className="apps-view__controls">
+        <div className="apps-view__controls-left">
+          <input
+            type="text"
+            className="apps-view__search"
+            placeholder="Search apps..."
+            value={searchQuery}
+            onChange={handleSearch}
+          />
+          <div className="apps-view__sort">
+            {(["recent", "name", "favorites"] as SortOption[]).map((option) => (
+              <button
+                key={option}
+                className={`apps-view__sort-btn ${sortBy === option ? "apps-view__sort-btn--active" : ""}`}
+                onClick={() => setSortBy(option)}
+              >
+                {option === "recent"
+                  ? "Recent"
+                  : option === "name"
+                    ? "Name"
+                    : "Favorites"}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <button
           className="apps-view__create-btn"
-          onClick={() => void handleCreateApp()}
-          disabled={!newAppTitle.trim()}
+          onClick={() => setShowCreateModal(true)}
         >
-          Create
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          Create App
         </button>
-
-        <input
-          type="text"
-          className="apps-view__search"
-          placeholder="Search apps..."
-          value={searchQuery}
-          onChange={handleSearch}
-        />
-      </div>
-
-      {/* Sort controls */}
-      <div className="apps-view__controls">
-        <div className="apps-view__sort">
-          {(["recent", "name", "favorites"] as SortOption[]).map((option) => (
-            <button
-              key={option}
-              className={`apps-view__sort-btn ${sortBy === option ? "apps-view__sort-btn--active" : ""}`}
-              onClick={() => setSortBy(option)}
-            >
-              {option === "recent"
-                ? "Recent"
-                : option === "name"
-                  ? "Name"
-                  : "Favorites"}
-            </button>
-          ))}
-        </div>
       </div>
 
       {/* Content */}
@@ -223,7 +176,7 @@ export function AppsView() {
         {error && (
           <div className="apps-view__empty">
             <p style={{ color: "var(--error)" }}>{error}</p>
-            <button className="apps-view__create-btn" onClick={loadArtifacts}>
+            <button className="apps-view__retry-btn" onClick={loadArtifacts}>
               Retry
             </button>
           </div>
@@ -365,6 +318,11 @@ export function AppsView() {
       </div>
       </>
       )}
+
+      <CreateAppModal
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+      />
     </div>
   );
 }

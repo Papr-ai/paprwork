@@ -8,15 +8,14 @@ import { useArtifacts } from "../../hooks/useArtifacts";
 import { useTabs } from "../../hooks/useTabs";
 import { gateway } from "../../src/lib/gateway";
 import { ArtifactCard } from "./ArtifactCard";
-import type { Artifact, ArtifactType } from "../../stores/artifactsStore";
+import { CreateAppModal } from "../Apps/CreateAppModal";
+import type { ArtifactType } from "../../stores/artifactsStore";
 import "./ArtifactsView.css";
 
 type SortOption = "recent" | "oldest" | "name-asc" | "name-desc";
 type ViewMode = "grid" | "list";
 
 export function ArtifactsView() {
-  const showTemplateShortcut =
-    import.meta.env.VITE_ENABLE_PIPELINE_TEMPLATE_SHORTCUT === "true";
   const {
     filteredArtifacts,
     loading,
@@ -28,7 +27,6 @@ export function ArtifactsView() {
     deleteArtifact,
     toggleFavorite,
     createDocument,
-    createApp,
     loadArtifacts,
   } = useArtifacts();
   const { createTab, switchToTab } = useTabs();
@@ -37,10 +35,9 @@ export function ArtifactsView() {
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [sortBy, setSortBy] = useState<SortOption>("recent");
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
-  const [newAppTitle, setNewAppTitle] = useState("");
-  const [newAppDescription, setNewAppDescription] = useState("");
   const [showNewDocInput, setShowNewDocInput] = useState(false);
   const [newDocTitle, setNewDocTitle] = useState("");
+  const [showCreateAppModal, setShowCreateAppModal] = useState(false);
 
   const handleFilterChange = (newFilter: ArtifactType | "all") => {
     setFilter(newFilter);
@@ -90,54 +87,6 @@ export function ArtifactsView() {
       handleOpen(doc.id, "document", doc.title);
     }
   }, [newDocTitle, createDocument]);
-
-  const handleCreateApp = async () => {
-    if (!newAppTitle.trim()) return;
-    const app = await createApp(
-      newAppTitle.trim(),
-      newAppDescription.trim() || "Generated mini app",
-      [
-        {
-          filename: "index.html",
-          content: `<!doctype html>
-<html>
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>${newAppTitle.trim()}</title>
-    <style>
-      body { font-family: -apple-system, sans-serif; margin: 24px; color: #1d1d1f; }
-      h1 { margin: 0 0 12px; }
-    </style>
-  </head>
-  <body>
-    <h1>${newAppTitle.trim()}</h1>
-    <p>${newAppDescription.trim() || "New Papr mini-app"}</p>
-  </body>
-</html>`,
-        },
-      ],
-    );
-    if (app) {
-      setNewAppTitle("");
-      setNewAppDescription("");
-      handleOpen(app.id, "app", app.title);
-    }
-  };
-
-  const handleCreatePipelineTemplate = async () => {
-    const pipelineName = newAppTitle.trim() || "Pipeline Template";
-    const response = await gateway.send("template:create-pipeline", {
-      name: pipelineName,
-      description: newAppDescription.trim() || undefined,
-    });
-    const data = response.data as { app?: { id: string; title: string } };
-    if (data?.app) {
-      setNewAppTitle("");
-      setNewAppDescription("");
-      handleOpen(data.app.id, "app", data.app.title);
-    }
-  };
 
   // Filter by view tab + favorites
   let viewArtifacts = filteredArtifacts.filter((a) => {
@@ -281,6 +230,14 @@ export function ArtifactsView() {
               + New Document
             </button>
           )}
+          {view === "apps" && (
+            <button
+              className="artifacts-view__new-btn"
+              onClick={() => setShowCreateAppModal(true)}
+            >
+              + New App
+            </button>
+          )}
         </div>
       </div>
 
@@ -305,39 +262,6 @@ export function ArtifactsView() {
           >
             Create
           </button>
-        </div>
-      )}
-
-      {view === "apps" && (
-        <div className="artifacts-view__filters">
-          <input
-            type="text"
-            className="artifacts-view__search"
-            placeholder="New app title..."
-            value={newAppTitle}
-            onChange={(event) => setNewAppTitle(event.target.value)}
-          />
-          <input
-            type="text"
-            className="artifacts-view__search"
-            placeholder="Description (optional)"
-            value={newAppDescription}
-            onChange={(event) => setNewAppDescription(event.target.value)}
-          />
-          <button
-            className="filter-pill filter-pill--active"
-            onClick={() => void handleCreateApp()}
-          >
-            Create App
-          </button>
-          {showTemplateShortcut && (
-            <button
-              className="filter-pill"
-              onClick={() => void handleCreatePipelineTemplate()}
-            >
-              Create Pipeline Template
-            </button>
-          )}
         </div>
       )}
 
@@ -488,6 +412,11 @@ export function ArtifactsView() {
           </div>
         )}
       </div>
+
+      <CreateAppModal
+        isOpen={showCreateAppModal}
+        onClose={() => setShowCreateAppModal(false)}
+      />
     </div>
   );
 }

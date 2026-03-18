@@ -813,6 +813,14 @@ async function startGateway(): Promise<void> {
         console.error("[Gateway] Failed to stop jobs:", error);
       }
 
+      // Cleanup AppService file watchers
+      try {
+        const appService = getAppService();
+        appService.cleanup();
+      } catch (error) {
+        console.error("[Gateway] Failed to cleanup AppService:", error);
+      }
+
       getJobsScheduler().stop();
       dbPool.terminate();
       server.close();

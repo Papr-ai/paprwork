@@ -18,6 +18,7 @@ import { AgentsView } from "../Agents/AgentsViewCards";
 import { ViewsView } from "../Views/ViewsView";
 import { TableView } from "../Views/TableView";
 import { ChatGPTConvHistoryView } from "../ChatGPT/ChatGPTConvHistoryView";
+import { OnboardingView } from "../Onboarding/OnboardingView";
 import "./ContentArea.css";
 
 export function ContentArea() {
@@ -175,6 +176,8 @@ export function ContentArea() {
         return <TableView entityId={tab.entityId} />;
       case "app":
         return <MiniAppView appId={tab.entityId} />;
+      case "getting-started":
+        return <OnboardingView />;
       case "home":
         return (
           <div className="content-area__placeholder">
@@ -196,6 +199,7 @@ export function ContentArea() {
     }
   };
 
+  // Show onboarding full-screen if needed
   if (!showSplitView) {
     return (
       <div className="content-area">

@@ -313,9 +313,16 @@ Mini-apps can trigger backend jobs directly — the same capability the agent ha
 
 | Layer | What it is | How it's set | When available |
 |-------|-----------|-------------|----------------|
+| **Job paths** | `$JOB_DIR`, `$JOB_DB` | Set automatically by Paprwork | Always, every job, automatically |
 | **API keys** | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc. | User keychain → gateway env | Always, every job, automatically |
 | **Job config env** | `SUBREDDIT=python`, `MODE=production` | `create_job` / `update_job` command or env | Every run of this job |
 | **Runtime params** | `THREAD_ID=abc123`, `ACTION=regen` | `params` field in `/api/jobs/run` | This invocation only — not persisted |
+
+**Job path variables (ALWAYS use these instead of hardcoded paths):**
+- `$JOB_DIR` — the job's own directory (e.g. `~/PAPR/jobs/{jobId}`). Use for accessing job files: `$JOB_DIR/data/data.db`, `$JOB_DIR/code/script.py`, etc.
+- `$JOB_DB` — shortcut to the job's SQLite database (`$JOB_DIR/data/data.db`)
+- These are set as real env vars for command jobs (bash/python/node/swift) and injected into the prompt for agent/subagent jobs
+- **NEVER hardcode absolute paths** like `/Users/john/PAPR/jobs/...` in job commands — always use `$JOB_DIR` or `$JOB_DB`
 
 Runtime params are passed as env vars to the job process for that single run. In Python: `os.environ['THREAD_ID']`. In bash: `$THREAD_ID`.
 
@@ -1729,8 +1736,16 @@ export_app_bundle({
   version: "1.0.0",
   description: "Analyze Twitter trends and engagement",
   // jobIds auto-detected from app's linked data sources if omitted
+  // + full pipeline auto-discovered via dependsOn/runtimeCalls chains
 })
 ```
+
+**Automatic pipeline discovery:** When jobIds are omitted, the tool discovers ALL related jobs via three methods:
+1. **Data-source links** — jobs whose databases the app queries (from `data-sources.json`)
+2. **Source code scanning** — scans the app's JS/TS/HTML files for job IDs referenced directly in code (e.g. `const JOB_ID = "uuid"` used with `fetch('/api/jobs/run', ...)`)
+3. **Dependency walking** — recursively follows `dependsOn` and `runtimeCalls` chains from all discovered jobs to find upstream pipeline jobs
+
+For example, if the app has a data-source link to a "Summarizer" job plus `const REFRESH_JOB_ID = "uuid"` in its code, and the Summarizer has `dependsOn: [{ jobId: "calendar-reader" }]`, ALL THREE jobs are included automatically. Check `resolvedJobIds` in the tool result to see the complete list.
 
 **What gets created:**
 ```
@@ -1739,11 +1754,18 @@ export_app_bundle({
 ├── README.md          # Auto-generated installation guide
 ├── .gitignore         # Excludes large data files
 ├── apps/{appId}/      # Mini app HTML/CSS/JS/TS files
-└── jobs/{jobId}/      # Job code, migrations, SQLite databases
+└── jobs/{jobId}/      # Job code, migrations
     ├── code/
-    ├── migrations/    # SQL schema migrations
-    └── data.db        # SQLite database (excluded by .gitignore)
+    └── migrations/    # SQL schema migrations
 ```
+
+**Automatic privacy scrub:** The export tool automatically removes private data after copying:
+- Databases: `*.db`, `*.db-shm`, `*.db-wal`, `*.sqlite`, `*.sqlite3`
+- Logs: `*.log`, `logs/` directories
+- Build artifacts: `venv/`, `.venv/`, `__pycache__/`, `node_modules/`
+- History: `.versions/`, `data/` directories
+
+The scrub report is included in the tool result — always review it and tell the user what was removed.
 
 **Auto-detection:** If you don't specify `jobIds`, the tool automatically includes all jobs linked to the app via `data-sources.json`.
 
@@ -1769,32 +1791,142 @@ import_app_bundle({
 - Set `renameConflicts: false` to block import on conflicts
 - Manual rename via `update_job` if needed after import
 
-### Sharing Workflow
+### Sharing Workflow — Publish to the Paprwork Community
 
-**1. Export the app bundle:**
-```
-Agent: "Export my Reddit Studio app as an app bundle"
-```
+**IMPORTANT:** When users want to publish/share a mini-app, publish it to the official **paprwork-community-apps** repo so it appears in the Community Apps tab for all Paprwork users.
 
-**2. Push to GitHub:**
+**1. Call the `export_app_bundle` tool (REQUIRED — do NOT manually create bundles):**
+```javascript
+export_app_bundle({
+  appId: "app-reddit-studio",
+  name: "Reddit Studio",
+  version: "1.0.0",
+  description: "Reddit analytics dashboard"
+  // jobIds auto-detected if omitted
+  // includeData: true  ← only if user explicitly wants to share data files
+})
+```
+**You MUST use this tool.** Do NOT manually copy files, create manifest.json, or assemble the bundle structure by hand. The tool handles everything: copying app + job files, generating manifest.json, README.md, .gitignore, automatically scrubbing private data, running a portability check, and **automatically discovering the full job pipeline** (scans app source for job IDs, walks dependsOn + runtimeCalls chains — all related jobs are included, not just the directly linked ones). Check `resolvedJobIds` in the tool result to see all jobs that were included.
+
+**2. Fix portability warnings (REQUIRED — fix source, then re-export):**
+The tool automatically scans all text files and job commands for hardcoded user-specific paths like `/Users/john/...` or `/home/john/...`. If the portability report has warnings:
+
+**CRITICAL: To fix job commands, you MUST use `update_job` — do NOT use `sed`, `bash`, or edit job files directly.** The export tool reads job commands from the job's database record (stored state), NOT from files on disk. If you edit the file with `sed`, the export will still contain the old hardcoded command.
+
+Fix workflow:
+1. Use `update_job({ jobId, command: "fixed command with $JOB_DIR/..." })` to fix the job command
+2. Use `write_job_file` if any job script files have hardcoded paths
+3. Delete the old bundle (if it exists)
+4. Re-run `export_app_bundle` — the new export will read the fixed command from the job record
+
+Common replacements:
+- `/Users/john/PAPR/jobs/{jobId}/data/data.db` → `$JOB_DIR/data/data.db`
+- `/Users/john/PAPR/jobs/{jobId}/...` → `$JOB_DIR/...`
+- `/Users/john/PAPR/...` → `$HOME/PAPR/...` or relative paths
+
+**Paprwork runtime environment variables** (set automatically for every job run):
+- `$JOB_DIR` — absolute path to the job's own directory (e.g. `~/PAPR/jobs/{jobId}`)
+- `$JOB_DB` — absolute path to the job's SQLite database (`$JOB_DIR/data/data.db`)
+- These work for ALL job types: bash, python, node, swift, agent, and subagent
+- **Always use `$JOB_DIR` and `$JOB_DB` instead of hardcoded paths** — this makes jobs portable across machines
+
+**Note:** `data-sources.json` absolute `dbPath` values are automatically cleaned during export (resolved from `jobId` at import time). No manual fix needed for those.
+
+**3. Privacy verification (REQUIRED before publishing):**
+After export, always:
+- Review the scrub report and tell the user what was auto-removed
+- Ask the user: "Would you like me to verify no private data remains, or did you want to include any data files?"
+- If they want data included: re-export with `includeData: true` — this skips the scrub and keeps databases, logs, etc. Only do this when the user explicitly asks.
+- If they want verification: scan remaining files (especially migration SQL, config files, any `.txt`/`.md` files) for personal info, meeting notes, transcripts, names, emails, etc.
+- Only proceed to publishing after user confirms
+
+**4. Fork & clone the community repo (NEVER clone the main repo directly):**
 ```bash
-cd ~/PAPR/bundles/reddit-studio
+# Fork to user's GitHub account and clone the fork — this ensures they
+# can only push to their own fork, never to the main repo.
+gh repo fork Papr-ai/paprwork-community-apps --clone --remote -- /tmp/paprwork-community-apps
+cp -r ~/PAPR/bundles/{bundleId} /tmp/paprwork-community-apps/bundles/{bundleId}
+```
+**SECURITY: Always use `gh repo fork`, never `git clone` on the main repo.** This prevents any possibility of pushing changes directly to the main repo (deleting other apps, modifying other entries, etc.). The PR review process on the upstream repo is the only way changes get merged.
+
+**5. Add entry to registry.json (only YOUR new entry — do NOT modify or remove existing entries):**
+
+Edit `/tmp/paprwork-community-apps/registry.json` and add a new entry to the `bundles` array:
+```json
+{
+  "bundleId": "my-app-name",
+  "name": "My App Name",
+  "description": "What this app does",
+  "version": "1.0.0",
+  "author": "<result of: gh api user -q .login>",
+  "tags": ["category1", "category2"],
+  "minPaprworkVersion": "2.0.0",
+  "path": "bundles/my-app-name",
+  "icon": "<svg>...</svg>",
+  "requirements": ["OPENAI_API_KEY"],
+  "platform": ["macos"]
+}
+```
+
+**Registry entry fields (Zod-validated — entries that fail are silently dropped):**
+- `bundleId`: string, min 1 char (kebab-case, must match folder name)
+- `name`: string, min 1 char (human-readable display name)
+- `description`: string, min 1 char (1-2 sentence description)
+- `version`: string, min 1 char (semver, e.g. "1.0.0")
+- `author`: string, min 1 char (the user's actual GitHub username — run `gh api user -q .login` to get it, NEVER hardcode "paprwork-team" or guess)
+- `tags`: string[] (category tags shown as chips, e.g. `["finance", "data"]`)
+- `minPaprworkVersion`: string, min 1 char (e.g. "2.0.0")
+- `path`: string (always `bundles/{bundleId}`)
+- `icon`: string, optional (SVG string or emoji)
+- `requirements`: string[], optional (flat string array — e.g. `["OPENAI_API_KEY", "Python 3.8+"]`)
+- `platform`: string[], optional (auto-detected — e.g. `["macos"]` or `["macos", "windows", "linux"]`). Use the `detectedPlatform` from the export tool result. Values: `"macos"`, `"windows"`, `"linux"`. Defaults to all three if omitted.
+
+**Platform auto-detection:** The `export_app_bundle` tool automatically scans for platform-specific indicators:
+- **macOS only:** `swift` job type, `.swift` source files, `osascript`, `open -a`, `pbcopy`/`pbpaste`, `brew install`, `defaults write`, `launchctl`, `.app` references
+- **Windows only:** `.bat`/`.ps1` scripts, `powershell`, `cmd.exe`, `reg.exe`, `C:\` paths, `choco install`
+- **Linux only:** `apt-get`/`apt install`, `systemctl`, `journalctl`, `yum`/`dnf`/`pacman` package managers
+If only macOS indicators are found, the bundle is tagged `["macos"]`. If no platform-specific signals are found, it defaults to `["macos", "windows", "linux"]` (cross-platform). Always use the `detectedPlatform` from the tool result in registry.json.
+
+**CRITICAL: `requirements` must be a flat string array, NOT objects.**
+```
+❌ WRONG (entry will be rejected and not displayed):
+"requirements": [{ "key": "OPENAI_API_KEY", "label": "OpenAI Key", "required": true }]
+
+✅ CORRECT:
+"requirements": ["OPENAI_API_KEY"]
+
+✅ ALSO CORRECT (no requirements):
+"requirements": []
+```
+
+**6. Commit, push to the fork, and open a PR to upstream:**
+```bash
+cd /tmp/paprwork-community-apps
+git checkout -b add-{bundleId}
+git add .
+git commit -m "Add {App Name} v1.0.0"
+# Push to the user's fork (origin), NOT to upstream
+git push -u origin add-{bundleId}
+# Open PR from the fork to the upstream repo
+gh pr create --repo Papr-ai/paprwork-community-apps --title "Add {App Name}" --body "New community app: {description}"
+```
+
+**7. Others discover and import from the Community Apps tab** in Paprwork (no manual URL sharing needed).
+
+### Alternative: Private Sharing via Separate Repo
+
+If the user wants to share privately (not to the community), create a standalone repo:
+
+```bash
+cd ~/PAPR/bundles/{bundleId}
 git init
 git add .
 git commit -m "Initial release v1.0.0"
-gh repo create papr-reddit-studio --public --source=.
+gh repo create papr-{app-name} --public --source=.
 git push -u origin main
 ```
 
-**3. Share the URL:**
-```
-github.com/username/papr-reddit-studio
-```
-
-**4. Others import:**
-```
-Agent: "Import the app bundle from github.com/username/papr-reddit-studio"
-```
+Others import with: `import_app_bundle({ source: "github.com/username/papr-{app-name}" })`
 
 ### Preview Before Import
 

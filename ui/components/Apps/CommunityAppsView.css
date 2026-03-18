@@ -93,6 +93,25 @@
   box-shadow: 0 4px 12px rgba(0, 113, 227, 0.25);
 }
 
+.community-apps__platform-toggle {
+  align-self: flex-start;
+  padding: 4px 12px;
+  background: none;
+  border: 1px solid var(--glass-border, rgba(0, 0, 0, 0.08));
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 140ms ease;
+}
+
+.community-apps__platform-toggle:hover {
+  color: var(--text-primary);
+  border-color: var(--accent, #0071E3);
+  background: var(--hover, rgba(0, 0, 0, 0.03));
+}
+
 .community-apps__empty-text {
   color: var(--text-tertiary);
 }
@@ -248,6 +267,18 @@
   letter-spacing: 0.02em;
 }
 
+.community-card__platform-badge {
+  padding: 2px 8px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.20);
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #D97706;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
 /* Orb icon (custom SVG/emoji from registry) */
 .community-card__orb-icon {
   width: 36px;
@@ -400,5 +431,11 @@
 
   .community-card__tag {
     background: rgba(255, 255, 255, 0.06);
+  }
+
+  .community-card__platform-badge {
+    background: rgba(245, 158, 11, 0.15);
+    border-color: rgba(245, 158, 11, 0.25);
+    color: #FBBF24;
   }
 }

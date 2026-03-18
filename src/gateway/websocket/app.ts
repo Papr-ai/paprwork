@@ -67,6 +67,10 @@ interface RestoreFileVersionPayload {
   versionId: string;
 }
 
+interface ValidateAppPayload {
+  appId: string;
+}
+
 export async function setupAppHandlers(
   ws: WebSocket,
   message: WSMessage,
@@ -340,6 +344,20 @@ export async function setupAppHandlers(
             type: "app:restore-file-version:response",
             success: true,
             data: { restored },
+          }),
+        );
+        break;
+      }
+
+      case "app:validate": {
+        const payload = message.payload as ValidateAppPayload;
+        const result = await appService.validateApp(payload.appId);
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:validate:response",
+            success: true,
+            data: result,
           }),
         );
         break;

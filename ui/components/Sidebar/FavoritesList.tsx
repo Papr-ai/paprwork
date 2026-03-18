@@ -3,7 +3,7 @@
  * Now uses SQLite for persistence (faster than localStorage)
  */
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useCallback } from "react";
 import { useTabs } from "../../hooks/useTabs";
 import { useArtifactsStore } from "../../stores/artifactsStore";
 import { useTabStore } from "../../stores/tabStore";
@@ -56,27 +56,29 @@ export function FavoritesList() {
   };
 
   const removeFavorite = (id: string) => {
-    // Check if this is an artifact favorite or a tab favorite
     const artifact = artifacts.find(a => a.id === id);
     
     if (artifact) {
-      // Artifact favorite - dispatch event so useArtifacts hook can handle the API call
       console.log(`[FavoritesList] Removing artifact favorite: ${id}`);
-      window.dispatchEvent(
-        new CustomEvent("papr-favorite-removed-from-sidebar", {
-          detail: { id, type: artifact.type },
-        }),
-      );
+      const messageType = artifact.type === "document" ? "document:toggle-favorite" : "app:toggle-favorite";
+      const payloadKey = artifact.type === "document" ? "documentId" : "appId";
+
+      gateway.send(messageType, { [payloadKey]: id })
+        .then((response) => {
+          const updated = response.data as { favorite?: boolean };
+          useArtifactsStore.getState().updateArtifact(id, { favorite: updated.favorite });
+        })
+        .catch((error: Error) => {
+          console.error("[FavoritesList] Failed to unfavorite artifact:", error);
+        });
     } else {
-      // Non-artifact favorite (chat, jobs, settings, etc.) - update tab
       console.log(`[FavoritesList] Removing tab favorite: ${id}`);
-      const { tabs } = useTabStore.getState();
-      const updatedTabs = tabs.map(t => 
+      const { tabs: currentTabs } = useTabStore.getState();
+      const updatedTabs = currentTabs.map(t => 
         t.id === id ? { ...t, isFavorite: false } : t
       );
       useTabStore.setState({ tabs: updatedTabs });
       
-      // Save to SQLite
       gateway.send('app:toggle_favorite_tab', { tabId: id }).catch((error: Error) => {
         console.error("Failed to remove favorite:", error);
       });
@@ -156,37 +158,38 @@ export function FavoritesList() {
         const artifact = artifacts.find(a => a.id === entityId);
         
         if (artifact) {
-          // Artifact - check if already favorited
           if (artifact.favorite) {
             console.log(`[FavoritesList] Already favorited: ${entityId}`);
             return;
           }
           
-          // Favorite the artifact
           console.log(`[FavoritesList] Favoriting artifact via drag: ${entityId}`);
-          window.dispatchEvent(
-            new CustomEvent("papr-favorite-drag-add", {
-              detail: { id: entityId, type: entityType },
-            }),
-          );
+          const messageType = entityType === "document" ? "document:toggle-favorite" : "app:toggle-favorite";
+          const payloadKey = entityType === "document" ? "documentId" : "appId";
+
+          gateway.send(messageType, { [payloadKey]: entityId })
+            .then((response) => {
+              const updated = response.data as { favorite?: boolean };
+              useArtifactsStore.getState().updateArtifact(entityId, { favorite: updated.favorite });
+            })
+            .catch((error: Error) => {
+              console.error("[FavoritesList] Failed to favorite artifact:", error);
+            });
         } else {
-          // Non-artifact tab - update tab isFavorite
           console.log(`[FavoritesList] Favoriting tab via drag: ${entityId}`);
-          const { tabs } = useTabStore.getState();
+          const { tabs: currentTabs } = useTabStore.getState();
           
-          // Check if already favorited
-          const existingTab = tabs.find(t => t.id === entityId);
+          const existingTab = currentTabs.find(t => t.id === entityId);
           if (existingTab?.isFavorite) {
             console.log(`[FavoritesList] Already favorited: ${entityId}`);
             return;
           }
           
-          const updatedTabs = tabs.map(t => 
+          const updatedTabs = currentTabs.map(t => 
             t.id === entityId ? { ...t, isFavorite: true } : t
           );
           useTabStore.setState({ tabs: updatedTabs });
           
-          // Save to SQLite
           gateway.send('app:toggle_favorite_tab', { tabId: entityId }).catch((error: Error) => {
             console.error("Failed to add favorite:", error);
           });

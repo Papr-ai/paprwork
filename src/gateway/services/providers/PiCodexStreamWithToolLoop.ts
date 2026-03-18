@@ -64,6 +64,25 @@ async function executeToolCall(
   }
   try {
     const rawResult = await tool.execute(toolCall.args);
+
+    // Detect Mastra validation errors (returned as result, not thrown)
+    if (
+      rawResult &&
+      typeof rawResult === "object" &&
+      (rawResult as Record<string, unknown>).error === true &&
+      typeof (rawResult as Record<string, unknown>).message === "string"
+    ) {
+      const msg = (rawResult as Record<string, unknown>).message as string;
+      console.warn(
+        `[PiCodexToolLoop] ⚠️ Mastra validation error for ${toolCall.toolName}: ${msg}`,
+      );
+      return {
+        toolCallId: toolCall.toolCallId,
+        toolName: toolCall.toolName,
+        result: { error: msg },
+      };
+    }
+
     const sanitized = sanitizeToolOutput(rawResult, apiKeys);
     const result =
       typeof sanitized === "string" && !skipTruncation

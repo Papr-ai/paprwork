@@ -91,6 +91,43 @@ export function App() {
   const { activeTabId, activeLeftTab } = useTabStore();
   const { activeRequest, claimedByChat, respond } = usePermissionStore();
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  
+  // Create getting-started tab on first run
+  useEffect(() => {
+    const checkOnboarding = () => {
+      const dismissed = localStorage.getItem("papr-onboarding-dismissed") === "true";
+      const step1 = localStorage.getItem("papr-onboarding-step1") === "true";
+      const step2 = localStorage.getItem("papr-onboarding-step2") === "true";
+      const step3 = localStorage.getItem("papr-onboarding-step3") === "true";
+      
+      // Show getting started tab if not dismissed and no steps completed
+      const shouldShow = !dismissed && !step1 && !step2 && !step3;
+      
+      if (shouldShow) {
+        // Check if getting-started tab already exists
+        const gettingStartedTab = tabs.find(t => t.type === 'getting-started');
+        if (!gettingStartedTab) {
+          console.log('[App] Creating getting-started tab');
+          createTab('getting-started', 'default', 'Getting Started');
+        }
+      } else {
+        // Remove getting-started tab if onboarding complete
+        const gettingStartedTab = tabs.find(t => t.type === 'getting-started');
+        if (gettingStartedTab) {
+          console.log('[App] Removing getting-started tab (onboarding complete)');
+          const { closeTab } = useTabStore.getState();
+          closeTab(gettingStartedTab.id);
+        }
+      }
+    };
+    
+    // Check on mount
+    checkOnboarding();
+    
+    // Listen for onboarding state changes
+    window.addEventListener('papr-onboarding-changed', checkOnboarding);
+    return () => window.removeEventListener('papr-onboarding-changed', checkOnboarding);
+  }, [tabs, createTab]);
 
   // Log when React finishes first render
   useEffect(() => {

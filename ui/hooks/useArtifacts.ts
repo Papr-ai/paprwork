@@ -176,40 +176,6 @@ export function useArtifacts() {
     [updateArtifact, toggleFavoriteLocal, setError, artifacts],
   );
 
-  // Listen for favorite removal from sidebar
-  useEffect(() => {
-    const handleFavoriteRemovedFromSidebar = (event: Event) => {
-      const customEvent = event as CustomEvent;
-      const { id, type } = customEvent.detail;
-      
-      // Find the artifact and toggle it off
-      const artifact = artifacts.find((a) => a.id === id);
-      if (artifact && artifact.favorite) {
-        console.log(`[useArtifacts] Unfavoriting from sidebar event: ${id}`);
-        toggleFavorite(id, type || artifact.type as "document" | "app");
-      }
-    };
-
-    const handleFavoriteDragAdd = (event: Event) => {
-      const customEvent = event as CustomEvent;
-      const { id, type } = customEvent.detail;
-      
-      // Find the artifact and toggle it on
-      const artifact = artifacts.find((a) => a.id === id);
-      if (artifact && !artifact.favorite) {
-        console.log(`[useArtifacts] Favoriting from drag event: ${id}`);
-        toggleFavorite(id, type as "document" | "app");
-      }
-    };
-
-    window.addEventListener("papr-favorite-removed-from-sidebar", handleFavoriteRemovedFromSidebar);
-    window.addEventListener("papr-favorite-drag-add", handleFavoriteDragAdd);
-    return () => {
-      window.removeEventListener("papr-favorite-removed-from-sidebar", handleFavoriteRemovedFromSidebar);
-      window.removeEventListener("papr-favorite-drag-add", handleFavoriteDragAdd);
-    };
-  }, [artifacts, toggleFavorite]);
-
   // Load artifacts on mount
   useEffect(() => {
     loadArtifacts();

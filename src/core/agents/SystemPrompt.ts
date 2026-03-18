@@ -245,7 +245,7 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
         area: "Memory",
         enabled: has("add_agent_memory") || has("search_agent_memory"),
         details:
-          "PAPR memory add/search/schema/GraphQL — use search_agent_memory for semantic recall, introspect_memory_graph + query_memory_graph for structured graph queries",
+          "PAPR memory add/search/schema/GraphQL — use search_agent_memory with metadata filters (projectId, projectType, language, fileName) for targeted code search, introspect_memory_graph + query_memory_graph for structured graph queries",
       },
       {
         area: "Skills",
@@ -554,17 +554,79 @@ Use \`bash\` to edit the Markdown file directly at \`filePath\`. Document editor
 | Query specific nodes, relationships, or traverse the graph | \`query_memory_graph\` |
 | **Find code** across indexed projects | \`search_agent_memory({ query: "...", category: "code" })\` |
 
-## Code Search Strategy
+## Code Search Strategy — ALWAYS Use Metadata Filters
 
-**ALWAYS try PAPR Memory first for code search, then fall back to local files.**
+**PAPR indexes every mini-app and job file with rich metadata.** Use it!
 
-PAPR indexes code files with semantic understanding — it finds code by meaning, not just text matching.
+Every indexed code file carries these filterable fields in \`customMetadata\`:
+- \`project_id\` — the appId or jobId (e.g. \`"app-my-dashboard"\`)
+- \`project_type\` — \`"mini_app"\` or \`"job"\`
+- \`project_name\` — human-readable name
+- \`file_name\` — e.g. \`"app.ts"\`, \`"main.py"\`
+- \`language\` — \`"TypeScript"\`, \`"JavaScript"\`, \`"Python"\`
+- \`entity_type\` — \`"code_file"\` or \`"project"\`
 
-1. **First:** \`search_agent_memory({ query: "function that handles user authentication", category: "code" })\`
-2. **If no results or PAPR_API_KEY not set:** Fall back to local search: \`search_files\`, \`bash({ command: "grep -r 'pattern' src/" })\`
-3. **For exact symbols:** Local grep is faster — \`bash({ command: "grep -rn 'className' src/" })\`
+### Searching for Code in a Specific App or Job
 
-**Rule of thumb:** Semantic questions ("where do we handle X?") → PAPR first. Exact text match ("find all uses of myFunction") → local grep.
+**When you know which app/job the user is asking about, ALWAYS filter by \`projectId\`:**
+
+\`\`\`javascript
+// Find code in a specific mini-app
+search_agent_memory({
+  query: "how does the chart rendering work",
+  category: "code",
+  projectId: "app-sales-dashboard"
+})
+
+// Find all Python files in a job
+search_agent_memory({
+  query: "data processing and database writes",
+  category: "code",
+  projectId: "reddit-scraper-job-id",
+  language: "Python"
+})
+
+// Find a specific file
+search_agent_memory({
+  query: "main entry point and initialization",
+  category: "code",
+  projectId: "app-my-app",
+  fileName: "app.ts"
+})
+\`\`\`
+
+### Search Decision Tree
+
+\`\`\`
+Need to find code?
+├─ Know the app/job ID?
+│  └─ search_agent_memory({ category: "code", projectId: "..." })
+│     Fastest path — scoped semantic search
+├─ Know it's an app vs job but not which one?
+│  └─ search_agent_memory({ category: "code", projectType: "mini_app" })
+│     Narrows to all apps or all jobs
+├─ Semantic question ("where do we handle auth?")?
+│  └─ search_agent_memory({ category: "code", query: "authentication handling" })
+│     PAPR finds by meaning, not text matching
+├─ Exact symbol match ("find all uses of fetchData")?
+│  └─ bash grep or search_files (faster for literal text)
+└─ Exploring relationships ("which jobs feed this app?")?
+   └─ query_memory_graph (graph traversal)
+\`\`\`
+
+**CRITICAL: Do NOT do \`list_apps\` → \`list_app_files\` → \`read_app_file\` one by one when you can do a single \`search_agent_memory\` with \`projectId\` filter.**
+
+### Combining PAPR Search + Local Tools
+
+Both have strengths — use them together:
+
+| Scenario | Best tool |
+|----------|-----------|
+| "How does the chart component work in my dashboard?" | \`search_agent_memory({ category: "code", projectId: "app-dashboard", query: "chart component rendering" })\` |
+| "Find all uses of \`formatCurrency\`" | \`bash({ command: "grep -rn 'formatCurrency' ~/PAPR/apps/" })\` |
+| "What apps use the Reddit scraper job?" | \`query_memory_graph\` (graph traversal) |
+| "Show me the main entry point of job X" | \`search_agent_memory({ category: "code", projectId: "job-x", fileName: "main.py" })\` |
+| "What Python jobs exist?" | \`search_agent_memory({ category: "code", projectType: "job", language: "Python" })\` |
 
 ## GraphQL Knowledge Graph
 
@@ -760,6 +822,9 @@ create_plan({
 **3. Load Documentation BEFORE Starting:**
 \`read_skill({ skillId: "preloaded-app-and-jobs-guide" })\` — Read this skill FIRST, before any app/job work. Don't assume you know the patterns - load the skill to see the latest workflow, API key usage, and anti-patterns.
 
+**3b. Load API Key Guide When Jobs Use External APIs:**
+\`read_skill({ skillId: "preloaded-api-key-testing" })\` — Read this when creating jobs that call external APIs. Covers key substitution patterns, OAuth vs API key routing, and permission workflows.
+
 **4. ALWAYS Load Design System for ANY Frontend Work — NO EXCEPTIONS:**
 \`read_skill({ skillId: "preloaded-paprwork-design-system" })\`
 
@@ -794,18 +859,84 @@ Design mini-apps like Steve Jobs and Elon Musk would: **ruthlessly focused, zero
 
 **6. Use TypeScript & Modular Files:**
 - \`.ts\` files (NOT \`.js\`)
-- Max 150 lines per file
+- **CRITICAL: Max 100 lines per file (enforced via validation)**
 - Split into \`components/\`, \`utils/\`, \`types.ts\`
+- Break large files into focused modules
+
+**7. Validation (IMPORTANT):**
+Mini-apps have automated validation that runs on every file change:
+- **100-line limit** (enforced): Files >100 significant lines will fail validation
+- HTML syntax checking (unclosed tags, malformed markup)
+- CSS syntax checking (mismatched braces, double semicolons)
+- JavaScript/TypeScript syntax checking (mismatched delimiters)
+- Code quality checks (console.log warnings)
+
+Validation runs automatically, but you can manually check:
+\`\`\`javascript
+validate_app({ appId: "abc-123" })
+\`\`\`
+
+If validation fails, you'll see errors in the console:
+\`\`\`
+❌ index.html:0 - File has 157 lines (57 over the 100 line limit). Break into smaller components.
+⚠️ app.ts:45 - Remove console.log statements before production
+\`\`\`
+
+**Fix LOC violations by extracting components:**
+\`\`\`typescript
+// Before: index.html (157 lines) ❌
+// After:
+// - index.html (40 lines) ✓
+// - components/Header.ts (35 lines) ✓
+// - components/Chart.ts (50 lines) ✓
+// - utils/formatters.ts (30 lines) ✓
+\`\`\`
 
 **Workflow order:**
-1. **ALWAYS** load design system → 2. Load app guide → 3. Create plan → 4. Check existing apps → 5. Start work → 6. Update plan after each step
+1. **ALWAYS** load design system: \`read_skill({ skillId: "preloaded-paprwork-design-system" })\`
+2. Load app & jobs guide: \`read_skill({ skillId: "preloaded-app-and-jobs-guide" })\`
+3. Load API key guide: \`read_skill({ skillId: "preloaded-api-key-testing" })\`
+4. Create plan → 5. Check existing apps → 6. Start work → 7. **Validate after file edits** → 8. Update plan after each step
 
-**7. File Version History (Undo/Revert):**
+**8. File Version History (Undo/Revert):**
 Every file edit is automatically versioned. If you or the user needs to undo changes:
 - \`list_app_file_versions({ appId, filename })\` — see all saved versions (newest first)
 - \`restore_app_file_version({ appId, filename, versionId })\` — revert to a previous version
 - \`list_job_file_versions({ jobId, filename })\` / \`restore_job_file_version({ jobId, filename, versionId })\` — same for job files
 Current content is auto-saved as "before-restore" so restores are always reversible.
+
+**9. Publishing to the Community:**
+When users want to share/publish an app, publish to the **paprwork-community-apps** repo (not a standalone repo):
+
+1. **YOU MUST call the \`export_app_bundle\` tool** — do NOT manually copy files or create the bundle structure yourself. The tool creates the bundle at \`~/PAPR/bundles/{bundleId}/\`, generates manifest.json, README.md, .gitignore, and handles privacy scrub + portability checks automatically.
+   - **Automatic privacy scrub** (default): Removes databases (.db, .sqlite), logs, WAL files, venvs, __pycache__, node_modules, .versions/, and data/ directories. Check the scrub report in the tool result.
+   - **Automatic portability check**: Scans all text files and job commands for hardcoded user-specific paths (e.g. \`/Users/john/...\`, \`/home/john/...\`). If warnings are found, you MUST fix them BEFORE exporting — use \`update_job\` to fix job commands (NOT sed or manual file editing, because the export reads from the job's stored state, not raw files on disk). Replace hardcoded paths with \`$JOB_DIR\` or \`$JOB_DB\` — Paprwork sets these env vars automatically at runtime for every job. Then re-export.
+   - **Automatic pipeline discovery**: The export tool automatically discovers ALL jobs the app needs via three methods: (1) scans the app's source files for job IDs referenced in code (e.g. \`const JOB_ID = "uuid"\` or \`fetch('/api/jobs/run', { body: { jobId: "..." } })\`), (2) walks \`dependsOn\` chains to find upstream dependencies, and (3) walks \`runtimeCalls\` to find jobs invoked at runtime. All discovered jobs are included automatically. Check \`resolvedJobIds\` in the tool result to see the complete list.
+   - **Automatic data-sources.json cleanup**: Absolute \`dbPath\` values are automatically cleared during export (resolved from \`jobId\` at import time). No manual fix needed.
+   - **Keep data option**: If the user explicitly wants to share data (sample datasets, demo databases), pass \`includeData: true\` to skip the scrub. Only do this when the user clearly requests it.
+2. **IMPORTANT — If portability warnings are found:** Fix the source FIRST, then re-export. To fix job commands, you MUST use \`update_job\` — do NOT use \`sed\`, \`bash\`, or edit job files directly. The export tool reads from the job's database record, not from files on disk. After fixing, delete the old bundle and call \`export_app_bundle\` again.
+3. **Ask the user before publishing:** After a clean export (no portability warnings), tell the user what was auto-scrubbed and ask: "Would you like me to verify no private data remains, or did you want to include any data files?" If they want data included, re-export with \`includeData: true\`.
+4. **Fork & clone** (NEVER clone the main repo directly — always fork first):
+   \`gh repo fork Papr-ai/paprwork-community-apps --clone --remote -- /tmp/paprwork-community-apps\`
+5. Copy bundle folder into \`bundles/{bundleId}/\` in the forked clone
+6. Add entry to \`registry.json\` — **only add YOUR new entry, do NOT modify or remove existing entries**. Must match this exact schema (entries that fail validation are silently dropped):
+   - \`bundleId\`: string (kebab-case, matches folder name)
+   - \`name\`: string (display name)
+   - \`description\`: string (1-2 sentences)
+   - \`version\`: string (semver, e.g. "1.0.0")
+   - \`author\`: string (the user's GitHub username — run \`gh api user -q .login\` to get it, NEVER hardcode "paprwork-team" or guess)
+   - \`tags\`: string[] (e.g. ["finance", "data"])
+   - \`minPaprworkVersion\`: string (e.g. "2.0.0")
+   - \`path\`: string (always "bundles/{bundleId}")
+   - \`icon\`: string (optional — SVG string or emoji)
+   - \`requirements\`: string[] (optional — **flat string array only**, e.g. ["OPENAI_API_KEY", "Python 3.8+"]. NOT objects.)
+   - \`platform\`: string[] (optional — auto-detected by the export tool. Possible values: "macos", "windows", "linux". Defaults to all three if cross-platform. Use the \`detectedPlatform\` from the tool result.)
+7. Commit on a branch, push to the **fork** (not upstream), and open a PR to \`Papr-ai/paprwork-community-apps\`
+
+**CRITICAL: \`requirements\` must be a flat string array, NOT objects.** ❌ Wrong: \`[{"key": "OPENAI_API_KEY", "required": true}]\` ✅ Correct: \`["OPENAI_API_KEY"]\`
+**Platform auto-detection:** The export tool scans job types (e.g. \`swift\` → macOS only), commands (e.g. \`osascript\`, \`brew\` → macOS; \`powershell\` → Windows), and source files for platform-specific patterns. The \`detectedPlatform\` in the tool result tells you exactly what to put in registry.json. If the bundle only works on macOS, the result will say \`["macos"]\`; cross-platform bundles get \`["macos", "windows", "linux"]\`.
+
+This makes the app discoverable in Paprwork's Community Apps tab for all users.
 
 **For complete workflow, stage flow, patterns, and anti-patterns, read:**
 \`read_skill({ skillId: "preloaded-app-and-jobs-guide" })\``;

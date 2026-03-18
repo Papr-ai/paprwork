@@ -4,6 +4,7 @@
  */
 
 import { promises as fs } from "fs";
+import { watch, type FSWatcher } from "fs";
 import path from "path";
 import os from "os";
 import { v4 as uuidv4 } from "uuid";
@@ -49,6 +50,23 @@ export interface AppDataSource {
   linkedAt: string;
 }
 
+export interface ValidationIssue {
+  file: string;
+  line?: number;
+  column?: number;
+  severity: "error" | "warning";
+  message: string;
+  rule?: string;
+}
+
+export interface ValidationResult {
+  appId: string;
+  timestamp: string;
+  valid: boolean;
+  issues: ValidationIssue[];
+  filesChecked: number;
+}
+
 let appServiceInstance: AppService | null = null;
 
 export class AppService {
@@ -59,6 +77,8 @@ export class AppService {
   private legacyAppsIndexPath: string;
   private apps: Map<string, MiniApp>;
   private initialized: boolean;
+  private watchers: Map<string, FSWatcher>;
+  private debounceTimers: Map<string, NodeJS.Timeout>;
 
   constructor() {
     const homeDir = os.homedir();
@@ -74,6 +94,8 @@ export class AppService {
     );
     this.apps = new Map();
     this.initialized = false;
+    this.watchers = new Map();
+    this.debounceTimers = new Map();
   }
 
   private async migrateLegacyIfNeeded(): Promise<void> {
@@ -123,6 +145,7 @@ export class AppService {
     await fs.mkdir(this.appsDir, { recursive: true });
     await fs.mkdir(path.dirname(this.appsIndexPath), { recursive: true });
     await this.loadApps();
+    await this.startWatchingApps();
     this.initialized = true;
     console.log(`[AppService] Initialized with ${this.apps.size} apps`);
   }
@@ -137,6 +160,23 @@ export class AppService {
         console.error("[AppService] Failed to load apps:", error);
       }
       this.apps = new Map();
+    }
+
+    // Backfill icons for existing apps that don't have one yet
+    let dirty = false;
+    for (const app of this.apps.values()) {
+      if (!app.icon) {
+        const appDir = path.join(this.appsDir, app.id);
+        const dirIcon = await this.resolveIconFromAppDir(appDir);
+        if (dirIcon) {
+          app.icon = dirIcon;
+          dirty = true;
+          console.log(`[AppService] Resolved icon from logo file for app: ${app.id}`);
+        }
+      }
+    }
+    if (dirty) {
+      await this.saveApps();
     }
   }
 
@@ -184,6 +224,43 @@ export class AppService {
     }
 
     return svgContent;
+  }
+
+  /**
+   * Try to resolve an SVG icon from known logo files in the app directory.
+   * Checks logo.svg, icon.svg, and favicon.svg (in priority order).
+   * Returns the SVG string sized for tab/sidebar use, or null.
+   */
+  private async resolveIconFromAppDir(appDir: string): Promise<string | null> {
+    const candidates = ["logo.svg", "icon.svg", "favicon.svg"];
+
+    for (const filename of candidates) {
+      const filePath = path.join(appDir, filename);
+      try {
+        const content = await fs.readFile(filePath, "utf-8");
+        const trimmed = content.trim();
+        if (!trimmed.startsWith("<svg") || !trimmed.includes("</svg>")) {
+          continue;
+        }
+
+        let svg = trimmed.replace(/"/g, "'");
+
+        // Normalise to small dimensions for tab/sidebar rendering
+        svg = svg
+          .replace(/width=['"][^'"]*['"]/i, "width='14'")
+          .replace(/height=['"][^'"]*['"]/i, "height='14'");
+
+        if (!svg.includes("width=")) {
+          svg = svg.replace("<svg", "<svg width='14' height='14'");
+        }
+
+        return svg;
+      } catch {
+        // File doesn't exist — try next candidate
+      }
+    }
+
+    return null;
   }
 
   async createApp(
@@ -247,8 +324,19 @@ export class AppService {
       );
     }
 
+    // If still no icon, try to read a logo SVG from the app directory
+    if (!app.icon) {
+      const dirIcon = await this.resolveIconFromAppDir(appPath);
+      if (dirIcon) {
+        app.icon = dirIcon;
+      }
+    }
+
     this.apps.set(app.id, app);
     await this.saveApps();
+
+    // Start watching the new app directory for changes
+    await this.watchApp(app.id);
 
     console.log(
       `[AppService] Created app: ${app.id} - ${title} (verified files on disk)`,
@@ -283,6 +371,9 @@ export class AppService {
   async deleteApp(id: string): Promise<boolean> {
     const app = this.apps.get(id);
     if (!app) return false;
+
+    // Stop watching the app directory
+    this.unwatchApp(id);
 
     // Delete app directory
     const appPath = path.join(this.appsDir, id);
@@ -358,6 +449,466 @@ export class AppService {
       console.error(`[AppService] Failed to write file: ${filename}`, error);
       return false;
     }
+  }
+
+  /**
+   * Start watching all app directories for file changes
+   */
+  private async startWatchingApps(): Promise<void> {
+    for (const app of this.apps.values()) {
+      await this.watchApp(app.id);
+    }
+    console.log(`[AppService] Started watching ${this.watchers.size} app directories`);
+  }
+
+  /**
+   * Watch a specific app directory for file changes
+   */
+  private async watchApp(appId: string): Promise<void> {
+    const appPath = path.join(this.appsDir, appId);
+
+    // Check if directory exists before watching
+    try {
+      await fs.access(appPath);
+    } catch {
+      return; // Directory doesn't exist yet
+    }
+
+    // Don't create duplicate watchers
+    if (this.watchers.has(appId)) {
+      return;
+    }
+
+    try {
+      const watcher = watch(
+        appPath,
+        { recursive: true },
+        (_eventType, filename) => {
+          if (!filename) return;
+
+          // Ignore version history, data sources, and hidden files
+          if (
+            filename.startsWith(".versions") ||
+            filename === "data-sources.json" ||
+            filename.startsWith(".")
+          ) {
+            return;
+          }
+
+          // Debounce file changes (multiple events fire for single edit)
+          const debounceKey = `${appId}:${filename}`;
+          
+          if (this.debounceTimers.has(debounceKey)) {
+            clearTimeout(this.debounceTimers.get(debounceKey)!);
+          }
+
+          const timer = setTimeout(() => {
+            this.debounceTimers.delete(debounceKey);
+            this.handleFileChange(appId, filename);
+          }, 200); // 200ms debounce
+
+          this.debounceTimers.set(debounceKey, timer);
+        }
+      );
+
+      watcher.on("error", (error) => {
+        console.error(`[AppService] Watcher error for app ${appId}:`, error);
+        this.watchers.delete(appId);
+      });
+
+      this.watchers.set(appId, watcher);
+    } catch (error) {
+      console.error(`[AppService] Failed to watch app ${appId}:`, error);
+    }
+  }
+
+  /**
+   * Stop watching a specific app directory
+   */
+  private unwatchApp(appId: string): void {
+    const watcher = this.watchers.get(appId);
+    if (watcher) {
+      watcher.close();
+      this.watchers.delete(appId);
+    }
+
+    // Clear any pending debounce timers for this app
+    for (const [key, timer] of this.debounceTimers.entries()) {
+      if (key.startsWith(`${appId}:`)) {
+        clearTimeout(timer);
+        this.debounceTimers.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Handle file change detected by filesystem watcher
+   */
+  private handleFileChange(appId: string, filename: string): void {
+    console.log(`[AppService] File changed on disk: ${appId}/${filename}`);
+    this.broadcastFileChange(appId, filename);
+    
+    // Run validation asynchronously (don't block file change broadcast)
+    this.runValidation(appId).catch((error) => {
+      console.error(`[AppService] Validation error for app ${appId}:`, error);
+    });
+  }
+
+  /**
+   * Validate an app's files (linting + LOC checks) - Public API
+   */
+  async validateApp(appId: string): Promise<ValidationResult> {
+    return await this.runValidation(appId);
+  }
+
+  /**
+   * Internal validation implementation
+   */
+  private async runValidation(appId: string): Promise<ValidationResult> {
+    const app = this.apps.get(appId);
+    if (!app) {
+      return {
+        appId,
+        timestamp: new Date().toISOString(),
+        valid: false,
+        issues: [{
+          file: 'app',
+          severity: 'error',
+          message: `App not found: ${appId}`,
+        }],
+        filesChecked: 0,
+      };
+    }
+
+    const appPath = path.join(this.appsDir, appId);
+    const issues: ValidationIssue[] = [];
+    const filesToCheck: string[] = [];
+
+    // Find all files to validate
+    try {
+      const files = await this.getAllAppFiles(appPath);
+      filesToCheck.push(...files);
+    } catch (error) {
+      console.error(`[AppService] Failed to list app files:`, error);
+      return {
+        appId,
+        timestamp: new Date().toISOString(),
+        valid: false,
+        issues: [{
+          file: 'app',
+          severity: 'error',
+          message: `Failed to read app files: ${(error as Error).message}`,
+        }],
+        filesChecked: 0,
+      };
+    }
+
+    // Check each file
+    for (const file of filesToCheck) {
+      const relativePath = path.relative(appPath, file);
+      const ext = path.extname(file).toLowerCase();
+
+      // Skip non-source files
+      if (!['.html', '.css', '.js', '.ts', '.tsx', '.jsx'].includes(ext)) {
+        continue;
+      }
+
+      try {
+        const content = await fs.readFile(file, 'utf-8');
+        
+        // LOC check (100 lines max for mini-apps)
+        const locIssues = this.checkLineLimit(content, relativePath, 100);
+        issues.push(...locIssues);
+
+        // Basic syntax checks
+        if (ext === '.html') {
+          const htmlIssues = this.checkHtmlSyntax(content, relativePath);
+          issues.push(...htmlIssues);
+        } else if (ext === '.css') {
+          const cssIssues = this.checkCssSyntax(content, relativePath);
+          issues.push(...cssIssues);
+        } else if (['.js', '.ts', '.tsx', '.jsx'].includes(ext)) {
+          const jsIssues = this.checkJavaScriptSyntax(content, relativePath);
+          issues.push(...jsIssues);
+        }
+      } catch (error) {
+        console.error(`[AppService] Failed to validate ${relativePath}:`, error);
+      }
+    }
+
+    // Broadcast validation result
+    const result: ValidationResult = {
+      appId,
+      timestamp: new Date().toISOString(),
+      valid: issues.length === 0,
+      issues,
+      filesChecked: filesToCheck.length,
+    };
+
+    this.broadcastValidation(result);
+    return result;
+  }
+
+  /**
+   * Get all files in app directory recursively
+   */
+  private async getAllAppFiles(dir: string): Promise<string[]> {
+    const files: string[] = [];
+    
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        
+        // Skip hidden files, versions, and node_modules
+        if (entry.name.startsWith('.') || entry.name === 'node_modules') {
+          continue;
+        }
+        
+        if (entry.isDirectory()) {
+          const subFiles = await this.getAllAppFiles(fullPath);
+          files.push(...subFiles);
+        } else {
+          files.push(fullPath);
+        }
+      }
+    } catch (error) {
+      // Directory doesn't exist or permission error
+    }
+    
+    return files;
+  }
+
+  /**
+   * Check if file exceeds line limit
+   */
+  private checkLineLimit(
+    content: string,
+    filename: string,
+    maxLines: number,
+  ): ValidationIssue[] {
+    const lines = content.split('\n');
+    let significantLines = 0;
+    let inBlockComment = false;
+
+    // Count significant lines (exclude empty lines and comments)
+    for (const line of lines) {
+      const trimmed = line.trim();
+      
+      if (!trimmed) continue;
+      
+      // Handle block comments
+      if (trimmed.startsWith('/*')) {
+        inBlockComment = true;
+      }
+      if (inBlockComment) {
+        if (trimmed.includes('*/')) {
+          inBlockComment = false;
+        }
+        continue;
+      }
+      
+      // Skip single-line comments
+      if (trimmed.startsWith('//')) continue;
+      
+      significantLines++;
+    }
+
+    if (significantLines > maxLines) {
+      const excess = significantLines - maxLines;
+      return [{
+        file: filename,
+        severity: 'error',
+        message: `File has ${significantLines} lines (${excess} over the ${maxLines} line limit). Break into smaller components.`,
+        rule: 'max-lines',
+      }];
+    }
+
+    return [];
+  }
+
+  /**
+   * Basic HTML syntax validation
+   */
+  private checkHtmlSyntax(content: string, filename: string): ValidationIssue[] {
+    const issues: ValidationIssue[] = [];
+    const lines = content.split('\n');
+
+    // Check for unclosed tags (basic validation)
+    const tagStack: Array<{ tag: string; line: number }> = [];
+    const selfClosing = new Set(['img', 'br', 'hr', 'input', 'meta', 'link']);
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      
+      // Find opening tags
+      const openingTags = line.matchAll(/<(\w+)[^>]*>/g);
+      for (const match of openingTags) {
+        const tag = match[1].toLowerCase();
+        if (!selfClosing.has(tag) && !line.includes(`</${tag}>`)) {
+          tagStack.push({ tag, line: i + 1 });
+        }
+      }
+      
+      // Find closing tags
+      const closingTags = line.matchAll(/<\/(\w+)>/g);
+      for (const match of closingTags) {
+        const tag = match[1].toLowerCase();
+        if (tagStack.length > 0 && tagStack[tagStack.length - 1].tag === tag) {
+          tagStack.pop();
+        }
+      }
+    }
+
+    // Report unclosed tags
+    for (const { tag, line } of tagStack) {
+      issues.push({
+        file: filename,
+        line,
+        severity: 'warning',
+        message: `Potentially unclosed <${tag}> tag`,
+        rule: 'html-syntax',
+      });
+    }
+
+    return issues;
+  }
+
+  /**
+   * Basic CSS syntax validation
+   */
+  private checkCssSyntax(content: string, filename: string): ValidationIssue[] {
+    const issues: ValidationIssue[] = [];
+    const lines = content.split('\n');
+
+    let braceCount = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      
+      // Count braces
+      braceCount += (line.match(/{/g) || []).length;
+      braceCount -= (line.match(/}/g) || []).length;
+      
+      // Check for common errors
+      if (line.includes(';;')) {
+        issues.push({
+          file: filename,
+          line: i + 1,
+          severity: 'warning',
+          message: 'Double semicolon found',
+          rule: 'css-syntax',
+        });
+      }
+    }
+
+    if (braceCount !== 0) {
+      issues.push({
+        file: filename,
+        severity: 'error',
+        message: `Mismatched braces (${braceCount > 0 ? 'missing closing' : 'extra closing'} braces)`,
+        rule: 'css-syntax',
+      });
+    }
+
+    return issues;
+  }
+
+  /**
+   * Basic JavaScript/TypeScript syntax validation
+   */
+  private checkJavaScriptSyntax(content: string, filename: string): ValidationIssue[] {
+    const issues: ValidationIssue[] = [];
+    const lines = content.split('\n');
+
+    let braceCount = 0;
+    let parenCount = 0;
+    let bracketCount = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      
+      // Skip comments and strings (basic check)
+      if (line.startsWith('//') || line.startsWith('/*')) continue;
+      
+      // Count delimiters
+      braceCount += (line.match(/{/g) || []).length;
+      braceCount -= (line.match(/}/g) || []).length;
+      parenCount += (line.match(/\(/g) || []).length;
+      parenCount -= (line.match(/\)/g) || []).length;
+      bracketCount += (line.match(/\[/g) || []).length;
+      bracketCount -= (line.match(/]/g) || []).length;
+      
+      // Check for console.log (should be removed in production)
+      if (line.includes('console.log')) {
+        issues.push({
+          file: filename,
+          line: i + 1,
+          severity: 'warning',
+          message: 'Remove console.log statements before production',
+          rule: 'no-console',
+        });
+      }
+    }
+
+    if (braceCount !== 0) {
+      issues.push({
+        file: filename,
+        severity: 'error',
+        message: `Mismatched braces (${braceCount > 0 ? 'missing closing' : 'extra closing'})`,
+        rule: 'syntax',
+      });
+    }
+
+    if (parenCount !== 0) {
+      issues.push({
+        file: filename,
+        severity: 'error',
+        message: `Mismatched parentheses (${parenCount > 0 ? 'missing closing' : 'extra closing'})`,
+        rule: 'syntax',
+      });
+    }
+
+    if (bracketCount !== 0) {
+      issues.push({
+        file: filename,
+        severity: 'error',
+        message: `Mismatched brackets (${bracketCount > 0 ? 'missing closing' : 'extra closing'})`,
+        rule: 'syntax',
+      });
+    }
+
+    return issues;
+  }
+
+  /**
+   * Broadcast validation result to all connected clients
+   */
+  private broadcastValidation(result: ValidationResult): void {
+    if (result.issues.length > 0) {
+      console.log(
+        `[AppService] Validation found ${result.issues.length} issue(s) in app ${result.appId}`,
+      );
+      
+      // Log errors to console for agent visibility
+      for (const issue of result.issues) {
+        const prefix = issue.severity === 'error' ? '❌' : '⚠️';
+        const location = issue.line ? `:${issue.line}` : '';
+        console.log(`${prefix} ${issue.file}${location} - ${issue.message}`);
+      }
+    }
+
+    import("../websocket/index.js")
+      .then(({ broadcast }) => {
+        broadcast({
+          type: "app:validation-result",
+          data: result,
+        });
+      })
+      .catch((error) => {
+        console.warn("[AppService] Failed to broadcast validation:", error);
+      });
   }
 
   /**
@@ -593,8 +1144,21 @@ export class AppService {
     if (sourceDir) {
       await fs.cp(sourceDir, appDir, { recursive: true });
     }
+
+    // Resolve icon from directory if not already set
+    if (!app.icon) {
+      const dirIcon = await this.resolveIconFromAppDir(appDir);
+      if (dirIcon) {
+        app.icon = dirIcon;
+      }
+    }
+
     this.apps.set(app.id, app);
     await this.saveApps();
+    
+    // Start watching the app directory
+    await this.watchApp(app.id);
+    
     return app;
   }
 
@@ -609,6 +1173,23 @@ export class AppService {
     await this.saveApps();
 
     return app;
+  }
+
+  /**
+   * Cleanup: stop all file watchers
+   */
+  cleanup(): void {
+    console.log(`[AppService] Cleaning up ${this.watchers.size} watchers`);
+    
+    for (const [_appId, watcher] of this.watchers.entries()) {
+      watcher.close();
+    }
+    this.watchers.clear();
+
+    for (const timer of this.debounceTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.debounceTimers.clear();
   }
 }
 
