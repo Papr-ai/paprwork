@@ -23,7 +23,7 @@ export function setGatewayProcess(gateway: ChildProcess): void {
 /**
  * Send cache invalidation message to Gateway
  */
-function invalidateKeyCache(keyName?: string): void {
+export function invalidateKeyCache(keyName?: string): void {
   if (gatewayProcess?.send) {
     console.log(
       `[IPC] Invalidating key cache: ${keyName || "all keys"}`,
