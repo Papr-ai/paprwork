@@ -9,6 +9,7 @@ import { OpenAIOAuthService } from "../../core/services/OpenAIOAuthService.js";
 import { ClaudeOAuthService } from "../../core/services/ClaudeOAuthService.js";
 import { ClaudeSetupTokenService } from "../../core/services/ClaudeSetupTokenService.js";
 import { OAuthCallbackServer } from "../../core/services/OAuthCallbackServer.js";
+import { invalidateKeyCache } from "./customKeys.js";
 
 let oauthTokenStorage: OAuthTokenStorage | null = null;
 let customKeysStorage: CustomKeysStorage | null = null;
@@ -73,6 +74,7 @@ async function syncOAuthTokenToApiKeys(
 
       (customKeysStorage as any).keys.set(existingKeyMetadata.id, updatedKey);
       await (customKeysStorage as any).saveKeys();
+      invalidateKeyCache(keyName);
       console.log(`[OAuth IPC] Updated ${keyName} with OAuth token`);
     } else {
       // Create new key
@@ -94,6 +96,7 @@ async function syncOAuthTokenToApiKeys(
 
       (customKeysStorage as any).keys.set(id, newKey);
       await (customKeysStorage as any).saveKeys();
+      invalidateKeyCache(keyName);
       console.log(`[OAuth IPC] Created ${keyName} with OAuth token`);
     }
   } catch (error) {
