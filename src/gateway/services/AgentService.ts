@@ -1050,6 +1050,7 @@ export class AgentService {
           apiKeys,
           maxSteps,
           onContextPressure, // Pass callback to enable summarization
+          piModelId, // Pass modelId for context threshold determination
         );
         timings.streamTextInit = performance.now() - t;
         console.log(

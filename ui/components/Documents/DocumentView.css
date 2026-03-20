@@ -325,6 +325,44 @@
   margin: 1.5em 0;
 }
 
+/* GFM pipe tables (markdown-it-multimd-table + TipTap Table) */
+.document-view__editor .tiptap table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.75em 0 1em;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.document-view__editor .tiptap th,
+.document-view__editor .tiptap td {
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.12));
+  padding: 8px 12px;
+  vertical-align: top;
+  text-align: left;
+}
+
+.document-view__editor .tiptap th {
+  background: var(--bg-secondary, rgba(0, 0, 0, 0.04));
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.document-view__editor .tiptap td p,
+.document-view__editor .tiptap th p {
+  margin: 0.15em 0;
+}
+
+.document-view__editor .tiptap td p:first-child,
+.document-view__editor .tiptap th p:first-child {
+  margin-top: 0;
+}
+
+.document-view__editor .tiptap td p:last-child,
+.document-view__editor .tiptap th p:last-child {
+  margin-bottom: 0;
+}
+
 .document-view__editor .tiptap u {
   text-decoration: underline;
 }
@@ -449,5 +487,14 @@
   .slash-menu__item:hover,
   .slash-menu__item--selected {
     background: var(--hover, rgba(255, 255, 255, 0.05));
+  }
+
+  .document-view__editor .tiptap th,
+  .document-view__editor .tiptap td {
+    border-color: var(--border-color, rgba(255, 255, 255, 0.12));
+  }
+
+  .document-view__editor .tiptap th {
+    background: var(--bg-secondary, rgba(255, 255, 255, 0.06));
   }
 }

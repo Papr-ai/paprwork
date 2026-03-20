@@ -256,6 +256,7 @@ export async function* createPiCodexStreamWithToolLoop(
   apiKeys: string[],
   maxSteps: number,
   onContextPressure?: () => Promise<void>, // Callback to trigger summarization
+  modelId?: string, // Add modelId to determine context threshold
 ): AsyncGenerator<OurChunk> {
   const context = {
     ...initialContext,
@@ -264,7 +265,39 @@ export async function* createPiCodexStreamWithToolLoop(
 
   let step = 0;
   let cumulativeTokens = 0; // Track token usage for adaptive truncation
-  const CONTEXT_ABORT_THRESHOLD = 120000; // Same as AI SDK path
+  
+  // Model-aware context thresholds (leave room for output + reasoning)
+  // GPT-5.4: 272K context, but reasoning can be 30-50K → use 200K threshold (72K buffer)
+  // GPT-5.2: 272K context → use 200K threshold
+  // Claude: 200K context → use 120K threshold (conservative)
+  // Default: 120K (conservative)
+  const getContextThreshold = (): number => {
+    if (!modelId) return 120000;
+    
+    // GPT-5.4 models (thinking, pro)
+    if (modelId.startsWith('gpt-5.4')) {
+      return 200000; // 272K - 72K buffer for output + reasoning
+    }
+    
+    // GPT-5.2/5.3 models
+    if (modelId.startsWith('gpt-5.2') || modelId.startsWith('gpt-5.3')) {
+      return 200000; // 272K - 72K buffer
+    }
+    
+    // Claude models (200K context)
+    if (modelId.includes('claude')) {
+      return 120000; // 200K - 80K buffer (conservative)
+    }
+    
+    // Default conservative threshold
+    return 120000;
+  };
+  
+  const CONTEXT_ABORT_THRESHOLD = getContextThreshold();
+  
+  console.log(
+    `[PiCodexToolLoop] Model: ${modelId || 'unknown'}, Context threshold: ${CONTEXT_ABORT_THRESHOLD.toLocaleString()} tokens`,
+  );
 
   // Estimate initial context tokens
   const initialContextStr = JSON.stringify(context.messages);

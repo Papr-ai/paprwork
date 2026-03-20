@@ -24,10 +24,17 @@ interface CustomKey {
 export class CustomKeysService {
   private initialized = false;
   private ipcAvailable = false;
+  private ipcWaitAttempts = 0;
+  private readonly MAX_IPC_WAIT_ATTEMPTS = 10; // Wait up to 1 second
+  private readonly IPC_WAIT_INTERVAL_MS = 100;
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
     this.initialized = true;
+    
+    // Wait for IPC to be available (with timeout)
+    await this.waitForIpc();
+    
     this.ipcAvailable = this.checkIpcAvailable();
     console.log(
       `[CustomKeysService] Initialized (IPC: ${this.ipcAvailable ? "available" : "unavailable"})`
@@ -35,12 +42,52 @@ export class CustomKeysService {
   }
 
   /**
+   * Wait for IPC channel to be ready (Gateway might start before IPC is established)
+   */
+  private async waitForIpc(): Promise<void> {
+    while (this.ipcWaitAttempts < this.MAX_IPC_WAIT_ATTEMPTS) {
+      if (typeof process.send === "function" && process.connected === true) {
+        console.log(
+          `[CustomKeysService] IPC ready after ${this.ipcWaitAttempts} attempts (${this.ipcWaitAttempts * this.IPC_WAIT_INTERVAL_MS}ms)`
+        );
+        return;
+      }
+      
+      this.ipcWaitAttempts++;
+      await new Promise((resolve) =>
+        setTimeout(resolve, this.IPC_WAIT_INTERVAL_MS)
+      );
+    }
+    
+    console.warn(
+      `[CustomKeysService] IPC not ready after ${this.MAX_IPC_WAIT_ATTEMPTS} attempts (${this.MAX_IPC_WAIT_ATTEMPTS * this.IPC_WAIT_INTERVAL_MS}ms)`
+    );
+  }
+
+  /**
    * Check if IPC channel is available and connected
    */
   private checkIpcAvailable(): boolean {
-    if (!process.send || !process.connected) {
+    // Check if process.send exists (means we were spawned with IPC)
+    const hasSend = typeof process.send === "function";
+    // Check if IPC channel is connected (will be false if disconnected)
+    const isConnected = process.connected === true;
+    
+    console.log(
+      `[CustomKeysService] IPC availability check:`,
+      `hasSend=${hasSend}, isConnected=${isConnected}, connected=${process.connected}`
+    );
+    
+    if (!hasSend) {
+      console.warn("[CustomKeysService] No process.send - not spawned with IPC");
       return false;
     }
+    
+    if (!isConnected) {
+      console.warn("[CustomKeysService] process.connected is not true - IPC channel not established");
+      return false;
+    }
+    
     return true;
   }
 
@@ -81,8 +128,12 @@ export class CustomKeysService {
     if (this.ipcAvailable) {
       return new Promise((resolve, reject) => {
         const requestId = `custom-keys-list-${Date.now()}`;
+        console.log(`[CustomKeysService] Listing keys (request: ${requestId})`);
         const timeout = setTimeout(() => {
           cleanup();
+          console.error(
+            `[CustomKeysService] List request ${requestId} timed out`
+          );
           reject(new Error("Custom keys list request timed out"));
         }, 5000);
 
@@ -93,8 +144,16 @@ export class CustomKeysService {
           ) {
             cleanup();
             if (message.error) {
+              console.error(
+                `[CustomKeysService] List failed: ${message.error}`
+              );
               reject(new Error(message.error));
             } else {
+              const keyCount = (message.keys || []).length;
+              const keyNames = (message.keys || []).map((k: any) => k.name);
+              console.log(
+                `[CustomKeysService] Received ${keyCount} keys: ${keyNames.join(", ")}`
+              );
               resolve(message.keys || []);
             }
           }
@@ -131,12 +190,17 @@ export class CustomKeysService {
       await this.initialize();
     }
 
+    console.log(`[CustomKeysService] Getting key by name: "${name}"`);
+
     // Gateway → Electron IPC
     if (this.ipcAvailable) {
       return new Promise((resolve, reject) => {
         const requestId = `custom-keys-get-${Date.now()}`;
         const timeout = setTimeout(() => {
           cleanup();
+          console.error(
+            `[CustomKeysService] Get key "${name}" request timed out`
+          );
           reject(new Error("Custom key get request timed out"));
         }, 5000);
 
@@ -147,8 +211,18 @@ export class CustomKeysService {
           ) {
             cleanup();
             if (message.error) {
+              console.error(
+                `[CustomKeysService] Failed to get key "${name}": ${message.error}`
+              );
               reject(new Error(message.error));
             } else {
+              const found = message.value ? "found" : "not found";
+              const preview = message.value
+                ? `${message.value.substring(0, 10)}...`
+                : "null";
+              console.log(
+                `[CustomKeysService] Key "${name}" ${found} (preview: ${preview})`
+              );
               resolve(message.value || null);
             }
           }

@@ -543,9 +543,298 @@ async function regenReply(threadId: string): Promise<void> {
 }
 ```
 
+### Using custom keys in `/api/bash/run`
+
+**NEW:** Mini-apps can access custom keys from Settings → API Keys using `${KEY_NAME}` syntax (same as jobs):
+
+```typescript
+// app.ts - Query Neon PostgreSQL database
+async function loadUsers() {
+  const res = await fetch('/api/bash/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      command: 'psql "${NEON_DB_URL}" -t -A -F, -c "SELECT id, name, email FROM users LIMIT 10"'
+    })
+  });
+  
+  const { stdout, exitCode, stderr } = await res.json();
+  if (exitCode !== 0) {
+    console.error('Query failed:', stderr);
+    throw new Error('Database query failed');
+  }
+  
+  // Parse CSV output (PostgreSQL with -A -F,)
+  return stdout.trim().split('\n').map(line => {
+    const [id, name, email] = line.split(',');
+    return { id: parseInt(id), name, email };
+  });
+}
+```
+
+**Example: Call REST API with authentication**
+
+```typescript
+// app.ts - Fetch GitHub repos
+async function getRepos() {
+  const res = await fetch('/api/bash/run', {
+    method: 'POST',
+    body: JSON.stringify({
+      command: 'curl -s -H "Authorization: token ${GITHUB_TOKEN}" https://api.github.com/user/repos'
+    })
+  });
+  
+  const { stdout, exitCode } = await res.json();
+  if (exitCode !== 0) throw new Error('API call failed');
+  
+  return JSON.parse(stdout);
+}
+```
+
+**Example: Query MySQL database**
+
+```typescript
+// app.ts - Get order count
+async function getOrderCount() {
+  const res = await fetch('/api/bash/run', {
+    method: 'POST',
+    body: JSON.stringify({
+      command: 'mysql -h mydb.example.com -u admin -p"${MYSQL_PASSWORD}" -N -e "SELECT COUNT(*) FROM orders"'
+    })
+  });
+  
+  const { stdout } = await res.json();
+  return parseInt(stdout.trim());
+}
+```
+
+**How it works:**
+1. `${KEY_NAME}` placeholders are replaced server-side (Gateway process)
+2. Custom keys are loaded from Keychain via CustomKeysService
+3. Keys never reach the browser (secure)
+4. Output is sanitized to remove any leaked key values
+
+**When to use this vs. jobs + SQLite:**
+
+| Use `/api/bash/run` + custom keys | Use jobs + SQLite |
+|-----------------------------------|-------------------|
+| Simple read-only queries (<5s) | Complex data transformations |
+| Quick API calls | Scheduled/recurring syncs |
+| Data fits in stdout (~1MB) | Large datasets (>1MB) |
+| Real-time data (no caching) | Multi-step workflows |
+
+**Example: Neon DB dashboard**
+```typescript
+// Fetch active users in real-time
+const users = await loadUsers(); // Uses /api/bash/run
+
+// vs.
+
+// Scheduled job syncs users every hour → SQLite
+// App reads from SQLite (faster, cached)
+```
+
 ### Security note
 
 `/api/bash/run` executes commands on the user's machine with the same permissions as the Gateway process. Only use it in apps you build — never construct the command string from user-controlled input without sanitizing it.
+
+**Custom keys:** `${KEY_NAME}` substitution is secure because:
+- Keys are resolved server-side (Gateway process)
+- Browser never sees actual key values
+- Output is sanitized to prevent leakage
+- Only same-origin requests allowed (no external access)
+
+---
+
+### Mini-Apps and System Integration (window.paprAPI)
+
+**IMPORTANT:** Mini-apps run in sandboxed iframes. Native browser APIs like `<a download>`, `window.open()`, and `navigator.clipboard` **do not work** because they're blocked by the iframe sandbox.
+
+Instead, use `window.paprAPI.invoke()` to call Electron system APIs. This method is automatically available in all mini-apps.
+
+#### Common System Actions
+
+**Download/Save Files:**
+```typescript
+// Show save dialog, let user choose location
+const result = await window.paprAPI.invoke('dialog.showSaveDialog', {
+  defaultPath: 'export.csv',
+  content: csvData,
+  filters: [{ name: 'CSV Files', extensions: ['csv'] }]
+});
+
+if (!result.canceled) {
+  console.log(`Saved to: ${result.filePath}`);
+}
+```
+
+**Open External Links:**
+```typescript
+// Open in default browser
+await window.paprAPI.invoke('shell.openExternal', 'https://github.com/user/repo');
+
+// Open mail app
+await window.paprAPI.invoke('shell.openExternal', 'mailto:user@example.com?subject=Hello&body=Message');
+
+// Open any URL with system default app
+await window.paprAPI.invoke('shell.openExternal', 'https://maps.google.com');
+```
+
+**Clipboard:**
+```typescript
+// Copy to clipboard
+await window.paprAPI.invoke('clipboard.writeText', shareLink);
+
+// Read from clipboard
+const { text } = await window.paprAPI.invoke('clipboard.readText');
+console.log('Clipboard contains:', text);
+```
+
+**Notifications:**
+```typescript
+// Show native OS notification
+await window.paprAPI.invoke('notification.show', {
+  title: 'Export Complete',
+  body: 'Your data has been saved successfully',
+  urgency: 'normal' // low, normal, or critical
+});
+```
+
+**Show Files in Finder/Explorer:**
+```typescript
+// Reveal file in Finder (macOS) or Explorer (Windows)
+await window.paprAPI.invoke('shell.showItemInFolder', '/Users/john/Downloads/report.pdf');
+```
+
+**Delete Files (Move to Trash):**
+```typescript
+// Move file to trash (safe, reversible)
+await window.paprAPI.invoke('shell.trashItem', '/path/to/file.txt');
+```
+
+#### Complete Example: Export Button with Notification
+
+```typescript
+// app.ts
+async function handleExport() {
+  try {
+    // Generate CSV
+    const csv = users.map(u => `${u.id},${u.name},${u.email}`).join('\n');
+    const content = 'ID,Name,Email\n' + csv;
+    
+    // Show save dialog
+    const result = await window.paprAPI.invoke('dialog.showSaveDialog', {
+      defaultPath: 'users.csv',
+      content: content,
+      filters: [{ name: 'CSV Files', extensions: ['csv'] }]
+    });
+    
+    if (!result.canceled) {
+      // Show success notification
+      await window.paprAPI.invoke('notification.show', {
+        title: 'Export Complete',
+        body: `Saved ${users.length} users to ${result.filePath}`
+      });
+      
+      // Optionally reveal in Finder
+      await window.paprAPI.invoke('shell.showItemInFolder', result.filePath);
+    }
+  } catch (error) {
+    console.error('Export failed:', error);
+    await window.paprAPI.invoke('notification.show', {
+      title: 'Export Failed',
+      body: error.message,
+      urgency: 'critical'
+    });
+  }
+}
+```
+
+#### Available Electron APIs
+
+All mini-apps have access to these APIs via `window.paprAPI.invoke(method, ...args)`:
+
+**shell module:**
+- `shell.openExternal(url)` - Open URL in default app (browser, mail, etc.)
+- `shell.showItemInFolder(path)` - Show file in Finder/Explorer
+- `shell.trashItem(path)` - Move file to trash
+
+**dialog module:**
+- `dialog.showSaveDialog(options)` - Show save file dialog
+  - Options: `{ defaultPath, content, filters }`
+  - Returns: `{ filePath, canceled }`
+- `dialog.showOpenDialog(options)` - Show open file dialog
+  - Options: `{ filters, properties: ['openFile', 'openDirectory', 'multiSelections'] }`
+  - Returns: `{ filePaths, canceled }`
+- `dialog.showMessageBox(options)` - Show alert/confirm dialog
+  - Options: `{ message, type: 'info'|'warning'|'error', buttons: ['OK', 'Cancel'] }`
+  - Returns: `{ response: 0|1 }` (button index)
+
+**clipboard module:**
+- `clipboard.writeText(text)` - Copy text to clipboard
+- `clipboard.readText()` - Read text from clipboard (returns `{ text }`)
+
+**notification module:**
+- `notification.show(options)` - Show native OS notification
+  - Options: `{ title, body, urgency: 'low'|'normal'|'critical' }`
+
+**app module:**
+- `app.getPath(name)` - Get standard paths
+  - Valid names: `'downloads'`, `'documents'`, `'desktop'`, `'home'`
+  - Returns: `{ path: '/Users/john/Downloads' }`
+
+#### Why Native Browser APIs Don't Work
+
+Mini-apps run in sandboxed iframes for security. These browser APIs are blocked:
+
+❌ **Doesn't work:**
+```typescript
+// Blocked by iframe sandbox
+const link = document.createElement('a');
+link.href = dataUrl;
+link.download = 'file.csv';
+link.click(); // Won't download!
+
+// Opens in iframe, not system browser
+window.open('https://github.com'); // Wrong!
+
+// Restricted in iframe
+navigator.clipboard.writeText('text'); // Permission denied!
+```
+
+✅ **Use window.paprAPI instead:**
+```typescript
+// Works! Opens in system browser
+await window.paprAPI.invoke('shell.openExternal', 'https://github.com');
+
+// Works! Shows native save dialog
+await window.paprAPI.invoke('dialog.showSaveDialog', {
+  defaultPath: 'file.csv',
+  content: csvData
+});
+
+// Works! Copies to system clipboard
+await window.paprAPI.invoke('clipboard.writeText', 'text');
+```
+
+#### Error Handling
+
+```typescript
+try {
+  const result = await window.paprAPI.invoke('shell.openExternal', url);
+  console.log('Opened successfully:', result);
+} catch (error) {
+  // API call failed (invalid URL, permission denied, etc.)
+  console.error('Failed to open URL:', error.message);
+  
+  // Show user-friendly error
+  await window.paprAPI.invoke('dialog.showMessageBox', {
+    type: 'error',
+    message: 'Failed to open link',
+    detail: error.message
+  });
+}
+```
 
 ---
 
@@ -723,12 +1012,12 @@ create_sub_agent({
   model: "gpt-5.2"
 })
 
-// Use in pipeline
+// Use in pipeline (autoTrigger required if Review should start when fetch finishes)
 create_job({
   name: "Review Posts",
   type: "subagent",
   subAgentId: "reviewer",
-  dependsOn: [{ jobId: "fetch-data" }]
+  dependsOn: [{ jobId: "fetch-data", onStatus: "completed", autoTrigger: true }]
 })
 ```
 
@@ -1225,7 +1514,7 @@ create_job({
   type: "python",
   requirements: ["anthropic"],
   command: "python3 code/selector.py --anthropic-key ${ANTHROPIC_API_KEY}",
-  dependsOn: [{ jobId: "scraper-id", onStatus: "completed" }]
+  dependsOn: [{ jobId: "scraper-id", onStatus: "completed", autoTrigger: true }]
 })
 ```
 
@@ -1310,23 +1599,27 @@ Do you know ALL the steps in advance?
 
 ### Job Dependencies (DAG Pipelines)
 
+**`dependsOn` alone does not auto-run the next job.** To start job B automatically when job A reaches a terminal status, B’s dependency entry must include **`autoTrigger: true`**. That is true for **every** link in the chain (python → subagent, subagent → subagent, etc.). Without it, `dependsOn` only enforces **order** when B is started manually, by schedule, or because a later job pulled the dependency chain via `run_job`.
+
+When updating dependencies with `update_job`, re-send the full `dependsOn` array including `autoTrigger: true` for each link that should keep auto-chaining — otherwise auto-start is dropped.
+
 ```javascript
 // Job A: Collect data (script)
-create_job({ name: "Data Collector", type: "python", ... })
+create_job({ name: "Data Collector", type: "python", ... }) // note returned job id
 
-// Job B: Analyze (agent) — runs after A completes
+// Job B: Analyze (agent) — starts automatically when A completes
 create_job({
   name: "Data Analyzer",
   type: "agent",
-  dependsOn: [{ jobId: "data-collector", onStatus: "completed" }],
+  dependsOn: [{ jobId: "<data-collector-job-id>", onStatus: "completed", autoTrigger: true }],
   ...
 })
 
-// Job C: Report (agent) — runs after B
+// Job C: Report (agent) — starts automatically when B completes
 create_job({
   name: "Daily Report",
   type: "agent",
-  dependsOn: [{ jobId: "data-analyzer", onStatus: "completed" }],
+  dependsOn: [{ jobId: "data-analyzer-id", onStatus: "completed", autoTrigger: true }],
   deliver: { channel: "chat", targetId: "main" }
 })
 ```
@@ -1809,7 +2102,7 @@ export_app_bundle({
 2. **Source code scanning** — scans the app's JS/TS/HTML files for job IDs referenced directly in code (e.g. `const JOB_ID = "uuid"` used with `fetch('/api/jobs/run', ...)`)
 3. **Dependency walking** — recursively follows `dependsOn` and `runtimeCalls` chains from all discovered jobs to find upstream pipeline jobs
 
-For example, if the app has a data-source link to a "Summarizer" job plus `const REFRESH_JOB_ID = "uuid"` in its code, and the Summarizer has `dependsOn: [{ jobId: "calendar-reader" }]`, ALL THREE jobs are included automatically. Check `resolvedJobIds` in the tool result to see the complete list.
+For example, if the app has a data-source link to a "Summarizer" job plus `const REFRESH_JOB_ID = "uuid"` in its code, and the Summarizer has `dependsOn: [{ jobId: "calendar-reader", onStatus: "completed", autoTrigger: true }]`, ALL THREE jobs are included automatically. Check `resolvedJobIds` in the tool result to see the complete list.
 
 **What gets created:**
 ```
@@ -2128,7 +2421,7 @@ Avoid naming folders after apps (`sales-dashboard`) — those are linkages, not 
 1. get_job_graph()                   → understand what already exists
 2. list_job_folders()                → see current folder names
 3. create_job({ folder: "ingestion", ... })
-4. create_job({ folder: "processing", dependsOn: [{ jobId: "...", onStatus: "completed" }], ... })
+4. create_job({ folder: "processing", dependsOn: [{ jobId: "...", onStatus: "completed", autoTrigger: true }], ... })
 5. link_app_data_source(...)         → wire processing job output to app
 ```
 
@@ -2140,7 +2433,7 @@ Avoid naming folders after apps (`sales-dashboard`) — those are linkages, not 
 {
   "folders": { "ingestion": ["job-id-1"], "processing": ["job-id-2"] },
   "appLinks": { "app-id-1": { "name": "Sales Dashboard", "jobIds": ["job-id-2"] } },
-  "edges": [{ "from": "job-id-1", "to": "job-id-2", "onStatus": "completed" }]
+  "edges": [{ "from": "job-id-1", "to": "job-id-2", "onStatus": "completed", "autoTrigger": true }]
 }
 ```
 

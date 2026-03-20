@@ -43,16 +43,40 @@ const STATUS_ALIASES: Record<string, PlanStep["status"]> = {
   skip: "skipped",
 };
 
-const stepUpdateSchema = z.object({
-  stepId: z.string().min(1),
-  status: z.string().min(1).transform((val): PlanStep["status"] => {
-    const normalized = STATUS_ALIASES[val.toLowerCase().trim()];
-    if (!normalized) {
-      return "pending";
+/** Accept stepId or id — models often reuse create_plan's `id` field name. */
+const stepUpdateSchema = z
+  .object({
+    stepId: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Step id from create_plan"),
+    id: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Same as stepId (alias matching create_plan step objects)"),
+    status: z.string().min(1),
+  })
+  .superRefine((val, ctx) => {
+    const sid = val.stepId?.trim() || val.id?.trim();
+    if (!sid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Provide stepId or id (must match a step id from create_plan)",
+        path: ["stepId"],
+      });
     }
-    return normalized;
-  }),
-});
+  })
+  .transform((val): { stepId: string; status: PlanStep["status"] } => {
+    const stepId = (val.stepId?.trim() || val.id?.trim()) as string;
+    const normalized = STATUS_ALIASES[val.status.toLowerCase().trim()];
+    return {
+      stepId,
+      status: normalized ?? "pending",
+    };
+  });
 
 const updatePlanSchema = z.object({
   planId: z.string().min(1).describe("Plan ID returned by create_plan"),
@@ -142,7 +166,7 @@ export const createPlanTool = createTool({
 export const updatePlanTool = createTool({
   id: "update_plan",
   description:
-    "Update step statuses in an existing plan. CRITICAL: Call this AFTER EACH STEP completes, not at the end. This shows real-time progress to the user. Mark steps as in_progress when starting, completed when done. Plans are persisted to disk. The stepId must EXACTLY match the id you used in create_plan.",
+    "Update step statuses in an existing plan. CRITICAL: Call this AFTER EACH STEP completes, not at the end. This shows real-time progress to the user. Mark steps as in_progress when starting, completed when done. Plans are persisted to disk. Each update must include the step id: use `id` or `stepId` — same value as each step's `id` from create_plan.",
   inputSchema: updatePlanSchema,
   execute: async (input) => {
     const args = (input as { context?: UpdatePlanArgs }).context ?? input;

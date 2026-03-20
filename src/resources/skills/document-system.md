@@ -27,6 +27,14 @@ create_document({
 
 The document opens automatically in a split view alongside the chat. The agent can continue editing via `bash` to modify the Markdown file directly.
 
+## Tables in documents
+
+The in-app editor supports **GitHub-style pipe tables**. For side-by-side comparisons (schemas, modes, APIs):
+
+- Header row, then `|---|` separator row, then body rows — one row per dimension (Mode, Purpose, Risk, etc.).
+- Keep each cell readable: separate values with commas (`manual`, `auto`), not run-together text (`manualauto`).
+- Avoid one long line of `**labels**` and `` `code` `` only; prefer a table or `###` + bullet lists.
+
 ## Editing Documents
 
 Agents edit documents by modifying the Markdown file with `bash`:

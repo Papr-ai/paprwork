@@ -629,6 +629,9 @@ async function startGateway(): Promise<void> {
     // via the bash tool).  Intended for lightweight backend calls like resetting
     // a DB row, calling a CLI, or reading a file — not long-running processes.
     //
+    // Supports custom key substitution: ${KEY_NAME} placeholders are replaced
+    // with values from Settings → API Keys (via CustomKeysService).
+    //
     //  POST /api/bash/run
     //    body: { command: string, timeoutMs?: number (default 30000) }
     //    returns: { stdout, stderr, exitCode }
@@ -644,6 +647,22 @@ async function startGateway(): Promise<void> {
           res.status(400).json({ error: "command is required" });
           return;
         }
+
+        // Substitute custom keys (${KEY_NAME} → actual values)
+        const { substituteCustomKeysInCommand } = await import(
+          "./utils/keySubstitution.js"
+        );
+        const keySubResult = await substituteCustomKeysInCommand(command);
+        const finalCommand = keySubResult.command;
+        const apiKeys = keySubResult.keyValues;
+
+        // Log which keys were used (for debugging)
+        if (keySubResult.usedKeyNames.length > 0) {
+          console.log(
+            `[Gateway] /api/bash/run using keys: ${keySubResult.usedKeyNames.join(", ")}`,
+          );
+        }
+
         const timeout = Math.min(timeoutMs ?? 30_000, 120_000); // cap at 2 min
         const { exec } = await import("child_process");
         const result = await new Promise<{
@@ -652,7 +671,7 @@ async function startGateway(): Promise<void> {
           exitCode: number;
         }>((resolve) => {
           const proc = exec(
-            command,
+            finalCommand,
             { timeout, env: process.env, shell: "/bin/bash" },
             (error, stdout, stderr) => {
               resolve({
@@ -671,10 +690,21 @@ async function startGateway(): Promise<void> {
             }
           }, timeout);
         });
+
+        // Sanitize output to remove any leaked API key values
+        const { sanitizeError } = await import("../core/tools/security.js");
+        const sanitizedStdout = sanitizeError(result.stdout, apiKeys);
+        const sanitizedStderr = sanitizeError(result.stderr, apiKeys);
+
         console.log(
           `[Gateway] /api/bash/run exit=${result.exitCode} cmd="${command.slice(0, 80)}"`,
         );
-        res.json(result);
+
+        res.json({
+          stdout: sanitizedStdout,
+          stderr: sanitizedStderr,
+          exitCode: result.exitCode,
+        });
       } catch (err) {
         console.error("[Gateway] /api/bash/run error:", err);
         res.status(500).json({ error: (err as Error).message });

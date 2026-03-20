@@ -178,6 +178,64 @@ const { lastInsertRowid } = await fetch('/api/db/write', {
 
 ---
 
+## Mini-App System Integration (window.paprAPI)
+
+Mini-apps run in sandboxed iframes where native browser APIs for system actions are blocked. Use `window.paprAPI.invoke()` instead:
+
+### Common Patterns
+
+```typescript
+// Download/save file
+await window.paprAPI.invoke('dialog.showSaveDialog', {
+  defaultPath: 'data.csv',
+  content: csvData,
+  filters: [{ name: 'CSV', extensions: ['csv'] }]
+});
+
+// Open external links (mailto, https)
+await window.paprAPI.invoke('shell.openExternal', 'mailto:user@example.com?subject=Hello');
+await window.paprAPI.invoke('shell.openExternal', 'https://github.com/user/repo');
+
+// Copy to clipboard
+await window.paprAPI.invoke('clipboard.writeText', 'text to copy');
+
+// Show desktop notification
+await window.paprAPI.invoke('notification.show', {
+  title: 'Task Complete',
+  body: 'Data export finished!'
+});
+
+// Show file in Finder/Explorer
+await window.paprAPI.invoke('shell.showItemInFolder', '/path/to/file.csv');
+
+// Move to trash
+await window.paprAPI.invoke('shell.trashItem', '/path/to/file');
+```
+
+### Available APIs
+
+- `shell.openExternal(url)` - Open mailto/https/file URLs in default app
+- `dialog.showSaveDialog(options)` - Save file picker
+- `dialog.showOpenDialog(options)` - Open file picker
+- `clipboard.writeText(text)` / `clipboard.readText()` - Clipboard access
+- `notification.show(options)` - Desktop notifications
+- `shell.showItemInFolder(path)` - Reveal file in file manager
+- `shell.trashItem(path)` - Move file to trash
+- `dialog.showMessageBox(options)` - Show alert/confirm dialog
+- `app.getPath(name)` - Get system paths (downloads, documents, etc.)
+
+### Why Native APIs Don't Work
+
+Mini-apps run in sandboxed iframes with restricted permissions:
+- `<a download>` - Blocked by iframe sandbox
+- `window.open()` - Opens inside iframe, not in external browser
+- `navigator.clipboard` - Requires user gesture in main frame
+- `new Notification()` - Blocked by iframe permissions
+
+`window.paprAPI` bridges to Electron's native APIs via secure IPC to the main process.
+
+---
+
 ## Job Types (choose correctly)
 
 | Type | Use for | Example |
@@ -269,12 +327,12 @@ create_job({
   // Writes posts to SQLite
 })
 
-// 2. Agent job: Process with LLM
+// 2. Agent job: Process with LLM (autoTrigger: true = start when fetch job completes)
 create_job({
   name: "Review Posts",
   type: "subagent",
   subAgentId: "reviewer-agent",
-  dependsOn: [{ jobId: "fetch-reddit-posts" }],
+  dependsOn: [{ jobId: "fetch-reddit-posts", onStatus: "completed", autoTrigger: true }],
   // Reads from fetch job's SQLite, processes with LLM, writes results
 })
 
@@ -283,7 +341,7 @@ create_job({
   name: "Export Results",
   type: "python",
   command: "python3 code/export.py",
-  dependsOn: [{ jobId: "review-posts" }],
+  dependsOn: [{ jobId: "review-posts", onStatus: "completed", autoTrigger: true }],
   // Reads reviewed posts, formats for delivery
 })
 ```
@@ -299,23 +357,23 @@ create_job({
 
 #### Pattern 1: Pipeline (with dependencies)
 
-Create 3 separate jobs with `dependsOn`:
+Create 3 separate jobs with `dependsOn` and **`autoTrigger: true`** on each dependency so the next job **starts by itself** when the previous one finishes (any job types: python, subagent, agent, etc.). Without `autoTrigger`, `dependsOn` only orders runs when you start a job another way (`run_job`, schedule, or a later job pulling the chain).
 
 ```javascript
 create_job({ name: "Fetch", type: "python" })
 create_job({ 
   name: "Review", 
   type: "subagent", 
-  dependsOn: [{ jobId: "fetch" }]  // ← Runs after Fetch completes
+  dependsOn: [{ jobId: "fetch", onStatus: "completed", autoTrigger: true }]
 })
 create_job({ 
   name: "Export", 
   type: "python", 
-  dependsOn: [{ jobId: "review" }]  // ← Runs after Review completes
+  dependsOn: [{ jobId: "review", onStatus: "completed", autoTrigger: true }]
 })
 ```
 
-**Flow:** Job executor runs them in order automatically.
+**Flow:** When Fetch completes, Review auto-starts; when Review completes, Export auto-starts. If you only need ordering when manually running Export, you can omit `autoTrigger` on those entries.
 
 #### Pattern 2: Embedded Call (Python calls agent)
 

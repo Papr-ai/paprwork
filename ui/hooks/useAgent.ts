@@ -90,11 +90,14 @@ export function useAgent() {
 
       // Ensure we have a streaming message for all chunk types
       // Note: start-step should continue existing message, not create a new one
+      // Also: compression-start/compression-complete should NOT create new message
       if (
         !streamingMessageIdRef.current.has(chatId) &&
         chunk.type !== "done" &&
         chunk.type !== "error" &&
-        chunk.type !== "start-step"
+        chunk.type !== "start-step" &&
+        chunk.type !== "compression-start" &&
+        chunk.type !== "compression-complete"
       ) {
         const messageId = `msg-${Date.now()}`;
         streamingMessageIdRef.current.set(chatId, messageId);
@@ -654,12 +657,24 @@ export function useAgent() {
             const payload = chunk.payload as { error: string };
             const rawError = payload.error || "Unknown error";
 
+            // Check if this is a context limit error (compression will follow)
+            const isContextLimitError =
+              rawError.includes("Context limit approaching") ||
+              rawError.includes("context_length_exceeded");
+
             // Don't show abort errors - expected when user stops or sends new message
             const isAbortError =
               rawError.includes("aborted") ||
               rawError.includes("abort") ||
               rawError.toLowerCase().includes("the user aborted");
-            if (isAbortError) {
+            
+            if (isContextLimitError) {
+              console.log(
+                "[useAgent] Context limit error detected - compression will follow, NOT finalizing message",
+              );
+              // DO NOT finalize message - compression chunks will follow
+              // Just log the error, don't clear state
+            } else if (isAbortError) {
               console.log(
                 "[useAgent] Ignoring expected abort error (user stopped or sent new message)",
               );
@@ -698,17 +713,101 @@ export function useAgent() {
               console.error("[useAgent] Full chunk payload:", chunk.payload);
               setError(errorMsg);
             }
+            
+            // Only clean up state if NOT a context limit error
+            if (!isContextLimitError) {
+              const streamingMessageId =
+                streamingMessageIdRef.current.get(chatId);
+              if (streamingMessageId) {
+                finalizeStreamingMessage(streamingMessageId, chatId);
+                streamingMessageIdRef.current.delete(chatId);
+                streamingContentRef.current.delete(chatId);
+                streamingReasoningRef.current.delete(chatId);
+                toolCallsMapRef.current.delete(chatId);
+              }
+              activeStreamRequestByChatRef.current.delete(chatId);
+              setSending(chatId, false); // ✅ Per-chat isSending
+            }
+          }
+          break;
+
+        case "compression-start":
+          {
+            // Show compression indicator to user without finalizing message
+            console.log(
+              "[useAgent] Compression starting - continuing in same message",
+            );
             const streamingMessageId =
               streamingMessageIdRef.current.get(chatId);
             if (streamingMessageId) {
-              finalizeStreamingMessage(streamingMessageId, chatId);
-              streamingMessageIdRef.current.delete(chatId);
-              streamingContentRef.current.delete(chatId);
-              streamingReasoningRef.current.delete(chatId);
-              toolCallsMapRef.current.delete(chatId);
+              // Add a visual indicator to the sequence
+              const sequence = sequenceRef.current.get(chatId) || [];
+              sequence.push({
+                type: "text",
+                data: "\n\n_Compressing conversation history..._\n\n",
+              });
+              sequenceRef.current.set(chatId, sequence);
+
+              // Update UI with compression indicator
+              const { chatStates } = useChatStore.getState();
+              const chatState = chatStates.get(chatId);
+              if (chatState) {
+                const updatedMessages = chatState.messages.map((msg) =>
+                  msg.id === streamingMessageId
+                    ? { ...msg, sequence: [...sequence] }
+                    : msg,
+                );
+                const newChatStates = new Map(chatStates);
+                newChatStates.set(chatId, {
+                  ...chatState,
+                  messages: updatedMessages,
+                });
+                useChatStore.setState({ chatStates: newChatStates });
+              }
             }
-            activeStreamRequestByChatRef.current.delete(chatId);
-            setSending(chatId, false); // ✅ Per-chat isSending
+            // DO NOT clear state - we're continuing the same message
+          }
+          break;
+
+        case "compression-complete":
+          {
+            // Remove compression indicator and continue
+            console.log(
+              "[useAgent] Compression complete - continuing in same message",
+            );
+            const streamingMessageId =
+              streamingMessageIdRef.current.get(chatId);
+            if (streamingMessageId) {
+              // Remove compression text from sequence
+              const sequence = sequenceRef.current.get(chatId) || [];
+              const compressionIdx = sequence.findIndex(
+                (item) =>
+                  item.type === "text" &&
+                  item.data.includes("Compressing conversation"),
+              );
+              if (compressionIdx !== -1) {
+                sequence.splice(compressionIdx, 1);
+                sequenceRef.current.set(chatId, sequence);
+              }
+
+              // Update UI
+              const { chatStates } = useChatStore.getState();
+              const chatState = chatStates.get(chatId);
+              if (chatState) {
+                const updatedMessages = chatState.messages.map((msg) =>
+                  msg.id === streamingMessageId
+                    ? { ...msg, sequence: [...sequence] }
+                    : msg,
+                );
+                const newChatStates = new Map(chatStates);
+                newChatStates.set(chatId, {
+                  ...chatState,
+                  messages: updatedMessages,
+                });
+                useChatStore.setState({ chatStates: newChatStates });
+              }
+            }
+            // DO NOT clear state - we're continuing the same message
           }
           break;
 

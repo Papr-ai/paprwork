@@ -121,4 +121,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     NODE_ENV: process.env.NODE_ENV || "production",
     GATEWAY_PORT: process.env.GATEWAY_PORT || "18789",
   },
+
+  // System integration for mini-apps (generic invoke)
+  system: {
+    invoke: (method, args) => ipcRenderer.invoke("system:invoke", method, args),
+  },
 });

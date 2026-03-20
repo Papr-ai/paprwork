@@ -152,6 +152,16 @@ export interface ElectronAPI {
     check: () => void;
   };
 
+  // System integration for mini-apps (generic invoke)
+  system: {
+    /**
+     * Invoke any whitelisted Electron API
+     * @param method - Electron API method (e.g., 'shell.openExternal', 'dialog.showSaveDialog')
+     * @param args - Arguments to pass to the method
+     */
+    invoke: (method: string, args: any) => Promise<any>;
+  };
+
   // Legacy agent/chat APIs (not currently used - UI uses WebSocket Gateway)
   agent: {
     stream: (params: {
@@ -207,9 +217,19 @@ export interface ElectronAPI {
   };
 }
 
+export interface PaprAPI {
+  /**
+   * Invoke any whitelisted Electron API from mini-app
+   * @param method - Electron API method (e.g., 'shell.openExternal', 'dialog.showSaveDialog')
+   * @param args - Arguments to pass to the method
+   */
+  invoke(method: string, ...args: any[]): Promise<any>;
+}
+
 declare global {
   interface Window {
     electronAPI: ElectronAPI;
+    paprAPI?: PaprAPI; // Available in mini-app iframes
   }
 }
 

@@ -659,16 +659,28 @@ class GatewayProcessSupervisor {
         }
       } else if (msg.type === "CUSTOM_KEYS_LIST") {
         try {
+          console.log(`[Electron] Received CUSTOM_KEYS_LIST request: ${msg.requestId}`);
           const keys = await storage.listKeys();
-          if (proc === this.process) proc.send({ type: "CUSTOM_KEYS_RESPONSE", requestId: msg.requestId, keys });
+          console.log(`[Electron] Loaded ${keys.length} keys from storage:`, keys.map(k => k.name));
+          if (proc === this.process) {
+            proc.send({ type: "CUSTOM_KEYS_RESPONSE", requestId: msg.requestId, keys });
+            console.log(`[Electron] Sent CUSTOM_KEYS_RESPONSE with ${keys.length} keys`);
+          }
         } catch (error) {
           console.error("[Electron] custom-keys:list error:", error);
           if (proc === this.process) proc.send({ type: "CUSTOM_KEYS_RESPONSE", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
         }
       } else if (msg.type === "CUSTOM_KEYS_GET_BY_NAME") {
         try {
+          console.log(`[Electron] Received CUSTOM_KEYS_GET_BY_NAME request: ${msg.requestId} for key: "${msg.name}"`);
           const value = await storage.getKeyByName(msg.name);
-          if (proc === this.process) proc.send({ type: "CUSTOM_KEYS_RESPONSE", requestId: msg.requestId, value });
+          const found = value ? "found" : "not found";
+          const preview = value ? `${value.substring(0, 10)}...` : "null";
+          console.log(`[Electron] Key "${msg.name}" ${found} (preview: ${preview})`);
+          if (proc === this.process) {
+            proc.send({ type: "CUSTOM_KEYS_RESPONSE", requestId: msg.requestId, value });
+            console.log(`[Electron] Sent CUSTOM_KEYS_RESPONSE with value ${found}`);
+          }
         } catch (error) {
           console.error("[Electron] custom-keys:get-by-name error:", error);
           if (proc === this.process) proc.send({ type: "CUSTOM_KEYS_RESPONSE", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
@@ -971,6 +983,115 @@ function sendUpdateStatus(status, data) {
 let supervisor = null;
 
 // App lifecycle
+// ---------------------------------------------------------------------------
+//  System Integration for Mini-Apps
+//
+//  Generic system:invoke handler that allows mini-apps to call whitelisted
+//  Electron APIs like shell.openExternal, dialog.showSaveDialog, etc.
+// ---------------------------------------------------------------------------
+
+function initializeSystemInvokeHandler(mainWindow) {
+  const { Notification, clipboard } = require('electron');
+  const fs = require('fs/promises');
+  const os = require('os');
+  
+  // Whitelist of allowed Electron APIs
+  const ALLOWED_APIS = {
+    'shell.openExternal': async (url) => {
+      await shell.openExternal(url);
+      return { success: true };
+    },
+    
+    'shell.showItemInFolder': async (fullPath) => {
+      shell.showItemInFolder(fullPath);
+      return { success: true };
+    },
+    
+    'shell.trashItem': async (fullPath) => {
+      await shell.trashItem(fullPath);
+      return { success: true };
+    },
+    
+    'dialog.showSaveDialog': async (options) => {
+      const result = await dialog.showSaveDialog(mainWindow, options);
+      if (result.canceled) {
+        return { canceled: true };
+      }
+      
+      // If content provided, write the file
+      if (options.content) {
+        await fs.writeFile(result.filePath, options.content);
+      }
+      
+      return { filePath: result.filePath, success: true };
+    },
+    
+    'dialog.showOpenDialog': async (options) => {
+      const result = await dialog.showOpenDialog(mainWindow, options);
+      if (result.canceled) {
+        return { canceled: true };
+      }
+      return { filePaths: result.filePaths, success: true };
+    },
+    
+    'dialog.showMessageBox': async (options) => {
+      const result = await dialog.showMessageBox(mainWindow, options);
+      return { response: result.response, checkboxChecked: result.checkboxChecked };
+    },
+    
+    'clipboard.writeText': async (text) => {
+      clipboard.writeText(text);
+      return { success: true };
+    },
+    
+    'clipboard.readText': async () => {
+      return { text: clipboard.readText() };
+    },
+    
+    'notification.show': async (options) => {
+      const notification = new Notification({
+        title: options.title || 'Notification',
+        body: options.body || '',
+        urgency: options.urgency || 'normal'
+      });
+      notification.show();
+      return { success: true };
+    },
+    
+    'app.getPath': async (name) => {
+      return { path: app.getPath(name) };
+    },
+  };
+
+  // Register IPC handler
+  ipcMain.handle('system:invoke', async (event, method, args) => {
+    try {
+      console.log(`[Electron] system:invoke: ${method}`, args);
+      
+      // Check if method is whitelisted
+      const handler = ALLOWED_APIS[method];
+      if (!handler) {
+        const allowedMethods = Object.keys(ALLOWED_APIS).join(', ');
+        throw new Error(`Electron API not allowed: ${method}. Whitelist: ${allowedMethods}`);
+      }
+      
+      // Call the handler with args (handle both array and single object)
+      const argsArray = Array.isArray(args) ? args : [args];
+      const result = await handler(...argsArray);
+      return result;
+    } catch (error) {
+      console.error(`[Electron] system:invoke error:`, error);
+      throw error;
+    }
+  });
+  
+  console.log('[Electron] System invoke handler initialized ✓');
+}
+
+// ---------------------------------------------------------------------------
+//  App Lifecycle
+// ---------------------------------------------------------------------------
+
 app.whenReady().then(async () => {
   console.log("[Electron] App ready");
 
@@ -1026,6 +1147,9 @@ app.whenReady().then(async () => {
   if (initializeOllamaIPC) {
     initializeOllamaIPC(mainWindow);
   }
+
+  // Initialize system:invoke handler for mini-app system integration
+  initializeSystemInvokeHandler(mainWindow);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

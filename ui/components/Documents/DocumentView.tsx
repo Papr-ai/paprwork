@@ -15,7 +15,12 @@ import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Underline from "@tiptap/extension-underline";
 import Placeholder from "@tiptap/extension-placeholder";
+import { Table } from "@tiptap/extension-table";
+import { TableRow } from "@tiptap/extension-table-row";
+import { TableCell } from "@tiptap/extension-table-cell";
+import { TableHeader } from "@tiptap/extension-table-header";
 import { CustomMarkdown } from "./CustomMarkdown";
+import { DocumentMarkdownItTables } from "./DocumentMarkdownItTables";
 import { SlashCommandExtension } from "./SlashCommandExtension";
 import { useDocument } from "../../hooks/useDocuments";
 import { gateway } from "../../src/lib/gateway";
@@ -63,6 +68,11 @@ export function DocumentView({ documentId }: DocumentViewProps) {
       StarterKit.configure({
         heading: { levels: [1, 2, 3] },
       }),
+      Table.configure({ resizable: false }),
+      TableRow,
+      TableHeader,
+      TableCell,
+      DocumentMarkdownItTables,
       Underline,
       Placeholder.configure({
         placeholder: 'Start typing or press "/" for commands...',

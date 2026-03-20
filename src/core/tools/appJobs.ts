@@ -32,8 +32,10 @@ const dependencySchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "When true, this job automatically runs when the dependency reaches onStatus. " +
-        "Without this, dependsOn only guarantees ordering when the job is triggered manually or by schedule.",
+      "REQUIRED for automatic pipeline chaining: set true so this job starts by itself when the parent job reaches onStatus (e.g. completed). " +
+        "If omitted or false, dependsOn only enforces order when something else starts this job (manual run_job, schedule, or running a downstream job that pulls the chain). " +
+        "Every link in a fire-and-forget chain (A finishes → run B → B finishes → run C) needs autoTrigger: true on B's dependency on A and on C's dependency on B. " +
+        "update_job: if you replace dependsOn without autoTrigger, auto-start is removed.",
     ),
 });
 
@@ -80,7 +82,12 @@ const createJobSchema = z.object({
     .describe(
       "Python/Node packages to install before running. Creates a venv automatically. Example: ['anthropic', 'requests', 'sqlite-utils']",
     ),
-  dependsOn: z.array(dependencySchema).optional(),
+  dependsOn: z
+    .array(dependencySchema)
+    .optional()
+    .describe(
+      "Upstream jobs. Use autoTrigger: true on each entry when this job should start automatically when the parent reaches onStatus (required for A→B→C chains).",
+    ),
   runtimeCalls: z
     .array(z.string().min(1))
     .optional()
@@ -249,7 +256,9 @@ export const createAppTool = createTool({
 export const createJobTool = createTool({
   id: "create_job",
   description:
-    "Create a job with optional DAG dependencies, retries, and delivery",
+    "Create a job with optional DAG dependencies, retries, and delivery. " +
+    "For pipelines that should run automatically when a parent job finishes, each dependsOn entry MUST include autoTrigger: true (same for subagent→subagent as python→subagent). " +
+    "Without autoTrigger, dependencies only order runs when you start the job another way.",
   inputSchema: createJobSchema,
   execute: async (input) => {
     const args = (input as { context?: CreateJobArgs }).context ?? input;
@@ -519,7 +528,9 @@ const updateJobSchema = z.object({
   dependsOn: z
     .array(dependencySchema)
     .optional()
-    .describe("Replace the full dependency list"),
+    .describe(
+      "Replace the full dependency list. Include autoTrigger: true on each entry that should auto-run when the parent completes; omitted flags are not stored.",
+    ),
   retries: retrySchema.optional().describe("Update retry policy"),
   retentionDays: z
     .number()
@@ -844,7 +855,7 @@ Cannot update a currently running job (stop it first with bash or wait for it to
 Common use cases:
 - Fix a buggy command: { jobId, command: "python3 fixed_script.py" }
 - Add missing requirements: { jobId, requirements: ["anthropic", "requests"] }
-- Change a dependency: { jobId, dependsOn: [{ jobId: "...", onStatus: "completed" }] }
+- Change a dependency: { jobId, dependsOn: [{ jobId: "...", onStatus: "completed", autoTrigger: true }] } — include autoTrigger: true whenever the job should start automatically when the parent completes; omitting it removes auto-chaining
 - Enable/change a schedule: { jobId, schedule: { enabled: true, cron: "0 9 * * *" } }
 - Adjust retries after a flaky run: { jobId, retries: { maxAttempts: 3, backoffMs: 5000 } }`,
   inputSchema: updateJobSchema,

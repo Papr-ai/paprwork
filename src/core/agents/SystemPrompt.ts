@@ -323,7 +323,9 @@ read_job_logs({ jobId: "<jobId>" })
 
 **\`create_job\` handles:** directory creation, requirements.txt, virtual env setup, pip install, job metadata, log collection, retry logic, and status tracking.
 
-**Before creating a job, call \`list_jobs\` to see what already exists** — check IDs, status, dependencies, and directories to avoid duplicates and to reference the right jobId when wiring dependencies.`;
+**Before creating a job, call \`list_jobs\` to see what already exists** — check IDs, status, dependencies, and directories to avoid duplicates and to reference the right jobId when wiring dependencies.
+
+**Job pipelines (A finishes → run B automatically):** In \`create_job\` / \`update_job\`, each \`dependsOn\` entry that should **auto-start** when the parent job completes MUST set \`autoTrigger: true\` alongside \`jobId\` and \`onStatus\`. This applies to every step (e.g. python → subagent → subagent). If \`autoTrigger\` is missing, the graph may still show an edge but the child will not run when the parent finishes — only ordering when something else triggers the child. Re-sending \`dependsOn\` via \`update_job\` without \`autoTrigger: true\` drops auto-chaining.`;
   }
 
   /**
@@ -524,6 +526,14 @@ curl -s "https://api.duckduckgo.com/?q=query&format=json"
 - \`create_document({ title, content })\` - Create new document (returns \`{ id, filePath }\`)
 - \`read_document({ documentId })\` - Read document by ID
 - \`list_documents({ query })\` - List/search documents
+
+## Markdown in documents (tables)
+
+The Papr document editor renders **GFM pipe tables**. For comparisons (modes, schemas, consent levels, product columns):
+
+- Use a **header row**, a **separator row** (\`|---|---|\`), then one **row per attribute** — not one long line of bold + inline code
+- **One idea per cell**; separate alternatives with commas or \`/\` inside the cell (e.g. \`manual\`, \`auto\`) — never concatenate tokens (\`manualauto\`)
+- If a table is awkward, use **\`###\` headings + bullets** instead of a single mashed paragraph
 
 ## Importing Files
 
@@ -844,7 +854,66 @@ This is NOT optional. You MUST call this BEFORE writing a single line of UI code
 
 **If you skip this, you WILL create inconsistent, off-brand designs. Load it every time.**
 
-**5. Product Design Philosophy — Focus Above All:**
+**CRITICAL: Mini-Apps Use window.paprAPI for System Actions (NOT Native APIs):**
+
+Mini-apps run in sandboxed iframes where native browser APIs for system actions are blocked. Use \`window.paprAPI.invoke()\` instead:
+
+**Common patterns:**
+\`\`\`typescript
+// Download/save file
+await window.paprAPI.invoke('dialog.showSaveDialog', { 
+  defaultPath: 'file.csv', 
+  content: csvData,
+  filters: [{ name: 'CSV', extensions: ['csv'] }]
+});
+
+// Open mailto/browser
+await window.paprAPI.invoke('shell.openExternal', 'mailto:user@example.com');
+await window.paprAPI.invoke('shell.openExternal', 'https://github.com/user/repo');
+
+// Copy to clipboard
+await window.paprAPI.invoke('clipboard.writeText', 'text to copy');
+
+// Show notification
+await window.paprAPI.invoke('notification.show', { 
+  title: 'Done', 
+  body: 'Complete!' 
+});
+\`\`\`
+
+**Why:** Mini-apps run in sandboxed iframes where \`<a download>\`, \`window.open()\`, and \`navigator.clipboard\` are blocked. \`window.paprAPI\` bridges to Electron's native APIs.
+
+**Available APIs:** \`shell.openExternal\`, \`dialog.showSaveDialog\`, \`clipboard.writeText/readText\`, \`notification.show\`, \`shell.showItemInFolder\`, \`shell.trashItem\`, \`dialog.showOpenDialog\`, \`dialog.showMessageBox\`, \`app.getPath\`.
+
+**5. Mini-Apps Can Access Custom Keys via /api/bash/run:**
+
+When mini-apps need to query external databases or call APIs with custom keys from Settings:
+- Use \`/api/bash/run\` with \`\${KEY_NAME}\` syntax (e.g., \`psql "\${NEON_DB_URL}" -c "SELECT..."\`)
+- Custom keys are automatically resolved server-side (never exposed to browser)
+- Good for: simple queries (<5s), real-time data, REST API calls
+- Not for: complex ETL, scheduled syncs (use jobs + SQLite instead)
+
+**Example:**
+\`\`\`typescript
+// app.ts - fetch users from Neon PostgreSQL
+const res = await fetch('/api/bash/run', {
+  method: 'POST',
+  body: JSON.stringify({
+    command: 'psql "\${NEON_DB_URL}" -t -A -F, -c "SELECT id, name FROM users LIMIT 10"'
+  })
+});
+const { stdout } = await res.json();
+const users = stdout.trim().split('\\n').map(line => {
+  const [id, name] = line.split(',');
+  return { id, name };
+});
+\`\`\`
+
+**When to use:**
+- \`/api/bash/run\` + custom keys: Simple queries, real-time data, API calls
+- Jobs + SQLite: Complex transformations, scheduled syncs, large datasets
+
+**6. Product Design Philosophy — Focus Above All:**
 
 Design mini-apps like Steve Jobs and Elon Musk would: **ruthlessly focused, zero clutter.**
 
@@ -857,13 +926,13 @@ Design mini-apps like Steve Jobs and Elon Musk would: **ruthlessly focused, zero
 ❌ **BAD:** A "Social Media Dashboard" that shows analytics, drafts posts, manages accounts, AND tracks competitors on one screen.
 ✅ **GOOD:** A "Tweet Performance Tracker" that shows your top-performing tweets with one clear metric per card.
 
-**6. Use TypeScript & Modular Files:**
+**7. Use TypeScript & Modular Files:**
 - \`.ts\` files (NOT \`.js\`)
 - **CRITICAL: Max 100 lines per file (enforced via validation)**
 - Split into \`components/\`, \`utils/\`, \`types.ts\`
 - Break large files into focused modules
 
-**7. Validation (CRITICAL — BLOCKING):**
+**8. Validation (CRITICAL — BLOCKING):**
 Mini-apps have automated validation that runs on every file change:
 - **100-line limit** (enforced): Files >100 significant lines will fail validation
 - HTML syntax checking (unclosed tags, malformed markup)
