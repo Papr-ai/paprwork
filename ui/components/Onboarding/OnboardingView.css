@@ -1,8 +1,18 @@
 /**
  * OnboardingView - Full-screen onboarding styles
+ * Accent colors match public/papr-logo.svg gradient
  */
 
 .onboarding-view {
+  --papr-onboard-blue: #0060e0;
+  --papr-onboard-cyan: #00acfa;
+  --papr-onboard-bright: #0bcdff;
+  --papr-onboard-gradient: linear-gradient(
+    135deg,
+    var(--papr-onboard-blue) 0%,
+    var(--papr-onboard-cyan) 60%,
+    var(--papr-onboard-bright) 100%
+  );
   width: 100%;
   height: 100%;
   display: flex;
@@ -26,12 +36,23 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 80px;
-  height: 80px;
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.2) 0%, rgba(118, 75, 162, 0.2) 100%);
-  border-radius: 20px;
-  color: #667eea;
+  width: 88px;
+  height: 88px;
+  background: linear-gradient(
+    145deg,
+    rgba(0, 96, 224, 0.12) 0%,
+    rgba(0, 172, 250, 0.1) 55%,
+    rgba(11, 205, 255, 0.08) 100%
+  );
+  border-radius: 22px;
   margin-bottom: 24px;
+  border: 1px solid rgba(0, 96, 224, 0.15);
+}
+
+.onboarding-view-logo {
+  width: 52px;
+  height: auto;
+  display: block;
 }
 
 .onboarding-view-title {
@@ -39,7 +60,7 @@
   font-weight: 700;
   color: var(--text-color);
   margin: 0 0 12px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--papr-onboard-gradient);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -73,22 +94,45 @@
 
 .onboarding-view-step:hover:not(.locked):not(.completed) {
   background: var(--card-background-hover, rgba(255, 255, 255, 0.08));
-  border-color: rgba(102, 126, 234, 0.4);
+  border-color: rgba(0, 96, 224, 0.45);
   transform: translateY(-4px);
-  box-shadow: 0 8px 24px rgba(102, 126, 234, 0.2);
+  box-shadow: 0 8px 24px rgba(0, 96, 224, 0.15);
+}
+
+/* Step 1 stays actionable after “done”; show hover like active */
+.onboarding-view-step--settings.completed {
+  cursor: pointer;
+  opacity: 0.92;
+}
+
+.onboarding-view-step--settings.completed .step-title-view {
+  text-decoration: none;
+}
+
+.onboarding-view-step--settings.completed:hover {
+  opacity: 1;
+  background: rgba(0, 96, 224, 0.08);
+  border-color: rgba(0, 96, 224, 0.4);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 96, 224, 0.12);
 }
 
 /* Step states */
-.onboarding-view-step.completed {
+.onboarding-view-step.completed:not(.onboarding-view-step--settings) {
   opacity: 0.6;
   background: rgba(16, 185, 129, 0.1);
   border-color: rgba(16, 185, 129, 0.3);
 }
 
+.onboarding-view-step--settings.completed {
+  background: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.28);
+}
+
 .onboarding-view-step.active {
-  background: rgba(102, 126, 234, 0.15);
-  border-color: rgba(102, 126, 234, 0.5);
-  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+  background: rgba(0, 96, 224, 0.1);
+  border-color: rgba(0, 96, 224, 0.45);
+  box-shadow: 0 0 0 4px rgba(0, 96, 224, 0.08);
 }
 
 .onboarding-view-step.locked {
@@ -125,18 +169,19 @@
 }
 
 .onboarding-view-step.active .step-number-view {
-  background: #667eea;
+  background: var(--papr-onboard-blue);
   color: white;
-  border-color: #667eea;
-  animation: pulse 2s ease-in-out infinite;
+  border-color: var(--papr-onboard-cyan);
+  animation: onboarding-papr-pulse 2s ease-in-out infinite;
 }
 
-@keyframes pulse {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(102, 126, 234, 0.7);
+@keyframes onboarding-papr-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(0, 96, 224, 0.45);
   }
   50% {
-    box-shadow: 0 0 0 8px rgba(102, 126, 234, 0);
+    box-shadow: 0 0 0 10px rgba(0, 96, 224, 0);
   }
 }
 
@@ -161,7 +206,7 @@
 }
 
 .onboarding-view-step.active .step-icon-view {
-  color: #667eea;
+  color: var(--papr-onboard-blue);
 }
 
 .step-text-view {
@@ -175,7 +220,7 @@
   margin: 0 0 6px;
 }
 
-.onboarding-view-step.completed .step-title-view {
+.onboarding-view-step.completed:not(.onboarding-view-step--settings) .step-title-view {
   text-decoration: line-through;
 }
 

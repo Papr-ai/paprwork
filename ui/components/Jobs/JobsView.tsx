@@ -120,6 +120,39 @@ export function JobsView() {
     return `${Math.floor(seconds / 604800)}w ago`;
   };
 
+  const formatAbsoluteShort = (isoString?: string): string => {
+    if (!isoString) return "—";
+    const date = new Date(isoString);
+    if (Number.isNaN(date.getTime())) return "—";
+    return date.toLocaleString(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+  };
+
+  const formatNextRunSummary = (job: JobRecord): string => {
+    if (!job.schedule?.enabled) return "—";
+    const raw = job.scheduleState?.nextRunAt;
+    if (!raw) return "Not set (will reconcile on load)";
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return "—";
+    const nowMs = Date.now();
+    if (d.getTime() <= nowMs) {
+      return `Due now · ${formatAbsoluteShort(raw)}`;
+    }
+    const diff = d.getTime() - nowMs;
+    if (diff < 60_000) {
+      return `in ${Math.max(1, Math.ceil(diff / 1000))}s · ${formatAbsoluteShort(raw)}`;
+    }
+    if (diff < 3_600_000) {
+      return `in ${Math.ceil(diff / 60_000)}m · ${formatAbsoluteShort(raw)}`;
+    }
+    if (diff < 86_400_000) {
+      return `in ${Math.ceil(diff / 3_600_000)}h · ${formatAbsoluteShort(raw)}`;
+    }
+    return formatAbsoluteShort(raw);
+  };
+
   const scheduleLabel = (job: {
     schedule?: { cron?: string; intervalMs?: number; atTime?: string };
   }): string => {
@@ -312,10 +345,69 @@ export function JobsView() {
                     </div>
                   )}
                 </div>
+                {job.schedule?.enabled ? (
+                  <div className="details-section">
+                    <h4>Schedule</h4>
+                    <div className="details-grid">
+                      <div className="detail-item">
+                        <span className="detail-label">Next run</span>
+                        <span className="detail-value">
+                          {formatNextRunSummary(job)}
+                        </span>
+                      </div>
+                      <div className="detail-item detail-item-full">
+                        <span className="detail-label">Rule</span>
+                        <span className="detail-value">
+                          {job.schedule.cron
+                            ? `Cron: ${job.schedule.cron}`
+                            : job.schedule.intervalMs
+                              ? `Every ${job.schedule.intervalMs} ms`
+                              : job.schedule.atTime
+                                ? `One shot at ${job.schedule.atTime}`
+                                : "Scheduled"}
+                          {job.schedule.timezone
+                            ? ` · TZ ${job.schedule.timezone}`
+                            : ""}
+                          {job.schedule.catchUpMissed
+                            ? " · catch-up missed runs"
+                            : ""}
+                        </span>
+                      </div>
+                      {job.scheduleState?.lastScheduledRunAt ? (
+                        <div className="detail-item">
+                          <span className="detail-label">Last scheduled slot</span>
+                          <span className="detail-value">
+                            {formatAbsoluteShort(
+                              job.scheduleState.lastScheduledRunAt,
+                            )}{" "}
+                            ({formatRelativeTime(
+                              job.scheduleState.lastScheduledRunAt,
+                            )}
+                            )
+                          </span>
+                        </div>
+                      ) : null}
+                      {job.scheduleState?.lastTriggeredAt ? (
+                        <div className="detail-item">
+                          <span className="detail-label">Last trigger</span>
+                          <span className="detail-value">
+                            {formatAbsoluteShort(
+                              job.scheduleState.lastTriggeredAt,
+                            )}{" "}
+                            ({formatRelativeTime(
+                              job.scheduleState.lastTriggeredAt,
+                            )}
+                            )
+                          </span>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
                 <div className="job-info-note">
                   <span>
                     {job.schedule?.enabled
-                      ? "Runs automatically on schedule. Use play/stop controls for manual testing."
+                      ? "Runs automatically while Paprwork is open and the gateway is running. Closing the app pauses schedules. Use play/stop for manual runs."
                       : "Use play to run once and stop to interrupt active execution."}
                   </span>
                 </div>

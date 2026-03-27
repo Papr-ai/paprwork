@@ -111,15 +111,8 @@ export function App() {
           console.log('[App] Creating getting-started tab');
           createTab('getting-started', 'default', 'Getting Started');
         }
-      } else {
-        // Remove getting-started tab if onboarding complete
-        const gettingStartedTab = tabs.find(t => t.type === 'getting-started');
-        if (gettingStartedTab) {
-          console.log('[App] Removing getting-started tab (onboarding complete)');
-          const { closeTab } = useTabStore.getState();
-          closeTab(gettingStartedTab.id);
-        }
       }
+      // Do not auto-close Getting Started: users can reopen it from the sidebar
     };
     
     // Check on mount

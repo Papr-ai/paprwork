@@ -3,6 +3,7 @@
  * Uses electron-store for encrypted, atomic updates
  */
 
+import { randomUUID } from "node:crypto";
 import Store from "electron-store";
 import type {
   AppSettings,
@@ -22,7 +23,9 @@ const DEFAULT_SETTINGS: AppSettings = {
     language: "en",
     autoSave: true,
     keyboardShortcuts: true,
+    telemetryEnabled: false,
   },
+  telemetry: {},
   compaction: {
     maxTokens: 100000,
     targetTokens: 50000,
@@ -32,13 +35,31 @@ const DEFAULT_SETTINGS: AppSettings = {
   permissions: DEFAULT_PERMISSION_SETTINGS,
 };
 
+export interface SettingsStorageOptions {
+  /**
+   * When true (typical for installed Mac/Windows/Linux packages), new installs default
+   * telemetry to on. Omit or false for dev/tests. User can still opt out in Settings.
+   */
+  defaultTelemetryEnabled?: boolean;
+}
+
 export class SettingsStorage {
   private store: Store<AppSettings>;
+  private readonly telemetryDefaultFallback: boolean;
 
-  constructor(storagePath?: string) {
+  constructor(storagePath?: string, options?: SettingsStorageOptions) {
+    const telemetryDefault = options?.defaultTelemetryEnabled ?? false;
+    this.telemetryDefaultFallback = telemetryDefault;
+    const defaults: AppSettings = {
+      ...DEFAULT_SETTINGS,
+      preferences: {
+        ...DEFAULT_SETTINGS.preferences,
+        telemetryEnabled: telemetryDefault,
+      },
+    };
     this.store = new Store<AppSettings>({
       name: "settings",
-      defaults: DEFAULT_SETTINGS,
+      defaults,
       encryptionKey: "paprwork-v2-secure-settings",
       ...(storagePath ? { cwd: storagePath } : {}),
     });
@@ -135,6 +156,33 @@ export class SettingsStorage {
    */
   getAutoSave(): boolean {
     return this.store.get("preferences.autoSave", true);
+  }
+
+  /**
+   * Anonymous usage telemetry preference. Persisted in encrypted store.
+   */
+  getTelemetryEnabled(): boolean {
+    return this.store.get(
+      "preferences.telemetryEnabled",
+      this.telemetryDefaultFallback,
+    );
+  }
+
+  setTelemetryEnabled(enabled: boolean): void {
+    this.store.set("preferences.telemetryEnabled", enabled);
+  }
+
+  /**
+   * Stable random id per install for anonymous DAU-style metrics only.
+   */
+  getOrCreateTelemetryInstallId(): string {
+    const existing = this.store.get("telemetry.installId");
+    if (typeof existing === "string" && existing.length > 0) {
+      return existing;
+    }
+    const id = randomUUID();
+    this.store.set("telemetry.installId", id);
+    return id;
   }
 
   /**

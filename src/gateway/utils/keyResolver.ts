@@ -53,9 +53,10 @@ async function requestKeysViaIPC(
     const messageHandler = (message: unknown) => {
       if (isKeysResponseMessage(message) && message.requestId === reqId) {
         cleanup();
-        // Cache OAuth tokens if available
-        if (message.oauthTokens) {
-          oauthTokenCache = message.oauthTokens;
+        // Main is authoritative: when it includes `oauthTokens`, replace cache (including `{}`
+        // when no valid subscription tokens) so we never keep a stale accessToken after re-auth.
+        if ("oauthTokens" in message) {
+          oauthTokenCache = message.oauthTokens ?? {};
         }
         resolve(message.keys || {});
       }
@@ -166,9 +167,15 @@ export async function getApiKey(keyName: string): Promise<string | undefined> {
 export function clearKeyCache(keyName?: string): void {
   if (keyName) {
     delete keyCache[keyName];
+    if (keyName === "OPENAI_API_KEY") {
+      delete oauthTokenCache.openai;
+    } else if (keyName === "ANTHROPIC_API_KEY") {
+      delete oauthTokenCache.anthropic;
+    }
     console.log(`[KeyResolver] Cleared cache for key: ${keyName}`);
   } else {
     keyCache = {};
+    oauthTokenCache = {};
     console.log("[KeyResolver] Cleared entire key cache");
   }
 }

@@ -105,6 +105,16 @@ paprwork-v2/
 4. **Mastra Framework** - Reliable multi-provider AI orchestration
 5. **Rust-Based Tools** - `oxlint` and `oxfmt` for 50-100x faster dev workflow
 
+### Optional usage telemetry
+
+The desktop app can send **anonymous, coarse usage events** (for example app started or quit) to help measure adoption. This follows the same **proxy pattern** as [Papr Memory OSS](https://github.com/Papr-ai/memory): the app **never** embeds an Amplitude API key; events are `POST`ed to `https://memory.papr.ai/v1/telemetry/events`, and the server forwards to Amplitude.
+
+- **Default:** **On** for **packaged** installs (Mac/Windows/Linux downloads from releases). **Off** when running from source/dev (`electron` unpackaged). Change anytime under **Settings → Privacy**. `PAPRWORK_TELEMETRY_ENABLED=true|false` still overrides the stored preference.
+- **Disable:** Turn off in **Settings → Privacy**, or set `PAPRWORK_TELEMETRY_ENABLED=false` (forces off regardless of package default).
+- **Custom endpoint:** Set `PAPRWORK_TELEMETRY_URL` to your own proxy base URL (must be `http://` or `https://`). Set `PAPRWORK_TELEMETRY_URL=` (empty) to block all telemetry network calls.
+- **Not collected:** Chat content, prompts, file paths, API keys, or personal data. Implementation: `src/core/telemetry/`.
+- **Operational signals (gateway):** When telemetry is on, the jobs gateway may emit coarse diagnostics (for example `paprwork_job_failed`, `paprwork_scheduler_cron_parse_error`, throttled `paprwork_scheduler_tick`) with **no stack traces** and **no stderr**. This helps spot patterns in Amplitude; it is **not** a full crash/bug reporter. For deep production error tracking, add something like Sentry separately.
+
 ---
 
 ## 📚 Documentation

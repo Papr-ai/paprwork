@@ -10,10 +10,10 @@ export default defineConfig({
     testTimeout: 60_000,
     hookTimeout: 60_000,
     passWithNoTests: true,
-    pool: "forks",
+    pool: "threads",
     poolOptions: {
-      forks: {
-        singleFork: true,
+      threads: {
+        singleThread: true,
       },
     },
     coverage: {

@@ -7,6 +7,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useCustomKeys } from "../../hooks/useCustomKeys";
 import { useProfileStore } from "../../stores/profileStore";
 import { useCodeIndexing } from "../../hooks/useCodeIndexing";
+import { useAppUpdater } from "../../hooks/useAppUpdater";
 import { gateway } from "../../src/lib/gateway";
 import type { CustomKeyInput, SettingsTab } from "../../types/settings";
 import { OAuthSection } from "./OAuthSection";
@@ -74,6 +75,24 @@ export function SettingsView() {
           Permissions
         </button>
         <button
+          className={`settings-tab ${activeTab === "privacy" ? "settings-tab--active" : ""}`}
+          onClick={() => setActiveTab("privacy")}
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            <path d="M12 8v4" />
+            <path d="M12 16h.01" />
+          </svg>
+          Privacy
+        </button>
+        <button
           className={`settings-tab ${activeTab === "memory" ? "settings-tab--active" : ""}`}
           onClick={() => setActiveTab("memory")}
         >
@@ -91,6 +110,24 @@ export function SettingsView() {
           </svg>
           Memory
         </button>
+        <button
+          className={`settings-tab ${activeTab === "about" ? "settings-tab--active" : ""}`}
+          onClick={() => setActiveTab("about")}
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="16" x2="12" y2="12" />
+            <line x1="12" y1="8" x2="12.01" y2="8" />
+          </svg>
+          About
+        </button>
       </div>
 
       {/* Content */}
@@ -98,7 +135,9 @@ export function SettingsView() {
         {activeTab === "keys" && <APIKeysTab />}
         {activeTab === "profile" && <ProfileTab />}
         {activeTab === "permissions" && <PermissionsTab />}
+        {activeTab === "privacy" && <PrivacyTab />}
         {activeTab === "memory" && <MemoryTab />}
+        {activeTab === "about" && <AboutTab />}
       </div>
     </div>
   );
@@ -887,6 +926,96 @@ function ProfileTab() {
   );
 }
 
+function PrivacyTab() {
+  const [telemetryEnabled, setTelemetryEnabled] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const telemetryApi = window.electronAPI?.telemetry;
+
+  useEffect(() => {
+    if (!telemetryApi) {
+      setLoaded(true);
+      return;
+    }
+    void telemetryApi
+      .getEnabled()
+      .then((r) => {
+        setTelemetryEnabled(r.enabled);
+        setLoaded(true);
+      })
+      .catch(() => setLoaded(true));
+  }, [telemetryApi]);
+
+  const handleTelemetryChange = async (next: boolean) => {
+    if (!telemetryApi) return;
+    setSaving(true);
+    try {
+      const result = await telemetryApi.setEnabled(next);
+      if (result.success) {
+        setTelemetryEnabled(result.enabled);
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!loaded) {
+    return (
+      <div className="settings-content">
+        <div className="settings-section">Loading privacy settings...</div>
+      </div>
+    );
+  }
+
+  if (!telemetryApi) {
+    return (
+      <div className="settings-content">
+        <div className="settings-section">
+          <h2 className="settings-section__title">Privacy</h2>
+          <p className="settings-section__description">
+            Anonymous usage statistics can be configured in the desktop app
+            (Electron). This build does not expose telemetry controls.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="settings-content">
+      <div className="settings-section">
+        <h2 className="settings-section__title">Privacy</h2>
+        <p className="settings-section__description">
+          Anonymous usage data helps us understand how Paprwork is used. In the
+          downloaded app, this is on by default; developer/source builds default
+          off. We never send chat content, prompts, file paths, or API keys.
+          Events go to Papr&apos;s telemetry proxy only; see the README for
+          details and environment overrides.
+        </p>
+
+        <label className="permission-option" style={{ marginTop: "1rem" }}>
+          <input
+            type="checkbox"
+            checked={telemetryEnabled}
+            disabled={saving}
+            onChange={(e) => void handleTelemetryChange(e.target.checked)}
+          />
+          <div className="permission-card">
+            <div className="permission-header">
+              <h4>Anonymous usage statistics</h4>
+            </div>
+            <p>
+              Send coarse events (for example app opened) to help improve the
+              product. You can turn this off anytime.
+            </p>
+          </div>
+        </label>
+      </div>
+    </div>
+  );
+}
+
 function PermissionsTab() {
   const [permissionLevel, setPermissionLevel] = useState<
     "open" | "moderate" | "strict"
@@ -1381,6 +1510,224 @@ function MemoryTab() {
               </div>
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===== About Tab =====
+
+function AboutTab() {
+  const {
+    currentVersion,
+    updateStatus,
+    checkForUpdates,
+    installUpdate,
+    isChecking,
+    isDownloading,
+    isUpdateReady,
+    hasUpdate,
+  } = useAppUpdater();
+
+  const getStatusDisplay = () => {
+    if (!updateStatus) {
+      return { text: "Ready to check for updates", color: "default" };
+    }
+
+    switch (updateStatus.status) {
+      case "checking":
+        return { text: "Checking for updates...", color: "default" };
+      case "available":
+        return {
+          text: `Update available: v${updateStatus.version}`,
+          color: "success",
+        };
+      case "downloading":
+        return {
+          text: `Downloading update... ${updateStatus.percent || 0}%`,
+          color: "info",
+        };
+      case "ready":
+        return {
+          text: `Update ready to install: v${updateStatus.version}`,
+          color: "success",
+        };
+      case "not-available":
+        return { text: "You're up to date!", color: "default" };
+      case "error":
+        return {
+          text: `Error: ${updateStatus.error || "Unknown error"}`,
+          color: "error",
+        };
+      default:
+        return { text: "Unknown status", color: "default" };
+    }
+  };
+
+  const statusDisplay = getStatusDisplay();
+
+  return (
+    <div className="settings-content">
+      <div className="settings-section">
+        <h2 className="settings-section__title">About Paprwork</h2>
+
+        {/* App Info Card */}
+        <div className="about-card">
+          <div className="about-header">
+            <div className="about-logo">
+              <svg
+                width="48"
+                height="48"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              >
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+                <line x1="16" y1="13" x2="8" y2="13" />
+                <line x1="16" y1="17" x2="8" y2="17" />
+                <polyline points="10 9 9 9 8 9" />
+              </svg>
+            </div>
+            <div className="about-info">
+              <h3>Paprwork V2</h3>
+              <p className="about-version">Version {currentVersion}</p>
+            </div>
+          </div>
+
+          <p className="about-description">
+            AI-powered desktop assistant built with TypeScript and Mastra
+          </p>
+
+          <div className="about-links">
+            <a
+              href="https://github.com/amirkabbara/paprwork-v2"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
+                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+              </svg>
+              GitHub
+            </a>
+            <a
+              href="https://papr.ai"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="2" y1="12" x2="22" y2="12" />
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+              </svg>
+              Website
+            </a>
+            <a
+              href="https://github.com/amirkabbara/paprwork-v2/issues"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="16" x2="12" y2="12" />
+                <line x1="12" y1="8" x2="12.01" y2="8" />
+              </svg>
+              Report Issue
+            </a>
+          </div>
+        </div>
+
+        {/* Update Section */}
+        <div className="about-card">
+          <div className="about-update-header">
+            <h3>Software Updates</h3>
+            <span className={`update-status-badge update-status-badge--${statusDisplay.color}`}>
+              {statusDisplay.text}
+            </span>
+          </div>
+
+          {hasUpdate && updateStatus?.releaseNotes && (
+            <div className="release-notes">
+              <h4>What's New</h4>
+              <div className="release-notes-content">
+                {updateStatus.releaseNotes}
+              </div>
+            </div>
+          )}
+
+          <div className="about-update-actions">
+            {isUpdateReady ? (
+              <button
+                className="settings-btn settings-btn--primary"
+                onClick={installUpdate}
+              >
+                Install Update & Restart
+              </button>
+            ) : isDownloading ? (
+              <button className="settings-btn settings-btn--secondary" disabled>
+                <div className="spinner" />
+                Downloading... {updateStatus?.percent || 0}%
+              </button>
+            ) : (
+              <button
+                className="settings-btn settings-btn--secondary"
+                onClick={checkForUpdates}
+                disabled={isChecking}
+              >
+                {isChecking ? (
+                  <>
+                    <div className="spinner" />
+                    Checking...
+                  </>
+                ) : (
+                  "Check for Updates"
+                )}
+              </button>
+            )}
+          </div>
+
+          <p className="about-update-note">
+            Paprwork automatically checks for updates on startup and every 4
+            hours
+          </p>
+        </div>
+
+        {/* License & Credits */}
+        <div className="about-card">
+          <h3>License & Credits</h3>
+          <p className="about-license-text">
+            Paprwork V2 is open source software licensed under AGPL-3.0
+          </p>
+          <p className="about-license-text">
+            Built with Electron, TypeScript, React, and Mastra
+          </p>
+          <p className="about-license-text">
+            © 2024-2026 Amir Kabbara. All rights reserved.
+          </p>
         </div>
       </div>
     </div>

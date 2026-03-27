@@ -3,6 +3,54 @@
  * Reference: Paprwork v1 style.css lines 1004-1182
  */
 
+/* Reopen full Getting Started tab (footer, matches Settings row) */
+.onboarding-persistent-link {
+  width: calc(100% - 24px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 12px 8px;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color 0.15s var(--ease, ease),
+    color 0.15s var(--ease, ease);
+  text-align: left;
+}
+
+.onboarding-persistent-link:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary, var(--text-color));
+}
+
+.onboarding-open-guide {
+  display: block;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 0;
+  background: none;
+  border: none;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-color, #0161e0);
+  cursor: pointer;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.onboarding-open-guide:hover {
+  color: var(--text-primary, var(--text-color));
+}
+
 .onboarding-card-compact {
   background: var(--sidebar-bg, var(--card-background));
   border-radius: 8px;

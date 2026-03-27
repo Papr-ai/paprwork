@@ -1,23 +1,39 @@
-import CronParser from "cron-parser";
 import { getJobsService, JobsService } from "./JobsService.js";
 import type { JobRecord, JobSchedule } from "./jobs/types.js";
+import { getGatewayTelemetry } from "./gatewayTelemetry.js";
+import {
+  computeFollowingNextRunAt,
+  computeInitialNextRunAt,
+  isScheduleDue,
+  msUntilSoonestNextRun,
+} from "./jobs/scheduleEngine.js";
 
 let jobsSchedulerInstance: JobsScheduler | null = null;
 
 export class JobsScheduler {
-  private timer: NodeJS.Timeout | null = null;
+  private static readonly TICK_TELEMETRY_MIN_MS = 300_000;
+  private static readonly BACKUP_POLL_MS = 60_000;
+  private static readonly WAKE_MIN_MS = 250;
+
+  private backupTimer: ReturnType<typeof setInterval> | null = null;
+  private wakeTimer: ReturnType<typeof setTimeout> | null = null;
   private runningLeases: Set<string> = new Set();
-  private readonly tickMs = 15_000;
+  private lastTickTelemetryAt = 0;
 
   start(): void {
-    if (this.timer) {
+    if (this.backupTimer) {
       return;
     }
-    this.timer = setInterval(() => {
+    this.backupTimer = setInterval(() => {
       void this.tick();
-    }, this.tickMs);
+    }, JobsScheduler.BACKUP_POLL_MS);
     void this.tick();
-    console.log("[JobsScheduler] Started");
+    console.log("[JobsScheduler] Started (wake + backup poll)");
+  }
+
+  /** Call after job schedule mutations so the next `setTimeout` wake is refreshed. */
+  requestReschedule(): void {
+    void this.tick();
   }
 
   async tickNow(): Promise<void> {
@@ -25,69 +41,19 @@ export class JobsScheduler {
   }
 
   stop(): void {
-    if (!this.timer) {
-      return;
+    if (this.backupTimer) {
+      clearInterval(this.backupTimer);
+      this.backupTimer = null;
     }
-    clearInterval(this.timer);
-    this.timer = null;
+    if (this.wakeTimer) {
+      clearTimeout(this.wakeTimer);
+      this.wakeTimer = null;
+    }
     console.log("[JobsScheduler] Stopped");
   }
 
   private getLeaseKey(jobId: string): string {
     return `schedule:${jobId}`;
-  }
-
-  private getCronNextRunAt(cron: string, fromDate: Date): string | undefined {
-    try {
-      const expression = CronParser.parse(cron, { currentDate: fromDate });
-      const next = expression.next().toISOString();
-      return next ?? undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
-  private shouldRunNow(job: JobRecord, now: Date): boolean {
-    const schedule = job.schedule;
-    if (!schedule?.enabled) {
-      return false;
-    }
-    if (schedule.intervalMs && schedule.intervalMs > 0) {
-      const nextRunAt = job.scheduleState?.nextRunAt;
-      if (!nextRunAt) {
-        return true;
-      }
-      return new Date(nextRunAt).getTime() <= now.getTime();
-    }
-    if (schedule.atTime) {
-      const atTimeMs = new Date(schedule.atTime).getTime();
-      if (Number.isNaN(atTimeMs)) {
-        return false;
-      }
-      const lastTriggeredAt = job.scheduleState?.lastTriggeredAt;
-      if (!lastTriggeredAt) {
-        return atTimeMs <= now.getTime();
-      }
-      return false;
-    }
-    if (schedule.cron) {
-      // Determine base time for next cron calculation
-      const lastRun = job.scheduleState?.lastScheduledRunAt
-        ? new Date(job.scheduleState.lastScheduledRunAt)
-        : undefined;
-
-      const fromDate =
-        schedule.catchUpMissed && lastRun
-          ? lastRun // Check from last actual run (enables catch-up)
-          : new Date(now.getTime() - this.tickMs); // Default: recent window only
-
-      const nextCronAt = this.getCronNextRunAt(schedule.cron, fromDate);
-      if (!nextCronAt) {
-        return false;
-      }
-      return new Date(nextCronAt).getTime() <= now.getTime();
-    }
-    return false;
   }
 
   private async patchNextRun(
@@ -97,11 +63,12 @@ export class JobsScheduler {
   ): Promise<void> {
     const jobsService = getJobsService();
     if (schedule.intervalMs && schedule.intervalMs > 0) {
+      const nextRunAt = computeFollowingNextRunAt(schedule, new Date());
       await jobsService.upsertJob({
         ...job,
         scheduleState: {
           ...job.scheduleState,
-          nextRunAt: new Date(Date.now() + schedule.intervalMs).toISOString(),
+          ...(nextRunAt ? { nextRunAt } : {}),
           lastTriggeredAt: nowIso,
         },
         updatedAt: new Date().toISOString(),
@@ -122,12 +89,16 @@ export class JobsScheduler {
       return;
     }
     if (schedule.cron) {
-      const nextRunAt = this.getCronNextRunAt(schedule.cron, new Date());
+      const anchor = new Date();
+      let nextRunAt = computeFollowingNextRunAt(schedule, anchor);
+      if (!nextRunAt) {
+        nextRunAt = computeInitialNextRunAt(schedule, anchor, job.scheduleState);
+      }
       await jobsService.upsertJob({
         ...job,
         scheduleState: {
           ...job.scheduleState,
-          nextRunAt,
+          ...(nextRunAt ? { nextRunAt } : {}),
           lastTriggeredAt: nowIso,
         },
         updatedAt: new Date().toISOString(),
@@ -135,35 +106,71 @@ export class JobsScheduler {
     }
   }
 
+  private queueWake(jobs: JobRecord[]): void {
+    if (this.wakeTimer) {
+      clearTimeout(this.wakeTimer);
+      this.wakeTimer = null;
+    }
+    const nowMs = Date.now();
+    const ms = msUntilSoonestNextRun(jobs, nowMs);
+    if (ms === null) {
+      return;
+    }
+    const delay =
+      ms === 0
+        ? JobsScheduler.WAKE_MIN_MS
+        : Math.max(ms, JobsScheduler.WAKE_MIN_MS);
+    this.wakeTimer = setTimeout(() => {
+      this.wakeTimer = null;
+      void this.tick();
+    }, delay);
+  }
+
   private async tick(): Promise<void> {
     const jobsService = getJobsService();
     await jobsService.initialize();
-    const jobs = await jobsService.listJobs();
+    let jobs = await jobsService.listJobs();
     const now = new Date();
     const launches: Array<Promise<void>> = [];
+    const launchedCount = { value: 0 };
     for (const job of jobs) {
-      if (!job.schedule?.enabled) {
+      if (!isScheduleDue(job.schedule, job.scheduleState, now)) {
+        continue;
+      }
+      const dueAt = job.scheduleState?.nextRunAt;
+      if (!dueAt) {
         continue;
       }
       const leaseKey = this.getLeaseKey(job.id);
       if (this.runningLeases.has(leaseKey)) {
         continue;
       }
-      if (!this.shouldRunNow(job, now)) {
-        continue;
-      }
       this.runningLeases.add(leaseKey);
+      launchedCount.value += 1;
       const launch = (async () => {
         const triggeredAt = new Date().toISOString();
         try {
-          await jobsService.runJobFromScheduler(job.id, triggeredAt);
-          await this.patchNextRun(
-            job,
-            job.schedule as JobSchedule,
-            triggeredAt,
+          await jobsService.runJobFromScheduler(job.id, dueAt);
+          const latest = await jobsService.getJob(job.id);
+          if (latest?.schedule?.enabled && latest.schedule) {
+            await this.patchNextRun(latest, latest.schedule, triggeredAt);
+          }
+          const sched = job.schedule as JobSchedule;
+          const scheduleType = sched.cron
+            ? "cron"
+            : sched.intervalMs
+              ? "interval"
+              : sched.atTime
+                ? "atTime"
+                : "unknown";
+          getGatewayTelemetry().trackFireAndForget(
+            "paprwork_scheduler_job_triggered",
+            {
+              job_id: job.id,
+              schedule_type: scheduleType,
+            },
           );
         } catch (error) {
-          // Dependency still running — skip this tick silently, it will retry next tick.
           if (error instanceof JobsService.DependencyRunningError) {
             console.log(
               `[JobsScheduler] Skipping ${job.id}: dependency ${error.dependencyId} is still running, will retry next tick`,
@@ -173,6 +180,15 @@ export class JobsScheduler {
               `[JobsScheduler] Scheduled run failed for ${job.id}:`,
               error,
             );
+            const err =
+              error instanceof Error ? error : new Error(String(error));
+            getGatewayTelemetry().trackFireAndForget(
+              "paprwork_scheduler_job_failed",
+              {
+                job_id: job.id,
+                error_type: err.constructor.name,
+              },
+            );
           }
         } finally {
           this.runningLeases.delete(leaseKey);
@@ -181,6 +197,21 @@ export class JobsScheduler {
       launches.push(launch);
     }
     await Promise.all(launches);
+
+    jobs = await jobsService.listJobs();
+    this.queueWake(jobs);
+
+    const nowMs = Date.now();
+    if (
+      nowMs - this.lastTickTelemetryAt >= JobsScheduler.TICK_TELEMETRY_MIN_MS &&
+      jobs.length > 0
+    ) {
+      this.lastTickTelemetryAt = nowMs;
+      getGatewayTelemetry().trackFireAndForget("paprwork_scheduler_tick", {
+        jobs_checked: jobs.length,
+        jobs_launched: launchedCount.value,
+      });
+    }
   }
 }
 

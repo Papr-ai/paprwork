@@ -7,7 +7,6 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
-import { gateway } from "../../src/lib/gateway";
 import "./OnboardingCard.css";
 
 type StepState = "locked" | "active" | "completed";
@@ -19,14 +18,17 @@ interface OnboardingState {
 }
 
 interface OnboardingCardProps {
-  /** Open the Settings API Keys tab */
+  /** Open Settings (Connect accounts & API Keys) */
   onOpenSettings: () => void;
+  /** Open the Getting Started tab (full onboarding guide) */
+  onOpenGettingStarted: () => void;
   /** Send a chat message to the agent */
   onSendMessage: (message: string) => void;
 }
 
 export function OnboardingCard({
   onOpenSettings,
+  onOpenGettingStarted,
   onSendMessage,
 }: OnboardingCardProps) {
   const [hidden, setHidden] = useState(true);
@@ -95,18 +97,22 @@ export function OnboardingCard({
 
   // Auto-dismiss when all 3 steps complete
   useEffect(() => {
-    if (state.step1Completed && state.step2Completed && state.step3Completed) {
-      const timer = setTimeout(() => {
-        setSlideOut(true);
-        setTimeout(() => {
-          // Dismiss
-          localStorage.setItem("papr-onboarding-dismissed", "true");
-          window.dispatchEvent(new CustomEvent('papr-onboarding-changed'));
-          setHidden(true);
-        }, 300);
-      }, 2000);
-      return () => clearTimeout(timer);
+    if (
+      !state.step1Completed ||
+      !state.step2Completed ||
+      !state.step3Completed
+    ) {
+      return;
     }
+    const timer = setTimeout(() => {
+      setSlideOut(true);
+      setTimeout(() => {
+        localStorage.setItem("papr-onboarding-dismissed", "true");
+        window.dispatchEvent(new CustomEvent("papr-onboarding-changed"));
+        setHidden(true);
+      }, 300);
+    }, 2000);
+    return () => clearTimeout(timer);
   }, [state]);
 
   const completedCount =
@@ -135,7 +141,6 @@ export function OnboardingCard({
     if (stepState === "locked" || stepState === "completed") return;
 
     if (step === 1) {
-      // Open Settings → API Keys
       onOpenSettings();
       // Mark completed after a short delay (user will configure keys)
       // In V1 this polls for keys; we simplify by marking done after opening
@@ -166,10 +171,29 @@ export function OnboardingCard({
     }
   };
 
-  if (hidden) return null;
-
-  // Always show as compact card in sidebar (never modal)
-  // Full-screen onboarding is handled by OnboardingView in ContentArea
+  // After onboarding is dismissed or finished, keep a slim entry to reopen the full guide
+  if (hidden) {
+    return (
+      <button
+        type="button"
+        className="onboarding-persistent-link"
+        onClick={onOpenGettingStarted}
+      >
+        <span className="onboarding-icon" aria-hidden>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </span>
+        Getting started
+      </button>
+    );
+  }
 
   return (
     <div className={`onboarding-card-compact${slideOut ? " slide-out" : ""}`}>
@@ -207,6 +231,17 @@ export function OnboardingCard({
         </span>
       </div>
 
+      <button
+        type="button"
+        className="onboarding-open-guide"
+        onClick={(e) => {
+          e.stopPropagation();
+          onOpenGettingStarted();
+        }}
+      >
+        Open full guide
+      </button>
+
       <div className="onboarding-progress-bar">
         <div
           className="onboarding-progress-fill"
@@ -217,7 +252,7 @@ export function OnboardingCard({
       {expanded && (
         <div className="onboarding-expanded">
           <div className="onboarding-steps-compact">
-            {/* Step 1: Configure API Keys */}
+            {/* Step 1: ChatGPT / Claude / API keys */}
             <div
               className={`onboarding-step-compact ${getStepState(1)}`}
               onClick={() => handleStepClick(1)}
@@ -234,7 +269,7 @@ export function OnboardingCard({
                   />
                 </svg>
               </div>
-              <span className="step-label-compact">Configure API Keys</span>
+              <span className="step-label-compact">ChatGPT, Claude, or API keys</span>
             </div>
 
             {/* Step 2: Setup Your Agents */}

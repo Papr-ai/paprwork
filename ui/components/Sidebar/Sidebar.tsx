@@ -75,6 +75,11 @@ export function Sidebar() {
     switchToTab(settingsId);
   }, [createTab, switchToTab]);
 
+  const handleOpenGettingStarted = useCallback(() => {
+    const tabId = createTab("getting-started", "default", "Getting Started");
+    switchToTab(tabId);
+  }, [createTab, switchToTab]);
+
   const handleOnboardingSendMessage = useCallback(
     async (message: string) => {
       // Create a new chat, switch to it, then dispatch event for ChatContainer to send
@@ -233,6 +238,7 @@ export function Sidebar() {
       <div className="sidebar__footer">
         <OnboardingCard
           onOpenSettings={handleOpenSettings}
+          onOpenGettingStarted={handleOpenGettingStarted}
           onSendMessage={handleOnboardingSendMessage}
         />
         <button

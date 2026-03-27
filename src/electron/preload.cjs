@@ -116,6 +116,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
     },
   },
 
+  telemetry: {
+    getEnabled: () => ipcRenderer.invoke("telemetry:get-enabled"),
+    setEnabled: (enabled) =>
+      ipcRenderer.invoke("telemetry:set-enabled", enabled),
+  },
+
   // Environment info
   env: {
     NODE_ENV: process.env.NODE_ENV || "production",

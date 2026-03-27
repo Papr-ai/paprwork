@@ -27,6 +27,10 @@ let cleanupOAuthServers;
 let requestPermissionFromGateway;
 let initializeOllamaIPC;
 let cleanupOllama;
+let initializeTelemetryIPC;
+let TelemetryClientClass;
+let isTelemetrySendingEnabledFn;
+let telemetryClientInstance = null;
 
 async function loadESMModules() {
   // Import from compiled dist directory
@@ -62,6 +66,17 @@ async function loadESMModules() {
     await import("../../dist/electron/electron/electron/services/OllamaManager.js");
   const ollamaManager = ollamaManagerModule.getOllamaManager();
   cleanupOllama = () => ollamaManager.cleanup();
+
+  const telemetryIpcModule = await import(
+    "../../dist/electron/electron/ipc/telemetry.js"
+  );
+  initializeTelemetryIPC = telemetryIpcModule.initializeTelemetryIPC;
+
+  const telemetryClientModule = await import(
+    "../../dist/electron/core/telemetry/index.js"
+  );
+  TelemetryClientClass = telemetryClientModule.TelemetryClient;
+  isTelemetrySendingEnabledFn = telemetryClientModule.isTelemetrySendingEnabled;
 }
 
 // Configuration
@@ -623,7 +638,8 @@ class GatewayProcessSupervisor {
             type: "KEYS_RESPONSE",
             requestId: msg.requestId,
             keys: resolvedKeys,
-            oauthTokens: Object.keys(oauthTokens).length > 0 ? oauthTokens : undefined,
+            // Always send (possibly {}) so gateway clears stale oauth cache when tokens are missing/expired
+            oauthTokens,
           });
         }
       } else if (isRequestPermissionMessage(msg)) {
@@ -1101,22 +1117,50 @@ app.whenReady().then(async () => {
   // Initialize storage and IPC
   const customKeysStorage = new CustomKeysStorage();
   const keyPermissionsStorage = new KeyPermissionsStorage();
-  const settingsStorage = new SettingsStorage();
+  const settingsStorage = new SettingsStorage(undefined, {
+    defaultTelemetryEnabled: app.isPackaged,
+  });
 
   await customKeysStorage.initialize();
   // Note: KeyPermissionsStorage and SettingsStorage auto-initialize via electron-store
+
+  if (initializeTelemetryIPC) {
+    initializeTelemetryIPC(settingsStorage);
+  }
+  if (TelemetryClientClass && isTelemetrySendingEnabledFn) {
+    telemetryClientInstance = new TelemetryClientClass({
+      getEffectiveEnabled: () =>
+        isTelemetrySendingEnabledFn(() =>
+          settingsStorage.getTelemetryEnabled(),
+        ),
+      getAnonymousInstallId: () =>
+        settingsStorage.getOrCreateTelemetryInstallId(),
+      appVersion: app.getVersion(),
+    });
+    telemetryClientInstance.trackFireAndForget("paprwork_app_started");
+  }
 
   initializeCustomKeysIPC(customKeysStorage);
 
   // Initialize OAuth IPC handlers (pass customKeysStorage for syncing)
   await initializeOAuthIPC(customKeysStorage);
 
-  // Build gateway environment
+  // Build gateway environment (telemetry flags align with main-process resolution)
+  const gatewayTelemetryOn =
+    isTelemetrySendingEnabledFn != null
+      ? isTelemetrySendingEnabledFn(() =>
+          settingsStorage.getTelemetryEnabled(),
+        )
+      : settingsStorage.getTelemetryEnabled();
   const gatewayEnv = {
     ...process.env,
     GATEWAY_PORT: String(GATEWAY_PORT),
     NODE_ENV: IS_PRODUCTION ? "production" : "development",
     ELECTRON_RUN_AS_NODE: "1",
+    PAPRWORK_TELEMETRY_ENABLED: gatewayTelemetryOn ? "true" : "false",
+    PAPRWORK_TELEMETRY_ANONYMOUS_ID:
+      settingsStorage.getOrCreateTelemetryInstallId(),
+    PAPRWORK_APP_VERSION: app.getVersion(),
   };
   if (IS_PRODUCTION) {
     const asarUnpacked = path.join(__dirname, "../..").replace("app.asar", "app.asar.unpacked");
@@ -1166,6 +1210,9 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", async () => {
   console.log("[Electron] App quitting...");
+  if (telemetryClientInstance) {
+    telemetryClientInstance.trackFireAndForget("paprwork_app_quit");
+  }
   // Cleanup OAuth servers before stopping gateway
   if (cleanupOAuthServers) {
     cleanupOAuthServers();

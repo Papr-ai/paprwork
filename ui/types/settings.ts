@@ -42,7 +42,13 @@ export interface UserProfile {
 
 export type PermissionLevel = "open" | "moderate" | "strict";
 
-export type SettingsTab = "keys" | "profile" | "permissions" | "memory";
+export type SettingsTab =
+  | "keys"
+  | "profile"
+  | "permissions"
+  | "privacy"
+  | "memory"
+  | "about";
 
 export interface CodeIndexingStatus {
   enabled: boolean;

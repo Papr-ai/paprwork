@@ -16,8 +16,9 @@
   gap: 0;
 }
 
-/* Panes */
+/* Panes — min-height: 0 lets nested flex children scroll (Jobs, Agents, Chat). */
 .content-pane {
+  min-height: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;

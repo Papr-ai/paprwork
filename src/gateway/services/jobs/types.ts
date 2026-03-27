@@ -134,6 +134,8 @@ export type JobMemoryPolicy = "none" | "summary" | "full";
 export interface JobSchedule {
   enabled: boolean;
   cron?: string;
+  /** IANA timezone for cron evaluation (e.g. `America/Los_Angeles`). Omit for local default behavior. */
+  timezone?: string;
   intervalMs?: number;
   atTime?: string;
   catchUpMissed?: boolean;

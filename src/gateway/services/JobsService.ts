@@ -8,6 +8,7 @@ import { CommandJobExecutor } from "./jobs/executors/CommandJobExecutor.js";
 import { AgentJobExecutor } from "./jobs/executors/AgentJobExecutor.js";
 import type { IJobExecutor } from "./jobs/executors/IJobExecutor.js";
 import { sanitizeError } from "../../core/tools/security.js";
+import { getGatewayTelemetry } from "./gatewayTelemetry.js";
 import type {
   CreateJobInput,
   JobGraph,
@@ -18,6 +19,10 @@ import type {
   JobStatus,
   JobType,
 } from "./jobs/types.js";
+import {
+  computeInitialNextRunAt,
+  computeMisfireSkipNextRunAt,
+} from "./jobs/scheduleEngine.js";
 export type {
   CreateJobInput,
   JobDelivery,
@@ -125,6 +130,8 @@ export class JobsService {
 
     // Reconcile interrupted jobs from previous session
     await this.reconcileInterruptedJobs();
+
+    await this.reconcileScheduleStates();
 
     this.initialized = true;
   }
@@ -391,6 +398,13 @@ export class JobsService {
     this.jobs.set(id, job);
     await this.saveJobs();
     void this.rebuildGraph();
+    if (job.schedule?.enabled) {
+      void import("./JobsScheduler.js")
+        .then(({ getJobsScheduler }) => {
+          getJobsScheduler().requestReschedule();
+        })
+        .catch(() => {});
+    }
     return job;
   }
 
@@ -432,6 +446,16 @@ export class JobsService {
           }
         : {}),
     };
+    if (
+      (status === "failed" || status === "cancelled") &&
+      next.schedule?.enabled &&
+      next.scheduleState?.currentIdempotencyKey
+    ) {
+      next.scheduleState = {
+        ...next.scheduleState,
+        currentIdempotencyKey: undefined,
+      };
+    }
     if (next.schedule?.enabled) {
       next.scheduleState = this.computeScheduleState(
         next.schedule,
@@ -549,29 +573,90 @@ export class JobsService {
     schedule: JobSchedule,
     previous?: JobRecord["scheduleState"],
   ): JobRecord["scheduleState"] {
-    const now = Date.now();
+    const now = new Date();
     if (schedule.intervalMs && schedule.intervalMs > 0) {
       return {
         ...previous,
-        nextRunAt: new Date(now + schedule.intervalMs).toISOString(),
+        nextRunAt: new Date(now.getTime() + schedule.intervalMs).toISOString(),
       };
     }
     if (schedule.atTime) {
-      const at = new Date(schedule.atTime).getTime();
-      if (!Number.isNaN(at) && at > now) {
-        return {
-          ...previous,
-          nextRunAt: new Date(at).toISOString(),
-        };
+      const raw = new Date(schedule.atTime);
+      if (Number.isNaN(raw.getTime())) {
+        return previous ?? {};
       }
-    }
-    if (schedule.cron) {
-      // Next run is calculated by scheduler for cron schedules.
       return {
         ...previous,
+        nextRunAt: raw.toISOString(),
       };
     }
-    return previous;
+    if (schedule.cron) {
+      if (previous?.nextRunAt) {
+        return { ...previous };
+      }
+      const next = computeInitialNextRunAt(schedule, now, previous);
+      return {
+        ...previous,
+        ...(next ? { nextRunAt: next } : {}),
+      };
+    }
+    return previous ?? {};
+  }
+
+  /**
+   * Ensure `nextRunAt` exists and apply misfire policy after restarts (gateway down, sleep, etc.).
+   */
+  private async reconcileScheduleStates(): Promise<void> {
+    const now = new Date();
+    for (const job of this.jobs.values()) {
+      if (!job.schedule?.enabled) {
+        continue;
+      }
+      const ss = job.scheduleState ?? {};
+      let nextRunAt = ss.nextRunAt;
+      let changed = false;
+
+      if (
+        !nextRunAt ||
+        Number.isNaN(new Date(nextRunAt as string).getTime())
+      ) {
+        const computed = computeInitialNextRunAt(job.schedule, now, ss);
+        if (computed) {
+          nextRunAt = computed;
+          changed = true;
+        }
+      }
+
+      if (
+        nextRunAt &&
+        !Number.isNaN(new Date(nextRunAt).getTime()) &&
+        new Date(nextRunAt).getTime() < now.getTime() &&
+        !job.schedule.catchUpMissed
+      ) {
+        if (job.schedule.atTime) {
+          await this.upsertJob({
+            ...job,
+            schedule: { ...job.schedule, enabled: false },
+            scheduleState: { ...ss, nextRunAt: undefined },
+            updatedAt: new Date().toISOString(),
+          });
+          continue;
+        }
+        const bumped = computeMisfireSkipNextRunAt(job.schedule, now);
+        if (bumped) {
+          nextRunAt = bumped;
+          changed = true;
+        }
+      }
+
+      if (changed && nextRunAt) {
+        await this.upsertJob({
+          ...job,
+          scheduleState: { ...ss, nextRunAt },
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    }
   }
 
   /**
@@ -763,6 +848,7 @@ export class JobsService {
     jobId: string,
     stack: Set<string>,
     runtimeParams?: Record<string, string>,
+    scheduledDueAt?: string,
   ): Promise<JobRecord> {
     const job = this.jobs.get(jobId);
     if (!job) {
@@ -778,10 +864,52 @@ export class JobsService {
 
     try {
       await this.ensureDependencyChain(job, stack);
+
+      if (scheduledDueAt !== undefined && scheduledDueAt.length > 0) {
+        const fresh = this.jobs.get(jobId);
+        if (!fresh) {
+          throw new Error(`Job not found: ${jobId}`);
+        }
+        if (fresh.schedule?.enabled) {
+          const idempotencyKey = `${jobId}-${scheduledDueAt}`;
+          if (
+            fresh.scheduleState?.currentIdempotencyKey === idempotencyKey &&
+            (fresh.status === "running" ||
+              fresh.status === "waiting_permission")
+          ) {
+            await this.appendLog(
+              jobId,
+              `Skipping duplicate scheduled slot (already active): ${idempotencyKey}`,
+            );
+            return fresh;
+          }
+          if (
+            fresh.scheduleState?.lastIdempotencyKey === idempotencyKey &&
+            fresh.status === "completed"
+          ) {
+            await this.appendLog(
+              jobId,
+              `Skipping scheduled slot (already completed): ${idempotencyKey}`,
+            );
+            return fresh;
+          }
+          const triggeredAt = new Date().toISOString();
+          await this.setJobStatus(jobId, fresh.status, {
+            scheduleState: {
+              ...fresh.scheduleState,
+              lastScheduledRunAt: scheduledDueAt,
+              lastTriggeredAt: triggeredAt,
+              currentIdempotencyKey: idempotencyKey,
+            },
+          });
+        }
+      }
+
       const maxAttempts = Math.max(1, job.retries?.maxAttempts ?? 1);
       const backoffMs = Math.max(0, job.retries?.backoffMs ?? 1000);
 
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const attemptStart = performance.now();
         const runId = `${job.id}-${Date.now()}-a${attempt}`;
 
         // Track execution state and retry attempts
@@ -825,9 +953,14 @@ export class JobsService {
         );
 
         if (status === "completed") {
-          // Mark scheduled execution as complete
+          getGatewayTelemetry().trackFireAndForget("paprwork_job_completed", {
+            job_id: job.id,
+            job_type: job.type,
+            duration_ms: Math.round(performance.now() - attemptStart),
+            attempts: attempt,
+          });
           if (updated.scheduleState?.currentIdempotencyKey) {
-            await this.setJobStatus(job.id, status, {
+            return await this.setJobStatus(job.id, status, {
               scheduleState: {
                 ...updated.scheduleState,
                 lastIdempotencyKey: updated.scheduleState.currentIdempotencyKey,
@@ -858,6 +991,12 @@ export class JobsService {
             job.id,
             `All ${maxAttempts} attempts failed. Job marked as failed.`,
           );
+          getGatewayTelemetry().trackFireAndForget("paprwork_job_failed", {
+            job_id: job.id,
+            job_type: job.type,
+            error_type: `exit_${result.exitCode}`,
+            attempts: maxAttempts,
+          });
         }
       }
 
@@ -870,45 +1009,31 @@ export class JobsService {
   async runJob(
     jobId: string,
     runtimeParams?: Record<string, string>,
+    scheduledDueAt?: string,
   ): Promise<JobRecord> {
-    return this.runJobWithDependencies(jobId, new Set<string>(), runtimeParams);
+    return this.runJobWithDependencies(
+      jobId,
+      new Set<string>(),
+      runtimeParams,
+      scheduledDueAt,
+    );
   }
 
+  /**
+   * @param dueAtIso - The `scheduleState.nextRunAt` value this tick is firing for (stable idempotency).
+   */
   async runJobFromScheduler(
     jobId: string,
-    triggeredAt: string,
+    dueAtIso: string,
   ): Promise<JobRecord> {
     const existing = await this.getJob(jobId);
     if (!existing) {
       throw new Error(`Job not found: ${jobId}`);
     }
-    if (existing.schedule?.enabled) {
-      // Generate idempotency key to prevent duplicate scheduled runs
-      const idempotencyKey = `${jobId}-${triggeredAt}`;
-
-      // Check if we already ran this scheduled execution
-      if (existing.scheduleState?.currentIdempotencyKey === idempotencyKey) {
-        await this.appendLog(
-          jobId,
-          `Skipping duplicate scheduled run (idempotency key: ${idempotencyKey})`,
-        );
-        return existing;
-      }
-
-      await this.setJobStatus(jobId, existing.status, {
-        scheduleState: {
-          ...existing.scheduleState,
-          lastScheduledRunAt: triggeredAt,
-          lastTriggeredAt: triggeredAt,
-          currentIdempotencyKey: idempotencyKey,
-          nextRunAt: this.computeScheduleState(
-            existing.schedule,
-            existing.scheduleState,
-          )?.nextRunAt,
-        },
-      });
+    if (!existing.schedule?.enabled) {
+      return this.runJob(jobId);
     }
-    return this.runJob(jobId);
+    return this.runJob(jobId, undefined, dueAtIso);
   }
 
   async updateJob(
@@ -948,9 +1073,27 @@ export class JobsService {
       ...updates,
       updatedAt: new Date().toISOString(),
     };
+    if (updates.schedule !== undefined) {
+      const s = updated.schedule;
+      updated.scheduleState = s?.enabled
+        ? this.computeScheduleState(s, {})
+        : undefined;
+    }
     this.jobs.set(jobId, updated);
+    await fs.writeFile(
+      path.join(this.getJobDir(jobId), "job.json"),
+      JSON.stringify(updated, null, 2),
+      "utf8",
+    );
     await this.saveJobs();
     void this.rebuildGraph();
+    if (updates.schedule !== undefined) {
+      void import("./JobsScheduler.js")
+        .then(({ getJobsScheduler }) => {
+          getJobsScheduler().requestReschedule();
+        })
+        .catch(() => {});
+    }
 
     // If requirements changed, rewrite requirements.txt so next run picks them up
     if (updates.requirements !== undefined) {
@@ -1296,6 +1439,11 @@ export class JobsService {
     }
     await this.jobDatabase.ensureDatabase(destination);
     this.jobs.set(job.id, job);
+    await fs.writeFile(
+      path.join(destination, "job.json"),
+      JSON.stringify(job, null, 2),
+      "utf8",
+    );
     await this.saveJobs();
     return job;
   }

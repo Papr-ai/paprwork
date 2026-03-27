@@ -144,6 +144,13 @@ export interface ElectronAPI {
     removeDownloadProgressListener: (callback: Function) => void;
   };
 
+  telemetry: {
+    getEnabled: () => Promise<{ enabled: boolean }>;
+    setEnabled: (
+      enabled: boolean,
+    ) => Promise<{ success: boolean; enabled: boolean }>;
+  };
+
   // Auto-updater API
   updater: {
     onStatus: (callback: (data: UpdateStatus) => void) => void;

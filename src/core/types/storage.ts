@@ -57,6 +57,15 @@ export interface AppSettings {
     language: string;
     autoSave: boolean;
     keyboardShortcuts: boolean;
+    /**
+     * Anonymous usage telemetry (main process → Papr proxy → Amplitude).
+     * Default depends on build: on for packaged app installs, off for dev/tests unless overridden in storage.
+     */
+    telemetryEnabled: boolean;
+  };
+  /** Anonymous install id for telemetry correlation only; not derived from user data. */
+  telemetry: {
+    installId?: string;
   };
   compaction: CompactionConfig;
   permissions: PermissionSettings;

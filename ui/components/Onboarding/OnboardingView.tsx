@@ -4,7 +4,8 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
-import { useTabStore } from "../../stores/tabStore";
+import { useTabs } from "../../hooks/useTabs";
+import { useChat } from "../../hooks/useChat";
 import "./OnboardingView.css";
 
 type StepState = "locked" | "active" | "completed";
@@ -16,12 +17,37 @@ interface OnboardingState {
 }
 
 export function OnboardingView() {
+  const { createTab, switchToTab } = useTabs();
+  const { createChat } = useChat();
   const [state, setState] = useState<OnboardingState>({
     step1Completed: false,
     step2Completed: false,
     step3Completed: false,
   });
   const [isInitialized, setIsInitialized] = useState(false);
+
+  const openSettings = useCallback(() => {
+    const settingsId = createTab("settings", "settings", "Settings");
+    switchToTab(settingsId);
+  }, [createTab, switchToTab]);
+
+  const sendInNewChat = useCallback(
+    async (message: string): Promise<boolean> => {
+      const chatId = await createChat();
+      if (!chatId) return false;
+      const tabId = createTab("chat", chatId, "New Chat");
+      switchToTab(tabId);
+      window.setTimeout(() => {
+        window.dispatchEvent(
+          new CustomEvent("papr-onboarding-send", {
+            detail: { message },
+          }),
+        );
+      }, 300);
+      return true;
+    },
+    [createChat, createTab, switchToTab],
+  );
 
   // Load state from localStorage
   useEffect(() => {
@@ -51,13 +77,18 @@ export function OnboardingView() {
 
   // Auto-dismiss when all 3 steps complete
   useEffect(() => {
-    if (state.step1Completed && state.step2Completed && state.step3Completed) {
-      const timer = setTimeout(() => {
-        localStorage.setItem("papr-onboarding-dismissed", "true");
-        window.dispatchEvent(new CustomEvent('papr-onboarding-changed'));
-      }, 1500);
-      return () => clearTimeout(timer);
+    if (
+      !state.step1Completed ||
+      !state.step2Completed ||
+      !state.step3Completed
+    ) {
+      return;
     }
+    const timer = setTimeout(() => {
+      localStorage.setItem("papr-onboarding-dismissed", "true");
+      window.dispatchEvent(new CustomEvent("papr-onboarding-changed"));
+    }, 1500);
+    return () => clearTimeout(timer);
   }, [state]);
 
   const getStepState = useCallback(
@@ -74,62 +105,39 @@ export function OnboardingView() {
     [state],
   );
 
-  const handleStepClick = async (step: 1 | 2 | 3) => {
+  const handleStepClick = async (step: 1 | 2 | 3): Promise<void> => {
+    // Step 1 always opens Settings (users often need to add another provider later)
+    if (step === 1) {
+      openSettings();
+      if (!state.step1Completed) {
+        window.setTimeout(() => {
+          setState((prev) => ({ ...prev, step1Completed: true }));
+        }, 1000);
+      }
+      return;
+    }
+
     const stepState = getStepState(step);
     if (stepState === "locked" || stepState === "completed") return;
 
-    if (step === 1) {
-      // Open Settings tab
-      const { gateway } = await import('../../src/lib/gateway.js');
-      await gateway.send('tab:open', { type: 'settings' });
-      
-      // Mark completed after short delay
-      setTimeout(() => {
-        setState((prev) => ({ ...prev, step1Completed: true }));
-      }, 1000);
-    } else if (step === 2) {
-      // Create a new chat and send onboarding message
-      const { gateway } = await import('../../src/lib/gateway.js');
-      const result = await gateway.send('chat:create', {});
-      
-      if (result.success && result.data) {
-        const chatId = result.data.id;
-        
-        // Open the chat tab
-        await gateway.send('tab:open', { 
-          type: 'chat', 
-          entityId: chatId 
-        });
-        
-        // Send the onboarding message
-        window.dispatchEvent(
-          new CustomEvent("papr-onboarding-send", { 
-            detail: { 
-              message: "Let's get started with onboarding! I'd like you to learn about me and set things up." 
-            } 
-          }),
-        );
-        
-        // Mark completed after delay
-        setTimeout(() => {
-          setState((prev) => ({ ...prev, step2Completed: true }));
-        }, 2000);
-      }
-    } else {
-      // Send first task message to active chat
-      window.dispatchEvent(
-        new CustomEvent("papr-onboarding-send", { 
-          detail: { 
-            message: "Based on what you learned about me, help me with my first task or create an app that would be most useful for my work." 
-          } 
-        }),
+    if (step === 2) {
+      const ok = await sendInNewChat(
+        "Let's get started with onboarding! I'd like you to learn about me and set things up.",
       );
-      
-      // Mark completed
-      setTimeout(() => {
-        setState((prev) => ({ ...prev, step3Completed: true }));
+      if (!ok) return;
+      window.setTimeout(() => {
+        setState((prev) => ({ ...prev, step2Completed: true }));
       }, 2000);
+      return;
     }
+
+    const ok = await sendInNewChat(
+      "Based on what you learned about me, help me with my first task or create an app that would be most useful for my work.",
+    );
+    if (!ok) return;
+    window.setTimeout(() => {
+      setState((prev) => ({ ...prev, step3Completed: true }));
+    }, 2000);
   };
 
   if (!isInitialized) return null;
@@ -139,15 +147,13 @@ export function OnboardingView() {
       <div className="onboarding-view-content">
         <div className="onboarding-view-header">
           <span className="onboarding-view-icon">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
-              <path
-                d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
+            <img
+              className="onboarding-view-logo"
+              src="/papr-logo.svg"
+              alt=""
+              width={56}
+              height={66}
+            />
           </span>
           <h1 className="onboarding-view-title">Welcome to Paprwork!</h1>
           <p className="onboarding-view-subtitle">
@@ -156,10 +162,10 @@ export function OnboardingView() {
         </div>
 
         <div className="onboarding-view-steps">
-          {/* Step 1: Configure API Keys */}
+          {/* Step 1: Connect accounts / keys — always opens Settings when clicked */}
           <div
-            className={`onboarding-view-step ${getStepState(1)}`}
-            onClick={() => handleStepClick(1)}
+            className={`onboarding-view-step onboarding-view-step--settings ${getStepState(1)}`}
+            onClick={() => void handleStepClick(1)}
           >
             <div className="step-number-view">1</div>
             <div className="step-content-view">
@@ -175,9 +181,10 @@ export function OnboardingView() {
                 </svg>
               </div>
               <div className="step-text-view">
-                <h3 className="step-title-view">Configure API Keys</h3>
+                <h3 className="step-title-view">Connect ChatGPT, Claude, or your keys</h3>
                 <p className="step-description-view">
-                  Add your OpenAI, Anthropic, or Google API keys to get started
+                  Sign in with ChatGPT or Claude if you have a subscription, or add your own
+                  API keys for OpenAI, Anthropic, or Google — all in Settings.
                 </p>
               </div>
             </div>
@@ -186,7 +193,7 @@ export function OnboardingView() {
           {/* Step 2: Setup Your Agents */}
           <div
             className={`onboarding-view-step ${getStepState(2)}`}
-            onClick={() => handleStepClick(2)}
+            onClick={() => void handleStepClick(2)}
           >
             <div className="step-number-view">2</div>
             <div className="step-content-view">
@@ -220,7 +227,7 @@ export function OnboardingView() {
           {/* Step 3: Complete First Task */}
           <div
             className={`onboarding-view-step ${getStepState(3)}`}
-            onClick={() => handleStepClick(3)}
+            onClick={() => void handleStepClick(3)}
           >
             <div className="step-number-view">3</div>
             <div className="step-content-view">
@@ -247,7 +254,8 @@ export function OnboardingView() {
 
         <div className="onboarding-view-footer">
           <p className="onboarding-view-hint">
-            <strong>Start here:</strong> Click "Configure API Keys" to begin
+            <strong>Start here:</strong> Use the first step anytime to open Settings — connect
+            ChatGPT or Claude, or add API keys.
           </p>
         </div>
       </div>

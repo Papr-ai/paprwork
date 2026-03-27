@@ -299,10 +299,15 @@
   }
 }
 
-/* V1 parity layout */
+/* V1 parity layout — scroll inside tab so header/stats stay in normal flow */
 .jobs-page-native {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 32px;
   width: 100%;
+  box-sizing: border-box;
 }
 
 .jobs-header-native {

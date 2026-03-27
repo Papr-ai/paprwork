@@ -28,9 +28,17 @@ export interface JobRecord {
   schedule?: {
     enabled: boolean;
     cron?: string;
+    timezone?: string;
     intervalMs?: number;
     atTime?: string;
     catchUpMissed?: boolean;
+  };
+  scheduleState?: {
+    nextRunAt?: string;
+    lastScheduledRunAt?: string;
+    lastTriggeredAt?: string;
+    currentIdempotencyKey?: string;
+    lastIdempotencyKey?: string;
   };
   subAgentId?: string;
   delegatedBy?: string;

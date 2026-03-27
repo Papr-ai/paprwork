@@ -35,6 +35,7 @@ import { getAppService } from "./services/AppService.js";
 import {
   initializeJobsService,
   getJobsService,
+  JobsService,
 } from "./services/JobsService.js";
 import { initializeSkillService } from "./services/SkillService.js";
 import { initializeBundleService } from "./services/BundleService.js";
@@ -53,6 +54,13 @@ import { initializeDbPool } from "./services/DbQueryPool.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+function isExpectedJobRunCollision(err: unknown): boolean {
+  return (
+    err instanceof JobsService.DependencyRunningError ||
+    (err instanceof Error && err.message === "Job is already running")
+  );
+}
 
 // Configuration
 const PORT = process.env.GATEWAY_PORT || 18789;
@@ -598,18 +606,47 @@ async function startGateway(): Promise<void> {
           return;
         }
         if (wait) {
-          // Block until the job completes (use for short jobs only)
-          const result = await jobsService.runJob(jobId, params);
-          res.json({
-            jobId,
-            status: result.status,
-            completedAt: result.completedAt,
-            error: result.error,
-            lastOutput: result.lastOutput,
-          });
+          try {
+            const result = await jobsService.runJob(jobId, params);
+            res.json({
+              jobId,
+              status: result.status,
+              completedAt: result.completedAt,
+              error: result.error,
+              lastOutput: result.lastOutput,
+            });
+          } catch (runErr: unknown) {
+            if (isExpectedJobRunCollision(runErr)) {
+              const snapshot = await jobsService.getJob(jobId);
+              const reason = runErr instanceof JobsService.DependencyRunningError
+                ? "dependency_running"
+                : "already_running";
+              res.status(409).json({
+                jobId,
+                status: snapshot?.status ?? "pending",
+                error:
+                  runErr instanceof Error ? runErr.message : String(runErr),
+                reason,
+                ...(runErr instanceof JobsService.DependencyRunningError
+                  ? { dependencyId: runErr.dependencyId }
+                  : {}),
+              });
+              return;
+            }
+            throw runErr;
+          }
         } else {
-          // Fire-and-forget: returns immediately, app polls /api/jobs/status/:jobId
           jobsService.runJob(jobId, params).catch((err: unknown) => {
+            if (isExpectedJobRunCollision(err)) {
+              const note =
+                err instanceof JobsService.DependencyRunningError
+                  ? `dependency ${err.dependencyId} still running`
+                  : (err as Error).message;
+              console.warn(
+                `[Gateway] /api/jobs/run skipped for ${jobId}: ${note}`,
+              );
+              return;
+            }
             console.error(
               `[Gateway] /api/jobs/run background error for ${jobId}:`,
               err,
