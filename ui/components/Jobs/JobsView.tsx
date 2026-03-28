@@ -137,7 +137,15 @@ export function JobsView() {
     const d = new Date(raw);
     if (Number.isNaN(d.getTime())) return "—";
     const nowMs = Date.now();
-    if (d.getTime() <= nowMs) {
+    const isPast = d.getTime() <= nowMs;
+    
+    if (job.status === "running" || job.status === "waiting_permission") {
+      if (isPast) {
+        return "Running current slot...";
+      }
+    }
+    
+    if (isPast) {
       return `Due now · ${formatAbsoluteShort(raw)}`;
     }
     const diff = d.getTime() - nowMs;

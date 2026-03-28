@@ -109,45 +109,54 @@ export class AgentJobExecutor implements IJobExecutor {
 
     // ── Choose execution path: structured (generateObject) vs free-form (streamText)
     let outputText: string;
+    let executionError: Error | null = null;
 
-    if (params.job.outputMode === "structured" && params.job.outputSchema) {
-      // ✅ Proper structured output via AI SDK generateObject
-      // The model is constrained at the decoding level to produce valid JSON
-      // matching the schema — no prompt hacks, no post-hoc parsing needed.
+    try {
+      if (params.job.outputMode === "structured" && params.job.outputSchema) {
+        // ✅ Proper structured output via AI SDK generateObject
+        // The model is constrained at the decoding level to produce valid JSON
+        // matching the schema — no prompt hacks, no post-hoc parsing needed.
+        await params.appendLog(
+          "Using generateObject for structured output (model-level schema enforcement)",
+        );
+
+        const structuredResult = await agentService.runStructuredJobSession({
+          jobId: params.job.id,
+          runId: params.runId,
+          prompt,
+          outputSchema: params.job.outputSchema,
+          schemaName: params.job.name.replace(/[^a-zA-Z0-9_-]/g, "_"),
+          schemaDescription: `Structured output for job: ${params.job.name}`,
+          provider,
+          model,
+        });
+
+        outputText = JSON.stringify(structuredResult.object, null, 2);
+        await params.appendLog(
+          "Structured output generated and validated by model.",
+        );
+      } else {
+        // Free-form text output via streamText (existing path)
+        const response = await agentService.runIsolatedJobSession({
+          jobId: params.job.id,
+          runId: params.runId,
+          prompt,
+          provider,
+          model,
+          allowedToolIds,
+          maxTurns: params.job.maxTurns,
+          appendLog: params.appendLog,
+          delegationId:
+            params.job.type === "subagent" ? params.job.id : undefined,
+        });
+        outputText = response.text;
+      }
+    } catch (error) {
+      executionError = error instanceof Error ? error : new Error(String(error));
+      outputText = "";
       await params.appendLog(
-        "Using generateObject for structured output (model-level schema enforcement)",
+        `Agent execution failed: ${executionError.message}`,
       );
-
-      const structuredResult = await agentService.runStructuredJobSession({
-        jobId: params.job.id,
-        runId: params.runId,
-        prompt,
-        outputSchema: params.job.outputSchema,
-        schemaName: params.job.name.replace(/[^a-zA-Z0-9_-]/g, "_"),
-        schemaDescription: `Structured output for job: ${params.job.name}`,
-        provider,
-        model,
-      });
-
-      outputText = JSON.stringify(structuredResult.object, null, 2);
-      await params.appendLog(
-        "Structured output generated and validated by model.",
-      );
-    } else {
-      // Free-form text output via streamText (existing path)
-      const response = await agentService.runIsolatedJobSession({
-        jobId: params.job.id,
-        runId: params.runId,
-        prompt,
-        provider,
-        model,
-        allowedToolIds,
-        maxTurns: params.job.maxTurns,
-        appendLog: params.appendLog,
-        delegationId:
-          params.job.type === "subagent" ? params.job.id : undefined,
-      });
-      outputText = response.text;
     }
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -191,11 +200,12 @@ export class AgentJobExecutor implements IJobExecutor {
       chatId: params.job.reportChatId ?? params.job.deliver?.targetId,
     });
 
+    const modelInfo =
+      provider && model
+        ? ` (${provider}/${model})`
+        : " (default openai/gpt-5.2)";
+
     if (outputText.length === 0) {
-      const modelInfo =
-        provider && model
-          ? ` (${provider}/${model})`
-          : " (default openai/gpt-5.2)";
       await params.appendLog(
         `[WARN] Agent job produced no model output${modelInfo}. ` +
           "Check: OAuth connected or API key set in Settings; see Gateway logs for API errors.",
@@ -207,11 +217,24 @@ export class AgentJobExecutor implements IJobExecutor {
         ? outputText.slice(0, 5000)
         : "Agent job completed successfully.";
 
+    // Determine exit code based on execution result
+    // Agent jobs should fail (exitCode: 1) if:
+    // 1. Exception was thrown during execution
+    // 2. No model output was produced
+    const exitCode = executionError || outputText.length === 0 ? 1 : 0;
+    const errorMessage = executionError
+      ? executionError.message
+      : outputText.length === 0
+        ? `[WARN] Agent job produced no model output${modelInfo}. ` +
+          "Check: OAuth connected or API key set in Settings; see Gateway logs for API errors."
+        : undefined;
+
     return {
       mode: "immediate",
       command: `agent:${params.runId}`,
-      exitCode: 0,
+      exitCode,
       outputMessage: output,
+      errorMessage,
     };
   }
 

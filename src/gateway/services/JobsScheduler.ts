@@ -59,17 +59,20 @@ export class JobsScheduler {
   private async patchNextRun(
     job: JobRecord,
     schedule: JobSchedule,
-    nowIso: string,
+    scheduledDueAt: string,
+    triggeredAt: string,
   ): Promise<void> {
     const jobsService = getJobsService();
     if (schedule.intervalMs && schedule.intervalMs > 0) {
-      const nextRunAt = computeFollowingNextRunAt(schedule, new Date());
+      // Use the scheduled due time as anchor for consistent intervals
+      const anchor = new Date(scheduledDueAt);
+      const nextRunAt = computeFollowingNextRunAt(schedule, anchor);
       await jobsService.upsertJob({
         ...job,
         scheduleState: {
           ...job.scheduleState,
           ...(nextRunAt ? { nextRunAt } : {}),
-          lastTriggeredAt: nowIso,
+          lastTriggeredAt: triggeredAt,
         },
         updatedAt: new Date().toISOString(),
       });
@@ -82,14 +85,15 @@ export class JobsScheduler {
         scheduleState: {
           ...job.scheduleState,
           nextRunAt: undefined,
-          lastTriggeredAt: nowIso,
+          lastTriggeredAt: triggeredAt,
         },
         updatedAt: new Date().toISOString(),
       });
       return;
     }
     if (schedule.cron) {
-      const anchor = new Date();
+      // Use the scheduled due time as anchor for cron
+      const anchor = new Date(scheduledDueAt);
       let nextRunAt = computeFollowingNextRunAt(schedule, anchor);
       if (!nextRunAt) {
         nextRunAt = computeInitialNextRunAt(schedule, anchor, job.scheduleState);
@@ -99,7 +103,7 @@ export class JobsScheduler {
         scheduleState: {
           ...job.scheduleState,
           ...(nextRunAt ? { nextRunAt } : {}),
-          lastTriggeredAt: nowIso,
+          lastTriggeredAt: triggeredAt,
         },
         updatedAt: new Date().toISOString(),
       });
@@ -127,25 +131,52 @@ export class JobsScheduler {
   }
 
   private async tick(): Promise<void> {
+    const tickStart = Date.now();
     const jobsService = getJobsService();
     await jobsService.initialize();
+    
+    console.log(`[JobsScheduler] Tick started at ${new Date().toISOString()}`);
     await jobsService.reconcileStaleRunningJobs();
+    
     let jobs = await jobsService.listJobs();
+    console.log(`[JobsScheduler] Checking ${jobs.length} total jobs`);
+    
     const now = new Date();
     const launches: Array<Promise<void>> = [];
     const launchedCount = { value: 0 };
+    let enabledCount = 0;
+    let dueCount = 0;
+    let skippedRunning = 0;
+    
     for (const job of jobs) {
+      if (!job.schedule?.enabled) {
+        continue;
+      }
+      enabledCount++;
+      
       if (!isScheduleDue(job.schedule, job.scheduleState, now)) {
         continue;
       }
+      dueCount++;
+      
+      if (job.status === "running" || job.status === "waiting_permission") {
+        console.log(`[JobsScheduler] Skipping job ${job.id} (${job.name}) - status: ${job.status}`);
+        skippedRunning++;
+        continue;
+      }
+      
       const dueAt = job.scheduleState?.nextRunAt;
       if (!dueAt) {
+        console.log(`[JobsScheduler] Skipping job ${job.id} (${job.name}) - no nextRunAt`);
         continue;
       }
       const leaseKey = this.getLeaseKey(job.id);
       if (this.runningLeases.has(leaseKey)) {
+        console.log(`[JobsScheduler] Skipping job ${job.id} (${job.name}) - already has lease`);
         continue;
       }
+      
+      console.log(`[JobsScheduler] Launching job ${job.id} (${job.name}) for slot ${dueAt}`);
       this.runningLeases.add(leaseKey);
       launchedCount.value += 1;
       const launch = (async () => {
@@ -154,7 +185,7 @@ export class JobsScheduler {
           await jobsService.runJobFromScheduler(job.id, dueAt);
           const latest = await jobsService.getJob(job.id);
           if (latest?.schedule?.enabled && latest.schedule) {
-            await this.patchNextRun(latest, latest.schedule, triggeredAt);
+            await this.patchNextRun(latest, latest.schedule, dueAt, triggeredAt);
           }
           const sched = job.schedule as JobSchedule;
           const scheduleType = sched.cron
@@ -201,6 +232,13 @@ export class JobsScheduler {
 
     jobs = await jobsService.listJobs();
     this.queueWake(jobs);
+
+    const elapsed = Date.now() - tickStart;
+    console.log(
+      `[JobsScheduler] Tick completed in ${elapsed}ms - ` +
+      `enabled: ${enabledCount}, due: ${dueCount}, launched: ${launchedCount.value}, ` +
+      `skipped: ${skippedRunning}`
+    );
 
     const nowMs = Date.now();
     if (

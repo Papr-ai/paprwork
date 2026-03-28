@@ -1175,6 +1175,75 @@ Paprwork V2 now supports OpenAI's latest GPT-5.4 models with native computer use
 
 ---
 
+### Enhancement 18: Job Scheduler Improvements (Run History + Error Classification) ✅ IMPLEMENTED
+**Added:** 2026-03-28
+**Problem:** Limited observability into job execution patterns, all errors treated the same (network blips retry forever, auth failures waste retries), agent jobs always returned exit code 0 even on failure.
+**Solution:** 
+1. Added run history tracking - persists every run to `~/Papr/data/job-runs.jsonl` with auto-pruning
+2. Added transient/permanent error classification - network errors retry, auth errors stop immediately
+3. Added log rotation - auto-prune logs >2MB to last 2000 lines
+4. Added verbose scheduler logging - see what scheduler is doing on every tick
+5. Fixed agent jobs to return proper exit codes (0 = success, 1 = failure)
+**Implementation:**
+1. Created `JobRunHistory` class for JSONL-based run persistence with statistics
+2. Created `errorClassifier` to distinguish transient vs permanent errors
+3. Added `pruneJobLog()` for automatic log rotation
+4. Enhanced scheduler tick with detailed logging (enabled/due/launched/skipped counts)
+5. Agent jobs now detect failures (exceptions, no output) and return exitCode: 1
+**Agent Tools:**
+- `get_job_history({ jobId, limit })` - Get last N runs with status, duration, timestamps
+- `get_job_stats({ jobId })` - Get success rate, avg duration, failure counts
+**Impact:**
+- **Run history:** Can now answer "why did this fail 5 times yesterday?" and "how long do runs typically take?"
+- **Error classification:** Auth errors fail fast (1 attempt), network errors retry with backoff (3 attempts)
+- **Log rotation:** Prevents disk space issues (2MB limit per job)
+- **Agent parity:** Agent jobs now have full parity with non-agent jobs for error handling
+**Files Created:**
+- `src/gateway/services/jobs/JobRunHistory.ts` - Run history persistence
+- `src/gateway/services/jobs/errorClassifier.ts` - Error classification logic
+- `docs/JOB_SCHEDULER_IMPROVEMENTS_2026-03-28.md` - Complete documentation
+**Files Changed:**
+- `src/gateway/services/JobsScheduler.ts` - Verbose logging
+- `src/gateway/services/JobsService.ts` - Run history integration, error classification, log rotation
+- `src/gateway/services/jobs/executors/AgentJobExecutor.ts` - Proper exit codes and error messages
+- `src/core/tools/appJobs.ts` - New agent tools
+- `src/core/tools/index.ts` - Export new tools
+**Coverage:** ALL improvements apply to ALL job types (agent, subagent, shell, bash, node, python, swift)
+
+### Enhancement 19: Comprehensive E2E Job Testing ✅ IMPLEMENTED
+**Added:** 2026-03-28
+**Problem:** No automated tests verifying the job scheduling system works end-to-end with real execution, scheduling, retry logic, run history tracking, agent jobs, or app restart scenarios.
+**Solution:** Created two comprehensive E2E test suites covering bash, python, agent jobs, scheduling, error handling, retry logic, run history, app restart, and persistence.
+**Implementation:**
+1. **Basic E2E Script** (`scripts/test-jobs-e2e.mjs`) - 8 tests for bash, python, scheduling, retry, error classification, run history
+2. **Advanced E2E Script** (`scripts/test-jobs-advanced.mjs`) - 8 tests for agent jobs, scheduled agents, app restart, persistence, interrupted job recovery, concurrent execution prevention
+3. **Vitest Tests** (`tests/jobs-e2e-simple.test.ts`) - Unit tests for error classification and run history
+4. **Testing Guide** (`docs/E2E_JOB_TESTING_GUIDE.md`) - Complete guide with verification checklist
+**Tests (16 total):**
+- **Non-Agent Jobs (6):** Bash execution, retry (3 attempts), Python venv, scheduled interval, scheduled cron, log rotation
+- **Agent Jobs (3):** Agent execution, scheduled agent, agent retry
+- **App Restart (4):** Job persistence, schedule reconciliation, run history persistence, interrupted job recovery
+- **Concurrency (1):** Overlapping run prevention
+- **Error Handling (2):** Transient vs permanent classification, retry behavior
+**Bug Fixed:** Scheduler `patchNextRun` was using `new Date()` (current time) instead of `scheduledDueAt` as anchor, causing intervals to drift. Now uses the scheduled time as anchor for consistent intervals (job scheduled every 10s runs at T, T+10s, T+20s, not T, T+0.02s, T+0.04s).
+**Commands:**
+- `npm run test:jobs-e2e` - Basic tests (~14s)
+- `npm run test:jobs-advanced` - Advanced tests (~5s)
+**Result:** ✅ All 16 tests passing - agent jobs, scheduled jobs, and restart scenarios fully verified
+**Files Created:**
+- `scripts/test-jobs-e2e.mjs` - Basic E2E test suite
+- `scripts/test-jobs-advanced.mjs` - Advanced E2E test suite
+- `tests/jobs-e2e-simple.test.ts` - Vitest unit tests
+- `docs/E2E_JOB_TESTING_GUIDE.md` - Testing guide
+- `docs/E2E_JOB_TESTING_RESULTS.md` - Initial results summary
+- `docs/COMPLETE_TEST_COVERAGE.md` - Complete coverage report
+- `docs/QUICK_TEST_REFERENCE.md` - Quick command reference
+**Files Changed:**
+- `src/gateway/services/JobsScheduler.ts` - Fixed anchor calculation in `patchNextRun` (uses `scheduledDueAt` instead of `new Date()`)
+- `package.json` - Added `test:jobs-e2e` and `test:jobs-advanced` scripts
+
+---
+
 ## Contributing Guidelines
 
 1. **TypeScript Only** - No JavaScript files

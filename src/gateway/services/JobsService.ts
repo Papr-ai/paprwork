@@ -9,6 +9,11 @@ import { AgentJobExecutor } from "./jobs/executors/AgentJobExecutor.js";
 import type { IJobExecutor } from "./jobs/executors/IJobExecutor.js";
 import { sanitizeError } from "../../core/tools/security.js";
 import { getGatewayTelemetry } from "./gatewayTelemetry.js";
+import { getJobRunHistory } from "./jobs/JobRunHistory.js";
+import {
+  classifyError,
+  getErrorClassificationReason,
+} from "./jobs/errorClassifier.js";
 import type {
   CreateJobInput,
   JobGraph,
@@ -128,6 +133,10 @@ export class JobsService {
     await fs.mkdir(path.dirname(this.jobsIndexPath), { recursive: true });
     await this.loadJobs();
 
+    // Initialize run history
+    const runHistory = getJobRunHistory();
+    await runHistory.initialize();
+
     // Reconcile interrupted jobs from previous session
     await this.reconcileInterruptedJobs();
 
@@ -188,6 +197,33 @@ export class JobsService {
 
   private getJobLogPath(jobId: string): string {
     return path.join(this.getJobDir(jobId), "logs", "run.log");
+  }
+
+  private async pruneJobLog(jobId: string): Promise<void> {
+    const logPath = this.getJobLogPath(jobId);
+    try {
+      const stats = await fs.stat(logPath);
+      const maxBytes = 2_000_000; // 2MB threshold
+      const keepLines = 2000; // Keep last 2000 lines
+
+      if (stats.size > maxBytes) {
+        const content = await fs.readFile(logPath, "utf8");
+        const lines = content.split("\n");
+        
+        if (lines.length > keepLines) {
+          const keep = lines.slice(-keepLines);
+          await fs.writeFile(logPath, keep.join("\n"), "utf8");
+          console.log(
+            `[JobsService] Pruned log for job ${jobId} to ${keepLines} lines (was ${lines.length})`,
+          );
+        }
+      }
+    } catch (error) {
+      // Log file might not exist yet, that's okay
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        console.error(`[JobsService] Failed to prune log for job ${jobId}:`, error);
+      }
+    }
   }
 
   async listJobs(filter?: {
@@ -412,6 +448,9 @@ export class JobsService {
     const logPath = this.getJobLogPath(jobId);
     const stamped = `[${new Date().toISOString()}] ${line}\n`;
     await fs.appendFile(logPath, stamped, "utf8");
+
+    // Prune log file if it exceeds 2MB
+    await this.pruneJobLog(jobId);
 
     // Broadcast log line to UI for real-time streaming
     this.broadcastJobLogLine(jobId, line);
@@ -929,6 +968,22 @@ export class JobsService {
         const status: JobStatus =
           result.exitCode === 0 ? "completed" : "failed";
 
+        // Record run in history
+        const runHistory = getJobRunHistory();
+        await runHistory.appendRun({
+          runId,
+          jobId: job.id,
+          status,
+          startedAt: new Date(Date.now() - (performance.now() - attemptStart)).toISOString(),
+          completedAt: new Date().toISOString(),
+          duration: Math.round(performance.now() - attemptStart),
+          exitCode: result.exitCode,
+          error: result.errorMessage,
+          scheduledDueAt,
+          attempt,
+          maxAttempts,
+        });
+
         // Update with execution results
         const updated = await this.setJobStatus(job.id, status, {
           exitCode: result.exitCode,
@@ -971,7 +1026,36 @@ export class JobsService {
           return updated;
         }
 
-        // Calculate and store next retry time
+        // For failed status, classify error to determine if we should retry
+        const error = new Error(result.errorMessage ?? `Exit code ${result.exitCode}`);
+        const errorType = classifyError(error);
+        const errorReason = getErrorClassificationReason(error);
+
+        await this.appendLog(job.id, `Error classification: ${errorReason}`);
+
+        // If permanent error, don't retry
+        if (errorType === "permanent") {
+          await this.appendLog(
+            job.id,
+            `Permanent error detected. Stopping retries.`,
+          );
+          
+          // Disable schedule for one-shot jobs with permanent errors
+          if (job.schedule?.atTime) {
+            await this.upsertJob({
+              ...job,
+              schedule: { ...job.schedule, enabled: false },
+            });
+            await this.appendLog(
+              job.id,
+              `One-shot schedule disabled due to permanent error.`,
+            );
+          }
+          
+          return updated;
+        }
+
+        // Calculate and store next retry time (for transient errors)
         if (attempt < maxAttempts) {
           const backoff = backoffMs * Math.pow(2, attempt - 1);
           const nextRetryAt = new Date(Date.now() + backoff).toISOString();

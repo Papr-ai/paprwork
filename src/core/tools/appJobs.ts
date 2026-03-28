@@ -2181,6 +2181,95 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
   },
 });
 
+const getJobHistorySchema = z.object({
+  jobId: z.string().min(1).describe("Job ID to get run history for"),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("Maximum number of runs to return (default: 20)"),
+});
+
+const getJobStatsSchema = z.object({
+  jobId: z.string().min(1).describe("Job ID to get statistics for"),
+});
+
+type GetJobHistoryArgs = z.infer<typeof getJobHistorySchema>;
+type GetJobStatsArgs = z.infer<typeof getJobStatsSchema>;
+
+export const getJobHistoryTool = createTool({
+  id: "get_job_history",
+  description:
+    "Get run history for a job (last N runs with status, duration, timestamps). Use this to debug patterns: 'why did this fail 5 times yesterday?', 'how long do runs typically take?', 'when did this last succeed?'",
+  inputSchema: getJobHistorySchema,
+  execute: async (input) => {
+    const args = (input as { context?: GetJobHistoryArgs }).context ?? input;
+    const { getJobRunHistory } =
+      await import("../../gateway/services/jobs/JobRunHistory.js");
+    const runHistory = getJobRunHistory();
+    await runHistory.initialize();
+
+    const runs = await runHistory.getRunsForJob(args.jobId, args.limit ?? 20);
+
+    return {
+      success: true,
+      data: {
+        jobId: args.jobId,
+        totalReturned: runs.length,
+        runs: runs.map((r) => ({
+          runId: r.runId,
+          status: r.status,
+          startedAt: r.startedAt,
+          completedAt: r.completedAt,
+          duration: r.duration ? `${Math.round(r.duration / 1000)}s` : undefined,
+          exitCode: r.exitCode,
+          error: r.error ? r.error.slice(0, 200) : undefined, // Truncate long errors
+          scheduledDueAt: r.scheduledDueAt,
+          attempt: r.attempt,
+          maxAttempts: r.maxAttempts,
+        })),
+      },
+    };
+  },
+});
+
+export const getJobStatsTool = createTool({
+  id: "get_job_stats",
+  description:
+    "Get statistics for a job (total runs, success/failure counts, average duration). Use this to assess job reliability and performance.",
+  inputSchema: getJobStatsSchema,
+  execute: async (input) => {
+    const args = (input as { context?: GetJobStatsArgs }).context ?? input;
+    const { getJobRunHistory } =
+      await import("../../gateway/services/jobs/JobRunHistory.js");
+    const runHistory = getJobRunHistory();
+    await runHistory.initialize();
+
+    const stats = await runHistory.getStats(args.jobId);
+
+    return {
+      success: true,
+      data: {
+        jobId: args.jobId,
+        totalRuns: stats.totalRuns,
+        completedRuns: stats.completedRuns,
+        failedRuns: stats.failedRuns,
+        cancelledRuns: stats.cancelledRuns,
+        successRate:
+          stats.totalRuns > 0
+            ? `${Math.round((stats.completedRuns / stats.totalRuns) * 100)}%`
+            : "N/A",
+        avgDuration: stats.avgDuration
+          ? `${Math.round(stats.avgDuration / 1000)}s`
+          : "N/A",
+        lastRunAt: stats.lastRunAt,
+      },
+    };
+  },
+});
+
 export const appJobsTools = [
   createAppTool,
   createJobTool,
@@ -2192,6 +2281,8 @@ export const appJobsTools = [
   editJobFileTool,
   updateJobTool,
   deleteJobTool,
+  getJobHistoryTool,
+  getJobStatsTool,
   linkAppDataSourceTool,
   readAppDataSourcesTool,
   readAppFileTool,

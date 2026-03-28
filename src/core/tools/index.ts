@@ -109,6 +109,8 @@ export {
   editJobFileTool,
   updateJobTool,
   deleteJobTool,
+  getJobHistoryTool,
+  getJobStatsTool,
   linkAppDataSourceTool,
   readAppDataSourcesTool,
   readAppFileTool,
