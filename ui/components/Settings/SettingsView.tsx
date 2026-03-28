@@ -1530,6 +1530,7 @@ function AboutTab() {
     hasUpdate,
   } = useAppUpdater();
 
+
   const getStatusDisplay = () => {
     if (!updateStatus) {
       return { text: "Ready to check for updates", color: "default" };
@@ -1557,7 +1558,7 @@ function AboutTab() {
         return { text: "You're up to date!", color: "default" };
       case "error":
         return {
-          text: `Error: ${updateStatus.error || "Unknown error"}`,
+          text: updateStatus.error || "Update check failed",
           color: "error",
         };
       default:
@@ -1675,6 +1676,33 @@ function AboutTab() {
               <h4>What's New</h4>
               <div className="release-notes-content">
                 {updateStatus.releaseNotes}
+              </div>
+            </div>
+          )}
+
+          {updateStatus?.status === "error" && updateStatus.error && (
+            <div className="update-error-notice">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+              <div>
+                <strong>Update Check Failed</strong>
+                <p>{updateStatus.error}</p>
+                {updateStatus.error.includes("not packaged") && (
+                  <p className="dev-mode-hint">
+                    💡 Tip: Auto-updates only work in production builds. To test updates, 
+                    run <code>npm run dist:mac</code> to create a packaged app.
+                  </p>
+                )}
               </div>
             </div>
           )}

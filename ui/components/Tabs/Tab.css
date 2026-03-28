@@ -318,9 +318,23 @@
   background-color: #10B981; /* Green */
 }
 
+/* Pending refresh indicator (orange static dot) */
+.tab.tab--pending-refresh::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #F59E0B; /* Orange */
+}
+
 /* Shift icon to make room for dot */
 .tab.tab--streaming .tab__icon,
-.tab.tab--unread .tab__icon {
+.tab.tab--unread .tab__icon,
+.tab.tab--pending-refresh .tab__icon {
   margin-left: 10px;
 }
 
@@ -343,5 +357,9 @@
   
   .tab.tab--unread::before {
     background-color: #34D399; /* Lighter green for dark mode */
+  }
+
+  .tab.tab--pending-refresh::before {
+    background-color: #FBBF24; /* Lighter orange for dark mode */
   }
 }

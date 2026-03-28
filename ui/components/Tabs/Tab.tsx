@@ -137,11 +137,16 @@ export function Tab({
       const draggedTabId = data.tabId;
 
       if (dragPosition === "before" || dragPosition === "after") {
-        // Reorder tabs
+        // Reorder tabs - both fromIndex and tabIndex are from the full tabs array
         let toIndex = tabIndex;
+        
         if (dragPosition === "after") {
+          // If dragging from left to right, insert after the target
+          // If dragging from right to left, the target shifts, so insert at target + 1
           toIndex = fromIndex < tabIndex ? tabIndex : tabIndex + 1;
         } else {
+          // If dragging from right to left, insert before the target
+          // If dragging from left to right, the target shifts, so insert at target - 1
           toIndex = fromIndex < tabIndex ? tabIndex - 1 : tabIndex;
         }
 
@@ -251,7 +256,7 @@ export function Tab({
   return (
     <div
       ref={tabRef}
-      className={`tab ${isActive ? "tab--active" : ""} ${isDragging ? "tab--dragging" : ""} ${dragPosition === "on-top" ? "tab--split-preview" : ""} ${dragPosition ? "tab--drag-over" : ""} ${isMerged ? "tab--merged" : ""} ${tab.isStreaming ? "tab--streaming" : ""} ${tab.hasUnread ? "tab--unread" : ""}`}
+      className={`tab ${isActive ? "tab--active" : ""} ${isDragging ? "tab--dragging" : ""} ${dragPosition === "on-top" ? "tab--split-preview" : ""} ${dragPosition ? "tab--drag-over" : ""} ${isMerged ? "tab--merged" : ""} ${tab.isStreaming ? "tab--streaming" : ""} ${tab.hasUnread ? "tab--unread" : ""} ${tab.pendingRefresh ? "tab--pending-refresh" : ""}`}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       draggable

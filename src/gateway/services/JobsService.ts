@@ -1222,6 +1222,51 @@ export class JobsService {
   }
 
   /**
+   * Jobs left in `running` with no tracked child process (lost completion write, sleep,
+   * or exception after the process exited). Marks them failed so schedules and updates work again.
+   * Safe while a real run is in flight: {@link running} holds the job id until the process ends.
+   */
+  async reconcileStaleRunningJobs(minStaleMs: number = 20_000): Promise<void> {
+    const processBackedTypes: JobType[] = [
+      "shell",
+      "bash",
+      "node",
+      "python",
+      "swift",
+    ];
+    const nowMs = Date.now();
+    for (const [jobId, job] of this.jobs.entries()) {
+      if (job.status !== "running") {
+        continue;
+      }
+      if (!processBackedTypes.includes(job.type)) {
+        continue;
+      }
+      if (this.running.has(jobId)) {
+        continue;
+      }
+      const anchorMs = new Date(
+        job.lastRunAt ?? job.updatedAt,
+      ).getTime();
+      if (Number.isNaN(anchorMs) || nowMs - anchorMs < minStaleMs) {
+        continue;
+      }
+      console.warn(
+        `[JobsService] Stale running job ${jobId} (no tracked process since ${job.lastRunAt ?? job.updatedAt}); marking failed`,
+      );
+      await this.appendLog(
+        jobId,
+        "Stale running state cleared: no active process was tracked (completion may not have been saved).",
+      );
+      await this.setJobStatus(jobId, "failed", {
+        error:
+          "Stale running state — the worker likely finished but Paprwork did not save completion. Check logs, then run again if needed.",
+        currentExecutionId: undefined,
+      });
+    }
+  }
+
+  /**
    * Stop all running jobs (called on graceful shutdown).
    * Kills processes and marks as cancelled.
    */

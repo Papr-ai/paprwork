@@ -49,6 +49,7 @@ interface TabState {
     parentId: string,
     childId: string,
     position: "left" | "right",
+    options?: { autoSwitch?: boolean },
   ) => void;
   removeChild: (parentId: string, childId: string) => void;
   replaceChild: (
@@ -57,7 +58,11 @@ interface TabState {
     newChildId: string,
   ) => void;
   promoteToStandalone: (tabId: string) => void;
-  createArtifactFromChat: (chatTabId: string, artifactTabId: string) => void;
+  createArtifactFromChat: (
+    chatTabId: string,
+    artifactTabId: string,
+    options?: { autoSwitch?: boolean },
+  ) => void;
 
   // Split View
   setSplitRatio: (ratio: number) => void;
@@ -66,6 +71,7 @@ interface TabState {
   // Tab Status Indicators (for chat streaming)
   setTabStreaming: (tabId: string, isStreaming: boolean) => void;
   setTabUnread: (tabId: string, hasUnread: boolean) => void;
+  setTabPendingRefresh: (tabId: string, pending: boolean) => void;
   markTabAsRead: (tabId: string) => void;
   updateTabId: (oldTabId: string, newTabId: string) => void;
 
@@ -423,7 +429,8 @@ export const useTabStore = create<TabState>()(
         return get().tabs.filter((t) => t.displayMode !== "child");
       },
 
-      addChild: (parentId, childId, position) => {
+      addChild: (parentId, childId, position, options = {}) => {
+        const { autoSwitch = true } = options;
         let parent = get().getTab(parentId);
         let child = get().getTab(childId);
 
@@ -461,7 +468,12 @@ export const useTabStore = create<TabState>()(
 
           if (alreadyCorrectChild) {
             // Nothing to do — tab is already the child of this parent.
-            get().switchToTab(parentId);
+            if (autoSwitch) {
+              get().switchToTab(parentId);
+            } else {
+              // Mark as pending refresh if not auto-switching
+              get().setTabPendingRefresh(parentId, true);
+            }
             return;
           }
 
@@ -496,7 +508,12 @@ export const useTabStore = create<TabState>()(
         }));
 
         // Update legacy state
-        get().switchToTab(parentId);
+        if (autoSwitch) {
+          get().switchToTab(parentId);
+        } else {
+          // Mark as pending refresh if not auto-switching
+          get().setTabPendingRefresh(parentId, true);
+        }
       },
 
       removeChild: (parentId, childId) => {
@@ -587,13 +604,15 @@ export const useTabStore = create<TabState>()(
         const tab = get().getTab(tabId);
         if (!tab) return;
 
+        const parentId = tab.parentTabId;
+
         // Remove from parent
-        if (tab.parentTabId) {
-          get().removeChild(tab.parentTabId, tabId);
+        if (parentId) {
+          get().removeChild(parentId, tabId);
         }
 
-        set((state) => ({
-          tabs: state.tabs.map((t) => {
+        set((state) => {
+          const tabs = state.tabs.map((t) => {
             if (t.id === tabId) {
               return {
                 ...t,
@@ -603,23 +622,41 @@ export const useTabStore = create<TabState>()(
               };
             }
             return t;
-          }),
-        }));
+          });
+
+          // If the tab had a parent, move it to be adjacent to the parent
+          if (parentId) {
+            const currentIndex = tabs.findIndex((t) => t.id === tabId);
+            const parentIndex = tabs.findIndex((t) => t.id === parentId);
+
+            if (currentIndex !== -1 && parentIndex !== -1) {
+              // Remove from current position
+              const [movedTab] = tabs.splice(currentIndex, 1);
+              // Insert right after parent
+              const insertIndex =
+                currentIndex < parentIndex ? parentIndex : parentIndex + 1;
+              tabs.splice(insertIndex, 0, movedTab);
+            }
+          }
+
+          return { tabs };
+        });
       },
 
-      createArtifactFromChat: (chatTabId, artifactTabId) => {
+      createArtifactFromChat: (chatTabId, artifactTabId, options = {}) => {
+        const { autoSwitch = true } = options;
         const chat = get().getTab(chatTabId);
         if (!chat) return;
 
         // Case 1: Chat is standalone → make it parent with artifact as child
         if (chat.displayMode === "standalone") {
-          get().addChild(chatTabId, artifactTabId, "right");
+          get().addChild(chatTabId, artifactTabId, "right", { autoSwitch });
           return;
         }
 
         // Case 2: Chat is parent → replace existing child with artifact
         if (chat.displayMode === "parent") {
-          get().addChild(chatTabId, artifactTabId, "right"); // max-1-child auto-replaces
+          get().addChild(chatTabId, artifactTabId, "right", { autoSwitch }); // max-1-child auto-replaces
           return;
         }
 
@@ -640,12 +677,12 @@ export const useTabStore = create<TabState>()(
           }));
 
           // Make artifact the new parent, with chat as child in SAME position
-          get().addChild(artifactTabId, chatTabId, chatPosition);
+          get().addChild(artifactTabId, chatTabId, chatPosition, { autoSwitch });
           return;
         }
 
         // Fallback (shouldn't reach here)
-        get().addChild(chatTabId, artifactTabId, "right");
+        get().addChild(chatTabId, artifactTabId, "right", { autoSwitch });
       },
 
       // Legacy compatibility methods
@@ -827,10 +864,25 @@ export const useTabStore = create<TabState>()(
         }));
       },
 
+      setTabPendingRefresh: (tabId, pending) => {
+        const state = get();
+
+        // Only set pending if tab is NOT active
+        if (tabId === state.activeTabId) {
+          return;
+        }
+
+        set((state) => ({
+          tabs: state.tabs.map((t) =>
+            t.id === tabId ? { ...t, pendingRefresh: pending } : t,
+          ),
+        }));
+      },
+
       markTabAsRead: (tabId) => {
         set((state) => ({
           tabs: state.tabs.map((t) =>
-            t.id === tabId ? { ...t, hasUnread: false, isStreaming: false } : t,
+            t.id === tabId ? { ...t, hasUnread: false, isStreaming: false, pendingRefresh: false } : t,
           ),
         }));
       },

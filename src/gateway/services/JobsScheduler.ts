@@ -129,6 +129,7 @@ export class JobsScheduler {
   private async tick(): Promise<void> {
     const jobsService = getJobsService();
     await jobsService.initialize();
+    await jobsService.reconcileStaleRunningJobs();
     let jobs = await jobsService.listJobs();
     const now = new Date();
     const launches: Array<Promise<void>> = [];

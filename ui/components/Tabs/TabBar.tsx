@@ -231,7 +231,7 @@ export function TabBar() {
       </div>
 
       <div className="tab-bar__tabs" id="header-tabs" ref={tabBarRef}>
-        {getVisibleTabs().map((tab, index) => {
+        {getVisibleTabs().map((tab, visibleIndex) => {
           // Only show standalone and parent tabs (children are hidden)
           const isActive = tab.id === activeLeftTab;
 
@@ -258,6 +258,9 @@ export function TabBar() {
           const isStreaming = chatMetadata?.isStreaming || false;
           const hasUnread = chatMetadata?.hasUnread || false;
 
+          // CRITICAL: Pass the actual index from the full tabs array, not just visible tabs
+          const actualTabIndex = tabs.findIndex((t) => t.id === tab.id);
+
           return (
             <Tab
               key={tab.id}
@@ -265,7 +268,7 @@ export function TabBar() {
               isActive={isActive}
               isMerged={isParent}
               rightTab={displayRightTab}
-              tabIndex={index}
+              tabIndex={actualTabIndex}
               isStreaming={isStreaming}
               hasUnread={hasUnread}
               onDragPositionChange={handleDragPositionChange}

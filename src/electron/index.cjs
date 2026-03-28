@@ -970,20 +970,44 @@ function setupAutoUpdater() {
 
   // IPC: renderer can manually trigger a check
   ipcMain.on("updater:check", () => {
+    console.log("[AutoUpdater] Manual check requested");
+    
+    // Check if running in development/unpackaged mode
+    if (!app.isPackaged) {
+      console.log("[AutoUpdater] Skipping check - app is not packaged");
+      sendUpdateStatus("error", { 
+        error: "Updates are only available in packaged builds. Running from source doesn't support auto-updates." 
+      });
+      return;
+    }
+    
     autoUpdater.checkForUpdates().catch((err) => {
       console.error("[AutoUpdater] Manual check failed:", err.message);
+      sendUpdateStatus("error", { error: err.message });
     });
   });
 
   // Check on launch (after a short delay to not block startup)
   setTimeout(() => {
+    // Skip auto-check in development mode
+    if (!app.isPackaged) {
+      console.log("[AutoUpdater] Skipping initial check - app is not packaged");
+      return;
+    }
+    
     autoUpdater.checkForUpdates().catch((err) => {
       console.error("[AutoUpdater] Initial check failed:", err.message);
+      sendUpdateStatus("error", { error: err.message });
     });
   }, 5000);
 
   // Check every 4 hours
   setInterval(() => {
+    // Skip auto-check in development mode
+    if (!app.isPackaged) {
+      return;
+    }
+    
     autoUpdater.checkForUpdates().catch((err) => {
       console.error("[AutoUpdater] Periodic check failed:", err.message);
     });

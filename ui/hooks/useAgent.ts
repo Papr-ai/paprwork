@@ -388,7 +388,7 @@ export function useAgent() {
 
                   if (docId) {
                     const tabType = isApp ? "app" : "document";
-                    const { createTab, createArtifactFromChat, getTab } =
+                    const { createTab, createArtifactFromChat, getTab, activeTabId } =
                       useTabStore.getState();
 
                     console.log("[useAgent] Attempting auto-open:", {
@@ -399,13 +399,18 @@ export function useAgent() {
                     // Check if tab already exists
                     const existingTabId = `${tabType}-${docId}`;
                     const existingTab = getTab(existingTabId);
+                    const chatTabId = `chat-${chatId}`;
+
+                    // Only auto-switch if user is currently on the chat tab
+                    // Otherwise, mark as pending refresh to avoid interruption
+                    const isUserOnChatTab = activeTabId === chatTabId;
+                    const autoSwitch = isUserOnChatTab;
 
                     if (existingTab) {
                       // Tab exists - just merge with chat (refreshes the view)
-                      const chatTabId = `chat-${chatId}`;
-                      createArtifactFromChat(chatTabId, existingTabId);
+                      createArtifactFromChat(chatTabId, existingTabId, { autoSwitch });
                       console.log(
-                        `[useAgent] Refreshed existing ${tabType} tab: ${existingTabId}`,
+                        `[useAgent] Refreshed existing ${tabType} tab: ${existingTabId}, autoSwitch: ${autoSwitch}`,
                       );
                     } else {
                       // Create new tab and merge
@@ -414,10 +419,9 @@ export function useAgent() {
                         docId,
                         docTitle || "Artifact",
                       );
-                      const chatTabId = `chat-${chatId}`;
-                      createArtifactFromChat(chatTabId, artifactTabId);
+                      createArtifactFromChat(chatTabId, artifactTabId, { autoSwitch });
                       console.log(
-                        `[useAgent] Auto-opened ${tabType} tab: ${artifactTabId} merged with ${chatTabId}`,
+                        `[useAgent] Auto-opened ${tabType} tab: ${artifactTabId} merged with ${chatTabId}, autoSwitch: ${autoSwitch}`,
                       );
                     }
                   } else {

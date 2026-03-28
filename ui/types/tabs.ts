@@ -38,6 +38,7 @@ export interface Tab {
   // Status indicators (for chat tabs)
   isStreaming?: boolean; // Blue pulsing dot
   hasUnread?: boolean; // Green static dot (when streaming finished in bg tab)
+  pendingRefresh?: boolean; // Orange dot - tab has updates but user hasn't viewed yet
 
   // Favorites
   isFavorite?: boolean; // Whether this tab is favorited

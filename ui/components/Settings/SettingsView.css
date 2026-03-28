@@ -2133,3 +2133,52 @@
     transform: rotate(360deg);
   }
 }
+
+/* Update Error Notice */
+.update-error-notice {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  background: rgba(211, 47, 47, 0.1);
+  border: 1px solid rgba(211, 47, 47, 0.3);
+  border-radius: 6px;
+  margin: 16px 0;
+  color: #d32f2f;
+}
+
+.update-error-notice svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.update-error-notice strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.update-error-notice p {
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0 0 8px 0;
+}
+
+.update-error-notice p:last-child {
+  margin-bottom: 0;
+}
+
+.dev-mode-hint {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 8px;
+  border-radius: 4px;
+  margin-top: 8px !important;
+}
+
+.dev-mode-hint code {
+  background: rgba(0, 0, 0, 0.2);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: SF Mono, Consolas, Monaco, monospace;
+  font-size: 11px;
+}
