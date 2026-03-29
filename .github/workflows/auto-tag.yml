@@ -1,0 +1,60 @@
+name: Auto Tag on Version Bump
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'package.json'
+
+permissions:
+  contents: write
+
+jobs:
+  auto-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check if version changed
+        id: version-check
+        run: |
+          # Get version from current commit
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          
+          # Get version from previous commit
+          git checkout HEAD~1 -- package.json 2>/dev/null || echo "First commit"
+          PREV_VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")
+          git checkout HEAD -- package.json
+          
+          echo "current=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "previous=$PREV_VERSION" >> $GITHUB_OUTPUT
+          
+          if [ "$CURRENT_VERSION" != "$PREV_VERSION" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check if tag already exists
+        if: steps.version-check.outputs.changed == 'true'
+        id: tag-check
+        run: |
+          VERSION="${{ steps.version-check.outputs.current }}"
+          if git ls-remote --tags origin | grep -q "refs/tags/v$VERSION"; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create and push tag
+        if: steps.version-check.outputs.changed == 'true' && steps.tag-check.outputs.exists == 'false'
+        run: |
+          VERSION="${{ steps.version-check.outputs.current }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$VERSION" -m "Release v$VERSION"
+          git push origin "v$VERSION"
+          echo "✅ Created and pushed tag v$VERSION"
