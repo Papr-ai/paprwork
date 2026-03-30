@@ -7,6 +7,7 @@ import type {
   ExecutorLaunchResult,
   IJobExecutor,
 } from "./IJobExecutor.js";
+import { getShellCommand, wrapCommandWithVenv, getVenvPaths } from "../../../../core/utils/platform.js";
 
 export class CommandJobExecutor implements IJobExecutor {
   private supportedTypes: Set<JobType>;
@@ -58,7 +59,8 @@ export class CommandJobExecutor implements IJobExecutor {
     // ─────────────────────────────────────────────────────────────────────────
 
     const jobDbPath = path.join(params.jobDir, "data", "data.db");
-    const proc = spawn("/bin/bash", ["-lc", finalCommand], {
+    const [shellPath, shellArgs] = getShellCommand(finalCommand);
+    const proc = spawn(shellPath, shellArgs, {
       cwd: params.jobDir,
       env: {
         ...process.env,
@@ -222,8 +224,9 @@ export class CommandJobExecutor implements IJobExecutor {
       if (needsInstall) {
         await params.appendLog("Installing Python requirements...");
         try {
+          const { pip } = getVenvPaths(venvDir);
           const pipOutput = execSync(
-            ".venv/bin/pip install -r requirements.txt 2>&1",
+            `${pip} install -r requirements.txt 2>&1`,
             {
               cwd: params.jobDir,
               timeout: 120_000, // 2 min timeout for pip
@@ -295,8 +298,8 @@ export class CommandJobExecutor implements IJobExecutor {
 
   /**
    * Wrap a command to use the job's venv Python if it exists.
-   * - `python3 script.py` → `.venv/bin/python3 script.py`
-   * - Other commands get the venv activated via `source .venv/bin/activate`
+   * - `python3 script.py` → `.venv/bin/python3 script.py` (Unix) or `.venv\Scripts\python.exe script.py` (Windows)
+   * - Other commands get the venv activated via platform-specific activation script
    */
   private wrapWithVenv(command: string, jobDir: string): string {
     const venvDir = path.join(jobDir, ".venv");
@@ -304,19 +307,6 @@ export class CommandJobExecutor implements IJobExecutor {
       return command;
     }
 
-    // If command starts with `python`, replace with venv python
-    if (command.startsWith("python3 ") || command.startsWith("python ")) {
-      const rest = command.replace(/^python3?\s+/, "");
-      return `.venv/bin/python3 ${rest}`;
-    }
-
-    // For pip commands, use venv pip
-    if (command.startsWith("pip ") || command.startsWith("pip3 ")) {
-      const rest = command.replace(/^pip3?\s+/, "");
-      return `.venv/bin/pip3 ${rest}`;
-    }
-
-    // For anything else, activate venv first
-    return `source .venv/bin/activate && ${command}`;
+    return wrapCommandWithVenv(command, venvDir);
   }
 }

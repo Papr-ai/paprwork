@@ -23,6 +23,10 @@ export default defineConfig({
       },
     },
   ],
+  define: {
+    // Expose environment variables to client
+    'import.meta.env.VITE_REQUIRE_PAPR_AUTH': JSON.stringify(process.env.REQUIRE_PAPR_AUTH || 'false'),
+  },
   base: "./", // Use relative paths for Electron
   resolve: {
     // CRITICAL: Do not resolve from parent node_modules

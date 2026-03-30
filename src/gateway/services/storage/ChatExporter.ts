@@ -17,7 +17,7 @@ export class ChatExporter {
   private jobsPath: string;
 
   constructor() {
-    this.paprPath = path.join(os.homedir(), "Papr");
+    this.paprPath = path.join(os.homedir(), "PAPR");
     this.chatsPath = path.join(this.paprPath, "Chats");
     this.artifactsPath = path.join(this.paprPath, "Artifacts");
     this.jobsPath = path.join(this.paprPath, "Jobs");

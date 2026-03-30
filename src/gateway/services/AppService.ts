@@ -4,7 +4,7 @@
  */
 
 import { promises as fs } from "fs";
-import { watch, type FSWatcher } from "fs";
+import chokidar, { type FSWatcher } from "chokidar";
 import path from "path";
 import os from "os";
 import { v4 as uuidv4 } from "uuid";
@@ -480,36 +480,29 @@ export class AppService {
     }
 
     try {
-      const watcher = watch(
-        appPath,
-        { recursive: true },
-        (_eventType, filename) => {
-          if (!filename) return;
+      const watcher = chokidar.watch(appPath, {
+        persistent: true,
+        ignoreInitial: true,
+        ignored: [
+          "**/.versions/**",
+          "**/data-sources.json",
+          "**/.*", // Hidden files
+        ],
+        awaitWriteFinish: {
+          stabilityThreshold: 200, // Wait 200ms after last change
+          pollInterval: 100,
+        },
+      });
 
-          // Ignore version history, data sources, and hidden files
-          if (
-            filename.startsWith(".versions") ||
-            filename === "data-sources.json" ||
-            filename.startsWith(".")
-          ) {
-            return;
-          }
+      watcher.on("change", (filePath) => {
+        const filename = path.relative(appPath, filePath);
+        this.handleFileChange(appId, filename);
+      });
 
-          // Debounce file changes (multiple events fire for single edit)
-          const debounceKey = `${appId}:${filename}`;
-          
-          if (this.debounceTimers.has(debounceKey)) {
-            clearTimeout(this.debounceTimers.get(debounceKey)!);
-          }
-
-          const timer = setTimeout(() => {
-            this.debounceTimers.delete(debounceKey);
-            this.handleFileChange(appId, filename);
-          }, 200); // 200ms debounce
-
-          this.debounceTimers.set(debounceKey, timer);
-        }
-      );
+      watcher.on("add", (filePath) => {
+        const filename = path.relative(appPath, filePath);
+        this.handleFileChange(appId, filename);
+      });
 
       watcher.on("error", (error) => {
         console.error(`[AppService] Watcher error for app ${appId}:`, error);

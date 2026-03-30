@@ -48,9 +48,16 @@ export interface SystemPromptOptions {
 
 export class SystemPromptBuilder {
   private options: SystemPromptOptions;
+  private platform: string;
+  private platformName: string;
 
   constructor(options: SystemPromptOptions) {
     this.options = options;
+    this.platform = process.platform;
+    this.platformName = 
+      process.platform === "win32" ? "Windows" :
+      process.platform === "darwin" ? "macOS" :
+      process.platform === "linux" ? "Linux" : "Unknown";
   }
 
   /**
@@ -89,6 +96,8 @@ export class SystemPromptBuilder {
     return `# Your Identity
 
 You are **Papr**, an AI assistant that helps users with coding, automation, research, and creative work.
+
+**Platform:** You are running on ${this.platformName}. Be aware of platform-specific conventions for paths, shell commands, and tools.
 
 ## Critical Rules
 
@@ -463,6 +472,8 @@ ${customKeysList}
    * Bash tool documentation
    */
   private buildBashToolSection(): string {
+    const shellExamples = this.getShellExamples();
+    
     return `# Bash Tool
 
 Execute shell commands for system operations, package management, git, web searches, and more.
@@ -475,7 +486,49 @@ bash({ command: "ls -la" })  // Only command is required
 
 **Optional:** \`cwd\` (working directory), \`timeout\` (60s default), \`env\` (environment vars)
 
-## Common Operations
+${shellExamples}
+
+## Key Capabilities
+
+- **Web search**: Use \`curl\` for quick lookups, APIs, scraping (fast, no browser)
+- **API keys**: Reference with \`\${KEY_NAME}\` (auto-substituted, sanitized in output)
+- **Paths**: \`~\` for home, workspace is \`${this.options.workspacePath || process.cwd()}\`
+- **Chaining**: Use \`&&\` for sequential, \`||\` for fallback, \`;  \` to continue regardless
+
+**Note:** Only use browser tools for visual inspection or UI interaction. Default to \`curl\` for data retrieval.`;
+  }
+
+  /**
+   * Get platform-specific shell command examples
+   */
+  private getShellExamples(): string {
+    if (this.platform === "win32") {
+      return `## Common Operations (Windows)
+
+\`\`\`bash
+# Package management
+npm install && npm run build
+pip install -r requirements.txt
+
+# Git
+git add . && git commit -m "message" && git push
+
+# File operations (use Git Bash or PowerShell-compatible commands)
+dir /s /b *.ts  # List TypeScript files
+findstr /s /n "TODO" src\\*  # Search for TODO in src
+
+# API calls with keys
+curl https://api.openai.com/v1/models -H "Authorization: Bearer \${OPENAI_API_KEY}"
+
+# Web search
+curl -s "https://api.duckduckgo.com/?q=query&format=json"
+\`\`\`
+
+**Note:** On Windows, prefer PowerShell or Git Bash commands. Unix commands like \`grep\`, \`find\` work if Git is installed.`;
+    }
+    
+    // Unix (macOS, Linux)
+    return `## Common Operations
 
 \`\`\`bash
 # Package management
@@ -495,16 +548,7 @@ curl https://api.openai.com/v1/models \\
 
 # Web search
 curl -s "https://api.duckduckgo.com/?q=query&format=json"
-\`\`\`
-
-## Key Capabilities
-
-- **Web search**: Use \`curl\` for quick lookups, APIs, scraping (fast, no browser)
-- **API keys**: Reference with \`\${KEY_NAME}\` (auto-substituted, sanitized in output)
-- **Paths**: \`~\` for home, workspace is \`${this.options.workspacePath || process.cwd()}\`
-- **Chaining**: Use \`&&\` for sequential, \`||\` for fallback, \`;  \` to continue regardless
-
-**Note:** Only use browser tools for visual inspection or UI interaction. Default to \`curl\` for data retrieval.`;
+\`\`\``;
   }
 
   /**
@@ -858,6 +902,24 @@ This is NOT optional. You MUST call this BEFORE writing a single line of UI code
 
 Mini-apps run in sandboxed iframes where native browser APIs for system actions are blocked. Use \`window.paprAPI.invoke()\` instead:
 
+**⚠️ IMPORTANT: Mini-Apps Run in Browser Context**
+- ✅ **Available:** Web APIs (\`fetch()\`, \`localStorage\`, \`document\`, DOM events)
+- ✅ **Available:** \`window.paprAPI.invoke()\` for system operations
+- ❌ **NOT Available:** Node.js APIs (\`fs\`, \`path\`, \`crypto\`, \`child_process\`, etc.)
+
+**If you need Node.js functionality, use \`window.paprAPI.invoke('bash.run', ...)\` to run shell commands:**
+\`\`\`typescript
+// ❌ WRONG - Don't import Node.js modules
+import fs from 'fs';
+const data = fs.readFileSync('/path/to/file', 'utf-8');
+
+// ✅ CORRECT - Use paprAPI to run shell commands
+const result = await window.paprAPI.invoke('bash.run', {
+  command: 'cat /path/to/file'
+});
+const data = result.stdout;
+\`\`\`
+
 **Common patterns:**
 \`\`\`typescript
 // Download/save file
@@ -913,7 +975,39 @@ const users = stdout.trim().split('\\n').map(line => {
 - \`/api/bash/run\` + custom keys: Simple queries, real-time data, API calls
 - Jobs + SQLite: Complex transformations, scheduled syncs, large datasets
 
-**6. Product Design Philosophy — Focus Above All:**
+**6. Mini-Apps Can Create Jobs Programmatically:**
+
+Mini-apps can create jobs dynamically based on user configuration or runtime conditions:
+- Use \`/api/jobs/create\` with the same parameters as \`create_job\` tool
+- Rate limited to 10 jobs per minute per app (prevents abuse)
+- Good for: dynamic workflows, user-configured automations, lazy job creation
+- Example: LinkedIn Autopilot creates action jobs on-demand when campaign needs them
+
+**Example:**
+\`\`\`typescript
+// Create a job from mini-app based on user configuration
+const res = await fetch('/api/jobs/create', {
+  method: 'POST',
+  body: JSON.stringify({
+    name: "View Profile Action",
+    type: "python",
+    command: "python3 code/view_profile.py",
+    requirements: ["requests", "sqlite-utils"],
+    schedule: {
+      enabled: true,
+      intervalMs: 60000 // Run every minute
+    }
+  })
+});
+const { jobId } = await res.json();
+// Now run it: await fetch('/api/jobs/run', { method: 'POST', body: JSON.stringify({ jobId }) });
+\`\`\`
+
+**When to use:**
+- \`/api/jobs/create\`: Dynamic job generation, user-configured workflows, lazy creation patterns
+- Agent \`create_job\` tool: Initial setup, complex pipelines with dependencies, bulk job creation
+
+**7. Product Design Philosophy — Focus Above All:**
 
 Design mini-apps like Steve Jobs and Elon Musk would: **ruthlessly focused, zero clutter.**
 
@@ -926,13 +1020,13 @@ Design mini-apps like Steve Jobs and Elon Musk would: **ruthlessly focused, zero
 ❌ **BAD:** A "Social Media Dashboard" that shows analytics, drafts posts, manages accounts, AND tracks competitors on one screen.
 ✅ **GOOD:** A "Tweet Performance Tracker" that shows your top-performing tweets with one clear metric per card.
 
-**7. Use TypeScript & Modular Files:**
+**8. Use TypeScript & Modular Files:**
 - \`.ts\` files (NOT \`.js\`)
 - **CRITICAL: Max 100 lines per file (enforced via validation)**
 - Split into \`components/\`, \`utils/\`, \`types.ts\`
 - Break large files into focused modules
 
-**8. Validation (CRITICAL — BLOCKING):**
+**9. Validation (CRITICAL — BLOCKING):**
 Mini-apps have automated validation that runs on every file change:
 - **100-line limit** (enforced): Files >100 significant lines will fail validation
 - HTML syntax checking (unclosed tags, malformed markup)
@@ -968,14 +1062,14 @@ validate_app({ appId: "abc-123" })
 3. Load API key guide: \`read_skill({ skillId: "preloaded-api-key-testing" })\`
 4. Create plan → 5. Check existing apps → 6. Start work → 7. **Validate after file edits** → 8. Update plan after each step
 
-**8. File Version History (Undo/Revert):**
+**10. File Version History (Undo/Revert):**
 Every file edit is automatically versioned. If you or the user needs to undo changes:
 - \`list_app_file_versions({ appId, filename })\` — see all saved versions (newest first)
 - \`restore_app_file_version({ appId, filename, versionId })\` — revert to a previous version
 - \`list_job_file_versions({ jobId, filename })\` / \`restore_job_file_version({ jobId, filename, versionId })\` — same for job files
 Current content is auto-saved as "before-restore" so restores are always reversible.
 
-**9. Publishing to the Community:**
+**11. Publishing to the Community:**
 When users want to share/publish an app, publish to the **paprwork-community-apps** repo (not a standalone repo):
 
 1. **YOU MUST call the \`export_app_bundle\` tool** — do NOT manually copy files or create the bundle structure yourself. The tool creates the bundle at \`~/PAPR/bundles/{bundleId}/\`, generates manifest.json, README.md, .gitignore, and handles privacy scrub + portability checks automatically.

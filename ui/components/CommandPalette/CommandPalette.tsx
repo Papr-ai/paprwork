@@ -10,6 +10,11 @@ import { useArtifacts } from "../../hooks/useArtifacts";
 import type { TabType } from "../../types/tabs";
 import "./CommandPalette.css";
 
+// Platform-aware modifier key detection
+const isMac = navigator.platform.toUpperCase().includes("MAC");
+const modKey = isMac ? "\u2318" : "Ctrl+";
+const modName = isMac ? "Cmd" : "Ctrl";
+
 interface CommandItem {
   id: string;
   label: string;
@@ -32,7 +37,7 @@ const COMMANDS: CommandItem[] = [
     description: "Browse all documents and artifacts",
     tabType: "artifacts",
     entityId: "artifacts",
-    shortcut: "\u2318D",
+    shortcut: `${modKey}D`,
     icon: (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
         <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -46,7 +51,7 @@ const COMMANDS: CommandItem[] = [
     description: "Data views and tables",
     tabType: "views",
     entityId: "views",
-    shortcut: "\u2318\u21e7V",
+    shortcut: `${modKey}Shift+V`,
     icon: (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
         <rect x="3" y="3" width="7" height="7" stroke="currentColor" strokeWidth="1.5" />
@@ -64,7 +69,7 @@ const COMMANDS: CommandItem[] = [
     description: "AI agents and sub-agents",
     tabType: "agents",
     entityId: "agents",
-    shortcut: "\u2318\u21e7A",
+    shortcut: `${modKey}Shift+A`,
     icon: (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
         <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.5" />
@@ -78,7 +83,7 @@ const COMMANDS: CommandItem[] = [
     description: "Scheduled jobs and automation",
     tabType: "jobs",
     entityId: "jobs",
-    shortcut: "\u2318J",
+    shortcut: `${modKey}J`,
     icon: (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
         <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.5" />
@@ -92,7 +97,7 @@ const COMMANDS: CommandItem[] = [
     description: "Skills marketplace and management",
     tabType: "skills",
     entityId: "skills",
-    shortcut: "\u2318\u21e7S",
+    shortcut: `${modKey}Shift+S`,
     icon: (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
         <path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -105,7 +110,7 @@ const COMMANDS: CommandItem[] = [
     description: "App preferences and configuration",
     tabType: "settings",
     entityId: "settings",
-    shortcut: "\u2318,",
+    shortcut: `${modKey},`,
     icon: (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
         <path d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />

@@ -36,6 +36,7 @@ import {
   initializeJobsService,
   getJobsService,
   JobsService,
+  type CreateJobInput,
 } from "./services/JobsService.js";
 import { initializeSkillService } from "./services/SkillService.js";
 import { initializeBundleService } from "./services/BundleService.js";
@@ -659,6 +660,91 @@ async function startGateway(): Promise<void> {
         res.status(500).json({ error: (err as Error).message });
       }
     });
+
+    // ── Mini-app Job Creation API ─────────────────────────────────────────────
+    // Lets mini-apps programmatically create jobs (the same capability agents have
+    // via the create_job tool). Intended for dynamic automation workflows where
+    // mini-apps generate job pipelines based on user configuration in the UI.
+    //
+    // Security:
+    //  - Rate limited to 10 jobs per minute per app (prevents spam)
+    //  - Command size capped at 100KB (prevents abuse)
+    //  - All validation from create_job tool applies (Zod schemas)
+    //  - No privilege escalation (mini-apps already have bash access via /api/bash/run)
+    //
+    //  POST /api/jobs/create
+    //    body: CreateJobInput (same as create_job tool)
+    //    returns: { success: true, jobId: string } or { error: string }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // Rate limiter for job creation (per app ID)
+    const jobCreationRateLimit = new Map<
+      string,
+      { count: number; windowStart: number }
+    >();
+    const MAX_JOBS_PER_MINUTE = 10;
+    const RATE_LIMIT_WINDOW_MS = 60_000;
+
+    app.post("/api/jobs/create", async (req, res) => {
+      try {
+        const input = req.body as CreateJobInput & { appId?: string };
+        const appId = input.appId || "unknown";
+
+        // Rate limit check
+        const now = Date.now();
+        const rateLimitData = jobCreationRateLimit.get(appId);
+
+        if (rateLimitData) {
+          // Reset window if expired
+          if (now - rateLimitData.windowStart >= RATE_LIMIT_WINDOW_MS) {
+            rateLimitData.count = 0;
+            rateLimitData.windowStart = now;
+          }
+
+          // Check if limit exceeded
+          if (rateLimitData.count >= MAX_JOBS_PER_MINUTE) {
+            const timeRemaining = Math.ceil(
+              (rateLimitData.windowStart + RATE_LIMIT_WINDOW_MS - now) / 1000,
+            );
+            res.status(429).json({
+              error: `Rate limit exceeded. Max ${MAX_JOBS_PER_MINUTE} jobs per minute per app. Try again in ${timeRemaining}s.`,
+            });
+            return;
+          }
+
+          rateLimitData.count++;
+        } else {
+          jobCreationRateLimit.set(appId, { count: 1, windowStart: now });
+        }
+
+        // Size validation
+        if (input.command && input.command.length > 100_000) {
+          res.status(400).json({
+            error: "Command too large. Maximum 100KB allowed.",
+          });
+          return;
+        }
+
+        // Create job via JobsService (all validation happens there)
+        const jobsService = getJobsService();
+        const job = await jobsService.createJob(input);
+
+        console.log(
+          `[Gateway] /api/jobs/create: App ${appId} created job ${job.id} (${job.name})`,
+        );
+
+        res.json({
+          success: true,
+          jobId: job.id,
+          name: job.name,
+          type: job.type,
+          status: job.status,
+        });
+      } catch (err) {
+        console.error("[Gateway] /api/jobs/create error:", err);
+        res.status(400).json({ error: (err as Error).message });
+      }
+    });
     // ─────────────────────────────────────────────────────────────────────────
 
     // ── Mini-app Bash API ─────────────────────────────────────────────────────
@@ -702,6 +788,7 @@ async function startGateway(): Promise<void> {
 
         const timeout = Math.min(timeoutMs ?? 30_000, 120_000); // cap at 2 min
         const { exec } = await import("child_process");
+        const { getShell } = await import("../core/utils/platform.js");
         const result = await new Promise<{
           stdout: string;
           stderr: string;
@@ -709,7 +796,7 @@ async function startGateway(): Promise<void> {
         }>((resolve) => {
           const proc = exec(
             finalCommand,
-            { timeout, env: process.env, shell: "/bin/bash" },
+            { timeout, env: process.env, shell: getShell() },
             (error, stdout, stderr) => {
               resolve({
                 stdout: stdout ?? "",
@@ -778,11 +865,47 @@ async function startGateway(): Promise<void> {
         // Transpile TypeScript files on-the-fly so agents can write .ts
         if (ext === ".ts" || ext === ".tsx") {
           try {
+            // Validate: Warn if mini-app imports Node.js built-ins
+            // Mini-apps run in browser iframes - they should use window.paprAPI instead
+            const nodeBuiltins = [
+              "fs",
+              "path",
+              "crypto",
+              "child_process",
+              "os",
+              "net",
+              "http",
+              "https",
+              "stream",
+              "buffer",
+              "process",
+            ];
+            
+            // TypeScript narrowing: content is guaranteed non-null here (checked above)
+            const contentStr = content as string;
+            const hasNodeImports = nodeBuiltins.some(
+              (mod) =>
+                contentStr.includes(`from '${mod}'`) ||
+                contentStr.includes(`from "${mod}"`) ||
+                contentStr.includes(`require('${mod}')`) ||
+                contentStr.includes(`from 'node:${mod}'`) ||
+                contentStr.includes(`from "node:${mod}"`),
+            );
+
+            if (hasNodeImports) {
+              console.warn(
+                `[Gateway] Mini-app ${appId}/${requestedPath} imports Node.js modules. ` +
+                  `These APIs are not available in browser context. ` +
+                  `Use window.paprAPI.invoke() instead.`,
+              );
+            }
+
             const esbuild = await import("esbuild");
-            const result = await esbuild.transform(content, {
+            const result = await esbuild.transform(contentStr, {
               loader: ext === ".tsx" ? "tsx" : "ts",
               format: "esm",
               target: "es2020",
+              platform: "browser", // Mini-apps run in iframe (browser context)
               sourcemap: "inline",
             });
             content = result.code;

@@ -12,9 +12,17 @@ const execAsync = promisify(exec);
 // Electron apps don't inherit the user's shell PATH, so npm/node/claude
 // won't be found. Resolve the user's real PATH via their login shell.
 function getShellEnv(): Record<string, string> {
-  const home = process.env.HOME || "";
+  const home = process.env.HOME || process.env.USERPROFILE || "";
 
-  // Try to get the real PATH from the user's login shell
+  // Skip shell env resolution on Windows - just use existing PATH
+  if (process.platform === "win32") {
+    return {
+      ...process.env,
+      PATH: process.env.PATH || "",
+    } as Record<string, string>;
+  }
+
+  // Unix: Try to get the real PATH from the user's login shell
   let shellPath = "";
   try {
     const { execSync } = require("child_process");
@@ -62,7 +70,8 @@ export class ClaudeSetupTokenService {
    */
   async isClaudeCLIInstalled(): Promise<boolean> {
     try {
-      await execAsync("which claude", { env: getShellEnv() });
+      const whichCmd = process.platform === "win32" ? "where claude" : "which claude";
+      await execAsync(whichCmd, { env: getShellEnv() });
       return true;
     } catch {
       return false;
@@ -296,41 +305,47 @@ export class ClaudeSetupTokenService {
   /**
    * Read token from Claude CLI's storage
    * This can be used as a fallback if extraction from stdout fails
-   * Claude Code stores tokens in macOS Keychain under 'Claude Code-credentials'
+   * Claude Code stores tokens in:
+   * - macOS: Keychain under 'Claude Code-credentials'
+   * - Windows: ~/.claude/.credentials.json or Windows Credential Manager
+   * - Linux: ~/.claude/.credentials.json
    */
   async readTokenFromCLIStorage(): Promise<string | null> {
     try {
-      // Try macOS Keychain first (where Claude Code actually stores tokens)
-      try {
-        console.log("[ClaudeSetupToken] Trying to read from macOS Keychain...");
-        const { exec: execCallback } = await import("child_process");
-        const { promisify } = await import("util");
-        const exec = promisify(execCallback);
-        
-        const { stdout } = await exec(
-          "security find-generic-password -s 'Claude Code-credentials' -w",
-          { timeout: 5000 }
-        );
-        
-        const credentialsJson = stdout.trim();
-        if (credentialsJson) {
-          // Parse the credentials JSON
-          const credentials = JSON.parse(credentialsJson);
+      // Try platform-specific credential storage first
+      if (process.platform === "darwin") {
+        // macOS: Try Keychain
+        try {
+          console.log("[ClaudeSetupToken] Trying to read from macOS Keychain...");
+          const { exec: execCallback } = await import("child_process");
+          const { promisify } = await import("util");
+          const exec = promisify(execCallback);
           
-          // Extract access token (structure: { claudeAiOauth: { accessToken: "..." } })
-          const token =
-            credentials?.claudeAiOauth?.accessToken ||
-            credentials?.accessToken;
-          if (token && typeof token === 'string') {
-            console.log("[ClaudeSetupToken] Found token in Keychain");
-            return token;
+          const { stdout } = await exec(
+            "security find-generic-password -s 'Claude Code-credentials' -w",
+            { timeout: 5000 }
+          );
+          
+          const credentialsJson = stdout.trim();
+          if (credentialsJson) {
+            const credentials = JSON.parse(credentialsJson);
+            const token =
+              credentials?.claudeAiOauth?.accessToken ||
+              credentials?.accessToken;
+            if (token && typeof token === 'string') {
+              console.log("[ClaudeSetupToken] Found token in Keychain");
+              return token;
+            }
           }
+        } catch (keychainError) {
+          console.log("[ClaudeSetupToken] Could not read from Keychain:", (keychainError as Error).message);
         }
-      } catch (keychainError) {
-        console.log("[ClaudeSetupToken] Could not read from Keychain:", (keychainError as Error).message);
+      } else if (process.platform === "win32") {
+        // Windows: Skip Credential Manager for now (complex), go straight to file
+        console.log("[ClaudeSetupToken] Windows: Checking file-based storage...");
       }
       
-      // Fall back to ~/.claude/.credentials.json
+      // Fall back to ~/.claude/.credentials.json (cross-platform)
       const fs = await import("fs/promises");
       const homeDir = process.env.HOME || process.env.USERPROFILE || "";
       const credPath = `${homeDir}/.claude/.credentials.json`;
@@ -353,8 +368,6 @@ export class ClaudeSetupTokenService {
         const content = await fs.readFile(tokenPath, "utf-8");
         const config = JSON.parse(content);
 
-        // Extract token from config structure
-        // Structure varies, but typically: { oauthAccount: { accessToken: "..." } }
         if (config.oauthAccount?.accessToken) {
           console.log("[ClaudeSetupToken] Found token in ~/.claude.json");
           return config.oauthAccount.accessToken;

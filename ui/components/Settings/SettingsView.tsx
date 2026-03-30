@@ -11,6 +11,7 @@ import { useAppUpdater } from "../../hooks/useAppUpdater";
 import { gateway } from "../../src/lib/gateway";
 import type { CustomKeyInput, SettingsTab } from "../../types/settings";
 import { OAuthSection } from "./OAuthSection";
+import { PaprLoginSection } from "./PaprLoginSection";
 import "./SettingsView.css";
 
 export function SettingsView() {
@@ -190,6 +191,7 @@ function APIKeysTab() {
     updateKey,
     deleteKey,
     getKeyValue,
+    loadKeys,
   } = useCustomKeys();
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -332,6 +334,11 @@ function APIKeysTab() {
 
   return (
     <div className="settings-content settings-content--full-width">
+      {/* Papr Login Section - Automatic API Key Provisioning */}
+      <div className="settings-section">
+        <PaprLoginSection onApiKeyReceived={() => loadKeys()} />
+      </div>
+
       {/* OAuth Section - Connect to Subscriptions */}
       <div className="settings-section">
         <h2 className="settings-section__title">Connect Your Accounts</h2>
@@ -364,8 +371,8 @@ function APIKeysTab() {
           <div>
             <h2 className="settings-section__title">API Keys</h2>
             <p className="settings-section__description">
-              Store API keys, tokens, and config securely. Stored in macOS
-              Keychain.
+              Store API keys, tokens, and config securely. Encrypted using your
+              system's secure storage.
             </p>
           </div>
           <button
@@ -759,6 +766,13 @@ function ProfileTab() {
   const [imageUrl, setImageUrl] = useState("");
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [paprProfile, setPaprProfile] = useState<{
+    userId: string;
+    email: string;
+    displayName?: string;
+    profileImage?: string;
+    authenticatedAt: string;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const profileStore = useProfileStore();
 
@@ -770,17 +784,53 @@ function ProfileTab() {
         const data = response.data as {
           profile?: { name?: string; email?: string; imageUrl?: string };
         };
-        if (data?.profile) {
+
+        // Load Papr profile first
+        const paprResponse = await window.electronAPI.papr.getProfile();
+        if (paprResponse.success && paprResponse.profile) {
+          setPaprProfile(paprResponse.profile);
+          
+          // Pre-fill manual profile fields if empty
+          if (data?.profile) {
+            setName(data.profile.name ?? paprResponse.profile.displayName ?? "");
+            setEmail(data.profile.email ?? paprResponse.profile.email ?? "");
+            setImageUrl(data.profile.imageUrl ?? paprResponse.profile.profileImage ?? "");
+          } else {
+            // No manual profile yet - use Papr profile as defaults
+            setName(paprResponse.profile.displayName ?? "");
+            setEmail(paprResponse.profile.email ?? "");
+            setImageUrl(paprResponse.profile.profileImage ?? "");
+          }
+        } else if (data?.profile) {
+          // No Papr profile - use manual profile only
           setName(data.profile.name ?? "");
           setEmail(data.profile.email ?? "");
           setImageUrl(data.profile.imageUrl ?? "");
         }
+
         setLoaded(true);
       } catch (err) {
         console.error("[ProfileTab] Load error:", err);
         setLoaded(true);
       }
     })();
+
+    // Listen for auth success to reload profile
+    const handleAuthSuccess = () => {
+      console.log('[ProfileTab] Auth success - reloading profile');
+      window.electronAPI.papr.getProfile().then((response) => {
+        if (response.success && response.profile) {
+          setPaprProfile(response.profile);
+          // Auto-populate if manual fields are empty
+          if (!name) setName(response.profile.displayName ?? "");
+          if (!email) setEmail(response.profile.email ?? "");
+          if (!imageUrl) setImageUrl(response.profile.profileImage ?? "");
+        }
+      });
+    };
+
+    window.addEventListener('papr-auth-success', handleAuthSuccess);
+    return () => window.removeEventListener('papr-auth-success', handleAuthSuccess);
   }, []);
 
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -831,11 +881,106 @@ function ProfileTab() {
 
   return (
     <div className="settings-content">
+      {/* Papr Profile Section - Shows info fetched from dashboard */}
+      {paprProfile && (
+        <div className="settings-section" style={{ marginBottom: '24px' }}>
+          <h2 className="settings-section__title">Papr Account</h2>
+          <p className="settings-section__description">
+            Profile synced from your Papr account
+          </p>
+
+          <div className="form-group">
+            <div style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '16px',
+              padding: '16px',
+              background: 'rgba(255, 255, 255, 0.02)',
+              border: '1px solid rgba(255, 255, 255, 0.05)',
+              borderRadius: '12px',
+            }}>
+              {paprProfile.profileImage ? (
+                <img 
+                  src={paprProfile.profileImage} 
+                  alt={paprProfile.displayName || paprProfile.email}
+                  style={{
+                    width: '48px',
+                    height: '48px',
+                    borderRadius: '50%',
+                    objectFit: 'cover',
+                  }}
+                />
+              ) : (
+                <div style={{
+                  width: '48px',
+                  height: '48px',
+                  borderRadius: '50%',
+                  background: 'rgba(255, 255, 255, 0.1)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                    <circle cx="12" cy="7" r="4" />
+                  </svg>
+                </div>
+              )}
+              <div style={{ flex: 1 }}>
+                <div style={{ 
+                  fontSize: '15px', 
+                  fontWeight: 500, 
+                  color: 'var(--text-primary)',
+                  marginBottom: '4px',
+                }}>
+                  {paprProfile.displayName || paprProfile.email}
+                </div>
+                <div style={{ 
+                  fontSize: '13px', 
+                  color: 'var(--text-secondary)',
+                }}>
+                  {paprProfile.email}
+                </div>
+                <div style={{ 
+                  fontSize: '12px', 
+                  color: 'var(--text-tertiary)',
+                  marginTop: '4px',
+                }}>
+                  Connected {new Date(paprProfile.authenticatedAt).toLocaleDateString()}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="settings-section">
-        <h2 className="settings-section__title">Your Profile</h2>
-        <p className="settings-section__description">
-          This information helps personalize your experience and chat messages
-        </p>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+          <div>
+            <h2 className="settings-section__title">Your Profile</h2>
+            <p className="settings-section__description">
+              {paprProfile 
+                ? "Override your Papr account info or keep it synced" 
+                : "This information helps personalize your experience and chat messages"}
+            </p>
+          </div>
+          {paprProfile && (
+            <button
+              className="settings-btn settings-btn--secondary"
+              onClick={() => {
+                setName(paprProfile.displayName ?? "");
+                setEmail(paprProfile.email ?? "");
+                setImageUrl(paprProfile.profileImage ?? "");
+              }}
+              style={{ marginTop: '-8px' }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+              </svg>
+              Sync from Papr
+            </button>
+          )}
+        </div>
 
         {/* Profile Photo Upload */}
         <div className="form-group">

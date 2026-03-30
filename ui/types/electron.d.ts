@@ -37,7 +37,7 @@ export interface UpdateStatus {
 }
 
 export interface ElectronAPI {
-  // Custom Keys API (secure storage via macOS Keychain)
+  // Custom Keys API (secure storage via system keychain)
   customKeys: {
     list: () => Promise<CustomKeyMetadata[]>;
     get: (keyId: string) => Promise<string | null>;
@@ -104,6 +104,36 @@ export interface ElectronAPI {
       }>;
       disconnect: () => Promise<{ success: boolean; error?: string }>;
     };
+  };
+
+  // Papr Login API - Authenticate with Papr platform for automatic API key provisioning
+  papr: {
+    checkLoginStatus: () => Promise<{
+      success: boolean;
+      isLoggedIn?: boolean;
+      email?: string;
+      error?: string;
+    }>;
+    startLogin: () => Promise<{
+      success: boolean;
+      error?: string;
+    }>;
+    logout: () => Promise<{
+      success: boolean;
+      error?: string;
+    }>;
+    getProfile: () => Promise<{
+      success: boolean;
+      profile?: {
+        userId: string;
+        email: string;
+        displayName?: string;
+        profileImage?: string;
+        authenticatedAt: string;
+      };
+      error?: string;
+    }>;
+    onLoginSuccess: (callback: (data: { apiKey: string; email: string }) => void) => void;
   };
 
   // Ollama API - Auto-install and manage local AI models

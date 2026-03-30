@@ -711,6 +711,53 @@ case "compression-complete":
 
 **Prevention:** Use model-aware thresholds instead of one-size-fits-all, preserve streaming state during retry mechanisms.
 
+### Issue 18: esbuild Platform Mismatch - Mini-Apps Using Node.js APIs ✅ FIXED
+**Added:** 2026-03-29
+**Problem:** Mini-apps written by agent fail at runtime when they import Node.js modules (`fs`, `path`, `crypto`, etc.). Code transpiles successfully but crashes in the browser iframe with "module is not defined" errors.
+**Root Cause:** The `esbuild.transform` call in Gateway was missing the `platform` option, defaulting to `platform: 'browser'` implicitly. This is actually correct (mini-apps run in browser iframes), but the implicit default made it unclear, and agents weren't properly guided to avoid Node.js APIs.
+**Solution:**
+1. Made `platform: "browser"` **explicit** in esbuild.transform options for clarity
+2. Added **validation** to detect Node.js imports and log warnings
+3. Strengthened **agent guidance** in SystemPrompt emphasizing browser context
+**Fix Applied:** 2026-03-29
+**Implementation:**
+```typescript
+// src/gateway/index.ts - Mini-app transpilation
+const nodeBuiltins = ["fs", "path", "crypto", "child_process", "os", "net", "http", "https", "stream", "buffer", "process"];
+const hasNodeImports = nodeBuiltins.some(mod => 
+  content.includes(`from '${mod}'`) || 
+  content.includes(`from "${mod}"`) ||
+  content.includes(`require('${mod}')`)
+);
+
+if (hasNodeImports) {
+  console.warn(
+    `[Gateway] Mini-app ${appId}/${requestedPath} imports Node.js modules. ` +
+    `These APIs are not available in browser context. Use window.paprAPI.invoke() instead.`
+  );
+}
+
+const result = await esbuild.transform(content, {
+  loader: ext === ".tsx" ? "tsx" : "ts",
+  format: "esm",
+  target: "es2020",
+  platform: "browser", // ✅ Explicit: mini-apps run in iframe (browser context)
+  sourcemap: "inline",
+});
+```
+**Files Changed:**
+- `src/gateway/index.ts` - Added explicit `platform: "browser"`, added Node.js import validation
+- `src/core/agents/SystemPrompt.ts` - Strengthened mini-app guidance with clear "Available/NOT Available" list
+- `docs/ESBUILD_PLATFORM_MISMATCH.md` - Complete documentation
+**Impact:**
+- **Before:** Agent wrote Node.js-style code, transpiled successfully, failed at runtime with cryptic errors
+- **After:** Explicit platform setting, warnings logged when Node imports detected, clearer agent guidance
+- **Agent behavior:** Should now correctly use `window.paprAPI.invoke('bash.run', ...)` for file operations instead of importing `fs`
+**Prevention:** 
+1. Always set `platform` explicitly in esbuild configs (don't rely on defaults)
+2. Validate code for platform-inappropriate imports before transpilation
+3. Clear documentation: mini-apps = browser context, use paprAPI for system operations
+
 ---
 
 ## OAuth & pi-ai Architecture
@@ -1241,6 +1288,240 @@ Paprwork V2 now supports OpenAI's latest GPT-5.4 models with native computer use
 **Files Changed:**
 - `src/gateway/services/JobsScheduler.ts` - Fixed anchor calculation in `patchNextRun` (uses `scheduledDueAt` instead of `new Date()`)
 - `package.json` - Added `test:jobs-e2e` and `test:jobs-advanced` scripts
+
+### Enhancement 20: Papr Platform Login - Automatic API Key Provisioning ✅ IMPLEMENTED
+**Added:** 2026-03-28
+**Problem:** Users had to manually sign up at dashboard.papr.ai, navigate to API keys, copy the key, then paste it into Paprwork settings. This created friction during onboarding and made it harder for new users to experience Papr Memory features.
+**Solution:** Integrated deep-link authentication flow with papr-dev-platform's existing desktop auth mechanism to automatically retrieve and store API keys directly from Paprwork's onboarding and settings screens.
+**Implementation:**
+1. Created `PaprLoginSection` React component with login/logout UI and status display
+2. Created IPC handler (`paprLogin.ts`) with deep-link flow orchestration:
+   - Opens dashboard at `/desktop-login?state=xxx` page
+   - Generates random state parameter for CSRF protection
+   - Handles `papr://auth/callback` deep links from dashboard
+   - Validates state parameter before storing API key
+   - Automatic storage in CustomKeysStorage (macOS Keychain)
+3. Added Papr login section to onboarding (pre-step, marked "Recommended")
+4. Added Papr login section to Settings → API Keys tab (top of page)
+5. Registered `papr://` custom URL protocol in Electron app
+**Deep Link Flow:**
+1. User clicks "Login with Papr"
+2. Browser opens to `dashboard.papr.ai/desktop-login?state=xxx`
+3. Desktop login page stores state in localStorage (`papr_desktop_auth`)
+4. Desktop login page redirects to Auth0 for authentication
+5. User authenticates via Auth0
+6. Dashboard redirects to `/get-started` page
+7. Get Started page detects `papr_desktop_auth` in localStorage
+8. Dashboard retrieves user's existing API key from profile
+9. Dashboard redirects to `papr://auth/callback?api_key=xxx&state=xxx&email=xxx&user_id=xxx`
+10. Paprwork catches the deep link via OS `open-url` event
+11. Paprwork validates state parameter (CSRF protection)
+12. Paprwork stores key in CustomKeysStorage as `PAPR_API_KEY`
+13. UI shows "Connected to Papr" with user email
+**Why Deep Links (Not GraphQL/OAuth):**
+- Dashboard already has desktop auth flow built-in (`/desktop-login` page)
+- No need for local callback server, token exchange, or GraphQL queries
+- Dashboard handles all API key retrieval from user's existing profile
+- Simpler, more reliable, leverages existing infrastructure
+**API Key Format:** `sk-org-{orgId}-namespace-{namespaceId}-{32-random-chars}` (retrieved from user's existing keys, not created new)
+**Security:**
+- State parameter provides CSRF protection (32-char random value)
+- API key only sent via deep link (never exposed in browser)
+- API key stored in system keychain (macOS Keychain, Windows Credential Manager)
+- State validation ensures callback came from legitimate login attempt
+- 10-minute timeout for desktop auth localStorage data
+**User Experience:**
+- **First-time users:** Login during onboarding, API key auto-provisioned from existing dashboard profile
+- **Existing users:** Login from Settings, retrieves their existing API key
+- **Logout:** Removes PAPR_API_KEY from keychain
+**Environment Variables:**
+- `PAPR_PLATFORM_URL` - Platform URL (default: https://dashboard.papr.ai)
+**Impact:**
+- **Before:** 5-step manual process (sign up → verify email → navigate to API keys → copy → paste)
+- **After:** 1-click login, automatic key retrieval, zero copy-paste
+- **Code simplification:** Eliminated 200+ lines of OAuth/GraphQL code by using existing dashboard flow
+**Files Created:**
+- `ui/components/Settings/PaprLoginSection.tsx` - Login UI component
+- `ui/components/Settings/PaprLoginSection.css` - Styles
+- `src/electron/ipc/paprLogin.ts` - IPC handlers and deep-link logic
+- `docs/PAPR_LOGIN_INTEGRATION.md` - Complete documentation
+- `docs/PAPR_LOGIN_DEEP_LINK_FLOW.md` - Deep link flow explanation
+**Files Changed:**
+- `src/electron/index.cjs` - Initialize Papr login IPC, register `papr://` protocol, handle deep links
+- `ui/types/electron.d.ts` - Add `papr` API namespace
+- `ui/components/Settings/SettingsView.tsx` - Add PaprLoginSection
+- `ui/components/Onboarding/OnboardingView.tsx` - Add Papr login section
+- `ui/components/Onboarding/OnboardingView.css` - Add Papr section styles
+- `.env.example` - Add PAPR_PLATFORM_URL configuration
+**Testing:** Manual testing checklist in docs/PAPR_LOGIN_INTEGRATION.md
+
+### Enhancement 21: Authentication Wall for Commercial Builds ✅ IMPLEMENTED
+**Added:** 2026-03-29
+**Problem:** Need to enforce Papr authentication for downloadable commercial version while keeping open-source version fully functional without Papr.
+**Solution:** Implemented build-time configuration flag (`REQUIRE_PAPR_AUTH`) that shows a full-screen authentication wall when enabled, blocking all app access until user authenticates with Papr.
+**Implementation:**
+1. Created `AuthWall` component with beautiful UI:
+   - Full-screen gradient background with frosted glass effect
+   - Animated loading spinner during authentication
+   - Real-time polling (checks login status every 2s)
+   - Error handling and sign-up link
+2. Added `REQUIRE_PAPR_AUTH` environment variable:
+   - `false` (default): Open source mode, Papr login optional
+   - `true`: Commercial mode, Papr login required
+3. Modified `App.tsx` to conditionally render AuthWall before main app
+4. Updated Vite config to expose env var to client code
+**Authentication Flow (Commercial Mode):**
+1. User launches app
+2. App checks `REQUIRE_PAPR_AUTH` environment variable
+3. If true, check for existing authentication in system keychain
+4. If not authenticated, show AuthWall (blocks all features)
+5. User clicks "Sign In with Papr"
+6. Browser opens to `dashboard.papr.ai/desktop-login`
+7. User completes login (existing flow)
+8. Deep link fires: `papr://auth/callback?api_key=xxx`
+9. Poll detects authentication, hides AuthWall
+10. Full app access granted
+**User Experience:**
+- **Open Source Mode** (`REQUIRE_PAPR_AUTH=false`): App loads immediately, Papr login optional, all features accessible (except cloud sync)
+- **Commercial Mode** (`REQUIRE_PAPR_AUTH=true`): Auth wall blocks access, must login before using any features, authentication persists across restarts
+**Security:**
+- API key stored in system keychain (persists across restarts)
+- Same deep link flow with CSRF protection (state parameter)
+- No API keys in source code or environment variables
+**Build Commands:**
+- Developer build: `npm run build` (default, auth optional)
+- Release build: Set in `.github/workflows/release.yml` (auth required)
+**Impact:**
+- **GitHub Releases:** Downloadable binaries require Papr authentication
+- **Source Code:** Developers building from source get optional authentication
+- **Single Codebase:** No source code changes needed between modes
+**Files Created:**
+- `ui/components/Auth/AuthWall.tsx` - Authentication wall component
+- `ui/components/Auth/AuthWall.css` - Frosted glass UI styles
+- `docs/AUTH_WALL_IMPLEMENTATION.md` - Complete documentation
+**Files Changed:**
+- `ui/App.tsx` - Added auth check and AuthWall conditional rendering
+- `ui/vite.config.ts` - Exposed REQUIRE_PAPR_AUTH to client
+- `.env.example` - Added REQUIRE_PAPR_AUTH documentation
+**Testing:** See docs/AUTH_WALL_IMPLEMENTATION.md for test procedures
+
+### Enhancement 22: Mini-App Job Creation API ✅ IMPLEMENTED
+**Added:** 2026-03-30
+**Problem:** Mini-apps could only run existing jobs via `/api/jobs/run`. Users needed to pre-create all possible jobs upfront, even if they might never be used. This was inflexible for dynamic workflows where job requirements emerge at runtime (e.g., LinkedIn Autopilot creating action jobs on-demand when campaigns need them, user-configured data pipelines).
+**Solution:** Added `/api/jobs/create` endpoint allowing mini-apps to programmatically create jobs with the same capabilities as the agent's `create_job` tool.
+**Implementation:**
+1. Added `/api/jobs/create` POST endpoint in Gateway (`src/gateway/index.ts`)
+2. Rate limiting: 10 jobs per minute per app (prevents abuse)
+3. Size validation: Command capped at 100KB (prevents massive job creation)
+4. Full validation: All `CreateJobInput` Zod schema validation applies
+5. No privilege escalation: Mini-apps already have bash access via `/api/bash/run`, creating jobs is just structured code execution
+**Security Measures:**
+- **Rate Limiting (Primary):** Per-app sliding window (10 jobs/min), returns 429 with wait time
+- **Size Validation:** 100KB command max, returns 400 error
+- **Zod Schemas:** Job type, schedule, dependencies, requirements validated
+- **No New Capabilities:** Mini-apps already have bash + custom keys, jobs are just trackable
+**Use Cases:**
+- **Lazy Creation:** LinkedIn Autopilot creates "view_profile" job only when campaign needs it
+- **User Workflows:** Data pipeline builders where users configure scrapers in UI
+- **Dynamic Pipelines:** Workflow generators creating job chains (A → B → C) from user input
+**API:**
+```typescript
+POST /api/jobs/create
+Body: { name, type, command, requirements, schedule, dependsOn, ... } // CreateJobInput
+Response: { success: true, jobId, name, type, status } | { error: string }
+```
+**Examples:**
+```typescript
+// Create on-demand job
+const res = await fetch('/api/jobs/create', {
+  method: 'POST',
+  body: JSON.stringify({
+    name: "LinkedIn View Profile Action",
+    type: "python",
+    command: "python3 code/view_profile.py",
+    requirements: ["linkedin-api"],
+    schedule: { enabled: true, intervalMs: 60000 }
+  })
+});
+const { jobId } = await res.json();
+```
+**Architecture Benefits:**
+- **Before:** Pre-create all possible jobs → cron overhead for unused jobs, less flexible
+- **After:** Hybrid approach → pre-create common jobs (reliability) + dynamic creation (flexibility)
+**Impact:**
+- **Before:** Must anticipate all job types upfront, unused jobs consume cron cycles
+- **After:** Create jobs on-demand, cleaner architecture, more flexible workflows
+**Files Created:**
+- `docs/MINI_APP_JOB_CREATION.md` - Complete feature documentation
+- `docs/JOB_CREATION_API_SUMMARY.md` - Implementation summary
+- `scripts/test-job-creation-api.mjs` - Automated test script (basic creation, rate limiting, size validation)
+**Files Changed:**
+- `src/gateway/index.ts` - Added `/api/jobs/create` endpoint with rate limiter and validation
+- `src/core/agents/SystemPrompt.ts` - Added section "6. Mini-Apps Can Create Jobs Programmatically" with usage examples
+**Testing:** `node scripts/test-job-creation-api.mjs` (requires Gateway running)
+
+---
+
+### Enhancement 21: Authentication Wall for Commercial Builds ✅ IMPLEMENTED
+**Added:** 2026-03-18
+**Problem:** Open-source repo needs downloadable releases that require Papr authentication, while keeping it optional for developers
+**Solution:** Build-time flag (`REQUIRE_PAPR_AUTH`) enforces authentication only in GitHub release builds via environment variable
+**Implementation:**
+1. Created `AuthWall` component (liquid glass aesthetic) shown on app launch before any other content
+2. Added `REQUIRE_PAPR_AUTH` environment variable (false in dev, true in release builds)
+3. Modified GitHub Actions workflow to set `REQUIRE_PAPR_AUTH=true` in release builds
+4. Authentication check runs BEFORE loading preferences/SQLite to eliminate flicker
+5. Integrated with deep link OAuth flow (redirects to sign-up page via `screen_hint=signup`)
+**User Experience:**
+- **Open-source devs:** No auth wall, optional Papr login in settings
+- **Downloaded releases:** Auth wall blocks access until authenticated, seamless profile sync
+**Files Created:**
+- `ui/components/Auth/AuthWall.tsx` - Full-screen authentication gate
+- `ui/components/Auth/AuthWall.css` - Liquid glass styling
+- `docs/AUTH_WALL_IMPLEMENTATION.md` - Complete documentation
+**Files Changed:**
+- `ui/App.tsx` - Auth check before app load, conditional AuthWall rendering
+- `ui/vite.config.ts` - Expose `VITE_REQUIRE_PAPR_AUTH` to client
+- `.env.example` - Added `REQUIRE_PAPR_AUTH` (default: false)
+- `.github/workflows/release.yml` - Set `REQUIRE_PAPR_AUTH=true` for release builds
+- `src/electron/ipc/paprLogin.ts` - Refined deep link handling
+- `CLAUDE.md` - Updated Enhancement 20 with final deep-link approach
+**Impact:**
+- **Before:** Open-source + downloadable builds identical, no monetization path
+- **After:** Open-source remains free, downloadable releases gated by Papr auth
+
+### Enhancement 22: Papr Profile Sync ✅ IMPLEMENTED
+**Added:** 2026-03-28
+**Problem:** Users authenticate with Papr but their profile info (name, image, email from Auth0 onboarding) isn't available in Paprwork
+**Solution:** After authentication, automatically fetch user profile from dashboard's `/api/user-info` endpoint and store in settings, auto-populate profile fields
+**Implementation:**
+1. Added `paprProfile` field to `AppSettings` interface with userId, email, displayName, profileImage, authenticatedAt
+2. Created `setPaprProfile()`, `getPaprProfile()`, `clearPaprProfile()` methods in SettingsStorage
+3. Enhanced `handlePaprAuthCallback()` to fetch profile from `dashboard.papr.ai/api/user-info` using API key
+4. Added `papr:get-profile` IPC handler to expose profile to renderer
+5. Enhanced Settings → Profile tab to display Papr account info and auto-populate manual fields
+**User Experience:**
+- **After sign-up:** Profile (name, image from Auth0) automatically synced to Paprwork
+- **Settings → Profile:** Shows "Papr Account" section (read-only) + editable "Your Profile" fields
+- **Auto-populate:** Manual profile fields pre-filled from Papr data if empty
+- **On logout:** Papr profile cleared, manual profile unchanged
+**API Integration:**
+- Endpoint: `GET https://dashboard.papr.ai/api/user-info`
+- Auth: `X-API-Key` header
+- Returns: displayName, profileImage, email, userId, etc.
+**Files Created:**
+- `docs/PAPR_PROFILE_SYNC.md` - Complete feature documentation
+**Files Changed:**
+- `src/core/types/storage.ts` - Added `paprProfile` to AppSettings
+- `src/core/storage/SettingsStorage.ts` - Added profile management methods
+- `src/electron/ipc/paprLogin.ts` - Profile fetching logic + `fetchUserProfile()` helper
+- `src/electron/index.cjs` - Pass settingsStorage to paprLogin handlers
+- `src/electron/preload.cjs` - Added `getProfile()` to papr namespace
+- `ui/types/electron.d.ts` - Type definitions for profile API
+- `ui/components/Settings/SettingsView.tsx` - Profile display + auto-populate logic
+**Impact:**
+- **Before:** Users authenticate but must manually enter profile info
+- **After:** Profile synced automatically from Papr account, seamless onboarding
 
 ---
 

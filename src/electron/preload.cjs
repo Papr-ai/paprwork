@@ -75,6 +75,22 @@ contextBridge.exposeInMainWorld("electronAPI", {
     },
   },
 
+  // Papr Login API - Authenticate with Papr platform for automatic API key provisioning
+  papr: {
+    checkLoginStatus: () => ipcRenderer.invoke("papr:check-login-status"),
+    startLogin: () => ipcRenderer.invoke("papr:start-login"),
+    logout: () => ipcRenderer.invoke("papr:logout"),
+    getProfile: () => ipcRenderer.invoke("papr:get-profile"),
+    // Listen for successful login (via deep link callback)
+    onLoginSuccess: (callback) => {
+      ipcRenderer.on("papr-login-success", (_event, data) => {
+        callback(data);
+        // Also dispatch a DOM event for easier listening
+        window.dispatchEvent(new CustomEvent('papr-auth-success', { detail: data }));
+      });
+    },
+  },
+
   // Ollama API - Auto-install and manage local AI models
   ollama: {
     checkStatus: () => ipcRenderer.invoke("ollama:check-status"),

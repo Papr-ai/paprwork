@@ -25,6 +25,8 @@ jobs:
 
       - name: Build app
         run: npm run build
+        env:
+          REQUIRE_PAPR_AUTH: true
 
       - name: Import signing certificate
         env:
@@ -99,6 +101,8 @@ jobs:
         run: |
           npm config set script-shell "$(which bash)"
           npm run build
+        env:
+          REQUIRE_PAPR_AUTH: true
 
       - name: Build Windows distributables
         run: npx electron-builder --win --publish always
@@ -129,6 +133,8 @@ jobs:
 
       - name: Build app
         run: npm run build
+        env:
+          REQUIRE_PAPR_AUTH: true
 
       - name: Build Linux distributables
         run: npx electron-builder --linux --publish always

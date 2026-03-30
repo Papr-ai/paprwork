@@ -1,0 +1,130 @@
+.papr-login-section {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.papr-login-section--logged-in {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.papr-login-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.papr-login-icon {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.papr-login-icon--success {
+  color: rgb(34, 197, 94);
+}
+
+.papr-login-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.papr-login-description {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0 0 16px 0;
+}
+
+.papr-login-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  color: rgb(239, 68, 68);
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.papr-login-error svg {
+  flex-shrink: 0;
+}
+
+.papr-login-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.papr-login-button--primary {
+  background: var(--accent-color);
+  color: white;
+}
+
+.papr-login-button--primary:hover:not(:disabled) {
+  background: var(--accent-color-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.papr-login-button--primary:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.papr-login-button--primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.papr-login-button--secondary {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+}
+
+.papr-login-button--secondary:hover {
+  background: var(--bg-tertiary);
+}
+
+.papr-login-spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.papr-login-note {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  margin: 12px 0 0 0;
+}
+
+.papr-login-note a {
+  color: var(--accent-color);
+  text-decoration: none;
+}
+
+.papr-login-note a:hover {
+  text-decoration: underline;
+}

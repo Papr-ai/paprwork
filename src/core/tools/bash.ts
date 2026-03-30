@@ -21,6 +21,7 @@ import {
   getApiKeysForSanitization,
 } from "./security.js";
 import { wrapUntrustedContent } from "./contentProvenance.js";
+import { getShell, getShellCommand } from "../utils/platform.js";
 
 /** Commands that fetch or produce external content - wrap stdout for prompt injection defense */
 const CURL_WGET_REGEX = /\b(curl|wget)\b/i;
@@ -238,7 +239,7 @@ export async function executeBashCommand(
         Object.keys(env).length > 0 
           ? { ...process.env, ...(env as Record<string, string>) } 
           : process.env,
-      shell: "/bin/bash",
+      shell: getShell(),
     });
 
     const duration = Date.now() - startTime;
@@ -439,7 +440,8 @@ export async function executeBashCommandStreaming(
     let stdoutData = "";
     let stderrData = "";
 
-    const proc = spawn("/bin/bash", ["-c", command], {
+    const [shellPath, shellArgs] = getShellCommand(command);
+    const proc = spawn(shellPath, shellArgs, {
       cwd: cwd || process.cwd(),
       env: env ? { ...process.env, ...(env as Record<string, string>) } : process.env,
       timeout,

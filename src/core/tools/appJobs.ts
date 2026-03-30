@@ -1664,10 +1664,12 @@ After import, check the result for:
         const { exec } = await import("child_process");
         const { promisify } = await import("util");
         const execAsync = promisify(exec);
+        const { getShell } = await import("../utils/platform.js");
 
         try {
           await execAsync(`git clone --depth 1 ${gitUrl} ${gitCloneDir}`, {
             timeout: 120000,
+            shell: getShell(),
           });
         } catch (error) {
           throw new Error(

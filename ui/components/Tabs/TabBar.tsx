@@ -10,6 +10,10 @@ import { useChatStore } from "../../stores/chatStore";
 import { Tab } from "./Tab";
 import "./TabBar.css";
 
+// Platform-aware modifier key
+const isMac = navigator.platform.toUpperCase().includes("MAC");
+const modKey = isMac ? "⌘" : "Ctrl+";
+
 export function TabBar() {
   const {
     tabs,
@@ -286,7 +290,7 @@ export function TabBar() {
           className="tab-bar__new-btn"
           onClick={handleNewTab}
           aria-label="New tab"
-          title="New tab (⌘T)"
+          title={`New tab (${modKey}T)`}
         >
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
             <path

@@ -67,6 +67,14 @@ export interface AppSettings {
   telemetry: {
     installId?: string;
   };
+  /** Papr user profile (fetched from dashboard after authentication) */
+  paprProfile?: {
+    userId: string;
+    email: string;
+    displayName?: string;
+    profileImage?: string;
+    authenticatedAt: string;
+  };
   compaction: CompactionConfig;
   permissions: PermissionSettings;
 }

@@ -72,6 +72,42 @@
   margin: 0;
 }
 
+/* Papr Login Section in Onboarding */
+.onboarding-view-papr-section {
+  margin-bottom: 40px;
+  padding: 24px;
+  background: rgba(0, 96, 224, 0.05);
+  border: 1px solid rgba(0, 96, 224, 0.2);
+  border-radius: 16px;
+}
+
+.onboarding-papr-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgb(16, 185, 129);
+  margin-bottom: 16px;
+}
+
+.onboarding-papr-badge svg {
+  width: 14px;
+  height: 14px;
+}
+
+.onboarding-papr-note {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  margin: 16px 0 0 0;
+  line-height: 1.5;
+  text-align: center;
+}
+
 .onboarding-view-steps {
   display: flex;
   flex-direction: column;

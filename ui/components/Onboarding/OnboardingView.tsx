@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useTabs } from "../../hooks/useTabs";
 import { useChat } from "../../hooks/useChat";
+import { PaprLoginSection } from "../Settings/PaprLoginSection";
 import "./OnboardingView.css";
 
 type StepState = "locked" | "active" | "completed";
@@ -158,6 +159,26 @@ export function OnboardingView() {
           <h1 className="onboarding-view-title">Welcome to Paprwork!</h1>
           <p className="onboarding-view-subtitle">
             Let's get you set up in 3 quick steps
+          </p>
+        </div>
+
+        {/* Papr Login Section - Optional but recommended */}
+        <div className="onboarding-view-papr-section">
+          <div className="onboarding-papr-badge">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            <span>Recommended</span>
+          </div>
+          <PaprLoginSection 
+            onApiKeyReceived={() => {
+              // Auto-mark step 1 as completed when Papr API key is provisioned
+              setState((prev) => ({ ...prev, step1Completed: true }));
+            }}
+          />
+          <p className="onboarding-papr-note">
+            Login to get automatic access to Papr Memory for chat history and cloud features. 
+            Or skip and add API keys manually below.
           </p>
         </div>
 

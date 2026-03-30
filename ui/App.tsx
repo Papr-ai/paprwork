@@ -9,6 +9,7 @@ import { Sidebar } from "./components/Sidebar/Sidebar";
 import { TabBar } from "./components/Tabs/TabBar";
 import { ContentArea } from "./components/Layout/ContentArea";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
+import { AuthWall } from "./components/Auth/AuthWall";
 import { useChat } from "./hooks/useChat";
 import { useTabs } from "./hooks/useTabs";
 import { useTabStore } from "./stores/tabStore";
@@ -25,12 +26,44 @@ import { useAppStatePersistence } from "./hooks/useAppStatePersistence";
 import "./styles/liquid-glass.css";
 import "./App.css";
 
+// Check if Papr authentication is required (commercial build vs open source)
+const REQUIRE_PAPR_AUTH = import.meta.env.VITE_REQUIRE_PAPR_AUTH === 'true';
+
 export function App() {
   // Track React initialization timing
   const appStartTime = performance.now();
   console.log(`[React] App component mounting at ${appStartTime.toFixed(2)}ms`);
 
   // ALL HOOKS MUST COME BEFORE ANY CONDITIONAL RETURNS
+  
+  // Track authentication state (for commercial builds)
+  // Check this FIRST before loading anything else
+  const [isAuthenticated, setIsAuthenticated] = useState(!REQUIRE_PAPR_AUTH);
+  const [authChecked, setAuthChecked] = useState(false);
+  
+  // Check authentication immediately (before loading preferences/SQLite)
+  useEffect(() => {
+    if (!REQUIRE_PAPR_AUTH) {
+      setAuthChecked(true);
+      return;
+    }
+
+    // Check if user is already authenticated
+    const checkAuth = async () => {
+      try {
+        const result = await window.electronAPI.papr.checkLoginStatus();
+        if (result.success && result.isLoggedIn) {
+          setIsAuthenticated(true);
+        }
+      } catch (err) {
+        console.error('[App] Failed to check authentication:', err);
+      } finally {
+        setAuthChecked(true);
+      }
+    };
+
+    checkAuth();
+  }, []);
   
   // Initialize SQLite persistence for tabs/favorites (fast!)
   useAppStatePersistence();
@@ -147,6 +180,15 @@ export function App() {
     initJobLiveLogsListener();
     initSubagentJobStore();
   }, []);
+
+  // Show authentication wall IMMEDIATELY if required (before loading anything else)
+  if (REQUIRE_PAPR_AUTH && !authChecked) {
+    return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: 'var(--background-color, #1a1a2e)' }} />;
+  }
+
+  if (REQUIRE_PAPR_AUTH && !isAuthenticated) {
+    return <AuthWall onAuthenticated={() => setIsAuthenticated(true)} />;
+  }
 
   // Don't render app until preferences AND SQLite are loaded
   if (!preferencesLoaded || !sqliteLoaded) {

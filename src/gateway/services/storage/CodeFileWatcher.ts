@@ -84,9 +84,10 @@ export class CodeFileWatcher {
     console.log(`📝 File ${action}: ${path.relative(this.paprDir, filePath)}`);
     
     try {
-      // Determine if this is a job or mini-app
-      const isJob = filePath.includes('/Jobs/');
-      const isMiniApp = filePath.includes('/apps/');
+      // Determine if this is a job or mini-app (use path.sep for cross-platform)
+      const pathParts = filePath.split(path.sep);
+      const isJob = pathParts.includes('Jobs');
+      const isMiniApp = pathParts.includes('apps');
       
       if (!isJob && !isMiniApp) {
         console.log('   ⚠️  Ignoring file outside Jobs/apps folders');

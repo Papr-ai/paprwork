@@ -268,4 +268,31 @@ export class SettingsStorage {
         return false;
     }
   }
+
+  /**
+   * Set Papr user profile
+   */
+  setPaprProfile(profile: {
+    userId: string;
+    email: string;
+    displayName?: string;
+    profileImage?: string;
+    authenticatedAt: string;
+  }): void {
+    this.store.set("paprProfile", profile);
+  }
+
+  /**
+   * Get Papr user profile
+   */
+  getPaprProfile(): AppSettings["paprProfile"] | undefined {
+    return this.store.get("paprProfile");
+  }
+
+  /**
+   * Clear Papr user profile
+   */
+  clearPaprProfile(): void {
+    this.store.delete("paprProfile");
+  }
 }

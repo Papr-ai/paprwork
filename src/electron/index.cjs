@@ -31,6 +31,9 @@ let initializeTelemetryIPC;
 let TelemetryClientClass;
 let isTelemetrySendingEnabledFn;
 let telemetryClientInstance = null;
+let initializePaprLoginIPC;
+let cleanupPaprLogin;
+let handlePaprAuthCallback;
 
 async function loadESMModules() {
   // Import from compiled dist directory
@@ -55,6 +58,13 @@ async function loadESMModules() {
     await import("../../dist/electron/electron/ipc/oauth.js");
   initializeOAuthIPC = oauthIpcModule.initializeOAuthIPC;
   cleanupOAuthServers = oauthIpcModule.cleanupOAuthServers;
+
+  // Import Papr Login IPC module
+  const paprLoginIpcModule =
+    await import("../../dist/electron/electron/ipc/paprLogin.js");
+  initializePaprLoginIPC = paprLoginIpcModule.initializePaprLoginIPC;
+  cleanupPaprLogin = paprLoginIpcModule.cleanupPaprLogin;
+  handlePaprAuthCallback = paprLoginIpcModule.handlePaprAuthCallback;
 
   // Import Ollama IPC module
   const ollamaIpcModule =
@@ -328,7 +338,11 @@ function createMainWindow() {
   const preloadPath = path.join(__dirname, "preload.cjs");
   console.log(`[Electron] Preload script path: ${preloadPath}`);
 
-  mainWindow = new BrowserWindow({
+  // Platform-specific window configuration
+  const isMac = process.platform === "darwin";
+  const isWindows = process.platform === "win32";
+
+  const baseConfig = {
     width: 1400,
     height: 900,
     webPreferences: {
@@ -336,13 +350,43 @@ function createMainWindow() {
       contextIsolation: true,
       preload: preloadPath,
     },
+  };
+
+  // macOS: Use native traffic lights with custom styling
+  const macConfig = {
+    ...baseConfig,
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 16 },
     transparent: true, // Enable window transparency for Liquid Glass
     backgroundColor: "#00000000", // Fully transparent background
     vibrancy: "under-window", // macOS native blur of desktop behind window
     visualEffectState: "active", // Keep blur active even when window loses focus
-  });
+  };
+
+  // Windows: Use native caption buttons with overlay
+  const windowsConfig = {
+    ...baseConfig,
+    titleBarStyle: "hidden",
+    titleBarOverlay: {
+      color: "#00000000", // Transparent overlay background
+      symbolColor: "#999999", // Gray caption button icons
+      height: 40,
+    },
+    transparent: true,
+    backgroundColor: "#00000000",
+  };
+
+  // Linux: Simple frameless with transparency
+  const linuxConfig = {
+    ...baseConfig,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+  };
+
+  mainWindow = new BrowserWindow(
+    isMac ? macConfig : isWindows ? windowsConfig : linuxConfig
+  );
 
   // Hide default menu
   Menu.setApplicationMenu(null);
@@ -528,16 +572,46 @@ class GatewayProcessSupervisor {
   _killOrphans() {
     try {
       console.log("[Supervisor] Checking for orphaned Gateway processes...");
-      try {
-        const pid = execSync(`lsof -ti:${this.port}`, { encoding: "utf8" }).trim();
-        if (pid) {
-          console.log(`[Supervisor] Found orphaned process ${pid} on port ${this.port}`);
-          execSync(`kill -9 ${pid}`);
-          execSync("sleep 0.5");
-          console.log("[Supervisor] Orphaned process killed");
+      
+      if (process.platform === "win32") {
+        // Windows: Use netstat to find PIDs listening on the port
+        try {
+          const output = execSync(`netstat -ano | findstr :${this.port}`, {
+            encoding: "utf8",
+            timeout: 5000,
+          });
+          
+          const lines = output.trim().split("\n");
+          for (const line of lines) {
+            const match = line.match(/LISTENING\s+(\d+)/);
+            if (match) {
+              const pid = match[1];
+              console.log(`[Supervisor] Found orphaned process ${pid} on port ${this.port}`);
+              execSync(`taskkill /PID ${pid} /F`, { timeout: 5000 });
+              // Brief delay for cleanup
+              const start = Date.now();
+              while (Date.now() - start < 500) {
+                // Busy wait
+              }
+              console.log("[Supervisor] Orphaned process killed");
+            }
+          }
+        } catch (e) {
+          // No process on port or command failed — good
         }
-      } catch (e) {
-        // No process on port — good
+      } else {
+        // Unix (macOS, Linux): Use lsof
+        try {
+          const pid = execSync(`lsof -ti:${this.port}`, { encoding: "utf8" }).trim();
+          if (pid) {
+            console.log(`[Supervisor] Found orphaned process ${pid} on port ${this.port}`);
+            execSync(`kill -9 ${pid}`);
+            execSync("sleep 0.5");
+            console.log("[Supervisor] Orphaned process killed");
+          }
+        } catch (e) {
+          // No process on port — good
+        }
       }
     } catch (error) {
       console.warn("[Supervisor] Cleanup warning:", error.message);
@@ -1135,6 +1209,15 @@ function initializeSystemInvokeHandler(mainWindow) {
 app.whenReady().then(async () => {
   console.log("[Electron] App ready");
 
+  // Register custom URL protocol for papr:// deep links
+  if (process.defaultApp) {
+    if (process.argv.length >= 2) {
+      app.setAsDefaultProtocolClient('papr', process.execPath, [path.resolve(process.argv[1])]);
+    }
+  } else {
+    app.setAsDefaultProtocolClient('papr');
+  }
+
   // Load ESM modules first
   await loadESMModules();
 
@@ -1169,6 +1252,9 @@ app.whenReady().then(async () => {
   // Initialize OAuth IPC handlers (pass customKeysStorage for syncing)
   await initializeOAuthIPC(customKeysStorage);
 
+  // Initialize Papr Login IPC handlers
+  initializePaprLoginIPC(customKeysStorage, settingsStorage);
+
   // Build gateway environment (telemetry flags align with main-process resolution)
   const gatewayTelemetryOn =
     isTelemetrySendingEnabledFn != null
@@ -1188,7 +1274,8 @@ app.whenReady().then(async () => {
   };
   if (IS_PRODUCTION) {
     const asarUnpacked = path.join(__dirname, "../..").replace("app.asar", "app.asar.unpacked");
-    const esbuildBin = path.join(asarUnpacked, "node_modules/@esbuild", `${process.platform}-${process.arch}`, "bin/esbuild");
+    const esbuildBinName = process.platform === "win32" ? "esbuild.exe" : "esbuild";
+    const esbuildBin = path.join(asarUnpacked, "node_modules/@esbuild", `${process.platform}-${process.arch}`, "bin", esbuildBinName);
     if (require("fs").existsSync(esbuildBin)) {
       gatewayEnv.ESBUILD_BINARY_PATH = esbuildBin;
       console.log(`[Electron] esbuild binary: ${esbuildBin}`);
@@ -1219,6 +1306,30 @@ app.whenReady().then(async () => {
   // Initialize system:invoke handler for mini-app system integration
   initializeSystemInvokeHandler(mainWindow);
 
+  // Handle deep links for Papr auth callback (papr://auth/callback?...)
+  // This handles the case when the app is already running
+  app.on('open-url', async (event, url) => {
+    event.preventDefault();
+    console.log('[Electron] Received deep link:', url);
+    if (handlePaprAuthCallback) {
+      await handlePaprAuthCallback(url, customKeysStorage, settingsStorage);
+    }
+  });
+
+  // Handle deep links when app is opened from a URL (macOS/Windows)
+  // Check if the app was opened with a URL argument
+  if (process.platform === 'darwin') {
+    // macOS - URL is passed via 'open-url' event
+    // Already handled above
+  } else {
+    // Windows/Linux - URL is passed as command line argument
+    const url = process.argv.find(arg => arg.startsWith('papr://'));
+    if (url && handlePaprAuthCallback) {
+      console.log('[Electron] App opened with deep link:', url);
+      await handlePaprAuthCallback(url, customKeysStorage, settingsStorage);
+    }
+  }
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createMainWindow();
@@ -1240,6 +1351,10 @@ app.on("before-quit", async () => {
   // Cleanup OAuth servers before stopping gateway
   if (cleanupOAuthServers) {
     cleanupOAuthServers();
+  }
+  // Cleanup Papr login callback server
+  if (cleanupPaprLogin) {
+    cleanupPaprLogin();
   }
   // Cleanup Ollama (stop managed instance)
   if (cleanupOllama) {
