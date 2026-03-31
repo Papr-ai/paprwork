@@ -12,12 +12,13 @@ const createAppSchema = z.object({
   description: z.string().optional(),
   icon: z
     .string()
-    .optional()
     .describe(
-      "SVG string or emoji for the app logo. Shown in tabs and favorites. " +
-        'Use an inline SVG (e.g. \'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14">...</svg>\') ' +
-        'or a single emoji (e.g. \'📊\'). Alternatively, add a <link rel="icon" href="data:image/svg+xml,..."> tag ' +
-        "in your index.html — it will be auto-extracted as the icon.",
+      "**REQUIRED:** SVG string or emoji for the app logo. Shown in tabs, apps list, and favorites. " +
+        "Apps without icons look generic and unprofessional. " +
+        'Use a simple inline SVG (e.g. \'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none"/></svg>\') ' +
+        'or a single emoji (e.g. \'📊\', \'📈\', \'🔍\'). ' +
+        "Keep SVGs simple (1-3 shapes max) for clarity at small sizes. " +
+        'Alternatively, add a <link rel="icon" href="data:image/svg+xml,..."> tag in your index.html — it will be auto-extracted.',
     ),
   files: z.array(appFileSchema).optional(),
   html: z.string().optional(),
@@ -109,6 +110,19 @@ const createJobSchema = z.object({
   maxTurns: z.number().int().min(1).max(100).optional(),
   memoryPolicy: z.enum(["none", "summary", "full"]).optional(),
   reportChatId: z.string().min(1).optional(),
+  provider: z
+    .enum(["openai", "anthropic", "google", "ollama"])
+    .optional()
+    .describe(
+      "Provider for agent/subagent jobs. Overrides default. Example: 'openai', 'anthropic', 'ollama'",
+    ),
+  model: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Model ID for agent/subagent jobs. Overrides default. Example: 'gpt-5.4', 'claude-sonnet-4-5', 'qwen3.5-9b'",
+    ),
 });
 
 const runJobSchema = z.object({
@@ -258,7 +272,11 @@ export const createJobTool = createTool({
   description:
     "Create a job with optional DAG dependencies, retries, and delivery. " +
     "For pipelines that should run automatically when a parent job finishes, each dependsOn entry MUST include autoTrigger: true (same for subagent→subagent as python→subagent). " +
-    "Without autoTrigger, dependencies only order runs when you start the job another way.",
+    "Without autoTrigger, dependencies only order runs when you start the job another way. " +
+    "\n\nAgent job model selection: " +
+    "Use 'provider' and 'model' fields for direct override (type: 'agent', same behavior, just different model). " +
+    "Use subagent (type: 'subagent' with subAgentId) when you need custom system prompt or restricted tools. " +
+    "Priority: subagent profile > job model override > default (gpt-5.2).",
   inputSchema: createJobSchema,
   execute: async (input) => {
     const args = (input as { context?: CreateJobArgs }).context ?? input;
@@ -303,6 +321,8 @@ export const createJobTool = createTool({
       maxTurns: args.maxTurns,
       memoryPolicy: args.memoryPolicy,
       reportChatId: args.reportChatId,
+      provider: args.provider,
+      model: args.model,
     });
     return { success: true, data: job };
   },
@@ -564,6 +584,19 @@ const updateJobSchema = z.object({
     .min(1)
     .optional()
     .describe("Update which chat receives job results"),
+  provider: z
+    .enum(["openai", "anthropic", "google", "ollama"])
+    .optional()
+    .describe(
+      "Update provider for agent/subagent jobs. Example: 'openai', 'anthropic', 'ollama'",
+    ),
+  model: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Update model ID for agent/subagent jobs. Example: 'gpt-5.4', 'claude-sonnet-4-5', 'qwen3.5-9b'",
+    ),
 });
 
 const deleteJobSchema = z.object({

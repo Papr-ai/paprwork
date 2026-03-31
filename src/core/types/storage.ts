@@ -62,6 +62,11 @@ export interface AppSettings {
      * Default depends on build: on for packaged app installs, off for dev/tests unless overridden in storage.
      */
     telemetryEnabled: boolean;
+    /**
+     * Default app ID to open when home button is clicked.
+     * If not set, shows placeholder "Agent Lounge (Coming Soon)".
+     */
+    defaultHomeAppId?: string;
   };
   /** Anonymous install id for telemetry correlation only; not derived from user data. */
   telemetry: {

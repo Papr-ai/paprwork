@@ -2008,7 +2008,18 @@ ${last15.substring(0, 8_000)}`;
 
     await this.ensureKeysLoaded();
 
-    const provider = input.provider ?? "openai";
+    // Resolve default provider and model based on user's available authentication
+    let provider = input.provider;
+    let model = input.model;
+    
+    if (!provider || !model) {
+      const { getDefaultProviderAndModel } = await import("../utils/defaultProvider.js");
+      const defaults = await getDefaultProviderAndModel();
+      provider = provider ?? defaults.provider;
+      model = model ?? defaults.model;
+      console.log(`[AgentService] Using default provider/model: ${provider}/${model}`);
+    }
+
     const defaultModelByProvider: Record<Provider, string> = {
       openai: "gpt-5.2",
       "openai-codex": "gpt-5.3-codex",
@@ -2016,13 +2027,17 @@ ${last15.substring(0, 8_000)}`;
       google: "gemini-2.5-flash",
       ollama: "qwen3.5:latest",
     };
-    const model = input.model ?? defaultModelByProvider[provider];
+    model = model ?? defaultModelByProvider[provider];
 
     // Use getProviderAuth for openai/anthropic (handles OAuth + API key) — same as WebSocket handler
-    let apiKey: string;
+    let apiKey: string | undefined;
     let authType: "oauth" | "apiKey" | undefined;
     const { getProviderAuth, getApiKeys } =
       await import("../utils/keyResolver.js");
+
+    // Check if the specified provider is available
+    let authCheckFailed = false;
+    let originalProvider = provider;
 
     if (
       provider === "openai" ||
@@ -2032,24 +2047,93 @@ ${last15.substring(0, 8_000)}`;
       const authProvider = provider === "openai-codex" ? "openai" : provider;
       const auth = await getProviderAuth(authProvider);
       if (!auth) {
-        throw new Error(
-          `No authentication found for job agent run (${provider}). Connect OAuth or add API key.`,
+        authCheckFailed = true;
+        console.warn(
+          `[AgentService] No authentication found for specified provider (${provider}). Falling back to default provider...`,
+        );
+      } else {
+        apiKey = auth.type === "oauth" ? auth.token : auth.key;
+        authType = auth.type;
+        console.log(
+          `[AgentService] runIsolatedJobSession: provider=${provider} authProvider=${authProvider} ` +
+            `authType=${authType} tokenLength=${apiKey.length}`,
         );
       }
-      apiKey = auth.type === "oauth" ? auth.token : auth.key;
-      authType = auth.type;
-      console.log(
-        `[AgentService] runIsolatedJobSession: provider=${provider} authProvider=${authProvider} ` +
-          `authType=${authType} tokenLength=${apiKey.length}`,
-      );
     } else {
       const keyName =
         provider === "google" ? "GOOGLE_API_KEY" : "OPENAI_API_KEY";
       const keys = await getApiKeys([keyName]);
       apiKey = keys[keyName];
       if (!apiKey) {
-        throw new Error(`Missing API key for job agent run: ${keyName}`);
+        authCheckFailed = true;
+        console.warn(
+          `[AgentService] Missing API key for specified provider (${provider}): ${keyName}. Falling back to default provider...`,
+        );
       }
+    }
+
+    // If auth check failed, fall back to default provider
+    if (authCheckFailed) {
+      // Try smart fallback based on original model capabilities
+      const { getBestFallbackModel } = await import("../utils/smartFallback.js");
+      const { getAvailableProviders } = await import("../utils/defaultProvider.js");
+      
+      const available = await getAvailableProviders();
+      const fallback = await getBestFallbackModel(
+        originalProvider,
+        input.model || "unknown",
+        available,
+      );
+
+      if (fallback) {
+        provider = fallback.provider;
+        model = fallback.model;
+        console.log(
+          `[AgentService] Smart fallback: ${originalProvider}/${input.model || "default"} → ${provider}/${model} (capability-matched)`,
+        );
+      } else {
+        // No smart fallback available, use basic default
+        const { getDefaultProviderAndModel } = await import("../utils/defaultProvider.js");
+        const defaults = await getDefaultProviderAndModel();
+        provider = defaults.provider;
+        model = defaults.model;
+        console.log(
+          `[AgentService] Falling back from ${originalProvider} to ${provider}/${model}`,
+        );
+      }
+
+      // Re-check auth for fallback provider
+      if (provider === "openai" || provider === "anthropic") {
+        const auth = await getProviderAuth(provider);
+        if (!auth) {
+          throw new Error(
+            `No authentication found for fallback provider (${provider}). Please configure at least one provider.`,
+          );
+        }
+        apiKey = auth.type === "oauth" ? auth.token : auth.key;
+        authType = auth.type;
+      } else if (provider === "google") {
+        const keys = await getApiKeys(["GOOGLE_API_KEY"]);
+        apiKey = keys.GOOGLE_API_KEY;
+        if (!apiKey) {
+          throw new Error(`Missing API key for fallback provider: GOOGLE_API_KEY`);
+        }
+      } else if (provider === "ollama") {
+        // Ollama doesn't need auth
+        apiKey = ""; // Empty string for Ollama
+      } else {
+        // Unexpected provider without auth setup
+        throw new Error(
+          `No authentication configuration found for fallback provider: ${provider}`,
+        );
+      }
+    }
+
+    // Ensure apiKey is assigned before proceeding
+    if (apiKey === undefined) {
+      throw new Error(
+        `Failed to obtain API key for provider: ${provider}. Please configure authentication.`,
+      );
     }
 
     const chatId = `job:${input.jobId}:${input.runId}`;
@@ -2325,7 +2409,18 @@ ${last15.substring(0, 8_000)}`;
 
     await this.ensureKeysLoaded();
 
-    const provider = input.provider ?? "openai";
+    // Resolve default provider and model based on user's available authentication
+    let provider = input.provider;
+    let modelId = input.model;
+    
+    if (!provider || !modelId) {
+      const { getDefaultProviderAndModel } = await import("../utils/defaultProvider.js");
+      const defaults = await getDefaultProviderAndModel();
+      provider = provider ?? defaults.provider;
+      modelId = modelId ?? defaults.model;
+      console.log(`[AgentService] Using default provider/model: ${provider}/${modelId}`);
+    }
+
     const defaultModelByProvider: Record<Provider, string> = {
       openai: "gpt-5.2",
       "openai-codex": "gpt-5.3-codex",
@@ -2333,15 +2428,19 @@ ${last15.substring(0, 8_000)}`;
       google: "gemini-2.5-flash",
       ollama: "qwen3.5:latest",
     };
-    const modelId = input.model ?? defaultModelByProvider[provider];
+    modelId = modelId ?? defaultModelByProvider[provider];
 
     const chatId = `job:${input.jobId}:${input.runId}`;
 
     // Use getProviderAuth for openai/anthropic (handles OAuth + API key)
-    let apiKey: string;
+    let apiKey: string | undefined;
     let authType: "oauth" | "apiKey" | undefined;
     const { getProviderAuth, getApiKeys } =
       await import("../utils/keyResolver.js");
+
+    // Check if the specified provider is available
+    let authCheckFailed = false;
+    let originalProvider = provider;
 
     if (
       provider === "openai" ||
@@ -2351,20 +2450,89 @@ ${last15.substring(0, 8_000)}`;
       const authProvider = provider === "openai-codex" ? "openai" : provider;
       const auth = await getProviderAuth(authProvider);
       if (!auth) {
-        throw new Error(
-          `No authentication found for structured job run (${provider}). Connect OAuth or add API key.`,
+        authCheckFailed = true;
+        console.warn(
+          `[AgentService] No authentication found for specified provider (${provider}). Falling back to default provider...`,
         );
+      } else {
+        apiKey = auth.type === "oauth" ? auth.token : auth.key;
+        authType = auth.type;
       }
-      apiKey = auth.type === "oauth" ? auth.token : auth.key;
-      authType = auth.type;
     } else {
       const keyName =
         provider === "google" ? "GOOGLE_API_KEY" : "OPENAI_API_KEY";
       const keys = await getApiKeys([keyName]);
       apiKey = keys[keyName];
       if (!apiKey) {
-        throw new Error(`Missing API key for structured job run: ${keyName}`);
+        authCheckFailed = true;
+        console.warn(
+          `[AgentService] Missing API key for specified provider (${provider}): ${keyName}. Falling back to default provider...`,
+        );
       }
+    }
+
+    // If auth check failed, fall back to default provider
+    if (authCheckFailed) {
+      // Try smart fallback based on original model capabilities
+      const { getBestFallbackModel } = await import("../utils/smartFallback.js");
+      const { getAvailableProviders } = await import("../utils/defaultProvider.js");
+      
+      const available = await getAvailableProviders();
+      const fallback = await getBestFallbackModel(
+        originalProvider,
+        input.model || "unknown",
+        available,
+      );
+
+      if (fallback) {
+        provider = fallback.provider;
+        modelId = fallback.model;
+        console.log(
+          `[AgentService] Smart fallback: ${originalProvider}/${input.model || "default"} → ${provider}/${modelId} (capability-matched)`,
+        );
+      } else {
+        // No smart fallback available, use basic default
+        const { getDefaultProviderAndModel } = await import("../utils/defaultProvider.js");
+        const defaults = await getDefaultProviderAndModel();
+        provider = defaults.provider;
+        modelId = defaults.model;
+        console.log(
+          `[AgentService] Falling back from ${originalProvider} to ${provider}/${modelId}`,
+        );
+      }
+
+      // Re-check auth for fallback provider
+      if (provider === "openai" || provider === "anthropic") {
+        const auth = await getProviderAuth(provider);
+        if (!auth) {
+          throw new Error(
+            `No authentication found for fallback provider (${provider}). Please configure at least one provider.`,
+          );
+        }
+        apiKey = auth.type === "oauth" ? auth.token : auth.key;
+        authType = auth.type;
+      } else if (provider === "google") {
+        const keys = await getApiKeys(["GOOGLE_API_KEY"]);
+        apiKey = keys.GOOGLE_API_KEY;
+        if (!apiKey) {
+          throw new Error(`Missing API key for fallback provider: GOOGLE_API_KEY`);
+        }
+      } else if (provider === "ollama") {
+        // Ollama doesn't need auth
+        apiKey = ""; // Empty string for Ollama
+      } else {
+        // Unexpected provider without auth setup
+        throw new Error(
+          `No authentication configuration found for fallback provider: ${provider}`,
+        );
+      }
+    }
+
+    // Ensure apiKey is assigned before proceeding
+    if (apiKey === undefined) {
+      throw new Error(
+        `Failed to obtain API key for provider: ${provider}. Please configure authentication.`,
+      );
     }
 
     // When OAuth: AI SDK generateObject fails (Platform API needs different auth).

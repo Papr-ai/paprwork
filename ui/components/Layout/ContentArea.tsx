@@ -3,7 +3,7 @@
  * Reference: Paprwork v1 split view implementation
  */
 
-import React, { useRef, useCallback, useEffect } from "react";
+import React, { useRef, useCallback, useEffect, useState } from "react";
 import { useTabs } from "../../hooks/useTabs";
 import { ChatContainer } from "../Chat/ChatContainer";
 import { ArtifactsView } from "../Artifacts/ArtifactsView";
@@ -19,7 +19,57 @@ import { ViewsView } from "../Views/ViewsView";
 import { TableView } from "../Views/TableView";
 import { ChatGPTConvHistoryView } from "../ChatGPT/ChatGPTConvHistoryView";
 import { OnboardingView } from "../Onboarding/OnboardingView";
+import { gateway } from "../../src/lib/gateway";
 import "./ContentArea.css";
+
+// Component that redirects home tab to default app if configured
+function HomeRedirect() {
+  const { createTab, closeTab, activeTabId } = useTabs();
+  const [redirecting, setRedirecting] = useState(true);
+
+  useEffect(() => {
+    const checkAndRedirect = async () => {
+      try {
+        const response = await gateway.send('settings:get', {});
+        const defaultHomeAppId = response?.data?.preferences?.defaultHomeAppId;
+        
+        if (defaultHomeAppId) {
+          // Get app details (just to verify it exists)
+          const appsResponse = await gateway.send('app:list', {});
+          const app = appsResponse?.data?.find((a: any) => a.id === defaultHomeAppId);
+          
+          if (app) {
+            // Close current home tab and open app tab with "Home" as title
+            if (activeTabId) {
+              closeTab(activeTabId);
+            }
+            // Use home icon for the tab
+            const homeIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+            createTab("app", defaultHomeAppId, "Home", { icon: homeIcon });
+            return;
+          }
+        }
+      } catch (error) {
+        console.error('[HomeRedirect] Failed to check default home app:', error);
+      }
+      
+      // No redirect needed, show placeholder
+      setRedirecting(false);
+    };
+
+    checkAndRedirect();
+  }, [createTab, closeTab, activeTabId]);
+
+  if (redirecting) {
+    return <div className="content-area__empty">Loading...</div>;
+  }
+
+  return (
+    <div className="content-area__placeholder">
+      Agent Lounge (Coming Soon)
+    </div>
+  );
+}
 
 export function ContentArea() {
   const {
@@ -179,11 +229,7 @@ export function ContentArea() {
       case "getting-started":
         return <OnboardingView />;
       case "home":
-        return (
-          <div className="content-area__placeholder">
-            Agent Lounge (Coming Soon)
-          </div>
-        );
+        return <HomeRedirect />;
       case "jobs":
         return <JobsView />;
       case "agents":

@@ -1026,7 +1026,37 @@ Design mini-apps like Steve Jobs and Elon Musk would: **ruthlessly focused, zero
 - Split into \`components/\`, \`utils/\`, \`types.ts\`
 - Break large files into focused modules
 
-**9. Validation (CRITICAL — BLOCKING):**
+**9. ALWAYS Include an Icon:**
+Every mini-app MUST have an icon — it appears in tabs, the apps list, and favorites.
+
+**✅ GOOD icons:**
+- Simple, recognizable SVGs (1-3 shapes)
+- Relevant emojis (📊 for charts, 🔍 for search, 📝 for notes)
+- Use \`stroke="currentColor"\` for theme compatibility
+
+**❌ BAD:**
+- No icon (looks generic and unprofessional)
+- Complex SVGs with gradients/shadows (hard to see at 14px)
+- Random/unrelated emojis
+
+**Examples:**
+\`\`\`typescript
+// Chart app
+create_app({
+  title: "Sales Dashboard",
+  icon: '<svg viewBox="0 0 24 24" width="14" height="14"><path d="M3 3v16a2 2 0 002 2h16" stroke="currentColor" stroke-width="2" fill="none"/><polyline points="7 14 12 9 16 13 21 8" stroke="currentColor" stroke-width="2"/></svg>',
+  // ...
+})
+
+// Note app
+create_app({
+  title: "Quick Notes",
+  icon: '📝',
+  // ...
+})
+\`\`\`
+
+**10. Validation (CRITICAL — BLOCKING):**
 Mini-apps have automated validation that runs on every file change:
 - **100-line limit** (enforced): Files >100 significant lines will fail validation
 - HTML syntax checking (unclosed tags, malformed markup)
@@ -1062,14 +1092,14 @@ validate_app({ appId: "abc-123" })
 3. Load API key guide: \`read_skill({ skillId: "preloaded-api-key-testing" })\`
 4. Create plan → 5. Check existing apps → 6. Start work → 7. **Validate after file edits** → 8. Update plan after each step
 
-**10. File Version History (Undo/Revert):**
+**11. File Version History (Undo/Revert):**
 Every file edit is automatically versioned. If you or the user needs to undo changes:
 - \`list_app_file_versions({ appId, filename })\` — see all saved versions (newest first)
 - \`restore_app_file_version({ appId, filename, versionId })\` — revert to a previous version
 - \`list_job_file_versions({ jobId, filename })\` / \`restore_job_file_version({ jobId, filename, versionId })\` — same for job files
 Current content is auto-saved as "before-restore" so restores are always reversible.
 
-**11. Publishing to the Community:**
+**12. Publishing to the Community:**
 When users want to share/publish an app, publish to the **paprwork-community-apps** repo (not a standalone repo):
 
 1. **YOU MUST call the \`export_app_bundle\` tool** — do NOT manually copy files or create the bundle structure yourself. The tool creates the bundle at \`~/PAPR/bundles/{bundleId}/\`, generates manifest.json, README.md, .gitignore, and handles privacy scrub + portability checks automatically.

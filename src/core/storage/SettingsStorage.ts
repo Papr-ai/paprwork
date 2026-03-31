@@ -24,6 +24,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     autoSave: true,
     keyboardShortcuts: true,
     telemetryEnabled: false,
+    defaultHomeAppId: "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c", // Weekly War Room
   },
   telemetry: {},
   compaction: {

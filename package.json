@@ -1,6 +1,6 @@
 {
   "name": "paprwork-v2",
-  "version": "2.0.14",
+  "version": "2.0.15",
   "description": "AI-powered desktop assistant - Rebuilt with TypeScript and Mastra",
   "main": "./src/electron/main.cjs",
   "type": "module",
@@ -45,10 +45,13 @@
     "test:llm-streaming": "tsx tests/llm-streaming.test.ts",
     "test:jobs-e2e": "node scripts/test-jobs-e2e.mjs",
     "test:jobs-advanced": "node scripts/test-jobs-advanced.mjs",
+    "set-home-app": "node scripts/set-default-home-app.mjs",
     "migrate:v1": "tsx scripts/migrate-v1-data.ts",
     "dist": "npm run build && electron-builder",
     "dist:mac": "npm run build && electron-builder --mac --arm64",
-    "dist:mac:universal": "npm run build && electron-builder --mac --arm64 --x64"
+    "dist:mac:universal": "npm run build && electron-builder --mac --arm64 --x64",
+    "dist:win": "npm run build && electron-builder --win --x64",
+    "dist:linux": "npm run build && electron-builder --linux --x64"
   },
   "keywords": [
     "electron",

@@ -39,6 +39,15 @@ test-results/
 # Electron
 out/
 
+# Code Signing Certificates (NEVER COMMIT)
+*.pfx
+*.p12
+certificate.*
+*.crt
+*.cer
+*.pem
+*.key
+
 # TypeScript
 *.tsbuildinfo
 

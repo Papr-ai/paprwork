@@ -53,7 +53,11 @@
         "arch": ["x64"]
       }
     ],
-    "icon": "build/icon.ico"
+    "icon": "build/icon.ico",
+    "signingHashAlgorithms": ["sha256"],
+    "certificateFile": "${CSC_LINK}",
+    "certificatePassword": "${CSC_KEY_PASSWORD}",
+    "publisherName": "Papr.ai Inc."
   },
   "linux": {
     "target": [

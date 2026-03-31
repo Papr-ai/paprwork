@@ -52,9 +52,12 @@ If the task is tiny and explicit, merge steps. Always explain tradeoffs when ski
 | `/api/jobs/list` | GET | List all jobs (id, name, type, status) |
 | `/api/jobs/status/:jobId` | GET | Poll job status |
 | `/api/jobs/run` | POST | Trigger a job (fire-and-forget or wait) |
+| `/api/jobs/create` | POST | **NEW:** Create jobs programmatically (same as `create_job` tool) |
 | `/api/bash/run` | POST | Run a bash command and get stdout/stderr |
 
 > **When a button in a mini-app needs to do backend work** (re-generate content, reset data, call an API, run a script) — use `/api/jobs/run` or `/api/bash/run`. These give mini-apps the same power agents have via `run_job` and `bash`. Do NOT build a separate HTTP server job as a bridge — that is always the wrong approach.
+
+> **NEW: Mini-apps can now CREATE jobs dynamically via `/api/jobs/create`**. This enables lazy job creation patterns (e.g., LinkedIn Autopilot creates action jobs on-demand when campaigns need them). Rate limited to 10 jobs/min per app. See "Mini-App Job Creation" section below.
 
 ---
 
@@ -1022,6 +1025,86 @@ create_job({
 ```
 
 **Pipeline pattern:** Python (data fetch) → Agent job (LLM) → Python (format output)
+
+### Agent Jobs: When to Use Model Override vs. Subagent
+
+**Two ways to specify a model for agent jobs:**
+
+1. **Direct model override** (`type: "agent"` with `provider`/`model`)
+2. **Subagent with custom profile** (`type: "subagent"` with `subAgentId`)
+
+**Use direct model override when:**
+- ✅ Same behavior as main agent, just need more power/context
+- ✅ One-off task (don't need reusable profile)
+- ✅ Quick model swap for testing (A/B test different models)
+- ✅ No custom system prompt or tool restrictions needed
+
+**Example: Weekly briefing with more context**
+```javascript
+// Just need GPT-5.4's 272K context (vs gpt-5.2's 120K)
+create_job({
+  name: "Weekly Prep Briefing",
+  type: "agent",  // ← Same main agent behavior
+  provider: "openai",
+  model: "gpt-5.4",  // ← Just need bigger context window
+  command: "Search memory for ICP decisions, product focus, and Techstars tasks from past week",
+  schedule: { enabled: true, cron: "0 7 * * 1" },  // Every Monday at 7am
+})
+```
+
+**Use subagent when:**
+- ✅ Specialized role/behavior (custom system prompt)
+- ✅ Restricted tool access (security/safety)
+- ✅ Reusable profile (multiple jobs use same agent)
+- ✅ Distinct identity matters (e.g., "Code Reviewer" vs. "Content Writer")
+
+**Example: Code review specialist**
+```javascript
+// Create reusable code review agent with custom prompt + restricted tools
+create_sub_agent({
+  id: "code-reviewer",
+  name: "Code Review Specialist",
+  provider: "anthropic",
+  model: "claude-sonnet-4-5",
+  systemPrompt: `You are a senior code reviewer. Focus on:
+- Security vulnerabilities
+- Performance bottlenecks
+- Code style consistency
+- Test coverage gaps
+NEVER suggest adding comments unless code is truly unclear.`,
+  allowedToolIds: ["read_file", "list_files", "grep"]  // No bash execution!
+})
+
+// Use in multiple contexts
+create_job({
+  name: "PR Review Bot",
+  type: "subagent",
+  subAgentId: "code-reviewer",
+  command: "Review files changed in latest PR",
+})
+
+create_job({
+  name: "Weekly Security Audit",
+  type: "subagent",
+  subAgentId: "code-reviewer",  // ← Same agent, different task
+  schedule: { enabled: true, cron: "0 9 * * 1" },
+})
+```
+
+**Quick decision tree:**
+
+```
+Need different model/provider?
+├─ YES → Need custom behavior/tools/prompt?
+│        ├─ YES → Use subagent (2 steps: create_sub_agent + create_job)
+│        └─ NO  → Use direct override (1 step: create_job with model)
+└─ NO  → Use plain agent job (type: "agent", no model specified)
+```
+
+**Priority order (when both are specified):**
+1. Subagent profile (highest priority) — if job is `type: "subagent"`
+2. Job record `provider`/`model` — if specified in `create_job`
+3. Default (`openai/gpt-5.2`) — fallback
 
 ### Calling Agent Jobs from Python Scripts
 
@@ -2441,6 +2524,263 @@ The UI uses this for:
 - **App filter chips** — filter the jobs list to only jobs linked to a specific app
 - **Folder sections** — collapsible groups in the list view
 - **Graph view** — visual DAG showing nodes (jobs), edges (dependsOn), clusters (folders)
+
+## Notes
+
+---
+
+## Mini-App Job Creation (NEW)
+
+**Added:** 2026-03-30
+
+Mini-apps can now create jobs programmatically via `/api/jobs/create`. This enables **lazy job creation patterns** where jobs are created on-demand when needed, rather than pre-creating all possible jobs upfront.
+
+### Why This Matters
+
+**Before:** You had to pre-create all possible jobs, even if they might never be used
+- LinkedIn Autopilot: Pre-create all 7 action jobs (view_profile, endorse, etc.) even if campaigns only use 2
+- User workflows: Can't create jobs based on user configuration in the UI
+
+**After:** Create jobs dynamically when needed
+- LinkedIn Autopilot: Create "view_profile" job only when a campaign adds that action type
+- Data pipeline builders: User configures scraper in UI → app creates the job
+- Workflow generators: Generate job chains based on user input
+
+### API Specification
+
+```typescript
+POST /api/jobs/create
+Content-Type: application/json
+
+{
+  name: string;              // Job display name
+  type: "shell" | "bash" | "node" | "python" | "swift" | "agent" | "subagent";
+  folder?: string;           // Group label (e.g. "ingestion")
+  command?: string;          // Command to execute
+  requirements?: string[];   // Python/Node packages
+  dependsOn?: Array<{        // Dependencies
+    jobId: string;
+    onStatus: "completed" | "failed";
+    autoTrigger?: boolean;
+  }>;
+  schedule?: {
+    enabled: boolean;
+    cron?: string;
+    intervalMs?: number;
+  };
+  // ... (all CreateJobInput fields supported)
+}
+
+// Response
+{
+  success: true,
+  jobId: string,
+  name: string,
+  type: string,
+  status: string
+}
+```
+
+### Security & Limits
+
+- **Rate Limited:** 10 jobs/min per app (prevents abuse)
+- **Size Limit:** 100KB command maximum
+- **Validation:** Full Zod schema validation (same as `create_job` tool)
+- **No Privilege Escalation:** Mini-apps already have bash access via `/api/bash/run`
+
+### Example 1: Lazy Job Creation (LinkedIn Autopilot)
+
+```typescript
+// app.ts - Check if job exists, create if needed
+async function ensureActionJob(actionType: string): Promise<string> {
+  // Check if job already exists
+  const res = await fetch('/api/jobs/list');
+  const { jobs } = await res.json();
+  
+  const existing = jobs.find(j => 
+    j.name === `LinkedIn ${actionType} Action`
+  );
+  
+  if (existing) {
+    console.log(`Job exists: ${existing.id}`);
+    return existing.id;
+  }
+
+  // Create on-demand
+  console.log(`Creating ${actionType} job...`);
+  const createRes = await fetch('/api/jobs/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: `LinkedIn ${actionType} Action`,
+      type: "python",
+      folder: "linkedin-actions",
+      command: `python3 code/${actionType}.py`,
+      requirements: ["linkedin-api", "sqlite-utils"],
+      schedule: {
+        enabled: true,
+        intervalMs: 60000 // Every minute
+      }
+    })
+  });
+
+  const { jobId } = await createRes.json();
+  console.log(`Created job: ${jobId}`);
+  return jobId;
+}
+
+// User adds "view_profile" action to campaign
+const jobId = await ensureActionJob('view_profile');
+// Store mapping: view_profile → jobId in campaigns table
+```
+
+### Example 2: User-Configured Pipeline
+
+```typescript
+// User configures a data pipeline in the UI
+async function createPipeline(config: {
+  source: string;
+  transform: string;
+  destination: string;
+}) {
+  // Create scraper job
+  const scraperRes = await fetch('/api/jobs/create', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: "Pipeline: Scraper",
+      type: "python",
+      folder: "ingestion",
+      command: `python3 code/scrape.py --source ${config.source}`,
+      requirements: ["requests", "beautifulsoup4"]
+    })
+  });
+  const { jobId: scraperId } = await scraperRes.json();
+
+  // Create transformer (depends on scraper)
+  const transformRes = await fetch('/api/jobs/create', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: "Pipeline: Transform",
+      type: "python",
+      folder: "processing",
+      command: `python3 code/transform.py --type ${config.transform}`,
+      requirements: ["pandas"],
+      dependsOn: [{
+        jobId: scraperId,
+        onStatus: "completed",
+        autoTrigger: true // Auto-run when scraper finishes
+      }]
+    })
+  });
+  const { jobId: transformerId } = await transformRes.json();
+
+  // Create destination job
+  const destRes = await fetch('/api/jobs/create', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: "Pipeline: Load",
+      type: "bash",
+      folder: "processing",
+      command: `./load.sh ${config.destination}`,
+      dependsOn: [{
+        jobId: transformerId,
+        onStatus: "completed",
+        autoTrigger: true
+      }]
+    })
+  });
+
+  console.log(`Pipeline created: ${scraperId} → ${transformerId} → ${destRes.jobId}`);
+  
+  // Start the pipeline
+  await fetch('/api/jobs/run', {
+    method: 'POST',
+    body: JSON.stringify({ jobId: scraperId })
+  });
+}
+```
+
+### Example 3: Simple On-Demand Job
+
+```typescript
+// Create a job when user clicks "Start Scraping"
+async function startScrapingJob() {
+  const res = await fetch('/api/jobs/create', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: "Reddit Scraper",
+      type: "python",
+      command: "python3 code/scraper.py",
+      requirements: ["requests", "sqlite-utils"]
+    })
+  });
+
+  const { jobId } = await res.json();
+  
+  // Run it immediately
+  await fetch('/api/jobs/run', {
+    method: 'POST',
+    body: JSON.stringify({ jobId })
+  });
+}
+```
+
+### Rate Limit Handling
+
+If you might hit the 10 jobs/min limit, implement retry logic:
+
+```typescript
+async function createJobWithRetry(jobConfig, maxRetries = 3) {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const res = await fetch('/api/jobs/create', {
+      method: 'POST',
+      body: JSON.stringify(jobConfig)
+    });
+
+    if (res.ok) {
+      return await res.json();
+    }
+
+    if (res.status === 429) {
+      const { error } = await res.json();
+      const match = error.match(/Try again in (\d+)s/);
+      const waitSeconds = match ? parseInt(match[1]) : 60;
+      
+      console.log(`Rate limited. Waiting ${waitSeconds}s...`);
+      await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
+      continue;
+    }
+
+    throw new Error((await res.json()).error);
+  }
+  
+  throw new Error('Failed to create job after retries');
+}
+```
+
+### When to Use
+
+**Use `/api/jobs/create` when:**
+- Dynamic job generation based on user input
+- Lazy creation patterns (only create when needed)
+- User-configured workflows
+- Runtime job pipeline construction
+
+**Use agent `create_job` tool when:**
+- Initial setup (creating baseline jobs)
+- Complex pipelines with many dependencies
+- Bulk job creation (>10 jobs)
+- Jobs requiring agent reasoning to configure
+
+### Architecture Benefits
+
+**Hybrid Approach = Best of Both Worlds:**
+- Pre-create common jobs for reliability
+- Use `/api/jobs/create` for dynamic user needs
+- No cron overhead for unused jobs
+- More flexible, cleaner architecture
+
+---
 
 ## Notes
 

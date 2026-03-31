@@ -36,7 +36,21 @@ export class AgentJobExecutor implements IJobExecutor {
     let sourceAgentId = "main-agent";
     let sourceAgentName = "Main Agent";
 
-    // ── Resolve sub-agent profile ─────────────────────────────────────────────
+    // ── Read provider/model from job record (applies to both agent and subagent jobs) ─
+    if (params.job.provider) {
+      provider = params.job.provider as
+        | "anthropic"
+        | "openai"
+        | "openai-codex"
+        | "google"
+        | "ollama";
+    }
+    if (params.job.model) {
+      model = params.job.model;
+    }
+    // ─────────────────────────────────────────────────────────────────────────────────
+
+    // ── Resolve sub-agent profile (may override provider/model) ───────────────────────
     let subAgentSystemPrompt: string | undefined;
     let subAgentName: string | undefined;
 
@@ -52,13 +66,14 @@ export class AgentJobExecutor implements IJobExecutor {
       }
       sourceAgentId = profile.id;
       sourceAgentName = profile.name;
-      provider = profile.provider;
-      model = profile.model;
+      // Subagent profile provider/model takes precedence over job record
+      if (profile.provider) provider = profile.provider;
+      if (profile.model) model = profile.model;
       allowedToolIds = profile.allowedToolIds;
       subAgentName = profile.name;
       subAgentSystemPrompt = profile.systemPrompt;
     }
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────────────
 
     // ── Auto-inject environment paths (own + dependencies) ───────────────────
     const envBlock = await this.buildEnvironmentBlock(params);

@@ -1,0 +1,28 @@
+:root {
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
+  --text: rgba(255,255,255,0.92); --muted: rgba(255,255,255,0.48);
+  --glass: rgba(14,18,28,0.55); --glass-border: rgba(255,255,255,0.10);
+  --accent: #3b82f6; --accent-glow: rgba(59,130,246,0.25);
+  --red: #ef4444; --amber: #f59e0b; --green: #22c55e;
+  --r: 16px; --dur: 220ms; --ease: cubic-bezier(.2,.8,.2,1);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#08090c; color:var(--text); font-family:var(--font); min-height:100vh; -webkit-font-smoothing:antialiased; overflow-x:hidden; }
+.ambient { position:fixed; inset:0; z-index:0; pointer-events:none; }
+.orb { position:absolute; border-radius:50%; filter:blur(80px); }
+.orb-1 { width:500px; height:400px; top:-10%; left:-5%; background:radial-gradient(circle, rgba(59,130,246,0.18), transparent 70%); }
+.orb-2 { width:400px; height:400px; bottom:10%; right:-10%; background:radial-gradient(circle, rgba(79,70,229,0.14), transparent 70%); }
+.orb-3 { width:300px; height:300px; top:40%; left:30%; background:radial-gradient(circle, rgba(12,205,255,0.08), transparent 70%); }
+main { position:relative; z-index:1; max-width:720px; margin:0 auto; padding:56px 20px 80px; transition: opacity .18s ease, filter .22s ease; }
+main.turn-prev, main.turn-next { opacity: .18; filter: blur(4px); }
+main.turn-in { animation: briefIn .24s ease; }
+@keyframes briefIn { from { opacity: .32; filter: blur(4px); } to { opacity: 1; filter: blur(0); } }
+.hero { text-align:center; padding:48px 0 36px; }
+.hero-date { font-size:12px; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin-bottom:6px; font-weight:500; }
+.hero-title { font-size:40px; font-weight:800; letter-spacing:-0.03em; background:linear-gradient(135deg,#fff 0%,rgba(255,255,255,0.55) 100%); -webkit-background-clip:text; -webkit-text-fill-color:transparent; line-height:1.1; }
+.hero-sub { font-size:15px; color:var(--muted); margin-top:10px; font-weight:400; }
+.hero-stats { display:flex; justify-content:center; gap:28px; margin-top:20px; }
+.stat-num { font-size:26px; font-weight:800; letter-spacing:-0.02em; }
+.stat-label { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em; margin-top:2px; }
+.section { margin-bottom:36px; }
+.section-title { font-size:12px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted); margin-bottom:14px; padding-left:4px; }

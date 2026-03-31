@@ -41,6 +41,10 @@ export interface JobRecord {
   maxTurns?: number;
   memoryPolicy?: JobMemoryPolicy;
   reportChatId?: string;
+  /** Provider for agent/subagent jobs (e.g. "openai", "anthropic", "ollama"). Overrides default. */
+  provider?: string;
+  /** Model ID for agent/subagent jobs (e.g. "gpt-5.4", "claude-sonnet-4-5"). Overrides default. */
+  model?: string;
   createdAt: string;
   updatedAt: string;
   lastRunAt?: string;
@@ -81,6 +85,10 @@ export interface CreateJobInput {
   maxTurns?: number;
   memoryPolicy?: JobMemoryPolicy;
   reportChatId?: string;
+  /** Provider for agent/subagent jobs (e.g. "openai", "anthropic", "ollama"). Overrides default. */
+  provider?: string;
+  /** Model ID for agent/subagent jobs (e.g. "gpt-5.4", "claude-sonnet-4-5"). Overrides default. */
+  model?: string;
   useCheckpointTemplate?: boolean;
 }
 

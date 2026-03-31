@@ -394,6 +394,8 @@ export class JobsService {
       maxTurns: input.maxTurns,
       memoryPolicy: input.memoryPolicy ?? "none",
       reportChatId: input.reportChatId,
+      provider: input.provider,
+      model: input.model,
       createdAt: now,
       updatedAt: now,
     };
@@ -1139,6 +1141,8 @@ export class JobsService {
         | "maxTurns"
         | "memoryPolicy"
         | "reportChatId"
+        | "provider"
+        | "model"
       >
     >,
   ): Promise<import("./jobs/types.js").JobRecord> {

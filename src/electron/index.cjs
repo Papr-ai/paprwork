@@ -1206,6 +1206,38 @@ function initializeSystemInvokeHandler(mainWindow) {
 //  App Lifecycle
 // ---------------------------------------------------------------------------
 
+// Storage instances (shared between app.whenReady and second-instance handler)
+let customKeysStorage;
+let keyPermissionsStorage;
+let settingsStorage;
+
+// Single instance lock - prevent multiple instances on Windows/Linux
+// When a second instance tries to start, send its command line args to the first instance
+const gotTheLock = app.requestSingleInstanceLock();
+
+if (!gotTheLock) {
+  console.log('[Electron] Another instance is already running, quitting');
+  app.quit();
+} else {
+  // Handle second instance attempting to launch (e.g., from deep link on Windows)
+  app.on('second-instance', async (event, commandLine, workingDirectory) => {
+    console.log('[Electron] Second instance detected, focusing existing window');
+    
+    // Focus the existing window
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+    
+    // Check if the second instance was launched with a deep link
+    const url = commandLine.find(arg => arg.startsWith('papr://'));
+    if (url && handlePaprAuthCallback && customKeysStorage && settingsStorage) {
+      console.log('[Electron] Second instance opened with deep link:', url);
+      await handlePaprAuthCallback(url, customKeysStorage, settingsStorage);
+    }
+  });
+}
+
 app.whenReady().then(async () => {
   console.log("[Electron] App ready");
 
@@ -1221,10 +1253,10 @@ app.whenReady().then(async () => {
   // Load ESM modules first
   await loadESMModules();
 
-  // Initialize storage and IPC
-  const customKeysStorage = new CustomKeysStorage();
-  const keyPermissionsStorage = new KeyPermissionsStorage();
-  const settingsStorage = new SettingsStorage(undefined, {
+  // Initialize storage and IPC (use outer scope variables for second-instance handler)
+  customKeysStorage = new CustomKeysStorage();
+  keyPermissionsStorage = new KeyPermissionsStorage();
+  settingsStorage = new SettingsStorage(undefined, {
     defaultTelemetryEnabled: app.isPackaged,
   });
 

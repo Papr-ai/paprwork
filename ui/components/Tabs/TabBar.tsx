@@ -8,6 +8,7 @@ import { useTabs } from "../../hooks/useTabs";
 import { useChat } from "../../hooks/useChat";
 import { useChatStore } from "../../stores/chatStore";
 import { Tab } from "./Tab";
+import { gateway } from "../../src/lib/gateway";
 import "./TabBar.css";
 
 // Platform-aware modifier key
@@ -135,8 +136,48 @@ export function TabBar() {
     goForward();
   };
 
-  const handleHome = () => {
-    // Create home tab
+  const handleHome = async () => {
+    console.log('[TabBar] Home button clicked');
+    
+    // Check if there's a default home app configured
+    try {
+      console.log('[TabBar] Fetching settings...');
+      const response = await gateway.send('settings:get', {});
+      console.log('[TabBar] Settings response:', response);
+      
+      const defaultHomeAppId = response?.data?.preferences?.defaultHomeAppId;
+      console.log('[TabBar] defaultHomeAppId:', defaultHomeAppId);
+      
+      if (defaultHomeAppId) {
+        // Get app details (just to verify it exists)
+        console.log('[TabBar] Fetching app list...');
+        const appsResponse = await gateway.send('app:list', {});
+        console.log('[TabBar] Apps response:', appsResponse);
+        console.log('[TabBar] Apps array:', appsResponse?.data);
+        console.log('[TabBar] Apps length:', appsResponse?.data?.length);
+        console.log('[TabBar] First app:', appsResponse?.data?.[0]);
+        
+        const app = appsResponse?.data?.find((a: any) => a.id === defaultHomeAppId);
+        console.log('[TabBar] Found app:', app);
+        
+        if (app) {
+          // Open the configured home app with "Home" as the title and home icon
+          console.log('[TabBar] Creating app tab:', defaultHomeAppId, 'Home');
+          const homeIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+          createTab("app", defaultHomeAppId, "Home", { icon: homeIcon });
+          return;
+        } else {
+          console.warn('[TabBar] App not found in list, falling back to home tab');
+        }
+      } else {
+        console.log('[TabBar] No defaultHomeAppId configured, creating home tab');
+      }
+    } catch (error) {
+      console.error('[TabBar] Failed to check default home app:', error);
+    }
+    
+    // Fallback: Create regular home tab
+    console.log('[TabBar] Creating fallback home tab');
     createTab("home", "home", "Home");
   };
 

@@ -138,12 +138,71 @@ export class AppService {
     }
   }
 
+  /**
+   * Install default apps from src/resources/default-apps/ if they don't exist yet.
+   * Called on first launch to provide pre-built apps like the home dashboard.
+   */
+  private async installDefaultApps(): Promise<void> {
+    try {
+      // Path to bundled default apps (in dist after build)
+      const defaultAppsDir = path.join(__dirname, "..", "resources", "default-apps");
+      
+      // Check if default apps directory exists (may not exist in dev mode before first build)
+      try {
+        await fs.access(defaultAppsDir);
+      } catch {
+        console.log("[AppService] No default apps directory found, skipping installation");
+        return;
+      }
+
+      // Get list of default apps
+      const defaultAppDirs = await fs.readdir(defaultAppsDir);
+      
+      for (const appDirName of defaultAppDirs) {
+        const sourceDir = path.join(defaultAppsDir, appDirName);
+        const stat = await fs.stat(sourceDir);
+        
+        if (!stat.isDirectory()) continue;
+
+        // Read app ID from app-id.txt
+        const appIdPath = path.join(sourceDir, "app-id.txt");
+        let appId: string;
+        try {
+          appId = (await fs.readFile(appIdPath, "utf-8")).trim();
+        } catch {
+          console.warn(`[AppService] Skipping default app ${appDirName}: no app-id.txt`);
+          continue;
+        }
+
+        // Check if app already exists
+        const targetDir = path.join(this.appsDir, appId);
+        try {
+          await fs.access(targetDir);
+          console.log(`[AppService] Default app already exists: ${appId}`);
+          continue;
+        } catch {
+          // App doesn't exist, install it
+        }
+
+        // Copy app files
+        await fs.mkdir(targetDir, { recursive: true });
+        await fs.cp(sourceDir, targetDir, { recursive: true });
+        
+        console.log(`[AppService] Installed default app: ${appId} (${appDirName})`);
+      }
+    } catch (error) {
+      console.error("[AppService] Failed to install default apps:", error);
+      // Don't throw - default apps are nice-to-have, not critical
+    }
+  }
+
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
     await this.migrateLegacyIfNeeded();
     await fs.mkdir(this.appsDir, { recursive: true });
     await fs.mkdir(path.dirname(this.appsIndexPath), { recursive: true });
+    await this.installDefaultApps(); // Install default apps on first launch
     await this.loadApps();
     await this.startWatchingApps();
     this.initialized = true;
