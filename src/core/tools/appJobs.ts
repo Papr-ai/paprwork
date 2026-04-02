@@ -13,12 +13,12 @@ const createAppSchema = z.object({
   icon: z
     .string()
     .describe(
-      "**REQUIRED:** SVG string or emoji for the app logo. Shown in tabs, apps list, and favorites. " +
-        "Apps without icons look generic and unprofessional. " +
-        'Use a simple inline SVG (e.g. \'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none"/></svg>\') ' +
-        'or a single emoji (e.g. \'📊\', \'📈\', \'🔍\'). ' +
-        "Keep SVGs simple (1-3 shapes max) for clarity at small sizes. " +
-        'Alternatively, add a <link rel="icon" href="data:image/svg+xml,..."> tag in your index.html — it will be auto-extracted.',
+      "**REQUIRED:** Icon for the app logo. Shown in tabs, apps list, and favorites. " +
+        "PREFERRED: Generate a droplet-style icon using an image API with prompt: " +
+        "'Create a minimalist premium icon on a pure white background. Show one perfect transparent water droplet sphere, centered, with soft glass-like edges, subtle reflections, delicate refraction, and a polished Apple-keynote aesthetic. Inside the droplet, place [SUBJECT]. No text, no clutter. Iconic, calm, minimal.' " +
+        "Pass as data URI: 'data:image/png;base64,...'. " +
+        "Also accepts: SVG string (1-3 shapes, stroke=currentColor) or emoji (📊, 📝, 🔍). " +
+        'Alternatively, add a <link rel="icon" href="data:image/..."> tag in your index.html — it will be auto-extracted.',
     ),
   files: z.array(appFileSchema).optional(),
   html: z.string().optional(),

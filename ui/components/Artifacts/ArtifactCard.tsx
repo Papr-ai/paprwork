@@ -91,6 +91,10 @@ export function ArtifactCard({
 
   const getIcon = () => {
     if (artifact.icon) {
+      // Image-based icon (droplet style PNG/data URI)
+      if (artifact.icon.startsWith("data:image/") || artifact.icon.startsWith("http")) {
+        return <img src={artifact.icon} alt={artifact.title} style={{ width: 24, height: 24, borderRadius: "50%", objectFit: "cover" }} draggable={false} />;
+      }
       return <span dangerouslySetInnerHTML={{ __html: artifact.icon }} />;
     }
 

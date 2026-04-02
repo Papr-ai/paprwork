@@ -82,26 +82,28 @@
   background: transparent;
 }
 
-/* Glass orb - Papr brand gradient default */
+/* Glass orb - Transparent droplet style */
 .app-card__orb {
   position: relative;
   width: 110px;
   height: 110px;
   border-radius: 50%;
-  /* Papr brand gradient: Blue → Cyan → Teal */
-  background: linear-gradient(
-    135deg,
-    rgba(1, 97, 224, 0.45) 0%,
-    rgba(12, 205, 255, 0.35) 60%,
-    rgba(0, 254, 254, 0.30) 100%
+  /* Transparent glass droplet: clear with subtle depth */
+  background: radial-gradient(
+    circle at 35% 30%,
+    rgba(255, 255, 255, 0.90) 0%,
+    rgba(255, 255, 255, 0.55) 35%,
+    rgba(240, 248, 255, 0.35) 65%,
+    rgba(220, 235, 250, 0.20) 100%
   );
   backdrop-filter: blur(16px) saturate(140%);
   -webkit-backdrop-filter: blur(16px) saturate(140%);
-  border: 1px solid rgba(12, 205, 255, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.55);
   box-shadow:
-    0 6px 24px rgba(1, 97, 224, 0.18),
-    0 2px 8px rgba(0, 254, 254, 0.10),
-    inset 0 1px 2px rgba(255, 255, 255, 0.45);
+    0 8px 32px rgba(0, 0, 0, 0.07),
+    0 2px 8px rgba(0, 0, 0, 0.04),
+    inset 0 1px 2px rgba(255, 255, 255, 0.80),
+    inset 0 -1px 4px rgba(0, 0, 0, 0.02);
   transition: transform 220ms var(--ease, cubic-bezier(.2,.8,.2,1)),
               box-shadow 220ms var(--ease, cubic-bezier(.2,.8,.2,1));
 }
@@ -109,9 +111,10 @@
 .app-card:hover .app-card__orb {
   transform: scale(1.06);
   box-shadow:
-    0 10px 36px rgba(1, 97, 224, 0.25),
-    0 4px 12px rgba(0, 254, 254, 0.15),
-    inset 0 1px 3px rgba(255, 255, 255, 0.55);
+    0 12px 40px rgba(0, 0, 0, 0.10),
+    0 4px 12px rgba(0, 0, 0, 0.06),
+    inset 0 1px 3px rgba(255, 255, 255, 0.90),
+    inset 0 -1px 4px rgba(0, 0, 0, 0.03);
 }
 
 /* Orb inner: centers the icon */
@@ -121,7 +124,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: rgba(1, 97, 224, 0.80);
+  color: rgba(60, 70, 90, 0.70);
 }
 
 /* Refraction highlight on top of orb - glass lensing effect */
@@ -280,29 +283,32 @@
   }
 
   .app-card__orb {
-    /* Papr brand gradient - dark mode: deeper tones */
-    background: linear-gradient(
-      135deg,
-      rgba(1, 97, 224, 0.50) 0%,
-      rgba(12, 205, 255, 0.35) 60%,
-      rgba(0, 254, 254, 0.25) 100%
+    /* Transparent glass droplet - dark mode */
+    background: radial-gradient(
+      circle at 35% 30%,
+      rgba(255, 255, 255, 0.12) 0%,
+      rgba(255, 255, 255, 0.06) 35%,
+      rgba(200, 220, 240, 0.04) 65%,
+      rgba(180, 200, 220, 0.02) 100%
     );
-    border-color: rgba(12, 205, 255, 0.25);
+    border-color: rgba(255, 255, 255, 0.12);
     box-shadow:
-      0 6px 24px rgba(1, 97, 224, 0.30),
-      0 2px 8px rgba(0, 254, 254, 0.12),
-      inset 0 1px 1px rgba(255, 255, 255, 0.12);
+      0 8px 32px rgba(0, 0, 0, 0.25),
+      0 2px 8px rgba(0, 0, 0, 0.15),
+      inset 0 1px 1px rgba(255, 255, 255, 0.10),
+      inset 0 -1px 4px rgba(0, 0, 0, 0.05);
   }
 
   .app-card:hover .app-card__orb {
     box-shadow:
-      0 10px 36px rgba(1, 97, 224, 0.40),
-      0 4px 12px rgba(0, 254, 254, 0.18),
-      inset 0 1px 2px rgba(255, 255, 255, 0.18);
+      0 12px 40px rgba(0, 0, 0, 0.35),
+      0 4px 12px rgba(0, 0, 0, 0.20),
+      inset 0 1px 2px rgba(255, 255, 255, 0.15),
+      inset 0 -1px 4px rgba(0, 0, 0, 0.08);
   }
 
   .app-card__orb-inner {
-    color: rgba(12, 205, 255, 0.90);
+    color: rgba(200, 210, 225, 0.85);
   }
 
   .app-card__orb-highlight {
@@ -312,4 +318,26 @@
       rgba(255, 255, 255, 0) 100%
     );
   }
+}
+
+/* Image-based droplet icon (PNG/data URI) */
+.app-card__orb-icon--image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+/* When image icon is present, make orb transparent to show the droplet image */
+.app-card__orb:has(.app-card__orb-icon--image) {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.07),
+    0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.app-card__orb:has(.app-card__orb-icon--image) .app-card__orb-highlight {
+  display: none;
 }

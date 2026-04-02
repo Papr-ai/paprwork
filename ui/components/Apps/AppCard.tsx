@@ -89,8 +89,23 @@ export function AppCard({
     [artifact.id, artifact.type, artifact.title, artifact.icon],
   );
 
+  const isImageIcon = (icon: string) =>
+    icon.startsWith("data:image/") || icon.startsWith("http");
+
   const renderIcon = () => {
     if (artifact.icon) {
+      // Image-based icon (droplet style PNG/data URI)
+      if (isImageIcon(artifact.icon)) {
+        return (
+          <img
+            className="app-card__orb-icon app-card__orb-icon--image"
+            src={artifact.icon}
+            alt={artifact.title}
+            draggable={false}
+          />
+        );
+      }
+      // SVG or emoji icon
       return (
         <span
           className="app-card__orb-icon"
@@ -99,7 +114,7 @@ export function AppCard({
       );
     }
 
-    // Default grid icon for apps without custom icons
+    // Default droplet-style icon for apps without custom icons
     return (
       <svg
         className="app-card__orb-icon"
@@ -108,41 +123,23 @@ export function AppCard({
         viewBox="0 0 24 24"
         fill="none"
       >
-        <rect
-          x="3"
-          y="3"
-          width="7"
-          height="7"
-          rx="2"
+        <path
+          d="M12 2.5C12 2.5 5 10.5 5 15a7 7 0 0014 0c0-4.5-7-12.5-7-12.5z"
           stroke="currentColor"
           strokeWidth="1.5"
+          fill="none"
+          strokeLinecap="round"
+          strokeLinejoin="round"
         />
-        <rect
-          x="14"
-          y="3"
-          width="7"
-          height="7"
-          rx="2"
+        <ellipse
+          cx="12"
+          cy="15"
+          rx="3"
+          ry="2.5"
           stroke="currentColor"
-          strokeWidth="1.5"
-        />
-        <rect
-          x="3"
-          y="14"
-          width="7"
-          height="7"
-          rx="2"
-          stroke="currentColor"
-          strokeWidth="1.5"
-        />
-        <rect
-          x="14"
-          y="14"
-          width="7"
-          height="7"
-          rx="2"
-          stroke="currentColor"
-          strokeWidth="1.5"
+          strokeWidth="1"
+          fill="none"
+          opacity="0.4"
         />
       </svg>
     );

@@ -169,11 +169,16 @@ export function Tab({
   const getIcon = () => {
     // App, document, and documents tabs: wrap icon in a mini liquid glass orb
     if (tab.type === "app" || tab.type === "document" || tab.type === "documents") {
+      const isImgIcon = tab.icon && (tab.icon.startsWith("data:image/") || tab.icon.startsWith("http"));
       const innerIcon = tab.icon ? (
-        <span
-          className="tab__orb-icon"
-          dangerouslySetInnerHTML={{ __html: tab.icon }}
-        />
+        isImgIcon ? (
+          <img className="tab__orb-icon tab__orb-icon--image" src={tab.icon} alt={tab.title} draggable={false} />
+        ) : (
+          <span
+            className="tab__orb-icon"
+            dangerouslySetInnerHTML={{ __html: tab.icon }}
+          />
+        )
       ) : tab.type === "app" ? (
         <svg
           className="tab__orb-icon"
@@ -209,8 +214,11 @@ export function Tab({
       );
     }
 
-    if (tab.icon)
+    if (tab.icon) {
+      if (tab.icon.startsWith("data:image/") || tab.icon.startsWith("http"))
+        return <img src={tab.icon} alt={tab.title} style={{ width: 14, height: 14, borderRadius: "50%", objectFit: "cover" }} draggable={false} />;
       return <span dangerouslySetInnerHTML={{ __html: tab.icon }} />;
+    }
 
     // Default icons based on type
     const icons: Record<string, string> = {

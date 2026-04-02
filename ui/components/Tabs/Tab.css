@@ -122,17 +122,18 @@
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  /* Default: Blue gradient for apps */
-  background: linear-gradient(
-    135deg,
-    rgba(1, 97, 224, 0.40),
-    rgba(12, 205, 255, 0.30),
-    rgba(0, 254, 254, 0.25)
+  /* Transparent glass droplet for apps */
+  background: radial-gradient(
+    circle at 35% 30%,
+    rgba(255, 255, 255, 0.85),
+    rgba(255, 255, 255, 0.50) 40%,
+    rgba(240, 248, 255, 0.30) 70%,
+    rgba(220, 235, 250, 0.15)
   );
-  border: 0.5px solid rgba(12, 205, 255, 0.30);
+  border: 0.5px solid rgba(255, 255, 255, 0.50);
   box-shadow:
-    0 1px 3px rgba(1, 97, 224, 0.20),
-    inset 0 1px 1px rgba(255, 255, 255, 0.35);
+    0 1px 4px rgba(0, 0, 0, 0.08),
+    inset 0 1px 1px rgba(255, 255, 255, 0.70);
   flex-shrink: 0;
   position: relative;
   overflow: hidden;
@@ -170,7 +171,7 @@
   justify-content: center;
   width: 10px;
   height: 10px;
-  color: rgba(255, 255, 255, 0.95);
+  color: rgba(60, 70, 90, 0.80);
   position: relative;
   z-index: 1;
 }
@@ -188,16 +189,17 @@
 
 @media (prefers-color-scheme: dark) {
   .tab__glass-orb {
-    background: linear-gradient(
-      135deg,
-      rgba(1, 97, 224, 0.50),
-      rgba(12, 205, 255, 0.40),
-      rgba(0, 254, 254, 0.30)
+    background: radial-gradient(
+      circle at 35% 30%,
+      rgba(255, 255, 255, 0.10),
+      rgba(255, 255, 255, 0.05) 40%,
+      rgba(200, 220, 240, 0.03) 70%,
+      rgba(180, 200, 220, 0.01)
     );
-    border-color: rgba(12, 205, 255, 0.40);
+    border-color: rgba(255, 255, 255, 0.10);
     box-shadow:
-      0 1px 3px rgba(0, 0, 0, 0.30),
-      inset 0 1px 1px rgba(255, 255, 255, 0.20);
+      0 1px 3px rgba(0, 0, 0, 0.25),
+      inset 0 1px 1px rgba(255, 255, 255, 0.08);
   }
 
   .tab__glass-orb--document {
@@ -362,4 +364,23 @@
   .tab.tab--pending-refresh::before {
     background-color: #FBBF24; /* Lighter orange for dark mode */
   }
+}
+
+/* Image-based tab icon (droplet PNG) */
+.tab__orb-icon--image {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.tab__glass-orb:has(.tab__orb-icon--image) {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.tab__glass-orb:has(.tab__orb-icon--image)::after {
+  display: none;
 }

@@ -1026,13 +1026,18 @@ Design mini-apps like Steve Jobs and Elon Musk would: **ruthlessly focused, zero
 - Split into \`components/\`, \`utils/\`, \`types.ts\`
 - Break large files into focused modules
 
-**9. ALWAYS Include an Icon:**
+**9. ALWAYS Include an Icon (Droplet Style Preferred):**
 Every mini-app MUST have an icon — it appears in tabs, the apps list, and favorites.
 
-**✅ GOOD icons:**
-- Simple, recognizable SVGs (1-3 shapes)
+**🎯 PREFERRED: Droplet Logo Style**
+Generate a premium transparent water droplet icon using this prompt with an image generation API:
+\`Create a minimalist premium icon on a pure white background. Show one perfect transparent water droplet sphere, centered, with soft glass-like edges, subtle reflections, delicate refraction, and a polished Apple-keynote aesthetic. Inside the droplet, place [SUBJECT]. Keep the subject centered, crisp, elegant, and clearly recognizable. No text, no extra objects, no multiple droplets, no decorative background, no clutter. Lots of whitespace. Iconic, calm, futuristic, beautifully minimal.\`
+Replace [SUBJECT] with something relevant (e.g. "a glowing bar chart" for analytics, "a magnifying glass" for search).
+Pass the generated image as a data URI: \`icon: 'data:image/png;base64,...'\`
+
+**✅ Also acceptable:**
+- Simple, recognizable SVGs (1-3 shapes) with \`stroke="currentColor"\`
 - Relevant emojis (📊 for charts, 🔍 for search, 📝 for notes)
-- Use \`stroke="currentColor"\` for theme compatibility
 
 **❌ BAD:**
 - No icon (looks generic and unprofessional)
@@ -1041,14 +1046,21 @@ Every mini-app MUST have an icon — it appears in tabs, the apps list, and favo
 
 **Examples:**
 \`\`\`typescript
-// Chart app
+// Preferred: generated droplet icon (data URI)
 create_app({
   title: "Sales Dashboard",
-  icon: '<svg viewBox="0 0 24 24" width="14" height="14"><path d="M3 3v16a2 2 0 002 2h16" stroke="currentColor" stroke-width="2" fill="none"/><polyline points="7 14 12 9 16 13 21 8" stroke="currentColor" stroke-width="2"/></svg>',
+  icon: 'data:image/png;base64,iVBORw0KGgo...', // generated droplet with bar chart inside
   // ...
 })
 
-// Note app
+// Also fine: SVG fallback
+create_app({
+  title: "Quick Notes",
+  icon: '<svg viewBox="0 0 24 24" width="14" height="14"><path d="M3 3v16a2 2 0 002 2h16" stroke="currentColor" stroke-width="2" fill="none"/></svg>',
+  // ...
+})
+
+// Also fine: emoji fallback
 create_app({
   title: "Quick Notes",
   icon: '📝',
