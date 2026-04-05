@@ -1,6 +1,7 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import type { Browser, Page } from "playwright";
+import { spawn } from "child_process";
 import { getApiKeysForSanitization, sanitizeToolOutput } from "./security.js";
 import { wrapUntrustedContent } from "./contentProvenance.js";
 
@@ -127,11 +128,142 @@ const browserScriptSchema = z.object({
   script: z.string().min(1),
 });
 
+const parseHtmlSchema = z.object({
+  code: z
+    .string()
+    .min(1)
+    .describe(
+      "Python code using BeautifulSoup to extract data. The page HTML is in the 'html' variable. " +
+        "Example: soup = BeautifulSoup(html, 'lxml'); result = {'title': soup.find('h1').text}. " +
+        "MUST be valid Python code, NOT a natural language prompt. Available: BeautifulSoup, json, lxml.",
+    ),
+  timeout: z
+    .number()
+    .optional()
+    .default(30000)
+    .describe("Max execution time in ms"),
+});
+
+const waitForSchema = z.object({
+  text: z.string().optional().describe("Wait for this text to appear on page"),
+  textGone: z
+    .string()
+    .optional()
+    .describe("Wait for this text to disappear"),
+  selector: z
+    .string()
+    .optional()
+    .describe("Wait for this element selector"),
+  time: z
+    .number()
+    .optional()
+    .describe("Fixed delay in seconds (e.g., 2 for 2s, 0.5 for 500ms)"),
+  timeout: z.number().optional().default(30000).describe("Max wait time in ms"),
+});
+
+const fillFormSchema = z.object({
+  fields: z
+    .array(
+      z.object({
+        selector: z.string().describe("CSS selector for form field"),
+        value: z.string().describe("Value to fill"),
+        clear: z
+          .boolean()
+          .optional()
+          .default(true)
+          .describe("Clear before filling"),
+      }),
+    )
+    .min(1)
+    .describe("Array of form fields to fill"),
+});
+
+const scrollSchema = z.object({
+  selector: z.string().optional().describe("Element to scroll into view"),
+  direction: z
+    .enum(["up", "down", "left", "right"])
+    .optional()
+    .describe("Scroll direction"),
+  amount: z
+    .number()
+    .optional()
+    .default(300)
+    .describe("Pixels to scroll (used with direction)"),
+  deltaX: z
+    .number()
+    .optional()
+    .describe("Horizontal scroll (positive = right, negative = left)"),
+  deltaY: z
+    .number()
+    .optional()
+    .describe("Vertical scroll (positive = down, negative = up)"),
+});
+
 function sanitizeBrowserData(data: unknown): unknown {
   const apiKeys = getApiKeysForSanitization();
   const sanitized = sanitizeToolOutput(data, apiKeys);
   // No truncation - prepareStep keeps last tool result full
   return sanitized;
+}
+
+/**
+ * Execute Python code for HTML parsing (simple subprocess, no venv needed)
+ * Used by browser_parse_html tool for BeautifulSoup-based data extraction
+ */
+async function executePythonForHtmlParsing(
+  code: string,
+  context: Record<string, string>,
+  timeout: number,
+): Promise<unknown> {
+  const script = `
+import json
+from bs4 import BeautifulSoup
+import sys
+
+# Inject context variables
+${Object.entries(context)
+  .map(([k, v]) => `${k} = """${v.replace(/"""/g, '\\"""')}"""`)
+  .join("\n")}
+
+# User code
+result = None
+try:
+${code
+  .split("\n")
+  .map((line) => "    " + line)
+  .join("\n")}
+    print(json.dumps(result))
+except Exception as e:
+    print(json.dumps({"error": str(e)}), file=sys.stderr)
+    sys.exit(1)
+`;
+
+  const proc = spawn("python3", ["-c", script]);
+  let stdout = "";
+  let stderr = "";
+
+  proc.stdout.on("data", (data) => (stdout += data.toString()));
+  proc.stderr.on("data", (data) => (stderr += data.toString()));
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      proc.kill();
+      reject(new Error("Python execution timed out"));
+    }, timeout);
+
+    proc.on("close", (exitCode) => {
+      clearTimeout(timer);
+      if (exitCode === 0) {
+        try {
+          resolve(JSON.parse(stdout));
+        } catch {
+          resolve(stdout.trim());
+        }
+      } else {
+        reject(new Error(stderr || "Python execution failed"));
+      }
+    });
+  });
 }
 
 export const browserNavigateTool = createTool({
@@ -333,6 +465,174 @@ export const browserEvaluateScriptTool = createTool({
   },
 });
 
+export const browserParseHtmlTool = createTool({
+  id: "browser_parse_html",
+  description:
+    "Execute Python code with BeautifulSoup to extract structured data from the current page HTML. " +
+    "IMPORTANT: You must provide actual Python code, not a prompt. " +
+    "Example code: soup = BeautifulSoup(html, 'lxml'); result = [{'title': a.text, 'url': a['href']} for a in soup.find_all('a', class_='result')]",
+  inputSchema: parseHtmlSchema,
+  execute: async (input) => {
+    const args =
+      (input as { context?: z.infer<typeof parseHtmlSchema> }).context ?? input;
+    await requestBrowserPermission("parse_html");
+    const session = await getBrowserSession();
+    const html = await session.page.content();
+
+    const result = await executePythonForHtmlParsing(
+      args.code,
+      { html },
+      args.timeout,
+    );
+
+    return sanitizeBrowserData({
+      success: true,
+      data: { result, url: session.page.url() },
+    }) as {
+      success: boolean;
+      data: { result: unknown; url: string };
+    };
+  },
+});
+
+export const browserWaitForTool = createTool({
+  id: "browser_wait_for",
+  description:
+    "Wait for text/element to appear/disappear or fixed time delay. " +
+    "Essential for SPAs that load content asynchronously.",
+  inputSchema: waitForSchema,
+  execute: async (input) => {
+    const args =
+      (input as { context?: z.infer<typeof waitForSchema> }).context ?? input;
+    await requestBrowserPermission("wait_for");
+    const session = await getBrowserSession();
+
+    if (args.time) {
+      await new Promise((resolve) => setTimeout(resolve, args.time! * 1000));
+      return { success: true, data: { waited: args.time, unit: "seconds" } };
+    }
+
+    if (args.text) {
+      await session.page.waitForFunction(
+        (text: string) => {
+          // @ts-expect-error - This function runs in browser context
+          return document.body.innerText.includes(text);
+        },
+        args.text,
+        { timeout: args.timeout },
+      );
+      return { success: true, data: { found: args.text } };
+    }
+
+    if (args.textGone) {
+      await session.page.waitForFunction(
+        (text: string) => {
+          // @ts-expect-error - This function runs in browser context
+          return !document.body.innerText.includes(text);
+        },
+        args.textGone,
+        { timeout: args.timeout },
+      );
+      return { success: true, data: { gone: args.textGone } };
+    }
+
+    if (args.selector) {
+      await session.page.waitForSelector(args.selector, {
+        timeout: args.timeout,
+      });
+      return { success: true, data: { found: args.selector } };
+    }
+
+    throw new Error("Must specify text, textGone, selector, or time");
+  },
+});
+
+export const browserFillFormTool = createTool({
+  id: "browser_fill_form",
+  description:
+    "Fill multiple form fields at once. More efficient than multiple browser_type calls.",
+  inputSchema: fillFormSchema,
+  execute: async (input) => {
+    const args =
+      (input as { context?: z.infer<typeof fillFormSchema> }).context ?? input;
+    await requestBrowserPermission(`fill_form:${args.fields.length} fields`);
+    const session = await getBrowserSession();
+
+    const results = [];
+    for (const field of args.fields) {
+      if (field.clear) {
+        await session.page.fill(field.selector, "");
+      }
+      await session.page.fill(field.selector, field.value);
+      results.push({ selector: field.selector, filled: true });
+    }
+
+    return {
+      success: true,
+      data: {
+        filledCount: results.length,
+        fields: results,
+      },
+    };
+  },
+});
+
+export const browserScrollTool = createTool({
+  id: "browser_scroll",
+  description:
+    "Scroll page by direction/amount or scroll element into view. " +
+    "Required before clicking off-screen elements.",
+  inputSchema: scrollSchema,
+  execute: async (input) => {
+    const args =
+      (input as { context?: z.infer<typeof scrollSchema> }).context ?? input;
+    await requestBrowserPermission("scroll");
+    const session = await getBrowserSession();
+
+    if (args.selector) {
+      await session.page.locator(args.selector).scrollIntoViewIfNeeded();
+      return {
+        success: true,
+        data: { scrolledToElement: args.selector },
+      };
+    }
+
+    let deltaX = args.deltaX ?? 0;
+    let deltaY = args.deltaY ?? 0;
+
+    if (args.direction) {
+      const amount = args.amount ?? 300;
+      switch (args.direction) {
+        case "up":
+          deltaY = -amount;
+          break;
+        case "down":
+          deltaY = amount;
+          break;
+        case "left":
+          deltaX = -amount;
+          break;
+        case "right":
+          deltaX = amount;
+          break;
+      }
+    }
+
+    await session.page.evaluate(
+      ({ x, y }: { x: number; y: number }) => {
+        // @ts-expect-error - This function runs in browser context
+        window.scrollBy(x, y);
+      },
+      { x: deltaX, y: deltaY },
+    );
+
+    return {
+      success: true,
+      data: { deltaX, deltaY },
+    };
+  },
+});
+
 export const browserTools = [
   browserNavigateTool,
   browserSnapshotTool,
@@ -342,4 +642,9 @@ export const browserTools = [
   browserConsoleLogsTool,
   browserNetworkLogsTool,
   browserEvaluateScriptTool,
+  // Phase 1 enhancements (browser-use inspired)
+  browserParseHtmlTool,
+  browserWaitForTool,
+  browserFillFormTool,
+  browserScrollTool,
 ];

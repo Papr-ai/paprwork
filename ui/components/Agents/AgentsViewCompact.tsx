@@ -11,10 +11,10 @@ const COMPACT_MODEL_IDS = [
   "claude-haiku-4-5",
   "claude-sonnet-4-6",
   "claude-opus-4-6",
-  "gpt-5.2-low",
-  "gpt-5.2",
+  "gpt-5.4-mini",
+  "gpt-5.4-low",
   "gpt-5.4",
-  "gpt-5.4-pro",
+  "gpt-5.4-high",
   "gemini-2.5-flash-lite",
   "gemini-2.5-flash",
 ];
@@ -413,7 +413,7 @@ export function AgentsView() {
                   <div className="agent-model-row">
                     <span className="model-label">Model:</span>
                     <span className="model-value">
-                      {agent.model ?? "gpt-5.2"}
+                      {agent.model ?? "gpt-5.4"}
                     </span>
                   </div>
 

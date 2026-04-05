@@ -136,6 +136,25 @@ export interface ElectronAPI {
     onLoginSuccess: (callback: (data: { apiKey: string; email: string }) => void) => void;
   };
 
+  // Python Dependencies API - Check and auto-install BeautifulSoup for browser_parse_html
+  pythonDeps: {
+    check: () => Promise<{
+      success: boolean;
+      status?: {
+        pythonInstalled: boolean;
+        pythonVersion?: string;
+        beautifulSoupInstalled: boolean;
+        lxmlInstalled: boolean;
+        canAutoInstall: boolean;
+      };
+      error?: string;
+    }>;
+    autoInstall: () => Promise<{
+      success: boolean;
+      error?: string;
+    }>;
+  };
+
   // Ollama API - Auto-install and manage local AI models
   ollama: {
     checkStatus: () => Promise<{
@@ -158,6 +177,19 @@ export interface ElectronAPI {
       hasModel?: boolean;
       error?: string;
     }>;
+    getHostMemory: () => Promise<
+      | {
+          success: true;
+          totalBytes: number;
+          freeBytes: number;
+          totalGb: number;
+          freeGb: number;
+        }
+      | {
+          success: false;
+          error: string;
+        }
+    >;
     start: () => Promise<{
       success: boolean;
       started?: boolean;

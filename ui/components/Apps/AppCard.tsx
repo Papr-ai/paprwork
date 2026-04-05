@@ -91,12 +91,22 @@ export function AppCard({
 
   const renderIcon = () => {
     if (artifact.icon) {
-      return (
-        <span
-          className="app-card__orb-icon"
-          dangerouslySetInnerHTML={{ __html: artifact.icon }}
-        />
-      );
+      // Check if icon is SVG (starts with <svg) or emoji (plain text)
+      if (artifact.icon.trim().startsWith('<svg') || artifact.icon.trim().startsWith('<')) {
+        return (
+          <span
+            className="app-card__orb-icon"
+            dangerouslySetInnerHTML={{ __html: artifact.icon }}
+          />
+        );
+      } else {
+        // Plain text (emoji)
+        return (
+          <span className="app-card__orb-icon" style={{ fontSize: '24px' }}>
+            {artifact.icon}
+          </span>
+        );
+      }
     }
 
     // Default grid icon for apps without custom icons

@@ -46,7 +46,7 @@ If the task is explicit and small, merge steps. Always explain tradeoffs when sk
 | `read_app_data_sources` | List registered data sources for an app |
 | `read_skill` | Load a skill for detailed guidance |
 
-> Mini-app REST APIs (`/api/db/query`, `/api/jobs/run`, `/api/bash/run`, etc.) are always shown in your system prompt — you do not need to look them up.
+> Mini-app REST APIs: **`/api/db/query`** (reads), **`/api/db/write`** (writes), **`/api/db/exec`** (CREATE TABLE IF NOT EXISTS only), plus `/api/jobs/run`, `/api/bash/run`, etc. Critical split is also in your system prompt — a 403 on `query` means use `write` for INSERT/UPDATE/DELETE.
 
 ---
 
@@ -74,7 +74,7 @@ See full patterns in APP_AND_JOBS_GUIDE.md → "Job Resilience & Patterns"
 ## File Structure
 
 ```
-~/PAPR/apps/{appId}/
+~/Papr/apps/{appId}/
   index.html            # Entry point — NO inline JS, load app.ts as module
   style.css             # Liquid Glass styles
   app.ts                # Main entry (TypeScript — auto-transpiled by gateway)
@@ -83,7 +83,7 @@ See full patterns in APP_AND_JOBS_GUIDE.md → "Job Resilience & Patterns"
   utils/                # Helpers, formatters, API calls
   data-sources.json     # Created automatically by link_app_data_source
 
-~/PAPR/jobs/{jobId}/
+~/Papr/jobs/{jobId}/
   job.json              # Config (schedule, type, command, env, deps)
   code/main.py          # (Python) or code/main.js (Node) or code/run.sh (Shell)
   code/requirements.txt # Python dependencies
@@ -210,6 +210,12 @@ await window.paprAPI.invoke('shell.showItemInFolder', '/path/to/file.csv');
 
 // Move to trash
 await window.paprAPI.invoke('shell.trashItem', '/path/to/file');
+
+// Open new chat from the mini-app (e.g. "Ask agent" on a dashboard card)
+await window.paprAPI.invoke('chat.open', {
+  message: 'Context from app: …', // optional draft in composer
+  model: 'gpt-5.4',              // optional — same ids as model picker
+});
 ```
 
 ### Available APIs
@@ -223,6 +229,8 @@ await window.paprAPI.invoke('shell.trashItem', '/path/to/file');
 - `shell.trashItem(path)` - Move file to trash
 - `dialog.showMessageBox(options)` - Show alert/confirm dialog
 - `app.getPath(name)` - Get system paths (downloads, documents, etc.)
+- `chat.open(options?)` - New chat tab; optional `message` (composer draft), `model`, `provider`
+- **Never** use `paprwork://` URLs, `window.paprwork`, or `window.electronAPI` inside mini-apps — use `window.paprAPI.invoke` only
 
 ### Why Native APIs Don't Work
 
@@ -257,7 +265,7 @@ Mini-apps run in sandboxed iframes with restricted permissions:
 | **Agent jobs** | ✅ Works — Paprwork routes to pi-ai automatically | ✅ Works — uses AI SDK |
 | **Bash/Python jobs** calling OpenAI/Anthropic | ❌ OAuth token won't work | ✅ Needs Platform API key |
 
-**Agent jobs** — No setup needed. Paprwork detects OAuth vs API key and routes to the right backend (pi-ai for OAuth, AI SDK for API key). When creating sub-agents for agent jobs, use models from `preloaded-subagent-guide` — pick ones the user has access to (OAuth or API key). Default: `gpt-5.2` or `claude-sonnet-4-6`.
+**Agent jobs** — No setup needed. Paprwork detects OAuth vs API key and routes to the right backend (pi-ai for OAuth, AI SDK for API key). When creating sub-agents for agent jobs, use models from `preloaded-subagent-guide` — pick ones the user has access to (OAuth or API key). Default: `gpt-5.4` or `claude-sonnet-4-6`.
 
 **Bash/Python jobs** that call `openai` Python SDK or `curl api.openai.com` — Require a **Platform API key** in Settings. OAuth tokens are for the ChatGPT backend, not the Platform API. If the user only has OAuth, tell them: "For Python/bash jobs that call the OpenAI API, add an OpenAI Platform API key in Settings → API Keys. Your ChatGPT subscription works for chat and agent jobs, but scripts need the Platform key."
 
@@ -268,7 +276,7 @@ Mini-apps run in sandboxed iframes with restricted permissions:
 # DON'T DO THIS - bypasses Paprwork's OAuth/API key routing
 import openai
 response = openai.chat.completions.create(
-    model="gpt-5.2",
+    model="gpt-5.4",
     messages=[{"role": "user", "content": prompt}]
 )
 ```
@@ -291,7 +299,7 @@ create_sub_agent({
   description: "Reviews and polishes content",
   systemPrompt: "You review content for clarity, tone, and accuracy. Output only the polished version.",
   provider: "openai",
-  model: "gpt-5.2"
+  model: "gpt-5.4"
 })
 
 // Create an agent job that uses the sub-agent
@@ -388,7 +396,7 @@ create_sub_agent({
   name: "Post Reviewer",
   systemPrompt: "Review posts. Return JSON: {\"content\": \"reviewed text\"}",
   provider: "openai",
-  model: "gpt-5.2"
+  model: "gpt-5.4"
 })
 
 create_job({
@@ -766,7 +774,7 @@ const { rows } = await fetch('/api/db/query', {
 - [ ] Design system loaded (`read_skill({ skillId: "preloaded-paprwork-design-system" })`)
 - [ ] `link_app_data_source` called after job has run at least once
 - [ ] App uses APP_ID constant (not hardcoded string scattered everywhere)
-- [ ] Job uses `JOB_DIR` env var for all file paths (not hardcoded `~/PAPR/...`)
+- [ ] Job uses `JOB_DIR` env var for all file paths (not hardcoded `~/Papr/...`)
 - [ ] Button has loading/disabled state during job execution
 - [ ] WebSocket listener set up for job completion push
 - [ ] Error states handled in UI (not just happy path)

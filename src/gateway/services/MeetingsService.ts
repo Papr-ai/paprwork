@@ -2,7 +2,7 @@
  * MeetingsService - SQLite-backed meeting management
  *
  * Ported from Paprwork v1 meetingsManager.js.
- * Stores meetings in ~/PAPR/data/meetings.db with the same schema.
+ * Stores meetings in ~/Papr/data/meetings.db with the same schema.
  */
 
 import { promises as fs } from "fs";
@@ -57,7 +57,7 @@ export class MeetingsService {
   private initialized = false;
 
   constructor() {
-    const dataDir = path.join(os.homedir(), "PAPR", "data");
+    const dataDir = path.join(os.homedir(), "Papr", "data");
     this.dbPath = path.join(dataDir, "meetings.json");
   }
 

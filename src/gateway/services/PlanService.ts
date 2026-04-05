@@ -41,7 +41,7 @@ export class PlanService {
 
   constructor() {
     const homeDir = os.homedir();
-    this.paprRootDir = path.join(homeDir, "PAPR");
+    this.paprRootDir = path.join(homeDir, "Papr");
     this.dbPath = path.join(this.paprRootDir, "data", "plans.db");
   }
 

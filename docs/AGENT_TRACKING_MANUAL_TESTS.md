@@ -287,7 +287,7 @@ The implementation is successful if:
 - Agent attribution for outputs only applies to newly created items
 - The plans database automatically migrates with ALTER TABLE statements
 - Tests can also be verified by inspecting the SQLite databases directly:
-  - `~/PAPR/data/chats.db` - Messages with tokens/cost
-  - `~/PAPR/data/plans.db` - Plans with source_agent_id
-  - `~/PAPR/documents/*/meta.json` - Documents with createdByAgentId
-  - `~/PAPR/data/apps.json` - Apps with createdByAgentId
+  - `~/Papr/data/chats.db` - Messages with tokens/cost
+  - `~/Papr/data/plans.db` - Plans with source_agent_id
+  - `~/Papr/documents/*/meta.json` - Documents with createdByAgentId
+  - `~/Papr/data/apps.json` - Apps with createdByAgentId

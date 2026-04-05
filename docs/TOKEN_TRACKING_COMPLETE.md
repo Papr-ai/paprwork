@@ -131,7 +131,7 @@ This confirms tokens are being captured.
 Check SQLite database:
 
 ```bash
-sqlite3 ~/PAPR/data/chats.db
+sqlite3 ~/Papr/data/chats.db
 ```
 
 Query recent assistant messages:

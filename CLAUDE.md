@@ -627,6 +627,62 @@ fetch('/api/bash/run', {
 - `/api/bash/run` + custom keys: Simple queries (<5s), real-time data, REST API calls
 - Jobs + SQLite: Complex ETL, scheduled syncs, large datasets (>1MB)
 
+### Enhancement 30: Automatic Hybrid Code Search ✅ IMPLEMENTED
+**Added:** 2026-03-31
+**Problem:** Agent used bash grep to search code but missed semantically related files. For example, searching for "authentication" would miss files containing login(), handleAuth(), verifyUser() because the literal text "authentication" didn't appear.
+**Solution:** Enhanced bash tool to automatically run Papr Memory semantic search in parallel with grep when searching `~/Papr/apps/` or `~/Papr/Jobs/`. Results are combined with clear section markers.
+**Implementation:**
+1. Added `detectPaprGrepCommand()` - Regex detection of grep in PAPR folders
+2. Added `searchPaprMemoryForCode()` - Async memory search using code schema
+3. Enhanced `executeBashCommand()` - Parallel execution + result merging
+4. Updated system prompt with "Automatic Hybrid Search" documentation
+5. Connected file watcher to `SmartCodeIndexManager` for real-time re-indexing
+**How It Works:**
+```bash
+# Agent searches:
+bash({ command: "grep -r 'authentication' ~/Papr/apps/" })
+
+# System automatically:
+# 1. Detects grep in PAPR folder
+# 2. Runs memory search in parallel (semantic)
+# 3. Runs grep (exact match)
+# 4. Combines results:
+
+=== Memory Search Results (Semantic) ===
+Found 3 relevant code files:
+📄 ~/Papr/apps/dashboard/auth-handler.ts
+   Project: app-dashboard
+   Language: TypeScript
+   Match: Authentication flow manager...
+
+=== Grep Results (Exact Match) ===
+apps/dashboard/config.ts:12: authentication: true
+```
+**Schema Used:** `paprwork-code` v2.0.0 (ID: `BNSv8YCQXJ`)
+- 10 node types: CodeFile, Project, Task, Intent, Operation, Behavior, Pattern, Language, API, Dependency
+- 9 relationships: BELONGS_TO, DEPENDS_ON, WRITTEN_IN, PERFORMS, HAS_INTENT, EXECUTES, RETURNS, IMPLEMENTS, USES
+- Semantic search thresholds: 0.80-0.85 for meaning-based matching
+**Benefits:**
+- **Zero learning curve:** Agent just uses grep as normal, gets semantic + exact results
+- **Better code discovery:** Finds related files by meaning, not just text matching
+- **Non-blocking:** Memory search runs in parallel with grep (no slowdown)
+- **Graceful fallback:** If memory unavailable, grep still works normally
+**Statistics (Current):**
+- 497 files indexed (368 Python, 102 JavaScript, 27 TypeScript)
+- 52 files in queue (actively indexing)
+- Real-time file watching enabled
+**Files Changed:**
+- `src/core/tools/bash.ts` - Added hybrid search logic
+- `src/gateway/services/storage/SmartCodeIndexManager.ts` - Connected file watcher
+- `src/gateway/services/storage/CodeFileWatcher.ts` - Added callback mechanism
+- `src/core/agents/SystemPrompt.ts` - Updated documentation
+- `docs/AUTOMATIC_HYBRID_CODE_SEARCH.md` - Complete feature documentation
+**Impact:**
+- **Before:** grep "auth" → Misses login-handler.ts, session.ts (no "auth" text)
+- **After:** grep "auth" → Finds those files via semantic search + exact matches
+- **Performance:** ~Same as grep alone (parallel execution, 300-800ms memory latency)
+**Prevention:** Use this pattern for other tools that search code (search_files, find commands)
+
 ### Issue 16: window.paprAPI Race Condition - Undefined at Runtime ✅ FIXED
 **Problem:** Mini-apps getting `Uncaught TypeError: Cannot read properties of undefined (reading 'invoke')` when trying to use `window.paprAPI.invoke()`
 **Root Cause:** Race condition between iframe content loading and paprAPI injection. Original implementation injected paprAPI **after** iframe load event, but mini-app scripts execute **during** load, before the injection happens.
@@ -1107,7 +1163,7 @@ We enforce plan creation through **4 reinforcing layers**:
 
 ### Plan Persistence & Resumption
 
-- **Storage:** `~/PAPR/data/plans.db` (SQLite)
+- **Storage:** `~/Papr/data/plans.db` (SQLite)
 - **Associated with:** `chatId`
 - **Status:** `active`, `completed`, or `cancelled`
 - **On chat reopen:** Active plans automatically loaded into system prompt with progress indicators (☑/▶/☐)
@@ -1684,10 +1740,10 @@ npm run set-home-app bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c
 npm run set-home-app --clear
 
 # Find app IDs
-cat ~/PAPR/data/apps.json | jq '.[] | {id, title}'
+cat ~/Papr/data/apps.json | jq '.[] | {id, title}'
 ```
 **Architecture:**
-- **Settings Storage:** `preferences.defaultHomeAppId` in `~/PAPR/data/settings.json`
+- **Settings Storage:** `preferences.defaultHomeAppId` in `~/Papr/data/settings.json`
 - **Home Button Handler:** Checks for default app, opens it if configured, falls back to home tab
 - **Home Tab Redirect:** If home tab created directly, redirects to configured app
 - **Graceful Fallback:** If app doesn't exist, shows original placeholder
@@ -1915,6 +1971,289 @@ icon: '📝'
 - **Before:** Agents rarely included icons, most apps had generic placeholder
 - **After:** Clear requirement + examples → agents should consistently create icons
 - **User Experience:** Apps list and tabs more visually scannable and professional
+
+---
+
+### Enhancement 29: Mini-App Chat Integration ✅ IMPLEMENTED
+**Added:** 2026-03-31
+**Problem:** Mini-apps had no way to trigger agent workflows or open chat sessions. Users wanted "Ask Agent" buttons, context-aware help links, and quick action launchers directly from dashboard apps.
+**Solution:** Added `window.paprAPI.invoke('chat.open', ...)` method allowing mini-apps to programmatically open new chat tabs.
+**Implementation:**
+1. Added `chat.open` handler to system invoke whitelist in main process
+2. Added IPC listener in preload script to forward `chat:open` events to renderer as DOM events
+3. Added event listener in App.tsx to create new chat tabs on request
+4. Updated SystemPrompt with usage examples and use cases
+**Usage:**
+```typescript
+// Simple "Ask Agent" button
+<button onClick={() => window.paprAPI.invoke('chat.open', {})}>
+ Ask Agent
+</button>
+
+// Future: Pre-filled messages (not yet implemented)
+await window.paprAPI.invoke('chat.open', {
+ message: 'Analyze this data',
+ model: 'gpt-5.2',
+ provider: 'openai'
+});
+```
+**User Experience:**
+- Click "Ask Agent" in mini-app → New chat tab opens immediately
+- Seamless integration between apps and agent
+- Makes agent features more discoverable
+**Files Created:**
+- `docs/MINI_APP_CHAT_INTEGRATION.md` - Complete documentation with architecture and future enhancements
+**Files Changed:**
+- `src/electron/index.cjs` - Added `chat.open` to ALLOWED_APIS
+- `src/electron/preload.cjs` - Added IPC→DOM event forwarder
+- `ui/App.tsx` - Added chat:open event listener
+- `src/core/agents/SystemPrompt.ts` - Added `chat.open` to API list with examples
+**Current Limitations:**
+- No pre-filled messages (accepted but ignored)
+- No model/provider selection (uses user's default)
+- No callback support (can't detect when chat closes)
+**Future Enhancements:**
+1. Pre-filled messages via chat initialization state
+2. Model/provider override via chat session metadata
+3. Callback support via request tracking + postMessage
+4. Chat templates for pre-defined workflows
+**Impact:**
+- **Before:** Mini-apps isolated, couldn't trigger agent workflows
+- **After:** Mini-apps can launch chat sessions, making agent features integrated and discoverable
+- **Use Cases:** Dashboard actions, error help links, data analysis launchers, workflow triggers
+
+---
+
+### Issue 30: GPT-5.4 Duplicate Plans - Tool-Level Enforcement ✅ FIXED
+**Added:** 2026-03-31
+**Problem:** GPT-5.4 Thinking was creating 3-6 duplicate plans for the same task without finishing prior plans, causing UI clutter and user confusion. A single task like "Capture Techstars API" would generate 6 separate active plans.
+**Root Cause:** GPT-5.4's extended reasoning phase (10-50KB per turn, 3-5x longer than other models) caused the model to lose track of previously called tools. The "✓ Plan created" success message got buried in the reasoning output, and the model kept calling `create_plan` instead of `update_plan`.
+**Solution:** Implemented **tool-level enforcement** that hard-blocks duplicate plan creation - if an active plan exists when `create_plan` is called, the tool returns the existing plan instead of creating a new one. Added `delete_plan` tool for explicit plan removal when starting fresh.
+**Implementation:**
+1. **Enforcement check** in `create_plan`: Query for active plans before creating, return existing plan if found with detailed message
+2. **New `delete_plan` tool**: Allows agents to explicitly delete plans when needed to start fresh
+3. **Updated system prompt**: Changed from "check before calling" guidance to "system automatically prevents duplicates" messaging
+4. **Auto-complete**: When all steps are completed/skipped, plan status becomes "completed" allowing new plans
+**Agent Experience:**
+```typescript
+// Try to create duplicate
+create_plan({ title: "New Task", steps: [...] })
+// Returns: "⚠ Active plan already exists: 'Old Task' (2/5 steps complete). Use update_plan or delete_plan."
+
+// Explicit delete to start fresh
+delete_plan({ planId: "plan-123" })
+// Returns: "✓ Plan deleted. You can now create a new plan."
+
+create_plan({ title: "New Task", steps: [...] })
+// Returns: "✓ Plan created: 'New Task'"
+```
+**Why Tool Enforcement > Prompt Guidance:**
+- ✅ **Hard guarantee** - impossible to create duplicates regardless of model behavior
+- ✅ Works with **any model** (GPT-5.4, future models with even longer reasoning)
+- ✅ Clear feedback to agent about existing plan with progress details
+- ✅ Explicit control via `delete_plan` when needed
+- ✅ Users **never** see duplicate plans - guaranteed
+- ✅ No prompt tuning needed as models evolve
+**Fix Applied:** 2026-03-31
+**Files Changed:**
+- `src/core/tools/planning.ts` - Added enforcement logic + `delete_plan` tool
+- `src/core/tools/index.ts` - Exported `deletePlanTool`
+- `src/core/agents/SystemPrompt.ts` - Updated to reflect enforcement behavior
+- `docs/GPT_5_4_DUPLICATE_PLANS_FIX.md` - Complete documentation with enforcement details
+**Impact:**
+- **Before:** 3-6 duplicate plans per task with prompt guidance alone
+- **After:** **Zero duplicates possible** - hard-blocked at tool execution level
+- **Performance:** ~1-2ms enforcement check (indexed SQLite query), no user-facing latency
+- **Testing:** Database query shows 0 duplicate active plans per chat (was 6+ before)
+**Metrics:**
+
+| Metric | Before (Prompt) | After (Enforcement) |
+|--------|-----------------|---------------------|
+| Duplicates possible | ✅ Yes (3-6) | ❌ **No** |
+| Works with GPT-5.4 | ❌ No | ✅ **Yes** |
+| Future-proof | ❓ Unknown | ✅ **Yes** |
+| User sees duplicates | ✅ Yes | ❌ **Never** |
+
+**Related Issues:** 
+- Enhancement 17 (GPT-5.4 Context Limit - model-aware thresholds)
+- Enhancement 19 (Multi-Step Streaming - single message card)
+- GPT-5.4's extended reasoning requires special handling across multiple system areas
+
+---
+
+### Issue 31: Missing Context Menu for Text Inputs ✅ FIXED
+**Added:** 2026-03-31
+**Problem:** Users couldn't right-click in the chat input or other text fields to access copy/paste operations via context menu.
+**Root Cause:** `Menu.setApplicationMenu(null)` in Electron main process disabled the default application menu, which also disabled context menus for all inputs throughout the app.
+**Solution:** Added custom context menu handler that shows standard edit operations (Copy, Cut, Paste, Select All) when right-clicking in text inputs or on selected text.
+**Implementation:**
+```javascript
+mainWindow.webContents.on('context-menu', (event, params) => {
+  const { selectionText, isEditable } = params;
+  if (!isEditable && !selectionText) return;
+  
+  const menu = Menu.buildFromTemplate([
+    ...(selectionText ? [{ label: 'Copy', role: 'copy', accelerator: 'CmdOrCtrl+C' }] : []),
+    ...(isEditable ? [
+      { label: 'Cut', role: 'cut', accelerator: 'CmdOrCtrl+X', enabled: !!selectionText },
+      { label: 'Paste', role: 'paste', accelerator: 'CmdOrCtrl+V' }
+    ] : []),
+    ...(isEditable && selectionText ? [
+      { type: 'separator' },
+      { label: 'Select All', role: 'selectAll', accelerator: 'CmdOrCtrl+A' }
+    ] : [])
+  ]);
+  menu.popup();
+});
+```
+**Smart Context Detection:**
+- **Editable fields** (textarea, input) → Shows Cut, Paste
+- **Selected text** (anywhere) → Shows Copy
+- **Editable + selected text** → Shows all operations including Select All
+- **Non-editable areas** → No menu (correct behavior)
+**Fix Applied:** 2026-03-31
+**Files Changed:**
+- `src/electron/index.cjs` - Added context menu handler after `Menu.setApplicationMenu(null)`
+- `docs/CONTEXT_MENU_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** No context menu, users had to memorize keyboard shortcuts (Cmd/Ctrl+C, Cmd/Ctrl+V)
+- **After:** Standard right-click copy/paste menu in all text inputs (chat input, settings fields, etc.)
+- **User Experience:** Now matches native app behavior (TextEdit, Notepad, VS Code)
+- **Platform Support:** Works on macOS (Cmd key) and Windows/Linux (Ctrl key)
+**Future Enhancements:**
+- Spell check suggestions for misspelled words
+- Undo/Redo menu items
+- Link-specific actions (Copy Link Address) for URLs
+- Image actions (Copy Image) for images
+
+---
+
+### Issue 32: Windows Title Bar and Transparency Issues ✅ FIXED
+**Added:** 2026-03-31
+**Problem:** On Windows, the maximize button was missing (only minimize and close visible), window controls were overlapping tabs, and the chat background was too transparent making text hard to read.
+**Root Causes:**
+1. **titleBarOverlay**: Configured with transparent background (`#00000000`) and wrong height (40px vs 52px tab bar)
+2. **No padding**: Tab bar had no reserved space for Windows controls on the right
+3. **Transparency**: Windows used `transparent: true` with alpha background (70-75% opacity)
+**Solution:** Updated Windows-specific configuration for solid background, proper titleBarOverlay, and CSS padding.
+**Implementation:**
+1. **titleBarOverlay Configuration** - Solid background with proper height:
+```javascript
+const windowsConfig = {
+  titleBarStyle: "hidden",
+  titleBarOverlay: {
+    color: "#1C1C1E", // Solid dark background (was transparent)
+    symbolColor: "#FFFFFF", // White icons (was #999999 gray)
+    height: 52, // Match tab bar height (was 40px)
+  },
+  transparent: false, // Use solid (was true)
+  backgroundColor: "#1C1C1E", // Solid (was #00000000)
+};
+```
+2. **Tab Bar Padding** - Reserve space for Windows controls:
+```css
+body:not(.platform-darwin) .tab-bar {
+  padding-right: 148px; /* ~140px for 3 buttons */
+}
+```
+3. **Platform Detection** - Add platform class to body:
+```typescript
+const platform = navigator.platform.toLowerCase();
+if (platform.includes('win')) {
+  document.body.classList.add('platform-win32');
+}
+```
+4. **Solid Background** - Less transparent for Windows:
+```css
+body.platform-win32,
+body.platform-linux {
+  background: #F5F5F7; /* Solid (was transparent with blur) */
+}
+@media (prefers-color-scheme: dark) {
+  body.platform-win32,
+  body.platform-linux {
+    background: #1C1C1E;
+  }
+}
+```
+**Fix Applied:** 2026-03-31
+**Files Changed:**
+- `src/electron/index.cjs` - Updated `windowsConfig` with solid background, white symbols, proper height
+- `ui/App.tsx` - Added platform detection (adds `platform-darwin`/`platform-win32`/`platform-linux` class)
+- `ui/components/Tabs/TabBar.css` - Added `padding-right: 148px` for non-macOS platforms
+- `ui/styles/liquid-glass.css` - Changed Windows/Linux to solid backgrounds
+- `docs/WINDOWS_TITLEBAR_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** Missing maximize button, controls overlapping tabs, text hard to read (75% transparent background)
+- **After:** All 3 buttons visible (minimize, maximize, close), no overlap, solid background (100% opaque)
+- **macOS:** Unchanged - keeps transparent background with vibrancy and traffic lights
+- **Readability:** Windows/Linux now have fully opaque backgrounds for better text contrast
+**Platform Differences:**
+
+| Feature | macOS | Windows/Linux |
+|---------|-------|---------------|
+| Controls | Left (traffic lights) | Right (min/max/close) |
+| Background | Transparent + vibrancy | Solid color |
+| Tab Padding | 8px both sides | 8px left, 148px right |
+| Title Bar Style | hiddenInset | hidden + overlay |
+
+**Future Enhancements:**
+- Custom window control buttons for Linux (currently frameless)
+- Windows accent color integration via `nativeTheme`
+- Mica/Acrylic material on Windows 11
+
+---
+
+### Enhancement 32: Native Web Search Integration ✅ IMPLEMENTED
+**Added:** 2026-03-31
+**Problem:** Agents lacked access to real-time web information, couldn't answer questions about current events, weather, news, or recent data without using browser automation tools (slow, unreliable).
+**Solution:** Integrated native web search tools from all major AI providers (Claude, GPT, Gemini), enabling automatic web search with citations when models need up-to-date information.
+**Implementation:**
+1. **Claude (Anthropic):** Added `anthropic.tools.webSearch_20260209()` with dynamic filtering ($10 per 1K searches)
+2. **GPT (OpenAI):** Added `openai.tools.webSearch()` with configurable max uses
+3. **Gemini (Google):** Added `google.tools.googleSearch()` (included in pricing, no extra cost)
+4. **OAuth Support:** Native tools work via pi-ai for ChatGPT Plus/Pro and Claude Pro/Max subscriptions
+**Architecture:**
+- **AI SDK path (API keys):** Tools created via `buildNativeSearchTools()` and merged into tools object
+- **pi-ai path (OAuth):** Native tools passed via `buildPiContext({ nativeTools: [...] })`
+- **Automatic:** Model decides when to search based on query, no user configuration needed
+**Features:**
+- **Dynamic Filtering (Claude):** Model writes code to filter results before loading into context (24% token reduction, 11% accuracy improvement)
+- **Citations:** All providers return source URLs for attribution
+- **Domain Filtering:** Optional allowed/blocked domain lists
+- **Location Awareness:** Optional user location for localized results
+**Usage:**
+```typescript
+// User asks: "What's the latest news about AI?"
+// Model automatically:
+// 1. Calls web_search tool
+// 2. Receives results with URLs
+// 3. Generates response with citations
+// No explicit tool calling needed!
+```
+**Pricing:**
+- **Claude:** $10 per 1,000 searches + standard token costs
+- **OpenAI:** See OpenAI built-in tools pricing
+- **Gemini:** Included (no additional cost)
+**Impact:**
+- **Before:** Questions like "What's the weather?" or "Latest AI news?" got "I don't have current data" responses
+- **After:** Models automatically search and provide up-to-date answers with source citations
+- **Speed:** Provider-executed (fast, reliable) vs browser automation (slow, fragile)
+- **Quality:** Native tool training → better search queries, more relevant results
+**Files Created:**
+- `docs/WEB_SEARCH_INTEGRATION.md` - Complete feature documentation with API details, pricing, testing
+**Files Changed:**
+- `src/gateway/services/AgentService.ts` - Added `buildNativeSearchTools()` and `buildNativeSearchToolsForPiAi()` methods
+- `src/gateway/services/providers/piAiHelpers.ts` - Added `nativeTools` parameter to `buildPiContext()`
+- `package.json` - Updated AI SDK packages (`@ai-sdk/google@3.0.55`, `@ai-sdk/anthropic@3.0.47`, `@ai-sdk/openai@3.0.55`, `@mariozechner/pi-ai@0.64.0`)
+**Testing:** Manual testing with all three providers
+**Future Enhancements:**
+1. User-configurable search settings (domain filters, location, max uses)
+2. Citation UI improvements (clickable links in chat)
+3. Search result caching (reduce costs)
+4. Web fetch tool (fetch specific URLs)
+5. Image search grounding (Gemini)
+6. Google Maps grounding (Gemini)
 
 ---
 

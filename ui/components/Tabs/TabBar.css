@@ -18,6 +18,14 @@
   user-select: none;
 }
 
+/* Windows/Linux: Reserve space for window controls (minimize, maximize, close) on the right */
+/* macOS: Reserve space for traffic lights on the left (handled separately) */
+body:not(.platform-darwin) .tab-bar {
+  /* Windows title bar overlay is ~140px wide (3 buttons × ~46px each) */
+  /* Add padding-right to prevent tabs from going under the controls */
+  padding-right: 148px;
+}
+
 .tab-bar__nav {
   display: flex;
   align-items: center;

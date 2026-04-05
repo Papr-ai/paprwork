@@ -109,7 +109,7 @@ describe('PAPR Memory Metadata Enhancement', () => {
       role: 'assistant',
       content: 'Created file',
       timestamp: new Date().toISOString(),
-      model: 'gpt-5.2',
+      model: 'gpt-5.4',
       toolCalls: [
         {
           id: 'call-1',
@@ -177,7 +177,7 @@ describe('PAPR Memory Metadata Enhancement', () => {
       role: 'assistant',
       content: 'Response with token tracking',
       timestamp: new Date().toISOString(),
-      model: 'gpt-5.2',
+      model: 'gpt-5.4',
       prompt_tokens: 5000,
       completion_tokens: 1500,
       total_tokens: 6500,

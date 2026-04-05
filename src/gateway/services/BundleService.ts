@@ -693,7 +693,7 @@ export class BundleService {
   ) {
     this.appService = appService;
     this.jobsService = jobsService;
-    this.bundlesRootPath = path.join(os.homedir(), "PAPR", "bundles");
+    this.bundlesRootPath = path.join(os.homedir(), "Papr", "bundles");
   }
 
   async initialize(): Promise<void> {
@@ -997,7 +997,7 @@ export class BundleService {
         },
       ],
       sync: {
-        preferredRoot: "~/PAPR",
+        preferredRoot: "~/Papr",
         bundleSubpath: "bundles",
         cloudReady: true,
       },

@@ -10,6 +10,7 @@ import { TabBar } from "./components/Tabs/TabBar";
 import { ContentArea } from "./components/Layout/ContentArea";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
 import { AuthWall } from "./components/Auth/AuthWall";
+import { PythonDepsSetup } from "./components/Setup/PythonDepsSetup";
 import { useChat } from "./hooks/useChat";
 import { useTabs } from "./hooks/useTabs";
 import { useTabStore } from "./stores/tabStore";
@@ -23,8 +24,15 @@ import { initSubagentJobStore } from "./stores/subagentJobStore";
 import { KeyPermissionModal } from "./components/Permissions/KeyPermissionModal";
 import { UpdateBanner } from "./components/UpdateBanner/UpdateBanner";
 import { useAppStatePersistence } from "./hooks/useAppStatePersistence";
+import { useChatStore } from "./stores/chatStore";
 import "./styles/liquid-glass.css";
 import "./App.css";
+
+type ChatOpenPayload = {
+  message?: string;
+  model?: string | null;
+  provider?: string | null;
+};
 
 // Check if Papr authentication is required (commercial build vs open source)
 const REQUIRE_PAPR_AUTH = import.meta.env.VITE_REQUIRE_PAPR_AUTH === 'true';
@@ -121,13 +129,23 @@ export function App() {
   }, []);
 
   const { chats, createChat } = useChat();
-  const { tabs, createTab } = useTabs();
+  const { tabs, createTab, switchToTab } = useTabs();
   const { activeTabId, activeLeftTab } = useTabStore();
   const { activeRequest, claimedByChat, respond } = usePermissionStore();
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   
   // Create getting-started tab on first run
   useEffect(() => {
+    // Add platform class to body for platform-specific CSS
+    const platform = navigator.platform.toLowerCase();
+    if (platform.includes('mac')) {
+      document.body.classList.add('platform-darwin');
+    } else if (platform.includes('win')) {
+      document.body.classList.add('platform-win32');
+    } else {
+      document.body.classList.add('platform-linux');
+    }
+    
     const checkOnboarding = () => {
       const dismissed = localStorage.getItem("papr-onboarding-dismissed") === "true";
       const step1 = localStorage.getItem("papr-onboarding-step1") === "true";
@@ -181,6 +199,32 @@ export function App() {
     initSubagentJobStore();
   }, []);
 
+  // Mini-apps: window.paprAPI.invoke('chat.open', ...) → main → preload → papr-chat-open
+  useEffect(() => {
+    const handleChatOpen = (event: Event) => {
+      const detail = (event as CustomEvent<ChatOpenPayload>).detail ?? {};
+      console.log("[App] chat:open from mini-app:", detail);
+
+      void (async () => {
+        const chatId = await createChat();
+        if (!chatId) return;
+        const tabId = createTab("chat", chatId, "New Chat");
+        const msg = detail.message?.trim();
+        if (msg) {
+          useChatStore.getState().setDraftMessage(chatId, msg);
+        }
+        const modelId = detail.model?.trim();
+        if (modelId) {
+          useChatStore.getState().setLastSelectedModel(chatId, modelId);
+        }
+        switchToTab(tabId);
+      })();
+    };
+
+    window.addEventListener("papr-chat-open", handleChatOpen);
+    return () => window.removeEventListener("papr-chat-open", handleChatOpen);
+  }, [createChat, createTab, switchToTab]);
+
   // Show authentication wall IMMEDIATELY if required (before loading anything else)
   if (REQUIRE_PAPR_AUTH && !authChecked) {
     return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: 'var(--background-color, #1a1a2e)' }} />;
@@ -201,6 +245,7 @@ export function App() {
 
   return (
     <>
+      <PythonDepsSetup />
       <AppLayout
         sidebar={<Sidebar />}
         topBar={<TabBar />}

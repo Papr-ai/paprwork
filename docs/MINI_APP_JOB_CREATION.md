@@ -16,7 +16,7 @@ Mini-apps can now programmatically create jobs via the `/api/jobs/create` endpoi
 **Security Posture:**
 - Mini-apps already have full bash access via `/api/bash/run` with custom key substitution
 - Creating a job is actually *safer* than raw bash — jobs have tracking, logging, status management
-- Jobs run in isolated directories (`~/PAPR/jobs/{jobId}/`)
+- Jobs run in isolated directories (`~/Papr/jobs/{jobId}/`)
 - No privilege escalation — just a structured way to run code
 
 ## Endpoint

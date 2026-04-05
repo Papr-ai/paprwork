@@ -2,7 +2,7 @@
  * Storage Manager
  *
  * Manages storage provider initialization and provides unified interface
- * for chat persistence. Handles switching between Local/PAPR/Hybrid modes.
+ * for chat persistence. Handles switching between Local/Papr/Hybrid modes.
  */
 
 import type {

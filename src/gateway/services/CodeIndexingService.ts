@@ -18,6 +18,7 @@ import * as os from 'os';
 let indexManager: SmartCodeIndexManager | null = null;
 let schemaId: string | null = null;
 let indexingInitialized = false;
+let initializationPromise: Promise<void> | null = null; // Mutex to prevent duplicate initialization
 
 const SCHEMA_FILE = path.join(os.homedir(), '.paprwork-v2', 'code-schema-id.txt');
 
@@ -107,21 +108,36 @@ async function ensureCodeSchema(client: Papr): Promise<string> {
 
 /**
  * Lazy initialization - start indexing when PAPR key is first used
+ * Uses a mutex to prevent duplicate initialization from multiple callers
  */
 export async function ensureIndexingStarted(paprApiKey: string): Promise<void> {
-  if (indexingInitialized) {
+  // If already initialized, return immediately
+  if (indexingInitialized && indexManager) {
     return; // Already started
   }
   
-  try {
-    console.log('[CodeIndexing] Starting lazy initialization...');
-    await initializeCodeIndexing(paprApiKey);
-    indexingInitialized = true;
-    console.log('[CodeIndexing] ✅ Lazy initialization complete');
-  } catch (error) {
-    console.error('[CodeIndexing] Failed to start:', error);
-    // Don't throw - indexing is optional
+  // If initialization is in progress, wait for it
+  if (initializationPromise) {
+    console.log('[CodeIndexing] Initialization already in progress, waiting...');
+    return initializationPromise;
   }
+  
+  // Start initialization and store the promise
+  initializationPromise = (async () => {
+    try {
+      console.log('[CodeIndexing] Starting lazy initialization...');
+      await initializeCodeIndexing(paprApiKey);
+      indexingInitialized = true;
+      console.log('[CodeIndexing] ✅ Lazy initialization complete');
+    } catch (error) {
+      console.error('[CodeIndexing] Failed to start:', error);
+      // Don't throw - indexing is optional
+    } finally {
+      initializationPromise = null; // Clear the mutex
+    }
+  })();
+  
+  return initializationPromise;
 }
 
 /**
@@ -141,7 +157,7 @@ export async function initializeCodeIndexing(paprApiKey: string): Promise<void> 
     indexManager = new SmartCodeIndexManager(client, {
       schemaId,
       debounceMs: 5000, // 5 seconds
-      batchSize: 50
+      batchSize: 10 // Reduced from 50 to avoid rate limiting
     });
     
     await indexManager.start();

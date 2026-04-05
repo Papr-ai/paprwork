@@ -5,7 +5,7 @@
 - ✅ `LocalStorageProvider` with SQLite + JSONB
 - ✅ `PaprMemoryProvider` with SDK integration (verified with 20 messages)
 - ✅ `HybridStorageProvider` combining both
-- ✅ `ChatExporter` for ~/PAPR/ folder
+- ✅ `ChatExporter` for ~/Papr/ folder
 - ✅ SQLite schema with chats, messages, summaries tables
 - ✅ Sync tracking with `sync_status` fields
 
@@ -23,7 +23,7 @@
    - Save user message before streaming
    - Load message history for LLM context
    - Save assistant message chunks as they arrive
-   - Export chat to ~/PAPR/ folder after completion
+   - Export chat to ~/Papr/ folder after completion
 
 3. Implement summarization trigger:
    - Check token count after each turn

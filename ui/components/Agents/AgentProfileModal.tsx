@@ -305,7 +305,7 @@ export function AgentProfileModal({ agentId, onClose }: Props) {
                 </div>
                 <div className="info-row">
                   <span className="info-label">Model:</span>
-                  <span className="info-value">{agent.model ?? "gpt-5.2"}</span>
+                  <span className="info-value">{agent.model ?? "gpt-5.4"}</span>
                 </div>
               </div>
 

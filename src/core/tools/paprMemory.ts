@@ -148,11 +148,11 @@ export const addAgentMemoryTool = createTool({
     } catch (error) {
       if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
         throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
+          "Papr Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
         );
       } else if (error instanceof Papr.AuthenticationError) {
         throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct."
+          "Invalid Papr API key. Please check your Settings and ensure your API key is correct."
         );
       }
       throw error;
@@ -205,11 +205,11 @@ export const searchAgentMemoryTool = createTool({
     } catch (error) {
       if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
         throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
+          "Papr Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
         );
       } else if (error instanceof Papr.AuthenticationError) {
         throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct."
+          "Invalid Papr API key. Please check your Settings and ensure your API key is correct."
         );
       }
       throw error;
@@ -220,7 +220,7 @@ export const searchAgentMemoryTool = createTool({
 export const registerSchemaTool = createTool({
   id: "register_schema",
   description:
-    "Register a PAPR memory schema for custom entity types. Creates node types and relationships for structured knowledge graphs.",
+    "Register a Papr memory schema for custom entity types. Creates node types and relationships for structured knowledge graphs.",
   inputSchema: registerSchemaSchema,
   execute: async (args) => {
     try {
@@ -233,11 +233,11 @@ export const registerSchemaTool = createTool({
     } catch (error) {
       if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
         throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
+          "Papr Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
         );
       } else if (error instanceof Papr.AuthenticationError) {
         throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct."
+          "Invalid Papr API key. Please check your Settings and ensure your API key is correct."
         );
       }
       throw error;

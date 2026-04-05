@@ -218,7 +218,7 @@ import sqlite3
 from pathlib import Path
 
 # Read agent job output
-agent_job_dir = Path.home() / "PAPR" / "jobs" / "extract-products"
+agent_job_dir = Path.home() / "Papr" / "jobs" / "extract-products"
 with open(agent_job_dir / "job.json") as f:
     job_data = json.load(f)
     
@@ -431,7 +431,7 @@ const lastRun = jobData.lastOutput
 - Examples: Analytics data, monitoring logs, inventory
 
 **Pattern:**
-1. Job writes to `$JOB_DB` (~/PAPR/jobs/{jobId}/data/data.db)
+1. Job writes to `$JOB_DB` (~/Papr/jobs/{jobId}/data/data.db)
 2. Link app to job DB via `link_app_data_source`
 3. UI queries via REST API or WebSocket
 

@@ -79,8 +79,14 @@
   margin-top: auto;
 }
 
+.sidebar__footer-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .sidebar__settings-btn {
-  width: 100%;
+  flex: 1;
   display: flex;
   align-items: center;
   gap: 8px;

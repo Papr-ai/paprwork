@@ -66,7 +66,7 @@ create_sub_agent({
 
 **Can do:**
 - ✅ `bash({ command: "sqlite3 scraper.db 'SELECT * FROM threads'" })`
-- ✅ `read_file({ path: "~/PAPR/jobs/scraper/data.db" })`
+- ✅ `read_file({ path: "~/Papr/jobs/scraper/data.db" })`
 - ✅ `write_file({ path: "output.json", content: "..." })`
 
 ### 2. Read-Only Research Agent

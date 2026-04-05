@@ -2,7 +2,7 @@
 
 ## Overview
 
-This feature **automatically** indexes all mini-app and job code from `~/PAPR` to PAPR Memory Cloud using a sophisticated 10-node schema with holographic frequency bands for semantic search.
+This feature **automatically** indexes all mini-app and job code from `~/Papr` to PAPR Memory Cloud using a sophisticated 10-node schema with holographic frequency bands for semantic search.
 
 ## Automatic Indexing
 
@@ -11,13 +11,13 @@ This feature **automatically** indexes all mini-app and job code from `~/PAPR` t
 Code indexing happens automatically in three ways:
 
 ### 1. On Gateway Startup
-- Scans `~/PAPR/apps` and `~/PAPR/Jobs` for new/changed files
+- Scans `~/Papr/apps` and `~/Papr/Jobs` for new/changed files
 - Only indexes files that are new or have changed content (SHA-256 hash comparison)
 - Queues files for background processing (no blocking)
 - Uses local SQLite database (`~/.paprwork-v2/code-index.db`) to track state
 
 ### 2. File Watching (Real-time Updates)
-- Watches for file changes in `~/PAPR/apps` and `~/PAPR/Jobs`
+- Watches for file changes in `~/Papr/apps` and `~/Papr/Jobs`
 - 5-second debounce prevents excessive indexing during rapid edits
 - Only re-indexes files with meaningful content changes
 - Runs in background without interrupting your work
@@ -68,7 +68,7 @@ npm run index:code
 
 This will:
 1. Use cached schema (or register new one)
-2. Scan `~/PAPR/apps` and `~/PAPR/Jobs`
+2. Scan `~/Papr/apps` and `~/Papr/Jobs`
 3. Extract metadata (auto-detected + LLM-extracted)
 4. Upload to PAPR Memory Cloud
 5. Update local tracking database
@@ -267,7 +267,7 @@ These fields are extracted asynchronously by PAPR's LLM and used to create graph
 
 **"Project not found" error:**
 ```bash
-# Ensure ~/PAPR/apps or ~/PAPR/Jobs exists
+# Ensure ~/Papr/apps or ~/Papr/Jobs exists
 # Check that projects have valid job.json files
 ```
 

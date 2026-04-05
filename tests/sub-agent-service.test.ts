@@ -99,7 +99,7 @@ describe("SubAgentService", () => {
   });
 
   test("migrates legacy run records into job records", async () => {
-    const legacyPath = path.join(home, "PAPR", "data", "subagent-runs.json");
+    const legacyPath = path.join(home, "Papr", "data", "subagent-runs.json");
     await fs.mkdir(path.dirname(legacyPath), { recursive: true });
     await fs.writeFile(
       legacyPath,

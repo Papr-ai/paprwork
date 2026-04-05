@@ -27,9 +27,15 @@ class GatewayClient {
   private handlers: Map<string, MessageHandler> = new Map();
   private connectionStatusHandlers: Set<ConnectionStatusHandler> = new Set();
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 10;
-  private reconnectDelay = 1000;
+  private maxReconnectAttempts = 30; // Increased for long sleep scenarios
+  private baseReconnectDelay = 500; // Start at 500ms
+  private maxReconnectDelay = 30000; // Cap at 30 seconds
   private url: string;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
+  private missedHeartbeats = 0;
+  private maxMissedHeartbeats = 3;
   /** Resolvers waiting for the first successful connection */
   private connectionWaiters: Array<() => void> = [];
 
@@ -41,12 +47,29 @@ class GatewayClient {
     this.url = `ws://${host}:${port}`;
 
     this.connect();
+    
+    // Listen for system resume events from Electron
+    if (typeof window !== 'undefined') {
+      window.addEventListener('system:resume', () => {
+        console.log('[Gateway] System resumed - reconnecting immediately');
+        this.reconnectAttempts = 0; // Reset backoff on system resume
+        if (!this.isConnected()) {
+          this.connect();
+        }
+      });
+    }
   }
 
   /**
    * Connect to Gateway WebSocket
    */
   private connect(): void {
+    // Clear any pending reconnect timer
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    
     try {
       console.log("[Gateway] Connecting to:", this.url);
       this.ws = new WebSocket(this.url);
@@ -54,7 +77,10 @@ class GatewayClient {
       this.ws.onopen = () => {
         console.log("[Gateway] Connected");
         this.reconnectAttempts = 0;
+        this.missedHeartbeats = 0;
         this.notifyConnectionStatus(true);
+        this.startHeartbeat();
+        
         // Resolve any pending waitForConnection() promises
         for (const resolve of this.connectionWaiters.splice(0)) {
           resolve();
@@ -64,6 +90,16 @@ class GatewayClient {
       this.ws.onmessage = (event) => {
         try {
           const response: GatewayResponse = JSON.parse(event.data);
+          
+          // Heartbeat response (pong)
+          if (response.type === 'pong') {
+            this.missedHeartbeats = 0;
+            if (this.heartbeatTimeout) {
+              clearTimeout(this.heartbeatTimeout);
+              this.heartbeatTimeout = null;
+            }
+            return;
+          }
 
           // Handle broadcast messages (no matching ID)
           if (!response.id && response.type) {
@@ -97,6 +133,7 @@ class GatewayClient {
 
       this.ws.onclose = () => {
         console.log("[Gateway] Disconnected");
+        this.stopHeartbeat();
         this.notifyConnectionStatus(false);
         this.attemptReconnect();
       };
@@ -107,7 +144,57 @@ class GatewayClient {
   }
 
   /**
-   * Attempt to reconnect to Gateway
+   * Start heartbeat mechanism to detect dead connections
+   */
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    
+    // Send ping every 15 seconds
+    this.heartbeatInterval = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.missedHeartbeats++;
+        
+        if (this.missedHeartbeats >= this.maxMissedHeartbeats) {
+          console.warn('[Gateway] Too many missed heartbeats, reconnecting');
+          this.ws.close();
+          return;
+        }
+        
+        // Send ping
+        try {
+          this.ws.send(JSON.stringify({ type: 'ping', id: 'heartbeat' }));
+          
+          // Expect pong within 5 seconds
+          this.heartbeatTimeout = setTimeout(() => {
+            if (this.missedHeartbeats >= this.maxMissedHeartbeats) {
+              console.warn('[Gateway] Heartbeat timeout, reconnecting');
+              this.ws?.close();
+            }
+          }, 5000);
+        } catch (err) {
+          console.error('[Gateway] Failed to send heartbeat:', err);
+        }
+      }
+    }, 15000);
+  }
+
+  /**
+   * Stop heartbeat mechanism
+   */
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+    if (this.heartbeatTimeout) {
+      clearTimeout(this.heartbeatTimeout);
+      this.heartbeatTimeout = null;
+    }
+    this.missedHeartbeats = 0;
+  }
+
+  /**
+   * Attempt to reconnect to Gateway with exponential backoff + jitter
    */
   private attemptReconnect(): void {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
@@ -116,12 +203,23 @@ class GatewayClient {
     }
 
     this.reconnectAttempts++;
-    const delay = this.reconnectDelay * this.reconnectAttempts;
+    
+    // Exponential backoff: 500ms, 1s, 2s, 4s, 8s, 16s, 30s (capped)
+    const exponentialDelay = Math.min(
+      this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
+      this.maxReconnectDelay
+    );
+    
+    // Add jitter: multiply by random factor between 0.5 and 1.0
+    // This prevents thundering herd problem when many clients reconnect simultaneously
+    const jitter = 0.5 + Math.random() * 0.5;
+    const delay = Math.floor(exponentialDelay * jitter);
 
     console.log(
-      `[Gateway] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`,
+      `[Gateway] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}, base: ${exponentialDelay}ms, jitter: ${jitter.toFixed(2)})`,
     );
-    setTimeout(() => this.connect(), delay);
+    
+    this.reconnectTimer = setTimeout(() => this.connect(), delay);
   }
 
   /**
@@ -298,6 +396,19 @@ class GatewayClient {
    */
   isConnected(): boolean {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * Get connection state for UI indicator
+   */
+  getConnectionState(): 'connected' | 'reconnecting' | 'disconnected' {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      return 'connected';
+    } else if (this.reconnectAttempts > 0 && this.reconnectAttempts < this.maxReconnectAttempts) {
+      return 'reconnecting';
+    } else {
+      return 'disconnected';
+    }
   }
 
   /**

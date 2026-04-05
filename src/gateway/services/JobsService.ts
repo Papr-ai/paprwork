@@ -61,7 +61,7 @@ export class JobsService {
 
   constructor() {
     const homeDir = os.homedir();
-    this.paprRootDir = path.join(homeDir, "PAPR");
+    this.paprRootDir = path.join(homeDir, "Papr");
     this.jobsRootDir = path.join(this.paprRootDir, "jobs");
     this.jobsIndexPath = path.join(this.paprRootDir, "data", "jobs.json");
     this.graphPath = path.join(this.paprRootDir, "data", "job-graph.json");
@@ -139,6 +139,9 @@ export class JobsService {
 
     // Reconcile interrupted jobs from previous session
     await this.reconcileInterruptedJobs();
+
+    // Detect and mark stale running jobs (jobs stuck in "running" for >60s with no tracked process)
+    await this.reconcileStaleRunningJobs(60_000);
 
     await this.reconcileScheduleStates();
 
@@ -285,7 +288,7 @@ export class JobsService {
   }
 
   /**
-   * Rebuilds ~/PAPR/data/job-graph.json from current jobs + app data-sources.
+   * Rebuilds ~/Papr/data/job-graph.json from current jobs + app data-sources.
    * Called fire-and-forget after every job mutation.
    */
   private async rebuildGraph(): Promise<void> {
@@ -329,15 +332,38 @@ export class JobsService {
         await appService.initialize();
         const apps = await appService.listApps();
         for (const app of apps) {
+          const linkedJobIds = new Set<string>();
+          
+          // Include jobs explicitly linked via data-sources.json
           try {
             const dataSources = await appService.listAppDataSources(app.id);
-            const jobIds = [...new Set(dataSources.map((ds) => ds.jobId))];
-            if (jobIds.length > 0) {
-              appLinks[app.id] = { name: app.title, jobIds };
+            for (const ds of dataSources) {
+              linkedJobIds.add(ds.jobId);
             }
           } catch {
             // skip apps with no data sources
           }
+          
+          // Also auto-link jobs whose folder matches the app title (case-insensitive)
+          // This enables app filters and graphs to show all related jobs, even if
+          // data sources aren't explicitly linked yet. The agent still needs to call
+          // link_app_data_source for the app to actually query job databases.
+          const appTitleLower = app.title.toLowerCase();
+          for (const job of jobs) {
+            if (job.folder && job.folder.toLowerCase() === appTitleLower) {
+              linkedJobIds.add(job.id);
+            }
+          }
+          
+          if (linkedJobIds.size > 0) {
+            appLinks[app.id] = { name: app.title, jobIds: [...linkedJobIds] };
+          }
+          
+          // Trigger auto-discovery of data sources for this app
+          // This runs asynchronously and won't block graph rebuild
+          void appService.autoDiscoverDataSources(app.id).catch(err => {
+            console.warn(`[JobsService] Auto-discovery failed for app ${app.id}:`, err);
+          });
         }
       } catch {
         // AppService not yet initialized — skip app links this rebuild

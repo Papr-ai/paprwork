@@ -91,12 +91,19 @@ contextBridge.exposeInMainWorld("electronAPI", {
     },
   },
 
+  // Python Dependencies API - Check and auto-install BeautifulSoup for browser_parse_html
+  pythonDeps: {
+    check: () => ipcRenderer.invoke("pythonDeps:check"),
+    autoInstall: () => ipcRenderer.invoke("pythonDeps:autoInstall"),
+  },
+
   // Ollama API - Auto-install and manage local AI models
   ollama: {
     checkStatus: () => ipcRenderer.invoke("ollama:check-status"),
     ensureModel: (modelName) => ipcRenderer.invoke("ollama:ensure-model", modelName),
     listModels: () => ipcRenderer.invoke("ollama:list-models"),
     hasModel: (modelName) => ipcRenderer.invoke("ollama:has-model", modelName),
+    getHostMemory: () => ipcRenderer.invoke("ollama:host-memory"),
     start: () => ipcRenderer.invoke("ollama:start"),
     onDownloadProgress: (callback) => {
       ipcRenderer.on("ollama:download-progress", (_event, data) => callback(data));
@@ -148,4 +155,28 @@ contextBridge.exposeInMainWorld("electronAPI", {
   system: {
     invoke: (method, args) => ipcRenderer.invoke("system:invoke", method, args),
   },
+});
+
+// Initialize chat IPC listener (forward to DOM event)
+console.log("[Preload] Initializing chat listener");
+ipcRenderer.on("chat:open", (_event, data) => {
+  window.dispatchEvent(new CustomEvent('papr-chat-open', { detail: data }));
+});
+
+// Initialize system power state listeners (forward to DOM events)
+console.log("[Preload] Initializing system power state listeners");
+ipcRenderer.on("system:suspend", (_event, data) => {
+  window.dispatchEvent(new CustomEvent('system:suspend', { detail: data }));
+});
+
+ipcRenderer.on("system:resume", (_event, data) => {
+  window.dispatchEvent(new CustomEvent('system:resume', { detail: data }));
+});
+
+ipcRenderer.on("system:lock-screen", (_event, data) => {
+  window.dispatchEvent(new CustomEvent('system:lock-screen', { detail: data }));
+});
+
+ipcRenderer.on("system:unlock-screen", (_event, data) => {
+  window.dispatchEvent(new CustomEvent('system:unlock-screen', { detail: data }));
 });

@@ -109,7 +109,7 @@ export class MastraAgent {
           name: "Paprwork Assistant",
           instructions:
             config.systemPrompt || "You are a helpful AI assistant.",
-          model: `${config.provider}/${apiModelId}`, // Format: "openai/gpt-5.2"
+          model: `${config.provider}/${apiModelId}`, // Format: "openai/gpt-5.4"
           tools: {}, // Tools will be added separately via ToolRegistry
         });
 

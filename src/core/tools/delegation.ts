@@ -3,13 +3,11 @@ import { z } from "zod";
 
 /** Valid model IDs for sub-agents — prevents agent from typing name/id in model field */
 const SUBAGENT_MODEL_IDS = [
-  "gpt-5.2-low",
-  "gpt-5.2",
-  "gpt-5.2-high",
-  "gpt-5.2-codex",
-  "gpt-5.3-codex",
+  "gpt-5.4-mini",
+  "gpt-5.4-low",
   "gpt-5.4",
-  "gpt-5.4-pro",
+  "gpt-5.4-high",
+  "gpt-5.3-codex",
   "claude-haiku-4-5",
   "claude-sonnet-4-6",
   "claude-sonnet-4-5",

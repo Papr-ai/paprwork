@@ -13,14 +13,14 @@ The meetings functionality has been migrated from a hardcoded system view to a r
 - Dedicated React components (`MeetingsView.tsx`, `MeetingDetail.tsx`) 
 - Dedicated WebSocket handlers (`src/gateway/websocket/meetings.ts`)
 - Dedicated service layer (`src/gateway/services/MeetingsService.ts`)
-- Meetings stored in JSON file (`~/PAPR/data/meetings.json`)
+- Meetings stored in JSON file (`~/Papr/data/meetings.json`)
 - Special "meetings" tab type in the tab system
 - Command palette shortcut (⌘M) to open meetings
 
 ### After (Mini-App)
 - Meetings is now a regular mini-app like any other app
 - Single-page TypeScript application with localStorage
-- Located at `~/PAPR/apps/ea6d8d7c-a15e-4c02-8273-117450b498f4/`
+- Located at `~/Papr/apps/ea6d8d7c-a15e-4c02-8273-117450b498f4/`
 - Agent can modify the app using standard tools (`update_app_file`, etc.)
 - Users access it through the Apps view or by opening it as an app tab
 - Data stored in browser localStorage (key: `papr-meetings`)
@@ -62,7 +62,7 @@ The meetings functionality has been migrated from a hardcoded system view to a r
 ## New App Structure
 
 ```
-~/PAPR/apps/ea6d8d7c-a15e-4c02-8273-117450b498f4/
+~/Papr/apps/ea6d8d7c-a15e-4c02-8273-117450b498f4/
 ├── index.html    # Entry point with favicon
 ├── app.ts        # Full TypeScript application
 └── style.css     # Liquid Glass design system styles
@@ -122,7 +122,7 @@ update_app_file({
 
 ## Migration Path
 
-If users had meetings data in the old format (`~/PAPR/data/meetings.json`), they would need to:
+If users had meetings data in the old format (`~/Papr/data/meetings.json`), they would need to:
 
 1. Export meetings from JSON
 2. Import into localStorage format

@@ -141,12 +141,12 @@ export function getHomeDirAlias(): string {
 }
 
 /**
- * Get the PAPR workspace directory (standardized to uppercase for consistency)
+ * Get the Papr workspace directory
  */
 export function getPaprDir(): string {
   const os = require("os");
   const path = require("path");
-  return path.join(os.homedir(), "PAPR");
+  return path.join(os.homedir(), "Papr");
 }
 
 /**

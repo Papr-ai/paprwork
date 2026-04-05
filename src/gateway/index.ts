@@ -101,7 +101,7 @@ async function initializeServices(): Promise<void> {
     });
     console.log("[Gateway] AgentService initialized");
 
-    // Initialize workspace (creates ~/PAPR/workspace/ and templates on first run)
+    // Initialize workspace (creates ~/Papr/workspace/ and templates on first run)
     console.log("[Gateway] Initializing WorkspaceService...");
     await initializeWorkspaceService();
     console.log("[Gateway] WorkspaceService initialized");
@@ -836,6 +836,72 @@ async function startGateway(): Promise<void> {
     });
     // ─────────────────────────────────────────────────────────────────────────
 
+    // ── Job Files Endpoint ────────────────────────────────────────────────────
+    // Serves files from job directories with correct MIME types
+    // Supports videos, images, and other media files
+    // GET /api/jobs/:jobId/files/:filename
+    // ─────────────────────────────────────────────────────────────────────────
+    app.get("/api/jobs/:jobId/files/:filename", async (req, res) => {
+      try {
+        const { jobId, filename } = req.params;
+        
+        // Security: prevent directory traversal
+        if (filename.includes("..") || filename.includes("/")) {
+          res.status(400).send("Invalid filename");
+          return;
+        }
+
+        const jobsService = getJobsService();
+        const jobsRootDir = jobsService.getJobsRootPath();
+        const filePath = path.join(jobsRootDir, jobId, filename);
+
+        // Check if file exists
+        const fs = await import("fs/promises");
+        try {
+          await fs.access(filePath);
+        } catch {
+          res.status(404).send("File not found");
+          return;
+        }
+
+        // Determine MIME type based on extension
+        const ext = path.extname(filename).toLowerCase();
+        const mimeTypes: Record<string, string> = {
+          // Video formats
+          ".mp4": "video/mp4",
+          ".webm": "video/webm",
+          ".ogg": "video/ogg",
+          ".mov": "video/quicktime",
+          ".avi": "video/x-msvideo",
+          // Image formats
+          ".jpg": "image/jpeg",
+          ".jpeg": "image/jpeg",
+          ".png": "image/png",
+          ".gif": "image/gif",
+          ".webp": "image/webp",
+          ".svg": "image/svg+xml",
+          // Audio formats
+          ".mp3": "audio/mpeg",
+          ".wav": "audio/wav",
+          ".oga": "audio/ogg",
+          // Documents
+          ".pdf": "application/pdf",
+          ".json": "application/json",
+          ".txt": "text/plain",
+        };
+
+        const contentType = mimeTypes[ext] || "application/octet-stream";
+        res.setHeader("Content-Type", contentType);
+        
+        // Send the file as binary
+        res.sendFile(filePath);
+      } catch (error) {
+        console.error("[Gateway] Failed to serve job file:", error);
+        res.status(500).send("Failed to read job file");
+      }
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
     // Serve mini-app files for iframe rendering in UI.
     // Supports on-the-fly TypeScript transpilation via esbuild.
     // Use RegExp route for Express/path-to-regexp compatibility.
@@ -1019,23 +1085,58 @@ async function startGateway(): Promise<void> {
 
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
+    
+    // Handle system power state changes from Electron main process
+    process.on("message", async (message: unknown) => {
+      if (typeof message !== "object" || message === null) return;
+      
+      const msg = message as { type?: string; timestamp?: number };
+      
+      if (msg.type === "SYSTEM_SUSPEND") {
+        console.log("[Gateway] System suspending - pausing operations");
+        // Note: Node.js process will be suspended by OS, no cleanup needed
+        // The OS will freeze all timers and I/O operations
+      } else if (msg.type === "SYSTEM_RESUME") {
+        console.log("[Gateway] System resumed - reconciling state");
+        
+        try {
+          // Immediately reconcile jobs that may have been missed during sleep
+          const jobsService = getJobsService();
+          await jobsService.reconcileStaleRunningJobs();
+          
+          // Force scheduler to re-evaluate all jobs immediately
+          const scheduler = getJobsScheduler();
+          await scheduler.tickNow();
+          
+          console.log("[Gateway] State reconciliation complete after system resume");
+        } catch (error) {
+          console.error("[Gateway] Failed to reconcile state after resume:", error);
+        }
+      }
+    });
+    
     getJobsScheduler().start();
     
     // Start code indexing after a delay (non-blocking)
+    console.log('[Gateway] Scheduling code indexing check in 3 seconds...');
     setTimeout(async () => {
+      console.log('[Gateway] Code indexing check starting...');
       try {
         const { getApiKey } = await import('./utils/keyResolver.js');
+        console.log('[Gateway] Requesting PAPR_API_KEY...');
         const paprKey = await getApiKey('PAPR_API_KEY');
         
         if (paprKey) {
-          console.log('[Gateway] Starting code indexing...');
+          console.log('[Gateway] PAPR_API_KEY found, starting code indexing...');
           const { ensureIndexingStarted } = await import('./services/CodeIndexingService.js');
           await ensureIndexingStarted(paprKey);
+          console.log('[Gateway] Code indexing initialization complete');
         } else {
           console.log('[Gateway] No PAPR_API_KEY found, skipping code indexing');
         }
       } catch (error) {
         console.error('[Gateway] Failed to start code indexing:', error);
+        console.error('[Gateway] Error stack:', (error as Error).stack);
       }
     }, 3000); // Wait 3 seconds after Gateway starts
   } catch (error) {

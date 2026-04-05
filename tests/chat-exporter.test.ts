@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Test ChatExporter and ~/PAPR/ folder creation
+ * Test ChatExporter and ~/Papr/ folder creation
  * Tests folder structure, file exports, and Finder integration
  */
 import { ChatExporter } from '../src/gateway/services/storage/ChatExporter';

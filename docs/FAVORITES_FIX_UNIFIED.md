@@ -19,8 +19,8 @@ This ensures all tab types can be favorited while avoiding the synchronization i
 
 ### Problem
 Three separate favorite storage systems were out of sync:
-1. **Documents** - `~/PAPR/documents/{id}/meta.json` with `favorite: boolean`
-2. **Apps** - `~/PAPR/data/apps.json` with `favorite: boolean`
+1. **Documents** - `~/Papr/documents/{id}/meta.json` with `favorite: boolean`
+2. **Apps** - `~/Papr/data/apps.json` with `favorite: boolean`
 3. **Tabs** - `~/.paprwork-v2/app-state.db` with `is_favorite` column
 
 When you starred an artifact, it would update the artifact but not the sidebar favorites (which read from tabs).
@@ -37,8 +37,8 @@ When you starred an artifact, it would update the artifact but not the sidebar f
 ### Tab Types by Category
 
 **Artifacts (stored in files):**
-- `document` - Individual documents (`~/PAPR/documents/{id}/`)
-- `app` - Mini-apps (`~/PAPR/apps/{id}/`)
+- `document` - Individual documents (`~/Papr/documents/{id}/`)
+- `app` - Mini-apps (`~/Papr/apps/{id}/`)
 
 **Non-Artifacts (ephemeral UI state):**
 - `chat` - Individual chat conversations
@@ -125,7 +125,7 @@ const handleDrop = (id, type) => {
    ↓
 2. useArtifacts.toggleFavorite() updates artifact metadata
    ↓
-3. Saved to: ~/PAPR/documents/{id}/meta.json or ~/PAPR/data/apps.json
+3. Saved to: ~/Papr/documents/{id}/meta.json or ~/Papr/data/apps.json
    ↓
 4. Artifacts store updates
    ↓
@@ -202,8 +202,8 @@ const handleDrop = (id, type) => {
 - `ui/hooks/useArtifacts.ts` - Handles artifact favorite toggling
 
 ### Storage Kept
-- `~/PAPR/documents/{id}/meta.json` - Document favorites ✅
-- `~/PAPR/data/apps.json` - App favorites ✅
+- `~/Papr/documents/{id}/meta.json` - Document favorites ✅
+- `~/Papr/data/apps.json` - App favorites ✅
 - `~/.paprwork-v2/app-state.db` (tabs table) - Non-artifact favorites ✅
 
 All three are still used, but now have clear ownership:

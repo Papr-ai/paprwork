@@ -31,6 +31,7 @@ export interface WSResponse {
   success: boolean;
   data?: unknown;
   error?: string;
+  type?: string;
 }
 
 // Global WebSocketServer reference for broadcasting
@@ -106,7 +107,14 @@ export function setupWebSocketHandlers(wss: WebSocketServer): void {
         //console.log(`[WebSocket] Received ${message.type} at +${messageStartTime - connectionTime}ms`);
 
         // Route to appropriate handler
-        if (message.type.startsWith("agent:")) {
+        if (message.type === "ping") {
+          // Heartbeat ping - respond with pong
+          sendResponse(ws, {
+            id: message.id,
+            success: true,
+            type: "pong",
+          });
+        } else if (message.type.startsWith("agent:")) {
           await setupAgentHandlers(ws, message);
         } else if (message.type.startsWith("chat:")) {
           await setupChatHandlers(ws, message);

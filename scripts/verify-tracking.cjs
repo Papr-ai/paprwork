@@ -29,12 +29,12 @@ function test(name, condition, details) {
 // Check possible database locations
 const possiblePaths = [
   path.join(os.homedir(), '.paprwork-v2', 'chats.db'),
-  path.join(os.homedir(), 'PAPR', 'data', 'chats.db'),
+  path.join(os.homedir(), 'Papr', 'data', 'chats.db'),
   path.join(os.homedir(), 'Library', 'Application Support', 'paprwork-v2', 'data', 'chats.db'),
 ];
 
 let chatsDbPath = possiblePaths.find(p => fs.existsSync(p));
-const plansDbPath = path.join(os.homedir(), 'PAPR', 'data', 'plans.db');
+const plansDbPath = path.join(os.homedir(), 'Papr', 'data', 'plans.db');
 
 console.log('\n📁 Database Paths:');
 console.log(`   Searching for chats database...`);
@@ -178,7 +178,7 @@ if (fs.existsSync(plansDbPath)) {
 
 // Test 7: Document attribution
 console.log('\n📊 Test: Document Attribution');
-const docsPath = path.join(os.homedir(), 'PAPR', 'documents');
+const docsPath = path.join(os.homedir(), 'Papr', 'documents');
 
 if (fs.existsSync(docsPath)) {
   const docDirs = fs.readdirSync(docsPath).filter(f => {
@@ -207,7 +207,7 @@ if (fs.existsSync(docsPath)) {
 
 // Test 8: App attribution
 console.log('\n📊 Test: App Attribution');
-const appsJsonPath = path.join(os.homedir(), 'PAPR', 'data', 'apps.json');
+const appsJsonPath = path.join(os.homedir(), 'Papr', 'data', 'apps.json');
 
 if (fs.existsSync(appsJsonPath)) {
   const apps = JSON.parse(fs.readFileSync(appsJsonPath, 'utf8'));

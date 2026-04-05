@@ -11,6 +11,7 @@ export interface PiContextInput {
   apiId: string;
   providerId: string;
   modelId?: string;
+  nativeTools?: Array<{ type: string; name?: string; max_uses?: number }>; // Native provider tools (web search, etc.)
 }
 
 /**
@@ -19,9 +20,9 @@ export interface PiContextInput {
 export function buildPiContext(input: PiContextInput): {
   systemPrompt?: string;
   messages: Message[];
-  tools?: Array<{ name: string; description: string; parameters: unknown }>;
+  tools?: any[]; // Allow mixed tool formats (custom + native)
 } {
-  const { messages, tools, apiId, providerId, modelId = "" } = input;
+  const { messages, tools, apiId, providerId, modelId = "", nativeTools } = input;
 
   const piMessages: Array<{ role: string; [k: string]: unknown }> = [];
   const now = Date.now();
@@ -133,9 +134,18 @@ export function buildPiContext(input: PiContextInput): {
     },
   );
 
+  // Combine custom tools with native tools (web search, etc.)
+  // NOTE: Native tools have different structure { type, name, max_uses } vs custom tools { name, description, parameters }
+  // We append them as-is and let pi-ai handle the different formats
+  const allTools: any[] = [...piTools];
+  if (nativeTools && nativeTools.length > 0) {
+    allTools.push(...nativeTools);
+    console.log(`[buildPiContext] Added ${nativeTools.length} native tools:`, nativeTools.map(t => t.type || t.name).join(', '));
+  }
+
   return {
     systemPrompt,
     messages: piMessages as unknown as Message[],
-    tools: piTools.length > 0 ? piTools : undefined,
+    tools: allTools.length > 0 ? allTools : undefined,
   };
 }

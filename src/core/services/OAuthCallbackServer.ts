@@ -142,7 +142,7 @@ export class OAuthCallbackServer {
               <body>
                 <h1>Authentication Successful!</h1>
                 <div class="success">✓ You can now close this window</div>
-                <p>Return to Paprwork to continue.</p>
+                <p>Return to Papr Work to continue.</p>
                 <script>
                   // Auto-close after 2 seconds if possible
                   setTimeout(() => {

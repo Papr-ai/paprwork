@@ -16,7 +16,7 @@ User sees the agent "starting over" after compression:
 → App file read ✓
 → App file read ✓
 → App files listed ✓
-→ Ran: cd ~/PAPR/apps/... ✓
+→ Ran: cd ~/Papr/apps/... ✓
 
 [Compression happens]
 

@@ -15,7 +15,7 @@ import path from 'path';
 import os from 'os';
 
 const HOME_APP_ID = 'bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c';
-const PAPR_DIR = path.join(os.homedir(), 'PAPR');
+const PAPR_DIR = path.join(os.homedir(), 'Papr');
 const APP_DIR = path.join(PAPR_DIR, 'apps', HOME_APP_ID);
 const APPS_JSON = path.join(PAPR_DIR, 'data', 'apps.json');
 const SETTINGS_JSON = path.join(PAPR_DIR, 'data', 'settings.json');

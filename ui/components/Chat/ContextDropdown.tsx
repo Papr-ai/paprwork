@@ -5,7 +5,11 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { useArtifacts } from "../../hooks/useArtifacts";
-import type { Artifact } from "../../stores/artifactsStore";
+import {
+  artifactTypeLabel,
+  type Artifact,
+} from "../../stores/artifactsStore";
+import { createFileContextArtifactsFromFiles } from "../../utils/fileContextArtifact";
 import "./ContextDropdown.css";
 
 interface ContextDropdownProps {
@@ -67,29 +71,9 @@ export function ContextDropdown({
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    // For each selected file, create an artifact with the file path
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      // Use the file's path (available in Electron) or name
-      const filePath = (file as any).path || file.name;
-      
-      // Create a pseudo-artifact representing the file
-      const fileArtifact: Artifact = {
-        id: `file-${Date.now()}-${i}`,
-        title: file.name,
-        type: "document",
-        content: `File path: ${filePath}`,
-        tags: ["file-upload"],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        // Store file path in metadata so LLM can access it
-        metadata: {
-          filePath,
-          fileSize: file.size,
-          fileType: file.type || "unknown",
-        },
-      };
-
+    for (const fileArtifact of createFileContextArtifactsFromFiles(
+      Array.from(files),
+    )) {
       onSelectArtifact(fileArtifact);
     }
 
@@ -229,7 +213,7 @@ export function ContextDropdown({
                     </span>
                   </div>
                   <span className="context-dropdown-item-type">
-                    {artifact.type === "document" ? "Document" : "App"}
+                    {artifactTypeLabel(artifact.type)}
                   </span>
                 </div>
               </button>

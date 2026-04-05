@@ -5,7 +5,7 @@
  * CommonJS format - Electron's require() is more reliable than ESM
  */
 
-const { app, BrowserWindow, Menu, shell, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, Menu, shell, dialog, ipcMain, powerMonitor } = require("electron");
 const { spawn, execSync } = require("child_process");
 const path = require("path");
 const http = require("http");
@@ -34,6 +34,9 @@ let telemetryClientInstance = null;
 let initializePaprLoginIPC;
 let cleanupPaprLogin;
 let handlePaprAuthCallback;
+
+// Python dependencies IPC
+const { initializePythonDepsIPC } = require("./ipc/pythonDeps.cjs");
 
 async function loadESMModules() {
   // Import from compiled dist directory
@@ -368,12 +371,12 @@ function createMainWindow() {
     ...baseConfig,
     titleBarStyle: "hidden",
     titleBarOverlay: {
-      color: "#00000000", // Transparent overlay background
-      symbolColor: "#999999", // Gray caption button icons
-      height: 40,
+      color: "#1C1C1E", // Dark background (less transparent than current)
+      symbolColor: "#FFFFFF", // White caption button icons for visibility
+      height: 52, // Match tab bar height
     },
-    transparent: true,
-    backgroundColor: "#00000000",
+    transparent: false, // Use solid background on Windows
+    backgroundColor: "#1C1C1E", // Dark background
   };
 
   // Linux: Simple frameless with transparency
@@ -390,6 +393,46 @@ function createMainWindow() {
 
   // Hide default menu
   Menu.setApplicationMenu(null);
+
+  // Enable context menu for text inputs (copy/paste/etc)
+  mainWindow.webContents.on('context-menu', (event, params) => {
+    const { selectionText, isEditable, inputFieldType } = params;
+    
+    // Only show menu for editable fields (inputs, textareas) or when text is selected
+    if (!isEditable && !selectionText) return;
+    
+    const menu = Menu.buildFromTemplate([
+      ...(selectionText ? [{
+        label: 'Copy',
+        role: 'copy',
+        accelerator: 'CmdOrCtrl+C'
+      }] : []),
+      ...(isEditable ? [
+        {
+          label: 'Cut',
+          role: 'cut',
+          accelerator: 'CmdOrCtrl+X',
+          enabled: !!selectionText
+        },
+        {
+          label: 'Paste',
+          role: 'paste',
+          accelerator: 'CmdOrCtrl+V'
+        }
+      ] : []),
+      ...(isEditable && selectionText ? [
+        { type: 'separator' },
+        {
+          label: 'Select All',
+          role: 'selectAll',
+          accelerator: 'CmdOrCtrl+A'
+        }
+      ] : [])
+    ]);
+    
+    menu.popup();
+  });
+
 
   const uiUrl = IS_PRODUCTION ? `http://localhost:${GATEWAY_PORT}` : UI_DEV_URL;
 
@@ -1175,6 +1218,19 @@ function initializeSystemInvokeHandler(mainWindow) {
     'app.getPath': async (name) => {
       return { path: app.getPath(name) };
     },
+    
+    'chat.open': async (options) => {
+      // Send message to renderer to open a new chat tab
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('chat:open', {
+          message: options?.message || '',
+          model: options?.model || null,
+          provider: options?.provider || null,
+        });
+        return { success: true };
+      }
+      throw new Error('Main window not available');
+    },
   };
 
   // Register IPC handler
@@ -1287,6 +1343,9 @@ app.whenReady().then(async () => {
   // Initialize Papr Login IPC handlers
   initializePaprLoginIPC(customKeysStorage, settingsStorage);
 
+  // Initialize Python dependencies IPC handlers
+  initializePythonDepsIPC();
+
   // Build gateway environment (telemetry flags align with main-process resolution)
   const gatewayTelemetryOn =
     isTelemetrySendingEnabledFn != null
@@ -1365,6 +1424,75 @@ app.whenReady().then(async () => {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createMainWindow();
+    }
+  });
+
+  // System power state monitoring (sleep/wake/lock/unlock)
+  // Works on macOS, Windows, and Linux
+  powerMonitor.on('suspend', () => {
+    console.log('[Electron] System suspending (sleep)');
+    
+    // Notify Gateway that system is going to sleep
+    if (gatewayProcess && !gatewayProcess.killed) {
+      try {
+        gatewayProcess.send({
+          type: 'SYSTEM_SUSPEND',
+          timestamp: Date.now()
+        });
+      } catch (err) {
+        console.warn('[Electron] Failed to notify Gateway of suspend:', err.message);
+      }
+    }
+
+    // Notify renderer (UI) that system is suspending
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('system:suspend', { timestamp: Date.now() });
+    }
+
+    // Track telemetry
+    if (telemetryClientInstance) {
+      telemetryClientInstance.trackFireAndForget('paprwork_system_suspend');
+    }
+  });
+
+  powerMonitor.on('resume', () => {
+    console.log('[Electron] System resumed (wake)');
+    
+    // Notify Gateway that system woke up
+    if (gatewayProcess && !gatewayProcess.killed) {
+      try {
+        gatewayProcess.send({
+          type: 'SYSTEM_RESUME',
+          timestamp: Date.now()
+        });
+      } catch (err) {
+        console.warn('[Electron] Failed to notify Gateway of resume:', err.message);
+      }
+    }
+
+    // Notify renderer (UI) that system resumed
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('system:resume', { timestamp: Date.now() });
+    }
+
+    // Track telemetry
+    if (telemetryClientInstance) {
+      telemetryClientInstance.trackFireAndForget('paprwork_system_resume');
+    }
+  });
+
+  // Lock screen events (macOS, Windows only)
+  powerMonitor.on('lock-screen', () => {
+    console.log('[Electron] Screen locked');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('system:lock-screen', { timestamp: Date.now() });
+    }
+  });
+
+  powerMonitor.on('unlock-screen', () => {
+    console.log('[Electron] Screen unlocked');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('system:unlock-screen', { timestamp: Date.now() });
     }
   });
 });

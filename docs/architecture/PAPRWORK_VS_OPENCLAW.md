@@ -724,7 +724,7 @@ Paprwork V2 now has a typed portable bundle contract for mini-app sharing and cl
 
 - Manifest + schema in `src/core/types/bundles.ts`
 - Architecture spec in `docs/architecture/PORTABLE_BUNDLE_SPEC.md`
-- Recommended sync root: `~/PAPR/bundles/{bundleId}/`
+- Recommended sync root: `~/Papr/bundles/{bundleId}/`
 
 This keeps Paprwork's persistent strengths while making import/export/sync easier over time.
 

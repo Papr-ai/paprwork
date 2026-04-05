@@ -14,13 +14,13 @@ Goal: make local sharing easy now, and cloud sync/deploy straightforward later.
 
 Recommended portable root:
 
-`~/PAPR/bundles/{bundleId}/`
+`~/Papr/bundles/{bundleId}/`
 
-Runtime storage is now aligned under `~/PAPR` as well:
+Runtime storage is now aligned under `~/Papr` as well:
 
-- Apps: `~/PAPR/apps`
-- Jobs: `~/PAPR/jobs`
-- Indexes: `~/PAPR/data/*.json`
+- Apps: `~/Papr/apps`
+- Jobs: `~/Papr/jobs`
+- Indexes: `~/Papr/data/*.json`
 
 Legacy locations are migrated forward during service initialization when needed.
 
@@ -127,7 +127,7 @@ Core fields:
     }
   ],
   "sync": {
-    "preferredRoot": "~/PAPR",
+    "preferredRoot": "~/Papr",
     "bundleSubpath": "bundles",
     "cloudReady": true
   }

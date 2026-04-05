@@ -2,9 +2,9 @@
  * DocumentService - File-based document management
  *
  * Storage layout:
- *   ~/PAPR/documents/{docId}/content.md   -- markdown content
- *   ~/PAPR/documents/{docId}/meta.json    -- title, tags, favorite, timestamps
- *   ~/PAPR/documents/{docId}/versions/    -- version snapshots
+ *   ~/Papr/documents/{docId}/content.md   -- markdown content
+ *   ~/Papr/documents/{docId}/meta.json    -- title, tags, favorite, timestamps
+ *   ~/Papr/documents/{docId}/versions/    -- version snapshots
  *
  * Migrates legacy documents.json on first init.
  */
@@ -64,7 +64,7 @@ export class DocumentService {
 
   constructor() {
     const homeDir = os.homedir();
-    this.docsRoot = path.join(homeDir, "PAPR", "documents");
+    this.docsRoot = path.join(homeDir, "Papr", "documents");
     this.legacyJsonPath = path.join(
       homeDir,
       ".paprwork",

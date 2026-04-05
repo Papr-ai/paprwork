@@ -205,10 +205,17 @@ export function FavoritesList() {
     // App and document-type favorites: wrap icon in liquid glass orb (matches Tab.tsx)
     if (favorite.type === "app" || favorite.type === "document") {
       const innerIcon = favorite.icon ? (
-        <span
-          className="favorite-item__orb-icon"
-          dangerouslySetInnerHTML={{ __html: favorite.icon }}
-        />
+        // Check if icon is SVG or emoji
+        favorite.icon.trim().startsWith('<svg') || favorite.icon.trim().startsWith('<') ? (
+          <span
+            className="favorite-item__orb-icon"
+            dangerouslySetInnerHTML={{ __html: favorite.icon }}
+          />
+        ) : (
+          <span className="favorite-item__orb-icon" style={{ fontSize: '10px' }}>
+            {favorite.icon}
+          </span>
+        )
       ) : favorite.type === "app" ? (
         <svg
           className="favorite-item__orb-icon"

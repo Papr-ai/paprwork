@@ -58,16 +58,33 @@ export function JobsView() {
     });
   }, [jobs, currentFilter, searchQuery, appFilteredJobIds]);
 
-  // Group filtered jobs by folder
+  // Group filtered jobs by folder OR matching app
   const groupedJobs = useMemo(() => {
     const folderMap = new Map<string, JobRecord[]>();
     const ungrouped: JobRecord[] = [];
 
+    // Build a map of folder names to app names for display
+    const folderToAppName = new Map<string, string>();
+    if (graph) {
+      for (const [appId, appLink] of Object.entries(graph.appLinks)) {
+        // For each app, check if any jobs have folders that match the app title
+        for (const jobId of appLink.jobIds) {
+          const job = jobs.find(j => j.id === jobId);
+          if (job?.folder) {
+            // Map this folder name to the app name (for consistent display)
+            folderToAppName.set(job.folder.toLowerCase(), appLink.name);
+          }
+        }
+      }
+    }
+
     for (const job of filteredJobs) {
       if (job.folder) {
-        const group = folderMap.get(job.folder) ?? [];
+        // Use app name if folder matches an app, otherwise use raw folder name
+        const displayName = folderToAppName.get(job.folder.toLowerCase()) || job.folder;
+        const group = folderMap.get(displayName) ?? [];
         group.push(job);
-        folderMap.set(job.folder, group);
+        folderMap.set(displayName, group);
       } else {
         ungrouped.push(job);
       }
@@ -78,7 +95,7 @@ export function JobsView() {
       a.localeCompare(b),
     );
     return { folders: sortedFolders, ungrouped };
-  }, [filteredJobs]);
+  }, [filteredJobs, graph, jobs]);
 
   // App chips from graph
   const appChips = useMemo(() => {

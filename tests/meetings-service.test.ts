@@ -27,7 +27,7 @@ async function setupService(): Promise<MeetingsService> {
       super();
       // Access and override private field via Object.defineProperty
       Object.defineProperty(this, "dbPath", {
-        value: path.join(root, "PAPR", "data", "meetings.json"),
+        value: path.join(root, "Papr", "data", "meetings.json"),
         writable: true,
       });
     }
@@ -166,7 +166,7 @@ describe("MeetingsService", () => {
   test("persists data to disk", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "papr-meetings-persist-"));
     tmpRoots.push(root);
-    const dbPath = path.join(root, "PAPR", "data", "meetings.json");
+    const dbPath = path.join(root, "Papr", "data", "meetings.json");
 
     // Create and populate
     const svc1 = new (class extends MeetingsService {

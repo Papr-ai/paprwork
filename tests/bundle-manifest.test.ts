@@ -61,7 +61,7 @@ describe("bundle manifest schema", () => {
         },
       ],
       sync: {
-        preferredRoot: "~/PAPR",
+        preferredRoot: "~/Papr",
         bundleSubpath: "bundles",
         cloudReady: true,
       },

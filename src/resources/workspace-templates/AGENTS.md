@@ -12,7 +12,7 @@ On every session start (before responding):
 ## Memory Management
 
 During sessions:
-- Record significant events in today's daily log: `~/PAPR/workspace/memory/YYYY-MM-DD.md`
+- Record significant events in today's daily log: `~/Papr/workspace/memory/YYYY-MM-DD.md`
 - Format: `[HH:MM] - Event description`
 - Record: decisions, user preferences, project milestones, mistakes to avoid
 - Don't log routine operations — focus on what matters for future sessions

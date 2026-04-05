@@ -4,7 +4,19 @@
 
 import { create } from "zustand";
 
-export type ArtifactType = "document" | "app";
+export type ArtifactType = "document" | "app" | "file";
+
+/** Short label for chat context / UI chips (not the same as storage kind). */
+export function artifactTypeLabel(type: ArtifactType): string {
+  switch (type) {
+    case "document":
+      return "Document";
+    case "app":
+      return "App";
+    case "file":
+      return "File";
+  }
+}
 
 export interface Artifact {
   id: string;

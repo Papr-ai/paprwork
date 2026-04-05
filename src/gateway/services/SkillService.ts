@@ -88,7 +88,7 @@ export class SkillService {
 
   constructor() {
     const homeDir = os.homedir();
-    this.paprRootDir = path.join(homeDir, "PAPR");
+    this.paprRootDir = path.join(homeDir, "Papr");
     this.skillIndexPath = path.join(this.paprRootDir, "data", "skills.json");
     this.skills = new Map();
     this.initialized = false;
@@ -209,7 +209,7 @@ export class SkillService {
   }
 
   /**
-   * Copy the bundled skills-catalog.json to ~/PAPR/skills-catalog.json
+   * Copy the bundled skills-catalog.json to ~/Papr/skills-catalog.json
    * so the agent can read it with read_file during onboarding.
    */
   private async ensureCatalogCached(): Promise<void> {
@@ -322,7 +322,7 @@ export class SkillService {
   }
 
   /**
-   * Load the cached skills-catalog.json from ~/PAPR or the bundled resource.
+   * Load the cached skills-catalog.json from ~/Papr or the bundled resource.
    */
   private async loadCachedCatalog(): Promise<CatalogSkill[]> {
     // Try user-data copy first, then bundled resource

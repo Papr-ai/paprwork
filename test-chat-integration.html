@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Chat Integration Test</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      max-width: 600px;
+      margin: 50px auto;
+      padding: 20px;
+      background: #1a1a2e;
+      color: #fff;
+    }
+    h1 {
+      color: #4a90e2;
+      margin-bottom: 30px;
+    }
+    .test-section {
+      background: #16213e;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+    button {
+      background: #4a90e2;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      margin: 5px;
+    }
+    button:hover {
+      background: #357abd;
+    }
+    button:active {
+      transform: scale(0.98);
+    }
+    .result {
+      margin-top: 15px;
+      padding: 10px;
+      background: #0f3460;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    .success {
+      color: #4ade80;
+    }
+    .error {
+      color: #f87171;
+    }
+  </style>
+</head>
+<body>
+  <h1>🧪 Mini-App Chat Integration Test</h1>
+  
+  <div class="test-section">
+    <h2>Test 1: Basic Chat Open</h2>
+    <button onclick="testBasicOpen()">Open Chat</button>
+    <div id="result1" class="result"></div>
+  </div>
+
+  <div class="test-section">
+    <h2>Test 2: With Options (Future)</h2>
+    <button onclick="testWithOptions()">Open Chat with Options</button>
+    <div id="result2" class="result"></div>
+  </div>
+
+  <div class="test-section">
+    <h2>Test 3: Multiple Clicks</h2>
+    <button onclick="testMultiple()">Open 3 Chats Rapidly</button>
+    <div id="result3" class="result"></div>
+  </div>
+
+  <div class="test-section">
+    <h2>Test 4: Error Handling</h2>
+    <button onclick="testError()">Test Invalid Method</button>
+    <div id="result4" class="result"></div>
+  </div>
+
+  <script>
+    function log(id, message, isError = false) {
+      const el = document.getElementById(id);
+      const timestamp = new Date().toLocaleTimeString();
+      const className = isError ? 'error' : 'success';
+      el.innerHTML = `<span class="${className}">[${timestamp}] ${message}</span>`;
+    }
+
+    async function testBasicOpen() {
+      try {
+        log('result1', 'Calling chat.open...');
+        const result = await window.paprAPI.invoke('chat.open', {});
+        log('result1', `✅ Success! Result: ${JSON.stringify(result)}`);
+      } catch (error) {
+        log('result1', `❌ Error: ${error.message}`, true);
+      }
+    }
+
+    async function testWithOptions() {
+      try {
+        log('result2', 'Calling chat.open with options...');
+        const result = await window.paprAPI.invoke('chat.open', {
+          message: 'Test pre-filled message',
+          model: 'gpt-5.4',
+          provider: 'openai'
+        });
+        log('result2', `✅ Success! Result: ${JSON.stringify(result)} (Note: options not yet implemented)`);
+      } catch (error) {
+        log('result2', `❌ Error: ${error.message}`, true);
+      }
+    }
+
+    async function testMultiple() {
+      try {
+        log('result3', 'Opening 3 chats rapidly...');
+        const promises = [
+          window.paprAPI.invoke('chat.open', {}),
+          window.paprAPI.invoke('chat.open', {}),
+          window.paprAPI.invoke('chat.open', {})
+        ];
+        const results = await Promise.all(promises);
+        log('result3', `✅ Success! Opened ${results.length} chats`);
+      } catch (error) {
+        log('result3', `❌ Error: ${error.message}`, true);
+      }
+    }
+
+    async function testError() {
+      try {
+        log('result4', 'Calling invalid method...');
+        const result = await window.paprAPI.invoke('chat.invalid', {});
+        log('result4', `Unexpected success: ${JSON.stringify(result)}`);
+      } catch (error) {
+        log('result4', `✅ Expected error: ${error.message}`);
+      }
+    }
+
+    // Log when paprAPI is available
+    if (window.paprAPI) {
+      console.log('✅ window.paprAPI is available');
+      console.log('Available at:', window.paprAPI);
+    } else {
+      console.error('❌ window.paprAPI is NOT available');
+    }
+  </script>
+</body>
+</html>

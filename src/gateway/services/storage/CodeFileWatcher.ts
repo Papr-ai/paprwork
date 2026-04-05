@@ -1,7 +1,7 @@
 /**
  * Code File Watcher
  * 
- * Watches ~/PAPR folder for code changes and auto-reindexes.
+ * Watches ~/Papr folder for code changes and auto-reindexes.
  */
 
 import chokidar, { FSWatcher } from 'chokidar';
@@ -13,16 +13,24 @@ import { Papr } from '@papr/memory';
 export class CodeFileWatcher {
   private watcher: FSWatcher | null = null;
   private paprDir: string;
+  private onFileChange?: (filePath: string) => void;
   
   constructor(
     _client: Papr,
     _schemaId: string,
     paprDir?: string
   ) {
-    this.paprDir = paprDir || path.join(os.homedir(), 'PAPR');
+    this.paprDir = paprDir || path.join(os.homedir(), 'Papr');
     // Store for future use in re-indexing
     // this.client = _client;
     // this.schemaId = _schemaId;
+  }
+  
+  /**
+   * Set callback for file changes
+   */
+  setOnFileChange(callback: (filePath: string) => void): void {
+    this.onFileChange = callback;
   }
   
   /**
@@ -101,17 +109,15 @@ export class CodeFileWatcher {
         return;
       }
       
-      // For now, log that we would re-index
-      // In production, you'd call a method to re-index just this project
-      console.log(`   ✓ Would re-index project: ${projectId}`);
+      console.log(`   ✓ Queueing for re-index: ${projectId}`);
       
-      // TODO: Implement actual re-indexing
-      // const indexer = new CodeIndexerService(this.client, this.schemaId, this.paprDir);
-      // const projectPath = isJob
-      //   ? path.join(this.paprDir, 'Jobs', projectId)
-      //   : path.join(this.paprDir, 'apps', projectId);
-      // await indexer.indexProject(projectPath);
-      console.log('   💡 Run full indexing to update: npm run index:code');
+      // Notify the manager to queue this file
+      if (this.onFileChange) {
+        this.onFileChange(filePath);
+        console.log(`   🔄 File queued for batch indexing (debounced 5s)`);
+      } else {
+        console.log('   💡 No callback registered - run full indexing: npm run index:code');
+      }
       
     } catch (error) {
       console.error(`   ❌ Failed to handle change: ${(error as Error).message}`);

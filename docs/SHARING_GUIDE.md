@@ -22,7 +22,7 @@ Ask the agent to export your app as an app bundle:
 Agent: "Export my Reddit Studio app as an app bundle called 'reddit-outreach'"
 ```
 
-The agent creates an app bundle at `~/PAPR/bundles/reddit-outreach/` containing:
+The agent creates an app bundle at `~/Papr/bundles/reddit-outreach/` containing:
 - `manifest.json` - App + job metadata, database schemas
 - `README.md` - Auto-generated installation instructions
 - `.gitignore` - Excludes large data files
@@ -34,7 +34,7 @@ The agent creates an app bundle at `~/PAPR/bundles/reddit-outreach/` containing:
 Push the bundle to GitHub so others can import it:
 
 ```bash
-cd ~/PAPR/bundles/reddit-outreach
+cd ~/Papr/bundles/reddit-outreach
 git init
 git add .
 git commit -m "Initial release v1.0.0"
@@ -163,7 +163,7 @@ The manifest defines everything needed to recreate the app:
   ],
   
   "sync": {
-    "preferredRoot": "~/PAPR",
+    "preferredRoot": "~/Papr",
     "bundleSubpath": "bundles",
     "cloudReady": true
   }
@@ -251,7 +251,7 @@ Example README section:
 **Scan before export:**
 
 ```bash
-cd ~/PAPR/bundles/my-bundle
+cd ~/Papr/bundles/my-bundle
 grep -r "sk-.*" .  # Check for OpenAI keys
 grep -r "AKIA.*" . # Check for AWS keys
 grep -r "ghp_.*" . # Check for GitHub tokens
@@ -361,7 +361,7 @@ export_app_bundle({
 })
 
 // 3. Tag in Git
-cd ~/PAPR/bundles/bundle-dashboard-v2
+cd ~/Papr/bundles/bundle-dashboard-v2
 git tag v2.0.0
 git push origin v2.0.0
 
@@ -417,7 +417,7 @@ export_app_bundle({
 git clone https://github.com/Papr-ai/paprwork-community-apps.git /tmp/paprwork-community-apps
 
 # 2. Copy your exported bundle into the repo
-cp -r ~/PAPR/bundles/my-bundle /tmp/paprwork-community-apps/bundles/my-bundle
+cp -r ~/Papr/bundles/my-bundle /tmp/paprwork-community-apps/bundles/my-bundle
 
 # 3. Add entry to registry.json (see registry format below)
 # Edit /tmp/paprwork-community-apps/registry.json
@@ -474,7 +474,7 @@ Users browse the Community Apps tab inside Paprwork and click "Import" — no UR
 **Setup:**
 
 ```bash
-cd ~/PAPR/bundles/my-bundle
+cd ~/Papr/bundles/my-bundle
 git init
 git add .
 git commit -m "Initial release"
@@ -516,7 +516,7 @@ Agent: "Import from ~/Downloads/my-app-bundle"
 Export uses the bundleId. Change it or delete the existing app bundle:
 
 ```bash
-rm -rf ~/PAPR/bundles/existing-bundle-id
+rm -rf ~/Papr/bundles/existing-bundle-id
 ```
 
 ### "Failed to clone repository"
@@ -560,7 +560,7 @@ read_job_logs({ jobId: "imported-job-id" })
 Fix migration files and re-run:
 
 ```bash
-cd ~/PAPR/jobs/{jobId}/migrations
+cd ~/Papr/jobs/{jobId}/migrations
 # Edit .sql files
 ```
 
@@ -588,8 +588,8 @@ list_jobs({ status: "completed" })
 run_job({ jobId: "..." })
 
 // 4. Verify database has data
-bash({ command: "sqlite3 ~/PAPR/jobs/{jobId}/data/data.db '.tables'" })
-bash({ command: "sqlite3 ~/PAPR/jobs/{jobId}/data/data.db 'SELECT COUNT(*) FROM tablename;'" })
+bash({ command: "sqlite3 ~/Papr/jobs/{jobId}/data/data.db '.tables'" })
+bash({ command: "sqlite3 ~/Papr/jobs/{jobId}/data/data.db 'SELECT COUNT(*) FROM tablename;'" })
 ```
 
 ---

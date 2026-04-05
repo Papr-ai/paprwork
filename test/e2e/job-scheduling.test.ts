@@ -21,7 +21,7 @@ import { JobsScheduler } from "../../src/gateway/services/JobsScheduler.js";
 
 describe("E2E: Job Scheduling", () => {
   const testDir = path.join(os.tmpdir(), "paprwork-e2e-jobs-test");
-  const testPaprRoot = path.join(testDir, "PAPR");
+  const testPaprRoot = path.join(testDir, "Papr");
   const testJobsRoot = path.join(testPaprRoot, "jobs");
 
   let originalHome: string;

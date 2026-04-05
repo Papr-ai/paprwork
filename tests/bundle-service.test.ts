@@ -76,7 +76,7 @@ describe("BundleService", () => {
       jobIds: [job.id],
     });
 
-    const bundlePath = path.join(source.root, "PAPR", "bundles", "bundle-importable");
+    const bundlePath = path.join(source.root, "Papr", "bundles", "bundle-importable");
     const target = await createWorkspace();
     await target.bundleService.importBundle({ sourcePath: bundlePath });
 

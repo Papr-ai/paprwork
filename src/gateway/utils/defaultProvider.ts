@@ -5,7 +5,20 @@
  * Priority: Use what the user has configured/authenticated.
  */
 
+import os from "node:os";
 import type { Provider } from "../../core/types/index.js";
+import {
+  bytesToRamGbRounded,
+  getRecommendedQwenModel,
+} from "../../core/utils/ollamaModelFit.js";
+
+function resolveDefaultOllamaModelId(): string {
+  try {
+    return getRecommendedQwenModel(bytesToRamGbRounded(os.totalmem()));
+  } catch {
+    return "qwen3.5:latest";
+  }
+}
 
 export interface AvailableProvider {
   provider: Provider;
@@ -15,13 +28,13 @@ export interface AvailableProvider {
 
 /**
  * Get the default provider and model based on what the user has configured.
- * Falls back to OpenAI GPT-5.2 if nothing is configured.
+ * Falls back to OpenAI GPT-5.4 if nothing is configured.
  * 
  * Priority order:
  * 1. OAuth-authenticated providers (openai, anthropic)
  * 2. API key providers (openai, anthropic, google)
  * 3. Ollama (always available, no auth needed)
- * 4. Fallback: openai/gpt-5.2 (will error if not configured)
+ * 4. Fallback: openai/gpt-5.4 (will error if not configured)
  */
 export async function getDefaultProviderAndModel(): Promise<{
   provider: Provider;
@@ -31,11 +44,11 @@ export async function getDefaultProviderAndModel(): Promise<{
 
   // Default models for each provider
   const defaultModelByProvider: Record<Provider, string> = {
-    openai: "gpt-5.2",
+    openai: "gpt-5.4",
     "openai-codex": "gpt-5.3-codex",
     anthropic: "claude-sonnet-4-6",
     google: "gemini-2.5-flash",
-    ollama: "qwen3.5:latest",
+    ollama: resolveDefaultOllamaModelId(),
   };
 
   try {
@@ -92,11 +105,11 @@ export async function getAvailableProviders(): Promise<AvailableProvider[]> {
   const { getProviderAuth, getApiKeys } = await import("./keyResolver.js");
 
   const defaultModelByProvider: Record<Provider, string> = {
-    openai: "gpt-5.2",
+    openai: "gpt-5.4",
     "openai-codex": "gpt-5.3-codex",
     anthropic: "claude-sonnet-4-6",
     google: "gemini-2.5-flash",
-    ollama: "qwen3.5:latest",
+    ollama: resolveDefaultOllamaModelId(),
   };
 
   const providers: AvailableProvider[] = [];

@@ -32,7 +32,7 @@ const TEST_MODELS = {
     envKey: "ANTHROPIC_API_KEY",
   },
   openai: {
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     provider: "openai",
     envKey: "OPENAI_API_KEY",
   },

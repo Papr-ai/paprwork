@@ -29,7 +29,10 @@ export function useOllama() {
     installedModels: [],
     checking: true,
   });
-  
+
+  /** Total installed RAM (GB), from main process; null if unavailable */
+  const [hostTotalRamGb, setHostTotalRamGb] = useState<number | null>(null);
+
   const [installing, setInstalling] = useState<string | null>(null);
   const [progress, setProgress] = useState<ModelInstallProgress | null>(null);
 
@@ -55,6 +58,17 @@ export function useOllama() {
   useEffect(() => {
     checkStatus();
 
+    let cancelled = false;
+    void (async () => {
+      try {
+        const mem = await window.electronAPI?.ollama?.getHostMemory?.();
+        if (cancelled || !mem || !mem.success) return;
+        setHostTotalRamGb(mem.totalGb);
+      } catch {
+        // Non-Electron or older preload — ignore
+      }
+    })();
+
     // Listen for download progress
     const handleProgress = (data: ModelInstallProgress) => {
       setProgress(data);
@@ -76,6 +90,7 @@ export function useOllama() {
     }
 
     return () => {
+      cancelled = true;
       if (window.electronAPI?.ollama) {
         window.electronAPI.ollama.removeDownloadProgressListener(handleProgress);
       }
@@ -84,7 +99,7 @@ export function useOllama() {
 
   /**
    * Ensure model is ready (auto-installs if needed)
-   * Call this when user selects a Qwen model
+   * Call when user selects an on-device Ollama model (e.g. Qwen, Gemma).
    */
   const ensureModel = useCallback(async (modelName: string): Promise<boolean> => {
     if (!window.electronAPI?.ollama) {
@@ -154,6 +169,7 @@ export function useOllama() {
 
   return {
     status,
+    hostTotalRamGb,
     installing,
     progress,
     ensureModel,

@@ -443,7 +443,7 @@ print(f"Database: ${DATABASE_URL}")
 
 **3. Mini-App:**
 ```javascript
-// ~/PAPR/apps/my-app/index.html
+// ~/Papr/apps/my-app/index.html
 fetch("/api/bash/run", {
   method: "POST",
   body: JSON.stringify({

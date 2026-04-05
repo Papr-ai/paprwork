@@ -82,7 +82,7 @@ export class AppService {
 
   constructor() {
     const homeDir = os.homedir();
-    this.paprRootDir = path.join(homeDir, "PAPR");
+    this.paprRootDir = path.join(homeDir, "Papr");
     this.appsDir = path.join(this.paprRootDir, "apps");
     this.appsIndexPath = path.join(this.paprRootDir, "data", "apps.json");
     this.legacyAppsDir = path.join(homeDir, ".paprwork", "apps");
@@ -1184,6 +1184,128 @@ export class AppService {
     this.apps.set(app.id, app);
     await this.saveApps();
     return next;
+  }
+
+  /**
+   * Auto-discover and link data sources for an app by analyzing which databases
+   * it actually uses. Scans app code for database paths and links the corresponding jobs.
+   * 
+   * This is more accurate than folder-name matching because it discovers:
+   * 1. Databases explicitly referenced in app code
+   * 2. Jobs whose databases are in ~/Papr/jobs/{jobId}/data/*.db
+   * 
+   * @param appId - App ID to discover sources for
+   * @returns Array of newly linked data sources
+   */
+  async autoDiscoverDataSources(appId: string): Promise<AppDataSource[]> {
+    const app = this.apps.get(appId);
+    if (!app) {
+      throw new Error(`App not found: ${appId}`);
+    }
+
+    const { getJobsService } = await import("./JobsService.js");
+    const jobsService = getJobsService();
+    await jobsService.initialize();
+
+    const allJobs = await jobsService.listJobs();
+    const existingSources = await this.listAppDataSources(appId);
+    const existingJobIds = new Set(existingSources.map(ds => ds.jobId));
+    
+    // Build map of database paths to jobs
+    const dbPathToJob = new Map<string, typeof allJobs[0]>();
+    for (const job of allJobs) {
+      const dbPath = await jobsService.getJobDatabasePath(job.id);
+      if (dbPath) {
+        dbPathToJob.set(dbPath, job);
+      }
+    }
+    
+    // Scan app code for database references
+    const appDir = path.join(this.appsDir, appId);
+    const referencedDbPaths = await this.scanAppCodeForDatabasePaths(appDir);
+    
+    // Link jobs whose databases are referenced in the app
+    const newSources: AppDataSource[] = [];
+    for (const dbPath of referencedDbPaths) {
+      const job = dbPathToJob.get(dbPath);
+      if (!job || existingJobIds.has(job.id)) continue;
+
+      const source: Omit<AppDataSource, "linkedAt"> = {
+        id: `${job.id}:auto-discovered`,
+        type: "sqlite",
+        jobId: job.id,
+        alias: job.name,
+        dbPath,
+        tables: [], // Tables will be discovered on first query
+      };
+
+      await this.linkAppDataSource(appId, source);
+      newSources.push({ ...source, linkedAt: new Date().toISOString() });
+      console.log(`[AppService] Auto-linked data source: ${job.name} → ${app.title}`);
+    }
+
+    return newSources;
+  }
+
+  /**
+   * Scan mini-app code files for database path references.
+   * Looks for:
+   * - fetch('/api/db/query', ...) calls with specific database paths
+   * - Direct database file references in code
+   * 
+   * @param appDir - App directory to scan
+   * @returns Set of database paths referenced in the app code
+   */
+  private async scanAppCodeForDatabasePaths(appDir: string): Promise<Set<string>> {
+    const dbPaths = new Set<string>();
+    
+    try {
+      const files = await fs.readdir(appDir);
+      const codeFiles = files.filter(f => 
+        f.endsWith('.js') || 
+        f.endsWith('.ts') || 
+        f.endsWith('.html')
+      );
+
+      for (const file of codeFiles) {
+        const filePath = path.join(appDir, file);
+        const content = await fs.readFile(filePath, 'utf8');
+        
+        // Look for database paths in the code
+        // Pattern 1: Explicit db paths: /Users/.../Papr/jobs/{jobId}/data/*.db
+        const dbPathPattern = /\/Papr\/jobs\/([a-f0-9-]+)\/data\/[^'"]+\.db/gi;
+        let match;
+        while ((match = dbPathPattern.exec(content)) !== null) {
+          dbPaths.add(match[0]);
+        }
+        
+        // Pattern 2: Job ID references that imply database usage
+        // If app code references a job ID, it's likely querying that job's database
+        const jobIdPattern = /['"]([a-f0-9-]{36})['"]/g;
+        const homeDir = os.homedir();
+        while ((match = jobIdPattern.exec(content)) !== null) {
+          const jobId = match[1];
+          // Try both standard paths
+          const possiblePaths = [
+            path.join(homeDir, 'Papr', 'jobs', jobId, 'data', 'data.db'),
+            path.join(homeDir, 'Papr', 'jobs', jobId, 'data', 'data.db'),
+          ];
+          for (const p of possiblePaths) {
+            try {
+              await fs.access(p);
+              dbPaths.add(p);
+              break;
+            } catch {
+              // Path doesn't exist, try next
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`[AppService] Failed to scan app code for db paths:`, err);
+    }
+
+    return dbPaths;
   }
 
   getAppsRootPath(): string {

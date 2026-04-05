@@ -15,6 +15,8 @@ interface MessageListProps {
   messages: ChatMessage[];
   isLoading?: boolean;
   isSending?: boolean;
+  /** When set, file drops on the list attach the same way as Add context → file upload */
+  onFilesDropped?: (files: File[]) => void;
 }
 
 export const MessageList: React.FC<MessageListProps> = ({
@@ -22,6 +24,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   messages,
   isLoading,
   isSending,
+  onFilesDropped,
 }) => {
   const listRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -112,6 +115,27 @@ export const MessageList: React.FC<MessageListProps> = ({
       <div
         className="message-list message-list-empty"
         data-testid="message-list"
+        onDragOver={
+          onFilesDropped
+            ? (e) => {
+                e.preventDefault();
+                if ([...e.dataTransfer.types].includes("Files")) {
+                  e.dataTransfer.dropEffect = "copy";
+                }
+              }
+            : undefined
+        }
+        onDrop={
+          onFilesDropped
+            ? (e) => {
+                e.preventDefault();
+                const { files } = e.dataTransfer;
+                if (files?.length) {
+                  onFilesDropped(Array.from(files));
+                }
+              }
+            : undefined
+        }
       >
         <WelcomeMessage />
       </div>
@@ -119,7 +143,32 @@ export const MessageList: React.FC<MessageListProps> = ({
   }
 
   return (
-    <div className="message-list" ref={listRef} data-testid="message-list">
+    <div
+      className="message-list"
+      ref={listRef}
+      data-testid="message-list"
+      onDragOver={
+        onFilesDropped
+          ? (e) => {
+              e.preventDefault();
+              if ([...e.dataTransfer.types].includes("Files")) {
+                e.dataTransfer.dropEffect = "copy";
+              }
+            }
+          : undefined
+      }
+      onDrop={
+        onFilesDropped
+          ? (e) => {
+              e.preventDefault();
+              const { files } = e.dataTransfer;
+              if (files?.length) {
+                onFilesDropped(Array.from(files));
+              }
+            }
+          : undefined
+      }
+    >
       {filteredMessages.map((message) => (
         <MessageItem key={message.id} chatId={chatId} message={message} />
       ))}

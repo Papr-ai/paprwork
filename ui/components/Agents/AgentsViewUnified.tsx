@@ -277,7 +277,7 @@ export function AgentsView() {
                       <div className="agent-info">
                         <div className="agent-name">{agent.name}</div>
                         <div className="agent-model">
-                          {agent.model ?? "gpt-5.2"}
+                          {agent.model ?? "gpt-5.4"}
                         </div>
                       </div>
                     </div>
