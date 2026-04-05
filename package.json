@@ -1,5 +1,5 @@
 {
-  "name": "Papr Work",
+  "name": "paprwork",
   "version": "2.0.16",
   "description": "AI-powered desktop assistant - Rebuilt with TypeScript and Mastra",
   "main": "./src/electron/main.cjs",
