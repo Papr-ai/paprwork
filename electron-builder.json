@@ -87,7 +87,8 @@
   },
   "nsis": {
     "oneClick": false,
-    "allowToChangeInstallationDirectory": true
+    "allowToChangeInstallationDirectory": true,
+    "artifactName": "PaprWork-Setup-${version}.${ext}"
   },
   "afterPack": "./scripts/afterPack.cjs"
 }
