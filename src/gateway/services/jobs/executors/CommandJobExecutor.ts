@@ -60,14 +60,33 @@ export class CommandJobExecutor implements IJobExecutor {
 
     const jobDbPath = path.join(params.jobDir, "data", "data.db");
     const [shellPath, shellArgs] = getShellCommand(finalCommand);
+    
+    // Ensure we use the correct Node version (nvm's Node v24, not system Node)
+    // This prevents native module version mismatches with better-sqlite3
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      JOB_DIR: params.jobDir,
+      JOB_DB: jobDbPath,
+      ...(params.runtimeParams ?? {}),
+    };
+    
+    // If nvm is available, ensure we use the Node version from .nvmrc
+    const nvmDir = process.env.NVM_DIR || path.join(process.env.HOME || '', '.nvm');
+    const nvmrcPath = path.join(process.cwd(), '.nvmrc');
+    if (existsSync(nvmDir) && existsSync(nvmrcPath)) {
+      const { readFileSync } = await import('fs');
+      const nvmVersion = readFileSync(nvmrcPath, 'utf8').trim();
+      const nvmNodePath = path.join(nvmDir, 'versions', 'node', `v${nvmVersion}`, 'bin');
+      
+      if (existsSync(nvmNodePath)) {
+        // Prepend nvm's Node path to ensure it takes priority over system Node
+        env.PATH = `${nvmNodePath}:${env.PATH || ''}`;
+      }
+    }
+    
     const proc = spawn(shellPath, shellArgs, {
       cwd: params.jobDir,
-      env: {
-        ...process.env,
-        JOB_DIR: params.jobDir,
-        JOB_DB: jobDbPath,
-        ...(params.runtimeParams ?? {}),
-      },
+      env,
     });
 
     return {
@@ -204,6 +223,7 @@ export class CommandJobExecutor implements IJobExecutor {
         execSync("python3 -m venv .venv", {
           cwd: params.jobDir,
           timeout: 30_000,
+          env: this.getNvmEnv(),
         });
         await params.appendLog("Virtual environment created.");
       } catch (error) {
@@ -231,6 +251,7 @@ export class CommandJobExecutor implements IJobExecutor {
               cwd: params.jobDir,
               timeout: 120_000, // 2 min timeout for pip
               encoding: "utf8",
+              env: this.getNvmEnv(),
             },
           );
           // Log last few lines of pip output (skip the verbose download lines)
@@ -287,6 +308,7 @@ export class CommandJobExecutor implements IJobExecutor {
           cwd: params.jobDir,
           timeout: 120_000,
           encoding: "utf8",
+          env: this.getNvmEnv(),
         });
         await params.appendLog("Node dependencies installed.");
       } catch (error) {
@@ -308,5 +330,33 @@ export class CommandJobExecutor implements IJobExecutor {
     }
 
     return wrapCommandWithVenv(command, venvDir);
+  }
+
+  /**
+   * Get environment with correct Node version from nvm.
+   * Ensures jobs use the Node version specified in .nvmrc to prevent native module mismatches.
+   */
+  private getNvmEnv(): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    
+    const nvmDir = process.env.NVM_DIR || path.join(process.env.HOME || '', '.nvm');
+    const nvmrcPath = path.join(process.cwd(), '.nvmrc');
+    
+    if (existsSync(nvmDir) && existsSync(nvmrcPath)) {
+      try {
+        const { readFileSync } = require('fs') as typeof import('fs');
+        const nvmVersion = readFileSync(nvmrcPath, 'utf8').trim();
+        const nvmNodePath = path.join(nvmDir, 'versions', 'node', `v${nvmVersion}`, 'bin');
+        
+        if (existsSync(nvmNodePath)) {
+          // Prepend nvm's Node path to ensure it takes priority over system Node
+          env.PATH = `${nvmNodePath}:${env.PATH || ''}`;
+        }
+      } catch {
+        // If we can't read .nvmrc, just use current environment
+      }
+    }
+    
+    return env;
   }
 }

@@ -50,9 +50,15 @@ export class AppStateStorage {
       fs.mkdirSync(APP_STATE_DIR, { recursive: true });
     }
 
-    // Open database
+    // Open database with performance optimizations
     this.db = new Database(APP_STATE_DB);
+    
+    // Performance optimizations
     this.db.pragma('journal_mode = WAL');
+    this.db.pragma('synchronous = NORMAL');
+    this.db.pragma('cache_size = -5000'); // 5MB cache
+    this.db.pragma('mmap_size = 15000000'); // 15MB mmap
+    this.db.pragma('temp_store = MEMORY');
     
     // Create tables
     this.initSchema();

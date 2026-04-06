@@ -48,6 +48,14 @@ export class CodeIndexTracker {
     
     this.dbPath = path.join(baseDir, 'code-index.db');
     this.db = new Database(this.dbPath);
+    
+    // Performance optimizations
+    this.db.pragma('journal_mode = WAL');
+    this.db.pragma('synchronous = NORMAL');
+    this.db.pragma('cache_size = -5000'); // 5MB cache
+    this.db.pragma('mmap_size = 15000000'); // 15MB mmap
+    this.db.pragma('temp_store = MEMORY');
+    
     this.initSchema();
   }
   

@@ -34,7 +34,14 @@ export class JobDatabase {
     let db: Database.Database | null = null;
     try {
       db = new Database(dbPath);
+      
+      // Performance optimizations
       db.pragma("journal_mode = WAL");
+      db.pragma("synchronous = NORMAL");
+      db.pragma("cache_size = -5000"); // 5MB cache per job
+      db.pragma("mmap_size = 15000000"); // 15MB mmap
+      db.pragma("temp_store = MEMORY");
+      
       db.exec(`
         CREATE TABLE IF NOT EXISTS schema_migrations (
           id TEXT PRIMARY KEY,
