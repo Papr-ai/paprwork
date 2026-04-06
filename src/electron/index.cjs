@@ -5,7 +5,7 @@
  * CommonJS format - Electron's require() is more reliable than ESM
  */
 
-const { app, BrowserWindow, Menu, shell, dialog, ipcMain, powerMonitor } = require("electron");
+const { app, BrowserWindow, Menu, shell, dialog, ipcMain, powerMonitor, nativeTheme } = require("electron");
 const { spawn, execSync } = require("child_process");
 const path = require("path");
 const http = require("http");
@@ -367,16 +367,18 @@ function createMainWindow() {
   };
 
   // Windows: Use native caption buttons with overlay
+  // Windows: Use theme-aware colors for titlebar overlay
+  const isDarkMode = nativeTheme.shouldUseDarkColors;
   const windowsConfig = {
     ...baseConfig,
     titleBarStyle: "hidden",
     titleBarOverlay: {
-      color: "#1C1C1E", // Dark background (less transparent than current)
-      symbolColor: "#FFFFFF", // White caption button icons for visibility
+      color: isDarkMode ? "#1C1C1E" : "#F5F5F7", // Dark or light background based on theme
+      symbolColor: isDarkMode ? "#FFFFFF" : "#000000", // White icons in dark, black icons in light
       height: 52, // Match tab bar height
     },
     transparent: false, // Use solid background on Windows
-    backgroundColor: "#1C1C1E", // Dark background
+    backgroundColor: isDarkMode ? "#1C1C1E" : "#F5F5F7", // Match titlebar color
   };
 
   // Linux: Simple frameless with transparency
@@ -393,6 +395,18 @@ function createMainWindow() {
 
   // Hide default menu
   Menu.setApplicationMenu(null);
+
+  // Update Windows titlebar colors when theme changes
+  if (isWindows) {
+    nativeTheme.on('updated', () => {
+      const isDarkMode = nativeTheme.shouldUseDarkColors;
+      mainWindow.setTitleBarOverlay({
+        color: isDarkMode ? "#1C1C1E" : "#F5F5F7",
+        symbolColor: isDarkMode ? "#FFFFFF" : "#000000",
+        height: 52,
+      });
+    });
+  }
 
   // Enable context menu for text inputs (copy/paste/etc)
   mainWindow.webContents.on('context-menu', (event, params) => {

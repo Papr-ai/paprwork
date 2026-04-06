@@ -2178,6 +2178,54 @@ body.platform-linux {
 ```
 **Fix Applied:** 2026-03-31
 **Files Changed:**
+
+### Issue 33: Missing IPC Files in Packaged App ✅ FIXED
+**Added:** 2026-04-05
+**Problem:** Users downloading Mac DMG/ZIP experienced crash on launch: "Cannot find module './ipc/pythonDeps.cjs'"
+**Root Cause:** Development vs. Production gap - `electron-builder.json` didn't include new `src/electron/ipc/` directory added in commit `93ef22d`. App worked in dev (files on disk) but failed in packaged app (files not in ASAR).
+**Solution:** Added `src/electron/ipc/**/*.cjs` to `electron-builder.json` files array.
+**Implementation:**
+```json
+{
+  "files": [
+    "dist/**/*",
+    "src/electron/main.cjs",
+    "src/electron/index.cjs",
+    "src/electron/supervisor-logic.cjs",
+    "src/electron/preload.cjs",
+    "src/electron/ipc/**/*.cjs",  // ← ADDED
+    "package.json"
+  ]
+}
+```
+**Prevention:** Created automated test script to catch missing files before release:
+```bash
+npm run test:package:quick  # Config validation + build
+npm run test:package        # Full build + package + ASAR verification
+```
+**Testing:** Verified ASAR contents contain `/src/electron/ipc/pythonDeps.cjs` ✅
+**Why It Happened:**
+- Large commit (139 files) in `93ef22d` made it easy to miss build config
+- No automated package testing (only dev mode testing)
+- electron-builder requires explicit file patterns (doesn't auto-discover)
+**Fix Applied:** 2026-04-05
+**Files Created:**
+- `scripts/test-package-build.mjs` - Automated package testing
+- `docs/MISSING_IPC_FILES_FIX.md` - Complete documentation
+**Files Changed:**
+- `electron-builder.json` - Added IPC directory pattern
+- `package.json` - Added test scripts
+**Impact:**
+- **Before:** Production builds crashed with "Cannot find module" error
+- **After:** All IPC files included, works in both dev and production
+- **Prevention:** Automated tests catch missing files before release
+**Testing Checklist (Before Every Release):**
+- [ ] Run `npm run test:package:quick` (fast config check)
+- [ ] Run `npm run test:package` (full package verification)
+- [ ] All tests pass
+- [ ] Optional: Test DMG/ZIP on clean machine
+
+---
 - `src/electron/index.cjs` - Updated `windowsConfig` with solid background, white symbols, proper height
 - `ui/App.tsx` - Added platform detection (adds `platform-darwin`/`platform-win32`/`platform-linux` class)
 - `ui/components/Tabs/TabBar.css` - Added `padding-right: 148px` for non-macOS platforms
@@ -2254,6 +2302,86 @@ body.platform-linux {
 4. Web fetch tool (fetch specific URLs)
 5. Image search grounding (Gemini)
 6. Google Maps grounding (Gemini)
+
+---
+
+### Issue 34: Windows Titlebar Theme Colors ✅ FIXED
+**Added:** 2026-04-06
+**Problem:** Windows titlebar buttons (minimize, maximize, close) had hardcoded black background regardless of Windows theme setting, creating poor contrast in light mode.
+**Root Cause:** `titleBarOverlay.color` was hardcoded to `#1C1C1E` (dark) instead of using `nativeTheme.shouldUseDarkColors` to detect Windows theme.
+**Solution:** 
+1. Import `nativeTheme` from Electron
+2. Detect theme on window creation: `const isDarkMode = nativeTheme.shouldUseDarkColors`
+3. Set theme-appropriate colors: Light mode = `#F5F5F7` background + black icons, Dark mode = `#1C1C1E` background + white icons
+4. Listen for theme changes: `nativeTheme.on('updated', ...)` to update titlebar dynamically
+**Fix Applied:** 2026-04-06
+**Implementation:**
+```javascript
+// Window creation
+const isDarkMode = nativeTheme.shouldUseDarkColors;
+const windowsConfig = {
+  titleBarOverlay: {
+    color: isDarkMode ? "#1C1C1E" : "#F5F5F7",
+    symbolColor: isDarkMode ? "#FFFFFF" : "#000000",
+    height: 52,
+  },
+  backgroundColor: isDarkMode ? "#1C1C1E" : "#F5F5F7",
+};
+
+// Dynamic updates
+nativeTheme.on('updated', () => {
+  const isDarkMode = nativeTheme.shouldUseDarkColors;
+  mainWindow.setTitleBarOverlay({
+    color: isDarkMode ? "#1C1C1E" : "#F5F5F7",
+    symbolColor: isDarkMode ? "#FFFFFF" : "#000000",
+    height: 52,
+  });
+});
+```
+**Files Changed:**
+- `src/electron/index.cjs` - Added nativeTheme import, theme detection, dynamic updates
+- `docs/WINDOWS_TITLEBAR_THEME_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** Black titlebar in both light/dark mode (poor contrast in light mode)
+- **After:** Theme-aware titlebar that matches Windows settings and updates instantly
+- **Platform:** Windows only (macOS uses native traffic lights, Linux uses frameless)
+**Testing:** Manual verification on Windows 11 with light/dark theme switching
+
+### Issue 35: Default Home App Not Bundled ✅ FIXED
+**Added:** 2026-04-06
+**Problem:** On Windows (and all packaged builds), clicking home button showed placeholder instead of Weekly War Room dashboard. The app worked in dev mode but failed in production.
+**Root Cause:** `electron-builder.json` didn't include `src/resources/**/*` in files array, so default apps were missing from ASAR archive. `AppService.installDefaultApps()` couldn't find the bundled resources.
+**Solution:** Added `src/resources/**/*` to electron-builder.json files array
+**Fix Applied:** 2026-04-06
+**Implementation:**
+```json
+{
+  "files": [
+    "dist/**/*",
+    "src/electron/main.cjs",
+    "src/electron/index.cjs",
+    "src/electron/supervisor-logic.cjs",
+    "src/electron/preload.cjs",
+    "src/electron/ipc/**/*.cjs",
+    "src/resources/**/*",  // ← ADDED
+    "package.json"
+  ]
+}
+```
+**How It Works:**
+1. First launch: `AppService.installDefaultApps()` reads from `dist/resources/default-apps/`
+2. Checks app ID from `app-id.txt`: `bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c`
+3. Copies to user directory if not exists: `~/Papr/apps/{appId}/`
+4. Subsequent launches skip installation if app exists
+**Files Changed:**
+- `electron-builder.json` - Added resources directory pattern
+- `docs/DEFAULT_HOME_APP_BUNDLING_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** Dev mode worked, packaged builds showed placeholder (inconsistent UX)
+- **After:** Both dev and production show home dashboard (consistent, professional)
+- **Related:** Same root cause as Issue 33 (missing IPC files)
+**Testing:** `npm run test:package:quick` verifies ASAR contents
+**Prevention:** Always run package test before releases to catch missing files
 
 ---
 

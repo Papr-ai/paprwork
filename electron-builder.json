@@ -17,6 +17,7 @@
     "src/electron/supervisor-logic.cjs",
     "src/electron/preload.cjs",
     "src/electron/ipc/**/*.cjs",
+    "src/resources/**/*",
     "package.json"
   ],
   "asarUnpack": [

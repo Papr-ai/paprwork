@@ -1,6 +1,6 @@
 {
   "name": "paprwork",
-  "version": "2.0.17",
+  "version": "2.0.18",
   "description": "AI-powered desktop assistant - Rebuilt with TypeScript and Mastra",
   "main": "./src/electron/main.cjs",
   "type": "module",
@@ -49,6 +49,9 @@
     "test:sleep-wake": "node scripts/test-sleep-wake.mjs",
     "test:hybrid-search": "node scripts/test-hybrid-search.mjs",
     "test:web-search": "node scripts/test-web-search.mjs",
+    "test:package": "node scripts/test-package-build.mjs",
+    "test:package:quick": "node scripts/test-package-build.mjs --no-package",
+    "test:packaged-app": "pkill -f 'Electron.*Papr Work' 2>/dev/null; sleep 1; open 'release/mac-arm64/Papr Work.app'",
     "set-home-app": "node scripts/set-default-home-app.mjs",
     "migrate:v1": "tsx scripts/migrate-v1-data.ts",
     "dist": "npm run build && electron-builder",
