@@ -1,6 +1,6 @@
 {
   "name": "paprwork",
-  "version": "2.0.19",
+  "version": "2.0.20",
   "description": "AI-powered desktop assistant - Rebuilt with TypeScript and Mastra",
   "main": "./src/electron/main.cjs",
   "type": "module",
@@ -103,6 +103,7 @@
     "fs-extra": "^11.3.3",
     "mammoth": "^1.11.0",
     "ollama-ai-provider-v2": "^3.3.1",
+    "playwright": "^1.48.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-syntax-highlighter": "^16.1.0",

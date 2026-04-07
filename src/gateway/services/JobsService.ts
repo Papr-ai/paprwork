@@ -140,8 +140,9 @@ export class JobsService {
     // Reconcile interrupted jobs from previous session
     await this.reconcileInterruptedJobs();
 
-    // Detect and mark stale running jobs (jobs stuck in "running" for >60s with no tracked process)
-    await this.reconcileStaleRunningJobs(60_000);
+    // Detect and mark stale running jobs (jobs stuck in "running" for >30s with no tracked process)
+    // Using 30s threshold to catch stale agent jobs faster while avoiding false positives
+    await this.reconcileStaleRunningJobs(30_000);
 
     await this.reconcileScheduleStates();
 
@@ -1339,6 +1340,9 @@ export class JobsService {
    * Jobs left in `running` with no tracked child process (lost completion write, sleep,
    * or exception after the process exited). Marks them failed so schedules and updates work again.
    * Safe while a real run is in flight: {@link running} holds the job id until the process ends.
+   * 
+   * For agent/subagent jobs (which don't use child processes), we detect stale state by checking
+   * if the job has been "running" for longer than expected without completion.
    */
   async reconcileStaleRunningJobs(minStaleMs: number = 20_000): Promise<void> {
     const processBackedTypes: JobType[] = [
@@ -1353,30 +1357,55 @@ export class JobsService {
       if (job.status !== "running") {
         continue;
       }
-      if (!processBackedTypes.includes(job.type)) {
+      
+      // For process-backed jobs: check if process is tracked
+      if (processBackedTypes.includes(job.type)) {
+        if (this.running.has(jobId)) {
+          continue;
+        }
+        const anchorMs = new Date(
+          job.lastRunAt ?? job.updatedAt,
+        ).getTime();
+        if (Number.isNaN(anchorMs) || nowMs - anchorMs < minStaleMs) {
+          continue;
+        }
+        console.warn(
+          `[JobsService] Stale running job ${jobId} (no tracked process since ${job.lastRunAt ?? job.updatedAt}); marking failed`,
+        );
+        await this.appendLog(
+          jobId,
+          "Stale running state cleared: no active process was tracked (completion may not have been saved).",
+        );
+        await this.setJobStatus(jobId, "failed", {
+          error:
+            "Stale running state — the worker likely finished but Paprwork did not save completion. Check logs, then run again if needed.",
+          currentExecutionId: undefined,
+        });
         continue;
       }
-      if (this.running.has(jobId)) {
-        continue;
+      
+      // For agent/subagent jobs: check if stuck in running for too long
+      // Agent jobs should complete within a reasonable timeframe or update their status
+      if (job.type === "agent" || job.type === "subagent") {
+        const anchorMs = new Date(
+          job.lastRunAt ?? job.updatedAt,
+        ).getTime();
+        if (Number.isNaN(anchorMs) || nowMs - anchorMs < minStaleMs) {
+          continue;
+        }
+        console.warn(
+          `[JobsService] Stale running ${job.type} job ${jobId} (stuck since ${job.lastRunAt ?? job.updatedAt}); marking failed`,
+        );
+        await this.appendLog(
+          jobId,
+          `Stale running state cleared: ${job.type} job was stuck in running state without completion.`,
+        );
+        await this.setJobStatus(jobId, "failed", {
+          error:
+            `${job.type} job stuck in running state — may have been interrupted by app restart or exception. Check logs and run again if needed.`,
+          currentExecutionId: undefined,
+        });
       }
-      const anchorMs = new Date(
-        job.lastRunAt ?? job.updatedAt,
-      ).getTime();
-      if (Number.isNaN(anchorMs) || nowMs - anchorMs < minStaleMs) {
-        continue;
-      }
-      console.warn(
-        `[JobsService] Stale running job ${jobId} (no tracked process since ${job.lastRunAt ?? job.updatedAt}); marking failed`,
-      );
-      await this.appendLog(
-        jobId,
-        "Stale running state cleared: no active process was tracked (completion may not have been saved).",
-      );
-      await this.setJobStatus(jobId, "failed", {
-        error:
-          "Stale running state — the worker likely finished but Paprwork did not save completion. Check logs, then run again if needed.",
-        currentExecutionId: undefined,
-      });
     }
   }
 

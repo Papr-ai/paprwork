@@ -91,25 +91,35 @@ export function AppCard({
 
   const renderIcon = () => {
     if (artifact.icon) {
-      // Check if icon is SVG (starts with <svg) or emoji (plain text)
-      if (artifact.icon.trim().startsWith('<svg') || artifact.icon.trim().startsWith('<')) {
+      const trimmedIcon = artifact.icon.trim();
+      
+      // Check if icon is SVG markup
+      if (trimmedIcon.startsWith('<svg') || trimmedIcon.startsWith('<')) {
         return (
           <span
             className="app-card__orb-icon"
             dangerouslySetInnerHTML={{ __html: artifact.icon }}
           />
         );
-      } else {
-        // Plain text (emoji)
+      }
+      
+      // Check if it's a valid emoji (Unicode character, not plain ASCII text)
+      // Emojis are typically > 1 byte when encoded
+      const isEmoji = trimmedIcon.length <= 4 && /[\p{Emoji}]/u.test(trimmedIcon);
+      
+      if (isEmoji) {
         return (
-          <span className="app-card__orb-icon" style={{ fontSize: '24px' }}>
+          <span className="app-card__orb-icon" style={{ fontSize: '28px' }}>
             {artifact.icon}
           </span>
         );
       }
+      
+      // Plain text strings like "chart", "shield" - treat as missing icon
+      console.warn(`App "${artifact.title}" has invalid icon: "${artifact.icon}". Expected SVG markup or emoji.`);
     }
 
-    // Default grid icon for apps without custom icons
+    // Default grid icon for apps without custom icons or invalid icons
     return (
       <svg
         className="app-card__orb-icon"

@@ -21,12 +21,48 @@ export const ExploringCard: React.FC<ExploringCardProps> = ({
   isStreaming = false,
   narration,
 }) => {
-  // Auto-collapse when streaming ends (V1 behavior)
-  // Start expanded during streaming, then collapse when done
+  // Start collapsed by default
   const [manuallyToggled, setManuallyToggled] = useState(false);
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(true);
+  
+  // Timer state
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const startTimeRef = React.useRef<number | null>(null);
+  const timerIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
 
-  // Auto-collapse when streaming ends (unless user manually expanded/collapsed)
+  // Start timer when exploring begins
+  React.useEffect(() => {
+    const isExploring = isStreaming || toolCalls.some((t) => t.status === "calling");
+    
+    if (isExploring && !startTimeRef.current) {
+      // Start timing
+      startTimeRef.current = Date.now();
+      timerIntervalRef.current = setInterval(() => {
+        if (startTimeRef.current) {
+          setElapsedTime(Math.floor((Date.now() - startTimeRef.current) / 1000));
+        }
+      }, 1000);
+    } else if (!isExploring && startTimeRef.current) {
+      // Stop timing
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
+      // Set final time
+      if (startTimeRef.current) {
+        setElapsedTime(Math.floor((Date.now() - startTimeRef.current) / 1000));
+      }
+    }
+
+    // Cleanup on unmount
+    return () => {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+      }
+    };
+  }, [isStreaming, toolCalls]);
+
+  // Keep collapsed when streaming ends (unless user manually expanded/collapsed)
   React.useEffect(() => {
     if (!isStreaming && !manuallyToggled) {
       setIsCollapsed(true);
@@ -45,6 +81,16 @@ export const ExploringCard: React.FC<ExploringCardProps> = ({
 
   const isExploring =
     isStreaming || toolCalls.some((t) => t.status === "calling");
+  
+  // Format elapsed time as "Xs" or "Xm Ys" for minutes
+  const formatTime = (seconds: number): string => {
+    if (seconds < 60) {
+      return `${seconds}s`;
+    }
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}m ${secs}s`;
+  };
 
   return (
     <div className="exploring-card">
@@ -56,6 +102,9 @@ export const ExploringCard: React.FC<ExploringCardProps> = ({
         </span>
         <span className="exploring-label-text">Working</span>
         {isExploring && <PaprLogoIcon />}
+        {elapsedTime > 0 && (
+          <span className="exploring-timer">{formatTime(elapsedTime)}</span>
+        )}
       </div>
       <div
         className="exploring-card-content"

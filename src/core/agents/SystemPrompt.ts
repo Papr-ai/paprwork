@@ -79,6 +79,7 @@ export class SystemPromptBuilder {
       this.buildAutomationArchitectureSection(),
       this.buildJobOutputStrategySection(),
       this.buildAppCreationReminderSection(),
+      this.buildMissingPackagesSection(), // NEW: Guide agent to install missing packages
       this.buildSecuritySection(),
       this.buildBehaviorSection(),
       // Variable sections at end (better caching)
@@ -1264,6 +1265,92 @@ This makes the app discoverable in Paprwork's Community Apps tab for all users.
 
 **For complete workflow, stage flow, patterns, and anti-patterns, read:**
 \`read_skill({ skillId: "preloaded-app-and-jobs-guide" })\``;
+  }
+
+  /**
+   * Guide agent to auto-install missing essential packages
+   */
+  private buildMissingPackagesSection(): string {
+    return `# Auto-Installing Missing Packages
+
+## When User Needs a Missing Package
+
+**If a job or task fails because a package is missing (Python, Node.js, Git, etc.):**
+
+1. **Detect the issue**: Tool output shows "not found", "not recognized", or similar
+2. **Ask permission**: "I need to install [Package Name]. May I install it? (Takes ~2-3 minutes)"
+3. **If approved**: Use bash tool to run the installation command
+4. **Verify**: Check package version after installation
+5. **Continue**: Resume the original task
+
+## Platform-Specific Install Commands
+
+### Python (Essential for Python jobs)
+- **Windows**: \`winget install Python.Python.3.12 --silent\`
+- **macOS**: \`brew install python@3.12\`
+- **Linux**: \`sudo apt-get update && sudo apt-get install -y python3 python3-pip\`
+
+### Node.js (Essential for Node jobs)
+- **Windows**: \`winget install OpenJS.NodeJS.LTS --silent\`
+- **macOS**: \`brew install node@24\`
+- **Linux**: \`curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && sudo apt-get install -y nodejs\`
+
+### Git (Recommended for version control)
+- **Windows**: \`winget install Git.Git --silent\`
+- **macOS**: \`brew install git\`
+- **Linux**: \`sudo apt-get update && sudo apt-get install -y git\`
+
+### curl (Essential for web requests)
+- **Windows**: \`winget install cURL.cURL --silent\`
+- **macOS**: Pre-installed (use \`brew install curl\` if needed)
+- **Linux**: \`sudo apt-get update && sudo apt-get install -y curl\`
+
+## Example Flow
+
+**User**: "Create a Python job that scrapes this website"
+
+**Agent detects Python missing**:
+- ❌ DON'T: Fail silently or just show error
+- ✅ DO: "I notice Python is not installed on this Windows machine. May I install it for you? (Takes ~2-3 minutes)"
+
+**User**: "Yes please"
+
+**Agent installs**:
+\`\`\`bash
+winget install Python.Python.3.12 --silent
+\`\`\`
+
+**Agent verifies**:
+\`\`\`bash
+python --version
+# Output: Python 3.12.8
+\`\`\`
+
+**Agent continues**:
+"Python 3.12.8 installed successfully! Now creating your scraper job..."
+
+## Important Rules
+
+1. **ALWAYS ask permission first** - Never install without user approval
+2. **Show estimated time** - Installations take 1-5 minutes typically
+3. **Verify success** - Check package version after installation
+4. **Handle failures gracefully** - Provide manual install link if automatic fails
+5. **Platform awareness** - Use correct command for ${this.platformName}
+
+## If Installation Fails
+
+Provide the manual installation guide:
+- **Python**: https://www.python.org/downloads/
+- **Node.js**: https://nodejs.org/en/download/
+- **Git**: https://git-scm.com/downloads
+
+## Verification Commands
+
+After installation, verify with:
+- Python: \`python --version\` (Windows) or \`python3 --version\` (macOS/Linux)
+- Node.js: \`node --version\`
+- Git: \`git --version\`
+- curl: \`curl --version\``;
   }
 
   /**

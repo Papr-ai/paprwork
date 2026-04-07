@@ -38,6 +38,24 @@ let handlePaprAuthCallback;
 // Python dependencies IPC
 const { initializePythonDepsIPC } = require("./ipc/pythonDeps.cjs");
 
+/**
+ * Check Python installation on Windows and notify user if missing
+ */
+async function checkPythonInstallation() {
+  try {
+    // Try to run python --version
+    execSync('python --version', { timeout: 5000, stdio: 'pipe' });
+    console.log('[Electron] Python is installed');
+  } catch (error) {
+    // Python not found - show notification
+    console.warn('[Electron] Python not found, user will be notified when needed');
+    
+    // We don't auto-install silently on startup anymore
+    // Instead, we show a helpful message when Python jobs are first created/run
+    // This avoids scary installation prompts on first launch
+  }
+}
+
 async function loadESMModules() {
   // Import from compiled dist directory
   const storageModule = await import("../../dist/core/storage/index.js");
@@ -379,6 +397,11 @@ function createMainWindow() {
     },
     transparent: false, // Use solid background on Windows
     backgroundColor: isDarkMode ? "#1C1C1E" : "#F5F5F7", // Match titlebar color
+    // Enable window resizing
+    resizable: true,
+    minimizable: true,
+    maximizable: true,
+    closable: true,
   };
 
   // Linux: Simple frameless with transparency
@@ -532,6 +555,20 @@ function createMainWindow() {
   if (!IS_PRODUCTION || openDevTools) {
     mainWindow.webContents.openDevTools();
   }
+
+  // Handle window close button
+  // Windows: Close button should quit the app (standard behavior)
+  // macOS: Close button should hide the window (app stays in dock)
+  mainWindow.on("close", (event) => {
+    if (process.platform === "darwin") {
+      // macOS: Hide window but keep app running (standard macOS behavior)
+      event.preventDefault();
+      mainWindow.hide();
+    } else {
+      // Windows/Linux: Let the window close normally, which triggers app.quit()
+      // Don't prevent default - allow normal close behavior
+    }
+  });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -1360,6 +1397,13 @@ app.whenReady().then(async () => {
   // Initialize Python dependencies IPC handlers
   initializePythonDepsIPC();
 
+  // Check Python installation on Windows (for non-technical users)
+  if (process.platform === 'win32') {
+    checkPythonInstallation().catch(err => {
+      console.error('[Electron] Python check failed:', err);
+    });
+  }
+
   // Build gateway environment (telemetry flags align with main-process resolution)
   const gatewayTelemetryOn =
     isTelemetrySendingEnabledFn != null
@@ -1512,8 +1556,19 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
+  // Windows/Linux: Quit when all windows closed (standard behavior)
+  // macOS: Keep app running (standard macOS behavior - app in dock)
   if (process.platform !== "darwin") {
     app.quit();
+  }
+});
+
+app.on("activate", () => {
+  // macOS: Re-create window when dock icon clicked and no windows open
+  if (mainWindow === null) {
+    createWindow();
+  } else if (!mainWindow.isVisible()) {
+    mainWindow.show();
   }
 });
 

@@ -1,0 +1,53 @@
+/**
+ * WorkingCard Styles - Matching ExploringCard style exactly
+ */
+
+.working-card {
+  margin: 12px 0;
+}
+
+.working-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.working-chevron {
+  font-size: 10px;
+  color: var(--text-secondary);
+  transition: transform 0.2s ease;
+  display: inline-block;
+}
+
+.working-chevron-collapsed {
+  transform: rotate(-90deg);
+}
+
+.working-label-text {
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.working-timer {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  margin-left: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.working-card-content {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  max-height: 420px;
+  overflow-y: auto;
+  transition: max-height 0.3s ease, opacity 0.3s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}

@@ -12,10 +12,19 @@
   padding: 0 8px;
   overflow: hidden;
   gap: 8px;
-  /* Make tab bar draggable for window movement */
-  -webkit-app-region: drag;
   -webkit-user-select: none;
   user-select: none;
+}
+
+/* macOS: Make entire tab bar draggable (native traffic lights on left) */
+body.platform-darwin .tab-bar {
+  -webkit-app-region: drag;
+}
+
+/* Windows/Linux: Make tab bar draggable, but only the empty space */
+/* Don't make the whole bar draggable as it interferes with tab interactions */
+body:not(.platform-darwin) .tab-bar {
+  -webkit-app-region: no-drag;
 }
 
 /* Windows/Linux: Reserve space for window controls (minimize, maximize, close) on the right */
@@ -73,11 +82,19 @@ body:not(.platform-darwin) .tab-bar {
   overflow-y: hidden;
   padding: 12px 4px; /* Add horizontal padding to prevent border cut */
   position: relative; /* For drop indicator positioning */
-  /* Allow dragging window from empty tab bar space */
-  -webkit-app-region: drag;
   /* Hide scrollbar */
   scrollbar-width: none;
   -ms-overflow-style: none;
+}
+
+/* macOS: Allow dragging window from empty tab bar space */
+body.platform-darwin .tab-bar__tabs {
+  -webkit-app-region: drag;
+}
+
+/* Windows/Linux: Explicitly make tabs area draggable for window movement */
+body:not(.platform-darwin) .tab-bar__tabs {
+  -webkit-app-region: drag;
 }
 
 .tab-bar__tabs::-webkit-scrollbar {

@@ -9,7 +9,7 @@ import type { ChatMessage } from "../../stores/chatStore";
 import { useProfileStore } from "../../stores/profileStore";
 import { ThinkingCard } from "./ThinkingCard";
 import { ExploringCard } from "./ExploringCard";
-import { PaprLogoIcon } from "./PaprLogoIcon";
+import { WorkingCard } from "./WorkingCard";
 import { PlanCard, parsePlanFromToolResult } from "./PlanCard";
 import { JobStatusCard, parseJobStatusFromToolResult } from "./JobStatusCard";
 import {
@@ -381,19 +381,9 @@ function renderSequence(
       const isExploring = message.isStreaming || hasCallingTool;
 
       elements.push(
-        <div key="exploring" className="exploring-card">
-          <div className="exploring-card-header">
-            <span className="exploring-chevron">▼</span>
-            <span className="exploring-label-text">Working</span>
-            {isExploring && <PaprLogoIcon />}
-          </div>
-          <div
-            className="exploring-card-content"
-            style={{ maxHeight: "420px", overflowY: "auto", opacity: "1" }}
-          >
-            {exploringItems}
-          </div>
-        </div>,
+        <WorkingCard key="working" isExploring={isExploring}>
+          {exploringItems}
+        </WorkingCard>,
       );
     }
 

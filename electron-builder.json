@@ -22,7 +22,9 @@
   ],
   "asarUnpack": [
     "node_modules/esbuild/**",
-    "node_modules/@esbuild/**"
+    "node_modules/@esbuild/**",
+    "node_modules/playwright/**",
+    "node_modules/playwright-core/**"
   ],
   "mac": {
     "category": "public.app-category.productivity",

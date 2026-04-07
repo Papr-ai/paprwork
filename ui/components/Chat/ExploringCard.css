@@ -32,6 +32,14 @@
   color: var(--text-color);
 }
 
+.exploring-timer {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  margin-left: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
 .exploring-card-content {
   font-size: 12px;
   color: var(--text-secondary);

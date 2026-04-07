@@ -63,25 +63,12 @@ export class CommandJobExecutor implements IJobExecutor {
     
     // Ensure we use the correct Node version (nvm's Node v24, not system Node)
     // This prevents native module version mismatches with better-sqlite3
+    // Uses getNvmEnv() which handles both Unix and Windows properly
     const env: NodeJS.ProcessEnv = {
-      ...process.env,
+      ...this.getNvmEnv(),
       JOB_DIR: params.jobDir,
       JOB_DB: jobDbPath,
       ...(params.runtimeParams ?? {}),
-    };
-    
-    // If nvm is available, ensure we use the Node version from .nvmrc
-    const nvmDir = process.env.NVM_DIR || path.join(process.env.HOME || '', '.nvm');
-    const nvmrcPath = path.join(process.cwd(), '.nvmrc');
-    if (existsSync(nvmDir) && existsSync(nvmrcPath)) {
-      const { readFileSync } = await import('fs');
-      const nvmVersion = readFileSync(nvmrcPath, 'utf8').trim();
-      const nvmNodePath = path.join(nvmDir, 'versions', 'node', `v${nvmVersion}`, 'bin');
-      
-      if (existsSync(nvmNodePath)) {
-        // Prepend nvm's Node path to ensure it takes priority over system Node
-        env.PATH = `${nvmNodePath}:${env.PATH || ''}`;
-      }
     }
     
     const proc = spawn(shellPath, shellArgs, {
@@ -220,7 +207,18 @@ export class CommandJobExecutor implements IJobExecutor {
     if (!existsSync(venvDir)) {
       await params.appendLog("Creating Python virtual environment...");
       try {
-        execSync("python3 -m venv .venv", {
+        const pythonCmd = await this.getPythonCommand();
+        
+        // Check if Python is actually available
+        const testResult = execSync(`${pythonCmd} --version 2>&1`, {
+          timeout: 5000,
+          encoding: 'utf8',
+          env: this.getNvmEnv(),
+        }).trim();
+        
+        await params.appendLog(`Using Python: ${testResult}`);
+        
+        execSync(`${pythonCmd} -m venv .venv`, {
           cwd: params.jobDir,
           timeout: 30_000,
           env: this.getNvmEnv(),
@@ -228,7 +226,18 @@ export class CommandJobExecutor implements IJobExecutor {
         await params.appendLog("Virtual environment created.");
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        await params.appendLog(`Failed to create venv: ${message}`);
+        
+        // Enhanced error message for Windows users
+        if (process.platform === 'win32' && message.includes('not found')) {
+          await params.appendLog(
+            `Failed to create venv: Python not found.\n\n` +
+            `Python will be installed automatically when you restart the app.\n` +
+            `Or install manually from: https://www.python.org/downloads/windows/\n` +
+            `Make sure to check "Add to PATH" during installation.`
+          );
+        } else {
+          await params.appendLog(`Failed to create venv: ${message}`);
+        }
         // Continue without venv — the job command may still work with system Python
         return;
       }
@@ -333,27 +342,81 @@ export class CommandJobExecutor implements IJobExecutor {
   }
 
   /**
+   * Get the appropriate Python command for the current platform.
+   * On Windows, attempts auto-install if Python not found.
+   * - Windows: 'python' (modern installations alias python3 as python)
+   * - Unix: 'python3' (explicit version to avoid Python 2)
+   */
+  private async getPythonCommand(): Promise<string> {
+    if (process.platform === "win32") {
+      // On Windows, check if Python exists, auto-install if missing
+      try {
+        const { execSync } = await import('child_process');
+        // Try 'python' first (most common)
+        try {
+          execSync('python --version', { timeout: 5000, stdio: 'pipe' });
+          return "python";
+        } catch {
+          // Try 'py' launcher
+          try {
+            execSync('py --version', { timeout: 5000, stdio: 'pipe' });
+            return "py -3";
+          } catch {
+            // Python not found - return 'python' and let the error handling deal with it
+            // The error message will guide users to install Python
+            console.warn('[CommandJobExecutor] Python not found on Windows');
+            return "python";
+          }
+        }
+      } catch (error) {
+        console.error('[CommandJobExecutor] Failed to check Python:', error);
+        return "python";
+      }
+    }
+    // Unix-like systems: use python3 explicitly to avoid Python 2
+    return "python3";
+  }
+
+  /**
    * Get environment with correct Node version from nvm.
    * Ensures jobs use the Node version specified in .nvmrc to prevent native module mismatches.
    */
   private getNvmEnv(): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = { ...process.env };
     
-    const nvmDir = process.env.NVM_DIR || path.join(process.env.HOME || '', '.nvm');
-    const nvmrcPath = path.join(process.cwd(), '.nvmrc');
+    // Windows uses nvm-windows with different structure, Unix uses nvm
+    const isWindows = process.platform === 'win32';
+    const pathSeparator = isWindows ? ';' : ':';
     
-    if (existsSync(nvmDir) && existsSync(nvmrcPath)) {
-      try {
-        const { readFileSync } = require('fs') as typeof import('fs');
-        const nvmVersion = readFileSync(nvmrcPath, 'utf8').trim();
-        const nvmNodePath = path.join(nvmDir, 'versions', 'node', `v${nvmVersion}`, 'bin');
-        
-        if (existsSync(nvmNodePath)) {
-          // Prepend nvm's Node path to ensure it takes priority over system Node
-          env.PATH = `${nvmNodePath}:${env.PATH || ''}`;
+    if (isWindows) {
+      // Windows: nvm-windows uses NVM_HOME or NVM_SYMLINK
+      const nvmHome = process.env.NVM_HOME || process.env.NVM_SYMLINK;
+      if (nvmHome && existsSync(nvmHome)) {
+        // nvm-windows creates a symlink at NVM_SYMLINK pointing to the active version
+        // Just ensure it's in PATH
+        const currentPath = env.PATH || '';
+        if (!currentPath.includes(nvmHome)) {
+          env.PATH = `${nvmHome}${pathSeparator}${currentPath}`;
         }
-      } catch {
-        // If we can't read .nvmrc, just use current environment
+      }
+    } else {
+      // Unix: Use nvm with .nvmrc version
+      const nvmDir = process.env.NVM_DIR || path.join(process.env.HOME || '', '.nvm');
+      const nvmrcPath = path.join(process.cwd(), '.nvmrc');
+      
+      if (existsSync(nvmDir) && existsSync(nvmrcPath)) {
+        try {
+          const { readFileSync } = require('fs') as typeof import('fs');
+          const nvmVersion = readFileSync(nvmrcPath, 'utf8').trim();
+          const nvmNodePath = path.join(nvmDir, 'versions', 'node', `v${nvmVersion}`, 'bin');
+          
+          if (existsSync(nvmNodePath)) {
+            // Prepend nvm's Node path to ensure it takes priority over system Node
+            env.PATH = `${nvmNodePath}${pathSeparator}${env.PATH || ''}`;
+          }
+        } catch {
+          // If we can't read .nvmrc, just use current environment
+        }
       }
     }
     
