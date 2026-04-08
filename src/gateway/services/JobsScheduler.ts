@@ -11,14 +11,12 @@ import {
 let jobsSchedulerInstance: JobsScheduler | null = null;
 
 export class JobsScheduler {
-  private static readonly TICK_TELEMETRY_MIN_MS = 300_000;
   private static readonly BACKUP_POLL_MS = 60_000;
   private static readonly WAKE_MIN_MS = 250;
 
   private backupTimer: ReturnType<typeof setInterval> | null = null;
   private wakeTimer: ReturnType<typeof setTimeout> | null = null;
   private runningLeases: Set<string> = new Set();
-  private lastTickTelemetryAt = 0;
 
   start(): void {
     if (this.backupTimer) {
