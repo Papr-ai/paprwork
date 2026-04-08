@@ -30,11 +30,11 @@
     "category": "public.app-category.productivity",
     "target": [
       {
-        "target": "pkg",
+        "target": "dmg",
         "arch": ["arm64", "x64"]
       },
       {
-        "target": "dmg",
+        "target": "zip",
         "arch": ["arm64", "x64"]
       }
     ],
@@ -72,12 +72,6 @@
     ],
     "icon": "build/icon.png",
     "category": "Utility"
-  },
-  "pkg": {
-    "installLocation": "/Applications",
-    "allowAnywhere": false,
-    "allowCurrentUserHome": false,
-    "allowRootDirectory": false
   },
   "dmg": {
     "title": "Install ${productName}",
