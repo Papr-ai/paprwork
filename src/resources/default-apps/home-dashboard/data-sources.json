@@ -1,1 +1,9 @@
-[]
+[{
+  "id": "2cafb2e9-696b-42db-98fa-5d605977123c:Daily Brief Generator (2cafb2e9)",
+  "type": "sqlite",
+  "jobId": "2cafb2e9-696b-42db-98fa-5d605977123c",
+  "alias": "Daily Brief Generator (2cafb2e9)",
+  "dbPath": "",
+  "tables": ["briefs"],
+  "linkedAt": "2026-04-07T00:00:00.000Z"
+}]

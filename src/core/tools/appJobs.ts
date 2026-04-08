@@ -30,12 +30,26 @@ const createAppSchema = z.object({
   description: z.string().optional(),
   icon: z
     .string()
+    .refine(
+      (val) => {
+        const trimmed = val.trim();
+        // Must start with < (SVG) or be a valid emoji (Unicode, not ASCII text)
+        const startsWithSvg = trimmed.startsWith('<');
+        const isEmoji = trimmed.length <= 4 && /[\p{Emoji}]/u.test(trimmed);
+        return startsWithSvg || isEmoji;
+      },
+      {
+        message:
+          'Icon must be an SVG string (starting with "<svg") or a valid emoji. Plain text like "chart" or "shield" is not allowed. ' +
+          'Example SVG: \'<svg viewBox="0 0 24 24" width="14" height="14"><path d="..." stroke="currentColor" stroke-width="2" fill="none"/></svg>\'',
+      },
+    )
     .describe(
       "**REQUIRED:** Simple inline SVG icon that matches the existing design system. Shown in tabs, apps list, and favorites. " +
         "Apps without icons look generic and unprofessional. " +
         'Use stroke="currentColor" with stroke-width="1.5" or "2" for theme compatibility. Keep it simple (1-3 shapes). ' +
         'Format: \'<svg viewBox="0 0 24 24" width="14" height="14"><path d="..." stroke="currentColor" stroke-width="2" fill="none"/></svg>\' ' +
-        'DO NOT use emojis - they look unprofessional. Use proper SVG icons that match the design system.',
+        'DO NOT use plain text like "chart" or "shield" - these are not valid icons. Use proper SVG markup or emojis only.',
     ),
   files: z.array(appFileSchema).optional(),
   html: z.string().optional(),

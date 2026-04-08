@@ -30,11 +30,11 @@
     "category": "public.app-category.productivity",
     "target": [
       {
-        "target": "dmg",
+        "target": "pkg",
         "arch": ["arm64", "x64"]
       },
       {
-        "target": "zip",
+        "target": "dmg",
         "arch": ["arm64", "x64"]
       }
     ],
@@ -73,7 +73,14 @@
     "icon": "build/icon.png",
     "category": "Utility"
   },
+  "pkg": {
+    "installLocation": "/Applications",
+    "allowAnywhere": false,
+    "allowCurrentUserHome": false,
+    "allowRootDirectory": false
+  },
   "dmg": {
+    "title": "Install ${productName}",
     "contents": [
       {
         "x": 130,
@@ -85,7 +92,12 @@
         "type": "link",
         "path": "/Applications"
       }
-    ]
+    ],
+    "background": null,
+    "window": {
+      "width": 540,
+      "height": 380
+    }
   },
   "nsis": {
     "oneClick": false,

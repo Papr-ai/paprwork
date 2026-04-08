@@ -8,6 +8,11 @@ import chokidar, { type FSWatcher } from "chokidar";
 import path from "path";
 import os from "os";
 import { v4 as uuidv4 } from "uuid";
+import { fileURLToPath } from "url";
+
+// ESM compatibility: get __dirname equivalent
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export interface MiniApp {
   id: string;
@@ -145,7 +150,8 @@ export class AppService {
   private async installDefaultApps(): Promise<void> {
     try {
       // Path to bundled default apps (in dist after build)
-      const defaultAppsDir = path.join(__dirname, "..", "resources", "default-apps");
+      // __dirname is dist/gateway/services/ so we need to go up 2 levels to reach dist/
+      const defaultAppsDir = path.join(__dirname, "..", "..", "resources", "default-apps");
       
       // Check if default apps directory exists (may not exist in dev mode before first build)
       try {
@@ -157,6 +163,7 @@ export class AppService {
 
       // Get list of default apps
       const defaultAppDirs = await fs.readdir(defaultAppsDir);
+      let installedCount = 0;
       
       for (const appDirName of defaultAppDirs) {
         const sourceDir = path.join(defaultAppsDir, appDirName);
@@ -174,21 +181,78 @@ export class AppService {
           continue;
         }
 
-        // Check if app already exists
-        const targetDir = path.join(this.appsDir, appId);
-        try {
-          await fs.access(targetDir);
-          console.log(`[AppService] Default app already exists: ${appId}`);
+        // Check if app already exists (both in registry and on disk)
+        if (this.apps.has(appId)) {
+          console.log(`[AppService] Default app already in registry: ${appId}`);
           continue;
-        } catch {
-          // App doesn't exist, install it
         }
 
-        // Copy app files
-        await fs.mkdir(targetDir, { recursive: true });
-        await fs.cp(sourceDir, targetDir, { recursive: true });
+        const targetDir = path.join(this.appsDir, appId);
+        let needsInstall = false;
+        try {
+          await fs.access(targetDir);
+          console.log(`[AppService] Default app files exist but not in registry: ${appId}`);
+          // Files exist but not registered - add to registry below
+        } catch {
+          // App doesn't exist, install files
+          needsInstall = true;
+        }
+
+        if (needsInstall) {
+          // Copy app files
+          await fs.mkdir(targetDir, { recursive: true });
+          await fs.cp(sourceDir, targetDir, { recursive: true });
+          console.log(`[AppService] Copied default app files: ${appId} (${appDirName})`);
+        }
+
+        // Read metadata.json to get app details
+        const metadataPath = path.join(sourceDir, "metadata.json");
+        let metadata: Partial<MiniApp> & { defaultHomeApp?: boolean; isDefault?: boolean };
+        try {
+          const metadataContent = await fs.readFile(metadataPath, "utf-8");
+          metadata = JSON.parse(metadataContent);
+        } catch {
+          console.warn(`[AppService] No metadata.json found for default app ${appId}, using defaults`);
+          metadata = {
+            id: appId,
+            title: appDirName,
+            description: "Default app",
+            type: "app",
+          };
+        }
+
+        // Read icon from directory if not in metadata
+        let icon: string | undefined = metadata.icon;
+        if (!icon) {
+          const resolvedIcon = await this.resolveIconFromAppDir(targetDir);
+          if (resolvedIcon) {
+            icon = resolvedIcon;
+          }
+        }
+
+        // Create app entry in registry
+        const now = new Date().toISOString();
+        const app: MiniApp = {
+          id: appId,
+          title: metadata.title || appDirName,
+          description: metadata.description || "Default app",
+          type: "app",
+          createdAt: metadata.createdAt || now,
+          updatedAt: now,
+          favorite: metadata.favorite || false,
+          ...(icon ? { icon } : {}),
+        };
+
+        this.apps.set(appId, app);
+        installedCount++;
         
-        console.log(`[AppService] Installed default app: ${appId} (${appDirName})`);
+        console.log(`[AppService] Registered default app: ${appId} - ${app.title}`);
+      }
+
+      // Save apps index if any apps were installed
+      if (installedCount > 0) {
+        await this.saveApps();
+        console.log(`[AppService] Installed and registered ${installedCount} default app(s)`);
       }
     } catch (error) {
       console.error("[AppService] Failed to install default apps:", error);

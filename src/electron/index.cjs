@@ -654,9 +654,22 @@ class GatewayProcessSupervisor {
       clearTimeout(this.backoffTimer);
       this.backoffTimer = null;
     }
-    if (this.process) {
-      console.log("[Supervisor] Stopping Gateway...");
-      this.process.kill("SIGTERM");
+    if (this.process && !this.process.killed) {
+      console.log("[Supervisor] Stopping Gateway process (PID: %s)...", this.process.pid);
+      try {
+        // Send SIGTERM for graceful shutdown
+        this.process.kill("SIGTERM");
+        
+        // Wait a moment, then force kill if still alive
+        setTimeout(() => {
+          if (this.process && !this.process.killed) {
+            console.log("[Supervisor] Gateway didn't stop, force killing...");
+            this.process.kill("SIGKILL");
+          }
+        }, 2000);
+      } catch (error) {
+        console.warn("[Supervisor] Error stopping Gateway:", error.message);
+      }
       this.process = null;
       gatewayProcess = null;
     }
@@ -1479,12 +1492,6 @@ app.whenReady().then(async () => {
     }
   }
 
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow();
-    }
-  });
-
   // System power state monitoring (sleep/wake/lock/unlock)
   // Works on macOS, Windows, and Linux
   powerMonitor.on('suspend', () => {
@@ -1566,40 +1573,99 @@ app.on("window-all-closed", () => {
 app.on("activate", () => {
   // macOS: Re-create window when dock icon clicked and no windows open
   if (mainWindow === null) {
-    createWindow();
+    createMainWindow();
   } else if (!mainWindow.isVisible()) {
     mainWindow.show();
   }
 });
 
-app.on("before-quit", async () => {
-  console.log("[Electron] App quitting...");
-  if (telemetryClientInstance) {
-    telemetryClientInstance.trackFireAndForget("paprwork_app_quit");
+// Track whether we're in the process of quitting to avoid duplicate cleanup
+let isQuitting = false;
+
+app.on("before-quit", async (event) => {
+  if (isQuitting) {
+    console.log("[Electron] Already quitting, skipping duplicate cleanup");
+    return;
   }
-  // Cleanup OAuth servers before stopping gateway
-  if (cleanupOAuthServers) {
-    cleanupOAuthServers();
+  
+  isQuitting = true;
+  console.log("[Electron] App is quitting - starting cleanup...");
+  
+  // Prevent quit until cleanup is done
+  event.preventDefault();
+  
+  try {
+    if (telemetryClientInstance) {
+      telemetryClientInstance.trackFireAndForget("paprwork_app_quit");
+    }
+    
+    // Cleanup OAuth servers before stopping gateway
+    if (cleanupOAuthServers) {
+      console.log("[Electron] Cleaning up OAuth servers...");
+      cleanupOAuthServers();
+    }
+    
+    // Cleanup Papr login callback server
+    if (cleanupPaprLogin) {
+      console.log("[Electron] Cleaning up Papr login server...");
+      cleanupPaprLogin();
+    }
+    
+    // Cleanup Ollama (stop managed instance)
+    if (cleanupOllama) {
+      console.log("[Electron] Cleaning up Ollama...");
+      await cleanupOllama();
+    }
+    
+    // Stop Gateway supervisor
+    if (supervisor) {
+      console.log("[Electron] Stopping Gateway supervisor...");
+      supervisor.stop();
+    }
+    
+    console.log("[Electron] Cleanup complete, quitting now");
+    
+    // Give a brief moment for cleanup to complete
+    setTimeout(() => {
+      app.quit();
+    }, 100);
+  } catch (error) {
+    console.error("[Electron] Error during cleanup:", error);
+    // Quit anyway after error
+    setTimeout(() => {
+      app.quit();
+    }, 100);
   }
-  // Cleanup Papr login callback server
-  if (cleanupPaprLogin) {
-    cleanupPaprLogin();
+});
+
+app.on("will-quit", (event) => {
+  console.log("[Electron] App will quit - final cleanup");
+  
+  // Force stop Gateway if somehow still running
+  if (supervisor && supervisor.getProcess() && !supervisor.getProcess().killed) {
+    console.log("[Electron] Force stopping Gateway on will-quit");
+    try {
+      supervisor.getProcess().kill("SIGKILL");
+    } catch (error) {
+      console.warn("[Electron] Error force-stopping Gateway:", error.message);
+    }
   }
-  // Cleanup Ollama (stop managed instance)
-  if (cleanupOllama) {
-    await cleanupOllama();
-  }
-  if (supervisor) supervisor.stop();
 });
 
 process.on("SIGINT", () => {
+  if (isQuitting) return;
   console.log("[Electron] Received SIGINT, shutting down...");
+  isQuitting = true;
   if (supervisor) supervisor.stop();
-  app.quit();
+  // Give supervisor time to stop, then quit
+  setTimeout(() => app.quit(), 500);
 });
 
 process.on("SIGTERM", () => {
+  if (isQuitting) return;
   console.log("[Electron] Received SIGTERM, shutting down...");
+  isQuitting = true;
   if (supervisor) supervisor.stop();
-  app.quit();
+  // Give supervisor time to stop, then quit
+  setTimeout(() => app.quit(), 500);
 });

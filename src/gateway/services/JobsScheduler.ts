@@ -240,17 +240,8 @@ export class JobsScheduler {
       `skipped: ${skippedRunning}`
     );
 
-    const nowMs = Date.now();
-    if (
-      nowMs - this.lastTickTelemetryAt >= JobsScheduler.TICK_TELEMETRY_MIN_MS &&
-      jobs.length > 0
-    ) {
-      this.lastTickTelemetryAt = nowMs;
-      getGatewayTelemetry().trackFireAndForget("paprwork_scheduler_tick", {
-        jobs_checked: jobs.length,
-        jobs_launched: launchedCount.value,
-      });
-    }
+    // Note: Removed paprwork_scheduler_tick telemetry - too noisy for Amplitude
+    // Scheduler health should be monitored via logs, not user analytics
   }
 }
 

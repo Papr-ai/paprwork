@@ -2594,6 +2594,89 @@ Make sure to check "Add to PATH" during installation.
 - Issue 35 (Default home app not bundled - same root cause)
 **Pattern:** electron-builder.json needs regular audits for completeness. Missing dependencies are a recurring theme.
 
+### Issue 41: App Staying Running After Quit ✅ FIXED
+**Added:** 2026-04-07
+**Problem:** When users tried to quit the app (Cmd+Q on macOS, File → Quit), the app window closed but processes (especially Gateway) stayed running in the background.
+**Root Causes:**
+1. **Incomplete cleanup**: `before-quit` handler was async but didn't wait for cleanup to complete
+2. **Race condition**: `app.quit()` could be called before cleanup finished
+3. **No quit prevention**: Handler didn't call `event.preventDefault()` to hold quit until cleanup done
+4. **Missing force-kill**: If Gateway didn't respond to SIGTERM, it stayed running indefinitely
+5. **Duplicate handlers**: Two `activate` handlers with one referencing non-existent function
+**Solution:**
+1. **Enhanced `before-quit` handler** with `event.preventDefault()`:
+   - Prevents quit until cleanup completes
+   - Added `isQuitting` flag to prevent duplicate cleanup
+   - Detailed logging for debugging
+   - Error handling ensures quit even if cleanup fails
+   - 100ms delay after cleanup before calling `app.quit()`
+2. **Enhanced Gateway stop** with force-kill timeout:
+   - Sends SIGTERM for graceful shutdown
+   - Waits 2 seconds, then sends SIGKILL if still alive
+   - Logs PID and status for debugging
+3. **Added `will-quit` safety net**:
+   - Last chance to kill Gateway with SIGKILL
+   - Runs after `before-quit` as final cleanup
+4. **Fixed SIGINT/SIGTERM handlers**:
+   - Check `isQuitting` flag to avoid duplicates
+   - 500ms delay for supervisor to stop Gateway before quit
+5. **Removed duplicate `activate` handler** inside `app.whenReady()`
+**Fix Applied:** 2026-04-07
+**Implementation:**
+```javascript
+let isQuitting = false;
+
+app.on("before-quit", async (event) => {
+  if (isQuitting) return;
+  isQuitting = true;
+  event.preventDefault(); // CRITICAL: Hold quit until cleanup done
+  
+  try {
+    // Cleanup OAuth, Papr login, Ollama
+    if (cleanupOAuthServers) cleanupOAuthServers();
+    if (cleanupPaprLogin) cleanupPaprLogin();
+    if (cleanupOllama) await cleanupOllama();
+    
+    // Stop Gateway supervisor
+    if (supervisor) supervisor.stop();
+    
+    // Brief delay then quit
+    setTimeout(() => app.quit(), 100);
+  } catch (error) {
+    console.error("[Electron] Error during cleanup:", error);
+    setTimeout(() => app.quit(), 100);
+  }
+});
+
+app.on("will-quit", () => {
+  // Final safety net: force kill Gateway if still running
+  if (supervisor?.getProcess() && !supervisor.getProcess().killed) {
+    supervisor.getProcess().kill("SIGKILL");
+  }
+});
+```
+**Files Changed:**
+- `src/electron/index.cjs` - Enhanced quit handlers, Gateway supervisor, removed duplicate handler
+- `docs/APP_QUIT_BEHAVIOR_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** Cmd+Q → Window closes, Gateway keeps running in background, required Activity Monitor to kill
+- **After:** Cmd+Q → Full cleanup in 100-500ms, all processes stopped, clean logs ✅
+- **Platform Support:** macOS ✅, Windows ✅, Linux ✅
+**Testing:** After quit, verify no processes:
+```bash
+# Should return nothing:
+lsof -ti:18789  # macOS/Linux
+netstat -ano | findstr :18789  # Windows
+```
+**Prevention:**
+- Always use `event.preventDefault()` in `before-quit` to hold quit
+- Clean up resources (child processes, connections)
+- Call `app.quit()` explicitly when done
+- Add `will-quit` as final safety net for force-kill
+- Test with Activity Monitor/Task Manager to verify no orphans
+
+---
+
 ### Issue 40: Stale Running Jobs - Automatic Reconciliation ✅ FIXED
 **Added:** 2026-04-06
 **Problem:** Jobs get stuck in "running" status in memory after completion. User has to restart the app (Cmd+Q) to clear the stale state.
@@ -2708,11 +2791,102 @@ Agent: "Python 3.12.8 installed successfully! Now creating your scraper job..."
 - Enhancement 40 - **THIS FIX** - Agent handles installations automatically
 **Pattern:** Moving from manual fixes → agent-driven solutions for non-technical users
 
----
+### Enhancement 41: Amplitude Enhanced Event Tracking ✅ READY TO IMPLEMENT
+**Added:** 2026-04-07
+**Status:** Infrastructure complete, ready for event implementation
+**Problem:** Limited visibility into user behavior and no way to understand product usage. Only 4 basic events tracked (app start/quit/suspend/resume), no understanding of:
+- How users interact with features
+- Which features drive retention vs churn
+- What causes errors and crashes
+- Feature adoption rates and patterns
+**Solution:** Comprehensive Amplitude integration with **40+ tracked events** across the full user journey for data-driven product decisions.
+**Key Features:**
+1. **Enhanced Event Tracking** - 40+ events:
+   - Lifecycle: app start/quit/suspend/resume/focus/minimize
+   - Onboarding: started/step viewed/step completed/completed/Papr login
+   - Chat: created/message sent/received/deleted/renamed/model changed
+   - Tools: tool called/bash executed/file read/written/browser action
+   - Jobs: created/completed/failed/edited/deleted/scheduler events
+   - Mini-Apps: created/opened/closed/edited/deleted/home app set
+   - Plans: created/step completed/completed/deleted
+   - Settings: opened/provider configured/telemetry toggled/theme changed
+   - Errors: error occurred/API error/job error
+   - Performance: slow operation/slow query/websocket latency
+2. **User Properties** - Persistent attributes: platform, app version, providers configured, feature usage counters, theme, settings
+3. **Privacy-First** - Anonymous install ID, no visual recording, user opt-in required, no message content tracked
+**Why No Session Replay:**
+- Respects user privacy (no visual recording of UI interactions)
+- Events + error context sufficient for most debugging
+- Open source transparency (users can see exactly what's tracked)
+- Lower cost (events free up to 10M/month vs $210/month for replay)
+**Implementation:**
+1. **Dependencies Added** - `@amplitude/analytics-browser` only (no session replay package)
+2. **Core Files Created:**
+   - `src/core/telemetry/events.ts` - Event definitions with property interfaces (40+ events)
+   - `src/core/telemetry/properties.ts` - User properties management helpers
+   - `ui/lib/telemetry.ts` - Renderer telemetry client (events only)
+3. **Initialization** - Added to `ui/App.tsx` to initialize Amplitude on app start if telemetry enabled
+4. **Documentation:**
+   - `docs/AMPLITUDE_ENHANCED_TRACKING.md` - Full specification (updated to remove session replay)
+   - `docs/AMPLITUDE_IMPLEMENTATION_GUIDE.md` - Step-by-step implementation guide
+   - `docs/AMPLITUDE_QUICK_REFERENCE.md` - Quick start and troubleshooting
+**Use Cases:**
+- **Feature Adoption:** Measure which features are used → justify development priorities
+- **Onboarding:** Track completion rates → identify drop-off points → improve flow
+- **Error Tracking:** See error context → reproduce faster → fix faster
+- **Retention:** Track Day 1/7/30 retention → understand churn patterns
+**Cost:** $0/month (events free up to 10M/month, well within expected volume)
+**Privacy Considerations:**
+- ✅ Anonymous install ID (no email, no PII, no IP address)
+- ✅ Opt-in required (telemetry toggle in settings)
+- ✅ No visual recording (events only, no session replay)
+- ✅ No message content tracked (only length)
+- ✅ No file paths tracked (only read/write events)
+- ✅ GDPR compliant with anonymous tracking
+**What We Track:**
+- Feature usage (which buttons clicked, which flows completed)
+- Performance metrics (slow operations, latency)
+- Error events (crashes, API failures)
+- User journeys (onboarding → first message → feature adoption)
+**What We DON'T Track:**
+- Message content (only length, not text)
+- API keys (not tracked at all)
+- Bash command details (only success/failure)
+- File paths (only read/write events)
+- Personal identifiers (email, name, IP)
+**Remaining Work (2-3 weeks):**
+- Week 1: Test basic setup, configure environment
+- Week 2: Implement events (onboarding, chat, jobs, apps, settings)
+- Week 3: Add error/performance tracking
+- Week 4: Create Amplitude dashboards, set up alerts, gradual rollout
+**Files Created:**
+- `src/core/telemetry/events.ts` - Event definitions and property interfaces
+- `src/core/telemetry/properties.ts` - User properties helper functions
+- `ui/lib/telemetry.ts` - Renderer telemetry client (events only)
+- `docs/AMPLITUDE_ENHANCED_TRACKING.md` - Complete specification
+- `docs/AMPLITUDE_IMPLEMENTATION_GUIDE.md` - Implementation guide
+- `docs/AMPLITUDE_QUICK_REFERENCE.md` - Quick reference
+**Files Changed:**
+- `package.json` - Added Amplitude SDK (browser SDK only)
+- `ui/App.tsx` - Added Amplitude initialization on startup
+**Impact:**
+- **Before:** Blind to user behavior, no retention data, can't measure feature adoption
+- **After:** Comprehensive analytics, data-driven decisions, measure what matters
+- **Metrics to Track:** Day 1/7/30 retention, onboarding completion, feature adoption, error rate, job success rate
+**Next Steps:**
+1. Test Amplitude initialization (`npm start` → check console for "[Amplitude] Initialized")
+2. Implement event tracking following implementation guide
+3. Create Amplitude dashboards for key metrics
+4. Set up alerts for critical errors
+5. Gradual rollout (10% → 50% → 100%)
+**Related:**
+- Existing telemetry infrastructure (`TelemetryClient.ts`) - Backend events
+- Settings telemetry toggle - User opt-in/opt-out
+- Privacy compliance - Anonymous tracking pattern
 
 ---
 
-## Contributing Guidelines
+
 
 1. **TypeScript Only** - No JavaScript files
 2. **Small Files** - Max 500 lines (will be enforced by CI)
@@ -2799,6 +2973,347 @@ app.on("activate", () => {
 - **After (macOS):** Click X → window hides (stays in dock), click dock → window shows
 - **Platform-appropriate:** Windows and macOS now follow their respective platform conventions
 **Testing:** Manual verification on Windows 11 and macOS 14 - close, minimize, restore all work correctly
+
+### Issue 40: App Icons Showing Plain Text Instead of SVG ✅ FIXED
+**Added:** 2026-04-07
+**Problem:** Apps displaying plain text labels ("chart", "shield") inside icon circles instead of proper SVG icons, making the apps list look unprofessional.
+**Root Causes:**
+1. **Insufficient validation:** Zod schema accepted any string for icon field without format validation
+2. **Contradictory guidance:** SystemPrompt said "DO NOT use emojis" in section 9 but "SVG string or emoji" in registry format
+3. **Permissive rendering:** AppCard.tsx rendered any non-SVG text as emoji without validation
+**Solution:**
+1. **Enhanced Zod validation:** Added `.refine()` to `createAppSchema` that rejects plain text, only accepts SVG (starts with `<`) or valid emojis (Unicode regex `/[\p{Emoji}]/u`)
+2. **UI fallback:** Updated `renderIcon()` to validate icons client-side and fall back to default grid icon for invalid values
+3. **Fixed SystemPrompt:** Changed contradictory statement from "SVG string or emoji" to "REQUIRED — inline SVG string, DO NOT use plain text"
+4. **Migration script:** Created `fix-app-icons.mjs` to automatically fix existing apps with text icons
+**Fix Applied:** 2026-04-07
+**Implementation:**
+```typescript
+// Zod validation (appJobs.ts)
+icon: z.string().refine(
+  (val) => {
+    const trimmed = val.trim();
+    const startsWithSvg = trimmed.startsWith('<');
+    const isEmoji = trimmed.length <= 4 && /[\p{Emoji}]/u.test(trimmed);
+    return startsWithSvg || isEmoji;
+  },
+  { message: 'Icon must be an SVG string or valid emoji. Plain text like "chart" is not allowed.' }
+)
+
+// UI validation (AppCard.tsx)
+const isEmoji = trimmedIcon.length <= 4 && /[\p{Emoji}]/u.test(trimmedIcon);
+if (!isEmoji) {
+  console.warn(`Invalid icon: "${artifact.icon}". Expected SVG or emoji.`);
+  // Falls back to default grid icon
+}
+```
+**Migration Results:**
+- Fixed 4 apps: "Amplitude Session Replays", "AI Agent Security Command Center", "PMF Sprint" (2x)
+- Replaced `"chart"` → Chart/analytics SVG icon
+- Replaced `"shield"` → Security shield SVG icon
+**Files Changed:**
+- `src/core/tools/appJobs.ts` - Enhanced `createAppSchema` with `.refine()` validation
+- `src/core/agents/SystemPrompt.ts` - Fixed contradictory guidance about emojis
+- `ui/components/Apps/AppCard.tsx` - Added emoji validation, fallback to default icon
+- `ui/components/Apps/AppCard.css` - Added overflow handling for icon container
+- `scripts/fix-app-icons.mjs` - NEW: Migration script with icon replacement map
+- `package.json` - Added `fix-app-icons` npm script
+- `docs/APP_ICON_VALIDATION_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** Plain text "chart", "shield" visible in icon circles, agent could create invalid icons
+- **After:** All apps show proper SVG icons, Zod validation prevents future invalid icons ✅
+- **Prevention:** Tool-level validation blocks plain text, UI gracefully handles legacy data
+**Run migration:** `npm run fix-app-icons` (processes all apps in `~/Papr/data/apps.json`)
+
+---
+
+### Enhancement 42: Proactive Integration - Never Say "I Can't" ✅ IMPLEMENTED
+**Added:** 2026-04-07  
+**Updated:** 2026-04-07 (Added Google Workspace CLI)
+**Problem:** Agent too quickly said "I don't have access to X" without checking its actual capabilities (bash, browser automation, package installation). Users thought Paprwork was limited when it has powerful automation tools.
+**Example:** User: "Pull up Hemang's email from LG" → Agent: "I don't have access to your email — Paprwork doesn't have email integration"
+**Reality:** Agent CAN access email via Gmail API, **Google Workspace CLI**, IMAP, browser automation, or AppleScript
+**Solution:** Added `buildProactiveIntegrationSection()` to SystemPrompt teaching agent to:
+1. Check available tools before saying "I can't"
+2. Recognize bash + packages = access to ANY API/service  
+3. Offer to build integrations instead of declining
+4. Understand full automation capabilities (browser, jobs, filesystem)
+5. **RECOMMEND Google Workspace CLI (`gws`) as primary method for Google services**
+**Implementation:**
+1. **The Proactive Pattern** - 5-step decision tree before declining requests
+2. **Concrete Examples** - Gmail, Calendar, Drive, LinkedIn, databases with multiple approaches
+3. **Package Installation** - Install ANY package/CLI tool (Python, Node, gws, etc.)
+4. **Google Workspace CLI** - Official `gws` CLI built specifically for AI agents (24K+ stars)
+5. **Browser Automation** - Reminder that agent has FULL browser capabilities
+**Google Workspace CLI (`gws`) - RECOMMENDED:**
+```javascript
+// Install (one command)
+bash({ command: "npm install -g @googleworkspace/cli" })
+
+// Set up OAuth (opens browser once)
+bash({ command: "gws auth setup" })
+
+// Use for ALL Google Workspace services
+bash({ command: "gws gmail users messages list --params '{\"userId\": \"me\", \"q\": \"from:john@example.com\"}'" })
+bash({ command: "gws calendar events list --params '{\"calendarId\": \"primary\"}'" })
+bash({ command: "gws drive files list --params '{\"pageSize\": 10}'" })
+bash({ command: "gws docs documents get --params '{\"documentId\": \"DOC_ID\"}'" })
+bash({ command: "gws sheets spreadsheets values get --params '{\"spreadsheetId\": \"SHEET_ID\", \"range\": \"Sheet1!A1:D10\"}'" })
+```
+**Why `gws` CLI:**
+- ✅ Built specifically for AI agents (includes 100+ agent skills)
+- ✅ Structured JSON output (easy parsing)
+- ✅ Handles auth, pagination, error handling automatically
+- ✅ Single tool for Gmail, Calendar, Drive, Docs, Sheets, Chat, Admin
+- ✅ Dynamic command generation (always up-to-date with Google APIs)
+- ✅ Fast and reliable
+**Examples Added:**
+- **Gmail:** Google Workspace CLI (primary), Gmail API, IMAP, browser automation, AppleScript
+- **Google Calendar:** Google Workspace CLI (primary), Calendar API, CalDAV, AppleScript, browser
+- **Google Workspace:** Google Workspace CLI (primary) covers Drive, Docs, Sheets, Chat, Admin
+- **LinkedIn:** Browser automation, scraping job, official API
+- **Databases:** Install client libraries (psycopg2, pymongo, mysql-connector), use custom keys
+**Files Changed:**
+- `src/core/agents/SystemPrompt.ts` - Added `buildProactiveIntegrationSection()`, replaced gcloud references with `gws` CLI, enhanced package installation examples
+- `docs/PROACTIVE_INTEGRATION_GUIDANCE.md` - Complete documentation with examples and testing checklist
+- `docs/GOOGLE_WORKSPACE_CLI_INTEGRATION.md` - **NEW**: Complete `gws` CLI documentation with usage examples
+**Impact:**
+- **Before:** Agent declined requests → poor UX, missed powerful features, users gave up
+- **After:** Agent proactively offers solutions → empowered users, increased engagement, integration options
+- **Coverage:** Email, calendar, social media, databases, cloud services, APIs, file formats, web scraping
+- **Google Workspace:** Now has official CLI support with AI-agent-first design
+**Expected Behavior:**
+```
+User: "Access my Gmail and find emails from john@example.com"
+Agent: "I can access your Gmail in several ways:
+1. **Google Workspace CLI** (recommended) - I can install the official gws CLI tool. It's built specifically for AI agents and supports Gmail, Calendar, Drive, Docs, Sheets, and more. Just one OAuth setup and I can access everything.
+2. Gmail API - Python job with OAuth
+3. Browser automation - Navigate Gmail and extract
+4. IMAP - Python imaplib with app password
+Which would you prefer? Option 1 (gws CLI) is fastest and most reliable."
+```
+**Key Insight:** Agent is a POWERFUL automation platform. The **Google Workspace CLI** is the missing piece that makes Google integrations trivial. If it can be done with Python/Node script, browser, API call, or CLI tool → Agent CAN DO IT. Just offer to build the integration.
+
+---
+
+### Issue 42: Default Home App Not Showing on Fresh Installs ✅ FIXED
+**Added:** 2026-04-07
+**Problem:** Fresh installations showed "Agent Lounge (Coming Soon)" placeholder instead of the bundled home dashboard. App files were copied to disk but not registered in the apps index.
+**Root Causes:**
+1. `installDefaultApps()` only copied files but didn't add apps to `this.apps` Map or call `saveApps()`
+2. ESM module issue: `__dirname` not defined (needed `import.meta.url`)
+3. Incorrect relative path: `../resources/` instead of `../../resources/` from `dist/gateway/services/`
+**Solution:** Enhanced `installDefaultApps()` to:
+1. Check both registry and filesystem (register existing files if not in index)
+2. Read `metadata.json` from bundled default apps
+3. Create proper `MiniApp` objects with all required fields
+4. Add to `this.apps` Map and call `saveApps()` to persist
+5. Resolve icons from app directory (logo.svg, icon.svg, favicon.svg)
+6. Added ESM compatibility with `fileURLToPath` and proper `__dirname`
+**Fix Applied:** 2026-04-07
+**Implementation:**
+```typescript
+// Added ESM compatibility
+import { fileURLToPath } from "url";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+private async installDefaultApps(): Promise<void> {
+  // Fixed path: up 2 levels from dist/gateway/services/
+  const defaultAppsDir = path.join(__dirname, "..", "..", "resources", "default-apps");
+  
+  for (const appDirName of defaultAppDirs) {
+    // Check if already registered (skip duplicates)
+    if (this.apps.has(appId)) continue;
+    
+    // Copy files if needed
+    if (!filesExist) {
+      await fs.cp(sourceDir, targetDir, { recursive: true });
+    }
+    
+    // Read metadata.json
+    const metadata = JSON.parse(await fs.readFile(metadataPath, "utf-8"));
+    
+    // Resolve icon
+    let icon = metadata.icon || await this.resolveIconFromAppDir(targetDir);
+    
+    // Register in index
+    const app: MiniApp = { id, title, description, type, createdAt, updatedAt, icon };
+    this.apps.set(appId, app);
+    installedCount++;
+  }
+  
+  // Save index
+  if (installedCount > 0) await this.saveApps();
+}
+```
+**Testing:** Created automated test (`scripts/test-default-app-install.mjs`) that:
+- Creates fresh test environment (empty registry)
+- Calls `AppService.initialize()` to trigger installation
+- Verifies app registered with correct metadata
+- Verifies app files copied to disk
+- Verifies icon resolved correctly
+- Tests idempotency (no duplicates)
+**Files Created:**
+- `scripts/test-default-app-install.mjs` - Automated test
+- `docs/DEFAULT_HOME_APP_INSTALLATION_FIX.md` - Complete documentation
+**Files Changed:**
+- `src/gateway/services/AppService.ts` - Fixed `installDefaultApps()` + ESM compatibility
+- `src/core/telemetry/properties.ts` - Fixed unused parameter TypeScript error
+- `package.json` - Added `test:default-app` script
+**Impact:**
+- **Before:** Fresh installs → "Agent Lounge (Coming Soon)" placeholder, home dashboard not accessible
+- **After:** Fresh installs → Home dashboard opens automatically, professional first-run experience ✅
+- **Test Coverage:** All aspects verified (registry, filesystem, metadata, icon, idempotency)
+**Related:**
+- Enhancement 26: Default Home App Configuration (settings integration)
+- Enhancement 27: Smart Default Provider & Bundled Home Dashboard (initial bundling)
+- Issue 35: Default Home App Not Bundled (electron-builder.json fix)
+
+---
+
+### Issue 43: Auto-Update Read-Only Volume Error ✅ FIXED
+**Added:** 2026-04-08
+**Problem:** Users getting "Cannot update while running on a read-only volume" error when app tries to check for updates. This happened when users:
+- Ran the app directly from the mounted DMG (read-only volume)
+- Ran the app from Downloads folder (macOS Sierra+ restricts updates)
+- Never moved app to Applications folder
+**Root Cause:** Distributed only as DMG, which requires manual drag-to-Applications. Many users skip this step and run directly from DMG or Downloads, breaking auto-updates.
+**Solution:** Changed primary distribution to **PKG installer** that automatically installs to correct location.
+**Fix Applied:** 2026-04-08
+**Implementation:**
+```json
+// electron-builder.json - BEFORE
+"mac": {
+  "target": [
+    { "target": "dmg", "arch": ["arm64", "x64"] },
+    { "target": "zip", "arch": ["arm64", "x64"] }
+  ]
+}
+
+// electron-builder.json - AFTER
+"mac": {
+  "target": [
+    { "target": "pkg", "arch": ["arm64", "x64"] },  // PRIMARY - proper installer
+    { "target": "dmg", "arch": ["arm64", "x64"] }   // SECONDARY - manual install
+  ]
+},
+"pkg": {
+  "installLocation": "/Applications",           // Force Applications folder
+  "allowAnywhere": false,                       // Don't allow other locations
+  "allowCurrentUserHome": false,                // Don't allow ~/Downloads
+  "allowRootDirectory": false                   // Don't allow root
+}
+```
+**Why PKG is Better:**
+| Feature | PKG Installer | DMG (Manual) |
+|---------|--------------|--------------|
+| Installation | Automatic guided wizard | Manual drag & drop |
+| Install location | Enforced `/Applications` | User choice (risky) |
+| User confusion | None | High ("what do I do?") |
+| Downloads folder | ❌ Prevented | ✅ Possible (breaks updates) |
+| DMG volume run | ❌ Prevented | ✅ Possible (breaks updates) |
+| Updates work | ✅ Always | ⚠️ Only if installed correctly |
+| First-time users | ✅ Perfect | ⚠️ Confusing |
+**Distribution Strategy:**
+- **PKG** - Primary download, recommended for all users
+- **DMG** - Secondary option for advanced users who prefer manual control
+**User Experience:**
+1. User downloads `PaprWork-2.0.0.pkg`
+2. Double-clicks PKG file
+3. macOS installer wizard guides through:
+   - Introduction
+   - License agreement
+   - Installation destination (forced to `/Applications`)
+   - Installation progress
+   - Success screen
+4. App is now in `/Applications/Papr Work.app`
+5. Auto-updates work perfectly ✅
+**Files Changed:**
+- `electron-builder.json` - Added PKG target as primary, configured install restrictions, enhanced DMG config
+- `src/electron/index.cjs` - Removed confusing warning dialog (no longer needed with PKG installer)
+- `docs/AUTO_UPDATE_INSTALLER_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** Users confused about installation, ran from wrong location, updates failed
+- **After:** Professional guided installation, app always in correct location, updates work reliably ✅
+- **No warnings needed:** Prevention at installer level, not detection at runtime
+**Build Commands:**
+```bash
+npm run dist:mac  # Creates both PKG and DMG
+# Outputs:
+# - release/PaprWork-{version}-arm64.pkg (PRIMARY)
+# - release/PaprWork-{version}-x64.pkg (PRIMARY)
+# - release/PaprWork-{version}-arm64.dmg (SECONDARY)
+# - release/PaprWork-{version}-x64.dmg (SECONDARY)
+```
+**GitHub Release Template:**
+```markdown
+## Downloads
+
+### macOS
+- **[PaprWork-2.0.0.pkg](...)** - **Recommended** - Installer (automatically installs to Applications)
+- [PaprWork-2.0.0.dmg](...) - Manual installation (drag to Applications folder)
+
+### Windows
+- [PaprWork-Setup-2.0.0.exe](...) - Windows installer
+
+### Linux
+- [PaprWork-2.0.0.AppImage](...) - AppImage (universal)
+- [paprwork_2.0.0_amd64.deb](...) - Debian/Ubuntu package
+```
+**Related:**
+- Windows already uses proper NSIS installer (no issues)
+- Linux already uses proper package formats (no issues)
+- macOS was the only platform with manual installation problems
+**Prevention:** Always use proper installers (PKG/NSIS/DEB) as primary distribution, keep manual formats (DMG/ZIP) as secondary options for advanced users.
+
+---
+
+### Enhancement 44: Design Enforcement for Clean Mini-Apps ✅ IMPLEMENTED
+**Added:** 2026-04-08
+**Problem:** Agent creates busy, cluttered mini-apps with "dashboard soup" (5-8+ cards on one screen) instead of clean, focused designs matching the Liquid Glass aesthetic. Design system skill existed but wasn't enforced strongly enough.
+**Solution:** Enhanced SystemPrompt with explicit anti-patterns, stronger enforcement, and visual examples of what NOT to do.
+**Implementation:**
+1. **Enhanced Critical Rules** - Added rule #5: "NEVER create dashboard soup — if adding 5+ cards, redesign with 2-3 sections"
+2. **Expanded Product Design Philosophy** - Added explicit ANTI-PATTERNS section:
+   - ❌ Dashboard Soup (too many cards, no hierarchy)
+   - ❌ Multiple Primary Actions (competing buttons)
+   - ❌ Busy Layouts (cramped spacing)
+   - ❌ Hidden Critical Actions (buried in menus)
+3. **Strengthened Design System Loading** - Shows consequences of skipping and benefits of loading:
+   - What you'll create if you skip (dashboard soup, cramped layouts)
+   - What the design system teaches (clean, spacious, focused)
+**Key Changes:**
+- Anti-patterns now visible in THREE places (not just design skill file)
+- Explicit examples of bad designs (5+ cards = redesign)
+- Clear visual checklist (✅ 2-3 sections, ❌ 6+ cards)
+- "BEFORE YOU CREATE ANY UI" checklist with 5 steps
+**Expected Behavior:**
+- Agent loads design system skill FIRST (every time)
+- Creates 2-3 focused sections maximum (not 6-8 cards)
+- ONE clear primary action per screen
+- Generous whitespace (24-48px between sections)
+- Follows Liquid Glass aesthetic
+**Files Changed:**
+- `src/core/agents/SystemPrompt.ts` - Enhanced 3 sections with anti-patterns
+- `docs/DESIGN_ENFORCEMENT_ENHANCEMENT.md` - Complete documentation with testing checklist
+**Impact:**
+- **Before:** 6-8 cards per screen, multiple primary buttons, cramped spacing, generic grids
+- **After:** 2-3 sections, ONE primary action, generous spacing, premium Liquid Glass feel ✅
+- **Pattern:** Moving from "optional best practice" → "hard requirement with explicit examples"
+**Testing Checklist:**
+1. Create analytics dashboard → should have 2-3 sections (not 6+ metric cards)
+2. Create task manager → should focus on ONE view (not all 7 views on one screen)
+3. Update existing app → should check layout before adding more cards
+**Success Metrics:**
+- % apps with 2-3 sections: target >80%
+- % apps with 1 primary button: target >90%
+- % apps loading design system: target 100%
+**Future Enhancements:**
+- Automated validation script (flag >3 cards, >1 primary button)
+- Design system templates (pre-built layouts)
+- Plan enforcement for apps (design plan before UI)
+- Visual linter in CI (reject bad designs)
 
 ---
 

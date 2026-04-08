@@ -381,7 +381,11 @@ function renderSequence(
       const isExploring = message.isStreaming || hasCallingTool;
 
       elements.push(
-        <WorkingCard key="working" isExploring={isExploring}>
+        <WorkingCard 
+          key="working" 
+          isExploring={isExploring}
+          elapsedSeconds={message.elapsedSeconds || 0}
+        >
           {exploringItems}
         </WorkingCard>,
       );

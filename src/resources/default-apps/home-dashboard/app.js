@@ -1,6 +1,7 @@
 const App = {
   dates: [], idx: 0, turning: false, labelTimer: null, brief: null,
   storeKey: 'home-review-v1',
+  isSampleData: false, // Track if showing sample data
   fmtDate(d) { return new Date(d + 'T12:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }); },
   loadState() { try { return JSON.parse(localStorage.getItem(this.storeKey) || '{}'); } catch { return {}; } },
   saveState(s) { localStorage.setItem(this.storeKey, JSON.stringify(s)); },
@@ -27,9 +28,76 @@ const App = {
       const w = bar.style.width; bar.style.width = '0%'; requestAnimationFrame(() => bar.style.width = w);
     }), 80);
   },
+  async generateRealBrief() {
+    const btn = document.getElementById('gen-real-brief-btn');
+    if (!btn) return;
+    
+    btn.disabled = true;
+    btn.innerHTML = '<div class="spinner"></div>Generating...';
+    
+    try {
+      // Trigger the Daily Brief Generator job
+      const response = await fetch('/api/jobs/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobId: '2cafb2e9-696b-42db-98fa-5d605977123c',
+          wait: true
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        btn.innerHTML = '✓ Generated! Reloading...';
+        // Reload the dashboard to show new data
+        setTimeout(() => {
+          this.dates = []; // Clear cache
+          this.init(); // Reload
+        }, 1000);
+      } else {
+        btn.innerHTML = '✗ Failed - Try Chat';
+        btn.disabled = false;
+        setTimeout(() => {
+          btn.innerHTML = '✨ Generate My Real Brief';
+          btn.disabled = false;
+        }, 3000);
+      }
+    } catch (error) {
+      console.error('Failed to generate brief:', error);
+      btn.innerHTML = '✗ Error - Try Chat';
+      setTimeout(() => {
+        btn.innerHTML = '✨ Generate My Real Brief';
+        btn.disabled = false;
+      }, 3000);
+    }
+  },
+  renderSampleDataBanner() {
+    if (!this.isSampleData) return '';
+    
+    return `
+      <div class="sample-data-banner">
+        <div class="sample-data-content">
+          <div class="sample-data-icon">💡</div>
+          <div class="sample-data-text">
+            <strong>This is sample data</strong> — showing what your dashboard will look like when populated.
+          </div>
+          <button id="gen-real-brief-btn" class="gen-real-brief-btn">
+            ✨ Generate My Real Brief
+          </button>
+        </div>
+      </div>
+    `;
+  },
   async init() {
     this.dates = await Data.dates();
     if (!this.dates.length) this.dates = [new Date().toISOString().slice(0, 10)];
+    
+    // Check if we're showing sample data
+    // If dates only has today and no actual data was queried, we're using sample
+    const testBrief = await Data.load();
+    this.isSampleData = testBrief._isSample === true;
+    
     await this.render(); FoldNav.bind(this);
     document.getElementById('sections').addEventListener('click', async (e) => {
       const reviewBtn = e.target.closest('[data-review]');
@@ -42,11 +110,21 @@ const App = {
         if (detail) { detail.classList.toggle('open'); card.classList.toggle('expanded', detail.classList.contains('open')); }
       }
     });
+    
+    // Add click handler for generate button
+    const genBtn = document.getElementById('gen-real-brief-btn');
+    if (genBtn) {
+      genBtn.addEventListener('click', () => this.generateRealBrief());
+    }
   },
   async render() {
     const date = this.dates[this.idx];
     this.brief = this.decorate(await Data.load(date), date);
-    document.getElementById('hero').innerHTML = R.hero(this.brief.hero);
+    
+    // Render banner if sample data
+    const banner = this.renderSampleDataBanner();
+    
+    document.getElementById('hero').innerHTML = banner + R.hero(this.brief.hero);
     document.getElementById('sections').innerHTML = (this.brief.sections || []).map((s) => R.section(s)).join('');
     this.updateNav(); this.animateBars();
   },

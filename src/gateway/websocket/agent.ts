@@ -145,6 +145,9 @@ export async function setupAgentHandlers(
         const t3 = performance.now();
         timings.beforeStream = performance.now() - perfStart;
 
+        // Track work start time for elapsed timer
+        const workStartTime = Date.now();
+
         // Stream response chunks back to client
         // Each chunk includes chatId for frontend routing
         // Wrap in runWithToolContext so delegate_task and other tools get chatId via getCurrentChatId()
@@ -176,12 +179,18 @@ export async function setupAgentHandlers(
               chunkCount++;
 
               if (ws.readyState === ws.OPEN) {
-                // Send chunk with chatId for parallel stream routing
+                // Calculate elapsed work time in seconds
+                const elapsedSeconds = Math.floor((Date.now() - workStartTime) / 1000);
+                
+                // Send chunk with chatId and elapsed time for parallel stream routing
                 ws.send(
                   JSON.stringify({
                     id: message.id,
                     type: "agent:chunk",
-                    data: chunk, // chunk already includes chatId from streamAgent
+                    data: {
+                      ...chunk, // chunk already includes chatId from streamAgent
+                      elapsedSeconds, // Add server-driven elapsed time
+                    },
                   }),
                 );
               } else {

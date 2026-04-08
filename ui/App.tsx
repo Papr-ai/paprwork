@@ -174,6 +174,45 @@ export function App() {
     return () => window.removeEventListener('papr-onboarding-changed', checkOnboarding);
   }, [tabs, createTab]);
 
+  // Initialize Amplitude telemetry (events only, no session replay)
+  useEffect(() => {
+    const initTelemetry = async () => {
+      try {
+        // Get telemetry settings
+        const telemetryResult = await window.electronAPI.telemetry.getEnabled();
+        const telemetryEnabled = telemetryResult?.enabled ?? false;
+
+        if (!telemetryEnabled) {
+          console.log('[Telemetry] Disabled by user');
+          return;
+        }
+
+        // Get install ID from settings
+        const { gateway } = await import('./src/lib/gateway.js');
+        const settingsResponse = await gateway.send('settings:get', {});
+        const installId = settingsResponse.data?.telemetry?.installId;
+
+        if (!installId) {
+          console.warn('[Telemetry] No install ID found');
+          return;
+        }
+
+        // Get app version
+        const appVersion = await window.electronAPI.getAppVersion();
+
+        // Initialize Amplitude (events only)
+        const { initializeAmplitudeBrowser } = await import('./lib/telemetry');
+        await initializeAmplitudeBrowser(installId, telemetryEnabled, appVersion);
+
+        console.log('[Telemetry] Amplitude initialized with event tracking');
+      } catch (error) {
+        console.error('[Telemetry] Failed to initialize:', error);
+      }
+    };
+
+    initTelemetry();
+  }, []);
+
   // Log when React finishes first render
   useEffect(() => {
     console.log(`[React] App component mounted at +${(performance.now() - appStartTime).toFixed(2)}ms`);

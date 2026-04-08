@@ -291,7 +291,7 @@ export function FavoritesList() {
       {isExpanded && (
         <div className="favorites-list__items">
           {favorites.length === 0 && (
-            <div className="favorites-list__empty">Drag artifacts here</div>
+            <div className="favorites-list__empty">Drag your favorite app here</div>
           )}
           {favorites.map((favorite) => (
             <div

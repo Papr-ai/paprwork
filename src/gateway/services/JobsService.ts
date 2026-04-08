@@ -3,6 +3,8 @@ import path from "path";
 import os from "os";
 import type { ChildProcessWithoutNullStreams } from "child_process";
 import { v4 as uuidv4 } from "uuid";
+import { fileURLToPath } from "url";
+import Database from "better-sqlite3";
 import { JobDatabase } from "./jobs/JobDatabase.js";
 import { CommandJobExecutor } from "./jobs/executors/CommandJobExecutor.js";
 import { AgentJobExecutor } from "./jobs/executors/AgentJobExecutor.js";
@@ -10,6 +12,10 @@ import type { IJobExecutor } from "./jobs/executors/IJobExecutor.js";
 import { sanitizeError } from "../../core/tools/security.js";
 import { getGatewayTelemetry } from "./gatewayTelemetry.js";
 import { getJobRunHistory } from "./jobs/JobRunHistory.js";
+
+// ESM compatibility: get __dirname equivalent
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 import {
   classifyError,
   getErrorClassificationReason,
@@ -124,6 +130,147 @@ export class JobsService {
     }
   }
 
+  /**
+   * Install default jobs from src/resources/default-jobs/ if they don't exist yet.
+   * Called on first launch to provide pre-built jobs like the Daily Brief generator.
+   */
+  private async installDefaultJobs(): Promise<void> {
+    try {
+      // Path to bundled default jobs (in dist after build)
+      // __dirname is dist/gateway/services/ so we need to go up 2 levels to reach dist/
+      const defaultJobsDir = path.join(__dirname, "..", "..", "resources", "default-jobs");
+      
+      // Check if default jobs directory exists
+      try {
+        await fs.access(defaultJobsDir);
+      } catch {
+        console.log("[JobsService] No default jobs directory found, skipping installation");
+        return;
+      }
+
+      // Get list of default jobs
+      const defaultJobDirs = await fs.readdir(defaultJobsDir);
+      let installedCount = 0;
+      
+      for (const jobDirName of defaultJobDirs) {
+        const sourceDir = path.join(defaultJobsDir, jobDirName);
+        const stat = await fs.stat(sourceDir);
+        
+        if (!stat.isDirectory()) continue;
+
+        // Read job ID from job-id.txt
+        const jobIdPath = path.join(sourceDir, "job-id.txt");
+        let jobId: string;
+        try {
+          jobId = (await fs.readFile(jobIdPath, "utf-8")).trim();
+        } catch {
+          console.warn(`[JobsService] Skipping default job ${jobDirName}: no job-id.txt`);
+          continue;
+        }
+
+        // Check if job already exists (both in registry and on disk)
+        if (this.jobs.has(jobId)) {
+          console.log(`[JobsService] Default job already in registry: ${jobId}`);
+          continue;
+        }
+
+        const targetDir = path.join(this.jobsRootDir, jobId);
+        let needsInstall = false;
+        try {
+          await fs.access(targetDir);
+          console.log(`[JobsService] Default job files exist but not in registry: ${jobId}`);
+          // Files exist but not registered - add to registry below
+        } catch {
+          // Job doesn't exist, install files
+          needsInstall = true;
+        }
+
+        if (needsInstall) {
+          // Copy job files (but not data/ directory if it exists)
+          await fs.mkdir(targetDir, { recursive: true });
+          const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+          for (const entry of entries) {
+            const sourcePath = path.join(sourceDir, entry.name);
+            const targetPath = path.join(targetDir, entry.name);
+            if (entry.isDirectory()) {
+              // Skip data directory (will be created with db below)
+              if (entry.name === 'data') continue;
+              await fs.cp(sourcePath, targetPath, { recursive: true });
+            } else {
+              await fs.copyFile(sourcePath, targetPath);
+            }
+          }
+          console.log(`[JobsService] Copied default job files: ${jobId} (${jobDirName})`);
+        }
+
+        // Read metadata.json to get job details
+        const metadataPath = path.join(sourceDir, "metadata.json");
+        let metadata: Partial<JobRecord> & { description?: string; isDefault?: boolean };
+        try {
+          const metadataContent = await fs.readFile(metadataPath, "utf-8");
+          metadata = JSON.parse(metadataContent);
+        } catch {
+          console.warn(`[JobsService] No metadata.json found for default job ${jobId}, using defaults`);
+          metadata = {
+            id: jobId,
+            name: jobDirName,
+            type: "agent",
+            command: "",
+          };
+        }
+
+        // Create job entry in registry
+        const now = new Date().toISOString();
+        const job: JobRecord = {
+          id: jobId,
+          name: metadata.name || jobDirName,
+          type: (metadata.type as JobType) || "agent",
+          status: "idle" as JobStatus,
+          command: metadata.command || "",
+          createdAt: metadata.createdAt || now,
+          updatedAt: now,
+          ...(metadata.schedule ? { schedule: metadata.schedule } : {}),
+          ...(metadata.requirements ? { requirements: metadata.requirements } : {}),
+          ...(metadata.provider ? { provider: metadata.provider } : {}),
+          ...(metadata.model ? { model: metadata.model } : {}),
+        };
+
+        this.jobs.set(jobId, job);
+        
+        // Initialize SQLite database if init-db.sql exists
+        const initDbPath = path.join(sourceDir, "init-db.sql");
+        try {
+          await fs.access(initDbPath);
+          const dataDir = path.join(targetDir, "data");
+          await fs.mkdir(dataDir, { recursive: true });
+          const dbPath = path.join(dataDir, "data.db");
+          
+          // Create database and execute init script
+          const db = new Database(dbPath);
+          const initSql = await fs.readFile(initDbPath, "utf-8");
+          db.exec(initSql);
+          db.close();
+          
+          console.log(`[JobsService] Initialized database for job: ${jobId}`);
+        } catch {
+          // No init-db.sql or error initializing - that's okay
+        }
+        
+        installedCount++;
+        console.log(`[JobsService] Registered default job: ${jobId} - ${job.name}`);
+      }
+
+      // Save jobs index if any jobs were installed
+      if (installedCount > 0) {
+        await this.saveJobs();
+        console.log(`[JobsService] Installed and registered ${installedCount} default job(s)`);
+      }
+    } catch (error) {
+      console.error("[JobsService] Failed to install default jobs:", error);
+      // Don't throw - default jobs are nice-to-have, not critical
+    }
+  }
+
   async initialize(): Promise<void> {
     if (this.initialized) {
       return;
@@ -132,6 +279,7 @@ export class JobsService {
     await fs.mkdir(this.jobsRootDir, { recursive: true });
     await fs.mkdir(path.dirname(this.jobsIndexPath), { recursive: true });
     await this.loadJobs();
+    await this.installDefaultJobs(); // Install default jobs on first launch
 
     // Initialize run history
     const runHistory = getJobRunHistory();

@@ -10,49 +10,20 @@ import "./WorkingCard.css";
 interface WorkingCardProps {
   children: React.ReactNode;
   isExploring?: boolean;
+  elapsedSeconds?: number; // Server-provided elapsed time
 }
 
 export const WorkingCard: React.FC<WorkingCardProps> = ({
   children,
   isExploring = false,
+  elapsedSeconds = 0,
 }) => {
   // Start collapsed by default
   const [isCollapsed, setIsCollapsed] = useState(true);
   
-  // Timer state
-  const [elapsedTime, setElapsedTime] = useState(0);
-  const startTimeRef = useRef<number | null>(null);
-  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Start timer when exploring begins
-  useEffect(() => {
-    if (isExploring && !startTimeRef.current) {
-      // Start timing
-      startTimeRef.current = Date.now();
-      timerIntervalRef.current = setInterval(() => {
-        if (startTimeRef.current) {
-          setElapsedTime(Math.floor((Date.now() - startTimeRef.current) / 1000));
-        }
-      }, 1000);
-    } else if (!isExploring && startTimeRef.current) {
-      // Stop timing
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-        timerIntervalRef.current = null;
-      }
-      // Set final time
-      if (startTimeRef.current) {
-        setElapsedTime(Math.floor((Date.now() - startTimeRef.current) / 1000));
-      }
-    }
-
-    // Cleanup on unmount
-    return () => {
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-      }
-    };
-  }, [isExploring]);
+  // Use server-provided elapsed time directly
+  // No client-side timing needed - backend knows exactly when work started/stopped
+  const displayTime = elapsedSeconds;
 
   // Format elapsed time as "Xs" or "Xm Ys" for minutes
   const formatTime = (seconds: number): string => {
@@ -74,8 +45,8 @@ export const WorkingCard: React.FC<WorkingCardProps> = ({
         </span>
         <span className="working-label-text">Working</span>
         {isExploring && <PaprLogoIcon />}
-        {elapsedTime > 0 && (
-          <span className="working-timer">{formatTime(elapsedTime)}</span>
+        {displayTime > 0 && (
+          <span className="working-timer">{formatTime(displayTime)}</span>
         )}
       </div>
       <div
