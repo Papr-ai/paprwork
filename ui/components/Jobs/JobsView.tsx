@@ -8,7 +8,7 @@ type JobFilter = "all" | "running" | "idle" | "scheduled" | "disabled";
 type ViewMode = "list" | "graph";
 
 export function JobsView() {
-  const { jobs, graph, loading, error, runJob, stopJob, loadLogs, logs } =
+  const { jobs, graph, loading, error, runJob, stopJob, loadLogs, logsByJobId } =
     useJobs();
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [currentFilter, setCurrentFilter] = useState<JobFilter>("all");
@@ -222,6 +222,19 @@ export function JobsView() {
               </div>
               <h3 className="job-title">{job.name}</h3>
               <span className="job-type-badge">{job.type}</span>
+              {job.lastEvaluation && (
+                <span
+                  className={`job-eval-badge ${job.lastEvaluation.passed ? "job-eval-pass" : "job-eval-fail"}`}
+                  title={`Last eval: ${Math.round(job.lastEvaluation.score * 100)}% — ${job.lastEvaluation.passed ? "Passed" : "Failed"}`}
+                >
+                  {job.lastEvaluation.passed ? "✓" : "✗"} {Math.round(job.lastEvaluation.score * 100)}%
+                </span>
+              )}
+              {job.recipe?.enabled && !job.lastEvaluation && (
+                <span className="job-eval-badge job-eval-pending" title="Recipe enabled, no evaluations yet">
+                  ◉ Recipe
+                </span>
+              )}
               {job.schedule?.enabled && (
                 <span className="job-schedule-badge">{scheduleLabel(job)}</span>
               )}
@@ -347,6 +360,22 @@ export function JobsView() {
                     <span className="detail-label">Exit Code</span>
                     <span className="detail-value">{job.exitCode ?? "-"}</span>
                   </div>
+                  {job.lastEvaluation && (
+                    <div className="detail-item">
+                      <span className="detail-label">Eval Score</span>
+                      <span className={`detail-value ${job.lastEvaluation.passed ? "eval-passed" : "eval-failed"}`}>
+                        {Math.round(job.lastEvaluation.score * 100)}% — {job.lastEvaluation.passed ? "Passed" : "Failed"}
+                      </span>
+                    </div>
+                  )}
+                  {job.recipe?.enabled && (
+                    <div className="detail-item">
+                      <span className="detail-label">Recipe</span>
+                      <span className="detail-value">
+                        Enabled (threshold: {Math.round((job.recipe.passThreshold ?? 0.7) * 100)}%)
+                      </span>
+                    </div>
+                  )}
                   {job.folder && (
                     <div className="detail-item">
                       <span className="detail-label">Folder</span>
@@ -440,7 +469,7 @@ export function JobsView() {
                   <span>Latest logs</span>
                 </div>
                 <pre className="jobs-view-inline-logs">
-                  {logs || "Click a job action to load logs."}
+                  {logsByJobId[job.id] || "Click 'Load Logs' to view logs for this job."}
                 </pre>
                 <button
                   className="btn-job-action"

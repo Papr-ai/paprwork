@@ -50,6 +50,17 @@ export interface JobRecord {
   exitCode?: number;
   error?: string;
   waitingPermissionKeys?: string[];
+  recipe?: {
+    enabled: boolean;
+    autoEvaluate?: boolean;
+    passThreshold?: number;
+  };
+  lastEvaluation?: {
+    runId: string;
+    score: number;
+    passed: boolean;
+    timestamp: string;
+  };
 }
 
 export interface JobGraphAppLink {
@@ -75,7 +86,7 @@ export function useJobs() {
   const [jobs, setJobs] = useState<JobRecord[]>([]);
   const [graph, setGraph] = useState<JobGraph | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
-  const [logs, setLogs] = useState("");
+  const [logsByJobId, setLogsByJobId] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -165,7 +176,10 @@ export function useJobs() {
       maxBytes: 50000,
     });
     const payload = response.data as { logs?: string };
-    setLogs(payload.logs ?? "");
+    setLogsByJobId((prev) => ({
+      ...prev,
+      [jobId]: payload.logs ?? "",
+    }));
   }, []);
 
   useEffect(() => {
@@ -179,6 +193,23 @@ export function useJobs() {
       event: CustomEvent<{ type: string; data?: Record<string, unknown> }>,
     ) => {
       const { type, data } = event.detail ?? {};
+      if (type === "job-recipe-evaluation" && data?.jobId) {
+        const jobId = data.jobId as string;
+        setJobs((prev) =>
+          prev.map((j) => {
+            if (j.id !== jobId) return j;
+            return {
+              ...j,
+              lastEvaluation: {
+                runId: data.runId as string,
+                score: data.score as number,
+                passed: data.passed as boolean,
+                timestamp: new Date().toISOString(),
+              },
+            };
+          }),
+        );
+      }
       if (type === "jobs:status-changed" && data?.jobId) {
         const jobId = data.jobId as string;
         setJobs((prev) =>
@@ -209,7 +240,7 @@ export function useJobs() {
     jobs,
     graph,
     selectedJobId,
-    logs,
+    logsByJobId,
     loading,
     error,
     loadJobs,

@@ -845,3 +845,42 @@
   border-color: var(--primary-color);
   box-shadow: 0 0 0 2px rgba(0, 113, 227, 0.15);
 }
+
+/* ─── Execution Recipe Evaluation Badges ──────────────────────���───────── */
+
+.job-eval-badge {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.job-eval-pass {
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  color: #22c55e;
+}
+
+.job-eval-fail {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #ef4444;
+}
+
+.job-eval-pending {
+  background: rgba(234, 179, 8, 0.1);
+  border: 1px solid rgba(234, 179, 8, 0.3);
+  color: #eab308;
+}
+
+.eval-passed {
+  color: #22c55e !important;
+  font-weight: 600;
+}
+
+.eval-failed {
+  color: #ef4444 !important;
+  font-weight: 600;
+}
