@@ -48,6 +48,10 @@ export type {
   JobScheduleState,
   JobStatus,
   JobType,
+  RecipeConfig,
+  RecipeEvaluation,
+  RecipeEvaluationSummary,
+  RecipeEvalCriterion,
 } from "./jobs/types.js";
 
 let jobsServiceInstance: JobsService | null = null;
@@ -311,6 +315,23 @@ export class JobsService {
     }
   }
 
+  /**
+   * Reload jobs from disk, picking up any manual edits to jobs.json.
+   * Useful when agent or user manually fixes job status on disk.
+   */
+  async reloadJobs(): Promise<void> {
+    console.log("[JobsService] Reloading jobs from disk...");
+    await this.loadJobs();
+    console.log(`[JobsService] Reloaded ${this.jobs.size} jobs from disk`);
+    
+    // Request scheduler to reschedule in case job schedules changed
+    void import("./JobsScheduler.js")
+      .then(({ getJobsScheduler }) => {
+        getJobsScheduler().requestReschedule();
+      })
+      .catch(() => {});
+  }
+
   private async saveJobs(): Promise<void> {
     const list = Array.from(this.jobs.values()).sort(
       (a, b) =>
@@ -571,6 +592,7 @@ export class JobsService {
       reportChatId: input.reportChatId,
       provider: input.provider,
       model: input.model,
+      recipe: input.recipe,
       createdAt: now,
       updatedAt: now,
     };
@@ -619,6 +641,56 @@ export class JobsService {
         .catch(() => {});
     }
     return job;
+  }
+
+  /** Run recipe evaluation after job completion */
+  private async runRecipeEvaluation(
+    job: JobRecord,
+    runId: string,
+  ): Promise<void> {
+    const { evaluateJobRun } = await import("./jobs/RecipeEvaluator.js");
+    const logs = await this.getLogs(job.id, 32000);
+    const output = job.lastOutput ?? "";
+
+    await this.appendLog(
+      job.id,
+      `[Recipe] Starting evaluation for run ${runId}...`,
+    );
+
+    const evaluation = await evaluateJobRun(job, runId, output, logs);
+    if (evaluation) {
+      // Update job record with latest evaluation summary
+      const updated = this.jobs.get(job.id);
+      if (updated) {
+        updated.lastEvaluation = {
+          runId: evaluation.runId,
+          score: evaluation.overallScore,
+          passed: evaluation.passed,
+          timestamp: evaluation.timestamp,
+        };
+        updated.updatedAt = new Date().toISOString();
+        this.jobs.set(job.id, updated);
+        await this.saveJobs();
+
+        // Broadcast evaluation result to UI
+        const { broadcast } = await import("../websocket/index.js");
+        broadcast({
+          type: "job-recipe-evaluation",
+          data: {
+            jobId: job.id,
+            runId,
+            score: evaluation.overallScore,
+            passed: evaluation.passed,
+            summary: evaluation.summary,
+          },
+        });
+      }
+
+      await this.appendLog(
+        job.id,
+        `[Recipe] Evaluation complete: score=${evaluation.overallScore.toFixed(2)} passed=${evaluation.passed}`,
+      );
+    }
   }
 
   private async appendLog(jobId: string, line: string): Promise<void> {
@@ -1028,6 +1100,32 @@ export class JobsService {
     let outputSize = 0;
 
     return new Promise((resolve) => {
+      let resolved = false;
+      const safeResolve = (result: { exitCode: number; lastOutput?: string; errorMessage?: string }) => {
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(watchdog);
+          resolve(result);
+        }
+      };
+
+      // Watchdog: kill process if it hangs for 30 minutes without completing
+      const WATCHDOG_MS = 30 * 60 * 1000; // 30 minutes
+      const watchdog = setTimeout(() => {
+        if (this.running.has(job.id)) {
+          const pid = proc.pid;
+          console.warn(
+            `[JobsService] Watchdog timeout for ${job.id} (pid ${pid}) after ${WATCHDOG_MS / 1000}s — killing process`,
+          );
+          void appendRunLog(`Watchdog timeout after ${WATCHDOG_MS / 1000}s — killing process`);
+          try {
+            proc.kill("SIGKILL");
+          } catch { /* already dead */ }
+          this.running.delete(job.id);
+          safeResolve({ exitCode: -1, errorMessage: "Watchdog timeout — process killed after 30 minutes" });
+        }
+      }, WATCHDOG_MS);
+
       proc.stdout.on("data", async (chunk: Buffer) => {
         const text = chunk.toString("utf8").trimEnd();
         // Sanitize stdout before logging
@@ -1050,12 +1148,12 @@ export class JobsService {
         void appendRunLog(`Process exited with code ${exitCode}`);
         const lastOutput =
           outputChunks.join("\n").slice(0, MAX_OUTPUT_BYTES) || undefined;
-        resolve({ exitCode, lastOutput });
+        safeResolve({ exitCode, lastOutput });
       });
       proc.on("error", (error: Error) => {
         this.running.delete(job.id);
         void appendRunLog(`Process error: ${error.message}`);
-        resolve({ exitCode: -1, errorMessage: error.message });
+        safeResolve({ exitCode: -1, errorMessage: error.message });
       });
     });
   }
@@ -1191,6 +1289,16 @@ export class JobsService {
             duration_ms: Math.round(performance.now() - attemptStart),
             attempts: attempt,
           });
+
+          // ── Recipe Evaluation (fire-and-forget after completion) ──
+          if (updated.recipe?.enabled && updated.recipe?.autoEvaluate) {
+            void this.runRecipeEvaluation(updated, runId).catch((err) => {
+              console.error(
+                `[JobsService] Recipe evaluation failed for ${job.id}:`,
+                err,
+              );
+            });
+          }
           if (updated.scheduleState?.currentIdempotencyKey) {
             return await this.setJobStatus(job.id, status, {
               scheduleState: {
@@ -1318,6 +1426,7 @@ export class JobsService {
         | "reportChatId"
         | "provider"
         | "model"
+        | "recipe"
       >
     >,
   ): Promise<import("./jobs/types.js").JobRecord> {
@@ -1489,8 +1598,8 @@ export class JobsService {
    * or exception after the process exited). Marks them failed so schedules and updates work again.
    * Safe while a real run is in flight: {@link running} holds the job id until the process ends.
    * 
-   * For agent/subagent jobs (which don't use child processes), we detect stale state by checking
-   * if the job has been "running" for longer than expected without completion.
+   * NOTE: Agent/subagent jobs are NOT checked here because they can legitimately run for hours.
+   * They are only reconciled on app startup via reconcileInterruptedJobs().
    */
   async reconcileStaleRunningJobs(minStaleMs: number = 20_000): Promise<void> {
     const processBackedTypes: JobType[] = [
@@ -1506,10 +1615,27 @@ export class JobsService {
         continue;
       }
       
-      // For process-backed jobs: check if process is tracked
+      // ONLY check process-backed jobs (they have reliable completion signals)
       if (processBackedTypes.includes(job.type)) {
         if (this.running.has(jobId)) {
-          continue;
+          const proc = this.running.get(jobId)!;
+          const pid = proc.pid;
+          if (pid) {
+            try {
+              process.kill(pid, 0); // Signal 0 = check if process is alive
+              continue; // Process is genuinely running
+            } catch {
+              // Process is dead but 'close' event never fired (e.g. after macOS sleep/wake)
+              console.warn(
+                `[JobsService] Zombie process detected for ${jobId} (pid ${pid}) — cleaning up`,
+              );
+              this.running.delete(jobId);
+              // Fall through to stale handling below
+            }
+          } else {
+            // No PID — process never started properly
+            this.running.delete(jobId);
+          }
         }
         const anchorMs = new Date(
           job.lastRunAt ?? job.updatedAt,
@@ -1532,28 +1658,8 @@ export class JobsService {
         continue;
       }
       
-      // For agent/subagent jobs: check if stuck in running for too long
-      // Agent jobs should complete within a reasonable timeframe or update their status
-      if (job.type === "agent" || job.type === "subagent") {
-        const anchorMs = new Date(
-          job.lastRunAt ?? job.updatedAt,
-        ).getTime();
-        if (Number.isNaN(anchorMs) || nowMs - anchorMs < minStaleMs) {
-          continue;
-        }
-        console.warn(
-          `[JobsService] Stale running ${job.type} job ${jobId} (stuck since ${job.lastRunAt ?? job.updatedAt}); marking failed`,
-        );
-        await this.appendLog(
-          jobId,
-          `Stale running state cleared: ${job.type} job was stuck in running state without completion.`,
-        );
-        await this.setJobStatus(jobId, "failed", {
-          error:
-            `${job.type} job stuck in running state — may have been interrupted by app restart or exception. Check logs and run again if needed.`,
-          currentExecutionId: undefined,
-        });
-      }
+      // Agent/subagent jobs are NOT checked at runtime (can run for hours)
+      // They are only reconciled on app startup via reconcileInterruptedJobs()
     }
   }
 

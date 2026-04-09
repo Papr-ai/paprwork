@@ -90,6 +90,18 @@ const scheduleSchema = z.object({
   catchUpMissed: z.boolean().optional(),
 });
 
+const recipeConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  autoEvaluate: z.boolean().optional().default(true).describe(
+    "Automatically evaluate each run against the recipe on completion"
+  ),
+  passThreshold: z.number().min(0).max(1).optional().default(0.7).describe(
+    "Minimum score (0-1) for a run to pass evaluation"
+  ),
+  evaluatorProvider: z.enum(["openai", "anthropic", "google", "ollama"]).optional(),
+  evaluatorModel: z.string().optional(),
+});
+
 const createJobSchema = z.object({
   name: z.string().min(1),
   type: z.enum([
@@ -155,6 +167,10 @@ const createJobSchema = z.object({
     .describe(
       "Model ID for agent/subagent jobs. Overrides default. Example: 'gpt-5.4', 'claude-sonnet-4-6', 'qwen3.5:latest', 'gemma3:4b'",
     ),
+  recipe: recipeConfigSchema.optional().describe(
+    "Execution recipe configuration. When enabled, an agent evaluates each run against the recipe's quality rubric. " +
+    "Use write_recipe to set the actual recipe content (markdown with intent, criteria, rubric, anti-patterns, edge cases)."
+  ),
 });
 
 const runJobSchema = z.object({
@@ -355,6 +371,7 @@ export const createJobTool = createTool({
       reportChatId: args.reportChatId,
       provider: args.provider,
       model: args.model,
+      recipe: args.recipe,
     });
     return { success: true, data: job };
   },
@@ -2364,6 +2381,49 @@ export const getJobStatsTool = createTool({
   },
 });
 
+export const reloadJobsTool = createTool({
+  id: "reload_jobs",
+  description: `Reload jobs from disk after manually editing jobs.json.
+
+Use when:
+- You manually edited jobs.json via bash/jq commands
+- You want to verify changes without restarting the app
+
+NOT needed for:
+- Stuck jobs → Process-backed jobs auto-recover in 20-60s
+- Agent jobs stuck → Fixed automatically on next app restart
+- Normal job operations → use update_job(), run_job() instead`,
+  inputSchema: z.object({}),
+  execute: async () => {
+    const startTime = performance.now();
+
+    try {
+      const { getJobsService } = await import("../../gateway/services/JobsService.js");
+      const jobsService = getJobsService();
+      await jobsService.reloadJobs();
+      const jobs = await jobsService.listJobs();
+
+      return {
+        success: true,
+        data: {
+          reloaded: true,
+          jobsCount: jobs.length,
+          message: `Successfully reloaded ${jobs.length} jobs from disk. Scheduler state updated.`,
+        },
+        duration: performance.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: (error as Error).message,
+        duration: performance.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  },
+});
+
 export const appJobsTools = [
   createAppTool,
   createJobTool,
@@ -2377,6 +2437,7 @@ export const appJobsTools = [
   deleteJobTool,
   getJobHistoryTool,
   getJobStatsTool,
+  reloadJobsTool,
   linkAppDataSourceTool,
   readAppDataSourcesTool,
   readAppFileTool,

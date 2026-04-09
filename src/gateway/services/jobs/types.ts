@@ -45,6 +45,8 @@ export interface JobRecord {
   provider?: string;
   /** Model ID for agent/subagent jobs (e.g. "gpt-5.4", "claude-sonnet-4-5"). Overrides default. */
   model?: string;
+  /** Execution recipe configuration — enables quality evaluation of runs */
+  recipe?: RecipeConfig;
   createdAt: string;
   updatedAt: string;
   lastRunAt?: string;
@@ -61,6 +63,8 @@ export interface JobRecord {
   lastOutput?: string;
   /** When status is waiting_permission, lists the API key names awaiting user approval. */
   waitingPermissionKeys?: string[];
+  /** Latest recipe evaluation result (summary — full results in evaluations/ dir) */
+  lastEvaluation?: RecipeEvaluationSummary;
 }
 
 export interface CreateJobInput {
@@ -89,6 +93,8 @@ export interface CreateJobInput {
   provider?: string;
   /** Model ID for agent/subagent jobs (e.g. "gpt-5.4", "claude-sonnet-4-5"). Overrides default. */
   model?: string;
+  /** Execution recipe configuration — enables quality evaluation of runs */
+  recipe?: RecipeConfig;
   useCheckpointTemplate?: boolean;
 }
 
@@ -142,7 +148,7 @@ export type JobMemoryPolicy = "none" | "summary" | "full";
 export interface JobSchedule {
   enabled: boolean;
   cron?: string;
-  /** IANA timezone for cron evaluation (e.g. `America/Los_Angeles`). Omit for local default behavior. */
+  /** IANA timezone for cron evaluation (e.g. "America/Los_Angeles"). Omit for local default behavior. */
   timezone?: string;
   intervalMs?: number;
   atTime?: string;
@@ -156,4 +162,52 @@ export interface JobScheduleState {
   // Idempotency tracking for scheduled runs
   currentIdempotencyKey?: string;
   lastIdempotencyKey?: string;
+}
+
+// ─── Execution Recipes ───────────────────────────────────────────────────────
+
+/** Configuration for a job's execution recipe (stored in job.json) */
+export interface RecipeConfig {
+  /** Whether the recipe is active and should be used for evaluation */
+  enabled: boolean;
+  /** Automatically evaluate runs against the recipe on completion */
+  autoEvaluate?: boolean;
+  /** Minimum overall score (0-1) to consider a run as passing */
+  passThreshold?: number;
+  /** Provider for the evaluator agent (defaults to job's provider or system default) */
+  evaluatorProvider?: string;
+  /** Model for the evaluator agent (defaults to job's model or system default) */
+  evaluatorModel?: string;
+}
+
+/** Compact evaluation summary stored on the job record */
+export interface RecipeEvaluationSummary {
+  runId: string;
+  score: number;
+  passed: boolean;
+  timestamp: string;
+}
+
+/** A single criterion evaluation result */
+export interface RecipeEvalCriterion {
+  name: string;
+  score: number;
+  weight: number;
+  passed: boolean;
+  notes: string;
+}
+
+/** Full evaluation result for a single run */
+export interface RecipeEvaluation {
+  runId: string;
+  jobId: string;
+  timestamp: string;
+  overallScore: number;
+  passed: boolean;
+  criteria: RecipeEvalCriterion[];
+  summary: string;
+  antiPatternViolations: string[];
+  edgeCasesHandled: string[];
+  evaluatorModel: string;
+  durationMs: number;
 }

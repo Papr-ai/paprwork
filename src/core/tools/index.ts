@@ -16,6 +16,7 @@ import { jobFolderTools } from "./jobFolders.js";
 import { webviewTools } from "./webview.js";
 import { delegationTools } from "./delegation.js";
 import { planningTools } from "./planning.js";
+import { recipeTools } from "./recipes.js";
 import { keyManagementTools } from "./keyManagement.js";
 
 /**
@@ -34,6 +35,7 @@ export const allTools = [
   ...delegationTools,
   ...planningTools,
   ...keyManagementTools,
+  ...recipeTools,
 ];
 
 /**
@@ -51,6 +53,7 @@ export const toolsByCategory = {
   delegation: delegationTools,
   planning: planningTools,
   keyManagement: keyManagementTools,
+  recipes: recipeTools,
 } as const;
 
 /**
@@ -132,6 +135,7 @@ export {
 } from "./jobFolders.js";
 
 export { planningTools, createPlanTool, updatePlanTool, deletePlanTool } from "./planning.js";
+export { writeRecipeTool, readRecipeTool, evaluateRunTool, listEvaluationsTool } from "./recipes.js";
 
 export {
   keyManagementTools,
