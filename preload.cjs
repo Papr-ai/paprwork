@@ -81,6 +81,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ensureModel: (modelName) => ipcRenderer.invoke("ollama:ensure-model", modelName),
     listModels: () => ipcRenderer.invoke("ollama:list-models"),
     hasModel: (modelName) => ipcRenderer.invoke("ollama:has-model", modelName),
+    getHostMemory: () => ipcRenderer.invoke("ollama:host-memory"),
     start: () => ipcRenderer.invoke("ollama:start"),
     onDownloadProgress: (callback) => {
       ipcRenderer.on("ollama:download-progress", (_event, data) => callback(data));

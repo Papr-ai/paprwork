@@ -12,13 +12,14 @@ import React, {
   useImperativeHandle,
   useCallback,
 } from "react";
-import { CHAT_MODELS, getModelGroups } from "../../constants/models";
+import { CHAT_MODELS, getModelGroups, ollamaModelFitsHostRam } from "../../constants/models";
 import type { AIModel } from "../../constants/models";
 import { ChatHistoryDropdown } from "./ChatHistoryDropdown";
 import { ContextDropdown } from "./ContextDropdown";
 import { ContextPills } from "./ContextPills";
 import { SlashCommandMenu } from "./SlashCommandMenu";
 import type { Artifact } from "../../stores/artifactsStore";
+import { createFileContextArtifactsFromFiles } from "../../utils/fileContextArtifact";
 import { useChatStore } from "../../stores/chatStore";
 import { useOllama } from "../../hooks/useOllama";
 import "./InputBar.css";
@@ -36,10 +37,14 @@ interface InputBarProps {
   isModelAvailable?: (model: AIModel) => boolean;
   /** Called when user clicks a locked model - open settings to add key/OAuth */
   onOpenSettings?: () => void;
+  /** Fires after file context pills are added (e.g. drag-drop) so parent can clear drag-over UI */
+  onFileAttachmentsAdded?: () => void;
 }
 
 export interface InputBarRef {
   focus: () => void;
+  /** Add dropped or pasted files as the same context attachments as "Attach file". */
+  attachFiles: (files: File[]) => void;
 }
 
 export const InputBar = forwardRef<InputBarRef, InputBarProps>(
@@ -55,6 +60,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       onModelChange,
       isModelAvailable,
       onOpenSettings,
+      onFileAttachmentsAdded,
     },
     ref,
   ) => {
@@ -64,7 +70,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     const clearDraftMessage = useChatStore((state) => state.clearDraftMessage);
 
     // Ollama status for showing install indicator
-    const { hasModel } = useOllama();
+    const { hasModel, hostTotalRamGb } = useOllama();
 
     const [message, setMessage] = useState(draftMessage);
     const [isFocused, setIsFocused] = useState(false);
@@ -92,12 +98,52 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       setDraftMessage(chatId, message);
     }, [message, chatId, setDraftMessage]);
 
-    // Expose focus method to parent
-    useImperativeHandle(ref, () => ({
-      focus: () => {
-        textareaRef.current?.focus();
+    const appendFileArtifacts = useCallback(
+      (files: File[]) => {
+        if (files.length === 0) return;
+        const newArtifacts = createFileContextArtifactsFromFiles(files);
+        setSelectedArtifacts((prev) => {
+          const out = [...prev];
+          for (const a of newArtifacts) {
+            if (!out.some((x) => x.id === a.id)) out.push(a);
+          }
+          return out;
+        });
+        setIsFocused(true);
+        onFileAttachmentsAdded?.();
+        queueMicrotask(() => textareaRef.current?.focus());
       },
-    }));
+      [onFileAttachmentsAdded],
+    );
+
+    const handleFileDragOver = useCallback((e: React.DragEvent) => {
+      if ([...e.dataTransfer.types].includes("Files")) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }
+    }, []);
+
+    const handleFileDrop = useCallback(
+      (e: React.DragEvent) => {
+        const { files } = e.dataTransfer;
+        if (!files?.length) return;
+        e.preventDefault();
+        appendFileArtifacts(Array.from(files));
+      },
+      [appendFileArtifacts],
+    );
+
+    // Expose focus + file attach for drag-drop on parent (whole chat surface)
+    useImperativeHandle(
+      ref,
+      () => ({
+        focus: () => {
+          textareaRef.current?.focus();
+        },
+        attachFiles: (files: File[]) => appendFileArtifacts(files),
+      }),
+      [appendFileArtifacts],
+    );
 
     // Auto-focus on mount
     useEffect(() => {
@@ -225,7 +271,11 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
           />
         )}
 
-        <div className="input-bar__wrapper">
+        <div
+          className="input-bar__wrapper"
+          onDragOver={handleFileDragOver}
+          onDrop={handleFileDrop}
+        >
           {/* Context pills - shown when artifacts are selected */}
           {(isFocused || selectedArtifacts.length > 0) && (
             <div className="input-context-section">
@@ -254,6 +304,8 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
               onKeyDown={handleKeyDown}
               onFocus={() => setIsFocused(true)}
               onBlur={handleBlur}
+              onDragOver={handleFileDragOver}
+              onDrop={handleFileDrop}
               placeholder={placeholder}
               rows={1}
             />
@@ -327,6 +379,10 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                           const available = isModelAvailable?.(model) ?? true;
                           const isOllama = model.provider === 'ollama';
                           const needsInstall = isOllama && !hasModel(model.id);
+                          const ramTight =
+                            isOllama &&
+                            hostTotalRamGb !== null &&
+                            !ollamaModelFitsHostRam(model.id, hostTotalRamGb);
                           
                           return (
                             <button
@@ -346,9 +402,11 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                               title={
                                 !available
                                   ? "Add API key or connect OAuth in Settings"
-                                  : needsInstall
-                                    ? "Click to download and install"
-                                    : undefined
+                                  : ramTight
+                                    ? `Estimated RAM needs may exceed this device (~${hostTotalRamGb} GB). Smaller Ollama models may run better.`
+                                    : needsInstall
+                                      ? "Click to download and install"
+                                      : undefined
                               }
                             >
                               <div className="model-picker-item-content">
@@ -371,6 +429,14 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                                       >
                                         <path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                                       </svg>
+                                    </span>
+                                  )}
+                                  {ramTight && available && (
+                                    <span
+                                      className="model-badge-ram-warn"
+                                      title="May need more RAM than this Mac/PC"
+                                    >
+                                      RAM
                                     </span>
                                   )}
                                   {needsInstall && available && (

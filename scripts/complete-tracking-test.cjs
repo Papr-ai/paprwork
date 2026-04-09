@@ -154,7 +154,7 @@ async function runTests() {
     test('Document has agent name', doc.createdByAgentName === TEST_AGENT_NAME);
 
     // Verify file system
-    const docMetaPath = path.join(os.homedir(), 'PAPR', 'documents', doc.id, 'meta.json');
+    const docMetaPath = path.join(os.homedir(), 'Papr', 'documents', doc.id, 'meta.json');
     if (fs.existsSync(docMetaPath)) {
       const meta = JSON.parse(fs.readFileSync(docMetaPath, 'utf8'));
       test('Document meta file has agent ID', meta.createdByAgentId === TEST_AGENT_ID);
@@ -206,7 +206,7 @@ async function runTests() {
     test('Plan has agent name', plan.sourceAgentName === TEST_AGENT_NAME);
 
     // Verify in database
-    const plansDbPath = path.join(os.homedir(), 'PAPR', 'data', 'plans.db');
+    const plansDbPath = path.join(os.homedir(), 'Papr', 'data', 'plans.db');
     const plansDb = new Database(plansDbPath);
     const planRow = plansDb.prepare('SELECT * FROM plans WHERE plan_id = ?').get('test-plan-123');
     test('Plan in database', planRow !== undefined);

@@ -1,0 +1,71 @@
+.connection-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  backdrop-filter: blur(10px);
+  transition: all 0.3s ease;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.connection-indicator--reconnecting {
+  background: rgba(255, 193, 7, 0.15);
+  border: 1px solid rgba(255, 193, 7, 0.4);
+  color: #f57c00;
+}
+
+.connection-indicator--disconnected {
+  background: rgba(244, 67, 54, 0.15);
+  border: 1px solid rgba(244, 67, 54, 0.4);
+  color: #d32f2f;
+}
+
+.connection-indicator__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.connection-indicator--reconnecting .connection-indicator__dot {
+  background: #f57c00;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.connection-indicator--disconnected .connection-indicator__dot {
+  background: #d32f2f;
+}
+
+.connection-indicator__text {
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(0.8);
+  }
+}
+
+/* Dark mode */
+body[data-theme="dark"] .connection-indicator--reconnecting {
+  background: rgba(255, 193, 7, 0.2);
+  border: 1px solid rgba(255, 193, 7, 0.5);
+  color: #ffb300;
+}
+
+body[data-theme="dark"] .connection-indicator--disconnected {
+  background: rgba(244, 67, 54, 0.2);
+  border: 1px solid rgba(244, 67, 54, 0.5);
+  color: #f44336;
+}

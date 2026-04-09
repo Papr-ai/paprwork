@@ -41,7 +41,7 @@ Redesigned the Data tab as "Memory" tab with comprehensive memory management fea
 **Features:**
 - Displays `workspace.md` content in readable format
 - Inline editor with save/cancel buttons
-- "Open Folder" button to open `~/PAPR/workspace/` in system file explorer
+- "Open Folder" button to open `~/Papr/workspace/` in system file explorer
 - Auto-creates `workspace.md` with default template if doesn't exist
 - Markdown-friendly textarea editor
 
@@ -64,7 +64,7 @@ Redesigned the Data tab as "Memory" tab with comprehensive memory management fea
   - 📁 Jobs/ - Automated jobs
   - 📁 workspace/ - Context files
   - 📄 chats.db - Chat history
-- "Open PAPR Folder" button to open `~/PAPR/` in system explorer
+- "Open PAPR Folder" button to open `~/Papr/` in system explorer
 - Replaces old "Data Location" card
 
 **Files Modified:**
@@ -105,7 +105,7 @@ Redesigned the Data tab as "Memory" tab with comprehensive memory management fea
 **New WebSocket Handlers** (`src/gateway/websocket/memory.ts`):
 
 1. **`memory:get-workspace`**
-   - Reads `~/PAPR/workspace/workspace.md`
+   - Reads `~/Papr/workspace/workspace.md`
    - Creates default file if doesn't exist
    - Returns content and file path
 
@@ -173,7 +173,7 @@ await gateway.send("memory:get-workspace", {});
 await gateway.send("memory:save-workspace", { content: "..." });
 
 // Open folder
-await gateway.send("memory:open-folder", { folderPath: "~/PAPR/" });
+await gateway.send("memory:open-folder", { folderPath: "~/Papr/" });
 
 // Get chat stats
 await gateway.send("memory:chat-stats", {});
@@ -225,7 +225,7 @@ await gateway.send("memory:chat-stats", {});
 - [ ] Click Edit, modify content, click Save
 - [ ] Verify content persists after reload
 - [ ] Click "Open Folder" for workspace - verify folder opens in Finder/Explorer
-- [ ] Click "Open PAPR Folder" - verify ~/PAPR opens
+- [ ] Click "Open PAPR Folder" - verify ~/Papr opens
 - [ ] Verify folder structure displays correctly
 - [ ] Send agent message - verify code indexing starts (check terminal logs)
 - [ ] Verify Code Memories section shows stats after indexing
@@ -253,7 +253,7 @@ await gateway.send("memory:chat-stats", {});
 
 4. **Document Indexing**
    - Index markdown files from workspace
-   - Index documents from ~/PAPR/documents
+   - Index documents from ~/Papr/documents
    - Show document stats in UI
 
 ## Conclusion

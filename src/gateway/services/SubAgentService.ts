@@ -52,7 +52,7 @@ const DEFAULT_SUB_AGENTS: Array<
     systemPrompt:
       "You are a focused research sub-agent. Gather evidence, summarize clearly, and highlight uncertainty.",
     provider: "openai",
-    model: "gpt-5.2",
+    model: "gpt-5.4-mini",
     allowedToolIds: [
       "bash",
       "read_file",
@@ -73,7 +73,7 @@ const DEFAULT_SUB_AGENTS: Array<
     systemPrompt:
       "You are a coding sub-agent. Produce practical implementation steps and validate outcomes.",
     provider: "openai",
-    model: "gpt-5.2",
+    model: "gpt-5.4-mini",
     allowedToolIds: [
       "bash",
       "read_file",
@@ -99,7 +99,7 @@ export class SubAgentService {
   private readonly pendingQuestions = new Map<string, PendingQuestion>();
 
   constructor() {
-    const root = path.join(os.homedir(), "PAPR", "data");
+    const root = path.join(os.homedir(), "Papr", "data");
     this.profilePath = path.join(root, "subagents.json");
     this.legacyRunsPath = path.join(root, "subagent-runs.json");
     this.profiles = new Map();

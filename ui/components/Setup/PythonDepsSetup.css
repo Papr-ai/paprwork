@@ -1,0 +1,173 @@
+.python-deps-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(
+    135deg,
+    rgba(59, 130, 246, 0.95),
+    rgba(147, 51, 234, 0.95)
+  );
+  backdrop-filter: blur(10px);
+  color: white;
+  padding: 12px 16px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 9999;
+  animation: slideDown 0.3s ease-out;
+}
+
+.python-deps-banner.python-deps-error {
+  background: linear-gradient(
+    135deg,
+    rgba(239, 68, 68, 0.95),
+    rgba(220, 38, 38, 0.95)
+  );
+}
+
+@keyframes slideDown {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.python-deps-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.python-deps-icon {
+  font-size: 24px;
+  flex-shrink: 0;
+}
+
+.python-deps-text {
+  flex: 1;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.python-deps-text strong {
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.python-deps-version {
+  opacity: 0.9;
+  font-size: 13px;
+  margin-left: 8px;
+}
+
+.python-deps-link {
+  color: white;
+  text-decoration: underline;
+  margin-left: 8px;
+  opacity: 0.9;
+  transition: opacity 0.2s;
+}
+
+.python-deps-link:hover {
+  opacity: 1;
+}
+
+.python-deps-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.python-deps-install-btn {
+  background: white;
+  color: #3b82f6;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.2s;
+}
+
+.python-deps-install-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.python-deps-install-btn:active {
+  transform: translateY(0);
+}
+
+.python-deps-dismiss-btn {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.python-deps-dismiss-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.python-deps-dismiss {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.python-deps-dismiss:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.python-deps-progress {
+  margin-top: 8px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.python-deps-progress-bar {
+  height: 100%;
+  background: white;
+  transition: width 0.3s ease-out;
+  border-radius: 2px;
+}
+
+/* Animated progress bar during installation */
+.python-deps-banner .python-deps-progress-bar[style*="50%"] {
+  animation: shimmer 2s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.6;
+  }
+}

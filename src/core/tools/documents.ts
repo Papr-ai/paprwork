@@ -182,7 +182,7 @@ export const importDocumentTool = createTool({
     // Save the original path in meta so we can write back later
     const metaPath = path.join(
       os.homedir(),
-      "PAPR",
+      "Papr",
       "documents",
       document.id,
       "meta.json",

@@ -56,7 +56,7 @@
 ## Data Flow
 
 ```
-Settings Storage (~/PAPR/data/settings.json)
+Settings Storage (~/Papr/data/settings.json)
 │
 ├─ preferences: {
 │    defaultHomeAppId: "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c"
@@ -109,7 +109,7 @@ paprwork-v2/
 │   ├── DEFAULT_HOME_APP.md
 │   └── DEFAULT_HOME_APP_SETUP_COMPLETE.md
 │
-└── ~/PAPR/
+└── ~/Papr/
     ├── data/
     │   ├── settings.json
     │   │   └── preferences.defaultHomeAppId: "<app-id>"
@@ -156,7 +156,7 @@ paprwork-v2/
                   ▼
     ┌──────────────────────────────┐
     │    Settings Storage          │
-    │    ~/PAPR/data/settings.json │
+    │    ~/Papr/data/settings.json │
     └──────────────────────────────┘
 ```
 
@@ -170,7 +170,7 @@ Developer/User
     ▼
 scripts/set-default-home-app.mjs
     │
-    ├─ Read ~/PAPR/data/settings.json
+    ├─ Read ~/Papr/data/settings.json
     │
     ├─ Set preferences.defaultHomeAppId = <app-id>
     │
@@ -193,7 +193,7 @@ scripts/set-default-home-app.mjs
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    Persistent State                      │
-│               (~/PAPR/data/settings.json)                │
+│               (~/Papr/data/settings.json)                │
 │                                                          │
 │  {                                                       │
 │    "preferences": {                                      │

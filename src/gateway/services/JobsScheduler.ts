@@ -11,14 +11,12 @@ import {
 let jobsSchedulerInstance: JobsScheduler | null = null;
 
 export class JobsScheduler {
-  private static readonly TICK_TELEMETRY_MIN_MS = 300_000;
   private static readonly BACKUP_POLL_MS = 60_000;
   private static readonly WAKE_MIN_MS = 250;
 
   private backupTimer: ReturnType<typeof setInterval> | null = null;
   private wakeTimer: ReturnType<typeof setTimeout> | null = null;
   private runningLeases: Set<string> = new Set();
-  private lastTickTelemetryAt = 0;
 
   start(): void {
     if (this.backupTimer) {
@@ -240,17 +238,8 @@ export class JobsScheduler {
       `skipped: ${skippedRunning}`
     );
 
-    const nowMs = Date.now();
-    if (
-      nowMs - this.lastTickTelemetryAt >= JobsScheduler.TICK_TELEMETRY_MIN_MS &&
-      jobs.length > 0
-    ) {
-      this.lastTickTelemetryAt = nowMs;
-      getGatewayTelemetry().trackFireAndForget("paprwork_scheduler_tick", {
-        jobs_checked: jobs.length,
-        jobs_launched: launchedCount.value,
-      });
-    }
+    // Note: Removed paprwork_scheduler_tick telemetry - too noisy for Amplitude
+    // Scheduler health should be monitored via logs, not user analytics
   }
 }
 

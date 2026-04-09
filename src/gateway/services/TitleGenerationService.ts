@@ -3,7 +3,7 @@
  *
  * Generates concise chat titles using AI models.
  * Handles both OAuth (via pi-ai) and API key (via AI SDK) routing.
- * Supports OpenAI (gpt-5-mini) and Anthropic (claude-3.5-haiku).
+ * Supports OpenAI (gpt-5.4-mini) and Anthropic (claude-3.5-haiku).
  * Based on Paprwork V1's title generation logic.
  */
 
@@ -14,7 +14,7 @@ import { generateText } from "ai";
 export class TitleGenerationService {
   /**
    * Generate a concise title from the first user message
-   * Uses gpt-5-mini-2025-08-07 (OpenAI) or claude-3.5-haiku (Claude)
+   * Uses gpt-5.4-mini (OpenAI) or claude-3.5-haiku (Claude)
    * 
    * Handles OAuth routing: If user is using OAuth, routes to pi-ai
    * Otherwise uses AI SDK with API key
@@ -55,6 +55,7 @@ export class TitleGenerationService {
         console.log(`[TitleGenerationService] Using ${provider} OAuth via pi-ai`);
         
         const { getModel, streamSimple } = await import("@mariozechner/pi-ai");
+        type PiStreamModel = Parameters<typeof streamSimple>[0];
         
         // Set token in environment (pi-ai reads from env)
         if (provider === "openai") {
@@ -65,8 +66,12 @@ export class TitleGenerationService {
         
         // Get pi-ai model (openai-codex for ChatGPT, anthropic for Claude)
         const modelType = provider === "openai" ? "openai-codex" : "anthropic";
-        const modelName = provider === "openai" ? "gpt-5.2" : "claude-3-5-sonnet-20241022";
-        const piModel = getModel(modelType as any, modelName as any);
+        const claudeModelName = "claude-3-5-sonnet-20241022";
+        const get = getModel as (p: string, m: string) => unknown;
+        const piModel: unknown =
+          provider === "openai"
+            ? (get(modelType, "gpt-5.4-mini") ?? get(modelType, "gpt-5.4"))
+            : get(modelType, claudeModelName);
         
         // Build messages for pi-ai
         const messages = [
@@ -78,7 +83,7 @@ export class TitleGenerationService {
         ];
         
         // Stream response from pi-ai
-        const stream = streamSimple(piModel, { 
+        const stream = streamSimple(piModel as PiStreamModel, {
           messages,
           tools: undefined,
         });
@@ -105,7 +110,7 @@ export class TitleGenerationService {
         
         if (provider === "openai") {
           process.env.OPENAI_API_KEY = auth.key;
-          const model = openai("gpt-5-mini-2025-08-07");
+          const model = openai.responses("gpt-5.4-mini");
           
           const result = await generateText({
             model,

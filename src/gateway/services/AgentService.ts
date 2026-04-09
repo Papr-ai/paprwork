@@ -508,13 +508,24 @@ export class AgentService {
         };
       }
 
-      // For Ollama models - enable thinking mode and increase context window
+      // For Ollama models (Qwen, Gemma, etc.) — thinking + adaptive context
       if (config.provider === "ollama") {
+        // Adaptive context sizing based on available RAM
+        // Smaller context = much faster inference on constrained hardware
+        // Web research: 32K causes VRAM overflow; 8-16K gives 40+ tok/s vs 17-25 tok/s
+        let totalRamGb = 16; // Safe default
+        try {
+          const os = await import("node:os");
+          totalRamGb = Math.round(os.default.totalmem() / 1024 ** 3);
+        } catch {
+          // Ignore import errors
+        }
+
         providerOptions.ollama = {
-          think: true, // Enable thinking mode for Qwen models (required for tool calling)
+          think: true,
           options: {
-            num_ctx: 32768, // Set context window to 32K (Qwen 3.5 supports up to 128K)
-            // Default is 4096 which is too small for 70 tools (~8.5K tokens)
+            // Context size: 8K for <16GB, 16K for 16-31GB, 32K for 32GB+
+            num_ctx: totalRamGb < 16 ? 8192 : totalRamGb < 32 ? 16384 : 32768,
           },
         };
       }
@@ -569,10 +580,16 @@ export class AgentService {
       let cumulativeSteps = 0;
       let cumulativePromptTokens = 0; // Track actual token usage for adaptive truncation
 
+      // Build native web search tools configuration
+      const nativeSearchTools = await this.buildNativeSearchTools(config.provider);
+
       const streamTextOptions: any = {
         model,
         messages,
-        tools: tools as unknown as ToolSet,
+        tools: { 
+          ...(tools as unknown as ToolSet),
+          ...nativeSearchTools, // Merge native search tools
+        },
         maxTokens: effectiveMaxTokens,
         // Allow up to maxSteps tool roundtrips before stopping.
         // 100 steps provides safety against infinite loops while allowing
@@ -839,7 +856,7 @@ export class AgentService {
           await import("./providers/PiCodexStreamWithToolLoop.js");
 
         const piProvider = useCodex ? "openai-codex" : "anthropic";
-        // For openai provider with OAuth, map model to pi-ai format (gpt-5.2-low -> gpt-5.2)
+        // For openai provider with OAuth, map model to pi-ai format (gpt-5.4-low -> gpt-5.4)
         const piModelId =
           useCodex && config.provider === "openai"
             ? (
@@ -888,19 +905,23 @@ export class AgentService {
             );
             
             // Create model object matching pi-ai's Model interface
-            // Based on GPT-5.2 structure but with GPT-5.4 pricing
+            // Manual registry entry when pi-ai has not listed the id yet
+            const isMini = piModelId === "gpt-5.4-mini";
+            const inputCost = isMini ? 0.75 : 2.5;
+            const outputCost = isMini ? 4.5 : 15.0;
+            const displayName = isMini ? "GPT-5.4 mini" : "GPT-5.4";
             finalModel = {
               id: piModelId,
-              name: piModelId === "gpt-5.4-pro" ? "GPT-5.4 Pro" : "GPT-5.4 Thinking",
+              name: displayName,
               api: piApiId,
               provider: piProvider,
               baseUrl: "https://chatgpt.com/backend-api",
               reasoning: true,
               input: ["text", "image"],
               cost: {
-                input: piModelId === "gpt-5.4-pro" ? 30.0 : 2.5,
-                output: piModelId === "gpt-5.4-pro" ? 180.0 : 15.0,
-                cacheRead: piModelId === "gpt-5.4-pro" ? 3.0 : 0.25,
+                input: inputCost,
+                output: outputCost,
+                cacheRead: 0.25,
                 cacheWrite: 0,
               },
               contextWindow: 1000000, // 1M tokens
@@ -955,12 +976,17 @@ export class AgentService {
           `api=${finalModel ? (finalModel as any).api : 'null'} ` +
           `baseUrl=${finalModel ? (finalModel as any).baseUrl : 'null'}`
         );
+        
+        // Build native web search tools for pi-ai providers
+        const nativeSearchTools = this.buildNativeSearchToolsForPiAi(piProvider);
+        
         const piContext = buildPiContext({
           messages: messages as any[],
           tools: tools as any,
           apiId: piApiId,
           providerId: piProvider,
           modelId: piModelId,
+          nativeTools: nativeSearchTools,
         });
 
         // 🔍 LOG EXACT CONTEXT SENT TO PI-AI
@@ -2021,7 +2047,7 @@ ${last15.substring(0, 8_000)}`;
     }
 
     const defaultModelByProvider: Record<Provider, string> = {
-      openai: "gpt-5.2",
+      openai: "gpt-5.4",
       "openai-codex": "gpt-5.3-codex",
       anthropic: "claude-sonnet-4-6",
       google: "gemini-2.5-flash",
@@ -2422,7 +2448,7 @@ ${last15.substring(0, 8_000)}`;
     }
 
     const defaultModelByProvider: Record<Provider, string> = {
-      openai: "gpt-5.2",
+      openai: "gpt-5.4",
       "openai-codex": "gpt-5.3-codex",
       anthropic: "claude-sonnet-4-6",
       google: "gemini-2.5-flash",
@@ -2968,6 +2994,100 @@ ${last15.substring(0, 8_000)}`;
     plans: Array<{ planId: string; title: string; createdAt: string }>;
   }> {
     return this.storageManager.getAgentOutputs(agentId);
+  }
+
+  /**
+   * Build native web search tools for supported providers (AI SDK format)
+   * 
+   * Providers with native search:
+   * - Google: google.tools.googleSearch({})
+   * - OpenAI: openai.tools.webSearch({ maxUses: 10 })
+   * - Anthropic: anthropic.tools.webSearch_20260209({ maxUses: 10 })
+   */
+  private async buildNativeSearchTools(provider: Provider): Promise<Record<string, any>> {
+    const tools: Record<string, any> = {};
+
+    switch (provider) {
+      case "google":
+        // Gemini: Google Search tool
+        try {
+          const { google } = await import("@ai-sdk/google");
+          if (google.tools?.googleSearch) {
+            tools.google_search = google.tools.googleSearch({});
+            console.log("[AgentService] ✅ Enabled Google Search for Gemini");
+          } else {
+            console.warn("[AgentService] ⚠️  Google Search not available in this SDK version");
+          }
+        } catch (error) {
+          console.warn("[AgentService] ⚠️  Failed to load Google Search tool:", (error as Error).message);
+        }
+        break;
+
+      case "openai":
+        // OpenAI: web_search tool via AI SDK helper
+        try {
+          const { openai } = await import("@ai-sdk/openai");
+          if (openai.tools?.webSearch) {
+            tools.web_search = openai.tools.webSearch({
+              externalWebAccess: true, // Enable live web access
+              searchContextSize: 'high', // Use high context for search results
+            });
+            console.log("[AgentService] ✅ Enabled OpenAI web search");
+          } else {
+            console.warn("[AgentService] ⚠️  OpenAI web search not available in this SDK version");
+          }
+        } catch (error) {
+          console.warn("[AgentService] ⚠️  Failed to load OpenAI web search tool:", (error as Error).message);
+        }
+        break;
+
+      case "anthropic":
+        // Anthropic: web_search disabled for now due to compatibility issues
+        console.log("[AgentService] ℹ️  Anthropic: Web search disabled (use browser tools instead)");
+        break;
+
+      case "ollama":
+        // Ollama: No native search (local models)
+        console.log("[AgentService] ℹ️  Ollama: No native search (use browser tools instead)");
+        break;
+
+      default:
+        console.log(`[AgentService] ℹ️  Provider ${provider}: No native search support`);
+    }
+
+    return tools;
+  }
+
+  /**
+   * Build native web search tools for pi-ai providers (OAuth routes)
+   * 
+   * Same as buildNativeSearchTools but returns pi-ai compatible format
+   */
+  private buildNativeSearchToolsForPiAi(provider: string): Array<{ type: string; name?: string; max_uses?: number }> {
+    const tools: Array<{ type: string; name?: string; max_uses?: number }> = [];
+
+    switch (provider) {
+      case "anthropic":
+        // Anthropic: web_search disabled for now due to compatibility issues
+        console.log("[AgentService] ℹ️  Anthropic OAuth: Web search disabled (use browser tools instead)");
+        break;
+
+      case "openai-codex":
+        // OpenAI Codex: web_search tool
+        // Note: May require specific ChatGPT backend support
+        tools.push({
+          type: "web_search",
+          name: "web_search",
+          max_uses: 10,
+        });
+        console.log("[AgentService] ⚠️  Added OpenAI Codex web_search via pi-ai (experimental)");
+        break;
+
+      default:
+        console.log(`[AgentService] ℹ️  Provider ${provider}: No native search via pi-ai`);
+    }
+
+    return tools;
   }
 }
 

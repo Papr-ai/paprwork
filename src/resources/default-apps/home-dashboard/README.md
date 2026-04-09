@@ -51,7 +51,7 @@ create_job({
 
 - **App ID:** `bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c` (fixed)
 - **Display Name:** "Home"
-- **Location:** `~/PAPR/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/`
+- **Location:** `~/Papr/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/`
 - **Installed:** On first launch if not already present
 - **Data:** Linked job databases via data-sources.json
 

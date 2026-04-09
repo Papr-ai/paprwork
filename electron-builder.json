@@ -1,6 +1,6 @@
 {
   "appId": "com.paprwork.v2",
-  "productName": "Paprwork",
+  "productName": "Papr Work",
   "publish": {
     "provider": "github",
     "owner": "Papr-ai",
@@ -16,11 +16,15 @@
     "src/electron/index.cjs",
     "src/electron/supervisor-logic.cjs",
     "src/electron/preload.cjs",
+    "src/electron/ipc/**/*.cjs",
+    "src/resources/**/*",
     "package.json"
   ],
   "asarUnpack": [
     "node_modules/esbuild/**",
-    "node_modules/@esbuild/**"
+    "node_modules/@esbuild/**",
+    "node_modules/playwright/**",
+    "node_modules/playwright-core/**"
   ],
   "mac": {
     "category": "public.app-category.productivity",
@@ -70,6 +74,7 @@
     "category": "Utility"
   },
   "dmg": {
+    "title": "Install ${productName}",
     "contents": [
       {
         "x": 130,
@@ -81,11 +86,17 @@
         "type": "link",
         "path": "/Applications"
       }
-    ]
+    ],
+    "background": null,
+    "window": {
+      "width": 540,
+      "height": 380
+    }
   },
   "nsis": {
     "oneClick": false,
-    "allowToChangeInstallationDirectory": true
+    "allowToChangeInstallationDirectory": true,
+    "artifactName": "PaprWork-Setup-${version}.${ext}"
   },
   "afterPack": "./scripts/afterPack.cjs"
 }

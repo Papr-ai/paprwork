@@ -54,7 +54,7 @@ create_sub_agent({
   description: "Investigates complex topics with evidence",
   systemPrompt: "You are a focused researcher. Gather evidence, cite sources, and highlight uncertainty."
 })
-// Result: Uses default provider (openai) and model (gpt-5.2)
+// Result: Uses default provider (openai) and model (gpt-5.4-mini)
 ```
 
 ### Full Example (All Options)
@@ -98,11 +98,11 @@ Always cite sources and explain your reasoning.`,
 - **OAuth** (ChatGPT/Claude subscription) → pi-ai backend
 - **API key** (Platform) → AI SDK backend
 
-Pick models the user has access to. Default to `gpt-5.2` or `claude-sonnet-4-6` when unspecified.
+Pick models the user has access to. Default to `gpt-5.4-mini` or `claude-sonnet-4-6` when unspecified.
 
 ### When to Specify a Model?
 
-**Use defaults (gpt-5.2 or claude-sonnet-4-6) for:**
+**Use defaults (gpt-5.4-mini or claude-sonnet-4-6) for:**
 - ✅ Fast, simple tasks
 - ✅ Data processing
 - ✅ Cost-sensitive operations
@@ -133,16 +133,16 @@ model: "claude-opus-4-5-thinking"
 
 ```javascript
 // Fast reasoning
-model: "gpt-5.2-low"
+model: "gpt-5.4-low"
 
 // Balanced (default) ⭐ RECOMMENDED
-model: "gpt-5.2"
+model: "gpt-5.4"
 
 // Deep reasoning
-model: "gpt-5.2-high"
+model: "gpt-5.4-high"
 
 // Specialized for code
-model: "gpt-5.2-codex"
+model: "gpt-5.3-codex"
 
 // Latest Codex (OAuth only)
 model: "gpt-5.3-codex"
@@ -273,7 +273,7 @@ Your process:
 
 Always validate data quality before analysis.`,
   
-  model: "gpt-5.2",  // Fast for data processing
+  model: "gpt-5.4",  // Fast for data processing
   allowedToolIds: ["bash", "read_file"]
 })
 ```
@@ -317,7 +317,7 @@ Responsibilities:
 
 Always validate jobs completed successfully before starting dependent jobs.`,
   
-  model: "gpt-5.2",
+  model: "gpt-5.4",
   allowedToolIds: ["bash", "create_job", "run_job", "read_job_logs", "read_file"]
 })
 ```
@@ -333,7 +333,7 @@ To update a sub-agent, call `create_sub_agent` with the **same ID**:
 create_sub_agent({
   id: "researcher",
   name: "Researcher",
-  model: "gpt-5.2",
+  model: "gpt-5.4",
   // ...
 })
 
@@ -425,7 +425,7 @@ allowedToolIds: ["bash", "read_file", "search_files"]
 model: "claude-opus-4-5-thinking"  // Expensive!
 
 // ✅ Right-sized
-model: "gpt-5.2"  // Fast, cheap, sufficient
+model: "gpt-5.4"  // Fast, cheap, sufficient
 ```
 
 ### 5. **Include Context in System Prompt**
@@ -434,7 +434,7 @@ model: "gpt-5.2"  // Fast, cheap, sufficient
 systemPrompt: "Analyze data."
 
 // ✅ Complete instructions
-systemPrompt: `Analyze SQLite data from ~/PAPR/jobs/{jobId}/data.db.
+systemPrompt: `Analyze SQLite data from ~/Papr/jobs/{jobId}/data.db.
 
 Schema:
 - leads table: id, name, email, score, created_at

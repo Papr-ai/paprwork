@@ -165,7 +165,7 @@ describe("V1 Migration (settings:migrate-v1)", () => {
     expect(response.data.apps.migrated).toBe(1);
 
     // Verify documents on disk
-    const v2DocsDir = path.join(root, "PAPR", "documents");
+    const v2DocsDir = path.join(root, "Papr", "documents");
     const doc1Content = await fs.readFile(
       path.join(v2DocsDir, "doc-001", "content.md"),
       "utf-8",
@@ -185,7 +185,7 @@ describe("V1 Migration (settings:migrate-v1)", () => {
     expect(versionsStat.isDirectory()).toBe(true);
 
     // Verify app files were copied
-    const v2AppsDir = path.join(root, "PAPR", "apps");
+    const v2AppsDir = path.join(root, "Papr", "apps");
     const appIndex = JSON.parse(
       await fs.readFile(path.join(v2AppsDir, "app-001", "index.json"), "utf-8"),
     ) as { id: string; name: string };

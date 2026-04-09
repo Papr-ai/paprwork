@@ -54,7 +54,7 @@ create_sub_agent({
   description: "Investigates complex topics with evidence",
   systemPrompt: "You are a focused researcher. Gather evidence, cite sources, and highlight uncertainty."
 })
-// Uses default provider (openai) and model (gpt-5.2)
+// Uses default provider (openai) and model (gpt-5.4-mini)
 ```
 
 ### Full Example (All Options)
@@ -98,19 +98,19 @@ Always cite sources and explain your reasoning.`,
 - **OAuth** (ChatGPT/Claude subscription) → pi-ai backend
 - **API key** (Platform) → AI SDK backend
 
-Pick models the user has access to. If they have OAuth, OpenAI models (gpt-5.2*, gpt-5.3-codex) and Claude models work. If they have API key, same models work. Default to `gpt-5.2` or `claude-sonnet-4-6` when unspecified.
+Pick models the user has access to. If they have OAuth, OpenAI models (gpt-5.4*, gpt-5.3-codex) and Claude models work. If they have API key, same models work. Default to `gpt-5.4-mini` or `claude-sonnet-4-6` when unspecified.
 
 ### When to specify a model?
 
-**Use defaults (gpt-5.2 or claude-sonnet-4-6) for:**
+**Use defaults (gpt-5.4-mini or claude-sonnet-4-6) for:**
 - Fast, simple tasks
 - Data processing
 - Cost-sensitive, high-volume work
 
 **Specify a model for:**
-- Complex reasoning → Claude Opus, GPT-5.2-high
+- Complex reasoning → Claude Opus, GPT-5.4-high
 - Extended thinking → Claude Thinking models
-- Code tasks → GPT-5.2 Codex, GPT 5.3
+- Code tasks → GPT-5.3-codex
 
 ### Anthropic Claude
 
@@ -124,11 +124,11 @@ model: "claude-opus-4-5-thinking"  // Extended thinking for deep analysis
 ### OpenAI GPT
 
 ```javascript
-model: "gpt-5.2-low"      // Fast reasoning
-model: "gpt-5.2"          // Balanced ⭐ RECOMMENDED DEFAULT
-model: "gpt-5.2-high"     // Deep reasoning
-model: "gpt-5.2-codex"    // Specialized for code
-model: "gpt-5.3-codex"    // Latest Codex (OAuth only)
+model: "gpt-5.4-mini"     // Fast mini (default for cost-sensitive sub-agents)
+model: "gpt-5.4-low"     // Fast reasoning
+model: "gpt-5.4"         // Balanced ⭐ RECOMMENDED DEFAULT
+model: "gpt-5.4-high"    // Deep reasoning (strongest GPT-5.4 reasoning tier)
+model: "gpt-5.3-codex"   // Latest Codex (OAuth)
 ```
 
 ### Google Gemini
@@ -203,7 +203,7 @@ create_sub_agent({
   name: "Data Analyst",
   description: "Analyzes SQLite data and generates insights",
   systemPrompt: `You are a data analyst specializing in business intelligence. Process: understand question → query efficiently (use indexes) → identify patterns → provide recommendations. Always validate data quality first.`,
-  model: "gpt-5.2",
+  model: "gpt-5.4",
   allowedToolIds: ["bash", "read_file"]
 })
 ```
@@ -224,7 +224,7 @@ create_sub_agent({
 create_sub_agent({
   name: "Pipeline Manager",
   systemPrompt: `You are a pipeline orchestrator. Create jobs with proper dependencies, monitor status and logs, handle errors, report progress. Always validate jobs completed successfully before starting dependent jobs.`,
-  model: "gpt-5.2",
+  model: "gpt-5.4",
   allowedToolIds: ["bash", "create_job", "run_job", "read_job_logs", "read_file"]
 })
 ```

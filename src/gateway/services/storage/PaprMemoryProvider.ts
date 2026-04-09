@@ -227,7 +227,7 @@ export class PaprMemoryProvider implements IStorageProvider {
     chatId: string,
   ): string {
     const archivedCount = totalCount - recentCount;
-    const chatFilePath = `~/PAPR/Chats/${chatId}.txt`;
+    const chatFilePath = `~/Papr/Chats/${chatId}.txt`;
 
     return `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📚 ARCHIVED CONVERSATION SUMMARY (${archivedCount} older messages archived)

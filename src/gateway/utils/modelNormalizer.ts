@@ -1,49 +1,74 @@
 /**
  * Model ID normalization for OpenAI GPT-5.x
  *
- * The OpenAI API uses dots (gpt-5.2) while some UI/legacy code uses dashes (gpt-5-2).
- * This normalizes both formats to the API format (dots).
+ * The OpenAI API uses dots (gpt-5.4) while some UI/legacy code uses dashes (gpt-5-4).
  *
- * Reasoning variants (low, high, xhigh) map to the same base model "gpt-5.2";
+ * Reasoning suffixes (low, medium, high, xhigh) map to base "gpt-5.4";
  * reasoning effort is passed separately via providerOptions.reasoningEffort.
+ *
+ * Deprecated GPT-5.2 picker IDs map to GPT-5.4 API ids for backward compatibility.
  */
+
+const REASONING_SUFFIXES = new Set(["low", "medium", "high", "xhigh"]);
+
+function popSegment(id: string): string | undefined {
+  const parts = id.split("-");
+  return parts.length >= 1 ? parts[parts.length - 1] : undefined;
+}
 
 /**
  * Normalize OpenAI model ID for API calls.
- * Accepts both gpt-5.2-* (dots) and gpt-5-2-* (dashes).
+ * Accepts gpt-5.x-* with dots or dashes (e.g. gpt-5-4-low).
  *
- * @returns API model ID (e.g. "gpt-5.2", "gpt-5.2-codex", "gpt-5.4", "gpt-5-mini")
+ * @returns API model ID (e.g. "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex")
  */
 export function normalizeOpenAIModelId(modelId: string): string {
-  // Normalize dashes to dots for comparison
-  const normalized = modelId.replace(/gpt-5-2/g, "gpt-5.2");
+  let n = modelId
+    .replace(/gpt-5-2/g, "gpt-5.2")
+    .replace(/gpt-5-4/g, "gpt-5.4");
 
-  // gpt-5.x-codex and gpt-5.x-pro models are separate - keep as-is (API format)
+  // Legacy GPT-5.2 family → GPT-5.4 / Codex successor
+  if (n === "gpt-5.2-codex") {
+    return "gpt-5.3-codex";
+  }
   if (
-    normalized === "gpt-5.2-codex" ||
-    normalized === "gpt-5.3-codex" ||
-    normalized === "gpt-5.4" ||
-    normalized === "gpt-5.4-pro"
+    n === "gpt-5.2" ||
+    (n.startsWith("gpt-5.2-") && n !== "gpt-5.2-codex")
   ) {
-    return normalized;
+    return "gpt-5.4";
   }
 
-  // Variants (low, high, xhigh) -> base model "gpt-5.2"
-  if (
-    normalized.startsWith("gpt-5.2-") &&
-    ["low", "high", "xhigh"].includes(normalized.split("-").pop() ?? "")
-  ) {
-    return "gpt-5.2";
+  // Distinct model IDs (no stripping)
+  if (n === "gpt-5.3-codex") {
+    return "gpt-5.3-codex";
+  }
+  // Legacy picker id (not a separate API model)
+  if (n === "gpt-5.4-pro") {
+    return "gpt-5.4";
+  }
+  if (n === "gpt-5.4-mini") {
+    return n;
   }
 
-  // Base gpt-5.2
-  if (normalized === "gpt-5.2") {
-    return "gpt-5.2";
+  // gpt-5.4-<reasoning> → gpt-5.4
+  if (n.startsWith("gpt-5.4-")) {
+    const last = popSegment(n);
+    if (last && REASONING_SUFFIXES.has(last)) {
+      return "gpt-5.4";
+    }
   }
 
-  // gpt-5-mini, gpt-5-nano, etc. - pass through
-  if (normalized.startsWith("gpt-5")) {
-    return normalized;
+  if (n === "gpt-5.4") {
+    return "gpt-5.4";
+  }
+
+  // Legacy mini snapshot IDs → GPT-5.4 mini
+  if (n === "gpt-5-mini" || n.startsWith("gpt-5-mini-")) {
+    return "gpt-5.4-mini";
+  }
+
+  if (n.startsWith("gpt-5")) {
+    return n;
   }
 
   return modelId;
@@ -61,28 +86,42 @@ export function normalizeGoogleModelId(modelId: string): string {
 
 /** Models that pi-ai openai-codex (ChatGPT OAuth) supports */
 const OPENAI_CODEX_MODELS = new Set([
-  "gpt-5.2",
-  "gpt-5.2-codex",
-  "gpt-5.2-low",
-  "gpt-5.2-high",
   "gpt-5.1",
   "gpt-5.1-codex-mini",
   "gpt-5.1-codex-max",
   "gpt-5.3-codex",
   "gpt-5.3-codex-spark",
-  "gpt-5.4", // Manually created in AgentService
-  "gpt-5.4-pro", // Manually created in AgentService
+  "gpt-5.4",
+  "gpt-5.4-mini",
 ]);
 
 /**
  * Check if model can use pi-ai openai-codex (OAuth path).
- * Variants like gpt-5.2-low map to base gpt-5.2 in pi-ai.
+ * Variants like gpt-5.4-low map to base gpt-5.4 in pi-ai.
  */
 export function isOpenAICodexModel(modelId: string): boolean {
-  const n = modelId.replace(/gpt-5-2/g, "gpt-5.2");
-  return (
-    OPENAI_CODEX_MODELS.has(n) ||
-    (n.startsWith("gpt-5.2-") &&
-      ["low", "high"].includes(n.split("-").pop() ?? ""))
-  );
+  const n = modelId
+    .replace(/gpt-5-2/g, "gpt-5.2")
+    .replace(/gpt-5-4/g, "gpt-5.4");
+
+  const apiId = normalizeOpenAIModelId(modelId);
+  if (OPENAI_CODEX_MODELS.has(apiId)) {
+    return true;
+  }
+
+  if (n.startsWith("gpt-5.4-")) {
+    const last = popSegment(n);
+    return last !== undefined && REASONING_SUFFIXES.has(last);
+  }
+
+  // Legacy OAuth IDs still stored in old chats
+  if (n === "gpt-5.2" || n === "gpt-5.2-codex") {
+    return true;
+  }
+  if (n.startsWith("gpt-5.2-")) {
+    const last = popSegment(n);
+    return last !== undefined && ["low", "high"].includes(last);
+  }
+
+  return false;
 }

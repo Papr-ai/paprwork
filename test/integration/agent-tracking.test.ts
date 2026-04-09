@@ -239,7 +239,7 @@ describe("Agent Integration Tests - Real Agent Calls", () => {
     expect(doc.createdByAgentName).toBe(TEST_AGENT_NAME);
 
     // Verify it's in the file system
-    const docPath = path.join(os.homedir(), "PAPR", "documents", doc.id, "meta.json");
+    const docPath = path.join(os.homedir(), "Papr", "documents", doc.id, "meta.json");
     const metaExists = await fs.pathExists(docPath);
     expect(metaExists).toBe(true);
 
@@ -312,7 +312,7 @@ describe("Agent Integration Tests - Real Agent Calls", () => {
     expect(plan.sourceAgentName).toBe(TEST_AGENT_NAME);
 
     // Verify in database
-    const plansDb = new Database(path.join(os.homedir(), "PAPR", "data", "plans.db"));
+    const plansDb = new Database(path.join(os.homedir(), "Papr", "data", "plans.db"));
     const planRow = plansDb
       .prepare("SELECT * FROM plans WHERE plan_id = ?")
       .get("test-plan-integration") as any;

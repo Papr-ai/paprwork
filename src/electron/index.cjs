@@ -5,7 +5,7 @@
  * CommonJS format - Electron's require() is more reliable than ESM
  */
 
-const { app, BrowserWindow, Menu, shell, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, Menu, shell, dialog, ipcMain, powerMonitor, nativeTheme } = require("electron");
 const { spawn, execSync } = require("child_process");
 const path = require("path");
 const http = require("http");
@@ -34,6 +34,27 @@ let telemetryClientInstance = null;
 let initializePaprLoginIPC;
 let cleanupPaprLogin;
 let handlePaprAuthCallback;
+
+// Python dependencies IPC
+const { initializePythonDepsIPC } = require("./ipc/pythonDeps.cjs");
+
+/**
+ * Check Python installation on Windows and notify user if missing
+ */
+async function checkPythonInstallation() {
+  try {
+    // Try to run python --version
+    execSync('python --version', { timeout: 5000, stdio: 'pipe' });
+    console.log('[Electron] Python is installed');
+  } catch (error) {
+    // Python not found - show notification
+    console.warn('[Electron] Python not found, user will be notified when needed');
+    
+    // We don't auto-install silently on startup anymore
+    // Instead, we show a helpful message when Python jobs are first created/run
+    // This avoids scary installation prompts on first launch
+  }
+}
 
 async function loadESMModules() {
   // Import from compiled dist directory
@@ -364,16 +385,23 @@ function createMainWindow() {
   };
 
   // Windows: Use native caption buttons with overlay
+  // Windows: Use theme-aware colors for titlebar overlay
+  const isDarkMode = nativeTheme.shouldUseDarkColors;
   const windowsConfig = {
     ...baseConfig,
     titleBarStyle: "hidden",
     titleBarOverlay: {
-      color: "#00000000", // Transparent overlay background
-      symbolColor: "#999999", // Gray caption button icons
-      height: 40,
+      color: isDarkMode ? "#1C1C1E" : "#F5F5F7", // Dark or light background based on theme
+      symbolColor: isDarkMode ? "#FFFFFF" : "#000000", // White icons in dark, black icons in light
+      height: 52, // Match tab bar height
     },
-    transparent: true,
-    backgroundColor: "#00000000",
+    transparent: false, // Use solid background on Windows
+    backgroundColor: isDarkMode ? "#1C1C1E" : "#F5F5F7", // Match titlebar color
+    // Enable window resizing
+    resizable: true,
+    minimizable: true,
+    maximizable: true,
+    closable: true,
   };
 
   // Linux: Simple frameless with transparency
@@ -390,6 +418,58 @@ function createMainWindow() {
 
   // Hide default menu
   Menu.setApplicationMenu(null);
+
+  // Update Windows titlebar colors when theme changes
+  if (isWindows) {
+    nativeTheme.on('updated', () => {
+      const isDarkMode = nativeTheme.shouldUseDarkColors;
+      mainWindow.setTitleBarOverlay({
+        color: isDarkMode ? "#1C1C1E" : "#F5F5F7",
+        symbolColor: isDarkMode ? "#FFFFFF" : "#000000",
+        height: 52,
+      });
+    });
+  }
+
+  // Enable context menu for text inputs (copy/paste/etc)
+  mainWindow.webContents.on('context-menu', (event, params) => {
+    const { selectionText, isEditable, inputFieldType } = params;
+    
+    // Only show menu for editable fields (inputs, textareas) or when text is selected
+    if (!isEditable && !selectionText) return;
+    
+    const menu = Menu.buildFromTemplate([
+      ...(selectionText ? [{
+        label: 'Copy',
+        role: 'copy',
+        accelerator: 'CmdOrCtrl+C'
+      }] : []),
+      ...(isEditable ? [
+        {
+          label: 'Cut',
+          role: 'cut',
+          accelerator: 'CmdOrCtrl+X',
+          enabled: !!selectionText
+        },
+        {
+          label: 'Paste',
+          role: 'paste',
+          accelerator: 'CmdOrCtrl+V'
+        }
+      ] : []),
+      ...(isEditable && selectionText ? [
+        { type: 'separator' },
+        {
+          label: 'Select All',
+          role: 'selectAll',
+          accelerator: 'CmdOrCtrl+A'
+        }
+      ] : [])
+    ]);
+    
+    menu.popup();
+  });
+
 
   const uiUrl = IS_PRODUCTION ? `http://localhost:${GATEWAY_PORT}` : UI_DEV_URL;
 
@@ -476,6 +556,20 @@ function createMainWindow() {
     mainWindow.webContents.openDevTools();
   }
 
+  // Handle window close button
+  // Windows: Close button should quit the app (standard behavior)
+  // macOS: Close button should hide the window (app stays in dock)
+  mainWindow.on("close", (event) => {
+    if (process.platform === "darwin") {
+      // macOS: Hide window but keep app running (standard macOS behavior)
+      event.preventDefault();
+      mainWindow.hide();
+    } else {
+      // Windows/Linux: Let the window close normally, which triggers app.quit()
+      // Don't prevent default - allow normal close behavior
+    }
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -560,9 +654,22 @@ class GatewayProcessSupervisor {
       clearTimeout(this.backoffTimer);
       this.backoffTimer = null;
     }
-    if (this.process) {
-      console.log("[Supervisor] Stopping Gateway...");
-      this.process.kill("SIGTERM");
+    if (this.process && !this.process.killed) {
+      console.log("[Supervisor] Stopping Gateway process (PID: %s)...", this.process.pid);
+      try {
+        // Send SIGTERM for graceful shutdown
+        this.process.kill("SIGTERM");
+        
+        // Wait a moment, then force kill if still alive
+        setTimeout(() => {
+          if (this.process && !this.process.killed) {
+            console.log("[Supervisor] Gateway didn't stop, force killing...");
+            this.process.kill("SIGKILL");
+          }
+        }, 2000);
+      } catch (error) {
+        console.warn("[Supervisor] Error stopping Gateway:", error.message);
+      }
       this.process = null;
       gatewayProcess = null;
     }
@@ -1175,6 +1282,19 @@ function initializeSystemInvokeHandler(mainWindow) {
     'app.getPath': async (name) => {
       return { path: app.getPath(name) };
     },
+    
+    'chat.open': async (options) => {
+      // Send message to renderer to open a new chat tab
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('chat:open', {
+          message: options?.message || '',
+          model: options?.model || null,
+          provider: options?.provider || null,
+        });
+        return { success: true };
+      }
+      throw new Error('Main window not available');
+    },
   };
 
   // Register IPC handler
@@ -1287,6 +1407,16 @@ app.whenReady().then(async () => {
   // Initialize Papr Login IPC handlers
   initializePaprLoginIPC(customKeysStorage, settingsStorage);
 
+  // Initialize Python dependencies IPC handlers
+  initializePythonDepsIPC();
+
+  // Check Python installation on Windows (for non-technical users)
+  if (process.platform === 'win32') {
+    checkPythonInstallation().catch(err => {
+      console.error('[Electron] Python check failed:', err);
+    });
+  }
+
   // Build gateway environment (telemetry flags align with main-process resolution)
   const gatewayTelemetryOn =
     isTelemetrySendingEnabledFn != null
@@ -1362,47 +1492,180 @@ app.whenReady().then(async () => {
     }
   }
 
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow();
+  // System power state monitoring (sleep/wake/lock/unlock)
+  // Works on macOS, Windows, and Linux
+  powerMonitor.on('suspend', () => {
+    console.log('[Electron] System suspending (sleep)');
+    
+    // Notify Gateway that system is going to sleep
+    if (gatewayProcess && !gatewayProcess.killed) {
+      try {
+        gatewayProcess.send({
+          type: 'SYSTEM_SUSPEND',
+          timestamp: Date.now()
+        });
+      } catch (err) {
+        console.warn('[Electron] Failed to notify Gateway of suspend:', err.message);
+      }
+    }
+
+    // Notify renderer (UI) that system is suspending
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('system:suspend', { timestamp: Date.now() });
+    }
+
+    // Track telemetry
+    if (telemetryClientInstance) {
+      telemetryClientInstance.trackFireAndForget('paprwork_system_suspend');
+    }
+  });
+
+  powerMonitor.on('resume', () => {
+    console.log('[Electron] System resumed (wake)');
+    
+    // Notify Gateway that system woke up
+    if (gatewayProcess && !gatewayProcess.killed) {
+      try {
+        gatewayProcess.send({
+          type: 'SYSTEM_RESUME',
+          timestamp: Date.now()
+        });
+      } catch (err) {
+        console.warn('[Electron] Failed to notify Gateway of resume:', err.message);
+      }
+    }
+
+    // Notify renderer (UI) that system resumed
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('system:resume', { timestamp: Date.now() });
+    }
+
+    // Track telemetry
+    if (telemetryClientInstance) {
+      telemetryClientInstance.trackFireAndForget('paprwork_system_resume');
+    }
+  });
+
+  // Lock screen events (macOS, Windows only)
+  powerMonitor.on('lock-screen', () => {
+    console.log('[Electron] Screen locked');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('system:lock-screen', { timestamp: Date.now() });
+    }
+  });
+
+  powerMonitor.on('unlock-screen', () => {
+    console.log('[Electron] Screen unlocked');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('system:unlock-screen', { timestamp: Date.now() });
     }
   });
 });
 
 app.on("window-all-closed", () => {
+  // Windows/Linux: Quit when all windows closed (standard behavior)
+  // macOS: Keep app running (standard macOS behavior - app in dock)
   if (process.platform !== "darwin") {
     app.quit();
   }
 });
 
-app.on("before-quit", async () => {
-  console.log("[Electron] App quitting...");
-  if (telemetryClientInstance) {
-    telemetryClientInstance.trackFireAndForget("paprwork_app_quit");
+app.on("activate", () => {
+  // macOS: Re-create window when dock icon clicked and no windows open
+  if (mainWindow === null) {
+    createMainWindow();
+  } else if (!mainWindow.isVisible()) {
+    mainWindow.show();
   }
-  // Cleanup OAuth servers before stopping gateway
-  if (cleanupOAuthServers) {
-    cleanupOAuthServers();
+});
+
+// Track whether we're in the process of quitting to avoid duplicate cleanup
+let isQuitting = false;
+
+app.on("before-quit", async (event) => {
+  if (isQuitting) {
+    console.log("[Electron] Already quitting, skipping duplicate cleanup");
+    return;
   }
-  // Cleanup Papr login callback server
-  if (cleanupPaprLogin) {
-    cleanupPaprLogin();
+  
+  isQuitting = true;
+  console.log("[Electron] App is quitting - starting cleanup...");
+  
+  // Prevent quit until cleanup is done
+  event.preventDefault();
+  
+  try {
+    if (telemetryClientInstance) {
+      telemetryClientInstance.trackFireAndForget("paprwork_app_quit");
+    }
+    
+    // Cleanup OAuth servers before stopping gateway
+    if (cleanupOAuthServers) {
+      console.log("[Electron] Cleaning up OAuth servers...");
+      cleanupOAuthServers();
+    }
+    
+    // Cleanup Papr login callback server
+    if (cleanupPaprLogin) {
+      console.log("[Electron] Cleaning up Papr login server...");
+      cleanupPaprLogin();
+    }
+    
+    // Cleanup Ollama (stop managed instance)
+    if (cleanupOllama) {
+      console.log("[Electron] Cleaning up Ollama...");
+      await cleanupOllama();
+    }
+    
+    // Stop Gateway supervisor
+    if (supervisor) {
+      console.log("[Electron] Stopping Gateway supervisor...");
+      supervisor.stop();
+    }
+    
+    console.log("[Electron] Cleanup complete, quitting now");
+    
+    // Give a brief moment for cleanup to complete
+    setTimeout(() => {
+      app.quit();
+    }, 100);
+  } catch (error) {
+    console.error("[Electron] Error during cleanup:", error);
+    // Quit anyway after error
+    setTimeout(() => {
+      app.quit();
+    }, 100);
   }
-  // Cleanup Ollama (stop managed instance)
-  if (cleanupOllama) {
-    await cleanupOllama();
+});
+
+app.on("will-quit", (event) => {
+  console.log("[Electron] App will quit - final cleanup");
+  
+  // Force stop Gateway if somehow still running
+  if (supervisor && supervisor.getProcess() && !supervisor.getProcess().killed) {
+    console.log("[Electron] Force stopping Gateway on will-quit");
+    try {
+      supervisor.getProcess().kill("SIGKILL");
+    } catch (error) {
+      console.warn("[Electron] Error force-stopping Gateway:", error.message);
+    }
   }
-  if (supervisor) supervisor.stop();
 });
 
 process.on("SIGINT", () => {
+  if (isQuitting) return;
   console.log("[Electron] Received SIGINT, shutting down...");
+  isQuitting = true;
   if (supervisor) supervisor.stop();
-  app.quit();
+  // Give supervisor time to stop, then quit
+  setTimeout(() => app.quit(), 500);
 });
 
 process.on("SIGTERM", () => {
+  if (isQuitting) return;
   console.log("[Electron] Received SIGTERM, shutting down...");
+  isQuitting = true;
   if (supervisor) supervisor.stop();
-  app.quit();
+  // Give supervisor time to stop, then quit
+  setTimeout(() => app.quit(), 500);
 });

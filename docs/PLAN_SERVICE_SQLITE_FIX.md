@@ -23,7 +23,7 @@ CREATE TABLE plans (
 ```
 
 This constraint is invalid because:
-1. Plans are stored in `~/PAPR/data/plans.db`
+1. Plans are stored in `~/Papr/data/plans.db`
 2. Chats are stored in a separate location (`~/.paprwork-v2/chats/` for local storage)
 3. **SQLite doesn't support foreign keys across different database files**
 
@@ -53,7 +53,7 @@ The `chat_id` field is still present for querying plans by chat, but without the
 Since the existing database has the invalid schema, it needs to be deleted and recreated:
 
 ```bash
-rm ~/PAPR/data/plans.db
+rm ~/Papr/data/plans.db
 ```
 
 The PlanService will automatically recreate it with the correct schema on next startup.
@@ -73,11 +73,11 @@ The PlanService will automatically recreate it with the correct schema on next s
 
 To verify the fix works:
 
-1. Delete old database: `rm ~/PAPR/data/plans.db`
+1. Delete old database: `rm ~/Papr/data/plans.db`
 2. Restart the app: `npm start`
 3. Ask agent to build an app: "Build me a task tracker app"
 4. Verify plan is created successfully with visible progress cards in UI
-5. Check database exists: `ls -la ~/PAPR/data/plans.db`
+5. Check database exists: `ls -la ~/Papr/data/plans.db`
 
 ## Lessons Learned
 

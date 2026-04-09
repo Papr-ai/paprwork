@@ -50,7 +50,7 @@ node scripts/set-default-home-app.mjs --clear
 #### Option 3: Manual settings.json edit
 
 ```bash
-# Edit ~/PAPR/data/settings.json
+# Edit ~/Papr/data/settings.json
 {
   "preferences": {
     "defaultHomeAppId": "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c"
@@ -62,10 +62,10 @@ node scripts/set-default-home-app.mjs --clear
 
 ```bash
 # List all apps with their IDs
-cat ~/PAPR/data/apps.json | jq '.[] | {id, title, description}'
+cat ~/Papr/data/apps.json | jq '.[] | {id, title, description}'
 
 # Find a specific app
-cat ~/PAPR/data/apps.json | jq '.[] | select(.title | contains("Daily Brief"))'
+cat ~/Papr/data/apps.json | jq '.[] | select(.title | contains("Daily Brief"))'
 ```
 
 ### After Configuration
@@ -200,7 +200,7 @@ function HomeRedirect() {
 
 The `set-default-home-app.mjs` script:
 
-1. Loads existing `~/PAPR/data/settings.json`
+1. Loads existing `~/Papr/data/settings.json`
 2. Updates `preferences.defaultHomeAppId`
 3. Saves back to disk
 4. Provides clear confirmation messages
@@ -248,7 +248,7 @@ If the configured app ID doesn't exist in `apps.json`:
 
 ### Settings File Missing
 
-If `~/PAPR/data/settings.json` doesn't exist:
+If `~/Papr/data/settings.json` doesn't exist:
 
 1. Script creates new settings file
 2. Sets the default home app
@@ -282,10 +282,10 @@ If `~/PAPR/data/settings.json` doesn't exist:
 ```bash
 # Test the configuration script
 node scripts/set-default-home-app.mjs test-app-id
-cat ~/PAPR/data/settings.json | jq '.preferences.defaultHomeAppId'
+cat ~/Papr/data/settings.json | jq '.preferences.defaultHomeAppId'
 
 node scripts/set-default-home-app.mjs --clear
-cat ~/PAPR/data/settings.json | jq '.preferences.defaultHomeAppId'
+cat ~/Papr/data/settings.json | jq '.preferences.defaultHomeAppId'
 ```
 
 ## Future Enhancements
@@ -360,7 +360,7 @@ If issues arise:
 npm run set-home-app --clear
 
 # Or edit settings manually
-rm ~/PAPR/data/settings.json
+rm ~/Papr/data/settings.json
 # (will regenerate on next launch)
 ```
 
@@ -390,10 +390,10 @@ npm run set-home-app bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c
 npm run set-home-app --clear
 
 # Find app IDs
-cat ~/PAPR/data/apps.json | jq '.[] | {id, title}'
+cat ~/Papr/data/apps.json | jq '.[] | {id, title}'
 
 # Check current setting
-cat ~/PAPR/data/settings.json | jq '.preferences.defaultHomeAppId'
+cat ~/Papr/data/settings.json | jq '.preferences.defaultHomeAppId'
 ```
 
 **Status:** ✅ Implemented and configured for your Weekly War Room app

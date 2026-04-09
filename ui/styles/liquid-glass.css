@@ -232,8 +232,35 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Windows: Use solid background (less transparent) for better readability */
+body.platform-win32,
+body.platform-linux {
+  background: #F5F5F7; /* Solid light background */
+}
+
+/* Windows dark mode: Use solid dark background */
+@media (prefers-color-scheme: dark) {
+  body.platform-win32,
+  body.platform-linux {
+    background: #1C1C1E; /* Solid dark background */
+  }
+}
+
 html {
   background: transparent; /* Must be transparent for window transparency */
+}
+
+/* Windows/Linux: Solid html background to match body */
+html:has(body.platform-win32),
+html:has(body.platform-linux) {
+  background: #F5F5F7;
+}
+
+@media (prefers-color-scheme: dark) {
+  html:has(body.platform-win32),
+  html:has(body.platform-linux) {
+    background: #1C1C1E;
+  }
 }
 
 /* Scrollbar styling */

@@ -129,7 +129,7 @@ export function AgentRosterCard({ agents, agentStats, runs }: Props) {
                         )}
                       </div>
                       <div className="agent-model">
-                        {agent.model ?? "gpt-5.2"}
+                        {agent.model ?? "gpt-5.4"}
                       </div>
                     </div>
                   </div>

@@ -53,8 +53,8 @@ This will check:
 ## Current State
 
 **Database Status:**
-- `~/PAPR/data/plans.db` - EXISTS ✅
-- `~/PAPR/data/chats.db` - NOT FOUND (need to create chat first)
+- `~/Papr/data/plans.db` - EXISTS ✅
+- `~/Papr/data/chats.db` - NOT FOUND (need to create chat first)
 
 **Next Step:**
 1. Start the app (`npm start`)

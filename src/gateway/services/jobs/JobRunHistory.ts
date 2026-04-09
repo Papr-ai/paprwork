@@ -26,7 +26,7 @@ export class JobRunHistory {
     maxBytes: number = 5_000_000, // 5MB default
     keepLines: number = 5000, // Keep last 5000 runs
   ) {
-    const paprRoot = dataDir ?? path.join(os.homedir(), "PAPR");
+    const paprRoot = dataDir ?? path.join(os.homedir(), "Papr");
     this.historyPath = path.join(paprRoot, "data", "job-runs.jsonl");
     this.maxBytes = maxBytes;
     this.keepLines = keepLines;

@@ -112,14 +112,14 @@ if (!settings.data.preferences.defaultHomeAppId) {
 
 1. Delete existing settings:
    ```bash
-   rm ~/PAPR/data/settings.json
+   rm ~/Papr/data/settings.json
    ```
 
 2. Restart Paprwork
 
 3. Settings regenerated with default home app:
    ```bash
-   cat ~/PAPR/data/settings.json | jq '.preferences.defaultHomeAppId'
+   cat ~/Papr/data/settings.json | jq '.preferences.defaultHomeAppId'
    # Output: "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c"
    ```
 
@@ -130,7 +130,7 @@ if (!settings.data.preferences.defaultHomeAppId) {
 Your settings.json already has the configuration from the script we ran earlier:
 
 ```bash
-cat ~/PAPR/data/settings.json | jq '.preferences.defaultHomeAppId'
+cat ~/Papr/data/settings.json | jq '.preferences.defaultHomeAppId'
 # Output: "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c"
 ```
 
@@ -152,13 +152,13 @@ When shipping Paprwork to users:
 
 ```
 Your Machine:
-  ~/PAPR/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/  ✅ Exists
+  ~/Papr/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/  ✅ Exists
     ├── index.html
     ├── app.js
     └── ...
 
 Fresh Installation:
-  ~/PAPR/apps/  ❌ Empty directory
+  ~/Papr/apps/  ❌ Empty directory
 ```
 
 ### Solution Options
@@ -178,7 +178,7 @@ paprwork-v2/
 │           └── ...
 ```
 
-On first launch, copy to `~/PAPR/apps/`:
+On first launch, copy to `~/Papr/apps/`:
 
 ```typescript
 // In AppService.initialize()
@@ -238,7 +238,7 @@ await settingsStorage.updatePreferences({
    ```bash
    # Create bundle
    mkdir -p src/resources/default-apps/weekly-war-room
-   cp -r ~/PAPR/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/* \
+   cp -r ~/Papr/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/* \
          src/resources/default-apps/weekly-war-room/
    
    # Document the app ID
@@ -284,20 +284,20 @@ await settingsStorage.updatePreferences({
 
 ```bash
 # 1. Clear app data
-rm -rf ~/PAPR/data/settings.json
-rm -rf ~/PAPR/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c
+rm -rf ~/Papr/data/settings.json
+rm -rf ~/Papr/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c
 
 # 2. Start app
 npm start
 
 # 3. Verify defaults
-cat ~/PAPR/data/settings.json | jq '.preferences.defaultHomeAppId'
+cat ~/Papr/data/settings.json | jq '.preferences.defaultHomeAppId'
 
 # 4. Click home button
 # Expected: Falls back to placeholder (app missing)
 
 # 5. Manually copy app back
-cp -r /path/to/backup ~/PAPR/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c
+cp -r /path/to/backup ~/Papr/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c
 
 # 6. Click home button again
 # Expected: Opens "Home" tab with Weekly War Room

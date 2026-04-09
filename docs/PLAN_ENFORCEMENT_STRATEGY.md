@@ -181,7 +181,7 @@ create_plan({
 ## Plan Persistence & Resumption
 
 ### Storage:
-- Plans are saved to `~/PAPR/data/plans.db` (SQLite)
+- Plans are saved to `~/Papr/data/plans.db` (SQLite)
 - Associated with `chatId`
 - Status: `active`, `completed`, or `cancelled`
 

@@ -36,7 +36,7 @@ export class SmartCodeIndexManager {
   
   constructor(client: Papr, config: IndexManagerConfig) {
     this.config = {
-      paprDir: config.paprDir || path.join(os.homedir(), 'PAPR'),
+      paprDir: config.paprDir || path.join(os.homedir(), 'Papr'),
       dataDir: config.dataDir || path.join(os.homedir(), '.paprwork-v2'),
       schemaId: config.schemaId,
       debounceMs: config.debounceMs || 5000, // 5 seconds
@@ -173,8 +173,17 @@ export class SmartCodeIndexManager {
    * Start file watcher with debounced indexing
    */
   private startFileWatcher(): void {
-    // TODO: Integrate with CodeFileWatcher to call queueFileChange
-    console.log('👀 File watcher integration pending...');
+    console.log('👀 Starting file watcher for real-time indexing...');
+    
+    // Connect watcher to queue changes
+    this.watcher.setOnFileChange((filePath) => {
+      this.queueFileChange(filePath);
+    });
+    
+    // Start watching
+    this.watcher.start();
+    
+    console.log('✅ File watcher active - changes will trigger re-indexing');
   }
   
   /**
@@ -264,13 +273,18 @@ export class SmartCodeIndexManager {
         
         console.log(`   ✅ Indexed: ${path.basename(queuedFile.file_path)}`);
         
+        // Add delay between files to avoid rate limiting (200ms)
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
       } catch (error) {
         const err = error as Error;
         
-        // Check if it's a rate limit error from PAPR Memory
+        // Check if it's a rate limit or service error from PAPR Memory
         const isRateLimitError = error instanceof Papr.RateLimitError || 
                                   error instanceof Papr.PermissionDeniedError ||
                                   err.message.includes('403') || 
+                                  err.message.includes('503') || // Service unavailable (often rate limiting)
+                                  err.message.includes('429') || // Too many requests
                                   err.message.includes('limit') ||
                                   err.message.includes('quota');
         
@@ -283,10 +297,11 @@ export class SmartCodeIndexManager {
           }
           
           console.error(`   ❌ Failed to index ${queuedFile.file_path}: ${errorMessage}`);
-          console.error('   💡 You need to upgrade your PAPR Memory account to continue indexing.');
-          console.error('   💡 Visit https://platform.papr.ai/settings to upgrade.');
+          console.error('   💡 PAPR Memory service issue (503) or quota exceeded.');
+          console.error('   💡 This may be temporary rate limiting - will retry in 30 seconds.');
+          console.error('   💡 If persistent, upgrade at: https://platform.papr.ai/settings');
           
-          // Remove from queue on rate limit - don't retry
+          // Remove from queue on rate limit - don't retry immediately
           this.tracker.dequeueFile(queuedFile.file_path);
           hitRateLimit = true;
           break; // Stop processing batch entirely
@@ -297,15 +312,22 @@ export class SmartCodeIndexManager {
       }
     }
     
-    // If we hit rate limit, clear remaining queue to prevent retry loop
+    // If we hit rate limit, schedule retry in 30 seconds instead of pausing forever
     if (hitRateLimit) {
       this.rateLimitHit = true;
       const remaining = this.tracker.getQueueSize();
       if (remaining > 0) {
-        console.log(`\n   🛑 Indexing paused - PAPR Memory quota exceeded.`);
+        console.log(`\n   ⏸️  Indexing paused - PAPR Memory returned 503 errors.`);
         console.log(`   💡 ${remaining} files remain in queue.`);
-        console.log(`   💡 Please upgrade your PAPR Memory account at: https://platform.papr.ai/settings`);
-        console.log(`   💡 Restart the app after upgrading to resume indexing.\n`);
+        console.log(`   💡 This may be temporary rate limiting - will retry in 30 seconds.`);
+        console.log(`   💡 If errors persist, check https://platform.papr.ai/settings for quota.\n`);
+        
+        // Schedule retry in 30 seconds
+        setTimeout(() => {
+          console.log('\n🔄 Retrying indexing after 30-second cooldown...');
+          this.rateLimitHit = false;
+          this.triggerBatchIndex();
+        }, 30000);
       }
     }
   }

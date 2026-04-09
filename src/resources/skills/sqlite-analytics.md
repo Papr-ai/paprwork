@@ -5,7 +5,7 @@ description: Build and query SQLite workflows for jobs and mini-apps with proper
 ---
 # SQLite Analytics
 
-Design and manage SQLite databases for Papr jobs and mini-apps. Each job gets its own `data.db` file at `~/PAPR/jobs/{jobId}/data.db`.
+Design and manage SQLite databases for Papr jobs and mini-apps. Each job gets its own `data.db` file at `~/Papr/jobs/{jobId}/data.db`.
 
 ## Schema Design
 

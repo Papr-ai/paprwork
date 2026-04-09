@@ -131,7 +131,7 @@ export {
   getJobGraphTool,
 } from "./jobFolders.js";
 
-export { planningTools, createPlanTool, updatePlanTool } from "./planning.js";
+export { planningTools, createPlanTool, updatePlanTool, deletePlanTool } from "./planning.js";
 
 export {
   keyManagementTools,

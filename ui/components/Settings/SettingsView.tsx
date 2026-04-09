@@ -1399,7 +1399,7 @@ function MemoryTab() {
               </div>
               <button
                 className="settings-btn settings-btn--primary"
-                onClick={() => openFolder("~/PAPR/workspace/")}
+                onClick={() => openFolder("~/Papr/workspace/")}
               >
                 Open Folder
               </button>
@@ -1444,12 +1444,12 @@ function MemoryTab() {
               <div className="data-card__title-group">
                 <h3>PAPR Folder</h3>
                 <p>
-                  <code>~/PAPR/</code> - chats, apps, jobs, workspace
+                  <code>~/Papr/</code> - chats, apps, jobs, workspace
                 </p>
               </div>
               <button
                 className="settings-btn settings-btn--primary"
-                onClick={() => openFolder("~/PAPR/")}
+                onClick={() => openFolder("~/Papr/")}
               >
                 Open Folder
               </button>

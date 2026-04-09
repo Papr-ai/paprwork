@@ -27,13 +27,6 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     cost: "expensive",
     specialties: ["reasoning", "computer-use", "complex-tasks"],
   },
-  "gpt-5.4-pro": {
-    reasoningLevel: "advanced",
-    contextWindow: 272000,
-    speed: "slow",
-    cost: "expensive",
-    specialties: ["reasoning", "multi-step", "research"],
-  },
   "gpt-5.3-codex": {
     reasoningLevel: "medium",
     contextWindow: 128000,
@@ -41,12 +34,12 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     cost: "medium",
     specialties: ["coding", "structured-output"],
   },
-  "gpt-5.2": {
+  "gpt-5.4-mini": {
     reasoningLevel: "medium",
-    contextWindow: 128000,
-    speed: "medium",
-    cost: "medium",
-    specialties: ["general-purpose", "balanced"],
+    contextWindow: 272000,
+    speed: "fast",
+    cost: "cheap",
+    specialties: ["coding", "computer-use", "subagents", "speed"],
   },
   "gpt-4o": {
     reasoningLevel: "medium",
@@ -110,6 +103,20 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     cost: "cheap",
     specialties: ["local", "privacy", "free"],
   },
+  "gemma3:latest": {
+    reasoningLevel: "medium",
+    contextWindow: 131072,
+    speed: "medium",
+    cost: "cheap",
+    specialties: ["local", "privacy", "free"],
+  },
+  "gemma3:4b": {
+    reasoningLevel: "medium",
+    contextWindow: 131072,
+    speed: "medium",
+    cost: "cheap",
+    specialties: ["local", "privacy", "free"],
+  },
 };
 
 /**
@@ -132,7 +139,7 @@ export async function getBestFallbackModel(
 
   // Default models by provider
   const defaultModelByProvider: Record<Provider, string> = {
-    openai: "gpt-5.2",
+    openai: "gpt-5.4",
     "openai-codex": "gpt-5.3-codex",
     anthropic: "claude-sonnet-4-6",
     google: "gemini-2.5-flash",
@@ -232,8 +239,8 @@ export function getUpgradeModelForTask(
     openai: {
       reasoning: "gpt-5.4",
       coding: "gpt-5.3-codex",
-      writing: "gpt-5.2",
-      general: "gpt-5.2",
+      writing: "gpt-5.4",
+      general: "gpt-5.4",
     },
     "openai-codex": {
       reasoning: "gpt-5.3-codex",

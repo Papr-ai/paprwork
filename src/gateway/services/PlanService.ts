@@ -41,7 +41,7 @@ export class PlanService {
 
   constructor() {
     const homeDir = os.homedir();
-    this.paprRootDir = path.join(homeDir, "PAPR");
+    this.paprRootDir = path.join(homeDir, "Papr");
     this.dbPath = path.join(this.paprRootDir, "data", "plans.db");
   }
 
@@ -51,8 +51,15 @@ export class PlanService {
     // Ensure data directory exists
     await fs.mkdir(path.dirname(this.dbPath), { recursive: true });
 
-    // Open database
+    // Open database with performance optimizations
     this.db = new Database(this.dbPath);
+    
+    // Performance optimizations
+    this.db.pragma('journal_mode = WAL');
+    this.db.pragma('synchronous = NORMAL');
+    this.db.pragma('cache_size = -5000'); // 5MB cache
+    this.db.pragma('mmap_size = 15000000'); // 15MB mmap
+    this.db.pragma('temp_store = MEMORY');
 
     // Create plans table
     this.db.exec(`

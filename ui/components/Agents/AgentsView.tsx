@@ -27,7 +27,7 @@ export function AgentsView() {
   const [agentName, setAgentName] = useState("");
   const [agentDescription, setAgentDescription] = useState("");
   const [agentSkills, setAgentSkills] = useState("");
-  const [agentModel, setAgentModel] = useState("gpt-5.2");
+  const [agentModel, setAgentModel] = useState("gpt-5.4");
   const [agentPrompt, setAgentPrompt] = useState("");
   const [selectedTools, setSelectedTools] = useState<Record<string, boolean>>({
     bash: true,
@@ -213,7 +213,7 @@ export function AgentsView() {
     setAgentName("");
     setAgentDescription("");
     setAgentSkills("");
-    setAgentModel("gpt-5.2");
+    setAgentModel("gpt-5.4");
     setAgentPrompt("");
   };
 
@@ -413,7 +413,7 @@ export function AgentsView() {
                         Consider using faster models
                       </div>
                       <div className="tip-description">
-                        You're using premium models. Try `gpt-5.2-low` or
+                        You're using premium models. Try `gpt-5.4-mini` or
                         `claude-haiku-4-5` for routine tasks to save up to 95%.
                       </div>
                     </div>
@@ -533,7 +533,7 @@ export function AgentsView() {
                 <div className="model-label-small">Model:</div>
                 <select
                   className="model-select-specialist"
-                  value={agent.model ?? "gpt-5.2"}
+                  value={agent.model ?? "gpt-5.4"}
                   onChange={(event) =>
                     void updateAgentModel(agent, event.target.value)
                   }

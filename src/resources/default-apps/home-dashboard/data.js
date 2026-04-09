@@ -26,34 +26,36 @@ const Data = {
   },
   sample() {
     const d = new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
-    return { hero:{date:d,title:'Daily Brief',subtitle:'5 meetings · 2 external',
-      stats:[{value:'5',label:'meetings'},{value:'2',label:'external'},{value:'3',label:'action items'}]},
+    return { 
+      _isSample: true, // Mark this as sample data
+      hero:{date:d,title:'Welcome to Paprwork',subtitle:'Your AI assistant is ready',
+      stats:[{value:'✓',label:'account'},{value:'✓',label:'API key'},{value:'∞',label:'possibilities'}]},
     sections:[
-      {type:'timeline',title:'Today',items:[
-        {time:'8:00',title:'Weekly Ops Review',tags:['internal']},
-        {time:'9:30',title:'Papr Daily',tags:['internal']},
-        {time:'11:30',title:'Papr × Techstars',tags:['internal']},
-        {time:'12:00',title:'Eric Immermann & Zachary Fischer — Perficient',tags:['external'],
-          detail:{Intel:'Large digital consultancy — potential channel partner.',
-            Angle:'Position Papr as infra for their AI practice.',
-            'The Ask':'Propose joint pilot with one enterprise client.'}},
-        {time:'1:30',title:'Ajay Sharma',tags:['external'],
-          detail:{Intel:'Discovery call. No prior history.',
-            Angle:'Paprwork if non-technical, Memory if engineering leader.',
-            'The Ask':'Qualify ICP fit. Book deep dive or demo.'}}]},
-      {type:'priorities',title:'Focus This Week',items:[
-        {rank:1,title:'Close Capital One → pilot',why:'Highest-leverage. Warm intro made. Demo Monday.'},
-        {rank:2,title:'DeepTrust → enterprise tier',why:'Active customer. Partnership review Tuesday.'},
-        {rank:3,title:'5 new discovery calls',why:'Pipeline building with better ICP targeting.'}]},
-      {type:'tracker',title:'OKR Alignment',items:[
-        {label:'Deep dive calls',current:2,target:5,unit:'calls',context:'Capital One Mon + DeepTrust Tue = 4'},
-        {label:'Discovery calls',current:1,target:5,unit:'/week',context:'Ajay today, Firas Wed, 3 more needed'},
-        {label:'Paprwork feedback',current:2,target:5,unit:'users',context:'Need 3 more sessions this week'}]},
-      {type:'alerts',title:"Don't Forget",items:[
-        {severity:'high',message:'Capital One demo Monday — prep agent memory walkthrough',action:'Build demo flow tonight'},
-        {severity:'medium',message:'DeepTrust review dashboard exists — check before Tue',action:'Open Partnership Review app'}]},
-      {type:'freeform',title:'My Take',
-        content:'<strong>This week is about conversion, not discovery.</strong> Capital One is warm, DeepTrust is already using the product, Verify is in play. <em>Capital One is your best pilot shot.</em> Prep that demo tonight.'}
+      {type:'priorities',title:'Next Steps',items:[
+        {rank:1,title:'Tell me what you need help with',why:'Open chat and describe your workflow. I\'ll help you set up integrations, create jobs, or build apps — just ask.'},
+        {rank:2,title:'Connect your tools (optional)',why:'Want calendar, LinkedIn, or email in your brief? Just ask me: "Connect my Google Calendar" or "Track my LinkedIn activity".'},
+        {rank:3,title:'Create your first mini-app',why:'Once you have some jobs running, we can build custom dashboards to visualize your data. Ask me: "Create a dashboard for my sales pipeline".'}]},
+      {type:'timeline',title:'What Happens Next',items:[
+        {time:'After we chat',title:'I understand your context',tags:['milestone'],
+          detail:{
+            What:'Every conversation helps me learn your goals, priorities, and workflow.',
+            Memory:'I remember past discussions and use them to make better recommendations.',
+            Better:'The more we talk, the more helpful I become. Think of me as your chief of staff.'}},
+        {time:'After 1st job',title:'Automation kicks in',tags:['milestone'],
+          detail:{
+            What:'Jobs run in the background without you thinking about them.',
+            Examples:'Sync calendar every 15 min, track LinkedIn weekly, pull CRM data daily.',
+            Power:'Jobs can query APIs, process data, and feed other jobs. Chain them together for complex workflows.'}},
+        {time:'After 1st app',title:'You get a custom dashboard',tags:['milestone'],
+          detail:{
+            What:'Mini-apps visualize your data and let you take actions.',
+            Examples:'Sales pipeline tracker, meeting prep dashboard, weekly review.',
+            This:'This home dashboard is a mini-app. You can create specialized ones for any workflow.'}}]},
+      {type:'alerts',title:'Quick Actions',items:[
+        {severity:'info',message:'Click "Generate My Real Brief" above',action:'Creates your first personalized brief from our conversation so far'},
+        {severity:'info',message:'Open chat and say hi',action:'Try: "What can you help me with?" or "I want to automate my [workflow]"'}]},
+      {type:'freeform',title:'How This Works',
+        content:'<strong>You\'re not configuring software — you\'re talking to an assistant.</strong> No forms, no settings screens, no complex setup. Just tell me what you need: <em>"Sync my calendar"</em>, <em>"Track LinkedIn connections"</em>, <em>"Build a sales dashboard"</em>. I\'ll create the jobs, apps, and automations. <strong>Everything happens through conversation.</strong>'}
     ]};
   }
 };

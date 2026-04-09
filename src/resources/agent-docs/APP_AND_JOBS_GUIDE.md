@@ -48,7 +48,9 @@ If the task is tiny and explicit, merge steps. Always explain tradeoffs when ski
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/api/db/schema?appId=ID` | GET | List linked SQLite tables & columns |
-| `/api/db/query` | POST | Read data from linked SQLite sources |
+| `/api/db/query` | POST | **Read only** — `SELECT` / `WITH ... SELECT` on linked SQLite (INSERT/UPDATE/DELETE → **403**) |
+| `/api/db/write` | POST | **Writes** — `INSERT`, `UPDATE`, `DELETE`, `REPLACE`, `UPSERT` on linked SQLite (`?` + `params` required for values) |
+| `/api/db/exec` | POST | **DDL** — only `CREATE TABLE IF NOT EXISTS ...` (safe schema bootstrap) |
 | `/api/jobs/list` | GET | List all jobs (id, name, type, status) |
 | `/api/jobs/status/:jobId` | GET | Poll job status |
 | `/api/jobs/run` | POST | Trigger a job (fire-and-forget or wait) |
@@ -58,6 +60,8 @@ If the task is tiny and explicit, merge steps. Always explain tradeoffs when ski
 > **When a button in a mini-app needs to do backend work** (re-generate content, reset data, call an API, run a script) — use `/api/jobs/run` or `/api/bash/run`. These give mini-apps the same power agents have via `run_job` and `bash`. Do NOT build a separate HTTP server job as a bridge — that is always the wrong approach.
 
 > **NEW: Mini-apps can now CREATE jobs dynamically via `/api/jobs/create`**. This enables lazy job creation patterns (e.g., LinkedIn Autopilot creates action jobs on-demand when campaigns need them). Rate limited to 10 jobs/min per app. See "Mini-App Job Creation" section below.
+
+> **CRITICAL:** If a mini-app needs to **INSERT/UPDATE/DELETE**, use **`POST /api/db/write`**, not `/api/db/query`. A 403 on `/api/db/query` means you used the read endpoint for a write — switch endpoints; **writes from apps are supported.**
 
 ---
 
@@ -111,6 +115,7 @@ webview_execute({ script: "fetch('/api/jobs/run', ...)" })  // ← DO NOT do thi
 fetch('/api/jobs/run', { method: 'POST', body: JSON.stringify({ jobId: 'my-job' }) })
 fetch('/api/bash/run', { method: 'POST', body: JSON.stringify({ command: 'sqlite3 ...' }) })
 fetch('/api/db/query', { method: 'POST', body: JSON.stringify({ appId, sql }) })
+fetch('/api/db/write', { method: 'POST', body: JSON.stringify({ appId, sql, params }) })
 ```
 
 ### ✅ Testing endpoints before wiring them into the app
@@ -268,7 +273,8 @@ async function loadData() {
 
 ### Security rules enforced by the gateway
 
-- **Read-only**: only `SELECT` and `WITH ... SELECT` are allowed. Any INSERT/UPDATE/DELETE returns HTTP 403.
+- **`/api/db/query` is read-only**: only `SELECT` and `WITH ... SELECT`. Any INSERT/UPDATE/DELETE on this route returns HTTP 403 — use **`POST /api/db/write`** for mutations.
+- **`/api/db/write`**: only `INSERT`, `UPDATE`, `DELETE`, `REPLACE`, `UPSERT`; bound parameters required for user-supplied values.
 - **Scoped**: only databases registered via `link_app_data_source` for that specific `appId` are accessible.
 - **No path traversal**: the db path is taken from the stored data-source record, not from the request.
 
@@ -322,7 +328,7 @@ Mini-apps can trigger backend jobs directly — the same capability the agent ha
 | **Runtime params** | `THREAD_ID=abc123`, `ACTION=regen` | `params` field in `/api/jobs/run` | This invocation only — not persisted |
 
 **Job path variables (ALWAYS use these instead of hardcoded paths):**
-- `$JOB_DIR` — the job's own directory (e.g. `~/PAPR/jobs/{jobId}`). Use for accessing job files: `$JOB_DIR/data/data.db`, `$JOB_DIR/code/script.py`, etc.
+- `$JOB_DIR` — the job's own directory (e.g. `~/Papr/jobs/{jobId}`). Use for accessing job files: `$JOB_DIR/data/data.db`, `$JOB_DIR/code/script.py`, etc.
 - `$JOB_DB` — shortcut to the job's SQLite database (`$JOB_DIR/data/data.db`)
 - These are set as real env vars for command jobs (bash/python/node/swift) and injected into the prompt for agent/subagent jobs
 - **NEVER hardcode absolute paths** like `/Users/john/PAPR/jobs/...` in job commands — always use `$JOB_DIR` or `$JOB_DB`
@@ -786,6 +792,14 @@ All mini-apps have access to these APIs via `window.paprAPI.invoke(method, ...ar
   - Valid names: `'downloads'`, `'documents'`, `'desktop'`, `'home'`
   - Returns: `{ path: '/Users/john/Downloads' }`
 
+**chat module (mini-apps only):**
+- `chat.open(options?)` - Open a new chat tab from a dashboard / mini-app
+  - Options: `{ message?: string; model?: string; provider?: string }` — all optional
+  - `message` pre-fills the **composer draft** (user can edit before sending)
+  - `model` should be a real model id from the app model picker (e.g. `gpt-5.2`, `claude-sonnet-4-6`)
+  - Example — “Ask agent” on a card: `await window.paprAPI.invoke('chat.open', { message: 'Help with: ' + cardSummary })`
+- **Do not use** `paprwork://…` links, `window.paprwork`, or raw `window.electronAPI` inside mini-app code — only `window.paprAPI.invoke(...)` is injected in the iframe.
+
 #### Why Native Browser APIs Don't Work
 
 Mini-apps run in sandboxed iframes for security. These browser APIs are blocked:
@@ -844,7 +858,7 @@ try {
 ## V2 Storage Layout
 
 ```
-~/PAPR/apps/{appId}/
+~/Papr/apps/{appId}/
   index.html            # Entry point (no inline JS)
   style.css             # Liquid Glass styles
   app.ts                # Main entry (TypeScript — auto-transpiled)
@@ -853,7 +867,7 @@ try {
   utils/                # Helpers, formatters, API calls
   data-sources.json     # Created by link_app_data_source
 
-~/PAPR/jobs/{jobId}/
+~/Papr/jobs/{jobId}/
   job.json              # Job configuration
   code/                 # Scripts (main.py, main.js, etc.)
   logs/                 # Execution logs
@@ -1269,7 +1283,7 @@ Mini-apps support **TypeScript** (`.ts`/`.tsx`) — the gateway transpiles them 
 #### Required File Structure
 
 ```
-~/PAPR/apps/{appId}/
+~/Papr/apps/{appId}/
   index.html          # Entry point — loads modules, no inline JS
   style.css           # Global styles (Liquid Glass tokens)
   app.ts              # Main entry — initialises app, wires components
@@ -1740,7 +1754,7 @@ This creates `data-sources.json` in the app folder:
   "type": "sqlite",
   "jobId": "amplitude-sync",
   "alias": "funnel",
-  "dbPath": "~/PAPR/jobs/amplitude-sync/data.db",
+  "dbPath": "~/Papr/jobs/amplitude-sync/data.db",
   "tables": ["funnel_runs"],
   "linkedAt": "2026-02-13T..."
 }]
@@ -2026,7 +2040,7 @@ create_job({
 })
 
 // Step 2: Write checkpointing script
-bash({ command: `cat > ~/PAPR/jobs/<jobId>/code/ingest.py << 'EOF'
+bash({ command: `cat > ~/Papr/jobs/<jobId>/code/ingest.py << 'EOF'
 import sqlite3
 import requests
 from pathlib import Path
@@ -2189,7 +2203,7 @@ For example, if the app has a data-source link to a "Summarizer" job plus `const
 
 **What gets created:**
 ```
-~/PAPR/bundles/{bundle-id}/
+~/Papr/bundles/{bundle-id}/
 ├── manifest.json      # App + job metadata, schemas, versions
 ├── README.md          # Auto-generated installation guide
 ├── .gitignore         # Excludes large data files
@@ -2265,7 +2279,7 @@ Common replacements:
 - `/Users/john/PAPR/...` → `$HOME/PAPR/...` or relative paths
 
 **Paprwork runtime environment variables** (set automatically for every job run):
-- `$JOB_DIR` — absolute path to the job's own directory (e.g. `~/PAPR/jobs/{jobId}`)
+- `$JOB_DIR` — absolute path to the job's own directory (e.g. `~/Papr/jobs/{jobId}`)
 - `$JOB_DB` — absolute path to the job's SQLite database (`$JOB_DIR/data/data.db`)
 - These work for ALL job types: bash, python, node, swift, agent, and subagent
 - **Always use `$JOB_DIR` and `$JOB_DB` instead of hardcoded paths** — this makes jobs portable across machines
@@ -2285,7 +2299,7 @@ After export, always:
 # Fork to user's GitHub account and clone the fork — this ensures they
 # can only push to their own fork, never to the main repo.
 gh repo fork Papr-ai/paprwork-community-apps --clone --remote -- /tmp/paprwork-community-apps
-cp -r ~/PAPR/bundles/{bundleId} /tmp/paprwork-community-apps/bundles/{bundleId}
+cp -r ~/Papr/bundles/{bundleId} /tmp/paprwork-community-apps/bundles/{bundleId}
 ```
 **SECURITY: Always use `gh repo fork`, never `git clone` on the main repo.** This prevents any possibility of pushing changes directly to the main repo (deleting other apps, modifying other entries, etc.). The PR review process on the upstream repo is the only way changes get merged.
 
@@ -2362,7 +2376,7 @@ gh pr create --repo Papr-ai/paprwork-community-apps --title "Add {App Name}" --b
 If the user wants to share privately (not to the community), create a standalone repo:
 
 ```bash
-cd ~/PAPR/bundles/{bundleId}
+cd ~/Papr/bundles/{bundleId}
 git init
 git add .
 git commit -m "Initial release v1.0.0"
@@ -2394,7 +2408,7 @@ Returns:
 list_app_bundles()
 ```
 
-Shows all app bundles in `~/PAPR/bundles/` with:
+Shows all app bundles in `~/Papr/bundles/` with:
 - Bundle ID, name, version
 - Creation date
 - Full path
@@ -2510,7 +2524,7 @@ Avoid naming folders after apps (`sales-dashboard`) — those are linkages, not 
 
 ### How the Graph Works
 
-`~/PAPR/data/job-graph.json` is automatically rebuilt after every job create/update/delete. It contains:
+`~/Papr/data/job-graph.json` is automatically rebuilt after every job create/update/delete. It contains:
 
 ```json
 {

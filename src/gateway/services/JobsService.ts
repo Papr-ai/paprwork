@@ -3,6 +3,8 @@ import path from "path";
 import os from "os";
 import type { ChildProcessWithoutNullStreams } from "child_process";
 import { v4 as uuidv4 } from "uuid";
+import { fileURLToPath } from "url";
+import Database from "better-sqlite3";
 import { JobDatabase } from "./jobs/JobDatabase.js";
 import { CommandJobExecutor } from "./jobs/executors/CommandJobExecutor.js";
 import { AgentJobExecutor } from "./jobs/executors/AgentJobExecutor.js";
@@ -10,6 +12,10 @@ import type { IJobExecutor } from "./jobs/executors/IJobExecutor.js";
 import { sanitizeError } from "../../core/tools/security.js";
 import { getGatewayTelemetry } from "./gatewayTelemetry.js";
 import { getJobRunHistory } from "./jobs/JobRunHistory.js";
+
+// ESM compatibility: get __dirname equivalent
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 import {
   classifyError,
   getErrorClassificationReason,
@@ -61,7 +67,7 @@ export class JobsService {
 
   constructor() {
     const homeDir = os.homedir();
-    this.paprRootDir = path.join(homeDir, "PAPR");
+    this.paprRootDir = path.join(homeDir, "Papr");
     this.jobsRootDir = path.join(this.paprRootDir, "jobs");
     this.jobsIndexPath = path.join(this.paprRootDir, "data", "jobs.json");
     this.graphPath = path.join(this.paprRootDir, "data", "job-graph.json");
@@ -124,6 +130,147 @@ export class JobsService {
     }
   }
 
+  /**
+   * Install default jobs from src/resources/default-jobs/ if they don't exist yet.
+   * Called on first launch to provide pre-built jobs like the Daily Brief generator.
+   */
+  private async installDefaultJobs(): Promise<void> {
+    try {
+      // Path to bundled default jobs (in dist after build)
+      // __dirname is dist/gateway/services/ so we need to go up 2 levels to reach dist/
+      const defaultJobsDir = path.join(__dirname, "..", "..", "resources", "default-jobs");
+      
+      // Check if default jobs directory exists
+      try {
+        await fs.access(defaultJobsDir);
+      } catch {
+        console.log("[JobsService] No default jobs directory found, skipping installation");
+        return;
+      }
+
+      // Get list of default jobs
+      const defaultJobDirs = await fs.readdir(defaultJobsDir);
+      let installedCount = 0;
+      
+      for (const jobDirName of defaultJobDirs) {
+        const sourceDir = path.join(defaultJobsDir, jobDirName);
+        const stat = await fs.stat(sourceDir);
+        
+        if (!stat.isDirectory()) continue;
+
+        // Read job ID from job-id.txt
+        const jobIdPath = path.join(sourceDir, "job-id.txt");
+        let jobId: string;
+        try {
+          jobId = (await fs.readFile(jobIdPath, "utf-8")).trim();
+        } catch {
+          console.warn(`[JobsService] Skipping default job ${jobDirName}: no job-id.txt`);
+          continue;
+        }
+
+        // Check if job already exists (both in registry and on disk)
+        if (this.jobs.has(jobId)) {
+          console.log(`[JobsService] Default job already in registry: ${jobId}`);
+          continue;
+        }
+
+        const targetDir = path.join(this.jobsRootDir, jobId);
+        let needsInstall = false;
+        try {
+          await fs.access(targetDir);
+          console.log(`[JobsService] Default job files exist but not in registry: ${jobId}`);
+          // Files exist but not registered - add to registry below
+        } catch {
+          // Job doesn't exist, install files
+          needsInstall = true;
+        }
+
+        if (needsInstall) {
+          // Copy job files (but not data/ directory if it exists)
+          await fs.mkdir(targetDir, { recursive: true });
+          const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+          for (const entry of entries) {
+            const sourcePath = path.join(sourceDir, entry.name);
+            const targetPath = path.join(targetDir, entry.name);
+            if (entry.isDirectory()) {
+              // Skip data directory (will be created with db below)
+              if (entry.name === 'data') continue;
+              await fs.cp(sourcePath, targetPath, { recursive: true });
+            } else {
+              await fs.copyFile(sourcePath, targetPath);
+            }
+          }
+          console.log(`[JobsService] Copied default job files: ${jobId} (${jobDirName})`);
+        }
+
+        // Read metadata.json to get job details
+        const metadataPath = path.join(sourceDir, "metadata.json");
+        let metadata: Partial<JobRecord> & { description?: string; isDefault?: boolean };
+        try {
+          const metadataContent = await fs.readFile(metadataPath, "utf-8");
+          metadata = JSON.parse(metadataContent);
+        } catch {
+          console.warn(`[JobsService] No metadata.json found for default job ${jobId}, using defaults`);
+          metadata = {
+            id: jobId,
+            name: jobDirName,
+            type: "agent",
+            command: "",
+          };
+        }
+
+        // Create job entry in registry
+        const now = new Date().toISOString();
+        const job: JobRecord = {
+          id: jobId,
+          name: metadata.name || jobDirName,
+          type: (metadata.type as JobType) || "agent",
+          status: "idle" as JobStatus,
+          command: metadata.command || "",
+          createdAt: metadata.createdAt || now,
+          updatedAt: now,
+          ...(metadata.schedule ? { schedule: metadata.schedule } : {}),
+          ...(metadata.requirements ? { requirements: metadata.requirements } : {}),
+          ...(metadata.provider ? { provider: metadata.provider } : {}),
+          ...(metadata.model ? { model: metadata.model } : {}),
+        };
+
+        this.jobs.set(jobId, job);
+        
+        // Initialize SQLite database if init-db.sql exists
+        const initDbPath = path.join(sourceDir, "init-db.sql");
+        try {
+          await fs.access(initDbPath);
+          const dataDir = path.join(targetDir, "data");
+          await fs.mkdir(dataDir, { recursive: true });
+          const dbPath = path.join(dataDir, "data.db");
+          
+          // Create database and execute init script
+          const db = new Database(dbPath);
+          const initSql = await fs.readFile(initDbPath, "utf-8");
+          db.exec(initSql);
+          db.close();
+          
+          console.log(`[JobsService] Initialized database for job: ${jobId}`);
+        } catch {
+          // No init-db.sql or error initializing - that's okay
+        }
+        
+        installedCount++;
+        console.log(`[JobsService] Registered default job: ${jobId} - ${job.name}`);
+      }
+
+      // Save jobs index if any jobs were installed
+      if (installedCount > 0) {
+        await this.saveJobs();
+        console.log(`[JobsService] Installed and registered ${installedCount} default job(s)`);
+      }
+    } catch (error) {
+      console.error("[JobsService] Failed to install default jobs:", error);
+      // Don't throw - default jobs are nice-to-have, not critical
+    }
+  }
+
   async initialize(): Promise<void> {
     if (this.initialized) {
       return;
@@ -132,6 +279,7 @@ export class JobsService {
     await fs.mkdir(this.jobsRootDir, { recursive: true });
     await fs.mkdir(path.dirname(this.jobsIndexPath), { recursive: true });
     await this.loadJobs();
+    await this.installDefaultJobs(); // Install default jobs on first launch
 
     // Initialize run history
     const runHistory = getJobRunHistory();
@@ -139,6 +287,10 @@ export class JobsService {
 
     // Reconcile interrupted jobs from previous session
     await this.reconcileInterruptedJobs();
+
+    // Detect and mark stale running jobs (jobs stuck in "running" for >30s with no tracked process)
+    // Using 30s threshold to catch stale agent jobs faster while avoiding false positives
+    await this.reconcileStaleRunningJobs(30_000);
 
     await this.reconcileScheduleStates();
 
@@ -285,7 +437,7 @@ export class JobsService {
   }
 
   /**
-   * Rebuilds ~/PAPR/data/job-graph.json from current jobs + app data-sources.
+   * Rebuilds ~/Papr/data/job-graph.json from current jobs + app data-sources.
    * Called fire-and-forget after every job mutation.
    */
   private async rebuildGraph(): Promise<void> {
@@ -329,15 +481,38 @@ export class JobsService {
         await appService.initialize();
         const apps = await appService.listApps();
         for (const app of apps) {
+          const linkedJobIds = new Set<string>();
+          
+          // Include jobs explicitly linked via data-sources.json
           try {
             const dataSources = await appService.listAppDataSources(app.id);
-            const jobIds = [...new Set(dataSources.map((ds) => ds.jobId))];
-            if (jobIds.length > 0) {
-              appLinks[app.id] = { name: app.title, jobIds };
+            for (const ds of dataSources) {
+              linkedJobIds.add(ds.jobId);
             }
           } catch {
             // skip apps with no data sources
           }
+          
+          // Also auto-link jobs whose folder matches the app title (case-insensitive)
+          // This enables app filters and graphs to show all related jobs, even if
+          // data sources aren't explicitly linked yet. The agent still needs to call
+          // link_app_data_source for the app to actually query job databases.
+          const appTitleLower = app.title.toLowerCase();
+          for (const job of jobs) {
+            if (job.folder && job.folder.toLowerCase() === appTitleLower) {
+              linkedJobIds.add(job.id);
+            }
+          }
+          
+          if (linkedJobIds.size > 0) {
+            appLinks[app.id] = { name: app.title, jobIds: [...linkedJobIds] };
+          }
+          
+          // Trigger auto-discovery of data sources for this app
+          // This runs asynchronously and won't block graph rebuild
+          void appService.autoDiscoverDataSources(app.id).catch(err => {
+            console.warn(`[JobsService] Auto-discovery failed for app ${app.id}:`, err);
+          });
         }
       } catch {
         // AppService not yet initialized — skip app links this rebuild
@@ -1313,6 +1488,9 @@ export class JobsService {
    * Jobs left in `running` with no tracked child process (lost completion write, sleep,
    * or exception after the process exited). Marks them failed so schedules and updates work again.
    * Safe while a real run is in flight: {@link running} holds the job id until the process ends.
+   * 
+   * For agent/subagent jobs (which don't use child processes), we detect stale state by checking
+   * if the job has been "running" for longer than expected without completion.
    */
   async reconcileStaleRunningJobs(minStaleMs: number = 20_000): Promise<void> {
     const processBackedTypes: JobType[] = [
@@ -1327,30 +1505,55 @@ export class JobsService {
       if (job.status !== "running") {
         continue;
       }
-      if (!processBackedTypes.includes(job.type)) {
+      
+      // For process-backed jobs: check if process is tracked
+      if (processBackedTypes.includes(job.type)) {
+        if (this.running.has(jobId)) {
+          continue;
+        }
+        const anchorMs = new Date(
+          job.lastRunAt ?? job.updatedAt,
+        ).getTime();
+        if (Number.isNaN(anchorMs) || nowMs - anchorMs < minStaleMs) {
+          continue;
+        }
+        console.warn(
+          `[JobsService] Stale running job ${jobId} (no tracked process since ${job.lastRunAt ?? job.updatedAt}); marking failed`,
+        );
+        await this.appendLog(
+          jobId,
+          "Stale running state cleared: no active process was tracked (completion may not have been saved).",
+        );
+        await this.setJobStatus(jobId, "failed", {
+          error:
+            "Stale running state — the worker likely finished but Paprwork did not save completion. Check logs, then run again if needed.",
+          currentExecutionId: undefined,
+        });
         continue;
       }
-      if (this.running.has(jobId)) {
-        continue;
+      
+      // For agent/subagent jobs: check if stuck in running for too long
+      // Agent jobs should complete within a reasonable timeframe or update their status
+      if (job.type === "agent" || job.type === "subagent") {
+        const anchorMs = new Date(
+          job.lastRunAt ?? job.updatedAt,
+        ).getTime();
+        if (Number.isNaN(anchorMs) || nowMs - anchorMs < minStaleMs) {
+          continue;
+        }
+        console.warn(
+          `[JobsService] Stale running ${job.type} job ${jobId} (stuck since ${job.lastRunAt ?? job.updatedAt}); marking failed`,
+        );
+        await this.appendLog(
+          jobId,
+          `Stale running state cleared: ${job.type} job was stuck in running state without completion.`,
+        );
+        await this.setJobStatus(jobId, "failed", {
+          error:
+            `${job.type} job stuck in running state — may have been interrupted by app restart or exception. Check logs and run again if needed.`,
+          currentExecutionId: undefined,
+        });
       }
-      const anchorMs = new Date(
-        job.lastRunAt ?? job.updatedAt,
-      ).getTime();
-      if (Number.isNaN(anchorMs) || nowMs - anchorMs < minStaleMs) {
-        continue;
-      }
-      console.warn(
-        `[JobsService] Stale running job ${jobId} (no tracked process since ${job.lastRunAt ?? job.updatedAt}); marking failed`,
-      );
-      await this.appendLog(
-        jobId,
-        "Stale running state cleared: no active process was tracked (completion may not have been saved).",
-      );
-      await this.setJobStatus(jobId, "failed", {
-        error:
-          "Stale running state — the worker likely finished but Paprwork did not save completion. Check logs, then run again if needed.",
-        currentExecutionId: undefined,
-      });
     }
   }
 

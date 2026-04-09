@@ -9,6 +9,8 @@
  */
 
 import { ipcMain, BrowserWindow } from 'electron';
+import os from 'node:os';
+import { bytesToRamGbRounded } from '../../../core/utils/ollamaModelFit.js';
 import { getOllamaManager } from '../services/OllamaManager.js';
 
 export function initializeOllamaIPC(window: BrowserWindow): void {
@@ -86,6 +88,27 @@ export function initializeOllamaIPC(window: BrowserWindow): void {
       console.error(`[Ollama IPC] Failed to check model ${modelName}:`, error);
       return {
         success: false,
+        error: (error as Error).message,
+      };
+    }
+  });
+
+  // Host RAM for on-device model fit hints (same machine as Ollama)
+  ipcMain.handle('ollama:host-memory', async () => {
+    try {
+      const totalBytes = os.totalmem();
+      const freeBytes = os.freemem();
+      return {
+        success: true as const,
+        totalBytes,
+        freeBytes,
+        totalGb: bytesToRamGbRounded(totalBytes),
+        freeGb: bytesToRamGbRounded(freeBytes),
+      };
+    } catch (error) {
+      console.error('[Ollama IPC] Failed to read host memory:', error);
+      return {
+        success: false as const,
         error: (error as Error).message,
       };
     }

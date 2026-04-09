@@ -65,9 +65,9 @@ export interface BashOutput {
   duration: number;
 }
 
-/** Matches ~/PAPR/apps/{appId}/{filename} or $HOME/PAPR/apps/... or /path/PAPR/apps/... */
+/** Matches ~/Papr/apps/{appId}/{filename} or $HOME/Papr/apps/... or /path/Papr/apps/... */
 const APP_PATH_REGEX =
-  /PAPR\/apps\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([^\s"'`;|&<>]+)/gi;
+  /Papr\/apps\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([^\s"'`;|&<>]+)/gi;
 
 /** Write indicators: redirects, sed -i, tee, cp, mv */
 const WRITE_INDICATORS = [
@@ -79,7 +79,7 @@ const WRITE_INDICATORS = [
 ];
 
 /**
- * Detect if a bash command modifies files in ~/PAPR/apps/{appId}/.
+ * Detect if a bash command modifies files in ~/Papr/apps/{appId}/.
  * Returns [{ appId, filename }] for each app file that appears to be written.
  */
 function detectAppFileEditsFromBashCommand(
@@ -107,7 +107,7 @@ function detectAppFileEditsFromBashCommand(
 
 /**
  * Broadcast app:file-changed for each edited app file (triggers iframe reload).
- * Called when bash modifies files in ~/PAPR/apps/.
+ * Called when bash modifies files in ~/Papr/apps/.
  */
 async function broadcastAppFileChanges(
   edits: { appId: string; filename: string }[],
@@ -126,6 +126,90 @@ async function broadcastAppFileChanges(
     }
   } catch (err) {
     console.warn("[Bash] Failed to broadcast app file changes:", err);
+  }
+}
+
+/**
+ * Detects if command is a grep search in PAPR folders
+ * Returns { pattern, path } if detected, null otherwise
+ */
+function detectPaprGrepCommand(command: string): { pattern: string; path: string } | null {
+  // Match: grep [options] "pattern" path/to/PAPR/...
+  // Also match: grep [options] pattern path/to/PAPR/... (without quotes)
+  const grepRegex = /\bgrep\s+(?:-[a-zA-Z]+\s+)*["']?([^"'\s]+)["']?\s+(.+)/i;
+  const match = command.match(grepRegex);
+  
+  if (!match) return null;
+  
+  const pattern = match[1];
+  const path = match[2].trim();
+  
+  // Check if path contains PAPR/apps or PAPR/Jobs
+  if (path.includes('Papr/apps') || path.includes('Papr/Jobs')) {
+    return { pattern, path };
+  }
+  
+  return null;
+}
+
+/**
+ * Search PAPR Memory for code matching the pattern
+ */
+async function searchPaprMemoryForCode(pattern: string): Promise<string | null> {
+  try {
+    // Check if PAPR_API_KEY is available
+    const { getApiKey } = await import("../../gateway/utils/keyResolver.js");
+    const paprKey = await getApiKey('PAPR_API_KEY');
+    
+    if (!paprKey) {
+      return null; // No PAPR key, skip memory search
+    }
+    
+    // Import Papr client
+    const { default: Papr } = await import('@papr/memory');
+    const client = new Papr({ xAPIKey: paprKey });
+    
+    // Search for code
+    const response = await client.memory.search({
+      query: pattern,
+      max_memories: 10,
+      max_nodes: 10,
+      enable_agentic_graph: true,
+      rank_results: true,
+      response_format: 'toon',
+      metadata: {
+        category: 'learning',
+        customMetadata: {
+          source: 'code_indexer'
+        }
+      }
+    });
+    
+    // Format results - response.data.memories
+    if (!response?.data?.memories || response.data.memories.length === 0) {
+      return null;
+    }
+    
+    let output = '=== Memory Search Results (Semantic) ===\n';
+    output += `Found ${response.data.memories.length} relevant code files:\n\n`;
+    
+    for (const memory of response.data.memories) {
+      const metadata = memory.customMetadata as Record<string, string> | undefined;
+      const filePath = metadata?.file_path || 'unknown';
+      const projectId = metadata?.project_id || 'unknown';
+      const language = metadata?.language || 'unknown';
+      
+      output += `📄 ${filePath}\n`;
+      output += `   Project: ${projectId}\n`;
+      output += `   Language: ${language}\n`;
+      output += `   Match: ${memory.content.substring(0, 200)}...\n\n`;
+    }
+    
+    return output;
+    
+  } catch (error) {
+    console.warn('[Bash Tool] Memory search failed:', error);
+    return null; // Fail gracefully
   }
 }
 
@@ -151,6 +235,16 @@ export async function executeBashCommand(
         error: "Command cannot be empty",
         type: "validation_error",
       };
+    }
+    
+    // Check if this is a grep command in PAPR folders
+    const grepInfo = detectPaprGrepCommand(command);
+    let memoryPromise: Promise<string | null> | null = null;
+    
+    if (grepInfo) {
+      // Run memory search in parallel (don't await yet)
+      memoryPromise = searchPaprMemoryForCode(grepInfo.pattern);
+      console.log(`[Bash Tool] Detected grep in Papr folder, running parallel memory search for: "${grepInfo.pattern}"`);
     }
 
     // Get API keys for sanitization and substitution
@@ -241,12 +335,33 @@ export async function executeBashCommand(
           : process.env,
       shell: getShell(),
     });
+    
+    // If we started a memory search, wait for it now
+    let memoryResults: string | null = null;
+    if (grepInfo && memoryPromise) {
+      try {
+        memoryResults = await memoryPromise;
+        if (memoryResults) {
+          console.log(`[Bash Tool] Memory search returned ${memoryResults.split('\n').length} lines`);
+        }
+      } catch (error) {
+        console.warn('[Bash Tool] Memory search error:', error);
+        // Continue without memory results
+      }
+    }
 
     const duration = Date.now() - startTime;
 
     // Sanitize output before returning (no truncation - prepareStep keeps last full)
     let sanitizedStdout = sanitizeError(stdout || "", apiKeys);
     const sanitizedStderr = sanitizeError(stderr || "", apiKeys);
+    
+    // Combine memory results with grep results if available
+    if (memoryResults && sanitizedStdout) {
+      sanitizedStdout = `${memoryResults}\n\n=== Grep Results (Exact Match) ===\n${sanitizedStdout}`;
+    } else if (memoryResults) {
+      sanitizedStdout = `${memoryResults}\n\n=== Grep Results ===\nNo exact matches found.\n`;
+    }
 
     // Wrap stdout from curl/wget/python - external content may contain prompt injections
     const wrapSource = shouldWrapBashOutput(input.command);

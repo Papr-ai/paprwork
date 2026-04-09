@@ -110,7 +110,7 @@ Comprehensive documentation system for agent job outputs, delivery mechanisms, a
 
 ```python
 # Python reads agent job output
-job_json = Path.home() / "PAPR" / "jobs" / "agent-job-id" / "job.json"
+job_json = Path.home() / "Papr" / "jobs" / "agent-job-id" / "job.json"
 data = json.loads(json.load(open(job_json))["lastOutput"])
 ```
 

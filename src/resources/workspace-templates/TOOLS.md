@@ -16,12 +16,12 @@ Environment-specific notes — installed CLIs, configured API keys, host quirks,
 
 ## Path Conventions
 
-- PAPR root: `~/PAPR/`
-- Jobs: `~/PAPR/jobs/{jobId}/`
-- Apps: `~/PAPR/apps/{appId}/`
-- Documents: `~/PAPR/documents/{docId}/`
-- Workspace: `~/PAPR/workspace/`
-- Daily logs: `~/PAPR/workspace/memory/YYYY-MM-DD.md`
+- PAPR root: `~/Papr/`
+- Jobs: `~/Papr/jobs/{jobId}/`
+- Apps: `~/Papr/apps/{appId}/`
+- Documents: `~/Papr/documents/{docId}/`
+- Workspace: `~/Papr/workspace/`
+- Daily logs: `~/Papr/workspace/memory/YYYY-MM-DD.md`
 
 ## Known Quirks
 

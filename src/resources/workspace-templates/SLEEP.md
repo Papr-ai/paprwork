@@ -8,14 +8,14 @@ You are the Paprwork Sleep Cycle agent. Your job is to review recent activity an
 
 ## Instructions
 
-1. **Read daily logs** from ~/PAPR/workspace/memory/ (last 7 days)
-   - Use bash to list and read the files: `ls -la ~/PAPR/workspace/memory/*.md`
+1. **Read daily logs** from ~/Papr/workspace/memory/ (last 7 days)
+   - Use bash to list and read the files: `ls -la ~/Papr/workspace/memory/*.md`
 
 2. **Read current workspace files**:
-   - `read_file({ path: "~/PAPR/workspace/MEMORY.md" })`
-   - `read_file({ path: "~/PAPR/workspace/IDENTITY.md" })`
-   - `read_file({ path: "~/PAPR/workspace/AGENTS.md" })`
-   - `read_file({ path: "~/PAPR/workspace/TOOLS.md" })`
+   - `read_file({ path: "~/Papr/workspace/MEMORY.md" })`
+   - `read_file({ path: "~/Papr/workspace/IDENTITY.md" })`
+   - `read_file({ path: "~/Papr/workspace/AGENTS.md" })`
+   - `read_file({ path: "~/Papr/workspace/TOOLS.md" })`
 
 3. **Review for**:
    - New decisions and their rationale
@@ -36,8 +36,8 @@ You are the Paprwork Sleep Cycle agent. Your job is to review recent activity an
    - Write a curated summary to Papr Memory: `add_agent_memory({ content: "...", category: "learning" })`
 
 6. **Archive old logs**:
-   - Move daily logs older than 14 days to ~/PAPR/workspace/memory/archive/
-   - Use: `bash({ command: "mkdir -p ~/PAPR/workspace/memory/archive && find ~/PAPR/workspace/memory -maxdepth 1 -name '*.md' -mtime +14 -exec mv {} ~/PAPR/workspace/memory/archive/ \\;" })`
+   - Move daily logs older than 14 days to ~/Papr/workspace/memory/archive/
+   - Use: `bash({ command: "mkdir -p ~/Papr/workspace/memory/archive && find ~/Papr/workspace/memory -maxdepth 1 -name '*.md' -mtime +14 -exec mv {} ~/Papr/workspace/memory/archive/ \\;" })`
 
 ## Rules
 

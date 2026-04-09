@@ -94,8 +94,13 @@ const updatePlanSchema = z.object({
   ).describe("Step status updates"),
 });
 
+const deletePlanSchema = z.object({
+  planId: z.string().min(1).describe("Plan ID to delete"),
+});
+
 type CreatePlanArgs = z.infer<typeof createPlanSchema>;
 type UpdatePlanArgs = z.infer<typeof updatePlanSchema>;
+type DeletePlanArgs = z.infer<typeof deletePlanSchema>;
 
 // Re-export types for compatibility
 export interface PlanStep {
@@ -117,7 +122,7 @@ export interface Plan {
 export const createPlanTool = createTool({
   id: "create_plan",
   description:
-    "REQUIRED for any multi-step task, especially app/job creation or updates. Create a step-by-step plan shown to the user as a progress card. Plans are persisted and associated with the chat. Use BEFORE starting any mini-app or job work (creating OR updating). Returns the plan with step statuses. IMPORTANT: Only call this ONCE per task - if you see 'Plan created' in the result, don't call it again! Example usage: create_plan({ title: 'Build Dashboard', steps: [{ id: 'design', description: 'Design UI layout' }, { id: 'build', description: 'Build components' }] })",
+    "REQUIRED for any multi-step task, especially app/job creation or updates. Create a step-by-step plan shown to the user as a progress card. Plans are persisted and associated with the chat. Use BEFORE starting any mini-app or job work (creating OR updating). **ENFORCED: Only ONE active plan per chat** - if an active plan exists, this tool will return it instead of creating a duplicate. To start a new plan, first complete or delete the existing one using update_plan (mark all steps completed) or delete_plan. Example usage: create_plan({ title: 'Build Dashboard', steps: [{ id: 'design', description: 'Design UI layout' }, { id: 'build', description: 'Build components' }] })",
   inputSchema: createPlanSchema,
   execute: async (input) => {
     const args = (input as { context?: CreatePlanArgs }).context ?? input;
@@ -136,6 +141,29 @@ export const createPlanTool = createTool({
       );
     }
 
+    // CHECK FOR EXISTING ACTIVE PLAN (enforcement)
+    const activePlans = await planService.getActivePlansForChat(chatId);
+    if (activePlans.length > 0) {
+      const existingPlan = activePlans[0];
+      const completedCount = existingPlan.steps.filter(
+        (s) => s.status === "completed" || s.status === "skipped"
+      ).length;
+      
+      console.log(
+        `[create_plan] Active plan already exists for chat ${chatId}: "${existingPlan.title}" (${existingPlan.planId}). Returning existing plan instead of creating duplicate.`
+      );
+      
+      const message = `⚠ Active plan already exists: "${existingPlan.title}" (${completedCount}/${existingPlan.steps.length} steps complete)\nPlan ID: ${existingPlan.planId}\n\nUse update_plan to mark progress on this plan, or delete_plan to remove it and start fresh.\n\nExisting steps:\n${existingPlan.steps.map((s, i) => `${i + 1}. [${s.status}] ${s.description}`).join('\n')}`;
+      
+      return JSON.stringify({
+        success: false,
+        existingPlan: true,
+        message,
+        data: existingPlan,
+      });
+    }
+
+    // No active plan exists, create new one
     const planId = `plan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     const steps: PlanStep[] = args.steps.map((s) => ({
@@ -251,4 +279,41 @@ export const updatePlanTool = createTool({
   },
 });
 
-export const planningTools = [createPlanTool, updatePlanTool];
+export const deletePlanTool = createTool({
+  id: "delete_plan",
+  description:
+    "Delete an existing plan to start fresh. Use this when you need to create a completely new plan but there's already an active plan for this chat. After deleting, you can call create_plan to start a new plan. Only delete plans when explicitly needed - if you just want to update the approach, use update_plan instead.",
+  inputSchema: deletePlanSchema,
+  execute: async (input) => {
+    const args = (input as { context?: DeletePlanArgs }).context ?? input;
+    const { getPlanService } =
+      await import("../../gateway/services/PlanService.js");
+    const planService = getPlanService();
+    await planService.initialize();
+
+    const plan = await planService.getPlan(args.planId);
+    if (!plan) {
+      return JSON.stringify({
+        success: false,
+        message: `Plan not found: ${args.planId}`,
+      });
+    }
+
+    const deleted = await planService.deletePlan(args.planId);
+    
+    if (deleted) {
+      console.log(`[delete_plan] Deleted plan ${args.planId}: "${plan.title}"`);
+      return JSON.stringify({
+        success: true,
+        message: `✓ Plan deleted: "${plan.title}"\n\nYou can now create a new plan with create_plan.`,
+      });
+    } else {
+      return JSON.stringify({
+        success: false,
+        message: `Failed to delete plan: ${args.planId}`,
+      });
+    }
+  },
+});
+
+export const planningTools = [createPlanTool, updatePlanTool, deletePlanTool];

@@ -173,7 +173,7 @@ interface CodeIndexingStatus {
 - [ ] Verify Code Memory section appears
 - [ ] Check loading state shows initially
 - [ ] Verify statistics display after load
-- [ ] Trigger indexing (modify file in ~/PAPR/apps)
+- [ ] Trigger indexing (modify file in ~/Papr/apps)
 - [ ] Verify spinner appears when `is_indexing: true`
 - [ ] Verify queue size updates in real-time
 - [ ] Verify last indexed timestamp updates

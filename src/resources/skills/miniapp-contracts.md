@@ -27,7 +27,7 @@ With a contract:
 ## Data Contract: [App Name] <-> [Job Name]
 
 ### Write Model (what the job produces)
-- Database: ~/PAPR/jobs/{jobId}/data.db
+- Database: ~/Papr/jobs/{jobId}/data.db
 - Tables:
   - `table_name`: columns, types, constraints
 - Indexes: which columns, matching which queries

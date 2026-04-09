@@ -67,7 +67,7 @@ const SqliteDatabaseSchema = z.object({
 });
 
 const SyncSettingsSchema = z.object({
-  preferredRoot: z.string().default("~/PAPR"),
+  preferredRoot: z.string().default("~/Papr"),
   bundleSubpath: z.string().default("bundles"),
   cloudReady: z.boolean().default(true),
 });
@@ -99,7 +99,7 @@ export const BundleManifestSchema = z.object({
   sqlite: z.array(SqliteDatabaseSchema).default([]),
   deploymentProfiles: z.array(DeploymentProfileSchema).default([]),
   sync: SyncSettingsSchema.default({
-    preferredRoot: "~/PAPR",
+    preferredRoot: "~/Papr",
     bundleSubpath: "bundles",
     cloudReady: true,
   }),

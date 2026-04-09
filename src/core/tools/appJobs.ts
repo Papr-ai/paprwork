@@ -2,16 +2,48 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { getApiKeysForSanitization, sanitizeError } from "./security.js";
 
-const appFileSchema = z.object({
-  filename: z.string().min(1),
-  content: z.string(),
-});
+/** Models often send `fileName`; our schemas use `filename`. Normalize before parse to avoid wasted tool calls. */
+function coerceFilenameAliasInToolArgs(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+  const o = raw as Record<string, unknown>;
+  if (o.filename === undefined && typeof o.fileName === "string") {
+    return { ...o, filename: o.fileName };
+  }
+  return raw;
+}
+
+function toolSchemaWithFilenameAlias<T extends z.ZodType>(schema: T) {
+  return z.preprocess(coerceFilenameAliasInToolArgs, schema);
+}
+
+const appFileSchema = toolSchemaWithFilenameAlias(
+  z.object({
+    filename: z.string().min(1),
+    content: z.string(),
+  }),
+);
 
 const createAppSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
   icon: z
     .string()
+    .refine(
+      (val) => {
+        const trimmed = val.trim();
+        // Must start with < (SVG) or be a valid emoji (Unicode, not ASCII text)
+        const startsWithSvg = trimmed.startsWith('<');
+        const isEmoji = trimmed.length <= 4 && /[\p{Emoji}]/u.test(trimmed);
+        return startsWithSvg || isEmoji;
+      },
+      {
+        message:
+          'Icon must be an SVG string (starting with "<svg") or a valid emoji. Plain text like "chart" or "shield" is not allowed. ' +
+          'Example SVG: \'<svg viewBox="0 0 24 24" width="14" height="14"><path d="..." stroke="currentColor" stroke-width="2" fill="none"/></svg>\'',
+      },
+    )
     .describe(
       "**REQUIRED:** Icon for the app logo. Shown in tabs, apps list, and favorites. " +
         "PREFERRED: Generate a droplet-style icon using an image API with prompt: " +
@@ -121,7 +153,7 @@ const createJobSchema = z.object({
     .min(1)
     .optional()
     .describe(
-      "Model ID for agent/subagent jobs. Overrides default. Example: 'gpt-5.4', 'claude-sonnet-4-5', 'qwen3.5-9b'",
+      "Model ID for agent/subagent jobs. Overrides default. Example: 'gpt-5.4', 'claude-sonnet-4-6', 'qwen3.5:latest', 'gemma3:4b'",
     ),
 });
 
@@ -276,7 +308,7 @@ export const createJobTool = createTool({
     "\n\nAgent job model selection: " +
     "Use 'provider' and 'model' fields for direct override (type: 'agent', same behavior, just different model). " +
     "Use subagent (type: 'subagent' with subAgentId) when you need custom system prompt or restricted tools. " +
-    "Priority: subagent profile > job model override > default (gpt-5.2).",
+    "Priority: subagent profile > job model override > default (gpt-5.4).",
   inputSchema: createJobSchema,
   execute: async (input) => {
     const args = (input as { context?: CreateJobArgs }).context ?? input;
@@ -472,45 +504,51 @@ export const readAppDataSourcesTool = createTool({
 
 // ===== App file editing tools =====
 
-const readAppFileSchema = z.object({
-  appId: z.string().min(1).describe("App UUID"),
-  filename: z
-    .string()
-    .min(1)
-    .describe("Filename to read (e.g. index.html, style.css, app.js)"),
-});
+const readAppFileSchema = toolSchemaWithFilenameAlias(
+  z.object({
+    appId: z.string().min(1).describe("App UUID"),
+    filename: z
+      .string()
+      .min(1)
+      .describe("Filename to read (e.g. index.html, style.css, app.js)"),
+  }),
+);
 
-const editAppFileSchema = z.object({
-  appId: z.string().min(1).describe("App UUID"),
-  filename: z.string().min(1).describe("Filename to edit"),
-  oldString: z.string().min(1).describe("Exact string to find in the file"),
-  newString: z
-    .string()
-    .describe("Replacement string (use empty string to delete)"),
-});
+const editAppFileSchema = toolSchemaWithFilenameAlias(
+  z.object({
+    appId: z.string().min(1).describe("App UUID"),
+    filename: z.string().min(1).describe("Filename to edit"),
+    oldString: z.string().min(1).describe("Exact string to find in the file"),
+    newString: z
+      .string()
+      .describe("Replacement string (use empty string to delete)"),
+  }),
+);
 
-const editAppFileLinesSchema = z.object({
-  appId: z.string().min(1).describe("App UUID"),
-  filename: z
-    .string()
-    .min(1)
-    .describe("Filename to edit (e.g. index.html, style.css, app.js)"),
-  startLine: z
-    .number()
-    .int()
-    .min(1)
-    .describe("Starting line number (1-indexed, inclusive)"),
-  endLine: z
-    .number()
-    .int()
-    .min(1)
-    .describe("Ending line number (1-indexed, inclusive)"),
-  newContent: z
-    .string()
-    .describe(
-      "New content to replace lines startLine through endLine. Use empty string to delete the lines.",
-    ),
-});
+const editAppFileLinesSchema = toolSchemaWithFilenameAlias(
+  z.object({
+    appId: z.string().min(1).describe("App UUID"),
+    filename: z
+      .string()
+      .min(1)
+      .describe("Filename to edit (e.g. index.html, style.css, app.js)"),
+    startLine: z
+      .number()
+      .int()
+      .min(1)
+      .describe("Starting line number (1-indexed, inclusive)"),
+    endLine: z
+      .number()
+      .int()
+      .min(1)
+      .describe("Ending line number (1-indexed, inclusive)"),
+    newContent: z
+      .string()
+      .describe(
+        "New content to replace lines startLine through endLine. Use empty string to delete the lines.",
+      ),
+  }),
+);
 
 const listAppFilesSchema = z.object({
   appId: z.string().min(1).describe("App UUID"),
@@ -595,7 +633,7 @@ const updateJobSchema = z.object({
     .min(1)
     .optional()
     .describe(
-      "Update model ID for agent/subagent jobs. Example: 'gpt-5.4', 'claude-sonnet-4-5', 'qwen3.5-9b'",
+      "Update model ID for agent/subagent jobs. Example: 'gpt-5.4', 'claude-sonnet-4-6', 'qwen3.5:latest', 'gemma3:4b'",
     ),
 });
 
@@ -641,34 +679,38 @@ const listJobFilesSchema = z.object({
   jobId: z.string().min(1).describe("Job UUID"),
 });
 
-const readJobFileSchema = z.object({
-  jobId: z.string().min(1).describe("Job UUID"),
-  filename: z
-    .string()
-    .min(1)
-    .describe(
-      "Filename relative to the job directory (e.g. selector.py, requirements.txt)",
-    ),
-});
+const readJobFileSchema = toolSchemaWithFilenameAlias(
+  z.object({
+    jobId: z.string().min(1).describe("Job UUID"),
+    filename: z
+      .string()
+      .min(1)
+      .describe(
+        "Filename relative to the job directory (e.g. selector.py, requirements.txt)",
+      ),
+  }),
+);
 
-const editJobFileSchema = z.object({
-  jobId: z.string().min(1).describe("Job UUID"),
-  filename: z
-    .string()
-    .min(1)
-    .describe("Filename to edit (relative to job directory)"),
-  oldString: z
-    .string()
-    .min(1)
-    .describe(
-      "Exact string to find and replace. Must match character-for-character including whitespace.",
-    ),
-  newString: z
-    .string()
-    .describe(
-      "Replacement string. Use empty string to delete the matched section.",
-    ),
-});
+const editJobFileSchema = toolSchemaWithFilenameAlias(
+  z.object({
+    jobId: z.string().min(1).describe("Job UUID"),
+    filename: z
+      .string()
+      .min(1)
+      .describe("Filename to edit (relative to job directory)"),
+    oldString: z
+      .string()
+      .min(1)
+      .describe(
+        "Exact string to find and replace. Must match character-for-character including whitespace.",
+      ),
+    newString: z
+      .string()
+      .describe(
+        "Replacement string. Use empty string to delete the matched section.",
+      ),
+  }),
+);
 
 type ReadAppFileArgs = z.infer<typeof readAppFileSchema>;
 type EditAppFileArgs = z.infer<typeof editAppFileSchema>;
@@ -831,7 +873,7 @@ export const listAppFilesTool = createTool({
     const osModule = await import("os");
     const appDir = pathModule.default.join(
       osModule.default.homedir(),
-      "PAPR",
+      "Papr",
       "apps",
       args.appId,
     );
@@ -890,6 +932,7 @@ Common use cases:
 - Add missing requirements: { jobId, requirements: ["anthropic", "requests"] }
 - Change a dependency: { jobId, dependsOn: [{ jobId: "...", onStatus: "completed", autoTrigger: true }] } — include autoTrigger: true whenever the job should start automatically when the parent completes; omitting it removes auto-chaining
 - Enable/change a schedule: { jobId, schedule: { enabled: true, cron: "0 9 * * *" } }
+- Disable a schedule: { jobId, schedule: { enabled: false } } — job still exists but won't run automatically
 - Adjust retries after a flaky run: { jobId, retries: { maxAttempts: 3, backoffMs: 5000 } }`,
   inputSchema: updateJobSchema,
   execute: async (input) => {
@@ -969,7 +1012,7 @@ async function getJobDir(jobId: string): Promise<string> {
   const pathModule = await import("path");
   return pathModule.default.join(
     osModule.default.homedir(),
-    "PAPR",
+    "Papr",
     "jobs",
     jobId,
   );
@@ -977,7 +1020,7 @@ async function getJobDir(jobId: string): Promise<string> {
 
 /**
  * Save a version snapshot of a job file before overwriting.
- * Stored in ~/PAPR/jobs/{jobId}/.versions/{filename}/{timestamp}_{reason}
+ * Stored in ~/Papr/jobs/{jobId}/.versions/{filename}/{timestamp}_{reason}
  */
 async function saveJobFileVersion(
   jobId: string,
@@ -1254,7 +1297,10 @@ Use this to:
 - Understand the dependency graph of a pipeline
 - Check which jobs are running, failed, or completed
 - Detect jobs stuck in waiting_permission (need API key approval) — check waitingPermissionKeys
-Returns jobs sorted newest-first. Filter by status or type as needed.`,
+- See schedule status: schedule.enabled: true (scheduled), schedule.enabled: false (disabled), schedule: undefined (never scheduled)
+Returns jobs sorted newest-first. Filter by status or type as needed.
+
+IMPORTANT: Jobs with schedule.enabled: false are NOT deleted or broken — they can still run manually or via dependencies. They just won't run automatically on a schedule.`,
   inputSchema: listJobsSchema,
   execute: async (input) => {
     const args = (input as { context?: ListJobsArgs }).context ?? input;
@@ -1283,7 +1329,7 @@ Returns jobs sorted newest-first. Filter by status or type as needed.`,
     const pathModule = await import("path");
     const jobsRoot = pathModule.default.join(
       osModule.default.homedir(),
-      "PAPR",
+      "Papr",
       "jobs",
     );
 
@@ -1304,8 +1350,9 @@ Returns jobs sorted newest-first. Filter by status or type as needed.`,
             ...(d.autoTrigger ? { autoTrigger: true } : {}),
           }))
         : undefined,
-      schedule: j.schedule?.enabled
+      schedule: j.schedule
         ? {
+            enabled: j.schedule.enabled,
             cron: j.schedule.cron,
             intervalMs: j.schedule.intervalMs,
             atTime: j.schedule.atTime,
@@ -1402,7 +1449,7 @@ type GetAppBundleInfoArgs = z.infer<typeof getAppBundleInfoSchema>;
 export const exportAppBundleTool = createTool({
   id: "export_app_bundle",
   description: `Export a mini-app with its jobs and database schemas as a portable app bundle.
-Creates an app bundle folder at ~/PAPR/bundles/{bundleId}/ containing:
+Creates an app bundle folder at ~/Papr/bundles/{bundleId}/ containing:
 - manifest.json: App + job metadata, database schemas
 - apps/{appId}/: Mini app HTML/CSS/JS/TS files
 - jobs/{jobId}/: Job code, migrations
@@ -1415,7 +1462,7 @@ By default, automatically scrubs private data (databases, logs, WAL files, venvs
 
 Use this to share complete mini-apps (with all jobs and schemas) via GitHub, Dropbox, or file transfer.
 
-**Publishing to the Paprwork Community:**
+**Publishing to the Papr Work Community:**
 After export, publish the bundle to the official community repo so other Paprwork users can discover and install it:
 
 1. Fork & clone: gh repo fork Papr-ai/paprwork-community-apps --clone --remote (NEVER clone the main repo directly)
@@ -1423,7 +1470,7 @@ After export, publish the bundle to the official community repo so other Paprwor
 3. Add YOUR entry to registry.json — do NOT modify or remove existing entries. IMPORTANT: Use the pre-built "registryEntry" JSON from the export result (just fill in author and tags). All fields are Zod-validated; entries that fail validation are SILENTLY DROPPED and won't appear in Community Apps. Required: bundleId, name, description, version, author (run "gh api user -q .login" to get the actual GitHub username — NEVER hardcode "paprwork-team"), tags (string[]), minPaprworkVersion, path. Optional: icon (string), requirements (string[] — MUST be a flat string array like ["OPENAI_API_KEY"], NOT objects), platform (string[] — MUST be a flat string array like ["macos"], NOT a bare string).
 4. Commit, push to the fork, then open a PR to Papr-ai/paprwork-community-apps
 
-This makes the app available in Paprwork's "Community Apps" tab for all users.`,
+This makes the app available in Papr Work's "Community Apps" tab for all users.`,
   inputSchema: exportAppBundleSchema,
   execute: async (input) => {
     const args = (input as { context?: ExportAppBundleArgs }).context ?? input;
@@ -1476,7 +1523,7 @@ This makes the app available in Paprwork's "Community Apps" tab for all users.`,
       const fsModule = await import("fs/promises");
       const bundlePath = pathModule.default.join(
         osModule.default.homedir(),
-        "PAPR",
+        "Papr",
         "bundles",
         bundleId,
       );
@@ -1492,7 +1539,7 @@ ${args.description || ""}
 
 ## Installation
 
-### Option 1: Import via Paprwork Agent
+### Option 1: Import via Papr Work Agent
 \`\`\`
 Agent: "Import the bundle from ${bundlePath}"
 \`\`\`
@@ -1510,7 +1557,7 @@ ${manifest.jobs.map((j) => `  - ${j.name} (${j.type})`).join("\n")}
 
 ## Requirements
 
-- Paprwork v${manifest.minPaprworkVersion} or later
+- Papr Work v${manifest.minPaprworkVersion} or later
 ${manifest.jobs.some((j) => j.type === "python") ? "- Python 3.8+ for Python jobs" : ""}
 ${manifest.jobs.some((j) => j.type === "node") ? "- Node.js 18+ for Node jobs" : ""}
 
@@ -1837,7 +1884,7 @@ After import, check the result for:
 
 export const listAppBundlesTool = createTool({
   id: "list_app_bundles",
-  description: `List all installed app bundles in ~/PAPR/bundles/.
+  description: `List all installed app bundles in ~/Papr/bundles/.
 Shows bundle ID, name, version, path, and creation date for each shareable app.`,
   inputSchema: z.object({}),
   execute: async () => {
@@ -1894,7 +1941,7 @@ Use this to inspect an app bundle before deciding to import it.`,
       if (!sourcePath.includes("/")) {
         sourcePath = pathModule.default.join(
           osModule.default.homedir(),
-          "PAPR",
+          "Papr",
           "bundles",
           sourcePath,
         );
@@ -1954,39 +2001,51 @@ Use this to inspect an app bundle before deciding to import it.`,
 
 // ===== File version history tools =====
 
-const appFileVersionsSchema = z.object({
-  appId: z.string().min(1).describe("App UUID"),
-  filename: z.string().min(1).describe("Filename to get version history for"),
-});
+const appFileVersionsSchema = toolSchemaWithFilenameAlias(
+  z.object({
+    appId: z.string().min(1).describe("App UUID"),
+    filename: z.string().min(1).describe("Filename to get version history for"),
+  }),
+);
 
-const appFileVersionSchema = z.object({
-  appId: z.string().min(1).describe("App UUID"),
-  filename: z.string().min(1).describe("Filename"),
-  versionId: z.string().min(1).describe("Version ID from list_app_file_versions"),
-});
+const appFileVersionSchema = toolSchemaWithFilenameAlias(
+  z.object({
+    appId: z.string().min(1).describe("App UUID"),
+    filename: z.string().min(1).describe("Filename"),
+    versionId: z.string().min(1).describe("Version ID from list_app_file_versions"),
+  }),
+);
 
-const restoreAppFileVersionSchema = z.object({
-  appId: z.string().min(1).describe("App UUID"),
-  filename: z.string().min(1).describe("Filename to restore"),
-  versionId: z.string().min(1).describe("Version ID to restore to"),
-});
+const restoreAppFileVersionSchema = toolSchemaWithFilenameAlias(
+  z.object({
+    appId: z.string().min(1).describe("App UUID"),
+    filename: z.string().min(1).describe("Filename to restore"),
+    versionId: z.string().min(1).describe("Version ID to restore to"),
+  }),
+);
 
-const jobFileVersionsSchema = z.object({
-  jobId: z.string().min(1).describe("Job UUID"),
-  filename: z.string().min(1).describe("Filename to get version history for"),
-});
+const jobFileVersionsSchema = toolSchemaWithFilenameAlias(
+  z.object({
+    jobId: z.string().min(1).describe("Job UUID"),
+    filename: z.string().min(1).describe("Filename to get version history for"),
+  }),
+);
 
-const jobFileVersionSchema = z.object({
-  jobId: z.string().min(1).describe("Job UUID"),
-  filename: z.string().min(1).describe("Filename"),
-  versionId: z.string().min(1).describe("Version ID from list_job_file_versions"),
-});
+const jobFileVersionSchema = toolSchemaWithFilenameAlias(
+  z.object({
+    jobId: z.string().min(1).describe("Job UUID"),
+    filename: z.string().min(1).describe("Filename"),
+    versionId: z.string().min(1).describe("Version ID from list_job_file_versions"),
+  }),
+);
 
-const restoreJobFileVersionSchema = z.object({
-  jobId: z.string().min(1).describe("Job UUID"),
-  filename: z.string().min(1).describe("Filename to restore"),
-  versionId: z.string().min(1).describe("Version ID to restore to"),
-});
+const restoreJobFileVersionSchema = toolSchemaWithFilenameAlias(
+  z.object({
+    jobId: z.string().min(1).describe("Job UUID"),
+    filename: z.string().min(1).describe("Filename to restore"),
+    versionId: z.string().min(1).describe("Version ID to restore to"),
+  }),
+);
 
 type AppFileVersionsArgs = z.infer<typeof appFileVersionsSchema>;
 type AppFileVersionArgs = z.infer<typeof appFileVersionSchema>;

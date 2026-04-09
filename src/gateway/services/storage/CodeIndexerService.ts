@@ -1,8 +1,8 @@
 /**
  * Code Indexer Service
  * 
- * Scans ~/PAPR folder for mini-apps and jobs, extracts metadata,
- * and uploads to PAPR Memory Cloud with the code schema.
+ * Scans ~/Papr folder for mini-apps and jobs, extracts metadata,
+ * and uploads to Papr Memory Cloud with the code schema.
  */
 
 import * as fs from 'fs';
@@ -70,19 +70,19 @@ export class CodeIndexerService {
     schemaId: string,
     paprDir?: string
   ) {
-    this.paprDir = paprDir || path.join(os.homedir(), 'PAPR');
+    this.paprDir = paprDir || path.join(os.homedir(), 'Papr');
     this.schemaId = schemaId;
   }
   
   /**
-   * Index all code from ~/PAPR folder
+   * Index all code from ~/Papr folder
    */
   async indexAllCode(): Promise<{
     projects: number;
     files: number;
     errors: string[];
   }> {
-    console.log('🔍 Scanning ~/PAPR for code...');
+    console.log('🔍 Scanning ~/Papr for code...');
     console.log(`   Base directory: ${this.paprDir}`);
     
     const stats = {
@@ -505,6 +505,12 @@ export class CodeIndexerService {
         schema_id: this.schemaId,
         mode: 'auto' // LLM will extract holographic fields + create graph nodes
       }
+    }).catch((error) => {
+      // Enhance error message with more context
+      const err = error as any;
+      throw new Error(
+        `${err.statusCode || err.code || 'Unknown'} ${JSON.stringify(err.body || err.message || err)}`
+      );
     });
   }
 }

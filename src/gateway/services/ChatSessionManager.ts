@@ -112,8 +112,8 @@ export class ChatSessionManager {
         break;
 
       case "openai":
-        // Normalize model ID: accept both gpt-5.2-* (dots) and gpt-5-2-* (dashes)
-        // API expects dots (gpt-5.2); reasoning effort comes from config.reasoning via providerOptions
+        // Normalize model ID: accept gpt-5.x with dots or dashes (e.g. gpt-5-4-low)
+        // API expects canonical ids (e.g. gpt-5.4); reasoning effort comes from config.reasoning via providerOptions
         const normalizedModel = normalizeOpenAIModelId(config.model);
 
         // Use Responses API for GPT-5 reasoning models (enables reasoning token streaming)

@@ -203,7 +203,7 @@ describe("Job file versioning (saveJobFileVersion helper)", () => {
     // Test the saveJobFileVersion helper from appJobs.ts directly
     // by creating the version structure manually (same format the helper uses)
     const jobId = "test-job-123";
-    const jobDir = path.join(tmpDir, "PAPR", "jobs", jobId);
+    const jobDir = path.join(tmpDir, "Papr", "jobs", jobId);
     await fs.mkdir(jobDir, { recursive: true });
 
     const scriptPath = path.join(jobDir, "script.py");

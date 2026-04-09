@@ -23,6 +23,10 @@ import { fetchChatHistory } from "../../utils/chatHistoryApi";
 import { gateway } from "../../src/lib/gateway";
 import { JobPermissionBanner } from "./JobPermissionBanner";
 import { ContextInspectorModal } from "./ContextInspectorModal";
+import {
+  artifactTypeLabel,
+  type Artifact,
+} from "../../stores/artifactsStore";
 import "./ChatContainer.css";
 
 const DEFAULT_SYSTEM_PROMPT = `You're Pen, an AI assistant running in Paprwork—a cross-platform AI workspace.
@@ -157,6 +161,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
   const [selectedModel, setSelectedModel] = useState<AIModel>(fallbackModel);
   const [contextInfo, setContextInfo] = useState<unknown | null>(null);
   const [gatewayStatus, setGatewayStatus] = useState<{ status: string; message?: string } | null>(null);
+  const [isFileDragOver, setIsFileDragOver] = useState(false);
 
   // Listen for gateway supervisor status changes (restart notifications)
   useEffect(() => {
@@ -176,7 +181,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
   const isWaitingForModel = selectedModel.provider === 'ollama' && installing === selectedModel.id;
 
   // When chatId or auth status changes: pick best default
-  // Priority: last selected (persisted in localStorage) > default order (sonnet-4-6 → gpt-5.2 → gemini-3-flash) > first available
+  // Priority: last selected (persisted in localStorage) > default order (sonnet-4-6 → gpt-5.4 → gemini-3-flash) > first available
   useEffect(() => {
     setSelectedModel((prev) => {
       const lastId = useChatStore.getState().getLastSelectedModel(chatId);
@@ -429,17 +434,18 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
         artifactsContext = "\n\n## Attached Context\n";
         for (const artifact of contextArtifacts) {
           artifactsContext += `\n### ${artifact.title}\n`;
-          artifactsContext += `Type: ${artifact.type === "document" ? "Document" : "App"}\n`;
-          
-          // Include file path if this is a file upload
-          if (artifact.metadata?.filePath) {
+          const isAttachedFile =
+            artifact.type === "file" || Boolean(artifact.metadata?.filePath);
+          artifactsContext += `Type: ${isAttachedFile ? "File" : artifactTypeLabel(artifact.type)}\n`;
+
+          if (isAttachedFile && artifact.metadata?.filePath) {
             artifactsContext += `File Path: ${artifact.metadata.filePath}\n`;
             if (artifact.metadata.fileType) {
               artifactsContext += `File Type: ${artifact.metadata.fileType}\n`;
             }
-            artifactsContext += `\nThe user has attached this file. You can read it using the read_file tool with the file path provided above.\n`;
+            artifactsContext +=
+              "\nThe user attached this file from disk. Read it with the read_file tool using the path above (use encoding: \"base64\" for binary files).\n";
           } else if (artifact.content) {
-            // Include content for non-file artifacts
             artifactsContext += `\n${artifact.content}\n`;
           }
         }
@@ -503,8 +509,53 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
     return () => window.removeEventListener("papr-onboarding-send", handler);
   }, [handleSendMessage]);
 
+  const handleChatDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (![...e.dataTransfer.types].includes("Files")) return;
+    setIsFileDragOver(true);
+  }, []);
+
+  const handleChatDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const related = e.relatedTarget as Node | null;
+    if (related && e.currentTarget.contains(related)) return;
+    setIsFileDragOver(false);
+  }, []);
+
+  const handleChatDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if ([...e.dataTransfer.types].includes("Files")) {
+      e.dataTransfer.dropEffect = "copy";
+    }
+  }, []);
+
+  const handleFilesDroppedToChat = useCallback((files: File[]) => {
+    inputBarRef.current?.attachFiles(files);
+  }, []);
+
+  const handleChatDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const { files } = e.dataTransfer;
+      if (!files?.length) return;
+      handleFilesDroppedToChat(Array.from(files));
+    },
+    [handleFilesDroppedToChat],
+  );
+
   return (
-    <div className="chat-container" data-testid="chat-container">
+    <div
+      className={`chat-container${isFileDragOver ? " chat-container--file-drag" : ""}`}
+      data-testid="chat-container"
+      onDragEnter={handleChatDragEnter}
+      onDragLeave={handleChatDragLeave}
+      onDragOver={handleChatDragOver}
+      onDrop={handleChatDrop}
+    >
       {error && (
         <div className="error-banner">
           <span className="error-icon">⚠️</span>
@@ -563,11 +614,13 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
         messages={messages}
         isLoading={chatIsLoading}
         isSending={isSending || isWaitingForModel}
+        onFilesDropped={handleFilesDroppedToChat}
       />
 
       <InputBar
         ref={inputBarRef}
         chatId={chatId}
+        onFileAttachmentsAdded={() => setIsFileDragOver(false)}
         onSend={handleSendMessage}
         onStop={handleStopAgent}
         onSlashCommand={handleSlashCommand}

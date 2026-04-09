@@ -22,7 +22,7 @@ Quick reference for choosing the right job output mode and delivery mechanism.
 import json
 from pathlib import Path
 
-job_json = Path.home() / "PAPR" / "jobs" / "agent-job-id" / "job.json"
+job_json = Path.home() / "Papr" / "jobs" / "agent-job-id" / "job.json"
 data = json.loads(json.load(open(job_json))["lastOutput"])
 # Process structured data...
 ```

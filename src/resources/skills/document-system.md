@@ -5,7 +5,7 @@ description: Create, read, and manage Papr documents stored as Markdown on disk 
 ---
 # Document System (V2)
 
-Papr documents are Markdown files stored on disk at `~/PAPR/documents/{docId}/content.md`. The UI auto-syncs changes via file watching.
+Papr documents are Markdown files stored on disk at `~/Papr/documents/{docId}/content.md`. The UI auto-syncs changes via file watching.
 
 ## Tools
 
@@ -41,10 +41,10 @@ Agents edit documents by modifying the Markdown file with `bash`:
 
 ```bash
 # Append content
-echo "\n## New Section\n\nContent here..." >> ~/PAPR/documents/{docId}/content.md
+echo "\n## New Section\n\nContent here..." >> ~/Papr/documents/{docId}/content.md
 
 # Replace specific content
-sed -i '' 's/old text/new text/g' ~/PAPR/documents/{docId}/content.md
+sed -i '' 's/old text/new text/g' ~/Papr/documents/{docId}/content.md
 ```
 
 The UI watches the file and auto-updates when changes are detected.
@@ -52,7 +52,7 @@ The UI watches the file and auto-updates when changes are detected.
 ## Document Structure on Disk
 
 ```
-~/PAPR/documents/{docId}/
+~/Papr/documents/{docId}/
   content.md          # The document content (Markdown)
   meta.json           # Metadata (title, dates, tags, word count)
   versions/           # Version history snapshots

@@ -39,7 +39,7 @@ export class TranscriptionService {
   private tempDir: string;
 
   constructor() {
-    this.tempDir = path.join(os.homedir(), "PAPR", "data", "transcriptions");
+    this.tempDir = path.join(os.homedir(), "Papr", "data", "transcriptions");
   }
 
   async initialize(): Promise<void> {

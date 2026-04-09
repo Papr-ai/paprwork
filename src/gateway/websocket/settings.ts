@@ -74,7 +74,7 @@ const DEFAULTS: SettingsData = {
   },
 };
 
-const SETTINGS_PATH = path.join(os.homedir(), "PAPR", "data", "settings.json");
+const SETTINGS_PATH = path.join(os.homedir(), "Papr", "data", "settings.json");
 
 export async function loadSettings(): Promise<SettingsData> {
   try {
@@ -219,7 +219,7 @@ async function runV1Migration(
   _messageId: string,
 ): Promise<MigrationResult> {
   const v1Root = path.join(os.homedir(), ".paprwork");
-  const v2Root = path.join(os.homedir(), "PAPR");
+  const v2Root = path.join(os.homedir(), "Papr");
   const result: MigrationResult = {
     chats: { migrated: 0, messages: 0 },
     documents: { migrated: 0 },

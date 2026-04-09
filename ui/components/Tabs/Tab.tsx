@@ -215,9 +215,13 @@ export function Tab({
     }
 
     if (tab.icon) {
-      if (tab.icon.startsWith("data:image/") || tab.icon.startsWith("http"))
-        return <img src={tab.icon} alt={tab.title} style={{ width: 14, height: 14, borderRadius: "50%", objectFit: "cover" }} draggable={false} />;
-      return <span dangerouslySetInnerHTML={{ __html: tab.icon }} />;
+      // Check if icon is SVG (starts with <svg) or emoji (plain text)
+      if (tab.icon.trim().startsWith('<svg') || tab.icon.trim().startsWith('<')) {
+        return <span dangerouslySetInnerHTML={{ __html: tab.icon }} />;
+      } else {
+        // Plain text (emoji)
+        return <span style={{ fontSize: '14px' }}>{tab.icon}</span>;
+      }
     }
 
     // Default icons based on type

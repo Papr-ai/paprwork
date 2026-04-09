@@ -57,47 +57,47 @@ export const CHAT_MODELS: AIModel[] = [
 
   // OpenAI — weakest to strongest
   {
-    id: "gpt-5.2-low",
-    name: "GPT-5.2 (Low Reasoning)",
+    id: "gpt-5.4-mini",
+    name: "GPT-5.4 mini",
     provider: "openai",
-    description: "Latest model with fast reasoning",
+    description: "Strong mini model for coding, computer use, and subagents",
+    group: "OpenAI",
+    supportsThinking: true,
+    reasoning: { effort: "medium" },
+    maxTokens: 128000,
+    requiresApiKey: "OPENAI_API_KEY",
+  },
+  {
+    id: "gpt-5.4-low",
+    name: "GPT-5.4 (Low Reasoning)",
+    provider: "openai",
+    description: "Frontier model with faster, lighter reasoning",
     group: "OpenAI",
     supportsThinking: true,
     reasoning: { effort: "low" },
-    maxTokens: 16384,
+    maxTokens: 128000,
     requiresApiKey: "OPENAI_API_KEY",
   },
   {
-    id: "gpt-5.2",
-    name: "GPT-5.2",
+    id: "gpt-5.4",
+    name: "GPT-5.4",
     provider: "openai",
-    description: "Latest flagship with medium reasoning (recommended)",
+    description: "Frontier flagship with balanced reasoning (recommended)",
     group: "OpenAI",
     supportsThinking: true,
     reasoning: { effort: "medium" },
-    maxTokens: 16384,
+    maxTokens: 128000,
     requiresApiKey: "OPENAI_API_KEY",
   },
   {
-    id: "gpt-5.2-high",
-    name: "GPT-5.2 (High Reasoning)",
+    id: "gpt-5.4-high",
+    name: "GPT-5.4 (High Reasoning)",
     provider: "openai",
-    description: "Latest model with deep reasoning",
+    description: "Frontier model with deeper reasoning",
     group: "OpenAI",
     supportsThinking: true,
     reasoning: { effort: "high" },
-    maxTokens: 16384,
-    requiresApiKey: "OPENAI_API_KEY",
-  },
-  {
-    id: "gpt-5.2-codex",
-    name: "GPT-5.2 Codex",
-    provider: "openai",
-    description: "Most intelligent coding model for agentic tasks",
-    group: "OpenAI",
-    supportsThinking: true,
-    reasoning: { effort: "medium" },
-    maxTokens: 16384,
+    maxTokens: 128000,
     requiresApiKey: "OPENAI_API_KEY",
   },
   {
@@ -110,28 +110,6 @@ export const CHAT_MODELS: AIModel[] = [
     reasoning: { effort: "medium" },
     maxTokens: 16384,
     requiresApiKey: "OPENAI_OAUTH",
-  },
-  {
-    id: "gpt-5.4",
-    name: "GPT-5.4 Thinking",
-    provider: "openai",
-    description: "Latest model with native computer use, 47% more efficient",
-    group: "OpenAI",
-    supportsThinking: true,
-    reasoning: { effort: "medium" },
-    maxTokens: 128000,
-    requiresApiKey: "OPENAI_API_KEY",
-  },
-  {
-    id: "gpt-5.4-pro",
-    name: "GPT-5.4 Pro",
-    provider: "openai",
-    description: "Most powerful model for complex multi-step workflows",
-    group: "OpenAI",
-    supportsThinking: true,
-    reasoning: { effort: "high" },
-    maxTokens: 128000,
-    requiresApiKey: "OPENAI_API_KEY",
   },
 
   // Google — weakest to strongest
@@ -205,10 +183,10 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "NONE",
   },
   {
-    id: "qwen3.5:4b",
+    id: "qwen3.5:4b-q4_k_m",
     name: "Qwen 3.5 4B",
     provider: "ollama",
-    description: "Good quality • 12GB+ RAM",
+    description: "Good quality • 10GB+ RAM • Q4 optimized (faster)",
     group: "Ollama (On-Device)",
     supportsThinking: false,
     maxTokens: 8192,
@@ -216,9 +194,19 @@ export const CHAT_MODELS: AIModel[] = [
   },
   {
     id: "qwen3.5:latest",
-    name: "Qwen 3.5 9B",
+    name: "Qwen 3.5 9B (full)",
     provider: "ollama",
     description: "Best quality • 16GB+ RAM • Recommended",
+    group: "Ollama (On-Device)",
+    supportsThinking: false,
+    maxTokens: 8192,
+    requiresApiKey: "NONE",
+  },
+  {
+    id: "qwen3.5:9b-q4_k_m",
+    name: "Qwen 3.5 9B",
+    provider: "ollama",
+    description: "Best balance • 12GB+ RAM • Q4 optimized (1.5x faster)",
     group: "Ollama (On-Device)",
     supportsThinking: false,
     maxTokens: 8192,
@@ -228,7 +216,79 @@ export const CHAT_MODELS: AIModel[] = [
     id: "qwen3.5:27b",
     name: "Qwen 3.5 27B",
     provider: "ollama",
-    description: "Highest quality • 32GB+ RAM • Slower",
+    description: "Highest quality • 32GB+ RAM • 256K context",
+    group: "Ollama (On-Device)",
+    supportsThinking: false,
+    maxTokens: 8192,
+    requiresApiKey: "NONE",
+  },
+
+  // Gemma (On-Device) — Q4_K_M and QAT optimized variants
+  {
+    id: "gemma3:270m",
+    name: "Gemma 3 270M",
+    provider: "ollama",
+    description: "Smallest Gemma 3 • ~2GB RAM • Ultra-lightweight",
+    group: "Ollama (On-Device)",
+    supportsThinking: false,
+    maxTokens: 8192,
+    requiresApiKey: "NONE",
+  },
+  {
+    id: "gemma3:1b",
+    name: "Gemma 3 1B",
+    provider: "ollama",
+    description: "Compact • ~4GB RAM • Good for basic tasks",
+    group: "Ollama (On-Device)",
+    supportsThinking: false,
+    maxTokens: 8192,
+    requiresApiKey: "NONE",
+  },
+  {
+    id: "gemma3:4b-it-q4_k_m",
+    name: "Gemma 3 4B",
+    provider: "ollama",
+    description: "Balanced • 8GB+ RAM • Q4 optimized (faster)",
+    group: "Ollama (On-Device)",
+    supportsThinking: false,
+    maxTokens: 8192,
+    requiresApiKey: "NONE",
+  },
+  {
+    id: "gemma3:4b-it-qat",
+    name: "Gemma 3 4B QAT",
+    provider: "ollama",
+    description: "High quality • 9GB+ RAM • Quantization-aware trained",
+    group: "Ollama (On-Device)",
+    supportsThinking: false,
+    maxTokens: 8192,
+    requiresApiKey: "NONE",
+  },
+  {
+    id: "gemma3:latest",
+    name: "Gemma 3 (default tag)",
+    provider: "ollama",
+    description: "Ollama default Gemma 3 build • Recommended to try first",
+    group: "Ollama (On-Device)",
+    supportsThinking: false,
+    maxTokens: 8192,
+    requiresApiKey: "NONE",
+  },
+  {
+    id: "gemma3:12b-it-q4_k_m",
+    name: "Gemma 3 12B",
+    provider: "ollama",
+    description: "High quality • 14GB+ RAM • Q4 optimized • 128K context",
+    group: "Ollama (On-Device)",
+    supportsThinking: false,
+    maxTokens: 8192,
+    requiresApiKey: "NONE",
+  },
+  {
+    id: "gemma3:27b",
+    name: "Gemma 3 27B",
+    provider: "ollama",
+    description: "Largest Gemma 3 • ~32GB+ RAM • 128K context",
     group: "Ollama (On-Device)",
     supportsThinking: false,
     maxTokens: 8192,
@@ -258,8 +318,8 @@ export const getModelById = (id: string): AIModel | undefined => {
 /** Mid-tier model IDs per provider, in preference order for default selection */
 export const MID_TIER_MODEL_IDS = [
   "claude-sonnet-4-6", // Anthropic mid
-  "gpt-5.4", // OpenAI latest
-  "gpt-5.2", // OpenAI mid
+  "gpt-5.4", // OpenAI flagship
+  "gpt-5.4-mini", // OpenAI mini
   "gpt-5.3-codex", // OpenAI Codex (OAuth)
   "gemini-2.5-flash", // Google mid
 ];
@@ -271,35 +331,15 @@ export const DEFAULT_MODEL_IDS = [
   "gemini-3-flash-preview", // Google
 ];
 
-/**
- * Get recommended Qwen model based on system RAM
- * @returns Model ID of recommended Qwen variant
- */
-export function getRecommendedQwenModel(): string {
-  // Default to 9B (best quality, works on most modern machines)
-  // Note: System memory detection must be done via Electron IPC from main process
-  // This function just returns the safe default
-  return "qwen3.5:latest";
-}
-
-/**
- * RAM requirements for each Qwen model (in GB)
- */
-export const QWEN_RAM_REQUIREMENTS: Record<string, number> = {
-  "qwen3.5:0.8b": 4,
-  "qwen3.5:2b": 8,
-  "qwen3.5:4b": 12,
-  "qwen3.5:latest": 16,
-  "qwen3.5:27b": 32,
-};
-
-/**
- * Model download sizes (in GB)
- */
-export const QWEN_MODEL_SIZES: Record<string, number> = {
-  "qwen3.5:0.8b": 1.0,
-  "qwen3.5:2b": 2.7,
-  "qwen3.5:4b": 3.4,
-  "qwen3.5:latest": 6.6,
-  "qwen3.5:27b": 17,
-};
+export {
+  QWEN_RAM_REQUIREMENTS,
+  QWEN_MODEL_SIZES,
+  GEMMA_RAM_REQUIREMENTS,
+  GEMMA_MODEL_SIZES,
+  bytesToRamGbRounded,
+  pickFittingOllamaModelId,
+  getRecommendedQwenModel,
+  getRecommendedGemmaModel,
+  getOllamaRamRequirementGb,
+  ollamaModelFitsHostRam,
+} from "../../src/core/utils/ollamaModelFit";

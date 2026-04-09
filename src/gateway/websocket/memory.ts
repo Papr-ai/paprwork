@@ -16,7 +16,7 @@ import { promisify } from "util";
 
 const execAsync = promisify(exec);
 
-const PAPR_DIR = path.join(os.homedir(), "PAPR");
+const PAPR_DIR = path.join(os.homedir(), "Papr");
 const WORKSPACE_DIR = path.join(PAPR_DIR, "workspace");
 const WORKSPACE_FILE = path.join(WORKSPACE_DIR, "workspace.md");
 

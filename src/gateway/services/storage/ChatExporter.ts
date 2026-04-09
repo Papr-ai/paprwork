@@ -1,7 +1,7 @@
 /**
  * Chat Export Utility
  *
- * Exports chat history to human-readable text files in ~/PAPR/Chats/
+ * Exports chat history to human-readable text files in ~/Papr/Chats/
  * Allows agents to search full history using bash/grep tools
  */
 
@@ -17,7 +17,7 @@ export class ChatExporter {
   private jobsPath: string;
 
   constructor() {
-    this.paprPath = path.join(os.homedir(), "PAPR");
+    this.paprPath = path.join(os.homedir(), "Papr");
     this.chatsPath = path.join(this.paprPath, "Chats");
     this.artifactsPath = path.join(this.paprPath, "Artifacts");
     this.jobsPath = path.join(this.paprPath, "Jobs");
@@ -181,7 +181,7 @@ Last Updated: ${new Date().toLocaleString()}
     const total = messages.length;
 
     if (synced === total) {
-      return `Synced to PAPR Memory ✓`;
+      return `Synced to Papr Memory ✓`;
     } else if (synced === 0) {
       return "Local only";
     } else {
@@ -190,7 +190,7 @@ Last Updated: ${new Date().toLocaleString()}
   }
 
   /**
-   * Get PAPR folder path
+   * Get Papr folder path
    */
   getPaprPath(): string {
     return this.paprPath;

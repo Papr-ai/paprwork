@@ -93,7 +93,7 @@ Add any user-specific workflow rules:
 
 Based on what you learned, set up relevant features:
 
-1. **Install relevant skills** from the skills catalog (`read_file("~/PAPR/skills-catalog.json")`)
+1. **Install relevant skills** from the skills catalog (`read_file("~/Papr/skills-catalog.json")`)
 2. **Create Papr Memory schemas** for their domain if needed
 3. **Create specialist agents** for recurring needs
 4. **Create 1-2 starter jobs** for immediate time-savers
@@ -103,7 +103,7 @@ Based on what you learned, set up relevant features:
 
 After writing all workspace files and setting up features:
 
-1. Rename this file: `bash({ command: "mv ~/PAPR/workspace/ONBOARD.md ~/PAPR/workspace/ONBOARD.completed.md" })`
+1. Rename this file: `bash({ command: "mv ~/Papr/workspace/ONBOARD.md ~/Papr/workspace/ONBOARD.completed.md" })`
 2. Create a summary document with `create_document` explaining what was configured
 3. Tell the user their agent is ready and walk them through what was set up
 

@@ -319,6 +319,25 @@
   flex-shrink: 0;
 }
 
+.model-badge-ram-warn {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  opacity: 0.85;
+  color: #b45309;
+  background: rgba(180, 83, 9, 0.12);
+}
+
+.model-picker-item--selected .model-badge-ram-warn {
+  color: #fef3c7;
+  background: rgba(245, 158, 11, 0.35);
+}
+
 .model-badge-install {
   display: inline-flex;
   align-items: center;

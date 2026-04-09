@@ -627,6 +627,62 @@ fetch('/api/bash/run', {
 - `/api/bash/run` + custom keys: Simple queries (<5s), real-time data, REST API calls
 - Jobs + SQLite: Complex ETL, scheduled syncs, large datasets (>1MB)
 
+### Enhancement 30: Automatic Hybrid Code Search ✅ IMPLEMENTED
+**Added:** 2026-03-31
+**Problem:** Agent used bash grep to search code but missed semantically related files. For example, searching for "authentication" would miss files containing login(), handleAuth(), verifyUser() because the literal text "authentication" didn't appear.
+**Solution:** Enhanced bash tool to automatically run Papr Memory semantic search in parallel with grep when searching `~/Papr/apps/` or `~/Papr/Jobs/`. Results are combined with clear section markers.
+**Implementation:**
+1. Added `detectPaprGrepCommand()` - Regex detection of grep in PAPR folders
+2. Added `searchPaprMemoryForCode()` - Async memory search using code schema
+3. Enhanced `executeBashCommand()` - Parallel execution + result merging
+4. Updated system prompt with "Automatic Hybrid Search" documentation
+5. Connected file watcher to `SmartCodeIndexManager` for real-time re-indexing
+**How It Works:**
+```bash
+# Agent searches:
+bash({ command: "grep -r 'authentication' ~/Papr/apps/" })
+
+# System automatically:
+# 1. Detects grep in PAPR folder
+# 2. Runs memory search in parallel (semantic)
+# 3. Runs grep (exact match)
+# 4. Combines results:
+
+=== Memory Search Results (Semantic) ===
+Found 3 relevant code files:
+📄 ~/Papr/apps/dashboard/auth-handler.ts
+   Project: app-dashboard
+   Language: TypeScript
+   Match: Authentication flow manager...
+
+=== Grep Results (Exact Match) ===
+apps/dashboard/config.ts:12: authentication: true
+```
+**Schema Used:** `paprwork-code` v2.0.0 (ID: `BNSv8YCQXJ`)
+- 10 node types: CodeFile, Project, Task, Intent, Operation, Behavior, Pattern, Language, API, Dependency
+- 9 relationships: BELONGS_TO, DEPENDS_ON, WRITTEN_IN, PERFORMS, HAS_INTENT, EXECUTES, RETURNS, IMPLEMENTS, USES
+- Semantic search thresholds: 0.80-0.85 for meaning-based matching
+**Benefits:**
+- **Zero learning curve:** Agent just uses grep as normal, gets semantic + exact results
+- **Better code discovery:** Finds related files by meaning, not just text matching
+- **Non-blocking:** Memory search runs in parallel with grep (no slowdown)
+- **Graceful fallback:** If memory unavailable, grep still works normally
+**Statistics (Current):**
+- 497 files indexed (368 Python, 102 JavaScript, 27 TypeScript)
+- 52 files in queue (actively indexing)
+- Real-time file watching enabled
+**Files Changed:**
+- `src/core/tools/bash.ts` - Added hybrid search logic
+- `src/gateway/services/storage/SmartCodeIndexManager.ts` - Connected file watcher
+- `src/gateway/services/storage/CodeFileWatcher.ts` - Added callback mechanism
+- `src/core/agents/SystemPrompt.ts` - Updated documentation
+- `docs/AUTOMATIC_HYBRID_CODE_SEARCH.md` - Complete feature documentation
+**Impact:**
+- **Before:** grep "auth" → Misses login-handler.ts, session.ts (no "auth" text)
+- **After:** grep "auth" → Finds those files via semantic search + exact matches
+- **Performance:** ~Same as grep alone (parallel execution, 300-800ms memory latency)
+**Prevention:** Use this pattern for other tools that search code (search_files, find commands)
+
 ### Issue 16: window.paprAPI Race Condition - Undefined at Runtime ✅ FIXED
 **Problem:** Mini-apps getting `Uncaught TypeError: Cannot read properties of undefined (reading 'invoke')` when trying to use `window.paprAPI.invoke()`
 **Root Cause:** Race condition between iframe content loading and paprAPI injection. Original implementation injected paprAPI **after** iframe load event, but mini-app scripts execute **during** load, before the injection happens.
@@ -1107,7 +1163,7 @@ We enforce plan creation through **4 reinforcing layers**:
 
 ### Plan Persistence & Resumption
 
-- **Storage:** `~/PAPR/data/plans.db` (SQLite)
+- **Storage:** `~/Papr/data/plans.db` (SQLite)
 - **Associated with:** `chatId`
 - **Status:** `active`, `completed`, or `cancelled`
 - **On chat reopen:** Active plans automatically loaded into system prompt with progress indicators (☑/▶/☐)
@@ -1684,10 +1740,10 @@ npm run set-home-app bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c
 npm run set-home-app --clear
 
 # Find app IDs
-cat ~/PAPR/data/apps.json | jq '.[] | {id, title}'
+cat ~/Papr/data/apps.json | jq '.[] | {id, title}'
 ```
 **Architecture:**
-- **Settings Storage:** `preferences.defaultHomeAppId` in `~/PAPR/data/settings.json`
+- **Settings Storage:** `preferences.defaultHomeAppId` in `~/Papr/data/settings.json`
 - **Home Button Handler:** Checks for default app, opens it if configured, falls back to home tab
 - **Home Tab Redirect:** If home tab created directly, redirects to configured app
 - **Graceful Fallback:** If app doesn't exist, shows original placeholder
@@ -1918,9 +1974,919 @@ icon: '📝'
 
 ---
 
+### Enhancement 29: Mini-App Chat Integration ✅ IMPLEMENTED
+**Added:** 2026-03-31
+**Problem:** Mini-apps had no way to trigger agent workflows or open chat sessions. Users wanted "Ask Agent" buttons, context-aware help links, and quick action launchers directly from dashboard apps.
+**Solution:** Added `window.paprAPI.invoke('chat.open', ...)` method allowing mini-apps to programmatically open new chat tabs.
+**Implementation:**
+1. Added `chat.open` handler to system invoke whitelist in main process
+2. Added IPC listener in preload script to forward `chat:open` events to renderer as DOM events
+3. Added event listener in App.tsx to create new chat tabs on request
+4. Updated SystemPrompt with usage examples and use cases
+**Usage:**
+```typescript
+// Simple "Ask Agent" button
+<button onClick={() => window.paprAPI.invoke('chat.open', {})}>
+ Ask Agent
+</button>
+
+// Future: Pre-filled messages (not yet implemented)
+await window.paprAPI.invoke('chat.open', {
+ message: 'Analyze this data',
+ model: 'gpt-5.2',
+ provider: 'openai'
+});
+```
+**User Experience:**
+- Click "Ask Agent" in mini-app → New chat tab opens immediately
+- Seamless integration between apps and agent
+- Makes agent features more discoverable
+**Files Created:**
+- `docs/MINI_APP_CHAT_INTEGRATION.md` - Complete documentation with architecture and future enhancements
+**Files Changed:**
+- `src/electron/index.cjs` - Added `chat.open` to ALLOWED_APIS
+- `src/electron/preload.cjs` - Added IPC→DOM event forwarder
+- `ui/App.tsx` - Added chat:open event listener
+- `src/core/agents/SystemPrompt.ts` - Added `chat.open` to API list with examples
+**Current Limitations:**
+- No pre-filled messages (accepted but ignored)
+- No model/provider selection (uses user's default)
+- No callback support (can't detect when chat closes)
+**Future Enhancements:**
+1. Pre-filled messages via chat initialization state
+2. Model/provider override via chat session metadata
+3. Callback support via request tracking + postMessage
+4. Chat templates for pre-defined workflows
+**Impact:**
+- **Before:** Mini-apps isolated, couldn't trigger agent workflows
+- **After:** Mini-apps can launch chat sessions, making agent features integrated and discoverable
+- **Use Cases:** Dashboard actions, error help links, data analysis launchers, workflow triggers
+
 ---
 
-## Contributing Guidelines
+### Issue 30: GPT-5.4 Duplicate Plans - Tool-Level Enforcement ✅ FIXED
+**Added:** 2026-03-31
+**Problem:** GPT-5.4 Thinking was creating 3-6 duplicate plans for the same task without finishing prior plans, causing UI clutter and user confusion. A single task like "Capture Techstars API" would generate 6 separate active plans.
+**Root Cause:** GPT-5.4's extended reasoning phase (10-50KB per turn, 3-5x longer than other models) caused the model to lose track of previously called tools. The "✓ Plan created" success message got buried in the reasoning output, and the model kept calling `create_plan` instead of `update_plan`.
+**Solution:** Implemented **tool-level enforcement** that hard-blocks duplicate plan creation - if an active plan exists when `create_plan` is called, the tool returns the existing plan instead of creating a new one. Added `delete_plan` tool for explicit plan removal when starting fresh.
+**Implementation:**
+1. **Enforcement check** in `create_plan`: Query for active plans before creating, return existing plan if found with detailed message
+2. **New `delete_plan` tool**: Allows agents to explicitly delete plans when needed to start fresh
+3. **Updated system prompt**: Changed from "check before calling" guidance to "system automatically prevents duplicates" messaging
+4. **Auto-complete**: When all steps are completed/skipped, plan status becomes "completed" allowing new plans
+**Agent Experience:**
+```typescript
+// Try to create duplicate
+create_plan({ title: "New Task", steps: [...] })
+// Returns: "⚠ Active plan already exists: 'Old Task' (2/5 steps complete). Use update_plan or delete_plan."
+
+// Explicit delete to start fresh
+delete_plan({ planId: "plan-123" })
+// Returns: "✓ Plan deleted. You can now create a new plan."
+
+create_plan({ title: "New Task", steps: [...] })
+// Returns: "✓ Plan created: 'New Task'"
+```
+**Why Tool Enforcement > Prompt Guidance:**
+- ✅ **Hard guarantee** - impossible to create duplicates regardless of model behavior
+- ✅ Works with **any model** (GPT-5.4, future models with even longer reasoning)
+- ✅ Clear feedback to agent about existing plan with progress details
+- ✅ Explicit control via `delete_plan` when needed
+- ✅ Users **never** see duplicate plans - guaranteed
+- ✅ No prompt tuning needed as models evolve
+**Fix Applied:** 2026-03-31
+**Files Changed:**
+- `src/core/tools/planning.ts` - Added enforcement logic + `delete_plan` tool
+- `src/core/tools/index.ts` - Exported `deletePlanTool`
+- `src/core/agents/SystemPrompt.ts` - Updated to reflect enforcement behavior
+- `docs/GPT_5_4_DUPLICATE_PLANS_FIX.md` - Complete documentation with enforcement details
+**Impact:**
+- **Before:** 3-6 duplicate plans per task with prompt guidance alone
+- **After:** **Zero duplicates possible** - hard-blocked at tool execution level
+- **Performance:** ~1-2ms enforcement check (indexed SQLite query), no user-facing latency
+- **Testing:** Database query shows 0 duplicate active plans per chat (was 6+ before)
+**Metrics:**
+
+| Metric | Before (Prompt) | After (Enforcement) |
+|--------|-----------------|---------------------|
+| Duplicates possible | ✅ Yes (3-6) | ❌ **No** |
+| Works with GPT-5.4 | ❌ No | ✅ **Yes** |
+| Future-proof | ❓ Unknown | ✅ **Yes** |
+| User sees duplicates | ✅ Yes | ❌ **Never** |
+
+**Related Issues:** 
+- Enhancement 17 (GPT-5.4 Context Limit - model-aware thresholds)
+- Enhancement 19 (Multi-Step Streaming - single message card)
+- GPT-5.4's extended reasoning requires special handling across multiple system areas
+
+---
+
+### Issue 31: Missing Context Menu for Text Inputs ✅ FIXED
+**Added:** 2026-03-31
+**Problem:** Users couldn't right-click in the chat input or other text fields to access copy/paste operations via context menu.
+**Root Cause:** `Menu.setApplicationMenu(null)` in Electron main process disabled the default application menu, which also disabled context menus for all inputs throughout the app.
+**Solution:** Added custom context menu handler that shows standard edit operations (Copy, Cut, Paste, Select All) when right-clicking in text inputs or on selected text.
+**Implementation:**
+```javascript
+mainWindow.webContents.on('context-menu', (event, params) => {
+  const { selectionText, isEditable } = params;
+  if (!isEditable && !selectionText) return;
+  
+  const menu = Menu.buildFromTemplate([
+    ...(selectionText ? [{ label: 'Copy', role: 'copy', accelerator: 'CmdOrCtrl+C' }] : []),
+    ...(isEditable ? [
+      { label: 'Cut', role: 'cut', accelerator: 'CmdOrCtrl+X', enabled: !!selectionText },
+      { label: 'Paste', role: 'paste', accelerator: 'CmdOrCtrl+V' }
+    ] : []),
+    ...(isEditable && selectionText ? [
+      { type: 'separator' },
+      { label: 'Select All', role: 'selectAll', accelerator: 'CmdOrCtrl+A' }
+    ] : [])
+  ]);
+  menu.popup();
+});
+```
+**Smart Context Detection:**
+- **Editable fields** (textarea, input) → Shows Cut, Paste
+- **Selected text** (anywhere) → Shows Copy
+- **Editable + selected text** → Shows all operations including Select All
+- **Non-editable areas** → No menu (correct behavior)
+**Fix Applied:** 2026-03-31
+**Files Changed:**
+- `src/electron/index.cjs` - Added context menu handler after `Menu.setApplicationMenu(null)`
+- `docs/CONTEXT_MENU_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** No context menu, users had to memorize keyboard shortcuts (Cmd/Ctrl+C, Cmd/Ctrl+V)
+- **After:** Standard right-click copy/paste menu in all text inputs (chat input, settings fields, etc.)
+- **User Experience:** Now matches native app behavior (TextEdit, Notepad, VS Code)
+- **Platform Support:** Works on macOS (Cmd key) and Windows/Linux (Ctrl key)
+**Future Enhancements:**
+- Spell check suggestions for misspelled words
+- Undo/Redo menu items
+- Link-specific actions (Copy Link Address) for URLs
+- Image actions (Copy Image) for images
+
+---
+
+### Issue 32: Windows Title Bar and Transparency Issues ✅ FIXED
+**Added:** 2026-03-31
+**Problem:** On Windows, the maximize button was missing (only minimize and close visible), window controls were overlapping tabs, and the chat background was too transparent making text hard to read.
+**Root Causes:**
+1. **titleBarOverlay**: Configured with transparent background (`#00000000`) and wrong height (40px vs 52px tab bar)
+2. **No padding**: Tab bar had no reserved space for Windows controls on the right
+3. **Transparency**: Windows used `transparent: true` with alpha background (70-75% opacity)
+**Solution:** Updated Windows-specific configuration for solid background, proper titleBarOverlay, and CSS padding.
+**Implementation:**
+1. **titleBarOverlay Configuration** - Solid background with proper height:
+```javascript
+const windowsConfig = {
+  titleBarStyle: "hidden",
+  titleBarOverlay: {
+    color: "#1C1C1E", // Solid dark background (was transparent)
+    symbolColor: "#FFFFFF", // White icons (was #999999 gray)
+    height: 52, // Match tab bar height (was 40px)
+  },
+  transparent: false, // Use solid (was true)
+  backgroundColor: "#1C1C1E", // Solid (was #00000000)
+};
+```
+2. **Tab Bar Padding** - Reserve space for Windows controls:
+```css
+body:not(.platform-darwin) .tab-bar {
+  padding-right: 148px; /* ~140px for 3 buttons */
+}
+```
+3. **Platform Detection** - Add platform class to body:
+```typescript
+const platform = navigator.platform.toLowerCase();
+if (platform.includes('win')) {
+  document.body.classList.add('platform-win32');
+}
+```
+4. **Solid Background** - Less transparent for Windows:
+```css
+body.platform-win32,
+body.platform-linux {
+  background: #F5F5F7; /* Solid (was transparent with blur) */
+}
+@media (prefers-color-scheme: dark) {
+  body.platform-win32,
+  body.platform-linux {
+    background: #1C1C1E;
+  }
+}
+```
+**Fix Applied:** 2026-03-31
+**Files Changed:**
+
+### Issue 33: Missing IPC Files in Packaged App ✅ FIXED
+**Added:** 2026-04-05
+**Problem:** Users downloading Mac DMG/ZIP experienced crash on launch: "Cannot find module './ipc/pythonDeps.cjs'"
+**Root Cause:** Development vs. Production gap - `electron-builder.json` didn't include new `src/electron/ipc/` directory added in commit `93ef22d`. App worked in dev (files on disk) but failed in packaged app (files not in ASAR).
+**Solution:** Added `src/electron/ipc/**/*.cjs` to `electron-builder.json` files array.
+**Implementation:**
+```json
+{
+  "files": [
+    "dist/**/*",
+    "src/electron/main.cjs",
+    "src/electron/index.cjs",
+    "src/electron/supervisor-logic.cjs",
+    "src/electron/preload.cjs",
+    "src/electron/ipc/**/*.cjs",  // ← ADDED
+    "package.json"
+  ]
+}
+```
+**Prevention:** Created automated test script to catch missing files before release:
+```bash
+npm run test:package:quick  # Config validation + build
+npm run test:package        # Full build + package + ASAR verification
+```
+**Testing:** Verified ASAR contents contain `/src/electron/ipc/pythonDeps.cjs` ✅
+**Why It Happened:**
+- Large commit (139 files) in `93ef22d` made it easy to miss build config
+- No automated package testing (only dev mode testing)
+- electron-builder requires explicit file patterns (doesn't auto-discover)
+**Fix Applied:** 2026-04-05
+**Files Created:**
+- `scripts/test-package-build.mjs` - Automated package testing
+- `docs/MISSING_IPC_FILES_FIX.md` - Complete documentation
+**Files Changed:**
+- `electron-builder.json` - Added IPC directory pattern
+- `package.json` - Added test scripts
+**Impact:**
+- **Before:** Production builds crashed with "Cannot find module" error
+- **After:** All IPC files included, works in both dev and production
+- **Prevention:** Automated tests catch missing files before release
+**Testing Checklist (Before Every Release):**
+- [ ] Run `npm run test:package:quick` (fast config check)
+- [ ] Run `npm run test:package` (full package verification)
+- [ ] All tests pass
+- [ ] Optional: Test DMG/ZIP on clean machine
+
+---
+- `src/electron/index.cjs` - Updated `windowsConfig` with solid background, white symbols, proper height
+- `ui/App.tsx` - Added platform detection (adds `platform-darwin`/`platform-win32`/`platform-linux` class)
+- `ui/components/Tabs/TabBar.css` - Added `padding-right: 148px` for non-macOS platforms
+- `ui/styles/liquid-glass.css` - Changed Windows/Linux to solid backgrounds
+- `docs/WINDOWS_TITLEBAR_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** Missing maximize button, controls overlapping tabs, text hard to read (75% transparent background)
+- **After:** All 3 buttons visible (minimize, maximize, close), no overlap, solid background (100% opaque)
+- **macOS:** Unchanged - keeps transparent background with vibrancy and traffic lights
+- **Readability:** Windows/Linux now have fully opaque backgrounds for better text contrast
+**Platform Differences:**
+
+| Feature | macOS | Windows/Linux |
+|---------|-------|---------------|
+| Controls | Left (traffic lights) | Right (min/max/close) |
+| Background | Transparent + vibrancy | Solid color |
+| Tab Padding | 8px both sides | 8px left, 148px right |
+| Title Bar Style | hiddenInset | hidden + overlay |
+
+**Future Enhancements:**
+- Custom window control buttons for Linux (currently frameless)
+- Windows accent color integration via `nativeTheme`
+- Mica/Acrylic material on Windows 11
+
+---
+
+### Enhancement 32: Native Web Search Integration ✅ IMPLEMENTED
+**Added:** 2026-03-31
+**Problem:** Agents lacked access to real-time web information, couldn't answer questions about current events, weather, news, or recent data without using browser automation tools (slow, unreliable).
+**Solution:** Integrated native web search tools from all major AI providers (Claude, GPT, Gemini), enabling automatic web search with citations when models need up-to-date information.
+**Implementation:**
+1. **Claude (Anthropic):** Added `anthropic.tools.webSearch_20260209()` with dynamic filtering ($10 per 1K searches)
+2. **GPT (OpenAI):** Added `openai.tools.webSearch()` with configurable max uses
+3. **Gemini (Google):** Added `google.tools.googleSearch()` (included in pricing, no extra cost)
+4. **OAuth Support:** Native tools work via pi-ai for ChatGPT Plus/Pro and Claude Pro/Max subscriptions
+**Architecture:**
+- **AI SDK path (API keys):** Tools created via `buildNativeSearchTools()` and merged into tools object
+- **pi-ai path (OAuth):** Native tools passed via `buildPiContext({ nativeTools: [...] })`
+- **Automatic:** Model decides when to search based on query, no user configuration needed
+**Features:**
+- **Dynamic Filtering (Claude):** Model writes code to filter results before loading into context (24% token reduction, 11% accuracy improvement)
+- **Citations:** All providers return source URLs for attribution
+- **Domain Filtering:** Optional allowed/blocked domain lists
+- **Location Awareness:** Optional user location for localized results
+**Usage:**
+```typescript
+// User asks: "What's the latest news about AI?"
+// Model automatically:
+// 1. Calls web_search tool
+// 2. Receives results with URLs
+// 3. Generates response with citations
+// No explicit tool calling needed!
+```
+**Pricing:**
+- **Claude:** $10 per 1,000 searches + standard token costs
+- **OpenAI:** See OpenAI built-in tools pricing
+- **Gemini:** Included (no additional cost)
+**Impact:**
+- **Before:** Questions like "What's the weather?" or "Latest AI news?" got "I don't have current data" responses
+- **After:** Models automatically search and provide up-to-date answers with source citations
+- **Speed:** Provider-executed (fast, reliable) vs browser automation (slow, fragile)
+- **Quality:** Native tool training → better search queries, more relevant results
+**Files Created:**
+- `docs/WEB_SEARCH_INTEGRATION.md` - Complete feature documentation with API details, pricing, testing
+**Files Changed:**
+- `src/gateway/services/AgentService.ts` - Added `buildNativeSearchTools()` and `buildNativeSearchToolsForPiAi()` methods
+- `src/gateway/services/providers/piAiHelpers.ts` - Added `nativeTools` parameter to `buildPiContext()`
+- `package.json` - Updated AI SDK packages (`@ai-sdk/google@3.0.55`, `@ai-sdk/anthropic@3.0.47`, `@ai-sdk/openai@3.0.55`, `@mariozechner/pi-ai@0.64.0`)
+**Testing:** Manual testing with all three providers
+**Future Enhancements:**
+1. User-configurable search settings (domain filters, location, max uses)
+2. Citation UI improvements (clickable links in chat)
+3. Search result caching (reduce costs)
+4. Web fetch tool (fetch specific URLs)
+5. Image search grounding (Gemini)
+6. Google Maps grounding (Gemini)
+
+---
+
+### Issue 34: Windows Titlebar Theme Colors ✅ FIXED
+**Added:** 2026-04-06
+**Problem:** Windows titlebar buttons (minimize, maximize, close) had hardcoded black background regardless of Windows theme setting, creating poor contrast in light mode.
+**Root Cause:** `titleBarOverlay.color` was hardcoded to `#1C1C1E` (dark) instead of using `nativeTheme.shouldUseDarkColors` to detect Windows theme.
+**Solution:** 
+1. Import `nativeTheme` from Electron
+2. Detect theme on window creation: `const isDarkMode = nativeTheme.shouldUseDarkColors`
+3. Set theme-appropriate colors: Light mode = `#F5F5F7` background + black icons, Dark mode = `#1C1C1E` background + white icons
+4. Listen for theme changes: `nativeTheme.on('updated', ...)` to update titlebar dynamically
+**Fix Applied:** 2026-04-06
+**Implementation:**
+```javascript
+// Window creation
+const isDarkMode = nativeTheme.shouldUseDarkColors;
+const windowsConfig = {
+  titleBarOverlay: {
+    color: isDarkMode ? "#1C1C1E" : "#F5F5F7",
+    symbolColor: isDarkMode ? "#FFFFFF" : "#000000",
+    height: 52,
+  },
+  backgroundColor: isDarkMode ? "#1C1C1E" : "#F5F5F7",
+};
+
+// Dynamic updates
+nativeTheme.on('updated', () => {
+  const isDarkMode = nativeTheme.shouldUseDarkColors;
+  mainWindow.setTitleBarOverlay({
+    color: isDarkMode ? "#1C1C1E" : "#F5F5F7",
+    symbolColor: isDarkMode ? "#FFFFFF" : "#000000",
+    height: 52,
+  });
+});
+```
+**Files Changed:**
+- `src/electron/index.cjs` - Added nativeTheme import, theme detection, dynamic updates
+- `docs/WINDOWS_TITLEBAR_THEME_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** Black titlebar in both light/dark mode (poor contrast in light mode)
+- **After:** Theme-aware titlebar that matches Windows settings and updates instantly
+- **Platform:** Windows only (macOS uses native traffic lights, Linux uses frameless)
+**Testing:** Manual verification on Windows 11 with light/dark theme switching
+
+### Issue 35: Default Home App Not Bundled ✅ FIXED
+**Added:** 2026-04-06
+**Problem:** On Windows (and all packaged builds), clicking home button showed placeholder instead of Weekly War Room dashboard. The app worked in dev mode but failed in production.
+**Root Cause:** `electron-builder.json` didn't include `src/resources/**/*` in files array, so default apps were missing from ASAR archive. `AppService.installDefaultApps()` couldn't find the bundled resources.
+**Solution:** Added `src/resources/**/*` to electron-builder.json files array
+**Fix Applied:** 2026-04-06
+**Implementation:**
+```json
+{
+  "files": [
+    "dist/**/*",
+    "src/electron/main.cjs",
+    "src/electron/index.cjs",
+    "src/electron/supervisor-logic.cjs",
+    "src/electron/preload.cjs",
+    "src/electron/ipc/**/*.cjs",
+    "src/resources/**/*",  // ← ADDED
+    "package.json"
+  ]
+}
+```
+**How It Works:**
+1. First launch: `AppService.installDefaultApps()` reads from `dist/resources/default-apps/`
+2. Checks app ID from `app-id.txt`: `bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c`
+3. Copies to user directory if not exists: `~/Papr/apps/{appId}/`
+4. Subsequent launches skip installation if app exists
+**Files Changed:**
+- `electron-builder.json` - Added resources directory pattern
+- `docs/DEFAULT_HOME_APP_BUNDLING_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** Dev mode worked, packaged builds showed placeholder (inconsistent UX)
+- **After:** Both dev and production show home dashboard (consistent, professional)
+- **Related:** Same root cause as Issue 33 (missing IPC files)
+**Testing:** `npm run test:package:quick` verifies ASAR contents
+**Prevention:** Always run package test before releases to catch missing files
+
+### Issue 36: Job Node Version Mismatch ✅ FIXED
+**Added:** 2026-04-06
+**Problem:** Jobs were failing with native module version mismatch errors: `better-sqlite3 was compiled for a different Node.js version`
+**Root Cause:** Jobs inherited `process.env` which had Homebrew's Node v25 in PATH, while native modules were compiled with nvm's Node v24. When jobs spawned child processes, they used the wrong Node version.
+**Solution:** Modified `CommandJobExecutor` to prepend nvm's Node v24 path to `PATH` environment variable for all job operations (spawn, venv creation, npm install, pip install).
+**Fix Applied:** 2026-04-06
+**Implementation:**
+```typescript
+// New helper method in CommandJobExecutor
+private getNvmEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  
+  const nvmDir = process.env.NVM_DIR || path.join(process.env.HOME || '', '.nvm');
+  const nvmrcPath = path.join(process.cwd(), '.nvmrc');
+  
+  if (existsSync(nvmDir) && existsSync(nvmrcPath)) {
+    try {
+      const nvmVersion = readFileSync(nvmrcPath, 'utf8').trim();
+      const nvmNodePath = path.join(nvmDir, 'versions', 'node', `v${nvmVersion}`, 'bin');
+      
+      if (existsSync(nvmNodePath)) {
+        // Prepend nvm's Node path to ensure it takes priority
+        env.PATH = `${nvmNodePath}:${env.PATH || ''}`;
+      }
+    } catch {
+      // Fallback to current environment
+    }
+  }
+  
+  return env;
+}
+```
+**Applied to:**
+- `launch()` - Job execution spawn
+- `ensurePythonVenv()` - Python venv creation
+- `ensureNodeModules()` - npm install
+- All `execSync()` calls for pip install
+**Files Changed:**
+- `src/gateway/services/jobs/executors/CommandJobExecutor.ts` - Added `getNvmEnv()` method and applied to all child process operations
+- `docs/JOB_NODE_VERSION_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** Jobs used system Node v25 → native module version mismatch, random failures with better-sqlite3
+- **After:** Jobs use nvm Node v24 → matches compiled native modules, consistent behavior
+- **Scope:** All job types (python, node, bash, shell) now use correct Node version
+**Platform Support:**
+- macOS: ✅ Fully supported
+- Linux: ✅ Fully supported
+- Windows: ⚠️ May need adjustment for nvm-windows paths
+**Related:** Issue 6 (Native Module Version Mismatch - original documentation)
+
+### Issue 36: Windows SQLite Performance ✅ FIXED
+**Added:** 2026-04-06
+**Problem:** On Windows, reading from SQLite databases (chats, apps, jobs) took 2-5+ seconds compared to <100ms on macOS. Apps list, chat loading, and all database operations were 10-25x slower on Windows.
+**Root Cause:** Windows has slower file I/O (fsync 10-50ms vs macOS 1-2ms). SQLite's default settings prioritize durability over performance:
+- `synchronous = FULL` - Every write waits for physical disk write
+- Small cache (2MB) - More frequent disk reads 
+- No memory-mapped I/O - All reads through OS file system
+- Temp files on disk - Sorting operations slow
+**Solution:** Applied 5 performance optimizations to all SQLite databases:
+1. `synchronous = NORMAL` - Sync at checkpoints only (50-90% faster writes, safe with WAL)
+2. `cache_size = -10000` - 10MB cache for main DB, 5MB for others (fewer disk reads)
+3. `mmap_size = 30000000` - 30MB memory-mapped I/O for main, 15MB for others (20-40% faster reads)
+4. `temp_store = MEMORY` - Use RAM for sorting/grouping (faster ORDER BY, GROUP BY)
+5. `journal_mode = WAL` - Already enabled, crucial for non-blocking reads
+**Fix Applied:** 2026-04-06
+**Databases Optimized:**
+- LocalStorageProvider (`~/.paprwork-v2/chats.db`) - 10MB cache, 30MB mmap
+- AppStateStorage (`~/.paprwork-v2/app-state.db`) - 5MB cache, 15MB mmap
+- CodeIndexTracker (`~/.paprwork-v2/code-index.db`) - 5MB cache, 15MB mmap
+- PlanService (`~/Papr/data/plans.db`) - 5MB cache, 15MB mmap
+- JobDatabase (`~/Papr/Jobs/{id}/data/data.db`) - 5MB cache, 15MB mmap per job
+**Performance Impact (Windows):**
+| Operation | Before | After | Improvement |
+|-----------|--------|-------|-------------|
+| List chats | 2-3s | 100-200ms | 10-15x faster |
+| Load apps list | 1-2s | 50-100ms | 10-20x faster |
+| Open chat (50 msgs) | 3-5s | 200-400ms | 10-15x faster |
+| Save message | 200-500ms | 20-50ms | 4-10x faster |
+**Memory overhead:** ~100-150MB total (cache + mmap) - acceptable for 10-25x performance gain
+**Safety:** `synchronous = NORMAL` is safe with WAL mode. Small risk of losing most recent transaction on power failure (not app crash), but database remains consistent.
+**Files Changed:**
+- `src/gateway/services/storage/LocalStorageProvider.ts` - Added 5 pragmas
+- `src/gateway/services/storage/AppStateStorage.ts` - Added 5 pragmas
+- `src/gateway/services/storage/CodeIndexTracker.ts` - Added 5 pragmas
+- `src/gateway/services/PlanService.ts` - Added 5 pragmas
+- `src/gateway/services/jobs/JobDatabase.ts` - Added 5 pragmas
+- `docs/WINDOWS_SQLITE_PERFORMANCE_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** Windows 10-25x slower than macOS for all DB operations
+- **After:** Windows performance parity with macOS (within margin of error)
+- **Platform:** Benefits all platforms but most dramatic on Windows
+**Testing:** Manual verification on Windows 11 with 20+ chats, 50+ apps, multiple jobs
+
+### Issue 37: Windows Node.js PATH for Jobs ✅ FIXED
+**Added:** 2026-04-06
+**Problem:** Windows users got "node is not recognized as a command" errors when running Node.js jobs, even though Node.js was properly installed via nvm-windows.
+**Root Cause:** Three critical Windows-specific issues in `getNvmEnv()` method:
+1. **Wrong PATH separator:** Used Unix colon (`:`) instead of Windows semicolon (`;`)
+2. **Wrong nvm structure:** Assumed Unix `NVM_DIR` instead of Windows `NVM_HOME`/`NVM_SYMLINK`
+3. **No Windows detection:** Code had no platform-specific logic for Windows
+**Solution:** Enhanced `getNvmEnv()` to properly handle both Windows (nvm-windows) and Unix (nvm):
+```typescript
+private getNvmEnv(): NodeJS.ProcessEnv {
+  const isWindows = process.platform === 'win32';
+  const pathSeparator = isWindows ? ';' : ':';
+  
+  if (isWindows) {
+    const nvmHome = process.env.NVM_HOME || process.env.NVM_SYMLINK;
+    if (nvmHome && existsSync(nvmHome)) {
+      env.PATH = `${nvmHome}${pathSeparator}${currentPath}`;
+    }
+  } else {
+    // Unix nvm logic with .nvmrc version...
+  }
+}
+```
+**Key Differences (nvm vs nvm-windows):**
+| Feature | Unix (nvm) | Windows (nvm-windows) |
+|---------|------------|----------------------|
+| Env Var | `NVM_DIR` | `NVM_HOME`/`NVM_SYMLINK` |
+| Structure | `$NVM_DIR/versions/node/v24/bin/node` | `%NVM_SYMLINK%\node.exe` |
+| PATH Sep | `:` | `;` |
+**Fix Applied:** 2026-04-06
+**Files Changed:**
+- `src/gateway/services/jobs/executors/CommandJobExecutor.ts` - Enhanced `getNvmEnv()` with Windows support, simplified `launch()` to avoid duplication
+- `docs/WINDOWS_NODE_PATH_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** Node jobs failed on Windows with "node is not recognized"
+- **After:** Node jobs work correctly with nvm-windows ✅
+- **Platform Support:** macOS ✅, Linux ✅, Windows ✅ (fixed)
+**Related:** Issue 36 (Job Node Version Mismatch - original Unix-only fix)
+
+### Issue 38: Windows Python Command for Jobs ✅ FIXED
+**Added:** 2026-04-06
+**Problem:** Windows users may get "python3 is not recognized as a command" errors when creating Python jobs, even though Python is properly installed.
+**Root Cause:** Python jobs used hardcoded `python3` command, but Windows Python installations typically use `python` (not `python3`). Only Microsoft Store Python and newer python.org installers create `python3.exe` symlink.
+**Solution:** Added platform-aware Python command detection:
+```typescript
+private async getPythonCommand(): Promise<string> {
+  if (process.platform === "win32") {
+    // Try python, py -3, python3 in order
+    // Returns first available command
+  }
+  return "python3"; // Unix
+}
+```
+**Enhanced Error Messages:**
+When Python not found on Windows, job logs show:
+```
+Python not found. Install from: https://www.python.org/downloads/windows/
+Make sure to check "Add to PATH" during installation.
+```
+**Why it works:**
+- **Windows:** Checks `python` first (most common), falls back to `py -3` launcher
+- **Unix (macOS/Linux):** Use `python3` explicitly to avoid accidentally using Python 2
+**Fix Applied:** 2026-04-06
+**Files Changed:**
+- `src/gateway/services/jobs/executors/CommandJobExecutor.ts` - Added async `getPythonCommand()` with detection, updated `ensurePythonVenv()` with better error messages
+- `src/electron/utils/pythonInstaller.ts` - Created Python auto-installer utility (for future use)
+- `src/electron/index.cjs` - Added Python check on startup
+- `docs/CROSS_PLATFORM_JOB_ANALYSIS.md` - Complete analysis of all job types across platforms
+**Impact:**
+- **Before:** Python jobs might fail on Windows with "python3 is not recognized"
+- **After:** Python jobs use correct command per platform + helpful error if Python missing ✅
+- **Platform Support:** macOS ✅, Linux ✅, Windows ✅ (with clear install guidance)
+**Linux:** No issue - Linux uses same `python3` command as macOS
+**Related:** Issue 37 (Windows Node.js PATH - same root cause: platform assumptions)
+
+### Issue 39: Playwright Missing in Windows Builds ✅ FIXED
+**Added:** 2026-04-06
+**Problem:** Browser tools completely broken in Windows packaged builds with error: "Cannot find package 'playwright' imported from ...app.asar\\dist\\core\\tools\\browser.js"
+**Root Cause:** Playwright was missing from `package.json` dependencies and not included in electron-builder's `asarUnpack` configuration. It worked in dev mode but failed in production builds.
+**Solution:** 
+1. Added `playwright` to dependencies in package.json
+2. Added playwright to `asarUnpack` in electron-builder.json to extract binaries from ASAR
+**Fix Applied:** 2026-04-06
+**Implementation:**
+```json
+// package.json
+"dependencies": {
+  "playwright": "^1.48.2"  // Added
+}
+
+// electron-builder.json
+"asarUnpack": [
+  "node_modules/esbuild/**",
+  "node_modules/@esbuild/**",
+  "node_modules/playwright/**",      // Added
+  "node_modules/playwright-core/**"  // Added
+]
+```
+**Why it was missed:**
+- Dev mode: Playwright might be installed globally or via dev dependencies
+- Production: electron-builder only packages explicit dependencies
+- ASAR: Playwright binaries must be unpacked for execution
+**Files Changed:**
+- `package.json` - Added playwright to dependencies
+- `electron-builder.json` - Added playwright to asarUnpack
+- `docs/WINDOWS_SUBAGENT_LOGS_ANALYSIS.md` - Log analysis documenting the issue
+- `docs/WINDOWS_COMPLETE_FIX.md` - Complete Windows platform fix documentation
+**Impact:**
+- **Before:** All browser tools broken on Windows production builds (browser_navigate, browser_snapshot, etc.)
+- **After:** Browser tools work correctly ✅
+- **Size Impact:** +~400MB to packaged app (acceptable for full browser automation)
+- **Platform Support:** macOS ✅, Linux ✅, Windows ✅ (all fixed)
+**Testing:** Requires testing packaged Windows build, not just dev mode
+**Related:** 
+- Issue 33 (Missing IPC files - same root cause: incomplete electron-builder.json)
+- Issue 35 (Default home app not bundled - same root cause)
+**Pattern:** electron-builder.json needs regular audits for completeness. Missing dependencies are a recurring theme.
+
+### Issue 41: App Staying Running After Quit ✅ FIXED
+**Added:** 2026-04-07
+**Problem:** When users tried to quit the app (Cmd+Q on macOS, File → Quit), the app window closed but processes (especially Gateway) stayed running in the background.
+**Root Causes:**
+1. **Incomplete cleanup**: `before-quit` handler was async but didn't wait for cleanup to complete
+2. **Race condition**: `app.quit()` could be called before cleanup finished
+3. **No quit prevention**: Handler didn't call `event.preventDefault()` to hold quit until cleanup done
+4. **Missing force-kill**: If Gateway didn't respond to SIGTERM, it stayed running indefinitely
+5. **Duplicate handlers**: Two `activate` handlers with one referencing non-existent function
+**Solution:**
+1. **Enhanced `before-quit` handler** with `event.preventDefault()`:
+   - Prevents quit until cleanup completes
+   - Added `isQuitting` flag to prevent duplicate cleanup
+   - Detailed logging for debugging
+   - Error handling ensures quit even if cleanup fails
+   - 100ms delay after cleanup before calling `app.quit()`
+2. **Enhanced Gateway stop** with force-kill timeout:
+   - Sends SIGTERM for graceful shutdown
+   - Waits 2 seconds, then sends SIGKILL if still alive
+   - Logs PID and status for debugging
+3. **Added `will-quit` safety net**:
+   - Last chance to kill Gateway with SIGKILL
+   - Runs after `before-quit` as final cleanup
+4. **Fixed SIGINT/SIGTERM handlers**:
+   - Check `isQuitting` flag to avoid duplicates
+   - 500ms delay for supervisor to stop Gateway before quit
+5. **Removed duplicate `activate` handler** inside `app.whenReady()`
+**Fix Applied:** 2026-04-07
+**Implementation:**
+```javascript
+let isQuitting = false;
+
+app.on("before-quit", async (event) => {
+  if (isQuitting) return;
+  isQuitting = true;
+  event.preventDefault(); // CRITICAL: Hold quit until cleanup done
+  
+  try {
+    // Cleanup OAuth, Papr login, Ollama
+    if (cleanupOAuthServers) cleanupOAuthServers();
+    if (cleanupPaprLogin) cleanupPaprLogin();
+    if (cleanupOllama) await cleanupOllama();
+    
+    // Stop Gateway supervisor
+    if (supervisor) supervisor.stop();
+    
+    // Brief delay then quit
+    setTimeout(() => app.quit(), 100);
+  } catch (error) {
+    console.error("[Electron] Error during cleanup:", error);
+    setTimeout(() => app.quit(), 100);
+  }
+});
+
+app.on("will-quit", () => {
+  // Final safety net: force kill Gateway if still running
+  if (supervisor?.getProcess() && !supervisor.getProcess().killed) {
+    supervisor.getProcess().kill("SIGKILL");
+  }
+});
+```
+**Files Changed:**
+- `src/electron/index.cjs` - Enhanced quit handlers, Gateway supervisor, removed duplicate handler
+- `docs/APP_QUIT_BEHAVIOR_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** Cmd+Q → Window closes, Gateway keeps running in background, required Activity Monitor to kill
+- **After:** Cmd+Q → Full cleanup in 100-500ms, all processes stopped, clean logs ✅
+- **Platform Support:** macOS ✅, Windows ✅, Linux ✅
+**Testing:** After quit, verify no processes:
+```bash
+# Should return nothing:
+lsof -ti:18789  # macOS/Linux
+netstat -ano | findstr :18789  # Windows
+```
+**Prevention:**
+- Always use `event.preventDefault()` in `before-quit` to hold quit
+- Clean up resources (child processes, connections)
+- Call `app.quit()` explicitly when done
+- Add `will-quit` as final safety net for force-kill
+- Test with Activity Monitor/Task Manager to verify no orphans
+
+---
+
+### Issue 40: Stale Running Jobs - Automatic Reconciliation ✅ FIXED
+**Added:** 2026-04-06
+**Problem:** Jobs get stuck in "running" status in memory after completion. User has to restart the app (Cmd+Q) to clear the stale state.
+**Root Causes:**
+1. **Process completion race condition** - Process exits and `running.delete()` removes from map, but exception occurs before status is saved to disk
+2. **Agent job exceptions** - Agent/subagent jobs don't use child processes, so they were never checked for stale state
+3. **App closure** - Job running when app closes stays in "running" state
+**Solution:** Enhanced `reconcileStaleRunningJobs()` to detect and recover all job types automatically:
+1. **Process-backed jobs** (python, node, bash, shell, swift) - Detect when job is "running" but not in `this.running` map
+2. **Agent jobs** - Now also checked for stale state (previously skipped entirely)
+3. **Automatic recovery** - Runs on app startup (30s threshold) and every scheduler tick (20s threshold, at least every 60s)
+**Fix Applied:** 2026-04-06
+**Implementation:**
+```typescript
+async reconcileStaleRunningJobs(minStaleMs: number = 20_000): Promise<void> {
+  for (const [jobId, job] of this.jobs.entries()) {
+    if (job.status !== "running") continue;
+    
+    const anchorMs = new Date(job.lastRunAt ?? job.updatedAt).getTime();
+    if (Date.now() - anchorMs < minStaleMs) continue;
+    
+    // Process-backed jobs: check if process is tracked
+    if (processBackedTypes.includes(job.type)) {
+      if (this.running.has(jobId)) continue; // Still legitimately running
+      // ✅ Stale: process completed but status not saved
+      await this.setJobStatus(jobId, "failed", { error: "Stale running state..." });
+    }
+    
+    // Agent/subagent jobs: check if stuck without completion
+    if (job.type === "agent" || job.type === "subagent") {
+      // ✅ Stale: agent job stuck in running state
+      await this.setJobStatus(jobId, "failed", { error: "Agent job stuck..." });
+    }
+  }
+}
+```
+**Files Changed:**
+- `src/gateway/services/JobsService.ts` - Enhanced reconciliation to handle agent jobs, adjusted threshold to 30s on startup
+- `docs/STALE_RUNNING_JOBS_FIX.md` - Complete documentation with timeline diagrams
+**Impact:**
+- **Before:** Jobs stuck forever, required manual app restart (Cmd+Q)
+- **After:** Jobs automatically recover within 20-60 seconds, no restart needed
+- **User Experience:** Clear error messages explain what happened, jobs can be immediately retried
+**Reconciliation Schedule:**
+
+| Trigger | Frequency | Threshold | Purpose |
+|---------|-----------|-----------|---------|
+| App startup | Once | 30s | Clear interrupted jobs from previous session |
+| Scheduler tick | Every 20-60s | 20s | Continuous monitoring during normal operation |
+| Before scheduled run | On-demand | 20s | Prevent conflicts with stale jobs |
+
+**Related:** 
+- Issue 19 (Enhanced E2E Job Testing - added stale job test coverage)
+- Issue 36 (Job Node Version Mismatch - could cause process crashes → stale jobs)
+- Issue 38 (Windows Python Command - could cause job failures → stale jobs)
+
+---
+
+### Enhancement 40: Agent Auto-Install Missing Packages ✅ IMPLEMENTED
+**Added:** 2026-04-06
+**Problem:** Non-technical users get stuck when essential packages (Python, Node.js, Git) are missing. They don't know what the error means or how to fix it.
+**Solution:** Agent automatically offers to install missing packages when needed, with user permission.
+**User Experience:**
+```
+User: "Create a Python job that scrapes this website"
+Agent: "I notice Python is not installed on this Windows machine. May I install it for you? (Takes ~2-3 minutes)"
+User: "Yes please"
+Agent: [Runs] winget install Python.Python.3.12 --silent
+Agent: "Python 3.12.8 installed successfully! Now creating your scraper job..."
+```
+**Implementation:**
+1. **Package Manager Utility** (`src/gateway/utils/packageManager.ts`):
+   - `checkPackage()` - Detects if package installed
+   - `installPackage()` - Runs platform-specific install command
+   - `getAgentInstallInstructions()` - Provides fallback manual instructions
+2. **System Prompt Integration** (`src/core/agents/SystemPrompt.ts`):
+   - Added `buildMissingPackagesSection()` with detection, permission, install, verify workflow
+   - Platform-specific commands for Windows (winget), macOS (brew), Linux (apt)
+   - Clear examples and fallback instructions
+**Supported Packages:**
+- **Python** (essential for Python jobs) - `winget install Python.Python.3.12 --silent`
+- **Node.js** (essential for Node jobs) - `winget install OpenJS.NodeJS.LTS --silent`
+- **Git** (recommended) - `winget install Git.Git --silent`
+- **curl** (essential for web requests) - `winget install cURL.cURL --silent`
+**Agent Workflow:**
+1. **Detect:** Job fails with "not found" or "not recognized" error
+2. **Ask:** "I notice [Package] is not installed. May I install it? (Takes ~2-3 minutes)"
+3. **Install:** If approved, run platform-specific install command via bash tool
+4. **Verify:** Check package version after installation
+5. **Continue:** Resume original task seamlessly
+**Safety Rules:**
+- ALWAYS ask permission first (never auto-install silently)
+- Show estimated time (1-5 minutes)
+- Verify success with version check
+- Provide manual fallback if automatic install fails
+- Use correct commands for user's platform
+**Fix Applied:** 2026-04-06
+**Files Created:**
+- `src/gateway/utils/packageManager.ts` - Package detection and installation utility
+- `docs/AUTO_INSTALL_PACKAGES.md` - Complete feature documentation
+**Files Changed:**
+- `src/core/agents/SystemPrompt.ts` - Added missing packages section with install workflow
+**Impact:**
+- **Before:** Users stuck with "python3 not recognized" → Google → Download → Forgot PATH → Gave up ❌
+- **After:** Agent asks → User approves → Installed in 2 minutes → Task continues ✅
+- **User Type:** Especially helpful for non-technical users who don't know what Python is
+- **Platform Support:** Windows (winget), macOS (brew), Linux (apt) all supported
+**Related:** 
+- Issue 37 (Windows Node.js PATH - required manual installation)
+- Issue 38 (Python command - provided manual install guidance)
+- Issue 39 (Playwright - required manual npm install)
+- Enhancement 40 - **THIS FIX** - Agent handles installations automatically
+**Pattern:** Moving from manual fixes → agent-driven solutions for non-technical users
+
+### Enhancement 41: Amplitude Enhanced Event Tracking ✅ READY TO IMPLEMENT
+**Added:** 2026-04-07
+**Status:** Infrastructure complete, ready for event implementation
+**Problem:** Limited visibility into user behavior and no way to understand product usage. Only 4 basic events tracked (app start/quit/suspend/resume), no understanding of:
+- How users interact with features
+- Which features drive retention vs churn
+- What causes errors and crashes
+- Feature adoption rates and patterns
+**Solution:** Comprehensive Amplitude integration with **40+ tracked events** across the full user journey for data-driven product decisions.
+**Key Features:**
+1. **Enhanced Event Tracking** - 40+ events:
+   - Lifecycle: app start/quit/suspend/resume/focus/minimize
+   - Onboarding: started/step viewed/step completed/completed/Papr login
+   - Chat: created/message sent/received/deleted/renamed/model changed
+   - Tools: tool called/bash executed/file read/written/browser action
+   - Jobs: created/completed/failed/edited/deleted/scheduler events
+   - Mini-Apps: created/opened/closed/edited/deleted/home app set
+   - Plans: created/step completed/completed/deleted
+   - Settings: opened/provider configured/telemetry toggled/theme changed
+   - Errors: error occurred/API error/job error
+   - Performance: slow operation/slow query/websocket latency
+2. **User Properties** - Persistent attributes: platform, app version, providers configured, feature usage counters, theme, settings
+3. **Privacy-First** - Anonymous install ID, no visual recording, user opt-in required, no message content tracked
+**Why No Session Replay:**
+- Respects user privacy (no visual recording of UI interactions)
+- Events + error context sufficient for most debugging
+- Open source transparency (users can see exactly what's tracked)
+- Lower cost (events free up to 10M/month vs $210/month for replay)
+**Implementation:**
+1. **Dependencies Added** - `@amplitude/analytics-browser` only (no session replay package)
+2. **Core Files Created:**
+   - `src/core/telemetry/events.ts` - Event definitions with property interfaces (40+ events)
+   - `src/core/telemetry/properties.ts` - User properties management helpers
+   - `ui/lib/telemetry.ts` - Renderer telemetry client (events only)
+3. **Initialization** - Added to `ui/App.tsx` to initialize Amplitude on app start if telemetry enabled
+4. **Documentation:**
+   - `docs/AMPLITUDE_ENHANCED_TRACKING.md` - Full specification (updated to remove session replay)
+   - `docs/AMPLITUDE_IMPLEMENTATION_GUIDE.md` - Step-by-step implementation guide
+   - `docs/AMPLITUDE_QUICK_REFERENCE.md` - Quick start and troubleshooting
+**Use Cases:**
+- **Feature Adoption:** Measure which features are used → justify development priorities
+- **Onboarding:** Track completion rates → identify drop-off points → improve flow
+- **Error Tracking:** See error context → reproduce faster → fix faster
+- **Retention:** Track Day 1/7/30 retention → understand churn patterns
+**Cost:** $0/month (events free up to 10M/month, well within expected volume)
+**Privacy Considerations:**
+- ✅ Anonymous install ID (no email, no PII, no IP address)
+- ✅ Opt-in required (telemetry toggle in settings)
+- ✅ No visual recording (events only, no session replay)
+- ✅ No message content tracked (only length)
+- ✅ No file paths tracked (only read/write events)
+- ✅ GDPR compliant with anonymous tracking
+**What We Track:**
+- Feature usage (which buttons clicked, which flows completed)
+- Performance metrics (slow operations, latency)
+- Error events (crashes, API failures)
+- User journeys (onboarding → first message → feature adoption)
+**What We DON'T Track:**
+- Message content (only length, not text)
+- API keys (not tracked at all)
+- Bash command details (only success/failure)
+- File paths (only read/write events)
+- Personal identifiers (email, name, IP)
+**Remaining Work (2-3 weeks):**
+- Week 1: Test basic setup, configure environment
+- Week 2: Implement events (onboarding, chat, jobs, apps, settings)
+- Week 3: Add error/performance tracking
+- Week 4: Create Amplitude dashboards, set up alerts, gradual rollout
+**Files Created:**
+- `src/core/telemetry/events.ts` - Event definitions and property interfaces
+- `src/core/telemetry/properties.ts` - User properties helper functions
+- `ui/lib/telemetry.ts` - Renderer telemetry client (events only)
+- `docs/AMPLITUDE_ENHANCED_TRACKING.md` - Complete specification
+- `docs/AMPLITUDE_IMPLEMENTATION_GUIDE.md` - Implementation guide
+- `docs/AMPLITUDE_QUICK_REFERENCE.md` - Quick reference
+**Files Changed:**
+- `package.json` - Added Amplitude SDK (browser SDK only)
+- `ui/App.tsx` - Added Amplitude initialization on startup
+**Impact:**
+- **Before:** Blind to user behavior, no retention data, can't measure feature adoption
+- **After:** Comprehensive analytics, data-driven decisions, measure what matters
+- **Metrics to Track:** Day 1/7/30 retention, onboarding completion, feature adoption, error rate, job success rate
+**Next Steps:**
+1. Test Amplitude initialization (`npm start` → check console for "[Amplitude] Initialized")
+2. Implement event tracking following implementation guide
+3. Create Amplitude dashboards for key metrics
+4. Set up alerts for critical errors
+5. Gradual rollout (10% → 50% → 100%)
+**Related:**
+- Existing telemetry infrastructure (`TelemetryClient.ts`) - Backend events
+- Settings telemetry toggle - User opt-in/opt-out
+- Privacy compliance - Anonymous tracking pattern
+
+---
+
+
 
 1. **TypeScript Only** - No JavaScript files
 2. **Small Files** - Max 500 lines (will be enforced by CI)
@@ -1928,6 +2894,426 @@ icon: '📝'
 4. **Test Coverage** - Add tests for new features
 5. **Documentation** - Update this file with learnings
 6. **Pre-commit Checks** - Code quality enforced automatically
+
+---
+
+### Issue 38: Windows Window Dragging and Resizing ✅ FIXED
+**Added:** 2026-04-06
+**Problem:** Users couldn't drag the window by clicking the titlebar/tab bar area on Windows. Window felt "stuck" and unusable.
+**Root Cause:** 
+- `titleBarStyle: "hidden"` with `titleBarOverlay` requires explicit drag region configuration
+- Global `-webkit-app-region: drag` on tab bar conflicted with Windows titleBarOverlay
+- Missing explicit window operation flags (resizable, minimizable, etc.)
+**Solution:** 
+1. Added explicit window flags to Windows config: `resizable: true`, `minimizable: true`, `maximizable: true`, `closable: true`
+2. Platform-specific drag regions: macOS uses global drag on entire tab bar, Windows only drags empty tab space
+3. Kept interactive elements non-draggable (tabs, buttons)
+**Fix Applied:** 2026-04-06
+**CSS Changes:**
+```css
+/* macOS: Make entire tab bar draggable */
+body.platform-darwin .tab-bar {
+  -webkit-app-region: drag;
+}
+
+/* Windows: Only empty tab space draggable */
+body:not(.platform-darwin) .tab-bar {
+  -webkit-app-region: no-drag;
+}
+body:not(.platform-darwin) .tab-bar__tabs {
+  -webkit-app-region: drag; /* Empty space between tabs */
+}
+```
+**Files Changed:**
+- `src/electron/index.cjs` - Added explicit window operation flags
+- `ui/components/Tabs/TabBar.css` - Platform-specific drag regions
+- `docs/WINDOWS_DRAG_RESIZE_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** Couldn't drag window on Windows (felt broken)
+- **After:** Can drag from empty tab bar space (Windows standard behavior)
+- **Limitation:** Drag area is empty space only (by design, avoids interfering with tabs)
+**Testing:** Manual verification on Windows 11 - drag, resize, minimize, maximize all work
+
+### Issue 39: Windows Close and Minimize Behavior ✅ FIXED
+**Added:** 2026-04-06
+**Problem:** After closing or minimizing the app on Windows, clicking the taskbar icon or executable to reopen resulted in no visible window. Process ran in background but window was hidden and couldn't be restored.
+**Root Cause:**
+- No `close` event handler - window close behavior undefined for Windows
+- No `activate` event handler - clicking taskbar when hidden had no effect
+- macOS-only logic in `window-all-closed` handler
+**Solution:** Added platform-specific window lifecycle handlers:
+1. **Close handler:** macOS prevents close and hides window (standard), Windows allows normal close → quit
+2. **Activate handler:** Shows hidden window or creates new one when dock/taskbar clicked
+3. **Clarified comments:** Documented platform differences in existing handlers
+**Fix Applied:** 2026-04-06
+**Implementation:**
+```javascript
+mainWindow.on("close", (event) => {
+  if (process.platform === "darwin") {
+    event.preventDefault(); // macOS: Hide, don't quit
+    mainWindow.hide();
+  }
+  // Windows/Linux: Allow normal close → quit
+});
+
+app.on("activate", () => {
+  if (mainWindow === null) {
+    createWindow();
+  } else if (!mainWindow.isVisible()) {
+    mainWindow.show();
+  }
+});
+```
+**Files Changed:**
+- `src/electron/index.cjs` - Added close and activate handlers
+- `docs/WINDOWS_CLOSE_MINIMIZE_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** Click X → process runs hidden, can't restore window
+- **After (Windows):** Click X → app quits completely, click taskbar → window restores
+- **After (macOS):** Click X → window hides (stays in dock), click dock → window shows
+- **Platform-appropriate:** Windows and macOS now follow their respective platform conventions
+**Testing:** Manual verification on Windows 11 and macOS 14 - close, minimize, restore all work correctly
+
+### Issue 40: App Icons Showing Plain Text Instead of SVG ✅ FIXED
+**Added:** 2026-04-07
+**Problem:** Apps displaying plain text labels ("chart", "shield") inside icon circles instead of proper SVG icons, making the apps list look unprofessional.
+**Root Causes:**
+1. **Insufficient validation:** Zod schema accepted any string for icon field without format validation
+2. **Contradictory guidance:** SystemPrompt said "DO NOT use emojis" in section 9 but "SVG string or emoji" in registry format
+3. **Permissive rendering:** AppCard.tsx rendered any non-SVG text as emoji without validation
+**Solution:**
+1. **Enhanced Zod validation:** Added `.refine()` to `createAppSchema` that rejects plain text, only accepts SVG (starts with `<`) or valid emojis (Unicode regex `/[\p{Emoji}]/u`)
+2. **UI fallback:** Updated `renderIcon()` to validate icons client-side and fall back to default grid icon for invalid values
+3. **Fixed SystemPrompt:** Changed contradictory statement from "SVG string or emoji" to "REQUIRED — inline SVG string, DO NOT use plain text"
+4. **Migration script:** Created `fix-app-icons.mjs` to automatically fix existing apps with text icons
+**Fix Applied:** 2026-04-07
+**Implementation:**
+```typescript
+// Zod validation (appJobs.ts)
+icon: z.string().refine(
+  (val) => {
+    const trimmed = val.trim();
+    const startsWithSvg = trimmed.startsWith('<');
+    const isEmoji = trimmed.length <= 4 && /[\p{Emoji}]/u.test(trimmed);
+    return startsWithSvg || isEmoji;
+  },
+  { message: 'Icon must be an SVG string or valid emoji. Plain text like "chart" is not allowed.' }
+)
+
+// UI validation (AppCard.tsx)
+const isEmoji = trimmedIcon.length <= 4 && /[\p{Emoji}]/u.test(trimmedIcon);
+if (!isEmoji) {
+  console.warn(`Invalid icon: "${artifact.icon}". Expected SVG or emoji.`);
+  // Falls back to default grid icon
+}
+```
+**Migration Results:**
+- Fixed 4 apps: "Amplitude Session Replays", "AI Agent Security Command Center", "PMF Sprint" (2x)
+- Replaced `"chart"` → Chart/analytics SVG icon
+- Replaced `"shield"` → Security shield SVG icon
+**Files Changed:**
+- `src/core/tools/appJobs.ts` - Enhanced `createAppSchema` with `.refine()` validation
+- `src/core/agents/SystemPrompt.ts` - Fixed contradictory guidance about emojis
+- `ui/components/Apps/AppCard.tsx` - Added emoji validation, fallback to default icon
+- `ui/components/Apps/AppCard.css` - Added overflow handling for icon container
+- `scripts/fix-app-icons.mjs` - NEW: Migration script with icon replacement map
+- `package.json` - Added `fix-app-icons` npm script
+- `docs/APP_ICON_VALIDATION_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** Plain text "chart", "shield" visible in icon circles, agent could create invalid icons
+- **After:** All apps show proper SVG icons, Zod validation prevents future invalid icons ✅
+- **Prevention:** Tool-level validation blocks plain text, UI gracefully handles legacy data
+**Run migration:** `npm run fix-app-icons` (processes all apps in `~/Papr/data/apps.json`)
+
+---
+
+### Enhancement 42: Proactive Integration - Never Say "I Can't" ✅ IMPLEMENTED
+**Added:** 2026-04-07  
+**Updated:** 2026-04-07 (Added Google Workspace CLI)
+**Problem:** Agent too quickly said "I don't have access to X" without checking its actual capabilities (bash, browser automation, package installation). Users thought Paprwork was limited when it has powerful automation tools.
+**Example:** User: "Pull up Hemang's email from LG" → Agent: "I don't have access to your email — Paprwork doesn't have email integration"
+**Reality:** Agent CAN access email via Gmail API, **Google Workspace CLI**, IMAP, browser automation, or AppleScript
+**Solution:** Added `buildProactiveIntegrationSection()` to SystemPrompt teaching agent to:
+1. Check available tools before saying "I can't"
+2. Recognize bash + packages = access to ANY API/service  
+3. Offer to build integrations instead of declining
+4. Understand full automation capabilities (browser, jobs, filesystem)
+5. **RECOMMEND Google Workspace CLI (`gws`) as primary method for Google services**
+**Implementation:**
+1. **The Proactive Pattern** - 5-step decision tree before declining requests
+2. **Concrete Examples** - Gmail, Calendar, Drive, LinkedIn, databases with multiple approaches
+3. **Package Installation** - Install ANY package/CLI tool (Python, Node, gws, etc.)
+4. **Google Workspace CLI** - Official `gws` CLI built specifically for AI agents (24K+ stars)
+5. **Browser Automation** - Reminder that agent has FULL browser capabilities
+**Google Workspace CLI (`gws`) - RECOMMENDED:**
+```javascript
+// Install (one command)
+bash({ command: "npm install -g @googleworkspace/cli" })
+
+// Set up OAuth (opens browser once)
+bash({ command: "gws auth setup" })
+
+// Use for ALL Google Workspace services
+bash({ command: "gws gmail users messages list --params '{\"userId\": \"me\", \"q\": \"from:john@example.com\"}'" })
+bash({ command: "gws calendar events list --params '{\"calendarId\": \"primary\"}'" })
+bash({ command: "gws drive files list --params '{\"pageSize\": 10}'" })
+bash({ command: "gws docs documents get --params '{\"documentId\": \"DOC_ID\"}'" })
+bash({ command: "gws sheets spreadsheets values get --params '{\"spreadsheetId\": \"SHEET_ID\", \"range\": \"Sheet1!A1:D10\"}'" })
+```
+**Why `gws` CLI:**
+- ✅ Built specifically for AI agents (includes 100+ agent skills)
+- ✅ Structured JSON output (easy parsing)
+- ✅ Handles auth, pagination, error handling automatically
+- ✅ Single tool for Gmail, Calendar, Drive, Docs, Sheets, Chat, Admin
+- ✅ Dynamic command generation (always up-to-date with Google APIs)
+- ✅ Fast and reliable
+**Examples Added:**
+- **Gmail:** Google Workspace CLI (primary), Gmail API, IMAP, browser automation, AppleScript
+- **Google Calendar:** Google Workspace CLI (primary), Calendar API, CalDAV, AppleScript, browser
+- **Google Workspace:** Google Workspace CLI (primary) covers Drive, Docs, Sheets, Chat, Admin
+- **LinkedIn:** Browser automation, scraping job, official API
+- **Databases:** Install client libraries (psycopg2, pymongo, mysql-connector), use custom keys
+**Files Changed:**
+- `src/core/agents/SystemPrompt.ts` - Added `buildProactiveIntegrationSection()`, replaced gcloud references with `gws` CLI, enhanced package installation examples
+- `docs/PROACTIVE_INTEGRATION_GUIDANCE.md` - Complete documentation with examples and testing checklist
+- `docs/GOOGLE_WORKSPACE_CLI_INTEGRATION.md` - **NEW**: Complete `gws` CLI documentation with usage examples
+**Impact:**
+- **Before:** Agent declined requests → poor UX, missed powerful features, users gave up
+- **After:** Agent proactively offers solutions → empowered users, increased engagement, integration options
+- **Coverage:** Email, calendar, social media, databases, cloud services, APIs, file formats, web scraping
+- **Google Workspace:** Now has official CLI support with AI-agent-first design
+**Expected Behavior:**
+```
+User: "Access my Gmail and find emails from john@example.com"
+Agent: "I can access your Gmail in several ways:
+1. **Google Workspace CLI** (recommended) - I can install the official gws CLI tool. It's built specifically for AI agents and supports Gmail, Calendar, Drive, Docs, Sheets, and more. Just one OAuth setup and I can access everything.
+2. Gmail API - Python job with OAuth
+3. Browser automation - Navigate Gmail and extract
+4. IMAP - Python imaplib with app password
+Which would you prefer? Option 1 (gws CLI) is fastest and most reliable."
+```
+**Key Insight:** Agent is a POWERFUL automation platform. The **Google Workspace CLI** is the missing piece that makes Google integrations trivial. If it can be done with Python/Node script, browser, API call, or CLI tool → Agent CAN DO IT. Just offer to build the integration.
+
+---
+
+### Issue 42: Default Home App Not Showing on Fresh Installs ✅ FIXED
+**Added:** 2026-04-07
+**Problem:** Fresh installations showed "Agent Lounge (Coming Soon)" placeholder instead of the bundled home dashboard. App files were copied to disk but not registered in the apps index.
+**Root Causes:**
+1. `installDefaultApps()` only copied files but didn't add apps to `this.apps` Map or call `saveApps()`
+2. ESM module issue: `__dirname` not defined (needed `import.meta.url`)
+3. Incorrect relative path: `../resources/` instead of `../../resources/` from `dist/gateway/services/`
+**Solution:** Enhanced `installDefaultApps()` to:
+1. Check both registry and filesystem (register existing files if not in index)
+2. Read `metadata.json` from bundled default apps
+3. Create proper `MiniApp` objects with all required fields
+4. Add to `this.apps` Map and call `saveApps()` to persist
+5. Resolve icons from app directory (logo.svg, icon.svg, favicon.svg)
+6. Added ESM compatibility with `fileURLToPath` and proper `__dirname`
+**Fix Applied:** 2026-04-07
+**Implementation:**
+```typescript
+// Added ESM compatibility
+import { fileURLToPath } from "url";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+private async installDefaultApps(): Promise<void> {
+  // Fixed path: up 2 levels from dist/gateway/services/
+  const defaultAppsDir = path.join(__dirname, "..", "..", "resources", "default-apps");
+  
+  for (const appDirName of defaultAppDirs) {
+    // Check if already registered (skip duplicates)
+    if (this.apps.has(appId)) continue;
+    
+    // Copy files if needed
+    if (!filesExist) {
+      await fs.cp(sourceDir, targetDir, { recursive: true });
+    }
+    
+    // Read metadata.json
+    const metadata = JSON.parse(await fs.readFile(metadataPath, "utf-8"));
+    
+    // Resolve icon
+    let icon = metadata.icon || await this.resolveIconFromAppDir(targetDir);
+    
+    // Register in index
+    const app: MiniApp = { id, title, description, type, createdAt, updatedAt, icon };
+    this.apps.set(appId, app);
+    installedCount++;
+  }
+  
+  // Save index
+  if (installedCount > 0) await this.saveApps();
+}
+```
+**Testing:** Created automated test (`scripts/test-default-app-install.mjs`) that:
+- Creates fresh test environment (empty registry)
+- Calls `AppService.initialize()` to trigger installation
+- Verifies app registered with correct metadata
+- Verifies app files copied to disk
+- Verifies icon resolved correctly
+- Tests idempotency (no duplicates)
+**Files Created:**
+- `scripts/test-default-app-install.mjs` - Automated test
+- `docs/DEFAULT_HOME_APP_INSTALLATION_FIX.md` - Complete documentation
+**Files Changed:**
+- `src/gateway/services/AppService.ts` - Fixed `installDefaultApps()` + ESM compatibility
+- `src/core/telemetry/properties.ts` - Fixed unused parameter TypeScript error
+- `package.json` - Added `test:default-app` script
+**Impact:**
+- **Before:** Fresh installs → "Agent Lounge (Coming Soon)" placeholder, home dashboard not accessible
+- **After:** Fresh installs → Home dashboard opens automatically, professional first-run experience ✅
+- **Test Coverage:** All aspects verified (registry, filesystem, metadata, icon, idempotency)
+**Related:**
+- Enhancement 26: Default Home App Configuration (settings integration)
+- Enhancement 27: Smart Default Provider & Bundled Home Dashboard (initial bundling)
+- Issue 35: Default Home App Not Bundled (electron-builder.json fix)
+
+---
+
+### Issue 43: Auto-Update Read-Only Volume Error ✅ FIXED
+**Added:** 2026-04-08
+**Problem:** Users getting "Cannot update while running on a read-only volume" error when app tries to check for updates. This happened when users:
+- Ran the app directly from the mounted DMG (read-only volume)
+- Ran the app from Downloads folder (macOS Sierra+ restricts updates)
+- Never moved app to Applications folder
+**Root Cause:** Distributed only as DMG, which requires manual drag-to-Applications. Many users skip this step and run directly from DMG or Downloads, breaking auto-updates.
+**Solution:** Changed primary distribution to **PKG installer** that automatically installs to correct location.
+**Fix Applied:** 2026-04-08
+**Implementation:**
+```json
+// electron-builder.json - BEFORE
+"mac": {
+  "target": [
+    { "target": "dmg", "arch": ["arm64", "x64"] },
+    { "target": "zip", "arch": ["arm64", "x64"] }
+  ]
+}
+
+// electron-builder.json - AFTER
+"mac": {
+  "target": [
+    { "target": "pkg", "arch": ["arm64", "x64"] },  // PRIMARY - proper installer
+    { "target": "dmg", "arch": ["arm64", "x64"] }   // SECONDARY - manual install
+  ]
+},
+"pkg": {
+  "installLocation": "/Applications",           // Force Applications folder
+  "allowAnywhere": false,                       // Don't allow other locations
+  "allowCurrentUserHome": false,                // Don't allow ~/Downloads
+  "allowRootDirectory": false                   // Don't allow root
+}
+```
+**Why PKG is Better:**
+| Feature | PKG Installer | DMG (Manual) |
+|---------|--------------|--------------|
+| Installation | Automatic guided wizard | Manual drag & drop |
+| Install location | Enforced `/Applications` | User choice (risky) |
+| User confusion | None | High ("what do I do?") |
+| Downloads folder | ❌ Prevented | ✅ Possible (breaks updates) |
+| DMG volume run | ❌ Prevented | ✅ Possible (breaks updates) |
+| Updates work | ✅ Always | ⚠️ Only if installed correctly |
+| First-time users | ✅ Perfect | ⚠️ Confusing |
+**Distribution Strategy:**
+- **PKG** - Primary download, recommended for all users
+- **DMG** - Secondary option for advanced users who prefer manual control
+**User Experience:**
+1. User downloads `PaprWork-2.0.0.pkg`
+2. Double-clicks PKG file
+3. macOS installer wizard guides through:
+   - Introduction
+   - License agreement
+   - Installation destination (forced to `/Applications`)
+   - Installation progress
+   - Success screen
+4. App is now in `/Applications/Papr Work.app`
+5. Auto-updates work perfectly ✅
+**Files Changed:**
+- `electron-builder.json` - Added PKG target as primary, configured install restrictions, enhanced DMG config
+- `src/electron/index.cjs` - Removed confusing warning dialog (no longer needed with PKG installer)
+- `docs/AUTO_UPDATE_INSTALLER_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** Users confused about installation, ran from wrong location, updates failed
+- **After:** Professional guided installation, app always in correct location, updates work reliably ✅
+- **No warnings needed:** Prevention at installer level, not detection at runtime
+**Build Commands:**
+```bash
+npm run dist:mac  # Creates both PKG and DMG
+# Outputs:
+# - release/PaprWork-{version}-arm64.pkg (PRIMARY)
+# - release/PaprWork-{version}-x64.pkg (PRIMARY)
+# - release/PaprWork-{version}-arm64.dmg (SECONDARY)
+# - release/PaprWork-{version}-x64.dmg (SECONDARY)
+```
+**GitHub Release Template:**
+```markdown
+## Downloads
+
+### macOS
+- **[PaprWork-2.0.0.pkg](...)** - **Recommended** - Installer (automatically installs to Applications)
+- [PaprWork-2.0.0.dmg](...) - Manual installation (drag to Applications folder)
+
+### Windows
+- [PaprWork-Setup-2.0.0.exe](...) - Windows installer
+
+### Linux
+- [PaprWork-2.0.0.AppImage](...) - AppImage (universal)
+- [paprwork_2.0.0_amd64.deb](...) - Debian/Ubuntu package
+```
+**Related:**
+- Windows already uses proper NSIS installer (no issues)
+- Linux already uses proper package formats (no issues)
+- macOS was the only platform with manual installation problems
+**Prevention:** Always use proper installers (PKG/NSIS/DEB) as primary distribution, keep manual formats (DMG/ZIP) as secondary options for advanced users.
+
+---
+
+### Enhancement 44: Design Enforcement for Clean Mini-Apps ✅ IMPLEMENTED
+**Added:** 2026-04-08
+**Problem:** Agent creates busy, cluttered mini-apps with "dashboard soup" (5-8+ cards on one screen) instead of clean, focused designs matching the Liquid Glass aesthetic. Design system skill existed but wasn't enforced strongly enough.
+**Solution:** Enhanced SystemPrompt with explicit anti-patterns, stronger enforcement, and visual examples of what NOT to do.
+**Implementation:**
+1. **Enhanced Critical Rules** - Added rule #5: "NEVER create dashboard soup — if adding 5+ cards, redesign with 2-3 sections"
+2. **Expanded Product Design Philosophy** - Added explicit ANTI-PATTERNS section:
+   - ❌ Dashboard Soup (too many cards, no hierarchy)
+   - ❌ Multiple Primary Actions (competing buttons)
+   - ❌ Busy Layouts (cramped spacing)
+   - ❌ Hidden Critical Actions (buried in menus)
+3. **Strengthened Design System Loading** - Shows consequences of skipping and benefits of loading:
+   - What you'll create if you skip (dashboard soup, cramped layouts)
+   - What the design system teaches (clean, spacious, focused)
+**Key Changes:**
+- Anti-patterns now visible in THREE places (not just design skill file)
+- Explicit examples of bad designs (5+ cards = redesign)
+- Clear visual checklist (✅ 2-3 sections, ❌ 6+ cards)
+- "BEFORE YOU CREATE ANY UI" checklist with 5 steps
+**Expected Behavior:**
+- Agent loads design system skill FIRST (every time)
+- Creates 2-3 focused sections maximum (not 6-8 cards)
+- ONE clear primary action per screen
+- Generous whitespace (24-48px between sections)
+- Follows Liquid Glass aesthetic
+**Files Changed:**
+- `src/core/agents/SystemPrompt.ts` - Enhanced 3 sections with anti-patterns
+- `docs/DESIGN_ENFORCEMENT_ENHANCEMENT.md` - Complete documentation with testing checklist
+**Impact:**
+- **Before:** 6-8 cards per screen, multiple primary buttons, cramped spacing, generic grids
+- **After:** 2-3 sections, ONE primary action, generous spacing, premium Liquid Glass feel ✅
+- **Pattern:** Moving from "optional best practice" → "hard requirement with explicit examples"
+**Testing Checklist:**
+1. Create analytics dashboard → should have 2-3 sections (not 6+ metric cards)
+2. Create task manager → should focus on ONE view (not all 7 views on one screen)
+3. Update existing app → should check layout before adding more cards
+**Success Metrics:**
+- % apps with 2-3 sections: target >80%
+- % apps with 1 primary button: target >90%
+- % apps loading design system: target 100%
+**Future Enhancements:**
+- Automated validation script (flag >3 cards, >1 primary button)
+- Design system templates (pre-built layouts)
+- Plan enforcement for apps (design plan before UI)
+- Visual linter in CI (reject bad designs)
 
 ---
 

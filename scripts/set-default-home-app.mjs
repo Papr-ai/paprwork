@@ -17,7 +17,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 
-const SETTINGS_PATH = path.join(os.homedir(), 'PAPR', 'data', 'settings.json');
+const SETTINGS_PATH = path.join(os.homedir(), 'Papr', 'data', 'settings.json');
 
 async function main() {
   const appId = process.argv[2];

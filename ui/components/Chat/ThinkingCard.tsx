@@ -36,7 +36,8 @@ export const ThinkingCard: React.FC<ThinkingCardProps> = ({
   isStreaming = false,
   isCollapsible = true,
 }) => {
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  // Start collapsed by default
+  const [isCollapsed, setIsCollapsed] = useState(true);
   const wasStreamingRef = useRef(isStreaming);
 
   // Pick a random phrase when the component mounts (stable across re-renders)
@@ -45,10 +46,10 @@ export const ThinkingCard: React.FC<ThinkingCardProps> = ({
     [], // Empty deps - only pick once when component first renders
   );
 
-  // Auto-collapse when streaming finishes
+  // Keep collapsed when streaming finishes
   useEffect(() => {
     if (wasStreamingRef.current && !isStreaming && content) {
-      // Streaming just finished - collapse the card
+      // Streaming just finished - keep collapsed
       setIsCollapsed(true);
     }
     wasStreamingRef.current = isStreaming;

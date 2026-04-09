@@ -1,7 +1,7 @@
 /**
  * WorkspaceService - Manages agent workspace files for persistent context
  *
- * Workspace files live in ~/PAPR/workspace/ and are injected into the system
+ * Workspace files live in ~/Papr/workspace/ and are injected into the system
  * prompt on every agent turn. The agent reads and writes these files using
  * existing tools (write_file, bash) to improve itself over time.
  *
@@ -62,7 +62,7 @@ export class WorkspaceService {
 
   constructor() {
     const homeDir = os.homedir();
-    this.workspaceDir = path.join(homeDir, "PAPR", "workspace");
+    this.workspaceDir = path.join(homeDir, "Papr", "workspace");
     this.memoryDir = path.join(this.workspaceDir, "memory");
   }
 
@@ -332,7 +332,7 @@ export class WorkspaceService {
       } catch {
         // Fallback if SLEEP.md is missing for some reason
         sleepPrompt =
-          "Review daily logs in ~/PAPR/workspace/memory/, distill learnings into MEMORY.md/IDENTITY.md/AGENTS.md/TOOLS.md, archive logs older than 14 days.";
+          "Review daily logs in ~/Papr/workspace/memory/, distill learnings into MEMORY.md/IDENTITY.md/AGENTS.md/TOOLS.md, archive logs older than 14 days.";
       }
 
       const job = await jobsService.createJob({

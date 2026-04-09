@@ -48,12 +48,14 @@ export function ArtifactsView() {
   };
 
   const handleDelete = async (id: string, type: ArtifactType) => {
+    if (type === "file") return;
     if (confirm(`Are you sure you want to delete this ${type}?`)) {
       await deleteArtifact(id, type);
     }
   };
 
   const handleToggleFavorite = async (id: string, type: ArtifactType) => {
+    if (type === "file") return;
     await toggleFavorite(id, type);
   };
 
@@ -63,6 +65,7 @@ export function ArtifactsView() {
     title: string,
     icon?: string,
   ) => {
+    if (type === "file") return;
     const tabType = type === "app" ? "app" : "document";
     const tabId = createTab(tabType, id, title, icon ? { icon } : {});
     switchToTab(tabId);
@@ -70,6 +73,7 @@ export function ArtifactsView() {
 
   const handleRename = useCallback(
     async (id: string, type: ArtifactType, newTitle: string) => {
+      if (type === "file") return;
       const msgType = type === "document" ? "document:update" : "app:update";
       const payloadKey = type === "document" ? "documentId" : "appId";
       await gateway.send(msgType, { [payloadKey]: id, title: newTitle });

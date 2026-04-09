@@ -214,7 +214,7 @@ async initialize(): Promise<void> {
 ```
 1. User installs Paprwork
 2. First launch → AppService.initialize() runs
-3. installDefaultApps() checks ~/PAPR/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/
+3. installDefaultApps() checks ~/Papr/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/
 4. Not found → Copies from dist/resources/default-apps/home-dashboard/
 5. App appears in apps list
 6. settings.json has defaultHomeAppId pointing to it
@@ -289,8 +289,8 @@ create_job({
 
 ```bash
 # 1. Fresh installation simulation
-rm -rf ~/PAPR/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c
-rm -f ~/PAPR/data/apps.json
+rm -rf ~/Papr/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c
+rm -f ~/Papr/data/apps.json
 
 # 2. Build the app (copies resources to dist/)
 npm run build
@@ -302,7 +302,7 @@ npm start
 # Expected: "[AppService] Installed default app: bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c (home-dashboard)"
 
 # 5. Verify app exists
-ls ~/PAPR/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/
+ls ~/Papr/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/
 
 # 6. Click home button
 # Expected: "Home" tab opens with Weekly War Room dashboard

@@ -24,16 +24,21 @@ export interface CostBreakdown {
  * Source: Official pricing pages
  */
 export const MODEL_PRICING: Record<string, ModelPricing> = {
-  // OpenAI GPT-5 Series (API format uses dots: gpt-5.2)
-  "gpt-5-mini": { input: 0.1, output: 0.4 },
-  "gpt-5.2-low": { input: 2.5, output: 10.0 },
-  "gpt-5.2": { input: 5.0, output: 15.0 },
-  "gpt-5.2-high": { input: 10.0, output: 30.0 },
-  "gpt-5.2-xhigh": { input: 20.0, output: 60.0 },
-  "gpt-5.2-codex": { input: 15.0, output: 45.0 },
+  // OpenAI GPT-5.x (API format uses dots)
+  "gpt-5-mini": { input: 0.1, output: 0.4 }, // legacy id; normalizer maps to gpt-5.4-mini
+  "gpt-5.4-mini": { input: 0.75, output: 4.5 },
+  "gpt-5.4-low": { input: 2.5, output: 15.0 },
+  "gpt-5.4-high": { input: 2.5, output: 15.0 },
+  "gpt-5.4-xhigh": { input: 2.5, output: 15.0 },
   "gpt-5.3-codex": { input: 15.0, output: 45.0 },
-  "gpt-5.4": { input: 2.5, output: 15.0 }, // GPT-5.4 Thinking
-  "gpt-5.4-pro": { input: 30.0, output: 180.0 }, // GPT-5.4 Pro
+  "gpt-5.4": { input: 2.5, output: 15.0 },
+  "gpt-5.4-pro": { input: 2.5, output: 15.0 }, // legacy id → same tier as gpt-5.4
+  // Deprecated picker IDs / legacy logs (treated as GPT-5.4 tier)
+  "gpt-5.2-low": { input: 2.5, output: 15.0 },
+  "gpt-5.2": { input: 2.5, output: 15.0 },
+  "gpt-5.2-high": { input: 2.5, output: 15.0 },
+  "gpt-5.2-xhigh": { input: 2.5, output: 15.0 },
+  "gpt-5.2-codex": { input: 15.0, output: 45.0 },
 
   // Anthropic Claude 4 Series
   "claude-haiku-4-5": { input: 0.8, output: 4.0 },
@@ -46,12 +51,26 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "gemini-2.5-flash": { input: 0.3, output: 1.2 },
   "gemini-3-flash-preview": { input: 0.6, output: 2.4 },
   "gemini-3-pro-preview": { input: 2.5, output: 10.0 },
+
+  // Ollama (local inference — no per-token API charge)
+  "qwen3.5:0.8b": { input: 0, output: 0 },
+  "qwen3.5:2b": { input: 0, output: 0 },
+  "qwen3.5:4b": { input: 0, output: 0 },
+  "qwen3.5:latest": { input: 0, output: 0 },
+  "qwen3.5:27b": { input: 0, output: 0 },
+  "gemma3:270m": { input: 0, output: 0 },
+  "gemma3:1b": { input: 0, output: 0 },
+  "gemma3:4b": { input: 0, output: 0 },
+  "gemma3:latest": { input: 0, output: 0 },
+  "gemma3:12b": { input: 0, output: 0 },
+  "gemma3:27b": { input: 0, output: 0 },
 };
 
 /** Normalize model ID for cost lookup (legacy dash format -> dot format) */
 function normalizeModelForPricing(model: string): string {
   return model
     .replace(/gpt-5-2/g, "gpt-5.2")
+    .replace(/gpt-5-4/g, "gpt-5.4")
     .replace(/gemini-2-5/g, "gemini-2.5");
 }
 
