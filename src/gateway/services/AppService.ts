@@ -266,11 +266,121 @@ export class AppService {
     await this.migrateLegacyIfNeeded();
     await fs.mkdir(this.appsDir, { recursive: true });
     await fs.mkdir(path.dirname(this.appsIndexPath), { recursive: true });
-    await this.installDefaultApps(); // Install default apps on first launch
-    await this.loadApps();
+    await this.loadApps(); // Load existing apps FIRST
+    await this.rebuildIndexIfCorrupted(); // Safety net: check for missing apps
+    await this.installDefaultApps(); // Then install defaults (won't overwrite existing)
     await this.startWatchingApps();
     this.initialized = true;
     console.log(`[AppService] Initialized with ${this.apps.size} apps`);
+  }
+
+
+  /**
+   * Safety net: detect if apps.json is missing apps that exist on disk.
+   * This handles corruption from updates, crashes, or the previous bug where
+   * installDefaultApps() could overwrite apps.json before loadApps() ran.
+   * Scans ~/Papr/apps/ for app directories not in the index and re-adds them.
+   */
+  private async rebuildIndexIfCorrupted(): Promise<void> {
+    try {
+      const dirsOnDisk = await fs.readdir(this.appsDir);
+      const appDirsOnDisk: string[] = [];
+
+      for (const dirName of dirsOnDisk) {
+        const dirPath = path.join(this.appsDir, dirName);
+        try {
+          const stat = await fs.stat(dirPath);
+          if (!stat.isDirectory()) continue;
+          // Must have at least one file (not an empty dir)
+          const files = await fs.readdir(dirPath);
+          if (files.length === 0) continue;
+          appDirsOnDisk.push(dirName);
+        } catch {
+          continue;
+        }
+      }
+
+      // Find apps on disk but missing from index
+      const missingAppIds = appDirsOnDisk.filter(id => !this.apps.has(id));
+
+      if (missingAppIds.length === 0) return;
+
+      console.warn(
+        `[AppService] INDEX CORRUPTION DETECTED: ${missingAppIds.length} apps on disk but missing from apps.json. Rebuilding...`
+      );
+
+      // Back up the corrupted index before fixing
+      try {
+        const backupPath = this.appsIndexPath + `.backup-${Date.now()}`;
+        await fs.copyFile(this.appsIndexPath, backupPath);
+        console.log(`[AppService] Backed up corrupted index to ${backupPath}`);
+      } catch {
+        // No existing file to back up — that's fine
+      }
+
+      for (const appId of missingAppIds) {
+        const appDir = path.join(this.appsDir, appId);
+
+        // Try to recover metadata from files
+        let title = appId;
+        let description = "Recovered app (index was corrupted)";
+        let icon: string | undefined;
+        let createdAt = new Date().toISOString();
+
+        // Try reading index.html for <title> tag
+        try {
+          const indexHtml = await fs.readFile(path.join(appDir, "index.html"), "utf-8");
+          const titleMatch = indexHtml.match(/<title>([^<]+)<\/title>/i);
+          if (titleMatch) {
+            title = titleMatch[1].trim();
+          }
+          // Try extracting favicon
+          const favicon = this.extractFaviconFromHTML(indexHtml);
+          if (favicon) {
+            icon = favicon;
+          }
+        } catch {
+          // No index.html, try other files for hints
+        }
+
+        // Try to get actual creation date from filesystem
+        try {
+          const stat = await fs.stat(appDir);
+          createdAt = stat.birthtime.toISOString();
+        } catch {
+          // Use current time
+        }
+
+        // Try resolving icon from logo files
+        if (!icon) {
+          const resolvedIcon = await this.resolveIconFromAppDir(appDir);
+          if (resolvedIcon) {
+            icon = resolvedIcon;
+          }
+        }
+
+        const recoveredApp: MiniApp = {
+          id: appId,
+          title,
+          description,
+          type: "app",
+          createdAt,
+          updatedAt: new Date().toISOString(),
+          ...(icon ? { icon } : {}),
+        };
+
+        this.apps.set(appId, recoveredApp);
+        console.log(`[AppService] Recovered app from disk: ${appId} - ${title}`);
+      }
+
+      await this.saveApps();
+      console.log(
+        `[AppService] Index rebuilt: recovered ${missingAppIds.length} apps. Total: ${this.apps.size}`
+      );
+    } catch (error) {
+      console.error("[AppService] Failed to rebuild index:", error);
+      // Don't throw — better to have some apps than crash
+    }
   }
 
   private async loadApps(): Promise<void> {
