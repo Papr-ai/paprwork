@@ -11,6 +11,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { openai } from "@ai-sdk/openai";
 import { google } from "@ai-sdk/google";
 import type { AgentConfigInternal } from "../../core/types/agents.js";
+import { createProxyModel } from "../utils/paprProxyProvider.js";
 import type { StorageManager } from "./StorageManager.js";
 import {
   normalizeOpenAIModelId,
@@ -106,7 +107,13 @@ export class ChatSessionManager {
     // Select the appropriate AI SDK provider
     let model;
 
-    switch (config.provider) {
+    // Route through Papr AI proxy if configured (user logged in via Papr, no direct API key)
+    if (config.usePaprProxy && config.apiKey) {
+      console.log(
+        `[ChatSessionManager] Using Papr AI proxy for ${config.provider}/${config.model}`,
+      );
+      model = await createProxyModel(config.provider, config.model, config.apiKey) as any;
+    } else switch (config.provider) {
       case "anthropic":
         model = anthropic(config.model);
         break;

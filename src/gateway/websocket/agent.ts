@@ -64,6 +64,7 @@ export async function setupAgentHandlers(
 
         let apiKey: string;
         let authType: "oauth" | "apiKey" | undefined;
+        let usePaprProxy = false;
 
         if (
           existingSession &&
@@ -72,6 +73,7 @@ export async function setupAgentHandlers(
           // Reuse API key and auth type from existing session (ZERO keychain access!)
           apiKey = existingSession.config.apiKey;
           authType = existingSession.config.authType;
+          usePaprProxy = existingSession.config.usePaprProxy || false;
           console.log(
             `[Agent WS] Reusing cached API key for chat ${chatId} (${config.provider})`,
           );
@@ -99,16 +101,28 @@ export async function setupAgentHandlers(
               const auth = await getProviderAuth(authProvider);
 
               if (!auth) {
-                sendError(
-                  ws,
-                  message.id,
-                  `No authentication found for provider: ${config.provider}`,
-                );
-                return;
+                // No direct provider auth — try Papr API key as proxy fallback
+                const { getApiKeys } = await import("../utils/keyResolver.js");
+                const paprKeys = await getApiKeys(["PAPR_API_KEY"]);
+                if (paprKeys.PAPR_API_KEY) {
+                  console.log(
+                    `[Agent WS] No direct ${config.provider} auth — falling back to Papr AI proxy`,
+                  );
+                  apiKey = paprKeys.PAPR_API_KEY;
+                  authType = "apiKey";
+                  usePaprProxy = true;
+                } else {
+                  sendError(
+                    ws,
+                    message.id,
+                    `No authentication found for provider: ${config.provider}`,
+                  );
+                  return;
+                }
+              } else {
+                apiKey = auth.type === "oauth" ? auth.token : auth.key;
+                authType = auth.type;
               }
-
-              apiKey = auth.type === "oauth" ? auth.token : auth.key;
-              authType = auth.type;
               
               console.log(
                 `[Agent WS] Auth resolved for ${config.provider}: type=${authType} tokenLength=${apiKey?.length || 0} ` +
@@ -122,8 +136,18 @@ export async function setupAgentHandlers(
               apiKey = keys[keyName];
 
               if (!apiKey) {
-                sendError(ws, message.id, `API key not found: ${keyName}`);
-                return;
+                // No direct key — try Papr API key as proxy fallback
+                const paprKeys = await getApiKeys(["PAPR_API_KEY"]);
+                if (paprKeys.PAPR_API_KEY) {
+                  console.log(
+                    `[Agent WS] No ${keyName} found — falling back to Papr AI proxy`,
+                  );
+                  apiKey = paprKeys.PAPR_API_KEY;
+                  usePaprProxy = true;
+                } else {
+                  sendError(ws, message.id, `API key not found: ${keyName}`);
+                  return;
+                }
               }
             }
 
@@ -139,14 +163,11 @@ export async function setupAgentHandlers(
         }
 
         // Create internal config with API key and auth type (for OAuth vs API key routing)
-        const configInternal = { ...config, apiKey, authType };
+        const configInternal = { ...config, apiKey, authType, usePaprProxy };
 
         // Track time until first chunk
         const t3 = performance.now();
         timings.beforeStream = performance.now() - perfStart;
-
-        // Track work start time for elapsed timer
-        const workStartTime = Date.now();
 
         // Stream response chunks back to client
         // Each chunk includes chatId for frontend routing
@@ -179,18 +200,12 @@ export async function setupAgentHandlers(
               chunkCount++;
 
               if (ws.readyState === ws.OPEN) {
-                // Calculate elapsed work time in seconds
-                const elapsedSeconds = Math.floor((Date.now() - workStartTime) / 1000);
-                
-                // Send chunk with chatId and elapsed time for parallel stream routing
+                // Send chunk with chatId for parallel stream routing
                 ws.send(
                   JSON.stringify({
                     id: message.id,
                     type: "agent:chunk",
-                    data: {
-                      ...chunk, // chunk already includes chatId from streamAgent
-                      elapsedSeconds, // Add server-driven elapsed time
-                    },
+                    data: chunk, // chunk already includes chatId from streamAgent
                   }),
                 );
               } else {

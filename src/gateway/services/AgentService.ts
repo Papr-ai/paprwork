@@ -1281,6 +1281,15 @@ export class AgentService {
       });
       await this.storageManager.saveMessage(chatId, assistantMsg);
 
+      // 4.5. Yield done chunk to signal stream completion to frontend
+      // This ensures isSending is cleared even if last item was a tool call
+      yield {
+        type: "done",
+        chatId,
+        payload: {},
+        timestamp: new Date().toISOString(),
+      } as StreamChunk & { chatId: string };
+
       // 5. Export chat to ~/Papr/ folder
       const allMessages = await this.storageManager.loadMessages(chatId);
       const chatMeta = await this.storageManager.getChat(chatId);
@@ -2763,7 +2772,15 @@ ${last15.substring(0, 8_000)}`;
   private async createLanguageModel(
     provider: Provider,
     modelId: string,
+    options?: { usePaprProxy?: boolean; paprApiKey?: string },
   ): Promise<LanguageModel> {
+    // Route through Papr proxy if configured
+    if (options?.usePaprProxy && options?.paprApiKey) {
+      const { createProxyModel } = await import("../utils/paprProxyProvider.js");
+      console.log(`[AgentService] Using Papr AI proxy for ${provider}/${modelId}`);
+      return createProxyModel(provider, modelId, options.paprApiKey);
+    }
+
     switch (provider) {
       case "anthropic": {
         const { anthropic } = await import("@ai-sdk/anthropic");

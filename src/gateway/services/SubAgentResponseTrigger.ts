@@ -32,6 +32,21 @@ export async function triggerMainAgentResponse(
   }
 
   const chatId = job.reportChatId;
+  
+  // For running delegations, only auto-respond if main agent will ask the user
+  // Skip auto-response for internal sub-agent → main agent questions (those stay in MiniChatCard)
+  // This prevents clutter while ensuring user sees important questions
+  const isRunningDelegation = job.status === "running" && source === "sub-agent";
+  
+  if (isRunningDelegation) {
+    // Auto-respond so main agent can decide if it needs user help
+    // Main agent's system prompt says: "If you truly cannot answer, respond in MAIN CHAT"
+    // This creates a visible message for the user when needed
+    console.log(
+      `[SubAgentResponseTrigger] Running delegation ${delegationId}, ` +
+      `auto-responding so main agent can route question (to itself or user).`
+    );
+  }
 
   // Get config from session or use default
   const sessionManager = agentService.getSessionManager();
@@ -61,18 +76,36 @@ export async function triggerMainAgentResponse(
       apiKey = keys.ANTHROPIC_API_KEY || "";
     }
     if (!apiKey) {
-      console.warn(
-        "[SubAgentResponseTrigger] No API key for default provider, skipping",
-      );
-      return;
+      // No direct provider key — try Papr API key as proxy fallback
+      const paprKeys = await getApiKeys(["PAPR_API_KEY"]);
+      if (paprKeys.PAPR_API_KEY) {
+        console.log(
+          "[SubAgentResponseTrigger] No direct API key — falling back to Papr AI proxy",
+        );
+        apiKey = paprKeys.PAPR_API_KEY;
+        config = {
+          provider,
+          model,
+          apiKey,
+          authType,
+          usePaprProxy: true,
+          systemPrompt: "", // Will use buildContextualSystemPrompt
+        };
+      } else {
+        console.warn(
+          "[SubAgentResponseTrigger] No API key for default provider, skipping",
+        );
+        return;
+      }
+    } else {
+      config = {
+        provider,
+        model,
+        apiKey,
+        authType,
+        systemPrompt: "", // Will use buildContextualSystemPrompt
+      };
     }
-    config = {
-      provider,
-      model,
-      apiKey,
-      authType,
-      systemPrompt: "", // Will use buildContextualSystemPrompt
-    };
   }
 
   const syntheticMessage =
