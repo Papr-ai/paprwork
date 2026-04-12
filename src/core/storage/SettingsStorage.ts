@@ -279,8 +279,14 @@ export class SettingsStorage {
     displayName?: string;
     profileImage?: string;
     authenticatedAt: string;
+    sessionToken?: string;
+    organizationId?: string;
+    activeNamespaceId?: string;
+    activeNamespaceName?: string;
   }): void {
-    this.store.set("paprProfile", profile);
+    // Merge with existing profile to preserve fields not in this update
+    const existing = this.store.get("paprProfile");
+    this.store.set("paprProfile", { ...existing, ...profile });
   }
 
   /**

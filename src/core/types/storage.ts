@@ -79,6 +79,13 @@ export interface AppSettings {
     displayName?: string;
     profileImage?: string;
     authenticatedAt: string;
+    /** Parse session token for server-side queries (namespace listing, etc.) */
+    sessionToken?: string;
+    /** Organization ID */
+    organizationId?: string;
+    /** Currently active namespace */
+    activeNamespaceId?: string;
+    activeNamespaceName?: string;
   };
   compaction: CompactionConfig;
   permissions: PermissionSettings;
