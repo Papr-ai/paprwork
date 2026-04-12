@@ -105,6 +105,123 @@ function decodeIdToken(idToken: string): Record<string, any> {
   return JSON.parse(payload);
 }
 
+
+
+// ─── Token Refresh ─────────────────────────────────────────────
+
+/**
+ * Use Auth0 refresh_token to get a new id_token, then extract a fresh
+ * Parse sessionToken from the JWT claims.
+ * Returns the new sessionToken (already persisted to keychain + profile).
+ */
+async function refreshSessionToken(
+  customKeysStorage: CustomKeysStorage,
+  settingsStorage: SettingsStorage,
+): Promise<string> {
+  const refreshToken = await customKeysStorage.getKeyByName("PAPR_REFRESH_TOKEN");
+  if (!refreshToken) {
+    throw new Error("No refresh token available — user must re-login");
+  }
+
+  console.log("[PaprLogin] Refreshing session token via Auth0...");
+
+  const response = await fetch(`https://${AUTH0_DOMAIN}/oauth/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      grant_type: "refresh_token",
+      client_id: AUTH0_CLIENT_ID,
+      refresh_token: refreshToken,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = (await response.json().catch(() => ({}))) as Record<string, string>;
+    // If refresh token is revoked/expired, clear it so we don't retry endlessly
+    if (response.status === 403 || response.status === 401) {
+      const meta = await customKeysStorage.getKeyMetadataByName("PAPR_REFRESH_TOKEN");
+      if (meta) await customKeysStorage.deleteKey(meta.id);
+      console.error("[PaprLogin] Refresh token revoked or expired, cleared.");
+    }
+    throw new Error(
+      `Token refresh failed: ${response.status} ${errorData.error_description || errorData.error || response.statusText}`,
+    );
+  }
+
+  const tokens = (await response.json()) as {
+    access_token: string;
+    id_token?: string;
+    refresh_token?: string;
+    expires_in: number;
+  };
+
+  if (!tokens.id_token) {
+    throw new Error("No id_token in refresh response");
+  }
+
+  // Auth0 may rotate refresh tokens — store the new one if provided
+  if (tokens.refresh_token) {
+    await customKeysStorage.addKey({
+      name: "PAPR_REFRESH_TOKEN",
+      value: tokens.refresh_token,
+    });
+  }
+
+  // Extract new Parse session token from the fresh JWT
+  const claims = decodeIdToken(tokens.id_token);
+  const newSessionToken = claims["https://papr.scope.com/sessionToken"];
+  if (!newSessionToken) {
+    throw new Error("Refreshed ID token missing Parse sessionToken claim");
+  }
+
+  // Persist the new session token
+  await customKeysStorage.addKey({
+    name: "PAPR_SESSION_TOKEN",
+    value: newSessionToken,
+  });
+
+  const profile = settingsStorage.getPaprProfile();
+  if (profile) {
+    settingsStorage.setPaprProfile({
+      ...profile,
+      sessionToken: newSessionToken,
+    });
+  }
+
+  console.log("[PaprLogin] Session token refreshed successfully.");
+  return newSessionToken;
+}
+
+/**
+ * Wrapper around parseGraphQL that auto-refreshes the session on 401/expired errors.
+ * Retries the original call once with the new token.
+ */
+async function parseGraphQLWithRefresh(
+  sessionToken: string,
+  query: string,
+  variables: Record<string, any>,
+  customKeysStorage: CustomKeysStorage,
+  settingsStorage: SettingsStorage,
+): Promise<any> {
+  try {
+    return await parseGraphQL(sessionToken, query, variables);
+  } catch (error: any) {
+    const msg = error?.message || "";
+    // Detect session expiry — Parse returns "Invalid session token" or HTTP 209
+    if (
+      msg.includes("Invalid session") ||
+      msg.includes("209") ||
+      msg.includes("unauthorized") ||
+      msg.includes("401")
+    ) {
+      console.log("[PaprLogin] Session token expired, attempting refresh...");
+      const newToken = await refreshSessionToken(customKeysStorage, settingsStorage);
+      return await parseGraphQL(newToken, query, variables);
+    }
+    throw error;
+  }
+}
+
 // ─── Parse GraphQL Client ──────────────────────────────────────
 
 async function parseGraphQL(
@@ -642,6 +759,14 @@ export function initializePaprLoginIPC(
         value: parseSessionToken,
       });
 
+      // Store refresh token for automatic session renewal
+      if (tokens.refresh_token) {
+        await customKeysStorage.addKey({
+          name: "PAPR_REFRESH_TOKEN",
+          value: tokens.refresh_token,
+        });
+      }
+
       // Save user profile with org/namespace info
       settingsStorage.setPaprProfile({
         userId: objectId,
@@ -734,9 +859,9 @@ export function initializePaprLoginIPC(
         return { success: false, error: "Not logged in or missing org info" };
       }
 
-      const data = await parseGraphQL(profile.sessionToken, GET_ORG_NAMESPACES, {
+      const data = await parseGraphQLWithRefresh(profile.sessionToken, GET_ORG_NAMESPACES, {
         orgId: profile.organizationId,
-      });
+      }, customKeysStorage, settingsStorage);
 
       const namespaces = (data.namespaces?.edges || []).map((edge: any) => ({
         id: edge.node.objectId,
@@ -768,9 +893,9 @@ export function initializePaprLoginIPC(
       }
 
       // Check for existing API key in this namespace
-      const keyData = await parseGraphQL(profile.sessionToken, GET_NAMESPACE_API_KEYS, {
+      const keyData = await parseGraphQLWithRefresh(profile.sessionToken, GET_NAMESPACE_API_KEYS, {
         namespaceId,
-      });
+      }, customKeysStorage, settingsStorage);
 
       let apiKey = keyData.aPIKeys?.edges?.[0]?.node?.key;
 
@@ -916,6 +1041,14 @@ export async function handlePaprAuthCallback(
       name: "PAPR_SESSION_TOKEN",
       value: parseSessionToken,
     });
+
+      // Store refresh token for automatic session renewal
+      if (tokens.refresh_token) {
+        await customKeysStorage.addKey({
+          name: "PAPR_REFRESH_TOKEN",
+          value: tokens.refresh_token,
+        });
+      }
 
     // Save user profile with org/namespace info
     settingsStorage.setPaprProfile({
