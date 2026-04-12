@@ -83,13 +83,27 @@ contextBridge.exposeInMainWorld("electronAPI", {
     getProfile: () => ipcRenderer.invoke("papr:get-profile"),
     // Listen for successful login (via deep link callback)
     onLoginSuccess: (callback) => {
-      ipcRenderer.on("papr-login-success", (_event, data) => {
+      ipcRenderer.on("papr:login-success", (_event, data) => {
         callback(data);
         // Also dispatch a DOM event for easier listening
         window.dispatchEvent(new CustomEvent('papr-auth-success', { detail: data }));
       });
     },
-  },
+    // Listen for successful logout
+    onLogoutSuccess: (callback) => {
+      ipcRenderer.on("papr:logout-success", () => {
+        callback();
+        window.dispatchEvent(new CustomEvent('papr-logout-success'));
+      });
+    },
+    listNamespaces: () => ipcRenderer.invoke("papr:list-namespaces"),
+    switchNamespace: (namespaceId, namespaceName) => ipcRenderer.invoke("papr:switch-namespace", namespaceId, namespaceName),
+    onNamespaceChanged: (callback) => {
+      ipcRenderer.on("papr:namespace-changed", (_event, data) => {
+        callback(data);
+        window.dispatchEvent(new CustomEvent('papr-namespace-changed', { detail: data }));
+      });
+    },  },
 
   // Python Dependencies API - Check and auto-install BeautifulSoup for browser_parse_html
   pythonDeps: {
@@ -144,6 +158,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     setEnabled: (enabled) =>
       ipcRenderer.invoke("telemetry:set-enabled", enabled),
   },
+
+  // App metadata
+  getAppVersion: () => ipcRenderer.invoke("app:get-version"),
 
   // Environment info
   env: {

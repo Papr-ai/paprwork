@@ -128,3 +128,73 @@
 .papr-login-note a:hover {
   text-decoration: underline;
 }
+
+/* Namespace Selector */
+.papr-namespace-section {
+  margin: 16px 0;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+}
+
+.papr-namespace-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.papr-namespace-select-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.papr-namespace-select {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+  appearance: auto;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.papr-namespace-select:hover:not(:disabled) {
+  border-color: var(--accent-color);
+}
+
+.papr-namespace-select:focus {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 2px rgba(var(--accent-color-rgb, 99, 102, 241), 0.15);
+}
+
+.papr-namespace-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.papr-namespace-spinner {
+  animation: spin 1s linear infinite;
+  color: var(--accent-color);
+  flex-shrink: 0;
+}
+
+.papr-namespace-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin: 8px 0 0 0;
+}
+
+.papr-namespace-hint strong {
+  color: var(--text-secondary);
+}

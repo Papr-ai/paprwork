@@ -1,10 +1,17 @@
 /**
  * PaprLoginSection - Login to Papr platform for automatic API key provisioning
  * Integrates with papr-dev-platform OAuth flow
+ * Includes namespace selector for switching between workspaces
  */
 
 import React, { useState, useEffect } from "react";
 import "./PaprLoginSection.css";
+
+interface Namespace {
+  id: string;
+  name: string;
+  environmentType?: string;
+}
 
 interface PaprLoginSectionProps {
   onApiKeyReceived?: (apiKey: string) => void;
@@ -16,10 +23,23 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
+  // Namespace state
+  const [namespaces, setNamespaces] = useState<Namespace[]>([]);
+  const [activeNamespaceId, setActiveNamespaceId] = useState<string | null>(null);
+  const [switchingNamespace, setSwitchingNamespace] = useState(false);
+  const [namespacesLoaded, setNamespacesLoaded] = useState(false);
+
   // Check if user is already logged in on mount
   useEffect(() => {
     checkLoginStatus();
   }, []);
+
+  // Load namespaces when logged in
+  useEffect(() => {
+    if (isLoggedIn) {
+      loadNamespaces();
+    }
+  }, [isLoggedIn]);
 
   const checkLoginStatus = async () => {
     try {
@@ -33,20 +53,51 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
     }
   };
 
+  const loadNamespaces = async () => {
+    try {
+      const result = await window.electronAPI.papr.listNamespaces();
+      if (result.success && result.namespaces) {
+        setNamespaces(result.namespaces);
+        setActiveNamespaceId(result.activeNamespaceId || null);
+      }
+    } catch (err) {
+      console.error("Failed to load namespaces:", err);
+    } finally {
+      setNamespacesLoaded(true);
+    }
+  };
+
+  const handleSwitchNamespace = async (namespaceId: string) => {
+    const ns = namespaces.find((n) => n.id === namespaceId);
+    if (!ns || namespaceId === activeNamespaceId) return;
+
+    setSwitchingNamespace(true);
+    setError(null);
+    try {
+      const result = await window.electronAPI.papr.switchNamespace(namespaceId, ns.name);
+      if (result.success) {
+        setActiveNamespaceId(namespaceId);
+        if (result.apiKey && onApiKeyReceived) {
+          onApiKeyReceived(result.apiKey);
+        }
+      } else {
+        setError(result.error || "Failed to switch namespace");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to switch namespace");
+    } finally {
+      setSwitchingNamespace(false);
+    }
+  };
+
   const handleLogin = async () => {
     setIsLoading(true);
     setError(null);
-
     try {
-      // Open dashboard login with desktop_auth flag
       const result = await window.electronAPI.papr.startLogin();
-      
       if (!result.success) {
         throw new Error(result.error || "Failed to start login flow");
       }
-
-      // Keep loading state - will be cleared when we receive the callback
-      console.log("Login flow started, waiting for dashboard callback...");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
       setIsLoading(false);
@@ -59,57 +110,61 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
       if (result.success) {
         setIsLoggedIn(false);
         setUserEmail(null);
+        setNamespaces([]);
+        setActiveNamespaceId(null);
+        setNamespacesLoaded(false);
       }
     } catch (err) {
       console.error("Failed to logout:", err);
     }
   };
 
-  // Listen for login success events from main process
+  // Listen for login/logout/namespace events
   useEffect(() => {
-    // Register IPC listener for login success
     window.electronAPI.papr.onLoginSuccess((data) => {
-      console.log('[PaprLoginSection] Login success received via IPC:', data);
       setIsLoggedIn(true);
       setUserEmail(data.email);
       setIsLoading(false);
-      
-      // Refresh keys list in parent component
-      if (onApiKeyReceived) {
-        onApiKeyReceived(data.apiKey);
-      }
+      if (onApiKeyReceived) onApiKeyReceived(data.apiKey);
     });
 
-    // Also listen for DOM event as backup
+    window.electronAPI.papr.onNamespaceChanged((data) => {
+      setActiveNamespaceId(data.namespaceId);
+    });
+
     const handleLoginSuccess = (event: CustomEvent) => {
-      console.log('[PaprLoginSection] Login success received via DOM event:', event.detail);
       const { apiKey, email } = event.detail;
       setIsLoggedIn(true);
       setUserEmail(email);
       setIsLoading(false);
-      
-      // Refresh keys list in parent component
-      if (onApiKeyReceived) {
-        onApiKeyReceived(apiKey);
-      }
+      if (onApiKeyReceived) onApiKeyReceived(apiKey);
     };
 
     const handleLoginError = (event: CustomEvent) => {
-      console.log('[PaprLoginSection] Login error:', event.detail);
       setError(event.detail.error);
       setIsLoading(false);
     };
 
+    const handleLogoutSuccess = () => {
+      setIsLoggedIn(false);
+      setUserEmail(null);
+      setNamespaces([]);
+      setActiveNamespaceId(null);
+    };
+
     window.addEventListener("papr-auth-success", handleLoginSuccess as EventListener);
     window.addEventListener("papr-login-error", handleLoginError as EventListener);
+    window.addEventListener("papr-logout-success", handleLogoutSuccess as EventListener);
 
     return () => {
       window.removeEventListener("papr-auth-success", handleLoginSuccess as EventListener);
       window.removeEventListener("papr-login-error", handleLoginError as EventListener);
+      window.removeEventListener("papr-logout-success", handleLogoutSuccess as EventListener);
     };
   }, [onApiKeyReceived]);
 
   if (isLoggedIn) {
+    const activeNs = namespaces.find((n) => n.id === activeNamespaceId);
     return (
       <div className="papr-login-section papr-login-section--logged-in">
         <div className="papr-login-header">
@@ -122,6 +177,55 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
         <p className="papr-login-description">
           {userEmail ? `Logged in as ${userEmail}` : "Your API key has been provisioned automatically"}
         </p>
+
+        {/* Namespace Selector */}
+        {namespacesLoaded && namespaces.length > 0 && (
+          <div className="papr-namespace-section">
+            <label className="papr-namespace-label">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+              Namespace
+            </label>
+            <div className="papr-namespace-select-wrapper">
+              <select
+                className="papr-namespace-select"
+                value={activeNamespaceId || ""}
+                onChange={(e) => handleSwitchNamespace(e.target.value)}
+                disabled={switchingNamespace}
+              >
+                {namespaces.map((ns) => (
+                  <option key={ns.id} value={ns.id}>
+                    {ns.name}{ns.environmentType ? ` (${ns.environmentType})` : ""}
+                  </option>
+                ))}
+              </select>
+              {switchingNamespace && (
+                <svg className="papr-namespace-spinner" width="14" height="14" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" opacity="0.25"/>
+                  <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                </svg>
+              )}
+            </div>
+            {activeNs && (
+              <p className="papr-namespace-hint">
+                API calls will use the <strong>{activeNs.name}</strong> namespace
+              </p>
+            )}
+          </div>
+        )}
+
+        {error && (
+          <div className="papr-login-error" style={{ marginTop: "12px" }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/>
+              <line x1="12" y1="8" x2="12" y2="12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              <line x1="12" y1="16" x2="12.01" y2="16" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+            </svg>
+            <span>{error}</span>
+          </div>
+        )}
+
         <button
           type="button"
           className="papr-login-button papr-login-button--secondary"
@@ -143,7 +247,7 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
         </svg>
         <h3 className="papr-login-title">Login to Papr</h3>
       </div>
-      
+
       <p className="papr-login-description">
         Connect your Papr account to automatically get an API key for memory and cloud features.
       </p>

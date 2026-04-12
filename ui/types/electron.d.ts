@@ -134,7 +134,19 @@ export interface ElectronAPI {
       error?: string;
     }>;
     onLoginSuccess: (callback: (data: { apiKey: string; email: string }) => void) => void;
-  };
+    onLogoutSuccess: (callback: () => void) => void;
+    listNamespaces: () => Promise<{
+      success: boolean;
+      namespaces?: Array<{ id: string; name: string; environmentType?: string }>;
+      activeNamespaceId?: string;
+      error?: string;
+    }>;
+    switchNamespace: (namespaceId: string, namespaceName: string) => Promise<{
+      success: boolean;
+      apiKey?: string;
+      error?: string;
+    }>;
+    onNamespaceChanged: (callback: (data: { namespaceId: string; namespaceName: string }) => void) => void;  };
 
   // Python Dependencies API - Check and auto-install BeautifulSoup for browser_parse_html
   pythonDeps: {
@@ -212,6 +224,9 @@ export interface ElectronAPI {
       enabled: boolean,
     ) => Promise<{ success: boolean; enabled: boolean }>;
   };
+
+  // App metadata
+  getAppVersion: () => Promise<string>;
 
   // Auto-updater API
   updater: {
