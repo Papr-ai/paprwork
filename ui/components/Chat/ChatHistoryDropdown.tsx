@@ -8,6 +8,7 @@ import { useChatStore } from "../../stores/chatStore";
 import { useTabStore } from "../../stores/tabStore";
 import { useChat } from "../../hooks/useChat";
 import type { ChatMetadata } from "../../types/chat";
+import { isUserFacingChatId } from "../../utils/chatVisibility";
 import "./ChatHistoryDropdown.css";
 
 interface ChatHistoryDropdownProps {
@@ -106,9 +107,11 @@ export const ChatHistoryDropdown: React.FC<ChatHistoryDropdownProps> = ({
 
   // Filter and sort chats based on search
   const groupedChats = useMemo(() => {
-    const filtered = chats.filter((chat) =>
-      chat.title.toLowerCase().includes(searchQuery.toLowerCase()),
-    );
+    const filtered = chats
+      .filter((chat) => isUserFacingChatId(chat.id))
+      .filter((chat) =>
+        chat.title.toLowerCase().includes(searchQuery.toLowerCase()),
+      );
 
     const sorted = [...filtered].sort(
       (a, b) =>

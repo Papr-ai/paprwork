@@ -95,10 +95,8 @@ export function AppCard({
   const renderIcon = () => {
     if (artifact.icon) {
       const trimmedIcon = artifact.icon.trim();
-      
-      // Check if icon is SVG markup
-      if (trimmedIcon.startsWith('<svg') || trimmedIcon.startsWith('<')) {
-        // Image-based icon (droplet style PNG/data URI)
+
+      // Full droplet renders (512×512 PNG) — orb shell is hidden; image carries the glass sphere
       if (isImageIcon(artifact.icon)) {
         return (
           <img
@@ -109,15 +107,17 @@ export function AppCard({
           />
         );
       }
-      // SVG or emoji icon
-      return (
+
+      // Inline SVG markup
+      if (trimmedIcon.startsWith("<svg") || trimmedIcon.startsWith("<")) {
+        return (
           <span
             className="app-card__orb-icon"
             dangerouslySetInnerHTML={{ __html: artifact.icon }}
           />
         );
       }
-      
+
       // Check if it's a valid emoji (Unicode character, not plain ASCII text)
       // Emojis are typically > 1 byte when encoded
       const isEmoji = trimmedIcon.length <= 4 && /[\p{Emoji}]/u.test(trimmedIcon);
@@ -134,33 +134,25 @@ export function AppCard({
       console.warn(`App "${artifact.title}" has invalid icon: "${artifact.icon}". Expected SVG markup or emoji.`);
     }
 
-    // Default droplet-style icon for apps without custom icons or invalid icons
+    // Default four-square grid icon for apps without custom icons or invalid icons
     return (
       <svg
         className="app-card__orb-icon"
-        width="48"
-        height="48"
+        width="44"
+        height="44"
         viewBox="0 0 24 24"
         fill="none"
       >
-        <path
-          d="M12 2.5C12 2.5 5 10.5 5 15a7 7 0 0014 0c0-4.5-7-12.5-7-12.5z"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          fill="none"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        <ellipse
-          cx="12"
-          cy="15"
-          rx="3"
-          ry="2.5"
-          stroke="currentColor"
-          strokeWidth="1"
-          fill="none"
-          opacity="0.4"
-        />
+        <defs>
+          <linearGradient id="papr-blue-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#00D4FF" />
+            <stop offset="100%" stopColor="#0066FF" />
+          </linearGradient>
+        </defs>
+        <rect x="3" y="3" width="7" height="7" rx="2" stroke="url(#papr-blue-gradient)" strokeWidth="1.5" />
+        <rect x="14" y="3" width="7" height="7" rx="2" stroke="url(#papr-blue-gradient)" strokeWidth="1.5" />
+        <rect x="3" y="14" width="7" height="7" rx="2" stroke="url(#papr-blue-gradient)" strokeWidth="1.5" />
+        <rect x="14" y="14" width="7" height="7" rx="2" stroke="url(#papr-blue-gradient)" strokeWidth="1.5" />
       </svg>
     );
   };
@@ -178,7 +170,6 @@ export function AppCard({
       <div className="app-card__preview">
         <div className="app-card__orb">
           <div className="app-card__orb-inner">{renderIcon()}</div>
-          <div className="app-card__orb-highlight" />
         </div>
       </div>
 

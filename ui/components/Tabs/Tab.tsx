@@ -187,10 +187,16 @@ export function Tab({
           viewBox="0 0 24 24"
           fill="none"
         >
-          <rect x="3" y="3" width="7" height="7" rx="2" stroke="currentColor" strokeWidth="1.5" />
-          <rect x="14" y="3" width="7" height="7" rx="2" stroke="currentColor" strokeWidth="1.5" />
-          <rect x="3" y="14" width="7" height="7" rx="2" stroke="currentColor" strokeWidth="1.5" />
-          <rect x="14" y="14" width="7" height="7" rx="2" stroke="currentColor" strokeWidth="1.5" />
+          <defs>
+            <linearGradient id="papr-blue-gradient-tab" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="#00D4FF" />
+              <stop offset="100%" stopColor="#0066FF" />
+            </linearGradient>
+          </defs>
+          <rect x="3" y="3" width="7" height="7" rx="2" stroke="url(#papr-blue-gradient-tab)" strokeWidth="1.5" />
+          <rect x="14" y="3" width="7" height="7" rx="2" stroke="url(#papr-blue-gradient-tab)" strokeWidth="1.5" />
+          <rect x="3" y="14" width="7" height="7" rx="2" stroke="url(#papr-blue-gradient-tab)" strokeWidth="1.5" />
+          <rect x="14" y="14" width="7" height="7" rx="2" stroke="url(#papr-blue-gradient-tab)" strokeWidth="1.5" />
         </svg>
       ) : (
         <svg

@@ -43,6 +43,13 @@ export function useAppStatePersistence() {
         const tabMap = new Map(restoredTabs.map((t: any) => [t.id, t]));
         for (const tab of restoredTabs) {
           if (tab.parentTabId) {
+            // Prevent self-referencing (data corruption guard)
+            if (tab.parentTabId === tab.id) {
+              console.warn(`[Persistence] Detected self-referencing tab: ${tab.id}, clearing parentTabId`);
+              tab.parentTabId = null;
+              continue;
+            }
+            
             const parent = tabMap.get(tab.parentTabId);
             if (parent && !parent.childTabIds.includes(tab.id)) {
               parent.childTabIds.push(tab.id);
@@ -93,34 +100,11 @@ export function useAppStatePersistence() {
         // Also restore onboarding state to localStorage for OnboardingCard
         const step1Value = state.onboardingStep1Completed ? 'true' : 'false';
         const step2Value = state.onboardingStep2Completed ? 'true' : 'false';
-        const step3Value = state.onboardingStep3Completed ? 'true' : 'false';
         const dismissedValue = state.onboardingDismissed ? 'true' : 'false';
-        
-        console.log('[Persistence] Writing to localStorage:', {
-          step1Value,
-          step2Value,
-          step3Value,
-          dismissedValue
-        });
         
         localStorage.setItem('papr-onboarding-step1', step1Value);
         localStorage.setItem('papr-onboarding-step2', step2Value);
-        localStorage.setItem('papr-onboarding-step3', step3Value);
         localStorage.setItem('papr-onboarding-dismissed', dismissedValue);
-        
-        console.log('[Persistence] Verifying localStorage after write:', {
-          step1: localStorage.getItem('papr-onboarding-step1'),
-          step2: localStorage.getItem('papr-onboarding-step2'),
-          step3: localStorage.getItem('papr-onboarding-step3'),
-          dismissed: localStorage.getItem('papr-onboarding-dismissed')
-        });
-        
-        console.log('[Persistence] Onboarding state loaded:', {
-          step1: state.onboardingStep1Completed,
-          step2: state.onboardingStep2Completed,
-          step3: state.onboardingStep3Completed,
-          dismissed: state.onboardingDismissed
-        });
         
         // Switch to the restored active tab if it exists
         if (state.activeTabId) {
@@ -184,15 +168,7 @@ export function useAppStatePersistence() {
       // Read onboarding state from localStorage
       const onboardingStep1 = localStorage.getItem('papr-onboarding-step1') === 'true';
       const onboardingStep2 = localStorage.getItem('papr-onboarding-step2') === 'true';
-      const onboardingStep3 = localStorage.getItem('papr-onboarding-step3') === 'true';
       const onboardingDismissed = localStorage.getItem('papr-onboarding-dismissed') === 'true';
-      
-      console.log('[Persistence] Saving app state with onboarding:', {
-        step1: onboardingStep1,
-        step2: onboardingStep2,
-        step3: onboardingStep3,
-        dismissed: onboardingDismissed
-      });
       
       gateway.send('app:save_state', {
         activeTabId,
@@ -202,7 +178,6 @@ export function useAppStatePersistence() {
         historyIndex,
         onboardingStep1Completed: onboardingStep1,
         onboardingStep2Completed: onboardingStep2,
-        onboardingStep3Completed: onboardingStep3,
         onboardingDismissed,
         lastSavedAt: new Date().toISOString(),
       }).catch((error: Error) => {
@@ -221,7 +196,6 @@ export function useAppStatePersistence() {
       // Read all onboarding state and save to SQLite
       const onboardingStep1 = localStorage.getItem('papr-onboarding-step1') === 'true';
       const onboardingStep2 = localStorage.getItem('papr-onboarding-step2') === 'true';
-      const onboardingStep3 = localStorage.getItem('papr-onboarding-step3') === 'true';
       const onboardingDismissed = localStorage.getItem('papr-onboarding-dismissed') === 'true';
       
       gateway.send('app:save_state', {
@@ -232,16 +206,8 @@ export function useAppStatePersistence() {
         historyIndex: useTabStore.getState().historyIndex,
         onboardingStep1Completed: onboardingStep1,
         onboardingStep2Completed: onboardingStep2,
-        onboardingStep3Completed: onboardingStep3,
         onboardingDismissed,
         lastSavedAt: new Date().toISOString(),
-      }).then(() => {
-        console.log('[Persistence] Onboarding state saved:', {
-          step1: onboardingStep1,
-          step2: onboardingStep2,
-          step3: onboardingStep3,
-          dismissed: onboardingDismissed
-        });
       }).catch((error: Error) => {
         console.error('[Persistence] Failed to save onboarding state:', error);
       });

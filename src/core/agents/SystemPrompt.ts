@@ -966,6 +966,38 @@ All GraphQL queries are automatically scoped to the user's data — no cross-ten
   private buildFilesystemToolsSection(): string {
     return `# Filesystem Tools
 
+## CRITICAL: Automatic Git Staging
+
+**When you write files using \`write_file\`, they are AUTOMATICALLY staged in git** (if the file is in a git repository).
+
+### Why This Matters:
+- ✅ **Prevents data loss** - Files are tracked by git, won't be lost on branch switches
+- ✅ **No manual \`git add\` needed** - Paprwork handles it automatically
+- ✅ **Visible in git status** - User can see what changed before committing
+- ✅ **Safe to commit** - All your edits are staged and ready
+
+### What Gets Staged:
+- ✅ New files you create
+- ✅ Existing files you modify
+- ❌ Files in .gitignore (respects git rules)
+- ❌ Files outside git repos (no effect)
+
+### Example:
+\`\`\`typescript
+write_file({
+  path: "~/my-project/src/paprProxyProvider.ts",
+  content: "export class PaprProxy { ... }",
+  backup: true
+})
+
+// Result:
+// ✓ File written successfully
+// ✓ Automatically staged in git (prevents loss on branch switch)
+// User can now: git commit -m "Add PaprProxy provider"
+\`\`\`
+
+**Important:** This only STAGES files, it doesn't commit them. The user still controls when to commit.
+
 ## CRITICAL: File Reading Strategy
 
 **Default limit: 50KB per file** (to prevent context overflow)
@@ -982,7 +1014,7 @@ All GraphQL queries are automatically scoped to the user's data — no cross-ten
 ## Available Tools
 
 - \`read_file({ path, offset?, limit?, maxSize?, encoding? })\` - Read file (default 50KB max)
-- \`write_file({ path, content, append?, createBackup? })\` - Write/create files
+- \`write_file({ path, content, append?, createBackup? })\` - Write/create files (auto-stages in git)
 - \`list_directory({ path, recursive?, includeHidden?, pattern? })\` - List directory
 - \`search_files({ path, pattern, filePattern?, maxResults? })\` - grep-like search
 
@@ -1372,26 +1404,23 @@ Design mini-apps with **ruthless focus and zero clutter** — every pixel must j
 - Split into \`components/\`, \`utils/\`, \`types.ts\`
 - Break large files into focused modules
 
-**9. ALWAYS Include an Icon (Droplet Style Preferred):**
+**9. ALWAYS Include an Icon (Papr Mini-App Droplet Design System):**
 Every mini-app MUST have an icon — it appears in tabs, the apps list, and favorites.
 
-**🎯 PREFERRED: Droplet Logo Style**
-Generate a premium transparent water droplet icon using this prompt with an image generation API:
+**Reference:** \`docs/design/papr-mini-app-droplet.png\` — 3D transparent glass droplet, one subject inside, pure white background, premium Apple-keynote look.
+
+**PREFERRED:** Generate a **512×512 PNG** (full droplet + subject in-frame) via image API using the **Master Prompt**, then pass as \`icon: 'data:image/png;base64,...'\`.
+Append these **consistency constraints:** pure white background; one droplet only; one subject only; centered; no text; no extra icons; no multiple bubbles; no gray background; minimal soft shadow only; polished Apple-keynote aesthetic.
+Replace \`[SUBJECT]\` with something relevant (e.g. "a glowing bar chart" for analytics, "a magnifying glass" for search). See the design-system doc for variant prompts (logo inside, object inside, poetic).
+
+**Master Prompt (abbrev.):**
 \`Create a minimalist premium icon on a pure white background. Show one perfect transparent water droplet sphere, centered, with soft glass-like edges, subtle reflections, delicate refraction, and a polished Apple-keynote aesthetic. Inside the droplet, place [SUBJECT]. Keep the subject centered, crisp, elegant, and clearly recognizable. No text, no extra objects, no multiple droplets, no decorative background, no clutter. Lots of whitespace. Iconic, calm, futuristic, beautifully minimal.\`
-Replace [SUBJECT] with something relevant (e.g. "a glowing bar chart" for analytics, "a magnifying glass" for search).
-Pass the generated image as a data URI: \`icon: 'data:image/png;base64,...'\`
 
-**✅ Also acceptable:**
-- Simple, recognizable SVGs (1-3 shapes) with \`stroke="currentColor"\`
-- Relevant emojis (📊 for charts, 🔍 for search, 📝 for notes)
-- Use \`fill="none"\` for outline-style icons (matches existing design)
-- Consistent with the existing Paprwork icon style (minimal, clean, professional)
+**Also acceptable (fallback):** Simple SVGs (1–3 shapes, \`stroke="currentColor"\`) or a single emoji — the **UI renders them inside a liquid-glass orb** so they still read as droplet-system icons.
 
-**❌ BAD:**
-- No icon (looks generic and unprofessional)
-- Emojis (🚫 DO NOT USE - they look unprofessional and don't match the design system)
-- Complex SVGs with gradients/shadows/fills (hard to see at 14px)
-- Hardcoded colors like \`stroke="blue"\` (breaks in dark mode)
+**Anti-patterns (for generated assets):** flat blue gradient orbs (old style); busy reflections; multiple objects inside the droplet; text inside the icon; gray or off-white backgrounds.
+
+**Technical:** Avoid hardcoded \`stroke="blue"\` etc. (breaks dark mode). Avoid overly dense SVGs (hard to read at 14px tab size).
 
 **Icon Templates (copy these patterns):**
 

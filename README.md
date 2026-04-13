@@ -31,13 +31,32 @@
 
 ## 🚀 Quick Start
 
-### Prerequisites
+### For End Users (Recommended)
+
+**Download the packaged app - no prerequisites needed!**
+
+1. Download the latest release from [GitHub Releases](https://github.com/Papr-ai/paprwork/releases)
+   - **macOS:** Download `.pkg` (recommended) or `.dmg`
+   - **Windows:** Download `.exe` installer
+   - **Linux:** Download `.AppImage` or `.deb`
+
+2. **Install and run** - that's it! Everything is included.
+
+3. **Optional:** Sign in with Papr for automatic API key provisioning
+
+**No Node.js, npm, or technical setup required.** See [User Installation Guide](docs/USER_INSTALLATION_GUIDE.md) for details.
+
+---
+
+### For Developers (Running from Source)
+
+**Prerequisites:**
 
 - **Node.js v24+** (required for Electron 40)
 - npm v10+
 - macOS, Windows, or Linux
 
-### Installation
+**Installation:**
 
 ```bash
 # 1. Clone the repository

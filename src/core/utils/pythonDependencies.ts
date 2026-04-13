@@ -107,8 +107,26 @@ export async function autoInstallPythonDependencies(
       }
     })();
 
-    // Install with --user flag (doesn't require sudo/admin)
-    const installCmd = `${pythonCmd} -m pip install --user beautifulsoup4 lxml`;
+    // Check if we're in a virtualenv
+    const isVirtualEnv = await (async () => {
+      try {
+        const result = execSync(`${pythonCmd} -c "import sys; print(hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix))"`, {
+          encoding: "utf8",
+          stdio: ["pipe", "pipe", "pipe"],
+        }).trim();
+        return result === "True";
+      } catch {
+        return false;
+      }
+    })();
+
+    // Use --user flag only if NOT in virtualenv
+    // In virtualenv, --user causes "User site-packages are not visible" error
+    const userFlag = isVirtualEnv ? "" : "--user";
+    const installCmd = `${pythonCmd} -m pip install ${userFlag} beautifulsoup4 lxml`.replace(/\s+/g, ' ').trim();
+
+    console.log(`[PythonDeps] Installing with command: ${installCmd}`);
+    console.log(`[PythonDeps] Virtualenv detected: ${isVirtualEnv}`);
 
     await execAsync(installCmd, {
       timeout: 120000, // 2 minute timeout

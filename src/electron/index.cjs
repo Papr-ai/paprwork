@@ -5,6 +5,9 @@
  * CommonJS format - Electron's require() is more reliable than ESM
  */
 
+// Load environment variables from .env.local FIRST (before any other imports)
+require("dotenv").config({ path: require("path").join(__dirname, "../../.env.local") });
+
 const { app, BrowserWindow, Menu, shell, dialog, ipcMain, powerMonitor, nativeTheme } = require("electron");
 const { spawn, execSync } = require("child_process");
 const path = require("path");
@@ -647,7 +650,7 @@ class GatewayProcessSupervisor {
     this._startHealthCheck();
   }
 
-  stop() {
+  async stop() {
     this.isStopping = true;
     this._stopHealthCheck();
     if (this.backoffTimer) {
@@ -655,18 +658,31 @@ class GatewayProcessSupervisor {
       this.backoffTimer = null;
     }
     if (this.process && !this.process.killed) {
-      console.log("[Supervisor] Stopping Gateway process (PID: %s)...", this.process.pid);
+      const pid = this.process.pid;
+      console.log("[Supervisor] Stopping Gateway process (PID: %s)...", pid);
       try {
         // Send SIGTERM for graceful shutdown
         this.process.kill("SIGTERM");
         
-        // Wait a moment, then force kill if still alive
-        setTimeout(() => {
-          if (this.process && !this.process.killed) {
-            console.log("[Supervisor] Gateway didn't stop, force killing...");
-            this.process.kill("SIGKILL");
-          }
-        }, 2000);
+        // Wait for process to exit gracefully (up to 3 seconds)
+        await new Promise((resolve) => {
+          let attempts = 0;
+          const checkInterval = setInterval(() => {
+            attempts++;
+            if (!this.process || this.process.killed) {
+              clearInterval(checkInterval);
+              console.log("[Supervisor] Gateway stopped gracefully");
+              resolve();
+            } else if (attempts >= 30) { // 30 * 100ms = 3 seconds
+              clearInterval(checkInterval);
+              console.log("[Supervisor] Gateway didn't stop gracefully, force killing...");
+              if (this.process && !this.process.killed) {
+                this.process.kill("SIGKILL");
+              }
+              resolve();
+            }
+          }, 100);
+        });
       } catch (error) {
         console.warn("[Supervisor] Error stopping Gateway:", error.message);
       }
@@ -1359,16 +1375,24 @@ if (!gotTheLock) {
 }
 
 app.whenReady().then(async () => {
-  console.log("[Electron] App ready");
+  const appStartTime = Date.now();
+  console.log("[Electron] ===========================================");
+  console.log("[Electron] App starting fresh - PID:", process.pid);
+  console.log("[Electron] Start time:", new Date(appStartTime).toISOString());
+  console.log("[Electron] ===========================================");
 
   // Register custom URL protocol for papr:// deep links
   if (process.defaultApp) {
     if (process.argv.length >= 2) {
-      app.setAsDefaultProtocolClient('papr', process.execPath, [path.resolve(process.argv[1])]);
+      const registered = app.setAsDefaultProtocolClient('papr', process.execPath, [path.resolve(process.argv[1])]);
+      console.log('[Electron] Protocol handler registered (dev mode):', registered);
     }
   } else {
-    app.setAsDefaultProtocolClient('papr');
+    const registered = app.setAsDefaultProtocolClient('papr');
+    console.log('[Electron] Protocol handler registered (production):', registered);
   }
+  
+  console.log('[Electron] isDefaultProtocolClient for papr://:', app.isDefaultProtocolClient('papr'));
 
   // Load ESM modules first
   await loadESMModules();
@@ -1386,6 +1410,9 @@ app.whenReady().then(async () => {
   if (initializeTelemetryIPC) {
     initializeTelemetryIPC(settingsStorage);
   }
+
+  ipcMain.handle("app:get-version", () => app.getVersion());
+
   if (TelemetryClientClass && isTelemetrySendingEnabledFn) {
     telemetryClientInstance = new TelemetryClientClass({
       getEffectiveEnabled: () =>
@@ -1472,9 +1499,13 @@ app.whenReady().then(async () => {
   // This handles the case when the app is already running
   app.on('open-url', async (event, url) => {
     event.preventDefault();
-    console.log('[Electron] Received deep link:', url);
+    console.log('[Electron] ========================================');
+    console.log('[Electron] Received deep link via open-url event:', url);
+    console.log('[Electron] ========================================');
     if (handlePaprAuthCallback) {
       await handlePaprAuthCallback(url, customKeysStorage, settingsStorage);
+    } else {
+      console.error('[Electron] handlePaprAuthCallback not available!');
     }
   });
 
@@ -1584,17 +1615,26 @@ let isQuitting = false;
 
 app.on("before-quit", async (event) => {
   if (isQuitting) {
-    console.log("[Electron] Already quitting, skipping duplicate cleanup");
-    return;
+    console.log("[Electron] Already quitting, allowing quit to proceed");
+    // Close all windows to ensure app actually quits
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.destroy();
+    }
+    return; // Don't prevent - let it quit
   }
   
+  // First time through - prevent quit and do cleanup
+  event.preventDefault();
   isQuitting = true;
   console.log("[Electron] App is quitting - starting cleanup...");
   
-  // Prevent quit until cleanup is done
-  event.preventDefault();
-  
   try {
+    // Tell renderer to stop trying to reconnect
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      console.log("[Electron] Notifying renderer of shutdown...");
+      mainWindow.webContents.send('app:shutting-down');
+    }
+    
     if (telemetryClientInstance) {
       telemetryClientInstance.trackFireAndForget("paprwork_app_quit");
     }
@@ -1617,24 +1657,30 @@ app.on("before-quit", async (event) => {
       await cleanupOllama();
     }
     
-    // Stop Gateway supervisor
+    // Stop Gateway supervisor (AWAIT to ensure it completes)
     if (supervisor) {
       console.log("[Electron] Stopping Gateway supervisor...");
-      supervisor.stop();
+      await supervisor.stop();
     }
     
-    console.log("[Electron] Cleanup complete, quitting now");
+    console.log("[Electron] Cleanup complete, destroying windows and quitting");
     
-    // Give a brief moment for cleanup to complete
-    setTimeout(() => {
-      app.quit();
-    }, 100);
+    // Destroy all windows before quitting (important on macOS)
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.destroy();
+      mainWindow = null;
+    }
+    
+    // Now call app.quit() to trigger quit again (this time isQuitting=true so it proceeds)
+    app.quit();
   } catch (error) {
     console.error("[Electron] Error during cleanup:", error);
-    // Quit anyway after error
-    setTimeout(() => {
-      app.quit();
-    }, 100);
+    // Destroy window and quit anyway after error
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.destroy();
+      mainWindow = null;
+    }
+    app.quit();
   }
 });
 

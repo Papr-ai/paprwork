@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useSubAgents, type SubAgentProfile } from "../../hooks/useSubAgents";
 import { gateway } from "../../src/lib/gateway";
 import { useTabStore } from "../../stores/tabStore";
+import { isUserFacingChatId } from "../../utils/chatVisibility";
 import { CHAT_MODELS } from "../../constants/models";
 import { CostTrends } from "./CostTrends";
 import "./AgentsView.css";
@@ -80,6 +81,7 @@ export function AgentsView() {
           }>) ?? [];
         setRecentChats(
           [...chats]
+            .filter((c) => isUserFacingChatId(c.id))
             .sort(
               (a, b) =>
                 new Date(b.updatedAt).getTime() -

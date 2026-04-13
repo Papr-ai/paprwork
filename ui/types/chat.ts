@@ -18,7 +18,6 @@ export interface ChatMessage extends CoreMessage {
   id: string;
   isStreaming?: boolean;
   streamingContent?: string;
-  elapsedSeconds?: number; // Server-provided elapsed work time
 
   // V1-style sequence for interleaving text and tool calls
   sequence?: Array<{

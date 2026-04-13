@@ -238,7 +238,6 @@ export function Sidebar() {
 
       <div className="sidebar__footer">
         <OnboardingCard
-          onOpenSettings={handleOpenSettings}
           onOpenGettingStarted={handleOpenGettingStarted}
           onSendMessage={handleOnboardingSendMessage}
         />

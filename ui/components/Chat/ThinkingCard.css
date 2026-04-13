@@ -21,6 +21,7 @@
   color: var(--text-secondary);
   transition: transform 0.2s ease;
   display: inline-block;
+  flex-shrink: 0;
 }
 
 .thinking-chevron-collapsed {
@@ -30,6 +31,19 @@
 .thinking-label-text {
   font-weight: 600;
   color: var(--text-color);
+  flex-shrink: 0;
+}
+
+.thinking-preview {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 400;
+  margin-left: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
 }
 
 .thinking-card-content {

@@ -165,6 +165,21 @@ export async function setupAgentHandlers(
         // Create internal config with API key and auth type (for OAuth vs API key routing)
         const configInternal = { ...config, apiKey, authType, usePaprProxy };
 
+        // Log which authentication method is being used
+        if (usePaprProxy) {
+          console.log(
+            `[Agent WS] 🔑 Using PAPR PROXY for ${config.provider}/${config.model} (no direct API key found)`
+          );
+        } else if (authType === "oauth") {
+          console.log(
+            `[Agent WS] 🔑 Using OAUTH for ${config.provider}/${config.model}`
+          );
+        } else {
+          console.log(
+            `[Agent WS] 🔑 Using DIRECT API KEY for ${config.provider}/${config.model}`
+          );
+        }
+
         // Track time until first chunk
         const t3 = performance.now();
         timings.beforeStream = performance.now() - perfStart;

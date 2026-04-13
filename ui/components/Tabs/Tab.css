@@ -114,7 +114,7 @@
   color: var(--text-primary);
 }
 
-/* Mini Liquid Glass Orb for App and Document Tabs */
+/* Mini glass sphere with PNG droplet background */
 .tab__glass-orb {
   display: flex;
   align-items: center;
@@ -122,21 +122,39 @@
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  /* Transparent glass droplet for apps */
-  background: radial-gradient(
-    circle at 35% 30%,
-    rgba(255, 255, 255, 0.85),
-    rgba(255, 255, 255, 0.50) 40%,
-    rgba(240, 248, 255, 0.30) 70%,
-    rgba(220, 235, 250, 0.15)
-  );
-  border: 0.5px solid rgba(255, 255, 255, 0.50);
-  box-shadow:
-    0 1px 4px rgba(0, 0, 0, 0.08),
-    inset 0 1px 1px rgba(255, 255, 255, 0.70);
-  flex-shrink: 0;
   position: relative;
-  overflow: hidden;
+  isolation: isolate;
+  /* Light mode: light droplet PNG */
+  background-image: url('/images/light-drop1.png');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  flex-shrink: 0;
+}
+
+/* Contact shadow beneath mini orb */
+.tab__glass-orb::after {
+  content: "";
+  position: absolute;
+  bottom: -2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 70%;
+  height: 3px;
+  border-radius: 50%;
+  background: radial-gradient(
+    ellipse,
+    rgba(100, 180, 255, 0.15) 0%,
+    rgba(100, 180, 255, 0.08) 40%,
+    transparent 70%
+  );
+  filter: blur(2px);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.tab__glass-orb::before {
+  display: none;
 }
 
 /* Purple gradient for document tabs */
@@ -153,16 +171,8 @@
     inset 0 1px 1px rgba(255, 255, 255, 0.35);
 }
 
-.tab__glass-orb::after {
-  content: '';
-  position: absolute;
-  top: 1px;
-  left: 15%;
-  width: 70%;
-  height: 40%;
-  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.45), transparent);
-  border-radius: 50%;
-  pointer-events: none;
+.tab__glass-orb--document::before {
+  display: none;
 }
 
 .tab__glass-orb .tab__orb-icon {
@@ -171,7 +181,6 @@
   justify-content: center;
   width: 10px;
   height: 10px;
-  color: rgba(60, 70, 90, 0.80);
   position: relative;
   z-index: 1;
 }
@@ -189,17 +198,28 @@
 
 @media (prefers-color-scheme: dark) {
   .tab__glass-orb {
+    /* Dark mode: dark droplet PNG */
+    background-image: url('/images/dark-drop.png');
+  }
+
+  /* Darker contact shadow in dark mode */
+  .tab__glass-orb::after {
     background: radial-gradient(
-      circle at 35% 30%,
-      rgba(255, 255, 255, 0.10),
-      rgba(255, 255, 255, 0.05) 40%,
-      rgba(200, 220, 240, 0.03) 70%,
-      rgba(180, 200, 220, 0.01)
+      ellipse,
+      rgba(0, 0, 0, 0.3) 0%,
+      rgba(0, 0, 0, 0.15) 40%,
+      transparent 70%
     );
-    border-color: rgba(255, 255, 255, 0.10);
-    box-shadow:
-      0 1px 3px rgba(0, 0, 0, 0.25),
-      inset 0 1px 1px rgba(255, 255, 255, 0.08);
+  }
+
+  /* White icons in dark mode */
+  .tab__glass-orb .tab__orb-icon svg {
+    color: white;
+  }
+  
+  /* Override gradient with white stroke in dark mode */
+  .tab__glass-orb .tab__orb-icon svg rect {
+    stroke: white !important;
   }
 
   .tab__glass-orb--document {
@@ -377,10 +397,12 @@
 
 .tab__glass-orb:has(.tab__orb-icon--image) {
   background: transparent;
+  background-color: transparent;
   border-color: transparent;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 }
 
+.tab__glass-orb:has(.tab__orb-icon--image)::before,
 .tab__glass-orb:has(.tab__orb-icon--image)::after {
   display: none;
 }

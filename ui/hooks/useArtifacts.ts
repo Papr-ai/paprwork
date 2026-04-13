@@ -181,6 +181,18 @@ export function useArtifacts() {
     loadArtifacts();
   }, [loadArtifacts]);
 
+  // Agent/bash can change apps on disk; gateway prunes stale entries and broadcasts
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { type?: string } | undefined;
+      if (detail?.type === "app:list-updated") {
+        void loadArtifacts();
+      }
+    };
+    window.addEventListener("gateway-broadcast", handler);
+    return () => window.removeEventListener("gateway-broadcast", handler);
+  }, [loadArtifacts]);
+
   return {
     artifacts,
     filteredArtifacts: getFilteredArtifacts(),

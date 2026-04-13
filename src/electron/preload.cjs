@@ -76,34 +76,90 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
 
   // Papr Login API - Authenticate with Papr platform for automatic API key provisioning
-  papr: {
-    checkLoginStatus: () => ipcRenderer.invoke("papr:check-login-status"),
-    startLogin: () => ipcRenderer.invoke("papr:start-login"),
-    logout: () => ipcRenderer.invoke("papr:logout"),
-    getProfile: () => ipcRenderer.invoke("papr:get-profile"),
-    // Listen for successful login (via deep link callback)
-    onLoginSuccess: (callback) => {
-      ipcRenderer.on("papr:login-success", (_event, data) => {
-        callback(data);
-        // Also dispatch a DOM event for easier listening
-        window.dispatchEvent(new CustomEvent('papr-auth-success', { detail: data }));
-      });
-    },
-    // Listen for successful logout
-    onLogoutSuccess: (callback) => {
-      ipcRenderer.on("papr:logout-success", () => {
-        callback();
-        window.dispatchEvent(new CustomEvent('papr-logout-success'));
-      });
-    },
-    listNamespaces: () => ipcRenderer.invoke("papr:list-namespaces"),
-    switchNamespace: (namespaceId, namespaceName) => ipcRenderer.invoke("papr:switch-namespace", namespaceId, namespaceName),
-    onNamespaceChanged: (callback) => {
-      ipcRenderer.on("papr:namespace-changed", (_event, data) => {
-        callback(data);
-        window.dispatchEvent(new CustomEvent('papr-namespace-changed', { detail: data }));
-      });
-    },  },
+  papr: (() => {
+    const loginSuccessListenerMap = new WeakMap();
+    const logoutSuccessListenerMap = new WeakMap();
+    const namespaceChangedListenerMap = new WeakMap();
+    const organizationChangedListenerMap = new WeakMap();
+
+    return {
+      checkLoginStatus: () => ipcRenderer.invoke("papr:check-login-status"),
+      startLogin: () => ipcRenderer.invoke("papr:start-login"),
+      logout: () => ipcRenderer.invoke("papr:logout"),
+      getProfile: () => ipcRenderer.invoke("papr:get-profile"),
+      
+      // Listen for successful login (via deep link callback)
+      onLoginSuccess: (callback) => {
+        const wrapper = (_event, data) => {
+          callback(data);
+          // Also dispatch a DOM event for easier listening
+          window.dispatchEvent(new CustomEvent('papr-auth-success', { detail: data }));
+        };
+        loginSuccessListenerMap.set(callback, wrapper);
+        ipcRenderer.on("papr:login-success", wrapper);
+      },
+      removeLoginSuccessListener: (callback) => {
+        const wrapper = loginSuccessListenerMap.get(callback);
+        if (wrapper) {
+          ipcRenderer.removeListener("papr:login-success", wrapper);
+          loginSuccessListenerMap.delete(callback);
+        }
+      },
+      
+      // Listen for successful logout
+      onLogoutSuccess: (callback) => {
+        const wrapper = () => {
+          callback();
+          window.dispatchEvent(new CustomEvent('papr-logout-success'));
+        };
+        logoutSuccessListenerMap.set(callback, wrapper);
+        ipcRenderer.on("papr:logout-success", wrapper);
+      },
+      removeLogoutSuccessListener: (callback) => {
+        const wrapper = logoutSuccessListenerMap.get(callback);
+        if (wrapper) {
+          ipcRenderer.removeListener("papr:logout-success", wrapper);
+          logoutSuccessListenerMap.delete(callback);
+        }
+      },
+      
+      listNamespaces: () => ipcRenderer.invoke("papr:list-namespaces"),
+      switchNamespace: (namespaceId, namespaceName) => ipcRenderer.invoke("papr:switch-namespace", namespaceId, namespaceName),
+      onNamespaceChanged: (callback) => {
+        const wrapper = (_event, data) => {
+          callback(data);
+          window.dispatchEvent(new CustomEvent('papr-namespace-changed', { detail: data }));
+        };
+        namespaceChangedListenerMap.set(callback, wrapper);
+        ipcRenderer.on("papr:namespace-changed", wrapper);
+      },
+      removeNamespaceChangedListener: (callback) => {
+        const wrapper = namespaceChangedListenerMap.get(callback);
+        if (wrapper) {
+          ipcRenderer.removeListener("papr:namespace-changed", wrapper);
+          namespaceChangedListenerMap.delete(callback);
+        }
+      },
+      
+      listOrganizations: () => ipcRenderer.invoke("papr:list-organizations"),
+      switchOrganization: (organizationId, organizationName) => ipcRenderer.invoke("papr:switch-organization", organizationId, organizationName),
+      onOrganizationChanged: (callback) => {
+        const wrapper = (_event, data) => {
+          callback(data);
+          window.dispatchEvent(new CustomEvent('papr-organization-changed', { detail: data }));
+        };
+        organizationChangedListenerMap.set(callback, wrapper);
+        ipcRenderer.on("papr:organization-changed", wrapper);
+      },
+      removeOrganizationChangedListener: (callback) => {
+        const wrapper = organizationChangedListenerMap.get(callback);
+        if (wrapper) {
+          ipcRenderer.removeListener("papr:organization-changed", wrapper);
+          organizationChangedListenerMap.delete(callback);
+        }
+      },
+    };
+  })(),
 
   // Python Dependencies API - Check and auto-install BeautifulSoup for browser_parse_html
   pythonDeps: {
@@ -112,20 +168,33 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
 
   // Ollama API - Auto-install and manage local AI models
-  ollama: {
-    checkStatus: () => ipcRenderer.invoke("ollama:check-status"),
-    ensureModel: (modelName) => ipcRenderer.invoke("ollama:ensure-model", modelName),
-    listModels: () => ipcRenderer.invoke("ollama:list-models"),
-    hasModel: (modelName) => ipcRenderer.invoke("ollama:has-model", modelName),
-    getHostMemory: () => ipcRenderer.invoke("ollama:host-memory"),
-    start: () => ipcRenderer.invoke("ollama:start"),
-    onDownloadProgress: (callback) => {
-      ipcRenderer.on("ollama:download-progress", (_event, data) => callback(data));
-    },
-    removeDownloadProgressListener: (callback) => {
-      ipcRenderer.removeListener("ollama:download-progress", callback);
-    },
-  },
+  ollama: (() => {
+    // Track wrapper functions for proper cleanup
+    const progressListenerMap = new WeakMap();
+
+    return {
+      checkStatus: () => ipcRenderer.invoke("ollama:check-status"),
+      ensureModel: (modelName) => ipcRenderer.invoke("ollama:ensure-model", modelName),
+      listModels: () => ipcRenderer.invoke("ollama:list-models"),
+      hasModel: (modelName) => ipcRenderer.invoke("ollama:has-model", modelName),
+      getHostMemory: () => ipcRenderer.invoke("ollama:host-memory"),
+      start: () => ipcRenderer.invoke("ollama:start"),
+      onDownloadProgress: (callback) => {
+        // Create wrapper and store mapping
+        const wrapper = (_event, data) => callback(data);
+        progressListenerMap.set(callback, wrapper);
+        ipcRenderer.on("ollama:download-progress", wrapper);
+      },
+      removeDownloadProgressListener: (callback) => {
+        // Remove using the stored wrapper
+        const wrapper = progressListenerMap.get(callback);
+        if (wrapper) {
+          ipcRenderer.removeListener("ollama:download-progress", wrapper);
+          progressListenerMap.delete(callback);
+        }
+      },
+    };
+  })(),
 
   // Gateway status notifications (supervisor → renderer)
   gateway: {

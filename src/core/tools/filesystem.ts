@@ -15,6 +15,7 @@ import path from "path";
 import { z } from "zod";
 import { createTool } from "@mastra/core/tools";
 import type { ToolResult } from "../types/tools.js";
+import { autoStageFile } from "../utils/gitAutoStage.js";
 
 /** Expand a leading `~` to the user's home directory. */
 function expandPath(filePath: string): string {
@@ -184,6 +185,8 @@ export interface WriteFileOutput {
   size: number;
   backed_up: boolean;
   backup_path?: string;
+  git_staged?: boolean;
+  git_status?: string;
 }
 
 async function writeFile(
@@ -221,6 +224,9 @@ async function writeFile(
     // Get size
     const stats = await fs.stat(filePath);
 
+    // Auto-stage file in git if in a repo
+    const gitResult = await autoStageFile(filePath);
+
     return {
       success: true,
       data: {
@@ -228,6 +234,8 @@ async function writeFile(
         size: stats.size,
         backed_up,
         backup_path,
+        git_staged: gitResult.staged,
+        git_status: gitResult.staged ? "staged" : "untracked",
       },
     };
   } catch (error) {

@@ -8,7 +8,7 @@
  * - Seamless user experience
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 interface OllamaStatus {
   isRunning: boolean;
@@ -36,6 +36,9 @@ export function useOllama() {
   const [installing, setInstalling] = useState<string | null>(null);
   const [progress, setProgress] = useState<ModelInstallProgress | null>(null);
 
+  // Store checkStatus ref to avoid recreating handleProgress
+  const checkStatusRef = useRef<() => Promise<void>>();
+
   // Check Ollama status on mount
   const checkStatus = useCallback(async () => {
     if (!window.electronAPI?.ollama) return;
@@ -55,6 +58,29 @@ export function useOllama() {
     }
   }, []);
 
+  // Keep ref updated
+  checkStatusRef.current = checkStatus;
+
+  // Create stable handleProgress callback using useRef
+  const handleProgressRef = useRef<(data: ModelInstallProgress) => void>();
+  
+  if (!handleProgressRef.current) {
+    handleProgressRef.current = (data: ModelInstallProgress) => {
+      setProgress(data);
+      
+      if (data.status === 'complete') {
+        // Model installed successfully
+        setInstalling(null);
+        setProgress(null);
+        // Refresh model list
+        checkStatusRef.current?.();
+      } else if (data.status === 'error') {
+        console.error('[useOllama] Model install error:', data.error);
+        setInstalling(null);
+      }
+    };
+  }
+
   useEffect(() => {
     checkStatus();
 
@@ -69,30 +95,16 @@ export function useOllama() {
       }
     })();
 
-    // Listen for download progress
-    const handleProgress = (data: ModelInstallProgress) => {
-      setProgress(data);
-      
-      if (data.status === 'complete') {
-        // Model installed successfully
-        setInstalling(null);
-        setProgress(null);
-        // Refresh model list
-        checkStatus();
-      } else if (data.status === 'error') {
-        console.error('[useOllama] Model install error:', data.error);
-        setInstalling(null);
-      }
-    };
-
-    if (window.electronAPI?.ollama) {
-      window.electronAPI.ollama.onDownloadProgress(handleProgress);
+    // Listen for download progress with stable callback
+    if (window.electronAPI?.ollama && handleProgressRef.current) {
+      window.electronAPI.ollama.onDownloadProgress(handleProgressRef.current);
     }
 
     return () => {
       cancelled = true;
-      if (window.electronAPI?.ollama) {
-        window.electronAPI.ollama.removeDownloadProgressListener(handleProgress);
+      // Remove the exact same callback reference
+      if (window.electronAPI?.ollama && handleProgressRef.current) {
+        window.electronAPI.ollama.removeDownloadProgressListener(handleProgressRef.current);
       }
     };
   }, [checkStatus]);

@@ -3,19 +3,18 @@
  * Reference: Paprwork v1 settings modal
  */
 
-import React, { useState, useEffect, useMemo, useRef } from "react";
-import { useCustomKeys } from "../../hooks/useCustomKeys";
+import React, { useState, useEffect, useRef } from "react";
 import { useProfileStore } from "../../stores/profileStore";
 import { useCodeIndexing } from "../../hooks/useCodeIndexing";
 import { useAppUpdater } from "../../hooks/useAppUpdater";
 import { gateway } from "../../src/lib/gateway";
-import type { CustomKeyInput, SettingsTab } from "../../types/settings";
-import { OAuthSection } from "./OAuthSection";
-import { PaprLoginSection } from "./PaprLoginSection";
+import type { SettingsTab } from "../../types/settings";
+import { AIModelsTab } from "./AIModelsTab";
+import { IntegrationKeysTab } from "./IntegrationKeysTab";
 import "./SettingsView.css";
 
 export function SettingsView() {
-  const [activeTab, setActiveTab] = useState<SettingsTab>("keys");
+  const [activeTab, setActiveTab] = useState<SettingsTab>("models");
 
   return (
     <div className="settings-view">
@@ -25,6 +24,23 @@ export function SettingsView() {
 
       {/* Tabs */}
       <div className="settings-view__tabs">
+        <button
+          className={`settings-tab ${activeTab === "models" ? "settings-tab--active" : ""}`}
+          onClick={() => setActiveTab("models")}
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <circle cx="12" cy="12" r="3" />
+            <path d="M12 1v6m0 6v6M5.64 5.64l4.24 4.24m4.24 4.24l4.24 4.24M1 12h6m6 0h6M5.64 18.36l4.24-4.24m4.24-4.24l4.24-4.24" />
+          </svg>
+          AI Models
+        </button>
         <button
           className={`settings-tab ${activeTab === "keys" ? "settings-tab--active" : ""}`}
           onClick={() => setActiveTab("keys")}
@@ -39,7 +55,7 @@ export function SettingsView() {
           >
             <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
           </svg>
-          API Keys
+          Integration Keys
         </button>
         <button
           className={`settings-tab ${activeTab === "profile" ? "settings-tab--active" : ""}`}
@@ -133,628 +149,13 @@ export function SettingsView() {
 
       {/* Content */}
       <div className="settings-view__content">
-        {activeTab === "keys" && <APIKeysTab />}
+        {activeTab === "models" && <AIModelsTab />}
+        {activeTab === "keys" && <IntegrationKeysTab />}
         {activeTab === "profile" && <ProfileTab />}
         {activeTab === "permissions" && <PermissionsTab />}
         {activeTab === "privacy" && <PrivacyTab />}
         {activeTab === "memory" && <MemoryTab />}
         {activeTab === "about" && <AboutTab />}
-      </div>
-    </div>
-  );
-}
-
-// Default keys that should always be shown
-const DEFAULT_KEYS = [
-  {
-    name: "PAPR_API_KEY",
-    description: "Papr Cloud API Key",
-    hint: "For Papr cloud features and integrations",
-  },
-  {
-    name: "ANTHROPIC_API_KEY",
-    description: "Anthropic Claude API Key",
-    hint: "For Claude models - console.anthropic.com",
-  },
-  {
-    name: "OPENAI_API_KEY",
-    description: "OpenAI API Key",
-    hint: "For GPT models - platform.openai.com/api-keys",
-  },
-  {
-    name: "GOOGLE_API_KEY",
-    description: "Google AI API Key",
-    hint: "For Gemini models - makersuite.google.com/app/apikey",
-  },
-];
-
-interface KeyDisplayItem {
-  id: string;
-  name: string;
-  description?: string;
-  hint: string;
-  hasValue: boolean;
-  isDefault: boolean;
-  addedAt?: string;
-  permission: "always" | "ask";
-  source?: "manual" | "oauth";
-  managedBy?: "oauth";
-  oauthProvider?: "openai" | "anthropic";
-}
-
-function APIKeysTab() {
-  const {
-    keys: customKeys,
-    loading,
-    error,
-    addKey,
-    updateKey,
-    deleteKey,
-    getKeyValue,
-    loadKeys,
-  } = useCustomKeys();
-
-  const [searchQuery, setSearchQuery] = useState("");
-  const [editingKeyId, setEditingKeyId] = useState<string | null>(null);
-  const [editValue, setEditValue] = useState("");
-  const [editPermission, setEditPermission] = useState<"always" | "ask">("ask");
-  const [showEditValue, setShowEditValue] = useState(false);
-  const [loadingEditValue, setLoadingEditValue] = useState(false);
-  const [showAddKeyValue, setShowAddKeyValue] = useState(false);
-  const [showAddKey, setShowAddKey] = useState(false);
-  const [keyForm, setKeyForm] = useState<CustomKeyInput>({
-    name: "",
-    value: "",
-    description: "",
-    permission: "ask",
-  });
-
-  // Combine default keys with custom keys
-  const allKeys: KeyDisplayItem[] = useMemo(() => {
-    return [
-      ...DEFAULT_KEYS.map((dk) => {
-        const existing = customKeys.find((k) => k.name === dk.name);
-        return {
-          id: existing?.id || `default-${dk.name}`,
-          name: dk.name,
-          description: existing?.description || dk.description,
-          hint: dk.hint,
-          hasValue: !!existing,
-          isDefault: true,
-          addedAt: existing?.createdAt,
-          permission: (existing?.permission as "always" | "ask") || "always",
-          source: existing?.source,
-          managedBy: existing?.managedBy,
-          oauthProvider: existing?.oauthProvider,
-        };
-      }),
-      ...customKeys
-        .filter((k) => !DEFAULT_KEYS.some((dk) => dk.name === k.name))
-        .map((k) => ({
-          id: k.id,
-          name: k.name,
-          description: k.description,
-          hint: "",
-          hasValue: true,
-          isDefault: false,
-          addedAt: k.createdAt,
-          permission: k.permission as "always" | "ask",
-          source: k.source,
-          managedBy: k.managedBy,
-          oauthProvider: k.oauthProvider,
-        })),
-    ];
-  }, [customKeys]);
-
-  const filteredKeys = allKeys.filter((k) =>
-    k.name.toLowerCase().includes(searchQuery.toLowerCase()),
-  );
-
-  const handleStartEdit = async (keyItem: KeyDisplayItem) => {
-    setEditingKeyId(keyItem.id);
-    setEditPermission(keyItem.permission);
-    setShowEditValue(false);
-    setEditValue("");
-    if (keyItem.hasValue && !keyItem.id.startsWith("default-")) {
-      setLoadingEditValue(true);
-      try {
-        const value = await getKeyValue(keyItem.id);
-        setEditValue(value ?? "");
-      } catch {
-        setEditValue("");
-      } finally {
-        setLoadingEditValue(false);
-      }
-    }
-  };
-
-  const handleSaveKey = async (keyItem: KeyDisplayItem) => {
-    const isUpdate = keyItem.hasValue && !keyItem.id.startsWith("default-");
-    const valueToSave = editValue.trim();
-
-    if (!isUpdate && !valueToSave) {
-      alert("Please enter a value for the key");
-      return;
-    }
-
-    try {
-      if (isUpdate) {
-        const updates: Partial<CustomKeyInput> = {
-          name: keyItem.name,
-          description: keyItem.description,
-          permission: editPermission,
-        };
-        if (valueToSave) updates.value = valueToSave;
-        await updateKey(keyItem.id, updates);
-      } else {
-        await addKey({
-          name: keyItem.name,
-          value: valueToSave,
-          description: keyItem.description,
-          permission: editPermission,
-        });
-      }
-      setEditingKeyId(null);
-      setEditValue("");
-      setShowEditValue(false);
-      setEditPermission("ask");
-    } catch (err) {
-      console.error("Error saving key:", err);
-      alert("Failed to save key. Please try again.");
-    }
-  };
-
-  const handleDeleteKey = async (keyItem: KeyDisplayItem) => {
-    if (!keyItem.hasValue) return;
-
-    if (confirm(`Are you sure you want to delete ${keyItem.name}?`)) {
-      await deleteKey(keyItem.id);
-    }
-  };
-
-  const handleAddCustomKey = async () => {
-    if (!keyForm.name || !keyForm.value) {
-      alert("Please enter both key name and value");
-      return;
-    }
-
-    const success = await addKey(keyForm);
-    if (success) {
-      setShowAddKey(false);
-      setKeyForm({ name: "", value: "", description: "", permission: "ask" });
-      setShowAddKeyValue(false);
-    }
-  };
-
-  const formatDate = (date?: string) => {
-    if (!date) return "";
-    const d = new Date(date);
-    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  };
-
-  return (
-    <div className="settings-content settings-content--full-width">
-      {/* Papr Login Section - Automatic API Key Provisioning */}
-      <div className="settings-section">
-        <PaprLoginSection onApiKeyReceived={() => loadKeys()} />
-      </div>
-
-      {/* OAuth Section - Connect to Subscriptions */}
-      <div className="settings-section">
-        <h2 className="settings-section__title">Connect Your Accounts</h2>
-        <p className="settings-section__description">
-          Sign in with OpenAI or Claude to use your subscription
-        </p>
-        
-        <div className="oauth-grid">
-          <OAuthSection
-            provider="openai"
-            title="OpenAI"
-            subscriptionName="ChatGPT Plus/Pro"
-            apiKeyName="OPENAI_API_KEY"
-            apiKeyHint="platform.openai.com/api-keys"
-          />
-
-          <OAuthSection
-            provider="anthropic"
-            title="Claude"
-            subscriptionName="Claude Pro/Max"
-            apiKeyName="ANTHROPIC_API_KEY"
-            apiKeyHint="console.anthropic.com"
-          />
-        </div>
-      </div>
-
-      {/* API Keys Section */}
-      <div className="settings-section">
-        <div className="api-keys-header">
-          <div>
-            <h2 className="settings-section__title">API Keys</h2>
-            <p className="settings-section__description">
-              Store API keys, tokens, and config securely. Encrypted using your
-              system's secure storage.
-            </p>
-          </div>
-          <button
-            className="settings-btn settings-btn--primary"
-            onClick={() => setShowAddKey(!showAddKey)}
-          >
-            {showAddKey ? "Cancel" : "Add API Key"}
-          </button>
-        </div>
-
-        {error && <div className="custom-keys-error">{error}</div>}
-
-        {showAddKey && (
-          <div className="custom-key-form" style={{ marginBottom: "24px" }}>
-            <div className="form-group">
-              <label className="form-label">Key Name</label>
-              <input
-                type="text"
-                className="form-input"
-                placeholder="MY_CUSTOM_KEY"
-                value={keyForm.name}
-                onChange={(e) =>
-                  setKeyForm({
-                    ...keyForm,
-                    name: e.target.value
-                      .toUpperCase()
-                      .replace(/[^A-Z0-9_]/g, "_"),
-                  })
-                }
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Key Value</label>
-              <div className="api-key-input-wrapper">
-                <input
-                  type={showAddKeyValue ? "text" : "password"}
-                  className="form-input"
-                  placeholder="Enter the API key value"
-                  value={keyForm.value}
-                  onChange={(e) =>
-                    setKeyForm({ ...keyForm, value: e.target.value })
-                  }
-                />
-                <button
-                  className="api-key-visibility-btn"
-                  onClick={() => setShowAddKeyValue(!showAddKeyValue)}
-                  title={showAddKeyValue ? "Hide value" : "Show value"}
-                  type="button"
-                >
-                  {showAddKeyValue ? (
-                    <svg
-                      width="16"
-                      height="16"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                    >
-                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                      <line x1="1" y1="1" x2="23" y2="23" />
-                    </svg>
-                  ) : (
-                    <svg
-                      width="16"
-                      height="16"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                    >
-                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                      <circle cx="12" cy="12" r="3" />
-                    </svg>
-                  )}
-                </button>
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Description (Optional)</label>
-              <input
-                type="text"
-                className="form-input"
-                placeholder="What is this key for?"
-                value={keyForm.description}
-                onChange={(e) =>
-                  setKeyForm({ ...keyForm, description: e.target.value })
-                }
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Permission</label>
-              <div className="key-permission-selector">
-                <label className="key-permission-option">
-                  <input
-                    type="radio"
-                    name="add-key-permission"
-                    checked={keyForm.permission === "always"}
-                    onChange={() =>
-                      setKeyForm({ ...keyForm, permission: "always" })
-                    }
-                  />
-                  <div className="key-permission-card">
-                    <span className="key-permission-title">Always allow</span>
-                    <span className="key-permission-desc">
-                      Auto-substitutes in jobs and tools. No prompts.
-                    </span>
-                  </div>
-                </label>
-                <label className="key-permission-option">
-                  <input
-                    type="radio"
-                    name="add-key-permission"
-                    checked={keyForm.permission === "ask"}
-                    onChange={() =>
-                      setKeyForm({ ...keyForm, permission: "ask" })
-                    }
-                  />
-                  <div className="key-permission-card">
-                    <span className="key-permission-title">Ask each time</span>
-                    <span className="key-permission-desc">
-                      Prompts before each use. More secure for sensitive keys.
-                    </span>
-                  </div>
-                </label>
-              </div>
-            </div>
-
-            <div className="custom-key-form-actions">
-              <button
-                className="settings-btn settings-btn--secondary"
-                onClick={() => {
-                  setShowAddKey(false);
-                  setShowAddKeyValue(false);
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                className="settings-btn settings-btn--primary"
-                onClick={handleAddCustomKey}
-              >
-                Save Key
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Search */}
-        <div className="api-keys-search">
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <circle cx="11" cy="11" r="8" />
-            <path d="m21 21-4.35-4.35" />
-          </svg>
-          <input
-            type="text"
-            placeholder="Search..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-        </div>
-
-        {/* Keys List */}
-        {loading ? (
-          <div className="custom-keys-loading">Loading keys...</div>
-        ) : (
-          <div className="api-keys-list">
-            {filteredKeys.map((keyItem) => (
-              <div
-                key={keyItem.id}
-                className={`api-key-row ${editingKeyId === keyItem.id ? "api-key-row--editing" : ""}`}
-              >
-                {editingKeyId === keyItem.id ? (
-                  // Edit mode - vertical layout
-                  <>
-                    <div className="api-key-row-content">
-                      <div className="api-key-info">
-                        <div className="api-key-name">{keyItem.name}</div>
-                        <div className="api-key-hint">{keyItem.hint}</div>
-                      </div>
-                    </div>
-                    <div className="api-key-edit-section">
-                      <div className="api-key-input-wrapper">
-                        <input
-                          type={showEditValue ? "text" : "password"}
-                          className="form-input"
-                          placeholder={
-                            keyItem.hasValue
-                              ? "Leave blank to keep current value"
-                              : "Enter value"
-                          }
-                          value={editValue}
-                          onChange={(e) => setEditValue(e.target.value)}
-                          autoFocus
-                          disabled={loadingEditValue}
-                        />
-                        {loadingEditValue ? (
-                          <span className="api-key-loading">Loading…</span>
-                        ) : (
-                          <button
-                            className="api-key-visibility-btn"
-                            onClick={() => setShowEditValue(!showEditValue)}
-                            title={showEditValue ? "Hide value" : "Show value"}
-                            type="button"
-                          >
-                            {showEditValue ? (
-                              <svg
-                                width="16"
-                                height="16"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                              >
-                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                                <line x1="1" y1="1" x2="23" y2="23" />
-                              </svg>
-                            ) : (
-                              <svg
-                                width="16"
-                                height="16"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                              >
-                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                                <circle cx="12" cy="12" r="3" />
-                              </svg>
-                            )}
-                          </button>
-                        )}
-                      </div>
-                      <div className="form-group form-group--compact">
-                        <label className="form-label">Permission</label>
-                        <div className="key-permission-selector">
-                          <label className="key-permission-option">
-                            <input
-                              type="radio"
-                              name={`edit-permission-${keyItem.id}`}
-                              checked={editPermission === "always"}
-                              onChange={() => setEditPermission("always")}
-                            />
-                            <div className="key-permission-card">
-                              <span className="key-permission-title">
-                                Always allow
-                              </span>
-                              <span className="key-permission-desc">
-                                Auto-substitutes. No prompts.
-                              </span>
-                            </div>
-                          </label>
-                          <label className="key-permission-option">
-                            <input
-                              type="radio"
-                              name={`edit-permission-${keyItem.id}`}
-                              checked={editPermission === "ask"}
-                              onChange={() => setEditPermission("ask")}
-                            />
-                            <div className="key-permission-card">
-                              <span className="key-permission-title">
-                                Ask each time
-                              </span>
-                              <span className="key-permission-desc">
-                                Prompts before use. More secure.
-                              </span>
-                            </div>
-                          </label>
-                        </div>
-                      </div>
-                      <div className="api-key-actions">
-                        <button
-                          className="settings-btn settings-btn--secondary"
-                          onClick={() => {
-                            setEditingKeyId(null);
-                            setEditValue("");
-                            setShowEditValue(false);
-                            setEditPermission("ask");
-                          }}
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          className="settings-btn settings-btn--primary"
-                          onClick={() => handleSaveKey(keyItem)}
-                        >
-                          Save
-                        </button>
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  // View mode
-                  <>
-                    <div className="api-key-info">
-                      <div className="api-key-name">
-                        {keyItem.name}
-                        {keyItem.source === "oauth" && (
-                          <span className="oauth-badge">🔒 OAuth</span>
-                        )}
-                      </div>
-                      <div className="api-key-hint">{keyItem.hint}</div>
-                    </div>
-                    <div className="api-key-value">
-                      {keyItem.hasValue ? (
-                        <>
-                          <svg
-                            width="16"
-                            height="16"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                          >
-                            <circle cx="12" cy="12" r="1" />
-                            <circle cx="19" cy="12" r="1" />
-                            <circle cx="5" cy="12" r="1" />
-                          </svg>
-                          <span>••••••••••••</span>
-                        </>
-                      ) : (
-                        <span className="api-key-not-set">Not set</span>
-                      )}
-                    </div>
-                    <div className="api-key-added">
-                      {keyItem.addedAt
-                        ? `Added ${formatDate(keyItem.addedAt)}`
-                        : ""}
-                    </div>
-                    <div className="api-key-actions">
-                      <button
-                        className="api-key-action-btn"
-                        onClick={() => handleStartEdit(keyItem)}
-                        title="Edit"
-                      >
-                        <svg
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                        >
-                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                        </svg>
-                      </button>
-                      {!keyItem.isDefault && keyItem.hasValue && (
-                        <button
-                          className="api-key-action-btn"
-                          onClick={() => handleDeleteKey(keyItem)}
-                          title="Delete"
-                        >
-                          <svg
-                            width="16"
-                            height="16"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                          >
-                            <polyline points="3 6 5 6 21 6" />
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                          </svg>
-                        </button>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );
@@ -1895,13 +1296,12 @@ function AboutTab() {
           <p className="about-license-text">
             Paprwork V2 is open source software licensed under AGPL-3.0
           </p>
+
           <p className="about-license-text">
-            Built with Electron, TypeScript, React, and Mastra
-          </p>
-          <p className="about-license-text">
-            © 2024-2026 Amir Kabbara. All rights reserved.
+            © 2024-2026 Papr, Inc. All rights reserved.
           </p>
         </div>
+        \
       </div>
     </div>
   );

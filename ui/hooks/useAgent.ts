@@ -22,7 +22,6 @@ export function useAgent() {
   const streamingMessageIdRef = useRef<Map<string, string>>(new Map());
   const streamingContentRef = useRef<Map<string, string>>(new Map());
   const streamingReasoningRef = useRef<Map<string, string>>(new Map());
-  const streamingElapsedRef = useRef<Map<string, number>>(new Map()); // Server-provided elapsed time
   const toolCallsMapRef = useRef<Map<string, Map<string, any>>>(new Map());
   const updateBatchRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const activeStreamRequestByChatRef = useRef<Map<string, string>>(new Map());
@@ -61,20 +60,10 @@ export function useAgent() {
         typeof streamChunk.requestId === "string"
           ? streamChunk.requestId
           : undefined;
-      
-      // Extract server-provided elapsed time (if available)
-      const elapsedSeconds = typeof streamChunk.elapsedSeconds === "number" 
-        ? streamChunk.elapsedSeconds 
-        : undefined;
 
       if (!chatId) {
         console.error("[useAgent] Chunk missing chatId:", chunk);
         return;
-      }
-      
-      // Update elapsed time if provided
-      if (elapsedSeconds !== undefined) {
-        streamingElapsedRef.current.set(chatId, elapsedSeconds);
       }
 
       // Sub-agent trigger responses: only hide delegation chat messages, NOT main chat messages
@@ -149,14 +138,12 @@ export function useAgent() {
             const streamingMessageId =
               streamingMessageIdRef.current.get(chatId);
             if (chatState && streamingMessageId) {
-              const elapsedSeconds = streamingElapsedRef.current.get(chatId) || 0;
               const updatedMessages = chatState.messages.map((msg) =>
                 msg.id === streamingMessageId
                   ? {
                       ...msg,
                       streamingReasoning:
                         streamingReasoningRef.current.get(chatId) || "",
-                      elapsedSeconds, // Update elapsed time from server
                     }
                   : msg,
               );
@@ -231,7 +218,6 @@ export function useAgent() {
               streamingMessageIdRef.current.get(chatId);
             if (chatState && streamingMessageId) {
               const toolCallsArray = Array.from(chatToolCalls.values());
-              const elapsedSeconds = streamingElapsedRef.current.get(chatId) || 0;
               console.log(
                 `[useAgent] Updating UI with ${toolCallsArray.length} tool call(s) and ${sequence.length} sequence items`,
               );
@@ -242,7 +228,6 @@ export function useAgent() {
                       ...msg,
                       toolCalls: toolCallsArray,
                       sequence: [...sequence], // Update sequence in real-time
-                      elapsedSeconds, // Update elapsed time from server
                     }
                   : msg,
               );
@@ -330,7 +315,6 @@ export function useAgent() {
                 streamingMessageIdRef.current.get(chatId);
               if (chatState && streamingMessageId) {
                 const toolCallsArray = Array.from(chatToolCalls.values());
-                const elapsedSeconds = streamingElapsedRef.current.get(chatId) || 0;
                 console.log(
                   `[useAgent] Updating UI after tool result, ${toolCallsArray.length} tool call(s):`,
                   toolCallsArray.map((tc) => ({
@@ -345,7 +329,6 @@ export function useAgent() {
                         ...msg,
                         toolCalls: toolCallsArray,
                         sequence: [...sequence], // Update sequence with tool result
-                        elapsedSeconds, // Update elapsed time from server
                       }
                     : msg,
                 );

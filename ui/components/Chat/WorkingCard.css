@@ -27,9 +27,27 @@
   transform: rotate(-90deg);
 }
 
-.working-label-text {
+.working-label-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  overflow: hidden;
+}
+
+.working-label-primary {
   font-weight: 600;
   color: var(--text-color);
+  white-space: nowrap;
+}
+
+.working-label-secondary {
+  font-weight: 400;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
 }
 
 .working-timer {
@@ -45,9 +63,17 @@
   color: var(--text-secondary);
   line-height: 1.5;
   max-height: 420px;
-  overflow-y: auto;
+  overflow-y: auto; /* Enable scrolling when expanded */
   transition: max-height 0.3s ease, opacity 0.3s ease;
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* When collapsed: prevent content from affecting layout */
+.working-card-content--collapsed {
+  visibility: hidden;
+  position: absolute;
+  pointer-events: none;
+  overflow: hidden; /* Disable scrolling when collapsed */
 }

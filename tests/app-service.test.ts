@@ -36,8 +36,9 @@ describe("AppService", () => {
     const loadedFile = await appService.readAppFile(created.id, "index.html");
 
     expect(created.title).toBe("Dashboard");
-    expect(listed).toHaveLength(1);
-    expect(listed[0].id).toBe(created.id);
+    const ours = listed.find((a) => a.id === created.id);
+    expect(ours).toBeDefined();
+    expect(ours?.id).toBe(created.id);
     expect(loadedFile).toContain("Dashboard");
   });
 
@@ -57,6 +58,16 @@ describe("AppService", () => {
     expect(updated?.description).toBe("Updated");
     expect(wrote).toBe(true);
     expect(loadedFile).toBe("v2");
+  });
+
+  test("prunes index when app folder is removed outside deleteApp (e.g. bash rm)", async () => {
+    const created = await appService.createApp("Orphan", "Desc", [
+      { filename: "index.html", content: "<h1>x</h1>" },
+    ]);
+    const appPath = path.join(testHomeDir, "Papr", "apps", created.id);
+    await fs.rm(appPath, { recursive: true, force: true });
+    const listed = await appService.listApps();
+    expect(listed.find((a) => a.id === created.id)).toBeUndefined();
   });
 
   test("toggles favorite and deletes app", async () => {

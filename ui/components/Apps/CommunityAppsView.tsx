@@ -258,12 +258,25 @@ function CommunityAppCard({
         />
       );
     }
+    // Default four-square grid icon with Papr blue gradient
     return (
-      <svg width="36" height="36" viewBox="0 0 24 24" fill="none">
-        <rect x="3" y="3" width="7" height="7" rx="2" stroke="currentColor" strokeWidth="1.5" />
-        <rect x="14" y="3" width="7" height="7" rx="2" stroke="currentColor" strokeWidth="1.5" />
-        <rect x="3" y="14" width="7" height="7" rx="2" stroke="currentColor" strokeWidth="1.5" />
-        <rect x="14" y="14" width="7" height="7" rx="2" stroke="currentColor" strokeWidth="1.5" />
+      <svg
+        className="community-card__orb-icon"
+        width="36"
+        height="36"
+        viewBox="0 0 24 24"
+        fill="none"
+      >
+        <defs>
+          <linearGradient id="community-papr-blue-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#00D4FF" />
+            <stop offset="100%" stopColor="#0066FF" />
+          </linearGradient>
+        </defs>
+        <rect x="3" y="3" width="7" height="7" rx="2" stroke="url(#community-papr-blue-gradient)" strokeWidth="1.5" />
+        <rect x="14" y="3" width="7" height="7" rx="2" stroke="url(#community-papr-blue-gradient)" strokeWidth="1.5" />
+        <rect x="3" y="14" width="7" height="7" rx="2" stroke="url(#community-papr-blue-gradient)" strokeWidth="1.5" />
+        <rect x="14" y="14" width="7" height="7" rx="2" stroke="url(#community-papr-blue-gradient)" strokeWidth="1.5" />
       </svg>
     );
   };
@@ -271,10 +284,7 @@ function CommunityAppCard({
   return (
     <div className="community-card">
       <div className="community-card__orb">
-        <div className="community-card__orb-inner">
-          {renderIcon()}
-        </div>
-        <div className="community-card__orb-highlight" />
+        {renderIcon()}
       </div>
 
       <div className="community-card__content">

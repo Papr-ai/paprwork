@@ -1,39 +1,24 @@
 /**
- * WorkingCard Component - Displays tool execution progress with timer
- * Supports collapsing and shows elapsed time
+ * WorkingCard Component - Displays tool execution progress
+ * Supports collapsing and shows current activity
  */
 
-import React, { useState, useEffect, useRef } from "react";
-import { PaprLogoIcon } from "./PaprLogoIcon";
+import React, { useState } from "react";
 import "./WorkingCard.css";
 
 interface WorkingCardProps {
   children: React.ReactNode;
   isExploring?: boolean;
-  elapsedSeconds?: number; // Server-provided elapsed time
+  lastActivity?: string; // Last tool call or response text
 }
 
 export const WorkingCard: React.FC<WorkingCardProps> = ({
   children,
   isExploring = false,
-  elapsedSeconds = 0,
+  lastActivity,
 }) => {
   // Start collapsed by default
   const [isCollapsed, setIsCollapsed] = useState(true);
-  
-  // Use server-provided elapsed time directly
-  // No client-side timing needed - backend knows exactly when work started/stopped
-  const displayTime = elapsedSeconds;
-
-  // Format elapsed time as "Xs" or "Xm Ys" for minutes
-  const formatTime = (seconds: number): string => {
-    if (seconds < 60) {
-      return `${seconds}s`;
-    }
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}m ${secs}s`;
-  };
 
   return (
     <div className="working-card">
@@ -43,14 +28,19 @@ export const WorkingCard: React.FC<WorkingCardProps> = ({
         >
           ▼
         </span>
-        <span className="working-label-text">Working</span>
-        {isExploring && <PaprLogoIcon />}
-        {displayTime > 0 && (
-          <span className="working-timer">{formatTime(displayTime)}</span>
-        )}
+        <div className="working-label-container">
+          <span className="working-label-primary">
+            {isExploring ? "Working" : "Finished Working"}
+          </span>
+          {isCollapsed && lastActivity && (
+            <span className="working-label-secondary">
+              {lastActivity}
+            </span>
+          )}
+        </div>
       </div>
       <div
-        className="working-card-content"
+        className={`working-card-content ${isCollapsed ? "working-card-content--collapsed" : ""}`}
         style={{
           maxHeight: isCollapsed ? "0px" : "420px",
           opacity: isCollapsed ? "0" : "1",

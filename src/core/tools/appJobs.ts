@@ -33,24 +33,26 @@ const createAppSchema = z.object({
     .refine(
       (val) => {
         const trimmed = val.trim();
-        // Must start with < (SVG) or be a valid emoji (Unicode, not ASCII text)
-        const startsWithSvg = trimmed.startsWith('<');
+        const startsWithSvg = trimmed.startsWith("<");
         const isEmoji = trimmed.length <= 4 && /[\p{Emoji}]/u.test(trimmed);
-        return startsWithSvg || isEmoji;
+        const isDataImage = trimmed.startsWith("data:image/");
+        const isHttpImage = /^https?:\/\//i.test(trimmed);
+        return startsWithSvg || isEmoji || isDataImage || isHttpImage;
       },
       {
         message:
-          'Icon must be an SVG string (starting with "<svg") or a valid emoji. Plain text like "chart" or "shield" is not allowed. ' +
-          'Example SVG: \'<svg viewBox="0 0 24 24" width="14" height="14"><path d="..." stroke="currentColor" stroke-width="2" fill="none"/></svg>\'',
+          'Icon must be: (1) PNG/JPEG as data:image/...;base64,... or https URL, (2) inline SVG, or (3) a valid emoji. Plain text like "chart" is not allowed. ' +
+          'See docs/design/papr-mini-app-droplet.png for the Papr droplet brand standard.',
       },
     )
     .describe(
-      "**REQUIRED:** Icon for the app logo. Shown in tabs, apps list, and favorites. " +
-        "PREFERRED: Generate a droplet-style icon using an image API with prompt: " +
-        "'Create a minimalist premium icon on a pure white background. Show one perfect transparent water droplet sphere, centered, with soft glass-like edges, subtle reflections, delicate refraction, and a polished Apple-keynote aesthetic. Inside the droplet, place [SUBJECT]. No text, no clutter. Iconic, calm, minimal.' " +
-        "Pass as data URI: 'data:image/png;base64,...'. " +
-        "Also accepts: SVG string (1-3 shapes, stroke=currentColor) or emoji (📊, 📝, 🔍). " +
-        'Alternatively, add a <link rel="icon" href="data:image/..."> tag in your index.html — it will be auto-extracted.',
+      "**REQUIRED:** Mini-app icon (tabs, apps grid, favorites). " +
+        "**Brand standard (preferred):** One 3D liquid-glass water droplet on pure white, one subject inside, Apple-keynote aesthetic — see `docs/design/papr-mini-app-droplet.png`. " +
+        "Master prompt: `Create a minimalist premium icon on a pure white background. Show one perfect transparent water droplet sphere, centered, with soft glass-like edges, subtle reflections, delicate refraction, and a polished Apple-keynote aesthetic. Inside the droplet, place [SUBJECT]. No text, no extra objects, no multiple droplets, no clutter. Lots of whitespace.` " +
+        "Append: pure white background; one droplet only; one subject only; centered; no text; minimal soft shadow only. " +
+        "Output 512×512 PNG as `data:image/png;base64,...`. " +
+        "Fallbacks: compact SVG with stroke=currentColor (renders inside the in-app glass orb) or emoji. " +
+        "Anti-patterns: flat blue gradient orbs, busy scenes, gray backgrounds, multiple bubbles.",
     ),
   files: z.array(appFileSchema).optional(),
   html: z.string().optional(),
@@ -929,6 +931,46 @@ export const listAppsTool = createTool({
         apps: appsData,
         count: appsData.length,
       },
+    };
+  },
+});
+
+const deleteAppSchema = z.object({
+  appId: z
+    .string()
+    .min(1)
+    .describe("UUID of the mini-app to remove from the catalog and disk"),
+});
+
+type DeleteAppArgs = z.infer<typeof deleteAppSchema>;
+
+export const deleteAppTool = createTool({
+  id: "delete_app",
+  description: `Delete a mini-app by id. Removes the app from ~/Papr/data/apps.json, deletes ~/Papr/apps/{id}/, and notifies the UI.
+
+**Prefer this over bash/rm** when removing an app: deleting files only leaves stale entries in the apps list until the registry is reconciled.`,
+  inputSchema: deleteAppSchema,
+  execute: async (input) => {
+    const args = (input as { context?: DeleteAppArgs }).context ?? input;
+    const startTime = performance.now();
+    const { getAppService } =
+      await import("../../gateway/services/AppService.js");
+    const appService = getAppService();
+    await appService.initialize();
+    const deleted = await appService.deleteApp(args.appId);
+    if (!deleted) {
+      return {
+        success: false,
+        error: `App not found: ${args.appId}`,
+        duration: performance.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
+    }
+    return {
+      success: true,
+      data: { deleted: true, appId: args.appId },
+      duration: performance.now() - startTime,
+      timestamp: new Date().toISOString(),
     };
   },
 });
@@ -2426,6 +2468,7 @@ NOT needed for:
 
 export const appJobsTools = [
   createAppTool,
+  deleteAppTool,
   createJobTool,
   runJobTool,
   readJobLogsTool,

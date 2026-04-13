@@ -4,11 +4,13 @@
 
 import React from "react";
 import { useChat } from "../../hooks/useChat";
+import { isUserFacingChatId } from "../../utils/chatVisibility";
 import { ChatItem } from "./ChatItem";
 import "./ChatList.css";
 
 export function ChatList() {
   const { chats, activeChat, switchChat, deleteChat, isLoading } = useChat();
+  const userChats = chats.filter((c) => isUserFacingChatId(c.id));
 
   if (isLoading) {
     return (
@@ -19,7 +21,7 @@ export function ChatList() {
     );
   }
 
-  if (chats.length === 0) {
+  if (userChats.length === 0) {
     return (
       <div className="chat-list__empty">
         <svg
@@ -40,7 +42,7 @@ export function ChatList() {
 
   return (
     <div className="chat-list">
-      {chats.map((chat) => (
+      {userChats.map((chat) => (
         <ChatItem
           key={chat.id}
           chat={chat}

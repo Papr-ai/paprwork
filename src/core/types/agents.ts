@@ -53,6 +53,8 @@ export interface AgentConfig {
  * Used only within Gateway after fetching key via IPC
  */
 export interface AgentConfigInternal extends AgentConfig {
+  /** Route through Papr AI proxy (memory.papr.ai/v1/ai/) when user has no provider keys */
+  usePaprProxy?: boolean;
   apiKey: string; // Fetched internally via IPC, never sent over network
   /** When OAuth is used for openai/anthropic; used to route to pi-ai vs AI SDK */
   authType?: "oauth" | "apiKey";

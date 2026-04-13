@@ -25,6 +25,7 @@ import { KeyPermissionModal } from "./components/Permissions/KeyPermissionModal"
 import { UpdateBanner } from "./components/UpdateBanner/UpdateBanner";
 import { useAppStatePersistence } from "./hooks/useAppStatePersistence";
 import { useChatStore } from "./stores/chatStore";
+import { initializeAmplitudeBrowser } from "./lib/telemetry"; // Static import
 import "./styles/liquid-glass.css";
 import "./App.css";
 
@@ -150,10 +151,9 @@ export function App() {
       const dismissed = localStorage.getItem("papr-onboarding-dismissed") === "true";
       const step1 = localStorage.getItem("papr-onboarding-step1") === "true";
       const step2 = localStorage.getItem("papr-onboarding-step2") === "true";
-      const step3 = localStorage.getItem("papr-onboarding-step3") === "true";
       
       // Show getting started tab if not dismissed and no steps completed
-      const shouldShow = !dismissed && !step1 && !step2 && !step3;
+      const shouldShow = !dismissed && !step1 && !step2;
       
       if (shouldShow) {
         // Check if getting-started tab already exists
@@ -177,9 +177,13 @@ export function App() {
   // Initialize Amplitude telemetry (events only, no session replay)
   useEffect(() => {
     const initTelemetry = async () => {
+      console.log('[Telemetry] Starting initialization...');
+      
       try {
         // Get telemetry settings
+        console.log('[Telemetry] Getting settings...');
         const telemetryResult = await window.electronAPI.telemetry.getEnabled();
+        console.log('[Telemetry] Settings result:', telemetryResult);
         const telemetryEnabled = telemetryResult?.enabled ?? false;
 
         if (!telemetryEnabled) {
@@ -188,8 +192,10 @@ export function App() {
         }
 
         // Get install ID from settings
+        console.log('[Telemetry] Getting install ID...');
         const { gateway } = await import('./src/lib/gateway.js');
         const settingsResponse = await gateway.send('settings:get', {});
+        console.log('[Telemetry] Settings response:', { hasData: !!settingsResponse.data, hasTelemetry: !!settingsResponse.data?.telemetry });
         const installId = settingsResponse.data?.telemetry?.installId;
 
         if (!installId) {
@@ -197,16 +203,23 @@ export function App() {
           return;
         }
 
+        console.log('[Telemetry] Install ID:', installId.substring(0, 8) + '...');
+
         // Get app version
         const appVersion = await window.electronAPI.getAppVersion();
+        console.log('[Telemetry] App version:', appVersion);
 
-        // Initialize Amplitude (events only)
-        const { initializeAmplitudeBrowser } = await import('./lib/telemetry');
+        // Initialize Amplitude (events only) - now static import
+        console.log('[Telemetry] Calling initializeAmplitudeBrowser...');
         await initializeAmplitudeBrowser(installId, telemetryEnabled, appVersion);
 
-        console.log('[Telemetry] Amplitude initialized with event tracking');
+        console.log('[Telemetry] ✅ Amplitude initialized with event tracking');
       } catch (error) {
-        console.error('[Telemetry] Failed to initialize:', error);
+        console.error('[Telemetry] ❌ Failed to initialize:', error);
+        console.error('[Telemetry] Error details:', {
+          message: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined
+        });
       }
     };
 

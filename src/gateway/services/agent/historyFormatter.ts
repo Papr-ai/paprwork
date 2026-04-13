@@ -242,9 +242,12 @@ export function formatHistoryMessagesForModel(
 
           let truncatedResult: string;
           if (resultStr.length > HISTORY_MAX_CHARS) {
+            const omitted = resultStr.length - HISTORY_MAX_CHARS;
             truncatedResult =
               resultStr.substring(0, HISTORY_MAX_CHARS) +
-              `\n[... ${resultStr.length - HISTORY_MAX_CHARS} chars truncated from history]`;
+              `\n[... ${omitted} chars truncated. ` +
+              `Tool: get_full_tool_result({ toolCallId: "${toolCallId}", toolName: "${toolName}" }) ` +
+              `OR query: ~/.paprwork-v2/chats.db → messages.parts (JSONL)]`;
           } else {
             truncatedResult = resultStr;
           }

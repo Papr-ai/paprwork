@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import { readFileSync } from "fs";
 import { resolve } from "path";
@@ -10,7 +10,10 @@ const packageJson = JSON.parse(
 const appVersion = packageJson.version;
 
 // https://vitejs.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+  
+  return {
   plugins: [
     react(),
     {
@@ -24,17 +27,20 @@ export default defineConfig({
     },
   ],
   define: {
-    // Expose environment variables to client
-    'import.meta.env.VITE_REQUIRE_PAPR_AUTH': JSON.stringify(process.env.REQUIRE_PAPR_AUTH || 'false'),
+    'import.meta.env.VITE_REQUIRE_PAPR_AUTH': JSON.stringify(
+      env.VITE_REQUIRE_PAPR_AUTH || 'false'
+    ),
   },
-  base: "./", // Use relative paths for Electron
+  base: "./",
   resolve: {
-    // CRITICAL: Do not resolve from parent node_modules
     preserveSymlinks: true,
     dedupe: ["react", "react-dom", "zustand"],
+    alias: {
+      react: resolve(__dirname, "../node_modules/react"),
+      "react-dom": resolve(__dirname, "../node_modules/react-dom"),
+    },
   },
   optimizeDeps: {
-    // Force Vite to only bundle these specific deps from ui/node_modules
     include: ["react", "react/jsx-runtime", "react-dom", "zustand"],
   },
   server: {
@@ -44,33 +50,40 @@ export default defineConfig({
   build: {
     outDir: "../dist/ui",
     emptyOutDir: true,
-    // Optimize bundle size with esbuild (faster than terser)
     minify: "esbuild",
-    // Increase chunk size warning limit (679KB gzipped to 187KB is acceptable)
     chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
-        // Split vendor chunks for better caching and smaller main bundle
-        manualChunks: {
-          "react-vendor": ["react", "react-dom"],
-          state: ["zustand"],
-          editor: [
-            "@tiptap/react",
-            "@tiptap/starter-kit",
-            "@tiptap/extension-underline",
-            "@tiptap/extension-placeholder",
-            "@tiptap/extension-bubble-menu",
-            "@tiptap/suggestion",
-            "tiptap-markdown",
-            "tippy.js",
-          ],
-          syntax: ["react-syntax-highlighter"],
-          markdown: ["react-markdown", "remark-math", "rehype-katex"],
+        manualChunks(id) {
+          if (id.includes("node_modules/react-dom/") || id.includes("node_modules/react/")) {
+            return "react-vendor";
+          }
+          if (id.includes("node_modules/zustand/")) {
+            return "state";
+          }
+          if (
+            id.includes("node_modules/@tiptap/") ||
+            id.includes("node_modules/tiptap-markdown") ||
+            id.includes("node_modules/tippy.js") ||
+            id.includes("node_modules/prosemirror") ||
+            id.includes("node_modules/@prosemirror") ||
+            id.includes("node_modules/@remirror")
+          ) {
+            return "editor";
+          }
+          if (id.includes("node_modules/react-syntax-highlighter/")) {
+            return "syntax";
+          }
+          if (
+            id.includes("node_modules/react-markdown/") ||
+            id.includes("node_modules/remark-math/") ||
+            id.includes("node_modules/rehype-katex/")
+          ) {
+            return "markdown";
+          }
         },
       },
-      // Mark everything except our UI deps as external
       external: (id) => {
-        // Allow our UI dependencies
         if (
           id === "react" ||
           id === "react-dom" ||
@@ -80,7 +93,6 @@ export default defineConfig({
         ) {
           return false;
         }
-        // Everything else is external (shouldn't be bundled)
         return (
           id.includes("@mastra") ||
           id.includes("@ai-sdk") ||
@@ -88,7 +100,6 @@ export default defineConfig({
           id.includes("better-sqlite3") ||
           id.includes("express") ||
           id.includes("fs-extra") ||
-          id.includes("uuid") ||
           id.includes("node:") ||
           id === "crypto" ||
           id === "fs" ||
@@ -97,4 +108,5 @@ export default defineConfig({
       },
     },
   },
+};
 });

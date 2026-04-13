@@ -11,6 +11,7 @@ export interface AuthStatus {
   openai: { oauth: boolean; apiKey: boolean };
   anthropic: { oauth: boolean; apiKey: boolean };
   google: { apiKey: boolean };
+  paprProxy: boolean; // PAPR_API_KEY enables all providers via proxy
 }
 
 /** Model has access if OAuth connected OR API key present (OAuth preferred) */
@@ -39,6 +40,7 @@ export function useAuthStatus() {
     openai: { oauth: false, apiKey: false },
     anthropic: { oauth: false, apiKey: false },
     google: { apiKey: false },
+    paprProxy: false,
   });
 
   const refresh = useCallback(() => {
@@ -58,6 +60,7 @@ export function useAuthStatus() {
         apiKey:
           hasKey("GOOGLE_API_KEY") || hasKey("GOOGLE_GENERATIVE_AI_API_KEY"),
       },
+      paprProxy: hasKey("PAPR_API_KEY"), // Papr proxy enables all providers
     });
   }, [
     keys,
@@ -77,6 +80,13 @@ export function useAuthStatus() {
       if (model.provider === "ollama") {
         return true;
       }
+      
+      // Papr proxy enables ALL cloud providers (OpenAI, Anthropic, Google)
+      if (status.paprProxy) {
+        return true;
+      }
+      
+      // Otherwise check provider-specific auth
       if (model.provider === "openai-codex") {
         return status.openai.oauth;
       }

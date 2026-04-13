@@ -46,6 +46,23 @@ export const ThinkingCard: React.FC<ThinkingCardProps> = ({
     [], // Empty deps - only pick once when component first renders
   );
 
+  // Extract preview of recent thinking (last 60 chars)
+  const thinkingPreview = useMemo(() => {
+    if (!content || !isCollapsed) return "";
+    
+    // Get last line or last 60 chars, whichever is shorter
+    const lines = content.trim().split('\n');
+    const lastLine = lines[lines.length - 1].trim();
+    
+    if (lastLine.length <= 60) {
+      return lastLine;
+    }
+    
+    // If last line is too long, show first 60 chars instead of last 60
+    // This reads more naturally (start of sentence vs middle/end)
+    return lastLine.slice(0, 57) + "...";
+  }, [content, isCollapsed]);
+
   // Keep collapsed when streaming finishes
   useEffect(() => {
     if (wasStreamingRef.current && !isStreaming && content) {
@@ -76,6 +93,11 @@ export const ThinkingCard: React.FC<ThinkingCardProps> = ({
         <span className="thinking-label-text">
           {isStreaming ? thinkingPhrase : thinkingPhrase.replace("...", "")}
         </span>
+        {isCollapsed && thinkingPreview && (
+          <span className="thinking-preview">
+            {thinkingPreview}
+          </span>
+        )}
       </div>
       <div
         className="thinking-card-content"

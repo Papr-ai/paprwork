@@ -225,15 +225,24 @@ export function JobStatusCard({ data }: Props) {
                 )}
               </div>
               {logLines.length > 0 && (
-                <button
-                  type="button"
+                <div
+                  role="button"
+                  tabIndex={0}
                   className="job-status-card__logs-link"
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.stopPropagation(); // Prevent header collapse toggle
                     // TODO: Open full logs
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      // TODO: Open full logs
+                    }
                   }}
                 >
                   View logs →
-                </button>
+                </div>
               )}
             </div>
           ) : null}

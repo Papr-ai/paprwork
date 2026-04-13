@@ -1,9 +1,10 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import type { Browser, Page } from "playwright";
-import { spawn } from "child_process";
 import { getApiKeysForSanitization, sanitizeToolOutput } from "./security.js";
 import { wrapUntrustedContent } from "./contentProvenance.js";
+// Use persistent Python worker for 10-20x better performance
+import { executePythonForHtmlParsing } from "./pythonWorker.js";
 
 interface BrowserSessionState {
   browser: Browser;
@@ -204,66 +205,6 @@ function sanitizeBrowserData(data: unknown): unknown {
   const sanitized = sanitizeToolOutput(data, apiKeys);
   // No truncation - prepareStep keeps last tool result full
   return sanitized;
-}
-
-/**
- * Execute Python code for HTML parsing (simple subprocess, no venv needed)
- * Used by browser_parse_html tool for BeautifulSoup-based data extraction
- */
-async function executePythonForHtmlParsing(
-  code: string,
-  context: Record<string, string>,
-  timeout: number,
-): Promise<unknown> {
-  const script = `
-import json
-from bs4 import BeautifulSoup
-import sys
-
-# Inject context variables
-${Object.entries(context)
-  .map(([k, v]) => `${k} = """${v.replace(/"""/g, '\\"""')}"""`)
-  .join("\n")}
-
-# User code
-result = None
-try:
-${code
-  .split("\n")
-  .map((line) => "    " + line)
-  .join("\n")}
-    print(json.dumps(result))
-except Exception as e:
-    print(json.dumps({"error": str(e)}), file=sys.stderr)
-    sys.exit(1)
-`;
-
-  const proc = spawn("python3", ["-c", script]);
-  let stdout = "";
-  let stderr = "";
-
-  proc.stdout.on("data", (data) => (stdout += data.toString()));
-  proc.stderr.on("data", (data) => (stderr += data.toString()));
-
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      proc.kill();
-      reject(new Error("Python execution timed out"));
-    }, timeout);
-
-    proc.on("close", (exitCode) => {
-      clearTimeout(timer);
-      if (exitCode === 0) {
-        try {
-          resolve(JSON.parse(stdout));
-        } catch {
-          resolve(stdout.trim());
-        }
-      } else {
-        reject(new Error(stderr || "Python execution failed"));
-      }
-    });
-  });
 }
 
 export const browserNavigateTool = createTool({

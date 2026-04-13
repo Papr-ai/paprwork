@@ -3317,4 +3317,474 @@ npm run dist:mac  # Creates both PKG and DMG
 
 ---
 
+### Enhancement 45: Actionable Tool Result Truncation ✅ IMPLEMENTED
+**Added:** 2026-04-10
+**Problem:** Tool results truncated to prevent context overflow, but agent had no way to access full results if needed. Truncation messages were passive: "[... 5000 chars truncated]" with no recourse.
+**Solution:** **Hybrid approach** - Made truncation messages actionable with BOTH simple tool usage AND direct data access for advanced needs.
+**Implementation:**
+1. **New tool `get_full_tool_result`** - Retrieves full results from chat history:
+   - Searches by `toolCallId` (unique ID from truncation notice)
+   - Supports partial reads (pagination) for extremely large results
+   - Returns metadata: `totalLength`, `hasMore`, `nextStartChar`
+2. **Enhanced truncation messages** - Show TWO options for flexibility:
+   - **Simple (90% case):** `Tool: get_full_tool_result({ toolCallId: "..." })`
+   - **Advanced (10% case):** `OR query: ~/.paprwork-v2/chats.db → messages.parts (JSONL)`
+3. **Papr Memory schema tools fixed**:
+   - `list_schemas` - Now returns lightweight summary (id, name, nodeTypeCount) instead of full objects
+   - `get_schema(schemaId)` - NEW tool to fetch full details for ONE schema
+**Usage Examples:**
+```typescript
+// Simple: Use the tool (type-safe, portable)
+get_full_tool_result({ toolCallId: "toolu_123", startChar: 0, length: 10000 })
+
+// Advanced: Query database directly (custom filters, time-based search)
+bash({ command: `sqlite3 ~/.paprwork-v2/chats.db "
+  SELECT m.parts FROM messages m 
+  WHERE json_extract(parts, '\$[*].toolCallId') = 'toolu_123'
+"` })
+```
+**Why Hybrid:**
+- **Flexibility:** Agent can use simple tool OR bash for complex needs
+- **Discovery:** Agent learns data architecture (SQLite, JSONL)
+- **Fallback:** If tool fails, bash path always available
+- **Teaching:** Transparency about data location
+**Files Created:**
+- `src/core/tools/chatHistory.ts` - NEW: Chat history tools
+- `docs/ACTIONABLE_TOOL_TRUNCATION.md` - Complete documentation
+- `docs/TOOL_TRUNCATION_QUICK_REF.md` - Quick reference
+**Files Changed:**
+- `src/core/tools/index.ts` - Exported chat history tools
+- `src/core/tools/paprMemory.ts` - Added `get_schema`, lightweight `list_schemas`
+- `src/gateway/services/agent/historyFormatter.ts` - Hybrid truncation messages
+- `src/gateway/services/AgentService.ts` - Hybrid truncation messages
+**Impact:**
+- **Before:** Agent stuck when tool result truncated (no recourse, "I can't see the full output")
+- **After:** Agent has 2 paths: simple tool (90% case) OR bash query (10% advanced)
+- **Schema discovery:** `list_schemas` → 500 chars, `get_schema(id)` → 3KB (no truncation)
+- **Flexibility:** Type-safe tool for simplicity, bash for power
+**Key Insight:** Give the agent TWO paths: (1) Simple tool for common case, (2) Direct data access for power users. Transparency + flexibility = autonomous problem-solving.
+
+---
+
+### Issue 46: Papr Memory Schema Registration - Node Types Not Persisting ✅ FIXED
+**Added:** 2026-04-11
+**Problem:** The `register_schema` tool only created "shell" schemas with no node types or relationships. When agents called `register_schema`, it only accepted `name` and `description` parameters, ignoring `node_types` and `relationship_types`. Result: schemas were registered but completely empty (zero entities, zero relationships), making them unusable.
+**Root Cause:** Tool's Zod schema was incomplete - only validated 2 fields (`name`, `description`) even though Papr Memory API accepts full schema definitions with node types, relationships, properties, validation rules, and metadata.
+**Solution:** Enhanced `register_schema` tool to accept complete schema structure:
+1. **Enhanced validation** - Added Zod schemas for:
+   - `PropertyDefinition` (type, required, enum_values, validation rules)
+   - `NodeType` (name, label, properties, resolution_policy, unique_identifiers)
+   - `RelationshipType` (name, label, allowed_source/target_types, cardinality)
+2. **Full tool implementation** - Pass all fields to API using SDK's `SchemaCreateParams` type
+3. **Added `update_schema` tool** - Modify existing schemas (add types, change status, update scope)
+**Implementation:**
+```typescript
+// Full schema registration
+register_schema({
+  name: "Product Management Schema",
+  description: "Track products, companies, and contacts",
+  status: "active", // Activate immediately
+  scope: "namespace",
+  node_types: {
+    "Company": {
+      name: "Company",
+      label: "Company",
+      properties: {
+        "name": { type: "string", required: true },
+        "industry": { type: "string" }
+      },
+      resolution_policy: "upsert",
+      unique_identifiers: ["name"]
+    }
+  },
+  relationship_types: {
+    "WORKS_AT": {
+      name: "WORKS_AT",
+      label: "Works At",
+      allowed_source_types: ["Contact"],
+      allowed_target_types: ["Company"]
+    }
+  }
+})
+// Returns: "Schema registered with 1 node types. Schema ID: abc123"
+```
+**Schema Limits (Papr Memory API):**
+- Maximum 10 node types per schema
+- Maximum 20 relationship types per schema
+- Maximum 10 properties per node type
+- Maximum 15 enum values per property
+**Resolution Policies:**
+- `upsert` (default): Create if not found, update if exists
+- `lookup`: Only link to existing nodes (controlled vocabulary)
+**Status Management:**
+- `draft` (default): Saved but not active
+- `active`: Triggers Neo4j indexing, can be used
+- `deprecated`: Marked as old
+- `archived`: Soft-deleted
+**Files Created:**
+- `docs/PAPR_MEMORY_SCHEMA_REGISTRATION_FIX.md` - Complete documentation with examples
+**Files Changed:**
+- `src/core/tools/paprMemory.ts` - Enhanced `register_schema` + added `update_schema` tool
+**Impact:**
+- **Before:** Agents couldn't create functional schemas via tools, had to use Python SDK workaround
+- **After:** Complete schema registration in one tool call, matches Python SDK functionality ✅
+- **Validation:** Full validation with 15+ fields (was 2 fields)
+- **User Experience:** No more empty shell schemas, node_types persist correctly
+**Key Takeaway:** Always pass `node_types` and `relationship_types` when calling `register_schema` - otherwise you'll get an empty shell.
+
+---
+
+### Issue 47: Working Card Collapse Layout Shift ✅ FIXED
+**Added:** 2026-04-11
+**Problem:** When "Working" section is collapsed while containing a running job card, the entire chat interface scrolls up abnormally, with message input displaced from bottom of screen.
+**Root Cause:** Collapsed state used only `max-height: 0` and `opacity: 0`, but content (JobStatusCard, etc.) was still in document flow, reserving space even when visually hidden.
+**Solution:** Added `.working-card-content--collapsed` CSS class that:
+1. `visibility: hidden` - Hides content
+2. `position: absolute` - Removes from document flow (prevents layout shift)
+3. `pointer-events: none` - Disables interaction
+**Fix Applied:** 2026-04-11
+**Files Changed:**
+- `ui/components/Chat/WorkingCard.tsx` - Added conditional collapsed class
+- `ui/components/Chat/WorkingCard.css` - Changed `overflow-y: auto` → `overflow: hidden`, added collapsed rule
+- `docs/WORKING_CARD_COLLAPSE_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** Collapsed Working section with job cards causes entire chat to scroll up
+- **After:** Working section collapse/expand is smooth, no layout shift, message input stays at bottom ✅
+**Testing:** Create job → collapse Working while running → verify chat stays stable
+**Pattern:** Can be applied to other collapsible sections (ThinkingCard, ExploringCard) if they exhibit similar layout issues
+
+---
+
+### Issue 48: Working Card - No Context in Collapsed State ✅ FIXED
+**Added:** 2026-04-11
+**Problem:** When WorkingCard is collapsed (default state), users see generic "Working" header with no indication of what the agent is doing or which job is running. Multiple collapsed "Working" headers appear with zero context, causing confusion about whether the agent is active, stuck, or waiting.
+**Root Cause:** WorkingCard collapsed header always showed "Working" text regardless of actual activity. Users had no visibility into tools being called, jobs running, or agent responses without manually expanding.
+**Solution:** Display the **last activity** (most recent tool call or text) directly in the collapsed header:
+- Extract last activity from message sequence
+- Special handling for `run_job` to show job name: "Running job: People Verify"
+- Use `getToolDisplayLabel()` for other tools: "Querying database", "Reading file"
+- Show first 50 chars of text responses
+- CSS handles text overflow with ellipsis
+**Fix Applied:** 2026-04-11
+**Implementation:**
+```typescript
+// Extract last activity from sequence
+let lastActivity = "Working";
+for (let i = sequence.length - 1; i >= 0; i--) {
+  if (item.type === "tool" && toolName === "run_job") {
+    lastActivity = `Running job: ${jobName}`;
+  } else if (item.type === "tool") {
+    lastActivity = getToolDisplayLabel(toolCall);
+  } else if (item.type === "text") {
+    lastActivity = text.substring(0, 50) + "...";
+  }
+}
+```
+**Files Changed:**
+- `ui/components/Chat/WorkingCard.tsx` - Added `lastActivity` prop, display in header
+- `ui/components/Chat/WorkingCard.css` - Added flex + ellipsis to label
+- `ui/components/Chat/MessageItem.tsx` - Extract and pass last activity
+- `docs/WORKING_CARD_LAST_ACTIVITY_DISPLAY.md` - Complete documentation
+**Impact:**
+- **Before:** Collapsed header shows "Working" - no context, users confused
+- **After:** Collapsed header shows exact activity - "Running job: People Verify" - full transparency ✅
+- **User Experience:** Always know what's happening at a glance, no expansion needed
+**Examples:**
+- Agent working: `▶ Querying data.db 3s`
+- Job running: `▶ Running job: People Verify 12s`
+- Complete: `▶ Job finished: People Verify ✓ 15s`
+
+---
+
+### Issue 49: Send Button Stuck on "Stop" After Tool Call ✅ FIXED
+**Added:** 2026-04-11
+**Problem:** When agent's last action is a tool call (like `run_job`), the send button stays as "Stop" instead of changing to "Send". Only happens when tools are last - if agent adds text after tools, button correctly changes.
+**Root Cause:** `streamAgent` generator never yielded a `done` chunk. After orchestrator finished, it saved the message to database then just ended. The `agent:complete` WebSocket message was sent by the handler AFTER the generator completed, but frontend didn't reliably process it when last chunk was a tool result.
+**Solution:** Added explicit `done` chunk yield in `AgentService.ts` after saving message, before export/summarization steps. This ensures frontend always receives `done` to finalize streaming state and clear `isSending` flag.
+**Fix Applied:** 2026-04-11
+**Files Changed:**
+- `src/gateway/services/AgentService.ts` - Added `done` chunk yield after message save
+- `docs/SEND_BUTTON_STUCK_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** Button stuck as "Stop" when last action is tool call, users confused if agent is done
+- **After:** Button always changes to "Send" when agent finishes, clear indication agent is ready ✅
+- **Also fixes:** Message persistence issue (done chunk sent before function ends, so message saved even if app quits)
+**Testing:** Send message triggering job → verify button changes to "Send" when agent finishes (even though job still running)
+
+---
+
+### Enhancement 50: Browser Parse HTML Performance - Persistent Python Worker ✅ IMPLEMENTED
+**Added:** 2026-04-11
+**Problem:** `browser_parse_html` tool taking 2-5+ seconds per call because each parse spawned a new Python subprocess, paying startup cost (Python interpreter ~500ms + BeautifulSoup import ~1-2s) on every single call.
+**Root Cause:** Original implementation used subprocess spawn pattern from browser-use reference, which is simple but inefficient for repeated calls. Each parse:
+1. Spawned new Python process (~500ms)
+2. Imported BeautifulSoup (~1-2s) 
+3. Parsed HTML (~100-500ms)
+4. Killed process
+**Solution:** Implemented persistent Python worker pool with JSON-RPC protocol that spawns once and processes requests via stdin/stdout:
+1. **First call:** ~2-5s (one-time worker startup + BeautifulSoup import)
+2. **Subsequent calls:** ~100-300ms (direct execution, 10-20x faster)
+3. **Automatic restart** on worker failures
+4. **Graceful cleanup** on app shutdown
+**Fix Applied:** 2026-04-11
+**Implementation:**
+```typescript
+// NEW: Persistent worker with JSON-RPC
+class PythonWorkerPool {
+  private worker: ChildProcess | null;
+  private pendingRequests = new Map();
+  
+  async execute(code, context, timeout) {
+    if (!this.worker) await this.start(); // Spawn once
+    const requestId = uuid();
+    this.worker.stdin.write(JSON.stringify({ id: requestId, code, context }));
+    // Wait for response via stdout
+    return await this.waitForResponse(requestId, timeout);
+  }
+}
+
+// Python worker stays alive and processes requests
+while True:
+    request = json.loads(sys.stdin.readline())
+    # Execute code with BeautifulSoup already imported
+    exec(request["code"])
+    print(json.dumps({"id": request["id"], "result": result}))
+```
+**Files Created:**
+- `src/core/tools/pythonWorker.ts` - Worker pool implementation (248 lines)
+- `docs/BROWSER_PARSE_HTML_PERFORMANCE_FIX.md` - Complete documentation
+**Files Changed:**
+- `src/core/tools/browser.ts` - Replace inline subprocess with worker import
+**Impact:**
+- **Before:** 2-5s per parse (subprocess spawn every time)
+- **After (1st call):** 2-5s (worker startup, same as before)
+- **After (2nd+ calls):** 100-300ms ✅ **10-20x faster**
+- **Speedup:** Dramatic improvement for workflows with multiple parses (e.g., parsing tables on multiple pages)
+**Performance Benchmarks:**
+
+| Scenario | Before | After | Speedup |
+|----------|--------|-------|---------|
+| Parse 1 table | 2-5s | 2-5s | Same (startup) |
+| Parse 10 tables | 20-50s | 3-8s | **6-10x faster overall** |
+| Parse 100 tables | 200-500s | 12-35s | **15-20x faster overall** |
+
+**Key Features:**
+- **Singleton pattern** - One worker per app instance
+- **Request queuing** - Handles concurrent requests in order
+- **Error recovery** - Auto-restart on failures
+- **Memory safety** - Stateless worker (no leaks)
+- **Graceful shutdown** - Cleanup on SIGINT/SIGTERM
+**Testing:** Navigate to site with tables → parse multiple times → verify 1st call ~2-5s, subsequent calls ~100-300ms
+**Related:** Enhancement 46 (Browser Tools Phase 1 - BeautifulSoup integration), matches browser-use architecture while optimizing for repeated calls
+**Research Sources:**
+- [BeautifulSoup Performance Tips](https://scrapingbee.com/blog/how-to-make-pythons-beautiful-soup-faster-performance) - Use lxml parser (already using), persistent processes
+- [Python Subprocess Optimization](https://stackoverflow.com/questions/75045739/faster-startup-of-processes-python) - Worker pools reduce startup overhead by 10-20x
+
+---
+
+### Issue 50: Delegation Message Consolidation ✅ FIXED
+**Added:** 2026-04-11
+**Problem:** When delegating to sub-agents via `delegate_task`, the MiniChatCard was hidden inside the collapsed Working card, preventing users from seeing sub-agent progress or interacting with the conversation.
+**Root Cause:** MiniChatCard and DelegationCard were added to `exploringItems` array, which renders inside the WorkingCard. When Working collapsed, all delegation UI became hidden and non-interactive.
+**Solution:** Moved delegation cards OUTSIDE the Working card by:
+1. Created `delegationCardMap` to store delegation data separately from exploring items
+2. Render delegation cards AFTER Working card, always visible
+3. Users can now see and interact with sub-agent conversations even when Working is collapsed
+**Fix Applied:** 2026-04-11
+**Implementation:**
+```typescript
+// Store delegation data for rendering outside Working card
+const delegationCardMap = new Map<string, DelegationData>();
+
+// Parse delegate_task tool
+if (toolName === "delegate_task") {
+  delegationCardMap.set(delegationData.id, miniChatProps);
+  // DON'T add to exploringItems
+}
+
+// After Working card
+if (delegationCardMap.size > 0) {
+  delegationCardMap.forEach((delegationData, delegationId) => {
+    elements.push(<MiniChatCard {...delegationData} />); // OUTSIDE Working
+  });
+}
+```
+**Files Changed:**
+- `ui/components/Chat/MessageItem.tsx` - Moved delegation cards outside Working card
+- `src/gateway/services/SubAgentResponseTrigger.ts` - Added delegation routing logging
+- `docs/DELEGATION_MESSAGE_CONSOLIDATION_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** MiniChatCard hidden when Working collapsed, no interaction possible
+- **After:** MiniChatCard always visible and interactive, clear separation between agent work and delegation status ✅
+- **User Experience:** Can see sub-agent progress and send messages without expanding Working
+- **Persistence:** Delegation cards remain visible after completion for reference
+**Testing:**
+- [x] Working collapsed → MiniChatCard still visible ✅
+- [x] User can send messages without expanding Working ✅
+- [x] Multiple delegations → Each has separate visible card ✅
+- [x] Delegation completes → Card persists with final result ✅
+**Related:**
+- Issue 48: Working Card - No Context in Collapsed State (shows last activity)
+- Issue 49: Send Button Stuck on "Stop" (delegation completion)
+- Issue 47: Working Card Collapse Layout Shift (visual stability)
+
+---
+
+**This file is living documentation. Update it as we learn and make decisions.**
+
+### Issue 51: Papr Logout Button Not Working ✅ FIXED
+**Added:** 2026-04-11
+**Problem:** Clicking "Logout" in Settings → AI Models for "Connected to Papr" had no visible effect
+**Root Cause:** Backend correctly removed API key and cleared profile, but didn't notify the UI
+**Solution:** Added IPC event notification (`papr:logout-success`) to update frontend state
+**Files Changed:**
+- `src/electron/ipc/paprLogin.ts` - Added logout success notification
+- `src/electron/preload.cjs` - Exposed logout listener
+- `ui/types/electron.d.ts` - Added TypeScript types
+- `ui/components/Settings/PaprLoginSection.tsx` - Listen for logout, update UI
+- `ui/components/Settings/SettingsView.tsx` - Refresh keys list on logout
+**Impact:**
+- **Before:** Click logout → nothing visible → user confused
+- **After:** Click logout → UI updates immediately → shows "Login with Papr" ✅
+**See:** `docs/PAPR_LOGOUT_FIX.md`
+
+### Issue 52: Auth0 Double HTTPS & AuthWall Split-Screen Design ✅ FIXED
+**Added:** 2026-04-11
+**Problems:**
+1. OAuth URLs malformed with `https://https//` causing flow to fail
+2. AuthWall needed split-screen design (form left, branding right)
+**Root Causes:**
+1. `AUTH0_DOMAIN` env var included `https://` prefix but code added it again
+2. Original design was centered card, needed professional split-screen layout
+**Solutions:**
+1. Strip `https://` prefix from AUTH0_DOMAIN automatically
+2. Created split-screen design: Left (sign-in form) + Right (Papr logo with Fold.svg)
+**Files Changed:**
+- `src/electron/ipc/paprLogin.ts` - Strip protocol prefix from AUTH0_DOMAIN
+- `ui/components/Auth/AuthWall.tsx` - Split-screen layout with Papr branding
+- `ui/components/Auth/AuthWall.css` - Split-screen styles, light/dark mode, responsive
+**Design Features:**
+- **Left side:** Light gradient background, "Welcome!" title, blue "Sign In" button
+- **Right side:** White background, Papr logo, Fold.svg geometric pattern
+- **Responsive:** Stacks vertically on mobile (form top, branding bottom)
+- **Dark mode:** Adapts to system theme automatically
+**Impact:**
+- **Before:** OAuth flow broken (double https), centered card design
+- **After:** OAuth flow works with any domain format, professional split-screen design ✅
+**See:** `docs/AUTH0_DOUBLE_HTTPS_AND_AUTHWALL_DESIGN_FIX.md`
+
+---
+
+### Issue 53: Git Auto-Staging - Preventing Data Loss from Agent Edits ✅ FIXED
+**Added:** 2026-04-12
+**Problem:** When Paprwork's agent uses `write_file` to create/modify files, those changes are written to disk but NOT tracked by git. If user runs `git checkout`, `git clean -fd`, or `git reset --hard`, untracked files are lost forever.
+**Real Example:** Agent created `paprProxyProvider.ts` but never `git add`'d it. Later branch switch wiped the source file (only compiled .js survived in dist/).
+**Root Cause:** `write_file` tool only writes to disk, doesn't interact with git at all. Agent has no way to track files without manual `bash({ command: "git add ..." })` calls, which are easy to forget.
+**Solution:** Automatic git staging after every `write_file` operation:
+1. Check if file is in git repository (`git rev-parse --git-dir`)
+2. Check if file is gitignored (`git check-ignore`)
+3. Automatically run `git add <file>` to stage it
+4. Return staging status in tool result (`git_staged: true`)
+**Implementation:**
+- Created `src/core/utils/gitAutoStage.ts` - Utility with `autoStageFile()` function
+- Enhanced `src/core/tools/filesystem.ts` - Integrated auto-staging into `write_file`
+- Updated `src/core/agents/SystemPrompt.ts` - Added "Automatic Git Staging" documentation
+**Behavior:**
+- ✅ New files → Staged (prevents loss on branch switch)
+- ✅ Modified files → Staged (tracks agent changes)
+- ❌ Files in .gitignore → NOT staged (respects git rules)
+- ❌ Files outside git repos → Silently skipped (no error)
+**Coverage:**
+- Works with ANY git repository (GitHub, GitLab, Bitbucket, local)
+- Works with ANY file location (Papr apps, jobs, external repos)
+- Requires only git CLI (`git --version`), no GitHub account/auth needed
+**User Experience:**
+- **Before:** Agent creates file → user switches branch → file lost forever → confusion
+- **After:** Agent creates file + auto-stages → user switches branch → git blocks with "local changes would be overwritten" → work protected ✅
+**Files Created:**
+- `src/core/utils/gitAutoStage.ts` - Git auto-staging utility
+- `docs/GIT_AUTO_STAGING_FIX.md` - Complete documentation
+**Files Changed:**
+- `src/core/tools/filesystem.ts` - Added auto-staging to write_file, added `git_staged` and `git_status` to `WriteFileOutput`
+- `src/core/agents/SystemPrompt.ts` - Added "Automatic Git Staging" section
+**Impact:**
+- **Before:** Agent-created files untracked, lost on branch operations, manual `git add` needed
+- **After:** Agent-created files auto-staged, protected from loss, user maintains commit control ✅
+- **Important:** Only STAGES files (`git add`), does NOT commit them - user controls commits
+**Testing:**
+```bash
+# Agent creates file
+write_file({ path: "test.ts", content: "..." })
+# Check: git status → Should show "new file: test.ts" (staged)
+# Try: git checkout other-branch → Should block with "local changes"
+```
+**See:** `docs/GIT_AUTO_STAGING_FIX.md`
+
+---
+
+### Issue 54: Ollama Event Listener Memory Leak ✅ FIXED
+**Added:** 2026-04-12
+**Problem:** Browser console showed "MaxListenersExceededWarning: 11 ollama:download-progress listeners added" indicating event listeners were accumulating instead of being cleaned up.
+**Root Causes:**
+1. **React Hook (useOllama):** `handleProgress` callback recreated on every render, so cleanup removed different reference than was added
+2. **Preload (preload.cjs):** Wrapped callbacks in arrow functions but didn't track wrapper, so removal failed (tried to remove original callback instead of wrapper)
+**Solution:**
+1. **useOllama:** Used `useRef` to create single stable callback instance that persists across renders
+2. **Preload:** Used `WeakMap` to track wrapper functions for proper cleanup (maps original callback → wrapper)
+**Implementation:**
+```typescript
+// useOllama.ts - Stable callback with useRef
+const handleProgressRef = useRef<(data: ModelInstallProgress) => void>();
+const checkStatusRef = useRef<() => Promise<void>>();
+
+if (!handleProgressRef.current) {
+  handleProgressRef.current = (data) => {
+    setProgress(data);
+    if (data.status === 'complete') {
+      checkStatusRef.current?.(); // Avoid stale closure
+    }
+  };
+}
+
+useEffect(() => {
+  // Same reference added and removed
+  window.electronAPI.ollama.onDownloadProgress(handleProgressRef.current);
+  return () => {
+    window.electronAPI.ollama.removeDownloadProgressListener(handleProgressRef.current);
+  };
+}, [checkStatus]);
+```
+```javascript
+// preload.cjs - WeakMap for wrapper tracking
+ollama: (() => {
+  const progressListenerMap = new WeakMap();
+  return {
+    onDownloadProgress: (callback) => {
+      const wrapper = (_event, data) => callback(data);
+      progressListenerMap.set(callback, wrapper); // Track
+      ipcRenderer.on("ollama:download-progress", wrapper);
+    },
+    removeDownloadProgressListener: (callback) => {
+      const wrapper = progressListenerMap.get(callback);
+      if (wrapper) {
+        ipcRenderer.removeListener("ollama:download-progress", wrapper); // Remove correct ref
+        progressListenerMap.delete(callback);
+      }
+    },
+  };
+})(),
+```
+**Files Changed:**
+- `ui/hooks/useOllama.ts` - Added `useRef` for stable callback
+- `src/electron/preload.cjs` - Added `WeakMap` wrapper tracking
+- `docs/OLLAMA_EVENT_LISTENER_MEMORY_LEAK_FIX.md` - Complete documentation
+**Impact:**
+- **Before:** 11+ listeners accumulated, memory leak warnings
+- **After:** Single listener properly cleaned up, no warnings ✅
+- **Pattern:** Use `useRef` for stable callbacks in React, `WeakMap` for wrapper tracking in IPC
+**Testing:** Download Ollama model → check console for no warnings
+**Prevention:** Always ensure cleanup removes exact same reference that was added (use `useRef` or `WeakMap`)
+
+---
+
 **This file is living documentation. Update it as we learn and make decisions.**

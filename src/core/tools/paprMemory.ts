@@ -1,5 +1,6 @@
 import Papr from "@papr/memory";
 import type { Memory } from "@papr/memory/resources/memory.js";
+import type { SchemaListResponse, UserGraphSchemaOutput as Schema, SchemaCreateParams } from "@papr/memory/resources/schemas.js";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
@@ -90,9 +91,51 @@ const searchMemorySchema = z.object({
     ),
 });
 
+// Property definition for node/relationship properties
+const propertyDefinitionSchema = z.object({
+  type: z.enum(['string', 'integer', 'float', 'boolean', 'array', 'datetime', 'object']),
+  description: z.string().optional(),
+  required: z.boolean().optional(),
+  default: z.unknown().optional(),
+  enum_values: z.array(z.string()).max(15).optional(),
+  min_length: z.number().optional(),
+  max_length: z.number().optional(),
+  min_value: z.number().optional(),
+  max_value: z.number().optional(),
+  pattern: z.string().optional(),
+});
+
+// Node type definition
+const nodeTypeSchema = z.object({
+  name: z.string().min(1).describe("Node type name (e.g., 'Company', 'Contact')"),
+  label: z.string().min(1).describe("Display label for the node type"),
+  description: z.string().optional(),
+  properties: z.record(z.string(), propertyDefinitionSchema).optional().describe("Properties as a dictionary: { 'name': { type: 'string', required: true }, ... }"),
+  resolution_policy: z.enum(['upsert', 'lookup']).optional().describe("'upsert' (create if not found) or 'lookup' (link only to existing)"),
+  unique_identifiers: z.array(z.string()).optional().describe("Properties that uniquely identify this node (e.g., ['name', 'email'])"),
+  color: z.string().optional(),
+  icon: z.string().optional(),
+});
+
+// Relationship type definition
+const relationshipTypeSchema = z.object({
+  name: z.string().min(1).describe("Relationship name (e.g., 'WORKS_AT', 'MANAGES')"),
+  label: z.string().min(1).describe("Display label for the relationship"),
+  description: z.string().optional(),
+  allowed_source_types: z.array(z.string()).min(1).describe("Which node types can be sources"),
+  allowed_target_types: z.array(z.string()).min(1).describe("Which node types can be targets"),
+  properties: z.record(z.string(), propertyDefinitionSchema).optional(),
+  cardinality: z.enum(['one-to-one', 'one-to-many', 'many-to-many']).optional(),
+  color: z.string().optional(),
+});
+
 const registerSchemaSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
+  node_types: z.record(z.string(), nodeTypeSchema).optional().describe("Node types as a dictionary: { 'Company': { name: 'Company', label: 'Company', ... }, ... }"),
+  relationship_types: z.record(z.string(), relationshipTypeSchema).optional().describe("Relationship types as a dictionary: { 'WORKS_AT': { name: 'WORKS_AT', ... }, ... }"),
+  status: z.enum(['draft', 'active']).optional().describe("'draft' (default) or 'active' to immediately enable the schema"),
+  scope: z.enum(['personal', 'workspace', 'namespace', 'organization']).optional().describe("Scope of the schema (default: 'namespace')"),
 });
 
 const listSchemasSchema = z.object({
@@ -101,6 +144,20 @@ const listSchemasSchema = z.object({
     .optional()
     .describe("Filter schemas by status"),
   workspaceId: z.string().optional().describe("Filter schemas by workspace ID"),
+});
+
+const getSchemasSchema = z.object({
+  schemaId: z.string().min(1).describe("The schema ID to fetch (e.g. 'BNSv8YCQXJ')"),
+});
+
+const updateSchemaSchema = z.object({
+  schemaId: z.string().min(1).describe("The schema ID to update"),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  node_types: z.record(z.string(), nodeTypeSchema).optional().describe("Updated node types dictionary (replaces existing)"),
+  relationship_types: z.record(z.string(), relationshipTypeSchema).optional().describe("Updated relationship types dictionary (replaces existing)"),
+  status: z.enum(['draft', 'active', 'deprecated', 'archived']).optional().describe("Update schema status"),
+  scope: z.enum(['personal', 'workspace', 'namespace', 'organization']).optional(),
 });
 
 async function getPaprClient(): Promise<Papr> {
@@ -220,16 +277,37 @@ export const searchAgentMemoryTool = createTool({
 export const registerSchemaTool = createTool({
   id: "register_schema",
   description:
-    "Register a Papr memory schema for custom entity types. Creates node types and relationships for structured knowledge graphs.",
+    "Register a Papr memory schema with custom entity types and relationships. " +
+    "Creates node types (entities like Company, Contact) and relationship types (connections like WORKS_AT, MANAGES). " +
+    "Pass node_types and relationship_types as dictionaries to create a fully functional schema. " +
+    "Set status='active' to immediately enable the schema, or leave as 'draft' (default) to save without activating.",
   inputSchema: registerSchemaSchema,
   execute: async (args) => {
     try {
       const client = await getPaprClient();
-      const response = await client.schemas.create({
+      
+      // Build the create params using the SDK's type
+      const createParams: SchemaCreateParams = {
         name: args.name,
-        description: args.description,
-      });
-      return { success: true, data: response };
+        ...(args.description && { description: args.description }),
+        ...(args.node_types && { node_types: args.node_types as SchemaCreateParams['node_types'] }),
+        ...(args.relationship_types && { relationship_types: args.relationship_types as SchemaCreateParams['relationship_types'] }),
+        ...(args.status && { status: args.status }),
+        ...(args.scope && { scope: args.scope }),
+      };
+      
+      const response = await client.schemas.create(createParams);
+      
+      // Extract schema ID from response
+      const schemaId = (response as any).data?.id || (response as any).schema_id;
+      
+      return { 
+        success: true, 
+        data: response,
+        message: args.node_types 
+          ? `Schema registered with ${Object.keys(args.node_types).length} node types. Schema ID: ${schemaId}` 
+          : `Schema shell created. Use update or pass node_types to add entity types. Schema ID: ${schemaId}`
+      };
     } catch (error) {
       if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
         throw new Error(
@@ -248,7 +326,8 @@ export const registerSchemaTool = createTool({
 export const listSchemasTool = createTool({
   id: "list_schemas",
   description:
-    "List all memory schemas accessible to the user. Returns schema definitions with node types, relationships, and metadata.",
+    "List names and descriptions of all memory schemas. Returns a lightweight summary (id, name, description, status). " +
+    "Use get_schema to fetch full details (node types, relationships, properties) for a specific schema.",
   inputSchema: listSchemasSchema,
   execute: async (args) => {
     try {
@@ -257,7 +336,92 @@ export const listSchemasTool = createTool({
         status_filter: args.statusFilter,
         workspace_id: args.workspaceId,
       });
+      
+      // Return lightweight summary (just name, ID, description, status)
+      // This prevents truncation when there are many schemas
+      const responseData = response as SchemaListResponse;
+      const summary = responseData.data?.map((schema: Schema) => ({
+        id: schema.id,
+        name: schema.name,
+        description: schema.description,
+        status: schema.status,
+        version: schema.version,
+        nodeTypeCount: schema.node_types?.length ?? 0,
+        relationshipCount: schema.relationship_types?.length ?? 0,
+      })) ?? [];
+      
+      return { 
+        success: true, 
+        data: {
+          count: summary.length,
+          schemas: summary,
+          note: "Use get_schema(schemaId) to fetch full details for a specific schema",
+        }
+      };
+    } catch (error) {
+      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
+        throw new Error(
+          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
+        );
+      } else if (error instanceof Papr.AuthenticationError) {
+        throw new Error(
+          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct."
+        );
+      }
+      throw error;
+    }
+  },
+});
+
+export const getSchemaTool = createTool({
+  id: "get_schema",
+  description:
+    "Fetch detailed information about a specific Papr memory schema by ID. " +
+    "Returns full schema definition including node types, relationships, properties, and metadata. " +
+    "Use this after list_schemas to get complete details for a specific schema.",
+  inputSchema: getSchemasSchema,
+  execute: async (args) => {
+    try {
+      const client = await getPaprClient();
+      const response = await client.schemas.retrieve(args.schemaId);
       return { success: true, data: response };
+    } catch (error) {
+      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
+        throw new Error(
+          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
+        );
+      } else if (error instanceof Papr.AuthenticationError) {
+        throw new Error(
+          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct."
+        );
+      }
+      throw error;
+    }
+  },
+});
+
+export const updateSchemaTool = createTool({
+  id: "update_schema",
+  description:
+    "Update an existing Papr memory schema. " +
+    "Allows modification of schema properties, node types, relationships, and status. " +
+    "Updates create a new version while preserving existing data. " +
+    "Set status='active' to activate, 'draft' to deactivate, or 'archived' to soft-delete.",
+  inputSchema: updateSchemaSchema,
+  execute: async (args) => {
+    try {
+      const client = await getPaprClient();
+      
+      // Build the update params
+      const { schemaId, ...updateParams } = args;
+      
+      const response = await client.schemas.update(schemaId, updateParams as any);
+      
+      return { 
+        success: true, 
+        data: response,
+        message: `Schema ${schemaId} updated successfully`
+      };
     } catch (error) {
       if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
         throw new Error(
@@ -501,7 +665,9 @@ export const paprMemoryTools = [
   addAgentMemoryTool,
   searchAgentMemoryTool,
   registerSchemaTool,
+  updateSchemaTool,
   listSchemasTool,
+  getSchemaTool,
   introspectMemoryGraphTool,
   queryMemoryGraphTool,
 ];

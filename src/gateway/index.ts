@@ -12,6 +12,11 @@
  * - No .env files in production (packaged app)
  */
 
+// Load environment variables from .env.local (for development)
+import dotenv from "dotenv";
+import { resolve } from "path";
+dotenv.config({ path: resolve(process.cwd(), ".env.local") });
+
 // CRITICAL: Ensure crypto is available globally for @mastra/core
 // In newer Node.js versions (v16+), crypto is already global
 // In older versions or some environments, we need to import it
@@ -52,6 +57,7 @@ import {
 import { setPermissionRequester } from "./permissions/PermissionRequester.js";
 import type { KeyPermissionRequest } from "../core/types/permissions.js";
 import { initializeDbPool } from "./services/DbQueryPool.js";
+import { forwardRendererTelemetry } from "./services/rendererTelemetryForward.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -760,6 +766,23 @@ async function startGateway(): Promise<void> {
     //    returns: { stdout, stderr, exitCode }
     // ─────────────────────────────────────────────────────────────────────────
 
+    // Renderer telemetry: same-origin POST → gateway forwards to Papr proxy (no CORS).
+    app.post("/api/telemetry/events", async (req, res) => {
+      try {
+        const result = await forwardRendererTelemetry(req.body);
+        if (result.status === 204) {
+          res.sendStatus(204);
+          return;
+        }
+        res.status(result.status).json({
+          error: result.error ?? "telemetry error",
+        });
+      } catch (err) {
+        console.error("[Gateway] /api/telemetry/events:", err);
+        res.status(500).json({ error: "internal error" });
+      }
+    });
+
     app.post("/api/bash/run", async (req, res) => {
       try {
         const { command, timeoutMs } = req.body as {
@@ -1014,12 +1037,25 @@ async function startGateway(): Promise<void> {
     if (process.env.NODE_ENV === "production") {
       const uiPath = path.join(__dirname, "../ui");
 
-      // Serve static files (CSS, JS, images)
-      app.use(express.static(uiPath));
+      // Serve static files (CSS, JS, images) with explicit options
+      app.use(express.static(uiPath, {
+        setHeaders: (res, filepath) => {
+          // Set correct MIME types for JavaScript modules
+          if (filepath.endsWith('.js')) {
+            res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+          } else if (filepath.endsWith('.mjs')) {
+            res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+          }
+        }
+      }));
 
-      // Catch-all route to serve index.html for SPA routing
+      // Catch-all route to serve index.html for SPA routing (except for assets)
       // Must be after static files so assets are served first
-      app.use((_req, res) => {
+      app.use((req, res, next) => {
+        // Don't catch asset requests - let them 404 if not found
+        if (req.path.startsWith('/assets/')) {
+          return next();
+        }
         res.sendFile(path.join(uiPath, "index.html"));
       });
 

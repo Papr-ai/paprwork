@@ -268,6 +268,7 @@ export class AppService {
     await fs.mkdir(path.dirname(this.appsIndexPath), { recursive: true });
     await this.loadApps(); // Load existing apps FIRST
     await this.rebuildIndexIfCorrupted(); // Safety net: check for missing apps
+    await this.pruneStaleAppEntries(); // Index entries whose folders were removed (e.g. bash rm)
     await this.installDefaultApps(); // Then install defaults (won't overwrite existing)
     await this.startWatchingApps();
     this.initialized = true;
@@ -622,11 +623,65 @@ export class AppService {
     this.apps.delete(id);
     await this.saveApps();
 
+    this.broadcastAppListUpdated();
+
     console.log(`[AppService] Deleted app: ${id}`);
     return true;
   }
 
+  /**
+   * True if ~/Papr/apps/{id} exists and has at least one entry (matches rebuild-index rules).
+   */
+  private async appDirHasContent(appId: string): Promise<boolean> {
+    const appPath = path.join(this.appsDir, appId);
+    try {
+      const stat = await fs.stat(appPath);
+      if (!stat.isDirectory()) return false;
+      const files = await fs.readdir(appPath);
+      return files.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Remove registry entries when the app folder is missing or empty (e.g. agent used `rm -rf` instead of delete_app).
+   * Persists apps.json and optionally notifies clients.
+   */
+  private async pruneStaleAppEntries(): Promise<boolean> {
+    const staleIds: string[] = [];
+    for (const id of this.apps.keys()) {
+      if (!(await this.appDirHasContent(id))) {
+        staleIds.push(id);
+      }
+    }
+    if (staleIds.length === 0) return false;
+
+    for (const id of staleIds) {
+      this.unwatchApp(id);
+      this.apps.delete(id);
+      console.log(
+        `[AppService] Pruned stale app index entry (folder missing or empty): ${id}`,
+      );
+    }
+    await this.saveApps();
+    this.broadcastAppListUpdated();
+    return true;
+  }
+
+  private broadcastAppListUpdated(): void {
+    import("../websocket/index.js")
+      .then(({ broadcast }) => {
+        broadcast({ type: "app:list-updated" });
+      })
+      .catch(() => {
+        /* non-fatal */
+      });
+  }
+
   async listApps(): Promise<MiniApp[]> {
+    await this.initialize();
+    await this.pruneStaleAppEntries();
     return Array.from(this.apps.values()).sort(
       (a, b) =>
         new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),

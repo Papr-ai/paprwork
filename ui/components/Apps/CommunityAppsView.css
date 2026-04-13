@@ -160,54 +160,61 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.30);
 }
 
-/* Orb */
+/* Orb with droplet PNG background */
 .community-card__orb {
   position: relative;
+  isolation: isolate;
   width: 72px;
   height: 72px;
   border-radius: 50%;
-  background: linear-gradient(
-    135deg,
-    rgba(16, 185, 129, 0.45) 0%,
-    rgba(59, 130, 246, 0.35) 60%,
-    rgba(139, 92, 246, 0.30) 100%
-  );
-  backdrop-filter: blur(16px) saturate(140%);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
-  border: 1px solid rgba(16, 185, 129, 0.30);
-  box-shadow:
-    0 4px 16px rgba(16, 185, 129, 0.15),
-    inset 0 1px 2px rgba(255, 255, 255, 0.40);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Light mode: use light droplet PNG as background */
+  background-image: url('/images/light-drop1.png');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
   margin: 24px auto 0;
   transition: transform 220ms var(--ease, cubic-bezier(.2,.8,.2,1));
+}
+
+/* Contact shadow (floor reflection) beneath the orb */
+.community-card__orb::after {
+  content: "";
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 70%;
+  height: 10px;
+  border-radius: 50%;
+  background: radial-gradient(
+    ellipse,
+    rgba(100, 180, 255, 0.18) 0%,
+    rgba(100, 180, 255, 0.09) 40%,
+    transparent 70%
+  );
+  filter: blur(5px);
+  pointer-events: none;
+  z-index: -1;
 }
 
 .community-card:hover .community-card__orb {
   transform: scale(1.06);
 }
 
+.community-card:hover .community-card__orb::after {
+  width: 75%;
+  bottom: -8px;
+}
+
 .community-card__orb-inner {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: rgba(16, 185, 129, 0.85);
+  display: none;
 }
 
 .community-card__orb-highlight {
-  position: absolute;
-  top: 6px;
-  left: 10px;
-  right: 10px;
-  height: 40%;
-  border-radius: 50%;
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.50) 0%,
-    rgba(255, 255, 255, 0) 100%
-  );
-  pointer-events: none;
+  display: none;
 }
 
 /* Content */
@@ -288,6 +295,8 @@
   justify-content: center;
   font-size: 28px;
   line-height: 1;
+  position: relative;
+  z-index: 1;
 }
 
 .community-card__orb-icon svg {
@@ -416,17 +425,23 @@
   }
 
   .community-card__orb {
-    background: linear-gradient(
-      135deg,
-      rgba(16, 185, 129, 0.50) 0%,
-      rgba(59, 130, 246, 0.40) 60%,
-      rgba(139, 92, 246, 0.30) 100%
-    );
-    border-color: rgba(16, 185, 129, 0.25);
+    /* Dark mode: use dark droplet PNG */
+    background-image: url('/images/dark-drop.png');
   }
 
-  .community-card__orb-inner {
-    color: rgba(16, 185, 129, 0.90);
+  /* Darker contact shadow in dark mode */
+  .community-card__orb::after {
+    background: radial-gradient(
+      ellipse,
+      rgba(0, 0, 0, 0.35) 0%,
+      rgba(0, 0, 0, 0.18) 40%,
+      transparent 70%
+    );
+  }
+
+  /* White icons in dark mode */
+  .community-card__orb-icon svg rect {
+    stroke: white !important;
   }
 
   .community-card__tag {

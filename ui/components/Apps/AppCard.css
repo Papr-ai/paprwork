@@ -1,6 +1,7 @@
 /**
- * AppCard Styles - Wabi-inspired Liquid Glass Orb Design
- * Default orb uses Papr brand gradient: #0161E0 → #0CCDFF → #00FEFE
+ * AppCard — mini-app icon base: 3D liquid-glass droplet (Papr Mini-App Droplet system).
+ * Full-bleed PNG icons (data:image/...) include the droplet in the asset; CSS orb is hidden.
+ * SVG/emoji sit inside this glass sphere. Reference: docs/design/papr-mini-app-droplet.png
  */
 
 .app-card {
@@ -82,39 +83,56 @@
   background: transparent;
 }
 
-/* Glass orb - Transparent droplet style */
+/* Glass orb — 3D droplet PNG background with icon layered inside */
 .app-card__orb {
   position: relative;
+  isolation: isolate;
   width: 110px;
   height: 110px;
   border-radius: 50%;
-  /* Transparent glass droplet: clear with subtle depth */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Light mode: use light droplet PNG as background */
+  background-image: url('/images/light-drop1.png');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  transition: transform 220ms var(--ease, cubic-bezier(.2,.8,.2,1));
+}
+
+/* Contact shadow (floor reflection) beneath the orb */
+.app-card__orb::after {
+  content: "";
+  position: absolute;
+  bottom: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 70%;
+  height: 12px;
+  border-radius: 50%;
   background: radial-gradient(
-    circle at 35% 30%,
-    rgba(255, 255, 255, 0.90) 0%,
-    rgba(255, 255, 255, 0.55) 35%,
-    rgba(240, 248, 255, 0.35) 65%,
-    rgba(220, 235, 250, 0.20) 100%
+    ellipse,
+    rgba(100, 180, 255, 0.2) 0%,
+    rgba(100, 180, 255, 0.1) 40%,
+    transparent 70%
   );
-  backdrop-filter: blur(16px) saturate(140%);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
-  border: 1px solid rgba(255, 255, 255, 0.55);
-  box-shadow:
-    0 8px 32px rgba(0, 0, 0, 0.07),
-    0 2px 8px rgba(0, 0, 0, 0.04),
-    inset 0 1px 2px rgba(255, 255, 255, 0.80),
-    inset 0 -1px 4px rgba(0, 0, 0, 0.02);
-  transition: transform 220ms var(--ease, cubic-bezier(.2,.8,.2,1)),
-              box-shadow 220ms var(--ease, cubic-bezier(.2,.8,.2,1));
+  filter: blur(6px);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.app-card__orb::before {
+  display: none;
 }
 
 .app-card:hover .app-card__orb {
   transform: scale(1.06);
-  box-shadow:
-    0 12px 40px rgba(0, 0, 0, 0.10),
-    0 4px 12px rgba(0, 0, 0, 0.06),
-    inset 0 1px 3px rgba(255, 255, 255, 0.90),
-    inset 0 -1px 4px rgba(0, 0, 0, 0.03);
+}
+
+.app-card:hover .app-card__orb::after {
+  width: 75%;
+  bottom: -10px;
 }
 
 /* Orb inner: centers the icon */
@@ -124,26 +142,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: rgba(60, 70, 90, 0.70);
+  color: rgba(55, 65, 88, 0.78);
+  z-index: 1;
 }
 
-/* Refraction highlight on top of orb - glass lensing effect */
-.app-card__orb-highlight {
-  position: absolute;
-  top: 8px;
-  left: 14px;
-  right: 14px;
-  height: 40%;
-  border-radius: 50%;
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.55) 0%,
-    rgba(255, 255, 255, 0) 100%
-  );
-  pointer-events: none;
-}
-
-/* Icon inside orb */
+/* Icon inside orb - Blue gradient from SVG (not CSS) in light mode */
 .app-card__orb-icon {
   width: 56px;
   height: 56px;
@@ -155,6 +158,8 @@
   line-height: 1;
   white-space: nowrap;
   text-overflow: clip;
+  position: relative;
+  z-index: 1;
 }
 
 .app-card__orb-icon svg {
@@ -289,40 +294,32 @@
   }
 
   .app-card__orb {
-    /* Transparent glass droplet - dark mode */
-    background: radial-gradient(
-      circle at 35% 30%,
-      rgba(255, 255, 255, 0.12) 0%,
-      rgba(255, 255, 255, 0.06) 35%,
-      rgba(200, 220, 240, 0.04) 65%,
-      rgba(180, 200, 220, 0.02) 100%
-    );
-    border-color: rgba(255, 255, 255, 0.12);
-    box-shadow:
-      0 8px 32px rgba(0, 0, 0, 0.25),
-      0 2px 8px rgba(0, 0, 0, 0.15),
-      inset 0 1px 1px rgba(255, 255, 255, 0.10),
-      inset 0 -1px 4px rgba(0, 0, 0, 0.05);
+    /* Dark mode: use dark droplet PNG */
+    background-image: url('/images/dark-drop.png');
   }
 
-  .app-card:hover .app-card__orb {
-    box-shadow:
-      0 12px 40px rgba(0, 0, 0, 0.35),
-      0 4px 12px rgba(0, 0, 0, 0.20),
-      inset 0 1px 2px rgba(255, 255, 255, 0.15),
-      inset 0 -1px 4px rgba(0, 0, 0, 0.08);
+  /* Darker, more subtle contact shadow in dark mode */
+  .app-card__orb::after {
+    background: radial-gradient(
+      ellipse,
+      rgba(0, 0, 0, 0.4) 0%,
+      rgba(0, 0, 0, 0.2) 40%,
+      transparent 70%
+    );
+  }
+
+  /* White icons in dark mode */
+  .app-card__orb-icon svg {
+    color: white;
+  }
+  
+  /* Override gradient with white stroke in dark mode */
+  .app-card__orb-icon svg rect {
+    stroke: white !important;
   }
 
   .app-card__orb-inner {
-    color: rgba(200, 210, 225, 0.85);
-  }
-
-  .app-card__orb-highlight {
-    background: linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.18) 0%,
-      rgba(255, 255, 255, 0) 100%
-    );
+    color: rgba(210, 218, 232, 0.88);
   }
 }
 
@@ -335,15 +332,27 @@
   pointer-events: none;
 }
 
-/* When image icon is present, make orb transparent to show the droplet image */
+/* Pre-rendered droplet PNG — asset includes glass sphere; hide CSS shell + glow */
 .app-card__orb:has(.app-card__orb-icon--image) {
   background: transparent;
+  background-color: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   border-color: transparent;
-  box-shadow: 
-    0 8px 32px rgba(0, 0, 0, 0.07),
-    0 2px 8px rgba(0, 0, 0, 0.04);
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.08),
+    0 4px 12px rgba(0, 0, 0, 0.05);
 }
 
-.app-card__orb:has(.app-card__orb-icon--image) .app-card__orb-highlight {
+.app-card__orb:has(.app-card__orb-icon--image)::before,
+.app-card__orb:has(.app-card__orb-icon--image)::after {
   display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .app-card__orb:has(.app-card__orb-icon--image) {
+    box-shadow:
+      0 12px 40px rgba(0, 0, 0, 0.35),
+      0 4px 12px rgba(0, 0, 0, 0.2);
+  }
 }

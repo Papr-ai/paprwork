@@ -72,42 +72,6 @@
   margin: 0;
 }
 
-/* Papr Login Section in Onboarding */
-.onboarding-view-papr-section {
-  margin-bottom: 40px;
-  padding: 24px;
-  background: rgba(0, 96, 224, 0.05);
-  border: 1px solid rgba(0, 96, 224, 0.2);
-  border-radius: 16px;
-}
-
-.onboarding-papr-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  background: rgba(16, 185, 129, 0.15);
-  border: 1px solid rgba(16, 185, 129, 0.3);
-  border-radius: 6px;
-  font-size: 13px;
-  font-weight: 600;
-  color: rgb(16, 185, 129);
-  margin-bottom: 16px;
-}
-
-.onboarding-papr-badge svg {
-  width: 14px;
-  height: 14px;
-}
-
-.onboarding-papr-note {
-  font-size: 13px;
-  color: var(--text-tertiary);
-  margin: 16px 0 0 0;
-  line-height: 1.5;
-  text-align: center;
-}
-
 .onboarding-view-steps {
   display: flex;
   flex-direction: column;
@@ -136,33 +100,11 @@
 }
 
 /* Step 1 stays actionable after “done”; show hover like active */
-.onboarding-view-step--settings.completed {
-  cursor: pointer;
-  opacity: 0.92;
-}
-
-.onboarding-view-step--settings.completed .step-title-view {
-  text-decoration: none;
-}
-
-.onboarding-view-step--settings.completed:hover {
-  opacity: 1;
-  background: rgba(0, 96, 224, 0.08);
-  border-color: rgba(0, 96, 224, 0.4);
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(0, 96, 224, 0.12);
-}
-
 /* Step states */
-.onboarding-view-step.completed:not(.onboarding-view-step--settings) {
+.onboarding-view-step.completed {
   opacity: 0.6;
   background: rgba(16, 185, 129, 0.1);
   border-color: rgba(16, 185, 129, 0.3);
-}
-
-.onboarding-view-step--settings.completed {
-  background: rgba(16, 185, 129, 0.08);
-  border-color: rgba(16, 185, 129, 0.28);
 }
 
 .onboarding-view-step.active {
@@ -256,7 +198,7 @@
   margin: 0 0 6px;
 }
 
-.onboarding-view-step.completed:not(.onboarding-view-step--settings) .step-title-view {
+.onboarding-view-step.completed .step-title-view {
   text-decoration: line-through;
 }
 

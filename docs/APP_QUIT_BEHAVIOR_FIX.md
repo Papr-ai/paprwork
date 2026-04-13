@@ -1,133 +1,156 @@
 # App Quit Behavior Fix
 
-**Issue ID:** #41
-**Date:** 2026-04-07
-**Status:** ✅ FIXED
+**Date:** 2026-04-12  
+**Issue:** App stays running in background after right-click quit  
+**Status:** ✅ Fixed
 
 ## Problem
 
-Users reported that when trying to quit the app (Cmd+Q on macOS, or File → Quit), the app stayed running in the background. The main window would close, but processes (especially the Gateway) continued running.
+When users right-clicked the app icon in the dock/taskbar and selected "Quit", the window would close but the app processes (especially Gateway) would stay running in the background. When users tried to reopen the app, it would appear to open instantly but show the existing state instead of doing a fresh restart.
+
+**User Experience:**
+- Right-click dock icon → Quit
+- Window closes
+- Gateway process stays running (port 18789 still bound)
+- Click app icon to reopen → Shows existing state, no fresh start
+- Required force-quit from Activity Monitor/Task Manager
 
 ## Root Causes
 
-1. **Incomplete cleanup in `before-quit` handler**: The original handler was async but didn't properly wait for cleanup to complete before quitting
-2. **Race condition**: `app.quit()` could be called before cleanup completed, leaving Gateway and other services running
-3. **No quit prevention**: The `before-quit` handler didn't call `event.preventDefault()` to hold the quit until cleanup finished
-4. **Missing force-kill safety net**: If Gateway didn't respond to SIGTERM, it would stay running indefinitely
-5. **Duplicate activate handlers**: Two `app.on("activate")` handlers with one referencing non-existent `createWindow()` function
+### 1. Incomplete Cleanup
+The `before-quit` handler was async but didn't properly await the Gateway supervisor's `stop()` method:
+
+```javascript
+// BEFORE (incorrect)
+if (supervisor) {
+  console.log("[Electron] Stopping Gateway supervisor...");
+  supervisor.stop(); // ❌ Not awaited
+}
+```
+
+### 2. Race Condition
+The `before-quit` handler called `app.quit()` after only 100ms, but the supervisor's `stop()` method used a 2-second timeout for SIGKILL. This meant the app would quit before Gateway was fully stopped:
+
+```javascript
+// BEFORE (incorrect)
+supervisor.stop(); // Takes up to 2 seconds
+setTimeout(() => app.quit(), 100); // ❌ Quit too early
+```
+
+### 3. Non-Async stop() Method
+The supervisor's `stop()` method was synchronous, using `setTimeout()` for the SIGKILL timeout. This meant there was no way to wait for it to complete:
+
+```javascript
+// BEFORE (incorrect)
+stop() {
+  this.process.kill("SIGTERM");
+  setTimeout(() => {
+    if (this.process && !this.process.killed) {
+      this.process.kill("SIGKILL");
+    }
+  }, 2000); // ❌ Can't await this
+}
+```
 
 ## Solution
 
-### 1. Enhanced `before-quit` Handler with Prevention
+### 1. Made stop() Async
+Changed the supervisor's `stop()` method to be async and properly wait for the Gateway process to exit:
 
 ```javascript
-let isQuitting = false;
-
-app.on("before-quit", async (event) => {
-  if (isQuitting) {
-    console.log("[Electron] Already quitting, skipping duplicate cleanup");
-    return;
-  }
-  
-  isQuitting = true;
-  console.log("[Electron] App is quitting - starting cleanup...");
-  
-  // CRITICAL: Prevent quit until cleanup is done
-  event.preventDefault();
-  
-  try {
-    // Telemetry tracking
-    if (telemetryClientInstance) {
-      telemetryClientInstance.trackFireAndForget("paprwork_app_quit");
-    }
-    
-    // Cleanup OAuth servers
-    if (cleanupOAuthServers) {
-      console.log("[Electron] Cleaning up OAuth servers...");
-      cleanupOAuthServers();
-    }
-    
-    // Cleanup Papr login callback server
-    if (cleanupPaprLogin) {
-      console.log("[Electron] Cleaning up Papr login server...");
-      cleanupPaprLogin();
-    }
-    
-    // Cleanup Ollama (stop managed instance)
-    if (cleanupOllama) {
-      console.log("[Electron] Cleaning up Ollama...");
-      await cleanupOllama();
-    }
-    
-    // Stop Gateway supervisor (CRITICAL)
-    if (supervisor) {
-      console.log("[Electron] Stopping Gateway supervisor...");
-      supervisor.stop();
-    }
-    
-    console.log("[Electron] Cleanup complete, quitting now");
-    
-    // Brief delay to ensure cleanup completes
-    setTimeout(() => {
-      app.quit();
-    }, 100);
-  } catch (error) {
-    console.error("[Electron] Error during cleanup:", error);
-    // Quit anyway after error to avoid hanging
-    setTimeout(() => {
-      app.quit();
-    }, 100);
-  }
-});
-```
-
-**Key Changes:**
-- **`event.preventDefault()`**: Holds the quit process until we explicitly call `app.quit()`
-- **`isQuitting` flag**: Prevents duplicate cleanup if multiple quit events fire
-- **Detailed logging**: Shows exactly what's being cleaned up
-- **Error handling**: Ensures app quits even if cleanup fails
-- **100ms delay**: Gives cleanup time to complete before final quit
-
-### 2. Enhanced Gateway Supervisor Stop Method
-
-```javascript
-stop() {
+// AFTER (correct)
+async stop() {
   this.isStopping = true;
   this._stopHealthCheck();
-  if (this.backoffTimer) {
-    clearTimeout(this.backoffTimer);
-    this.backoffTimer = null;
-  }
+  
   if (this.process && !this.process.killed) {
-    console.log("[Supervisor] Stopping Gateway process (PID: %s)...", this.process.pid);
+    const pid = this.process.pid;
+    console.log("[Supervisor] Stopping Gateway process (PID: %s)...", pid);
+    
     try {
       // Send SIGTERM for graceful shutdown
       this.process.kill("SIGTERM");
       
-      // Wait 2 seconds, then force kill if still alive
-      setTimeout(() => {
-        if (this.process && !this.process.killed) {
-          console.log("[Supervisor] Gateway didn't stop, force killing...");
-          this.process.kill("SIGKILL");
-        }
-      }, 2000);
+      // Wait for process to exit gracefully (up to 3 seconds)
+      await new Promise((resolve) => {
+        let attempts = 0;
+        const checkInterval = setInterval(() => {
+          attempts++;
+          if (!this.process || this.process.killed) {
+            clearInterval(checkInterval);
+            console.log("[Supervisor] Gateway stopped gracefully");
+            resolve();
+          } else if (attempts >= 30) { // 30 * 100ms = 3 seconds
+            clearInterval(checkInterval);
+            console.log("[Supervisor] Gateway didn't stop gracefully, force killing...");
+            if (this.process && !this.process.killed) {
+              this.process.kill("SIGKILL");
+            }
+            resolve();
+          }
+        }, 100);
+      });
     } catch (error) {
       console.warn("[Supervisor] Error stopping Gateway:", error.message);
     }
+    
     this.process = null;
     gatewayProcess = null;
   }
+  
   this._transitionTo("stopped");
 }
 ```
 
-**Key Changes:**
-- **PID logging**: Shows which process is being stopped
-- **SIGTERM first**: Graceful shutdown attempt
-- **2-second timeout**: Force SIGKILL if Gateway doesn't respond
-- **Error handling**: Logs errors but continues cleanup
+**Key improvements:**
+- ✅ Returns a Promise that resolves when Gateway is fully stopped
+- ✅ Checks every 100ms if process has exited
+- ✅ Graceful shutdown with SIGTERM first
+- ✅ Force kill with SIGKILL after 3 seconds if needed
+- ✅ Logs progress for debugging
 
-### 3. Added `will-quit` Safety Net
+### 2. Awaited stop() in before-quit
+Updated the `before-quit` handler to properly await the supervisor's `stop()` method:
+
+```javascript
+// AFTER (correct)
+app.on("before-quit", async (event) => {
+  if (isQuitting) return;
+  
+  isQuitting = true;
+  console.log("[Electron] App is quitting - starting cleanup...");
+  
+  // Prevent quit until cleanup is done
+  event.preventDefault();
+  
+  try {
+    // ... other cleanup ...
+    
+    // Stop Gateway supervisor (AWAIT to ensure it completes)
+    if (supervisor) {
+      console.log("[Electron] Stopping Gateway supervisor...");
+      await supervisor.stop(); // ✅ Now awaited
+    }
+    
+    console.log("[Electron] Cleanup complete, quitting now");
+    
+    // Brief delay before quit to ensure everything is settled
+    setTimeout(() => app.quit(), 100);
+  } catch (error) {
+    console.error("[Electron] Error during cleanup:", error);
+    setTimeout(() => app.quit(), 100);
+  }
+});
+```
+
+**Key improvements:**
+- ✅ Uses `event.preventDefault()` to hold quit until cleanup done
+- ✅ Properly awaits `supervisor.stop()`
+- ✅ Only calls `app.quit()` after cleanup completes
+- ✅ 100ms buffer after cleanup for safety
+
+### 3. Added will-quit Safety Net
+Added a final safety net in `will-quit` to force-kill Gateway if somehow still running:
 
 ```javascript
 app.on("will-quit", (event) => {
@@ -145,128 +168,140 @@ app.on("will-quit", (event) => {
 });
 ```
 
-**Why This Matters:**
-- `will-quit` is the **last event** before the app actually quits
-- If Gateway somehow survived `before-quit`, this ensures it's killed
-- Uses `SIGKILL` (force kill) because this is the final chance
-
 ### 4. Fixed SIGINT/SIGTERM Handlers
+Updated the signal handlers to check the `isQuitting` flag to avoid duplicate cleanup:
 
 ```javascript
 process.on("SIGINT", () => {
-  if (isQuitting) return;
+  if (isQuitting) return; // ✅ Avoid duplicate cleanup
   console.log("[Electron] Received SIGINT, shutting down...");
   isQuitting = true;
   if (supervisor) supervisor.stop();
-  // Give supervisor time to stop, then quit
   setTimeout(() => app.quit(), 500);
 });
 
 process.on("SIGTERM", () => {
-  if (isQuitting) return;
+  if (isQuitting) return; // ✅ Avoid duplicate cleanup
   console.log("[Electron] Received SIGTERM, shutting down...");
   isQuitting = true;
   if (supervisor) supervisor.stop();
-  // Give supervisor time to stop, then quit
   setTimeout(() => app.quit(), 500);
 });
 ```
 
-**Key Changes:**
-- **Check `isQuitting` flag**: Avoid duplicate cleanup
-- **500ms delay**: Gives supervisor time to stop Gateway before app quits
-- **Proper ordering**: Stop supervisor first, then quit app
+## Timeline
 
-### 5. Removed Duplicate `activate` Handler
+### Before Fix
+```
+1. User clicks Quit
+2. before-quit event fires
+3. supervisor.stop() called (not awaited)
+4. app.quit() called after 100ms
+5. Gateway still running (SIGTERM sent but not processed)
+6. App quits but Gateway stays alive
+7. Port 18789 still bound
+```
 
-Removed duplicate handler that was inside `app.whenReady()` and referenced non-existent `createWindow()` function. Kept the one outside that correctly references `createMainWindow()`.
+### After Fix
+```
+1. User clicks Quit
+2. before-quit event fires (first time)
+3. event.preventDefault() blocks quit
+4. isQuitting = true
+5. await supervisor.stop() called
+6. SIGTERM sent to Gateway
+7. Poll every 100ms for up to 3 seconds
+8. Gateway exits gracefully OR force-killed with SIGKILL
+9. supervisor.stop() resolves
+10. app.quit() called again
+11. before-quit fires (second time)
+12. isQuitting already true, so return (allow quit)
+13. will-quit fires (safety net check)
+14. App quits cleanly
+15. Port 18789 released
+```
 
 ## Testing
 
-### Manual Testing
+### Manual Test
+1. Start app: `npm start`
+2. Wait for Gateway to start (check console logs)
+3. Right-click dock/taskbar icon → Quit
+4. Check console logs for cleanup messages:
+   - "App is quitting - starting cleanup..."
+   - "Stopping Gateway supervisor..."
+   - "Gateway stopped gracefully" OR "Gateway didn't stop gracefully, force killing..."
+   - "Cleanup complete, quitting now"
+5. Verify no processes running: `lsof -ti:18789` (should return nothing)
+6. Reopen app: should do fresh start, not show existing state
 
-**macOS:**
-1. Launch app normally
-2. Press **Cmd+Q** to quit
-3. Verify in Activity Monitor:
-   - No "Papr Work" processes running
-   - No orphaned Node processes on port 18789
-4. Check logs for cleanup sequence:
-   ```
-   [Electron] App is quitting - starting cleanup...
-   [Electron] Cleaning up OAuth servers...
-   [Electron] Cleaning up Papr login server...
-   [Electron] Cleaning up Ollama...
-   [Electron] Stopping Gateway supervisor...
-   [Supervisor] Stopping Gateway process (PID: 12345)...
-   [Electron] Cleanup complete, quitting now
-   [Electron] App will quit - final cleanup
-   ```
-
-**Windows/Linux:**
-1. Launch app normally
-2. Close window (X button)
-3. Verify processes stopped
-
-### Automated Testing
-
-Check for orphaned Gateway processes:
-
-```bash
-# After quitting app, should return nothing:
-lsof -ti:18789
-
-# Or on Windows:
-netstat -ano | findstr :18789
+### Expected Console Output (Successful Quit)
+```
+[Electron] App is quitting - starting cleanup...
+[Electron] Cleaning up OAuth servers...
+[OAuth IPC] Stopped token refresh timer
+[Electron] Cleaning up Papr login server...
+[PaprLogin] Cleaned up login state.
+[Electron] Cleaning up Ollama...
+[Electron] Stopping Gateway supervisor...
+[Supervisor] Stopping Gateway process (PID: 12345)...
+[Supervisor] Gateway exited with code: 0
+[Supervisor] Gateway stopped gracefully
+[Supervisor] running → stopped
+[Electron] Cleanup complete, allowing app to quit
+[Electron] Already quitting, allowing quit to proceed
+[Electron] App will quit - final cleanup
 ```
 
-## Impact
+### Edge Cases
 
-**Before:**
-- Cmd+Q → Window closes but Gateway keeps running in background
-- No way to quit except Activity Monitor or `killall -9`
-- Orphaned processes accumulate over time
+#### Gateway Hangs
+If Gateway doesn't respond to SIGTERM:
+```
+[Supervisor] Stopping Gateway process (PID: 12345)...
+[Supervisor] Gateway didn't stop gracefully, force killing...
+```
 
-**After:**
-- Cmd+Q → Full cleanup in 100-500ms, all processes stopped ✅
-- Gateway gets graceful SIGTERM, then SIGKILL if needed ✅
-- Clean logs showing exactly what's happening ✅
-- Multiple safety nets prevent zombie processes ✅
+#### Force Quit (Cmd+Q)
+Same flow as right-click quit (both trigger `before-quit`)
+
+#### Terminal Ctrl+C
+SIGINT handler stops supervisor:
+```
+[Electron] Received SIGINT, shutting down...
+[Supervisor] Stopping Gateway process (PID: 12345)...
+```
 
 ## Files Changed
 
 - `src/electron/index.cjs`:
-  - Enhanced `before-quit` handler with `event.preventDefault()`
-  - Added `will-quit` handler as safety net
-  - Enhanced `GatewayProcessSupervisor.stop()` with force-kill
-  - Fixed SIGINT/SIGTERM handlers with delays
-  - Removed duplicate `activate` handler
-  - Added `isQuitting` flag to prevent duplicate cleanup
+  - Changed `stop()` from sync to async
+  - Added graceful shutdown with polling
+  - Awaited `supervisor.stop()` in `before-quit`
+  - Added safety net in `will-quit`
+  - Fixed SIGINT/SIGTERM handlers
 
-## Platform Support
+## Impact
 
-- **macOS**: ✅ Fully tested and working
-- **Windows**: ✅ Should work (same logic, different signals)
-- **Linux**: ✅ Should work (same logic as macOS)
-
-## Related Issues
-
-- Similar to Windows close/minimize behavior (Issue #39)
-- Gateway lifecycle management (Enhancement 15)
-- Ollama cleanup on quit (Enhancement 23)
+- **Before:** Gateway stayed running after quit, required force-quit
+- **After:** All processes stop cleanly, port released, fresh restart works ✅
 
 ## Prevention
 
-**Always follow this pattern for Electron lifecycle:**
-1. Use `event.preventDefault()` in `before-quit` to hold the quit
-2. Clean up resources (stop child processes, close connections)
-3. Call `app.quit()` explicitly when done
+**Rules for future quit handlers:**
+1. Always use `event.preventDefault()` in `before-quit` to hold quit
+2. Clean up all resources (child processes, connections, timers)
+3. Call `app.quit()` explicitly when cleanup done
 4. Add `will-quit` as final safety net for force-kill
-5. Test with Activity Monitor / Task Manager to verify no orphans
+5. Test with Activity Monitor/Task Manager to verify no orphans
 
-## Future Enhancements
+## Related Issues
 
-1. Add timeout to entire cleanup (force quit after 5 seconds)
-2. Track cleanup telemetry (time taken, errors)
-3. Show "Quitting..." dialog if cleanup takes >2 seconds
-4. Add health check before quit (warn if Gateway unhealthy)
+- Issue 41: App Staying Running After Quit (original report)
+- Issue 40: Stale Running Jobs (related to process cleanup)
+
+## References
+
+- [Electron app.before-quit docs](https://www.electronjs.org/docs/latest/api/app#event-before-quit)
+- [Electron app.will-quit docs](https://www.electronjs.org/docs/latest/api/app#event-will-quit)
+- [Node.js process.kill docs](https://nodejs.org/api/process.html#processkillpid-signal)

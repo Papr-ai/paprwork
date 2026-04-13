@@ -18,6 +18,7 @@ import { delegationTools } from "./delegation.js";
 import { planningTools } from "./planning.js";
 import { recipeTools } from "./recipes.js";
 import { keyManagementTools } from "./keyManagement.js";
+import { chatHistoryTools } from "./chatHistory.js";
 
 /**
  * All available tools
@@ -36,6 +37,7 @@ export const allTools = [
   ...planningTools,
   ...keyManagementTools,
   ...recipeTools,
+  ...chatHistoryTools,
 ];
 
 /**
@@ -54,6 +56,7 @@ export const toolsByCategory = {
   planning: planningTools,
   keyManagement: keyManagementTools,
   recipes: recipeTools,
+  chatHistory: chatHistoryTools,
 } as const;
 
 /**
@@ -103,6 +106,7 @@ export { skillsTools } from "./skills.js";
 export {
   appJobsTools,
   createAppTool,
+  deleteAppTool,
   createJobTool,
   runJobTool,
   readJobLogsTool,
@@ -136,6 +140,7 @@ export {
 
 export { planningTools, createPlanTool, updatePlanTool, deletePlanTool } from "./planning.js";
 export { writeRecipeTool, readRecipeTool, evaluateRunTool, listEvaluationsTool } from "./recipes.js";
+export { chatHistoryTools, getFullToolResultTool } from "./chatHistory.js";
 
 export {
   keyManagementTools,

@@ -4,13 +4,19 @@
  * Includes namespace selector for switching between workspaces
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import "./PaprLoginSection.css";
 
 interface Namespace {
   id: string;
   name: string;
   environmentType?: string;
+}
+
+interface Organization {
+  id: string;
+  name: string;
+  role?: string;
 }
 
 interface PaprLoginSectionProps {
@@ -23,6 +29,12 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
+  // Organization state
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [activeOrganizationId, setActiveOrganizationId] = useState<string | null>(null);
+  const [switchingOrganization, setSwitchingOrganization] = useState(false);
+  const [organizationsLoaded, setOrganizationsLoaded] = useState(false);
+
   // Namespace state
   const [namespaces, setNamespaces] = useState<Namespace[]>([]);
   const [activeNamespaceId, setActiveNamespaceId] = useState<string | null>(null);
@@ -34,12 +46,19 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
     checkLoginStatus();
   }, []);
 
-  // Load namespaces when logged in
+  // Load organizations when logged in
   useEffect(() => {
     if (isLoggedIn) {
-      loadNamespaces();
+      loadOrganizations();
     }
   }, [isLoggedIn]);
+
+  // Load namespaces when organization changes
+  useEffect(() => {
+    if (isLoggedIn && activeOrganizationId) {
+      loadNamespaces();
+    }
+  }, [isLoggedIn, activeOrganizationId]);
 
   const checkLoginStatus = async () => {
     try {
@@ -50,6 +69,20 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
       }
     } catch (err) {
       console.error("Failed to check Papr login status:", err);
+    }
+  };
+
+  const loadOrganizations = async () => {
+    try {
+      const result = await window.electronAPI.papr.listOrganizations();
+      if (result.success && result.organizations) {
+        setOrganizations(result.organizations);
+        setActiveOrganizationId(result.activeOrganizationId || null);
+      }
+    } catch (err) {
+      console.error("Failed to load organizations:", err);
+    } finally {
+      setOrganizationsLoaded(true);
     }
   };
 
@@ -64,6 +97,30 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
       console.error("Failed to load namespaces:", err);
     } finally {
       setNamespacesLoaded(true);
+    }
+  };
+
+  const handleSwitchOrganization = async (organizationId: string) => {
+    const org = organizations.find((o) => o.id === organizationId);
+    if (!org || organizationId === activeOrganizationId) return;
+
+    setSwitchingOrganization(true);
+    setError(null);
+    try {
+      const result = await window.electronAPI.papr.switchOrganization(organizationId, org.name);
+      if (result.success) {
+        setActiveOrganizationId(organizationId);
+        // Clear namespace state (will reload after org change)
+        setActiveNamespaceId(null);
+        setNamespaces([]);
+        setNamespacesLoaded(false);
+      } else {
+        setError(result.error || "Failed to switch organization");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to switch organization");
+    } finally {
+      setSwitchingOrganization(false);
     }
   };
 
@@ -119,18 +176,32 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
     }
   };
 
+  // Stable callback refs for IPC listeners (must be at top level, not inside useEffect)
+  const handleLoginSuccessRef = useRef((data: { apiKey: string; email: string }) => {
+    setIsLoggedIn(true);
+    setUserEmail(data.email);
+    setIsLoading(false);
+    if (onApiKeyReceived) onApiKeyReceived(data.apiKey);
+  });
+
+  const handleNamespaceChangedRef = useRef((data: { namespaceId: string; namespaceName: string }) => {
+    setActiveNamespaceId(data.namespaceId);
+  });
+
+  const handleOrganizationChangedRef = useRef((data: { organizationId: string; organizationName: string }) => {
+    setActiveOrganizationId(data.organizationId);
+    loadNamespaces();
+  });
+
   // Listen for login/logout/namespace events
   useEffect(() => {
-    window.electronAPI.papr.onLoginSuccess((data) => {
-      setIsLoggedIn(true);
-      setUserEmail(data.email);
-      setIsLoading(false);
-      if (onApiKeyReceived) onApiKeyReceived(data.apiKey);
-    });
+    const loginCb = handleLoginSuccessRef.current;
+    const nsCb = handleNamespaceChangedRef.current;
+    const orgCb = handleOrganizationChangedRef.current;
 
-    window.electronAPI.papr.onNamespaceChanged((data) => {
-      setActiveNamespaceId(data.namespaceId);
-    });
+    window.electronAPI.papr.onLoginSuccess(loginCb);
+    window.electronAPI.papr.onNamespaceChanged(nsCb);
+    window.electronAPI.papr.onOrganizationChanged(orgCb);
 
     const handleLoginSuccess = (event: CustomEvent) => {
       const { apiKey, email } = event.detail;
@@ -148,6 +219,8 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
     const handleLogoutSuccess = () => {
       setIsLoggedIn(false);
       setUserEmail(null);
+      setOrganizations([]);
+      setActiveOrganizationId(null);
       setNamespaces([]);
       setActiveNamespaceId(null);
     };
@@ -157,11 +230,14 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
     window.addEventListener("papr-logout-success", handleLogoutSuccess as EventListener);
 
     return () => {
+      window.electronAPI.papr.removeLoginSuccessListener(loginCb);
+      window.electronAPI.papr.removeNamespaceChangedListener(nsCb);
+      window.electronAPI.papr.removeOrganizationChangedListener(orgCb);
       window.removeEventListener("papr-auth-success", handleLoginSuccess as EventListener);
       window.removeEventListener("papr-login-error", handleLoginError as EventListener);
       window.removeEventListener("papr-logout-success", handleLogoutSuccess as EventListener);
     };
-  }, [onApiKeyReceived]);
+  }, []);
 
   if (isLoggedIn) {
     const activeNs = namespaces.find((n) => n.id === activeNamespaceId);
@@ -177,6 +253,41 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
         <p className="papr-login-description">
           {userEmail ? `Logged in as ${userEmail}` : "Your API key has been provisioned automatically"}
         </p>
+
+        {/* Organization Selector */}
+        {organizationsLoaded && organizations.length > 1 && (
+          <div className="papr-namespace-section">
+            <label className="papr-namespace-label">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+              </svg>
+              Organization
+            </label>
+            <div className="papr-namespace-select-wrapper">
+              <select
+                className="papr-namespace-select"
+                value={activeOrganizationId || ""}
+                onChange={(e) => handleSwitchOrganization(e.target.value)}
+                disabled={switchingOrganization}
+              >
+                {organizations.map((org) => (
+                  <option key={org.id} value={org.id}>
+                    {org.name}{org.role ? ` (${org.role})` : ""}
+                  </option>
+                ))}
+              </select>
+              {switchingOrganization && (
+                <svg className="papr-namespace-spinner" width="14" height="14" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" opacity="0.25"/>
+                  <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                </svg>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Namespace Selector */}
         {namespacesLoaded && namespaces.length > 0 && (

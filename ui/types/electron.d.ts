@@ -134,7 +134,9 @@ export interface ElectronAPI {
       error?: string;
     }>;
     onLoginSuccess: (callback: (data: { apiKey: string; email: string }) => void) => void;
+    removeLoginSuccessListener: (callback: (data: { apiKey: string; email: string }) => void) => void;
     onLogoutSuccess: (callback: () => void) => void;
+    removeLogoutSuccessListener: (callback: () => void) => void;
     listNamespaces: () => Promise<{
       success: boolean;
       namespaces?: Array<{ id: string; name: string; environmentType?: string }>;
@@ -146,7 +148,23 @@ export interface ElectronAPI {
       apiKey?: string;
       error?: string;
     }>;
-    onNamespaceChanged: (callback: (data: { namespaceId: string; namespaceName: string }) => void) => void;  };
+    onNamespaceChanged: (callback: (data: { namespaceId: string; namespaceName: string }) => void) => void;
+    removeNamespaceChangedListener: (callback: (data: { namespaceId: string; namespaceName: string }) => void) => void;
+    listOrganizations: () => Promise<{
+      success: boolean;
+      organizations?: Array<{ id: string; name: string; role?: string }>;
+      activeOrganizationId?: string;
+      error?: string;
+    }>;
+    switchOrganization: (organizationId: string, organizationName: string) => Promise<{
+      success: boolean;
+      organizationId?: string;
+      organizationName?: string;
+      error?: string;
+    }>;
+    onOrganizationChanged: (callback: (data: { organizationId: string; organizationName: string }) => void) => void;
+    removeOrganizationChangedListener: (callback: (data: { organizationId: string; organizationName: string }) => void) => void;
+  };
 
   // Python Dependencies API - Check and auto-install BeautifulSoup for browser_parse_html
   pythonDeps: {

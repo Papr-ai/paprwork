@@ -125,6 +125,11 @@ function renderSequence(
       string,
       Parameters<typeof JobStatusCard>[0]["data"]
     >();
+    // Map of delegationId → latest DelegationData — for cards OUTSIDE working card
+    const delegationCardMap = new Map<
+      string,
+      Parameters<typeof DelegationCard>[0]["data"] | Parameters<typeof MiniChatCard>[0]
+    >();
     // Map of keyName → latest KeyRequestData — ensures one card per key per response
     const keyRequestCardMap = new Map<
       string,
@@ -305,8 +310,7 @@ function renderSequence(
         if (delegationData) {
           // Only add if we haven't already added this delegation ID
           if (!addedDelegationIds.has(delegationData.id)) {
-            // MiniChatCard when we have real job ID: from result, or from subagent-job-started (placeholder).
-            // Show MiniChatCard for ALL delegations with job ID so user sees sub-agent conversation.
+            // Build MiniChatCard props for OUTSIDE working card
             const hasResult = !!toolCall.result;
             const hasRealJobId =
               hasResult ||
@@ -320,28 +324,23 @@ function renderSequence(
                 : delegationData.status === "completed"
                   ? "completed"
                   : "failed";
-            exploringItems.push(
-              useMiniChat ? (
-                <MiniChatCard
-                  key={`delegation-${delegationData.id}`}
-                  delegationId={delegationData.id}
-                  subAgentName={
-                    delegationData.agentName ?? delegationData.agentId
-                  }
-                  task={delegationData.task}
-                  status={miniStatus}
-                  context={delegationData.context}
-                  resultText={delegationData.resultText}
-                  error={delegationData.error}
-                  subAgentIcon={delegationData.agentIcon}
-                />
-              ) : (
-                <DelegationCard
-                  key={`delegation-${delegationData.id}`}
-                  data={delegationData}
-                />
-              ),
-            );
+            
+            // Store delegation data to render OUTSIDE working card
+            if (useMiniChat) {
+              delegationCardMap.set(delegationData.id, {
+                delegationId: delegationData.id,
+                subAgentName: delegationData.agentName ?? delegationData.agentId,
+                task: delegationData.task,
+                status: miniStatus,
+                context: delegationData.context,
+                resultText: delegationData.resultText,
+                error: delegationData.error,
+                subAgentIcon: delegationData.agentIcon,
+              });
+            } else {
+              delegationCardMap.set(delegationData.id, delegationData);
+            }
+            
             addedDelegationIds.add(delegationData.id);
           }
         }
@@ -371,6 +370,69 @@ function renderSequence(
 
     // Job status cards are rendered INLINE inside exploring card (after run_job tool)
 
+    // Render delegation cards (OUTSIDE working card, always visible and interactive)
+    if (delegationCardMap.size > 0) {
+      delegationCardMap.forEach((delegationData, delegationId) => {
+        // Check if it's MiniChatCard props or DelegationCard data
+        if ("delegationId" in delegationData) {
+          // MiniChatCard props
+          elements.push(
+            <MiniChatCard
+              key={`delegation-${delegationId}`}
+              delegationId={delegationData.delegationId}
+              subAgentName={delegationData.subAgentName}
+              task={delegationData.task}
+              status={delegationData.status}
+              context={delegationData.context}
+              resultText={delegationData.resultText}
+              error={delegationData.error}
+              subAgentIcon={delegationData.subAgentIcon}
+            />,
+          );
+        } else {
+          // DelegationCard data
+          elements.push(
+            <DelegationCard
+              key={`delegation-${delegationId}`}
+              data={delegationData}
+            />,
+          );
+        }
+      });
+    }
+
+    // Extract last activity for header
+    let lastActivity = "Working";
+    // Find the last tool or text item in the sequence
+    for (let i = sequence.length - 1; i >= 0; i--) {
+      const item = sequence[i];
+      if (item.type === "tool") {
+        const toolData = item.data as any;
+        const toolName = toolData.name || "tool";
+        const isRunning = toolData.status === "calling";
+        
+        // Special handling for run_job to show job name
+        if (toolName === "run_job") {
+          const jobId = (toolData.input?.jobId as string) || "unknown";
+          const jobName = getJobName(jobId) || jobId;
+          lastActivity = isRunning ? `Running job: ${jobName}` : `Job finished: ${jobName}`;
+        } else {
+          // Use the display label helper
+          lastActivity = getToolDisplayLabel({
+            toolName,
+            args: toolData.input || {},
+            status: toolData.status || "success",
+          });
+        }
+        break;
+      } else if (item.type === "text" && typeof item.data === "string" && item.data.trim()) {
+        // Use first 50 chars of text as activity
+        const text = item.data.trim();
+        lastActivity = text.length > 50 ? text.substring(0, 50) + "..." : text;
+        break;
+      }
+    }
+
     // Render exploring card with all interleaved items
     if (exploringItems.length > 0) {
       const hasCallingTool = sequence.some(
@@ -384,7 +446,7 @@ function renderSequence(
         <WorkingCard 
           key="working" 
           isExploring={isExploring}
-          elapsedSeconds={message.elapsedSeconds || 0}
+          lastActivity={lastActivity}
         >
           {exploringItems}
         </WorkingCard>,

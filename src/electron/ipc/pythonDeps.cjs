@@ -11,11 +11,19 @@ let checkPythonDependenciesFn;
 let autoInstallPythonDependenciesFn;
 
 async function loadESMModules() {
-  const module = await import(
-    "../../dist/core/utils/pythonDependencies.js"
-  );
-  checkPythonDependenciesFn = module.checkPythonDependencies;
-  autoInstallPythonDependenciesFn = module.autoInstallPythonDependencies;
+  try {
+    const module = await import(
+      "../../../dist/core/utils/pythonDependencies.js"
+    );
+    checkPythonDependenciesFn = module.checkPythonDependencies;
+    autoInstallPythonDependenciesFn = module.autoInstallPythonDependencies;
+  } catch (error) {
+    console.warn(
+      "[Electron] Could not load Python dependencies module:",
+      error.message
+    );
+    throw error; // Re-throw so handlers can catch and return graceful error
+  }
 }
 
 /**

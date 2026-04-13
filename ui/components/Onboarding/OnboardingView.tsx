@@ -1,12 +1,12 @@
 /**
  * OnboardingView - Full-screen onboarding experience
  * Shown in ContentArea instead of as a modal overlay
+ * Post-signin: Papr AI proxy provides model access, so no API key setup needed.
  */
 
 import React, { useState, useEffect, useCallback } from "react";
 import { useTabs } from "../../hooks/useTabs";
 import { useChat } from "../../hooks/useChat";
-import { PaprLoginSection } from "../Settings/PaprLoginSection";
 import "./OnboardingView.css";
 
 type StepState = "locked" | "active" | "completed";
@@ -14,7 +14,6 @@ type StepState = "locked" | "active" | "completed";
 interface OnboardingState {
   step1Completed: boolean;
   step2Completed: boolean;
-  step3Completed: boolean;
 }
 
 export function OnboardingView() {
@@ -23,14 +22,8 @@ export function OnboardingView() {
   const [state, setState] = useState<OnboardingState>({
     step1Completed: false,
     step2Completed: false,
-    step3Completed: false,
   });
   const [isInitialized, setIsInitialized] = useState(false);
-
-  const openSettings = useCallback(() => {
-    const settingsId = createTab("settings", "settings", "Settings");
-    switchToTab(settingsId);
-  }, [createTab, switchToTab]);
 
   const sendInNewChat = useCallback(
     async (message: string): Promise<boolean> => {
@@ -54,12 +47,10 @@ export function OnboardingView() {
   useEffect(() => {
     const step1 = localStorage.getItem("papr-onboarding-step1") === "true";
     const step2 = localStorage.getItem("papr-onboarding-step2") === "true";
-    const step3 = localStorage.getItem("papr-onboarding-step3") === "true";
 
     setState({
       step1Completed: step1,
       step2Completed: step2,
-      step3Completed: step3,
     });
 
     setIsInitialized(true);
@@ -71,18 +62,13 @@ export function OnboardingView() {
 
     localStorage.setItem("papr-onboarding-step1", state.step1Completed.toString());
     localStorage.setItem("papr-onboarding-step2", state.step2Completed.toString());
-    localStorage.setItem("papr-onboarding-step3", state.step3Completed.toString());
 
     window.dispatchEvent(new CustomEvent('papr-onboarding-changed'));
   }, [state, isInitialized]);
 
-  // Auto-dismiss when all 3 steps complete
+  // Auto-dismiss when both steps complete
   useEffect(() => {
-    if (
-      !state.step1Completed ||
-      !state.step2Completed ||
-      !state.step3Completed
-    ) {
+    if (!state.step1Completed || !state.step2Completed) {
       return;
     }
     const timer = setTimeout(() => {
@@ -93,41 +79,25 @@ export function OnboardingView() {
   }, [state]);
 
   const getStepState = useCallback(
-    (step: 1 | 2 | 3): StepState => {
+    (step: 1 | 2): StepState => {
       if (step === 1) return state.step1Completed ? "completed" : "active";
-      if (step === 2) {
-        if (state.step2Completed) return "completed";
-        return state.step1Completed ? "active" : "locked";
-      }
-      // step 3
-      if (state.step3Completed) return "completed";
-      return state.step2Completed ? "active" : "locked";
+      if (state.step2Completed) return "completed";
+      return state.step1Completed ? "active" : "locked";
     },
     [state],
   );
 
-  const handleStepClick = async (step: 1 | 2 | 3): Promise<void> => {
-    // Step 1 always opens Settings (users often need to add another provider later)
-    if (step === 1) {
-      openSettings();
-      if (!state.step1Completed) {
-        window.setTimeout(() => {
-          setState((prev) => ({ ...prev, step1Completed: true }));
-        }, 1000);
-      }
-      return;
-    }
-
+  const handleStepClick = async (step: 1 | 2): Promise<void> => {
     const stepState = getStepState(step);
     if (stepState === "locked" || stepState === "completed") return;
 
-    if (step === 2) {
+    if (step === 1) {
       const ok = await sendInNewChat(
         "Let's get started with onboarding! I'd like you to learn about me and set things up.",
       );
       if (!ok) return;
       window.setTimeout(() => {
-        setState((prev) => ({ ...prev, step2Completed: true }));
+        setState((prev) => ({ ...prev, step1Completed: true }));
       }, 2000);
       return;
     }
@@ -137,7 +107,7 @@ export function OnboardingView() {
     );
     if (!ok) return;
     window.setTimeout(() => {
-      setState((prev) => ({ ...prev, step3Completed: true }));
+      setState((prev) => ({ ...prev, step2Completed: true }));
     }, 2000);
   };
 
@@ -158,65 +128,17 @@ export function OnboardingView() {
           </span>
           <h1 className="onboarding-view-title">Welcome to Paprwork!</h1>
           <p className="onboarding-view-subtitle">
-            Let's get you set up in 3 quick steps
-          </p>
-        </div>
-
-        {/* Papr Login Section - Optional but recommended */}
-        <div className="onboarding-view-papr-section">
-          <div className="onboarding-papr-badge">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-            <span>Recommended</span>
-          </div>
-          <PaprLoginSection 
-            onApiKeyReceived={() => {
-              // Auto-mark step 1 as completed when Papr API key is provisioned
-              setState((prev) => ({ ...prev, step1Completed: true }));
-            }}
-          />
-          <p className="onboarding-papr-note">
-            Login to get automatic access to Papr Memory for chat history and cloud features. 
-            Or skip and add API keys manually below.
+            Let's get you set up in 2 quick steps
           </p>
         </div>
 
         <div className="onboarding-view-steps">
-          {/* Step 1: Connect accounts / keys — always opens Settings when clicked */}
+          {/* Step 1: Setup Your Agents */}
           <div
-            className={`onboarding-view-step onboarding-view-step--settings ${getStepState(1)}`}
+            className={`onboarding-view-step ${getStepState(1)}`}
             onClick={() => void handleStepClick(1)}
           >
             <div className="step-number-view">1</div>
-            <div className="step-content-view">
-              <div className="step-icon-view">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-                  <path
-                    d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </div>
-              <div className="step-text-view">
-                <h3 className="step-title-view">Connect ChatGPT, Claude, or your keys</h3>
-                <p className="step-description-view">
-                  Sign in with ChatGPT or Claude if you have a subscription, or add your own
-                  API keys for OpenAI, Anthropic, or Google — all in Settings.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Step 2: Setup Your Agents */}
-          <div
-            className={`onboarding-view-step ${getStepState(2)}`}
-            onClick={() => void handleStepClick(2)}
-          >
-            <div className="step-number-view">2</div>
             <div className="step-content-view">
               <div className="step-icon-view">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
@@ -245,12 +167,12 @@ export function OnboardingView() {
             </div>
           </div>
 
-          {/* Step 3: Complete First Task */}
+          {/* Step 2: Complete First Task */}
           <div
-            className={`onboarding-view-step ${getStepState(3)}`}
-            onClick={() => void handleStepClick(3)}
+            className={`onboarding-view-step ${getStepState(2)}`}
+            onClick={() => void handleStepClick(2)}
           >
-            <div className="step-number-view">3</div>
+            <div className="step-number-view">2</div>
             <div className="step-content-view">
               <div className="step-icon-view">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
@@ -275,8 +197,7 @@ export function OnboardingView() {
 
         <div className="onboarding-view-footer">
           <p className="onboarding-view-hint">
-            <strong>Start here:</strong> Use the first step anytime to open Settings — connect
-            ChatGPT or Claude, or add API keys.
+            Click a step to get started — your AI agents are ready to go!
           </p>
         </div>
       </div>
