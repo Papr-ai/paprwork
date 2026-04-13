@@ -40,12 +40,19 @@ interface UIPreferences {
   onboardingStep3Completed: boolean; // Complete first task
 }
 
+interface PreferencesData {
+  defaultHomeAppId: string | null;
+}
+
 interface SettingsData {
   profile: ProfileData;
   permissions: PermissionData;
   codeIndexing: CodeIndexingSettings;
   uiPreferences: UIPreferences;
+  preferences: PreferencesData;
 }
+
+const DEFAULT_HOME_APP_ID = "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c";
 
 const DEFAULTS: SettingsData = {
   profile: { name: "", email: "", imageUrl: "" },
@@ -72,6 +79,9 @@ const DEFAULTS: SettingsData = {
     onboardingStep2Completed: false,
     onboardingStep3Completed: false,
   },
+  preferences: {
+    defaultHomeAppId: DEFAULT_HOME_APP_ID,
+  },
 };
 
 const SETTINGS_PATH = path.join(os.homedir(), "Papr", "data", "settings.json");
@@ -79,7 +89,12 @@ const SETTINGS_PATH = path.join(os.homedir(), "Papr", "data", "settings.json");
 export async function loadSettings(): Promise<SettingsData> {
   try {
     const raw = await fs.readFile(SETTINGS_PATH, "utf-8");
-    return { ...DEFAULTS, ...JSON.parse(raw) };
+    const saved = JSON.parse(raw) as Partial<SettingsData>;
+    return {
+      ...DEFAULTS,
+      ...saved,
+      preferences: { ...DEFAULTS.preferences, ...saved.preferences },
+    };
   } catch {
     return { ...DEFAULTS };
   }
