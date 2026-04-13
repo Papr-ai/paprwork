@@ -11,7 +11,10 @@ describe("AppService", () => {
 
   beforeEach(async () => {
     originalHome = process.env.HOME;
-    testHomeDir = path.join(os.tmpdir(), `paprwork-v2-app-service-${Date.now()}`);
+    testHomeDir = path.join(
+      os.tmpdir(),
+      `paprwork-v2-app-service-${Date.now()}`,
+    );
     process.env.HOME = testHomeDir;
     await fs.mkdir(testHomeDir, { recursive: true });
     appService = new AppService();
@@ -36,8 +39,7 @@ describe("AppService", () => {
     const loadedFile = await appService.readAppFile(created.id, "index.html");
 
     expect(created.title).toBe("Dashboard");
-    expect(listed).toHaveLength(1);
-    expect(listed[0].id).toBe(created.id);
+    expect(listed.some((app) => app.id === created.id)).toBe(true);
     expect(loadedFile).toContain("Dashboard");
   });
 
@@ -99,5 +101,45 @@ describe("AppService", () => {
       "utf8",
     );
     expect(raw).toContain("orders");
+  });
+
+  test("preserves existing apps.json entries when installing default apps", async () => {
+    await fs.rm(testHomeDir, { recursive: true, force: true });
+    await fs.mkdir(path.join(testHomeDir, "Papr", "data"), { recursive: true });
+    await fs.mkdir(path.join(testHomeDir, "Papr", "apps", "existing-app"), {
+      recursive: true,
+    });
+
+    const existingApp = {
+      id: "existing-app",
+      title: "Existing App",
+      description: "Recovered from disk",
+      type: "app" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      favorite: false,
+    };
+
+    await fs.writeFile(
+      path.join(testHomeDir, "Papr", "data", "apps.json"),
+      JSON.stringify([existingApp], null, 2),
+      "utf8",
+    );
+
+    const freshService = new AppService();
+    await freshService.initialize();
+
+    const listed = await freshService.listApps();
+    const persisted = JSON.parse(
+      await fs.readFile(
+        path.join(testHomeDir, "Papr", "data", "apps.json"),
+        "utf8",
+      ),
+    ) as Array<{ id: string; title: string }>;
+
+    expect(listed.some((app) => app.id === "existing-app")).toBe(true);
+    expect(listed.some((app) => app.title === "Home")).toBe(true);
+    expect(persisted.some((app) => app.id === "existing-app")).toBe(true);
+    expect(persisted.some((app) => app.title === "Home")).toBe(true);
   });
 });

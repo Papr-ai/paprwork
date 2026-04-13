@@ -149,26 +149,41 @@ export class AppService {
    */
   private async installDefaultApps(): Promise<void> {
     try {
+      if (this.apps.size === 0) {
+        const appsFromDisk = await this.readAppsIndex();
+        if (appsFromDisk && appsFromDisk.length > 0) {
+          this.apps = new Map(appsFromDisk.map((app) => [app.id, app]));
+        }
+      }
+
       // Path to bundled default apps (in dist after build)
       // __dirname is dist/gateway/services/ so we need to go up 2 levels to reach dist/
-      const defaultAppsDir = path.join(__dirname, "..", "..", "resources", "default-apps");
-      
+      const defaultAppsDir = path.join(
+        __dirname,
+        "..",
+        "..",
+        "resources",
+        "default-apps",
+      );
+
       // Check if default apps directory exists (may not exist in dev mode before first build)
       try {
         await fs.access(defaultAppsDir);
       } catch {
-        console.log("[AppService] No default apps directory found, skipping installation");
+        console.log(
+          "[AppService] No default apps directory found, skipping installation",
+        );
         return;
       }
 
       // Get list of default apps
       const defaultAppDirs = await fs.readdir(defaultAppsDir);
       let installedCount = 0;
-      
+
       for (const appDirName of defaultAppDirs) {
         const sourceDir = path.join(defaultAppsDir, appDirName);
         const stat = await fs.stat(sourceDir);
-        
+
         if (!stat.isDirectory()) continue;
 
         // Read app ID from app-id.txt
@@ -177,7 +192,9 @@ export class AppService {
         try {
           appId = (await fs.readFile(appIdPath, "utf-8")).trim();
         } catch {
-          console.warn(`[AppService] Skipping default app ${appDirName}: no app-id.txt`);
+          console.warn(
+            `[AppService] Skipping default app ${appDirName}: no app-id.txt`,
+          );
           continue;
         }
 
@@ -191,7 +208,9 @@ export class AppService {
         let needsInstall = false;
         try {
           await fs.access(targetDir);
-          console.log(`[AppService] Default app files exist but not in registry: ${appId}`);
+          console.log(
+            `[AppService] Default app files exist but not in registry: ${appId}`,
+          );
           // Files exist but not registered - add to registry below
         } catch {
           // App doesn't exist, install files
@@ -202,17 +221,24 @@ export class AppService {
           // Copy app files
           await fs.mkdir(targetDir, { recursive: true });
           await fs.cp(sourceDir, targetDir, { recursive: true });
-          console.log(`[AppService] Copied default app files: ${appId} (${appDirName})`);
+          console.log(
+            `[AppService] Copied default app files: ${appId} (${appDirName})`,
+          );
         }
 
         // Read metadata.json to get app details
         const metadataPath = path.join(sourceDir, "metadata.json");
-        let metadata: Partial<MiniApp> & { defaultHomeApp?: boolean; isDefault?: boolean };
+        let metadata: Partial<MiniApp> & {
+          defaultHomeApp?: boolean;
+          isDefault?: boolean;
+        };
         try {
           const metadataContent = await fs.readFile(metadataPath, "utf-8");
           metadata = JSON.parse(metadataContent);
         } catch {
-          console.warn(`[AppService] No metadata.json found for default app ${appId}, using defaults`);
+          console.warn(
+            `[AppService] No metadata.json found for default app ${appId}, using defaults`,
+          );
           metadata = {
             id: appId,
             title: appDirName,
@@ -245,14 +271,18 @@ export class AppService {
 
         this.apps.set(appId, app);
         installedCount++;
-        
-        console.log(`[AppService] Registered default app: ${appId} - ${app.title}`);
+
+        console.log(
+          `[AppService] Registered default app: ${appId} - ${app.title}`,
+        );
       }
 
       // Save apps index if any apps were installed
       if (installedCount > 0) {
         await this.saveApps();
-        console.log(`[AppService] Installed and registered ${installedCount} default app(s)`);
+        console.log(
+          `[AppService] Installed and registered ${installedCount} default app(s)`,
+        );
       }
     } catch (error) {
       console.error("[AppService] Failed to install default apps:", error);
@@ -266,24 +296,33 @@ export class AppService {
     await this.migrateLegacyIfNeeded();
     await fs.mkdir(this.appsDir, { recursive: true });
     await fs.mkdir(path.dirname(this.appsIndexPath), { recursive: true });
-    await this.installDefaultApps(); // Install default apps on first launch
     await this.loadApps();
+    await this.installDefaultApps(); // Install default apps after loading existing registry
     await this.startWatchingApps();
     this.initialized = true;
     console.log(`[AppService] Initialized with ${this.apps.size} apps`);
   }
 
-  private async loadApps(): Promise<void> {
+  private async readAppsIndex(): Promise<MiniApp[] | null> {
     try {
       const data = await fs.readFile(this.appsIndexPath, "utf-8");
-      const appsArray: MiniApp[] = JSON.parse(data);
-      this.apps = new Map(appsArray.map((app) => [app.id, app]));
+      const parsed = JSON.parse(data);
+      if (!Array.isArray(parsed)) {
+        console.error("[AppService] apps.json did not contain an array");
+        return [];
+      }
+      return parsed as MiniApp[];
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         console.error("[AppService] Failed to load apps:", error);
       }
-      this.apps = new Map();
+      return null;
     }
+  }
+
+  private async loadApps(): Promise<void> {
+    const appsArray = await this.readAppsIndex();
+    this.apps = new Map((appsArray ?? []).map((app) => [app.id, app]));
 
     // Backfill icons for existing apps that don't have one yet
     let dirty = false;
@@ -294,7 +333,9 @@ export class AppService {
         if (dirIcon) {
           app.icon = dirIcon;
           dirty = true;
-          console.log(`[AppService] Resolved icon from logo file for app: ${app.id}`);
+          console.log(
+            `[AppService] Resolved icon from logo file for app: ${app.id}`,
+          );
         }
       }
     }
@@ -305,7 +346,25 @@ export class AppService {
 
   private async saveApps(): Promise<void> {
     const appsArray = Array.from(this.apps.values());
-    await fs.writeFile(this.appsIndexPath, JSON.stringify(appsArray, null, 2));
+    const nextData = JSON.stringify(appsArray, null, 2);
+    const tempPath = `${this.appsIndexPath}.${process.pid}.${Date.now()}.tmp`;
+
+    await fs.mkdir(path.dirname(this.appsIndexPath), { recursive: true });
+
+    try {
+      const existingData = await fs.readFile(this.appsIndexPath, "utf-8");
+      if (existingData !== nextData) {
+        const backupPath = `${this.appsIndexPath}.bak-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+        await fs.writeFile(backupPath, existingData, "utf-8");
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+
+    await fs.writeFile(tempPath, nextData, "utf-8");
+    await fs.rename(tempPath, this.appsIndexPath);
   }
 
   /**
@@ -581,7 +640,9 @@ export class AppService {
     for (const app of this.apps.values()) {
       await this.watchApp(app.id);
     }
-    console.log(`[AppService] Started watching ${this.watchers.size} app directories`);
+    console.log(
+      `[AppService] Started watching ${this.watchers.size} app directories`,
+    );
   }
 
   /**
@@ -663,7 +724,7 @@ export class AppService {
   private handleFileChange(appId: string, filename: string): void {
     console.log(`[AppService] File changed on disk: ${appId}/${filename}`);
     this.broadcastFileChange(appId, filename);
-    
+
     // Run validation asynchronously (don't block file change broadcast)
     this.runValidation(appId).catch((error) => {
       console.error(`[AppService] Validation error for app ${appId}:`, error);
@@ -687,11 +748,13 @@ export class AppService {
         appId,
         timestamp: new Date().toISOString(),
         valid: false,
-        issues: [{
-          file: 'app',
-          severity: 'error',
-          message: `App not found: ${appId}`,
-        }],
+        issues: [
+          {
+            file: "app",
+            severity: "error",
+            message: `App not found: ${appId}`,
+          },
+        ],
         filesChecked: 0,
       };
     }
@@ -710,11 +773,13 @@ export class AppService {
         appId,
         timestamp: new Date().toISOString(),
         valid: false,
-        issues: [{
-          file: 'app',
-          severity: 'error',
-          message: `Failed to read app files: ${(error as Error).message}`,
-        }],
+        issues: [
+          {
+            file: "app",
+            severity: "error",
+            message: `Failed to read app files: ${(error as Error).message}`,
+          },
+        ],
         filesChecked: 0,
       };
     }
@@ -725,30 +790,33 @@ export class AppService {
       const ext = path.extname(file).toLowerCase();
 
       // Skip non-source files
-      if (!['.html', '.css', '.js', '.ts', '.tsx', '.jsx'].includes(ext)) {
+      if (![".html", ".css", ".js", ".ts", ".tsx", ".jsx"].includes(ext)) {
         continue;
       }
 
       try {
-        const content = await fs.readFile(file, 'utf-8');
-        
+        const content = await fs.readFile(file, "utf-8");
+
         // LOC check (100 lines max for mini-apps)
         const locIssues = this.checkLineLimit(content, relativePath, 100);
         issues.push(...locIssues);
 
         // Basic syntax checks
-        if (ext === '.html') {
+        if (ext === ".html") {
           const htmlIssues = this.checkHtmlSyntax(content, relativePath);
           issues.push(...htmlIssues);
-        } else if (ext === '.css') {
+        } else if (ext === ".css") {
           const cssIssues = this.checkCssSyntax(content, relativePath);
           issues.push(...cssIssues);
-        } else if (['.js', '.ts', '.tsx', '.jsx'].includes(ext)) {
+        } else if ([".js", ".ts", ".tsx", ".jsx"].includes(ext)) {
           const jsIssues = this.checkJavaScriptSyntax(content, relativePath);
           issues.push(...jsIssues);
         }
       } catch (error) {
-        console.error(`[AppService] Failed to validate ${relativePath}:`, error);
+        console.error(
+          `[AppService] Failed to validate ${relativePath}:`,
+          error,
+        );
       }
     }
 
@@ -770,18 +838,18 @@ export class AppService {
    */
   private async getAllAppFiles(dir: string): Promise<string[]> {
     const files: string[] = [];
-    
+
     try {
       const entries = await fs.readdir(dir, { withFileTypes: true });
-      
+
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
-        
+
         // Skip hidden files, versions, and node_modules
-        if (entry.name.startsWith('.') || entry.name === 'node_modules') {
+        if (entry.name.startsWith(".") || entry.name === "node_modules") {
           continue;
         }
-        
+
         if (entry.isDirectory()) {
           const subFiles = await this.getAllAppFiles(fullPath);
           files.push(...subFiles);
@@ -792,7 +860,7 @@ export class AppService {
     } catch (error) {
       // Directory doesn't exist or permission error
     }
-    
+
     return files;
   }
 
@@ -804,41 +872,43 @@ export class AppService {
     filename: string,
     maxLines: number,
   ): ValidationIssue[] {
-    const lines = content.split('\n');
+    const lines = content.split("\n");
     let significantLines = 0;
     let inBlockComment = false;
 
     // Count significant lines (exclude empty lines and comments)
     for (const line of lines) {
       const trimmed = line.trim();
-      
+
       if (!trimmed) continue;
-      
+
       // Handle block comments
-      if (trimmed.startsWith('/*')) {
+      if (trimmed.startsWith("/*")) {
         inBlockComment = true;
       }
       if (inBlockComment) {
-        if (trimmed.includes('*/')) {
+        if (trimmed.includes("*/")) {
           inBlockComment = false;
         }
         continue;
       }
-      
+
       // Skip single-line comments
-      if (trimmed.startsWith('//')) continue;
-      
+      if (trimmed.startsWith("//")) continue;
+
       significantLines++;
     }
 
     if (significantLines > maxLines) {
       const excess = significantLines - maxLines;
-      return [{
-        file: filename,
-        severity: 'error',
-        message: `File has ${significantLines} lines (${excess} over the ${maxLines} line limit). Break into smaller components.`,
-        rule: 'max-lines',
-      }];
+      return [
+        {
+          file: filename,
+          severity: "error",
+          message: `File has ${significantLines} lines (${excess} over the ${maxLines} line limit). Break into smaller components.`,
+          rule: "max-lines",
+        },
+      ];
     }
 
     return [];
@@ -847,17 +917,20 @@ export class AppService {
   /**
    * Basic HTML syntax validation
    */
-  private checkHtmlSyntax(content: string, filename: string): ValidationIssue[] {
+  private checkHtmlSyntax(
+    content: string,
+    filename: string,
+  ): ValidationIssue[] {
     const issues: ValidationIssue[] = [];
-    const lines = content.split('\n');
+    const lines = content.split("\n");
 
     // Check for unclosed tags (basic validation)
     const tagStack: Array<{ tag: string; line: number }> = [];
-    const selfClosing = new Set(['img', 'br', 'hr', 'input', 'meta', 'link']);
+    const selfClosing = new Set(["img", "br", "hr", "input", "meta", "link"]);
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      
+
       // Find opening tags
       const openingTags = line.matchAll(/<(\w+)[^>]*>/g);
       for (const match of openingTags) {
@@ -866,7 +939,7 @@ export class AppService {
           tagStack.push({ tag, line: i + 1 });
         }
       }
-      
+
       // Find closing tags
       const closingTags = line.matchAll(/<\/(\w+)>/g);
       for (const match of closingTags) {
@@ -882,9 +955,9 @@ export class AppService {
       issues.push({
         file: filename,
         line,
-        severity: 'warning',
+        severity: "warning",
         message: `Potentially unclosed <${tag}> tag`,
-        rule: 'html-syntax',
+        rule: "html-syntax",
       });
     }
 
@@ -896,25 +969,25 @@ export class AppService {
    */
   private checkCssSyntax(content: string, filename: string): ValidationIssue[] {
     const issues: ValidationIssue[] = [];
-    const lines = content.split('\n');
+    const lines = content.split("\n");
 
     let braceCount = 0;
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      
+
       // Count braces
       braceCount += (line.match(/{/g) || []).length;
       braceCount -= (line.match(/}/g) || []).length;
-      
+
       // Check for common errors
-      if (line.includes(';;')) {
+      if (line.includes(";;")) {
         issues.push({
           file: filename,
           line: i + 1,
-          severity: 'warning',
-          message: 'Double semicolon found',
-          rule: 'css-syntax',
+          severity: "warning",
+          message: "Double semicolon found",
+          rule: "css-syntax",
         });
       }
     }
@@ -922,9 +995,9 @@ export class AppService {
     if (braceCount !== 0) {
       issues.push({
         file: filename,
-        severity: 'error',
-        message: `Mismatched braces (${braceCount > 0 ? 'missing closing' : 'extra closing'} braces)`,
-        rule: 'css-syntax',
+        severity: "error",
+        message: `Mismatched braces (${braceCount > 0 ? "missing closing" : "extra closing"} braces)`,
+        rule: "css-syntax",
       });
     }
 
@@ -934,9 +1007,12 @@ export class AppService {
   /**
    * Basic JavaScript/TypeScript syntax validation
    */
-  private checkJavaScriptSyntax(content: string, filename: string): ValidationIssue[] {
+  private checkJavaScriptSyntax(
+    content: string,
+    filename: string,
+  ): ValidationIssue[] {
     const issues: ValidationIssue[] = [];
-    const lines = content.split('\n');
+    const lines = content.split("\n");
 
     let braceCount = 0;
     let parenCount = 0;
@@ -944,10 +1020,10 @@ export class AppService {
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
-      
+
       // Skip comments and strings (basic check)
-      if (line.startsWith('//') || line.startsWith('/*')) continue;
-      
+      if (line.startsWith("//") || line.startsWith("/*")) continue;
+
       // Count delimiters
       braceCount += (line.match(/{/g) || []).length;
       braceCount -= (line.match(/}/g) || []).length;
@@ -955,15 +1031,15 @@ export class AppService {
       parenCount -= (line.match(/\)/g) || []).length;
       bracketCount += (line.match(/\[/g) || []).length;
       bracketCount -= (line.match(/]/g) || []).length;
-      
+
       // Check for console.log (should be removed in production)
-      if (line.includes('console.log')) {
+      if (line.includes("console.log")) {
         issues.push({
           file: filename,
           line: i + 1,
-          severity: 'warning',
-          message: 'Remove console.log statements before production',
-          rule: 'no-console',
+          severity: "warning",
+          message: "Remove console.log statements before production",
+          rule: "no-console",
         });
       }
     }
@@ -971,27 +1047,27 @@ export class AppService {
     if (braceCount !== 0) {
       issues.push({
         file: filename,
-        severity: 'error',
-        message: `Mismatched braces (${braceCount > 0 ? 'missing closing' : 'extra closing'})`,
-        rule: 'syntax',
+        severity: "error",
+        message: `Mismatched braces (${braceCount > 0 ? "missing closing" : "extra closing"})`,
+        rule: "syntax",
       });
     }
 
     if (parenCount !== 0) {
       issues.push({
         file: filename,
-        severity: 'error',
-        message: `Mismatched parentheses (${parenCount > 0 ? 'missing closing' : 'extra closing'})`,
-        rule: 'syntax',
+        severity: "error",
+        message: `Mismatched parentheses (${parenCount > 0 ? "missing closing" : "extra closing"})`,
+        rule: "syntax",
       });
     }
 
     if (bracketCount !== 0) {
       issues.push({
         file: filename,
-        severity: 'error',
-        message: `Mismatched brackets (${bracketCount > 0 ? 'missing closing' : 'extra closing'})`,
-        rule: 'syntax',
+        severity: "error",
+        message: `Mismatched brackets (${bracketCount > 0 ? "missing closing" : "extra closing"})`,
+        rule: "syntax",
       });
     }
 
@@ -1006,11 +1082,11 @@ export class AppService {
       console.log(
         `[AppService] Validation found ${result.issues.length} issue(s) in app ${result.appId}`,
       );
-      
+
       // Log errors to console for agent visibility
       for (const issue of result.issues) {
-        const prefix = issue.severity === 'error' ? '❌' : '⚠️';
-        const location = issue.line ? `:${issue.line}` : '';
+        const prefix = issue.severity === "error" ? "❌" : "⚠️";
+        const location = issue.line ? `:${issue.line}` : "";
         console.log(`${prefix} ${issue.file}${location} - ${issue.message}`);
       }
     }
@@ -1070,7 +1146,11 @@ export class AppService {
     // Deduplicate: skip if latest version has identical content
     const existing = await this.getFileVersionHistory(appId, filename);
     if (existing.length > 0) {
-      const latest = await this.getFileVersion(appId, filename, existing[0].versionId);
+      const latest = await this.getFileVersion(
+        appId,
+        filename,
+        existing[0].versionId,
+      );
       if (latest && latest.content === content) {
         return existing[0].versionId;
       }
@@ -1078,7 +1158,9 @@ export class AppService {
 
     const versionPath = path.join(versionsDir, versionId);
     await fs.writeFile(versionPath, content, "utf-8");
-    console.log(`[AppService] Saved version ${versionId} for ${appId}/${filename}`);
+    console.log(
+      `[AppService] Saved version ${versionId} for ${appId}/${filename}`,
+    );
     return versionId;
   }
 
@@ -1098,7 +1180,8 @@ export class AppService {
     const versions: AppFileVersion[] = files
       .map((f) => {
         const firstUnderscore = f.indexOf("_");
-        const reason = firstUnderscore >= 0 ? f.slice(firstUnderscore + 1) : "auto";
+        const reason =
+          firstUnderscore >= 0 ? f.slice(firstUnderscore + 1) : "auto";
         return {
           versionId: f,
           filename,
@@ -1166,7 +1249,12 @@ export class AppService {
     try {
       const currentContent = await fs.readFile(filePath, "utf-8");
       if (currentContent) {
-        await this.saveFileVersion(appId, filename, currentContent, "before-restore");
+        await this.saveFileVersion(
+          appId,
+          filename,
+          currentContent,
+          "before-restore",
+        );
       }
     } catch {
       /* file may not exist */
@@ -1184,7 +1272,9 @@ export class AppService {
     }
 
     this.broadcastFileChange(appId, filename);
-    console.log(`[AppService] Restored ${filename} to version ${versionId} for app ${appId}`);
+    console.log(
+      `[AppService] Restored ${filename} to version ${versionId} for app ${appId}`,
+    );
     return true;
   }
 
@@ -1253,11 +1343,11 @@ export class AppService {
   /**
    * Auto-discover and link data sources for an app by analyzing which databases
    * it actually uses. Scans app code for database paths and links the corresponding jobs.
-   * 
+   *
    * This is more accurate than folder-name matching because it discovers:
    * 1. Databases explicitly referenced in app code
    * 2. Jobs whose databases are in ~/Papr/jobs/{jobId}/data/*.db
-   * 
+   *
    * @param appId - App ID to discover sources for
    * @returns Array of newly linked data sources
    */
@@ -1273,21 +1363,21 @@ export class AppService {
 
     const allJobs = await jobsService.listJobs();
     const existingSources = await this.listAppDataSources(appId);
-    const existingJobIds = new Set(existingSources.map(ds => ds.jobId));
-    
+    const existingJobIds = new Set(existingSources.map((ds) => ds.jobId));
+
     // Build map of database paths to jobs
-    const dbPathToJob = new Map<string, typeof allJobs[0]>();
+    const dbPathToJob = new Map<string, (typeof allJobs)[0]>();
     for (const job of allJobs) {
       const dbPath = await jobsService.getJobDatabasePath(job.id);
       if (dbPath) {
         dbPathToJob.set(dbPath, job);
       }
     }
-    
+
     // Scan app code for database references
     const appDir = path.join(this.appsDir, appId);
     const referencedDbPaths = await this.scanAppCodeForDatabasePaths(appDir);
-    
+
     // Link jobs whose databases are referenced in the app
     const newSources: AppDataSource[] = [];
     for (const dbPath of referencedDbPaths) {
@@ -1305,7 +1395,9 @@ export class AppService {
 
       await this.linkAppDataSource(appId, source);
       newSources.push({ ...source, linkedAt: new Date().toISOString() });
-      console.log(`[AppService] Auto-linked data source: ${job.name} → ${app.title}`);
+      console.log(
+        `[AppService] Auto-linked data source: ${job.name} → ${app.title}`,
+      );
     }
 
     return newSources;
@@ -1316,25 +1408,25 @@ export class AppService {
    * Looks for:
    * - fetch('/api/db/query', ...) calls with specific database paths
    * - Direct database file references in code
-   * 
+   *
    * @param appDir - App directory to scan
    * @returns Set of database paths referenced in the app code
    */
-  private async scanAppCodeForDatabasePaths(appDir: string): Promise<Set<string>> {
+  private async scanAppCodeForDatabasePaths(
+    appDir: string,
+  ): Promise<Set<string>> {
     const dbPaths = new Set<string>();
-    
+
     try {
       const files = await fs.readdir(appDir);
-      const codeFiles = files.filter(f => 
-        f.endsWith('.js') || 
-        f.endsWith('.ts') || 
-        f.endsWith('.html')
+      const codeFiles = files.filter(
+        (f) => f.endsWith(".js") || f.endsWith(".ts") || f.endsWith(".html"),
       );
 
       for (const file of codeFiles) {
         const filePath = path.join(appDir, file);
-        const content = await fs.readFile(filePath, 'utf8');
-        
+        const content = await fs.readFile(filePath, "utf8");
+
         // Look for database paths in the code
         // Pattern 1: Explicit db paths: /Users/.../Papr/jobs/{jobId}/data/*.db
         const dbPathPattern = /\/Papr\/jobs\/([a-f0-9-]+)\/data\/[^'"]+\.db/gi;
@@ -1342,7 +1434,7 @@ export class AppService {
         while ((match = dbPathPattern.exec(content)) !== null) {
           dbPaths.add(match[0]);
         }
-        
+
         // Pattern 2: Job ID references that imply database usage
         // If app code references a job ID, it's likely querying that job's database
         const jobIdPattern = /['"]([a-f0-9-]{36})['"]/g;
@@ -1351,8 +1443,8 @@ export class AppService {
           const jobId = match[1];
           // Try both standard paths
           const possiblePaths = [
-            path.join(homeDir, 'Papr', 'jobs', jobId, 'data', 'data.db'),
-            path.join(homeDir, 'Papr', 'jobs', jobId, 'data', 'data.db'),
+            path.join(homeDir, "Papr", "jobs", jobId, "data", "data.db"),
+            path.join(homeDir, "Papr", "jobs", jobId, "data", "data.db"),
           ];
           for (const p of possiblePaths) {
             try {
@@ -1393,10 +1485,10 @@ export class AppService {
 
     this.apps.set(app.id, app);
     await this.saveApps();
-    
+
     // Start watching the app directory
     await this.watchApp(app.id);
-    
+
     return app;
   }
 
@@ -1418,7 +1510,7 @@ export class AppService {
    */
   cleanup(): void {
     console.log(`[AppService] Cleaning up ${this.watchers.size} watchers`);
-    
+
     for (const [_appId, watcher] of this.watchers.entries()) {
       watcher.close();
     }
@@ -1437,7 +1529,8 @@ export class AppService {
 function versionIdToTimestamp(versionId: string): string {
   // Version ID format: "2026-03-17T15-23-56-289Z_reason"
   const firstUnderscore = versionId.indexOf("_");
-  const raw = firstUnderscore >= 0 ? versionId.slice(0, firstUnderscore) : versionId;
+  const raw =
+    firstUnderscore >= 0 ? versionId.slice(0, firstUnderscore) : versionId;
   return raw.replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z/, "T$1:$2:$3.$4Z");
 }
 
