@@ -157,6 +157,17 @@ async function initializeServices(): Promise<void> {
     console.log(
       `[Gateway] Storage mode: ${storageMode} (keys will load on demand)`,
     );
+
+    // Auto-install Python dependencies (bs4, lxml) if missing — non-blocking
+    import("../core/utils/pythonDependencies.js")
+      .then(async ({ checkPythonDependencies, autoInstallPythonDependencies }) => {
+        const status = await checkPythonDependencies();
+        if (status.pythonInstalled && (!status.beautifulSoupInstalled || !status.lxmlInstalled)) {
+          console.log("[Gateway] Auto-installing missing Python deps (bs4/lxml)...");
+          await autoInstallPythonDependencies((p) => console.log(`[Gateway] Python deps: ${p.message}`));
+        }
+      })
+      .catch((err) => console.warn("[Gateway] Python dep check skipped:", err.message));
   } catch (error) {
     console.error("[Gateway] Failed to initialize services:", error);
     throw error;
