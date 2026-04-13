@@ -26,6 +26,61 @@ export function OAuthSection({
   const [showPasteToken, setShowPasteToken] = useState(false);
   const [pastedToken, setPastedToken] = useState("");
   const [pasting, setPasting] = useState(false);
+  const [showToken, setShowToken] = useState(false);
+  const [currentToken, setCurrentToken] = useState("");
+  const [loadingToken, setLoadingToken] = useState(false);
+  const [editingToken, setEditingToken] = useState(false);
+  const [editedToken, setEditedToken] = useState("");
+  const [savingToken, setSavingToken] = useState(false);
+
+  const handleViewToken = async () => {
+    if (showToken) {
+      setShowToken(false);
+      setCurrentToken("");
+      setEditingToken(false);
+      return;
+    }
+    if (provider !== "anthropic") return;
+    setLoadingToken(true);
+    try {
+      const result = await window.electronAPI.oauth.claude.getToken();
+      if (result.success && result.token) {
+        setCurrentToken(result.token);
+        setShowToken(true);
+      } else {
+        alert(`Could not retrieve token: ${result.error || "Unknown error"}`);
+      }
+    } catch (error) {
+      alert(`Error: ${error}`);
+    } finally {
+      setLoadingToken(false);
+    }
+  };
+
+  const handleSaveEditedToken = async () => {
+    const cleaned = editedToken.replace(/\s+/g, "");
+    if (!cleaned.startsWith("sk-ant-oat")) {
+      alert("Invalid token format. Claude OAuth tokens should start with sk-ant-oat01-");
+      return;
+    }
+    setSavingToken(true);
+    try {
+      const result = await window.electronAPI.oauth.pasteToken(provider, cleaned);
+      if (result.success) {
+        setCurrentToken(cleaned);
+        setEditingToken(false);
+        setEditedToken("");
+        alert("Token updated successfully! Refreshing...");
+        window.location.reload();
+      } else {
+        alert(`Failed to save token: ${result.error}`);
+      }
+    } catch (error) {
+      alert(`Error: ${error}`);
+    } finally {
+      setSavingToken(false);
+    }
+  };
 
   const handlePasteToken = async () => {
     const trimmedToken = pastedToken.trim();
@@ -102,13 +157,105 @@ export function OAuthSection({
                   </span>
                 </div>
               )}
-              <button
-                className="settings-btn settings-btn--secondary"
-                onClick={disconnect}
-                disabled={loading}
-              >
-                {loading ? "Disconnecting..." : "Disconnect"}
-              </button>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <button
+                  className="settings-btn settings-btn--secondary"
+                  onClick={disconnect}
+                  disabled={loading}
+                  style={{ flex: 1 }}
+                >
+                  {loading ? "Disconnecting..." : "Disconnect"}
+                </button>
+                {provider === "anthropic" && (
+                  <button
+                    className="settings-btn settings-btn--secondary"
+                    onClick={handleViewToken}
+                    disabled={loadingToken}
+                    style={{ flex: 1 }}
+                  >
+                    {loadingToken ? "Loading..." : showToken ? "Hide Token" : "View Token"}
+                  </button>
+                )}
+              </div>
+
+              {showToken && currentToken && (
+                <div style={{ marginTop: "12px" }}>
+                  {!editingToken ? (
+                    <>
+                      <div style={{
+                        fontFamily: "monospace",
+                        fontSize: "11px",
+                        padding: "8px",
+                        background: "var(--color-bg-tertiary, #f5f5f5)",
+                        borderRadius: "4px",
+                        wordBreak: "break-all",
+                        userSelect: "all",
+                        marginBottom: "8px",
+                      }}>
+                        {currentToken}
+                      </div>
+                      <div style={{ display: "flex", gap: "8px" }}>
+                        <button
+                          className="settings-btn settings-btn--secondary"
+                          onClick={() => {
+                            navigator.clipboard.writeText(currentToken);
+                          }}
+                          style={{ flex: 1, fontSize: "12px" }}
+                        >
+                          Copy
+                        </button>
+                        <button
+                          className="settings-btn settings-btn--secondary"
+                          onClick={() => {
+                            setEditedToken(currentToken);
+                            setEditingToken(true);
+                          }}
+                          style={{ flex: 1, fontSize: "12px" }}
+                        >
+                          Edit
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <textarea
+                        value={editedToken}
+                        onChange={(e) => setEditedToken(e.target.value)}
+                        style={{
+                          width: "100%",
+                          minHeight: "80px",
+                          padding: "8px",
+                          fontFamily: "monospace",
+                          fontSize: "11px",
+                          border: "1px solid #ddd",
+                          borderRadius: "4px",
+                          marginBottom: "8px",
+                        }}
+                      />
+                      <div style={{ display: "flex", gap: "8px" }}>
+                        <button
+                          className="settings-btn settings-btn--primary"
+                          onClick={handleSaveEditedToken}
+                          disabled={savingToken || !editedToken.trim()}
+                          style={{ flex: 1, fontSize: "12px" }}
+                        >
+                          {savingToken ? "Saving..." : "Save"}
+                        </button>
+                        <button
+                          className="settings-btn settings-btn--secondary"
+                          onClick={() => {
+                            setEditingToken(false);
+                            setEditedToken("");
+                          }}
+                          style={{ flex: 1, fontSize: "12px" }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           ) : (
             <>
@@ -119,8 +266,8 @@ export function OAuthSection({
               {provider === "anthropic" && !showPasteToken && (
                 <div style={{ marginBottom: "12px" }}>
                   <p style={{ fontSize: "13px", color: "#666", marginBottom: "8px" }}>
-                    <strong>Note:</strong> Due to Claude Code CLI limitations, automated setup may not work.
-                    If the button below fails, manually run <code style={{ background: "#f5f5f5", padding: "2px 6px", borderRadius: "3px" }}>claude setup-token</code> in your terminal and paste the token below.
+                    Use your Claude Pro/Max subscription.
+                    If sign-in doesn't connect automatically, run <code style={{ background: "#f5f5f5", padding: "2px 6px", borderRadius: "3px" }}>claude setup-token</code> in your terminal and paste the token below.
                   </p>
                 </div>
               )}
