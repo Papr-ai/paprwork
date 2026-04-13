@@ -229,61 +229,63 @@ export class ClaudeSetupTokenService {
 
   /**
    * Extract OAuth token from CLI output
-   * Token format: sk-ant-oat01-xxxxx...xxxxx
-   * NOTE: Token may wrap across multiple lines in terminal output!
+   * Token format: sk-ant-oat01-xxxxx...xxxxx (only chars: a-zA-Z0-9_-)
+   * The token wraps across lines and the CLI outputs ANSI codes.
+   * Strategy: strip ALL ANSI codes, split into lines, find the line with "sk-ant-oat",
+   * then collect consecutive lines that contain only valid token chars [a-zA-Z0-9_-].
    */
   private extractTokenFromOutput(output: string): string | null {
     console.log("[ClaudeSetupToken] Extracting token from output...");
-    
-    // Line-by-line parsing (most reliable - avoids greedy regex issues)
-    console.log("[ClaudeSetupToken] Using line-by-line parsing...");
-    const lines = output.split(/\r?\n/);
-    
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      
-      // Found line with token start
-      if (line.includes("sk-ant-oat")) {
-        const startIdx = line.indexOf("sk-ant-oat");
-        let token = line.substring(startIdx).trim();
-        
-        console.log(`[ClaudeSetupToken] Found token start at line ${i}: ${token.substring(0, 30)}...`);
-        
-        // Check next line(s) for continuation
-        for (let j = i + 1; j < Math.min(i + 3, lines.length); j++) {
-          const nextLine = lines[j].trim();
-          
-          // Stop at empty line or text that doesn't look like token
-          if (!nextLine || 
-              nextLine.startsWith("Store") || 
-              nextLine.startsWith("Use") ||
-              nextLine.startsWith("Paste") ||
-              nextLine.toLowerCase().includes("secure") ||
-              nextLine.toLowerCase().includes("export")) {
-            break;
-          }
-          
-          // Only append if line contains ONLY valid token characters
-          if (/^[a-zA-Z0-9_-]+$/.test(nextLine)) {
-            token += nextLine;
-            console.log(`[ClaudeSetupToken] Appended continuation from line ${j}: ${nextLine}`);
-          } else {
-            break; // Stop if line has invalid chars
-          }
-        }
-        
-        // Validate token
-        if (token.startsWith("sk-ant-oat") && token.length > 50) {
-          console.log(`[ClaudeSetupToken] ✓ Found complete token (length: ${token.length})`);
-          return token;
-        } else {
-          console.warn(`[ClaudeSetupToken] Token too short (${token.length} chars), expected >50`);
-        }
+
+    // Aggressively strip ANSI escape sequences (SGR, OSC, cursor, charset, etc.)
+    const cleaned = output
+      .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")   // SGR and cursor sequences
+      .replace(/\x1b\][^\x07]*\x07/g, "")       // OSC sequences
+      .replace(/\x1b[()][A-Za-z]/g, "")          // Charset sequences
+      .replace(/\x1b[><=]/g, "");                // Keypad/mode sequences
+
+    const lines = cleaned.split(/\r?\n/);
+    const tokenParts: string[] = [];
+    let foundStart = false;
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) {
+        if (foundStart) break;
+        continue;
+      }
+
+      if (!foundStart && line.includes("sk-ant-oat")) {
+        const idx = line.indexOf("sk-ant-oat");
+        tokenParts.push(line.substring(idx));
+        foundStart = true;
+        console.log(`[ClaudeSetupToken] Found token start: "${line.substring(idx, idx + 30)}..."`);
+      } else if (foundStart && /^[a-zA-Z0-9_-]+$/.test(line)) {
+        tokenParts.push(line);
+        console.log(`[ClaudeSetupToken] Found continuation line: "${line}"`);
+      } else if (foundStart) {
+        console.log(`[ClaudeSetupToken] Stopped at non-token line: "${line.substring(0, 40)}..."`);
+        break;
       }
     }
 
-    console.error("[ClaudeSetupToken] ✗ No valid token found in output");
-    console.error("[ClaudeSetupToken] Output sample:", output.substring(0, 300));
+    if (tokenParts.length === 0) {
+      console.error("[ClaudeSetupToken] ✗ No 'sk-ant-oat' found in output");
+      console.error("[ClaudeSetupToken] Output sample:", output.substring(0, 300));
+      return null;
+    }
+
+    // Join parts and strip any remaining whitespace
+    const token = tokenParts.join("").replace(/\s+/g, "");
+
+    console.log(`[ClaudeSetupToken] Token: length=${token.length}, start=${token.substring(0, 25)}..., end=...${token.substring(Math.max(0, token.length - 10))}`);
+
+    if (token.startsWith("sk-ant-oat") && token.length > 80) {
+      console.log(`[ClaudeSetupToken] ✓ Complete token (${tokenParts.length} parts, ${token.length} chars)`);
+      return token;
+    }
+
+    console.warn(`[ClaudeSetupToken] Token too short (${token.length} chars)`);
     return null;
   }
 
@@ -329,11 +331,12 @@ export class ClaudeSetupTokenService {
           const credentialsJson = stdout.trim();
           if (credentialsJson) {
             const credentials = JSON.parse(credentialsJson);
-            const token =
+            const rawToken =
               credentials?.claudeAiOauth?.accessToken ||
               credentials?.accessToken;
-            if (token && typeof token === 'string') {
-              console.log("[ClaudeSetupToken] Found token in Keychain");
+            if (rawToken && typeof rawToken === 'string') {
+              const token = rawToken.replace(/\s+/g, "");
+              console.log("[ClaudeSetupToken] Found token in Keychain (length: " + token.length + ")");
               return token;
             }
           }
@@ -356,7 +359,7 @@ export class ClaudeSetupTokenService {
         
         if (credentials.accessToken) {
           console.log("[ClaudeSetupToken] Found token in ~/.claude/.credentials.json");
-          return credentials.accessToken;
+          return String(credentials.accessToken).replace(/\s+/g, "");
         }
       } catch (fileError) {
         console.log("[ClaudeSetupToken] Could not read from ~/.claude/.credentials.json:", (fileError as Error).message);
@@ -370,11 +373,11 @@ export class ClaudeSetupTokenService {
 
         if (config.oauthAccount?.accessToken) {
           console.log("[ClaudeSetupToken] Found token in ~/.claude.json");
-          return config.oauthAccount.accessToken;
+          return String(config.oauthAccount.accessToken).replace(/\s+/g, "");
         }
 
         if (config.accessToken) {
-          return config.accessToken;
+          return String(config.accessToken).replace(/\s+/g, "");
         }
       } catch (jsonError) {
         console.log("[ClaudeSetupToken] Could not read from ~/.claude.json:", (jsonError as Error).message);

@@ -67,6 +67,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
       getStatus: () => ipcRenderer.invoke("auth:claude:get-status"),
       disconnect: () => ipcRenderer.invoke("auth:claude:disconnect"),
       pasteToken: (token) => ipcRenderer.invoke("auth:claude:paste-token", token),
+      getToken: () => ipcRenderer.invoke("auth:claude:get-token"),
     },
     // Generic paste token that maps providers correctly
     pasteToken: (provider, token) => {

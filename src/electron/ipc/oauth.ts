@@ -47,6 +47,9 @@ async function syncOAuthTokenToApiKeys(
     return;
   }
 
+  // Strip ALL whitespace including newlines in the middle (Claude tokens wrap across lines)
+  const cleanToken = accessToken.replace(/\s+/g, "");
+
   const keyName =
     provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
   const description =
@@ -65,7 +68,7 @@ async function syncOAuthTokenToApiKeys(
         ...existingKeyMetadata,
         description,
         permission: "always" as const,
-        encryptedValue: (customKeysStorage as any).encryptValue(accessToken),
+        encryptedValue: (customKeysStorage as any).encryptValue(cleanToken),
         updatedAt: new Date().toISOString(),
         source: "oauth" as const,
         managedBy: "oauth" as const,
@@ -86,7 +89,7 @@ async function syncOAuthTokenToApiKeys(
         name: keyName,
         description,
         permission: "always" as const,
-        encryptedValue: (customKeysStorage as any).encryptValue(accessToken),
+        encryptedValue: (customKeysStorage as any).encryptValue(cleanToken),
         createdAt: now,
         updatedAt: now,
         source: "oauth" as const,
@@ -386,41 +389,85 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
     }
   });
 
-  // Claude OAuth handlers (using automated token generation)
+  // Active Claude token poller handle (so we can cancel it)
+  let claudeTokenPoller: NodeJS.Timeout | null = null;
+
+  // Claude OAuth handlers (CLI-based, non-blocking)
   ipcMain.handle("auth:claude:start-oauth", async () => {
     try {
-      console.log("[OAuth IPC] Starting automated Claude OAuth token generation");
+      console.log("[OAuth IPC] Starting Claude OAuth via CLI (non-blocking)");
 
-      // Run automated setup (installs CLI if needed + generates token)
-      const result = await claudeSetupTokenService!.automatedSetup();
-
-      if (result.success && result.token) {
-        // Automatically store the token
+      // Step 0: Try reading existing token from Keychain/storage first (fast path)
+      const existingToken = await claudeSetupTokenService!.readTokenFromCLIStorage();
+      if (existingToken) {
+        console.log("[OAuth IPC] Found existing Claude token in storage — using it");
         const tokenInput = {
           provider: "anthropic" as const,
-          accessToken: result.token,
-          refreshToken: result.token,
-          expiresIn: 365 * 24 * 60 * 60, // 1 year
+          accessToken: existingToken,
+          refreshToken: existingToken,
+          expiresIn: 365 * 24 * 60 * 60,
         };
-
         await oauthTokenStorage!.storeToken(tokenInput);
-        await syncOAuthTokenToApiKeys("anthropic", result.token);
-
-        console.log("[OAuth IPC] Claude OAuth completed successfully");
+        await syncOAuthTokenToApiKeys("anthropic", existingToken);
         return { success: true };
       }
 
-      if (result.requiresInstall) {
-        return {
-          success: false,
-          error: "Claude Code CLI needs to be installed. Click 'Install CLI' first.",
-        };
-      }
+      // Step 1: Launch full automated setup in background (do NOT await)
+      // This handles: CLI install if needed → browser OAuth → token extraction → storage fallback
+      claudeSetupTokenService!.automatedSetup().then(async (result) => {
+        if (result.success && result.token) {
+          const t = result.token;
+          console.log(`[OAuth IPC] Claude automated setup returned token: length=${t.length}, start=${t.substring(0, 20)}..., end=...${t.substring(t.length - 10)}`);
+          const tokenInput = {
+            provider: "anthropic" as const,
+            accessToken: t,
+            refreshToken: t,
+            expiresIn: 365 * 24 * 60 * 60,
+          };
+          await oauthTokenStorage!.storeToken(tokenInput);
+          await syncOAuthTokenToApiKeys("anthropic", t);
+          stopClaudePoller();
+        } else {
+          console.log("[OAuth IPC] Claude automated setup did not return token:", result.error);
+        }
+      }).catch((error) => {
+        console.error("[OAuth IPC] Claude automated setup error:", error);
+      });
 
-      return {
-        success: false,
-        error: result.error || "Failed to generate OAuth token",
-      };
+      // Step 2: Start background polling for token in Keychain/storage
+      // The CLI writes to Keychain after OAuth completes - we poll to detect it
+      stopClaudePoller();
+      let pollCount = 0;
+      const maxPolls = 150; // 5 minutes at 2s intervals
+      claudeTokenPoller = setInterval(async () => {
+        pollCount++;
+        if (pollCount > maxPolls) {
+          console.log("[OAuth IPC] Claude token polling timed out after 5 minutes");
+          stopClaudePoller();
+          return;
+        }
+
+        try {
+          const token = await claudeSetupTokenService!.readTokenFromCLIStorage();
+          if (token) {
+            console.log("[OAuth IPC] Claude token detected in storage via polling");
+            const tokenInput = {
+              provider: "anthropic" as const,
+              accessToken: token,
+              refreshToken: token,
+              expiresIn: 365 * 24 * 60 * 60,
+            };
+            await oauthTokenStorage!.storeToken(tokenInput);
+            await syncOAuthTokenToApiKeys("anthropic", token);
+            stopClaudePoller();
+          }
+        } catch {
+          // Silently retry
+        }
+      }, 2000);
+
+      // Return immediately - UI polling will detect connection via get-status
+      return { success: true };
     } catch (error) {
       console.error("[OAuth IPC] Failed to start Claude OAuth:", error);
       return {
@@ -429,6 +476,13 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
       };
     }
   });
+
+  function stopClaudePoller(): void {
+    if (claudeTokenPoller) {
+      clearInterval(claudeTokenPoller);
+      claudeTokenPoller = null;
+    }
+  }
 
   ipcMain.handle("auth:claude:get-status", async () => {
     try {
@@ -449,6 +503,19 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
     } catch (error) {
       console.error("[OAuth IPC] Failed to get Claude status:", error);
       return { connected: false, error: (error as Error).message };
+    }
+  });
+
+  ipcMain.handle("auth:claude:get-token", async () => {
+    try {
+      const token = oauthTokenStorage!.getTokenByProvider("anthropic");
+      if (!token) {
+        return { success: false, error: "No token found" };
+      }
+      return { success: true, token: token.accessToken };
+    } catch (error) {
+      console.error("[OAuth IPC] Failed to get Claude token:", error);
+      return { success: false, error: (error as Error).message };
     }
   });
 
@@ -491,7 +558,10 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
         };
       }
 
-      if (!token.startsWith("sk-ant-oat")) {
+      // Strip all whitespace (token may be pasted with line breaks from terminal)
+      const cleanedToken = token.replace(/\s+/g, "");
+
+      if (!cleanedToken.startsWith("sk-ant-oat")) {
         return {
           success: false,
           error:
@@ -502,15 +572,15 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
       // Store as OAuth token (1 year expiry)
       const tokenInput = {
         provider: "anthropic" as const,
-        accessToken: token,
-        refreshToken: token, // OAuth tokens are self-contained
+        accessToken: cleanedToken,
+        refreshToken: cleanedToken, // OAuth tokens are self-contained
         expiresIn: 365 * 24 * 60 * 60, // 1 year in seconds
       };
 
       await oauthTokenStorage!.storeToken(tokenInput);
 
       // Sync to CustomKeysStorage (makes it available as ANTHROPIC_API_KEY for jobs/bash)
-      await syncOAuthTokenToApiKeys("anthropic", token);
+      await syncOAuthTokenToApiKeys("anthropic", cleanedToken);
 
       console.log("[OAuth IPC] Claude OAuth token stored successfully");
       return { success: true };

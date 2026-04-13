@@ -103,7 +103,9 @@ export interface ElectronAPI {
         error?: string;
       }>;
       disconnect: () => Promise<{ success: boolean; error?: string }>;
+      getToken: () => Promise<{ success: boolean; token?: string; error?: string }>;
     };
+    pasteToken: (provider: string, token: string) => Promise<{ success: boolean; error?: string }>;
   };
 
   // Papr Login API - Authenticate with Papr platform for automatic API key provisioning
