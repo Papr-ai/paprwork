@@ -174,7 +174,7 @@ export class PaprMemoryProvider implements IStorageProvider {
         // Keep last 50 messages for proper recent context
         // IMPORTANT: PAPR returns messages in REVERSE chronological order (newest first)
         // We need to reverse them to chronological order (oldest first) for LLM
-        const recentMessages = response.messages.slice(-50).reverse();
+        const recentMessages = response.messages.slice(0, 50).reverse();
         
         console.log(`[PaprMemoryProvider] 📤 Returning ${recentMessages.length} recent messages (reversed to chronological order)`);
         

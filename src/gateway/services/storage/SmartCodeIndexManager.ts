@@ -307,7 +307,15 @@ export class SmartCodeIndexManager {
           break; // Stop processing batch entirely
         } else {
           console.error(`   ❌ Failed to index ${queuedFile.file_path}: ${err.message}`);
-          // Keep in queue for retry on other errors
+          // Track retries — dequeue after 3 failures to prevent infinite retry loops
+          const retryKey = `__retries_${queuedFile.file_path}`;
+          const retries = ((this as any)[retryKey] || 0) + 1;
+          (this as any)[retryKey] = retries;
+          if (retries >= 3) {
+            console.error(`   🗑️  Giving up on ${path.basename(queuedFile.file_path)} after ${retries} failures`);
+            this.tracker.dequeueFile(queuedFile.file_path);
+            delete (this as any)[retryKey];
+          }
         }
       }
     }

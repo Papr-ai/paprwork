@@ -158,14 +158,14 @@ export class AppStateStorage {
 
     const now = new Date().toISOString();
     stmt.run('activeTabId', state.activeTabId || '', now);
-    stmt.run('splitRatio', state.splitRatio.toString(), now);
-    stmt.run('splitRatios', JSON.stringify(state.splitRatios), now);
-    stmt.run('history', JSON.stringify(state.history), now);
-    stmt.run('historyIndex', state.historyIndex.toString(), now);
-    stmt.run('onboardingStep1Completed', state.onboardingStep1Completed.toString(), now);
-    stmt.run('onboardingStep2Completed', state.onboardingStep2Completed.toString(), now);
-    stmt.run('onboardingStep3Completed', state.onboardingStep3Completed.toString(), now);
-    stmt.run('onboardingDismissed', state.onboardingDismissed.toString(), now);
+    stmt.run('splitRatio', String(state.splitRatio ?? 0.5), now);
+    stmt.run('splitRatios', JSON.stringify(state.splitRatios ?? {}), now);
+    stmt.run('history', JSON.stringify(state.history ?? []), now);
+    stmt.run('historyIndex', String(state.historyIndex ?? 0), now);
+    stmt.run('onboardingStep1Completed', String(state.onboardingStep1Completed ?? false), now);
+    stmt.run('onboardingStep2Completed', String(state.onboardingStep2Completed ?? false), now);
+    stmt.run('onboardingStep3Completed', String(state.onboardingStep3Completed ?? false), now);
+    stmt.run('onboardingDismissed', String(state.onboardingDismissed ?? false), now);
     stmt.run('lastSavedAt', state.lastSavedAt, now);
   }
 
