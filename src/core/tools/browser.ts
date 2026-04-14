@@ -448,40 +448,55 @@ export const browserWaitForTool = createTool({
     await requestBrowserPermission("wait_for");
     const session = await getBrowserSession();
 
+    // Cap timeout to 10s to prevent long hangs
+    const timeout = Math.min(args.timeout ?? 30000, 10000);
+
     if (args.time) {
-      await new Promise((resolve) => setTimeout(resolve, args.time! * 1000));
-      return { success: true, data: { waited: args.time, unit: "seconds" } };
+      const waitTime = Math.min(args.time, 10);
+      await new Promise((resolve) => setTimeout(resolve, waitTime * 1000));
+      return { success: true, data: { waited: waitTime, unit: "seconds" } };
     }
 
-    if (args.text) {
-      await session.page.waitForFunction(
-        (text: string) => {
-          // @ts-expect-error - This function runs in browser context
-          return document.body.innerText.includes(text);
+    try {
+      if (args.text) {
+        await session.page.waitForFunction(
+          (text: string) => {
+            // @ts-expect-error - This function runs in browser context
+            return document.body.innerText.includes(text);
+          },
+          args.text,
+          { timeout },
+        );
+        return { success: true, data: { found: args.text } };
+      }
+
+      if (args.textGone) {
+        await session.page.waitForFunction(
+          (text: string) => {
+            // @ts-expect-error - This function runs in browser context
+            return !document.body.innerText.includes(text);
+          },
+          args.textGone,
+          { timeout },
+        );
+        return { success: true, data: { gone: args.textGone } };
+      }
+
+      if (args.selector) {
+        await session.page.waitForSelector(args.selector, {
+          timeout,
+        });
+        return { success: true, data: { found: args.selector } };
+      }
+    } catch (error) {
+      const target = args.text || args.textGone || args.selector || "unknown";
+      return {
+        success: false,
+        data: {
+          error: `Timed out after ${timeout}ms waiting for: ${target}`,
+          timedOut: true,
         },
-        args.text,
-        { timeout: args.timeout },
-      );
-      return { success: true, data: { found: args.text } };
-    }
-
-    if (args.textGone) {
-      await session.page.waitForFunction(
-        (text: string) => {
-          // @ts-expect-error - This function runs in browser context
-          return !document.body.innerText.includes(text);
-        },
-        args.textGone,
-        { timeout: args.timeout },
-      );
-      return { success: true, data: { gone: args.textGone } };
-    }
-
-    if (args.selector) {
-      await session.page.waitForSelector(args.selector, {
-        timeout: args.timeout,
-      });
-      return { success: true, data: { found: args.selector } };
+      };
     }
 
     throw new Error("Must specify text, textGone, selector, or time");

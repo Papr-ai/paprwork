@@ -178,7 +178,6 @@ async function searchPaprMemoryForCode(pattern: string): Promise<string | null> 
       rank_results: true,
       response_format: 'toon',
       metadata: {
-        category: 'learning',
         customMetadata: {
           source: 'code_indexer'
         }
