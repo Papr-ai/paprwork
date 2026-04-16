@@ -3,7 +3,7 @@
  * Auto-hides after download completes, shows "Restart to update" action
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import type { UpdateStatus } from "../../types/electron";
 import "./UpdateBanner.css";
 
@@ -14,37 +14,44 @@ export function UpdateBanner() {
   const [version, setVersion] = useState<string>("");
   const [percent, setPercent] = useState(0);
   const [dismissed, setDismissed] = useState(false);
+  const handlerRef = useRef<((data: UpdateStatus) => void) | undefined>(undefined);
+
+  // Keep handler ref in sync
+  handlerRef.current = (data: UpdateStatus) => {
+    switch (data.status) {
+      case "available":
+        if (data.version) setVersion(data.version);
+        setState("downloading");
+        setDismissed(false);
+        break;
+      case "downloading":
+        setState("downloading");
+        if (data.percent !== undefined) setPercent(data.percent);
+        break;
+      case "ready":
+        setState("ready");
+        if (data.version) setVersion(data.version);
+        setPercent(100);
+        setDismissed(false);
+        break;
+      case "error":
+      case "not-available":
+        setState("hidden");
+        break;
+    }
+  };
 
   useEffect(() => {
     const api = window.electronAPI?.updater;
     if (!api) return;
 
-    const handleStatus = (data: UpdateStatus) => {
-      switch (data.status) {
-        case "available":
-          if (data.version) setVersion(data.version);
-          setState("downloading");
-          setDismissed(false);
-          break;
-        case "downloading":
-          setState("downloading");
-          if (data.percent !== undefined) setPercent(data.percent);
-          break;
-        case "ready":
-          setState("ready");
-          if (data.version) setVersion(data.version);
-          setPercent(100);
-          setDismissed(false);
-          break;
-        case "error":
-        case "not-available":
-          setState("hidden");
-          break;
-      }
+    // Stable handler that delegates to ref
+    const handler = (data: UpdateStatus) => {
+      handlerRef.current?.(data);
     };
 
-    api.onStatus(handleStatus);
-    return () => api.removeStatusListener();
+    api.onStatus(handler);
+    return () => api.removeStatusListener(handler);
   }, []);
 
   if (state === "hidden" || dismissed) return null;

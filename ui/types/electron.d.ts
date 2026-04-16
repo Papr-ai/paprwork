@@ -251,7 +251,7 @@ export interface ElectronAPI {
   // Auto-updater API
   updater: {
     onStatus: (callback: (data: UpdateStatus) => void) => void;
-    removeStatusListener: () => void;
+    removeStatusListener: (callback: (data: UpdateStatus) => void) => void;
     install: () => void;
     check: () => void;
   };

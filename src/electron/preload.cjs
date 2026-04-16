@@ -208,20 +208,30 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
 
   // Auto-updater API
-  updater: {
-    onStatus: (callback) => {
-      ipcRenderer.on("updater:status", (_event, data) => callback(data));
-    },
-    removeStatusListener: () => {
-      ipcRenderer.removeAllListeners("updater:status");
-    },
-    install: () => {
-      ipcRenderer.send("updater:install");
-    },
-    check: () => {
-      ipcRenderer.send("updater:check");
-    },
-  },
+  updater: (() => {
+    const statusListenerMap = new WeakMap();
+
+    return {
+      onStatus: (callback) => {
+        const wrapper = (_event, data) => callback(data);
+        statusListenerMap.set(callback, wrapper);
+        ipcRenderer.on("updater:status", wrapper);
+      },
+      removeStatusListener: (callback) => {
+        const wrapper = statusListenerMap.get(callback);
+        if (wrapper) {
+          ipcRenderer.removeListener("updater:status", wrapper);
+          statusListenerMap.delete(callback);
+        }
+      },
+      install: () => {
+        ipcRenderer.send("updater:install");
+      },
+      check: () => {
+        ipcRenderer.send("updater:check");
+      },
+    };
+  })(),
 
   telemetry: {
     getEnabled: () => ipcRenderer.invoke("telemetry:get-enabled"),

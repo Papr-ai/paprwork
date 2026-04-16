@@ -1,8 +1,11 @@
 /**
  * useAppUpdater - Hook for managing app version and updates
+ * 
+ * Uses a ref-based callback so the listener registered once in useEffect
+ * always calls the latest handler without re-subscribing.
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { UpdateStatus } from "../types/electron";
 
 interface UseAppUpdaterReturn {
@@ -19,42 +22,47 @@ interface UseAppUpdaterReturn {
 export function useAppUpdater(): UseAppUpdaterReturn {
   const [currentVersion, setCurrentVersion] = useState<string>("2.0.10");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
+  const callbackRef = useRef<((status: UpdateStatus) => void) | undefined>(undefined);
+
+  // Keep callback ref in sync
+  callbackRef.current = (status: UpdateStatus) => {
+    setUpdateStatus(status);
+    if (status.status === "not-available") {
+      const metaVersion = document.querySelector('meta[name="app-version"]')?.getAttribute('content');
+      if (metaVersion) setCurrentVersion(metaVersion);
+    }
+  };
 
   useEffect(() => {
     const updaterAPI = window.electronAPI?.updater;
     if (!updaterAPI) {
+      setUpdateStatus({ status: "error", error: "Updater not available" });
       return;
     }
 
-    const handleStatusUpdate = (status: UpdateStatus) => {
-      setUpdateStatus(status);
-      
-      // Extract current version from update status if available
-      // When "not-available" is returned, we know the current version is latest
-      if (status.status === "not-available" && !status.version) {
-        // Read from package.json version in meta tag
-        const metaVersion = document.querySelector('meta[name="app-version"]')?.getAttribute('content');
-        if (metaVersion) {
-          setCurrentVersion(metaVersion);
-        }
-      }
+    // Stable handler that delegates to ref
+    const handler = (status: UpdateStatus) => {
+      callbackRef.current?.(status);
     };
 
-    updaterAPI.onStatus(handleStatusUpdate);
+    updaterAPI.onStatus(handler);
 
-    // Try to read version from meta tag
+    // Read version from meta tag
     const metaVersion = document.querySelector('meta[name="app-version"]')?.getAttribute('content');
-    if (metaVersion) {
-      setCurrentVersion(metaVersion);
-    }
+    if (metaVersion) setCurrentVersion(metaVersion);
 
     return () => {
-      updaterAPI.removeStatusListener();
+      updaterAPI.removeStatusListener(handler);
     };
   }, []);
 
   const checkForUpdates = useCallback(() => {
-    window.electronAPI?.updater?.check();
+    const updater = window.electronAPI?.updater;
+    if (!updater) {
+      setUpdateStatus({ status: "error", error: "Updater not available. Please restart the app." });
+      return;
+    }
+    updater.check();
   }, []);
 
   const installUpdate = useCallback(() => {
