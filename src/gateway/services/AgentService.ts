@@ -1311,14 +1311,76 @@ export class AgentService {
         console.log(`[AgentService] ℹ️  Token count (${stats.token_count}) below 50K threshold - no summarization needed`);
       }
     } catch (error) {
-      // Save partial assistant message with error indicator
-      // This ensures user sees what happened when they reopen the chat
-      const contextThresholdStr = CONTEXT_ABORT_THRESHOLD.toLocaleString();
-      const errorMessage = contextPressureAborted
-        ? `Context limit approaching (${contextThresholdStr} prompt tokens). Conversation summary generated — you can continue from where we left off.`
-        : error instanceof Error
-          ? error.message
-          : "Unknown error";
+      // If this was a context pressure abort, handle gracefully: compress + retry
+      // This matches the pi-ai path behavior (line ~1183) so both routes get
+      // automatic compression instead of failing.
+      if (contextPressureAborted) {
+        console.log(
+          `[AgentService] ⚡ Context pressure abort caught — compressing and retrying (AI SDK path)`,
+        );
+
+        // Yield compression start chunk
+        yield {
+          type: "compression-start",
+          payload: {
+            message:
+              "Context limit reached. Compressing conversation history...",
+          },
+          timestamp: new Date().toISOString(),
+          chatId,
+        } as StreamChunk & { chatId: string };
+
+        // Perform compression
+        console.log(`🔄 Starting compression for chat ${chatId}`);
+        await this.triggerSummarization(chatId);
+
+        // Yield compression complete chunk
+        yield {
+          type: "compression-complete",
+          payload: { message: "Compression complete. Continuing..." },
+          timestamp: new Date().toISOString(),
+          chatId,
+        } as StreamChunk & { chatId: string };
+
+        console.log(`✓ Compression complete for chat ${chatId}`);
+
+        // Save the partial message first
+        if (assistantText || toolCalls.length > 0) {
+          const partialMsg: StoredMessage = createAssistantStoredMessage({
+            chatId,
+            model: config.model,
+            assistantText,
+            thinkingText,
+            toolCalls,
+            toolResults,
+            sequence,
+            usage: tokenUsage,
+          });
+          await this.storageManager.saveMessage(chatId, partialMsg);
+          console.log(`✓ Saved partial response before retry`);
+        }
+
+        // Automatically retry with compressed context
+        console.log(`🔄 Automatically retrying with compressed context...`);
+        const continuationPrompt =
+          "Continue from where you left off. You've already made progress on this task.";
+
+        for await (const chunk of this.streamAgent(
+          chatId,
+          continuationPrompt,
+          config,
+          options,
+        )) {
+          yield chunk;
+        }
+
+        // Return after the retry completes (don't save message again or throw)
+        return;
+      }
+
+      // Non-context-pressure errors: save error message and re-throw
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
 
       const errorMsg: StoredMessage = createErrorStoredMessage({
         chatId,
