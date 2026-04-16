@@ -2,7 +2,7 @@
  * OAuth IPC Handlers - Handle OAuth authentication requests from renderer
  */
 
-import { ipcMain, shell } from "electron";
+import { ipcMain, shell, BrowserWindow } from "electron";
 import { OAuthTokenStorage } from "../../core/storage/OAuthTokenStorage.js";
 import type { CustomKeysStorage } from "../../core/storage/CustomKeysStorage.js";
 import { OpenAIOAuthService } from "../../core/services/OpenAIOAuthService.js";
@@ -17,7 +17,7 @@ let openaiOAuthService: OpenAIOAuthService | null = null;
 let claudeSetupTokenService: ClaudeSetupTokenService | null = null;
 let claudeOAuthService: ClaudeOAuthService | null = null;
 
-// Active callback servers (for OpenAI OAuth only)
+// Active callback servers (OpenAI and Claude PKCE flows)
 const activeServers = new Map<string, OAuthCallbackServer>();
 
 // Active OAuth flows (store PKCE data for OpenAI)
@@ -28,6 +28,19 @@ const activeFlows = new Map<
     provider: "openai" | "anthropic";
   }
 >();
+
+
+/**
+ * Send OAuth status event to all renderer windows
+ */
+function sendOAuthStatus(provider: "openai" | "anthropic", status: "connected" | "error" | "timeout", error?: string) {
+  const wins = BrowserWindow.getAllWindows();
+  for (const win of wins) {
+    if (!win.isDestroyed()) {
+      win.webContents.send("oauth:status", { provider, status, error });
+    }
+  }
+}
 
 // Token refresh timer
 let refreshTimer: NodeJS.Timeout | null = null;
@@ -318,9 +331,11 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
 
             console.log("[OAuth IPC] OpenAI OAuth flow completed successfully");
             activeFlows.delete("openai");
+            sendOAuthStatus("openai", "connected");
           } catch (error) {
             console.error("[OAuth IPC] OpenAI callback error:", error);
             activeFlows.delete("openai");
+            sendOAuthStatus("openai", "error", (error as Error).message);
           }
         },
       });
@@ -389,18 +404,15 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
     }
   });
 
-  // Active Claude token poller handle (so we can cancel it)
-  let claudeTokenPoller: NodeJS.Timeout | null = null;
-
-  // Claude OAuth handlers (CLI-based, non-blocking)
+  // Claude OAuth handlers (direct PKCE flow, same pattern as OpenAI)
   ipcMain.handle("auth:claude:start-oauth", async () => {
     try {
-      console.log("[OAuth IPC] Starting Claude OAuth via CLI (non-blocking)");
+      console.log("[OAuth IPC] Starting Claude OAuth (direct PKCE flow)");
 
-      // Step 0: Try reading existing token from Keychain/storage first (fast path)
+      // Step 0: Check for existing token in Claude CLI storage (Keychain/files)
       const existingToken = await claudeSetupTokenService!.readTokenFromCLIStorage();
       if (existingToken) {
-        console.log("[OAuth IPC] Found existing Claude token in storage — using it");
+        console.log("[OAuth IPC] Found existing Claude token in CLI storage — using it");
         const tokenInput = {
           provider: "anthropic" as const,
           accessToken: existingToken,
@@ -409,65 +421,79 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
         };
         await oauthTokenStorage!.storeToken(tokenInput);
         await syncOAuthTokenToApiKeys("anthropic", existingToken);
-        return { success: true };
+        // Notify renderer immediately — token found in CLI storage
+        sendOAuthStatus("anthropic", "connected");
+        return { success: true, source: "keychain" };
       }
 
-      // Step 1: Launch full automated setup in background (do NOT await)
-      // This handles: CLI install if needed → browser OAuth → token extraction → storage fallback
-      claudeSetupTokenService!.automatedSetup().then(async (result) => {
-        if (result.success && result.token) {
-          const t = result.token;
-          console.log(`[OAuth IPC] Claude automated setup returned token: length=${t.length}, start=${t.substring(0, 20)}..., end=...${t.substring(t.length - 10)}`);
-          const tokenInput = {
-            provider: "anthropic" as const,
-            accessToken: t,
-            refreshToken: t,
-            expiresIn: 365 * 24 * 60 * 60,
-          };
-          await oauthTokenStorage!.storeToken(tokenInput);
-          await syncOAuthTokenToApiKeys("anthropic", t);
-          stopClaudePoller();
-        } else {
-          console.log("[OAuth IPC] Claude automated setup did not return token:", result.error);
-        }
-      }).catch((error) => {
-        console.error("[OAuth IPC] Claude automated setup error:", error);
+      // Step 1: Stop any existing Claude callback server
+      const existingServer = activeServers.get("anthropic");
+      if (existingServer) {
+        existingServer.stop();
+        activeServers.delete("anthropic");
+      }
+
+      // Step 2: Start PKCE OAuth flow (same as OpenAI)
+      const { url, pkce } = claudeOAuthService!.startOAuthFlow();
+
+      // Store PKCE data for callback verification
+      activeFlows.set("anthropic", {
+        pkce: { verifier: pkce.verifier, state: pkce.state },
+        provider: "anthropic",
       });
 
-      // Step 2: Start background polling for token in Keychain/storage
-      // The CLI writes to Keychain after OAuth completes - we poll to detect it
-      stopClaudePoller();
-      let pollCount = 0;
-      const maxPolls = 150; // 5 minutes at 2s intervals
-      claudeTokenPoller = setInterval(async () => {
-        pollCount++;
-        if (pollCount > maxPolls) {
-          console.log("[OAuth IPC] Claude token polling timed out after 5 minutes");
-          stopClaudePoller();
-          return;
-        }
+      // Step 3: Start local callback server
+      // Claude Code uses http://localhost:{PORT}/callback
+      const server = new OAuthCallbackServer({
+        port: 1456,
+        hostname: "localhost",
+        callbackPath: "/callback",
+        timeout: 300000, // 5 minutes
+        onCallback: async (params) => {
+          try {
+            const code = params.get("code");
+            const state = params.get("state");
+            const flow = activeFlows.get("anthropic");
 
-        try {
-          const token = await claudeSetupTokenService!.readTokenFromCLIStorage();
-          if (token) {
-            console.log("[OAuth IPC] Claude token detected in storage via polling");
-            const tokenInput = {
-              provider: "anthropic" as const,
-              accessToken: token,
-              refreshToken: token,
-              expiresIn: 365 * 24 * 60 * 60,
-            };
+            if (!code || !state || !flow) {
+              console.error("[OAuth IPC] Claude callback: missing code, state, or flow data");
+              return;
+            }
+
+            console.log("[OAuth IPC] Claude callback received, exchanging code for token...");
+
+            // Exchange authorization code for tokens
+            const tokenInput = await claudeOAuthService!.handleCallback(
+              code,
+              flow.pkce.verifier,
+              state,
+              flow.pkce.state,
+            );
+
+            // Store tokens in OAuthTokenStorage
             await oauthTokenStorage!.storeToken(tokenInput);
-            await syncOAuthTokenToApiKeys("anthropic", token);
-            stopClaudePoller();
-          }
-        } catch {
-          // Silently retry
-        }
-      }, 2000);
 
-      // Return immediately - UI polling will detect connection via get-status
-      return { success: true };
+            // Sync token to CustomKeysStorage (makes it available as ANTHROPIC_API_KEY)
+            await syncOAuthTokenToApiKeys("anthropic", tokenInput.accessToken);
+
+            console.log("[OAuth IPC] Claude OAuth flow completed successfully");
+            activeFlows.delete("anthropic");
+            sendOAuthStatus("anthropic", "connected");
+          } catch (error) {
+            console.error("[OAuth IPC] Claude callback error:", error);
+            activeFlows.delete("anthropic");
+            sendOAuthStatus("anthropic", "error", (error as Error).message);
+          }
+        },
+      });
+
+      await server.start();
+      activeServers.set("anthropic", server);
+
+      // Step 4: Open browser to Claude's authorization page
+      await shell.openExternal(url);
+
+      return { success: true, url };
     } catch (error) {
       console.error("[OAuth IPC] Failed to start Claude OAuth:", error);
       return {
@@ -476,13 +502,6 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
       };
     }
   });
-
-  function stopClaudePoller(): void {
-    if (claudeTokenPoller) {
-      clearInterval(claudeTokenPoller);
-      claudeTokenPoller = null;
-    }
-  }
 
   ipcMain.handle("auth:claude:get-status", async () => {
     try {

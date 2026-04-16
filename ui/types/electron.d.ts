@@ -94,6 +94,7 @@ export interface ElectronAPI {
         success: boolean;
         url?: string;
         error?: string;
+        source?: string;
       }>;
       getStatus: () => Promise<{
         connected: boolean;
@@ -106,6 +107,7 @@ export interface ElectronAPI {
       getToken: () => Promise<{ success: boolean; token?: string; error?: string }>;
     };
     pasteToken: (provider: string, token: string) => Promise<{ success: boolean; error?: string }>;
+    onAuthStatus?: (callback: (data: { provider: string; status: string; error?: string }) => void) => (() => void) | undefined;
   };
 
   // Papr Login API - Authenticate with Papr platform for automatic API key provisioning

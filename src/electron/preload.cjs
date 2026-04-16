@@ -74,6 +74,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
       const channel = provider === "anthropic" ? "auth:claude:paste-token" : `auth:${provider}:paste-token`;
       return ipcRenderer.invoke(channel, token);
     },
+    // Push-based auth status from main process (no polling needed)
+    onAuthStatus: (callback) => {
+      const handler = (_event, data) => callback(data);
+      ipcRenderer.on("oauth:status", handler);
+      return () => ipcRenderer.removeListener("oauth:status", handler);
+    },
   },
 
   // Papr Login API - Authenticate with Papr platform for automatic API key provisioning
