@@ -10,6 +10,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Tab, TabType, DisplayMode } from "../types/tabs";
+import { gateway } from "../src/lib/gateway";
 
 // Re-export for backward compatibility
 export type { Tab, TabType, DisplayMode };
@@ -301,6 +302,24 @@ export const useTabStore = create<TabState>()(
       closeTab: (tabId) => {
         const tab = get().getTab(tabId);
         if (!tab) return;
+
+        // If closing a streaming chat tab, stop the stream first
+        // This triggers the backend to save the partial response
+        if (tab.type === "chat" && tab.metadata?.isStreaming) {
+          gateway.send("agent:stop", { chatId: tab.entityId }).catch(() => {});
+        }
+        // Also check chatStore for streaming status (more reliable)
+        if (tab.type === "chat") {
+          try {
+            const chatStore = (window as any).__chatStore__;
+            if (chatStore?.getChatState) {
+              const chatState = chatStore.getChatState(tab.entityId);
+              if (chatState?.isSending) {
+                gateway.send("agent:stop", { chatId: tab.entityId }).catch(() => {});
+              }
+            }
+          } catch {}
+        }
 
         const state = get();
         const visibleTabs = get().getVisibleTabs();

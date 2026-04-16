@@ -295,13 +295,15 @@ export function Tab({
         <span className="tab__title">{tab.title}</span>
       )}
 
-      <button
-        className="tab__close"
-        onClick={handleClose}
-        aria-label="Close tab"
-      >
-        ×
-      </button>
+      {isActive && (
+        <button
+          className="tab__close"
+          onClick={handleClose}
+          aria-label="Close tab"
+        >
+          ×
+        </button>
+      )}
     </div>
   );
 }
