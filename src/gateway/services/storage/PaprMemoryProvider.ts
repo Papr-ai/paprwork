@@ -78,9 +78,21 @@ export class PaprMemoryProvider implements IStorageProvider {
         customMetadata.incomplete = true;
       }
 
+      // Serialize rich content (thinking, toolCalls, sequence) into content
+      // so it can be reconstructed when loading from PAPR
+      const richContent = message.role === "assistant" && (message.thinking || message.toolCalls || message.sequence)
+        ? JSON.stringify({
+            text: message.content,
+            thinking: message.thinking,
+            toolCalls: message.toolCalls,
+            sequence: message.sequence,
+            model: message.model,
+          })
+        : message.content;
+
       // POST to PAPR /v1/messages using SDK
       const response = await this.client.messages.store({
-        content: message.content,
+        content: richContent,
         role: message.role,
         sessionId: chatId,
         process_messages: true, // Let PAPR do batch analysis & auto-summarize
@@ -133,18 +145,32 @@ export class PaprMemoryProvider implements IStorageProvider {
 
       // IMPORTANT: PAPR returns messages in REVERSE chronological order (newest first)
       // Reverse to chronological order (oldest first) for UI display
-      return response.messages.reverse().map((msg) => ({
-        id: msg.objectId,
-        chat_id: chatId,
-        role: msg.role,
-        content:
-          typeof msg.content === "string"
-            ? msg.content
-            : JSON.stringify(msg.content),
-        timestamp: msg.createdAt,
-        sync_status: "synced" as const,
-        papr_message_id: msg.objectId,
-      }));
+      return response.messages.reverse().map((msg) => {
+        const raw = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+
+        // Try to parse rich content (thinking, toolCalls, sequence)
+        let parsed: any = null;
+        if (msg.role === "assistant" && raw.startsWith("{")) {
+          try {
+            const obj = JSON.parse(raw);
+            if (obj.text !== undefined) parsed = obj;
+          } catch {}
+        }
+
+        return {
+          id: msg.objectId,
+          chat_id: chatId,
+          role: msg.role,
+          content: parsed ? parsed.text : raw,
+          thinking: parsed?.thinking,
+          toolCalls: parsed?.toolCalls,
+          sequence: parsed?.sequence,
+          model: parsed?.model,
+          timestamp: msg.createdAt,
+          sync_status: "synced" as const,
+          papr_message_id: msg.objectId,
+        };
+      });
     } catch (error) {
       console.error("Failed to load messages from PAPR:", error);
       return [];
