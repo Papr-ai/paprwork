@@ -146,26 +146,64 @@ export class PaprMemoryProvider implements IStorageProvider {
       // IMPORTANT: PAPR returns messages in REVERSE chronological order (newest first)
       // Reverse to chronological order (oldest first) for UI display
       return response.messages.reverse().map((msg) => {
-        const raw = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+        // Handle three content formats:
+        // 1. Old format: JSON string '{"text": "...", "thinking": "...", "toolCalls": [...]}'
+        // 2. New format: structured array [{type: "thinking",...}, {type: "text",...}, {type: "tool_use",...}]
+        // 3. Plain string: regular text content
 
-        // Try to parse rich content (thinking, toolCalls, sequence)
-        let parsed: any = null;
-        if (msg.role === "assistant" && raw.startsWith("{")) {
+        let textContent = "";
+        let thinking: string | undefined;
+        let toolCalls: any[] | undefined;
+        let sequence: any[] | undefined;
+        let model: string | undefined;
+
+        if (msg.role === "assistant" && Array.isArray(msg.content)) {
+          // New structured format from PAPR (unwrapped from {type:"structured", data:[...]})
+          for (const item of msg.content as any[]) {
+            if (item.type === "text" && item.text) textContent += item.text;
+            if (item.type === "thinking" && item.thinking) thinking = item.thinking;
+            if (item.type === "tool_use") {
+              if (!toolCalls) toolCalls = [];
+              toolCalls.push({
+                id: item.id,
+                name: item.name,
+                args: item.input,
+              });
+            }
+          }
+          // Check for sequence/model stored as extra properties on the content object
+          const rawContent = (msg as any).content;
+          if (rawContent?.sequence) sequence = rawContent.sequence;
+          if (rawContent?.model) model = rawContent.model;
+        } else if (msg.role === "assistant" && typeof msg.content === "string" && msg.content.startsWith("{")) {
+          // Old format: serialized rich content JSON string
           try {
-            const obj = JSON.parse(raw);
-            if (obj.text !== undefined) parsed = obj;
-          } catch {}
+            const obj = JSON.parse(msg.content);
+            if (obj.text !== undefined) {
+              textContent = obj.text;
+              thinking = obj.thinking;
+              toolCalls = obj.toolCalls;
+              sequence = obj.sequence;
+              model = obj.model;
+            } else {
+              textContent = msg.content;
+            }
+          } catch {
+            textContent = msg.content;
+          }
+        } else {
+          textContent = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
         }
 
         return {
           id: msg.objectId,
           chat_id: chatId,
           role: msg.role,
-          content: parsed ? parsed.text : raw,
-          thinking: parsed?.thinking,
-          toolCalls: parsed?.toolCalls,
-          sequence: parsed?.sequence,
-          model: parsed?.model,
+          content: textContent,
+          thinking,
+          toolCalls,
+          sequence,
+          model,
           timestamp: msg.createdAt,
           sync_status: "synced" as const,
           papr_message_id: msg.objectId,
