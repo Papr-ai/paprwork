@@ -1031,25 +1031,6 @@ export function useAgent() {
         setError(null);
         console.log("[useAgent] State reset, about to call gateway.stream");
 
-        // V1 APPROACH: Generate title in parallel with streaming (non-blocking)
-        // Title generation happens in background while user sees streaming response
-        if (isFirstMessage) {
-          // Fire and forget - don't await
-          gateway
-            .send("agent:generate-title", {
-              chatId: finalChatId,
-              message,
-            })
-            .then((titleResponse) => {
-              const title = (titleResponse.data as any)?.title || "New Chat";
-              console.log("[useAgent] Generated title:", title);
-              updateTabTitle(`chat-${finalChatId}`, title);
-            })
-            .catch((titleError) => {
-              console.error("[useAgent] Failed to generate title:", titleError);
-            });
-        }
-
         // Stream message via WebSocket (with permanent chatId)
         await gateway.stream(
           "agent:stream",
@@ -1064,6 +1045,23 @@ export function useAgent() {
           },
         );
         console.log("[useAgent] gateway.stream completed successfully");
+
+        // Generate title after streaming (auth is guaranteed resolved)
+        if (isFirstMessage) {
+          gateway
+            .send("agent:generate-title", {
+              chatId: finalChatId,
+              message,
+            })
+            .then((titleResponse) => {
+              const title = (titleResponse.data as any)?.title || "New Chat";
+              console.log("[useAgent] Generated title:", title);
+              updateTabTitle(`chat-${finalChatId}`, title);
+            })
+            .catch((titleError) => {
+              console.error("[useAgent] Failed to generate title:", titleError);
+            });
+        }
 
         // Set tab unread status if not active (green dot)
         // The streaming status (blue dot) was already cleared by the "done" chunk
