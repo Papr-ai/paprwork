@@ -122,8 +122,26 @@ export async function autoInstallPythonDependencies(
 
     // Use --user flag only if NOT in virtualenv
     // In virtualenv, --user causes "User site-packages are not visible" error
+    // On macOS with PEP 668 (externally-managed-environment), --user alone fails
+    // so we add --break-system-packages as fallback
     const userFlag = isVirtualEnv ? "" : "--user";
-    const installCmd = `${pythonCmd} -m pip install ${userFlag} beautifulsoup4 lxml`.replace(/\s+/g, ' ').trim();
+    let installCmd = `${pythonCmd} -m pip install ${userFlag} beautifulsoup4 lxml`.replace(/\s+/g, ' ').trim();
+
+    // Check if PEP 668 applies (macOS Homebrew / system Python)
+    if (!isVirtualEnv && process.platform === "darwin") {
+      try {
+        execSync(`${pythonCmd} -m pip install --user --dry-run beautifulsoup4 2>&1`, {
+          stdio: ["pipe", "pipe", "pipe"],
+          timeout: 10000,
+        });
+      } catch (pipErr: unknown) {
+        const errMsg = pipErr instanceof Error ? (pipErr as { stderr?: string }).stderr || pipErr.message : String(pipErr);
+        if (errMsg.includes("externally-managed") || errMsg.includes("PEP 668")) {
+          installCmd = `${pythonCmd} -m pip install --break-system-packages beautifulsoup4 lxml`;
+          console.log("[PythonDeps] PEP 668 detected, using --break-system-packages");
+        }
+      }
+    }
 
     console.log(`[PythonDeps] Installing with command: ${installCmd}`);
     console.log(`[PythonDeps] Virtualenv detected: ${isVirtualEnv}`);
