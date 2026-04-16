@@ -4,6 +4,7 @@
 
 import React, { useState } from "react";
 import { useOAuth } from "../../hooks/useOAuth";
+import { useCustomKeys } from "../../hooks/useCustomKeys";
 import "./SettingsView.css";
 
 interface OAuthSectionProps {
@@ -24,6 +25,7 @@ export function OAuthSection({
   const { status, loading, startOAuthLogin, disconnect } = useOAuth(provider);
   const [useApiKey, setUseApiKey] = useState(false);
   const [showPasteToken, setShowPasteToken] = useState(false);
+  const [prevTimedOut, setPrevTimedOut] = useState(false);
   const [pastedToken, setPastedToken] = useState("");
   const [pasting, setPasting] = useState(false);
   const [showToken, setShowToken] = useState(false);
@@ -32,6 +34,11 @@ export function OAuthSection({
   const [editingToken, setEditingToken] = useState(false);
   const [editedToken, setEditedToken] = useState("");
   const [savingToken, setSavingToken] = useState(false);
+  const [apiKeyValue, setApiKeyValue] = useState("");
+  const [savingApiKey, setSavingApiKey] = useState(false);
+  const [apiKeySaved, setApiKeySaved] = useState(false);
+  const [apiKeyError, setApiKeyError] = useState("");
+  const { keys, addKey, updateKey, getKeyValue, deleteKey } = useCustomKeys();
 
   const handleViewToken = async () => {
     if (showToken) {
@@ -108,6 +115,63 @@ export function OAuthSection({
       alert(`Error: ${error}`);
     } finally {
       setPasting(false);
+    }
+  };
+
+  // Auto-show paste token fallback when sign-in times out
+  React.useEffect(() => {
+    if (status.timedOut && !prevTimedOut && provider === "anthropic") {
+      setShowPasteToken(true);
+      setPrevTimedOut(true);
+    }
+    if (!status.timedOut && prevTimedOut) {
+      setPrevTimedOut(false);
+    }
+  }, [status.timedOut]);
+
+
+  // Check if API key already exists when switching to API key mode
+  React.useEffect(() => {
+    if (useApiKey) {
+      const existingKey = keys.find(k => k.name === apiKeyName);
+      if (existingKey) {
+        setApiKeySaved(true);
+        getKeyValue(existingKey.id).then(val => {
+          if (val) setApiKeyValue(val);
+        });
+      } else {
+        setApiKeySaved(false);
+        setApiKeyValue("");
+      }
+    }
+  }, [useApiKey, keys]);
+
+  const handleSaveApiKey = async () => {
+    const trimmed = apiKeyValue.trim();
+    if (!trimmed) return;
+    setSavingApiKey(true);
+    setApiKeyError("");
+    try {
+      const existingKey = keys.find(k => k.name === apiKeyName);
+      if (existingKey) {
+        await updateKey(existingKey.id, { value: trimmed });
+      } else {
+        await addKey({ name: apiKeyName, value: trimmed, description: `${title} API Key`, permission: "always" });
+      }
+      setApiKeySaved(true);
+    } catch (err: any) {
+      setApiKeyError(err.message || "Failed to save key");
+    } finally {
+      setSavingApiKey(false);
+    }
+  };
+
+  const handleDeleteApiKey = async () => {
+    const existingKey = keys.find(k => k.name === apiKeyName);
+    if (existingKey) {
+      await deleteKey(existingKey.id);
+      setApiKeyValue("");
+      setApiKeySaved(false);
     }
   };
 
@@ -272,6 +336,12 @@ export function OAuthSection({
                 </div>
               )}
               
+              {status.error && !status.connected && (
+                <div style={{ padding: "8px 12px", background: "#fff3cd", borderRadius: "6px", fontSize: "13px", color: "#856404", marginBottom: "8px" }}>
+                  {status.error}
+                </div>
+              )}
+              
               <div style={{ display: "flex", gap: "8px", flexDirection: "column" }}>
                 <button
                   className="settings-btn settings-btn--primary"
@@ -279,7 +349,7 @@ export function OAuthSection({
                   disabled={loading}
                   style={{ width: "100%" }}
                 >
-                  {loading ? "Connecting..." : `Sign in with ${title}`}
+                  {loading ? "Connecting..." : status.error && !status.connected ? "Try Again" : `Sign in with ${title}`}
                 </button>
                 
                 {provider === "anthropic" && (
@@ -329,11 +399,70 @@ export function OAuthSection({
 
         </>
       ) : (
-        <>
-          <div className="oauth-api-key-info">
-            <p>Configure <code>{apiKeyName}</code> in the API Keys section below</p>
+        <div className="oauth-api-key-inline">
+            {apiKeySaved ? (
+              <div className="oauth-connected-info">
+                <div className="oauth-detail">
+                  <span className="oauth-detail-label">Key:</span>
+                  <span className="oauth-detail-value" style={{ fontFamily: "monospace" }}>
+                    {apiKeyValue ? `${apiKeyValue.substring(0, 8)}...${apiKeyValue.slice(-4)}` : "••••••••"}
+                  </span>
+                </div>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <button
+                    className="settings-btn settings-btn--secondary"
+                    onClick={() => { setApiKeySaved(false); }}
+                    style={{ flex: 1 }}
+                  >
+                    Update Key
+                  </button>
+                  <button
+                    className="settings-btn settings-btn--secondary"
+                    onClick={handleDeleteApiKey}
+                    style={{ flex: 1 }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <p className="oauth-card__description">
+                  Enter your {title} API key
+                </p>
+                <input
+                  type="password"
+                  className="oauth-api-key-input"
+                  placeholder={apiKeyHint || `Enter ${apiKeyName}`}
+                  value={apiKeyValue}
+                  onChange={(e) => setApiKeyValue(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "8px 12px",
+                    border: "1px solid var(--color-border, #ddd)",
+                    borderRadius: "6px",
+                    fontSize: "13px",
+                    fontFamily: "monospace",
+                    marginBottom: "8px",
+                    background: "var(--color-bg-secondary, #f9f9f9)",
+                  }}
+                />
+                {apiKeyError && (
+                  <div style={{ color: "#dc3545", fontSize: "12px", marginBottom: "8px" }}>
+                    {apiKeyError}
+                  </div>
+                )}
+                <button
+                  className="settings-btn settings-btn--primary"
+                  onClick={handleSaveApiKey}
+                  disabled={savingApiKey || !apiKeyValue.trim()}
+                  style={{ width: "100%" }}
+                >
+                  {savingApiKey ? "Saving..." : "Save API Key"}
+                </button>
+              </>
+            )}
           </div>
-        </>
       )}
 
       {/* Toggle Switch */}
