@@ -107,6 +107,7 @@ export function createErrorStoredMessage(args: {
   toolCalls: ToolCallEvent[];
   toolResults: ToolResultEvent[];
   errorMessage: string;
+  sequence?: Array<{ type: "text" | "tool" | "thinking"; data: any }>;
   usage?: {
     promptTokens: number;
     completionTokens: number;
@@ -146,6 +147,7 @@ export function createErrorStoredMessage(args: {
             status: "error" as const,
           }))
         : undefined,
+    sequence: args.sequence,
     error: args.errorMessage,
     incomplete: true,
     timestamp: new Date().toISOString(),

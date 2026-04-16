@@ -1390,6 +1390,7 @@ export class AgentService {
         toolCalls,
         toolResults,
         errorMessage,
+        sequence,
         usage: tokenUsage, // Pass token usage even on error
       });
 

@@ -72,20 +72,23 @@ export class HybridStorageProvider implements IStorageProvider {
     limit?: number,
     skip?: number,
   ): Promise<StoredMessage[]> {
-    // Try PAPR first if synced
+    // Always prefer local DB — it has full fidelity (sequence, thinking, toolCalls)
+    // PAPR only stores role + content, so loading from PAPR loses rich rendering data
+    const localMessages = await this.local.loadMessages(chatId, limit, skip);
+    if (localMessages.length > 0) {
+      return localMessages;
+    }
+
+    // Fallback to PAPR if local has no messages (e.g. new device, cleared local data)
     if (this.syncEnabled) {
       try {
-        const paprMessages = await this.papr.loadMessages(chatId, limit, skip);
-        if (paprMessages.length > 0) {
-          return paprMessages;
-        }
+        return await this.papr.loadMessages(chatId, limit, skip);
       } catch (error) {
-        console.warn("Failed to load from PAPR, using local:", error);
+        console.warn("Failed to load from PAPR:", error);
       }
     }
 
-    // Fallback to local
-    return this.local.loadMessages(chatId, limit, skip);
+    return [];
   }
 
   async loadMessagesForLLM(chatId: string): Promise<any[]> {
