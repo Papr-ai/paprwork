@@ -2,17 +2,24 @@
  * CommunityAppsView - Browse and import app bundles from the community repo
  */
 
-import React, { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { gateway } from "../../src/lib/gateway";
 import { useArtifacts } from "../../hooks/useArtifacts";
 import { useChat } from "../../hooks/useChat";
 import { useTabs } from "../../hooks/useTabs";
+import {
+  ImportSetupWizard,
+  type WizardResult,
+  type HelpRequest,
+} from "./ImportSetupWizard";
+import type { RequirementItem } from "../../../src/core/types/bundles";
+import { normalizeRequirements } from "../../../src/core/types/bundles";
+import { lookupService } from "../../../src/core/data/knownServices";
 import "./CommunityAppsView.css";
 
 /**
  * Registry entries are Zod-validated server-side (parseValidRegistryEntries).
- * Only entries with correct schema reach the UI. Fields like `requirements`
- * are guaranteed to be string[] — objects or other shapes are rejected.
+ * Both bare strings and RequiredKeySpec objects are accepted for requirements.
  */
 interface CommunityRegistryEntry {
   bundleId: string;
@@ -24,7 +31,7 @@ interface CommunityRegistryEntry {
   minPaprworkVersion: string;
   path: string;
   icon?: string;
-  requirements?: string[];
+  requirements?: RequirementItem[];
   platform?: string[];
 }
 
@@ -53,6 +60,9 @@ export function CommunityAppsView() {
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [showAllPlatforms, setShowAllPlatforms] = useState(false);
+  const [wizardEntry, setWizardEntry] = useState<CommunityRegistryEntry | null>(
+    null,
+  );
   const { filteredArtifacts } = useArtifacts();
   const { createChat } = useChat();
   const { createTab, switchToTab } = useTabs();
@@ -81,23 +91,107 @@ export function CommunityAppsView() {
     void fetchRegistry();
   }, [fetchRegistry]);
 
-  const handleImport = async (entry: CommunityRegistryEntry) => {
+  const handleImportClick = (entry: CommunityRegistryEntry) => {
+    const reqs = entry.requirements ?? [];
+    if (reqs.length > 0) {
+      setWizardEntry(entry);
+    } else {
+      void startAgentImport(entry, null);
+    }
+  };
+
+  const handleWizardComplete = (result: WizardResult) => {
+    if (!wizardEntry) return;
+    setWizardEntry(null);
+    void startAgentImport(wizardEntry, result);
+  };
+
+  /**
+   * Build a structured message for the agent with all wizard context
+   * so it can import the bundle and adapt any substituted services.
+   */
+  const startAgentImport = async (
+    entry: CommunityRegistryEntry,
+    wizard: WizardResult | null,
+  ) => {
     const chatId = await createChat();
     if (!chatId) return;
 
     const tabId = createTab("chat", chatId, "New Chat");
     switchToTab(tabId);
 
-    const requirements = entry.requirements ?? [];
-    const reqNote = requirements.length > 0
-      ? ` This app requires: ${requirements.join(", ")}.`
-      : "";
-
-    const message =
+    let message =
       `Import the community app "${entry.name}" (bundleId: ${entry.bundleId}). ` +
-      `It's in the Papr-ai/paprwork-community-apps repo at path: ${entry.path}.${reqNote} ` +
+      `It's in the Papr-ai/paprwork-community-apps repo at path: ${entry.path}. ` +
       `Please handle the full setup — clone the community repo, import the bundle, ` +
       `set up any virtual environments, install dependencies, and verify everything works.`;
+
+    if (wizard) {
+      // Describe configured keys
+      if (wizard.configured.length > 0) {
+        const names = wizard.configured.map((k) => k.keyName);
+        message += `\n\nThe following API keys are already configured in Settings: ${names.join(", ")}.`;
+      }
+
+      // Describe substitutions
+      if (wizard.substituted.length > 0) {
+        message += `\n\nIMPORTANT — Service substitutions requested:`;
+        for (const sub of wizard.substituted) {
+          message +=
+            `\n- Replace ${sub.originalService} (${sub.originalKeyName}) with ` +
+            `${sub.chosenService} (${sub.chosenKeyName}). The key for ${sub.chosenService} ` +
+            `is already saved in Settings. Please rewrite the data pipeline job(s) to use ` +
+            `\${${sub.chosenKeyName}} and the ${sub.chosenService} API instead of ${sub.originalService}.`;
+        }
+      }
+
+      // Describe skipped keys
+      if (wizard.skipped.length > 0) {
+        const skipped = wizard.skipped.map((k) => `${k.service} (${k.keyName})`);
+        message += `\n\nNote: These keys were skipped and are not configured: ${skipped.join(", ")}. The app features that depend on them may not work until the user adds them in Settings.`;
+      }
+    } else {
+      // No wizard (no requirements) — include raw requirements for completeness
+      const reqs = entry.requirements ?? [];
+      if (reqs.length > 0) {
+        const normalized = normalizeRequirements(reqs);
+        const names = normalized.map((r) => r.name);
+        message += ` This app requires: ${names.join(", ")}.`;
+      }
+    }
+
+    setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent("papr-onboarding-send", { detail: { message } }),
+      );
+    }, 300);
+  };
+
+  const handleWizardHelp = async (request: HelpRequest) => {
+    const chatId = await createChat();
+    if (!chatId) return;
+
+    const tabId = createTab("chat", chatId, `Help: ${request.service}`);
+    switchToTab(tabId);
+
+    let message =
+      `I need help getting an API key for ${request.service} (key name: ${request.keyName}).`;
+
+    if (request.instructions) {
+      message += ` The instructions say: "${request.instructions}"`;
+    }
+
+    if (request.signupUrl) {
+      message += ` The signup page is: ${request.signupUrl}`;
+    }
+
+    if (request.docsUrl) {
+      message += ` Docs: ${request.docsUrl}`;
+    }
+
+    message +=
+      ` Please walk me through the process step by step. ` +
+      `Once I have the key, I'll paste it in the setup wizard and come back here.`;
 
     setTimeout(() => {
       window.dispatchEvent(
@@ -208,11 +302,23 @@ export function CommunityAppsView() {
               key={entry.bundleId}
               entry={entry}
               isInstalled={isInstalled}
-              onImport={() => void handleImport(entry)}
+              onImport={() => handleImportClick(entry)}
             />
           );
         })}
       </div>
+
+      {wizardEntry && (
+        <ImportSetupWizard
+          appName={wizardEntry.name}
+          appDescription={wizardEntry.description}
+          appIcon={wizardEntry.icon}
+          requirements={wizardEntry.requirements ?? []}
+          onComplete={handleWizardComplete}
+          onCancel={() => setWizardEntry(null)}
+          onRequestHelp={(req) => void handleWizardHelp(req)}
+        />
+      )}
     </div>
   );
 }
@@ -232,7 +338,8 @@ function CommunityAppCard({
 
   const buttonLabel = isInstalled ? "Installed" : "Import";
 
-  const requirements = entry.requirements ?? [];
+  const rawReqs = entry.requirements ?? [];
+  const requirements = normalizeRequirements(rawReqs);
   const hasNoRequirements = requirements.length === 0;
 
   const allPlatforms = ["macos", "windows", "linux"];
@@ -323,7 +430,9 @@ function CommunityAppCard({
               <span
                 className={`community-card__detail-value ${hasNoRequirements ? "community-card__detail-value--good" : "community-card__detail-value--warn"}`}
               >
-                {requirements.length > 0 ? requirements.join(", ") : "No API keys needed"}
+                {requirements.length > 0
+                  ? requirements.map((r) => lookupService(r.name)?.service ?? r.name).join(", ")
+                  : "No API keys needed"}
               </span>
             </div>
             <div className="community-card__detail-row">

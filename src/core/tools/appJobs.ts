@@ -313,7 +313,16 @@ export const createAppTool = createTool({
       files,
       args.icon,
     );
-    return { success: true, data: app };
+    return {
+      success: true,
+      data: app,
+      _designReminder:
+        `⚠️ DESIGN REQUIREMENT: You MUST load the design system skill BEFORE writing any UI code: ` +
+        `read_skill({ skillId: "preloaded-paprwork-design-system" }). ` +
+        `Design target: Steve Jobs meets Elon Musk — obsessively clean, premium, zero clutter. ` +
+        `2-3 focused sections max, ONE primary action per screen, generous whitespace. ` +
+        `Follow these principles unless the user has explicitly provided different design guidelines.`,
+    };
   },
 });
 
@@ -375,9 +384,129 @@ export const createJobTool = createTool({
       model: args.model,
       recipe: args.recipe,
     });
-    return { success: true, data: job };
+
+    const isScriptJob = ["python", "node", "bash", "shell", "swift"].includes(
+      args.type,
+    );
+    const commandUsesKeySubstitution = args.command?.includes("${");
+
+    const keyReminder =
+      isScriptJob && !commandUsesKeySubstitution
+        ? `⚠️ API KEY REMINDER: If this job uses custom API keys from Settings, you MUST pass them as CLI args using \${KEY_NAME} in the command field. ` +
+          `Example: command: "python3 code/main.py --api-key \${MY_KEY}" + argparse in script. ` +
+          `Do NOT use os.environ.get() or process.env — custom keys are NOT available as environment variables. ` +
+          `Load the guide: read_skill({ skillId: "preloaded-api-key-testing" })`
+        : undefined;
+
+    return {
+      success: true,
+      data: job,
+      ...(keyReminder ? { _keyPatternReminder: keyReminder } : {}),
+    };
   },
 });
+
+/**
+ * Scan job source files for the anti-pattern of using os.environ/process.env
+ * to access custom API keys. Custom keys from Settings are stored in the system
+ * keychain and are NOT available as environment variables in job processes.
+ * They must be passed via CLI arguments using ${KEY_NAME} in the command field.
+ */
+async function scanJobSourceForEnvKeyAntiPattern(
+  jobId: string,
+): Promise<string[]> {
+  const { promises: fsP } = await import("fs");
+  const pathMod = await import("path");
+  const warnings: string[] = [];
+  const jobDir = await getJobDir(jobId);
+
+  const inheritedEnvKeys = new Set([
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GOOGLE_API_KEY",
+    "PAPR_API_KEY",
+    "JOB_DIR",
+    "JOB_DB",
+    "THREAD_ID",
+    "ACTION",
+    "PATH",
+    "HOME",
+    "USER",
+    "NODE_ENV",
+  ]);
+
+  const looksLikeApiKey = (name: string): boolean => {
+    const upper = name.toUpperCase();
+    return /(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|_URL$)/.test(upper);
+  };
+
+  const scanDir = async (dir: string, prefix: string): Promise<void> => {
+    try {
+      const entries = await fsP.readdir(dir);
+      for (const entry of entries) {
+        if (
+          entry.startsWith(".") ||
+          ["node_modules", "__pycache__", "data", ".venv", "venv"].includes(
+            entry,
+          )
+        )
+          continue;
+        const fullPath = pathMod.default.join(dir, entry);
+        const stat = await fsP.stat(fullPath);
+
+        if (stat.isDirectory()) {
+          await scanDir(fullPath, prefix ? `${prefix}/${entry}` : entry);
+          continue;
+        }
+
+        if (!/\.(py|js|ts|mjs)$/.test(entry)) continue;
+        if (stat.size > 100_000) continue;
+
+        const content = await fsP.readFile(fullPath, "utf-8");
+        const relPath = prefix ? `${prefix}/${entry}` : entry;
+
+        const pyPatterns = [
+          /os\.environ\.get\(\s*['"]([^'"]+)['"]/g,
+          /os\.getenv\(\s*['"]([^'"]+)['"]/g,
+          /os\.environ\[\s*['"]([^'"]+)['"]/g,
+        ];
+        for (const pattern of pyPatterns) {
+          let match: RegExpExecArray | null;
+          while ((match = pattern.exec(content)) !== null) {
+            if (!inheritedEnvKeys.has(match[1]) && looksLikeApiKey(match[1])) {
+              warnings.push(
+                `${relPath}: \`${match[0]})\` — "${match[1]}" is a custom key from Settings and is NOT available as an env var. ` +
+                  `Fix: pass it via CLI arg in the job command using \${${match[1]}} and use argparse in the script.`,
+              );
+            }
+          }
+        }
+
+        const nodePatterns = [
+          /process\.env\.(\w+)/g,
+          /process\.env\[\s*['"]([^'"]+)['"]\s*]/g,
+        ];
+        for (const pattern of nodePatterns) {
+          let match: RegExpExecArray | null;
+          while ((match = pattern.exec(content)) !== null) {
+            const key = match[1] || match[2];
+            if (!inheritedEnvKeys.has(key) && looksLikeApiKey(key)) {
+              warnings.push(
+                `${relPath}: \`${match[0]}\` — "${key}" is a custom key from Settings and is NOT available as an env var. ` +
+                  `Fix: pass it via CLI arg in the job command using \${${key}} and read from process.argv.`,
+              );
+            }
+          }
+        }
+      }
+    } catch {
+      // directory doesn't exist or can't be read
+    }
+  };
+
+  await scanDir(jobDir, "");
+  return warnings;
+}
 
 export const runJobTool = createTool({
   id: "run_job",
@@ -389,6 +518,11 @@ export const runJobTool = createTool({
       await import("../../gateway/services/JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
+
+    // Scan source files for env key anti-patterns before running
+    const envKeyWarnings =
+      await scanJobSourceForEnvKeyAntiPattern(args.jobId);
+
     const job = await jobsService.runJob(args.jobId);
     const apiKeys = getApiKeysForSanitization();
     const logs = sanitizeError(
@@ -401,15 +535,26 @@ export const runJobTool = createTool({
     return {
       success: true,
       data: {
-        type: "job_status", // Special type for UI detection
+        type: "job_status",
         jobId: job.id,
         jobName: job.name,
         runId: job.lastExecutionId || "latest",
         status: job.status,
         startedAt: job.lastRunAt || new Date().toISOString(),
-        logs: logs.split("\n").slice(-10), // Last 10 lines
-        job, // Full job data for debugging
+        logs: logs.split("\n").slice(-10),
+        job,
         dbPath,
+        ...(envKeyWarnings.length > 0
+          ? {
+              _envKeyWarnings: envKeyWarnings,
+              _keyPatternReminder:
+                `⚠️ DETECTED: Source files use os.environ/process.env for custom API keys that are NOT available as env vars. ` +
+                `Custom keys from Settings must be passed via CLI args using \${KEY_NAME} in the job command field. ` +
+                `This job will likely fail with None/undefined for those keys. ` +
+                `Fix: update_job to add \${KEY_NAME} to the command, update the script to use argparse/process.argv. ` +
+                `Read: read_skill({ skillId: "preloaded-api-key-testing" })`,
+            }
+          : {}),
       },
     };
   },
@@ -1476,6 +1621,39 @@ const exportAppBundleSchema = z.object({
     .describe(
       "Target platforms for the bundle. Auto-detected from job types and source files if omitted. Override when you know the app is platform-specific.",
     ),
+  requirements: z
+    .array(
+      z.union([
+        z.string().min(1),
+        z.object({
+          name: z
+            .string()
+            .min(1)
+            .describe("Key name as used in job commands, e.g. POSTHOG_PERSONAL_API_KEY"),
+          service: z.string().min(1).describe("Human-readable service name, e.g. PostHog"),
+          category: z
+            .enum([
+              "analytics", "database", "crm", "email", "payments", "storage",
+              "messaging", "search", "monitoring", "auth", "ai", "notifications",
+              "google", "github", "other",
+            ])
+            .describe("Service category — enables 'I use a different service' substitution in the import wizard"),
+          description: z.string().default("").describe("Short description of what the key is used for"),
+          required: z.boolean().default(true).describe("If false, the app works without this key but with reduced functionality"),
+          signupUrl: z.string().optional().describe("URL where users can sign up and get an API key"),
+          docsUrl: z.string().optional().describe("URL to the service's API key documentation"),
+          instructions: z.string().optional().describe("Step-by-step instructions for obtaining the key"),
+          freeTier: z.boolean().optional().describe("Whether the service has a free tier"),
+          freeTierNote: z.string().optional().describe("Details about the free tier, e.g. '1M events/month free'"),
+        }),
+      ]),
+    )
+    .optional()
+    .describe(
+      "API keys this app needs. Provide rich specs so the import wizard can show setup instructions, " +
+      "free-tier info, and alternative services. If omitted, keys are auto-detected from job source files " +
+      "as bare strings (no wizard metadata).",
+    ),
 });
 
 const importAppBundleSchema = z.object({
@@ -1526,7 +1704,7 @@ After export, publish the bundle to the official community repo so other Paprwor
 
 1. Fork & clone: gh repo fork Papr-ai/paprwork-community-apps --clone --remote (NEVER clone the main repo directly)
 2. Copy the exported bundle folder into bundles/{bundleId}/ in the forked clone
-3. Add YOUR entry to registry.json — do NOT modify or remove existing entries. IMPORTANT: Use the pre-built "registryEntry" JSON from the export result (just fill in author and tags). All fields are Zod-validated; entries that fail validation are SILENTLY DROPPED and won't appear in Community Apps. Required: bundleId, name, description, version, author (run "gh api user -q .login" to get the actual GitHub username — NEVER hardcode "paprwork-team"), tags (string[]), minPaprworkVersion, path. Optional: icon (string), requirements (string[] — MUST be a flat string array like ["OPENAI_API_KEY"], NOT objects), platform (string[] — MUST be a flat string array like ["macos"], NOT a bare string).
+3. Add YOUR entry to registry.json — do NOT modify or remove existing entries. IMPORTANT: Use the pre-built "registryEntry" JSON from the export result (just fill in author and tags). All fields are Zod-validated; entries that fail validation are SILENTLY DROPPED and won't appear in Community Apps. Required: bundleId, name, description, version, author (run "gh api user -q .login" to get the actual GitHub username — NEVER hardcode "paprwork-team"), tags (string[]), minPaprworkVersion, path. Optional: icon (string), requirements (array of strings or RequiredKeySpec objects — pass the "requirements" from the manifest as-is), platform (string[] — MUST be a flat string array like ["macos"], NOT a bare string).
 4. Commit, push to the fork, then open a PR to Papr-ai/paprwork-community-apps
 
 This makes the app available in Papr Work's "Community Apps" tab for all users.`,
@@ -1575,6 +1753,7 @@ This makes the app available in Papr Work's "Community Apps" tab for all users.`
         jobIds,
         includeData: args.includeData,
         platform: args.platform,
+        requirements: args.requirements,
       });
 
       const osModule = await import("os");

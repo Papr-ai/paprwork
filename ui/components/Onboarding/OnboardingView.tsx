@@ -7,6 +7,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useTabs } from "../../hooks/useTabs";
 import { useChat } from "../../hooks/useChat";
+import { trackEvent } from "../../lib/telemetry";
 import "./OnboardingView.css";
 
 type StepState = "locked" | "active" | "completed";
@@ -66,11 +67,16 @@ export function OnboardingView() {
     window.dispatchEvent(new CustomEvent('papr-onboarding-changed'));
   }, [state, isInitialized]);
 
+  useEffect(() => {
+    trackEvent("paprwork_onboarding_started", {});
+  }, []);
+
   // Auto-dismiss when both steps complete
   useEffect(() => {
     if (!state.step1Completed || !state.step2Completed) {
       return;
     }
+    trackEvent("paprwork_onboarding_completed", {});
     const timer = setTimeout(() => {
       localStorage.setItem("papr-onboarding-dismissed", "true");
       window.dispatchEvent(new CustomEvent("papr-onboarding-changed"));
@@ -96,6 +102,7 @@ export function OnboardingView() {
         "Let's get started with onboarding! I'd like you to learn about me and set things up.",
       );
       if (!ok) return;
+      trackEvent("paprwork_onboarding_step_completed", { step_number: 1, step_name: "setup_agents" } as Record<string, unknown>);
       window.setTimeout(() => {
         setState((prev) => ({ ...prev, step1Completed: true }));
       }, 2000);
@@ -106,6 +113,7 @@ export function OnboardingView() {
       "Based on what you learned about me, help me with my first task or create an app that would be most useful for my work.",
     );
     if (!ok) return;
+    trackEvent("paprwork_onboarding_step_completed", { step_number: 2, step_name: "first_task" } as Record<string, unknown>);
     window.setTimeout(() => {
       setState((prev) => ({ ...prev, step2Completed: true }));
     }, 2000);

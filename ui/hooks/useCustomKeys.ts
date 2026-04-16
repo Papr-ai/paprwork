@@ -5,6 +5,7 @@
 
 import { useState, useEffect } from "react";
 import type { CustomKey, CustomKeyInput } from "../types/settings";
+import { trackEvent } from "../lib/telemetry";
 
 // Re-export types for backward compatibility
 export type { CustomKey, CustomKeyInput };
@@ -51,6 +52,10 @@ export function useCustomKeys() {
     try {
       await window.electronAPI.customKeys.add(input);
       await loadKeys();
+      trackEvent("paprwork_provider_configured", {
+        provider_key_name: input.name,
+        method: "api_key",
+      } as Record<string, unknown>);
       return true;
     } catch (err) {
       console.error("[useCustomKeys] Add error:", err);

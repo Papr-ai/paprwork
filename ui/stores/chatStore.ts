@@ -269,8 +269,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   setLastSelectedModel: (chatId, modelId) =>
     set((state) => {
       const chatState = state.chatStates.get(chatId) || { ...defaultChatState };
+      const previousModelId = chatState.lastSelectedModelId;
       const newChatStates = new Map(state.chatStates);
       newChatStates.set(chatId, { ...chatState, lastSelectedModelId: modelId });
+
+      if (previousModelId && previousModelId !== modelId) {
+        import("../lib/telemetry").then(({ trackEvent }) => {
+          trackEvent("paprwork_model_changed", {
+            from_model: previousModelId,
+            to_model: modelId,
+          } as Record<string, unknown>);
+        }).catch(() => {});
+      }
+
       if (typeof window !== "undefined") {
         try {
           localStorage.setItem("paprwork_last_model_id", modelId);

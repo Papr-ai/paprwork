@@ -697,20 +697,34 @@ export function useAgent() {
               else if (
                 rawError.includes("overloaded_error") ||
                 rawError.includes("Overloaded") ||
-                rawError.includes('"type":"overloaded_error"')
+                rawError.includes("temporarily overloaded")
               ) {
                 errorMsg = `🔄 Claude servers are temporarily overloaded. This is an issue from Anthropic, not your connection. Please wait a moment and try again, or switch to a different model (Sonnet/Haiku).`;
               }
-              // Pattern: Generic API key errors
-              else if (rawError.includes("API key")) {
-                errorMsg = `API key error: ${rawError}`;
-              }
               // Pattern: Rate limit errors
               else if (
+                rawError.includes("Rate limit exceeded") ||
                 rawError.includes("rate limit") ||
-                rawError.includes("429")
+                rawError.includes("(429)")
               ) {
                 errorMsg = `Rate limit exceeded. Please try again in a moment.`;
+              }
+              // Pattern: Invalid API key (specific patterns, not just "API key" anywhere)
+              else if (
+                rawError.includes("Invalid API key") ||
+                rawError.includes("invalid x-api-key") ||
+                rawError.includes("authentication_error") ||
+                rawError.includes("(401)")
+              ) {
+                errorMsg = `Invalid API key. Please check your API key in Settings.`;
+              }
+              // Pattern: Anthropic server errors (already cleaned up by backend)
+              else if (
+                rawError.includes("server error") ||
+                rawError.includes("(529)") ||
+                rawError.includes("(500)")
+              ) {
+                errorMsg = `🔄 Server error from the AI provider. Please wait a moment and try again.`;
               }
 
               console.error("[useAgent] Received error chunk:", errorMsg);

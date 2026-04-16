@@ -16,6 +16,8 @@ export function getGatewayTelemetry(): TelemetryClient {
         ),
       getAnonymousInstallId: () =>
         process.env.PAPRWORK_TELEMETRY_ANONYMOUS_ID?.trim() ?? "",
+      getPaprUserId: () =>
+        process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID?.trim() ?? "",
       appVersion: process.env.PAPRWORK_APP_VERSION?.trim() || "unknown",
     });
   }

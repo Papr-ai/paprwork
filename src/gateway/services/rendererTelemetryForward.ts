@@ -44,11 +44,18 @@ export async function forwardRendererTelemetry(
   const body = rawBody as {
     events?: unknown;
     anonymous_id?: unknown;
+    papr_user_id?: unknown;
   };
 
   if (body.anonymous_id !== anonId) {
     return { status: 403, error: "anonymous_id mismatch" };
   }
+
+  const rendererPaprUserId =
+    typeof body.papr_user_id === "string" ? body.papr_user_id.trim() : "";
+  const effectivePaprUserId =
+    rendererPaprUserId ||
+    (process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID?.trim() ?? "");
 
   if (!Array.isArray(body.events) || body.events.length === 0) {
     return { status: 400, error: "events required" };
@@ -83,7 +90,10 @@ export async function forwardRendererTelemetry(
     if (typeof ev.event_name !== "string" || !ev.event_name.trim()) {
       return { status: 400, error: "invalid event_name" };
     }
-    if (typeof ev.user_id === "string" && ev.user_id !== anonId) {
+    const evUserId = typeof ev.user_id === "string" ? ev.user_id : "";
+    const allowedUserIds = [anonId];
+    if (effectivePaprUserId) allowedUserIds.push(effectivePaprUserId);
+    if (evUserId && !allowedUserIds.includes(evUserId)) {
       return { status: 403, error: "user_id mismatch" };
     }
 
@@ -98,6 +108,9 @@ export async function forwardRendererTelemetry(
       platform: process.platform,
       ...propsIn,
     };
+    if (effectivePaprUserId) {
+      merged.papr_user_id = effectivePaprUserId;
+    }
     const safeProps = sanitizeTelemetryProperties(merged);
 
     const ts =
@@ -105,10 +118,11 @@ export async function forwardRendererTelemetry(
         ? ev.timestamp
         : Date.now();
 
+    const outUserId = effectivePaprUserId || anonId;
     outboundEvents.push({
       event_name: ev.event_name,
       properties: safeProps,
-      user_id: anonId,
+      user_id: outUserId,
       timestamp: ts,
     });
   }

@@ -390,8 +390,18 @@ export class AppService {
       const appsArray: MiniApp[] = JSON.parse(data);
       this.apps = new Map(appsArray.map((app) => [app.id, app]));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        console.error("[AppService] Failed to load apps:", error);
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        this.apps = new Map();
+        return;
+      }
+      console.error("[AppService] Failed to load apps:", error);
+
+      try {
+        const backupPath = this.appsIndexPath + `.corrupt-${Date.now()}`;
+        await fs.copyFile(this.appsIndexPath, backupPath);
+        console.warn(`[AppService] Backed up corrupt apps.json to ${backupPath}`);
+      } catch {
+        // backup failed — not critical
       }
       this.apps = new Map();
     }
@@ -416,7 +426,10 @@ export class AppService {
 
   private async saveApps(): Promise<void> {
     const appsArray = Array.from(this.apps.values());
-    await fs.writeFile(this.appsIndexPath, JSON.stringify(appsArray, null, 2));
+    const data = JSON.stringify(appsArray, null, 2);
+    const tmpPath = this.appsIndexPath + `.tmp-${process.pid}`;
+    await fs.writeFile(tmpPath, data, "utf8");
+    await fs.rename(tmpPath, this.appsIndexPath);
   }
 
   /**
@@ -572,6 +585,15 @@ export class AppService {
     // Start watching the new app directory for changes
     await this.watchApp(app.id);
 
+    import("./gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
+      getGatewayTelemetry().trackFireAndForget("paprwork_app_created", {
+        app_id: app.id,
+        app_name: title.length > 80 ? `${title.slice(0, 79)}…` : title,
+        has_icon: !!app.icon,
+        file_count: files.length,
+      });
+    }).catch(() => {});
+
     console.log(
       `[AppService] Created app: ${app.id} - ${title} (verified files on disk)`,
     );
@@ -597,6 +619,13 @@ export class AppService {
 
     this.apps.set(id, updatedApp);
     await this.saveApps();
+
+    import("./gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
+      getGatewayTelemetry().trackFireAndForget("paprwork_app_edited", {
+        app_id: id,
+        app_name: updatedApp.title.length > 80 ? `${updatedApp.title.slice(0, 79)}…` : updatedApp.title,
+      });
+    }).catch(() => {});
 
     console.log(`[AppService] Updated app: ${id}`);
     return updatedApp;
@@ -624,6 +653,13 @@ export class AppService {
     await this.saveApps();
 
     this.broadcastAppListUpdated();
+
+    import("./gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
+      getGatewayTelemetry().trackFireAndForget("paprwork_app_deleted", {
+        app_id: id,
+        app_name: app.title.length > 80 ? `${app.title.slice(0, 79)}…` : app.title,
+      });
+    }).catch(() => {});
 
     console.log(`[AppService] Deleted app: ${id}`);
     return true;

@@ -2,6 +2,78 @@ import { z } from "zod";
 
 export const BUNDLE_SCHEMA_VERSION = "1.0.0" as const;
 
+// ---------------------------------------------------------------------------
+// Service categories — enable "I use a different service" substitution
+// ---------------------------------------------------------------------------
+
+export const SERVICE_CATEGORIES = [
+  "analytics",
+  "database",
+  "crm",
+  "email",
+  "payments",
+  "storage",
+  "messaging",
+  "search",
+  "monitoring",
+  "auth",
+  "ai",
+  "notifications",
+  "google",
+  "github",
+  "other",
+] as const;
+
+export type ServiceCategory = (typeof SERVICE_CATEGORIES)[number];
+
+// ---------------------------------------------------------------------------
+// Rich key requirement spec — replaces bare key-name strings in manifests
+// ---------------------------------------------------------------------------
+
+export const RequiredKeySpecSchema = z.object({
+  name: z.string().min(1),
+  service: z.string().min(1),
+  category: z.enum(SERVICE_CATEGORIES).default("other"),
+  description: z.string().default(""),
+  required: z.boolean().default(true),
+  signupUrl: z.string().optional(),
+  docsUrl: z.string().optional(),
+  instructions: z.string().optional(),
+  freeTier: z.boolean().optional(),
+  freeTierNote: z.string().optional(),
+});
+
+export type RequiredKeySpec = z.infer<typeof RequiredKeySpecSchema>;
+
+/**
+ * Accepts either a bare key name string (legacy) or a full RequiredKeySpec
+ * object. Bare strings are normalized into spec objects with only `name` set.
+ */
+export const RequirementItemSchema = z.union([
+  z.string().min(1),
+  RequiredKeySpecSchema,
+]);
+
+export type RequirementItem = z.infer<typeof RequirementItemSchema>;
+
+/** Normalize a mixed requirements array to always produce RequiredKeySpec[] */
+export function normalizeRequirements(
+  items: RequirementItem[],
+): RequiredKeySpec[] {
+  return items.map((item) => {
+    if (typeof item === "string") {
+      return {
+        name: item,
+        service: item,
+        category: "other" as ServiceCategory,
+        description: "",
+        required: true,
+      };
+    }
+    return RequiredKeySpecSchema.parse(item);
+  });
+}
+
 export const RuntimeTypeSchema = z.enum([
   "python",
   "node",
@@ -90,7 +162,7 @@ export const BundleManifestSchema = z.object({
   minPaprworkVersion: z.string().min(1),
   description: z.string().optional(),
   icon: z.string().optional(),
-  requirements: z.array(z.string()).default([]),
+  requirements: z.array(RequirementItemSchema).default([]),
   platform: z
     .array(z.enum(["macos", "windows", "linux"]))
     .default(["macos", "windows", "linux"]),
@@ -130,7 +202,7 @@ export const CommunityRegistryEntrySchema = z.object({
   minPaprworkVersion: z.string().min(1),
   path: z.string().min(1),
   icon: z.string().optional(),
-  requirements: z.array(z.string()).default([]),
+  requirements: z.array(RequirementItemSchema).default([]),
   platform: z
     .array(z.enum(["macos", "windows", "linux"]))
     .default(["macos", "windows", "linux"]),

@@ -17,6 +17,7 @@ interface PlanData {
   steps: PlanStep[];
   createdAt?: string;
   updatedAt?: string;
+  deleted?: boolean;
 }
 
 interface PlanCardProps {
@@ -38,7 +39,7 @@ const STATUS_LABELS: Record<PlanStep["status"], string> = {
 };
 
 export function PlanCard({ data }: PlanCardProps) {
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(data.deleted ?? false);
 
   const { completed, total, percentage } = useMemo(() => {
     const t = data.steps.length;
@@ -52,6 +53,20 @@ export function PlanCard({ data }: PlanCardProps) {
       percentage: t > 0 ? Math.round((c / t) * 100) : 0,
     };
   }, [data.steps]);
+
+  if (data.deleted) {
+    return (
+      <div className="plan-card plan-card--deleted">
+        <div className="plan-card__header plan-card__header--deleted">
+          <div className="plan-card__header-left">
+            <span className="plan-card__deleted-icon">✗</span>
+            <span className="plan-card__title">{data.title}</span>
+          </div>
+          <span className="plan-card__deleted-label">Deleted</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="plan-card">
@@ -118,28 +133,38 @@ export function parsePlanFromToolResult(
   toolName: string,
   result: string | undefined,
 ): PlanData | null {
-  if (toolName !== "create_plan" && toolName !== "update_plan") return null;
+  if (
+    toolName !== "create_plan" &&
+    toolName !== "update_plan" &&
+    toolName !== "delete_plan"
+  )
+    return null;
   if (!result) return null;
 
   try {
-    const parsed = JSON.parse(result) as { data?: PlanData; success?: boolean };
-    if (parsed?.data?.planId && parsed?.data?.steps) {
+    const parsed = JSON.parse(result) as {
+      data?: PlanData & { deleted?: boolean };
+      success?: boolean;
+    };
 
+    if (parsed?.data?.planId && parsed?.data?.steps) {
+      if (toolName === "delete_plan" || parsed.data.deleted) {
+        parsed.data.deleted = true;
+      }
       return parsed.data;
     }
-    // Maybe the result is the plan directly
+
     const direct = parsed as unknown as PlanData;
     if (direct?.planId && direct?.steps) {
-
+      if (toolName === "delete_plan") {
+        direct.deleted = true;
+      }
       return direct;
     }
-  } catch (e) {
-    // If parsing fails, try to extract from stringified JSON
-    // Sometimes tools return JSON.stringify(object) instead of object
+  } catch {
     try {
-      // Result might be double-stringified
       const doubleString = JSON.parse(result);
-      if (typeof doubleString === 'string') {
+      if (typeof doubleString === "string") {
         return parsePlanFromToolResult(toolName, doubleString);
       }
     } catch {

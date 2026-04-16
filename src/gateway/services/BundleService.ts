@@ -6,6 +6,7 @@ import type {
   BundleJobSpec,
   BundleManifest,
   CommunityRegistryEntry,
+  RequirementItem,
   RuntimeType,
 } from "../../core/types/bundles.js";
 import {
@@ -34,6 +35,8 @@ export interface ExportBundleInput {
   includeData?: boolean;
   /** Override auto-detected platform. If omitted, platforms are detected from job types and source files. */
   platform?: Platform[];
+  /** Rich key requirements provided by the agent. Takes priority over auto-detection. */
+  requirements?: RequirementItem[];
 }
 
 export interface ImportBundleInput {
@@ -976,7 +979,7 @@ export class BundleService {
       minPaprworkVersion: input.minPaprworkVersion ?? "2.0.0",
       description: input.description,
       ...(app.icon ? { icon: app.icon } : {}),
-      requirements: detectedKeys,
+      requirements: input.requirements ?? detectedKeys,
       platform: detectedPlatform,
       app: {
         id: app.id,

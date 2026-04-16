@@ -11,6 +11,7 @@ import type {
 let isInitialized = false;
 let initPromise: Promise<void> | null = null;
 let installId: string | null = null;
+let paprUserIdCached: string | null = null;
 let appVersionCached = "";
 let httpBase = "";
 
@@ -37,6 +38,7 @@ export async function initializeAmplitudeBrowser(
   anonymousInstallId: string,
   enabled: boolean,
   appVersion: string,
+  paprUserId?: string,
 ): Promise<void> {
   if (!enabled) {
     console.log("[Telemetry] Renderer: disabled");
@@ -47,6 +49,10 @@ export async function initializeAmplitudeBrowser(
     return;
   }
   if (isInitialized) {
+    if (paprUserId && paprUserId !== paprUserIdCached) {
+      paprUserIdCached = paprUserId;
+      console.log("[Telemetry] Updated Papr user ID");
+    }
     return;
   }
   if (initPromise) {
@@ -57,11 +63,13 @@ export async function initializeAmplitudeBrowser(
   initPromise = (async () => {
     try {
       installId = anonymousInstallId;
+      paprUserIdCached = paprUserId ?? null;
       appVersionCached = appVersion;
       httpBase = resolveHttpBase();
       isInitialized = true;
       console.log(
-        `[Telemetry] Renderer proxy → ${httpBase}/api/telemetry/events`,
+        `[Telemetry] Renderer proxy → ${httpBase}/api/telemetry/events` +
+          (paprUserId ? ` (identified: ${paprUserId.substring(0, 8)}…)` : " (anonymous)"),
       );
     } finally {
       initPromise = null;
@@ -82,15 +90,20 @@ async function postEvents(
     return;
   }
   try {
+    const userId = paprUserIdCached || installId;
     const response = await fetch(`${httpBase}/api/telemetry/events`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         anonymous_id: installId,
+        papr_user_id: paprUserIdCached ?? undefined,
         events: events.map((e) => ({
           event_name: e.event_name,
-          properties: e.properties ?? {},
-          user_id: installId,
+          properties: {
+            ...(e.properties ?? {}),
+            ...(paprUserIdCached ? { papr_user_id: paprUserIdCached } : {}),
+          },
+          user_id: userId,
           timestamp: e.timestamp ?? Date.now(),
         })),
       }),

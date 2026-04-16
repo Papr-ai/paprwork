@@ -22,31 +22,119 @@ export interface StreamOrchestratorResult {
 }
 
 /**
- * Extract a user-friendly error message from API errors
- * Handles cases where error is an object with nested error details
+ * Extract the underlying error from an AI SDK RetryError.
+ * RetryError wraps an array of APICallError instances from each retry attempt.
+ * We extract the last (most relevant) error's status code and message.
+ */
+function extractFromRetryError(error: Record<string, unknown>): string | null {
+  const errors = error.errors as Array<unknown> | undefined;
+  const lastError = error.lastError as Record<string, unknown> | undefined;
+  
+  const underlying = lastError ?? (Array.isArray(errors) ? errors[errors.length - 1] : undefined);
+  if (!underlying || typeof underlying !== "object") return null;
+  
+  const err = underlying as Record<string, unknown>;
+  const statusCode = err.statusCode as number | undefined;
+  const message = typeof err.message === "string" ? err.message : undefined;
+  const responseBody = typeof err.responseBody === "string" ? err.responseBody : undefined;
+
+  // Try to extract Anthropic's error type from response body (e.g. "overloaded_error")
+  let apiErrorType: string | undefined;
+  if (responseBody) {
+    try {
+      const body = JSON.parse(responseBody) as Record<string, unknown>;
+      const bodyError = body.error as Record<string, unknown> | undefined;
+      if (bodyError && typeof bodyError.type === "string") {
+        apiErrorType = bodyError.type;
+      }
+      if (bodyError && typeof bodyError.message === "string" && !message) {
+        return `API error${statusCode ? ` (${statusCode})` : ""}: ${bodyError.message}`;
+      }
+    } catch {
+      // Response body not JSON
+    }
+  }
+
+  if (statusCode === 529 || apiErrorType === "overloaded_error") {
+    return "Claude servers are temporarily overloaded. Please wait a moment and try again, or switch to a different model.";
+  }
+  if (statusCode === 429) {
+    return "Rate limit exceeded. Please wait a moment and try again.";
+  }
+  if (statusCode === 401) {
+    return "Invalid API key. Please check your Anthropic API key in Settings.";
+  }
+  if (statusCode === 403) {
+    return "API key does not have permission for this model. Check your Anthropic plan.";
+  }
+  if (statusCode === 402) {
+    return "Credit balance too low. Please add credits to your Anthropic account.";
+  }
+  if (statusCode && statusCode >= 500) {
+    return `Anthropic server error (${statusCode}). Please try again in a moment.`;
+  }
+  if (message) {
+    return `API error${statusCode ? ` (${statusCode})` : ""}: ${message}`;
+  }
+  return null;
+}
+
+/**
+ * Extract a user-friendly error message from API errors.
+ * Handles AI SDK RetryError (with nested APICallError), plain Error objects,
+ * and common API error response shapes.
  */
 function extractErrorMessage(error: unknown): string {
-  // If it's already a string, return it
   if (typeof error === "string") {
     return error;
   }
 
-  // If it's an Error object, return message
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  // If it's an object, try to extract meaningful error info
   if (typeof error === "object" && error !== null) {
     const errorObj = error as Record<string, unknown>;
 
-    // Check for common API error patterns
-    // Pattern 1: { message: "..." }
+    // AI SDK RetryError: has `reason` and `errors` array with underlying APICallErrors
+    if (
+      errorObj.reason === "maxRetriesExceeded" ||
+      errorObj.reason === "errorNotRetryable" ||
+      (errorObj.name === "AI_RetryError" || errorObj.name === "RetryError") ||
+      (Array.isArray(errorObj.errors) && errorObj.lastError !== undefined)
+    ) {
+      const extracted = extractFromRetryError(errorObj);
+      if (extracted) return extracted;
+    }
+
+    // AI SDK APICallError: has statusCode and url
+    if (typeof errorObj.statusCode === "number" && typeof errorObj.url === "string") {
+      const statusCode = errorObj.statusCode as number;
+      const message = typeof errorObj.message === "string" ? errorObj.message : "";
+      if (statusCode === 529) {
+        return "Claude servers are temporarily overloaded. Please wait a moment and try again.";
+      }
+      if (statusCode === 429) {
+        return "Rate limit exceeded. Please wait a moment and try again.";
+      }
+      if (statusCode === 401) {
+        return "Invalid API key. Please check your API key in Settings.";
+      }
+      return `API error (${statusCode}): ${message}`;
+    }
+
+    // Plain Error object
+    if (error instanceof Error) {
+      // Check if it's a retry error by name (cross-realm instances)
+      if (error.name === "AI_RetryError" || error.name === "RetryError") {
+        const extracted = extractFromRetryError(errorObj);
+        if (extracted) return extracted;
+      }
+      return error.message;
+    }
+
+    // { message: "..." }
     if (typeof errorObj.message === "string") {
       return errorObj.message;
     }
 
-    // Pattern 2: { error: { message: "..." } }
+    // { error: { message: "..." } }
     if (
       typeof errorObj.error === "object" &&
       errorObj.error !== null &&
@@ -55,7 +143,7 @@ function extractErrorMessage(error: unknown): string {
       return (errorObj.error as Record<string, unknown>).message as string;
     }
 
-    // Pattern 3: { data: { error: { message: "..." } } }
+    // { data: { error: { message: "..." } } }
     if (
       typeof errorObj.data === "object" &&
       errorObj.data !== null &&
@@ -69,12 +157,16 @@ function extractErrorMessage(error: unknown): string {
       }
     }
 
-    // Try to stringify if we haven't found a message
     try {
       return JSON.stringify(errorObj);
     } catch {
       return "[Unserializable error object]";
     }
+  }
+
+  // instanceof check for errors not caught above (e.g., non-object realms)
+  if (error instanceof Error) {
+    return error.message;
   }
 
   return "Unknown error";
@@ -383,6 +475,19 @@ export async function* orchestrateModelStream(
         console.log(
           `[AgentService] Tool ${parsedToolResult.toolName} raw result: ${rawSize} chars`,
         );
+
+        const isToolError =
+          sanitizedResult &&
+          typeof sanitizedResult === "object" &&
+          "error" in (sanitizedResult as Record<string, unknown>);
+        import("../gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
+          getGatewayTelemetry().trackFireAndForget("paprwork_tool_called", {
+            tool_name: parsedToolResult.toolName,
+            success: !isToolError,
+            result_size: rawSize,
+            chat_id: chatId,
+          });
+        }).catch(() => {});
 
         // Buffer for flush - last one stays full
         toolResultBuffer.push({

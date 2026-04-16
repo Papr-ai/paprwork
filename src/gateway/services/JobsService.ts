@@ -20,6 +20,18 @@ import {
   classifyError,
   getErrorClassificationReason,
 } from "./jobs/errorClassifier.js";
+
+/** Short, single-line hint for telemetry (no raw logs; keys avoid "message" substring). */
+function truncateForTelemetryHint(raw: string | undefined, maxLen: number): string {
+  if (!raw) {
+    return "";
+  }
+  const oneLine = raw.replace(/\s+/g, " ").trim();
+  if (oneLine.length <= maxLen) {
+    return oneLine;
+  }
+  return `${oneLine.slice(0, Math.max(0, maxLen - 1))}…`;
+}
 import type {
   CreateJobInput,
   JobGraph,
@@ -282,8 +294,10 @@ export class JobsService {
     await this.migrateLegacyIfNeeded();
     await fs.mkdir(this.jobsRootDir, { recursive: true });
     await fs.mkdir(path.dirname(this.jobsIndexPath), { recursive: true });
-    await this.loadJobs();
-    await this.installDefaultJobs(); // Install default jobs on first launch
+    await this.loadJobs(); // Load existing jobs FIRST
+    await this.rebuildIndexIfCorrupted(); // Safety net: recover jobs on disk but missing from index
+    await this.pruneStaleJobEntries(); // Remove index entries whose folders were deleted (e.g. bash rm)
+    await this.installDefaultJobs(); // Then install defaults (won't overwrite existing)
 
     // Initialize run history
     const runHistory = getJobRunHistory();
@@ -308,11 +322,153 @@ export class JobsService {
       this.jobs = new Map(jobs.map((job) => [job.id, job]));
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
-      if (err.code !== "ENOENT") {
-        console.error("[JobsService] Failed to load jobs:", error);
+      if (err.code === "ENOENT") {
+        this.jobs = new Map();
+        return;
+      }
+      console.error("[JobsService] Failed to load jobs:", error);
+
+      // File exists but is corrupted (truncated write, etc.).
+      // Back it up so rebuildIndexIfCorrupted() can recover from disk.
+      try {
+        const backupPath = this.jobsIndexPath + `.corrupt-${Date.now()}`;
+        await fs.copyFile(this.jobsIndexPath, backupPath);
+        console.warn(`[JobsService] Backed up corrupt jobs.json to ${backupPath}`);
+      } catch {
+        // backup failed — not critical
       }
       this.jobs = new Map();
     }
+  }
+
+  /**
+   * Safety net: detect if jobs.json is missing jobs that exist on disk.
+   * Handles corruption from crashes, failed updates, or race conditions.
+   * Scans ~/Papr/Jobs/ for job directories not in the index and re-adds them.
+   */
+  private async rebuildIndexIfCorrupted(): Promise<void> {
+    try {
+      const dirsOnDisk = await fs.readdir(this.jobsRootDir);
+      const jobDirsOnDisk: string[] = [];
+
+      for (const dirName of dirsOnDisk) {
+        const dirPath = path.join(this.jobsRootDir, dirName);
+        try {
+          const stat = await fs.stat(dirPath);
+          if (!stat.isDirectory()) continue;
+          const files = await fs.readdir(dirPath);
+          if (files.length === 0) continue;
+          jobDirsOnDisk.push(dirName);
+        } catch {
+          continue;
+        }
+      }
+
+      const missingJobIds = jobDirsOnDisk.filter(id => !this.jobs.has(id));
+
+      if (missingJobIds.length === 0) return;
+
+      console.warn(
+        `[JobsService] INDEX CORRUPTION DETECTED: ${missingJobIds.length} jobs on disk but missing from jobs.json. Rebuilding...`
+      );
+
+      try {
+        const backupPath = this.jobsIndexPath + `.backup-${Date.now()}`;
+        await fs.copyFile(this.jobsIndexPath, backupPath);
+        console.log(`[JobsService] Backed up corrupted index to ${backupPath}`);
+      } catch {
+        // No existing file to back up
+      }
+
+      for (const jobId of missingJobIds) {
+        const jobDir = path.join(this.jobsRootDir, jobId);
+
+        let name = jobId;
+        let type: JobType = "bash";
+        let command = "";
+        let createdAt = new Date().toISOString();
+
+        // Try reading metadata.json
+        try {
+          const metadataContent = await fs.readFile(path.join(jobDir, "metadata.json"), "utf-8");
+          const metadata = JSON.parse(metadataContent) as Partial<JobRecord>;
+          name = metadata.name || name;
+          type = (metadata.type as JobType) || type;
+          command = metadata.command || command;
+          if (metadata.createdAt) createdAt = metadata.createdAt;
+        } catch {
+          // No metadata — try to infer type from files on disk
+          try {
+            const files = await fs.readdir(path.join(jobDir, "code"));
+            if (files.some(f => f.endsWith(".py"))) type = "python";
+            else if (files.some(f => f.endsWith(".js") || f.endsWith(".ts"))) type = "node";
+            else if (files.some(f => f.endsWith(".swift"))) type = "swift";
+          } catch {
+            // No code directory
+          }
+        }
+
+        try {
+          const stat = await fs.stat(jobDir);
+          createdAt = stat.birthtime.toISOString();
+        } catch {
+          // Use current time
+        }
+
+        const recoveredJob: JobRecord = {
+          id: jobId,
+          name,
+          type,
+          status: "idle" as JobStatus,
+          command,
+          createdAt,
+          updatedAt: new Date().toISOString(),
+        };
+
+        this.jobs.set(jobId, recoveredJob);
+        console.log(`[JobsService] Recovered job from disk: ${jobId} - ${name}`);
+      }
+
+      await this.saveJobs();
+      console.log(
+        `[JobsService] Index rebuilt: recovered ${missingJobIds.length} jobs. Total: ${this.jobs.size}`
+      );
+    } catch (error) {
+      console.error("[JobsService] Failed to rebuild index:", error);
+    }
+  }
+
+  /**
+   * Remove index entries whose job directories no longer exist on disk.
+   * Handles cases where a job folder was deleted externally (e.g. bash rm -rf).
+   */
+  private async pruneStaleJobEntries(): Promise<void> {
+    const staleIds: string[] = [];
+    for (const jobId of this.jobs.keys()) {
+      const jobDir = path.join(this.jobsRootDir, jobId);
+      try {
+        const stat = await fs.stat(jobDir);
+        if (!stat.isDirectory()) {
+          staleIds.push(jobId);
+          continue;
+        }
+        const files = await fs.readdir(jobDir);
+        if (files.length === 0) {
+          staleIds.push(jobId);
+        }
+      } catch {
+        staleIds.push(jobId);
+      }
+    }
+
+    if (staleIds.length === 0) return;
+
+    for (const id of staleIds) {
+      this.running.delete(id);
+      this.jobs.delete(id);
+      console.log(`[JobsService] Pruned stale job index entry (folder missing or empty): ${id}`);
+    }
+    await this.saveJobs();
   }
 
   /**
@@ -337,11 +493,10 @@ export class JobsService {
       (a, b) =>
         new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
     );
-    await fs.writeFile(
-      this.jobsIndexPath,
-      JSON.stringify(list, null, 2),
-      "utf8",
-    );
+    const data = JSON.stringify(list, null, 2);
+    const tmpPath = this.jobsIndexPath + `.tmp-${process.pid}`;
+    await fs.writeFile(tmpPath, data, "utf8");
+    await fs.rename(tmpPath, this.jobsIndexPath);
   }
 
   private getJobDir(jobId: string): string {
@@ -403,6 +558,7 @@ export class JobsService {
     folder?: string;
     appId?: string;
   }): Promise<JobRecord[]> {
+    await this.pruneStaleJobEntries();
     let jobs = Array.from(this.jobs.values()).sort(
       (a, b) =>
         new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
@@ -640,6 +796,16 @@ export class JobsService {
         })
         .catch(() => {});
     }
+
+    getGatewayTelemetry().trackFireAndForget("paprwork_job_created", {
+      job_id: id,
+      job_name: input.name.length > 80 ? `${input.name.slice(0, 79)}…` : input.name,
+      job_type: input.type,
+      has_schedule: !!input.schedule?.enabled,
+      has_dependencies: (input.dependsOn ?? []).length > 0,
+      schedule_type: input.schedule?.cron ? "cron" : input.schedule?.intervalMs ? "interval" : undefined,
+    });
+
     return job;
   }
 
@@ -1360,11 +1526,19 @@ export class JobsService {
             job.id,
             `All ${maxAttempts} attempts failed. Job marked as failed.`,
           );
+          const failErr = new Error(
+            result.errorMessage ?? `Exit code ${result.exitCode}`,
+          );
           getGatewayTelemetry().trackFireAndForget("paprwork_job_failed", {
             job_id: job.id,
+            job_name:
+              job.name.length > 80 ? `${job.name.slice(0, 79)}…` : job.name,
             job_type: job.type,
+            exit_code: result.exitCode,
             error_type: `exit_${result.exitCode}`,
             attempts: maxAttempts,
+            retry_class: classifyError(failErr),
+            failure_hint: truncateForTelemetryHint(result.errorMessage, 220),
           });
         }
       }
@@ -1486,6 +1660,13 @@ export class JobsService {
       }
     }
 
+    getGatewayTelemetry().trackFireAndForget("paprwork_job_edited", {
+      job_id: jobId,
+      job_name: updated.name.length > 80 ? `${updated.name.slice(0, 79)}…` : updated.name,
+      job_type: updated.type,
+      changed_fields: Object.keys(updates).join(","),
+    });
+
     return updated;
   }
 
@@ -1522,6 +1703,12 @@ export class JobsService {
         );
       }
     }
+
+    getGatewayTelemetry().trackFireAndForget("paprwork_job_deleted", {
+      job_id: job.id,
+      job_name: job.name.length > 80 ? `${job.name.slice(0, 79)}…` : job.name,
+      job_type: job.type,
+    });
 
     return { id: job.id, name: job.name };
   }

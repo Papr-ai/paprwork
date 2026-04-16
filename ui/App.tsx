@@ -209,11 +209,23 @@ export function App() {
         const appVersion = await window.electronAPI.getAppVersion();
         console.log('[Telemetry] App version:', appVersion);
 
+        // Check for Papr user ID (identified analytics for authenticated users)
+        let paprUserId: string | undefined;
+        try {
+          const profile = await window.electronAPI.papr?.getProfile?.();
+          if (profile?.userId) {
+            paprUserId = profile.userId;
+            console.log('[Telemetry] Papr user:', paprUserId.substring(0, 8) + '...');
+          }
+        } catch {
+          // No Papr profile — anonymous tracking only
+        }
+
         // Initialize Amplitude (events only) - now static import
         console.log('[Telemetry] Calling initializeAmplitudeBrowser...');
-        await initializeAmplitudeBrowser(installId, telemetryEnabled, appVersion);
+        await initializeAmplitudeBrowser(installId, telemetryEnabled, appVersion, paprUserId);
 
-        console.log('[Telemetry] ✅ Amplitude initialized with event tracking');
+        console.log('[Telemetry] ✅ Amplitude initialized with event tracking' + (paprUserId ? ' (identified)' : ' (anonymous)'));
       } catch (error) {
         console.error('[Telemetry] ❌ Failed to initialize:', error);
         console.error('[Telemetry] Error details:', {

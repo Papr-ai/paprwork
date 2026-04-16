@@ -1459,6 +1459,8 @@ app.whenReady().then(async () => {
     PAPRWORK_TELEMETRY_ENABLED: gatewayTelemetryOn ? "true" : "false",
     PAPRWORK_TELEMETRY_ANONYMOUS_ID:
       settingsStorage.getOrCreateTelemetryInstallId(),
+    PAPRWORK_TELEMETRY_PAPR_USER_ID:
+      settingsStorage.getPaprProfile()?.userId ?? "",
     PAPRWORK_APP_VERSION: app.getVersion(),
   };
   if (IS_PRODUCTION) {

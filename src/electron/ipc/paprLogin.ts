@@ -16,6 +16,7 @@
 
 import { ipcMain, BrowserWindow, shell } from "electron";
 import { CustomKeysStorage, SettingsStorage } from "../../core/storage/index.js";
+import { invalidateKeyCache } from "./customKeys.js";
 import * as crypto from "crypto";
 
 // Auth0 configuration — env vars for dev, defaults for prod
@@ -927,6 +928,9 @@ export function initializePaprLoginIPC(
         value: provision.apiKey,
       });
 
+      // Invalidate Gateway's cached PAPR_API_KEY so it picks up the new key
+      invalidateKeyCache("PAPR_API_KEY");
+
       // Also store the session token for later namespace queries
       await customKeysStorage.addKey({
         name: "PAPR_SESSION_TOKEN",
@@ -998,6 +1002,9 @@ export function initializePaprLoginIPC(
           await customKeysStorage.deleteKey(key.id);
         }
       }
+
+      // Invalidate Gateway's cached PAPR_API_KEY so it stops using the old key
+      invalidateKeyCache("PAPR_API_KEY");
 
       // Clear PKCE state
       loginState.codeVerifier = undefined;
@@ -1209,6 +1216,9 @@ export function initializePaprLoginIPC(
         value: apiKey,
       });
 
+      // Invalidate Gateway's cached PAPR_API_KEY so it picks up the new namespace's key
+      invalidateKeyCache("PAPR_API_KEY");
+
       // Update profile with new active namespace
       settingsStorage.setPaprProfile({
         ...profile,
@@ -1328,19 +1338,22 @@ export async function handlePaprAuthCallback(
       value: provision.apiKey,
     });
 
+    // Invalidate Gateway's cached PAPR_API_KEY so it picks up the new key
+    invalidateKeyCache("PAPR_API_KEY");
+
     // Also store the session token for later namespace queries
     await customKeysStorage.addKey({
       name: "PAPR_SESSION_TOKEN",
       value: parseSessionToken,
     });
 
-      // Store refresh token for automatic session renewal
-      if (tokens.refresh_token) {
-        await customKeysStorage.addKey({
-          name: "PAPR_REFRESH_TOKEN",
-          value: tokens.refresh_token,
-        });
-      }
+    // Store refresh token for automatic session renewal
+    if (tokens.refresh_token) {
+      await customKeysStorage.addKey({
+        name: "PAPR_REFRESH_TOKEN",
+        value: tokens.refresh_token,
+      });
+    }
 
     // Save user profile with org/namespace info
     settingsStorage.setPaprProfile({

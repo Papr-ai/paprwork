@@ -306,6 +306,12 @@ export const deletePlanTool = createTool({
       return JSON.stringify({
         success: true,
         message: `✓ Plan deleted: "${plan.title}"\n\nYou can now create a new plan with create_plan.`,
+        data: {
+          planId: args.planId,
+          title: plan.title,
+          steps: plan.steps,
+          deleted: true,
+        },
       });
     } else {
       return JSON.stringify({

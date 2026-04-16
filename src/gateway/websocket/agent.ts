@@ -180,6 +180,17 @@ export async function setupAgentHandlers(
           );
         }
 
+        // Track message_sent event
+        const { getGatewayTelemetry } = await import("../services/gatewayTelemetry.js");
+        getGatewayTelemetry().trackFireAndForget("paprwork_message_sent", {
+          chat_id: chatId,
+          message_length: userMessage.length,
+          model: config.model,
+          provider: config.provider,
+          auth_type: authType ?? "apiKey",
+          uses_papr_proxy: usePaprProxy,
+        });
+
         // Track time until first chunk
         const t3 = performance.now();
         timings.beforeStream = performance.now() - perfStart;
@@ -231,6 +242,14 @@ export async function setupAgentHandlers(
           });
 
           timings.totalStreamTime = performance.now() - perfStart;
+
+          getGatewayTelemetry().trackFireAndForget("paprwork_message_received", {
+            chat_id: chatId,
+            response_time_ms: Math.round(timings.totalStreamTime),
+            model: config.model,
+            provider: config.provider,
+            chunk_count: chunkCount,
+          });
 
           console.log(`[Agent WS] Stream complete for chat ${chatId}.`);
           console.log(`[Agent WS]   Chunks: ${chunkCount}`);

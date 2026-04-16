@@ -74,6 +74,11 @@ export async function setupChatHandlers(
         const { chatId, title } = (message.payload as CreateChatPayload) || {};
         const newChatId = await agentService.createChat(chatId, title);
 
+        const { getGatewayTelemetry } = await import("../services/gatewayTelemetry.js");
+        getGatewayTelemetry().trackFireAndForget("paprwork_chat_created", {
+          chat_id: newChatId,
+        });
+
         sendResponse(ws, {
           id: message.id,
           success: true,
@@ -103,6 +108,11 @@ export async function setupChatHandlers(
         const { chatId, title } = message.payload as UpdateChatPayload;
         await agentService.updateChatTitle(chatId, title);
 
+        const { getGatewayTelemetry } = await import("../services/gatewayTelemetry.js");
+        getGatewayTelemetry().trackFireAndForget("paprwork_chat_renamed", {
+          chat_id: chatId,
+        });
+
         sendResponse(ws, {
           id: message.id,
           success: true,
@@ -114,6 +124,11 @@ export async function setupChatHandlers(
       case "chat:delete": {
         const { chatId } = message.payload as DeleteChatPayload;
         await agentService.deleteChat(chatId);
+
+        const { getGatewayTelemetry } = await import("../services/gatewayTelemetry.js");
+        getGatewayTelemetry().trackFireAndForget("paprwork_chat_deleted", {
+          chat_id: chatId,
+        });
 
         sendResponse(ws, {
           id: message.id,

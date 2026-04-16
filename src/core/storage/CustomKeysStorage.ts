@@ -192,17 +192,43 @@ export class CustomKeysStorage {
   }
 
   /**
-   * Add a new custom key
+   * Add or update a custom key (upserts by name).
+   * If a key with the same name already exists, its value and metadata are updated
+   * instead of creating a duplicate entry.
    */
   async addKey(input: CustomKeyInput): Promise<CustomKey> {
-    const id = `key-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const now = new Date().toISOString();
+    const normalizeKeyName = (n: string): string => n.trim().toUpperCase();
+    const expectedName = normalizeKeyName(input.name);
 
+    // Check for existing key with the same name (upsert)
+    const existing = Array.from(this.keys.entries()).find(
+      ([, k]) => normalizeKeyName(k.name) === expectedName,
+    );
+
+    if (existing) {
+      const [existingId, existingKey] = existing;
+      const updatedKey: CustomKey = {
+        ...existingKey,
+        encryptedValue: this.encryptValue(input.value),
+        ...(input.description !== undefined && { description: input.description }),
+        ...(input.permission && { permission: input.permission }),
+        updatedAt: now,
+      };
+      this.keys.set(existingId, updatedKey);
+      await this.saveKeys();
+      console.log(
+        `[CustomKeys] Updated existing key: ${input.name} (id: ${existingId})`,
+      );
+      return updatedKey;
+    }
+
+    const id = `key-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const key: CustomKey = {
       id,
       name: input.name,
       description: input.description,
-      permission: input.permission || "always", // Default to "always" for convenience
+      permission: input.permission || "always",
       encryptedValue: this.encryptValue(input.value),
       createdAt: now,
       updatedAt: now,

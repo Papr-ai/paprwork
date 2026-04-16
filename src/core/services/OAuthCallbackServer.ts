@@ -9,6 +9,8 @@ import { URL } from "url";
 export interface CallbackServerOptions {
   port: number;
   timeout?: number; // Auto-close after this many ms (default: 60000)
+  callbackPath?: string; // Path to listen on (default: "/auth/callback")
+  hostname?: string; // Hostname to bind to (default: "127.0.0.1")
   onCallback?: (params: URLSearchParams) => void;
 }
 
@@ -16,12 +18,16 @@ export class OAuthCallbackServer {
   private server: http.Server | null = null;
   private port: number;
   private timeout: number;
+  private callbackPath: string;
+  private hostname: string;
   private timeoutHandle: NodeJS.Timeout | null = null;
   private onCallback?: (params: URLSearchParams) => void;
 
   constructor(options: CallbackServerOptions) {
     this.port = options.port;
     this.timeout = options.timeout || 60000; // 1 minute default
+    this.callbackPath = options.callbackPath || "/auth/callback";
+    this.hostname = options.hostname || "127.0.0.1";
     this.onCallback = options.onCallback;
   }
 
@@ -37,7 +43,7 @@ export class OAuthCallbackServer {
       this.server = http.createServer((req, res) => {
         try {
           // Only handle callback path
-          if (!req.url || !req.url.startsWith("/auth/callback")) {
+          if (!req.url || !req.url.startsWith(this.callbackPath)) {
             res.writeHead(404, { "Content-Type": "text/plain" });
             res.end("Not Found");
             return;
@@ -172,9 +178,9 @@ export class OAuthCallbackServer {
         reject(error);
       });
 
-      this.server.listen(this.port, "127.0.0.1", () => {
+      this.server.listen(this.port, this.hostname, () => {
         console.log(
-          `[OAuthCallback] Listening on http://127.0.0.1:${this.port}/auth/callback`,
+          `[OAuthCallback] Listening on http://${this.hostname}:${this.port}${this.callbackPath}`,
         );
 
         // Set timeout to auto-close

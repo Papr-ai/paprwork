@@ -153,6 +153,13 @@ export class PlanService {
       plan.sourceAgentName ?? null,
     );
 
+    import("./gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
+      getGatewayTelemetry().trackFireAndForget("paprwork_plan_created", {
+        plan_id: planId,
+        step_count: steps.length,
+      });
+    }).catch(() => {});
+
     console.log(`[PlanService] Created plan: ${planId} for chat: ${chatId}`);
     return plan;
   }
@@ -175,6 +182,17 @@ export class PlanService {
     if (result.changes === 0) {
       return null;
     }
+
+    const completedCount = steps.filter(
+      (s) => s.status === "completed" || s.status === "skipped",
+    ).length;
+    import("./gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
+      getGatewayTelemetry().trackFireAndForget("paprwork_plan_step_completed", {
+        plan_id: planId,
+        completed_steps: completedCount,
+        total_steps: steps.length,
+      });
+    }).catch(() => {});
 
     return this.getPlan(planId);
   }
@@ -199,6 +217,14 @@ export class PlanService {
 
     if (result.changes === 0) {
       return null;
+    }
+
+    if (status === "completed") {
+      import("./gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
+        getGatewayTelemetry().trackFireAndForget("paprwork_plan_completed", {
+          plan_id: planId,
+        });
+      }).catch(() => {});
     }
 
     return this.getPlan(planId);

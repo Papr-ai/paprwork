@@ -3787,4 +3787,51 @@ ollama: (() => {
 
 ---
 
+### Enhancement 55: Tool-Level Skill Enforcement for Jobs & Apps ✅ IMPLEMENTED
+**Added:** 2026-04-13
+**Problem:** Agent repeatedly forgot to follow documented patterns:
+1. **Jobs:** Used `os.environ.get()` / `process.env` for custom API keys instead of `${KEY_NAME}` CLI arg substitution. Custom keys from Settings are stored in the system keychain and are NOT available as environment variables in job processes.
+2. **Mini-apps:** Skipped loading the design system skill before building UI, resulting in cluttered "dashboard soup" instead of clean, premium Liquid Glass aesthetics.
+**Root Cause:** System prompt had the correct guidance, but LLMs lose track of earlier context during long conversations with many tool calls. Prompt-only enforcement is unreliable — models need reminders at the point of action.
+**Solution:** Tool-level enforcement that returns actionable reminders in the tool result, right when the agent needs them:
+
+**1. `create_job` — API Key Pattern Reminder:**
+- For script-based jobs (python, node, bash, shell, swift), if the command doesn't contain `${` key substitution, the tool result includes a `_keyPatternReminder` warning
+- Tells agent: custom keys are NOT env vars, use `${KEY_NAME}` in command + argparse
+- Points to: `read_skill({ skillId: "preloaded-api-key-testing" })`
+
+**2. `run_job` — Source File Scanning:**
+- Before running, scans job source files (.py, .js, .ts) for `os.environ.get()`, `os.getenv()`, `process.env` accessing non-inherited key names (containing KEY, TOKEN, SECRET, etc.)
+- Skips known inherited env vars (OPENAI_API_KEY, JOB_DIR, PATH, etc.)
+- If anti-patterns found, result includes `_envKeyWarnings` with specific file:line fixes
+- Tells agent exactly how to fix: update_job command + update script to use argparse
+
+**3. `create_app` — Design System Reminder:**
+- Every `create_app` result includes a `_designReminder` message
+- Tells agent: load `preloaded-paprwork-design-system` skill BEFORE writing any UI
+- Design target: "Steve Jobs meets Elon Musk — obsessively clean, premium, zero clutter"
+- Explicit: "Follow these principles unless the user has explicitly provided different design guidelines"
+
+**Why Tool-Level > Prompt-Only:**
+- ✅ Reminder appears RIGHT when the agent needs it (not buried in system prompt)
+- ✅ Works regardless of conversation length or context pressure
+- ✅ Model-agnostic (GPT-5.4, Claude, Qwen all benefit)
+- ✅ Can't be missed — it's in the tool result the agent is actively processing
+- ✅ Same pattern as duplicate plan enforcement (Issue 30) which proved effective
+
+**Files Changed:**
+- `src/core/tools/appJobs.ts` — Added `_designReminder` to `create_app` result, `_keyPatternReminder` to `create_job` result, `scanJobSourceForEnvKeyAntiPattern()` helper + integration in `run_job`
+**Impact:**
+- **Before (Jobs):** Agent used `os.environ.get("POSTHOG_PERSONAL_API_KEY")` → returned None → job failed → required debugging
+- **After (Jobs):** Agent sees reminder at create_job time, gets specific warnings at run_job time → uses correct `${KEY_NAME}` pattern
+- **Before (Apps):** Agent skipped design skill → cluttered dashboards, 6+ cards, generic UI
+- **After (Apps):** Agent sees design reminder at create_app → loads skill → clean, focused layouts
+**Testing:**
+- Create python job without `${KEY}` in command → verify `_keyPatternReminder` in result
+- Create python job WITH `${KEY}` in command → verify no reminder
+- Run job with `os.environ.get('CUSTOM_KEY')` in source → verify `_envKeyWarnings` in result
+- Create mini-app → verify `_designReminder` in result
+
+---
+
 **This file is living documentation. Update it as we learn and make decisions.**

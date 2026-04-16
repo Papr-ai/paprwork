@@ -1,5 +1,6 @@
 import { useMemo, useEffect, useRef } from "react";
 import { useApp } from "../../hooks/useApp";
+import { trackEvent } from "../../lib/telemetry";
 import "./MiniAppView.css";
 
 interface MiniAppViewProps {
@@ -14,6 +15,10 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
     const host = import.meta.env.VITE_GATEWAY_HOST || "localhost";
     const port = import.meta.env.VITE_GATEWAY_PORT || "18789";
     return `http://${host}:${port}/apps/${appId}/index.html`;
+  }, [appId]);
+
+  useEffect(() => {
+    trackEvent("paprwork_app_opened", { app_id: appId } as Record<string, unknown>);
   }, [appId]);
 
   // Inject paprAPI BEFORE app scripts execute via inline script tag

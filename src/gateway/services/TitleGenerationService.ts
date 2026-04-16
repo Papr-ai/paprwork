@@ -5,8 +5,8 @@
  * Uses AI SDK directly with OAuth tokens or API keys.
  */
 
-import { openai, createOpenAI } from "@ai-sdk/openai";
-import { anthropic, createAnthropic } from "@ai-sdk/anthropic";
+import { createOpenAI } from "@ai-sdk/openai";
+import { createAnthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 
 const SYSTEM_PROMPT = `Generate a concise title that summarizes the user's message. Rules:
@@ -53,7 +53,7 @@ export class TitleGenerationService {
             { role: "system", content: SYSTEM_PROMPT },
             { role: "user", content: userPrompt },
           ],
-          maxTokens: 30,
+          maxOutputTokens: 30,
         });
         text = result.text;
       } else {
@@ -64,7 +64,7 @@ export class TitleGenerationService {
             { role: "system", content: SYSTEM_PROMPT },
             { role: "user", content: userPrompt },
           ],
-          maxTokens: 30,
+          maxOutputTokens: 30,
         });
         text = result.text;
       }
@@ -77,8 +77,9 @@ export class TitleGenerationService {
       }
 
       return this.fallbackTitle(firstMessage);
-    } catch (error: any) {
-      console.warn("[TitleGen] AI generation failed:", error.message);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn("[TitleGen] AI generation failed:", message);
       return this.fallbackTitle(firstMessage);
     }
   }

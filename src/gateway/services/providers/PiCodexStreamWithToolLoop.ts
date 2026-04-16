@@ -116,6 +116,14 @@ async function executeToolCall(
         : sanitized && typeof sanitized === "object"
           ? sanitized
           : sanitized;
+
+    import("../gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
+      getGatewayTelemetry().trackFireAndForget("paprwork_tool_called", {
+        tool_name: toolCall.toolName,
+        success: true,
+      });
+    }).catch(() => {});
+
     return {
       toolCallId: toolCall.toolCallId,
       toolName: toolCall.toolName,
@@ -123,6 +131,14 @@ async function executeToolCall(
     };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
+
+    import("../gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
+      getGatewayTelemetry().trackFireAndForget("paprwork_tool_called", {
+        tool_name: toolCall.toolName,
+        success: false,
+      });
+    }).catch(() => {});
+
     return {
       toolCallId: toolCall.toolCallId,
       toolName: toolCall.toolName,

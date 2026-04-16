@@ -137,6 +137,38 @@
   white-space: nowrap;
 }
 
+/* Deleted state */
+.plan-card--deleted {
+  opacity: 0.5;
+}
+
+.plan-card__header--deleted {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 14px;
+  cursor: default;
+}
+
+.plan-card__deleted-icon {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.plan-card__deleted-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.plan-card--deleted .plan-card__title {
+  text-decoration: line-through;
+}
+
 @media (prefers-color-scheme: dark) {
   .plan-card {
     background: rgba(255, 255, 255, 0.04);

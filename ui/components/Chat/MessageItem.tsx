@@ -188,7 +188,9 @@ function renderSequence(
         // within one response show only once (the latest state).
         const toolName = toolData.name;
         if (
-          (toolName === "create_plan" || toolName === "update_plan") &&
+          (toolName === "create_plan" ||
+            toolName === "update_plan" ||
+            toolName === "delete_plan") &&
           toolCall.result
         ) {
           const planData = parsePlanFromToolResult(

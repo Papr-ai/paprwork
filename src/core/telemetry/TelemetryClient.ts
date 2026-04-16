@@ -11,6 +11,8 @@ export interface TelemetryClientDeps {
   /** Resolved preference: user setting and/or env must be applied by caller. */
   getEffectiveEnabled: () => boolean;
   getAnonymousInstallId: () => string;
+  /** Papr user ID for identified analytics (commercial builds). */
+  getPaprUserId?: () => string;
   appVersion: string;
   fetchImpl?: typeof fetch;
 }
@@ -79,21 +81,28 @@ export class TelemetryClient {
       return;
     }
 
+    const paprUserId = this.deps.getPaprUserId?.() ?? "";
+
     const merged: Record<string, unknown> = {
       client: "paprwork",
       app_version: this.deps.appVersion,
       platform: process.platform,
     };
+    if (paprUserId) {
+      merged.papr_user_id = paprUserId;
+    }
     if (properties) {
       Object.assign(merged, properties);
     }
     const safeProps = sanitizeTelemetryProperties(merged);
+
+    const userId = paprUserId || installId;
     const body = {
       events: [
         {
           event_name: eventName,
           properties: safeProps,
-          user_id: installId,
+          user_id: userId,
           timestamp: Date.now(),
         },
       ],

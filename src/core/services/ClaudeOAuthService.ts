@@ -23,12 +23,12 @@ export interface OAuthConfig {
 
 export class ClaudeOAuthService {
   private config: OAuthConfig = {
-    // From OpenClaw research - official Claude Code client ID
+    // Official Claude Code client ID (public client, supports loopback redirects)
     clientId: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-    // Use claude.ai for authorization (where the user actually authenticates)
     authorizationUrl: "https://claude.ai/oauth/authorize",
     tokenUrl: "https://claude.ai/api/oauth/token",
-    redirectUri: "http://127.0.0.1:1456/auth/callback",
+    // Claude Code uses http://localhost:{PORT}/callback (not 127.0.0.1, not /auth/callback)
+    redirectUri: "http://localhost:1456/callback",
     scopes: "user:profile user:inference",
   };
 
@@ -57,13 +57,12 @@ export class ClaudeOAuthService {
 
   /**
    * Start OAuth flow - returns authorization URL
-   * Note: Claude expects code=true parameter in addition to response_type=code
+   * Standard PKCE flow matching Claude Code CLI's OAuth parameters
    */
   startOAuthFlow(): { url: string; pkce: PKCEChallenge } {
     const pkce = this.generatePKCE();
 
     const params = new URLSearchParams({
-      code: "true", // Claude-specific: indicates authorization code flow
       client_id: this.config.clientId,
       response_type: "code",
       redirect_uri: this.config.redirectUri,
@@ -86,8 +85,12 @@ export class ClaudeOAuthService {
   async handleCallback(
     code: string,
     verifier: string,
-    _state: string, // State validation handled by IPC layer
+    state: string,
+    expectedState: string,
   ): Promise<OAuthTokenInput> {
+    if (state !== expectedState) {
+      throw new Error("OAuth state mismatch - possible CSRF attack");
+    }
     // OAuth 2.0 RFC 6749 requires form-urlencoded, not JSON!
     const params = new URLSearchParams({
       code,
