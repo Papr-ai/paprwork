@@ -65,6 +65,9 @@ export interface ImportCommunityBundleInput {
 
 const COMMUNITY_REGISTRY_URL =
   "https://raw.githubusercontent.com/Papr-ai/paprwork-community-apps/main/registry.json";
+/** Human-readable link for fixing invalid JSON in the registry */
+const COMMUNITY_REGISTRY_FILE_ON_GITHUB =
+  "https://github.com/Papr-ai/paprwork-community-apps/blob/main/registry.json";
 const COMMUNITY_REPO_URL =
   "https://github.com/Papr-ai/paprwork-community-apps.git";
 
@@ -1102,7 +1105,19 @@ export class BundleService {
         `Failed to fetch community registry: HTTP ${response.status}`,
       );
     }
-    const raw: unknown = await response.json();
+    const text = await response.text();
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text) as unknown;
+    } catch (parseError) {
+      const detail =
+        parseError instanceof Error ? parseError.message : String(parseError);
+      throw new Error(
+        `Community registry is not valid JSON (${detail}). ` +
+          `The file on main must be fixed in the repo: ${COMMUNITY_REGISTRY_FILE_ON_GITHUB} ` +
+          `(common mistake: a new bundle was appended without closing the previous object’s "platform" array and \`}\`).`,
+      );
+    }
     const validated = parseValidRegistryEntries(raw);
     return validated;
   }
