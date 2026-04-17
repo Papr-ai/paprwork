@@ -150,23 +150,41 @@ export class AppStateStorage {
   /**
    * Save app state (active tab, split ratio, onboarding, etc.)
    */
-  saveAppState(state: AppState): void {
+  saveAppState(state: Partial<AppState>): void {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO app_state (key, value, updated_at)
       VALUES (?, ?, ?)
     `);
 
     const now = new Date().toISOString();
-    stmt.run('activeTabId', state.activeTabId || '', now);
-    stmt.run('splitRatio', state.splitRatio.toString(), now);
-    stmt.run('splitRatios', JSON.stringify(state.splitRatios), now);
-    stmt.run('history', JSON.stringify(state.history), now);
-    stmt.run('historyIndex', state.historyIndex.toString(), now);
-    stmt.run('onboardingStep1Completed', state.onboardingStep1Completed.toString(), now);
-    stmt.run('onboardingStep2Completed', state.onboardingStep2Completed.toString(), now);
-    stmt.run('onboardingStep3Completed', state.onboardingStep3Completed.toString(), now);
-    stmt.run('onboardingDismissed', state.onboardingDismissed.toString(), now);
-    stmt.run('lastSavedAt', state.lastSavedAt, now);
+    const splitRatio = state.splitRatio ?? 0.5;
+    const historyIndex = state.historyIndex ?? -1;
+    stmt.run('activeTabId', state.activeTabId ?? '', now);
+    stmt.run('splitRatio', splitRatio.toString(), now);
+    stmt.run('splitRatios', JSON.stringify(state.splitRatios ?? {}), now);
+    stmt.run('history', JSON.stringify(state.history ?? []), now);
+    stmt.run('historyIndex', historyIndex.toString(), now);
+    stmt.run(
+      'onboardingStep1Completed',
+      (state.onboardingStep1Completed ?? false).toString(),
+      now,
+    );
+    stmt.run(
+      'onboardingStep2Completed',
+      (state.onboardingStep2Completed ?? false).toString(),
+      now,
+    );
+    stmt.run(
+      'onboardingStep3Completed',
+      (state.onboardingStep3Completed ?? false).toString(),
+      now,
+    );
+    stmt.run(
+      'onboardingDismissed',
+      (state.onboardingDismissed ?? false).toString(),
+      now,
+    );
+    stmt.run('lastSavedAt', state.lastSavedAt ?? now, now);
   }
 
   /**

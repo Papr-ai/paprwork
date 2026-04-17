@@ -809,6 +809,71 @@ export class JobsService {
     return job;
   }
 
+  /**
+   * Install a default/bundled job with a pre-defined ID.
+   * Unlike createJob(), this accepts a full JobRecord with a fixed ID so
+   * bundled apps can reference it by known ID. Skips if the job already exists.
+   *
+   * Optionally runs extra SQL statements against the job's data.db after creation
+   * (e.g. to create application-specific tables like `briefs`).
+   */
+  async installDefaultJob(
+    jobDef: Partial<JobRecord> & { id: string; name: string; type: JobRecord["type"] },
+    extraSql?: string[],
+  ): Promise<{ installed: boolean; dbPath: string }> {
+    if (this.jobs.has(jobDef.id)) {
+      const dbPath = path.join(this.getJobDir(jobDef.id), "data", "data.db");
+      console.log(`[JobsService] Default job already exists: ${jobDef.id}`);
+      return { installed: false, dbPath };
+    }
+
+    const now = new Date().toISOString();
+    const job: JobRecord = {
+      status: "pending",
+      dependsOn: [],
+      retries: { maxAttempts: 1, backoffMs: 1000 },
+      retentionDays: 14,
+      outputMode: "natural",
+      memoryPolicy: "none",
+      ...jobDef,
+      createdAt: jobDef.createdAt || now,
+      updatedAt: now,
+    };
+
+    const jobDir = this.getJobDir(job.id);
+    await fs.mkdir(path.join(jobDir, "code"), { recursive: true });
+    await fs.mkdir(path.join(jobDir, "logs"), { recursive: true });
+    await fs.mkdir(path.join(jobDir, "migrations"), { recursive: true });
+    await fs.mkdir(path.join(jobDir, "data"), { recursive: true });
+    await this.jobDatabase.ensureDatabase(jobDir);
+    await fs.writeFile(
+      path.join(jobDir, "job.json"),
+      JSON.stringify(job, null, 2),
+    );
+
+    const dbPath = path.join(jobDir, "data", "data.db");
+
+    if (extraSql && extraSql.length > 0) {
+      let db: Database.Database | null = null;
+      try {
+        db = new Database(dbPath);
+        for (const sql of extraSql) {
+          db.exec(sql);
+        }
+        console.log(`[JobsService] Ran ${extraSql.length} extra SQL statement(s) for default job ${job.id}`);
+      } catch (err) {
+        console.warn(`[JobsService] Failed to run extra SQL for default job ${job.id}:`, err);
+      } finally {
+        if (db) db.close();
+      }
+    }
+
+    this.jobs.set(job.id, job);
+    await this.saveJobs();
+    console.log(`[JobsService] Installed default job: ${job.id} - ${job.name}`);
+    return { installed: true, dbPath };
+  }
+
   /** Run recipe evaluation after job completion */
   private async runRecipeEvaluation(
     job: JobRecord,

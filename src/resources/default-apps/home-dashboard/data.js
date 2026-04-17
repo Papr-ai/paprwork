@@ -1,10 +1,15 @@
 const Data = {
   APP_ID: 'bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c',
-  SRC_ID: '2cafb2e9-696b-42db-98fa-5d605977123c:Daily Brief Generator (2cafb2e9)',
+  DEFAULT_JOB_ID: '2cafb2e9-696b-42db-98fa-5d605977123c',
+  getSrcId() {
+    const jobId = (typeof App !== 'undefined' && App.JOB_ID) ? App.JOB_ID : this.DEFAULT_JOB_ID;
+    const short = jobId.slice(0, 8);
+    return `${jobId}:Daily Brief Generator (${short})`;
+  },
   async query(sql) {
     const r = await fetch('/api/db/query', { method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({appId:this.APP_ID, sourceId:this.SRC_ID, sql})
+      body: JSON.stringify({appId:this.APP_ID, sourceId:this.getSrcId(), sql})
     });
     return (await r.json())?.rows || [];
   },

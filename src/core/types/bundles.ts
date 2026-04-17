@@ -105,17 +105,56 @@ const JobResourceSchema = z.object({
   timeoutMs: z.number().int().positive().optional(),
 });
 
+const BundleJobScheduleSchema = z.object({
+  enabled: z.boolean(),
+  cron: z.string().optional(),
+  timezone: z.string().optional(),
+  intervalMs: z.number().int().positive().optional(),
+  atTime: z.string().optional(),
+  catchUpMissed: z.boolean().optional(),
+});
+
+const BundleJobRetrySchema = z.object({
+  maxAttempts: z.number().int().positive(),
+  backoffMs: z.number().int().nonnegative(),
+});
+
+const BundleJobDeliverySchema = z.object({
+  channel: z.enum(["chat"]),
+  targetId: z.string().min(1),
+});
+
+const BundleRecipeConfigSchema = z.object({
+  enabled: z.boolean(),
+  autoEvaluate: z.boolean().optional(),
+  passThreshold: z.number().min(0).max(1).optional(),
+  evaluatorProvider: z.string().optional(),
+  evaluatorModel: z.string().optional(),
+});
+
 const JobSpecSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   type: RuntimeTypeSchema,
   entryPoint: z.string().optional(),
   command: z.string().optional(),
-  schedule: z.string().optional(),
+  schedule: z.union([z.string(), BundleJobScheduleSchema]).optional(),
   dependsOn: z.array(JobDependencySchema).default([]),
   env: z.record(z.string(), z.string()).default({}),
   resources: JobResourceSchema.optional(),
   outputTables: z.array(z.string()).default([]),
+  requirements: z.array(z.string()).default([]),
+  folder: z.string().optional(),
+  provider: z.string().optional(),
+  model: z.string().optional(),
+  retries: BundleJobRetrySchema.optional(),
+  deliver: BundleJobDeliverySchema.optional(),
+  outputMode: z.enum(["natural", "structured"]).optional(),
+  maxTurns: z.number().int().positive().optional(),
+  memoryPolicy: z.enum(["none", "summary", "full"]).optional(),
+  recipe: BundleRecipeConfigSchema.optional(),
+  subAgentId: z.string().optional(),
+  runtimeCalls: z.array(z.string()).default([]),
 });
 
 const SqliteIndexSchema = z.object({

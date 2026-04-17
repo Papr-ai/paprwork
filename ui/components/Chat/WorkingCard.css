@@ -41,6 +41,48 @@
   white-space: nowrap;
 }
 
+.working-label-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.55) 0%,
+    rgba(255, 255, 255, 0.55) 35%,
+    var(--text-color) 50%,
+    rgba(255, 255, 255, 0.55) 65%,
+    rgba(255, 255, 255, 0.55) 100%
+  );
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: working-shimmer 2s ease-in-out infinite;
+}
+
+@media (prefers-color-scheme: light) {
+  .working-label-shimmer {
+    background: linear-gradient(
+      90deg,
+      rgba(0, 0, 0, 0.4) 0%,
+      rgba(0, 0, 0, 0.4) 35%,
+      var(--text-color) 50%,
+      rgba(0, 0, 0, 0.4) 65%,
+      rgba(0, 0, 0, 0.4) 100%
+    );
+    background-size: 300% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+}
+
+@keyframes working-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
 .working-label-secondary {
   font-weight: 400;
   color: var(--text-secondary);
@@ -48,6 +90,39 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
+}
+
+.working-secondary-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.35) 0%,
+    rgba(255, 255, 255, 0.35) 35%,
+    var(--text-secondary) 50%,
+    rgba(255, 255, 255, 0.35) 65%,
+    rgba(255, 255, 255, 0.35) 100%
+  );
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: working-shimmer 2s ease-in-out infinite;
+}
+
+@media (prefers-color-scheme: light) {
+  .working-secondary-shimmer {
+    background: linear-gradient(
+      90deg,
+      rgba(0, 0, 0, 0.3) 0%,
+      rgba(0, 0, 0, 0.3) 35%,
+      var(--text-secondary) 50%,
+      rgba(0, 0, 0, 0.3) 65%,
+      rgba(0, 0, 0, 0.3) 100%
+    );
+    background-size: 300% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
 }
 
 .working-timer {

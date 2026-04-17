@@ -1766,6 +1766,22 @@ This makes the app available in Papr Work's "Community Apps" tab for all users.`
         bundleId,
       );
 
+      // Hard block: if hardcoded secrets found, delete the bundle and force the agent to fix them
+      if (scrubReport.leakedSecrets.length > 0) {
+        await fsModule.rm(bundlePath, { recursive: true, force: true });
+        const secretsList = scrubReport.leakedSecrets
+          .map((s) => `  ${s.file}:${s.line} — ${s.pattern}`)
+          .join("\n");
+        throw new Error(
+          `Export BLOCKED: Found ${scrubReport.leakedSecrets.length} hardcoded secret(s) in app/job source files. ` +
+            `The bundle has been deleted to prevent accidental sharing.\n\n` +
+            `Locations:\n${secretsList}\n\n` +
+            `Fix: Replace each hardcoded value with the \${KEY_NAME} substitution pattern, then re-export. ` +
+            `Example: replace "sk-proj-abc123..." with \${OPENAI_API_KEY} in the job command, ` +
+            `and use argparse/sys.argv in the script to receive it.`,
+        );
+      }
+
       const scrubSummary =
         scrubReport.removedFiles.length + scrubReport.removedDirs.length > 0
           ? `\n## Privacy Scrub\n\nThe following private data was automatically removed during export:\n${[...scrubReport.removedFiles, ...scrubReport.removedDirs.map((d) => `${d}/`)].map((f) => `- ${f}`).join("\n")}\n\nTotal removed: ${(scrubReport.totalBytesRemoved / 1024).toFixed(1)}KB\n`
@@ -1937,7 +1953,7 @@ Supports:
 - Community repo with subPath: source="github.com/Papr-ai/paprwork-community-apps" subPath="bundles/meetings-manager"
 
 Use subPath when the bundle is inside a subdirectory of the repo (e.g., the Paprwork community apps repo).
-If app/job IDs conflict with existing ones, auto-renames by default (e.g., app-123 → app-123-imported).
+If app/job IDs conflict with existing ones, generates new UUIDs when renameConflicts is true. All references (source files, data-sources.json, job dependencies) are updated automatically.
 
 After import, check the result for:
 - requirements: API keys the app needs (configure in Settings → Custom Keys)
@@ -2021,15 +2037,20 @@ After import, check the result for:
       await jobsService.initialize();
 
       const conflicts: string[] = [];
+      const idRemaps = new Map<string, string>();
       const existingApp = await appService.getApp(manifest.app.id);
       if (existingApp) {
-        conflicts.push(`App ID "${manifest.app.id}" already exists`);
+        conflicts.push(
+          `App "${manifest.app.name}" (${manifest.app.id}) already exists`,
+        );
       }
 
       for (const jobSpec of manifest.jobs) {
         const existingJob = await jobsService.getJob(jobSpec.id);
         if (existingJob) {
-          conflicts.push(`Job ID "${jobSpec.id}" already exists`);
+          conflicts.push(
+            `Job "${jobSpec.name}" (${jobSpec.id}) already exists`,
+          );
         }
       }
 
@@ -2039,18 +2060,28 @@ After import, check the result for:
         );
       }
 
-      const result = await bundleService.importBundle({ sourcePath });
+      if (conflicts.length > 0 && args.renameConflicts) {
+        const { randomUUID } = await import("node:crypto");
+        if (existingApp) {
+          idRemaps.set(manifest.app.id, randomUUID());
+        }
+        for (const jobSpec of manifest.jobs) {
+          const existingJob = await jobsService.getJob(jobSpec.id);
+          if (existingJob) {
+            idRemaps.set(jobSpec.id, randomUUID());
+          }
+        }
+      }
+
+      const result = await bundleService.importBundle({
+        sourcePath,
+        idRemaps: idRemaps.size > 0 ? idRemaps : undefined,
+      });
 
       if (gitCloneDir) {
         await fsModule.rm(gitCloneDir, { recursive: true, force: true });
       }
 
-      const pythonJobs = result.jobs
-        .filter((j) => j.type === "python")
-        .map((j) => j.name);
-      const nodeJobs = result.jobs
-        .filter((j) => j.type === "node")
-        .map((j) => j.name);
       const requirements = result.requirements ?? [];
       const platform = result.platform ?? [];
 
@@ -2065,20 +2096,61 @@ After import, check the result for:
           ? `WARNING: This bundle targets ${platform.join(", ")} but you are on ${userPlatform}. Some features may not work.`
           : undefined;
 
+      // --- Post-import validation ---
+      const validationIssues: string[] = [];
       const postImportSteps: string[] = [];
+
+      const appDir = await appService.getAppPath(result.app.id);
+      if (appDir) {
+        try {
+          await fsModule.access(
+            pathModule.default.join(appDir, "index.html"),
+          );
+        } catch {
+          validationIssues.push(
+            `App missing index.html — the app may not load correctly`,
+          );
+        }
+      }
+
+      for (const jobSpec of result.jobs) {
+        if (
+          jobSpec.type !== "agent" &&
+          (!jobSpec.command || jobSpec.command.trim() === "")
+        ) {
+          validationIssues.push(
+            `Job "${jobSpec.name}" has no command — it will fail when run`,
+          );
+        }
+      }
+
       if (requirements.length > 0) {
         postImportSteps.push(
           `Configure required API keys in Settings → Custom Keys: ${requirements.join(", ")}`,
         );
       }
-      if (pythonJobs.length > 0) {
+
+      // Report dependency setup results (venvs, npm install — already ran during import)
+      const setupResults = result.setupResults ?? [];
+      const setupFailures = setupResults.filter((r) => !r.ok);
+      const setupSuccesses = setupResults.filter((r) => r.ok);
+      if (setupSuccesses.length > 0) {
         postImportSteps.push(
-          `Python jobs (${pythonJobs.join(", ")}) will auto-create virtual environments on first run`,
+          `Dependencies installed: ${setupSuccesses.map((r) => r.message).join("; ")}`,
         );
       }
-      if (nodeJobs.length > 0) {
+      if (setupFailures.length > 0) {
+        for (const failure of setupFailures) {
+          validationIssues.push(failure.message);
+        }
+      }
+
+      const scheduledJobs = result.jobs.filter(
+        (j) => j.schedule && typeof j.schedule === "object",
+      );
+      if (scheduledJobs.length > 0) {
         postImportSteps.push(
-          `Node jobs (${nodeJobs.join(", ")}) will auto-install dependencies on first run`,
+          `Scheduled jobs imported: ${scheduledJobs.map((j) => j.name).join(", ")}. Verify schedules are correct before enabling.`,
         );
       }
 
@@ -2093,15 +2165,21 @@ After import, check the result for:
             id: j.id,
             name: j.name,
             type: j.type,
+            command: j.command,
+            hasSchedule: !!j.schedule,
           })),
           requirements,
           platform,
           platformWarning,
           postImportSteps,
+          validationIssues:
+            validationIssues.length > 0 ? validationIssues : undefined,
           warnings:
-            conflicts.length > 0
-              ? `Conflicts detected (${conflicts.join(", ")}). Imported with original IDs.`
-              : undefined,
+            conflicts.length > 0 && idRemaps.size > 0
+              ? `Conflicts resolved: ${[...idRemaps.entries()].map(([old, nw]) => `${old} → ${nw}`).join(", ")}`
+              : conflicts.length > 0
+                ? `Conflicts detected but no remapping needed.`
+                : undefined,
         },
         duration: performance.now() - startTime,
         timestamp: new Date().toISOString(),

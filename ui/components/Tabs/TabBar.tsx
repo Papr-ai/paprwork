@@ -25,9 +25,8 @@ export function TabBar() {
     closeTab,
     moveTab,
   } = useTabs();
-  const { chats } = useChatStore();
+  const chats = useChatStore((s) => s.chats);
   const { createChat } = useChat();
-  const chatStore = useChatStore();
   const [dropIndicatorStyle, setDropIndicatorStyle] =
     useState<React.CSSProperties>({ display: "none" });
   const [dropIndicatorOnTop, setDropIndicatorOnTop] = useState(false);

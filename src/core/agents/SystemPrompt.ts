@@ -67,7 +67,8 @@ export class SystemPromptBuilder {
     const sections = [
       // Static sections first (better caching)
       this.buildIdentitySection(),
-      this.buildProactiveIntegrationSection(), // NEW: Teach agent to check capabilities before saying "I can't"
+      this.buildProactiveIntegrationSection(),
+      this.buildConnectorsSection(),
       this.buildCapabilityMatrixSection(),
       this.buildToolCallStyleSection(), // Merged with narration
       this.buildAgentDocsSection(),
@@ -414,6 +415,87 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
   }
 
   /**
+   * Service Connectors - Stripe Projects integration for provisioning cloud services
+   */
+  private buildConnectorsSection(): string {
+    return `# Service Connectors (connect_service)
+
+You have a \`connect_service\` tool that provisions cloud services via Stripe Projects — databases, hosting, auth, analytics, AI, and more. One tool call handles CLI setup, provisioning, and credential storage.
+
+## Decision Tree: When a User Needs an External Service
+
+1. **Service available via connect_service?**
+   - Use \`connect_service({ action: "catalog" })\` to check
+   - YES → \`connect_service({ action: "add", provider: "neon", service: "database" })\`
+   - Credentials auto-stored in keychain. Use \${KEY_NAME} in jobs/bash/mini-apps.
+
+2. **Service NOT in the catalog?**
+   - Guide user to sign up at the provider's website
+   - Use \`request_key({ name: "SERVICE_API_KEY", sourceUrl: "https://..." })\` to collect credentials
+   - Or user adds key in Settings → API Keys
+   - Then use \${KEY_NAME} — works the same regardless of how the key was stored
+
+3. **User already HAS credentials?**
+   - Use \`set_key()\` or \`request_key()\` to store them
+   - No need for connect_service at all
+
+## Actions
+
+| Action | Purpose | Example |
+|--------|---------|---------|
+| catalog | Browse available services | \`connect_service({ action: "catalog" })\` |
+| add | Provision + auto-store credentials | \`connect_service({ action: "add", provider: "neon", service: "database" })\` |
+| status | Check provisioned services | \`connect_service({ action: "status" })\` |
+| remove | Deprovision a service | \`connect_service({ action: "remove", provider: "neon", service: "database" })\` |
+
+## Available Providers (Stripe Projects Catalog)
+
+| Category | Providers |
+|----------|-----------|
+| Database | Neon, Supabase, Turso, PlanetScale, Railway |
+| Hosting | Vercel, Cloudflare, Railway, Fly.io, Runloop |
+| Auth | Clerk, Supabase, Neon |
+| Analytics | PostHog, Amplitude, Mixpanel |
+| AI | OpenRouter, Hugging Face, Inngest |
+| Vector DB | Chroma |
+| Search | Firecrawl |
+
+Use \`connect_service({ action: "catalog" })\` for the latest list — providers are added regularly.
+
+## First-Time Setup
+
+On the first call, connect_service automatically:
+1. Installs Stripe CLI (if missing)
+2. Installs the Projects plugin (if missing)
+3. If not authenticated, returns instructions to run \`stripe login\` via bash (one-time browser login)
+
+After initial setup, all subsequent calls work without user interaction.
+
+## Existing Accounts
+
+Users can bring existing provider accounts. Stripe Projects supports linking existing accounts — the user doesn't need to create new ones. If the tool returns an error about account linking, use bash to run \`stripe projects link <provider>\` first.
+
+## After Provisioning
+
+Credentials are auto-stored as custom keys. Use them exactly like any other key:
+- Jobs: \`create_job({ command: "python3 main.py --db '\${NEON_DATABASE_URL}'" })\`
+- Bash: \`bash({ command: "psql '\${NEON_DATABASE_URL}' -c 'SELECT 1'" })\`
+- Mini-apps: \`/api/bash/run\` with \${KEY_NAME} in the command body
+
+## When to Suggest connect_service
+
+- User says "set up a database", "add analytics", "I need hosting"
+- User needs a service for a job or mini-app (e.g., "create a scraper that saves to Postgres")
+- User asks "how do I connect to Neon/Supabase/Vercel/Clerk/PostHog?"
+
+## When NOT to Use connect_service
+
+- User already has the API key → just use set_key() or request_key()
+- Service not in Stripe catalog → guide manual setup
+- User explicitly wants to manage their own provider account directly`;
+  }
+
+  /**
    * Explicit capability matrix based on registered tools
    */
   private buildCapabilityMatrixSection(): string {
@@ -455,8 +537,8 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
         area: "Browser",
         enabled: has("browser_navigate") || has("browser_snapshot"),
         details:
-          "navigate/snapshot/click/type/tabs/parse_html/wait_for/fill_form/scroll — " +
-          "NEW: browser_parse_html for data extraction (write Python with BeautifulSoup), " +
+          "navigate/snapshot/click/type/tabs/test_script/wait_for/fill_form/scroll — " +
+          "browser_test_script for data extraction (write JS to run in page via page.evaluate), " +
           "browser_wait_for for SPAs, browser_fill_form for multi-field forms, " +
           "browser_scroll to bring elements into view. Use ONLY for visual/interactive browsing, NOT for simple searches (use bash curl instead)",
       },
@@ -504,40 +586,41 @@ ${matrix}
 4. **BEFORE creating or editing any UI/frontend code, load the design system:** \`read_skill({ skillId: "preloaded-paprwork-design-system" })\`
 5. **NEVER create "dashboard soup"** — if you're adding 5+ cards to one screen, redesign with 2-3 focused sections instead
 
-## Browser Data Extraction Examples
+## Browser Data Extraction
 
-**\`browser_parse_html\` requires actual Python code, NOT a natural language prompt.**
+Use \`browser_test_script\` to extract structured data from pages. It runs JavaScript via Playwright's \`page.evaluate()\` — fast, in-process, no external dependencies.
 
-✅ **CORRECT:**
+**Example — extract search results:**
 \`\`\`javascript
-browser_parse_html({
-  code: \`
-soup = BeautifulSoup(html, 'lxml')
-results = []
-for item in soup.find_all('div', class_='search-result')[:5]:
-    results.append({
-        'title': item.find('h2').text.strip(),
-        'url': item.find('a')['href'],
-        'snippet': item.find('div', class_='snippet').text.strip()
-    })
-result = results
-\`
+browser_test_script({
+  script: \`
+    Array.from(document.querySelectorAll('.search-result')).slice(0, 5).map(item => ({
+      title: item.querySelector('h2')?.textContent?.trim() || '',
+      url: item.querySelector('a')?.href || '',
+      snippet: item.querySelector('.snippet')?.textContent?.trim() || ''
+    }))
+  \`
 })
 \`\`\`
 
-❌ **WRONG:**
+**Example — extract table data:**
 \`\`\`javascript
-browser_parse_html({
-  prompt: "Extract the top 5 search results"  // ❌ This is NOT valid!
+browser_test_script({
+  script: \`
+    const rows = Array.from(document.querySelectorAll('table tbody tr'));
+    rows.map(row => {
+      const cells = Array.from(row.querySelectorAll('td'));
+      return cells.map(c => c.textContent?.trim() || '');
+    })
+  \`
 })
 \`\`\`
 
 **Key points:**
-- Write Python code using BeautifulSoup (\`soup = BeautifulSoup(html, 'lxml')\`)
-- The page HTML is available in the \`html\` variable
-- Store your result in a variable called \`result\`
-- Use \`find()\`, \`find_all()\`, \`.text\`, \`['attribute']\` to extract data
-- Return lists/dicts for structured data
+- Write JavaScript that returns the data you need (the return value becomes the tool result)
+- Use \`document.querySelectorAll()\`, \`.textContent\`, \`.href\`, etc.
+- Return arrays/objects for structured data
+- For quick page overview, use \`browser_snapshot\` instead
 
 ## IMPORTANT: Use the Right Tool for Jobs
 

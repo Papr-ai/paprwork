@@ -21,7 +21,7 @@
       "@renderer/*": ["src/renderer/*"],
       "@gateway/*": ["src/gateway/*"]
     },
-    "types": ["node", "electron"],
+    "types": ["node"],
     "noImplicitAny": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,

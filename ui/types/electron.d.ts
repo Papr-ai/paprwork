@@ -170,25 +170,6 @@ export interface ElectronAPI {
     removeOrganizationChangedListener: (callback: (data: { organizationId: string; organizationName: string }) => void) => void;
   };
 
-  // Python Dependencies API - Check and auto-install BeautifulSoup for browser_parse_html
-  pythonDeps: {
-    check: () => Promise<{
-      success: boolean;
-      status?: {
-        pythonInstalled: boolean;
-        pythonVersion?: string;
-        beautifulSoupInstalled: boolean;
-        lxmlInstalled: boolean;
-        canAutoInstall: boolean;
-      };
-      error?: string;
-    }>;
-    autoInstall: () => Promise<{
-      success: boolean;
-      error?: string;
-    }>;
-  };
-
   // Ollama API - Auto-install and manage local AI models
   ollama: {
     checkStatus: () => Promise<{

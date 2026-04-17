@@ -1,4 +1,6 @@
 import { promises as fs } from "fs";
+import { existsSync, readFileSync, writeFileSync } from "fs";
+import { execSync } from "child_process";
 import path from "path";
 import os from "os";
 import type {
@@ -41,6 +43,8 @@ export interface ExportBundleInput {
 
 export interface ImportBundleInput {
   sourcePath: string;
+  /** Map of original ID → new ID for conflict resolution. Applied to app ID, job IDs, dependsOn, runtimeCalls, and data-sources.json. */
+  idRemaps?: Map<string, string>;
 }
 
 export interface BundleSummary {
@@ -128,10 +132,18 @@ const SCRUB_DIRS = new Set([
   "data",
 ]);
 
+export interface LeakedSecretWarning {
+  file: string;
+  line: number;
+  pattern: string;
+  snippet: string;
+}
+
 export interface ScrubReport {
   removedFiles: string[];
   removedDirs: string[];
   totalBytesRemoved: number;
+  leakedSecrets: LeakedSecretWarning[];
 }
 
 export interface PortabilityWarning {
@@ -146,15 +158,36 @@ export interface PortabilityReport {
   portable: boolean;
 }
 
+/** Patterns that match hardcoded secret values (not key names — actual values) */
+const HARDCODED_SECRET_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /sk-(?:proj|org|ant)-[A-Za-z0-9_-]{20,}/g, label: "OpenAI/Anthropic API key" },
+  { pattern: /sk-[a-zA-Z0-9]{32,}/g, label: "API key (sk-...)" },
+  { pattern: /AIza[A-Za-z0-9_-]{35}/g, label: "Google API key" },
+  { pattern: /ghp_[A-Za-z0-9]{36}/g, label: "GitHub personal access token" },
+  { pattern: /gho_[A-Za-z0-9]{36}/g, label: "GitHub OAuth token" },
+  { pattern: /xoxb-[0-9]{10,}-[A-Za-z0-9-]+/g, label: "Slack bot token" },
+  { pattern: /xoxp-[0-9]{10,}-[A-Za-z0-9-]+/g, label: "Slack user token" },
+  { pattern: /postgres(?:ql)?:\/\/[^\s'"]+:[^\s'"]+@[^\s'"]+/g, label: "PostgreSQL connection string with password" },
+  { pattern: /mysql:\/\/[^\s'"]+:[^\s'"]+@[^\s'"]+/g, label: "MySQL connection string with password" },
+  { pattern: /mongodb(?:\+srv)?:\/\/[^\s'"]+:[^\s'"]+@[^\s'"]+/g, label: "MongoDB connection string with password" },
+];
+
+const SCANNABLE_EXTENSIONS = new Set([
+  ".py", ".js", ".ts", ".tsx", ".jsx", ".sh", ".bash",
+  ".json", ".yaml", ".yml", ".toml", ".env", ".cfg", ".ini",
+  ".html", ".md", ".swift",
+]);
+
 /**
  * Recursively remove private data files and directories from an exported
- * bundle path. Returns a report of what was removed.
+ * bundle path. Also scans source files for hardcoded secret values.
  */
 async function scrubPrivateData(bundlePath: string): Promise<ScrubReport> {
   const report: ScrubReport = {
     removedFiles: [],
     removedDirs: [],
     totalBytesRemoved: 0,
+    leakedSecrets: [],
   };
 
   async function walk(dir: string): Promise<void> {
@@ -189,6 +222,56 @@ async function scrubPrivateData(bundlePath: string): Promise<ScrubReport> {
   }
 
   await walk(bundlePath);
+
+  // Scan remaining source files for hardcoded secret values
+  async function scanForSecrets(dir: string): Promise<void> {
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (SCRUB_DIRS.has(entry.name) || entry.name === "node_modules")
+          continue;
+        await scanForSecrets(fullPath);
+        continue;
+      }
+      const ext = path.extname(entry.name).toLowerCase();
+      if (!SCANNABLE_EXTENSIONS.has(ext)) continue;
+      const stat = await fs.stat(fullPath).catch(() => null);
+      if (!stat || stat.size > 512 * 1024) continue;
+      let content: string;
+      try {
+        content = await fs.readFile(fullPath, "utf8");
+      } catch {
+        continue;
+      }
+      const lines = content.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        for (const { pattern, label } of HARDCODED_SECRET_PATTERNS) {
+          pattern.lastIndex = 0;
+          if (pattern.test(line)) {
+            const relPath = path.relative(bundlePath, fullPath);
+            const masked =
+              line.length > 80 ? line.substring(0, 80) + "..." : line;
+            report.leakedSecrets.push({
+              file: relPath,
+              line: i + 1,
+              pattern: label,
+              snippet: masked,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  await scanForSecrets(bundlePath);
+
   return report;
 }
 
@@ -230,6 +313,9 @@ const JOB_JSON_KEEP_FIELDS = new Set([
   "outputSchema",
   "maxTurns",
   "memoryPolicy",
+  "provider",
+  "model",
+  "recipe",
 ]);
 
 /**
@@ -741,15 +827,34 @@ export class BundleService {
       // No job.json on disk — use in-memory record
     }
 
-    return {
+    const spec: BundleJobSpec = {
       id: job.id,
       name: job.name,
       type: mapJobTypeToRuntime(job.type),
       command,
-      dependsOn: [],
+      dependsOn: (job.dependsOn ?? []).map((dep) => ({
+        jobId: dep.jobId,
+        onStatus: [dep.onStatus],
+      })),
       env: {},
       outputTables: [],
+      requirements: job.requirements ?? [],
+      runtimeCalls: job.runtimeCalls ?? [],
     };
+
+    if (job.folder) spec.folder = job.folder;
+    if (job.provider) spec.provider = job.provider;
+    if (job.model) spec.model = job.model;
+    if (job.schedule) spec.schedule = job.schedule;
+    if (job.retries) spec.retries = job.retries;
+    if (job.deliver) spec.deliver = job.deliver;
+    if (job.outputMode) spec.outputMode = job.outputMode;
+    if (job.maxTurns) spec.maxTurns = job.maxTurns;
+    if (job.memoryPolicy) spec.memoryPolicy = job.memoryPolicy;
+    if (job.subAgentId) spec.subAgentId = job.subAgentId;
+    if (job.recipe) spec.recipe = job.recipe;
+
+    return spec;
   }
 
   /**
@@ -930,7 +1035,7 @@ export class BundleService {
     }
 
     const scrubReport = input.includeData
-      ? { removedFiles: [], removedDirs: [], totalBytesRemoved: 0 }
+      ? { removedFiles: [], removedDirs: [], totalBytesRemoved: 0, leakedSecrets: [] }
       : await scrubPrivateData(destinationPath);
 
     const portabilityReport = await checkPortability(destinationPath);
@@ -1024,7 +1129,213 @@ export class BundleService {
     };
   }
 
-  async importBundle(input: ImportBundleInput): Promise<BundleManifest> {
+  /**
+   * Apply ID remaps to all text files in a directory (replaces old UUIDs with new ones).
+   * Used when importing with conflict resolution to update hardcoded job/app ID references.
+   */
+  private async applyIdRemapsToSourceFiles(
+    dir: string,
+    remaps: Map<string, string>,
+  ): Promise<void> {
+    const remappableExts = new Set([
+      ".html",
+      ".js",
+      ".ts",
+      ".tsx",
+      ".jsx",
+      ".json",
+      ".css",
+      ".py",
+      ".sh",
+      ".swift",
+      ".md",
+    ]);
+
+    async function walkAndRemap(currentDir: string): Promise<void> {
+      let entries;
+      try {
+        entries = await fs.readdir(currentDir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const full = path.join(currentDir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name === "node_modules" || entry.name.startsWith("."))
+            continue;
+          await walkAndRemap(full);
+          continue;
+        }
+        const ext = path.extname(entry.name).toLowerCase();
+        if (!remappableExts.has(ext)) continue;
+        try {
+          let content = await fs.readFile(full, "utf8");
+          let changed = false;
+          for (const [oldId, newId] of remaps) {
+            if (content.includes(oldId)) {
+              content = content.split(oldId).join(newId);
+              changed = true;
+            }
+          }
+          if (changed) {
+            await fs.writeFile(full, content, "utf8");
+          }
+        } catch {
+          // Skip unreadable files
+        }
+      }
+    }
+
+    await walkAndRemap(dir);
+  }
+
+  private buildJobRecordFromSpec(
+    jobSpec: BundleJobSpec,
+    createdAt: string,
+  ): JobRecord {
+    const now = new Date().toISOString();
+    const jobRecord: JobRecord = {
+      id: jobSpec.id,
+      name: jobSpec.name,
+      type: mapRuntimeToJobType(jobSpec.type),
+      status: "pending",
+      command: jobSpec.command,
+      createdAt,
+      updatedAt: now,
+    };
+
+    if (jobSpec.requirements && jobSpec.requirements.length > 0) {
+      jobRecord.requirements = jobSpec.requirements;
+    }
+    if (jobSpec.folder) jobRecord.folder = jobSpec.folder;
+    if (jobSpec.provider) jobRecord.provider = jobSpec.provider;
+    if (jobSpec.model) jobRecord.model = jobSpec.model;
+    if (jobSpec.subAgentId) jobRecord.subAgentId = jobSpec.subAgentId;
+    if (jobSpec.outputMode) jobRecord.outputMode = jobSpec.outputMode;
+    if (jobSpec.maxTurns) jobRecord.maxTurns = jobSpec.maxTurns;
+    if (jobSpec.memoryPolicy) jobRecord.memoryPolicy = jobSpec.memoryPolicy;
+    if (jobSpec.retries) jobRecord.retries = jobSpec.retries;
+    if (jobSpec.deliver) jobRecord.deliver = jobSpec.deliver;
+    if (jobSpec.recipe) jobRecord.recipe = jobSpec.recipe;
+    if (jobSpec.runtimeCalls && jobSpec.runtimeCalls.length > 0) {
+      jobRecord.runtimeCalls = jobSpec.runtimeCalls;
+    }
+
+    if (jobSpec.dependsOn && jobSpec.dependsOn.length > 0) {
+      jobRecord.dependsOn = jobSpec.dependsOn.map((dep) => ({
+        jobId: dep.jobId,
+        onStatus: (dep.onStatus[0] ?? "completed") as "completed" | "failed",
+        autoTrigger: undefined,
+      }));
+    }
+
+    if (jobSpec.schedule && typeof jobSpec.schedule === "object") {
+      jobRecord.schedule = jobSpec.schedule;
+    } else if (typeof jobSpec.schedule === "string") {
+      jobRecord.schedule = { enabled: true, cron: jobSpec.schedule };
+    }
+
+    return jobRecord;
+  }
+
+  /**
+   * Run post-import dependency setup for a job directory.
+   * Creates Python venvs + pip install, or runs npm install for Node jobs.
+   * Returns a human-readable status string for the agent.
+   */
+  private async setupJobDependencies(
+    jobId: string,
+    jobType: string,
+    jobName: string,
+  ): Promise<{ ok: boolean; message: string }> {
+    const jobDir = await this.jobsService.getJobPath(jobId);
+    if (!jobDir) {
+      return { ok: false, message: `Job directory not found for "${jobName}"` };
+    }
+
+    if (jobType === "python") {
+      const venvDir = path.join(jobDir, ".venv");
+      const requirementsFile = path.join(jobDir, "requirements.txt");
+
+      if (!existsSync(venvDir)) {
+        try {
+          const pythonCmd =
+            process.platform === "win32" ? "python" : "python3";
+          execSync(`${pythonCmd} -m venv .venv`, {
+            cwd: jobDir,
+            timeout: 30_000,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return {
+            ok: false,
+            message: `Failed to create venv for "${jobName}": ${msg}`,
+          };
+        }
+      }
+
+      if (existsSync(requirementsFile)) {
+        try {
+          const isWin = process.platform === "win32";
+          const pip = isWin
+            ? path.join(venvDir, "Scripts", "pip.exe")
+            : path.join(venvDir, "bin", "pip");
+          execSync(`${pip} install -r requirements.txt 2>&1`, {
+            cwd: jobDir,
+            timeout: 120_000,
+            encoding: "utf8",
+          });
+          const markerPath = path.join(venvDir, ".requirements-installed");
+          const reqContent = readFileSync(requirementsFile, "utf8");
+          writeFileSync(markerPath, reqContent, "utf8");
+          return {
+            ok: true,
+            message: `Python venv created and requirements installed for "${jobName}"`,
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return {
+            ok: false,
+            message: `Venv created but pip install failed for "${jobName}": ${msg}`,
+          };
+        }
+      }
+
+      return {
+        ok: true,
+        message: `Python venv created for "${jobName}" (no requirements.txt)`,
+      };
+    }
+
+    if (jobType === "node") {
+      const packageJson = path.join(jobDir, "package.json");
+      const nodeModules = path.join(jobDir, "node_modules");
+
+      if (existsSync(packageJson) && !existsSync(nodeModules)) {
+        try {
+          execSync("npm install --production 2>&1", {
+            cwd: jobDir,
+            timeout: 120_000,
+            encoding: "utf8",
+          });
+          return {
+            ok: true,
+            message: `Node dependencies installed for "${jobName}"`,
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return {
+            ok: false,
+            message: `npm install failed for "${jobName}": ${msg}`,
+          };
+        }
+      }
+    }
+
+    return { ok: true, message: "" };
+  }
+
+  async importBundle(input: ImportBundleInput): Promise<BundleManifest & { setupResults?: Array<{ jobName: string; ok: boolean; message: string }> }> {
     await this.initialize();
     const sourceManifestPath = path.join(input.sourcePath, "manifest.json");
     const raw = await fs.readFile(sourceManifestPath, "utf8");
@@ -1033,6 +1344,21 @@ export class BundleService {
     const destination = this.getBundlePath(manifest.bundleId);
     await fs.mkdir(path.dirname(destination), { recursive: true });
     await fs.cp(input.sourcePath, destination, { recursive: true });
+
+    const remaps = input.idRemaps;
+    if (remaps && remaps.size > 0) {
+      await this.applyIdRemapsToSourceFiles(destination, remaps);
+
+      // Re-read manifest after remap (IDs in manifest.json were rewritten)
+      const remappedRaw = await fs.readFile(
+        path.join(destination, "manifest.json"),
+        "utf8",
+      );
+      Object.assign(
+        manifest,
+        parseBundleManifest(JSON.parse(remappedRaw) as unknown),
+      );
+    }
 
     const appSource = path.join(destination, manifest.app.appPath);
     const appMetadata: MiniApp = {
@@ -1049,16 +1375,10 @@ export class BundleService {
 
     for (const jobSpec of manifest.jobs) {
       const sourceJobPath = path.join(destination, "jobs", jobSpec.id);
-      const now = new Date().toISOString();
-      const jobRecord: JobRecord = {
-        id: jobSpec.id,
-        name: jobSpec.name,
-        type: mapRuntimeToJobType(jobSpec.type),
-        status: "pending",
-        command: jobSpec.command,
-        createdAt: manifest.createdAt,
-        updatedAt: now,
-      };
+      const jobRecord = this.buildJobRecordFromSpec(
+        jobSpec,
+        manifest.createdAt,
+      );
       await this.jobsService.upsertJob(jobRecord, sourceJobPath);
     }
 
@@ -1095,7 +1415,34 @@ export class BundleService {
       // No data-sources.json — fine, skip
     }
 
-    return manifest;
+    // Proactively install dependencies for Python/Node jobs
+    const setupResults: Array<{
+      jobName: string;
+      ok: boolean;
+      message: string;
+    }> = [];
+    for (const jobSpec of manifest.jobs) {
+      const jobType = mapRuntimeToJobType(jobSpec.type);
+      if (jobType === "python" || jobType === "node") {
+        const result = await this.setupJobDependencies(
+          jobSpec.id,
+          jobType,
+          jobSpec.name,
+        );
+        if (result.message) {
+          setupResults.push({
+            jobName: jobSpec.name,
+            ok: result.ok,
+            message: result.message,
+          });
+        }
+      }
+    }
+
+    return {
+      ...manifest,
+      setupResults: setupResults.length > 0 ? setupResults : undefined,
+    };
   }
 
   async fetchCommunityRegistry(): Promise<CommunityRegistry> {

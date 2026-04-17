@@ -168,12 +168,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
     };
   })(),
 
-  // Python Dependencies API - Check and auto-install BeautifulSoup for browser_parse_html
-  pythonDeps: {
-    check: () => ipcRenderer.invoke("pythonDeps:check"),
-    autoInstall: () => ipcRenderer.invoke("pythonDeps:autoInstall"),
-  },
-
   // Ollama API - Auto-install and manage local AI models
   ollama: (() => {
     // Track wrapper functions for proper cleanup

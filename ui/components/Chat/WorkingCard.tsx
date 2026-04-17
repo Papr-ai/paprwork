@@ -3,8 +3,10 @@
  * Supports collapsing and shows current activity
  */
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import "./WorkingCard.css";
+
+const SHIMMER_DELAY_MS = 3000;
 
 interface WorkingCardProps {
   children: React.ReactNode;
@@ -17,8 +19,25 @@ export const WorkingCard: React.FC<WorkingCardProps> = ({
   isExploring = false,
   lastActivity,
 }) => {
-  // Start collapsed by default
   const [isCollapsed, setIsCollapsed] = useState(true);
+  const [showShimmer, setShowShimmer] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    setShowShimmer(false);
+
+    if (timerRef.current) clearTimeout(timerRef.current);
+
+    if (isExploring) {
+      timerRef.current = setTimeout(() => setShowShimmer(true), SHIMMER_DELAY_MS);
+    }
+
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [lastActivity, isExploring]);
+
+  const shimmerActive = isExploring && showShimmer;
 
   return (
     <div className="working-card">
@@ -29,11 +48,11 @@ export const WorkingCard: React.FC<WorkingCardProps> = ({
           ▼
         </span>
         <div className="working-label-container">
-          <span className="working-label-primary">
+          <span className={`working-label-primary${shimmerActive ? " working-label-shimmer" : ""}`}>
             {isExploring ? "Working" : "Finished Working"}
           </span>
           {isCollapsed && lastActivity && (
-            <span className="working-label-secondary">
+            <span className={`working-label-secondary${shimmerActive ? " working-secondary-shimmer" : ""}`}>
               {lastActivity}
             </span>
           )}

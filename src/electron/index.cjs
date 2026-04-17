@@ -38,8 +38,6 @@ let initializePaprLoginIPC;
 let cleanupPaprLogin;
 let handlePaprAuthCallback;
 
-// Python dependencies IPC
-const { initializePythonDepsIPC } = require("./ipc/pythonDeps.cjs");
 
 /**
  * Check Python installation on Windows and notify user if missing
@@ -1434,8 +1432,6 @@ app.whenReady().then(async () => {
   // Initialize Papr Login IPC handlers
   initializePaprLoginIPC(customKeysStorage, settingsStorage);
 
-  // Initialize Python dependencies IPC handlers
-  initializePythonDepsIPC();
 
   // Check Python installation on Windows (for non-technical users)
   if (process.platform === 'win32') {

@@ -3,6 +3,7 @@
  * - Workspace file operations
  * - Folder opening
  * - Memory statistics
+ * - Schema listing for UI
  */
 
 import type { WebSocket } from "ws";
@@ -35,6 +36,8 @@ export async function setupMemoryHandlers(
       await handleChatStats(ws, message);
     } else if (message.type === "memory:list-workspace-files") {
       await handleListWorkspaceFiles(ws, message);
+    } else if (message.type === "memory:list-schemas") {
+      await handleListSchemas(ws, message);
     } else {
       sendError(ws, message.id, `Unknown memory message type: ${message.type}`);
     }
@@ -257,5 +260,79 @@ async function handleListWorkspaceFiles(
     });
   } catch (error) {
     sendError(ws, message.id, error as Error);
+  }
+}
+
+/**
+ * List Papr Memory schemas for the current namespace
+ */
+async function handleListSchemas(
+  ws: WebSocket,
+  message: WSMessage
+): Promise<void> {
+  try {
+    const { getApiKey } = await import("../../gateway/utils/keyResolver.js");
+    const apiKey = await getApiKey("PAPR_API_KEY");
+
+    if (!apiKey) {
+      sendResponse(ws, {
+        id: message.id,
+        success: true,
+        data: { schemas: [], error: "No PAPR_API_KEY configured" },
+      });
+      return;
+    }
+
+    const Papr = (await import("@papr/memory")).default;
+    const client = new Papr({ xAPIKey: apiKey, maxRetries: 1, timeout: 15000 });
+
+    const payload = message.payload as { statusFilter?: string } | undefined;
+    const response = await client.schemas.list({
+      status_filter: payload?.statusFilter as "draft" | "active" | "deprecated" | "archived" | undefined,
+    });
+
+    const responseData = response as { data?: Array<{
+      id?: string;
+      name?: string;
+      description?: string;
+      status?: string;
+      version?: string;
+      node_types?: Array<{ name?: string }> | Record<string, unknown>;
+      relationship_types?: Array<{ name?: string }> | Record<string, unknown>;
+    }> };
+
+    const schemas = (responseData.data ?? []).map((schema) => {
+      const nodeTypes = Array.isArray(schema.node_types)
+        ? schema.node_types.map((nt) => nt.name).filter(Boolean)
+        : Object.keys(schema.node_types ?? {});
+      const relTypes = Array.isArray(schema.relationship_types)
+        ? schema.relationship_types.map((rt) => rt.name).filter(Boolean)
+        : Object.keys(schema.relationship_types ?? {});
+
+      return {
+        id: schema.id,
+        name: schema.name,
+        description: schema.description,
+        status: schema.status,
+        version: schema.version,
+        nodeTypeCount: nodeTypes.length,
+        relationshipTypeCount: relTypes.length,
+        nodeTypeNames: nodeTypes,
+        relationshipTypeNames: relTypes,
+      };
+    });
+
+    sendResponse(ws, {
+      id: message.id,
+      success: true,
+      data: { schemas },
+    });
+  } catch (error) {
+    console.error("[Memory] Failed to list schemas:", error);
+    sendResponse(ws, {
+      id: message.id,
+      success: true,
+      data: { schemas: [], error: error instanceof Error ? error.message : "Failed to list schemas" },
+    });
   }
 }

@@ -28,6 +28,7 @@ const App = {
       const w = bar.style.width; bar.style.width = '0%'; requestAnimationFrame(() => bar.style.width = w);
     }), 80);
   },
+  JOB_ID: '2cafb2e9-696b-42db-98fa-5d605977123c',
   async generateRealBrief() {
     const btn = document.getElementById('gen-real-brief-btn');
     if (!btn) return;
@@ -36,26 +37,34 @@ const App = {
     btn.innerHTML = '<div class="spinner"></div>Generating...';
     
     try {
-      // Trigger the Daily Brief Generator job
-      const response = await fetch('/api/jobs/run', {
+      let response = await fetch('/api/jobs/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jobId: '2cafb2e9-696b-42db-98fa-5d605977123c',
-          wait: true
-        })
+        body: JSON.stringify({ jobId: this.JOB_ID, wait: true })
       });
+      
+      // Job doesn't exist — ask the agent to set it up
+      if (response.status === 404) {
+        btn.innerHTML = 'Opening chat...';
+        try {
+          window.paprAPI.invoke('chat.open', {
+            message: 'My Home dashboard needs a Daily Brief Generator job. Please create an agent job that generates a daily brief and saves it to the briefs table in its SQLite database ($JOB_DB). The brief_json should include: hero (date, title, subtitle, stats), sections (priorities, timeline, alerts, freeform). The job ID should be linked to my Home app.'
+          });
+        } catch (e) { /* paprAPI may not be available */ }
+        setTimeout(() => { btn.innerHTML = '✨ Generate My Real Brief'; btn.disabled = false; }, 2000);
+        return;
+      }
       
       const result = await response.json();
       
-      if (result.success) {
+      if (response.ok && result.status === 'completed') {
         btn.innerHTML = '✓ Generated! Reloading...';
-        // Reload the dashboard to show new data
         setTimeout(() => {
-          this.dates = []; // Clear cache
-          this.init(); // Reload
+          this.dates = [];
+          this.init();
         }, 1000);
       } else {
+        console.error('Brief generation failed:', result);
         btn.innerHTML = '✗ Failed - Try Chat';
         btn.disabled = false;
         setTimeout(() => {

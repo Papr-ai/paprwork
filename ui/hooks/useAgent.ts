@@ -10,13 +10,11 @@ import { useTabStore } from "../stores/tabStore";
 import { gateway } from "../src/lib/gateway";
 
 export function useAgent() {
-  const {
-    addMessage,
-    updateStreamingMessage,
-    finalizeStreamingMessage,
-    setSending,
-    setError,
-  } = useChatStore();
+  const addMessage = useChatStore((s) => s.addMessage);
+  const updateStreamingMessage = useChatStore((s) => s.updateStreamingMessage);
+  const finalizeStreamingMessage = useChatStore((s) => s.finalizeStreamingMessage);
+  const setSending = useChatStore((s) => s.setSending);
+  const setError = useChatStore((s) => s.setError);
 
   // ✅ FIX: Use Maps keyed by chatId to support parallel streaming
   const streamingMessageIdRef = useRef<Map<string, string>>(new Map());
@@ -377,8 +375,16 @@ export function useAgent() {
                     existingCall.toolName === "update_app"
                   ) {
                     docId = existingCall.args?.appId as string | undefined;
-                    docTitle = "App"; // Will be updated from tab if it exists
                     isApp = true;
+
+                    // Resolve title from existing tab if available
+                    if (docId) {
+                      const existingAppTab = useTabStore.getState().getTab(`app-${docId}`);
+                      docTitle = existingAppTab?.title || "App";
+                    } else {
+                      docTitle = "App";
+                    }
+
                     console.log("[useAgent] edit_app_file auto-open:", {
                       toolName: existingCall.toolName,
                       appId: docId,
@@ -423,6 +429,20 @@ export function useAgent() {
                       console.log(
                         `[useAgent] Auto-opened ${tabType} tab: ${artifactTabId} merged with ${chatTabId}, autoSwitch: ${autoSwitch}`,
                       );
+
+                      // If title is a placeholder, resolve actual app title from gateway
+                      if (isApp && docId && (docTitle === "App" || docTitle === "Artifact")) {
+                        void gateway
+                          .send("app:list", {})
+                          .then((appsResponse) => {
+                            const apps = appsResponse?.data as Array<{ id: string; title: string }> | undefined;
+                            const appInfo = apps?.find((a) => a.id === docId);
+                            if (appInfo?.title) {
+                              useTabStore.getState().updateTabTitle(artifactTabId, appInfo.title);
+                            }
+                          })
+                          .catch(() => {});
+                      }
                     }
                   } else {
                     console.warn("[useAgent] No docId found for auto-open:", {

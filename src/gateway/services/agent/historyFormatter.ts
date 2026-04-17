@@ -101,6 +101,20 @@ function extractContent(message: HistoryMessageLike): string | null {
     return message.content;
   }
 
+  // Handle structured array content from Papr Memory
+  // e.g. [{type: "thinking", thinking: "..."}, {type: "text", text: "..."}, {type: "tool_use", ...}]
+  if (Array.isArray(message.content)) {
+    const textParts = (message.content as Array<Record<string, unknown>>)
+      .filter((p) => p.type === "text" && typeof p.text === "string")
+      .map((p) => p.text as string);
+    if (textParts.length > 0) {
+      return textParts.join("");
+    }
+    // Array with no text parts (e.g. only tool_use) — return empty string so
+    // the message isn't skipped; tool calls will be extracted separately
+    return "";
+  }
+
   if (
     typeof message.content === "object" &&
     message.content !== null &&
@@ -121,13 +135,29 @@ function extractContent(message: HistoryMessageLike): string | null {
 
 function extractToolCalls(message: HistoryMessageLike): ToolCallLike[] {
   const candidate = message.toolCalls ?? message.tool_calls;
-  if (!Array.isArray(candidate)) {
-    return [];
+  if (Array.isArray(candidate)) {
+    return candidate.filter(
+      (entry): entry is ToolCallLike =>
+        typeof entry === "object" && entry !== null,
+    );
   }
-  return candidate.filter(
-    (entry): entry is ToolCallLike =>
-      typeof entry === "object" && entry !== null,
-  );
+
+  // Extract tool calls from Papr structured content array
+  // Format: [{type: "tool_use", id: "...", name: "...", input: {...}}]
+  if (Array.isArray(message.content)) {
+    const toolUseParts = (message.content as Array<Record<string, unknown>>)
+      .filter((p) => p.type === "tool_use")
+      .map((p) => ({
+        id: p.id as string,
+        name: p.name as string,
+        args: p.input ?? {},
+      }));
+    if (toolUseParts.length > 0) {
+      return toolUseParts;
+    }
+  }
+
+  return [];
 }
 
 // ---------------------------------------------------------------------------

@@ -3834,4 +3834,61 @@ ollama: (() => {
 
 ---
 
+### Enhancement 56: Service Connectors via Stripe Projects ✅ IMPLEMENTED
+**Added:** 2026-04-16
+**Problem:** When agents needed to provision cloud services (databases, hosting, auth, analytics) for jobs or mini-apps, they had to guide users through manual signup flows at each provider's website, then collect and store API keys — a multi-step process that non-technical users found confusing.
+**Solution:** Created `connect_service` tool wrapping Stripe Projects CLI, enabling single-tool-call provisioning of 18+ cloud services with automatic credential storage in the system keychain.
+**Implementation:**
+1. Created `connect_service` tool with 4 actions:
+   - `catalog` — Browse available providers and services from Stripe Projects catalog
+   - `add` — Provision a service, parse credentials from JSON output, auto-store in CustomKeysService
+   - `status` — Check currently provisioned services and their health
+   - `remove` — Deprovision a service
+2. Auto-install logic: checks for Stripe CLI and Projects plugin, installs if missing (brew/winget/apt)
+3. Authentication detection: returns clear instructions if user needs to run `stripe login` first
+4. System prompt section teaching agent when to use `connect_service` vs manual credential flow
+**Supported Providers:**
+- Databases: Neon, Supabase, Turso, PlanetScale, Railway
+- Hosting: Vercel, Cloudflare, Railway, Fly.io, Runloop
+- Auth: Clerk, Supabase, Neon
+- Analytics: PostHog, Amplitude, Mixpanel
+- AI: OpenRouter, Hugging Face, Inngest
+- Vector DB: Chroma
+- Search: Firecrawl
+**Decision Tree (Agent Guidance):**
+1. Service in Stripe catalog? → `connect_service({ action: "add", provider, service })` (fastest)
+2. Not in catalog? → Guide manual setup, use `request_key()` or Settings
+3. User already has credentials? → `set_key()` directly, no Stripe needed
+**Usage:**
+```typescript
+// Provision a database
+connect_service({ action: "add", provider: "neon", service: "database" })
+// Returns: { keys_stored: ["NEON_DATABASE_URL"], message: "Provisioned neon/database..." }
+
+// Use in jobs
+create_job({ command: "python3 scraper.py --db '${NEON_DATABASE_URL}'" })
+```
+**Security:**
+- Credentials parsed server-side from CLI JSON output — values never pass through LLM context
+- Stored in system keychain via CustomKeysService (same encryption as all custom keys)
+- Stripe auth is browser-based OAuth (one-time, no Stripe API keys stored locally)
+**Files Created:**
+- `src/core/tools/connectors.ts` — connect_service tool implementation
+**Files Changed:**
+- `src/core/tools/index.ts` — Registered connectors tool in allTools, toolsByCategory, re-exports
+- `src/core/agents/SystemPrompt.ts` — Added `buildConnectorsSection()` with decision tree and provider catalog
+**Impact:**
+- **Before:** Agent guides user through manual signup → copy API key → paste in Settings → configure job (5+ steps, confusing for non-devs)
+- **After:** `connect_service({ action: "add", provider: "neon", service: "database" })` → credentials auto-stored → use `${KEY_NAME}` in jobs (1 tool call)
+- **Non-dev friendly:** Auto-installs CLI, detects auth status, provides clear instructions
+- **Fallback:** If service not in Stripe catalog, agent falls back to manual credential flow (request_key, set_key, Settings UI)
+**Testing:**
+- `connect_service({ action: "catalog" })` → verify returns provider list
+- `connect_service({ action: "add", provider: "neon", service: "database" })` → verify provisions + stores key
+- `connect_service({ action: "status" })` → verify shows provisioned services
+- Without Stripe CLI → verify auto-install attempt
+- Without auth → verify returns `needs_auth` with instructions
+
+---
+
 **This file is living documentation. Update it as we learn and make decisions.**

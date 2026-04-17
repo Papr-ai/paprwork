@@ -178,6 +178,7 @@ export function useAppStatePersistence() {
         historyIndex,
         onboardingStep1Completed: onboardingStep1,
         onboardingStep2Completed: onboardingStep2,
+        onboardingStep3Completed: false,
         onboardingDismissed,
         lastSavedAt: new Date().toISOString(),
       }).catch((error: Error) => {
@@ -206,6 +207,7 @@ export function useAppStatePersistence() {
         historyIndex: useTabStore.getState().historyIndex,
         onboardingStep1Completed: onboardingStep1,
         onboardingStep2Completed: onboardingStep2,
+        onboardingStep3Completed: false,
         onboardingDismissed,
         lastSavedAt: new Date().toISOString(),
       }).catch((error: Error) => {

@@ -78,14 +78,22 @@ export class PaprMemoryProvider implements IStorageProvider {
         customMetadata.incomplete = true;
       }
 
-      // Serialize rich content (thinking, toolCalls, sequence) into content
-      // so it can be reconstructed when loading from PAPR
-      const richContent = message.role === "assistant" && (message.thinking || message.toolCalls || message.sequence)
+      // Build lightweight rich content for PAPR sync.
+      // Strip sequence (redundant, only for local UI reconstruction) and thinking
+      // (only needed for local UI display, already in SQLite).
+      // Truncate tool results to match server-side truncation (500 chars).
+      // This keeps payloads under Parse Server's body size limit (~100KB).
+      const toolCalls = message.toolCalls ?? [];
+      const richContent = message.role === "assistant" && toolCalls.length > 0
         ? JSON.stringify({
             text: message.content,
-            thinking: message.thinking,
-            toolCalls: message.toolCalls,
-            sequence: message.sequence,
+            toolCalls: toolCalls.map((tc) => ({
+              id: tc.id,
+              name: tc.name,
+              args: tc.args,
+              result: tc.result ? String(tc.result).substring(0, 500) : undefined,
+              status: tc.status,
+            })),
             model: message.model,
           })
         : message.content;
@@ -143,8 +151,7 @@ export class PaprMemoryProvider implements IStorageProvider {
         },
       );
 
-      // IMPORTANT: PAPR returns messages in REVERSE chronological order (newest first)
-      // Reverse to chronological order (oldest first) for UI display
+      // PAPR returns newest first (-createdAt order), reverse to chronological for UI
       return response.messages.reverse().map((msg) => {
         // Handle three content formats:
         // 1. Old format: JSON string '{"text": "...", "thinking": "...", "toolCalls": [...]}'
@@ -235,18 +242,16 @@ export class PaprMemoryProvider implements IStorageProvider {
       if (response.context_for_llm) {
         // PAPR provides pre-formatted context
         const summary = response.summaries;
-        // Keep last 50 messages for proper recent context
-        // IMPORTANT: PAPR returns messages in REVERSE chronological order (newest first)
-        // We need to reverse them to chronological order (oldest first) for LLM
-        const recentMessages = response.messages.slice(-50).reverse();
+        // PAPR returns newest first (-createdAt), limit=50 applied server-side
+        // slice(0, 50) is a safety cap, reverse() puts in chronological order for LLM
+        const recentMessages = response.messages.slice(0, 50).reverse();
         
-        console.log(`[PaprMemoryProvider] 📤 Returning ${recentMessages.length} recent messages (reversed to chronological order)`);
+        console.log(`[PaprMemoryProvider] 📤 Returning ${recentMessages.length} recent messages`);
         
-        // Log first and last after reversing to verify order
         if (recentMessages.length > 0) {
           const first = recentMessages[0] as any;
           const last = recentMessages[recentMessages.length - 1] as any;
-          console.log(`[PaprMemoryProvider] ✅ After reverse - First: [${first.timestamp || first.createdAt}], Last: [${last.timestamp || last.createdAt}]`);
+          console.log(`[PaprMemoryProvider] ✅ First: [${first.timestamp || first.createdAt}] ${first.role}, Last: [${last.timestamp || last.createdAt}] ${last.role}`);
         }
 
         if (summary) {
@@ -270,9 +275,7 @@ export class PaprMemoryProvider implements IStorageProvider {
         }
       }
 
-      // No summary, return all messages
-      // IMPORTANT: PAPR returns messages in REVERSE chronological order (newest first)
-      // Reverse to chronological order (oldest first) for LLM
+      // No summary — reverse from newest-first to chronological for LLM
       return response.messages.reverse().map((m: any) => ({
         role: m.role,
         content: m.content,

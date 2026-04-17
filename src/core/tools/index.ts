@@ -19,6 +19,7 @@ import { planningTools } from "./planning.js";
 import { recipeTools } from "./recipes.js";
 import { keyManagementTools } from "./keyManagement.js";
 import { chatHistoryTools } from "./chatHistory.js";
+import { connectorsTools } from "./connectors.js";
 
 /**
  * All available tools
@@ -38,6 +39,7 @@ export const allTools = [
   ...keyManagementTools,
   ...recipeTools,
   ...chatHistoryTools,
+  ...connectorsTools,
 ];
 
 /**
@@ -57,6 +59,7 @@ export const toolsByCategory = {
   keyManagement: keyManagementTools,
   recipes: recipeTools,
   chatHistory: chatHistoryTools,
+  connectors: connectorsTools,
 } as const;
 
 /**
@@ -141,6 +144,7 @@ export {
 export { planningTools, createPlanTool, updatePlanTool, deletePlanTool } from "./planning.js";
 export { writeRecipeTool, readRecipeTool, evaluateRunTool, listEvaluationsTool } from "./recipes.js";
 export { chatHistoryTools, getFullToolResultTool } from "./chatHistory.js";
+export { connectorsTools, connectServiceTool } from "./connectors.js";
 
 export {
   keyManagementTools,

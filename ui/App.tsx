@@ -10,7 +10,6 @@ import { TabBar } from "./components/Tabs/TabBar";
 import { ContentArea } from "./components/Layout/ContentArea";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
 import { AuthWall } from "./components/Auth/AuthWall";
-import { PythonDepsSetup } from "./components/Setup/PythonDepsSetup";
 import { useChat } from "./hooks/useChat";
 import { useTabs } from "./hooks/useTabs";
 import { useTabStore } from "./stores/tabStore";
@@ -309,7 +308,6 @@ export function App() {
 
   return (
     <>
-      <PythonDepsSetup />
       <AppLayout
         sidebar={<Sidebar />}
         topBar={<TabBar />}

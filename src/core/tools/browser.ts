@@ -3,8 +3,6 @@ import { z } from "zod";
 import type { Browser, Page } from "playwright";
 import { getApiKeysForSanitization, sanitizeToolOutput } from "./security.js";
 import { wrapUntrustedContent } from "./contentProvenance.js";
-// Use persistent Python worker for 10-20x better performance
-import { executePythonForHtmlParsing } from "./pythonWorker.js";
 
 interface BrowserSessionState {
   browser: Browser;
@@ -127,22 +125,6 @@ const browserLogsSchema = z.object({
 
 const browserScriptSchema = z.object({
   script: z.string().min(1),
-});
-
-const parseHtmlSchema = z.object({
-  code: z
-    .string()
-    .min(1)
-    .describe(
-      "Python code using BeautifulSoup to extract data. The page HTML is in the 'html' variable. " +
-        "Example: soup = BeautifulSoup(html, 'lxml'); result = {'title': soup.find('h1').text}. " +
-        "MUST be valid Python code, NOT a natural language prompt. Available: BeautifulSoup, json, lxml.",
-    ),
-  timeout: z
-    .number()
-    .optional()
-    .default(30000)
-    .describe("Max execution time in ms"),
 });
 
 const waitForSchema = z.object({
@@ -406,36 +388,6 @@ export const browserEvaluateScriptTool = createTool({
   },
 });
 
-export const browserParseHtmlTool = createTool({
-  id: "browser_parse_html",
-  description:
-    "Execute Python code with BeautifulSoup to extract structured data from the current page HTML. " +
-    "IMPORTANT: You must provide actual Python code, not a prompt. " +
-    "Example code: soup = BeautifulSoup(html, 'lxml'); result = [{'title': a.text, 'url': a['href']} for a in soup.find_all('a', class_='result')]",
-  inputSchema: parseHtmlSchema,
-  execute: async (input) => {
-    const args =
-      (input as { context?: z.infer<typeof parseHtmlSchema> }).context ?? input;
-    await requestBrowserPermission("parse_html");
-    const session = await getBrowserSession();
-    const html = await session.page.content();
-
-    const result = await executePythonForHtmlParsing(
-      args.code,
-      { html },
-      args.timeout,
-    );
-
-    return sanitizeBrowserData({
-      success: true,
-      data: { result, url: session.page.url() },
-    }) as {
-      success: boolean;
-      data: { result: unknown; url: string };
-    };
-  },
-});
-
 export const browserWaitForTool = createTool({
   id: "browser_wait_for",
   description:
@@ -583,8 +535,6 @@ export const browserTools = [
   browserConsoleLogsTool,
   browserNetworkLogsTool,
   browserEvaluateScriptTool,
-  // Phase 1 enhancements (browser-use inspired)
-  browserParseHtmlTool,
   browserWaitForTool,
   browserFillFormTool,
   browserScrollTool,

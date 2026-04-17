@@ -84,6 +84,7 @@ export class AppService {
   private initialized: boolean;
   private watchers: Map<string, FSWatcher>;
   private debounceTimers: Map<string, NodeJS.Timeout>;
+  private pendingDefaultJobs: Array<{ sourceDir: string; targetDir: string; appId: string }>;
 
   constructor() {
     const homeDir = os.homedir();
@@ -101,6 +102,7 @@ export class AppService {
     this.initialized = false;
     this.watchers = new Map();
     this.debounceTimers = new Map();
+    this.pendingDefaultJobs = [];
   }
 
   private async migrateLegacyIfNeeded(): Promise<void> {
@@ -183,7 +185,13 @@ export class AppService {
 
         // Check if app already exists (both in registry and on disk)
         if (this.apps.has(appId)) {
-          console.log(`[AppService] Default app already in registry: ${appId}`);
+          const targetDir2 = path.join(this.appsDir, appId);
+
+          // Check if bundled version is newer and update app files if so
+          await this.updateDefaultAppIfNewer(sourceDir, targetDir2, appId);
+
+          // Ensure the associated job exists (handles upgrades)
+          await this.installDefaultJobForApp(sourceDir, targetDir2, appId);
           continue;
         }
 
@@ -247,6 +255,9 @@ export class AppService {
         installedCount++;
         
         console.log(`[AppService] Registered default app: ${appId} - ${app.title}`);
+
+        // Install associated default job if bundled with the app
+        await this.installDefaultJobForApp(sourceDir, targetDir, appId);
       }
 
       // Save apps index if any apps were installed
@@ -257,6 +268,165 @@ export class AppService {
     } catch (error) {
       console.error("[AppService] Failed to install default apps:", error);
       // Don't throw - default apps are nice-to-have, not critical
+    }
+  }
+
+  /**
+   * Install a default job bundled with an app (default-job.json) and link its
+   * database into the app's data-sources.json so queries work immediately.
+   *
+   * IMPORTANT: This is deferred so it doesn't trigger a full JobsService.initialize()
+   * during AppService init — with 300+ jobs that scan takes longer than the
+   * supervisor health-check timeout, causing an infinite restart loop.
+   */
+  private async installDefaultJobForApp(
+    sourceDir: string,
+    targetDir: string,
+    appId: string,
+  ): Promise<void> {
+    const jobDefPath = path.join(sourceDir, "default-job.json");
+    try {
+      await fs.access(jobDefPath);
+    } catch {
+      return; // No default job bundled — nothing to do
+    }
+
+    // Schedule deferred installation after Gateway finishes all service inits.
+    // JobsService.initialize() is called by Gateway AFTER AppService, so we
+    // wait for it to be ready instead of triggering a redundant heavy init.
+    this.pendingDefaultJobs.push({ sourceDir, targetDir, appId });
+  }
+
+  /**
+   * Run deferred default-job installations. Called by Gateway after
+   * JobsService has been fully initialized.
+   */
+  async installPendingDefaultJobs(): Promise<void> {
+    if (this.pendingDefaultJobs.length === 0) return;
+
+    const pending = [...this.pendingDefaultJobs];
+    this.pendingDefaultJobs = [];
+
+    for (const { sourceDir, targetDir, appId } of pending) {
+      try {
+        await this.doInstallDefaultJobForApp(sourceDir, targetDir, appId);
+      } catch (err) {
+        console.warn(`[AppService] Failed to install default job for app ${appId}:`, err);
+      }
+    }
+  }
+
+  private async doInstallDefaultJobForApp(
+    sourceDir: string,
+    targetDir: string,
+    appId: string,
+  ): Promise<void> {
+    const jobDefPath = path.join(sourceDir, "default-job.json");
+    const jobDefContent = await fs.readFile(jobDefPath, "utf-8");
+    const jobDef = JSON.parse(jobDefContent) as {
+      id: string;
+      name: string;
+      type: string;
+      command?: string;
+      schedule?: Record<string, unknown>;
+      retries?: Record<string, unknown>;
+      outputMode?: string;
+      memoryPolicy?: string;
+    };
+
+    const { getJobsService } = await import("./JobsService.js");
+    const jobsService = getJobsService();
+    await jobsService.initialize();
+
+    const { installed, dbPath } = await jobsService.installDefaultJob(
+      jobDef as Parameters<typeof jobsService.installDefaultJob>[0],
+      [
+        `CREATE TABLE IF NOT EXISTS briefs (
+          date TEXT PRIMARY KEY,
+          brief_json TEXT NOT NULL,
+          created_at TEXT DEFAULT (datetime('now'))
+        )`,
+      ],
+    );
+
+    // Update data-sources.json with the resolved dbPath
+    const dataSourcesPath = path.join(targetDir, "data-sources.json");
+    try {
+      const dsContent = await fs.readFile(dataSourcesPath, "utf-8");
+      const dataSources = JSON.parse(dsContent) as Array<{
+        jobId?: string;
+        dbPath?: string;
+        [key: string]: unknown;
+      }>;
+
+      let updated = false;
+      for (const ds of dataSources) {
+        if (ds.jobId === jobDef.id && (!ds.dbPath || ds.dbPath === "")) {
+          ds.dbPath = dbPath;
+          updated = true;
+        }
+      }
+
+      if (updated) {
+        await fs.writeFile(dataSourcesPath, JSON.stringify(dataSources, null, 2));
+        console.log(`[AppService] Linked data-source dbPath for app ${appId} → ${dbPath}`);
+      }
+    } catch (dsErr) {
+      console.warn(`[AppService] Could not update data-sources.json for ${appId}:`, dsErr);
+    }
+
+    if (installed) {
+      console.log(`[AppService] Installed default job ${jobDef.id} for app ${appId}`);
+    }
+  }
+
+  /**
+   * Compare bundled metadata version with installed version and re-copy
+   * app files if the bundle is newer (preserves user's data-sources.json).
+   */
+  private async updateDefaultAppIfNewer(
+    sourceDir: string,
+    targetDir: string,
+    appId: string,
+  ): Promise<void> {
+    try {
+      const srcMeta = JSON.parse(
+        await fs.readFile(path.join(sourceDir, "metadata.json"), "utf-8"),
+      ) as { version?: number };
+      const bundledVersion = srcMeta.version ?? 0;
+      if (bundledVersion <= 0) return;
+
+      let installedVersion = 0;
+      try {
+        const tgtMeta = JSON.parse(
+          await fs.readFile(path.join(targetDir, "metadata.json"), "utf-8"),
+        ) as { version?: number };
+        installedVersion = tgtMeta.version ?? 0;
+      } catch {
+        // metadata missing — treat as version 0
+      }
+
+      if (bundledVersion <= installedVersion) return;
+
+      // Preserve user-specific files before overwrite
+      let savedDataSources: string | null = null;
+      const dsPath = path.join(targetDir, "data-sources.json");
+      try {
+        savedDataSources = await fs.readFile(dsPath, "utf-8");
+      } catch { /* no data-sources to preserve */ }
+
+      await fs.cp(sourceDir, targetDir, { recursive: true });
+
+      // Restore user's data-sources.json (may have custom dbPath)
+      if (savedDataSources) {
+        await fs.writeFile(dsPath, savedDataSources);
+      }
+
+      console.log(
+        `[AppService] Updated default app ${appId} from v${installedVersion} → v${bundledVersion}`,
+      );
+    } catch (err) {
+      console.warn(`[AppService] Could not check/update default app ${appId}:`, err);
     }
   }
 
@@ -760,6 +930,29 @@ export class AppService {
       await fs.mkdir(dir, { recursive: true });
       // Flush to disk immediately to prevent race conditions
       await fs.writeFile(filePath, content, { flush: true });
+
+      // Sync icon to registry when icon-bearing files are written
+      const basename = path.basename(filename);
+      if (basename === "index.html") {
+        const extracted = this.extractFaviconFromHTML(content);
+        if (extracted && extracted !== app.icon) {
+          app.icon = extracted;
+        }
+      } else if (["logo.svg", "icon.svg", "favicon.svg"].includes(basename)) {
+        const trimmed = content.trim();
+        if (trimmed.startsWith("<svg") && trimmed.includes("</svg>")) {
+          let svg = trimmed.replace(/"/g, "'");
+          svg = svg
+            .replace(/width=['"][^'"]*['"]/i, "width='14'")
+            .replace(/height=['"][^'"]*['"]/i, "height='14'");
+          if (!svg.includes("width=")) {
+            svg = svg.replace("<svg", "<svg width='14' height='14'");
+          }
+          if (svg !== app.icon) {
+            app.icon = svg;
+          }
+        }
+      }
 
       // Update app's updatedAt
       app.updatedAt = new Date().toISOString();

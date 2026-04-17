@@ -132,6 +132,10 @@ async function initializeServices(): Promise<void> {
     await initializeJobsService();
     console.log("[Gateway] JobsService initialized");
 
+    // Now that JobsService is ready, install any default jobs deferred by AppService
+    const { getAppService } = await import("./services/AppService.js");
+    await getAppService().installPendingDefaultJobs();
+
     console.log("[Gateway] Initializing SkillService...");
     await initializeSkillService();
     console.log("[Gateway] SkillService initialized");
@@ -158,16 +162,6 @@ async function initializeServices(): Promise<void> {
       `[Gateway] Storage mode: ${storageMode} (keys will load on demand)`,
     );
 
-    // Auto-install Python dependencies (bs4, lxml) if missing — non-blocking
-    import("../core/utils/pythonDependencies.js")
-      .then(async ({ checkPythonDependencies, autoInstallPythonDependencies }) => {
-        const status = await checkPythonDependencies();
-        if (status.pythonInstalled && (!status.beautifulSoupInstalled || !status.lxmlInstalled)) {
-          console.log("[Gateway] Auto-installing missing Python deps (bs4/lxml)...");
-          await autoInstallPythonDependencies((p) => console.log(`[Gateway] Python deps: ${p.message}`));
-        }
-      })
-      .catch((err) => console.warn("[Gateway] Python dep check skipped:", err.message));
   } catch (error) {
     console.error("[Gateway] Failed to initialize services:", error);
     throw error;
@@ -319,7 +313,7 @@ async function startGateway(): Promise<void> {
       );
     }
 
-    app.use(express.json());
+    app.use(express.json({ limit: "5mb" }));
 
     app.get("/api/db/schema", async (req, res) => {
       try {

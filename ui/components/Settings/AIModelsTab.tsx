@@ -1,59 +1,18 @@
 /**
- * AIModelsTab - AI model configuration with Papr AI proxy toggle + provider cards
- * "I want AI to work" — one toggle for instant access, or bring your own keys
+ * AIModelsTab - AI model configuration with Papr account + provider cards
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { useCustomKeys } from "../../hooks/useCustomKeys";
 import { OAuthSection } from "./OAuthSection";
 import { PaprLoginSection } from "./PaprLoginSection";
-import { gateway } from "../../src/lib/gateway";
-
-interface PaprAIStatus {
-  enabled: boolean;
-  loading: boolean;
-}
 
 export function AIModelsTab() {
   const { keys, loading, addKey, updateKey, deleteKey, getKeyValue, loadKeys } = useCustomKeys();
-  const [paprAI, setPaprAI] = useState<PaprAIStatus>({ enabled: false, loading: true });
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [apiKeyInputs, setApiKeyInputs] = useState<Record<string, string>>({});
   const [showKeyValue, setShowKeyValue] = useState<Record<string, boolean>>({});
   const [savingKey, setSavingKey] = useState<string | null>(null);
-
-  // Check if user is logged into Papr (required for proxy)
-  const paprKey = keys.find(k => k.name === "PAPR_API_KEY");
-  const hasPaprKey = !!paprKey;
-
-  // Load Papr AI proxy preference
-  useEffect(() => {
-    loadPaprAIStatus();
-  }, []);
-
-  const loadPaprAIStatus = async () => {
-    try {
-      const settings = await gateway.send("settings:get", {});
-      setPaprAI({
-        enabled: settings?.paprAIProxy?.enabled ?? false,
-        loading: false,
-      });
-    } catch {
-      setPaprAI({ enabled: false, loading: false });
-    }
-  };
-
-  const togglePaprAI = async () => {
-    const newEnabled = !paprAI.enabled;
-    setPaprAI(prev => ({ ...prev, enabled: newEnabled }));
-    try {
-      await gateway.send("settings:save-ui-preferences", {
-        paprAIProxy: { enabled: newEnabled },
-      });
-    } catch {
-      setPaprAI(prev => ({ ...prev, enabled: !newEnabled }));
-    }
-  };
 
   const getProviderStatus = (keyName: string) => {
     const key = keys.find(k => k.name === keyName);
@@ -134,60 +93,15 @@ export function AIModelsTab() {
 
   return (
     <div className="settings-content settings-content--full-width">
-      {/* Papr Login / Account Section */}
-
-        <div className="settings-section">
-          <PaprLoginSection onApiKeyReceived={() => loadKeys()} />
-        </div>
-
-      {/* Hero: Papr AI Proxy Toggle */}
+      {/* Papr Account */}
       <div className="settings-section">
-        <div className="ai-proxy-card">
-          <div className="ai-proxy-card__header">
-            <div className="ai-proxy-card__info">
-              <div className="ai-proxy-card__icon">⚡</div>
-              <div>
-                <h3 className="ai-proxy-card__title">Use AI via Papr</h3>
-                <p className="ai-proxy-card__description">
-                  Use GPT, Claude & Gemini through your Papr account — no API keys needed.
-                </p>
-              </div>
-            </div>
-            <label className="ai-toggle">
-              <input
-                type="checkbox"
-                checked={paprAI.enabled}
-                onChange={togglePaprAI}
-                disabled={!hasPaprKey || paprAI.loading}
-              />
-              <span className="ai-toggle__slider" />
-            </label>
-          </div>
-
-          {!hasPaprKey && (
-            <p className="ai-proxy-card__note">
-              Login to Papr above to enable this feature.
-            </p>
-          )}
-
-          {paprAI.enabled && hasPaprKey && (
-            <div className="ai-proxy-card__active">
-              <span className="ai-proxy-card__active-dot" />
-              AI requests are routed through your Papr account
-            </div>
-          )}
-        </div>
+        <PaprLoginSection onApiKeyReceived={() => loadKeys()} />
       </div>
 
       {/* Divider */}
       <div className="ai-divider">
         <span className="ai-divider__text">or bring your own keys</span>
       </div>
-
-      {/* Priority explanation */}
-      <p className="ai-priority-note">
-        Priority: Own API key → OAuth → Papr AI
-      </p>
 
       {/* Provider Cards */}
       <div className="ai-providers-grid">
@@ -203,10 +117,6 @@ export function AIModelsTab() {
                   <span className="ai-provider-badge ai-provider-badge--connected">
                     ✓ {status.isOAuth ? "OAuth" : "API Key"}
                   </span>
-                ) : paprAI.enabled ? (
-                  <span className="ai-provider-badge ai-provider-badge--proxy">
-                    via Papr
-                  </span>
                 ) : (
                   <span className="ai-provider-badge ai-provider-badge--none">
                     Not configured
@@ -218,7 +128,6 @@ export function AIModelsTab() {
                 {provider.models.join(" · ")}
               </div>
 
-              {/* OAuth section for OpenAI/Claude */}
               {provider.hasOAuth && (
                 <OAuthSection
                   provider={provider.id as "openai" | "anthropic"}
@@ -229,7 +138,6 @@ export function AIModelsTab() {
                 />
               )}
 
-              {/* API Key section for Google (no OAuth) */}
               {!provider.hasOAuth && (
                 <div className="ai-provider-card__apikey">
                   {status.hasKey ? (
