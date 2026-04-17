@@ -114,13 +114,24 @@ export function JobsView() {
   };
 
   const formatRelativeTime = (isoString?: string): string => {
-    if (!isoString) return "Never";
-    const seconds = Math.floor((Date.now() - new Date(isoString).getTime()) / 1000);
+    if (!isoString) return "";
+    const d = new Date(isoString);
+    if (Number.isNaN(d.getTime())) return "";
+    const seconds = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (seconds < 0) return "";
     if (seconds < 60) return "Just now";
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
     if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
     if (seconds < 604800) return `${Math.floor(seconds / 86400)}d ago`;
     return `${Math.floor(seconds / 604800)}w ago`;
+  };
+
+  const lastRunLabel = (job: JobRecord): string => {
+    const ran = formatRelativeTime(job.lastRunAt);
+    if (ran) return ran;
+    const updated = formatRelativeTime(job.updatedAt);
+    if (updated) return `Updated ${updated}`;
+    return "Never run";
   };
 
   const formatNextRun = (job: JobRecord): string => {
@@ -137,17 +148,67 @@ export function JobsView() {
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   };
 
-  const scheduleLabel = (job: JobRecord): string => {
-    const s = job.schedule;
-    if (!s) return "";
-    if (s.cron) return s.cron;
-    if (s.intervalMs) {
-      const sec = s.intervalMs / 1000;
-      if (sec < 60) return `Every ${sec}s`;
-      if (sec < 3600) return `Every ${sec / 60}m`;
-      return `Every ${sec / 3600}h`;
+  const humanCron = (cron: string): string => {
+    const parts = cron.trim().split(/\s+/);
+    if (parts.length < 5) return cron;
+    const [min, hour, dom, mon, dow] = parts;
+
+    const fmtTime = (h: string, m: string): string => {
+      const hr = parseInt(h, 10);
+      const mn = parseInt(m, 10);
+      if (Number.isNaN(hr)) return "";
+      const ampm = hr >= 12 ? "PM" : "AM";
+      const h12 = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
+      return mn === 0 ? `${h12} ${ampm}` : `${h12}:${String(mn).padStart(2, "0")} ${ampm}`;
+    };
+
+    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const monNames = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const time = fmtTime(hour, min);
+
+    if (dom === "*" && mon === "*" && dow === "*") {
+      if (hour === "*" && min === "*") return "Every minute";
+      if (hour === "*") return `Every hour at :${min.padStart(2, "0")}`;
+      return `Daily at ${time}`;
     }
-    return "Scheduled";
+    if (dom === "*" && mon === "*" && dow !== "*") {
+      const days = dow.split(",").map((d) => dayNames[parseInt(d, 10)] ?? d).join(", ");
+      return `${days} at ${time}`;
+    }
+    if (dow === "*" && mon === "*" && dom !== "*") {
+      return `${dom}${dom === "1" ? "st" : dom === "2" ? "nd" : dom === "3" ? "rd" : "th"} of month at ${time}`;
+    }
+    if (dom !== "*" && mon !== "*") {
+      const m = monNames[parseInt(mon, 10)] ?? mon;
+      return `${m} ${dom} at ${time}`;
+    }
+    return cron;
+  };
+
+  const triggerLabel = (job: JobRecord): string => {
+    const s = job.schedule;
+    const deps = job.dependsOn ?? [];
+
+    if (s?.enabled) {
+      if (s.cron) return humanCron(s.cron);
+      if (s.intervalMs) {
+        const sec = s.intervalMs / 1000;
+        if (sec < 60) return `Every ${sec}s`;
+        if (sec < 3600) return `Every ${Math.round(sec / 60)}m`;
+        if (sec < 86400) return `Every ${Math.round(sec / 3600)}h`;
+        return `Every ${Math.round(sec / 86400)}d`;
+      }
+      if (s.atTime) return `At ${s.atTime}`;
+      return "Scheduled";
+    }
+    if (deps.length > 0) {
+      const depNames = deps.map((d) => {
+        const depJob = jobs.find((j) => j.id === d.jobId);
+        return depJob ? depJob.name : d.jobId.slice(0, 8);
+      });
+      return `After ${depNames.join(", ")}`;
+    }
+    return "";
   };
 
   const renderJobRow = (job: JobRecord) => {
@@ -171,13 +232,15 @@ export function JobsView() {
             <span className="jv2-type">{job.type}</span>
           </div>
           <div className="jv2-row-right">
-            {job.schedule?.enabled && (
-              <span className="jv2-sched">{scheduleLabel(job)}</span>
+            {triggerLabel(job) && (
+              <span className={`jv2-trigger ${job.dependsOn?.length ? "jv2-trigger--dep" : ""}`}>
+                {triggerLabel(job)}
+              </span>
             )}
             {isWaiting && (
               <span className="jv2-badge jv2-badge--waiting">Awaiting approval</span>
             )}
-            <span className="jv2-time">{formatRelativeTime(job.lastRunAt)}</span>
+            <span className="jv2-time">{lastRunLabel(job)}</span>
             <div className="jv2-actions" onClick={(e) => e.stopPropagation()}>
               {isActive ? (
                 <button

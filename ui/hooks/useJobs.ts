@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { gateway } from "../src/lib/gateway";
 
 export type JobType =
@@ -82,6 +82,12 @@ export interface JobGraph {
   edges: JobGraphEdge[];
 }
 
+function jobsFingerprint(jobs: JobRecord[]): string {
+  return jobs
+    .map((j) => `${j.id}:${j.status}:${j.updatedAt}:${j.lastRunAt ?? ""}:${j.exitCode ?? ""}`)
+    .join("|");
+}
+
 export function useJobs() {
   const [jobs, setJobs] = useState<JobRecord[]>([]);
   const [graph, setGraph] = useState<JobGraph | null>(null);
@@ -89,17 +95,29 @@ export function useJobs() {
   const [logsByJobId, setLogsByJobId] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fingerprintRef = useRef("");
+  const initialLoadDone = useRef(false);
 
-  const loadJobs = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const loadJobs = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const response = await gateway.send("jobs:list");
-      setJobs((response.data as JobRecord[]) ?? []);
+      const incoming = (response.data as JobRecord[]) ?? [];
+      const fp = jobsFingerprint(incoming);
+      if (fp !== fingerprintRef.current) {
+        fingerprintRef.current = fp;
+        setJobs(incoming);
+      }
+      if (!silent) setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load jobs");
+      if (!silent) {
+        setError(err instanceof Error ? err.message : "Failed to load jobs");
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -183,10 +201,11 @@ export function useJobs() {
   }, []);
 
   useEffect(() => {
-    void loadJobs();
+    void loadJobs(false);
     void loadGraph();
+    initialLoadDone.current = true;
     const timer = setInterval(() => {
-      void loadJobs();
+      void loadJobs(true);
     }, 10000);
 
     const handler = (

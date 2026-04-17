@@ -976,6 +976,7 @@ export class JobsService {
       status === "cancelled"
         ? {
             completedAt: now,
+            lastRunAt: existing.lastRunAt ?? now,
             // Clear retry tracking on terminal states (if not overridden by updates)
             currentAttempt: updates.currentAttempt,
             maxAttempts: updates.maxAttempts,
