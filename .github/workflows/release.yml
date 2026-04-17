@@ -75,7 +75,7 @@ jobs:
         with:
           name: mac-builds
           path: |
-            release/*.dmg
+            release/*.pkg
             release/*.zip
           if-no-files-found: error
           retention-days: 5
