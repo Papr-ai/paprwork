@@ -60,8 +60,12 @@ async function syncOAuthTokenToApiKeys(
     return;
   }
 
-  // Strip ALL whitespace including newlines in the middle (Claude tokens wrap across lines)
-  const cleanToken = accessToken.replace(/\s+/g, "");
+  // Aggressively strip: ANSI codes, whitespace, zero-width chars, non-token chars
+  const cleanToken = accessToken
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+    .replace(/\x1b\][^\x07]*\x07/g, "")
+    .replace(/[\s\u00A0\u200B\u200C\u200D\uFEFF]/g, "")
+    .replace(/[^a-zA-Z0-9_-]/g, "");
 
   const keyName =
     provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
@@ -404,15 +408,19 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
     }
   });
 
-  // Claude OAuth handlers (direct PKCE flow, same pattern as OpenAI)
+  // Claude OAuth handlers
+  // `claude setup-token` needs a real TTY (uses Ink for interactive input).
+  // Flow: (1) check existing credentials, (2) ensure CLI installed, (3) open
+  // a real terminal window with the command, (4) UI shows paste field for
+  // user to copy token from terminal and paste it.
   ipcMain.handle("auth:claude:start-oauth", async () => {
     try {
-      console.log("[OAuth IPC] Starting Claude OAuth (direct PKCE flow)");
+      console.log("[OAuth IPC] Starting Claude OAuth flow");
 
-      // Step 0: Check for existing token in Claude CLI storage (Keychain/files)
+      // Step 0: Check for existing token in Keychain / credential files
       const existingToken = await claudeSetupTokenService!.readTokenFromCLIStorage();
       if (existingToken) {
-        console.log("[OAuth IPC] Found existing Claude token in CLI storage — using it");
+        console.log("[OAuth IPC] Found existing Claude token in CLI storage");
         const tokenInput = {
           provider: "anthropic" as const,
           accessToken: existingToken,
@@ -421,81 +429,56 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
         };
         await oauthTokenStorage!.storeToken(tokenInput);
         await syncOAuthTokenToApiKeys("anthropic", existingToken);
-        // Notify renderer immediately — token found in CLI storage
         sendOAuthStatus("anthropic", "connected");
         return { success: true, source: "keychain" };
       }
 
-      // Step 1: Stop any existing Claude callback server
-      const existingServer = activeServers.get("anthropic");
-      if (existingServer) {
-        existingServer.stop();
-        activeServers.delete("anthropic");
+      // Step 1: Ensure Claude CLI is installed (uses shell PATH resolution)
+      const isInstalled = await claudeSetupTokenService!.isClaudeCLIInstalled();
+      if (!isInstalled) {
+        console.log("[OAuth IPC] Claude CLI not found, installing...");
+        const installResult = await claudeSetupTokenService!.installClaudeCLI();
+        if (!installResult.success) {
+          console.error("[OAuth IPC] Failed to install Claude CLI:", installResult.error);
+          sendOAuthStatus(
+            "anthropic",
+            "error",
+            "Could not install Claude CLI. Use Manual Setup instead.",
+          );
+          return { success: false, error: "CLI install failed", fallback: "manual" };
+        }
+        console.log("[OAuth IPC] Claude CLI installed");
       }
 
-      // Step 2: Start PKCE OAuth flow (same as OpenAI)
-      const { url, pkce } = claudeOAuthService!.startOAuthFlow();
+      // Step 2: Open a real terminal window with `claude setup-token`
+      // The CLI needs an interactive TTY, so we open the user's terminal app.
+      // After sign-in, the CLI prints the token -- the user copies it and pastes
+      // it into our UI (the paste field is shown immediately).
+      console.log("[OAuth IPC] Opening terminal with claude setup-token...");
+      const { exec: execCb } = await import("child_process");
 
-      // Store PKCE data for callback verification
-      activeFlows.set("anthropic", {
-        pkce: { verifier: pkce.verifier, state: pkce.state },
-        provider: "anthropic",
-      });
+      let terminalOpened = false;
+      try {
+        if (process.platform === "darwin") {
+          execCb(`osascript -e 'tell application "Terminal" to do script "claude setup-token"' -e 'tell application "Terminal" to activate'`);
+          terminalOpened = true;
+        } else if (process.platform === "win32") {
+          execCb(`start cmd.exe /k "claude setup-token"`);
+          terminalOpened = true;
+        } else {
+          execCb(`x-terminal-emulator -e "claude setup-token" 2>/dev/null || gnome-terminal -- bash -c "claude setup-token; exec bash" 2>/dev/null || xterm -e "claude setup-token" 2>/dev/null`);
+          terminalOpened = true;
+        }
+      } catch (termErr) {
+        console.error("[OAuth IPC] Failed to open terminal:", termErr);
+      }
 
-      // Step 3: Start local callback server
-      // Claude Code uses http://localhost:{PORT}/callback
-      const server = new OAuthCallbackServer({
-        port: 1456,
-        hostname: "localhost",
-        callbackPath: "/callback",
-        timeout: 300000, // 5 minutes
-        onCallback: async (params) => {
-          try {
-            const code = params.get("code");
-            const state = params.get("state");
-            const flow = activeFlows.get("anthropic");
-
-            if (!code || !state || !flow) {
-              console.error("[OAuth IPC] Claude callback: missing code, state, or flow data");
-              return;
-            }
-
-            console.log("[OAuth IPC] Claude callback received, exchanging code for token...");
-
-            // Exchange authorization code for tokens
-            const tokenInput = await claudeOAuthService!.handleCallback(
-              code,
-              flow.pkce.verifier,
-              state,
-              flow.pkce.state,
-            );
-
-            // Store tokens in OAuthTokenStorage
-            await oauthTokenStorage!.storeToken(tokenInput);
-
-            // Sync token to CustomKeysStorage (makes it available as ANTHROPIC_API_KEY)
-            await syncOAuthTokenToApiKeys("anthropic", tokenInput.accessToken);
-
-            console.log("[OAuth IPC] Claude OAuth flow completed successfully");
-            activeFlows.delete("anthropic");
-            sendOAuthStatus("anthropic", "connected");
-          } catch (error) {
-            console.error("[OAuth IPC] Claude callback error:", error);
-            activeFlows.delete("anthropic");
-            sendOAuthStatus("anthropic", "error", (error as Error).message);
-          }
-        },
-      });
-
-      await server.start();
-      activeServers.set("anthropic", server);
-
-      // Step 4: Open browser to Claude's authorization page
-      await shell.openExternal(url);
-
-      return { success: true, url };
+      // Return immediately -- UI will show the paste field for the user
+      // to copy/paste the token from the terminal
+      return { success: true, source: "terminal-opened", terminalOpened };
     } catch (error) {
       console.error("[OAuth IPC] Failed to start Claude OAuth:", error);
+      sendOAuthStatus("anthropic", "error", (error as Error).message);
       return {
         success: false,
         error: (error as Error).message,
@@ -577,8 +560,12 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
         };
       }
 
-      // Strip all whitespace (token may be pasted with line breaks from terminal)
-      const cleanedToken = token.replace(/\s+/g, "");
+      // Aggressively strip: ANSI codes, all whitespace, zero-width chars, non-token chars
+      const cleanedToken = token
+        .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+        .replace(/\x1b\][^\x07]*\x07/g, "")
+        .replace(/[\s\u00A0\u200B\u200C\u200D\uFEFF]/g, "")
+        .replace(/[^a-zA-Z0-9_-]/g, "");
 
       if (!cleanedToken.startsWith("sk-ant-oat")) {
         return {

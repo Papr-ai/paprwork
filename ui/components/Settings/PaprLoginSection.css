@@ -256,17 +256,53 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+}
+
+.papr-schemas__toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.papr-schemas__toggle:hover {
+  color: var(--accent-color);
+}
+
+.papr-schemas__chevron {
+  transition: transform 0.15s;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.papr-schemas__chevron--open {
+  transform: rotate(180deg);
 }
 
 .papr-schemas__title {
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: inherit;
   margin: 0;
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.papr-schemas__count-badge {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  padding: 0 6px;
+  min-width: 18px;
+  text-align: center;
+  line-height: 18px;
 }
 
 .papr-schemas__ns-badge {
@@ -303,7 +339,7 @@
 .papr-schemas__empty {
   font-size: 12px;
   color: var(--text-tertiary);
-  padding: 8px 0;
+  padding: 8px 0 0 0;
 }
 
 .papr-schemas__empty code {
@@ -319,6 +355,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  margin-top: 8px;
 }
 
 /* ─── Schema Card ─── */

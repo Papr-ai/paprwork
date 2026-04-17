@@ -467,6 +467,8 @@ function SchemasSection({
   onRefresh: () => void;
   namespaceName?: string;
 }) {
+  const [isCollapsed, setIsCollapsed] = useState(true);
+
   const activeSchemas = schemas.filter(s => s.status === "active");
   const draftSchemas = schemas.filter(s => s.status === "draft");
   const otherSchemas = schemas.filter(s => s.status !== "active" && s.status !== "draft");
@@ -474,12 +476,31 @@ function SchemasSection({
   return (
     <div className="papr-schemas">
       <div className="papr-schemas__header">
-        <h4 className="papr-schemas__title">
-          Schemas
-          {namespaceName && (
-            <span className="papr-schemas__ns-badge">{namespaceName}</span>
-          )}
-        </h4>
+        <button
+          className="papr-schemas__toggle"
+          onClick={() => setIsCollapsed(!isCollapsed)}
+        >
+          <svg
+            className={`papr-schemas__chevron ${!isCollapsed ? "papr-schemas__chevron--open" : ""}`}
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <polyline points="6 9 12 15 18 9"/>
+          </svg>
+          <h4 className="papr-schemas__title">
+            Schemas
+            {schemas.length > 0 && (
+              <span className="papr-schemas__count-badge">{schemas.length}</span>
+            )}
+            {namespaceName && (
+              <span className="papr-schemas__ns-badge">{namespaceName}</span>
+            )}
+          </h4>
+        </button>
         <button
           className="papr-schemas__refresh"
           onClick={onRefresh}
@@ -500,27 +521,31 @@ function SchemasSection({
         </button>
       </div>
 
-      {loading && schemas.length === 0 && (
-        <div className="papr-schemas__empty">Loading schemas...</div>
-      )}
+      {!isCollapsed && (
+        <>
+          {loading && schemas.length === 0 && (
+            <div className="papr-schemas__empty">Loading schemas...</div>
+          )}
 
-      {!loading && schemas.length === 0 && (
-        <div className="papr-schemas__empty">
-          No schemas in this namespace. The agent can create schemas using <code>register_schema</code>.
-        </div>
-      )}
+          {!loading && schemas.length === 0 && (
+            <div className="papr-schemas__empty">
+              No schemas in this namespace. The agent can create schemas using <code>register_schema</code>.
+            </div>
+          )}
 
-      {schemas.length > 0 && (
-        <div className="papr-schemas__list">
-          {[...activeSchemas, ...draftSchemas, ...otherSchemas].map((schema) => (
-            <SchemaCard
-              key={schema.id}
-              schema={schema}
-              isExpanded={expandedSchema === schema.id}
-              onToggle={() => onToggleSchema(expandedSchema === schema.id ? null : schema.id)}
-            />
-          ))}
-        </div>
+          {schemas.length > 0 && (
+            <div className="papr-schemas__list">
+              {[...activeSchemas, ...draftSchemas, ...otherSchemas].map((schema) => (
+                <SchemaCard
+                  key={schema.id}
+                  schema={schema}
+                  isExpanded={expandedSchema === schema.id}
+                  onToggle={() => onToggleSchema(expandedSchema === schema.id ? null : schema.id)}
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

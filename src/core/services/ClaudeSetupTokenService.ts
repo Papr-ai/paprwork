@@ -127,7 +127,6 @@ export class ClaudeSetupTokenService {
    */
   async generateToken(): Promise<TokenGenerationResult> {
     try {
-      // Check if CLI is installed
       const isInstalled = await this.isClaudeCLIInstalled();
       if (!isInstalled) {
         return {
@@ -140,83 +139,85 @@ export class ClaudeSetupTokenService {
       console.log("[ClaudeSetupToken] Running claude setup-token...");
 
       return new Promise((resolve) => {
-        // Spawn the command with proper shell and stdio handling
-        const process = spawn("claude", ["setup-token"], {
+        let resolved = false;
+        const safeResolve = (result: TokenGenerationResult) => {
+          if (resolved) return;
+          resolved = true;
+          resolve(result);
+        };
+
+        const child = spawn("claude", ["setup-token"], {
           shell: true,
-          stdio: ["inherit", "pipe", "pipe"], // inherit stdin for interactive, pipe stdout/stderr
+          stdio: ["pipe", "pipe", "pipe"],
           env: getShellEnv(),
         });
 
         let stdout = "";
         let stderr = "";
 
-        // Collect stdout
-        process.stdout.on("data", (data: Buffer) => {
+        child.stdout.on("data", (data: Buffer) => {
           const output = data.toString();
           stdout += output;
           console.log("[ClaudeSetupToken] stdout:", output);
+
+          // Detect interactive code prompt — the CLI is waiting for user
+          // input we can't provide from Electron. Fail fast.
+          const stripped = output.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+          if (stripped.includes("Paste code here") || stripped.includes("paste code")) {
+            console.log("[ClaudeSetupToken] CLI waiting for code input — killing (can't interact from Electron)");
+            child.kill();
+            safeResolve({
+              success: false,
+              error: "Browser sign-in didn't complete automatically. Use Manual Setup to paste your token.",
+            });
+          }
         });
 
-        // Collect stderr
-        process.stderr.on("data", (data: Buffer) => {
+        child.stderr.on("data", (data: Buffer) => {
           const output = data.toString();
           stderr += output;
           console.error("[ClaudeSetupToken] stderr:", output);
         });
 
-        // Handle process completion
-        process.on("close", (code: number) => {
-          console.log(
-            `[ClaudeSetupToken] Process exited with code ${code}`,
-          );
+        child.on("close", (code: number | null) => {
+          console.log(`[ClaudeSetupToken] Process exited with code ${code}`);
 
           if (code === 0) {
-            // Try to extract token from output
             const token = this.extractTokenFromOutput(stdout + stderr);
-
             if (token) {
               console.log("[ClaudeSetupToken] Token extracted successfully");
-              resolve({
-                success: true,
-                token,
-              });
+              safeResolve({ success: true, token });
             } else {
-              console.error(
-                "[ClaudeSetupToken] Token not found in output",
-              );
-              resolve({
+              safeResolve({
                 success: false,
-                error:
-                  "Token generation completed but token not found in output. Please try manual paste.",
+                error: "Token generation completed but token not found in output. Use Manual Setup.",
               });
             }
           } else {
-            resolve({
+            safeResolve({
               success: false,
-              error: `Command exited with code ${code}. Error: ${stderr}`,
+              error: `Command exited with code ${code}. Use Manual Setup to connect.`,
             });
           }
         });
 
-        // Handle process error
-        process.on("error", (error: Error) => {
+        child.on("error", (error: Error) => {
           console.error("[ClaudeSetupToken] Process error:", error);
-          resolve({
-            success: false,
-            error: error.message,
-          });
+          safeResolve({ success: false, error: error.message });
         });
 
-        // Set timeout (5 minutes for user to complete OAuth)
+        // Reduced timeout: if browser auth worked, token appears in <30s.
+        // If it didn't, no point waiting 5 minutes.
         setTimeout(() => {
-          if (!process.killed) {
-            process.kill();
-            resolve({
+          if (!child.killed) {
+            console.log("[ClaudeSetupToken] Timeout (45s) — killing process");
+            child.kill();
+            safeResolve({
               success: false,
-              error: "Token generation timed out after 5 minutes",
+              error: "Sign-in timed out. Use Manual Setup to connect.",
             });
           }
-        }, 5 * 60 * 1000);
+        }, 45_000);
       });
     } catch (error) {
       console.error("[ClaudeSetupToken] Failed to generate token:", error);
@@ -428,14 +429,17 @@ export class ClaudeSetupTokenService {
     // Step 3: Generate token
     const tokenResult = await this.generateToken();
 
-    // Step 4: If extraction failed, try reading from CLI storage
-    if (tokenResult.success && !tokenResult.token) {
+    // Step 4: If generation failed or no token extracted, try reading from
+    // CLI storage — the browser auth may have completed even though the CLI
+    // couldn't return the token (e.g. killed due to "Paste code" prompt).
+    if (!tokenResult.token) {
       console.log(
-        "[ClaudeSetupToken] Trying to read token from CLI storage...",
+        "[ClaudeSetupToken] Trying to read token from CLI storage as fallback...",
       );
       const storedToken = await this.readTokenFromCLIStorage();
 
       if (storedToken) {
+        console.log("[ClaudeSetupToken] Found token in CLI storage after fallback");
         return {
           success: true,
           token: storedToken,

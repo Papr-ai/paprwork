@@ -2,10 +2,39 @@
  * OAuthSection - OAuth authentication UI for OpenAI and Claude
  */
 
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { useOAuth } from "../../hooks/useOAuth";
 import { useCustomKeys } from "../../hooks/useCustomKeys";
 import "./SettingsView.css";
+
+type OSPlatform = "mac" | "windows" | "linux";
+
+function detectOS(): OSPlatform {
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes("mac") || ua.includes("darwin")) return "mac";
+  if (ua.includes("win")) return "windows";
+  return "linux";
+}
+
+const OS_TERMINAL_INFO: Record<OSPlatform, { name: string; howToOpen: string }> = {
+  mac: {
+    name: "Terminal",
+    howToOpen: "Press Cmd + Space, type \"Terminal\", and press Enter",
+  },
+  windows: {
+    name: "PowerShell",
+    howToOpen: "Press Win key, type \"PowerShell\", and click to open",
+  },
+  linux: {
+    name: "Terminal",
+    howToOpen: "Press Ctrl + Alt + T to open a terminal window",
+  },
+};
+
+const CLAUDE_CLI_INSTALL_CMD = "npm install -g @anthropic-ai/claude-code";
+
+/** Whether the paste field was triggered by the automated terminal flow */
+type PasteMode = "idle" | "terminal" | "manual";
 
 interface OAuthSectionProps {
   provider: "openai" | "anthropic";
@@ -25,9 +54,11 @@ export function OAuthSection({
   const { status, loading, startOAuthLogin, disconnect } = useOAuth(provider);
   const [useApiKey, setUseApiKey] = useState(false);
   const [showPasteToken, setShowPasteToken] = useState(false);
+  const [pasteMode, setPasteMode] = useState<PasteMode>("idle");
   const [prevTimedOut, setPrevTimedOut] = useState(false);
   const [pastedToken, setPastedToken] = useState("");
   const [pasting, setPasting] = useState(false);
+  const [showManualInstructions, setShowManualInstructions] = useState(false);
   const [showToken, setShowToken] = useState(false);
   const [currentToken, setCurrentToken] = useState("");
   const [loadingToken, setLoadingToken] = useState(false);
@@ -36,9 +67,13 @@ export function OAuthSection({
   const [savingToken, setSavingToken] = useState(false);
   const [apiKeyValue, setApiKeyValue] = useState("");
   const [savingApiKey, setSavingApiKey] = useState(false);
+  const [copiedCommand, setCopiedCommand] = useState(false);
+  const [copiedInstall, setCopiedInstall] = useState(false);
   const [apiKeySaved, setApiKeySaved] = useState(false);
   const [apiKeyError, setApiKeyError] = useState("");
   const { keys, addKey, updateKey, getKeyValue, deleteKey } = useCustomKeys();
+  const os = useMemo(detectOS, []);
+  const termInfo = OS_TERMINAL_INFO[os];
 
   const handleViewToken = async () => {
     if (showToken) {
@@ -65,7 +100,11 @@ export function OAuthSection({
   };
 
   const handleSaveEditedToken = async () => {
-    const cleaned = editedToken.replace(/\s+/g, "");
+    const cleaned = editedToken
+      .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+      .replace(/\x1b\][^\x07]*\x07/g, "")
+      .replace(/[\s\u00A0\u200B\u200C\u200D\uFEFF]/g, "")
+      .replace(/[^a-zA-Z0-9_-]/g, "");
     if (!cleaned.startsWith("sk-ant-oat")) {
       alert("Invalid token format. Claude OAuth tokens should start with sk-ant-oat01-");
       return;
@@ -90,23 +129,27 @@ export function OAuthSection({
   };
 
   const handlePasteToken = async () => {
-    const trimmedToken = pastedToken.trim();
-    if (!trimmedToken) return;
+    // Aggressively clean: strip ANSI escape codes, all whitespace (including \n, \r),
+    // and any non-token characters. Valid token chars are [a-zA-Z0-9_-].
+    const cleanedToken = pastedToken
+      .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")  // ANSI SGR sequences
+      .replace(/\x1b\][^\x07]*\x07/g, "")      // ANSI OSC sequences
+      .replace(/[\s\u00A0\u200B\u200C\u200D\uFEFF]/g, "")  // All whitespace + zero-width chars
+      .replace(/[^a-zA-Z0-9_-]/g, "");          // Keep only valid token chars
+    if (!cleanedToken) return;
     
-    // Validate token format before sending
-    if (!trimmedToken.startsWith("sk-ant-oat")) {
+    if (!cleanedToken.startsWith("sk-ant-oat")) {
       alert("Invalid token format. Claude OAuth tokens should start with sk-ant-oat01-");
       return;
     }
     
     setPasting(true);
     try {
-      const result = await window.electronAPI.oauth.pasteToken(provider, trimmedToken);
+      const result = await window.electronAPI.oauth.pasteToken(provider, cleanedToken);
       if (result.success) {
         setPastedToken("");
         setShowPasteToken(false);
         alert("Token saved successfully! Refreshing...");
-        // Refresh the page to show updated status
         window.location.reload();
       } else {
         alert(`Failed to save token: ${result.error}`);
@@ -118,16 +161,31 @@ export function OAuthSection({
     }
   };
 
-  // Auto-show paste token fallback when sign-in times out
+  const handleCopy = (text: string, setter: (v: boolean) => void) => {
+    navigator.clipboard.writeText(text);
+    setter(true);
+    setTimeout(() => setter(false), 2000);
+  };
+
+  // Auto-show paste field when terminal was opened or sign-in fails/times out
   React.useEffect(() => {
-    if (status.timedOut && !prevTimedOut && provider === "anthropic") {
+    if (provider !== "anthropic") return;
+    // Terminal was opened -- show inline paste field
+    if (status.showPasteField && pasteMode === "idle") {
       setShowPasteToken(true);
+      setPasteMode("terminal");
+    }
+    // Error/timeout fallback
+    const shouldShow = status.timedOut || (status.error && !status.connected);
+    if (shouldShow && !prevTimedOut) {
+      setShowPasteToken(true);
+      if (pasteMode === "idle") setPasteMode("terminal");
       setPrevTimedOut(true);
     }
-    if (!status.timedOut && prevTimedOut) {
+    if (!status.timedOut && !status.error && prevTimedOut) {
       setPrevTimedOut(false);
     }
-  }, [status.timedOut]);
+  }, [status.timedOut, status.error, status.connected, status.showPasteField, provider]);
 
 
   // Check if API key already exists when switching to API key mode
@@ -329,68 +387,172 @@ export function OAuthSection({
               
               {provider === "anthropic" && !showPasteToken && (
                 <div style={{ marginBottom: "12px" }}>
-                  <p style={{ fontSize: "13px", color: "#666", marginBottom: "8px" }}>
-                    Use your Claude Pro/Max subscription.
-                    If sign-in doesn't connect automatically, run <code style={{ background: "#f5f5f5", padding: "2px 6px", borderRadius: "3px" }}>claude setup-token</code> in your terminal and paste the token below.
+                  <p style={{ fontSize: "13px", color: "var(--color-text-secondary, #666)", marginBottom: "8px" }}>
+                    Use your Claude Pro/Max subscription. Click Connect to sign in — we'll check for an existing token, install the CLI if needed, and open a terminal for you.
                   </p>
                 </div>
               )}
               
-              {status.error && !status.connected && (
+              {status.error && !status.connected && !showPasteToken && (
                 <div style={{ padding: "8px 12px", background: "#fff3cd", borderRadius: "6px", fontSize: "13px", color: "#856404", marginBottom: "8px" }}>
                   {status.error}
                 </div>
               )}
               
-              <div style={{ display: "flex", gap: "8px", flexDirection: "column" }}>
-                <button
-                  className="settings-btn settings-btn--primary"
-                  onClick={startOAuthLogin}
-                  disabled={loading}
-                  style={{ width: "100%" }}
-                >
-                  {loading ? "Connecting..." : status.error && !status.connected ? "Try Again" : `Sign in with ${title}`}
-                </button>
-                
-                {provider === "anthropic" && (
+              {!showPasteToken && (
+                <div style={{ display: "flex", gap: "8px", flexDirection: "column" }}>
                   <button
-                    className="settings-btn settings-btn--secondary"
-                    onClick={() => setShowPasteToken(!showPasteToken)}
+                    className="settings-btn settings-btn--primary"
+                    onClick={startOAuthLogin}
+                    disabled={loading}
                     style={{ width: "100%" }}
                   >
-                    {showPasteToken ? "Cancel" : "Paste Token Instead"}
+                    {loading ? "Connecting..." : status.error && !status.connected ? "Try Again" : `Connect ${title}`}
                   </button>
-                )}
-              </div>
+                  
+                  {provider === "anthropic" && (
+                    <button
+                      className="settings-btn settings-btn--secondary"
+                      onClick={() => { setShowPasteToken(true); setPasteMode("manual"); }}
+                      style={{ width: "100%" }}
+                    >
+                      Manual Setup
+                    </button>
+                  )}
+                </div>
+              )}
               
+              {/* Inline paste section -- shown after Connect opens terminal, or via Manual Setup */}
               {showPasteToken && provider === "anthropic" && (
-                <div style={{ marginTop: "12px" }}>
-                  <p style={{ fontSize: "13px", marginBottom: "8px" }}>
-                    Run <code style={{ background: "#f5f5f5", padding: "2px 6px", borderRadius: "3px" }}>claude setup-token</code> in your terminal,
-                    copy the full token (starts with <code>sk-ant-oat01-</code>), and paste it below:
-                  </p>
+                <div className="token-paste-section">
+                  {/* Context message depending on how we got here */}
+                  {pasteMode === "terminal" && (
+                    <div className="token-paste-section__info">
+                      <span className="token-paste-section__icon">✓</span>
+                      <div>
+                        <p className="token-paste-section__title">Terminal opened with <code>claude setup-token</code></p>
+                        <p className="token-paste-section__hint">
+                          Complete the sign-in in your browser, then copy the token from the terminal (starts with <code>sk-ant-oat01-</code>) and paste it below.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {pasteMode === "manual" && (
+                    <div className="token-paste-section__info">
+                      <span className="token-paste-section__icon">📋</span>
+                      <div>
+                        <p className="token-paste-section__title">Manual Setup</p>
+                        <p className="token-paste-section__hint">
+                          Run <code>claude setup-token</code> in your terminal, complete the browser sign-in, then paste the token below.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Paste field */}
                   <textarea
+                    className="token-modal__textarea"
                     value={pastedToken}
                     onChange={(e) => setPastedToken(e.target.value)}
-                    placeholder="Paste your Claude OAuth token here..."
-                    style={{
-                      width: "100%",
-                      minHeight: "80px",
-                      padding: "8px",
-                      fontFamily: "monospace",
-                      fontSize: "12px",
-                      border: "1px solid #ddd",
-                      borderRadius: "4px",
-                      marginBottom: "8px"
-                    }}
+                    placeholder="Paste your token here (starts with sk-ant-oat01-...)"
+                    autoFocus
                   />
+                  {pastedToken && /[\s\n\r]/.test(pastedToken) && (
+                    <p className="token-modal__space-notice">
+                      Whitespace/line breaks detected — they'll be removed automatically.
+                    </p>
+                  )}
                   <button
                     className="settings-btn settings-btn--primary"
                     onClick={handlePasteToken}
                     disabled={!pastedToken.trim() || pasting}
-                    style={{ width: "100%" }}
+                    style={{ width: "100%", marginTop: "8px" }}
                   >
                     {pasting ? "Saving..." : "Save Token"}
+                  </button>
+
+                  {/* Expandable manual instructions */}
+                  <button
+                    className="token-paste-section__expand-btn"
+                    onClick={() => setShowManualInstructions(!showManualInstructions)}
+                  >
+                    {showManualInstructions ? "Hide" : "Show"} full instructions
+                    <span style={{ marginLeft: "4px" }}>{showManualInstructions ? "▲" : "▼"}</span>
+                  </button>
+
+                  {showManualInstructions && (
+                    <div className="token-paste-section__manual">
+                      <div className="token-modal__step">
+                        <div className="token-modal__step-number">1</div>
+                        <div className="token-modal__step-content">
+                          <p className="token-modal__step-title">Open {termInfo.name}</p>
+                          <p className="token-modal__step-hint">{termInfo.howToOpen}</p>
+                        </div>
+                      </div>
+
+                      <div className="token-modal__step">
+                        <div className="token-modal__step-number">2</div>
+                        <div className="token-modal__step-content">
+                          <p className="token-modal__step-title">Run this command</p>
+                          <div className="token-modal__command-row">
+                            <code className="token-modal__command">claude setup-token</code>
+                            <button
+                              className="token-modal__copy-btn"
+                              onClick={() => handleCopy("claude setup-token", setCopiedCommand)}
+                            >
+                              {copiedCommand ? "Copied!" : "Copy"}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="token-modal__step">
+                        <div className="token-modal__step-number">3</div>
+                        <div className="token-modal__step-content">
+                          <p className="token-modal__step-title">Sign in and copy the token</p>
+                          <p className="token-modal__step-hint">
+                            Your browser will open. Sign in with your Claude account. The terminal will print a token starting with <code>sk-ant-oat01-</code>. Copy it and paste it in the field above.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="token-modal__tip">
+                        <strong>Don't have Claude Code CLI?</strong>
+                        <p>Install it first, then follow the steps above:</p>
+                        <div className="token-modal__command-row">
+                          <code className="token-modal__command">{CLAUDE_CLI_INSTALL_CMD}</code>
+                          <button
+                            className="token-modal__copy-btn"
+                            onClick={() => handleCopy(CLAUDE_CLI_INSTALL_CMD, setCopiedInstall)}
+                          >
+                            {copiedInstall ? "Copied!" : "Copy"}
+                          </button>
+                        </div>
+                        <a
+                          href="#"
+                          className="token-modal__link"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            window.electronAPI.system.invoke(
+                              "shell.openExternal",
+                              "https://docs.anthropic.com/en/docs/claude-code/getting-started",
+                            );
+                          }}
+                        >
+                          Full installation guide &rarr;
+                        </a>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Cancel button */}
+                  <button
+                    className="settings-btn settings-btn--secondary"
+                    onClick={() => { setShowPasteToken(false); setPasteMode("idle"); setShowManualInstructions(false); setPastedToken(""); }}
+                    style={{ width: "100%", marginTop: "4px" }}
+                  >
+                    Cancel
                   </button>
                 </div>
               )}

@@ -13,6 +13,8 @@ export interface OAuthStatus {
   isExpired?: boolean;
   error?: string;
   timedOut?: boolean;
+  /** Set when Claude flow opened a terminal -- UI should show paste field */
+  showPasteField?: boolean;
 }
 
 const OAUTH_TIMEOUT_MS = 30_000; // 30 seconds before showing fallback
@@ -91,6 +93,19 @@ export function useOAuth(provider: "openai" | "anthropic") {
         return;
       }
 
+      // If source is "terminal-opened", the backend opened a terminal with
+      // `claude setup-token`. Show the paste field so the user can copy the
+      // token from the terminal and paste it here.
+      if (result.source === "terminal-opened") {
+        setLoading(false);
+        setStatus({
+          connected: false,
+          showPasteField: true,
+        });
+        if (cleanupRef.current) cleanupRef.current();
+        return;
+      }
+
       // Set timeout — if no response in 30s, show fallback
       timeoutRef.current = setTimeout(() => {
         setLoading(false);
@@ -99,7 +114,7 @@ export function useOAuth(provider: "openai" | "anthropic") {
           timedOut: true,
           error:
             provider === "anthropic"
-              ? "Sign-in didn't complete. Try pasting your token instead."
+              ? "Sign-in didn't complete. Use Manual Setup below."
               : "Sign-in timed out. Please try again.",
         });
       }, OAUTH_TIMEOUT_MS);
