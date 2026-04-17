@@ -388,16 +388,34 @@ export class JobsService {
         let command = "";
         let createdAt = new Date().toISOString();
 
-        // Try reading metadata.json
-        try {
-          const metadataContent = await fs.readFile(path.join(jobDir, "metadata.json"), "utf-8");
-          const metadata = JSON.parse(metadataContent) as Partial<JobRecord>;
-          name = metadata.name || name;
-          type = (metadata.type as JobType) || type;
-          command = metadata.command || command;
-          if (metadata.createdAt) createdAt = metadata.createdAt;
-        } catch {
-          // No metadata — try to infer type from files on disk
+        // Try reading job.json first (primary source), then metadata.json (legacy)
+        let recoveredFromFile = false;
+        let folder: string | undefined;
+        for (const filename of ["job.json", "metadata.json"]) {
+          if (recoveredFromFile) break;
+          try {
+            const content = await fs.readFile(path.join(jobDir, filename), "utf-8");
+            const data = JSON.parse(content) as Partial<JobRecord>;
+            name = data.name || name;
+            type = (data.type as JobType) || type;
+            command = data.command || command;
+            if (data.createdAt) createdAt = data.createdAt;
+            if (data.folder) folder = data.folder;
+            recoveredFromFile = true;
+            console.log(`[JobsService] Recovered job data from ${filename}: ${jobId} → "${name}"`);
+          } catch {
+            // File doesn't exist or is corrupted, try next
+          }
+        }
+
+        // Skip subagent delegation entries — these are sub-agent executions, not user jobs
+        if (type === "subagent") {
+          console.log(`[JobsService] Skipping subagent entry: ${jobId} (${name})`);
+          continue;
+        }
+
+        if (!recoveredFromFile) {
+          // No job.json or metadata.json — try to infer type from files on disk
           try {
             const files = await fs.readdir(path.join(jobDir, "code"));
             if (files.some(f => f.endsWith(".py"))) type = "python";
@@ -423,6 +441,7 @@ export class JobsService {
           command,
           createdAt,
           updatedAt: new Date().toISOString(),
+          ...(folder ? { folder } : {}),
         };
 
         this.jobs.set(jobId, recoveredJob);

@@ -24,7 +24,8 @@ import { KeyPermissionModal } from "./components/Permissions/KeyPermissionModal"
 import { UpdateBanner } from "./components/UpdateBanner/UpdateBanner";
 import { useAppStatePersistence } from "./hooks/useAppStatePersistence";
 import { useChatStore } from "./stores/chatStore";
-import { initializeAmplitudeBrowser } from "./lib/telemetry"; // Static import
+import { initializeAmplitudeBrowser } from "./lib/telemetry";
+import { gateway } from "./src/lib/gateway";
 import "./styles/liquid-glass.css";
 import "./App.css";
 
@@ -83,9 +84,6 @@ export function App() {
   useEffect(() => {
     const loadUIPreferences = async () => {
       try {
-        const { gateway } = await import('./src/lib/gateway.js');
-        
-        // Always load from settings (source of truth)
         const response = await gateway.send('settings:get', {});
         
         if (response.success && response.data?.uiPreferences) {
@@ -192,7 +190,6 @@ export function App() {
 
         // Get install ID from settings
         console.log('[Telemetry] Getting install ID...');
-        const { gateway } = await import('./src/lib/gateway.js');
         const settingsResponse = await gateway.send('settings:get', {});
         console.log('[Telemetry] Settings response:', { hasData: !!settingsResponse.data, hasTelemetry: !!settingsResponse.data?.telemetry });
         const installId = settingsResponse.data?.telemetry?.installId;

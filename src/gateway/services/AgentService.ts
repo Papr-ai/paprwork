@@ -301,8 +301,15 @@ export class AgentService {
       | undefined;
 
     // Context pressure monitoring — declared here so catch block can read them
-    // 150k = 75% of Claude's 200k window; safe abort margin for tool-heavy loops
-    const CONTEXT_ABORT_THRESHOLD = 120000; // Conservative: leave room for output tokens
+    // Model-aware thresholds: GPT-5.x has 272K context, Claude has 200K
+    const getContextAbortThreshold = (): number => {
+      const model = config.model?.toLowerCase() ?? "";
+      if (model.startsWith("gpt-5.4") || model.startsWith("gpt-5.3") || model.startsWith("gpt-5.2")) {
+        return 200000; // 272K context - 72K buffer for output + reasoning
+      }
+      return 120000; // Claude 200K - 80K buffer (conservative)
+    };
+    const CONTEXT_ABORT_THRESHOLD = getContextAbortThreshold();
     let contextPressureAborted = false;
 
     try {
@@ -2256,6 +2263,25 @@ ${last15.substring(0, 8_000)}`;
           const errMsg =
             (chunk.payload as { error?: string })?.error ?? "Model API error";
 
+          // Context limit errors are handled by streamAgent's compression logic.
+          // Don't throw — let the generator resume so onContextPressure() fires
+          // and streamAgent can compress + retry automatically.
+          if (
+            errMsg.includes("Context limit") ||
+            errMsg.includes("context_length_exceeded")
+          ) {
+            console.log(
+              `[AgentService] Context limit hit in job (${provider}/${model}). ` +
+                `Letting streamAgent handle compression...`,
+            );
+            if (input.appendLog) {
+              await input.appendLog(
+                `⚠️ Context limit approaching — compressing conversation and continuing...`,
+              );
+            }
+            continue;
+          }
+
           // Check if this is an OAuth rate limit error
           if (
             authType === "oauth" &&
@@ -2273,6 +2299,16 @@ ${last15.substring(0, 8_000)}`;
           throw new Error(
             `Agent job model error (${provider}/${model}): ${errMsg}`,
           );
+        }
+
+        // Log compression progress to job logs
+        if (chunk.type === "compression-start" && input.appendLog) {
+          await input.appendLog(`🔄 Compressing conversation history...`);
+          continue;
+        }
+        if (chunk.type === "compression-complete" && input.appendLog) {
+          await input.appendLog(`✅ Compression complete. Continuing with fresh context.`);
+          continue;
         }
 
         // Log structured activity to job logs (thinking, tool calls, results)
@@ -2663,6 +2699,18 @@ ${last15.substring(0, 8_000)}`;
             const errMsg =
               (chunk.payload as { error?: string })?.error ?? "Model API error";
 
+            // Context limit errors are handled by streamAgent's compression logic
+            if (
+              errMsg.includes("Context limit") ||
+              errMsg.includes("context_length_exceeded")
+            ) {
+              console.log(
+                `[AgentService] Context limit hit in structured job (${provider}/${modelId}). ` +
+                  `Letting streamAgent handle compression...`,
+              );
+              continue;
+            }
+
             // Check if this is an OAuth rate limit error
             if (
               errMsg.includes("usage limit") ||
@@ -2679,6 +2727,9 @@ ${last15.substring(0, 8_000)}`;
             throw new Error(
               `Structured job model error (${provider}/${modelId}): ${errMsg}`,
             );
+          }
+          if (chunk.type === "compression-start" || chunk.type === "compression-complete") {
+            continue;
           }
           if (chunk.type === "text-delta") {
             const payload = chunk.payload as { text?: string };

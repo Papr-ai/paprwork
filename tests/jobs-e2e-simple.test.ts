@@ -223,6 +223,20 @@ describe("Error Classification", () => {
     const type = classifyError(error);
     expect(type).toBe("transient");
   });
+
+  test("classifies context limit as permanent (compression handles internally)", () => {
+    const error = new Error(
+      "Agent job model error (openai/gpt-5.4): Context limit approaching. Conversation will be summarized automatically.",
+    );
+    const type = classifyError(error);
+    expect(type).toBe("permanent");
+  });
+
+  test("classifies context_length_exceeded as permanent", () => {
+    const error = new Error("context_length_exceeded: max tokens exceeded");
+    const type = classifyError(error);
+    expect(type).toBe("permanent");
+  });
 });
 
 describe("Run History Management", () => {

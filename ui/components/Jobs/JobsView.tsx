@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useRef, useEffect } from "react";
 import { useJobs } from "../../hooks/useJobs";
 import type { JobRecord } from "../../hooks/useJobs";
 import { JobsGraph } from "./JobsGraph";
 import "./JobsView.css";
 
-type JobFilter = "all" | "running" | "idle" | "scheduled" | "disabled";
+type JobFilter = "all" | "running" | "idle" | "scheduled";
 type ViewMode = "list" | "graph";
 
 export function JobsView() {
@@ -13,27 +13,32 @@ export function JobsView() {
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [currentFilter, setCurrentFilter] = useState<JobFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const [expandedJobIds, setExpandedJobIds] = useState<Set<string>>(new Set());
+  const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
-  const [graphSelectedJobId, setGraphSelectedJobId] = useState<string | null>(
-    null,
-  );
+  const [appDropdownOpen, setAppDropdownOpen] = useState(false);
+  const [graphSelectedJobId, setGraphSelectedJobId] = useState<string | null>(null);
+  const appDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (appDropdownRef.current && !appDropdownRef.current.contains(e.target as Node)) {
+        setAppDropdownOpen(false);
+      }
+    }
+    if (appDropdownOpen) document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [appDropdownOpen]);
 
   const runningCount = jobs.filter(
-    (job) => job.status === "running" || job.status === "waiting_permission",
+    (j) => j.status === "running" || j.status === "waiting_permission",
   ).length;
-  const idleCount = jobs.filter(
-    (job) => job.status !== "running" && job.status !== "waiting_permission",
-  ).length;
-  const scheduledCount = jobs.filter((job) => job.schedule?.enabled).length;
+  const scheduledCount = jobs.filter((j) => j.schedule?.enabled).length;
 
-  // Jobs visible for selected app (from graph appLinks)
   const appFilteredJobIds = useMemo<Set<string> | null>(() => {
     if (!selectedAppId || !graph) return null;
     return new Set(graph.appLinks[selectedAppId]?.jobIds ?? []);
   }, [selectedAppId, graph]);
 
-  // Status + type + app + search filtered jobs
   const filteredJobs = useMemo(() => {
     const isActive = (j: JobRecord) =>
       j.status === "running" || j.status === "waiting_permission";
@@ -42,45 +47,31 @@ export function JobsView() {
       if (!isActive(a) && isActive(b)) return 1;
       return a.name.localeCompare(b.name);
     });
-
     return sorted.filter((job) => {
       if (appFilteredJobIds && !appFilteredJobIds.has(job.id)) return false;
-      const isActive =
-        job.status === "running" || job.status === "waiting_permission";
-      if (currentFilter === "running" && !isActive) return false;
-      if (currentFilter === "idle" && isActive) return false;
+      if (currentFilter === "running" && !isActive(job)) return false;
+      if (currentFilter === "idle" && isActive(job)) return false;
       if (currentFilter === "scheduled" && !job.schedule?.enabled) return false;
-      if (currentFilter === "disabled") return false;
       if (!searchQuery.trim()) return true;
-      const haystack =
-        `${job.name} ${job.type} ${job.command ?? ""}`.toLowerCase();
+      const haystack = `${job.name} ${job.type} ${job.command ?? ""}`.toLowerCase();
       return haystack.includes(searchQuery.toLowerCase());
     });
   }, [jobs, currentFilter, searchQuery, appFilteredJobIds]);
 
-  // Group filtered jobs by folder OR matching app
   const groupedJobs = useMemo(() => {
     const folderMap = new Map<string, JobRecord[]>();
     const ungrouped: JobRecord[] = [];
-
-    // Build a map of folder names to app names for display
     const folderToAppName = new Map<string, string>();
     if (graph) {
-      for (const [appId, appLink] of Object.entries(graph.appLinks)) {
-        // For each app, check if any jobs have folders that match the app title
+      for (const [, appLink] of Object.entries(graph.appLinks)) {
         for (const jobId of appLink.jobIds) {
-          const job = jobs.find(j => j.id === jobId);
-          if (job?.folder) {
-            // Map this folder name to the app name (for consistent display)
-            folderToAppName.set(job.folder.toLowerCase(), appLink.name);
-          }
+          const job = jobs.find((j) => j.id === jobId);
+          if (job?.folder) folderToAppName.set(job.folder.toLowerCase(), appLink.name);
         }
       }
     }
-
     for (const job of filteredJobs) {
       if (job.folder) {
-        // Use app name if folder matches an app, otherwise use raw folder name
         const displayName = folderToAppName.get(job.folder.toLowerCase()) || job.folder;
         const group = folderMap.get(displayName) ?? [];
         group.push(job);
@@ -89,47 +80,42 @@ export function JobsView() {
         ungrouped.push(job);
       }
     }
-
-    // Sort folders alphabetically
-    const sortedFolders = [...folderMap.entries()].sort(([a], [b]) =>
-      a.localeCompare(b),
-    );
+    const sortedFolders = [...folderMap.entries()].sort(([a], [b]) => a.localeCompare(b));
     return { folders: sortedFolders, ungrouped };
   }, [filteredJobs, graph, jobs]);
 
-  // App chips from graph
   const appChips = useMemo(() => {
     if (!graph) return [];
     return Object.entries(graph.appLinks).map(([appId, link]) => ({
       appId,
       name: link.name,
+      count: link.jobIds.length,
     }));
   }, [graph]);
 
+  const selectedAppName = useMemo(() => {
+    if (!selectedAppId) return "All Apps";
+    return appChips.find((c) => c.appId === selectedAppId)?.name ?? "All Apps";
+  }, [selectedAppId, appChips]);
+
   const toggleDetails = (jobId: string) => {
-    setExpandedJobIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(jobId)) next.delete(jobId);
-      else next.add(jobId);
-      return next;
-    });
+    if (expandedJobId === jobId) {
+      setExpandedJobId(null);
+    } else {
+      setExpandedJobId(jobId);
+      void loadLogs(jobId);
+    }
   };
 
   const handleGraphNodeClick = (jobId: string) => {
     setGraphSelectedJobId(jobId);
-    setExpandedJobIds((prev) => {
-      const next = new Set(prev);
-      next.add(jobId);
-      return next;
-    });
+    setExpandedJobId(jobId);
     setViewMode("list");
   };
 
   const formatRelativeTime = (isoString?: string): string => {
     if (!isoString) return "Never";
-    const date = new Date(isoString);
-    const now = new Date();
-    const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+    const seconds = Math.floor((Date.now() - new Date(isoString).getTime()) / 1000);
     if (seconds < 60) return "Just now";
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
     if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
@@ -137,352 +123,142 @@ export function JobsView() {
     return `${Math.floor(seconds / 604800)}w ago`;
   };
 
-  const formatAbsoluteShort = (isoString?: string): string => {
-    if (!isoString) return "—";
-    const date = new Date(isoString);
-    if (Number.isNaN(date.getTime())) return "—";
-    return date.toLocaleString(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
-    });
-  };
-
-  const formatNextRunSummary = (job: JobRecord): string => {
-    if (!job.schedule?.enabled) return "—";
+  const formatNextRun = (job: JobRecord): string => {
+    if (!job.schedule?.enabled) return "";
     const raw = job.scheduleState?.nextRunAt;
-    if (!raw) return "Not set (will reconcile on load)";
+    if (!raw) return "Pending";
     const d = new Date(raw);
-    if (Number.isNaN(d.getTime())) return "—";
-    const nowMs = Date.now();
-    const isPast = d.getTime() <= nowMs;
-    
-    if (job.status === "running" || job.status === "waiting_permission") {
-      if (isPast) {
-        return "Running current slot...";
-      }
-    }
-    
-    if (isPast) {
-      return `Due now · ${formatAbsoluteShort(raw)}`;
-    }
-    const diff = d.getTime() - nowMs;
-    if (diff < 60_000) {
-      return `in ${Math.max(1, Math.ceil(diff / 1000))}s · ${formatAbsoluteShort(raw)}`;
-    }
-    if (diff < 3_600_000) {
-      return `in ${Math.ceil(diff / 60_000)}m · ${formatAbsoluteShort(raw)}`;
-    }
-    if (diff < 86_400_000) {
-      return `in ${Math.ceil(diff / 3_600_000)}h · ${formatAbsoluteShort(raw)}`;
-    }
-    return formatAbsoluteShort(raw);
+    if (Number.isNaN(d.getTime())) return "";
+    const diff = d.getTime() - Date.now();
+    if (diff <= 0) return "Due now";
+    if (diff < 60_000) return `in ${Math.ceil(diff / 1000)}s`;
+    if (diff < 3_600_000) return `in ${Math.ceil(diff / 60_000)}m`;
+    if (diff < 86_400_000) return `in ${Math.ceil(diff / 3_600_000)}h`;
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   };
 
-  const scheduleLabel = (job: {
-    schedule?: { cron?: string; intervalMs?: number; atTime?: string };
-  }): string => {
-    const schedule = job.schedule;
-    if (!schedule) return "Manual";
-    if (schedule.cron) return "Scheduled";
-    if (schedule.intervalMs) return `Every ${schedule.intervalMs}ms`;
-    if (schedule.atTime) return `At ${schedule.atTime}`;
+  const scheduleLabel = (job: JobRecord): string => {
+    const s = job.schedule;
+    if (!s) return "";
+    if (s.cron) return s.cron;
+    if (s.intervalMs) {
+      const sec = s.intervalMs / 1000;
+      if (sec < 60) return `Every ${sec}s`;
+      if (sec < 3600) return `Every ${sec / 60}m`;
+      return `Every ${sec / 3600}h`;
+    }
     return "Scheduled";
   };
 
-  const renderJobCard = (job: JobRecord) => {
+  const renderJobRow = (job: JobRecord) => {
     const isRunning = job.status === "running";
-    const isWaitingPermission = job.status === "waiting_permission";
-    const isActive = isRunning || isWaitingPermission;
-    const isExpanded = expandedJobIds.has(job.id);
-    const dependencies = job.dependsOn ?? [];
+    const isWaiting = job.status === "waiting_permission";
+    const isActive = isRunning || isWaiting;
+    const isExpanded = expandedJobId === job.id;
     const isGraphSelected = job.id === graphSelectedJobId;
 
     return (
       <div
-        className={
-          isGraphSelected ? "job-card job-card--highlighted" : "job-card"
-        }
+        className={`jv2-row ${isExpanded ? "jv2-row--expanded" : ""} ${isGraphSelected ? "jv2-row--highlighted" : ""}`}
         key={job.id}
       >
-        <div className="job-card-header" onClick={() => toggleDetails(job.id)}>
-          <div className="job-card-main">
-            <div className="job-title-row">
-              <div
-                className={
-                  isWaitingPermission
-                    ? "job-status-indicator status-waiting-permission"
-                    : isRunning
-                      ? "job-status-indicator status-running"
-                      : "job-status-indicator status-idle"
-                }
-              >
-                <svg width="10" height="10" viewBox="0 0 10 10">
-                  <circle cx="5" cy="5" r="3" fill="currentColor" />
-                </svg>
-              </div>
-              <h3 className="job-title">{job.name}</h3>
-              <span className="job-type-badge">{job.type}</span>
-              {job.lastEvaluation && (
-                <span
-                  className={`job-eval-badge ${job.lastEvaluation.passed ? "job-eval-pass" : "job-eval-fail"}`}
-                  title={`Last eval: ${Math.round(job.lastEvaluation.score * 100)}% — ${job.lastEvaluation.passed ? "Passed" : "Failed"}`}
-                >
-                  {job.lastEvaluation.passed ? "✓" : "✗"} {Math.round(job.lastEvaluation.score * 100)}%
-                </span>
-              )}
-              {job.recipe?.enabled && !job.lastEvaluation && (
-                <span className="job-eval-badge job-eval-pending" title="Recipe enabled, no evaluations yet">
-                  ◉ Recipe
-                </span>
-              )}
-              {job.schedule?.enabled && (
-                <span className="job-schedule-badge">{scheduleLabel(job)}</span>
-              )}
-              {dependencies.length > 0 && (
-                <span className="job-trigger-badge">Triggered</span>
-              )}
-            </div>
-            {job.command && (
-              <p className="job-description">
-                {(() => {
-                  const firstLine = job.command.split("\n")[0].trim();
-                  return firstLine.length > 72
-                    ? firstLine.slice(0, 70) + "…"
-                    : firstLine;
-                })()}
-              </p>
+        <div className="jv2-row-main" onClick={() => toggleDetails(job.id)}>
+          <div className="jv2-row-left">
+            <span
+              className={`jv2-dot ${isWaiting ? "jv2-dot--waiting" : isRunning ? "jv2-dot--running" : job.status === "failed" ? "jv2-dot--failed" : ""}`}
+            />
+            <span className="jv2-name">{job.name}</span>
+            <span className="jv2-type">{job.type}</span>
+          </div>
+          <div className="jv2-row-right">
+            {job.schedule?.enabled && (
+              <span className="jv2-sched">{scheduleLabel(job)}</span>
             )}
-          </div>
-          {isWaitingPermission && job.waitingPermissionKeys?.length ? (
-            <div className="job-card-waiting-keys">
-              Waiting for approval: {job.waitingPermissionKeys.join(", ")}
+            {isWaiting && (
+              <span className="jv2-badge jv2-badge--waiting">Awaiting approval</span>
+            )}
+            <span className="jv2-time">{formatRelativeTime(job.lastRunAt)}</span>
+            <div className="jv2-actions" onClick={(e) => e.stopPropagation()}>
+              {isActive ? (
+                <button
+                  className="jv2-btn"
+                  title="Stop"
+                  onClick={() => void stopJob(job.id)}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                    <rect x="6" y="6" width="12" height="12" stroke="currentColor" strokeWidth="1.5" />
+                  </svg>
+                </button>
+              ) : (
+                <button
+                  className="jv2-btn"
+                  title="Run"
+                  onClick={() => void runJob(job.id)}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                    <path d="M8 5v14l11-7-11-7z" stroke="currentColor" strokeWidth="1.5" />
+                  </svg>
+                </button>
+              )}
             </div>
-          ) : null}
-          <div
-            className="job-card-actions"
-            onClick={(event) => event.stopPropagation()}
-          >
-            {isActive ? (
-              <button
-                className="btn-job-action btn-job-delete"
-                title="Stop Job"
-                onClick={() => void stopJob(job.id)}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                  <rect
-                    x="6"
-                    y="6"
-                    width="12"
-                    height="12"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                  />
-                </svg>
-              </button>
-            ) : null}
-            {!isActive ? (
-              <button
-                className="btn-job-action btn-job-test"
-                title="Test Job (Run Once)"
-                onClick={() => void runJob(job.id)}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                  <path
-                    d="M8 5v14l11-7-11-7z"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                  />
-                </svg>
-              </button>
-            ) : null}
-            <button
-              className={
-                isExpanded
-                  ? "btn-job-action btn-job-expand expanded"
-                  : "btn-job-action btn-job-expand"
-              }
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleDetails(job.id);
-              }}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                <polyline
-                  points="6 9 12 15 18 9"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-              </svg>
-            </button>
-          </div>
-        </div>
-
-        <div className="job-card-meta">
-          <div className="job-meta-item">
-            <span className="meta-label">Last Run:</span>
-            <span className="meta-value">
-              {formatRelativeTime(job.lastRunAt)}
-            </span>
-          </div>
-          <div className="job-meta-item">
-            <span className="meta-label">Updated:</span>
-            <span className="meta-value">
-              {formatRelativeTime(job.updatedAt)}
-            </span>
           </div>
         </div>
 
         {isExpanded && (
-          <div className="job-card-details">
-            <div className="job-details-content">
-              <div className="details-section">
-                <h4>Configuration</h4>
-                <div className="details-grid">
-                  <div className="detail-item">
-                    <span className="detail-label">Status</span>
-                    <span className="detail-value">{job.status}</span>
-                  </div>
-                  <div className="detail-item">
-                    <span className="detail-label">Type</span>
-                    <span className="detail-value">{job.type}</span>
-                  </div>
-                  <div className="detail-item">
-                    <span className="detail-label">Trigger</span>
-                    <span className="detail-value">
-                      {job.schedule?.enabled
-                        ? scheduleLabel(job)
-                        : dependencies.length > 0
-                          ? "Triggered"
-                          : "Manual"}
-                    </span>
-                  </div>
-                  <div className="detail-item">
-                    <span className="detail-label">Exit Code</span>
-                    <span className="detail-value">{job.exitCode ?? "-"}</span>
-                  </div>
-                  {job.lastEvaluation && (
-                    <div className="detail-item">
-                      <span className="detail-label">Eval Score</span>
-                      <span className={`detail-value ${job.lastEvaluation.passed ? "eval-passed" : "eval-failed"}`}>
-                        {Math.round(job.lastEvaluation.score * 100)}% — {job.lastEvaluation.passed ? "Passed" : "Failed"}
-                      </span>
-                    </div>
-                  )}
-                  {job.recipe?.enabled && (
-                    <div className="detail-item">
-                      <span className="detail-label">Recipe</span>
-                      <span className="detail-value">
-                        Enabled (threshold: {Math.round((job.recipe.passThreshold ?? 0.7) * 100)}%)
-                      </span>
-                    </div>
-                  )}
-                  {job.folder && (
-                    <div className="detail-item">
-                      <span className="detail-label">Folder</span>
-                      <span className="detail-value">{job.folder}</span>
-                    </div>
-                  )}
-                  {dependencies.length > 0 && (
-                    <div className="detail-item detail-item-full">
-                      <span className="detail-label">Depends on</span>
-                      <span className="detail-value">
-                        {dependencies
-                          .map((dep) => `${dep.jobId} (${dep.onStatus})`)
-                          .join(", ")}
-                      </span>
-                    </div>
-                  )}
-                  {job.error && (
-                    <div className="detail-item detail-item-full">
-                      <span className="detail-label">Last Error</span>
-                      <span className="detail-value">{job.error}</span>
-                    </div>
-                  )}
+          <div className="jv2-detail">
+            <div className="jv2-detail-grid">
+              <div className="jv2-detail-cell">
+                <span className="jv2-detail-label">Status</span>
+                <span className={`jv2-detail-value ${isActive ? "jv2-detail-value--active" : ""}`}>
+                  {job.status}
+                </span>
+              </div>
+              <div className="jv2-detail-cell">
+                <span className="jv2-detail-label">Last Run</span>
+                <span className="jv2-detail-value">{formatRelativeTime(job.lastRunAt)}</span>
+              </div>
+              {job.schedule?.enabled && (
+                <div className="jv2-detail-cell">
+                  <span className="jv2-detail-label">Next Run</span>
+                  <span className="jv2-detail-value">{formatNextRun(job)}</span>
                 </div>
-                {job.schedule?.enabled ? (
-                  <div className="details-section">
-                    <h4>Schedule</h4>
-                    <div className="details-grid">
-                      <div className="detail-item">
-                        <span className="detail-label">Next run</span>
-                        <span className="detail-value">
-                          {formatNextRunSummary(job)}
-                        </span>
-                      </div>
-                      <div className="detail-item detail-item-full">
-                        <span className="detail-label">Rule</span>
-                        <span className="detail-value">
-                          {job.schedule.cron
-                            ? `Cron: ${job.schedule.cron}`
-                            : job.schedule.intervalMs
-                              ? `Every ${job.schedule.intervalMs} ms`
-                              : job.schedule.atTime
-                                ? `One shot at ${job.schedule.atTime}`
-                                : "Scheduled"}
-                          {job.schedule.timezone
-                            ? ` · TZ ${job.schedule.timezone}`
-                            : ""}
-                          {job.schedule.catchUpMissed
-                            ? " · catch-up missed runs"
-                            : ""}
-                        </span>
-                      </div>
-                      {job.scheduleState?.lastScheduledRunAt ? (
-                        <div className="detail-item">
-                          <span className="detail-label">Last scheduled slot</span>
-                          <span className="detail-value">
-                            {formatAbsoluteShort(
-                              job.scheduleState.lastScheduledRunAt,
-                            )}{" "}
-                            ({formatRelativeTime(
-                              job.scheduleState.lastScheduledRunAt,
-                            )}
-                            )
-                          </span>
-                        </div>
-                      ) : null}
-                      {job.scheduleState?.lastTriggeredAt ? (
-                        <div className="detail-item">
-                          <span className="detail-label">Last trigger</span>
-                          <span className="detail-value">
-                            {formatAbsoluteShort(
-                              job.scheduleState.lastTriggeredAt,
-                            )}{" "}
-                            ({formatRelativeTime(
-                              job.scheduleState.lastTriggeredAt,
-                            )}
-                            )
-                          </span>
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
-                <div className="job-info-note">
-                  <span>
-                    {job.schedule?.enabled
-                      ? "Runs automatically while Paprwork is open and the gateway is running. Closing the app pauses schedules. Use play/stop for manual runs."
-                      : "Use play to run once and stop to interrupt active execution."}
+              )}
+              {job.exitCode !== undefined && job.exitCode !== null && (
+                <div className="jv2-detail-cell">
+                  <span className="jv2-detail-label">Exit Code</span>
+                  <span className="jv2-detail-value">{job.exitCode}</span>
+                </div>
+              )}
+              {job.lastEvaluation && (
+                <div className="jv2-detail-cell">
+                  <span className="jv2-detail-label">Eval</span>
+                  <span className={`jv2-detail-value ${job.lastEvaluation.passed ? "jv2-eval--pass" : "jv2-eval--fail"}`}>
+                    {Math.round(job.lastEvaluation.score * 100)}% {job.lastEvaluation.passed ? "Pass" : "Fail"}
                   </span>
                 </div>
-                <div className="job-info-note" style={{ marginTop: 10 }}>
-                  <span>Latest logs</span>
+              )}
+              {job.error && (
+                <div className="jv2-detail-cell jv2-detail-cell--full">
+                  <span className="jv2-detail-label">Error</span>
+                  <span className="jv2-detail-value jv2-detail-value--error">{job.error}</span>
                 </div>
-                <pre className="jobs-view-inline-logs">
-                  {logsByJobId[job.id] || "Click 'Load Logs' to view logs for this job."}
-                </pre>
-                <button
-                  className="btn-job-action"
-                  style={{
-                    marginTop: 8,
-                    width: "fit-content",
-                    paddingInline: 10,
-                  }}
-                  onClick={() => void loadLogs(job.id)}
-                >
-                  Load Logs
+              )}
+            </div>
+            {job.command && (
+              <pre className="jv2-command">
+                {job.command.length > 200 ? job.command.slice(0, 200) + "…" : job.command}
+              </pre>
+            )}
+            <div className="jv2-logs-section">
+              <div className="jv2-logs-header">
+                <span className="jv2-detail-label">Logs</span>
+                <button className="jv2-btn-text" onClick={() => void loadLogs(job.id)}>
+                  Refresh
                 </button>
               </div>
+              <pre className="jv2-logs">
+                {logsByJobId[job.id] || "No logs loaded yet."}
+              </pre>
             </div>
           </div>
         )}
@@ -490,203 +266,104 @@ export function JobsView() {
     );
   };
 
-  const renderFolderSection = (folder: string, folderJobs: JobRecord[]) => {
-    return (
-      <div className="jobs-folder-section" key={folder}>
-        <div className="jobs-folder-header">
-          <span className="jobs-folder-name">{folder}</span>
-          <span className="jobs-folder-count">{folderJobs.length}</span>
-        </div>
-        <div className="jobs-folder-content">
-          {folderJobs.map((job) => renderJobCard(job))}
-        </div>
-      </div>
-    );
-  };
-
-  const hasAnyJobs = filteredJobs.length > 0;
   const hasFolders = groupedJobs.folders.length > 0;
 
   return (
-    <div className="jobs-page-native">
-      {/* Header */}
-      <div className="jobs-header-native">
-        <div className="jobs-header-left">
-          <h1>Background Jobs</h1>
-          <p className="jobs-subtitle">
-            Manage scheduled tasks and background processes
-          </p>
-        </div>
-        <div className="jobs-header-right">
-          <div className="jobs-stats">
-            <div className="job-stat">
-              <span className="jobs-stat-value">{runningCount}</span>
-              <span className="jobs-stat-label">Running</span>
-            </div>
-            <div className="job-stat">
-              <span className="jobs-stat-value">{idleCount}</span>
-              <span className="jobs-stat-label">Idle</span>
-            </div>
-            <div className="job-stat">
-              <span className="jobs-stat-value">{scheduledCount}</span>
-              <span className="jobs-stat-label">Scheduled</span>
-            </div>
+    <div className="jv2">
+      {/* ── Header: title + search ── */}
+      <div className="jv2-header">
+        <div className="jv2-header-left">
+          <h1 className="jv2-title">Jobs</h1>
+          <div className="jv2-header-stats">
+            {runningCount > 0 && (
+              <span className="jv2-stat jv2-stat--running">{runningCount} running</span>
+            )}
+            <span className="jv2-stat">{jobs.length} total</span>
+            {scheduledCount > 0 && (
+              <span className="jv2-stat">{scheduledCount} scheduled</span>
+            )}
           </div>
-          {/* View toggle */}
-          <div className="jobs-view-toggle">
+        </div>
+        <div className="jv2-header-right">
+          <div className="jv2-search">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="jv2-search-icon">
+              <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M16 16l4.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search jobs…"
+            />
+          </div>
+          <div className="jv2-view-toggle">
             <button
-              className={
-                viewMode === "list"
-                  ? "view-toggle-btn view-toggle-btn--active"
-                  : "view-toggle-btn"
-              }
+              className={viewMode === "list" ? "jv2-toggle jv2-toggle--active" : "jv2-toggle"}
               onClick={() => setViewMode("list")}
-              title="List view"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                <line
-                  x1="3"
-                  y1="6"
-                  x2="21"
-                  y2="6"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                />
-                <line
-                  x1="3"
-                  y1="12"
-                  x2="21"
-                  y2="12"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                />
-                <line
-                  x1="3"
-                  y1="18"
-                  x2="21"
-                  y2="18"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                />
-              </svg>
               List
             </button>
             <button
-              className={
-                viewMode === "graph"
-                  ? "view-toggle-btn view-toggle-btn--active"
-                  : "view-toggle-btn"
-              }
+              className={viewMode === "graph" ? "jv2-toggle jv2-toggle--active" : "jv2-toggle"}
               onClick={() => setViewMode("graph")}
-              title="Graph view"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                <circle
-                  cx="5"
-                  cy="12"
-                  r="2"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-                <circle
-                  cx="19"
-                  cy="6"
-                  r="2"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-                <circle
-                  cx="19"
-                  cy="18"
-                  r="2"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-                <line
-                  x1="7"
-                  y1="11"
-                  x2="17"
-                  y2="7"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-                <line
-                  x1="7"
-                  y1="13"
-                  x2="17"
-                  y2="17"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-              </svg>
               Graph
             </button>
           </div>
         </div>
       </div>
 
-      {/* App filter chips */}
-      {appChips.length > 0 && (
-        <div className="jobs-app-filter">
-          <button
-            className={
-              selectedAppId === null ? "app-chip app-chip--active" : "app-chip"
-            }
-            onClick={() => setSelectedAppId(null)}
-          >
-            All Apps
-          </button>
-          {appChips.map(({ appId, name }) => (
+      {/* ── Toolbar: app dropdown + status filters ── */}
+      <div className="jv2-toolbar">
+        {appChips.length > 0 && (
+          <div className="jv2-app-dropdown" ref={appDropdownRef}>
             <button
-              key={appId}
-              className={
-                selectedAppId === appId
-                  ? "app-chip app-chip--active"
-                  : "app-chip"
-              }
-              onClick={() =>
-                setSelectedAppId(selectedAppId === appId ? null : appId)
-              }
+              className={`jv2-app-trigger ${selectedAppId ? "jv2-app-trigger--active" : ""}`}
+              onClick={() => setAppDropdownOpen(!appDropdownOpen)}
             >
-              {name}
+              {selectedAppName}
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
+                <polyline points="6 9 12 15 18 9" stroke="currentColor" strokeWidth="2" />
+              </svg>
             </button>
-          ))}
-        </div>
-      )}
-
-      {/* Status filters + search */}
-      <div className="jobs-filters">
-        <div className="filter-tabs">
-          {(
-            ["all", "running", "idle", "scheduled", "disabled"] as JobFilter[]
-          ).map((filter) => (
-            <button
-              key={filter}
-              className={
-                currentFilter === filter ? "filter-tab active" : "filter-tab"
-              }
-              onClick={() => setCurrentFilter(filter)}
-            >
-              {filter === "all"
-                ? "All Jobs"
-                : filter.charAt(0).toUpperCase() + filter.slice(1)}
-            </button>
-          ))}
-        </div>
-        <div className="filter-right">
-          <div className="filter-search">
-            <input
-              id="jobs-search"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search jobs..."
-            />
+            {appDropdownOpen && (
+              <div className="jv2-app-menu">
+                <button
+                  className={`jv2-app-option ${!selectedAppId ? "jv2-app-option--active" : ""}`}
+                  onClick={() => { setSelectedAppId(null); setAppDropdownOpen(false); }}
+                >
+                  All Apps
+                  <span className="jv2-app-count">{jobs.length}</span>
+                </button>
+                {appChips.map(({ appId, name, count }) => (
+                  <button
+                    key={appId}
+                    className={`jv2-app-option ${selectedAppId === appId ? "jv2-app-option--active" : ""}`}
+                    onClick={() => { setSelectedAppId(appId); setAppDropdownOpen(false); }}
+                  >
+                    {name}
+                    <span className="jv2-app-count">{count}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
+        )}
+        <div className="jv2-filters">
+          {(["all", "running", "scheduled", "idle"] as JobFilter[]).map((f) => (
+            <button
+              key={f}
+              className={currentFilter === f ? "jv2-filter jv2-filter--active" : "jv2-filter"}
+              onClick={() => setCurrentFilter(f)}
+            >
+              {f === "all" ? "All" : f.charAt(0).toUpperCase() + f.slice(1)}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Content */}
-      <div className="jobs-content-native">
+      {/* ── Content ── */}
+      <div className="jv2-content">
         {viewMode === "graph" && graph ? (
           <JobsGraph
             jobs={filteredJobs}
@@ -695,40 +372,39 @@ export function JobsView() {
             onJobClick={handleGraphNodeClick}
           />
         ) : (
-          <div className="jobs-list-native">
-            {loading && <p className="jobs-loading">Loading jobs...</p>}
-            {error && <p className="jobs-loading">{error}</p>}
-
-            {!loading && !hasAnyJobs && (
-              <div className="jobs-empty-state">
-                <h3>No Matching Jobs</h3>
-                <p>Try adjusting your filters or search</p>
+          <div className="jv2-list">
+            {loading && <p className="jv2-empty">Loading…</p>}
+            {error && <p className="jv2-empty">{error}</p>}
+            {!loading && filteredJobs.length === 0 && (
+              <div className="jv2-empty">
+                <p>No matching jobs</p>
               </div>
             )}
 
-            {/* Folder sections */}
             {hasFolders &&
-              groupedJobs.folders.map(([folder, folderJobs]) =>
-                renderFolderSection(folder, folderJobs),
-              )}
+              groupedJobs.folders.map(([folder, folderJobs]) => (
+                <div className="jv2-group" key={folder}>
+                  <div className="jv2-group-header">
+                    <span className="jv2-group-name">{folder}</span>
+                    <span className="jv2-group-count">{folderJobs.length}</span>
+                  </div>
+                  {folderJobs.map((job) => renderJobRow(job))}
+                </div>
+              ))}
 
-            {/* Ungrouped jobs */}
             {groupedJobs.ungrouped.length > 0 && hasFolders && (
-              <div className="jobs-folder-section">
-                <div className="jobs-folder-header jobs-folder-header--muted">
-                  <span className="jobs-folder-name">Ungrouped</span>
-                  <span className="jobs-folder-count">
-                    {groupedJobs.ungrouped.length}
-                  </span>
+              <div className="jv2-group">
+                <div className="jv2-group-header jv2-group-header--muted">
+                  <span className="jv2-group-name">Ungrouped</span>
+                  <span className="jv2-group-count">{groupedJobs.ungrouped.length}</span>
                 </div>
-                <div className="jobs-folder-content">
-                  {groupedJobs.ungrouped.map((job) => renderJobCard(job))}
-                </div>
+                {groupedJobs.ungrouped.map((job) => renderJobRow(job))}
               </div>
             )}
+
             {groupedJobs.ungrouped.length > 0 &&
               !hasFolders &&
-              groupedJobs.ungrouped.map((job) => renderJobCard(job))}
+              groupedJobs.ungrouped.map((job) => renderJobRow(job))}
           </div>
         )}
       </div>

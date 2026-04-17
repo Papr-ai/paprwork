@@ -16,8 +16,8 @@ const Data = {
   async load(date) {
     try {
       const sql = date
-        ? `SELECT brief_json FROM briefs WHERE date='${date}' LIMIT 1`
-        : `SELECT brief_json FROM briefs ORDER BY date DESC LIMIT 1`;
+        ? `SELECT brief_json FROM briefs WHERE date='${date}' AND brief_json IS NOT NULL LIMIT 1`
+        : `SELECT brief_json FROM briefs WHERE brief_json IS NOT NULL ORDER BY date DESC LIMIT 1`;
       const rows = await this.query(sql);
       if (rows[0]?.brief_json) return JSON.parse(rows[0].brief_json);
     } catch(e) {}
@@ -25,7 +25,7 @@ const Data = {
   },
   async dates() {
     try {
-      const rows = await this.query('SELECT DISTINCT date FROM briefs ORDER BY date DESC LIMIT 30');
+      const rows = await this.query('SELECT DISTINCT date FROM briefs WHERE brief_json IS NOT NULL ORDER BY date DESC LIMIT 30');
       return rows.map(r => r.date);
     } catch(e) { return []; }
   },

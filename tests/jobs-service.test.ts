@@ -8,8 +8,10 @@ import { getAgentService } from "../src/gateway/services/AgentService.js";
 const tmpRoots: string[] = [];
 
 afterEach(async () => {
+  // Brief delay to let file watchers release handles before cleanup
+  await new Promise((resolve) => setTimeout(resolve, 50));
   for (const root of tmpRoots.splice(0, tmpRoots.length)) {
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   }
 });
 
@@ -139,5 +141,129 @@ describe("JobsService", () => {
     await service.runJob(job.id);
     const logs = await service.getLogs(job.id);
     expect(logs).toContain("0002_test.sql");
+  });
+});
+
+describe("JobsService index corruption recovery", () => {
+  test("recovers job names from job.json when jobs.json is wiped", async () => {
+    const service = await setupService();
+    const job1 = await service.createJob({
+      name: "LinkedIn Scraper",
+      type: "python",
+      command: "python3 scrape.py",
+    });
+    const job2 = await service.createJob({
+      name: "Weekly Newsletter",
+      type: "agent",
+      command: "Write the weekly newsletter",
+    });
+    const job3 = await service.createJob({
+      name: "Deploy Script",
+      type: "shell",
+      command: "echo deploy",
+    });
+
+    const jobsIndexPath = path.join(
+      process.env.HOME!,
+      "Papr",
+      "data",
+      "jobs.json",
+    );
+
+    // Verify job.json files exist on disk with real names
+    for (const job of [job1, job2, job3]) {
+      const jobJsonPath = path.join(
+        process.env.HOME!,
+        "Papr",
+        "Jobs",
+        job.id,
+        "job.json",
+      );
+      const data = JSON.parse(await fs.readFile(jobJsonPath, "utf-8"));
+      expect(data.name).toBe(job.name);
+    }
+
+    // Simulate corruption: wipe jobs.json to empty
+    await fs.writeFile(jobsIndexPath, "", "utf-8");
+
+    // Create a fresh service that will hit the corrupted index and recover
+    const recovered = new JobsService();
+    await recovered.initialize();
+    const jobs = await recovered.listJobs();
+
+    // All three user-created jobs should be recovered with real names
+    const scraper = jobs.find((j) => j.name === "LinkedIn Scraper");
+    expect(scraper).toBeDefined();
+    expect(scraper?.type).toBe("python");
+
+    const newsletter = jobs.find((j) => j.name === "Weekly Newsletter");
+    expect(newsletter).toBeDefined();
+    expect(newsletter?.type).toBe("agent");
+
+    const deploy = jobs.find((j) => j.name === "Deploy Script");
+    expect(deploy).toBeDefined();
+    expect(deploy?.type).toBe("shell");
+
+    // No job should have a UUID as its name (the bug we're preventing)
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    for (const job of jobs) {
+      expect(
+        uuidRegex.test(job.name),
+        `Job "${job.id}" has UUID as name — recovery failed to read job.json`,
+      ).toBe(false);
+    }
+  });
+
+  test("recovers job names when jobs.json is deleted entirely", async () => {
+    const service = await setupService();
+    const created = await service.createJob({
+      name: "Nightly Backup",
+      type: "bash",
+      command: "tar czf backup.tgz .",
+    });
+
+    const jobsIndexPath = path.join(
+      process.env.HOME!,
+      "Papr",
+      "data",
+      "jobs.json",
+    );
+    await fs.rm(jobsIndexPath);
+
+    const recovered = new JobsService();
+    await recovered.initialize();
+    const jobs = await recovered.listJobs();
+
+    const backup = jobs.find((j) => j.name === "Nightly Backup");
+    expect(backup).toBeDefined();
+    expect(backup?.type).toBe("bash");
+    expect(backup?.command).toBe("tar czf backup.tgz .");
+  });
+
+  test("recovered job names are never raw UUIDs when job.json exists", async () => {
+    const service = await setupService();
+    const created = await service.createJob({
+      name: "Data Pipeline",
+      type: "python",
+      command: "python3 pipeline.py",
+    });
+
+    // Simulate corruption: empty JSON array (no jobs)
+    const jobsIndexPath = path.join(
+      process.env.HOME!,
+      "Papr",
+      "data",
+      "jobs.json",
+    );
+    await fs.writeFile(jobsIndexPath, "[]", "utf-8");
+
+    const recovered = new JobsService();
+    await recovered.initialize();
+    const jobs = await recovered.listJobs();
+
+    const pipeline = jobs.find((j) => j.id === created.id);
+    expect(pipeline).toBeDefined();
+    expect(pipeline?.name).not.toBe(created.id);
+    expect(pipeline?.name).toBe("Data Pipeline");
   });
 });

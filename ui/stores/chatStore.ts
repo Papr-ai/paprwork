@@ -6,6 +6,8 @@
 
 import { create } from "zustand";
 import type { ChatMetadata, ChatMessage, ChatState } from "../types/chat";
+import { gateway } from "../src/lib/gateway";
+import { trackEvent } from "../lib/telemetry";
 
 // Re-export types for backward compatibility
 export type { ChatMetadata, ChatMessage, ChatState };
@@ -274,21 +276,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       newChatStates.set(chatId, { ...chatState, lastSelectedModelId: modelId });
 
       if (previousModelId && previousModelId !== modelId) {
-        import("../lib/telemetry").then(({ trackEvent }) => {
+        try {
           trackEvent("paprwork_model_changed", {
             from_model: previousModelId,
             to_model: modelId,
           } as Record<string, unknown>);
-        }).catch(() => {});
+        } catch { /* ignore */ }
       }
 
       if (typeof window !== "undefined") {
         try {
           localStorage.setItem("paprwork_last_model_id", modelId);
           // Also save to Gateway settings for reliable persistence
-          import('../src/lib/gateway.js').then(({ gateway }) => {
-            gateway.send('settings:save-ui-preferences', { lastModelId: modelId }).catch(() => {});
-          });
+          gateway.send('settings:save-ui-preferences', { lastModelId: modelId }).catch(() => {});
         } catch {
           /* ignore */
         }
@@ -314,7 +314,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   // Load UI preferences from settings (called on app mount)
   loadUIPreferences: async () => {
     try {
-      const { gateway } = await import('../src/lib/gateway.js');
       const response = await gateway.send('settings:get', {});
       if (response.success && response.data?.uiPreferences) {
         const { lastModelId } = response.data.uiPreferences;

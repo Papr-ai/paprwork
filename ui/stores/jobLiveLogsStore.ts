@@ -7,6 +7,7 @@
  */
 
 import { create } from "zustand";
+import { gateway } from "../src/lib/gateway";
 
 type LogsState = Map<string, string[]>;
 type NamesState = Map<string, string>;
@@ -49,7 +50,6 @@ export const useJobLiveLogsStore = create<JobLiveLogsStore>((set, get) => ({
 
     // Fetch from gateway
     try {
-      const { gateway } = await import("../src/lib/gateway.js");
       const response = await gateway.send("jobs:get", { jobId });
       const job = response.data as { name?: string };
       if (job?.name) {

@@ -51,7 +51,7 @@ export default defineConfig(({ mode }) => {
     outDir: "../dist/ui",
     emptyOutDir: true,
     minify: "esbuild",
-    chunkSizeWarningLimit: 1000,
+    chunkSizeWarningLimit: 1100,
     rollupOptions: {
       output: {
         manualChunks(id) {
@@ -71,13 +71,21 @@ export default defineConfig(({ mode }) => {
           ) {
             return "editor";
           }
-          if (id.includes("node_modules/react-syntax-highlighter/")) {
+          if (
+            id.includes("node_modules/react-syntax-highlighter/") ||
+            id.includes("node_modules/refractor/") ||
+            id.includes("node_modules/prismjs/") ||
+            id.includes("node_modules/highlight.js/") ||
+            id.includes("node_modules/lowlight/")
+          ) {
             return "syntax";
           }
           if (
             id.includes("node_modules/react-markdown/") ||
             id.includes("node_modules/remark-math/") ||
-            id.includes("node_modules/rehype-katex/")
+            id.includes("node_modules/rehype-katex/") ||
+            id.includes("node_modules/katex/") ||
+            id.includes("node_modules/remark-gfm/")
           ) {
             return "markdown";
           }

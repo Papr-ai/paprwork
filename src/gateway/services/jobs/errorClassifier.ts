@@ -36,6 +36,11 @@ export function classifyError(error: unknown): ErrorType {
   // 5xx server errors are transient
   if (/5\d{2}/.test(msg)) return "transient";
 
+  // Context limit errors are handled internally by streamAgent compression.
+  // If they still reach the classifier, retrying won't help (context is still too large).
+  if (msg.includes("context limit") || msg.includes("context_length_exceeded"))
+    return "permanent";
+
   // Permanent (non-retryable) errors
   if (msg.includes("unauthorized") || msg.includes("401")) return "permanent";
   if (msg.includes("invalid api key") || msg.includes("invalid_api_key"))
@@ -68,6 +73,8 @@ export function getErrorClassificationReason(error: unknown): string {
     return "Network error (will retry)";
   if (/5\d{2}/.test(msg)) return "Server error (will retry)";
 
+  if (msg.includes("context limit") || msg.includes("context_length_exceeded"))
+    return "Context limit exceeded (compression should have handled this, no retry)";
   if (msg.includes("unauthorized") || msg.includes("401"))
     return "Authentication failed (permanent error, no retry)";
   if (msg.includes("invalid api key"))
