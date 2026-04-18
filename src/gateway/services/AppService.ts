@@ -603,8 +603,9 @@ export class AppService {
   }
 
   /**
-   * Extract SVG favicon from an HTML string's <link rel="icon" href="data:image/svg+xml,..."> tag.
-   * Mirrors the logic from Paprwork v1 appManager.js extractFaviconFromHTML.
+   * Extract favicon from an HTML string's <link rel="icon"> tag.
+   * Supports SVG data URIs (preferred — returns raw SVG string) and
+   * PNG/other base64 data URIs (fallback — returns the full data URI).
    */
   private extractFaviconFromHTML(html: string): string | null {
     const linkMatch = html.match(/<link[^>]+rel=["']icon["'][^>]*>/i);
@@ -614,33 +615,47 @@ export class AppService {
     if (!hrefMatch) return null;
 
     const href = hrefMatch[1];
-    if (!href.startsWith("data:image/svg+xml,")) return null;
 
-    let svgContent = href.substring("data:image/svg+xml,".length);
-    try {
-      if (svgContent.includes("%")) {
-        svgContent = decodeURIComponent(svgContent);
+    // Prefer SVG — compact and scalable
+    if (href.startsWith("data:image/svg+xml,")) {
+      let svgContent = href.substring("data:image/svg+xml,".length);
+      try {
+        if (svgContent.includes("%")) {
+          svgContent = decodeURIComponent(svgContent);
+        }
+      } catch {
+        return null;
       }
-    } catch {
+
+      if (
+        !svgContent.trim().startsWith("<svg") ||
+        !svgContent.includes("</svg>")
+      ) {
+        return null;
+      }
+
+      // Use single quotes for JSON compatibility
+      svgContent = svgContent.replace(/"/g, "'");
+
+      // Ensure small dimensions for tab/favorites use (14px)
+      if (!svgContent.includes("width=")) {
+        svgContent = svgContent.replace("<svg", "<svg width='14' height='14'");
+      }
+
+      return svgContent;
+    }
+
+    // Fallback: PNG/GIF/WEBP base64 data URI — store the full data URI as the icon
+    if (href.startsWith("data:image/") && href.includes(";base64,")) {
+      // Only accept reasonably-sized icons (< 32KB encoded) to avoid bloating the index
+      if (href.length <= 44000) {
+        return href;
+      }
+      console.log("[AppService] Skipping oversized base64 favicon:", href.length, "chars");
       return null;
     }
 
-    if (
-      !svgContent.trim().startsWith("<svg") ||
-      !svgContent.includes("</svg>")
-    ) {
-      return null;
-    }
-
-    // Use single quotes for JSON compatibility
-    svgContent = svgContent.replace(/"/g, "'");
-
-    // Ensure small dimensions for tab/favorites use (14px)
-    if (!svgContent.includes("width=")) {
-      svgContent = svgContent.replace("<svg", "<svg width='14' height='14'");
-    }
-
-    return svgContent;
+    return null;
   }
 
   /**
