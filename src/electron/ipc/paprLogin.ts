@@ -19,6 +19,33 @@ import { CustomKeysStorage, SettingsStorage } from "../../core/storage/index.js"
 import { invalidateKeyCache } from "./customKeys.js";
 import * as crypto from "crypto";
 
+/**
+ * Sync user email to gateway settings file so the gateway process
+ * (including CodeIndexerService) can use it as external_user_id.
+ */
+async function syncEmailToGatewaySettings(email: string): Promise<void> {
+  try {
+    const fsP = await import("fs/promises");
+    const pathM = await import("path");
+    const osM = await import("os");
+    const settingsPath = pathM.join(osM.homedir(), "Papr", "data", "settings.json");
+    let settings: Record<string, unknown> = {};
+    try {
+      const raw = await fsP.readFile(settingsPath, "utf-8");
+      settings = JSON.parse(raw);
+    } catch { /* file may not exist yet */ }
+    if (!settings.profile || typeof settings.profile !== "object") {
+      settings.profile = { name: "", email: "", imageUrl: "" };
+    }
+    (settings.profile as Record<string, string>).email = email;
+    await fsP.mkdir(pathM.dirname(settingsPath), { recursive: true });
+    await fsP.writeFile(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
+    console.log(`[PaprLogin] Synced email to gateway settings: ${email}`);
+  } catch (e) {
+    console.warn("[PaprLogin] Failed to sync email to gateway settings:", e);
+  }
+}
+
 // Auth0 configuration — env vars for dev, defaults for prod
 // Remove https:// prefix if present (to avoid double https in URLs)
 const AUTH0_DOMAIN = (process.env.AUTH0_DOMAIN || "papr.auth0.com").replace(/^https?:\/\//, "");
@@ -957,6 +984,9 @@ export function initializePaprLoginIPC(
         activeNamespaceName: provision.namespaceName,
       });
 
+
+      // Sync email to gateway settings for CodeIndexerService
+      await syncEmailToGatewaySettings(email || "");
       console.log("[PaprLogin] Login complete. API key stored as PAPR_API_KEY.");
 
       // Notify renderer
@@ -1367,6 +1397,9 @@ export async function handlePaprAuthCallback(
       activeNamespaceName: provision.namespaceName,
     });
 
+
+    // Sync email to gateway settings for CodeIndexerService
+    await syncEmailToGatewaySettings(email || "");
     console.log("[PaprLogin] Login complete. API key stored as PAPR_API_KEY.");
 
     // Notify renderer

@@ -173,6 +173,23 @@ async function getPaprClient(): Promise<Papr> {
   });
 }
 
+/**
+ * Get user email from gateway settings for use as external_user_id.
+ * When a namespace is shared by multiple users, this scopes memories to the individual.
+ */
+async function getUserEmail(): Promise<string | undefined> {
+  try {
+    const { readFile } = await import("fs/promises");
+    const { join } = await import("path");
+    const { homedir } = await import("os");
+    const raw = await readFile(join(homedir(), "Papr", "data", "settings.json"), "utf-8");
+    const settings = JSON.parse(raw);
+    return settings?.profile?.email || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export const addAgentMemoryTool = createTool({
   id: "add_agent_memory",
   description:
@@ -194,7 +211,7 @@ export const addAgentMemoryTool = createTool({
 
       const response = await client.memory.add({
         content: args.content,
-        external_user_id: args.externalUserId,
+        external_user_id: args.externalUserId || await getUserEmail(),
         metadata: {
           role: args.role,
           category: args.category,
@@ -240,7 +257,7 @@ export const searchAgentMemoryTool = createTool({
 
       const response = await client.memory.search({
         query: args.query,
-        external_user_id: args.externalUserId,
+        external_user_id: args.externalUserId || await getUserEmail(),
         max_memories: args.maxMemories ?? 20,
         max_nodes: 15,
         enable_agentic_graph: true,
