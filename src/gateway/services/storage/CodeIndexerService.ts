@@ -64,7 +64,6 @@ export interface ProjectMetadata {
 export class CodeIndexerService {
   private paprDir: string;
   private schemaId: string;
-  private userEmail: string | null = null;
   
   constructor(
     private client: Papr,
@@ -74,26 +73,7 @@ export class CodeIndexerService {
     this.paprDir = paprDir || path.join(os.homedir(), 'Papr');
     this.schemaId = schemaId;
   }
-  
-  /**
-   * Get user email from gateway settings for use as external_user_id.
-   * Cached after first read. Falls back to undefined (API key auth only).
-   */
-  private async getUserEmail(): Promise<string | undefined> {
-    if (this.userEmail !== null) return this.userEmail || undefined;
-    try {
-      const settingsPath = path.join(os.homedir(), 'Papr', 'data', 'settings.json');
-      const raw = fs.readFileSync(settingsPath, 'utf-8');
-      const settings = JSON.parse(raw);
-      this.userEmail = settings?.profile?.email || '';
-      if (this.userEmail) {
-        console.log(`[CodeIndexer] Using user email as external_user_id: ${this.userEmail}`);
-      }
-    } catch {
-      this.userEmail = '';
-    }
-    return this.userEmail || undefined;
-  }
+
   
   /**
    * Index all code from ~/Papr folder
@@ -467,7 +447,7 @@ export class CodeIndexerService {
     
     await this.client.memory.add({
       content: `Project: ${metadata.name}\nType: ${metadata.type}\nID: ${metadata.project_id}`,
-      external_user_id: await this.getUserEmail(),  // scope to user within namespace
+      // external_user_id omitted — API key scopes to developer automatically
       metadata: {
         role: 'assistant',
         category: 'learning',
@@ -516,7 +496,7 @@ export class CodeIndexerService {
     
     await this.client.memory.add({
       content: truncatedContent,
-      external_user_id: await this.getUserEmail(),  // scope to user within namespace
+      // external_user_id omitted — API key scopes to developer automatically
       metadata: {
         role: 'assistant',
         category: 'learning',
