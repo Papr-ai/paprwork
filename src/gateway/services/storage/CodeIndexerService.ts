@@ -446,7 +446,8 @@ export class CodeIndexerService {
     
     await this.client.memory.add({
       content: `Project: ${metadata.name}\nType: ${metadata.type}\nID: ${metadata.project_id}`,
-      external_user_id: 'paprwork_system',
+      // Omit external_user_id so memories are stored under the developer's own user_id
+      // (resolved from the API key). This ensures search can find code memories.
       metadata: {
         role: 'assistant',
         category: 'learning',
@@ -495,7 +496,8 @@ export class CodeIndexerService {
     
     await this.client.memory.add({
       content: truncatedContent,
-      external_user_id: 'paprwork_system',
+      // Omit external_user_id so memories are stored under the developer's own user_id
+      // (resolved from the API key). This ensures search can find code memories.
       metadata: {
         role: 'assistant',
         category: 'learning',
