@@ -28,33 +28,43 @@ jobs:
         env:
           REQUIRE_PAPR_AUTH: true
 
-      - name: Import signing certificate
+      - name: Import signing certificates
         env:
           MAC_CERTIFICATE_P12: ${{ secrets.MAC_CERTIFICATE_P12 }}
           MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          MAC_INSTALLER_CERTIFICATE_P12: ${{ secrets.MAC_INSTALLER_CERTIFICATE_P12 }}
+          MAC_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.MAC_INSTALLER_CERTIFICATE_PASSWORD }}
         run: |
-          CERT_PATH=$RUNNER_TEMP/certificate.p12
+          APP_CERT_PATH=$RUNNER_TEMP/app_certificate.p12
+          INSTALLER_CERT_PATH=$RUNNER_TEMP/installer_certificate.p12
           KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain-db
           KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
 
-          # Decode certificate from base64
-          echo "$MAC_CERTIFICATE_P12" | base64 --decode > "$CERT_PATH"
-          echo "Certificate file size: $(wc -c < "$CERT_PATH") bytes"
+          # Decode certificates from base64
+          echo "$MAC_CERTIFICATE_P12" | base64 --decode > "$APP_CERT_PATH"
+          echo "App certificate file size: $(wc -c < "$APP_CERT_PATH") bytes"
+          echo "$MAC_INSTALLER_CERTIFICATE_P12" | base64 --decode > "$INSTALLER_CERT_PATH"
+          echo "Installer certificate file size: $(wc -c < "$INSTALLER_CERT_PATH") bytes"
 
           # Create temporary keychain
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          # Import certificate into keychain
-          security import "$CERT_PATH" -P "$MAC_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          # Import Application certificate (for signing the .app)
+          security import "$APP_CERT_PATH" -P "$MAC_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          # Import Installer certificate (for signing the .pkg)
+          security import "$INSTALLER_CERT_PATH" -P "$MAC_INSTALLER_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          # Add to search list so codesign finds it
+          # Add to search list so codesign/productbuild finds them
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
 
-          # Verify the certificate is available
+          # Verify both certificates are available
+          echo "=== Code signing identities ==="
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          echo "=== All identities ==="
+          security find-identity -v "$KEYCHAIN_PATH"
 
       - name: Build Mac distributables
         run: npx electron-builder --mac --arm64 --x64 --publish always
@@ -68,7 +78,7 @@ jobs:
         if: always()
         run: |
           security delete-keychain $RUNNER_TEMP/build.keychain-db 2>/dev/null || true
-          rm -f $RUNNER_TEMP/certificate.p12
+          rm -f $RUNNER_TEMP/app_certificate.p12 $RUNNER_TEMP/installer_certificate.p12
 
       - name: Upload Mac artifacts
         uses: actions/upload-artifact@v4
