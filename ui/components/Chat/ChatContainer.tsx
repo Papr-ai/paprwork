@@ -3,7 +3,7 @@
  * Brings together MessageList and InputBar with agent integration
  */
 
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { MessageList } from "./MessageList";
 import { InputBar, InputBarRef } from "./InputBar";
 import { useAgent } from "../../hooks/useAgent";
@@ -122,32 +122,19 @@ function findMergedArtifact(chatId: string): ArtifactContext | null {
   return null;
 }
 
+// Stable empty array to avoid new reference on every render when no chatState exists
+const EMPTY_MESSAGES: never[] = [];
+
 interface ChatContainerProps {
   chatId: string;
 }
 
 export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
-  // Get messages and state for THIS specific chat (not activeChat)
-  const messages = useChatStore((state) => {
-    const chatState = state.chatStates.get(chatId);
-    return chatState?.messages || [];
-  });
-  const chatIsLoading = useChatStore((state) => {
-    const chatState = state.chatStates.get(chatId);
-    return chatState?.isLoading || false;
-  });
-  const isSending = useChatStore((state) => {
-    const chatState = state.chatStates.get(chatId);
-    return chatState?.isSending || false;
-  });
-
-  // Log after getting messages (not inside the selector)
-  useEffect(() => {
-    const chatState = useChatStore.getState().chatStates.get(chatId);
-    console.log(
-      `[ChatContainer] Rendering chatId=${chatId}, hasChatState=${!!chatState}, messageCount=${chatState?.messages?.length || 0}`,
-    );
-  }, [chatId, messages.length]);
+  // Combined selector — single subscription instead of three, reduces re-render triggers
+  const chatState = useChatStore((state) => state.chatStates.get(chatId));
+  const messages = chatState?.messages ?? EMPTY_MESSAGES;
+  const chatIsLoading = chatState?.isLoading ?? false;
+  const isSending = chatState?.isSending ?? false;
 
   const error = useChatStore((state) => state.error);
 

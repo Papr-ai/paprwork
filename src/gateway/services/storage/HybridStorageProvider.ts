@@ -72,21 +72,29 @@ export class HybridStorageProvider implements IStorageProvider {
     limit?: number,
     skip?: number,
   ): Promise<StoredMessage[]> {
-    // Prefer PAPR — it has the most up-to-date data (cross-device sync)
-    // Rich content (thinking, toolCalls, sequence) is serialized in the content field
-    if (this.syncEnabled) {
-      try {
-        const paprMessages = await this.papr.loadMessages(chatId, limit, skip);
-        if (paprMessages.length > 0) {
-          return paprMessages;
-        }
-      } catch (error) {
-        console.warn("Failed to load from PAPR, falling back to local:", error);
-      }
+    // LOCAL-FIRST STRATEGY: Always load from local SQLite (source of truth)
+    // This prevents missing messages when PAPR sync is incomplete or delayed.
+    // PAPR sync for assistant messages can fail silently (large payloads with
+    // tool calls, thinking, etc.), leaving PAPR with only user messages.
+    // Using local-first ensures the UI always shows all messages.
+    const localMessages = await this.local.loadMessages(chatId, limit, skip);
+
+    // If sync disabled or local has messages, use local
+    if (!this.syncEnabled || localMessages.length > 0) {
+      return localMessages;
     }
 
-    // Fallback to local DB
-    return this.local.loadMessages(chatId, limit, skip);
+    // Local is empty — try PAPR as fallback (e.g., cross-device scenario)
+    try {
+      const paprMessages = await this.papr.loadMessages(chatId, limit, skip);
+      if (paprMessages.length > 0) {
+        return paprMessages;
+      }
+    } catch (error) {
+      console.warn("[HybridStorage] PAPR fallback failed:", error);
+    }
+
+    return localMessages;
   }
 
   async loadMessagesForLLM(chatId: string): Promise<any[]> {

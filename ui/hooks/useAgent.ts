@@ -22,6 +22,7 @@ export function useAgent() {
   const streamingReasoningRef = useRef<Map<string, string>>(new Map());
   const toolCallsMapRef = useRef<Map<string, Map<string, any>>>(new Map());
   const updateBatchRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
+  const reasoningBatchRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const activeStreamRequestByChatRef = useRef<Map<string, string>>(new Map());
 
   // Sequence tracking (V1-style interleaving)
@@ -124,34 +125,42 @@ export function useAgent() {
       switch (chunk.type) {
         case "reasoning-delta":
           {
-            // Append reasoning delta
+            // Append reasoning delta to ref (always immediate)
             const text = (chunk.payload as { text: string }).text || "";
             const currentReasoning =
               streamingReasoningRef.current.get(chatId) || "";
             streamingReasoningRef.current.set(chatId, currentReasoning + text);
 
-            // Update the message with new reasoning content directly in chatState
-            const { chatStates } = useChatStore.getState();
-            const chatState = chatStates.get(chatId);
-            const streamingMessageId =
-              streamingMessageIdRef.current.get(chatId);
-            if (chatState && streamingMessageId) {
-              const updatedMessages = chatState.messages.map((msg) =>
-                msg.id === streamingMessageId
-                  ? {
-                      ...msg,
-                      streamingReasoning:
-                        streamingReasoningRef.current.get(chatId) || "",
-                    }
-                  : msg,
-              );
-              const newChatStates = new Map(chatStates);
-              newChatStates.set(chatId, {
-                ...chatState,
-                messages: updatedMessages,
-              });
-              useChatStore.setState({ chatStates: newChatStates });
+            // Batch reasoning state updates to avoid excessive re-renders (50ms, same as text-delta)
+            const existingReasoningTimeout = reasoningBatchRef.current.get(chatId);
+            if (existingReasoningTimeout) {
+              clearTimeout(existingReasoningTimeout);
             }
+            const reasoningTimeout = setTimeout(() => {
+              const { chatStates } = useChatStore.getState();
+              const chatState = chatStates.get(chatId);
+              const streamingMessageId =
+                streamingMessageIdRef.current.get(chatId);
+              if (chatState && streamingMessageId) {
+                const updatedMessages = chatState.messages.map((msg) =>
+                  msg.id === streamingMessageId
+                    ? {
+                        ...msg,
+                        streamingReasoning:
+                          streamingReasoningRef.current.get(chatId) || "",
+                      }
+                    : msg,
+                );
+                const newChatStates = new Map(chatStates);
+                newChatStates.set(chatId, {
+                  ...chatState,
+                  messages: updatedMessages,
+                });
+                useChatStore.setState({ chatStates: newChatStates });
+              }
+              reasoningBatchRef.current.delete(chatId);
+            }, 50); // Update at most every 50ms (20 FPS)
+            reasoningBatchRef.current.set(chatId, reasoningTimeout);
           }
           break;
 
@@ -500,6 +509,12 @@ export function useAgent() {
             if (existingTimeout) {
               clearTimeout(existingTimeout);
               updateBatchRef.current.delete(chatId);
+            }
+            // Also flush any pending reasoning batch
+            const existingReasoningTimeout = reasoningBatchRef.current.get(chatId);
+            if (existingReasoningTimeout) {
+              clearTimeout(existingReasoningTimeout);
+              reasoningBatchRef.current.delete(chatId);
             }
 
             // ✅ Use finalMessage from backend when available (Codex, or when streaming chunks missed)

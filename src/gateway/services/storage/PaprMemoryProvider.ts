@@ -78,29 +78,45 @@ export class PaprMemoryProvider implements IStorageProvider {
         customMetadata.incomplete = true;
       }
 
-      // Build lightweight rich content for PAPR sync.
-      // Strip sequence (redundant, only for local UI reconstruction) and thinking
-      // (only needed for local UI display, already in SQLite).
-      // Truncate tool results to match server-side truncation (500 chars).
-      // This keeps payloads under Parse Server's body size limit (~100KB).
+      // Build structured content blocks (List[Dict]) for PAPR sync.
+      // This is the API's native format — avoids server-side parsing of custom JSON strings.
+      // Strip sequence (redundant) and limit tool results to keep payloads manageable.
       const toolCalls = message.toolCalls ?? [];
-      const richContent = message.role === "assistant" && toolCalls.length > 0
-        ? JSON.stringify({
-            text: message.content,
-            toolCalls: toolCalls.map((tc) => ({
-              id: tc.id,
-              name: tc.name,
-              args: tc.args,
-              result: tc.result ? String(tc.result).substring(0, 500) : undefined,
-              status: tc.status,
-            })),
-            model: message.model,
-          })
-        : message.content;
+      let contentForPapr: string | Array<Record<string, any>> = message.content;
+
+      if (message.role === "assistant" && toolCalls.length > 0) {
+        const contentBlocks: Array<Record<string, any>> = [];
+
+        if (message.content) {
+          contentBlocks.push({ type: "text", text: message.content });
+        }
+
+        if (message.thinking) {
+          contentBlocks.push({ type: "thinking", thinking: message.thinking });
+        }
+
+        for (const tc of toolCalls) {
+          contentBlocks.push({
+            type: "tool_use",
+            id: tc.id,
+            name: tc.name,
+            input: tc.args ?? {},
+          });
+          if (tc.result != null) {
+            contentBlocks.push({
+              type: "tool_result",
+              tool_use_id: tc.id,
+              content: String(tc.result).substring(0, 500),
+            });
+          }
+        }
+
+        contentForPapr = contentBlocks;
+      }
 
       // POST to PAPR /v1/messages using SDK
       const response = await this.client.messages.store({
-        content: richContent,
+        content: contentForPapr,
         role: message.role,
         sessionId: chatId,
         process_messages: true, // Let PAPR do batch analysis & auto-summarize

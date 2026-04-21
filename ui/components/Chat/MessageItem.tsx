@@ -479,7 +479,7 @@ function renderSequence(
   return <>{elements}</>;
 }
 
-export const MessageItem: React.FC<MessageItemProps> = ({ chatId, message }) => {
+const MessageItemInner: React.FC<MessageItemProps> = ({ chatId, message }) => {
   const isUser = message.role === "user";
   const content = message.isStreaming
     ? message.streamingContent || message.content
@@ -814,3 +814,17 @@ export const MessageItem: React.FC<MessageItemProps> = ({ chatId, message }) => 
     </div>
   );
 };
+
+// Memoize to prevent re-renders of unchanged messages during streaming
+export const MessageItem = React.memo(MessageItemInner, (prev, next) => {
+  // Only re-render if the message actually changed
+  if (prev.message.id !== next.message.id) return false;
+  if (prev.message.content !== next.message.content) return false;
+  if (prev.message.streamingContent !== next.message.streamingContent) return false;
+  if (prev.message.streamingReasoning !== next.message.streamingReasoning) return false;
+  if (prev.message.reasoning !== next.message.reasoning) return false;
+  if (prev.message.isStreaming !== next.message.isStreaming) return false;
+  if (prev.message.sequence !== next.message.sequence) return false;
+  if (prev.chatId !== next.chatId) return false;
+  return true;
+});
