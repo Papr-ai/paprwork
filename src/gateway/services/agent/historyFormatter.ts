@@ -244,8 +244,10 @@ export function formatHistoryMessagesForModel(
         let toolIndex = 0;
 
         for (const tc of toolCalls) {
-          const toolCallId =
-            typeof tc.id === "string" ? tc.id : `tc-hist-${toolIndex}`;
+          // Anthropic requires tool_use IDs to match ^[a-zA-Z0-9_-]+$
+          // IDs from PAPR history may contain dots or other invalid chars
+          const rawId = typeof tc.id === "string" ? tc.id : `tc-hist-${toolIndex}`;
+          const toolCallId = rawId.replace(/[^a-zA-Z0-9_-]/g, "_");
           const toolName = typeof tc.name === "string" ? tc.name : "unknown";
 
           contentParts.push({

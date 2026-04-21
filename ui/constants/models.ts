@@ -54,6 +54,29 @@ export const CHAT_MODELS: AIModel[] = [
     maxTokens: 16000,
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
+  {
+    id: "claude-opus-4-7",
+    name: "Claude Opus 4.7",
+    provider: "anthropic",
+    description: "Latest frontier model with enhanced reasoning",
+    group: "Anthropic",
+    supportsThinking: true,
+    defaultThinkingBudget: 32000,
+    maxTokens: 16000,
+    requiresApiKey: "ANTHROPIC_API_KEY",
+  },
+  {
+    id: "claude-opus-4-7-high",
+    name: "Claude Opus 4.7 (High Reasoning)",
+    provider: "anthropic",
+    description: "Opus 4.7 with extended thinking for deep analysis",
+    group: "Anthropic",
+    supportsThinking: true,
+    extendedThinking: true,
+    defaultThinkingBudget: 64000,
+    maxTokens: 16000,
+    requiresApiKey: "ANTHROPIC_API_KEY",
+  },
 
   // OpenAI — weakest to strongest
   {
