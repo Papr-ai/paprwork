@@ -6,4 +6,12 @@
   "dbPath": "",
   "tables": ["briefs"],
   "linkedAt": "2026-04-07T00:00:00.000Z"
+}, {
+  "id": "6c840212-9cdc-4b2e-a3ae-951ee2f277a1:Weekly War Room — Orchestrator (6c840212)",
+  "type": "sqlite",
+  "jobId": "6c840212-9cdc-4b2e-a3ae-951ee2f277a1",
+  "alias": "Weekly War Room — Orchestrator (6c840212)",
+  "dbPath": "",
+  "tables": [],
+  "linkedAt": "2026-03-30T08:10:01.322Z"
 }]

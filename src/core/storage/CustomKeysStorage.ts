@@ -83,9 +83,7 @@ export class CustomKeysStorage {
         const fileContent = await fs.readFile(this.keysFile, "utf-8");
         const data = JSON.parse(fileContent);
         this.keys = new Map(Object.entries(data));
-        console.log(
-          `[CustomKeys] Loaded ${this.keys.size} custom keys from storage`,
-        );
+        //console.log(`[CustomKeys] Loaded ${this.keys.size} custom keys from storage`,);
       }
     } catch (error) {
       console.error("[CustomKeys] Failed to load keys:", error);

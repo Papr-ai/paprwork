@@ -114,7 +114,7 @@ export class JobsScheduler {
       this.wakeTimer = null;
     }
     const nowMs = Date.now();
-    const ms = msUntilSoonestNextRun(jobs, nowMs);
+    const ms = msUntilSoonestNextRun(jobs, nowMs, this.runningLeases);
     if (ms === null) {
       return;
     }
@@ -158,23 +158,23 @@ export class JobsScheduler {
       dueCount++;
       
       if (job.status === "running" || job.status === "waiting_permission") {
-        console.log(`[JobsScheduler] Skipping job ${job.id} (${job.name}) - status: ${job.status}`);
+        //console.log(`[JobsScheduler] Skipping job ${job.id} (${job.name}) - status: ${job.status}`);
         skippedRunning++;
         continue;
       }
       
       const dueAt = job.scheduleState?.nextRunAt;
       if (!dueAt) {
-        console.log(`[JobsScheduler] Skipping job ${job.id} (${job.name}) - no nextRunAt`);
+        //console.log(`[JobsScheduler] Skipping job ${job.id} (${job.name}) - no nextRunAt`);
         continue;
       }
       const leaseKey = this.getLeaseKey(job.id);
       if (this.runningLeases.has(leaseKey)) {
-        console.log(`[JobsScheduler] Skipping job ${job.id} (${job.name}) - already has lease`);
+        //console.log(`[JobsScheduler] Skipping job ${job.id} (${job.name}) - already has lease`);
         continue;
       }
       
-      console.log(`[JobsScheduler] Launching job ${job.id} (${job.name}) for slot ${dueAt}`);
+      //console.log(`[JobsScheduler] Launching job ${job.id} (${job.name}) for slot ${dueAt}`);
       this.runningLeases.add(leaseKey);
       launchedCount.value += 1;
       const launch = (async () => {

@@ -8,7 +8,7 @@ type JobFilter = "all" | "running" | "idle" | "scheduled";
 type ViewMode = "list" | "graph";
 
 export function JobsView() {
-  const { jobs, graph, loading, error, runJob, stopJob, loadLogs, logsByJobId } =
+  const { jobs, graph, loading, error, runJob, stopJob, loadLogs, logsByJobId, defaultModel } =
     useJobs();
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [currentFilter, setCurrentFilter] = useState<JobFilter>("all");
@@ -59,30 +59,40 @@ export function JobsView() {
   }, [jobs, currentFilter, searchQuery, appFilteredJobIds]);
 
   const groupedJobs = useMemo(() => {
-    const folderMap = new Map<string, JobRecord[]>();
+    const appMap = new Map<string, JobRecord[]>();
     const ungrouped: JobRecord[] = [];
-    const folderToAppName = new Map<string, string>();
+
+    // Build map of appId -> app name
+    const appIdToName = new Map<string, string>();
     if (graph) {
-      for (const [, appLink] of Object.entries(graph.appLinks)) {
-        for (const jobId of appLink.jobIds) {
-          const job = jobs.find((j) => j.id === jobId);
-          if (job?.folder) folderToAppName.set(job.folder.toLowerCase(), appLink.name);
-        }
+      for (const [appId, appLink] of Object.entries(graph.appLinks)) {
+        appIdToName.set(appId, appLink.name);
       }
     }
+
+    // Group jobs by which app claims them (via graph.appLinks)
     for (const job of filteredJobs) {
-      if (job.folder) {
-        const displayName = folderToAppName.get(job.folder.toLowerCase()) || job.folder;
-        const group = folderMap.get(displayName) ?? [];
-        group.push(job);
-        folderMap.set(displayName, group);
-      } else {
+      let grouped = false;
+      if (graph) {
+        // Check if any app claims this job
+        for (const [appId, appLink] of Object.entries(graph.appLinks)) {
+          if (appLink.jobIds.includes(job.id)) {
+            const group = appMap.get(appLink.name) ?? [];
+            group.push(job);
+            appMap.set(appLink.name, group);
+            grouped = true;
+            break; // Job belongs to first matching app
+          }
+        }
+      }
+      if (!grouped) {
         ungrouped.push(job);
       }
     }
-    const sortedFolders = [...folderMap.entries()].sort(([a], [b]) => a.localeCompare(b));
-    return { folders: sortedFolders, ungrouped };
-  }, [filteredJobs, graph, jobs]);
+
+    const sortedApps = [...appMap.entries()].sort(([a], [b]) => a.localeCompare(b));
+    return { apps: sortedApps, ungrouped };
+  }, [filteredJobs, graph]);
 
   const appChips = useMemo(() => {
     if (!graph) return [];
@@ -218,6 +228,16 @@ export function JobsView() {
     const isExpanded = expandedJobId === job.id;
     const isGraphSelected = job.id === graphSelectedJobId;
 
+    // Find which apps use this job (computed inline, no hooks)
+    const linkedApps: string[] = [];
+    if (graph) {
+      for (const [, appLink] of Object.entries(graph.appLinks)) {
+        if (appLink.jobIds.includes(job.id)) {
+          linkedApps.push(appLink.name);
+        }
+      }
+    }
+
     return (
       <div
         className={`jv2-row ${isExpanded ? "jv2-row--expanded" : ""} ${isGraphSelected ? "jv2-row--highlighted" : ""}`}
@@ -276,6 +296,16 @@ export function JobsView() {
                   {job.status}
                 </span>
               </div>
+              {(job.type === "agent" || job.type === "subagent") && (
+                <div className="jv2-detail-cell">
+                  <span className="jv2-detail-label">Model</span>
+                  <span className="jv2-detail-value">
+                    {job.model 
+                      ? `${job.provider ? `${job.provider}/` : ""}${job.model}`
+                      : `Default (${defaultModel})`}
+                  </span>
+                </div>
+              )}
               <div className="jv2-detail-cell">
                 <span className="jv2-detail-label">Last Run</span>
                 <span className="jv2-detail-value">{formatRelativeTime(job.lastRunAt)}</span>
@@ -306,11 +336,20 @@ export function JobsView() {
                   <span className="jv2-detail-value jv2-detail-value--error">{job.error}</span>
                 </div>
               )}
+              {linkedApps.length > 0 && (
+                <div className="jv2-detail-cell jv2-detail-cell--full">
+                  <span className="jv2-detail-label">Used By Apps</span>
+                  <span className="jv2-detail-value">{linkedApps.join(", ")}</span>
+                </div>
+              )}
             </div>
             {job.command && (
-              <pre className="jv2-command">
-                {job.command.length > 200 ? job.command.slice(0, 200) + "…" : job.command}
-              </pre>
+              <div className="jv2-command-section">
+                <span className="jv2-detail-label">Command</span>
+                <pre className="jv2-command">
+                  {job.command.length > 300 ? job.command.slice(0, 300) + "…" : job.command}
+                </pre>
+              </div>
             )}
             <div className="jv2-logs-section">
               <div className="jv2-logs-header">
@@ -329,7 +368,7 @@ export function JobsView() {
     );
   };
 
-  const hasFolders = groupedJobs.folders.length > 0;
+  const hasFolders = groupedJobs.apps.length > 0;
 
   return (
     <div className="jv2">
@@ -445,13 +484,13 @@ export function JobsView() {
             )}
 
             {hasFolders &&
-              groupedJobs.folders.map(([folder, folderJobs]) => (
-                <div className="jv2-group" key={folder}>
+              groupedJobs.apps.map(([appName, appJobs]) => (
+                <div className="jv2-group" key={appName}>
                   <div className="jv2-group-header">
-                    <span className="jv2-group-name">{folder}</span>
-                    <span className="jv2-group-count">{folderJobs.length}</span>
+                    <span className="jv2-group-name">{appName}</span>
+                    <span className="jv2-group-count">{appJobs.length}</span>
                   </div>
-                  {folderJobs.map((job) => renderJobRow(job))}
+                  {appJobs.map((job) => renderJobRow(job))}
                 </div>
               ))}
 

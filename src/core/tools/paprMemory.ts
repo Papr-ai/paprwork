@@ -7,7 +7,7 @@ import { z } from "zod";
 const addMemorySchema = z
   .object({
     content: z.string().min(1),
-    externalUserId: z.string().optional(),
+    // externalUserId removed - API key scopes to user automatically
     role: z.enum(["user", "assistant"]).optional(),
     category: z
       .enum([
@@ -50,7 +50,6 @@ const searchMemorySchema = z.object({
     .describe(
       "2-3 sentence query for best results. Include specific details, context, and time frame.",
     ),
-  externalUserId: z.string().optional(),
   maxMemories: z
     .number()
     .int()
@@ -194,7 +193,7 @@ export const addAgentMemoryTool = createTool({
 
       const response = await client.memory.add({
         content: args.content,
-        external_user_id: args.externalUserId,
+        // external_user_id omitted - API key scopes to user automatically
         metadata: {
           role: args.role,
           category: args.category,
@@ -240,7 +239,7 @@ export const searchAgentMemoryTool = createTool({
 
       const response = await client.memory.search({
         query: args.query,
-        external_user_id: args.externalUserId,
+        // external_user_id omitted - API key scopes to user automatically
         max_memories: args.maxMemories ?? 20,
         max_nodes: 15,
         enable_agentic_graph: true,

@@ -138,11 +138,13 @@ export function isScheduleDue(
  */
 export function msUntilSoonestNextRun(
   jobs: Iterable<{
+    id: string;
     schedule?: JobSchedule;
     scheduleState?: JobScheduleState;
     status?: JobStatus;
   }>,
   nowMs: number,
+  activeLeasesPrefix: Set<string> = new Set(),
 ): number | null {
   let minFuture: number | null = null;
   for (const job of jobs) {
@@ -150,6 +152,11 @@ export function msUntilSoonestNextRun(
       continue;
     }
     if (job.status === "running" || job.status === "waiting_permission") {
+      continue;
+    }
+    // Skip jobs with active scheduler leases
+    const leaseKey = `schedule:${job.id}`;
+    if (activeLeasesPrefix.has(leaseKey)) {
       continue;
     }
     const raw = job.scheduleState?.nextRunAt;

@@ -7,11 +7,23 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 32px 40px 64px;
   width: 100%;
+  box-sizing: border-box;
+}
+
+.jv2 > * {
   max-width: 960px;
   margin: 0 auto;
-  box-sizing: border-box;
+  padding-left: 40px;
+  padding-right: 40px;
+}
+
+.jv2 > :first-child {
+  padding-top: 32px;
+}
+
+.jv2 > :last-child {
+  padding-bottom: 64px;
 }
 
 /* ── Header ──────────────────────────────────────────────────────────────── */
@@ -552,6 +564,13 @@
 
 .jv2-eval--pass { color: #22c55e; font-weight: 600; }
 .jv2-eval--fail { color: #ef4444; font-weight: 600; }
+
+.jv2-command-section {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 
 .jv2-command {
   margin: 0 0 16px;

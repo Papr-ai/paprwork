@@ -19,8 +19,8 @@ async function main() {
     process.exit(1);
   }
 
-  console.log('✓ Found OPENAI_API_KEY in .env.local');
-  console.log(`  Key: ${OPENAI_API_KEY.substring(0, 10)}...`);
+  //console.log('✓ Found OPENAI_API_KEY in .env.local');
+  //console.log(`  Key: ${OPENAI_API_KEY.substring(0, 10)}...`);
 
   // Wait for Electron app to be ready
   await app.whenReady();
@@ -41,12 +41,12 @@ async function main() {
   });
 
   console.log('✓ Added OPENAI_API_KEY to secure storage');
-  console.log(`  ID: ${result.id}`);
+  //console.log(`  ID: ${result.id}`);
   
   // Verify it can be retrieved
   const retrieved = await storage.getKeyByName('OPENAI_API_KEY');
   if (retrieved === OPENAI_API_KEY) {
-    console.log('✓ Verified: Key can be retrieved from secure storage');
+    //console.log('✓ Verified: Key can be retrieved from secure storage');
   } else {
     console.error('❌ Verification failed: Retrieved key does not match');
   }

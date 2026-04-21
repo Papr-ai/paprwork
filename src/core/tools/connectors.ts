@@ -13,6 +13,9 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { execFile } from "child_process";
 import { promisify } from "util";
+import { homedir } from "os";
+import { join } from "path";
+import { mkdirSync } from "fs";
 import type { ToolResult } from "../types/index.js";
 
 const execFileAsync = promisify(execFile);
@@ -20,6 +23,9 @@ const execFileAsync = promisify(execFile);
 const STRIPE_CLI_TIMEOUT_MS = 30_000;
 const PROVISION_TIMEOUT_MS = 120_000;
 const INSTALL_TIMEOUT_MS = 60_000;
+
+/** Dedicated directory for Stripe Projects config & state */
+const STRIPE_PROJECT_DIR = join(homedir(), "Papr", "stripe-project");
 
 interface ExecResult {
   stdout: string;
@@ -30,12 +36,14 @@ async function runCommand(
   command: string,
   args: string[],
   timeoutMs: number,
+  cwd?: string,
 ): Promise<ExecResult> {
   try {
     const result = await execFileAsync(command, args, {
       timeout: timeoutMs,
       env: { ...process.env },
       shell: true,
+      ...(cwd ? { cwd } : {}),
     });
     return { stdout: result.stdout || "", stderr: result.stderr || "" };
   } catch (error: unknown) {
@@ -190,10 +198,14 @@ async function ensureStripeReady(): Promise<ToolResult | null> {
 async function ensureProjectInitialized(
   projectName: string,
 ): Promise<{ success: boolean; message: string }> {
+  // Ensure dedicated project directory exists
+  mkdirSync(STRIPE_PROJECT_DIR, { recursive: true });
+
   const statusResult = await runCommand(
     "stripe",
     ["projects", "status", "--json"],
     STRIPE_CLI_TIMEOUT_MS,
+    STRIPE_PROJECT_DIR,
   );
 
   if (
@@ -205,6 +217,7 @@ async function ensureProjectInitialized(
       "stripe",
       ["projects", "init", projectName, "--no-interactive"],
       STRIPE_CLI_TIMEOUT_MS,
+      STRIPE_PROJECT_DIR,
     );
     if (initResult.stderr.includes("error")) {
       return {
@@ -366,6 +379,7 @@ export const connectServiceTool = createTool({
             "stripe",
             catalogArgs,
             STRIPE_CLI_TIMEOUT_MS,
+            STRIPE_PROJECT_DIR,
           );
 
           let catalogData: unknown;
@@ -422,6 +436,7 @@ export const connectServiceTool = createTool({
               "--auto-confirm",
             ],
             PROVISION_TIMEOUT_MS,
+            STRIPE_PROJECT_DIR,
           );
 
           if (
@@ -452,6 +467,7 @@ export const connectServiceTool = createTool({
               "stripe",
               ["projects", "env", "--pull", "--json"],
               STRIPE_CLI_TIMEOUT_MS,
+              STRIPE_PROJECT_DIR,
             );
             const syncedVars = parseEnvVarsFromOutput(
               envSyncResult.stdout || envSyncResult.stderr,
@@ -509,10 +525,12 @@ export const connectServiceTool = createTool({
         }
 
         case "status": {
+          mkdirSync(STRIPE_PROJECT_DIR, { recursive: true });
           const result = await runCommand(
             "stripe",
             ["projects", "status", "--json"],
             STRIPE_CLI_TIMEOUT_MS,
+            STRIPE_PROJECT_DIR,
           );
 
           let statusData: unknown;
@@ -555,6 +573,7 @@ export const connectServiceTool = createTool({
               "--auto-confirm",
             ],
             PROVISION_TIMEOUT_MS,
+            STRIPE_PROJECT_DIR,
           );
 
           if (

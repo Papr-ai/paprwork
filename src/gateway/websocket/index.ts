@@ -160,6 +160,7 @@ export function setupWebSocketHandlers(wss: WebSocketServer): void {
               region?: string; // State code like "CA"
               regionName?: string; // Full state name like "California"
               country?: string;
+              countryCode?: string;
               status?: string;
             };
 
@@ -178,6 +179,7 @@ export function setupWebSocketHandlers(wss: WebSocketServer): void {
                   city: data.city,
                   region: data.region, // Use abbreviated state code
                   country: data.country,
+                  country_code: data.countryCode,
                 },
               });
             } else {

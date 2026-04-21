@@ -80,6 +80,7 @@ export class JobsService {
   private jobDatabase: JobDatabase;
   private executors: IJobExecutor[];
   private initialized: boolean;
+  private saveLock: Promise<void> | null = null; // Prevent concurrent saves
 
   constructor() {
     const homeDir = os.homedir();
@@ -174,19 +175,26 @@ export class JobsService {
         
         if (!stat.isDirectory()) continue;
 
-        // Read job ID from job-id.txt
-        const jobIdPath = path.join(sourceDir, "job-id.txt");
-        let jobId: string;
+        // Read job.json to get job configuration
+        const jobJsonPath = path.join(sourceDir, "job.json");
+        let jobConfig: JobRecord;
         try {
-          jobId = (await fs.readFile(jobIdPath, "utf-8")).trim();
+          const jobJsonContent = await fs.readFile(jobJsonPath, "utf-8");
+          jobConfig = JSON.parse(jobJsonContent);
         } catch {
-          console.warn(`[JobsService] Skipping default job ${jobDirName}: no job-id.txt`);
+          console.warn(`[JobsService] Skipping default job ${jobDirName}: no job.json`);
+          continue;
+        }
+
+        const jobId = jobConfig.id;
+        if (!jobId) {
+          console.warn(`[JobsService] Skipping default job ${jobDirName}: no id in job.json`);
           continue;
         }
 
         // Check if job already exists (both in registry and on disk)
         if (this.jobs.has(jobId)) {
-          console.log(`[JobsService] Default job already in registry: ${jobId}`);
+          console.log(`[JobsService] Default job already in registry: ${jobId} (${jobConfig.name})`);
           continue;
         }
 
@@ -202,76 +210,28 @@ export class JobsService {
         }
 
         if (needsInstall) {
-          // Copy job files (but not data/ directory if it exists)
-          await fs.mkdir(targetDir, { recursive: true });
-          const entries = await fs.readdir(sourceDir, { withFileTypes: true });
-          for (const entry of entries) {
-            const sourcePath = path.join(sourceDir, entry.name);
-            const targetPath = path.join(targetDir, entry.name);
-            if (entry.isDirectory()) {
-              // Skip data directory (will be created with db below)
-              if (entry.name === 'data') continue;
-              await fs.cp(sourcePath, targetPath, { recursive: true });
-            } else {
-              await fs.copyFile(sourcePath, targetPath);
-            }
-          }
-          console.log(`[JobsService] Copied default job files: ${jobId} (${jobDirName})`);
+          // Copy entire job folder including data/ with empty database
+          await fs.cp(sourceDir, targetDir, { recursive: true });
+          console.log(`[JobsService] Copied default job files: ${jobId} (${jobConfig.name})`);
         }
 
-        // Read metadata.json to get job details
-        const metadataPath = path.join(sourceDir, "metadata.json");
-        let metadata: Partial<JobRecord> & { description?: string; isDefault?: boolean };
-        try {
-          const metadataContent = await fs.readFile(metadataPath, "utf-8");
-          metadata = JSON.parse(metadataContent);
-        } catch {
-          console.warn(`[JobsService] No metadata.json found for default job ${jobId}, using defaults`);
-          metadata = {
-            id: jobId,
-            name: jobDirName,
-            type: "agent",
-            command: "",
-          };
-        }
-
-        // Create job entry in registry
+        // Register job in memory (reset status to idle, clear runtime fields)
         const now = new Date().toISOString();
         const job: JobRecord = {
-          id: jobId,
-          name: metadata.name || jobDirName,
-          type: (metadata.type as JobType) || "agent",
+          ...jobConfig,
           status: "idle" as JobStatus,
-          command: metadata.command || "",
-          createdAt: metadata.createdAt || now,
           updatedAt: now,
-          ...(metadata.schedule ? { schedule: metadata.schedule } : {}),
-          ...(metadata.requirements ? { requirements: metadata.requirements } : {}),
-          ...(metadata.provider ? { provider: metadata.provider } : {}),
-          ...(metadata.model ? { model: metadata.model } : {}),
+          // Clear runtime fields from bundled job.json
+          lastRunAt: undefined,
+          error: undefined,
+          exitCode: undefined,
+          lastOutput: undefined,
+          currentExecutionId: undefined,
+          currentAttempt: undefined,
+          completedAt: undefined,
         };
 
         this.jobs.set(jobId, job);
-        
-        // Initialize SQLite database if init-db.sql exists
-        const initDbPath = path.join(sourceDir, "init-db.sql");
-        try {
-          await fs.access(initDbPath);
-          const dataDir = path.join(targetDir, "data");
-          await fs.mkdir(dataDir, { recursive: true });
-          const dbPath = path.join(dataDir, "data.db");
-          
-          // Create database and execute init script
-          const db = new Database(dbPath);
-          const initSql = await fs.readFile(initDbPath, "utf-8");
-          db.exec(initSql);
-          db.close();
-          
-          console.log(`[JobsService] Initialized database for job: ${jobId}`);
-        } catch {
-          // No init-db.sql or error initializing - that's okay
-        }
-        
         installedCount++;
         console.log(`[JobsService] Registered default job: ${jobId} - ${job.name}`);
       }
@@ -508,14 +468,33 @@ export class JobsService {
   }
 
   private async saveJobs(): Promise<void> {
-    const list = Array.from(this.jobs.values()).sort(
-      (a, b) =>
-        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-    );
-    const data = JSON.stringify(list, null, 2);
-    const tmpPath = this.jobsIndexPath + `.tmp-${process.pid}`;
-    await fs.writeFile(tmpPath, data, "utf8");
-    await fs.rename(tmpPath, this.jobsIndexPath);
+    // Wait for any in-flight save to complete
+    if (this.saveLock) {
+      await this.saveLock;
+    }
+
+    // Create new save promise
+    this.saveLock = (async () => {
+      try {
+        const list = Array.from(this.jobs.values()).sort(
+          (a, b) =>
+            new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+        );
+        const data = JSON.stringify(list, null, 2);
+        
+        // Use timestamp + random suffix to ensure unique temp file
+        const tmpPath = this.jobsIndexPath + `.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        
+        await fs.writeFile(tmpPath, data, "utf8");
+        await fs.rename(tmpPath, this.jobsIndexPath);
+      } finally {
+        // Clear lock after save completes or fails
+        this.saveLock = null;
+      }
+    })();
+
+    // Wait for this save to complete
+    await this.saveLock;
   }
 
   private getJobDir(jobId: string): string {

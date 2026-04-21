@@ -870,12 +870,12 @@ class GatewayProcessSupervisor {
         }
       } else if (msg.type === "CUSTOM_KEYS_LIST") {
         try {
-          console.log(`[Electron] Received CUSTOM_KEYS_LIST request: ${msg.requestId}`);
+          //console.log(`[Electron] Received CUSTOM_KEYS_LIST request: ${msg.requestId}`);
           const keys = await storage.listKeys();
-          console.log(`[Electron] Loaded ${keys.length} keys from storage:`, keys.map(k => k.name));
+          //console.log(`[Electron] Loaded ${keys.length} keys from storage:`, keys.map(k => k.name));
           if (proc === this.process) {
             proc.send({ type: "CUSTOM_KEYS_RESPONSE", requestId: msg.requestId, keys });
-            console.log(`[Electron] Sent CUSTOM_KEYS_RESPONSE with ${keys.length} keys`);
+            //console.log(`[Electron] Sent CUSTOM_KEYS_RESPONSE with ${keys.length} keys`);
           }
         } catch (error) {
           console.error("[Electron] custom-keys:list error:", error);
@@ -883,14 +883,14 @@ class GatewayProcessSupervisor {
         }
       } else if (msg.type === "CUSTOM_KEYS_GET_BY_NAME") {
         try {
-          console.log(`[Electron] Received CUSTOM_KEYS_GET_BY_NAME request: ${msg.requestId} for key: "${msg.name}"`);
+          //console.log(`[Electron] Received CUSTOM_KEYS_GET_BY_NAME request: ${msg.requestId} for key: "${msg.name}"`);
           const value = await storage.getKeyByName(msg.name);
           const found = value ? "found" : "not found";
           const preview = value ? `${value.substring(0, 10)}...` : "null";
-          console.log(`[Electron] Key "${msg.name}" ${found} (preview: ${preview})`);
+          //console.log(`[Electron] Key "${msg.name}" ${found} (preview: ${preview})`);
           if (proc === this.process) {
             proc.send({ type: "CUSTOM_KEYS_RESPONSE", requestId: msg.requestId, value });
-            console.log(`[Electron] Sent CUSTOM_KEYS_RESPONSE with value ${found}`);
+            //console.log(`[Electron] Sent CUSTOM_KEYS_RESPONSE with value ${found}`);
           }
         } catch (error) {
           console.error("[Electron] custom-keys:get-by-name error:", error);

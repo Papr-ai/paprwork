@@ -6,7 +6,6 @@ dist/
 release/
 
 # Environment
-.env
 .env.*
 !.env.example
 
@@ -31,6 +30,7 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+logs/
 
 # Test coverage & reports
 coverage/
@@ -54,3 +54,8 @@ certificate.*
 # Literal ~ directory (created when path expansion fails e.g. ~/PAPR/jobs)
 ~/
 .env.build
+
+.projects/cache
+.projects/vault
+.env
+.env.local

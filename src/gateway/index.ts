@@ -1189,6 +1189,9 @@ async function startGateway(): Promise<void> {
 // Start the gateway
 startGateway();
 
+// Increase max listeners for process IPC (CustomKeysService uses many concurrent requests)
+process.setMaxListeners(20);
+
 // Handle uncaught errors
 process.on("uncaughtException", (error) => {
   console.error("[Gateway] Uncaught exception:", error);

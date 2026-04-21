@@ -163,11 +163,41 @@ const createJobSchema = z.object({
       "Provider for agent/subagent jobs. Overrides default. Example: 'openai', 'anthropic', 'ollama'",
     ),
   model: z
-    .string()
-    .min(1)
+    .enum([
+      // Anthropic
+      "claude-haiku-4-5",
+      "claude-sonnet-4-6",
+      "claude-opus-4-6",
+      // OpenAI
+      "gpt-5.4-mini",
+      "gpt-5.4-low",
+      "gpt-5.4",
+      "gpt-5.4-high",
+      "gpt-5.3-codex",
+      // Google
+      "gemini-2.5-flash-lite",
+      "gemini-2.5-flash",
+      "gemini-3-flash-preview",
+      "gemini-3-pro-preview",
+      // Ollama - Qwen
+      "qwen3.5:0.8b",
+      "qwen3.5:2b",
+      "qwen3.5:4b-q4_k_m",
+      "qwen3.5:latest",
+      "qwen3.5:9b-q4_k_m",
+      "qwen3.5:27b",
+      // Ollama - Gemma
+      "gemma3:270m",
+      "gemma3:1b",
+      "gemma3:4b-it-q4_k_m",
+      "gemma3:4b-it-qat",
+      "gemma3:latest",
+      "gemma3:12b-it-q4_k_m",
+      "gemma3:27b",
+    ])
     .optional()
     .describe(
-      "Model ID for agent/subagent jobs. Overrides default. Example: 'gpt-5.4', 'claude-sonnet-4-6', 'qwen3.5:latest', 'gemma3:4b'",
+      "Model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-4-6', 'gpt-5.4', 'gemini-2.5-flash', 'qwen3.5:latest'",
     ),
   recipe: recipeConfigSchema.optional().describe(
     "Execution recipe configuration. When enabled, an agent evaluates each run against the recipe's quality rubric. " +
@@ -793,11 +823,41 @@ const updateJobSchema = z.object({
       "Update provider for agent/subagent jobs. Example: 'openai', 'anthropic', 'ollama'",
     ),
   model: z
-    .string()
-    .min(1)
+    .enum([
+      // Anthropic
+      "claude-haiku-4-5",
+      "claude-sonnet-4-6",
+      "claude-opus-4-6",
+      // OpenAI
+      "gpt-5.4-mini",
+      "gpt-5.4-low",
+      "gpt-5.4",
+      "gpt-5.4-high",
+      "gpt-5.3-codex",
+      // Google
+      "gemini-2.5-flash-lite",
+      "gemini-2.5-flash",
+      "gemini-3-flash-preview",
+      "gemini-3-pro-preview",
+      // Ollama - Qwen
+      "qwen3.5:0.8b",
+      "qwen3.5:2b",
+      "qwen3.5:4b-q4_k_m",
+      "qwen3.5:latest",
+      "qwen3.5:9b-q4_k_m",
+      "qwen3.5:27b",
+      // Ollama - Gemma
+      "gemma3:270m",
+      "gemma3:1b",
+      "gemma3:4b-it-q4_k_m",
+      "gemma3:4b-it-qat",
+      "gemma3:latest",
+      "gemma3:12b-it-q4_k_m",
+      "gemma3:27b",
+    ])
     .optional()
     .describe(
-      "Update model ID for agent/subagent jobs. Example: 'gpt-5.4', 'claude-sonnet-4-6', 'qwen3.5:latest', 'gemma3:4b'",
+      "Update model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-4-6', 'gpt-5.4', 'gemini-2.5-flash', 'qwen3.5:latest'",
     ),
 });
 
@@ -1723,13 +1783,17 @@ This makes the app available in Papr Work's "Community Apps" tab for all users.`
       await bundleService.initialize();
       await appService.initialize();
 
-      const bundleId = args.bundleId || `bundle-${Date.now()}`;
-
       let bundleName = args.name;
       if (!bundleName) {
         const app = await appService.getApp(args.appId);
         bundleName = app?.title || `App ${args.appId.slice(0, 8)}`;
       }
+
+      const bundleId = args.bundleId || bundleName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "")
+        || `bundle-${Date.now()}`;
 
       let jobIds = args.jobIds || [];
       if (!jobIds.length) {
@@ -1787,7 +1851,7 @@ This makes the app available in Papr Work's "Community Apps" tab for all users.`
           ? `\n## Privacy Scrub\n\nThe following private data was automatically removed during export:\n${[...scrubReport.removedFiles, ...scrubReport.removedDirs.map((d) => `${d}/`)].map((f) => `- ${f}`).join("\n")}\n\nTotal removed: ${(scrubReport.totalBytesRemoved / 1024).toFixed(1)}KB\n`
           : "";
 
-      const readmeContent = `# ${args.name}
+      const readmeContent = `# ${bundleName}
 
 ${args.description || ""}
 
@@ -1851,6 +1915,9 @@ ${args.version} - Created ${new Date().toISOString().split("T")[0]}
 # Data directories
 **/data/
 
+# Paprwork editor backups
+**/*.backup.*
+
 # OS files
 .DS_Store
 Thumbs.db
@@ -1897,8 +1964,8 @@ Thumbs.db
       const appRecord = await appService.getApp(args.appId);
       const registryEntry = {
         bundleId,
-        name: args.name,
-        description: args.description ?? "",
+        name: bundleName,
+        description: args.description || manifest.description || "",
         version: args.version,
         author: "<FILL_IN: run 'gh api user -q .login' to get your GitHub username>",
         tags: [] as string[],

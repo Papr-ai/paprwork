@@ -73,10 +73,10 @@ export class CustomKeysService {
     // Check if IPC channel is connected (will be false if disconnected)
     const isConnected = process.connected === true;
     
-    console.log(
+    /*console.log(
       `[CustomKeysService] IPC availability check:`,
       `hasSend=${hasSend}, isConnected=${isConnected}, connected=${process.connected}`
-    );
+    );*/
     
     if (!hasSend) {
       console.warn("[CustomKeysService] No process.send - not spawned with IPC");
@@ -190,7 +190,7 @@ export class CustomKeysService {
       await this.initialize();
     }
 
-    console.log(`[CustomKeysService] Getting key by name: "${name}"`);
+    //console.log(`[CustomKeysService] Getting key by name: "${name}"`);
 
     // Gateway → Electron IPC
     if (this.ipcAvailable) {

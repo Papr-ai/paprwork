@@ -330,56 +330,70 @@ export class AgentService {
       t = performance.now();
       const historyRaw = await this.storageManager.loadMessagesForLLM(chatId);
 
+      console.log(`\n${'='.repeat(100)}`);
+      console.log(`🔵 STAGE 2.5: MESSAGES RECEIVED FROM STORAGE (Before LLM formatting)`);
+      console.log(`${'='.repeat(100)}`);
+      console.log(`[STAGE 2.5] Received ${historyRaw.length} items from storage`);
+      
+      // Check for summary
+      const hasSummary = historyRaw.some(item => typeof item === "object" && item !== null && "__summary" in item);
+      console.log(`[STAGE 2.5] Contains __summary object: ${hasSummary}`);
+      
+      // Log role distribution
+      const roleCount = historyRaw.reduce((acc: any, item: any) => {
+        if ('__summary' in item) {
+          acc['__summary'] = (acc['__summary'] || 0) + 1;
+        } else {
+          acc[item.role] = (acc[item.role] || 0) + 1;
+        }
+        return acc;
+      }, {});
+      console.log(`[STAGE 2.5] Item distribution:`, roleCount);
+      
+      // Log first few items
+      console.log(`[STAGE 2.5] First 5 items from storage:`);
+      historyRaw.slice(0, 5).forEach((item: any, i: number) => {
+        if ('__summary' in item) {
+          console.log(`  [${i}] __summary (${item.__summary.length} chars)`);
+        } else {
+          const content = typeof item.content === 'string' ? item.content : JSON.stringify(item.content);
+          const timestamp = item.timestamp || item.createdAt || 'no-timestamp';
+          console.log(`  [${i}] ${item.role.padEnd(10)} | ${timestamp.substring(11, 19)} | ${content.substring(0, 50)}...`);
+        }
+      });
+
       // Extract summary if present (injected by storage providers)
       let conversationSummary: string | undefined;
-      
-      // DEBUG: Check historyRaw before filtering
-      if (historyRaw.length > 0) {
-        console.log(`[AgentService] 🔍 historyRaw[0] keys:`, Object.keys(historyRaw[0]));
-        if (historyRaw.length > 1) {
-          console.log(`[AgentService] 🔍 historyRaw[1] keys:`, Object.keys(historyRaw[1]));
-          console.log(`[AgentService] 🔍 historyRaw[1]:`, JSON.stringify(historyRaw[1]).substring(0, 200));
-        }
-      }
       
       const history = historyRaw.filter((msg) => {
         if (typeof msg === "object" && msg !== null && "__summary" in msg) {
           conversationSummary = (msg as { __summary: string }).__summary;
+          console.log(`[STAGE 2.5] ✅ Extracted summary (${conversationSummary.length} chars)`);
           return false; // Remove from history
         }
         return true; // Keep in history
       });
 
-      timings.loadHistory = performance.now() - t;
+      console.log(`[STAGE 2.5] After extracting summary: ${history.length} messages`);
+      
+      // Log role distribution after summary extraction
+      const historyRoleCount = history.reduce((acc: any, m: any) => {
+        acc[m.role] = (acc[m.role] || 0) + 1;
+        return acc;
+      }, {});
+      console.log(`[STAGE 2.5] Role distribution (no summary):`, historyRoleCount);
+      
+      // Log last 5 messages that will go to LLM
+      console.log(`[STAGE 2.5] Last 5 messages going to LLM:`);
+      history.slice(-5).forEach((msg: any, i: number) => {
+        const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+        const timestamp = msg.timestamp || msg.createdAt || 'no-timestamp';
+        const actualIdx = history.length - 5 + i;
+        console.log(`  [${actualIdx}] ${msg.role.padEnd(10)} | ${timestamp.substring(11, 19)} | ${content.substring(0, 50)}...`);
+      });
+      console.log(`${'='.repeat(100)}\n`);
 
-      console.log(`[AgentService] 📥 Loaded ${historyRaw.length} messages from storage (before summary extraction)`);
-      console.log(`[AgentService] 📥 After summary extraction: ${history.length} messages`);
-      
-      // DEBUG: Check what fields exist in first message
-      if (history.length > 0) {
-        console.log(`[AgentService] 🔍 First message keys:`, Object.keys(history[0]));
-        console.log(`[AgentService] 🔍 First message:`, JSON.stringify(history[0]).substring(0, 200));
-      }
-      
-      // Log FIRST 5 and LAST 10 messages from raw history to debug ordering
-      console.log(`[AgentService] 📋 FIRST 5 messages in history array:`);
-      history.slice(0, 5).forEach((msg: any, i: number) => {
-        const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-        const preview = content.substring(0, 60);
-        // Try to extract timestamp if available
-        const timestamp = msg.timestamp || msg.createdAt || 'no-timestamp';
-        console.log(`  [${i}] ${msg.role} [${timestamp}]: ${preview}...`);
-      });
-      
-      console.log(`[AgentService] 📋 LAST 10 messages in history array:`);
-      const startIdx = Math.max(0, history.length - 10);
-      history.slice(startIdx).forEach((msg: any, i: number) => {
-        const actualIdx = startIdx + i;
-        const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-        const preview = content.substring(0, 60);
-        const timestamp = msg.timestamp || msg.createdAt || 'no-timestamp';
-        console.log(`  [${actualIdx}] ${msg.role} [${timestamp}]: ${preview}...`);
-      });
+      timings.loadHistory = performance.now() - t;
 
       const historyCount = history.length;
       const historySize = JSON.stringify(history).length;
@@ -997,38 +1011,53 @@ export class AgentService {
         });
 
         // 🔍 LOG EXACT CONTEXT SENT TO PI-AI
-        console.log(`\n${'='.repeat(80)}`);
-        console.log(`📤 [PI-AI] EXACT CONTEXT BEING SENT TO LLM`);
-        console.log(`${'='.repeat(80)}`);
-        console.log(`Model: ${piModelId}`);
-        console.log(`Provider: ${piProvider}`);
-        console.log(`Total messages: ${piContext.messages?.length || 0}`);
-        console.log(`\nFIRST 5 MESSAGES (should be oldest):`);
-        console.log(`${'─'.repeat(80)}`);
+        console.log(`\n${'='.repeat(100)}`);
+        console.log(`🟡 STAGE 3: SENDING CONTEXT TO LLM (PI-AI)`);
+        console.log(`${'='.repeat(100)}`);
+        console.log(`[STAGE 3] Model: ${piModelId}`);
+        console.log(`[STAGE 3] Provider: ${piProvider}`);
+        console.log(`[STAGE 3] Total messages: ${piContext.messages?.length || 0}`);
+        console.log(`[STAGE 3] System prompt length: ${piContext.systemPrompt?.length || 0} chars`);
+        console.log(`[STAGE 3] Tools available: ${Object.keys(tools).length}`);
+        
+        // Log role distribution
+        if (piContext.messages && Array.isArray(piContext.messages)) {
+          const roleCount = piContext.messages.reduce((acc: any, m: any) => {
+            acc[m.role] = (acc[m.role] || 0) + 1;
+            return acc;
+          }, {});
+          console.log(`[STAGE 3] Role distribution in context:`, roleCount);
+        }
+        
+        console.log(`\n[STAGE 3] FIRST 5 MESSAGES (should be oldest):`);
+        console.log(`${'─'.repeat(100)}`);
         if (piContext.messages && Array.isArray(piContext.messages)) {
           piContext.messages.slice(0, 5).forEach((msg: any, i: number) => {
             const contentPreview = typeof msg.content === 'string' 
               ? msg.content.substring(0, 80)
-              : JSON.stringify(msg.content).substring(0, 80);
+              : Array.isArray(msg.content)
+                ? `Array[${msg.content.length}]: ${JSON.stringify(msg.content[0]).substring(0, 60)}...`
+                : JSON.stringify(msg.content).substring(0, 80);
             const timestamp = msg.timestamp || 'no-timestamp';
-            console.log(`[${i}] ${msg.role} [ts:${timestamp}]: ${contentPreview}...`);
+            console.log(`  [${i}] ${msg.role.padEnd(12)} | ts:${timestamp} | ${contentPreview}`);
           });
         }
-        console.log(`\nLAST 10 MESSAGES (should be newest):`);
-        console.log(`${'─'.repeat(80)}`);
+        console.log(`\n[STAGE 3] LAST 10 MESSAGES (should be newest):`);
+        console.log(`${'─'.repeat(100)}`);
         if (piContext.messages && Array.isArray(piContext.messages)) {
           const startIdx = Math.max(0, piContext.messages.length - 10);
           piContext.messages.slice(startIdx).forEach((msg: any, i: number) => {
             const actualIdx = startIdx + i;
             const contentPreview = typeof msg.content === 'string' 
               ? msg.content.substring(0, 80)
-              : JSON.stringify(msg.content).substring(0, 80);
+              : Array.isArray(msg.content)
+                ? `Array[${msg.content.length}]: ${JSON.stringify(msg.content[0]).substring(0, 60)}...`
+                : JSON.stringify(msg.content).substring(0, 80);
             const timestamp = msg.timestamp || 'no-timestamp';
-            console.log(`[${actualIdx}] ${msg.role} [ts:${timestamp}]: ${contentPreview}...`);
+            console.log(`  [${actualIdx}] ${msg.role.padEnd(12)} | ts:${timestamp} | ${contentPreview}`);
           });
         }
-        console.log(`\nTools available: ${Object.keys(tools).length}`);
-        console.log(`${'='.repeat(80)}\n`);
+        console.log(`${'='.repeat(100)}\n`);
 
         const reasoningLevel = (config.reasoning?.effort ?? "medium") as
           | "minimal"

@@ -43,6 +43,8 @@ export interface JobRecord {
   subAgentId?: string;
   delegatedBy?: string;
   reportChatId?: string;
+  provider?: string;
+  model?: string;
   createdAt: string;
   updatedAt: string;
   lastRunAt?: string;
@@ -95,6 +97,7 @@ export function useJobs() {
   const [logsByJobId, setLogsByJobId] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [defaultModel, setDefaultModel] = useState<string>("gpt-5.4");
   const fingerprintRef = useRef("");
   const initialLoadDone = useRef(false);
 
@@ -130,6 +133,19 @@ export function useJobs() {
       }
     } catch {
       // graph is optional — don't surface errors
+    }
+  }, []);
+
+  const loadDefaultModel = useCallback(async () => {
+    try {
+      const response = await gateway.send("jobs:default-model");
+      const payload = response.data as { provider: string; model: string };
+      if (payload.model) {
+        const display = payload.provider ? `${payload.provider}/${payload.model}` : payload.model;
+        setDefaultModel(display);
+      }
+    } catch {
+      // fallback already set to gpt-5.4
     }
   }, []);
 
@@ -203,6 +219,7 @@ export function useJobs() {
   useEffect(() => {
     void loadJobs(false);
     void loadGraph();
+    void loadDefaultModel();
     initialLoadDone.current = true;
     const timer = setInterval(() => {
       void loadJobs(true);
@@ -260,6 +277,7 @@ export function useJobs() {
     graph,
     selectedJobId,
     logsByJobId,
+    defaultModel,
     loading,
     error,
     loadJobs,

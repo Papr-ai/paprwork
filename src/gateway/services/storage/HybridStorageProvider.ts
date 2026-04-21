@@ -90,20 +90,67 @@ export class HybridStorageProvider implements IStorageProvider {
   }
 
   async loadMessagesForLLM(chatId: string): Promise<any[]> {
-    // Prefer PAPR if synced (has better summaries)
-    if (this.syncEnabled) {
-      try {
-        const paprMessages = await this.papr.loadMessagesForLLM(chatId);
-        if (paprMessages.length > 0) {
-          return paprMessages;
-        }
-      } catch (error) {
-        console.warn("Failed to load from PAPR, using local:", error);
-      }
+    // LOCAL-FIRST STRATEGY: Always load from local (source of truth)
+    // This prevents race conditions where PAPR doesn't have latest messages yet
+    const localMessages = await this.local.loadMessagesForLLM(chatId);
+
+    // If sync disabled, return local only
+    if (!this.syncEnabled) {
+      return localMessages;
     }
 
-    // Fallback to local
-    return this.local.loadMessagesForLLM(chatId);
+    // If sync enabled, fetch PAPR summary and merge with local messages
+    try {
+      const paprData = await this.papr.loadMessagesForLLM(chatId);
+
+      // Extract summary from PAPR (if it exists)
+      const summaryItem = paprData.find((item: any) => item.__summary);
+
+      if (summaryItem) {
+        // BEST OF BOTH WORLDS:
+        // - Use PAPR's summary (compressed context for long chats)
+        // - Use LOCAL's messages (always current, no race condition)
+        console.log(
+          `[HybridStorage] Using PAPR summary + ${localMessages.length} local messages`,
+        );
+        return [summaryItem, ...localMessages];
+      }
+
+      // No summary from PAPR, check if PAPR has messages from other devices
+      const localMessageIds = new Set(
+        localMessages.map((m: any) => m.id || m.papr_message_id),
+      );
+
+      // Find messages in PAPR but not in local (from other devices)
+      const crossDeviceMessages = paprData.filter(
+        (m: any) =>
+          !m.__summary &&
+          (m.id || m.papr_message_id) &&
+          !localMessageIds.has(m.id || m.papr_message_id),
+      );
+
+      if (crossDeviceMessages.length > 0) {
+        console.log(
+          `[HybridStorage] Merging ${crossDeviceMessages.length} cross-device messages from PAPR`,
+        );
+        // Merge and sort by timestamp
+        const merged = [...localMessages, ...crossDeviceMessages];
+        merged.sort(
+          (a: any, b: any) =>
+            new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+        );
+        return merged;
+      }
+
+      // PAPR has no new data, use local only
+      return localMessages;
+    } catch (error) {
+      console.warn(
+        "[HybridStorage] PAPR fetch failed, using local only:",
+        error,
+      );
+      return localMessages;
+    }
   }
 
   // ===== Summary Operations =====

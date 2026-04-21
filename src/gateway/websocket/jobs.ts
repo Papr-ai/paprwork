@@ -122,6 +122,12 @@ export async function setupJobsHandlers(
         sendResponse(ws, { id: message.id, success: true, data: { graph } });
         break;
       }
+      case "jobs:default-model": {
+        const { getDefaultProviderAndModel } = await import("../utils/defaultProvider.js");
+        const defaults = await getDefaultProviderAndModel();
+        sendResponse(ws, { id: message.id, success: true, data: defaults });
+        break;
+      }
       case "jobs:get": {
         const payload = message.payload as JobIdPayload;
         const job = await jobsService.getJob(payload.jobId);

@@ -119,6 +119,8 @@ const SCRUB_PATTERNS: RegExp[] = [
   /\.sqlite$/,
   /\.sqlite3$/,
   /\.log$/,
+  /\.backup\.[0-9]+$/,
+  /\.DS_Store$/,
 ];
 
 /** Directory names that contain user data or build artifacts */
@@ -1116,7 +1118,7 @@ export class BundleService {
 
     await fs.writeFile(
       this.getManifestPath(input.bundleId),
-      JSON.stringify(manifest, null, 2),
+      JSON.stringify(manifest, null, 2) + "\n",
       "utf8",
     );
     return {
