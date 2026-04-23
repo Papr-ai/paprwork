@@ -374,17 +374,33 @@ export const browserEvaluateScriptTool = createTool({
       input;
     await requestBrowserPermission("test_script");
     const session = await getBrowserSession();
-    const result = await session.page.evaluate(args.script);
-    return sanitizeBrowserData({
-      success: true,
-      data: {
-        url: session.page.url(),
-        result,
-      },
-    }) as {
-      success: boolean;
-      data: { url: string; result: unknown };
-    };
+    try {
+      const result = await Promise.race([
+        session.page.evaluate(args.script),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Script timed out after 10s")), 10000)
+        ),
+      ]);
+      return sanitizeBrowserData({
+        success: true,
+        data: {
+          url: session.page.url(),
+          result,
+        },
+      }) as {
+        success: boolean;
+        data: { url: string; result: unknown };
+      };
+    } catch (error) {
+      return {
+        success: false,
+        data: {
+          url: session.page.url(),
+          error: error instanceof Error ? error.message : String(error),
+          timedOut: true,
+        },
+      };
+    }
   },
 });
 
