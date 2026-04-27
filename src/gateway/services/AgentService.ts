@@ -301,12 +301,26 @@ export class AgentService {
       | undefined;
 
     // Context pressure monitoring — declared here so catch block can read them
-    // Model-aware thresholds: GPT-5.x has 272K context, Claude has 200K
+    // Model-aware thresholds: GPT-5.5 has 1M, GPT-5.4-mini has 272K, Claude Opus 4.7 has 1M, older Claude 200K
     const getContextAbortThreshold = (): number => {
       const model = config.model?.toLowerCase() ?? "";
-      if (model.startsWith("gpt-5.4") || model.startsWith("gpt-5.3") || model.startsWith("gpt-5.2")) {
-        return 200000; // 272K context - 72K buffer for output + reasoning
+      
+      // GPT-5.5 (1M context)
+      if (model.startsWith("gpt-5.5")) {
+        return 750000; // 1M - 250K buffer
       }
+      
+      // GPT-5.4-mini (272K context) - legacy 5.4 variants map to 5.5 now
+      if (model.startsWith("gpt-5.4") || model.startsWith("gpt-5.3") || model.startsWith("gpt-5.2")) {
+        return 750000; // Forward compatibility: treat as 5.5 tier
+      }
+      
+      // Claude Opus 4.7 (1M context)
+      if (model === "claude-opus-4-7") {
+        return 750000; // 1M - 250K buffer
+      }
+      
+      // Older Claude models (200K context)
       return 120000; // Claude 200K - 80K buffer (conservative)
     };
     const CONTEXT_ABORT_THRESHOLD = getContextAbortThreshold();
@@ -928,9 +942,13 @@ export class AgentService {
             // Create model object matching pi-ai's Model interface
             // Manual registry entry when pi-ai has not listed the id yet
             const isMini = piModelId === "gpt-5.4-mini";
-            const inputCost = isMini ? 0.75 : 2.5;
-            const outputCost = isMini ? 4.5 : 15.0;
-            const displayName = isMini ? "GPT-5.4 mini" : "GPT-5.4";
+            const is55 = piModelId.startsWith("gpt-5.5");
+            const is55Pro = piModelId === "gpt-5.5-pro";
+            
+            const inputCost = is55Pro ? 30.0 : is55 ? 5.0 : isMini ? 0.75 : 2.5;
+            const outputCost = is55Pro ? 180.0 : is55 ? 30.0 : isMini ? 4.5 : 15.0;
+            const displayName = is55Pro ? "GPT-5.5 Pro" : is55 ? "GPT-5.5" : isMini ? "GPT-5.4 mini" : "GPT-5.4";
+            
             finalModel = {
               id: piModelId,
               name: displayName,
@@ -1335,16 +1353,32 @@ export class AgentService {
         allMessages,
       );
 
-      // 6. Check if summarization is needed (50K tokens threshold)
+      // 6. Check if summarization is needed
+      // Use actual context size (from AI SDK or tokenUsage) not just message tokens
       const stats = await this.storageManager.getChatStats(chatId);
-      console.log(`[AgentService] 📊 Chat stats after stream: message_count=${stats.message_count}, token_count=${stats.token_count}, has_summary=${stats.has_summary}`);
       
-      if (stats.token_count > 50000) {
-        console.log(`[AgentService] 🔄 Token count (${stats.token_count}) > 50K threshold - triggering summarization`);
+      // For AI SDK path, use cumulativePromptTokens (tracked via onStepFinish)
+      // For pi-ai path, use tokenUsage.promptTokens (extracted from done chunk)
+      const actualContextTokens = cumulativePromptTokens || tokenUsage?.promptTokens || 0;
+      const messageTokens = stats.token_count;
+      
+      console.log(`[AgentService] 📊 Chat stats after stream:`);
+      console.log(`  Messages in DB: ${stats.message_count}, has_summary: ${stats.has_summary}`);
+      console.log(`  Message tokens (DB): ${messageTokens}`);
+      console.log(`  Actual context tokens: ${actualContextTokens}`);
+      console.log(`  Context overhead: ${actualContextTokens - messageTokens} tokens (system prompts, tools, attachments, etc.)`);
+      
+      // Trigger summarization when actual context exceeds 60K tokens
+      // This accounts for the full context including system prompts, tool definitions,
+      // attached files, git status, etc. - not just message tokens.
+      const SUMMARIZATION_THRESHOLD = 60000;
+      
+      if (actualContextTokens > SUMMARIZATION_THRESHOLD) {
+        console.log(`[AgentService] 🔄 Context size (${actualContextTokens}) > ${SUMMARIZATION_THRESHOLD} threshold - triggering summarization`);
         // Trigger summarization in background (don't await)
         this.triggerSummarization(chatId).catch(console.error);
       } else {
-        console.log(`[AgentService] ℹ️  Token count (${stats.token_count}) below 50K threshold - no summarization needed`);
+        console.log(`[AgentService] ℹ️  Context size (${actualContextTokens}) below ${SUMMARIZATION_THRESHOLD} threshold - no summarization needed`);
       }
     } catch (error) {
       // If this was a context pressure abort, handle gracefully: compress + retry
@@ -2155,7 +2189,7 @@ ${last15.substring(0, 8_000)}`;
     }
 
     const defaultModelByProvider: Record<Provider, string> = {
-      openai: "gpt-5.4",
+      openai: "gpt-5.5",
       "openai-codex": "gpt-5.3-codex",
       anthropic: "claude-sonnet-4-6",
       google: "gemini-2.5-flash",
@@ -2585,7 +2619,7 @@ ${last15.substring(0, 8_000)}`;
     }
 
     const defaultModelByProvider: Record<Provider, string> = {
-      openai: "gpt-5.4",
+      openai: "gpt-5.5",
       "openai-codex": "gpt-5.3-codex",
       anthropic: "claude-sonnet-4-6",
       google: "gemini-2.5-flash",
@@ -3173,8 +3207,14 @@ ${last15.substring(0, 8_000)}`;
         try {
           const { google } = await import("@ai-sdk/google");
           if (google.tools?.googleSearch) {
-            tools.google_search = google.tools.googleSearch({});
-            console.log("[AgentService] ✅ Enabled Google Search for Gemini");
+            const googleSearchTool = google.tools.googleSearch({});
+            // ⚠️ CRITICAL FIX: Override tool ID to remove dot (Gemini requires ^[a-zA-Z0-9_-]+$)
+            // Original ID: "google.google_search" → Fixed ID: "google_search"
+            tools.google_search = {
+              ...googleSearchTool,
+              id: "google_search", // Remove dot from ID
+            };
+            console.log("[AgentService] ✅ Enabled Google Search for Gemini (fixed tool ID: google_search)");
           } else {
             console.warn("[AgentService] ⚠️  Google Search not available in this SDK version");
           }
@@ -3188,11 +3228,28 @@ ${last15.substring(0, 8_000)}`;
         try {
           const { openai } = await import("@ai-sdk/openai");
           if (openai.tools?.webSearch) {
-            tools.web_search = openai.tools.webSearch({
+            const webSearchTool = openai.tools.webSearch({
               externalWebAccess: true, // Enable live web access
               searchContextSize: 'high', // Use high context for search results
             });
-            console.log("[AgentService] ✅ Enabled OpenAI web search");
+            // Check if tool has ID property and sanitize it if needed
+            // OpenAI tools may or may not expose 'id', use key name as fallback
+            const hasId = webSearchTool && typeof (webSearchTool as any).id === 'string';
+            const toolId = hasId && (webSearchTool as any).id.includes('.')
+              ? (webSearchTool as any).id.replace(/\./g, '_')
+              : 'web_search';
+            
+            // Override ID if it exists and has dots
+            if (hasId && (webSearchTool as any).id.includes('.')) {
+              tools.web_search = {
+                ...webSearchTool,
+                id: toolId,
+              };
+              console.log("[AgentService] ✅ Enabled OpenAI web search (sanitized tool ID: " + toolId + ")");
+            } else {
+              tools.web_search = webSearchTool;
+              console.log("[AgentService] ✅ Enabled OpenAI web search");
+            }
           } else {
             console.warn("[AgentService] ⚠️  OpenAI web search not available in this SDK version");
           }

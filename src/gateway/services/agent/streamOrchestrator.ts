@@ -119,6 +119,33 @@ function extractErrorMessage(error: unknown): string {
       return `API error (${statusCode}): ${message}`;
     }
 
+    // Claude API error format: { error: { type: "api_error", message: "Internal Server Error", details: {...} } }
+    if (
+      typeof errorObj.error === "object" &&
+      errorObj.error !== null
+    ) {
+      const errorDetails = errorObj.error as Record<string, unknown>;
+      
+      // Check for Claude's error structure with message
+      if (typeof errorDetails.message === "string") {
+        const errorMessage = errorDetails.message;
+        const errorType = typeof errorDetails.type === "string" ? errorDetails.type : "";
+        
+        // Handle "Internal Server Error" from Claude
+        if (errorMessage === "Internal Server Error" || errorType === "api_error") {
+          return "🔄 Claude's servers encountered an internal error. This is a temporary issue on Anthropic's side. Please try again in a moment, or switch to a different model.";
+        }
+        
+        // Handle other overloaded errors
+        if (errorType === "overloaded_error" || errorMessage.includes("overloaded")) {
+          return "Claude servers are temporarily overloaded. Please wait a moment and try again, or switch to a different model.";
+        }
+        
+        // Return the error message with type if available
+        return errorType ? `${errorType}: ${errorMessage}` : errorMessage;
+      }
+    }
+
     // Plain Error object
     if (error instanceof Error) {
       // Check if it's a retry error by name (cross-realm instances)
@@ -132,15 +159,6 @@ function extractErrorMessage(error: unknown): string {
     // { message: "..." }
     if (typeof errorObj.message === "string") {
       return errorObj.message;
-    }
-
-    // { error: { message: "..." } }
-    if (
-      typeof errorObj.error === "object" &&
-      errorObj.error !== null &&
-      typeof (errorObj.error as Record<string, unknown>).message === "string"
-    ) {
-      return (errorObj.error as Record<string, unknown>).message as string;
     }
 
     // { data: { error: { message: "..." } } }
@@ -576,10 +594,27 @@ export async function* orchestrateModelStream(
       }
 
       case "finish": {
-        const finishReason = (rawChunk as any).finishReason;
+        const finishChunk = rawChunk as any;
+        const finishReason = finishChunk.finishReason;
+        const usage = finishChunk.usage;
+        
         console.log(
           `[StreamOrchestrator] 🏁 Finish chunk received, reason: ${finishReason || "unknown"}`,
         );
+        
+        // If we have token usage from the model, yield it as a step-usage chunk
+        // so AgentService can use it for summarization decisions
+        if (usage?.promptTokens) {
+          console.log(
+            `[StreamOrchestrator] 💰 Token usage from model: ${usage.totalTokens || 0} total ` +
+            `(${usage.promptTokens} prompt + ${usage.completionTokens || 0} completion)`,
+          );
+          yield createChatStreamChunk(
+            "step-usage",
+            { usage },
+            chatId,
+          );
+        }
         break;
       }
       default:

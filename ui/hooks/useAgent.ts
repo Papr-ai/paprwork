@@ -722,8 +722,19 @@ export function useAgent() {
               // Extract provider-specific error messages
               let errorMsg = rawError;
 
+              // Pattern: Claude Internal Server Error (500-level errors from Anthropic)
+              if (
+                rawError.includes("Internal Server Error") ||
+                rawError.includes("api_error") ||
+                rawError.includes("server error") ||
+                rawError.includes("Server Error") ||
+                rawError.includes("(529)") ||
+                rawError.includes("(500)")
+              ) {
+                errorMsg = `🔄 Claude's servers encountered an internal error. This is a temporary issue on Anthropic's side, not your connection. Please try again in a moment, or switch to a different model.`;
+              }
               // Pattern: "Your credit balance is too low to access the X API"
-              if (rawError.includes("credit balance is too low")) {
+              else if (rawError.includes("credit balance is too low")) {
                 const providerMatch = rawError.match(/access the (\w+) API/);
                 const provider = providerMatch ? providerMatch[1] : "provider";
                 errorMsg = `Credit balance too low for ${provider}. Please add credits or switch to a different model.`;
@@ -753,13 +764,17 @@ export function useAgent() {
               ) {
                 errorMsg = `Invalid API key. Please check your API key in Settings.`;
               }
-              // Pattern: Anthropic server errors (already cleaned up by backend)
+              // Pattern: AI SDK tool validation errors (Zod validation failures)
               else if (
-                rawError.includes("server error") ||
-                rawError.includes("(529)") ||
-                rawError.includes("(500)")
+                rawError.includes("AI_TypeValidationError") ||
+                rawError.includes("invalid_union") ||
+                rawError.includes("invalid_type") ||
+                (rawError.includes("expected") && rawError.includes("received") && rawError.includes("undefined"))
               ) {
-                errorMsg = `🔄 Server error from the AI provider. Please wait a moment and try again.`;
+                errorMsg = `⚠️ The AI model returned an invalid tool call. This is usually temporary.\n\nWhat you can do:\n• Try sending your message again\n• Try a different model (e.g., GPT-5.4 → Claude Sonnet)\n• If this persists, please report this issue`;
+                
+                // Log full technical error to console for debugging
+                console.error("[useAgent] Tool validation error (full details):", rawError);
               }
 
               console.error("[useAgent] Received error chunk:", errorMsg);

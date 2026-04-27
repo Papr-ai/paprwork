@@ -6,6 +6,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { MessageList } from "./MessageList";
 import { InputBar, InputBarRef } from "./InputBar";
+import { QueuedMessages, type QueuedMessage } from "./QueuedMessages";
 import { useAgent } from "../../hooks/useAgent";
 import { useAuthStatus } from "../../hooks/useAuthStatus";
 import { useOllama } from "../../hooks/useOllama";
@@ -149,6 +150,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
   const [contextInfo, setContextInfo] = useState<unknown | null>(null);
   const [gatewayStatus, setGatewayStatus] = useState<{ status: string; message?: string } | null>(null);
   const [isFileDragOver, setIsFileDragOver] = useState(false);
+  const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
+  const isProcessingQueue = useRef(false);
 
   // Listen for gateway supervisor status changes (restart notifications)
   useEffect(() => {
@@ -481,8 +484,118 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
       useChatStore.getState().setSending(chatId, false);
       useChatStore.getState().setChatStreaming(chatId, false);
       useTabStore.getState().setTabStreaming(`chat-${chatId}`, false);
+      
+      // Finalize any streaming message to update its status from "Working" to "Finished Working"
+      const chatState = useChatStore.getState().chatStates.get(chatId);
+      if (chatState?.messages) {
+        const streamingMessage = chatState.messages.find(msg => msg.isStreaming);
+        if (streamingMessage) {
+          // Update sequence to mark any "calling" tools as stopped
+          const updatedSequence = streamingMessage.sequence?.map(item => {
+            if (item.type === "tool" && (item.data as any)?.status === "calling") {
+              return {
+                ...item,
+                data: {
+                  ...(item.data as any),
+                  status: "stopped",
+                  error: "Stopped by user"
+                }
+              };
+            }
+            return item;
+          });
+          
+          // Update toolCalls to mark any calling tools as stopped
+          const updatedToolCalls = streamingMessage.toolCalls?.map(tc => {
+            if (tc.status === "calling") {
+              return {
+                ...tc,
+                status: "error" as const,
+                error: "Stopped by user"
+              };
+            }
+            return tc;
+          });
+          
+          // Update the message in the store with the modified sequence and toolCalls
+          const updatedMessages = chatState.messages.map(msg => 
+            msg.id === streamingMessage.id 
+              ? { 
+                  ...msg, 
+                  sequence: updatedSequence,
+                  toolCalls: updatedToolCalls 
+                }
+              : msg
+          );
+          
+          const newChatStates = new Map(useChatStore.getState().chatStates);
+          newChatStates.set(chatId, {
+            ...chatState,
+            messages: updatedMessages
+          });
+          
+          useChatStore.setState({ chatStates: newChatStates });
+          
+          // Now finalize the streaming message
+          useChatStore.getState().finalizeStreamingMessage(streamingMessage.id, chatId);
+        }
+      }
     }
   }, [chatId]);
+
+  // Queue management handlers
+  const handleQueueMessage = useCallback((message: string, context?: Artifact[]) => {
+    const queuedMessage: QueuedMessage = {
+      id: `queued-${Date.now()}-${Math.random()}`,
+      text: message,
+      timestamp: Date.now(),
+    };
+    setMessageQueue(prev => [...prev, queuedMessage]);
+  }, []);
+
+  const handleSendQueuedNow = useCallback(async (messageId: string) => {
+    const queued = messageQueue.find(q => q.id === messageId);
+    if (!queued) return;
+
+    // Remove from queue
+    setMessageQueue(prev => prev.filter(q => q.id !== messageId));
+
+    // Stop current agent response
+    await handleStopAgent();
+
+    // Send the queued message
+    await handleSendMessage(queued.text);
+  }, [messageQueue, handleStopAgent, handleSendMessage]);
+
+  const handleRemoveQueued = useCallback((messageId: string) => {
+    setMessageQueue(prev => prev.filter(q => q.id !== messageId));
+  }, []);
+
+  const processNextQueued = useCallback(async () => {
+    if (isProcessingQueue.current || messageQueue.length === 0 || isSending) {
+      return;
+    }
+
+    isProcessingQueue.current = true;
+    const nextMessage = messageQueue[0];
+    setMessageQueue(prev => prev.slice(1));
+
+    try {
+      await handleSendMessage(nextMessage.text);
+    } catch (error) {
+      console.error('[ChatContainer] Failed to send queued message:', error);
+    } finally {
+      isProcessingQueue.current = false;
+    }
+  }, [messageQueue, isSending, handleSendMessage]);
+
+  // Auto-send next queued message when agent finishes responding
+  useEffect(() => {
+    if (!isSending && messageQueue.length > 0) {
+      processNextQueued();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSending, messageQueue.length]);  // processNextQueued is stable, don't include it
 
   // Listen for onboarding messages dispatched from OnboardingCard via sidebar
   useEffect(() => {
@@ -604,15 +717,28 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
         onFilesDropped={handleFilesDroppedToChat}
       />
 
+      <QueuedMessages
+        queue={messageQueue}
+        onSendNow={handleSendQueuedNow}
+        onRemove={handleRemoveQueued}
+      />
+
       <InputBar
         ref={inputBarRef}
         chatId={chatId}
         onFileAttachmentsAdded={() => setIsFileDragOver(false)}
         onSend={handleSendMessage}
+        onQueue={handleQueueMessage}
         onStop={handleStopAgent}
         onSlashCommand={handleSlashCommand}
         isSending={isSending || isWaitingForModel}
-        placeholder={isWaitingForModel ? `Preparing ${selectedModel.name}...` : "Type a message..."}
+        placeholder={
+          (isWaitingForModel 
+            ? `Preparing ${selectedModel.name}...` 
+            : messageQueue.length > 0
+              ? "Send follow-up..." 
+              : "Type a message...") as string
+        }
         selectedModel={selectedModel}
         onModelChange={handleModelChange}
         isModelAvailable={isModelAvailable}

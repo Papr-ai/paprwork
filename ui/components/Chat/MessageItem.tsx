@@ -443,12 +443,21 @@ function renderSequence(
           (item.data as { status?: string }).status === "calling",
       );
       const isExploring = message.isStreaming || hasCallingTool;
+      
+      // Detect if the message was stopped by checking for stopped tools
+      const wasStopped = sequence.some(
+        (item) =>
+          item.type === "tool" &&
+          (item.data as { status?: string; error?: string }).status === "stopped" ||
+          (item.data as { error?: string }).error === "Stopped by user",
+      );
 
       elements.push(
         <WorkingCard 
           key="working" 
           isExploring={isExploring}
           lastActivity={lastActivity}
+          wasStopped={wasStopped}
         >
           {exploringItems}
         </WorkingCard>,

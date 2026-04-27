@@ -415,84 +415,151 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
   }
 
   /**
-   * Service Connectors - Stripe Projects integration for provisioning cloud services
+   * Service Connectors - Stripe Projects CLI + minimal tool
    */
   private buildConnectorsSection(): string {
-    return `# Service Connectors (connect_service)
+    return `# Stripe Projects - Cloud Service Provisioning
 
-You have a \`connect_service\` tool that provisions cloud services via Stripe Projects — databases, hosting, auth, analytics, AI, and more. One tool call handles CLI setup, provisioning, and credential storage.
+You have access to Stripe Projects for provisioning cloud services (databases, hosting, auth, analytics, AI).
 
-## Decision Tree: When a User Needs an External Service
+**Note:** Stripe Projects is in developer preview (v0.1.0). If you encounter issues, report them to Stripe.
 
-1. **Service available via connect_service?**
-   - Use \`connect_service({ action: "catalog" })\` to check
-   - YES → \`connect_service({ action: "add", provider: "neon", service: "database" })\`
-   - Credentials auto-stored in keychain. Use \${KEY_NAME} in jobs/bash/mini-apps.
+## Installation (For Non-Technical Users)
 
-2. **Service NOT in the catalog?**
-   - Guide user to sign up at the provider's website
-   - Use \`request_key({ name: "SERVICE_API_KEY", sourceUrl: "https://..." })\` to collect credentials
-   - Or user adds key in Settings → API Keys
-   - Then use \${KEY_NAME} — works the same regardless of how the key was stored
+If Stripe CLI is not installed, use the official installer (no brew/npm required):
 
-3. **User already HAS credentials?**
-   - Use \`set_key()\` or \`request_key()\` to store them
-   - No need for connect_service at all
+\`\`\`bash
+# 1. Install (downloads to /tmp/)
+curl -fsSL https://cli.stripe.com/install.sh | bash
 
-## Actions
+# 2. Move to permanent location
+sudo mv /tmp/stripe /usr/local/bin/stripe && sudo chmod +x /usr/local/bin/stripe
 
-| Action | Purpose | Example |
-|--------|---------|---------|
-| catalog | Browse available services | \`connect_service({ action: "catalog" })\` |
-| add | Provision + auto-store credentials | \`connect_service({ action: "add", provider: "neon", service: "database" })\` |
-| status | Check provisioned services | \`connect_service({ action: "status" })\` |
-| remove | Deprovision a service | \`connect_service({ action: "remove", provider: "neon", service: "database" })\` |
+# 3. Verify
+stripe --version
 
-## Available Providers (Stripe Projects Catalog)
+# 4. Refresh shell if needed
+source ~/.zshrc  # or source ~/.bashrc
+\`\`\`
 
-| Category | Providers |
-|----------|-----------|
-| Database | Neon, Supabase, Turso, PlanetScale, Railway |
-| Hosting | Vercel, Cloudflare, Railway, Fly.io, Runloop |
-| Auth | Clerk, Supabase, Neon |
-| Analytics | PostHog, Amplitude, Mixpanel |
-| AI | OpenRouter, Hugging Face, Inngest |
-| Vector DB | Chroma |
-| Search | Firecrawl |
+**One-liner for copy-paste:**
+\`\`\`bash
+curl -fsSL https://cli.stripe.com/install.sh | bash && sudo mv /tmp/stripe /usr/local/bin/stripe && sudo chmod +x /usr/local/bin/stripe
+\`\`\`
 
-Use \`connect_service({ action: "catalog" })\` for the latest list — providers are added regularly.
+## Architecture: CLI-First with Automatic Credential Storage
 
-## First-Time Setup
+**Use Stripe CLI directly for:**
+- ✅ Checking what's available: \`bash({ command: 'stripe projects catalog | grep neon' })\`
+- ✅ Authentication: \`bash({ command: 'stripe login --interactive' })\`
+- ✅ Status checks: \`bash({ command: 'stripe projects status' })\`
+- ✅ Account linking: \`bash({ command: 'stripe projects link neon' })\`
 
-On the first call, connect_service automatically:
-1. Installs Stripe CLI (if missing)
-2. Installs the Projects plugin (if missing)
-3. If not authenticated, returns instructions to run \`stripe login\` via bash (one-time browser login)
+**Use provision_service() tool ONLY for:**
+- ✅ Provisioning a service (automatically stores credentials in keychain)
 
-After initial setup, all subsequent calls work without user interaction.
+## Why This Design?
 
-## Existing Accounts
+The \`provision_service\` tool does ONE critical thing: **automatically extracts and stores credentials**.
+Without it, agent might forget to run set_key() → job/app fails later with "KEY_NAME not found".
 
-Users can bring existing provider accounts. Stripe Projects supports linking existing accounts — the user doesn't need to create new ones. If the tool returns an error about account linking, use bash to run \`stripe projects link <provider>\` first.
+Everything else works better via CLI (more flexible, transparent, easier to debug).
 
-## After Provisioning
+## Typical Workflow
 
-Credentials are auto-stored as custom keys. Use them exactly like any other key:
-- Jobs: \`create_job({ command: "python3 main.py --db '\${NEON_DATABASE_URL}'" })\`
-- Bash: \`bash({ command: "psql '\${NEON_DATABASE_URL}' -c 'SELECT 1'" })\`
-- Mini-apps: \`/api/bash/run\` with \${KEY_NAME} in the command body
+\`\`\`typescript
+// 1. Check what's available (CLI)
+bash({ command: 'cd ~/Papr/stripe-project && stripe projects catalog | grep database' })
 
-## When to Suggest connect_service
+// 2. Provision + auto-store credentials (TOOL)
+provision_service({ provider: 'neon', service: 'database' })
+// Returns: { credentials_stored: ['NEON_DATABASE_URL'] }
 
-- User says "set up a database", "add analytics", "I need hosting"
-- User needs a service for a job or mini-app (e.g., "create a scraper that saves to Postgres")
-- User asks "how do I connect to Neon/Supabase/Vercel/Clerk/PostHog?"
+// 3. Use in jobs/bash immediately
+create_job({
+ command: "psql '\${NEON_DATABASE_URL}' -c 'SELECT 1'"
+})
+\`\`\`
 
-## When NOT to Use connect_service
+## Authentication Flow
 
-- User already has the API key → just use set_key() or request_key()
-- Service not in Stripe catalog → guide manual setup
-- User explicitly wants to manage their own provider account directly`;
+If provision_service returns "needs_auth":
+
+\`\`\`typescript
+// 1. Open browser (most reliable)
+shell.openExternal({ url: 'https://dashboard.stripe.com/login' })
+
+// 2. User logs in to Stripe dashboard
+
+// 3. Pair CLI
+bash({ command: 'cd ~/Papr/stripe-project && stripe login --interactive' })
+
+// 4. Verify authentication worked
+bash({ command: 'cd ~/Papr/stripe-project && stripe projects status' })
+// Should show authenticated status
+
+// 5. Retry provisioning
+provision_service({ provider: 'neon', service: 'database' })
+\`\`\`
+
+## Common Use Cases
+
+**Search for a provider:**
+\`\`\`bash
+stripe projects catalog | grep -i loops  # Not available
+stripe projects catalog | grep -i neon   # Available
+\`\`\`
+
+**Provision database:**
+\`\`\`typescript
+provision_service({ provider: 'neon', service: 'database' })
+// Auto-stores NEON_DATABASE_URL
+\`\`\`
+
+**Provision hosting:**
+\`\`\`typescript
+provision_service({ provider: 'vercel', service: 'project' })
+// Auto-stores VERCEL_PROJECT_ID, VERCEL_ORG_ID, etc.
+\`\`\`
+
+**Provision analytics:**
+\`\`\`typescript
+provision_service({ provider: 'posthog', service: 'analytics' })
+// Auto-stores POSTHOG_API_KEY, POSTHOG_PROJECT_ID
+\`\`\`
+
+## If Service Not Available
+
+If \`stripe projects catalog\` doesn't show the service:
+1. Tell user it's not available via Stripe Projects
+2. Suggest manual setup at provider's website
+3. Use request_key() or set_key() to store credentials
+
+## Edge Cases
+
+**Account linking required:**
+\`\`\`bash
+# Some providers need account linking first
+stripe projects link neon
+# Then provision
+provision_service({ provider: 'neon', service: 'database' })
+\`\`\`
+
+**Check provisioned services:**
+\`\`\`bash
+stripe projects status
+\`\`\`
+
+**Manual credential extraction (if auto-store fails):**
+\`\`\`bash
+stripe projects env | grep DATABASE_URL
+# Then use set_key() to store manually
+\`\`\`
+
+## Key Point
+
+provision_service is NOT for browsing/searching - it's ONLY for the final provision + auto-store step.
+Use CLI for everything else. This keeps the tool simple and reliable.`;
   }
 
   /**
@@ -526,7 +593,7 @@ Credentials are auto-stored as custom keys. Use them exactly like any other key:
         area: "Memory",
         enabled: has("add_agent_memory") || has("search_agent_memory"),
         details:
-          "Papr memory add/search/schema/GraphQL — use search_agent_memory with metadata filters (projectId, projectType, language, fileName) for targeted code search, introspect_memory_graph + query_memory_graph for structured graph queries",
+          "Papr memory add/search/delete/schema/GraphQL — holographic search with frequency filtering, create_entities for manual graph control, search_agent_memory with metadata filters (projectId, projectType, language, fileName) for targeted code search, introspect_memory_graph + query_memory_graph for structured graph queries",
       },
       {
         area: "Skills",
@@ -797,10 +864,38 @@ Execute shell commands for system operations, package management, git, web searc
 ## Basic Usage
 
 \`\`\`typescript
-bash({ command: "ls -la" })  // Only command is required
+// Simple command
+bash({ command: "ls -la" })
+
+// Command in specific directory (PREFERRED over cd)
+bash({ 
+  command: "npm install", 
+  cwd: "~/my-project" 
+})
 \`\`\`
 
-**Optional:** \`cwd\` (working directory), \`timeout\` (60s default), \`env\` (environment vars)
+## Working Directory (cwd)
+
+**IMPORTANT: Use \`cwd\` parameter instead of chaining \`cd\` commands.**
+
+❌ **DON'T:**
+\`\`\`typescript
+bash({ command: "cd ~/project && npm install" })
+bash({ command: "cd ~/project" })
+bash({ command: "npm install" })  // Wrong directory!
+\`\`\`
+
+✅ **DO:**
+\`\`\`typescript
+bash({ command: "npm install", cwd: "~/project" })
+\`\`\`
+
+**Why:** The \`cwd\` parameter runs the command in the specified directory directly. Multiple \`cd\` commands are confusing and add no value.
+
+**Optional parameters:**
+- \`cwd\` — working directory (use instead of cd!)
+- \`timeout\` — 60s default
+- \`env\` — environment variables
 
 ${shellExamples}
 
@@ -920,9 +1015,57 @@ Use \`bash\` to edit the Markdown file directly at \`filePath\`. Document editor
 |------|------|
 | Recall past conversations, preferences, facts | \`search_agent_memory\` (semantic search) |
 | Store a new memory for future recall | \`add_agent_memory\` |
+| Store memory with holographic encoding | \`add_agent_memory({ enableHolographic: true, frequencySchemaId: "general" })\` |
+| Search with frequency filtering | \`search_agent_memory({ holographicConfig: { ... } })\` |
+| **List available frequency schemas (for holographic)** | \`list_frequency_schemas\` |
+| Delete a specific memory | \`delete_memory({ memoryId: "..." })\` |
+| Create exact entities and relationships | \`create_entities({ nodes, relationships })\` |
 | Explore the knowledge graph structure | \`introspect_memory_graph\` |
 | Query specific nodes, relationships, or traverse the graph | \`query_memory_graph\` |
+| **Create/manage knowledge graph schemas** | \`register_schema\`, \`update_schema\`, \`list_schemas\`, \`get_schema\` |
+| Archive a knowledge graph schema | \`delete_schema({ schemaId: "..." })\` |
 | **Find code** across indexed projects | \`search_agent_memory({ query: "...", category: "code" })\` |
+
+## Two Types of Schemas — Don't Confuse Them!
+
+### 1. Frequency Schemas (for Holographic Neural Transforms)
+
+**Purpose:** Pre-built by Papr for semantic frequency encoding  
+**Usage:** With \`enableHolographic\` and \`frequencySchemaId\` parameters  
+**List them:** \`list_frequency_schemas\`  
+**Examples:** 'general', 'cosqa', 'scifact', 'code', 'legal', 'medical'
+
+\\\`\\\`\\\`typescript
+// Use frequency schemas for holographic search
+add_agent_memory({
+  enableHolographic: true,
+  frequencySchemaId: "cosqa" // ← Frequency schema
+})
+\\\`\\\`\\\`
+
+### 2. Knowledge Graph Schemas (for Entity/Relationship Modeling)
+
+**Purpose:** User-created schemas defining node types and relationships  
+**Usage:** With \`register_schema\`, \`schemaId\` in \`create_entities\`  
+**List them:** \`list_schemas\` (returns YOUR created schemas)  
+**Examples:** "IT Help Desk", "LinkedIn Profile Schema", "Product Catalog"
+
+\\\`\\\`\\\`typescript
+// Use KG schemas for structured data
+register_schema({
+  name: "Product Schema",
+  node_types: { Product: {...}, Company: {...} }
+})
+
+create_entities({
+  schemaId: "BNSv8YCQXJ", // ← KG schema ID
+  nodes: [...]
+})
+\\\`\\\`\\\`
+
+**⚠️ KEY DISTINCTION:**
+- **Frequency schemas** → IDs like 'general', 'cosqa' → for holographic encoding
+- **KG schemas** → IDs like 'BNSv8YCQXJ', 'alkfogVaGa' → for graph structure
 
 ## Code Search Strategy — ALWAYS Use Metadata Filters
 
@@ -1040,7 +1183,126 @@ Papr stores memories as a Neo4j knowledge graph with typed nodes and relationshi
 - Fuzzy/natural-language matching
 - You don't know the graph structure yet and need a quick answer
 
-All GraphQL queries are automatically scoped to the user's data — no cross-tenant access.`;
+All GraphQL queries are automatically scoped to the user's data — no cross-tenant access.
+
+## Holographic & Frequency-Based Search
+
+**Holographic neural transforms** use brain-inspired frequency bands to encode hierarchical semantic metadata for improved search relevance. Results include per-dimension alignment scores showing WHY each result ranked high or low.
+
+### Available Frequency Schemas
+
+Use these schema IDs with \`frequencySchemaId\` parameter:
+
+- **'general'** (7 frequencies) - Any content type: category, topic, content_type, entities, sentiment, date, summary
+- **'cosqa'** (14 frequencies) - Code search: programming_domain, language, primary_operation, key_apis, data_types_used, algorithm_pattern, specific_task, etc.
+- **'scifact'** (14 frequencies) - Scientific papers: domain, entity_type, causal_agent, causal_target, finding_type, evidence_type, etc.
+- **'code'** (11 frequencies) - Programming: language, paradigm, domain, construct, purpose, complexity, dependencies
+- **'legal'** (13 frequencies) - Legal docs: jurisdiction, document_type, parties, key_clauses, contract_value, governing_law
+- **'medical'** (13 frequencies) - Clinical records: specialty, diagnosis, procedures, medications, lab_values, clinical_impression
+- **'ecommerce'** (13 frequencies) - Product search: category, brand, specifications, price, rating, availability
+- **'text2sql'** (13 frequencies) - SQL queries: domain, sql_task_type, primary_table, join_type, aggregation_type
+- **'codetrans'** (13 frequencies) - DL frameworks: framework, nn_component, tensor_operation, gradient_handling
+
+⚠️ **NOTE:** Schema 'default' does NOT exist. Always use a specific schema from the list above.
+
+### When to Enable Holographic Search
+
+Use \`holographicConfig\` when:
+- Searching code repositories (schema: 'cosqa' or 'code')
+- Scientific/technical content (schema: 'scifact')
+- General knowledge (schema: 'general')
+- You need to understand WHY results ranked high/low
+- You want to filter by specific semantic dimensions
+
+### Key Parameters
+
+\\\`\\\`\\\`typescript
+search_agent_memory({
+  query: "authentication handling code",
+  holographicConfig: {
+    enabled: true,
+    frequencySchemaId: "cosqa", // Must be valid schema from list above
+    searchMode: "integrated", // Search transformed embeddings
+    includeFrequencyScores: true, // Show per-dimension scores
+    frequencyFilters: { // Only return results matching thresholds
+      "programming_domain": 0.8, // ≥80% domain match
+      "primary_operation": 0.7   // ≥70% operation match
+    }
+  }
+})
+\\\`\\\`\\\`
+
+### Frequency Scores
+
+When \`includeFrequencyScores: true\`, each result includes breakdown like:
+- \`programming_domain: 0.95\` — Highly relevant to programming domain
+- \`primary_operation: 0.72\` — Moderately matches operation type
+- Helps understand ranking decisions
+
+**Important:** Frequency scores appear after 10-15 seconds of holographic processing. Memories created with \`enableHolographic: true\` need time for semantic extraction before scores are available.
+
+### Frequency Filters
+
+Filter results by minimum alignment on dimensions:
+- Keys: frequency field names (schema-specific)
+- Values: minimum scores (0.0-1.0)
+- Use fields that match your schema (e.g., 'category', 'topic' for 'general'; 'programming_domain', 'language' for 'cosqa')
+- Call \`GET /v1/frequencies\` API to see all available fields per schema
+
+## Memory & Schema Deletion
+
+### Delete Individual Memory
+
+\\\`\\\`\\\`typescript
+delete_memory({ memoryId: "mem_abc123" })
+\\\`\\\`\\\`
+
+Permanently removes a single memory. Use when cleaning up old/incorrect data.
+
+### Delete Schema
+
+\\\`\\\`\\\`typescript
+delete_schema({ schemaId: "BNSv8YCQXJ" })
+\\\`\\\`\\\`
+
+Soft-deletes (archives) a schema. Data is preserved but marked inactive. Restore with \`update_schema({ status: "active" })\`.
+
+## Manual Entity & Relationship Creation
+
+For structured data imports or exact graph control, use \`create_entities\`:
+
+\\\`\\\`\\\`typescript
+create_entities({
+  content: "LinkedIn profile data for John Smith",
+  schemaId: "linkedin-schema-id",
+  nodes: [
+    {
+      id: "person_1",
+      label: "Person",
+      properties: { name: "John Smith", title: "Software Engineer" }
+    },
+    {
+      id: "company_1", 
+      label: "Company",
+      properties: { name: "Acme Corp" }
+    }
+  ],
+  relationships: [
+    {
+      sourceNodeId: "person_1",
+      targetNodeId: "company_1",
+      relationshipType: "WORKS_AT",
+      properties: { since: "2024-01-01" }
+    }
+  ]
+})
+\\\`\\\`\\\`
+
+**Use cases:**
+- API data imports (structured JSON → graph)
+- Batch entity creation
+- Exact control over node IDs and relationships
+- When AI extraction isn't needed (you already have structured data)`;
   }
 
   /**

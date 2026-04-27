@@ -36,12 +36,12 @@ type ChatOpenPayload = {
 };
 
 // Check if Papr authentication is required (commercial build vs open source)
-const REQUIRE_PAPR_AUTH = import.meta.env.VITE_REQUIRE_PAPR_AUTH === 'true';
+const REQUIRE_PAPR_AUTH = (import.meta as any).env?.VITE_REQUIRE_PAPR_AUTH === 'true';
 
 export function App() {
   // Track React initialization timing
-  const appStartTime = performance.now();
-  console.log(`[React] App component mounting at ${appStartTime.toFixed(2)}ms`);
+  // const appStartTime = performance.now();
+  //console.log(`[React] App component mounting at ${appStartTime.toFixed(2)}ms`);
 
   // ALL HOOKS MUST COME BEFORE ANY CONDITIONAL RETURNS
   
@@ -84,7 +84,14 @@ export function App() {
   useEffect(() => {
     const loadUIPreferences = async () => {
       try {
-        const response = await gateway.send('settings:get', {});
+        const response = await gateway.send('settings:get', {}) as {
+          success: boolean;
+          data?: {
+            uiPreferences?: {
+              lastModelId?: string;
+            };
+          };
+        };
         
         if (response.success && response.data?.uiPreferences) {
           const { lastModelId } = response.data.uiPreferences;
@@ -126,9 +133,8 @@ export function App() {
     return () => window.removeEventListener('papr-sqlite-loaded', handleSqliteLoaded);
   }, []);
 
-  const { chats, createChat } = useChat();
-  const { tabs, createTab, switchToTab } = useTabs();
-  const { activeTabId, activeLeftTab } = useTabStore();
+  const { createChat } = useChat();
+  const { createTab, switchToTab } = useTabs();
   const { activeRequest, claimedByChat, respond } = usePermissionStore();
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   
@@ -153,8 +159,9 @@ export function App() {
       const shouldShow = !dismissed && !step1 && !step2;
       
       if (shouldShow) {
-        // Check if getting-started tab already exists
-        const gettingStartedTab = tabs.find(t => t.type === 'getting-started');
+        // Check if getting-started tab already exists (use getState to avoid dependency)
+        const currentTabs = useTabStore.getState().tabs;
+        const gettingStartedTab = currentTabs.find(t => t.type === 'getting-started');
         if (!gettingStartedTab) {
           console.log('[App] Creating getting-started tab');
           createTab('getting-started', 'default', 'Getting Started');
@@ -169,7 +176,7 @@ export function App() {
     // Listen for onboarding state changes
     window.addEventListener('papr-onboarding-changed', checkOnboarding);
     return () => window.removeEventListener('papr-onboarding-changed', checkOnboarding);
-  }, [tabs, createTab]);
+  }, [createTab]); // Removed tabs dependency - use getState() instead
 
   // Initialize Amplitude telemetry (events only, no session replay)
   useEffect(() => {
@@ -190,7 +197,14 @@ export function App() {
 
         // Get install ID from settings
         console.log('[Telemetry] Getting install ID...');
-        const settingsResponse = await gateway.send('settings:get', {});
+        const settingsResponse = await gateway.send('settings:get', {}) as {
+          success: boolean;
+          data?: {
+            telemetry?: {
+              installId?: string;
+            };
+          };
+        };
         console.log('[Telemetry] Settings response:', { hasData: !!settingsResponse.data, hasTelemetry: !!settingsResponse.data?.telemetry });
         const installId = settingsResponse.data?.telemetry?.installId;
 
@@ -208,9 +222,9 @@ export function App() {
         // Check for Papr user ID (identified analytics for authenticated users)
         let paprUserId: string | undefined;
         try {
-          const profile = await window.electronAPI.papr?.getProfile?.();
-          if (profile?.userId) {
-            paprUserId = profile.userId;
+          const profileResult = await window.electronAPI.papr?.getProfile?.();
+          if (profileResult?.profile?.userId) {
+            paprUserId = profileResult.profile.userId;
             console.log('[Telemetry] Papr user:', paprUserId.substring(0, 8) + '...');
           }
         } catch {
@@ -234,10 +248,7 @@ export function App() {
     initTelemetry();
   }, []);
 
-  // Log when React finishes first render
-  useEffect(() => {
-    console.log(`[React] App component mounted at +${(performance.now() - appStartTime).toFixed(2)}ms`);
-  }, [appStartTime]);
+
 
   // Cmd+K to open command palette
   useEffect(() => {
@@ -300,8 +311,6 @@ export function App() {
       Loading {!preferencesLoaded && 'preferences'}{!preferencesLoaded && !sqliteLoaded && ' and '}{!sqliteLoaded && 'app state'}...
     </div>;
   }
-
-  const activeTab = tabs.find((t) => t.id === activeTabId);
 
   return (
     <>

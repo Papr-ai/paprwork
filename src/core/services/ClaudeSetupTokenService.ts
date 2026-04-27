@@ -79,25 +79,59 @@ export class ClaudeSetupTokenService {
   }
 
   /**
-   * Install Claude Code CLI globally
+   * Install Claude Code CLI using curl (works without npm/brew)
    */
   async installClaudeCLI(): Promise<{ success: boolean; error?: string }> {
     try {
-      console.log("[ClaudeSetupToken] Installing Claude Code CLI...");
+      console.log("[ClaudeSetupToken] Installing Claude Code CLI via curl...");
 
-      // Install @anthropic-ai/claude-code globally
-      const { stdout, stderr } = await execAsync(
-        "npm install -g @anthropic-ai/claude-code",
-        {
+      // Use curl-based installer (works for non-technical users without npm/brew)
+      const installScript = "curl -fsSL https://claude.ai/install.sh | bash";
+      
+      try {
+        const { stdout, stderr } = await execAsync(installScript, {
           timeout: 120000, // 2 minutes timeout
           env: getShellEnv(),
-        },
-      );
+          shell: "/bin/bash", // Ensure bash is used for piping
+        });
 
-      console.log("[ClaudeSetupToken] Installation output:", stdout);
+        console.log("[ClaudeSetupToken] Curl installation output:", stdout);
 
-      if (stderr && !stderr.includes("npm warn")) {
-        console.error("[ClaudeSetupToken] Installation stderr:", stderr);
+        if (stderr && !stderr.toLowerCase().includes("downloading")) {
+          console.error("[ClaudeSetupToken] Installation stderr:", stderr);
+        }
+
+        // Move from /tmp to permanent location
+        console.log("[ClaudeSetupToken] Moving CLI to /usr/local/bin...");
+        const moveCmd = "sudo mv /tmp/claude /usr/local/bin/claude && sudo chmod +x /usr/local/bin/claude";
+        
+        try {
+          await execAsync(moveCmd, {
+            timeout: 30000,
+            env: getShellEnv(),
+          });
+        } catch (moveError) {
+          console.warn("[ClaudeSetupToken] Could not move CLI (may need sudo):", (moveError as Error).message);
+          // Continue anyway - CLI might be in /tmp/claude which could work temporarily
+        }
+
+      } catch (curlError) {
+        console.warn("[ClaudeSetupToken] Curl install failed, trying npm fallback...");
+        
+        // Fallback to npm install for users who have it
+        const { stdout, stderr } = await execAsync(
+          "npm install -g @anthropic-ai/claude-code",
+          {
+            timeout: 120000,
+            env: getShellEnv(),
+          },
+        );
+
+        console.log("[ClaudeSetupToken] NPM installation output:", stdout);
+
+        if (stderr && !stderr.includes("npm warn")) {
+          console.error("[ClaudeSetupToken] NPM installation stderr:", stderr);
+        }
       }
 
       // Verify installation
@@ -105,7 +139,7 @@ export class ClaudeSetupTokenService {
       if (!installed) {
         return {
           success: false,
-          error: "Installation completed but CLI not found in PATH",
+          error: "Installation completed but CLI not found in PATH. Try running: source ~/.zshrc",
         };
       }
 

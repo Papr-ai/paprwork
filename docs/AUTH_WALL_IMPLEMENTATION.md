@@ -16,8 +16,9 @@ This allows the downloadable commercial version to enforce Papr login while keep
 
 ```bash
 # .env.local or build environment
-REQUIRE_PAPR_AUTH=true   # Commercial build (requires Papr login)
-REQUIRE_PAPR_AUTH=false  # Open source build (Papr login optional)
+# NOTE: Must use VITE_ prefix for Vite to expose to client code
+VITE_REQUIRE_PAPR_AUTH=true   # Commercial build (requires Papr login)
+VITE_REQUIRE_PAPR_AUTH=false  # Open source build (Papr login optional)
 ```
 
 **Default:** `false` (open source mode)
@@ -29,22 +30,22 @@ REQUIRE_PAPR_AUTH=false  # Open source build (Papr login optional)
 npm run build
 
 # Commercial build (requires auth)
-REQUIRE_PAPR_AUTH=true npm run build
+VITE_REQUIRE_PAPR_AUTH=true npm run build
 
 # Package commercial version
-REQUIRE_PAPR_AUTH=true npm run package
+VITE_REQUIRE_PAPR_AUTH=true npm run package
 ```
 
 ## User Experience
 
-### Open Source Mode (`REQUIRE_PAPR_AUTH=false`)
+### Open Source Mode (`VITE_REQUIRE_PAPR_AUTH=false`)
 
 1. ✅ App loads immediately
 2. ✅ "Getting Started" tab shows with optional Papr login
 3. ✅ Users can skip Papr login and use local-only mode
 4. ✅ All features accessible (except cloud sync/memory)
 
-### Commercial Mode (`REQUIRE_PAPR_AUTH=true`)
+### Commercial Mode (`VITE_REQUIRE_PAPR_AUTH=true`)
 
 1. 🔒 App shows authentication wall on first launch
 2. 🔒 User **must** login with Papr before accessing any features
@@ -53,7 +54,7 @@ REQUIRE_PAPR_AUTH=true npm run package
 
 ## Authentication Wall UI
 
-**When `REQUIRE_PAPR_AUTH=true`:**
+**When `VITE_REQUIRE_PAPR_AUTH=true`:**
 
 ```
 ┌─────────────────────────────────────────┐
@@ -144,7 +145,7 @@ Hide AuthWall, show app ✅
 ### Test Open Source Mode
 
 ```bash
-# 1. Ensure REQUIRE_PAPR_AUTH is false (or unset)
+# 1. Ensure VITE_REQUIRE_PAPR_AUTH is false (or unset)
 npm start
 
 # Expected: App loads immediately, no auth wall
@@ -154,7 +155,7 @@ npm start
 
 ```bash
 # 1. Set environment variable
-export REQUIRE_PAPR_AUTH=true
+export VITE_REQUIRE_PAPR_AUTH=true
 
 # 2. Clear existing authentication
 rm ~/Library/Application\ Support/Paprwork/.keychain  # macOS
@@ -169,13 +170,13 @@ npm start
 
 ```bash
 # 1. Login to commercial build
-REQUIRE_PAPR_AUTH=true npm start
+VITE_REQUIRE_PAPR_AUTH=true npm start
 # Login with Papr
 
 # 2. Close app
 
 # 3. Restart
-REQUIRE_PAPR_AUTH=true npm start
+VITE_REQUIRE_PAPR_AUTH=true npm start
 
 # Expected: No auth wall, app loads directly (authenticated)
 ```
@@ -184,14 +185,14 @@ REQUIRE_PAPR_AUTH=true npm start
 
 ### GitHub Releases (Downloadable Binaries)
 
-The GitHub Actions workflow automatically sets `REQUIRE_PAPR_AUTH=true` for all release builds:
+The GitHub Actions workflow automatically sets `VITE_REQUIRE_PAPR_AUTH=true` for all release builds:
 
 ```yaml
 # .github/workflows/release.yml
 - name: Build app
   run: npm run build
   env:
-    REQUIRE_PAPR_AUTH: true  # ✅ Enforced for downloadable releases
+    VITE_REQUIRE_PAPR_AUTH: true  # ✅ Enforced for downloadable releases
 ```
 
 **Result:** All binaries published to GitHub Releases (DMG, EXE, AppImage) require Papr authentication.
@@ -204,7 +205,7 @@ Developers cloning the repo and building locally get open-source mode by default
 git clone https://github.com/paprwork/paprwork-v2
 cd paprwork-v2
 npm install
-npm start  # REQUIRE_PAPR_AUTH defaults to false
+npm start  # VITE_REQUIRE_PAPR_AUTH defaults to false
 ```
 
 **Result:** Developers can run the app without Papr authentication (optional).
@@ -215,7 +216,7 @@ npm start  # REQUIRE_PAPR_AUTH defaults to false
 |------------|---------------|---------|
 | **GitHub Releases** (downloadable) | ✅ YES | GitHub Actions workflow env var |
 | **Local dev build** (source) | ❌ NO | Default value (false) |
-| **Custom CI/CD** | Configurable | Set `REQUIRE_PAPR_AUTH` in build env |
+| **Custom CI/CD** | Configurable | Set `VITE_REQUIRE_PAPR_AUTH` in build env |
 
 ## Migration Path
 
@@ -235,8 +236,9 @@ For users who download the commercial version:
 
 **Modified Files:**
 - `ui/App.tsx` - Added auth check and AuthWall rendering
-- `ui/vite.config.ts` - Exposed REQUIRE_PAPR_AUTH environment variable
-- `.env.example` - Added REQUIRE_PAPR_AUTH documentation
+- `ui/vite.config.ts` - Exposed VITE_REQUIRE_PAPR_AUTH environment variable
+- `.env.example` - Added VITE_REQUIRE_PAPR_AUTH documentation
+- `.github/workflows/release.yml` - Set VITE_REQUIRE_PAPR_AUTH=true for all release builds
 
 ## Future Enhancements
 

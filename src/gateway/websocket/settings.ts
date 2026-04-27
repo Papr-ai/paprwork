@@ -44,12 +44,18 @@ interface PreferencesData {
   defaultHomeAppId: string | null;
 }
 
+interface TelemetryData {
+  installId: string;
+  enabled: boolean;
+}
+
 interface SettingsData {
   profile: ProfileData;
   permissions: PermissionData;
   codeIndexing: CodeIndexingSettings;
   uiPreferences: UIPreferences;
   preferences: PreferencesData;
+  telemetry?: TelemetryData;
 }
 
 const DEFAULT_HOME_APP_ID = "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c";
@@ -90,13 +96,39 @@ export async function loadSettings(): Promise<SettingsData> {
   try {
     const raw = await fs.readFile(SETTINGS_PATH, "utf-8");
     const saved = JSON.parse(raw) as Partial<SettingsData>;
-    return {
+    const settings = {
       ...DEFAULTS,
       ...saved,
       preferences: { ...DEFAULTS.preferences, ...saved.preferences },
     };
+    
+    // Add telemetry data from environment variables (set by main process)
+    // This ensures consistency with the main process's electron-store
+    const installId = process.env.PAPRWORK_TELEMETRY_ANONYMOUS_ID?.trim() || "";
+    const enabled = process.env.PAPRWORK_TELEMETRY_ENABLED === "true";
+    
+    if (installId) {
+      settings.telemetry = {
+        installId,
+        enabled,
+      };
+    }
+    
+    return settings;
   } catch {
-    return { ...DEFAULTS };
+    // For defaults, also include telemetry from env vars
+    const installId = process.env.PAPRWORK_TELEMETRY_ANONYMOUS_ID?.trim() || "";
+    const enabled = process.env.PAPRWORK_TELEMETRY_ENABLED === "true";
+    
+    const settings = { ...DEFAULTS };
+    if (installId) {
+      settings.telemetry = {
+        installId,
+        enabled,
+      };
+    }
+    
+    return settings;
   }
 }
 

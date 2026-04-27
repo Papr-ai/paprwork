@@ -7,7 +7,12 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin: 0 20px 16px 20px;
+  margin: 0 20px 8px 20px;
+}
+
+/* Add spacing for queued messages that appear above input bar */
+.queued-messages + .input-bar {
+  margin-top: 0;
 }
 
 .input-bar__wrapper {

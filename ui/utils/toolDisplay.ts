@@ -35,6 +35,32 @@ export function getBashCommandDescription(
   const cmd = command.trim();
   const prefix = isRunning ? "Running" : "Ran";
 
+  // Handle cd commands - show destination directory clearly
+  // BUT: only match standalone cd, not cd in pipes/chains
+  if (cmd.startsWith("cd ") && !cmd.includes("|") && !cmd.includes("&&") && !cmd.includes(";")) {
+    const pathMatch = cmd.match(/cd\s+([^\s]+)/);  // Capture only the path argument
+    if (pathMatch) {
+      const fullPath = pathMatch[1].trim().replace(/["']/g, "");
+      // Extract just the last 2-3 directory components for clarity
+      const parts = fullPath.split("/").filter(p => p);
+      let displayPath;
+      
+      if (parts.length > 3) {
+        // Show last 3 parts with ellipsis: .../GitHub/repo-name/subfolder
+        displayPath = ".../" + parts.slice(-3).join("/");
+      } else if (parts.length > 0) {
+        displayPath = parts.join("/");
+      } else {
+        displayPath = fullPath;
+      }
+      
+      return isRunning 
+        ? `Navigating to ${displayPath}` 
+        : `Navigated to ${displayPath}`;
+    }
+    return isRunning ? "Navigating directory" : "Navigated to directory";
+  }
+
   if (cmd.startsWith("curl")) {
     const urlMatch = cmd.match(/https?:\/\/[^\s]+/);
     if (urlMatch) {
@@ -58,6 +84,17 @@ export function getBashCommandDescription(
 
   if (cmd.startsWith("cat ") && !cmd.includes(">")) {
     const pathMatch = cmd.match(/cat\s+((?:[^\s|;&]|\\.)+)/);
+    if (pathMatch) {
+      const filename = getDisplayFilename(pathMatch[1].replace(/\\/g, ""));
+      if (filename)
+        return isRunning ? `Reading ${filename}` : `Read ${filename}`;
+    }
+    return isRunning ? "Reading file" : "Read file";
+  }
+
+  if (cmd.startsWith("head ") || cmd.startsWith("tail ")) {
+    const cmdName = cmd.startsWith("head") ? "head" : "tail";
+    const pathMatch = cmd.match(/(?:head|tail)\s+(?:-n?\s*\d+\s+)?([^\s|;&]+)/);
     if (pathMatch) {
       const filename = getDisplayFilename(pathMatch[1].replace(/\\/g, ""));
       if (filename)

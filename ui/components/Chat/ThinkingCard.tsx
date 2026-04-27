@@ -81,7 +81,12 @@ export const ThinkingCard: React.FC<ThinkingCardProps> = ({
     <div className="thinking-card">
       <div
         className="thinking-card-header"
-        onClick={() => isCollapsible && setIsCollapsed(!isCollapsed)}
+        onMouseDown={(e) => {
+          if (isCollapsible) {
+            e.preventDefault(); // Prevent input from losing focus
+            setIsCollapsed(!isCollapsed);
+          }
+        }}
       >
         {isCollapsible && (
           <span

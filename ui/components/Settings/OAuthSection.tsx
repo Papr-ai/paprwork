@@ -31,7 +31,15 @@ const OS_TERMINAL_INFO: Record<OSPlatform, { name: string; howToOpen: string }> 
   },
 };
 
-const CLAUDE_CLI_INSTALL_CMD = "npm install -g @anthropic-ai/claude-code";
+// Curl-based installer (works for non-technical users without npm/brew)
+const CLAUDE_CLI_INSTALL_STEPS = {
+  download: "curl -fsSL https://claude.ai/install.sh | bash",
+  move: "sudo mv /tmp/claude /usr/local/bin/claude && sudo chmod +x /usr/local/bin/claude",
+  verify: "claude --version",
+  refresh: "source ~/.zshrc || source ~/.bashrc",
+  // Fallback for users with npm
+  npm: "npm install -g @anthropic-ai/claude-code",
+};
 
 /** Whether the paste field was triggered by the automated terminal flow */
 type PasteMode = "idle" | "terminal" | "manual";
@@ -519,16 +527,64 @@ export function OAuthSection({
 
                       <div className="token-modal__tip">
                         <strong>Don't have Claude Code CLI?</strong>
-                        <p>Install it first, then follow the steps above:</p>
-                        <div className="token-modal__command-row">
-                          <code className="token-modal__command">{CLAUDE_CLI_INSTALL_CMD}</code>
-                          <button
-                            className="token-modal__copy-btn"
-                            onClick={() => handleCopy(CLAUDE_CLI_INSTALL_CMD, setCopiedInstall)}
-                          >
-                            {copiedInstall ? "Copied!" : "Copy"}
-                          </button>
+                        <p>Install it first (no npm or Homebrew required), then follow the steps above:</p>
+                        
+                        <div style={{ marginTop: "12px", marginBottom: "8px" }}>
+                          <p style={{ fontSize: "12px", fontWeight: "500", marginBottom: "6px" }}>Step 1: Download and install</p>
+                          <div className="token-modal__command-row">
+                            <code className="token-modal__command">{CLAUDE_CLI_INSTALL_STEPS.download}</code>
+                            <button
+                              className="token-modal__copy-btn"
+                              onClick={() => handleCopy(CLAUDE_CLI_INSTALL_STEPS.download, setCopiedInstall)}
+                            >
+                              {copiedInstall ? "Copied!" : "Copy"}
+                            </button>
+                          </div>
                         </div>
+
+                        <div style={{ marginBottom: "8px" }}>
+                          <p style={{ fontSize: "12px", fontWeight: "500", marginBottom: "6px" }}>Step 2: Move to permanent location</p>
+                          <div className="token-modal__command-row">
+                            <code className="token-modal__command" style={{ fontSize: "10px" }}>{CLAUDE_CLI_INSTALL_STEPS.move}</code>
+                            <button
+                              className="token-modal__copy-btn"
+                              onClick={() => handleCopy(CLAUDE_CLI_INSTALL_STEPS.move, (v) => {})}
+                            >
+                              Copy
+                            </button>
+                          </div>
+                        </div>
+
+                        <div style={{ marginBottom: "8px" }}>
+                          <p style={{ fontSize: "12px", fontWeight: "500", marginBottom: "6px" }}>Step 3: Verify installation</p>
+                          <div className="token-modal__command-row">
+                            <code className="token-modal__command">{CLAUDE_CLI_INSTALL_STEPS.verify}</code>
+                            <button
+                              className="token-modal__copy-btn"
+                              onClick={() => handleCopy(CLAUDE_CLI_INSTALL_STEPS.verify, (v) => {})}
+                            >
+                              Copy
+                            </button>
+                          </div>
+                        </div>
+
+                        <div style={{ marginBottom: "12px" }}>
+                          <p style={{ fontSize: "12px", fontWeight: "500", marginBottom: "6px" }}>Step 4: Refresh your shell</p>
+                          <div className="token-modal__command-row">
+                            <code className="token-modal__command">{CLAUDE_CLI_INSTALL_STEPS.refresh}</code>
+                            <button
+                              className="token-modal__copy-btn"
+                              onClick={() => handleCopy(CLAUDE_CLI_INSTALL_STEPS.refresh, (v) => {})}
+                            >
+                              Copy
+                            </button>
+                          </div>
+                        </div>
+
+                        <p style={{ fontSize: "11px", color: "var(--color-text-secondary, #666)", marginTop: "12px" }}>
+                          <strong>Have npm?</strong> You can also use: <code style={{ fontSize: "10px" }}>{CLAUDE_CLI_INSTALL_STEPS.npm}</code>
+                        </p>
+
                         <a
                           href="#"
                           className="token-modal__link"

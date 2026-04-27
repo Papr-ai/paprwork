@@ -311,6 +311,95 @@
   font-weight: 600;
 }
 
+/* ── Similar Keys Section ──────────────────────── */
+
+.isw-similar-keys {
+  margin: 14px 0;
+  padding: 12px 14px;
+  background: rgba(16, 185, 129, 0.04);
+  border: 1px solid rgba(16, 185, 129, 0.12);
+  border-radius: 12px;
+}
+
+.isw-similar-keys__header {
+  font-size: 12px;
+  color: var(--text-secondary, #6E6E73);
+  margin-bottom: 10px;
+}
+
+.isw-similar-keys__header strong {
+  color: #059669;
+  font-weight: 600;
+}
+
+.isw-similar-keys__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.isw-similar-key-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+  text-align: left;
+  width: 100%;
+  position: relative;
+}
+
+.isw-similar-key-btn:hover {
+  background: rgba(255, 255, 255, 0.8);
+  transform: translateY(-1px);
+}
+
+.isw-similar-key-btn--selected {
+  background: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.22);
+}
+
+.isw-similar-key-btn__name {
+  font-size: 13px;
+  font-weight: 600;
+  font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+  color: var(--text-primary, #1D1D1F);
+  flex: 1;
+}
+
+.isw-similar-key-btn__reason {
+  font-size: 11px;
+  color: var(--text-tertiary, #8E8E93);
+  flex-shrink: 0;
+}
+
+.isw-similar-key-btn__check {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 16px;
+  color: #059669;
+  font-weight: bold;
+}
+
+.isw-similar-keys__footer {
+  padding-top: 6px;
+  border-top: 1px solid rgba(0, 0, 0, 0.04);
+}
+
+.isw-similar-keys__note {
+  font-size: 11px;
+  color: var(--text-tertiary, #8E8E93);
+  font-style: italic;
+}
+
 /* Action buttons row */
 .isw-key-actions {
   display: flex;
@@ -681,6 +770,29 @@
   .isw-agent-note {
     background: rgba(0, 113, 227, 0.08);
     border-color: rgba(0, 113, 227, 0.15);
+  }
+  
+  .isw-similar-keys {
+    background: rgba(16, 185, 129, 0.08);
+    border-color: rgba(16, 185, 129, 0.18);
+  }
+  
+  .isw-similar-key-btn {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+  
+  .isw-similar-key-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+  
+  .isw-similar-key-btn--selected {
+    background: rgba(16, 185, 129, 0.12);
+    border-color: rgba(16, 185, 129, 0.28);
+  }
+  
+  .isw-similar-keys__footer {
+    border-top-color: rgba(255, 255, 255, 0.06);
   }
 
   .isw-footer {

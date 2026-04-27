@@ -19,7 +19,7 @@
 
 .error-banner {
   display: flex;
-  align-items: center;
+  align-items: flex-start; /* Changed from center to support multi-line */
   gap: 12px;
   padding: 12px 16px;
   background: rgba(232, 76, 96, 0.1);
@@ -32,11 +32,15 @@
 .error-icon {
   font-size: 18px;
   flex-shrink: 0;
+  margin-top: 2px; /* Align with first line of text */
 }
 
 .error-message {
   flex: 1;
   font-weight: 500;
+  white-space: pre-wrap; /* Preserve line breaks from \n */
+  word-wrap: break-word;
+  line-height: 1.5;
 }
 
 /* Gateway reconnecting banner */

@@ -128,12 +128,10 @@ export class CustomKeysService {
     if (this.ipcAvailable) {
       return new Promise((resolve, reject) => {
         const requestId = `custom-keys-list-${Date.now()}`;
-        console.log(`[CustomKeysService] Listing keys (request: ${requestId})`);
+        //console.log(`[CustomKeysService] Listing keys (request: ${requestId})`);
         const timeout = setTimeout(() => {
           cleanup();
-          console.error(
-            `[CustomKeysService] List request ${requestId} timed out`
-          );
+          //console.error(`[CustomKeysService] List request ${requestId} timed out`);
           reject(new Error("Custom keys list request timed out"));
         }, 5000);
 
@@ -151,9 +149,7 @@ export class CustomKeysService {
             } else {
               const keyCount = (message.keys || []).length;
               const keyNames = (message.keys || []).map((k: any) => k.name);
-              console.log(
-                `[CustomKeysService] Received ${keyCount} keys: ${keyNames.join(", ")}`
-              );
+              //console.log(`[CustomKeysService] Received ${keyCount} keys: ${keyNames.join(", ")}`);
               resolve(message.keys || []);
             }
           }
@@ -198,9 +194,7 @@ export class CustomKeysService {
         const requestId = `custom-keys-get-${Date.now()}`;
         const timeout = setTimeout(() => {
           cleanup();
-          console.error(
-            `[CustomKeysService] Get key "${name}" request timed out`
-          );
+          console.error(`[CustomKeysService] Get key "${name}" request timed out`);
           reject(new Error("Custom key get request timed out"));
         }, 5000);
 
@@ -220,9 +214,7 @@ export class CustomKeysService {
               const preview = message.value
                 ? `${message.value.substring(0, 10)}...`
                 : "null";
-              console.log(
-                `[CustomKeysService] Key "${name}" ${found} (preview: ${preview})`
-              );
+              //console.log(`[CustomKeysService] Key "${name}" ${found} (preview: ${preview})`);
               resolve(message.value || null);
             }
           }

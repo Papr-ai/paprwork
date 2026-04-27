@@ -104,7 +104,21 @@ export {
   listDelegationRunsTool,
 } from "./delegation.js";
 export { documentTools } from "./documents.js";
-export { paprMemoryTools } from "./paprMemory.js";
+export { 
+  paprMemoryTools,
+  addAgentMemoryTool,
+  searchAgentMemoryTool,
+  registerSchemaTool,
+  updateSchemaTool,
+  listSchemasTool,
+  getSchemaTool,
+  listFrequencySchemasTool,
+  introspectMemoryGraphTool,
+  queryMemoryGraphTool,
+  deleteMemoryTool,
+  deleteSchemaTool,
+  createEntitiesAndRelationshipsTool,
+} from "./paprMemory.js";
 export { skillsTools } from "./skills.js";
 export {
   appJobsTools,
@@ -144,7 +158,7 @@ export {
 export { planningTools, createPlanTool, updatePlanTool, deletePlanTool } from "./planning.js";
 export { writeRecipeTool, readRecipeTool, evaluateRunTool, listEvaluationsTool } from "./recipes.js";
 export { chatHistoryTools, getFullToolResultTool } from "./chatHistory.js";
-export { connectorsTools, connectServiceTool } from "./connectors.js";
+export { connectorsTools, provisionServiceTool } from "./connectors.js";
 
 export {
   keyManagementTools,

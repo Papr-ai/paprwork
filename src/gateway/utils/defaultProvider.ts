@@ -28,13 +28,13 @@ export interface AvailableProvider {
 
 /**
  * Get the default provider and model based on what the user has configured.
- * Falls back to OpenAI GPT-5.4 if nothing is configured.
+ * Falls back to OpenAI GPT-5.5 if nothing is configured.
  * 
  * Priority order:
  * 1. OAuth-authenticated providers (openai, anthropic)
  * 2. API key providers (openai, anthropic, google)
  * 3. Ollama (always available, no auth needed)
- * 4. Fallback: openai/gpt-5.4 (will error if not configured)
+ * 4. Fallback: openai/gpt-5.5 (will error if not configured)
  */
 export async function getDefaultProviderAndModel(): Promise<{
   provider: Provider;
@@ -44,7 +44,7 @@ export async function getDefaultProviderAndModel(): Promise<{
 
   // Default models for each provider
   const defaultModelByProvider: Record<Provider, string> = {
-    openai: "gpt-5.4",
+    openai: "gpt-5.5",
     "openai-codex": "gpt-5.3-codex",
     anthropic: "claude-sonnet-4-6",
     google: "gemini-2.5-flash",

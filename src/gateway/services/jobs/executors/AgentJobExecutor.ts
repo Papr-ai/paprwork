@@ -218,7 +218,7 @@ export class AgentJobExecutor implements IJobExecutor {
     const modelInfo =
       provider && model
         ? ` (${provider}/${model})`
-        : " (default openai/gpt-5.4)";
+        : " (default openai/gpt-5.5)";
 
     if (outputText.length === 0) {
       await params.appendLog(

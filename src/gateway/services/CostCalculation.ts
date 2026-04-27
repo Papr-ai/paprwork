@@ -1,7 +1,7 @@
 /**
  * Cost Calculation - Calculate USD cost from token usage
  *
- * Pricing as of 2026-02-20 (per 1M tokens)
+ * Pricing as of 2026-04-24 (per 1M tokens)
  */
 
 export interface ModelPricing {
@@ -20,24 +20,30 @@ export interface CostBreakdown {
 
 /**
  * Model pricing table (USD per 1M tokens)
- * Updated: 2026-02-20
+ * Updated: 2026-04-24
  * Source: Official pricing pages
  */
 export const MODEL_PRICING: Record<string, ModelPricing> = {
   // OpenAI GPT-5.x (API format uses dots)
   "gpt-5-mini": { input: 0.1, output: 0.4 }, // legacy id; normalizer maps to gpt-5.4-mini
   "gpt-5.4-mini": { input: 0.75, output: 4.5 },
-  "gpt-5.4-low": { input: 2.5, output: 15.0 },
-  "gpt-5.4-high": { input: 2.5, output: 15.0 },
-  "gpt-5.4-xhigh": { input: 2.5, output: 15.0 },
   "gpt-5.3-codex": { input: 15.0, output: 45.0 },
-  "gpt-5.4": { input: 2.5, output: 15.0 },
-  "gpt-5.4-pro": { input: 2.5, output: 15.0 }, // legacy id → same tier as gpt-5.4
-  // Deprecated picker IDs / legacy logs (treated as GPT-5.4 tier)
-  "gpt-5.2-low": { input: 2.5, output: 15.0 },
-  "gpt-5.2": { input: 2.5, output: 15.0 },
-  "gpt-5.2-high": { input: 2.5, output: 15.0 },
-  "gpt-5.2-xhigh": { input: 2.5, output: 15.0 },
+  // GPT-5.5 Series (released April 2026) - replaced GPT-5.4 reasoning variants
+  "gpt-5.5-low": { input: 5.0, output: 30.0 },
+  "gpt-5.5": { input: 5.0, output: 30.0 },
+  "gpt-5.5-high": { input: 5.0, output: 30.0 },
+  "gpt-5.5-xhigh": { input: 5.0, output: 30.0 },
+  "gpt-5.5-pro": { input: 30.0, output: 180.0 },
+  // Deprecated picker IDs / legacy logs (treated as GPT-5.5 tier for forward compatibility)
+  "gpt-5.4-low": { input: 5.0, output: 30.0 },
+  "gpt-5.4": { input: 5.0, output: 30.0 },
+  "gpt-5.4-high": { input: 5.0, output: 30.0 },
+  "gpt-5.4-xhigh": { input: 5.0, output: 30.0 },
+  "gpt-5.4-pro": { input: 5.0, output: 30.0 },
+  "gpt-5.2-low": { input: 5.0, output: 30.0 },
+  "gpt-5.2": { input: 5.0, output: 30.0 },
+  "gpt-5.2-high": { input: 5.0, output: 30.0 },
+  "gpt-5.2-xhigh": { input: 5.0, output: 30.0 },
   "gpt-5.2-codex": { input: 15.0, output: 45.0 },
 
   // Anthropic Claude 4 Series
@@ -45,6 +51,7 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "claude-sonnet-4-6": { input: 3.0, output: 15.0 },
   "claude-opus-4-6": { input: 15.0, output: 75.0 },
   "claude-opus-4-5-thinking": { input: 15.0, output: 75.0 },
+  "claude-opus-4-7": { input: 5.0, output: 25.0 },
 
   // Google Gemini Series (API format uses dots: gemini-2.5)
   "gemini-2.5-flash-lite": { input: 0.15, output: 0.6 },

@@ -1,0 +1,113 @@
+/**
+ * QueuedMessages Styles - Message queue display
+ */
+
+.queued-messages {
+  margin: 0 20px 8px 20px;
+}
+
+.queued-message-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--background-color);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  margin-bottom: 6px;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.15s var(--ease);
+}
+
+.queued-message-item:last-child {
+  margin-bottom: 0;
+}
+
+.queued-message-item:hover {
+  background: var(--hover-bg);
+}
+
+.queued-message-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+}
+
+.queued-message-text {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  cursor: pointer;
+  line-height: 1.4;
+  transition: all 0.15s var(--ease);
+  background: transparent;
+  border: none;
+  padding: 0;
+  text-align: left;
+  font-family: inherit;
+}
+
+.queued-message-text:hover {
+  color: var(--primary-color);
+}
+
+.queued-message-text-expanded {
+  white-space: normal;
+  word-wrap: break-word;
+}
+
+.queued-message-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.queued-message-icon-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: transparent;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+  padding: 0;
+}
+
+.queued-message-delete-icon {
+  color: var(--text-secondary);
+}
+
+.queued-message-delete-icon:hover {
+  background: var(--error-color, #e74c3c);
+  color: white;
+  border-color: var(--error-color, #e74c3c);
+}
+
+.queued-message-send-icon {
+  color: var(--primary-color);
+  border-color: var(--primary-color);
+}
+
+.queued-message-send-icon:hover {
+  background: var(--primary-color);
+  color: white;
+}
+
+/* Dark mode adjustments */
+@media (prefers-color-scheme: dark) {
+  .queued-message-item {
+    background: rgba(28, 28, 30, 0.95);
+    border-color: rgba(255, 255, 255, 0.10);
+  }
+}

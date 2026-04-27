@@ -157,7 +157,7 @@ export function useAppStatePersistence() {
       }).catch((error: Error) => {
         console.error('[Persistence] Failed to save tabs:', error);
       });
-    }, 1000); // Debounce 1 second
+    }, 2000); // Increased debounce to 2 seconds to reduce save frequency
 
     return () => clearTimeout(saveTimeout);
   }, [tabs]);
@@ -184,7 +184,7 @@ export function useAppStatePersistence() {
       }).catch((error: Error) => {
         console.error('[Persistence] Failed to save app state:', error);
       });
-    }, 500); // Debounce 500ms
+    }, 1000); // Increased debounce to 1 second to reduce save frequency
 
     return () => clearTimeout(saveTimeout);
   }, [activeTabId, splitRatio, splitRatios, history, historyIndex]);

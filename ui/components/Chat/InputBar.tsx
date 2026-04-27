@@ -22,11 +22,13 @@ import type { Artifact } from "../../stores/artifactsStore";
 import { createFileContextArtifactsFromFiles } from "../../utils/fileContextArtifact";
 import { useChatStore } from "../../stores/chatStore";
 import { useOllama } from "../../hooks/useOllama";
+import { useDebouncedCallback } from "../../hooks/useDebouncedCallback";
 import "./InputBar.css";
 
 interface InputBarProps {
   chatId: string; // Chat ID for persisting draft messages
   onSend: (message: string, context?: Artifact[]) => void;
+  onQueue?: (message: string, context?: Artifact[]) => void;
   onStop?: () => void;
   onSlashCommand?: (commandId: string) => void;
   isSending?: boolean;
@@ -52,6 +54,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     {
       chatId,
       onSend,
+      onQueue,
       onStop,
       onSlashCommand,
       isSending = false,
@@ -82,6 +85,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     const [selectedArtifacts, setSelectedArtifacts] = useState<Artifact[]>([]);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const inputBarRef = useRef<HTMLDivElement>(null);
+    const lastSendAttemptRef = useRef<number>(0);
 
     // Use first model as default if none selected
     const currentModel = selectedModel || CHAT_MODELS[0];
@@ -93,10 +97,18 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       setMessage(draft);
     }, [chatId]);
 
-    // Save draft message to store whenever it changes
+    // Debounced save to store - only saves 300ms after user stops typing
+    const debouncedSaveDraft = useDebouncedCallback(
+      (chatId: string, draft: string) => {
+        setDraftMessage(chatId, draft);
+      },
+      300,
+    );
+
+    // Save draft message to store (debounced to avoid lag on every keystroke)
     useEffect(() => {
-      setDraftMessage(chatId, message);
-    }, [message, chatId, setDraftMessage]);
+      debouncedSaveDraft(chatId, message);
+    }, [message, chatId, debouncedSaveDraft]);
 
     const appendFileArtifacts = useCallback(
       (files: File[]) => {
@@ -177,22 +189,60 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     const handleSend = () => {
       const trimmedMessage = message.trim();
       if (trimmedMessage) {
-        // If agent is working, stop it first, then send new message
-        if (isSending && onStop) {
-          onStop();
-        }
+        const now = Date.now();
+        const timeSinceLastAttempt = now - lastSendAttemptRef.current;
+        
+        // If agent is working
+        if (isSending) {
+          // If user pressed send again within 1 second (double-enter or double-click), 
+          // stop agent and send immediately
+          if (timeSinceLastAttempt < 1000) {
+            if (onStop) {
+              onStop();
+            }
+            onSend(
+              trimmedMessage,
+              selectedArtifacts.length > 0 ? selectedArtifacts : undefined,
+            );
+            setMessage("");
+            clearDraftMessage(chatId);
+            setSelectedArtifacts([]);
+            
+            if (textareaRef.current) {
+              textareaRef.current.style.height = "auto";
+            }
+            lastSendAttemptRef.current = 0; // Reset
+          } else {
+            // First attempt while agent is working - queue the message
+            if (onQueue) {
+              onQueue(
+                trimmedMessage,
+                selectedArtifacts.length > 0 ? selectedArtifacts : undefined,
+              );
+            }
+            setMessage("");
+            clearDraftMessage(chatId);
+            setSelectedArtifacts([]);
+            
+            if (textareaRef.current) {
+              textareaRef.current.style.height = "auto";
+            }
+            lastSendAttemptRef.current = now;
+          }
+        } else {
+          // Agent not working - send normally
+          onSend(
+            trimmedMessage,
+            selectedArtifacts.length > 0 ? selectedArtifacts : undefined,
+          );
+          setMessage("");
+          clearDraftMessage(chatId);
+          setSelectedArtifacts([]);
 
-        onSend(
-          trimmedMessage,
-          selectedArtifacts.length > 0 ? selectedArtifacts : undefined,
-        );
-        setMessage("");
-        clearDraftMessage(chatId); // Clear draft from store
-        setSelectedArtifacts([]);
-
-        // Reset textarea height
-        if (textareaRef.current) {
-          textareaRef.current.style.height = "auto";
+          if (textareaRef.current) {
+            textareaRef.current.style.height = "auto";
+          }
+          lastSendAttemptRef.current = 0;
         }
       }
     };

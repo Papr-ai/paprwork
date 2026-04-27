@@ -12,12 +12,14 @@ interface WorkingCardProps {
   children: React.ReactNode;
   isExploring?: boolean;
   lastActivity?: string; // Last tool call or response text
+  wasStopped?: boolean; // Whether the agent was manually stopped
 }
 
 export const WorkingCard: React.FC<WorkingCardProps> = ({
   children,
   isExploring = false,
   lastActivity,
+  wasStopped = false,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(true);
   const [showShimmer, setShowShimmer] = useState(false);
@@ -41,7 +43,13 @@ export const WorkingCard: React.FC<WorkingCardProps> = ({
 
   return (
     <div className="working-card">
-      <div className="working-card-header" onClick={() => setIsCollapsed(!isCollapsed)}>
+      <div 
+        className="working-card-header" 
+        onMouseDown={(e) => {
+          e.preventDefault(); // Prevent input from losing focus
+          setIsCollapsed(!isCollapsed);
+        }}
+      >
         <span
           className={`working-chevron ${isCollapsed ? "working-chevron-collapsed" : ""}`}
         >
@@ -49,7 +57,7 @@ export const WorkingCard: React.FC<WorkingCardProps> = ({
         </span>
         <div className="working-label-container">
           <span className={`working-label-primary${shimmerActive ? " working-label-shimmer" : ""}`}>
-            {isExploring ? "Working" : "Finished Working"}
+            {isExploring ? "Working" : wasStopped ? "Stopped" : "Finished Working"}
           </span>
           {isCollapsed && lastActivity && (
             <span className={`working-label-secondary${shimmerActive ? " working-secondary-shimmer" : ""}`}>

@@ -37,7 +37,7 @@ type OurChunk =
       toolName: string;
       result: unknown;
     }
-  | { type: "finish"; finishReason: string }
+  | { type: "finish"; finishReason: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } }
   | { type: "start-step" }
   | { type: "error"; error: unknown };
 
@@ -283,24 +283,33 @@ export async function* createPiCodexStreamWithToolLoop(
   let cumulativeTokens = 0; // Track token usage for adaptive truncation
   
   // Model-aware context thresholds (leave room for output + reasoning)
-  // GPT-5.4: 272K context, but reasoning can be 30-50K → use 200K threshold (72K buffer)
-  // GPT-5.2: 272K context → use 200K threshold
-  // Claude: 200K context → use 120K threshold (conservative)
+  // GPT-5.5: 1M context, but reasoning can be 30-50K → use 750K threshold (250K buffer)
+  // GPT-5.4-mini: 272K context → use 200K threshold (72K buffer)
+  // Claude Opus 4.7: 1M context → use 750K threshold (250K buffer)
+  // Claude Opus 4.6: 200K context → use 120K threshold (conservative)
   // Default: 120K (conservative)
   const getContextThreshold = (): number => {
     if (!modelId) return 120000;
     
-    // GPT-5.4 models (thinking, pro)
-    if (modelId.startsWith('gpt-5.4')) {
-      return 200000; // 272K - 72K buffer for output + reasoning
+    // GPT-5.5 models (1M context) - includes legacy 5.4 non-mini variants
+    if (modelId.startsWith('gpt-5.5') || 
+        (modelId.startsWith('gpt-5.4') && modelId !== 'gpt-5.4-mini') ||
+        modelId.startsWith('gpt-5.3') ||
+        modelId.startsWith('gpt-5.2')) {
+      return 750000; // 1M - 250K buffer for output + reasoning
     }
     
-    // GPT-5.2/5.3 models
-    if (modelId.startsWith('gpt-5.2') || modelId.startsWith('gpt-5.3')) {
+    // GPT-5.4-mini (272K context)
+    if (modelId === 'gpt-5.4-mini') {
       return 200000; // 272K - 72K buffer
     }
     
-    // Claude models (200K context)
+    // Claude Opus 4.7 (1M context)
+    if (modelId === 'claude-opus-4-7') {
+      return 750000; // 1M - 250K buffer
+    }
+    
+    // Claude models (200K context for older models)
     if (modelId.includes('claude')) {
       return 120000; // 200K - 80K buffer (conservative)
     }
@@ -397,7 +406,7 @@ export async function* createPiCodexStreamWithToolLoop(
         if (event.reason === "toolUse") continue;
       }
 
-      const chunk = adaptPiStreamToAISDKEvent(event);
+      const chunk = adaptPiStreamToAISDKEvent(event, cumulativeTokens);
       if (chunk) yield chunk;
     }
 
@@ -453,6 +462,7 @@ export async function* createPiCodexStreamWithToolLoop(
  */
 function adaptPiStreamToAISDKEvent(
   event: AssistantMessageEvent,
+  cumulativeTokens?: number,
 ): OurChunk | null {
   switch (event.type) {
     case "text_delta": {
@@ -493,7 +503,21 @@ function adaptPiStreamToAISDKEvent(
           : reason === "length"
             ? "length"
             : "stop";
-      return { type: "finish", finishReason };
+      
+      // Include token usage if available
+      const usage = (event as any).usage;
+      const promptTokens = usage?.input_tokens || cumulativeTokens || 0;
+      const completionTokens = usage?.output_tokens || 0;
+      
+      return { 
+        type: "finish", 
+        finishReason,
+        usage: promptTokens > 0 ? {
+          promptTokens,
+          completionTokens,
+          totalTokens: promptTokens + completionTokens,
+        } : undefined,
+      };
     }
     case "error":
       return {

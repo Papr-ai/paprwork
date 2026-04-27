@@ -74,13 +74,22 @@ export const ExploringCard: React.FC<ExploringCardProps> = ({
     return null;
   }
 
-  const handleToggle = () => {
+  const handleToggle = (e: React.MouseEvent) => {
+    e.preventDefault(); // Prevent input from losing focus
     setIsCollapsed(!isCollapsed);
     setManuallyToggled(true);
   };
 
   const isExploring =
     isStreaming || toolCalls.some((t) => t.status === "calling");
+  
+  // Detect if the message was stopped by checking for stopped tools
+  const wasStopped = toolCalls.some(
+    (t) => t.status === "error" && t.error === "Stopped by user"
+  );
+  
+  // Determine status label
+  const statusLabel = isExploring ? "Working" : wasStopped ? "Stopped" : "Finished Working";
   
   // Format elapsed time as "Xs" or "Xm Ys" for minutes
   const formatTime = (seconds: number): string => {
@@ -94,13 +103,13 @@ export const ExploringCard: React.FC<ExploringCardProps> = ({
 
   return (
     <div className="exploring-card">
-      <div className="exploring-card-header" onClick={handleToggle}>
+      <div className="exploring-card-header" onMouseDown={handleToggle}>
         <span
           className={`exploring-chevron ${isCollapsed ? "exploring-chevron-collapsed" : ""}`}
         >
           ▼
         </span>
-        <span className="exploring-label-text">Working</span>
+        <span className="exploring-label-text">{statusLabel}</span>
         {isExploring && <PaprLogoIcon />}
         {elapsedTime > 0 && (
           <span className="exploring-timer">{formatTime(elapsedTime)}</span>

@@ -38,9 +38,7 @@ const root = ReactDOM.createRoot(
 console.log(`[React] Root created at +${(performance.now() - reactStartTime).toFixed(2)}ms`);
 
 root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
+  <App />
 );
 
 console.log(`[React] Render called at +${(performance.now() - reactStartTime).toFixed(2)}ms`);

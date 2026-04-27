@@ -19,6 +19,11 @@ import {
   lookupService,
   getAlternatives,
 } from "../../../src/core/data/knownServices";
+import {
+  findSimilarKeys,
+  isOptionalLLMKey,
+  type SimilarKey,
+} from "../../../src/core/utils/keySimilarity";
 import type { CustomKeyInput } from "../../types/settings";
 import "./ImportSetupWizard.css";
 
@@ -102,6 +107,8 @@ interface WizardEntry {
     chosenKeyName: string;
     keyValue: string;
   };
+  similarKeys?: SimilarKey[]; // Similar existing keys user might want to use
+  selectedSimilarKey?: string; // Key name user selected from similar keys
 }
 
 export interface WizardResult {
@@ -192,14 +199,36 @@ export function ImportSetupWizard({
     }
 
     const keyNameSet = new Set(keys.map((k) => k.name));
-    const wizardEntries: WizardEntry[] = enriched.map((spec) => ({
-      spec,
-      status: keyNameSet.has(spec.name)
-        ? "connected"
-        : spec.required
-          ? "missing"
-          : "optional",
-    }));
+    const existingKeyNames = Array.from(keyNameSet);
+    
+    const wizardEntries: WizardEntry[] = enriched.map((spec) => {
+      const isConnected = keyNameSet.has(spec.name);
+      
+      // Check if this is an LLM provider key (can use OAuth/Papr proxy)
+      const isLLMKey = isOptionalLLMKey(spec.name);
+      
+      // Find similar keys if not connected
+      let similarKeys: SimilarKey[] = [];
+      if (!isConnected && existingKeyNames.length > 0) {
+        similarKeys = findSimilarKeys(spec.name, existingKeyNames, 0.6);
+      }
+      
+      // Determine status
+      let status: "connected" | "missing" | "optional";
+      if (isConnected) {
+        status = "connected";
+      } else if (isLLMKey || !spec.required) {
+        status = "optional";
+      } else {
+        status = "missing";
+      }
+      
+      return {
+        spec,
+        status,
+        similarKeys,
+      };
+    });
 
     setEntries(wizardEntries);
   }, [requirements]);
@@ -241,7 +270,26 @@ export function ImportSetupWizard({
   const handleKeySubmit = async () => {
     if (!currentEntry) return;
 
-    if (showAlternatives && selectedAlt && altKeyInput.trim()) {
+    // If user selected a similar existing key, map it to the requested key name
+    if (currentEntry.selectedSimilarKey) {
+      // Mark as connected without saving a new key
+      setEntries((prev) =>
+        prev.map((e) =>
+          e === currentEntry
+            ? {
+                ...e,
+                status: "connected" as const,
+                substitution: {
+                  originalService: e.spec.service,
+                  chosenService: e.spec.service,
+                  chosenKeyName: e.selectedSimilarKey!,
+                  keyValue: "", // Value already stored
+                },
+              }
+            : e
+        )
+      );
+    } else if (showAlternatives && selectedAlt && altKeyInput.trim()) {
       // Service substitution
       const altService = selectedAlt === "__custom__"
         ? customServiceName || "Custom Service"
@@ -394,7 +442,12 @@ export function ImportSetupWizard({
             >
               {entry.status === "connected" && "Connected"}
               {entry.status === "missing" && "Not configured"}
-              {entry.status === "optional" && "Optional"}
+              {entry.status === "optional" && (
+                <>
+                  Optional
+                  {isOptionalLLMKey(entry.spec.name) && " (OAuth/Papr)"}
+                </>
+              )}
             </span>
           </div>
         ))}
@@ -433,9 +486,11 @@ export function ImportSetupWizard({
     const spec = currentEntry.spec;
     const known = lookupService(spec.name);
     const alternatives = getAlternatives(spec.name);
-    const canSubmit = showAlternatives
-      ? Boolean(selectedAlt && altKeyInput.trim())
-      : Boolean(keyInput.trim());
+    const canSubmit = currentEntry.selectedSimilarKey
+      ? true // Similar key selected
+      : showAlternatives
+        ? Boolean(selectedAlt && altKeyInput.trim())
+        : Boolean(keyInput.trim());
 
     return (
       <>
@@ -463,6 +518,43 @@ export function ImportSetupWizard({
                 <div className="isw-instructions">
                   <strong>How to get your API key: </strong>
                   {spec.instructions}
+                </div>
+              )}
+              
+              {/* Show similar keys if any */}
+              {currentEntry.similarKeys && currentEntry.similarKeys.length > 0 && (
+                <div className="isw-similar-keys">
+                  <div className="isw-similar-keys__header">
+                    <strong>You already have similar keys:</strong>
+                  </div>
+                  <div className="isw-similar-keys__list">
+                    {currentEntry.similarKeys.map((similar) => (
+                      <button
+                        key={similar.name}
+                        className={`isw-similar-key-btn ${currentEntry.selectedSimilarKey === similar.name ? "isw-similar-key-btn--selected" : ""}`}
+                        onClick={() => {
+                          setEntries((prev) =>
+                            prev.map((e) =>
+                              e === currentEntry
+                                ? { ...e, selectedSimilarKey: similar.name }
+                                : e
+                            )
+                          );
+                        }}
+                      >
+                        <div className="isw-similar-key-btn__name">{similar.name}</div>
+                        <div className="isw-similar-key-btn__reason">{similar.reason}</div>
+                        {currentEntry.selectedSimilarKey === similar.name && (
+                          <div className="isw-similar-key-btn__check">✓</div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="isw-similar-keys__footer">
+                    <span className="isw-similar-keys__note">
+                      Select an existing key to use instead of creating a new one
+                    </span>
+                  </div>
                 </div>
               )}
 

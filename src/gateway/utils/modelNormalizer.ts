@@ -18,16 +18,17 @@ function popSegment(id: string): string | undefined {
 
 /**
  * Normalize OpenAI model ID for API calls.
- * Accepts gpt-5.x-* with dots or dashes (e.g. gpt-5-4-low).
+ * Accepts gpt-5.x-* with dots or dashes (e.g. gpt-5-4-low, gpt-5-5).
  *
- * @returns API model ID (e.g. "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex")
+ * @returns API model ID (e.g. "gpt-5.5", "gpt-5.5-pro", "gpt-5.4-mini", "gpt-5.3-codex")
  */
 export function normalizeOpenAIModelId(modelId: string): string {
   let n = modelId
     .replace(/gpt-5-2/g, "gpt-5.2")
-    .replace(/gpt-5-4/g, "gpt-5.4");
+    .replace(/gpt-5-4/g, "gpt-5.4")
+    .replace(/gpt-5-5/g, "gpt-5.5");
 
-  // Legacy GPT-5.2 family → GPT-5.4 / Codex successor
+  // Legacy GPT-5.2 family → GPT-5.5 successor
   if (n === "gpt-5.2-codex") {
     return "gpt-5.3-codex";
   }
@@ -35,34 +36,48 @@ export function normalizeOpenAIModelId(modelId: string): string {
     n === "gpt-5.2" ||
     (n.startsWith("gpt-5.2-") && n !== "gpt-5.2-codex")
   ) {
-    return "gpt-5.4";
+    return "gpt-5.5"; // Map legacy 5.2 to 5.5
   }
 
   // Distinct model IDs (no stripping)
   if (n === "gpt-5.3-codex") {
     return "gpt-5.3-codex";
   }
-  // Legacy picker id (not a separate API model)
-  if (n === "gpt-5.4-pro") {
-    return "gpt-5.4";
-  }
   if (n === "gpt-5.4-mini") {
     return n;
   }
-
-  // gpt-5.4-<reasoning> → gpt-5.4
+  
+  // Legacy GPT-5.4 variants → GPT-5.5 (5.4 replaced by 5.5)
+  if (n === "gpt-5.4-pro") {
+    return "gpt-5.5-pro";
+  }
+  if (n === "gpt-5.4") {
+    return "gpt-5.5";
+  }
   if (n.startsWith("gpt-5.4-")) {
     const last = popSegment(n);
     if (last && REASONING_SUFFIXES.has(last)) {
-      return "gpt-5.4";
+      return "gpt-5.5"; // gpt-5.4-low/high/xhigh → gpt-5.5
+    }
+  }
+  
+  // GPT-5.5 variants
+  if (n === "gpt-5.5-pro") {
+    return "gpt-5.5-pro";
+  }
+  if (n === "gpt-5.5") {
+    return "gpt-5.5";
+  }
+
+  // gpt-5.5-<reasoning> → gpt-5.5 (reasoning passed separately via API)
+  if (n.startsWith("gpt-5.5-")) {
+    const last = popSegment(n);
+    if (last && REASONING_SUFFIXES.has(last)) {
+      return "gpt-5.5";
     }
   }
 
-  if (n === "gpt-5.4") {
-    return "gpt-5.4";
-  }
-
-  // Legacy mini snapshot IDs → GPT-5.4 mini
+  // Legacy mini snapshot IDs → GPT-5.4 mini (still kept as mini variant)
   if (n === "gpt-5-mini" || n.startsWith("gpt-5-mini-")) {
     return "gpt-5.4-mini";
   }
@@ -93,28 +108,41 @@ const OPENAI_CODEX_MODELS = new Set([
   "gpt-5.3-codex-spark",
   "gpt-5.4",
   "gpt-5.4-mini",
+  "gpt-5.5",
+  "gpt-5.5-pro",
 ]);
 
 /**
  * Check if model can use pi-ai openai-codex (OAuth path).
- * Variants like gpt-5.4-low map to base gpt-5.4 in pi-ai.
+ * Variants like gpt-5.4-low or gpt-5.5-high map to base models in pi-ai.
  */
 export function isOpenAICodexModel(modelId: string): boolean {
   const n = modelId
     .replace(/gpt-5-2/g, "gpt-5.2")
-    .replace(/gpt-5-4/g, "gpt-5.4");
+    .replace(/gpt-5-4/g, "gpt-5.4")
+    .replace(/gpt-5-5/g, "gpt-5.5");
 
   const apiId = normalizeOpenAIModelId(modelId);
   if (OPENAI_CODEX_MODELS.has(apiId)) {
     return true;
   }
 
+  // Check GPT-5.5 with reasoning suffix
+  if (n.startsWith("gpt-5.5-")) {
+    const last = popSegment(n);
+    return last !== undefined && REASONING_SUFFIXES.has(last);
+  }
+
+  // Check GPT-5.4 with reasoning suffix (maps to 5.5 now)
   if (n.startsWith("gpt-5.4-")) {
     const last = popSegment(n);
     return last !== undefined && REASONING_SUFFIXES.has(last);
   }
 
   // Legacy OAuth IDs still stored in old chats
+  if (n === "gpt-5.4" || n === "gpt-5.4-pro") {
+    return true;
+  }
   if (n === "gpt-5.2" || n === "gpt-5.2-codex") {
     return true;
   }

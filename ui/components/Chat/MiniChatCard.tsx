@@ -388,10 +388,17 @@ export function MiniChatCard({
 
   return (
     <div className="mini-chat-card" data-testid="mini-chat-card">
-      <button
-        type="button"
+      <div
         className="mini-chat-card__header"
         onClick={() => hasDetails && setIsCollapsed((c) => !c)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            hasDetails && setIsCollapsed((c) => !c);
+          }
+        }}
       >
         <div className="mini-chat-card__header-left">
           <svg
@@ -428,7 +435,7 @@ export function MiniChatCard({
             {STATUS_LABELS[status]}
           </span>
         </div>
-      </button>
+      </div>
 
       {!isCollapsed && (
         <div className="mini-chat-card__body">

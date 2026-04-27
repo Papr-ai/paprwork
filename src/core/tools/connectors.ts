@@ -1,12 +1,10 @@
 /**
- * Service Connectors - Provision cloud services via Stripe Projects CLI
- *
- * Wraps the Stripe Projects CLI to let agents provision databases, hosting,
- * auth, analytics, and other services with a single tool call. Credentials
- * are auto-stored in the system keychain via CustomKeysService.
- *
- * Supported providers: Neon, Supabase, Vercel, Railway, Cloudflare, Clerk,
- * PostHog, Amplitude, Mixpanel, OpenRouter, Hugging Face, and more.
+ * Stripe Projects Provisioning Tool
+ * 
+ * MINIMAL tool that does ONE thing: provision a service and automatically store credentials.
+ * For everything else (catalog search, authentication, status), agent should use Stripe CLI directly via bash.
+ * 
+ * Why this tool exists: Automatic credential extraction and storage prevents agent from forgetting to store keys.
  */
 
 import { createTool } from "@mastra/core/tools";
@@ -22,7 +20,6 @@ const execFileAsync = promisify(execFile);
 
 const STRIPE_CLI_TIMEOUT_MS = 30_000;
 const PROVISION_TIMEOUT_MS = 120_000;
-const INSTALL_TIMEOUT_MS = 60_000;
 
 /** Dedicated directory for Stripe Projects config & state */
 const STRIPE_PROJECT_DIR = join(homedir(), "Papr", "stripe-project");
@@ -60,69 +57,6 @@ async function runCommand(
   }
 }
 
-async function isStripeCliInstalled(): Promise<boolean> {
-  const result = await runCommand("which", ["stripe"], STRIPE_CLI_TIMEOUT_MS);
-  return result.stdout.trim().length > 0 && !result.stderr.includes("not found");
-}
-
-async function isProjectsPluginInstalled(): Promise<boolean> {
-  const result = await runCommand(
-    "stripe",
-    ["projects", "--help"],
-    STRIPE_CLI_TIMEOUT_MS,
-  );
-  return !result.stderr.includes("unknown command") && !result.stderr.includes("not found");
-}
-
-async function installStripeCli(): Promise<{ success: boolean; message: string }> {
-  const platform = process.platform;
-
-  let cmd: string;
-  let args: string[];
-
-  if (platform === "darwin") {
-    cmd = "brew";
-    args = ["install", "stripe/stripe-cli/stripe"];
-  } else if (platform === "win32") {
-    cmd = "winget";
-    args = ["install", "Stripe.StripeCLI", "--silent"];
-  } else {
-    cmd = "sh";
-    args = [
-      "-c",
-      'curl -s https://packages.stripe.dev/api/security/keypair/stripe-cli-gpg/public | gpg --dearmor | sudo tee /usr/share/keyrings/stripe.gpg > /dev/null && echo "deb [signed-by=/usr/share/keyrings/stripe.gpg] https://packages.stripe.dev/stripe-cli-debian-local stable main" | sudo tee -a /etc/apt/sources.list.d/stripe.list > /dev/null && sudo apt update && sudo apt install stripe',
-    ];
-  }
-
-  const result = await runCommand(cmd, args, INSTALL_TIMEOUT_MS);
-
-  if (result.stderr && !result.stdout.includes("stripe")) {
-    return {
-      success: false,
-      message: `Failed to install Stripe CLI: ${result.stderr.substring(0, 200)}`,
-    };
-  }
-
-  return { success: true, message: "Stripe CLI installed successfully." };
-}
-
-async function installProjectsPlugin(): Promise<{ success: boolean; message: string }> {
-  const result = await runCommand(
-    "stripe",
-    ["plugin", "install", "projects"],
-    INSTALL_TIMEOUT_MS,
-  );
-
-  if (result.stderr.includes("error") || result.stderr.includes("failed")) {
-    return {
-      success: false,
-      message: `Failed to install projects plugin: ${result.stderr.substring(0, 200)}`,
-    };
-  }
-
-  return { success: true, message: "Stripe Projects plugin installed." };
-}
-
 async function checkAuthentication(): Promise<boolean> {
   const result = await runCommand(
     "stripe",
@@ -145,49 +79,55 @@ async function checkAuthentication(): Promise<boolean> {
   return true;
 }
 
+async function checkStripeInstalled(): Promise<boolean> {
+  try {
+    const result = await runCommand("stripe", ["--version"], 5000);
+    return result.stdout.includes("stripe") || !result.stderr.includes("not found");
+  } catch {
+    return false;
+  }
+}
+
 async function ensureStripeReady(): Promise<ToolResult | null> {
-  if (!(await isStripeCliInstalled())) {
-    const installResult = await installStripeCli();
-    if (!installResult.success) {
-      return {
-        success: false,
-        error: installResult.message,
-        data: {
-          status: "cli_not_installed",
-          instructions:
-            "Install the Stripe CLI manually: https://docs.stripe.com/stripe-cli/install",
-        },
-      };
-    }
+  // First check if Stripe CLI is installed
+  const isInstalled = await checkStripeInstalled();
+  
+  if (!isInstalled) {
+    return {
+      success: false,
+      data: {
+        status: "needs_install",
+        message: "Stripe CLI not installed. Use the official installer (works for all users, no brew/npm required).",
+        instructions: [
+          "1. Run: bash({ command: 'curl -fsSL https://cli.stripe.com/install.sh | bash' })",
+          "2. The installer places stripe in /tmp/ temporarily",
+          "3. Move it to a permanent location: bash({ command: 'sudo mv /tmp/stripe /usr/local/bin/stripe && sudo chmod +x /usr/local/bin/stripe' })",
+          "4. Verify installation: bash({ command: 'stripe --version' })",
+          "5. If shell needs refresh: bash({ command: 'source ~/.zshrc' }) or bash({ command: 'source ~/.bashrc' })",
+          "6. Then authenticate: shell.openExternal({ url: 'https://dashboard.stripe.com/login' }) → bash({ command: 'stripe login --interactive' })",
+          "7. Retry provision_service() after setup completes",
+        ],
+        one_liner: "curl -fsSL https://cli.stripe.com/install.sh | bash && sudo mv /tmp/stripe /usr/local/bin/stripe && sudo chmod +x /usr/local/bin/stripe",
+      },
+    };
   }
 
-  if (!(await isProjectsPluginInstalled())) {
-    const pluginResult = await installProjectsPlugin();
-    if (!pluginResult.success) {
-      return {
-        success: false,
-        error: pluginResult.message,
-        data: {
-          status: "plugin_not_installed",
-          instructions:
-            "Install manually: stripe plugin install projects",
-        },
-      };
-    }
-  }
-
+  // Check authentication
   if (!(await checkAuthentication())) {
     return {
       success: false,
       data: {
         status: "needs_auth",
         message:
-          "Stripe authentication required. Run `stripe login` via the bash tool to open the browser for one-time authentication. After logging in, retry this action.",
+          "Stripe authentication required. Use shell.openExternal() to open the Stripe dashboard for authentication, OR run `stripe login` via bash if browser doesn't open automatically.",
         instructions: [
-          "1. Call bash({ command: 'stripe login' }) to open browser authentication",
-          "2. User completes login in browser",
-          "3. Retry the connect_service action",
+          "1. PREFERRED: shell.openExternal({ url: 'https://dashboard.stripe.com/login' })",
+          "2. User logs in to Stripe dashboard",
+          "3. Run: bash({ command: 'stripe login --interactive' }) to complete CLI pairing",
+          "4. Retry provision_service() after authentication succeeds",
         ],
+        manual_url: "https://dashboard.stripe.com/login",
+        fallback_command: "stripe login --interactive",
       },
     };
   }
@@ -198,7 +138,6 @@ async function ensureStripeReady(): Promise<ToolResult | null> {
 async function ensureProjectInitialized(
   projectName: string,
 ): Promise<{ success: boolean; message: string }> {
-  // Ensure dedicated project directory exists
   mkdirSync(STRIPE_PROJECT_DIR, { recursive: true });
 
   const statusResult = await runCommand(
@@ -295,7 +234,7 @@ async function storeCredentials(
       storedKeys.push(name);
     } catch (error) {
       console.warn(
-        `[connect_service] Failed to store key ${name}:`,
+        `[provision_service] Failed to store key ${name}:`,
         error instanceof Error ? error.message : error,
       );
     }
@@ -304,37 +243,21 @@ async function storeCredentials(
   return storedKeys;
 }
 
-export const connectServiceTool = createTool({
-  id: "connect_service",
+export const provisionServiceTool = createTool({
+  id: "provision_service",
   description:
-    "Provision cloud services (databases, hosting, auth, analytics) via Stripe Projects. " +
-    "Handles CLI setup, authentication, provisioning, and credential storage automatically. " +
-    "Actions: 'catalog' (browse available services), 'add' (provision and store credentials), " +
-    "'status' (check provisioned services), 'remove' (remove a service). " +
-    "Credentials are auto-stored in the keychain — use ${KEY_NAME} in jobs/bash after provisioning. " +
-    "If a service is NOT in the catalog, fall back to manual setup: guide the user to sign up " +
-    "at the provider's website, then use request_key() or set_key() to store their credentials.",
+    "Provision a cloud service via Stripe Projects and automatically store credentials in keychain. " +
+    "This is the ONLY Stripe Projects tool - for everything else (checking catalog, authentication, status), " +
+    "use the Stripe CLI directly via bash. " +
+    "Example: provision_service({ provider: 'neon', service: 'database' }) → provisions AND stores NEON_DATABASE_URL automatically. " +
+    "The tool guarantees credentials are stored, preventing jobs/apps from failing due to missing keys.",
   inputSchema: z.object({
-    action: z
-      .enum(["catalog", "add", "status", "remove"])
-      .describe(
-        "Action: 'catalog' = browse services, 'add' = provision + store creds, " +
-        "'status' = check provisioned, 'remove' = deprovision",
-      ),
     provider: z
       .string()
-      .optional()
-      .describe(
-        "Provider name (e.g., 'neon', 'supabase', 'vercel', 'clerk', 'posthog'). " +
-        "For catalog action, optionally filter by provider or category.",
-      ),
+      .describe("Provider name (e.g., 'neon', 'supabase', 'vercel', 'clerk', 'posthog')"),
     service: z
       .string()
-      .optional()
-      .describe(
-        "Service name (e.g., 'database', 'auth', 'analytics', 'project'). " +
-        "Required for 'add' and 'remove' actions.",
-      ),
+      .describe("Service name (e.g., 'database', 'project', 'postgres', 'analytics')"),
     project: z
       .string()
       .optional()
@@ -345,20 +268,19 @@ export const connectServiceTool = createTool({
   execute: async (inputData): Promise<ToolResult> => {
     const args = (inputData as Record<string, unknown>).context
       ? ((inputData as Record<string, unknown>).context as {
-          action: string;
-          provider?: string;
-          service?: string;
+          provider: string;
+          service: string;
           project?: string;
         })
       : (inputData as {
-          action: string;
-          provider?: string;
-          service?: string;
+          provider: string;
+          service: string;
           project?: string;
         });
     const startTime = performance.now();
 
     try {
+      // Check authentication
       const readyError = await ensureStripeReady();
       if (readyError) {
         return {
@@ -368,246 +290,118 @@ export const connectServiceTool = createTool({
         };
       }
 
-      switch (args.action) {
-        case "catalog": {
-          const catalogArgs = ["projects", "catalog", "--json"];
-          if (args.provider) {
-            catalogArgs.splice(2, 0, args.provider);
-          }
+      // Ensure project is initialized
+      const projectName = args.project || "paprwork-default";
+      const initResult = await ensureProjectInitialized(projectName);
+      if (!initResult.success) {
+        return {
+          success: false,
+          error: initResult.message,
+          duration: performance.now() - startTime,
+          timestamp: new Date().toISOString(),
+        };
+      }
 
-          const result = await runCommand(
-            "stripe",
-            catalogArgs,
-            STRIPE_CLI_TIMEOUT_MS,
-            STRIPE_PROJECT_DIR,
-          );
+      // Provision the service
+      const providerService = `${args.provider}/${args.service}`;
+      const addResult = await runCommand(
+        "stripe",
+        [
+          "projects",
+          "add",
+          providerService,
+          "--json",
+          "--auto-confirm",
+        ],
+        PROVISION_TIMEOUT_MS,
+        STRIPE_PROJECT_DIR,
+      );
 
-          let catalogData: unknown;
-          try {
-            catalogData = JSON.parse(result.stdout);
-          } catch {
-            catalogData = result.stdout.trim();
-          }
+      if (
+        addResult.stderr.includes("error") &&
+        !addResult.stdout.includes('"')
+      ) {
+        return {
+          success: false,
+          error: `Failed to provision ${providerService}: ${addResult.stderr.substring(0, 300)}`,
+          data: {
+            provider: args.provider,
+            service: args.service,
+            fallback:
+              "If this provider requires account linking first, try: " +
+              `bash({ command: 'cd ~/Papr/stripe-project && stripe projects link ${args.provider}' }) then retry.`,
+          },
+          duration: performance.now() - startTime,
+          timestamp: new Date().toISOString(),
+        };
+      }
 
-          return {
-            success: true,
-            data: {
-              catalog: catalogData,
-              message: args.provider
-                ? `Showing services for provider: ${args.provider}`
-                : "Full service catalog. Use provider/service with 'add' action to provision.",
-            },
-            duration: performance.now() - startTime,
-            timestamp: new Date().toISOString(),
-          };
-        }
+      // Parse and auto-store credentials (THE KEY FEATURE)
+      const outputToParse = addResult.stdout || addResult.stderr;
+      const envVars = parseEnvVarsFromOutput(outputToParse);
+      const storedKeys = await storeCredentials(envVars, args.provider);
 
-        case "add": {
-          if (!args.provider || !args.service) {
-            return {
-              success: false,
-              error:
-                "Both 'provider' and 'service' are required for the 'add' action. " +
-                "Example: connect_service({ action: 'add', provider: 'neon', service: 'database' })",
-              duration: performance.now() - startTime,
-              timestamp: new Date().toISOString(),
-            };
-          }
+      if (storedKeys.length === 0) {
+        // Try pulling from Stripe Projects env if not in output
+        const envSyncResult = await runCommand(
+          "stripe",
+          ["projects", "env", "--pull", "--json"],
+          STRIPE_CLI_TIMEOUT_MS,
+          STRIPE_PROJECT_DIR,
+        );
+        const syncedVars = parseEnvVarsFromOutput(
+          envSyncResult.stdout || envSyncResult.stderr,
+        );
+        const syncedKeys = await storeCredentials(syncedVars, args.provider);
 
-          const projectName = args.project || "paprwork-default";
-          const initResult = await ensureProjectInitialized(projectName);
-          if (!initResult.success) {
-            return {
-              success: false,
-              error: initResult.message,
-              duration: performance.now() - startTime,
-              timestamp: new Date().toISOString(),
-            };
-          }
-
-          const providerService = `${args.provider}/${args.service}`;
-          const addResult = await runCommand(
-            "stripe",
-            [
-              "projects",
-              "add",
-              providerService,
-              "--json",
-              "--auto-confirm",
-            ],
-            PROVISION_TIMEOUT_MS,
-            STRIPE_PROJECT_DIR,
-          );
-
-          if (
-            addResult.stderr.includes("error") &&
-            !addResult.stdout.includes('"')
-          ) {
-            return {
-              success: false,
-              error: `Failed to provision ${providerService}: ${addResult.stderr.substring(0, 300)}`,
-              data: {
-                provider: args.provider,
-                service: args.service,
-                fallback:
-                  "If this provider requires account linking first, try: " +
-                  `bash({ command: 'stripe projects link ${args.provider}' }) then retry.`,
-              },
-              duration: performance.now() - startTime,
-              timestamp: new Date().toISOString(),
-            };
-          }
-
-          const outputToParse = addResult.stdout || addResult.stderr;
-          const envVars = parseEnvVarsFromOutput(outputToParse);
-          const storedKeys = await storeCredentials(envVars, args.provider);
-
-          if (storedKeys.length === 0) {
-            const envSyncResult = await runCommand(
-              "stripe",
-              ["projects", "env", "--pull", "--json"],
-              STRIPE_CLI_TIMEOUT_MS,
-              STRIPE_PROJECT_DIR,
-            );
-            const syncedVars = parseEnvVarsFromOutput(
-              envSyncResult.stdout || envSyncResult.stderr,
-            );
-            const syncedKeys = await storeCredentials(syncedVars, args.provider);
-
-            if (syncedKeys.length > 0) {
-              return {
-                success: true,
-                data: {
-                  provider: args.provider,
-                  service: args.service,
-                  keys_stored: syncedKeys,
-                  key_usage: syncedKeys.map(
-                    (k) => `Use \${${k}} in jobs and bash commands`,
-                  ),
-                  message: `Provisioned ${providerService}. Stored ${syncedKeys.length} credential(s) in keychain.`,
-                },
-                duration: performance.now() - startTime,
-                timestamp: new Date().toISOString(),
-              };
-            }
-
-            return {
-              success: true,
-              data: {
-                provider: args.provider,
-                service: args.service,
-                keys_stored: [],
-                raw_output: addResult.stdout.substring(0, 500),
-                message:
-                  `Provisioned ${providerService} but could not auto-extract credentials. ` +
-                  "Run `stripe projects env` via bash to check environment variables, " +
-                  "then use set_key() to store them manually.",
-              },
-              duration: performance.now() - startTime,
-              timestamp: new Date().toISOString(),
-            };
-          }
-
+        if (syncedKeys.length > 0) {
           return {
             success: true,
             data: {
               provider: args.provider,
               service: args.service,
-              keys_stored: storedKeys,
-              key_usage: storedKeys.map(
+              credentials_stored: syncedKeys,
+              usage_example: syncedKeys.map(
                 (k) => `Use \${${k}} in jobs and bash commands`,
               ),
-              message: `Provisioned ${providerService}. Stored ${storedKeys.length} credential(s) in keychain.`,
+              message: `✓ Provisioned ${providerService}. Auto-stored ${syncedKeys.length} credential(s) in keychain.`,
             },
             duration: performance.now() - startTime,
             timestamp: new Date().toISOString(),
           };
         }
 
-        case "status": {
-          mkdirSync(STRIPE_PROJECT_DIR, { recursive: true });
-          const result = await runCommand(
-            "stripe",
-            ["projects", "status", "--json"],
-            STRIPE_CLI_TIMEOUT_MS,
-            STRIPE_PROJECT_DIR,
-          );
-
-          let statusData: unknown;
-          try {
-            statusData = JSON.parse(result.stdout);
-          } catch {
-            statusData = result.stdout.trim();
-          }
-
-          return {
-            success: true,
-            data: {
-              status: statusData,
-              message: "Current project status and provisioned services.",
-            },
-            duration: performance.now() - startTime,
-            timestamp: new Date().toISOString(),
-          };
-        }
-
-        case "remove": {
-          if (!args.provider || !args.service) {
-            return {
-              success: false,
-              error:
-                "Both 'provider' and 'service' are required for the 'remove' action.",
-              duration: performance.now() - startTime,
-              timestamp: new Date().toISOString(),
-            };
-          }
-
-          const providerService = `${args.provider}/${args.service}`;
-          const result = await runCommand(
-            "stripe",
-            [
-              "projects",
-              "remove",
-              providerService,
-              "--json",
-              "--auto-confirm",
-            ],
-            PROVISION_TIMEOUT_MS,
-            STRIPE_PROJECT_DIR,
-          );
-
-          if (
-            result.stderr.includes("error") &&
-            !result.stdout.includes('"')
-          ) {
-            return {
-              success: false,
-              error: `Failed to remove ${providerService}: ${result.stderr.substring(0, 300)}`,
-              duration: performance.now() - startTime,
-              timestamp: new Date().toISOString(),
-            };
-          }
-
-          return {
-            success: true,
-            data: {
-              provider: args.provider,
-              service: args.service,
-              message: `Removed ${providerService}. Note: associated keys in Settings are NOT automatically removed — delete them manually if no longer needed.`,
-            },
-            duration: performance.now() - startTime,
-            timestamp: new Date().toISOString(),
-          };
-        }
-
-        default:
-          return {
-            success: false,
-            error: `Unknown action: ${args.action}. Use 'catalog', 'add', 'status', or 'remove'.`,
-            duration: performance.now() - startTime,
-            timestamp: new Date().toISOString(),
-          };
+        return {
+          success: true,
+          data: {
+            provider: args.provider,
+            service: args.service,
+            credentials_stored: [],
+            raw_output: addResult.stdout.substring(0, 500),
+            message:
+              `Provisioned ${providerService} but could not auto-extract credentials. ` +
+              "Run \`bash({ command: 'cd ~/Papr/stripe-project && stripe projects env' })\` to check environment variables, " +
+              "then use set_key() to store them manually.",
+          },
+          duration: performance.now() - startTime,
+          timestamp: new Date().toISOString(),
+        };
       }
+
+      return {
+        success: true,
+        data: {
+          provider: args.provider,
+          service: args.service,
+          credentials_stored: storedKeys,
+          usage_example: storedKeys.map(
+            (k) => `Use \${${k}} in jobs and bash commands`,
+          ),
+          message: `✓ Provisioned ${providerService}. Auto-stored ${storedKeys.length} credential(s) in keychain.`,
+        },
+        duration: performance.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
     } catch (error) {
       throw new Error(
         JSON.stringify({
@@ -621,4 +415,4 @@ export const connectServiceTool = createTool({
   },
 });
 
-export const connectorsTools = [connectServiceTool];
+export const connectorsTools = [provisionServiceTool];
