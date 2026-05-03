@@ -63,10 +63,10 @@ const AVAILABLE_MODELS: Record<Provider, ModelInfo[]> = {
       supportsVision: true,
     },
     {
-      id: "gpt-5.4",
-      name: "GPT-5.4",
+      id: "gpt-5.5",
+      name: "GPT-5.5",
       provider: "openai",
-      contextWindow: 272000,
+      contextWindow: 1000000,
       supportsThinking: true,
       supportsVision: true,
     },

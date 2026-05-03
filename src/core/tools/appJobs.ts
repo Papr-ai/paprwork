@@ -170,9 +170,9 @@ const createJobSchema = z.object({
       "claude-opus-4-6",
       // OpenAI
       "gpt-5.4-mini",
-      "gpt-5.4-low",
-      "gpt-5.4",
-      "gpt-5.4-high",
+      "gpt-5.5-low",
+      "gpt-5.5",
+      "gpt-5.5-high",
       "gpt-5.3-codex",
       // Google
       "gemini-2.5-flash-lite",
@@ -197,7 +197,7 @@ const createJobSchema = z.object({
     ])
     .optional()
     .describe(
-      "Model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-4-6', 'gpt-5.4', 'gemini-2.5-flash', 'qwen3.5:latest'",
+      "Model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-4-6', 'gpt-5.5', 'gemini-2.5-flash', 'qwen3.5:latest'",
     ),
   recipe: recipeConfigSchema.optional().describe(
     "Execution recipe configuration. When enabled, an agent evaluates each run against the recipe's quality rubric. " +
@@ -830,9 +830,9 @@ const updateJobSchema = z.object({
       "claude-opus-4-6",
       // OpenAI
       "gpt-5.4-mini",
-      "gpt-5.4-low",
-      "gpt-5.4",
-      "gpt-5.4-high",
+      "gpt-5.5-low",
+      "gpt-5.5",
+      "gpt-5.5-high",
       "gpt-5.3-codex",
       // Google
       "gemini-2.5-flash-lite",
@@ -857,7 +857,7 @@ const updateJobSchema = z.object({
     ])
     .optional()
     .describe(
-      "Update model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-4-6', 'gpt-5.4', 'gemini-2.5-flash', 'qwen3.5:latest'",
+      "Update model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-4-6', 'gpt-5.5', 'gemini-2.5-flash', 'qwen3.5:latest'",
     ),
 });
 

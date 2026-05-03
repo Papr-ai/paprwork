@@ -56,6 +56,7 @@ export function buildPiContext(input: PiContextInput): {
             content.push({
               type: "toolCall",
               id: part.toolCallId ?? "",
+              // Tool names are already sanitized in historyFormatter, just pass through
               name: part.toolName ?? "",
               arguments: typeof part.args === "object" ? part.args : {},
             });
@@ -84,10 +85,18 @@ export function buildPiContext(input: PiContextInput): {
     if (msg.role === "tool") {
       const results = Array.isArray(msg.content) ? msg.content : [];
       for (const r of results as any[]) {
-        const text =
-          typeof r.result === "string"
-            ? r.result
-            : JSON.stringify(r.result ?? "");
+        // Accept three shapes:
+        //  - AI-SDK tool-result: { result: <any> }
+        //  - already pi-ai shape (round-tripped from storage): { text: "..." } / { type: "text", text: "..." }
+        //  - missing result (interrupted stream): emit explicit marker, never a silent empty string
+        const directText =
+          typeof (r as any).text === "string" ? (r as any).text : undefined;
+        const hasResult = r.result !== undefined && r.result !== null;
+        const text = hasResult
+          ? (typeof r.result === "string" ? r.result : JSON.stringify(r.result))
+          : directText !== undefined
+            ? directText
+            : "[Tool result not persisted — stream likely interrupted before this tool finished. Treat as unknown; re-invoke if needed.]";
         const resultObj = r.result && typeof r.result === "object" ? r.result as Record<string, unknown> : null;
         const hasError = resultObj
           ? resultObj.success === false || typeof resultObj.error === "string"

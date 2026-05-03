@@ -105,7 +105,7 @@ export async function getAvailableProviders(): Promise<AvailableProvider[]> {
   const { getProviderAuth, getApiKeys } = await import("./keyResolver.js");
 
   const defaultModelByProvider: Record<Provider, string> = {
-    openai: "gpt-5.4",
+    openai: "gpt-5.5",
     "openai-codex": "gpt-5.3-codex",
     anthropic: "claude-sonnet-4-6",
     google: "gemini-2.5-flash",

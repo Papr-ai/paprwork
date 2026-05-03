@@ -9,6 +9,8 @@ import type { ChatMessage } from "../../stores/chatStore";
 import { useProfileStore } from "../../stores/profileStore";
 import { ThinkingCard } from "./ThinkingCard";
 import { ExploringCard } from "./ExploringCard";
+import { FileWritePreview, hasFilePreview } from "./FileWritePreview";
+import "./FileWritePreview.css";
 import { WorkingCard } from "./WorkingCard";
 import { PlanCard, parsePlanFromToolResult } from "./PlanCard";
 import { JobStatusCard, parseJobStatusFromToolResult } from "./JobStatusCard";
@@ -281,17 +283,35 @@ function renderSequence(
           }
         }
 
+        const _showFilePreview = hasFilePreview(
+          toolCall.toolName,
+          toolCall.args,
+          typeof toolCall.result === "string" ? toolCall.result : undefined,
+        );
         exploringItems.push(
-          <div key={`tool-${index}`} className="exploring-tool-item">
-            <span className="exploring-tool-arrow">→</span>
-            <span className="exploring-tool-name">
-              {getToolDisplayLabel(toolCall)}
-            </span>
-            {toolCall.status === "success" && (
-              <span className="exploring-tool-success">✓</span>
-            )}
-            {toolCall.status === "error" && (
-              <span className="exploring-tool-error">✗</span>
+          <div key={`tool-${index}`} className="exploring-tool-row">
+            <div className="exploring-tool-item">
+              <span className="exploring-tool-arrow">→</span>
+              <span className="exploring-tool-name">
+                {getToolDisplayLabel(toolCall)}
+              </span>
+              {toolCall.status === "success" && (
+                <span className="exploring-tool-success">✓</span>
+              )}
+              {toolCall.status === "error" && (
+                <span className="exploring-tool-error">✗</span>
+              )}
+            </div>
+            {_showFilePreview && (
+              <FileWritePreview
+                toolName={toolCall.toolName}
+                args={toolCall.args}
+                result={
+                  typeof toolCall.result === "string"
+                    ? toolCall.result
+                    : undefined
+                }
+              />
             )}
           </div>,
         );

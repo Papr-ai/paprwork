@@ -20,9 +20,9 @@ interface ModelCapabilities {
  */
 const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
   // OpenAI
-  "gpt-5.4": {
+  "gpt-5.5": {
     reasoningLevel: "advanced",
-    contextWindow: 272000,
+    contextWindow: 1000000,
     speed: "slow",
     cost: "expensive",
     specialties: ["reasoning", "computer-use", "complex-tasks"],
@@ -139,7 +139,7 @@ export async function getBestFallbackModel(
 
   // Default models by provider
   const defaultModelByProvider: Record<Provider, string> = {
-    openai: "gpt-5.4",
+    openai: "gpt-5.5",
     "openai-codex": "gpt-5.3-codex",
     anthropic: "claude-sonnet-4-6",
     google: "gemini-2.5-flash",
@@ -237,10 +237,10 @@ export function getUpgradeModelForTask(
     Record<string, string>
   > = {
     openai: {
-      reasoning: "gpt-5.4",
+      reasoning: "gpt-5.5",
       coding: "gpt-5.3-codex",
-      writing: "gpt-5.4",
-      general: "gpt-5.4",
+      writing: "gpt-5.5",
+      general: "gpt-5.5",
     },
     "openai-codex": {
       reasoning: "gpt-5.3-codex",

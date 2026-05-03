@@ -627,10 +627,23 @@ export class AgentService {
         },
         maxTokens: effectiveMaxTokens,
         // Allow up to maxSteps tool roundtrips before stopping.
-        // 100 steps provides safety against infinite loops while allowing
-        // complex multi-step agentic workflows.
-        stopWhen: (stopOptions: any) =>
-          stopOptions.steps.length >= (options?.maxSteps ?? 100),
+        // Hard limit at maxSteps (default 100), but we force stop at 95 to give
+        // the model a chance to respond gracefully before hitting the limit.
+        // Warnings start at 90 steps via prepareStep.
+        stopWhen: (stopOptions: any) => {
+          const stepCount = stopOptions.steps.length;
+          const maxSteps = options?.maxSteps ?? 100;
+          const FORCE_STOP = 95;
+          
+          if (stepCount >= FORCE_STOP) {
+            console.warn(
+              `[AgentService] 🛑 Force stopping at step ${stepCount} (threshold: ${FORCE_STOP}/${maxSteps})`
+            );
+            return true;
+          }
+          
+          return stepCount >= maxSteps;
+        },
         // ⚡ NO TIMEOUT - Allow agents to work as long as needed
         // Protection mechanisms:
         // 1. Step limit prevents infinite loops
@@ -641,8 +654,9 @@ export class AgentService {
         ...(providerOptions.openai || providerOptions.google || providerOptions.ollama
           ? { providerOptions }
           : {}),
-        // Truncate tool results mid-stream to prevent context overflow
-        // Strategy: Adaptive truncation based on ACTUAL token usage from previous steps
+        // Compact stale tool results before each model call.
+        // Fresh batch (most recent) stays full; older batches get truncated.
+        // Also handles step-limit warnings.
         prepareStep: async (stepOptions: {
           messages: any[];
           stepNumber: number;
@@ -650,173 +664,39 @@ export class AgentService {
             usage?: { promptTokens?: number; completionTokens?: number };
           }>;
         }) => {
-          // Use cumulative tokens tracked from onStepFinish
-          // (stepOptions.steps doesn't have usage data until after the step completes)
           const totalPromptTokens = cumulativePromptTokens;
-
           console.log(
-            `[prepareStep] Step ${stepOptions.stepNumber}: ${Math.round(totalPromptTokens / 1000)}K tokens used, ` +
-              `${stepOptions.messages.length} messages in context`,
+            `[prepareStep] Step ${stepOptions.stepNumber}: ${Math.round(totalPromptTokens / 1000)}K tokens, ` +
+              `${stepOptions.messages.length} messages`,
           );
 
-          // Determine context pressure level
-          // NOTE: Most models have 128K-200K context windows
-          // - GPT-5.2: ~128K tokens
-          // - Claude Sonnet/Opus: ~200K tokens
-          // - Gemini: ~1M tokens
-          // We use conservative thresholds to leave room for output + safety margin
-          const CONTEXT_PRESSURE_THRESHOLDS = {
-            low: 30000, // <30K tokens: generous limits
-            medium: 60000, // 30-60K: moderate limits
-            high: 90000, // 60-90K: aggressive limits
-            critical: 120000, // >120K: abort (handled by onStepFinish)
-          };
+          // Check if approaching step limit and warn the model
+          const maxSteps = options?.maxSteps ?? 100;
+          const STEP_WARNING_THRESHOLD = 90;
+          const stepNumber = stepOptions.stepNumber || 0;
 
-          let pressureLevel: "low" | "medium" | "high";
-          if (totalPromptTokens < CONTEXT_PRESSURE_THRESHOLDS.low) {
-            pressureLevel = "low";
-          } else if (totalPromptTokens < CONTEXT_PRESSURE_THRESHOLDS.medium) {
-            pressureLevel = "medium";
-          } else {
-            pressureLevel = "high";
+          if (stepNumber >= STEP_WARNING_THRESHOLD) {
+            console.warn(
+              `[prepareStep] ⚠️ Step ${stepNumber}/${maxSteps}: Approaching step limit.`,
+            );
+            const warningMessage = {
+              role: "user",
+              content: `[SYSTEM NOTE: You've made ${stepNumber} tool calls out of ${maxSteps} maximum. Please complete your current task and provide a final response soon. Avoid unnecessary tool calls.]`,
+            };
+            const msgs = [...stepOptions.messages, warningMessage];
+            // Import and compact on the cloned array
+            const { compactStaleToolResults } = await import("./agent/compactToolResults.js");
+            compactStaleToolResults(msgs);
+            return { messages: msgs };
           }
 
-          console.log(`[prepareStep]   Pressure: ${pressureLevel}`);
-
-          // Find all tool messages and their indices (to determine recency)
-          const toolMessageIndices: number[] = [];
-          stepOptions.messages.forEach((msg, idx) => {
-            if (msg.role === "tool") {
-              toolMessageIndices.push(idx);
-            }
-          });
-
-          const totalToolMessages = toolMessageIndices.length;
-          console.log(
-            `[prepareStep]   Tool messages found: ${totalToolMessages}`,
-          );
-
-          // If no tool messages yet, don't modify anything
-          if (totalToolMessages === 0) {
-            return {};
-          }
-
-          // Adaptive truncation limits based on context pressure (1 token ≈ 4 chars)
-          const getTruncationLimit = (
-            toolMessagePosition: number,
-          ): number | null => {
-            const positionFromEnd = totalToolMessages - toolMessagePosition - 1;
-
-            // Always keep last result unlimited
-            if (positionFromEnd < 1) return null;
-
-            // Adapt limits based on context pressure
-            if (pressureLevel === "low") {
-              // Low pressure: generous limits (we have room)
-              if (positionFromEnd < 3) return 12000; // Next 2: 3000 tokens
-              if (positionFromEnd < 6) return 6000; // Next 3: 1500 tokens
-              if (positionFromEnd < 11) return 3000; // Next 5: 750 tokens
-              return 1500; // Old: 375 tokens
-            } else if (pressureLevel === "medium") {
-              // Medium pressure: moderate limits
-              if (positionFromEnd < 3) return 8000; // Next 2: 2000 tokens
-              if (positionFromEnd < 6) return 4000; // Next 3: 1000 tokens
-              if (positionFromEnd < 11) return 2000; // Next 5: 500 tokens
-              return 1000; // Old: 250 tokens
-            } else {
-              // High pressure: aggressive limits (context nearly full)
-              if (positionFromEnd < 3) return 4000; // Next 2: 1000 tokens
-              if (positionFromEnd < 6) return 2000; // Next 3: 500 tokens
-              if (positionFromEnd < 11) return 1000; // Next 5: 250 tokens
-              return 500; // Old: 125 tokens
-            }
-          };
-
-          // Helper function to truncate tool result (works for both strings and objects)
-          const truncateToolResult = (
-            result: unknown,
-            maxLength: number | null,
-            toolMessagePosition: number,
-          ): unknown => {
-            // Handle undefined/null results
-            if (result === undefined || result === null) {
-              return result;
-            }
-
-            // Convert result to string for size check
-            const resultStr =
-              typeof result === "string" ? result : JSON.stringify(result);
-
-            // EMERGENCY: Catch absurdly large results (>50K tokens) regardless of recency
-            // 50K tokens ≈ 200KB chars - max for any single tool result
-            const EMERGENCY_LIMIT = 200000; // ~50K tokens
-            if (resultStr.length > EMERGENCY_LIMIT) {
-              const truncated = resultStr.substring(0, EMERGENCY_LIMIT);
-              const omitted = resultStr.length - EMERGENCY_LIMIT;
-              console.warn(
-                `[prepareStep] ⚠️ EMERGENCY truncation: tool result was ${Math.round(resultStr.length / 1024)}KB, ` +
-                  `truncated to ${Math.round(EMERGENCY_LIMIT / 1024)}KB`,
-              );
-              return (
-                truncated +
-                `\n\n[⚠️ EMERGENCY TRUNCATION: Result was ${Math.round(resultStr.length / 1024)}KB (${Math.round(resultStr.length / 4000)}K tokens), ` +
-                `truncated ${omitted} chars. This is too large for context. ` +
-                `Use more specific search patterns or incremental reading.]`
-              );
-            }
-
-            // Keep unlimited for most recent (unless emergency truncation applied above)
-            if (maxLength === null) {
-              return result;
-            }
-
-            if (resultStr.length > maxLength) {
-              const truncated = resultStr.substring(0, maxLength);
-              const omitted = resultStr.length - maxLength;
-              const positionFromEnd =
-                totalToolMessages - toolMessagePosition - 1;
-              const estimatedTokens = Math.ceil(maxLength / 4);
-              return (
-                truncated +
-                `\n\n[... ${omitted} chars truncated (tool #${positionFromEnd + 1} from end, ` +
-                `limit: ~${estimatedTokens} tokens, context: ${Math.round(totalPromptTokens / 1000)}K/${pressureLevel})]`
-              );
-            }
-
-            return result;
-          };
-
-          // Process messages to truncate tool results based on recency + context pressure
-          const truncatedMessages = stepOptions.messages.map((msg, msgIdx) => {
-            if (msg.role === "tool" && Array.isArray(msg.content)) {
-              const toolMessagePosition = toolMessageIndices.indexOf(msgIdx);
-              const maxLength = getTruncationLimit(toolMessagePosition);
-
-              return {
-                ...msg,
-                content: msg.content.map((part: any) => {
-                  if (part.type === "tool-result") {
-                    // Truncate result (works for both strings and objects)
-                    const truncatedResult = truncateToolResult(
-                      part.result,
-                      maxLength,
-                      toolMessagePosition,
-                    );
-
-                    return {
-                      ...part,
-                      result: truncatedResult,
-                    };
-                  }
-                  return part;
-                }),
-              };
-            }
-            return msg;
-          });
-
-          return { messages: truncatedMessages };
+          // Clone messages and compact stale tool results
+          const msgs = [...stepOptions.messages];
+          const { compactStaleToolResults } = await import("./agent/compactToolResults.js");
+          compactStaleToolResults(msgs);
+          return { messages: msgs };
         },
+
         onStepFinish: async (step: StepResult<any>) => {
           cumulativeSteps++;
 

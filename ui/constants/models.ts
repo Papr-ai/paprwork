@@ -91,8 +91,8 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "OPENAI_API_KEY",
   },
   {
-    id: "gpt-5.4-low",
-    name: "GPT-5.4 (Low Reasoning)",
+    id: "gpt-5.5-low",
+    name: "GPT-5.5 (Low Reasoning)",
     provider: "openai",
     description: "Frontier model with faster, lighter reasoning",
     group: "OpenAI",
@@ -102,8 +102,8 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "OPENAI_API_KEY",
   },
   {
-    id: "gpt-5.4",
-    name: "GPT-5.4",
+    id: "gpt-5.5",
+    name: "GPT-5.5",
     provider: "openai",
     description: "Frontier flagship with balanced reasoning (recommended)",
     group: "OpenAI",
@@ -113,8 +113,8 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "OPENAI_API_KEY",
   },
   {
-    id: "gpt-5.4-high",
-    name: "GPT-5.4 (High Reasoning)",
+    id: "gpt-5.5-high",
+    name: "GPT-5.5 (High Reasoning)",
     provider: "openai",
     description: "Frontier model with deeper reasoning",
     group: "OpenAI",
@@ -341,7 +341,7 @@ export const getModelById = (id: string): AIModel | undefined => {
 /** Mid-tier model IDs per provider, in preference order for default selection */
 export const MID_TIER_MODEL_IDS = [
   "claude-sonnet-4-6", // Anthropic mid
-  "gpt-5.4", // OpenAI flagship
+  "gpt-5.5", // OpenAI flagship
   "gpt-5.4-mini", // OpenAI mini
   "gpt-5.3-codex", // OpenAI Codex (OAuth)
   "gemini-2.5-flash", // Google mid
@@ -350,7 +350,7 @@ export const MID_TIER_MODEL_IDS = [
 /** Default model IDs when no saved preference - first available wins */
 export const DEFAULT_MODEL_IDS = [
   "claude-sonnet-4-6", // Anthropic
-  "gpt-5.4", // OpenAI latest
+  "gpt-5.5", // OpenAI latest
   "gemini-3-flash-preview", // Google
 ];
 

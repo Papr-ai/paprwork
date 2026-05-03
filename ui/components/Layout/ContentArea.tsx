@@ -3,13 +3,13 @@
  * Reference: Paprwork v1 split view implementation
  */
 
-import React, { useRef, useCallback, useEffect, useState, Suspense } from "react";
+import React, { useRef, useCallback, useEffect, useState } from "react";
 import { useTabs } from "../../hooks/useTabs";
 import { ChatContainer } from "../Chat/ChatContainer";
 import { ArtifactsView } from "../Artifacts/ArtifactsView";
 import { AppsView } from "../Apps/AppsView";
 import { DocumentsView } from "../Documents/DocumentsView";
-const DocumentView = React.lazy(() => import("../Documents/DocumentView").then(m => ({ default: m.DocumentView })));
+import { DocumentView } from "../Documents/DocumentView";
 import { SettingsView } from "../Settings/SettingsView";
 import { JobsView } from "../Jobs/JobsView";
 import { MiniAppView } from "../Apps/MiniAppView";
@@ -213,11 +213,7 @@ export function ContentArea() {
       case "chat":
         return <ChatContainer chatId={tab.entityId} />;
       case "document":
-        return (
-          <Suspense fallback={<div className="document-view document-view--loading"><div className="document-view__spinner" /></div>}>
-            <DocumentView documentId={tab.entityId} />
-          </Suspense>
-        );
+        return <DocumentView documentId={tab.entityId} />;
       case "documents":
         return <DocumentsView />;
       case "apps":
