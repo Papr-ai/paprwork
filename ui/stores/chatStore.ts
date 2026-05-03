@@ -5,12 +5,19 @@
  */
 
 import { create } from "zustand";
-import type { ChatMetadata, ChatMessage, ChatState } from "../types/chat";
+import type {
+  ChatMetadata,
+  ChatMessage,
+  ChatState,
+  StreamingState,
+  SequenceItem,
+} from "../types/chat";
+import type { ToolCall } from "../types/core";
 import { gateway } from "../src/lib/gateway";
 import { trackEvent } from "../lib/telemetry";
 
 // Re-export types for backward compatibility
-export type { ChatMetadata, ChatMessage, ChatState };
+export type { ChatMetadata, ChatMessage, ChatState, StreamingState, SequenceItem };
 
 interface ChatStore {
   // All chat metadata
@@ -50,6 +57,42 @@ interface ChatStore {
   // Model selection per chat
   setLastSelectedModel: (chatId: string, modelId: string) => void;
   getLastSelectedModel: (chatId: string) => string | undefined;
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Live streaming slice (ephemeral, separate from chatStates.messages)
+  // See StreamingState type docs for lifecycle.
+  // ──────────────────────────────────────────────────────────────────────
+  streamingState: Map<string, StreamingState>;
+
+  /** Initialise streaming slice for a new in-flight assistant message. */
+  initStreamingState: (chatId: string, messageId: string) => void;
+  /** Append a text delta. Caller is responsible for throttling. */
+  appendStreamingText: (chatId: string, delta: string) => void;
+  /** Append a reasoning delta. Caller is responsible for throttling. */
+  appendStreamingReasoning: (chatId: string, delta: string) => void;
+  /** Replace the streaming sequence wholesale (used when sequence is rebuilt). */
+  replaceStreamingSequence: (chatId: string, sequence: SequenceItem[]) => void;
+  /** Insert/update a single tool call by id. Triggers granular row re-render. */
+  upsertStreamingToolCall: (chatId: string, toolCall: ToolCall) => void;
+  /**
+   * Flush streaming slice into the placeholder message in chatStates.messages
+   * and clear the slice. Called on stream done / abort.
+   * If overrides are provided (e.g. backend-provided final sequence), they win.
+   */
+  flushStreamingState: (
+    chatId: string,
+    overrides?: {
+      content?: string;
+      reasoning?: string;
+      sequence?: SequenceItem[];
+      toolCalls?: ToolCall[];
+      isStreaming?: boolean;
+    },
+  ) => void;
+  /** Drop streaming slice without flushing (errors, hard abort). */
+  clearStreamingState: (chatId: string) => void;
+  /** Read the current streaming slice for a chat (no subscription). */
+  getStreamingState: (chatId: string) => StreamingState | undefined;
 }
 
 export const defaultChatState: ChatState = {
@@ -64,6 +107,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   // Initial state
   chats: [],
   chatStates: new Map(),
+  streamingState: new Map(),
   isLoading: false,
   error: null,
 
@@ -326,6 +370,128 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       console.error('[ChatStore] Failed to load UI preferences:', error);
     }
   },
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Streaming slice actions
+  //
+  // All actions replace the streamingState Map so subscribers fire, but
+  // selectors should pick narrow values (e.g. .text, or a single toolCall by
+  // id) so unrelated chats and unrelated tool rows do NOT re-render.
+  // ────────────────────────────────────────────────────────────────────────
+
+  initStreamingState: (chatId, messageId) =>
+    set((state) => {
+      const next = new Map(state.streamingState);
+      next.set(chatId, {
+        messageId,
+        text: "",
+        reasoning: "",
+        sequence: [],
+        toolCalls: new Map<string, ToolCall>(),
+      });
+      return { streamingState: next };
+    }),
+
+  appendStreamingText: (chatId, delta) =>
+    set((state) => {
+      const slice = state.streamingState.get(chatId);
+      if (!slice) return state;
+      const next = new Map(state.streamingState);
+      next.set(chatId, { ...slice, text: slice.text + delta });
+      return { streamingState: next };
+    }),
+
+  appendStreamingReasoning: (chatId, delta) =>
+    set((state) => {
+      const slice = state.streamingState.get(chatId);
+      if (!slice) return state;
+      const next = new Map(state.streamingState);
+      next.set(chatId, { ...slice, reasoning: slice.reasoning + delta });
+      return { streamingState: next };
+    }),
+
+  replaceStreamingSequence: (chatId, sequence) =>
+    set((state) => {
+      const slice = state.streamingState.get(chatId);
+      if (!slice) return state;
+      const next = new Map(state.streamingState);
+      next.set(chatId, { ...slice, sequence });
+      return { streamingState: next };
+    }),
+
+  upsertStreamingToolCall: (chatId, toolCall) =>
+    set((state) => {
+      const slice = state.streamingState.get(chatId);
+      if (!slice) return state;
+      // Mutate map in place is fine because we replace the slice object,
+      // and consumers read .toolCalls.get(id) — Map identity check is enough.
+      const newToolCalls = new Map(slice.toolCalls);
+      newToolCalls.set(toolCall.id, toolCall);
+      const next = new Map(state.streamingState);
+      next.set(chatId, { ...slice, toolCalls: newToolCalls });
+      return { streamingState: next };
+    }),
+
+  flushStreamingState: (chatId, overrides) =>
+    set((state) => {
+      const slice = state.streamingState.get(chatId);
+      if (!slice) return state;
+      const chatState = state.chatStates.get(chatId);
+      if (!chatState) {
+        // Nothing to flush into — just clear the slice.
+        const next = new Map(state.streamingState);
+        next.delete(chatId);
+        return { streamingState: next };
+      }
+
+      const finalContent = overrides?.content ?? slice.text;
+      const finalReasoning = overrides?.reasoning ?? slice.reasoning;
+      const finalSequence = overrides?.sequence ?? slice.sequence;
+      const finalToolCalls =
+        overrides?.toolCalls ?? Array.from(slice.toolCalls.values());
+
+      const updatedMessages = chatState.messages.map((msg) =>
+        msg.id === slice.messageId
+          ? {
+              ...msg,
+              content: finalContent || msg.content,
+              streamingContent: undefined,
+              reasoning: finalReasoning || msg.reasoning,
+              streamingReasoning: undefined,
+              sequence:
+                finalSequence.length > 0 ? finalSequence : msg.sequence,
+              toolCalls:
+                finalToolCalls.length > 0 ? finalToolCalls : msg.toolCalls,
+              isStreaming: overrides?.isStreaming ?? false,
+            }
+          : msg,
+      );
+
+      const newChatStates = new Map(state.chatStates);
+      newChatStates.set(chatId, {
+        ...chatState,
+        messages: updatedMessages,
+        isStreaming: overrides?.isStreaming ?? false,
+      });
+
+      const newStreaming = new Map(state.streamingState);
+      newStreaming.delete(chatId);
+
+      return {
+        chatStates: newChatStates,
+        streamingState: newStreaming,
+      };
+    }),
+
+  clearStreamingState: (chatId) =>
+    set((state) => {
+      if (!state.streamingState.has(chatId)) return state;
+      const next = new Map(state.streamingState);
+      next.delete(chatId);
+      return { streamingState: next };
+    }),
+
+  getStreamingState: (chatId) => get().streamingState.get(chatId),
 }));
 
 // Expose chatStore globally for tabStore to access
