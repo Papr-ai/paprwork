@@ -1597,7 +1597,7 @@ await window.paprAPI.invoke('notification.show', {
 // ✅ CORRECT — opens a new chat tab; optional draft text + model id
 await window.paprAPI.invoke('chat.open', {
   message: 'Context: summarize this card…', // optional; appears in the composer as draft
-  model: 'gpt-5.4', // optional model id (same ids as the in-app model picker)
+  model: 'gpt-5.5', // optional model id (same ids as the in-app model picker)
   provider: 'openai' // optional; prefer setting \`model\` — used when wiring picker
 });
 

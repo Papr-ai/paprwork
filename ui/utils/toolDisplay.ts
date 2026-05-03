@@ -240,8 +240,8 @@ export function getBashCommandDescription(
     return isRunning ? "Moving files" : "Moved files";
   }
 
-  // Default: show first 40 chars of command
-  const shortCmd = cmd.length > 40 ? cmd.substring(0, 40) + "..." : cmd;
+  // Default: show first 120 chars of command (increased from 40 to show more context)
+  const shortCmd = cmd.length > 120 ? cmd.substring(0, 120) + "..." : cmd;
   return `${prefix}: ${shortCmd}`;
 }
 

@@ -771,7 +771,7 @@ export function useAgent() {
                 rawError.includes("invalid_type") ||
                 (rawError.includes("expected") && rawError.includes("received") && rawError.includes("undefined"))
               ) {
-                errorMsg = `⚠️ The AI model returned an invalid tool call. This is usually temporary.\n\nWhat you can do:\n• Try sending your message again\n• Try a different model (e.g., GPT-5.4 → Claude Sonnet)\n• If this persists, please report this issue`;
+                errorMsg = `⚠️ The AI model returned an invalid tool call. This is usually temporary.\n\nWhat you can do:\n• Try sending your message again\n• Try a different model (e.g., GPT-5.5 → Claude Sonnet)\n• If this persists, please report this issue`;
                 
                 // Log full technical error to console for debugging
                 console.error("[useAgent] Tool validation error (full details):", rawError);
@@ -1046,6 +1046,59 @@ export function useAgent() {
           const existingStreamingMessageId =
             streamingMessageIdRef.current.get(finalChatId);
           if (existingStreamingMessageId) {
+            // Mark any calling tools as stopped before finalizing
+            const chatToolCalls = toolCallsMapRef.current.get(finalChatId);
+            if (chatToolCalls) {
+              chatToolCalls.forEach((toolCall, toolCallId) => {
+                if (toolCall.status === "calling") {
+                  chatToolCalls.set(toolCallId, {
+                    ...toolCall,
+                    status: "error" as const,
+                    error: "Stopped by user"
+                  });
+                }
+              });
+              
+              // Update sequence to mark any "calling" tools as stopped
+              const sequence = sequenceRef.current.get(finalChatId) || [];
+              const updatedSequence = sequence.map(item => {
+                if (item.type === "tool" && (item.data as any)?.status === "calling") {
+                  return {
+                    ...item,
+                    data: {
+                      ...(item.data as any),
+                      status: "stopped",
+                      error: "Stopped by user"
+                    }
+                  };
+                }
+                return item;
+              });
+              sequenceRef.current.set(finalChatId, updatedSequence);
+              
+              // Update the message with stopped status
+              const { chatStates } = useChatStore.getState();
+              const chatState = chatStates.get(finalChatId);
+              if (chatState) {
+                const updatedMessages = chatState.messages.map(msg =>
+                  msg.id === existingStreamingMessageId
+                    ? {
+                        ...msg,
+                        toolCalls: Array.from(chatToolCalls.values()),
+                        sequence: updatedSequence,
+                        isStreaming: false,
+                      }
+                    : msg
+                );
+                const newChatStates = new Map(chatStates);
+                newChatStates.set(finalChatId, {
+                  ...chatState,
+                  messages: updatedMessages,
+                });
+                useChatStore.setState({ chatStates: newChatStates });
+              }
+            }
+            
             finalizeStreamingMessage(existingStreamingMessageId, finalChatId);
           }
 

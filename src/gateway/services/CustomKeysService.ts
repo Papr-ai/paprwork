@@ -147,9 +147,10 @@ export class CustomKeysService {
               );
               reject(new Error(message.error));
             } else {
-              const keyCount = (message.keys || []).length;
-              const keyNames = (message.keys || []).map((k: any) => k.name);
-              //console.log(`[CustomKeysService] Received ${keyCount} keys: ${keyNames.join(", ")}`);
+              // Uncomment for debugging:
+              // const keyCount = (message.keys || []).length;
+              // const keyNames = (message.keys || []).map((k: any) => k.name);
+              // console.log(`[CustomKeysService] Received ${keyCount} keys: ${keyNames.join(", ")}`);
               resolve(message.keys || []);
             }
           }
@@ -210,11 +211,12 @@ export class CustomKeysService {
               );
               reject(new Error(message.error));
             } else {
-              const found = message.value ? "found" : "not found";
-              const preview = message.value
-                ? `${message.value.substring(0, 10)}...`
-                : "null";
-              //console.log(`[CustomKeysService] Key "${name}" ${found} (preview: ${preview})`);
+              // Uncomment for debugging:
+              // const found = message.value ? "found" : "not found";
+              // const preview = message.value
+              //   ? `${message.value.substring(0, 10)}...`
+              //   : "null";
+              // console.log(`[CustomKeysService] Key "${name}" ${found} (preview: ${preview})`);
               resolve(message.value || null);
             }
           }

@@ -11,8 +11,8 @@
 import type { AssistantMessageEvent } from "@mariozechner/pi-ai";
 import {
   sanitizeToolOutput,
-  truncateResult,
 } from "../../../core/tools/index.js";
+import { compactStaleToolResults, estimateMessagesTokens } from "../agent/compactToolResults.js";
 
 type ToolCallAccum = {
   toolCallId: string;
@@ -69,7 +69,7 @@ function coerceArgTypes(args: Record<string, unknown>): Record<string, unknown> 
 
 /**
  * Execute a single tool call using Mastra tools
- * @param skipTruncation - When true (last tool in step), return full result for model context
+ 
  */
 async function executeToolCall(
   toolCall: ToolCallAccum,
@@ -78,7 +78,6 @@ async function executeToolCall(
     { execute?: (args: unknown) => Promise<unknown> }
   >,
   apiKeys: string[],
-  skipTruncation: boolean = false,
 ): Promise<{ toolCallId: string; toolName: string; result: unknown }> {
   const tool = mastraTools[toolCall.toolName];
   if (!tool?.execute) {
@@ -90,6 +89,21 @@ async function executeToolCall(
   }
   try {
     const rawResult = await tool.execute(coerceArgTypes(toolCall.args));
+
+    // Validate result exists (catch undefined/null from tool crashes/timeouts)
+    if (rawResult === undefined || rawResult === null) {
+      console.warn(
+        `[PiCodexToolLoop] ⚠️ Tool ${toolCall.toolName} returned ${rawResult === null ? 'null' : 'undefined'} result - possible timeout or crash`,
+      );
+      return {
+        toolCallId: toolCall.toolCallId,
+        toolName: toolCall.toolName,
+        result: { 
+          success: false,
+          error: `Tool returned no result (${rawResult === null ? 'null' : 'undefined'} - possible timeout or crash)`,
+        },
+      };
+    }
 
     // Detect Mastra validation errors (returned as result, not thrown)
     if (
@@ -109,13 +123,9 @@ async function executeToolCall(
       };
     }
 
-    const sanitized = sanitizeToolOutput(rawResult, apiKeys);
-    const result =
-      typeof sanitized === "string" && !skipTruncation
-        ? truncateResult(sanitized)
-        : sanitized && typeof sanitized === "object"
-          ? sanitized
-          : sanitized;
+
+    const result = sanitizeToolOutput(rawResult, apiKeys);
+
 
     import("../gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
       getGatewayTelemetry().trackFireAndForget("paprwork_tool_called", {
@@ -163,39 +173,10 @@ function appendToolTurnToContext(
     timestamp: number;
   },
   toolResults: Array<{ toolCallId: string; toolName: string; result: unknown }>,
-  cumulativeTokens: number,
+  _cumulativeTokens: number,
 ): void {
   context.messages.push(assistantMessage);
   const now = Date.now();
-
-  // Adaptive truncation based on context pressure (matching AI SDK's prepareStep logic)
-  const CONTEXT_PRESSURE_THRESHOLDS = {
-    low: 30000,
-    medium: 60000,
-    high: 90000,
-  };
-
-  let pressureLevel: "low" | "medium" | "high";
-  if (cumulativeTokens < CONTEXT_PRESSURE_THRESHOLDS.low) {
-    pressureLevel = "low";
-  } else if (cumulativeTokens < CONTEXT_PRESSURE_THRESHOLDS.medium) {
-    pressureLevel = "medium";
-  } else {
-    pressureLevel = "high";
-  }
-
-  // Determine truncation limits based on pressure
-  const getTruncationLimit = (): number | null => {
-    if (pressureLevel === "low") {
-      return 12000; // 3000 tokens
-    } else if (pressureLevel === "medium") {
-      return 8000; // 2000 tokens
-    } else {
-      return 4000; // 1000 tokens
-    }
-  };
-
-  const maxLength = getTruncationLimit();
 
   for (const tr of toolResults) {
     let text =
@@ -203,28 +184,12 @@ function appendToolTurnToContext(
         ? tr.result
         : JSON.stringify(tr.result ?? "");
 
-    // Apply truncation if needed
-    const EMERGENCY_LIMIT = 200000; // ~50K tokens
-    if (text.length > EMERGENCY_LIMIT) {
-      const truncated = text.substring(0, EMERGENCY_LIMIT);
-      const omitted = text.length - EMERGENCY_LIMIT;
+    // Warn if result is empty
+    if (text === "" || text === '""' || text === "{}") {
       console.warn(
-        `[PiCodexToolLoop] ⚠️ EMERGENCY truncation: tool result was ${Math.round(text.length / 1024)}KB, ` +
-          `truncated to ${Math.round(EMERGENCY_LIMIT / 1024)}KB`,
+        `[PiCodexToolLoop] ⚠️ Tool ${tr.toolName} returned empty result.`,
       );
-      text =
-        truncated +
-        `\n\n[⚠️ EMERGENCY TRUNCATION: Result was ${Math.round(text.length / 1024)}KB (${Math.round(text.length / 4000)}K tokens), ` +
-        `truncated ${omitted} chars. This is too large for context. ` +
-        `Use more specific search patterns or incremental reading.]`;
-    } else if (maxLength && text.length > maxLength) {
-      const truncated = text.substring(0, maxLength);
-      const omitted = text.length - maxLength;
-      const estimatedTokens = Math.ceil(maxLength / 4);
-      text =
-        truncated +
-        `\n\n[... ${omitted} chars truncated (context: ${Math.round(cumulativeTokens / 1000)}K/${pressureLevel}, ` +
-        `limit: ~${estimatedTokens} tokens)]`;
+      text = `[Tool ${tr.toolName} returned empty result - possible timeout or crash]`;
     }
 
     const resultObj = tr.result && typeof tr.result === "object" ? tr.result as Record<string, unknown> : null;
@@ -232,6 +197,8 @@ function appendToolTurnToContext(
       ? resultObj.success === false || typeof resultObj.error === "string"
       : false;
 
+    // Store full results — compaction happens in compactStaleToolResults
+    // before the next model call, not here.
     context.messages.push({
       role: "toolResult",
       toolCallId: tr.toolCallId,
@@ -242,6 +209,7 @@ function appendToolTurnToContext(
     });
   }
 }
+
 
 /**
  * Create a stream that runs multiple pi-ai turns when the model returns tool calls
@@ -280,7 +248,13 @@ export async function* createPiCodexStreamWithToolLoop(
   };
 
   let step = 0;
+  let totalToolCalls = 0; // Track total tool calls across all steps
   let cumulativeTokens = 0; // Track token usage for adaptive truncation
+  
+  // Detect repetitive tool calls (possible infinite loop)
+  const recentToolCalls: Array<{ name: string; args: string }> = [];
+  const MAX_RECENT_TOOL_CALLS = 10;
+  const REPETITION_THRESHOLD = 5; // If same tool called 5+ times recently, warn
   
   // Model-aware context thresholds (leave room for output + reasoning)
   // GPT-5.5: 1M context, but reasoning can be 30-50K → use 750K threshold (250K buffer)
@@ -333,6 +307,16 @@ export async function* createPiCodexStreamWithToolLoop(
   );
 
   while (step < maxSteps) {
+    // Estimate the size we'd ACTUALLY send (post-compaction) for the
+    // threshold check. Cheap — just walks the array measuring strings.
+    // Falls back to cumulativeTokens (last known prompt size) if no batches yet.
+    if (step > 0) {
+      const projectedTokens = estimateMessagesTokens(context.messages);
+      if (projectedTokens < cumulativeTokens) {
+        // Will compact; use the smaller projection
+        cumulativeTokens = projectedTokens;
+      }
+    }
     // Check context pressure before each step
     if (cumulativeTokens > CONTEXT_ABORT_THRESHOLD) {
       console.warn(
@@ -362,6 +346,11 @@ export async function* createPiCodexStreamWithToolLoop(
     if (step > 0) {
       yield { type: "start-step" };
     }
+
+
+    // Compact stale tool results before sending to model.
+    // Fresh batch (most recent) stays full; older batches get truncated.
+    compactStaleToolResults(context.messages);
 
     const piStream = streamSimple(piModel, context, streamOptions);
     const toolCallsThisTurn: ToolCallAccum[] = [];
@@ -415,11 +404,82 @@ export async function* createPiCodexStreamWithToolLoop(
       toolCallsThisTurn.length > 0 &&
       finalMessage
     ) {
-      // Execute tools - keep last result full for model context
-      const lastIdx = toolCallsThisTurn.length - 1;
+      // Update total tool call counter
+      totalToolCalls += toolCallsThisTurn.length;
+      
+      // Track recent tool calls to detect loops
+      for (const tc of toolCallsThisTurn) {
+        const argsStr = JSON.stringify(tc.args);
+        recentToolCalls.push({ name: tc.toolName, args: argsStr });
+      }
+      if (recentToolCalls.length > MAX_RECENT_TOOL_CALLS) {
+        recentToolCalls.splice(0, recentToolCalls.length - MAX_RECENT_TOOL_CALLS);
+      }
+      
+      // Check for repetitive tool calls (same tool with similar args)
+      const toolCallCounts = new Map<string, number>();
+      for (const tc of recentToolCalls) {
+        const key = `${tc.name}:${tc.args.substring(0, 100)}`; // First 100 chars of args
+        toolCallCounts.set(key, (toolCallCounts.get(key) || 0) + 1);
+      }
+      
+      const maxRepetitions = Math.max(...Array.from(toolCallCounts.values()));
+      if (maxRepetitions >= REPETITION_THRESHOLD) {
+        const repetitiveCall = Array.from(toolCallCounts.entries()).find(
+          ([_, count]) => count === maxRepetitions
+        );
+        console.warn(
+          `[PiCodexToolLoop] ⚠️ LOOP DETECTED: Tool call repeated ${maxRepetitions} times in last ${MAX_RECENT_TOOL_CALLS} calls. ` +
+          `Call: ${repetitiveCall?.[0].substring(0, 80)}...`
+        );
+      }
+      
+      console.log(
+        `[PiCodexToolLoop] Step ${step}: ${toolCallsThisTurn.length} tools this turn, ${totalToolCalls} total tool calls`
+      );
+      
+      // Check tool result count in context for pressure warnings
+      const toolResultCount = context.messages.filter(
+        (m: any) => m.role === 'toolResult'
+      ).length;
+      
+      if (toolResultCount > 100) {
+        console.warn(
+          `[PiCodexToolLoop] ⚠️ High tool result count: ${toolResultCount} results in context (${Math.round(cumulativeTokens / 1000)}K tokens). ` +
+          `Performance may degrade.`
+        );
+      }
+      
+      if (toolResultCount > 200) {
+        console.error(
+          `[PiCodexToolLoop] 🚨 CRITICAL: ${toolResultCount} tool results in context (${Math.round(cumulativeTokens / 1000)}K tokens)! ` +
+          `Recommend summarization or context reset.`
+        );
+      }
+      
+      // HARD LIMIT: Check total tool calls (not just steps)
+      // Even if agent makes multiple tool calls per step, we enforce a hard limit
+      const MAX_TOTAL_TOOL_CALLS = maxSteps * 2; // Allow 2x maxSteps as absolute maximum
+      if (totalToolCalls >= MAX_TOTAL_TOOL_CALLS) {
+        console.error(
+          `[PiCodexToolLoop] 🛑 HARD LIMIT: ${totalToolCalls} tool calls exceeds maximum (${MAX_TOTAL_TOOL_CALLS}). ` +
+          `Forcing stop to prevent infinite loops.`
+        );
+        
+        // Add a system instruction to force a response
+        context.messages.push({
+          role: "user",
+          content: `[SYSTEM: You've made ${totalToolCalls} tool calls, which exceeds the maximum limit of ${MAX_TOTAL_TOOL_CALLS}. You MUST stop making tool calls and provide your final response now. Summarize what you've learned and respond to the user.]`,
+        } as any);
+        
+        break; // Force stop the loop
+      }
+      
+      // Execute all tools in parallel — full results preserved for this turn.
+      // Stale results from prior turns are compacted before the next model call.
       const toolResults = await Promise.all(
-        toolCallsThisTurn.map((tc, i) =>
-          executeToolCall(tc, mastraTools, apiKeys, i === lastIdx),
+        toolCallsThisTurn.map((tc) =>
+          executeToolCall(tc, mastraTools, apiKeys),
         ),
       );
 
@@ -432,23 +492,60 @@ export async function* createPiCodexStreamWithToolLoop(
         };
       }
 
-      // Append with adaptive truncation based on context pressure
+      // Check if approaching step limit
+      const STEP_WARNING_THRESHOLD = 90;
+      const STEP_FORCE_STOP_THRESHOLD = 95;
+      
+      if (step >= STEP_FORCE_STOP_THRESHOLD) {
+        // Force stop at 95 steps - inject final instruction and break
+        console.warn(
+          `[PiCodexToolLoop] 🛑 Reached ${step} steps (force stop threshold). ` +
+          `Breaking tool loop and forcing final response.`
+        );
+        
+        // Add a system instruction as the last tool result to force a response
+        context.messages.push({
+          role: "user",
+          content: `[SYSTEM: You've made ${step} tool calls. You MUST provide your final response now. Do not make any more tool calls. Summarize your findings and respond to the user.]`,
+        } as any);
+        
+        break; // Force stop the loop
+      } else if (step >= STEP_WARNING_THRESHOLD) {
+        // At 90+ steps, warn the model
+        console.warn(
+          `[PiCodexToolLoop] ⚠️ Step ${step}/${maxSteps}: Approaching step limit. ` +
+          `Model should wrap up soon.`
+        );
+        
+        // Inject warning into the last tool result
+        if (toolResults.length > 0) {
+          const lastResult = toolResults[toolResults.length - 1];
+          const warning = `\n\n[⚠️ Note: You've made ${step} tool calls out of ${maxSteps} maximum. Please wrap up and provide your response soon.]`;
+          
+          if (typeof lastResult.result === 'string') {
+            lastResult.result += warning;
+          } else if (lastResult.result && typeof lastResult.result === 'object') {
+            (lastResult.result as any)._stepWarning = `Step ${step}/${maxSteps} - please wrap up`;
+          }
+        }
+      }
+
+      // Append full results — compaction happens in compactStaleToolResults
+      // before the next model call (next loop iteration).
       appendToolTurnToContext(context, finalMessage, toolResults, cumulativeTokens);
 
-      // Update cumulative tokens with estimated added context
-      const addedContext = toolResults
-        .map((tr) =>
-          typeof tr.result === "string"
-            ? tr.result
-            : JSON.stringify(tr.result ?? ""),
-        )
-        .join("");
-      cumulativeTokens += Math.ceil(addedContext.length / 4);
+      // Do NOT update cumulativeTokens here from raw context size — that
+      // double-counts results that will be compacted before the next model call.
+      // The next streamSimple() will set cumulativeTokens from usage.input_tokens
+      // (line ~378), which reflects the COMPACTED prompt the model actually saw.
+      // For the threshold check on the NEXT iteration we estimate post-compaction
+      // size by simulating compaction on a clone (cheap — just walks the array).
 
       step++;
       console.log(
         `[PiCodexToolLoop] Step ${step}: executed ${toolCallsThisTurn.length} tools, ` +
-          `cumulative context: ~${Math.round(cumulativeTokens / 1000)}K tokens`,
+          `cumulative context: ~${Math.round(cumulativeTokens / 1000)}K tokens, ` +
+          `total tool calls: ${totalToolCalls}`,
       );
     } else {
       // Done - no more tool turns

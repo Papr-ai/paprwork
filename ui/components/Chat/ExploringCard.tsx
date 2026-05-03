@@ -8,7 +8,9 @@ import React, { useState } from "react";
 import type { ToolCall } from "../../types/core";
 import { getToolDisplayLabel } from "../../utils/toolDisplay";
 import { PaprLogoIcon } from "./PaprLogoIcon";
+import { FileWritePreview, hasFilePreview } from "./FileWritePreview";
 import "./ExploringCard.css";
+import "./FileWritePreview.css";
 
 interface ExploringCardProps {
   toolCalls: ToolCall[];
@@ -118,7 +120,7 @@ export const ExploringCard: React.FC<ExploringCardProps> = ({
       <div
         className="exploring-card-content"
         style={{
-          maxHeight: isCollapsed ? "0px" : "200px",
+          maxHeight: isCollapsed ? "0px" : "640px",
           opacity: isCollapsed ? "0" : "1",
         }}
       >
@@ -142,11 +144,30 @@ export const ExploringCard: React.FC<ExploringCardProps> = ({
             statusIndicator = <span className="exploring-tool-error">✗</span>;
           }
 
+          const showPreview = hasFilePreview(
+            toolCall.toolName,
+            toolCall.args,
+            typeof toolCall.result === "string" ? toolCall.result : undefined,
+          );
+
           return (
-            <div key={toolCall.id || index} className="exploring-tool-item">
-              <span className="exploring-tool-arrow">→</span>
-              <span className="exploring-tool-name">{displayText}</span>
-              {statusIndicator}
+            <div key={toolCall.id || index} className="exploring-tool-row">
+              <div className="exploring-tool-item">
+                <span className="exploring-tool-arrow">→</span>
+                <span className="exploring-tool-name">{displayText}</span>
+                {statusIndicator}
+              </div>
+              {showPreview && (
+                <FileWritePreview
+                  toolName={toolCall.toolName}
+                  args={toolCall.args}
+                  result={
+                    typeof toolCall.result === "string"
+                      ? toolCall.result
+                      : undefined
+                  }
+                />
+              )}
             </div>
           );
         })}

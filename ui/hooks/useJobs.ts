@@ -97,7 +97,7 @@ export function useJobs() {
   const [logsByJobId, setLogsByJobId] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [defaultModel, setDefaultModel] = useState<string>("gpt-5.4");
+  const [defaultModel, setDefaultModel] = useState<string>("gpt-5.5");
   const fingerprintRef = useRef("");
   const initialLoadDone = useRef(false);
 
@@ -145,7 +145,7 @@ export function useJobs() {
         setDefaultModel(display);
       }
     } catch {
-      // fallback already set to gpt-5.4
+      // fallback already set to gpt-5.5
     }
   }, []);
 

@@ -1,0 +1,146 @@
+/* File Write Preview - inline expandable code blocks under tool calls */
+
+.exploring-tool-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.file-preview {
+  margin-left: 22px; /* align under tool name (past the arrow) */
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.file-preview-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s ease;
+}
+
+.file-preview-header:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.file-preview-chevron {
+  display: inline-block;
+  width: 10px;
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.5);
+  transition: transform 0.15s ease;
+}
+
+.file-preview-chevron.collapsed {
+  transform: rotate(-90deg);
+}
+
+.file-preview-label {
+  font-family:
+    ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.85);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+}
+
+.file-preview-meta {
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, 0.45);
+  margin-left: auto;
+}
+
+.file-preview-code,
+.file-preview-diff {
+  margin: 0;
+  padding: 10px 12px;
+  font-family:
+    ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(0, 0, 0, 0.3);
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  white-space: pre;
+  overflow: auto;
+}
+
+.file-preview-code code,
+.file-preview-diff code {
+  font-family: inherit;
+  font-size: inherit;
+  background: transparent;
+  padding: 0;
+}
+
+/* Diff colours */
+.diff-removed {
+  color: #ef9a9a;
+  background: rgba(239, 68, 68, 0.08);
+  padding: 0 4px;
+}
+
+.diff-added {
+  color: #a5d6a7;
+  background: rgba(34, 197, 94, 0.08);
+  padding: 0 4px;
+}
+
+/* Multi-file (create_app/create_job) */
+.file-preview-subfile {
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.file-preview-subfile-name {
+  padding: 6px 12px;
+  font-family:
+    ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.file-preview-subfile .file-preview-code {
+  border-top: none;
+}
+
+/* Light-mode adjustments (if the app supports a light theme) */
+@media (prefers-color-scheme: light) {
+  .file-preview {
+    background: rgba(0, 0, 0, 0.025);
+    border-color: rgba(0, 0, 0, 0.08);
+  }
+  .file-preview-header:hover {
+    background: rgba(0, 0, 0, 0.04);
+  }
+  .file-preview-label {
+    color: rgba(0, 0, 0, 0.85);
+  }
+  .file-preview-meta {
+    color: rgba(0, 0, 0, 0.5);
+  }
+  .file-preview-code,
+  .file-preview-diff {
+    color: rgba(0, 0, 0, 0.85);
+    background: rgba(0, 0, 0, 0.04);
+    border-top-color: rgba(0, 0, 0, 0.06);
+  }
+  .diff-removed {
+    color: #b00020;
+  }
+  .diff-added {
+    color: #1b5e20;
+  }
+}

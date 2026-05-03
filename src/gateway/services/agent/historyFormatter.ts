@@ -248,7 +248,11 @@ export function formatHistoryMessagesForModel(
           // IDs from PAPR history may contain dots or other invalid chars
           const rawId = typeof tc.id === "string" ? tc.id : `tc-hist-${toolIndex}`;
           const toolCallId = rawId.replace(/[^a-zA-Z0-9_-]/g, "_");
-          const toolName = typeof tc.name === "string" ? tc.name : "unknown";
+          
+          // Gemini (and Anthropic) require tool names to match ^[a-zA-Z0-9_-]+$
+          // Sanitize tool names when loading from history to support provider switching
+          const rawToolName = typeof tc.name === "string" ? tc.name : "unknown";
+          const toolName = rawToolName.replace(/[^a-zA-Z0-9_-]/g, "_");
 
           contentParts.push({
             type: "tool-call",
@@ -260,7 +264,15 @@ export function formatHistoryMessagesForModel(
           // Add matching tool result (truncate aggressively for history)
           // History strategy: Keep tool calls (what the agent did) but heavily truncate results
           // This preserves the "commands used" while minimizing context usage
-          const resultValue = tc.result ?? "";
+          // If the tool call was persisted without a matching result
+          // (e.g. stream interrupted, abort mid-flight, mismatched toolCallId),
+          // emit an explicit marker so the model knows the result is missing
+          // rather than seeing a silent empty string and assuming the tool
+          // returned nothing.
+          const hasResult = tc.result !== undefined && tc.result !== null;
+          const resultValue: unknown = hasResult
+            ? tc.result
+            : `[Tool result not persisted — likely the stream was interrupted before this tool finished. Treat as unknown; do not assume success or failure. Re-invoke if you need the data.]`;
           const resultStr =
             typeof resultValue === "string"
               ? resultValue
@@ -287,7 +299,7 @@ export function formatHistoryMessagesForModel(
           toolResultParts.push({
             type: "tool-result",
             toolCallId,
-            toolName,
+            toolName, // Already sanitized above to match tool-call
             result: truncatedResult,
           });
 

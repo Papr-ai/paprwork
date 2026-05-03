@@ -8,12 +8,13 @@
 
 .working-card-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start; /* Changed from center to allow multi-line secondary labels */
   gap: 8px;
   margin-bottom: 8px;
   font-size: 13px;
   cursor: pointer;
   user-select: none;
+  padding: 4px 0; /* Add vertical padding for better spacing with wrapped text */
 }
 
 .working-chevron {
@@ -29,10 +30,11 @@
 
 .working-label-container {
   display: flex;
-  align-items: center;
+  align-items: flex-start; /* Changed from center to allow multi-line */
   gap: 8px;
   flex: 1;
   overflow: hidden;
+  flex-wrap: wrap; /* Allow wrapping to next line */
 }
 
 .working-label-primary {
@@ -86,10 +88,11 @@
 .working-label-secondary {
   font-weight: 400;
   color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: 12px;
+  /* Allow wrapping to show full descriptions instead of truncating */
+  overflow-wrap: break-word;
+  word-break: break-word;
+  line-height: 1.4;
 }
 
 .working-secondary-shimmer {

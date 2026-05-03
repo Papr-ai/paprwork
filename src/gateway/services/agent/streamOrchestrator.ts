@@ -1,17 +1,16 @@
 import {
   sanitizeToolOutput,
-  truncateResult,
 } from "../../../core/tools/index.js";
 import {
   createChatStreamChunk,
   parseToolCallChunk,
   parseToolErrorChunk,
   parseToolResultChunk,
-  truncateStringsInUnknown,
   type ChatStreamChunk,
   type ToolCallEvent,
   type ToolResultEvent,
 } from "./streamChunks.js";
+
 
 export interface StreamOrchestratorResult {
   assistantText: string;
@@ -223,21 +222,14 @@ export async function* orchestrateModelStream(
 
   function* flushToolResultBuffer(): Generator<ChatStreamChunk> {
     if (toolResultBuffer.length === 0) return;
-    const lastIdx = toolResultBuffer.length - 1;
+    // No truncation here — all results pass through at full size.
+    // Stale results are compacted in prepareStep before the next model call.
     for (let i = 0; i < toolResultBuffer.length; i++) {
       const item = toolResultBuffer[i];
-      let result = item.result;
-      if (i < lastIdx) {
-        if (typeof result === "string") {
-          result = truncateResult(result);
-        } else if (result && typeof result === "object") {
-          result = truncateStringsInUnknown(result);
-        }
-      }
       const toolResult: ToolResultEvent = {
         toolCallId: item.toolCallId,
         toolName: item.toolName,
-        result,
+        result: item.result,
       };
       toolResults.push(toolResult);
       const toolCall = toolCalls.find(
@@ -273,6 +265,7 @@ export async function* orchestrateModelStream(
     }
     toolResultBuffer.length = 0;
   }
+
 
   for await (const rawChunk of fullStream) {
     if (typeof rawChunk !== "object" || rawChunk === null) {
