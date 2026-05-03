@@ -157,6 +157,11 @@ export function useAgent() {
                   messages: updatedMessages,
                 });
                 useChatStore.setState({ chatStates: newChatStates });
+                // Mirror into streaming slice
+                setStreamingReasoning(
+                  chatId,
+                  streamingReasoningRef.current.get(chatId) || "",
+                );
               }
               reasoningBatchRef.current.delete(chatId);
             }, 50); // Update at most every 50ms (20 FPS)
@@ -244,6 +249,15 @@ export function useAgent() {
                 messages: updatedMessages,
               });
               useChatStore.setState({ chatStates: newChatStates });
+
+              // Mirror into streaming slice (granular tool subscription)
+              upsertStreamingToolCall(chatId, {
+                id: toolCallId,
+                toolName: payload.toolName,
+                args: payload.args,
+                status: "calling",
+              });
+              replaceStreamingSequence(chatId, [...sequence]);
             }
           }
           break;
@@ -345,6 +359,20 @@ export function useAgent() {
                   messages: updatedMessages,
                 });
                 useChatStore.setState({ chatStates: newChatStates });
+
+                // Mirror into streaming slice
+                const updatedToolCall = chatToolCalls.get(payload.toolCallId);
+                if (updatedToolCall) {
+                  upsertStreamingToolCall(chatId, {
+                    id: payload.toolCallId,
+                    toolName: updatedToolCall.toolName,
+                    args: updatedToolCall.args,
+                    status: updatedToolCall.status,
+                    result: updatedToolCall.result,
+                    error: updatedToolCall.error,
+                  });
+                }
+                replaceStreamingSequence(chatId, [...sequence]);
               }
 
               // === Auto-open document/app tabs when agent creates or edits them ===
@@ -674,6 +702,17 @@ export function useAgent() {
                 useChatStore.setState({ chatStates: newChatStates });
               }
 
+              // Flush streaming slice into final message state
+              flushStreamingState(chatId, {
+                content: content || "",
+                reasoning: finalReasoning || undefined,
+                sequence: sequence.length > 0 ? sequence : undefined,
+                toolCalls: chatToolCalls
+                  ? (Array.from(chatToolCalls.values()) as any)
+                  : undefined,
+                isStreaming: false,
+              });
+
               streamingMessageIdRef.current.delete(chatId);
               streamingContentRef.current.delete(chatId);
               streamingReasoningRef.current.delete(chatId);
@@ -787,6 +826,9 @@ export function useAgent() {
               const streamingMessageId =
                 streamingMessageIdRef.current.get(chatId);
               if (streamingMessageId) {
+                // Flush any partial streaming state into the message before
+                // finalizing — preserves whatever text/tools we already have.
+                flushStreamingState(chatId, { isStreaming: false });
                 finalizeStreamingMessage(streamingMessageId, chatId);
                 streamingMessageIdRef.current.delete(chatId);
                 streamingContentRef.current.delete(chatId);
@@ -939,6 +981,13 @@ export function useAgent() {
       finalizeStreamingMessage,
       setSending,
       setError,
+      initStreamingState,
+      setStreamingText,
+      setStreamingReasoning,
+      replaceStreamingSequence,
+      upsertStreamingToolCall,
+      flushStreamingState,
+      clearStreamingState,
     ],
   );
 

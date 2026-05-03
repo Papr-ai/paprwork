@@ -68,8 +68,12 @@ interface ChatStore {
   initStreamingState: (chatId: string, messageId: string) => void;
   /** Append a text delta. Caller is responsible for throttling. */
   appendStreamingText: (chatId: string, delta: string) => void;
+  /** Replace streaming text wholesale (when caller already accumulates in a ref). */
+  setStreamingText: (chatId: string, text: string) => void;
   /** Append a reasoning delta. Caller is responsible for throttling. */
   appendStreamingReasoning: (chatId: string, delta: string) => void;
+  /** Replace streaming reasoning wholesale. */
+  setStreamingReasoning: (chatId: string, reasoning: string) => void;
   /** Replace the streaming sequence wholesale (used when sequence is rebuilt). */
   replaceStreamingSequence: (chatId: string, sequence: SequenceItem[]) => void;
   /** Insert/update a single tool call by id. Triggers granular row re-render. */
@@ -401,12 +405,32 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       return { streamingState: next };
     }),
 
+  setStreamingText: (chatId, text) =>
+    set((state) => {
+      const slice = state.streamingState.get(chatId);
+      if (!slice) return state;
+      if (slice.text === text) return state; // no-op short circuit
+      const next = new Map(state.streamingState);
+      next.set(chatId, { ...slice, text });
+      return { streamingState: next };
+    }),
+
   appendStreamingReasoning: (chatId, delta) =>
     set((state) => {
       const slice = state.streamingState.get(chatId);
       if (!slice) return state;
       const next = new Map(state.streamingState);
       next.set(chatId, { ...slice, reasoning: slice.reasoning + delta });
+      return { streamingState: next };
+    }),
+
+  setStreamingReasoning: (chatId, reasoning) =>
+    set((state) => {
+      const slice = state.streamingState.get(chatId);
+      if (!slice) return state;
+      if (slice.reasoning === reasoning) return state;
+      const next = new Map(state.streamingState);
+      next.set(chatId, { ...slice, reasoning });
       return { streamingState: next };
     }),
 
