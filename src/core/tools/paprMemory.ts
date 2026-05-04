@@ -64,7 +64,13 @@ const searchMemorySchema = z.object({
     .string()
     .min(1)
     .describe(
-      "2-3 sentence query for best results. Include specific details, context, and time frame.",
+      "Detailed search query describing what you're looking for. For best results, write 2-3 sentences " +
+      "that include specific details, context, and time frame. Use specific nouns over vague ones " +
+      "(e.g. 'graph-aware embedding architecture' beats 'how it works'). " +
+      "Examples: " +
+      "'Find recurring customer complaints about API performance from the last month, focusing on timeout errors.' " +
+      "'What are the main blockers in my current projects? Focus on technical challenges and timeline impacts.' " +
+      "'Papr architecture: graph-aware embeddings, predictive memory layer, technical design decisions.'",
     ),
   maxMemories: z
     .number()
@@ -73,7 +79,9 @@ const searchMemorySchema = z.object({
     .max(30)
     .optional()
     .describe(
-      "Number of memories to return. Default 20. Use 15-20 for comprehensive results.",
+      "Number of memories to return (max 30). Default 20. " +
+      "Use 25-30 for architecture/concept queries where breadth and reranking matter most. " +
+      "Use 10-15 for narrow lookups where you know exactly what you want.",
     ),
   category: z
     .enum(["agent_memory", "code"])
@@ -293,7 +301,14 @@ export const searchAgentMemoryTool = createTool({
         max_memories: args.maxMemories ?? 20,
         max_nodes: 15,
         enable_agentic_graph: true,
-        rank_results: true,
+        // Migrated from deprecated rank_results: true to reranking_config.
+        // Cohere rerank-v3.5 is a purpose-built cross-encoder: faster than LLM
+        // reranking and SOTA on retrieval benchmarks. Production-ready on Papr backend.
+        reranking_config: {
+          reranking_enabled: true,
+          reranking_provider: "cohere",
+          reranking_model: "rerank-v3.5",
+        },
         response_format: "toon",
         ...(holographicConfig && { holographic_config: holographicConfig }),
         // Pass filters via SDK's metadata.customMetadata + category
