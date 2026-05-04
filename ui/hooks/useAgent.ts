@@ -206,6 +206,28 @@ export function useAgent() {
               );
               sequence.push({ type: "text", data: currentSegment.trim() });
               currentTextSegmentRef.current.set(chatId, ""); // Reset
+
+              // Clear streamingTrailingText now that the segment has been
+              // flushed into sequence. Without this, the just-flushed text
+              // stays mirrored on the message and gets re-rendered AGAIN
+              // outside the working card as `finalTextAfterAllTools` —
+              // showing the same text twice (once between tools inside the
+              // card, once after the card).
+              const sId = streamingMessageIdRef.current.get(chatId);
+              if (sId) {
+                const { chatStates } = useChatStore.getState();
+                const cs = chatStates.get(chatId);
+                if (cs) {
+                  const updated = cs.messages.map((m) =>
+                    m.id === sId
+                      ? { ...m, streamingTrailingText: undefined }
+                      : m,
+                  );
+                  const next = new Map(chatStates);
+                  next.set(chatId, { ...cs, messages: updated });
+                  useChatStore.setState({ chatStates: next });
+                }
+              }
             }
 
             // Add tool to sequence with 'calling' status
