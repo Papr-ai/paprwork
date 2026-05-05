@@ -503,7 +503,9 @@ export const readFileTool = createTool({
 export const writeFileTool = createTool({
   id: "write_file",
   description:
-    "Write content to a file. Creates parent directories if needed. Creates backup if specified.",
+    "Write content to a file. OVERWRITES existing files in place — you do NOT need to delete a file before recreating it. " +
+    "Creates parent directories if needed. Creates backup if specified. " +
+    "ANTI-PATTERN: Never run `rm <file>` followed by `write_file({ path: <file> })` in the same turn — if the stream is interrupted between the two, the file is lost. Just call write_file directly; it overwrites.",
   inputSchema: WriteFileSchema,
   execute: writeFile,
 });

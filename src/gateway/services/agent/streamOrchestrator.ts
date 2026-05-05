@@ -654,6 +654,61 @@ export async function* orchestrateModelStream(
   // Flush any remaining tool results (e.g. stream ended after last tool-result)
   yield* flushToolResultBuffer();
 
+  // ORPHAN-TOOL-CALL DETECTION
+  // If the model emitted tool_use blocks but the stream ended before some of
+  // them produced tool_results (e.g. the stream was aborted, the provider
+  // returned `length` finish-reason mid-tool-call, or the network dropped),
+  // synthesize an explicit "not persisted" result for each orphan. Without
+  // this, the next turn's history shows tool_use with no matching result and
+  // the model assumes silent success — exactly the failure mode that caused
+  // the destructive-rm-then-failed-writes data loss bug.
+  const resultIds = new Set(toolResults.map((r) => r.toolCallId));
+  const orphans = toolCalls.filter((tc) => !resultIds.has(tc.toolCallId));
+  if (orphans.length > 0) {
+    console.warn(
+      `[StreamOrchestrator] ⚠️ ${orphans.length} orphaned tool_use block(s) at stream end — synthesizing recovery markers so next turn retries`,
+    );
+    for (const tc of orphans) {
+      const recoveryMarker = {
+        __orphan: true as const,
+        message:
+          "[Tool result not persisted — likely the stream was interrupted before this tool finished. Treat as unknown; do not assume success or failure. Re-invoke if you need the data.]",
+        toolName: tc.toolName,
+      };
+      toolResults.push({
+        toolCallId: tc.toolCallId,
+        toolName: tc.toolName,
+        result: recoveryMarker,
+      });
+      // Update sequence so the UI also shows the orphan state
+      const idx = sequence.findIndex(
+        (e) =>
+          e.type === "tool" &&
+          (e.data as { toolCallId?: string }).toolCallId === tc.toolCallId,
+      );
+      if (idx !== -1) {
+        sequence[idx].data = {
+          ...(sequence[idx].data as object),
+          name: tc.toolName,
+          input: tc.args,
+          output: recoveryMarker,
+          status: "orphaned",
+          toolCallId: tc.toolCallId,
+        };
+      }
+      yield createChatStreamChunk(
+        "tool-result",
+        {
+          toolCallId: tc.toolCallId,
+          toolName: tc.toolName,
+          result: recoveryMarker,
+          success: false,
+        },
+        chatId,
+      );
+    }
+  }
+
   if (textBuffer.length > 0) {
     yield createChatStreamChunk("text-delta", { text: textBuffer }, chatId);
   }

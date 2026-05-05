@@ -268,9 +268,20 @@ export function formatHistoryMessagesForModel(
           // returned nothing. This matches the pre-regression behavior in
           // dist/historyFormatter.js.
           const hasResult = tc.result !== undefined && tc.result !== null;
-          const resultValue = hasResult
-            ? (tc as { result?: unknown }).result
-            : "[Tool result not persisted — likely the stream was interrupted before this tool finished. Treat as unknown; do not assume success or failure. Re-invoke if you need the data.]";
+          // Recognize orphan markers synthesized by streamOrchestrator when a
+          // tool_use had no matching tool_result at stream end. Emit the
+          // marker text directly (not JSON) so the model can read it cleanly.
+          const isOrphan =
+            hasResult &&
+            typeof (tc as { result?: unknown }).result === "object" &&
+            (tc as { result?: { __orphan?: boolean } }).result?.__orphan ===
+              true;
+          const resultValue = !hasResult
+            ? "[Tool result not persisted — likely the stream was interrupted before this tool finished. Treat as unknown; do not assume success or failure. Re-invoke if you need the data.]"
+            : isOrphan
+              ? (tc as { result?: { message?: string } }).result?.message ??
+                "[Tool result not persisted — likely the stream was interrupted before this tool finished.]"
+              : (tc as { result?: unknown }).result;
           const resultStr =
             typeof resultValue === "string"
               ? resultValue
