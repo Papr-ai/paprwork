@@ -264,7 +264,14 @@ export class AgentService {
     chatId: string,
     userMessage: string,
     config: AgentConfigInternal,
-    options?: { allowedToolIds?: string[]; maxSteps?: number },
+    options?: {
+      allowedToolIds?: string[];
+      maxSteps?: number;
+      /** Internal: set true when this is an auto-recovery retry of an empty completion. Prevents infinite loops. */
+      _isSilentRetry?: boolean;
+      /** Internal: skip re-saving the user message (it's already saved from the original turn). */
+      _skipSaveUserMessage?: boolean;
+    },
   ): AsyncGenerator<StreamChunk & { chatId: string }> {
     if (!this.initialized) {
       throw new Error("AgentService not initialized");
@@ -337,7 +344,9 @@ export class AgentService {
         timestamp: new Date().toISOString(),
         sync_status: "local",
       };
-      await this.storageManager.saveMessage(chatId, userMsg);
+      if (!options?._skipSaveUserMessage) {
+        await this.storageManager.saveMessage(chatId, userMsg);
+      }
       timings.saveUserMessage = performance.now() - t;
 
       // 2. Load message history for LLM context
@@ -1200,6 +1209,68 @@ export class AgentService {
         }
 
         yield next.value;
+      }
+
+      // 4. Empty-completion silent self-heal
+      // If the model returned literally nothing (no text, no thinking, no tool
+      // calls), and this isn't an aborted/cancelled run, transparently retry
+      // ONCE before persisting. The most common cause is malformed history
+      // (orphaned tool_use blocks from a prior interrupted stream); since the
+      // historyFormatter now injects synthetic tool_results for orphans on
+      // every load, the second attempt will see a healed history and respond
+      // normally. This recovery is invisible to the user — no error chunk,
+      // no UI banner, no saved-empty message.
+      const isEmpty =
+        assistantText.length === 0 &&
+        thinkingText.length === 0 &&
+        toolCalls.length === 0 &&
+        !abortController.signal.aborted;
+
+      if (isEmpty && !options?._isSilentRetry) {
+        console.warn(
+          `[AgentService] Empty completion detected (model returned 0 tokens of content). ` +
+          `Silently retrying once to self-heal — likely caused by a stale orphaned tool_use ` +
+          `in history that gets fixed on reload. chatId=${chatId} model=${config.model}`,
+        );
+
+        // Don't save the empty assistant message. Don't yield 'done'. Just
+        // re-invoke ourselves with the same userMessage but flagged as a
+        // silent retry so we don't loop, and skip re-saving the user msg.
+        for await (const chunk of this.streamAgent(
+          chatId,
+          userMessage,
+          config,
+          {
+            ...options,
+            _isSilentRetry: true,
+            _skipSaveUserMessage: true,
+          },
+        )) {
+          yield chunk;
+        }
+
+        // Reset streaming state and return — the recursive call handled everything.
+        this.sessionManager.setStreaming(chatId, false);
+        return;
+      }
+
+      if (isEmpty && options?._isSilentRetry) {
+        // Second attempt also empty — give up silently. Don't save an empty
+        // message (would clutter the chat). Just log and end the stream
+        // cleanly so the UI's isSending clears. The next user message will
+        // naturally retry the conversation with healed history.
+        console.warn(
+          `[AgentService] Silent retry also returned empty completion. ` +
+          `Skipping save to keep chat clean. chatId=${chatId}`,
+        );
+        yield {
+          type: "done",
+          chatId,
+          payload: {},
+          timestamp: new Date().toISOString(),
+        } as StreamChunk & { chatId: string };
+        this.sessionManager.setStreaming(chatId, false);
+        return;
       }
 
       // 4. Save assistant message with thinking and tool calls
