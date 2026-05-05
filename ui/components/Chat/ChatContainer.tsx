@@ -729,6 +729,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
         onFileAttachmentsAdded={() => setIsFileDragOver(false)}
         onSend={handleSendMessage}
         onQueue={handleQueueMessage}
+        queuedCount={messageQueue.length}
         onStop={handleStopAgent}
         onSlashCommand={handleSlashCommand}
         isSending={isSending || isWaitingForModel}

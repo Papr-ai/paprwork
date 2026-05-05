@@ -29,6 +29,8 @@ interface InputBarProps {
   chatId: string; // Chat ID for persisting draft messages
   onSend: (message: string, context?: Artifact[]) => void;
   onQueue?: (message: string, context?: Artifact[]) => void;
+  /** Number of messages currently queued for this chat. */
+  queuedCount?: number;
   onStop?: () => void;
   onSlashCommand?: (commandId: string) => void;
   isSending?: boolean;
@@ -55,6 +57,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       chatId,
       onSend,
       onQueue,
+      queuedCount = 0,
       onStop,
       onSlashCommand,
       isSending = false,
@@ -272,6 +275,16 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       // Send on Enter (without Shift)
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
+        // Double-Enter shortcut: first Enter queued the message + cleared
+        // the input. A second Enter on an empty input while the agent is
+        // still working AND there is a queued message should stop the
+        // agent. The existing processNextQueued effect in ChatContainer
+        // automatically sends the queued message when isSending goes
+        // false, so we only need to call onStop here.
+        if (!message.trim() && isSending && queuedCount > 0 && onStop) {
+          onStop();
+          return;
+        }
         handleSend();
       }
     };

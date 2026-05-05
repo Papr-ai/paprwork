@@ -3,7 +3,8 @@
  */
 
 .queued-messages {
-  margin: 0 20px 8px 20px;
+  /* Flush against InputBar — no bottom gap. */
+  margin: 0 20px 0 20px;
 }
 
 .queued-message-item {
@@ -75,13 +76,21 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border-color);
+  /* No border / focus ring — buttons are flush icons. */
+  border: none;
+  outline: none;
   border-radius: 6px;
   background: transparent;
   font-size: 14px;
   cursor: pointer;
   transition: all 0.15s var(--ease);
   padding: 0;
+}
+
+.queued-message-icon-btn:focus,
+.queued-message-icon-btn:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 .queued-message-delete-icon {
@@ -91,12 +100,10 @@
 .queued-message-delete-icon:hover {
   background: var(--error-color, #e74c3c);
   color: white;
-  border-color: var(--error-color, #e74c3c);
 }
 
 .queued-message-send-icon {
   color: var(--primary-color);
-  border-color: var(--primary-color);
 }
 
 .queued-message-send-icon:hover {

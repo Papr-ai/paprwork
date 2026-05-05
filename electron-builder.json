@@ -83,12 +83,21 @@
       }
     ],
     "icon": "build/icon.png",
-    "category": "Utility"
+    "category": "Utility",
+    "desktop": {
+      "Name": "Papr Work",
+      "Comment": "AI-powered desktop assistant",
+      "Categories": "Utility;Productivity;",
+      "StartupWMClass": "papr-work"
+    }
   },
   "nsis": {
     "oneClick": false,
     "allowToChangeInstallationDirectory": true,
-    "artifactName": "PaprWork-Setup-${version}.${ext}"
+    "artifactName": "PaprWork-Setup-${version}.${ext}",
+    "runAfterFinish": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true
   },
   "afterPack": "./scripts/afterPack.cjs",
   "pkg": {
@@ -96,6 +105,7 @@
     "allowCurrentUserHome": false,
     "allowRootDirectory": false,
     "isRelocatable": false,
-    "overwriteAction": "upgrade"
+    "overwriteAction": "upgrade",
+    "scripts": "build/pkg-scripts"
   }
 }

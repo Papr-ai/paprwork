@@ -15,6 +15,15 @@ export function useAgent() {
   const finalizeStreamingMessage = useChatStore((s) => s.finalizeStreamingMessage);
   const setSending = useChatStore((s) => s.setSending);
   const setError = useChatStore((s) => s.setError);
+  
+  // Streaming state management functions
+  const initStreamingState = useChatStore((s) => s.initStreamingState);
+  const setStreamingText = useChatStore((s) => s.setStreamingText);
+  const setStreamingReasoning = useChatStore((s) => s.setStreamingReasoning);
+  const replaceStreamingSequence = useChatStore((s) => s.replaceStreamingSequence);
+  const upsertStreamingToolCall = useChatStore((s) => s.upsertStreamingToolCall);
+  const flushStreamingState = useChatStore((s) => s.flushStreamingState);
+  const clearStreamingState = useChatStore((s) => s.clearStreamingState);
 
   // ✅ FIX: Use Maps keyed by chatId to support parallel streaming
   const streamingMessageIdRef = useRef<Map<string, string>>(new Map());

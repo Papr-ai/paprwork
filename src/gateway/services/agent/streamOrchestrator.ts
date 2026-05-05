@@ -1,16 +1,17 @@
 import {
   sanitizeToolOutput,
+  truncateResult,
 } from "../../../core/tools/index.js";
 import {
   createChatStreamChunk,
   parseToolCallChunk,
   parseToolErrorChunk,
   parseToolResultChunk,
+  truncateStringsInUnknown,
   type ChatStreamChunk,
   type ToolCallEvent,
   type ToolResultEvent,
 } from "./streamChunks.js";
-
 
 export interface StreamOrchestratorResult {
   assistantText: string;
@@ -222,14 +223,21 @@ export async function* orchestrateModelStream(
 
   function* flushToolResultBuffer(): Generator<ChatStreamChunk> {
     if (toolResultBuffer.length === 0) return;
-    // No truncation here — all results pass through at full size.
-    // Stale results are compacted in prepareStep before the next model call.
+    const lastIdx = toolResultBuffer.length - 1;
     for (let i = 0; i < toolResultBuffer.length; i++) {
       const item = toolResultBuffer[i];
+      let result = item.result;
+      if (i < lastIdx) {
+        if (typeof result === "string") {
+          result = truncateResult(result);
+        } else if (result && typeof result === "object") {
+          result = truncateStringsInUnknown(result);
+        }
+      }
       const toolResult: ToolResultEvent = {
         toolCallId: item.toolCallId,
         toolName: item.toolName,
-        result: item.result,
+        result,
       };
       toolResults.push(toolResult);
       const toolCall = toolCalls.find(
@@ -266,7 +274,28 @@ export async function* orchestrateModelStream(
     toolResultBuffer.length = 0;
   }
 
+  // Guarantee buffered tool results land in toolResults[] even if the
+  // for-await throws or the generator gets `.return()`'d on abort. Without
+  // this, parallel bash tool results that arrived just before the
+  // interruption would be silently dropped, and on the next turn
+  // historyFormatter would see orphaned tool-calls with no matching
+  // results — feeding the model an empty string and breaking causality.
+  const drainBufferIntoToolResults = () => {
+    if (toolResultBuffer.length === 0) return;
+    for (const item of toolResultBuffer) {
+      // No truncation here — finally-path means we never got the chance to
+      // do per-position truncation. Better to have the full result land in
+      // toolResults than lose it entirely.
+      toolResults.push({
+        toolCallId: item.toolCallId,
+        toolName: item.toolName,
+        result: item.result,
+      });
+    }
+    toolResultBuffer.length = 0;
+  };
 
+  try {
   for await (const rawChunk of fullStream) {
     if (typeof rawChunk !== "object" || rawChunk === null) {
       continue;
@@ -613,6 +642,13 @@ export async function* orchestrateModelStream(
       default:
         break;
     }
+  }
+
+  } finally {
+    // Drain anything still buffered into toolResults so AgentService's
+    // catch/saveMessage path persists them. Yields are not safe in finally
+    // (would re-enter the generator), so we just push to the result array.
+    drainBufferIntoToolResults();
   }
 
   // Flush any remaining tool results (e.g. stream ended after last tool-result)
