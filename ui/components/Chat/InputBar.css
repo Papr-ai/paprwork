@@ -10,7 +10,7 @@
   margin: 0 20px 8px 20px;
 }
 
-/* Add spacing for queued messages that appear above input bar */
+/* Join queued messages with the input bar as a single stacked control. */
 .queued-messages + .input-bar {
   margin-top: 0;
 }
@@ -25,6 +25,13 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* When a queued message sits above the input, make the two surfaces join. */
+.queued-messages + .input-bar .input-bar__wrapper {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  border-top: none;
 }
 
 .input-bar__wrapper:focus-within {

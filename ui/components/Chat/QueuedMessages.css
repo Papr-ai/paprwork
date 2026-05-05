@@ -22,6 +22,9 @@
 
 .queued-message-item:last-child {
   margin-bottom: 0;
+  /* Join visually with the InputBar below. */
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
 }
 
 .queued-message-item:hover {
