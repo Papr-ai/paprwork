@@ -380,11 +380,22 @@ ${conversationSummary}
     });
   }
 
-  // Add the current user message at the end
-  messages.push({
-    role: "user",
-    content: userMessage,
-  });
+  // Add the current user message at the end (only if not already present)
+  // Check if the last message is already this user message (it was saved to storage first, then loaded)
+  const lastMessage = messages[messages.length - 1];
+  const isDuplicate = 
+    lastMessage && 
+    lastMessage.role === "user" && 
+    lastMessage.content === userMessage;
+  
+  if (isDuplicate) {
+    console.log(`[historyFormatter] Skipping duplicate user message (already in history)`);
+  } else {
+    messages.push({
+      role: "user",
+      content: userMessage,
+    });
+  }
 
   return messages;
 }

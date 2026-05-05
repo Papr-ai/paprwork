@@ -1,13 +1,9 @@
-import {
-  sanitizeToolOutput,
-  truncateResult,
-} from "../../../core/tools/index.js";
+import { sanitizeToolOutput } from "../../../core/tools/index.js";
 import {
   createChatStreamChunk,
   parseToolCallChunk,
   parseToolErrorChunk,
   parseToolResultChunk,
-  truncateStringsInUnknown,
   type ChatStreamChunk,
   type ToolCallEvent,
   type ToolResultEvent,
@@ -210,7 +206,11 @@ export async function* orchestrateModelStream(
   const toolCalls: ToolCallEvent[] = [];
   const toolResults: ToolResultEvent[] = [];
 
-  // Buffer tool results so we can keep the last one full (truncate only prior ones)
+  // Buffer tool results so we can flush them together at turn boundaries.
+  // NOTE: Results are yielded at FULL size — truncation of stale results across
+  // turns is handled by compactStaleToolResults() before the next model call.
+  // Truncating here would clobber parallel batch results on first sight (the
+  // pre-refactor "i < lastIdx" bug).
   const toolResultBuffer: Array<{
     toolCallId: string;
     toolName: string;
@@ -223,17 +223,9 @@ export async function* orchestrateModelStream(
 
   function* flushToolResultBuffer(): Generator<ChatStreamChunk> {
     if (toolResultBuffer.length === 0) return;
-    const lastIdx = toolResultBuffer.length - 1;
     for (let i = 0; i < toolResultBuffer.length; i++) {
       const item = toolResultBuffer[i];
-      let result = item.result;
-      if (i < lastIdx) {
-        if (typeof result === "string") {
-          result = truncateResult(result);
-        } else if (result && typeof result === "object") {
-          result = truncateStringsInUnknown(result);
-        }
-      }
+      const result = item.result;
       const toolResult: ToolResultEvent = {
         toolCallId: item.toolCallId,
         toolName: item.toolName,

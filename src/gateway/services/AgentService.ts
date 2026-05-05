@@ -1256,19 +1256,15 @@ export class AgentService {
 
       if (isEmpty && options?._isSilentRetry) {
         // Second attempt also empty — give up silently. Don't save an empty
-        // message (would clutter the chat). Just log and end the stream
-        // cleanly so the UI's isSending clears. The next user message will
+        // message (would clutter the chat). Just log and return without yielding
+        // "done" (parent will handle that). The next user message will
         // naturally retry the conversation with healed history.
         console.warn(
           `[AgentService] Silent retry also returned empty completion. ` +
           `Skipping save to keep chat clean. chatId=${chatId}`,
         );
-        yield {
-          type: "done",
-          chatId,
-          payload: {},
-          timestamp: new Date().toISOString(),
-        } as StreamChunk & { chatId: string };
+        // DON'T yield "done" here - if this is a nested call (compression retry),
+        // the parent would pass it to UI and create an empty message. Just return.
         this.sessionManager.setStreaming(chatId, false);
         return;
       }

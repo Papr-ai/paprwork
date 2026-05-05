@@ -723,12 +723,24 @@ class GatewayProcessSupervisor {
       } else {
         // Unix (macOS, Linux): Use lsof
         try {
-          const pid = execSync(`lsof -ti:${this.port}`, { encoding: "utf8" }).trim();
-          if (pid) {
-            console.log(`[Supervisor] Found orphaned process ${pid} on port ${this.port}`);
-            execSync(`kill -9 ${pid}`);
+          const output = execSync(`lsof -ti:${this.port}`, { encoding: "utf8" }).trim();
+          if (output) {
+            // Split by newline to handle multiple PIDs
+            const pids = output.split('\n').filter(p => p.trim());
+            console.log(`[Supervisor] Found ${pids.length} orphaned process(es) on port ${this.port}: ${pids.join(', ')}`);
+            
+            // Kill each PID individually
+            for (const pid of pids) {
+              try {
+                execSync(`kill -9 ${pid.trim()}`);
+                console.log(`[Supervisor] Killed orphaned process ${pid}`);
+              } catch (killErr) {
+                console.warn(`[Supervisor] Failed to kill PID ${pid}:`, killErr.message);
+              }
+            }
+            
             execSync("sleep 0.5");
-            console.log("[Supervisor] Orphaned process killed");
+            console.log("[Supervisor] Orphaned processes cleanup complete");
           }
         } catch (e) {
           // No process on port — good

@@ -1195,6 +1195,11 @@ process.setMaxListeners(20);
 // Handle uncaught errors
 process.on("uncaughtException", (error) => {
   console.error("[Gateway] Uncaught exception:", error);
+  // Exit on EADDRINUSE or other fatal errors to prevent zombie processes
+  if ((error as NodeJS.ErrnoException).code === "EADDRINUSE") {
+    console.error("[Gateway] Fatal error: Port already in use. Exiting.");
+    process.exit(1);
+  }
 });
 
 process.on("unhandledRejection", (reason) => {
