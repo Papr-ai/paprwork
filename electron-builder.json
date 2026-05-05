@@ -83,13 +83,7 @@
       }
     ],
     "icon": "build/icon.png",
-    "category": "Utility",
-    "desktop": {
-      "Name": "Papr Work",
-      "Comment": "AI-powered desktop assistant",
-      "Categories": "Utility;Productivity;",
-      "StartupWMClass": "papr-work"
-    }
+    "category": "Utility"
   },
   "nsis": {
     "oneClick": false,
