@@ -1,0 +1,12 @@
+#!/bin/bash
+
+# Post-install script for Papr Work PKG installer
+# Opens the app after installation completes
+
+# Wait a moment for installation to fully complete
+sleep 1
+
+# Open the app (macOS will run it in the background if not in foreground)
+open -a "Papr Work" || true
+
+exit 0

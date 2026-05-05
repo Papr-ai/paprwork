@@ -11,10 +11,12 @@ import { gateway } from "../src/lib/gateway";
 
 type LogsState = Map<string, string[]>;
 type NamesState = Map<string, string>;
+type FailedFetchesState = Set<string>;
 
 interface JobLiveLogsStore {
   logsByJobId: LogsState;
   namesByJobId: NamesState;
+  failedFetches: FailedFetchesState;
   appendLine: (jobId: string, line: string) => void;
   setJobName: (jobId: string, name: string) => void;
   getJobName: (jobId: string) => string | undefined;
@@ -25,6 +27,7 @@ interface JobLiveLogsStore {
 export const useJobLiveLogsStore = create<JobLiveLogsStore>((set, get) => ({
   logsByJobId: new Map(),
   namesByJobId: new Map(),
+  failedFetches: new Set(),
 
   appendLine: (jobId, line) =>
     set((state) => {
@@ -48,6 +51,9 @@ export const useJobLiveLogsStore = create<JobLiveLogsStore>((set, get) => ({
     const existing = get().namesByJobId.get(jobId);
     if (existing) return existing;
 
+    // Don't retry if we already failed to fetch this job
+    if (get().failedFetches.has(jobId)) return undefined;
+
     // Fetch from gateway
     try {
       const response = await gateway.send("jobs:get", { jobId });
@@ -61,6 +67,12 @@ export const useJobLiveLogsStore = create<JobLiveLogsStore>((set, get) => ({
         `[jobLiveLogsStore] Failed to fetch job name for ${jobId}:`,
         error,
       );
+      // Mark this job as failed so we don't retry
+      set((state) => {
+        const next = new Set(state.failedFetches);
+        next.add(jobId);
+        return { failedFetches: next };
+      });
     }
     return undefined;
   },
@@ -69,9 +81,11 @@ export const useJobLiveLogsStore = create<JobLiveLogsStore>((set, get) => ({
     set((state) => {
       const nextLogs = new Map(state.logsByJobId);
       const nextNames = new Map(state.namesByJobId);
+      const nextFailed = new Set(state.failedFetches);
       nextLogs.delete(jobId);
       nextNames.delete(jobId);
-      return { logsByJobId: nextLogs, namesByJobId: nextNames };
+      nextFailed.delete(jobId);
+      return { logsByJobId: nextLogs, namesByJobId: nextNames, failedFetches: nextFailed };
     }),
 }));
 
