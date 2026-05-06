@@ -22,6 +22,8 @@ interface StopStreamingPayload {
 
 interface ChatHistoryPayload {
   chatId: string;
+  limit?: number;
+  skip?: number;
 }
 
 interface GenerateTitlePayload {
@@ -330,8 +332,8 @@ export async function setupAgentHandlers(
       }
 
       case "agent:history": {
-        const { chatId } = message.payload as ChatHistoryPayload;
-        const history = await agentService.getChatHistory(chatId);
+        const { chatId, limit, skip } = message.payload as ChatHistoryPayload;
+        const history = await agentService.getChatHistory(chatId, limit, skip);
 
         // StoredMessage already has correct format (role, content) - no transformation needed
         sendResponse(ws, {

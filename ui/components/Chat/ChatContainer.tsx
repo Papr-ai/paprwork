@@ -10,6 +10,7 @@ import { QueuedMessages, type QueuedMessage } from "./QueuedMessages";
 import { useAgent } from "../../hooks/useAgent";
 import { useAuthStatus } from "../../hooks/useAuthStatus";
 import { useOllama } from "../../hooks/useOllama";
+import { useChat } from "../../hooks/useChat";
 import { useChatStore, defaultChatState } from "../../stores/chatStore";
 import { useTabStore } from "../../stores/tabStore";
 import type { Tab } from "../../stores/tabStore";
@@ -140,6 +141,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
   const error = useChatStore((state) => state.error);
 
   const { sendMessage } = useAgent();
+  const { loadOlderMessages } = useChat();
   const inputBarRef = useRef<InputBarRef>(null);
   const { isModelAvailable, status: authStatus } = useAuthStatus();
   const { ensureModel, progress, installing, status: ollamaStatus } = useOllama();
@@ -715,6 +717,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
         isLoading={chatIsLoading}
         isSending={isSending || isWaitingForModel}
         onFilesDropped={handleFilesDroppedToChat}
+        onLoadOlder={() => loadOlderMessages(chatId)}
       />
 
       <QueuedMessages

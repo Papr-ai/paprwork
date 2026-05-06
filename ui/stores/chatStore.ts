@@ -32,6 +32,7 @@ interface ChatStore {
 
   // Actions
   addMessage: (message: ChatMessage, chatId?: string) => void;
+  prependMessages: (messages: ChatMessage[], chatId: string) => void;
   updateStreamingMessage: (
     messageId: string,
     content: string,
@@ -48,6 +49,10 @@ interface ChatStore {
   setChatUnread: (chatId: string, hasUnread: boolean) => void;
   markChatAsRead: (chatId: string) => void;
   getChatState: (chatId: string) => ChatState;
+
+  // Pagination management
+  setHasMoreMessages: (chatId: string, hasMore: boolean) => void;
+  setLoadingMore: (chatId: string, isLoading: boolean) => void;
 
   // Draft message management
   setDraftMessage: (chatId: string, draft: string) => void;
@@ -105,6 +110,8 @@ export const defaultChatState: ChatState = {
   isSending: false,
   isStreaming: false,
   hasUnread: false,
+  hasMoreMessages: true, // Assume there might be more until we know otherwise
+  isLoadingMore: false,
 };
 
 export const useChatStore = create<ChatStore>((set, get) => ({
@@ -135,6 +142,25 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       newChatStates.set(chatId, {
         ...chatState,
         messages: updatedMessages,
+      });
+
+      return {
+        chatStates: newChatStates,
+      };
+    }),
+
+  prependMessages: (messages, chatId) =>
+    set((state) => {
+      const chatState = state.chatStates.get(chatId) || {
+        ...defaultChatState,
+      };
+      const updatedMessages = [...messages, ...chatState.messages];
+
+      const newChatStates = new Map(state.chatStates);
+      newChatStates.set(chatId, {
+        ...chatState,
+        messages: updatedMessages,
+        isLoadingMore: false,
       });
 
       return {
@@ -290,6 +316,27 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const state = get();
     return state.chatStates.get(chatId) || { ...defaultChatState };
   },
+
+  // Pagination management
+  setHasMoreMessages: (chatId, hasMore) =>
+    set((state) => {
+      const chatState = state.chatStates.get(chatId);
+      if (!chatState) return state;
+
+      const newChatStates = new Map(state.chatStates);
+      newChatStates.set(chatId, { ...chatState, hasMoreMessages: hasMore });
+      return { chatStates: newChatStates };
+    }),
+
+  setLoadingMore: (chatId, isLoading) =>
+    set((state) => {
+      const chatState = state.chatStates.get(chatId);
+      if (!chatState) return state;
+
+      const newChatStates = new Map(state.chatStates);
+      newChatStates.set(chatId, { ...chatState, isLoadingMore: isLoading });
+      return { chatStates: newChatStates };
+    }),
 
   // Draft message management
   setDraftMessage: (chatId, draft) =>

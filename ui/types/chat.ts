@@ -41,6 +41,8 @@ export interface ChatState {
   hasUnread: boolean;
   draftMessage?: string; // Persisted draft message for this chat
   lastSelectedModelId?: string; // Last model user chose for this chat
+  hasMoreMessages?: boolean; // Whether there are older messages to load
+  isLoadingMore?: boolean; // Whether currently loading older messages
 }
 
 /**

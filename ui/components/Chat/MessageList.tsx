@@ -7,6 +7,7 @@ import { MessageItem } from "./MessageItem";
 import { WelcomeMessage } from "./WelcomeMessage";
 import { PermissionCard } from "./PermissionCard";
 import { usePermissionStore } from "../../stores/permissionStore";
+import { useChatStore } from "../../stores/chatStore";
 import type { ChatMessage } from "../../stores/chatStore";
 import "./MessageList.css";
 
@@ -17,6 +18,8 @@ interface MessageListProps {
   isSending?: boolean;
   /** When set, file drops on the list attach the same way as Add context → file upload */
   onFilesDropped?: (files: File[]) => void;
+  /** Called when user scrolls to the top (for loading older messages) */
+  onLoadOlder?: () => void;
 }
 
 export const MessageList: React.FC<MessageListProps> = ({
@@ -25,12 +28,21 @@ export const MessageList: React.FC<MessageListProps> = ({
   isLoading,
   isSending,
   onFilesDropped,
+  onLoadOlder,
 }) => {
   const listRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const activeRequest = usePermissionStore((s) => s.activeRequest);
   const autoScrollEnabled = useRef(true);
   const lastScrollHeight = useRef(0);
+  const hasLoadedOnce = useRef(false);
+  const previousMessageCount = useRef(messages.length);
+  const scrollBottomBeforeLoad = useRef(0);
+  
+  // Get pagination state from chat store
+  const chatState = useChatStore((state) => state.chatStates.get(chatId));
+  const hasMoreMessages = chatState?.hasMoreMessages ?? false;
+  const isLoadingMore = chatState?.isLoadingMore ?? false;
 
   // Filter out sub-agent trigger messages from main chat (they appear in MiniChatCard)
   const filteredMessages = messages.filter((msg) => {
@@ -53,7 +65,7 @@ export const MessageList: React.FC<MessageListProps> = ({
     return true;
   });
 
-  // Detect if user has manually scrolled up (want to disable auto-scroll)
+  // Detect scroll position for auto-scroll and load-more triggers
   useEffect(() => {
     const listElement = listRef.current;
     if (!listElement) return;
@@ -65,11 +77,45 @@ export const MessageList: React.FC<MessageListProps> = ({
       // If user scrolled more than 100px from bottom, disable auto-scroll
       // If they scroll back to within 100px of bottom, re-enable
       autoScrollEnabled.current = distanceFromBottom < 100;
+
+      // Load older messages when user scrolls near the top (within 200px)
+      if (scrollTop < 200 && hasMoreMessages && !isLoadingMore && onLoadOlder && hasLoadedOnce.current) {
+        console.log("[MessageList] User scrolled near top, loading older messages...");
+        onLoadOlder();
+      }
     };
 
     listElement.addEventListener("scroll", handleScroll);
     return () => listElement.removeEventListener("scroll", handleScroll);
-  }, []);
+  }, [hasMoreMessages, isLoadingMore, onLoadOlder]);
+
+  // Mark as loaded once messages appear (to avoid triggering on mount)
+  useEffect(() => {
+    if (messages.length > 0) {
+      hasLoadedOnce.current = true;
+    }
+  }, [messages.length]);
+
+  // Preserve scroll position when older messages are loaded (prepended to top)
+  useEffect(() => {
+    const listElement = listRef.current;
+    if (!listElement) return;
+
+    // If messages were added to the beginning (count increased), restore scroll position
+    if (messages.length > previousMessageCount.current) {
+      const addedCount = messages.length - previousMessageCount.current;
+      // Only adjust scroll if we're not at the bottom (i.e., loading older messages)
+      const distanceFromBottom = listElement.scrollHeight - (listElement.scrollTop + listElement.clientHeight);
+      if (distanceFromBottom > 200) {
+        // Calculate new scroll position to keep the same content visible
+        const newScrollHeight = listElement.scrollHeight;
+        const heightDiff = newScrollHeight - lastScrollHeight.current;
+        listElement.scrollTop += heightDiff;
+        lastScrollHeight.current = newScrollHeight;
+      }
+    }
+    previousMessageCount.current = messages.length;
+  }, [messages.length]);
 
   // Auto-scroll to bottom on any content change (messages, streaming, tool calls)
   // useLayoutEffect runs before paint, preventing visible jump
@@ -169,6 +215,18 @@ export const MessageList: React.FC<MessageListProps> = ({
           : undefined
       }
     >
+      {isLoadingMore && (
+        <div className="loading-older-indicator">
+          <div className="loading-dots">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <span style={{ marginLeft: '8px', fontSize: '13px', color: 'var(--text-tertiary, #888)' }}>
+            Loading older messages...
+          </span>
+        </div>
+      )}
       {filteredMessages.map((message) => (
         <MessageItem key={message.id} chatId={chatId} message={message} />
       ))}

@@ -691,6 +691,13 @@ export function useAgent() {
               sequenceRef.current.set(chatId, sequence);
             }
 
+            // Set isSending to false FIRST to prevent empty loading indicator from appearing
+            setSending(chatId, false); // ✅ Per-chat isSending
+            
+            // Clear streaming status (blue dot) for THIS chat's tab
+            const { setTabStreaming } = useTabStore.getState();
+            setTabStreaming(`chat-${chatId}`, false);
+
             // Flush final update immediately
             const streamingMessageId =
               streamingMessageIdRef.current.get(chatId);
@@ -752,11 +759,6 @@ export function useAgent() {
               currentTextSegmentRef.current.delete(chatId); // Clear text segment
             }
             activeStreamRequestByChatRef.current.delete(chatId);
-            setSending(chatId, false); // ✅ Per-chat isSending
-
-            // Clear streaming status (blue dot) for THIS chat's tab
-            const { setTabStreaming } = useTabStore.getState();
-            setTabStreaming(`chat-${chatId}`, false);
           }
           break;
 
@@ -854,6 +856,9 @@ export function useAgent() {
             
             // Only clean up state if NOT a context limit error
             if (!isContextLimitError) {
+              // Set isSending to false FIRST to prevent empty loading indicator from appearing
+              setSending(chatId, false); // ✅ Per-chat isSending
+              
               const streamingMessageId =
                 streamingMessageIdRef.current.get(chatId);
               if (streamingMessageId) {
@@ -867,7 +872,6 @@ export function useAgent() {
                 toolCallsMapRef.current.delete(chatId);
               }
               activeStreamRequestByChatRef.current.delete(chatId);
-              setSending(chatId, false); // ✅ Per-chat isSending
             }
           }
           break;

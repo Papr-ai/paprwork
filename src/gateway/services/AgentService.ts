@@ -1711,8 +1711,8 @@ ${last15.substring(0, 8_000)}`;
   /**
    * Get chat history
    */
-  async getChatHistory(chatId: string): Promise<StoredMessage[]> {
-    return await this.storageManager.loadMessages(chatId);
+  async getChatHistory(chatId: string, limit?: number, skip?: number): Promise<StoredMessage[]> {
+    return await this.storageManager.loadMessages(chatId, limit, skip);
   }
 
   /**

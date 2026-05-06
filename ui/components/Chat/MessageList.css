@@ -60,6 +60,17 @@
   gap: 12px;
 }
 
+.loading-older-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 24px;
+  margin: 8px 0;
+  border-radius: 8px;
+  background: var(--surface, #2a2a3e);
+  border: 1px solid var(--border-color, #3a3a4e);
+}
+
 .loading-dots {
   display: flex;
   gap: 8px;

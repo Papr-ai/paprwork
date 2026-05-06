@@ -316,6 +316,8 @@ export class LocalStorageProvider implements IStorageProvider {
     limit?: number,
     skip?: number,
   ): Promise<StoredMessage[]> {
+    // When limit is specified, we load most recent messages first (DESC), then reverse
+    // to maintain chronological order in the UI
     let query = `
       SELECT 
         id, chat_id, role, content, timestamp,
@@ -326,7 +328,7 @@ export class LocalStorageProvider implements IStorageProvider {
         sequence
       FROM messages 
       WHERE chat_id = ? 
-      ORDER BY timestamp ASC
+      ORDER BY timestamp ${limit ? 'DESC' : 'ASC'}
     `;
 
     if (limit) {
@@ -338,16 +340,19 @@ export class LocalStorageProvider implements IStorageProvider {
 
     const rows = this.db.prepare(query).all(chatId) as any[];
 
+    // If using pagination (limit specified), reverse to get chronological order
+    const orderedRows = limit ? rows.reverse() : rows;
+
     console.log(
-      `[LocalStorage] Loaded ${rows.length} messages for chat ${chatId}`,
+      `[LocalStorage] Loaded ${orderedRows.length} messages for chat ${chatId}${limit ? ` (limit: ${limit}, skip: ${skip || 0})` : ''}`,
     );
-    rows.forEach((row, i) => {
+    orderedRows.forEach((row, i) => {
       console.log(
         `  Message ${i}: role=${row.role}, hasThinking=${!!row.thinking}, hasToolCalls=${!!row.tool_calls}`,
       );
     });
 
-    return rows.map((row) => ({
+    return orderedRows.map((row) => ({
       id: row.id,
       chat_id: row.chat_id,
       role: row.role as "user" | "assistant",

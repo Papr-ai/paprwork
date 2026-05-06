@@ -82,9 +82,9 @@ export function useChat() {
     [setChats, setLoading],
   ); // Fixed: removed activeChat and setActiveChat
 
-  // Load messages for a chat
+  // Load messages for a chat (loads only recent messages)
   const loadMessages = useCallback(
-    async (chatId: string) => {
+    async (chatId: string, limit: number = 30) => {
       try {
         setLoading(true);
         useChatStore.setState((state) => {
@@ -99,7 +99,7 @@ export function useChat() {
           return { chatStates: newChatStates };
         });
 
-        const history = await fetchChatHistory(chatId);
+        const history = await fetchChatHistory(chatId, { limit });
 
         const messages = mapHistoryMessages(history);
 
@@ -113,6 +113,7 @@ export function useChat() {
             ...existingState,
             messages,
             isLoading: false,
+            hasMoreMessages: messages.length === limit, // If we got exactly 'limit' messages, there might be more
           });
           return { chatStates: newChatStates };
         });
@@ -134,6 +135,46 @@ export function useChat() {
       }
     },
     [setLoading],
+  );
+
+  // Load older messages for pagination
+  const loadOlderMessages = useCallback(
+    async (chatId: string, batchSize: number = 20) => {
+      const chatState = useChatStore.getState().chatStates.get(chatId);
+      if (!chatState || !chatState.hasMoreMessages || chatState.isLoadingMore) {
+        return;
+      }
+
+      try {
+        useChatStore.getState().setLoadingMore(chatId, true);
+
+        const currentMessageCount = chatState.messages.length;
+        const history = await fetchChatHistory(chatId, {
+          limit: batchSize,
+          skip: currentMessageCount,
+        });
+
+        const olderMessages = mapHistoryMessages(history);
+
+        if (olderMessages.length === 0) {
+          // No more messages to load
+          useChatStore.getState().setHasMoreMessages(chatId, false);
+        } else {
+          // Prepend older messages to the beginning
+          useChatStore.getState().prependMessages(olderMessages, chatId);
+          
+          // If we got fewer messages than requested, we've reached the beginning
+          if (olderMessages.length < batchSize) {
+            useChatStore.getState().setHasMoreMessages(chatId, false);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to load older messages:", error);
+      } finally {
+        useChatStore.getState().setLoadingMore(chatId, false);
+      }
+    },
+    [],
   );
 
   // Load chats on mount
@@ -252,5 +293,6 @@ export function useChat() {
     updateChatTitle,
     loadChats,
     loadMessages,
+    loadOlderMessages,
   };
 }
