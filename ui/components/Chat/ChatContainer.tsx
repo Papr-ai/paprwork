@@ -20,8 +20,6 @@ import {
   DEFAULT_MODEL_IDS,
 } from "../../constants/models";
 import type { AIModel } from "../../constants/models";
-import { mapHistoryMessages } from "../../utils/historyMapper";
-import { fetchChatHistory } from "../../utils/chatHistoryApi";
 import { gateway } from "../../src/lib/gateway";
 import { JobPermissionBanner } from "./JobPermissionBanner";
 import { ContextInspectorModal } from "./ContextInspectorModal";
@@ -141,7 +139,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
   const error = useChatStore((state) => state.error);
 
   const { sendMessage } = useAgent();
-  const { loadOlderMessages } = useChat();
+  const { loadMessages, loadOlderMessages } = useChat();
   const inputBarRef = useRef<InputBarRef>(null);
   const { isModelAvailable, status: authStatus } = useAuthStatus();
   const { ensureModel, progress, installing, status: ollamaStatus } = useOllama();
@@ -201,71 +199,15 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
     return () => clearTimeout(timer);
   }, [chatId]); // Re-focus when chatId changes (different chat loaded)
 
-  // Ensure each visible pane hydrates its own chat history.
-  // This fixes split-view startup where right pane could stay empty until tab toggles.
+  // Load messages with pagination when chat loads
+  // Uses pagination-aware loadMessages() that loads only recent 30 messages
   useEffect(() => {
-    let cancelled = false;
-
-    const hydrateHistory = async () => {
-      const existingState = useChatStore.getState().chatStates.get(chatId);
-      if ((existingState?.messages.length || 0) > 0) {
-        return;
-      }
-
-      useChatStore.setState((state) => {
-        const current = state.chatStates.get(chatId) || { ...defaultChatState };
-        const next = new Map(state.chatStates);
-        next.set(chatId, {
-          ...current,
-          isLoading: true,
-        });
-        return { chatStates: next };
-      });
-
-      try {
-        const history = await fetchChatHistory(chatId);
-        if (cancelled) return;
-        const mapped = mapHistoryMessages(history);
-
-        useChatStore.setState((state) => {
-          const current = state.chatStates.get(chatId) || {
-            ...defaultChatState,
-          };
-          const next = new Map(state.chatStates);
-          next.set(chatId, {
-            ...current,
-            messages: mapped,
-            isLoading: false,
-          });
-          return { chatStates: next };
-        });
-      } catch (error) {
-        if (!cancelled) {
-          console.error(
-            `[ChatContainer] Failed to hydrate chat ${chatId}:`,
-            error,
-          );
-        }
-      } finally {
-        useChatStore.setState((state) => {
-          const current = state.chatStates.get(chatId) || {
-            ...defaultChatState,
-          };
-          const next = new Map(state.chatStates);
-          next.set(chatId, {
-            ...current,
-            isLoading: false,
-          });
-          return { chatStates: next };
-        });
-      }
-    };
-
-    hydrateHistory();
-    return () => {
-      cancelled = true;
-    };
-  }, [chatId]);
+    const existingState = useChatStore.getState().chatStates.get(chatId);
+    // Only load if chat has no messages yet
+    if ((existingState?.messages.length || 0) === 0) {
+      loadMessages(chatId);
+    }
+  }, [chatId, loadMessages]);
 
   // Listen for new messages delivered from jobs/sub-agents
   useEffect(() => {
