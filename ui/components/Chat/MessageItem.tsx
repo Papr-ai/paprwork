@@ -27,7 +27,7 @@ import { Markdown } from "../common/Markdown";
 import { getToolDisplayLabel } from "../../utils/toolDisplay";
 import { useJobLiveLogsStore } from "../../stores/jobLiveLogsStore";
 import { useSubagentJobStore } from "../../stores/subagentJobStore";
-import { useSubAgents } from "../../hooks/useSubAgents";
+import { useSubAgentNameStore } from "../../stores/subAgentNameStore";
 import "./MessageItem.css";
 
 interface MessageItemProps {
@@ -531,10 +531,8 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ chatId, message }) => {
     s.getJobIdForChat(chatId),
   );
 
-  // Resolve sub-agent name for delegation cards
-  const { agents } = useSubAgents();
-  const getAgentName = (agentId: string) =>
-    agents.find((a) => a.id === agentId)?.name ?? agentId;
+  // Resolve sub-agent name for delegation cards (shared store — single IPC subscription)
+  const getAgentName = useSubAgentNameStore((s) => s.getAgentName);
 
   // Check if message has V1-style sequence
   const hasSequence = message.sequence && message.sequence.length > 0;
