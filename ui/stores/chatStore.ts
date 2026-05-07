@@ -135,6 +135,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const chatState = state.chatStates.get(chatId) || {
         ...defaultChatState,
       };
+      
+      // Check if message already exists (prevent duplicates)
+      const messageExists = chatState.messages.some(m => m.id === message.id);
+      if (messageExists) {
+        console.warn(`[chatStore] Message ${message.id} already exists in chat ${chatId}, skipping add`);
+        return state;
+      }
+      
       const updatedMessages = [...chatState.messages, message];
 
       // Update chat state map
@@ -154,7 +162,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const chatState = state.chatStates.get(chatId) || {
         ...defaultChatState,
       };
-      const updatedMessages = [...messages, ...chatState.messages];
+      
+      // Deduplicate: only prepend messages that don't already exist
+      const existingIds = new Set(chatState.messages.map(m => m.id));
+      const newMessages = messages.filter(m => !existingIds.has(m.id));
+      const updatedMessages = [...newMessages, ...chatState.messages];
 
       const newChatStates = new Map(state.chatStates);
       newChatStates.set(chatId, {

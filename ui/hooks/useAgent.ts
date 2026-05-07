@@ -186,8 +186,10 @@ export function useAgent() {
               args?: Record<string, unknown>;
               toolCallId?: string;
             };
-            const toolCallId =
-              payload.toolCallId || `tool-${Date.now()}-${payload.toolName}`;
+            // OpenAI requires tool call IDs to be max 64 characters
+            const fallbackId = `tool-${Date.now()}-${payload.toolName}`;
+            const toolCallId = payload.toolCallId || 
+              (fallbackId.length > 64 ? fallbackId.substring(0, 64) : fallbackId);
 
             console.log(
               `[useAgent] Tool call: ${payload.toolName}`,

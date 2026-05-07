@@ -14,6 +14,14 @@ import {
 } from "../../../core/tools/index.js";
 import { compactStaleToolResults, estimateMessagesTokens } from "../agent/compactToolResults.js";
 
+/**
+ * Truncate tool call ID to 64 characters (OpenAI's maximum length requirement).
+ * IDs from various APIs may exceed this limit, causing validation errors.
+ */
+function truncateToolCallId(id: string): string {
+  return id.length > 64 ? id.substring(0, 64) : id;
+}
+
 type ToolCallAccum = {
   toolCallId: string;
   toolName: string;
@@ -368,7 +376,7 @@ export async function* createPiCodexStreamWithToolLoop(
     for await (const event of piStream) {
       if (event.type === "toolcall_end" && event.toolCall) {
         toolCallsThisTurn.push({
-          toolCallId: event.toolCall.id,
+          toolCallId: truncateToolCallId(event.toolCall.id),
           toolName: event.toolCall.name,
           args: event.toolCall.arguments ?? {},
         });
@@ -585,7 +593,7 @@ function adaptPiStreamToAISDKEvent(
       if (toolCall) {
         return {
           type: "tool-call",
-          toolCallId: toolCall.id,
+          toolCallId: truncateToolCallId(toolCall.id),
           toolName: toolCall.name,
           args: toolCall.arguments ?? {},
         };

@@ -9,6 +9,14 @@
 
 import type { AssistantMessageEvent } from "@mariozechner/pi-ai";
 
+/**
+ * Truncate tool call ID to 64 characters (OpenAI's maximum length requirement).
+ * IDs from various APIs may exceed this limit, causing validation errors.
+ */
+function truncateToolCallId(id: string): string {
+  return id.length > 64 ? id.substring(0, 64) : id;
+}
+
 /** Chunks we yield - match what orchestrateModelStream expects */
 type OurChunk =
   | { type: "text-delta"; text: string }
@@ -65,7 +73,7 @@ export async function* adaptPiStreamToAISDK(
           if (toolCall) {
             yield {
               type: "tool-call",
-              toolCallId: toolCall.id,
+              toolCallId: truncateToolCallId(toolCall.id),
               toolName: toolCall.name,
               args: toolCall.arguments ?? {},
             };

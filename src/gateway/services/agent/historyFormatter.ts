@@ -245,9 +245,12 @@ export function formatHistoryMessagesForModel(
 
         for (const tc of toolCalls) {
           // Anthropic requires tool_use IDs to match ^[a-zA-Z0-9_-]+$
+          // OpenAI requires IDs to be max 64 characters
           // IDs from PAPR history may contain dots or other invalid chars
           const rawId = typeof tc.id === "string" ? tc.id : `tc-hist-${toolIndex}`;
-          const toolCallId = rawId.replace(/[^a-zA-Z0-9_-]/g, "_");
+          const sanitizedId = rawId.replace(/[^a-zA-Z0-9_-]/g, "_");
+          // Truncate to 64 chars max for OpenAI compatibility
+          const toolCallId = sanitizedId.length > 64 ? sanitizedId.substring(0, 64) : sanitizedId;
           const toolName = typeof tc.name === "string" ? tc.name : "unknown";
 
           contentParts.push({
