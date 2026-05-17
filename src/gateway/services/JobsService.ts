@@ -925,10 +925,34 @@ export class JobsService {
   private async appendLog(jobId: string, line: string): Promise<void> {
     const logPath = this.getJobLogPath(jobId);
     const stamped = `[${new Date().toISOString()}] ${line}\n`;
-    await fs.appendFile(logPath, stamped, "utf8");
+    try {
+      await fs.appendFile(logPath, stamped, "utf8");
+    } catch (err: unknown) {
+      // Self-heal: if the logs/ directory was deleted or never created
+      // (older jobs, manual cleanup), create it and retry once. We must
+      // NEVER let a logging failure crash a job run or scheduler tick.
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "ENOENT") {
+        try {
+          await fs.mkdir(path.dirname(logPath), { recursive: true });
+          await fs.appendFile(logPath, stamped, "utf8");
+        } catch (retryErr) {
+          console.warn(
+            `[JobsService] appendLog retry failed for ${jobId}:`,
+            retryErr,
+          );
+        }
+      } else {
+        console.warn(`[JobsService] appendLog failed for ${jobId}:`, err);
+      }
+    }
 
-    // Prune log file if it exceeds 2MB
-    await this.pruneJobLog(jobId);
+    // Prune log file if it exceeds 2MB (best-effort)
+    try {
+      await this.pruneJobLog(jobId);
+    } catch {
+      /* non-fatal */
+    }
 
     // Broadcast log line to UI for real-time streaming
     this.broadcastJobLogLine(jobId, line);

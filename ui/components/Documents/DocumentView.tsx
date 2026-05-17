@@ -143,18 +143,37 @@ export function DocumentView({ documentId }: DocumentViewProps) {
     };
   }, [editor]);
 
-  // Sync document content into editor
+  // Sync document content into editor without yanking the user's scroll position.
   useEffect(() => {
     if (!document || !editor) return;
 
     const currentMarkdown =
       (editor.storage.markdown?.getMarkdown() as string) ?? editor.getText();
     if (currentMarkdown !== document.content) {
+      const wrapper = editorWrapperRef.current;
+      const scrollTop = wrapper?.scrollTop ?? 0;
+      const { from, to } = editor.state.selection;
+
       isLoadingContent.current = true;
       editor.commands.setContent(document.content || "", false, {
         preserveWhitespace: "full",
       });
+      if (from <= editor.state.doc.content.size && to <= editor.state.doc.content.size) {
+        editor.commands.setTextSelection({ from, to });
+      }
       isLoadingContent.current = false;
+
+      // TipTap/ProseMirror may scroll the selection into view after setContent.
+      // Restore on the next frames so auto-save/file refreshes don't jump upward.
+      if (wrapper) {
+        wrapper.scrollTop = scrollTop;
+        requestAnimationFrame(() => {
+          wrapper.scrollTop = scrollTop;
+          requestAnimationFrame(() => {
+            wrapper.scrollTop = scrollTop;
+          });
+        });
+      }
       
       // Update word count when loading new content
       setCurrentWordCount(calculateWordCount(document.content || ""));
