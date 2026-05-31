@@ -292,7 +292,9 @@ export class AgentService {
     const session = await this.sessionManager.getSession(chatId, config);
     timings.getSession = performance.now() - t;
 
-    // Create abort controller for this stream
+    // Create abort controller for this stream.
+    // Keep a reference so the finally block can check if it's still the "current" controller
+    // before clearing — a rapid second stream may have already replaced it.
     const abortController = new AbortController();
     this.sessionManager.setAbortController(chatId, abortController);
     this.sessionManager.setStreaming(chatId, true);
@@ -454,6 +456,7 @@ export class AgentService {
           chatId,
           history,
           enabledSkills,
+          config.provider,
         ));
       const messages = buildModelMessages(
         history,
@@ -1426,9 +1429,10 @@ export class AgentService {
       // Re-throw to propagate to WebSocket handler
       throw error;
     } finally {
-      // Clear streaming state
-      this.sessionManager.setStreaming(chatId, false);
-      this.sessionManager.setAbortController(chatId, null);
+      // Only clear session state if this stream still owns the abort controller.
+      // If a new stream started (e.g. from the auto-send queue) it will have replaced
+      // the controller already — don't clobber its state.
+      this.sessionManager.clearStreamingStateIfOwner(chatId, abortController);
     }
   }
 
@@ -1795,6 +1799,7 @@ ${last15.substring(0, 8_000)}`;
       chatId,
       history,
       enabledSkills,
+      undefined, // No provider context in getContextSize
     );
 
     // Get all available tools
@@ -2946,6 +2951,7 @@ ${last15.substring(0, 8_000)}`;
     chatId: string,
     history: unknown[],
     enabledSkills?: Array<{ id: string; name: string; description: string }>,
+    provider?: Provider,
   ): Promise<string> {
     const includeExtendedAppPlaybook = this.hasAppAutomationContext(history);
 
@@ -3005,6 +3011,7 @@ ${last15.substring(0, 8_000)}`;
       activeSkills: enabledSkills,
       activePlans,
       workspaceContext,
+      provider,
     });
   }
 

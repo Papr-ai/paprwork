@@ -7,7 +7,7 @@ import { z } from "zod";
 const addMemorySchema = z
   .object({
     content: z.string().min(1),
-    // externalUserId removed - API key scopes to user automatically
+    // userId resolved at runtime via getPaprUserId() — passed as user_id to API
     role: z.enum(["user", "assistant"]).optional(),
     category: z
       .enum([
@@ -223,6 +223,8 @@ export const addAgentMemoryTool = createTool({
   execute: async (args) => {
     try {
       const client = await getPaprClient();
+      const { getPaprUserId } = await import("../../gateway/utils/paprUserId.js");
+      const userId = getPaprUserId();
 
       // Build customMetadata for fields not in the MemoryMetadata spec
       const customMetadata: Record<string, string> = {};
@@ -236,7 +238,7 @@ export const addAgentMemoryTool = createTool({
 
       const response = await client.memory.add({
         content: args.content,
-        // external_user_id omitted - API key scopes to user automatically
+        ...(userId ? { user_id: userId } : {}),
         enable_holographic: args.enableHolographic,
         frequency_schema_id: args.frequencySchemaId,
         metadata: {
@@ -271,6 +273,8 @@ export const searchAgentMemoryTool = createTool({
   execute: async (args) => {
     try {
       const client = await getPaprClient();
+      const { getPaprUserId } = await import("../../gateway/utils/paprUserId.js");
+      const userId = getPaprUserId();
 
       // Build customMetadata filters from code search params
       const customMetadata: Record<string, string | number | boolean> = {};
@@ -297,7 +301,7 @@ export const searchAgentMemoryTool = createTool({
 
       const response = await client.memory.search({
         query: args.query,
-        // external_user_id omitted - API key scopes to user automatically
+        ...(userId ? { user_id: userId } : {}),
         max_memories: args.maxMemories ?? 20,
         max_nodes: 15,
         enable_agentic_graph: true,
@@ -316,7 +320,7 @@ export const searchAgentMemoryTool = createTool({
           ? {
               metadata: {
                 ...(args.category === "code"
-                  ? { category: "learning" as const }
+                  ? { category: "learning" as const, role: "assistant" as const }
                   : {}),
                 ...(hasMetadataFilters ? { customMetadata } : {}),
               },
@@ -827,6 +831,8 @@ export const createEntitiesAndRelationshipsTool = createTool({
   execute: async (args) => {
     try {
       const client = await getPaprClient();
+      const { getPaprUserId } = await import("../../gateway/utils/paprUserId.js");
+      const userId = getPaprUserId();
       
       // Build manual graph generation structure
       const manualGeneration = {
@@ -847,6 +853,7 @@ export const createEntitiesAndRelationshipsTool = createTool({
       
       const response = await client.memory.add({
         content: args.content,
+        ...(userId ? { user_id: userId } : {}),
         memory_policy: {
           mode: 'manual',
           nodes: manualGeneration.nodes,

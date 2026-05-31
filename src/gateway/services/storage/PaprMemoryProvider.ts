@@ -14,6 +14,7 @@ import type {
   StoredSummary,
   ChatMetadata,
 } from "./IStorageProvider";
+import { getPaprUserId } from "../../utils/paprUserId.js";
 
 export interface PaprConfig {
   apiKey: string; // X-API-Key from macOS Keychain
@@ -114,12 +115,15 @@ export class PaprMemoryProvider implements IStorageProvider {
         contentForPapr = contentBlocks;
       }
 
+      const userId = getPaprUserId();
+
       // POST to PAPR /v1/messages using SDK
       const response = await this.client.messages.store({
         content: contentForPapr,
         role: message.role,
         sessionId: chatId,
         process_messages: true, // Let PAPR do batch analysis & auto-summarize
+        ...(userId ? { user_id: userId } : {}),
         metadata: {
           // Typed MemoryMetadata fields
           conversationId: chatId,

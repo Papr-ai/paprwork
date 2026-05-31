@@ -27,6 +27,7 @@ import {
   artifactTypeLabel,
   type Artifact,
 } from "../../stores/artifactsStore";
+import { mapHistoryMessages } from "../../utils/historyMapper";
 import "./ChatContainer.css";
 
 const DEFAULT_SYSTEM_PROMPT = `You're Pen, an AI assistant running in Paprwork—a cross-platform AI workspace.
@@ -129,7 +130,7 @@ interface ChatContainerProps {
   chatId: string;
 }
 
-export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
+export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.ReactElement => {
   // Combined selector — single subscription instead of three, reduces re-render triggers
   const chatState = useChatStore((state) => state.chatStates.get(chatId));
   const messages = chatState?.messages ?? EMPTY_MESSAGES;
@@ -142,7 +143,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
   const { loadMessages, loadOlderMessages } = useChat();
   const inputBarRef = useRef<InputBarRef>(null);
   const { isModelAvailable, status: authStatus } = useAuthStatus();
-  const { ensureModel, progress, installing, status: ollamaStatus } = useOllama();
+  const { ensureModel, progress, installing } = useOllama();
   const fallbackModel =
     CHAT_MODELS.find((m) => m.id === "claude-sonnet-4-6") || CHAT_MODELS[0];
 
@@ -152,6 +153,12 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
   const [isFileDragOver, setIsFileDragOver] = useState(false);
   const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
   const isProcessingQueue = useRef(false);
+
+  // ✅ Filter queue to only show messages for THIS chat
+  const currentChatQueue = useMemo(
+    () => messageQueue.filter(q => q.chatId === chatId),
+    [messageQueue, chatId]
+  );
 
   // Listen for gateway supervisor status changes (restart notifications)
   useEffect(() => {
@@ -164,6 +171,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
         api.gateway?.removeStatusListener?.();
       };
     }
+    return undefined;
   }, []);
 
   // Only block THIS chat if it's waiting for an Ollama model that's currently being installed
@@ -229,9 +237,10 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
           (m) =>
             m.id === incomingMessage.id ||
             (m.content === incomingMessage.content &&
+              'timestamp' in m && 'timestamp' in incomingMessage &&
               Math.abs(
-                new Date(m.timestamp).getTime() -
-                  new Date(incomingMessage.timestamp).getTime(),
+                new Date((m as any).timestamp).getTime() -
+                  new Date((incomingMessage as any).timestamp).getTime(),
               ) < 3000),
         );
 
@@ -488,41 +497,48 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
   }, [chatId]);
 
   // Queue management handlers
-  const handleQueueMessage = useCallback((message: string, context?: Artifact[]) => {
+  const handleQueueMessage = useCallback((message: string, _context?: Artifact[]) => {
+    // TODO: Store and handle artifacts in queued messages
     const queuedMessage: QueuedMessage = {
       id: `queued-${Date.now()}-${Math.random()}`,
       text: message,
       timestamp: Date.now(),
+      chatId, // ✅ Scope message to this chat
     };
     setMessageQueue(prev => [...prev, queuedMessage]);
-  }, []);
+  }, [chatId]);
 
   const handleSendQueuedNow = useCallback(async (messageId: string) => {
-    const queued = messageQueue.find(q => q.id === messageId);
+    const queued = messageQueue.find(q => q.id === messageId && q.chatId === chatId);
     if (!queued) return;
 
     // Remove from queue
     setMessageQueue(prev => prev.filter(q => q.id !== messageId));
 
-    // Stop current agent response
-    await handleStopAgent();
+    // Only stop the agent if it's actually streaming — avoids sending a spurious
+    // agent:stop that could race with a newly-started stream.
+    if (isSending) {
+      await handleStopAgent();
+    }
 
     // Send the queued message
     await handleSendMessage(queued.text);
-  }, [messageQueue, handleStopAgent, handleSendMessage]);
+  }, [messageQueue, isSending, handleStopAgent, handleSendMessage, chatId]);
 
   const handleRemoveQueued = useCallback((messageId: string) => {
     setMessageQueue(prev => prev.filter(q => q.id !== messageId));
   }, []);
 
   const processNextQueued = useCallback(async () => {
-    if (isProcessingQueue.current || messageQueue.length === 0 || isSending) {
+    if (isProcessingQueue.current || currentChatQueue.length === 0) {
       return;
     }
 
     isProcessingQueue.current = true;
-    const nextMessage = messageQueue[0];
-    setMessageQueue(prev => prev.slice(1));
+    const nextMessage = currentChatQueue[0];
+    
+    // Remove this specific message from the queue (not just the first one)
+    setMessageQueue(prev => prev.filter(q => q.id !== nextMessage.id));
 
     try {
       await handleSendMessage(nextMessage.text);
@@ -531,15 +547,14 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
     } finally {
       isProcessingQueue.current = false;
     }
-  }, [messageQueue, isSending, handleSendMessage]);
+  }, [currentChatQueue, handleSendMessage]);
 
   // Auto-send next queued message when agent finishes responding
   useEffect(() => {
-    if (!isSending && messageQueue.length > 0) {
+    if (!isSending && currentChatQueue.length > 0) {
       processNextQueued();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSending, messageQueue.length]);  // processNextQueued is stable, don't include it
+  }, [isSending, currentChatQueue.length, processNextQueued]);
 
   // Listen for onboarding messages dispatched from OnboardingCard via sidebar
   useEffect(() => {
@@ -663,7 +678,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
       />
 
       <QueuedMessages
-        queue={messageQueue}
+        queue={currentChatQueue}
         onSendNow={handleSendQueuedNow}
         onRemove={handleRemoveQueued}
       />
@@ -674,14 +689,14 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }) => {
         onFileAttachmentsAdded={() => setIsFileDragOver(false)}
         onSend={handleSendMessage}
         onQueue={handleQueueMessage}
-        queuedCount={messageQueue.length}
+        queuedCount={currentChatQueue.length}
         onStop={handleStopAgent}
         onSlashCommand={handleSlashCommand}
         isSending={isSending || isWaitingForModel}
         placeholder={
           (isWaitingForModel 
             ? `Preparing ${selectedModel.name}...` 
-            : messageQueue.length > 0
+            : currentChatQueue.length > 0
               ? "Send follow-up..." 
               : "Type a message...") as string
         }

@@ -44,6 +44,8 @@ export interface SystemPromptOptions {
   }>;
   /** Workspace context (workspace files, daily logs, onboarding) injected from ~/Papr/workspace/ */
   workspaceContext?: WorkspaceContextData;
+  /** AI provider being used (to enable native web search documentation) */
+  provider?: string;
 }
 
 export class SystemPromptBuilder {
@@ -74,6 +76,7 @@ export class SystemPromptBuilder {
       this.buildAgentDocsSection(),
       this.buildSkillsSection(),
       this.buildApiKeysSection(),
+      this.buildNativeWebSearchSection(), // Native web search tools (provider-specific)
       this.buildBashToolSection(),
       this.buildDocumentToolsSection(),
       this.buildMemoryToolsSection(),
@@ -89,7 +92,7 @@ export class SystemPromptBuilder {
       ...this.buildDynamicContextSections(),
     ];
 
-    return sections.join("\n\n---\n\n");
+    return sections.filter(Boolean).join("\n\n---\n\n");
   }
 
   /**
@@ -880,14 +883,104 @@ ${customKeysList}
   }
 
   /**
+   * Native Web Search tool documentation (provider-specific)
+   */
+  private buildNativeWebSearchSection(): string {
+    const provider = this.options.provider?.toLowerCase();
+    
+    // Only show web search documentation for providers that support it
+    if (provider === "openai" || provider === "openai-codex") {
+      return `# Web Search Tool (OpenAI)
+
+You have access to a native **web_search** tool that enables real-time internet access with citations.
+
+## When to Use
+
+Use \`web_search\` for queries requiring up-to-date information:
+- Current events, news, or recent developments
+- Real-time data (weather, stock prices, sports scores)
+- Latest documentation, API changes, or library versions
+- Facts that may have changed since your training data
+
+## Usage
+
+The model automatically decides when to invoke web search based on your needs. You don't need to explicitly call it - just proceed with your task and the tool will be used if needed.
+
+## Output
+
+Search results include:
+- Relevant web content with context
+- Source URLs and citations
+- Inline attribution in responses
+
+**Note:** Prefer native web search over curl/bash for general web queries. Only use curl for specific API calls or scraping tasks.`;
+    } else if (provider === "google") {
+      return `# Web Search Tool (Google)
+
+You have access to a native **google_search** tool that enables real-time Google Search with grounding.
+
+## When to Use
+
+Use \`google_search\` for queries requiring up-to-date information:
+- Current events, news, or recent developments
+- Real-time data (weather, stock prices, sports scores)
+- Latest documentation, API changes, or library versions
+- Facts that may have changed since your training data
+
+## Usage
+
+The model automatically decides when to invoke search based on your needs. You don't need to explicitly call it - just proceed with your task and the tool will be used if needed.
+
+## Output
+
+Search results include:
+- Google Search results with grounding metadata
+- Source URLs and citations
+- Attribution and confidence scores
+
+**Note:** Prefer native web search over curl/bash for general web queries. Only use curl for specific API calls or scraping tasks.`;
+    }
+    
+    // For Anthropic and other providers without native search, return empty string
+    // (They should use browser tools or curl as needed)
+    return "";
+  }
+
+  /**
    * Bash tool documentation
    */
   private buildBashToolSection(): string {
+    const provider = this.options.provider?.toLowerCase();
+    const hasNativeSearch = provider === "openai" || provider === "openai-codex" || provider === "google";
     const shellExamples = this.getShellExamples();
+    
+    // Build capabilities list based on provider
+    let capabilities = `## Key Capabilities
+
+`;
+    
+    if (!hasNativeSearch) {
+      capabilities += `- **Web search**: Use \`curl\` for quick lookups, APIs, scraping (fast, no browser)
+`;
+    }
+    
+    capabilities += `- **API keys**: Reference with \`\${KEY_NAME}\` (auto-substituted, sanitized in output)
+- **Paths**: \`~\` for home, workspace is \`${this.options.workspacePath || process.cwd()}\`
+- **Chaining**: Use \`&&\` for sequential, \`||\` for fallback, \`;  \` to continue regardless`;
+
+    if (hasNativeSearch) {
+      capabilities += `
+
+**Note:** For general web searches, use the native web_search tool above. Use bash/curl only for specific API calls or scraping tasks.`;
+    } else {
+      capabilities += `
+
+**Note:** Only use browser tools for visual inspection or UI interaction. Default to \`curl\` for data retrieval.`;
+    }
     
     return `# Bash Tool
 
-Execute shell commands for system operations, package management, git, web searches, and more.
+Execute shell commands for system operations, package management, git, and more.
 
 ## Basic Usage
 
@@ -927,21 +1020,23 @@ bash({ command: "npm install", cwd: "~/project" })
 
 ${shellExamples}
 
-## Key Capabilities
-
-- **Web search**: Use \`curl\` for quick lookups, APIs, scraping (fast, no browser)
-- **API keys**: Reference with \`\${KEY_NAME}\` (auto-substituted, sanitized in output)
-- **Paths**: \`~\` for home, workspace is \`${this.options.workspacePath || process.cwd()}\`
-- **Chaining**: Use \`&&\` for sequential, \`||\` for fallback, \`;  \` to continue regardless
-
-**Note:** Only use browser tools for visual inspection or UI interaction. Default to \`curl\` for data retrieval.`;
+${capabilities}`;
   }
 
   /**
    * Get platform-specific shell command examples
    */
   private getShellExamples(): string {
+    const provider = this.options.provider?.toLowerCase();
+    const hasNativeSearch = provider === "openai" || provider === "openai-codex" || provider === "google";
+    
     if (this.platform === "win32") {
+      const webSearchExample = hasNativeSearch 
+        ? "" 
+        : `
+# Web search
+curl -s "https://api.duckduckgo.com/?q=query&format=json"`;
+      
       return `## Common Operations (Windows)
 
 \`\`\`bash
@@ -957,16 +1052,20 @@ dir /s /b *.ts  # List TypeScript files
 findstr /s /n "TODO" src\\*  # Search for TODO in src
 
 # API calls with keys
-curl https://api.openai.com/v1/models -H "Authorization: Bearer \${OPENAI_API_KEY}"
-
-# Web search
-curl -s "https://api.duckduckgo.com/?q=query&format=json"
+curl https://api.openai.com/v1/models -H "Authorization: Bearer \${OPENAI_API_KEY}"${webSearchExample}
 \`\`\`
 
 **Note:** On Windows, prefer PowerShell or Git Bash commands. Unix commands like \`grep\`, \`find\` work if Git is installed.`;
     }
     
     // Unix (macOS, Linux)
+    const webSearchExample = hasNativeSearch 
+      ? "" 
+      : `
+
+# Web search
+curl -s "https://api.duckduckgo.com/?q=query&format=json"`;
+    
     return `## Common Operations
 
 \`\`\`bash
@@ -983,10 +1082,7 @@ grep -r "TODO" src/
 
 # API calls with keys
 curl https://api.openai.com/v1/models \\
-  -H "Authorization: Bearer \${OPENAI_API_KEY}"
-
-# Web search
-curl -s "https://api.duckduckgo.com/?q=query&format=json"
+  -H "Authorization: Bearer \${OPENAI_API_KEY}"${webSearchExample}
 \`\`\``;
   }
 

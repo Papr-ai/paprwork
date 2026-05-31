@@ -3,11 +3,13 @@
  * Matching Paprwork v1 model list exactly
  */
 
+import type { Provider } from "../types/core";
+
 export interface AIModel {
   id: string;
   name: string;
   description: string;
-  provider: "anthropic" | "openai" | "openai-codex" | "google" | "ollama";
+  provider: Provider;
   group: string;
   supportsThinking?: boolean;
   defaultThinkingBudget?: number;

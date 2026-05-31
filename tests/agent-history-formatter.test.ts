@@ -85,7 +85,7 @@ describe("agent history formatter", () => {
       text?: string;
       toolCallId?: string;
       toolName?: string;
-      args?: unknown;
+      input?: unknown;
     }>;
 
     // Should have text part and tool-call part
@@ -98,7 +98,7 @@ describe("agent history formatter", () => {
       type: "tool-call",
       toolCallId: "call-1",
       toolName: "bash",
-      args: { command: "npm test" },
+      input: { command: "npm test" },
     });
 
     // Second message: tool results
@@ -107,14 +107,14 @@ describe("agent history formatter", () => {
       type: string;
       toolCallId: string;
       toolName: string;
-      result: unknown;
+      output: { type: string; value: unknown };
     }>;
     expect(toolContent).toHaveLength(1);
     expect(toolContent[0]).toEqual({
       type: "tool-result",
       toolCallId: "call-1",
       toolName: "bash",
-      result: "ok",
+      output: { type: "text", value: "ok" },
     });
   });
 
@@ -241,5 +241,47 @@ describe("agent history formatter", () => {
 
     // Verify no [tool_activity] anywhere
     expect(JSON.stringify(messages)).not.toContain("[tool_activity]");
+  });
+
+  test("formatted tool messages use AI SDK 6 input/output schema", async () => {
+    const history: unknown[] = [
+      { role: "user", content: "run a command" },
+      {
+        role: "assistant",
+        content: "Running now",
+        toolCalls: [
+          {
+            id: "call-1",
+            name: "bash",
+            args: { command: "echo hi" },
+            result: '{"success":true}',
+            status: "success",
+          },
+        ],
+      },
+    ];
+
+    const messages = formatHistoryMessagesForModel(history);
+    const { streamText, tool } = await import("ai");
+    const { z } = await import("zod");
+    const { createOpenAI } = await import("@ai-sdk/openai");
+
+    try {
+      await streamText({
+        model: createOpenAI({ apiKey: "sk-test" })("gpt-4o"),
+        messages,
+        tools: {
+          bash: tool({
+            description: "run bash",
+            inputSchema: z.object({ command: z.string() }),
+            execute: async () => "ok",
+          }),
+        },
+      }).response;
+    } catch (error) {
+      const err = error as { name?: string; cause?: { name?: string } };
+      expect(err.name).not.toBe("AI_InvalidPromptError");
+      expect(err.cause?.name).not.toBe("AI_TypeValidationError");
+    }
   });
 });

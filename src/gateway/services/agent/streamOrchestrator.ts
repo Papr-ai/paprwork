@@ -122,19 +122,19 @@ function extractErrorMessage(error: unknown): string {
     ) {
       const errorDetails = errorObj.error as Record<string, unknown>;
       
-      // Check for Claude's error structure with message
+      // Check for error structure with message (from any provider)
       if (typeof errorDetails.message === "string") {
         const errorMessage = errorDetails.message;
         const errorType = typeof errorDetails.type === "string" ? errorDetails.type : "";
         
-        // Handle "Internal Server Error" from Claude
+        // Handle "Internal Server Error" from any provider
         if (errorMessage === "Internal Server Error" || errorType === "api_error") {
-          return "🔄 Claude's servers encountered an internal error. This is a temporary issue on Anthropic's side. Please try again in a moment, or switch to a different model.";
+          return "🔄 The AI provider encountered an internal server error. This is a temporary issue on their side. Please try again in a moment, or switch to a different model.";
         }
         
         // Handle other overloaded errors
         if (errorType === "overloaded_error" || errorMessage.includes("overloaded")) {
-          return "Claude servers are temporarily overloaded. Please wait a moment and try again, or switch to a different model.";
+          return "The AI servers are temporarily overloaded. Please wait a moment and try again, or switch to a different model.";
         }
         
         // Return the error message with type if available

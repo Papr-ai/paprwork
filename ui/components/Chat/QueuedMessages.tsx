@@ -10,6 +10,7 @@ export interface QueuedMessage {
   id: string;
   text: string;
   timestamp: number;
+  chatId: string;
 }
 
 interface QueuedMessagesProps {

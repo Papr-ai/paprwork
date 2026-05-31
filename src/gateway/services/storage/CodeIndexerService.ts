@@ -9,6 +9,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { Papr } from '@papr/memory';
+import { getPaprUserId } from '../../utils/paprUserId.js';
 
 export interface CodeFileMetadata {
   file_path: string;
@@ -445,9 +446,11 @@ export class CodeIndexerService {
     if (metadata.created_at) paprMetadata.created_at = metadata.created_at.toISOString();
     if (metadata.updated_at) paprMetadata.updated_at = metadata.updated_at.toISOString();
     
+    const userId = getPaprUserId();
+
     await this.client.memory.add({
       content: `Project: ${metadata.name}\nType: ${metadata.type}\nID: ${metadata.project_id}`,
-      // external_user_id omitted — API key scopes to developer automatically
+      ...(userId ? { user_id: userId } : {}),
       metadata: {
         role: 'assistant',
         category: 'learning',
@@ -494,9 +497,11 @@ export class CodeIndexerService {
       paprMetadata.data_source_path = fileMetadata.data_source_path;
     }
     
+    const userId = getPaprUserId();
+
     await this.client.memory.add({
       content: truncatedContent,
-      // external_user_id omitted — API key scopes to developer automatically
+      ...(userId ? { user_id: userId } : {}),
       metadata: {
         role: 'assistant',
         category: 'learning',

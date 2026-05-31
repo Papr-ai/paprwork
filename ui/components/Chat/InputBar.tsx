@@ -3,7 +3,8 @@
  * Handles textarea auto-resize, keyboard shortcuts, context artifacts, and slash commands
  */
 
-import React, {
+import * as React from "react";
+import {
   useState,
   useRef,
   KeyboardEvent,
@@ -594,3 +595,5 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     );
   },
 );
+
+InputBar.displayName = 'InputBar';

@@ -230,14 +230,29 @@ export function hasValidOAuthToken(provider: "openai" | "anthropic"): boolean {
  */
 export async function getProviderAuth(
   provider: "openai" | "anthropic",
+  ipcProcess: IpcProcessLike = process,
 ): Promise<
   { type: "oauth"; token: string } | { type: "apiKey"; key: string } | null
 > {
   const keyName =
     provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
 
-  // Request keys first - IPC response populates oauthTokenCache when main process sends oauthTokens
-  const keys = await getApiKeys([keyName]);
+  // Populate OAuth cache from Electron main process when available.
+  // In dev mode getApiKeys() reads process.env only, but the gateway still runs
+  // as an Electron child with IPC — so OAuth tokens from Settings must be loaded here.
+  if (ipcProcess.send && !hasValidOAuthToken(provider)) {
+    try {
+      await requestKeysViaIPC([keyName], ipcProcess);
+    } catch (error) {
+      console.warn(
+        `[KeyResolver] OAuth IPC lookup failed for ${provider}:`,
+        (error as Error).message,
+      );
+    }
+  }
+
+  // Request keys (env in dev, IPC cache in prod)
+  const keys = await getApiKeys([keyName], ipcProcess);
 
   // Now check OAuth (cache populated by IPC response above)
   if (hasValidOAuthToken(provider)) {

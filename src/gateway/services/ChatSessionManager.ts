@@ -272,6 +272,21 @@ export class ChatSessionManager {
   }
 
   /**
+   * Clear streaming state only if the given controller is still the active one.
+   * Guards against a race where the old stream's finally block runs after a new
+   * stream has already stored its own AbortController in the session.
+   */
+  clearStreamingStateIfOwner(chatId: string, controller: AbortController): void {
+    const session = this.sessions.get(chatId);
+    if (!session) return;
+    if (session.abortController === controller) {
+      session.abortController = null;
+      session.isStreaming = false;
+    }
+    // If the controller no longer matches, a new stream has taken ownership — leave it alone.
+  }
+
+  /**
    * Clear all sessions (e.g., on app shutdown)
    */
   async clearAllSessions(): Promise<void> {

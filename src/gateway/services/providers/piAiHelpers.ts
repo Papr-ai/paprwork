@@ -14,6 +14,17 @@ export interface PiContextInput {
   nativeTools?: Array<{ type: string; name?: string; max_uses?: number }>; // Native provider tools (web search, etc.)
 }
 
+// Schema conversion circuit breaker (Issue 65)
+let schemaConversionCount = 0;
+const MAX_SCHEMA_CONVERSIONS = 100; // Normal: ~70-95 tools, abort at 100
+
+/**
+ * Reset schema conversion counter (call at start of new request)
+ */
+export function resetSchemaConversionCounter(): void {
+  schemaConversionCount = 0;
+}
+
 /**
  * Convert our AIModelMessage format to pi-ai Context messages
  */
@@ -121,6 +132,20 @@ export function buildPiContext(input: PiContextInput): {
 
   const piTools = Object.entries(tools).map(
     ([toolKey, tool]: [string, any]) => {
+      // CIRCUIT BREAKER 3: Check schema conversion count (Issue 65)
+      schemaConversionCount++;
+      if (schemaConversionCount > MAX_SCHEMA_CONVERSIONS) {
+        console.error(
+          `[buildPiContext] 🚨 CRITICAL: Schema conversion loop detected! ` +
+          `${schemaConversionCount} conversions exceeds maximum (${MAX_SCHEMA_CONVERSIONS}). ` +
+          `This usually indicates a recursive schema definition or infinite loop.`
+        );
+        throw new Error(
+          `Schema conversion limit exceeded (${schemaConversionCount}/${MAX_SCHEMA_CONVERSIONS}). ` +
+          `This indicates a recursive schema or conversion loop.`
+        );
+      }
+      
       let parameters: Record<string, unknown> = {
         type: "object",
         properties: {},
@@ -142,6 +167,9 @@ export function buildPiContext(input: PiContextInput): {
       };
     },
   );
+  
+  console.log(`[buildPiContext] Converted ${schemaConversionCount} tool schemas (max: ${MAX_SCHEMA_CONVERSIONS})`);
+
 
   // Combine custom tools with native tools (web search, etc.)
   // NOTE: Native tools have different structure { type, name, max_uses } vs custom tools { name, description, parameters }

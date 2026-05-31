@@ -5,9 +5,9 @@
  * NOT as plain text. If tool calls are serialized as text (e.g. "[tool_activity]"),
  * the model learns to generate fake tool call text instead of actually invoking tools.
  *
- * AI SDK expected message format for tool calls:
- * 1. { role: "assistant", content: [{ type: "text", ... }, { type: "tool-call", ... }] }
- * 2. { role: "tool", content: [{ type: "tool-result", ... }] }
+ * AI SDK 6 expected message format for tool calls:
+ * 1. { role: "assistant", content: [{ type: "text", ... }, { type: "tool-call", input: ... }] }
+ * 2. { role: "tool", content: [{ type: "tool-result", output: { type: "text"|"json", value: ... } }] }
  *
  * CONTEXT MANAGEMENT:
  * - Tool results in storage can be up to 100KB each (MAX_TOOL_RESULT_LENGTH)
@@ -30,14 +30,26 @@ interface ToolCallContentPart {
   type: "tool-call";
   toolCallId: string;
   toolName: string;
-  args: unknown;
+  input: unknown;
 }
+
+/** AI SDK 6 tool-result output (replaces legacy `result` string field). */
+type ToolResultOutput =
+  | { type: "text"; value: string }
+  | { type: "json"; value: unknown };
 
 interface ToolResultContentPart {
   type: "tool-result";
   toolCallId: string;
   toolName: string;
-  result: unknown;
+  output: ToolResultOutput;
+}
+
+function toToolResultOutput(value: unknown): ToolResultOutput {
+  if (typeof value === "string") {
+    return { type: "text", value };
+  }
+  return { type: "json", value };
 }
 
 type AssistantContent = Array<TextContentPart | ToolCallContentPart>;
@@ -257,7 +269,7 @@ export function formatHistoryMessagesForModel(
             type: "tool-call",
             toolCallId,
             toolName,
-            args: tc.args ?? {},
+            input: tc.args ?? {},
           });
 
           // Add matching tool result (truncate aggressively for history)
@@ -312,7 +324,7 @@ export function formatHistoryMessagesForModel(
             type: "tool-result",
             toolCallId,
             toolName,
-            result: truncatedResult,
+            output: toToolResultOutput(truncatedResult),
           });
 
           toolIndex++;

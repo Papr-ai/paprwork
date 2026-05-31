@@ -796,7 +796,7 @@ export function useAgent() {
               // Extract provider-specific error messages
               let errorMsg = rawError;
 
-              // Pattern: Claude Internal Server Error (500-level errors from Anthropic)
+              // Pattern: Internal Server Error (500-level errors from any provider)
               if (
                 rawError.includes("Internal Server Error") ||
                 rawError.includes("api_error") ||
@@ -805,7 +805,7 @@ export function useAgent() {
                 rawError.includes("(529)") ||
                 rawError.includes("(500)")
               ) {
-                errorMsg = `🔄 Claude's servers encountered an internal error. This is a temporary issue on Anthropic's side, not your connection. Please try again in a moment, or switch to a different model.`;
+                errorMsg = `🔄 The AI provider encountered an internal server error. This is a temporary issue on their side, not your connection. Please try again in a moment, or switch to a different model.`;
               }
               // Pattern: "Your credit balance is too low to access the X API"
               else if (rawError.includes("credit balance is too low")) {
@@ -813,13 +813,19 @@ export function useAgent() {
                 const provider = providerMatch ? providerMatch[1] : "provider";
                 errorMsg = `Credit balance too low for ${provider}. Please add credits or switch to a different model.`;
               }
-              // Pattern: Overloaded errors (Anthropic server capacity issues)
+              // Pattern: Connection terminated mid-stream (undici/Node.js "terminated" error)
+              // This happens when any provider's server closes the HTTP connection
+              // unexpectedly (usage limit hit, server-side timeout, socket reset, etc.)
+              else if (rawError === "terminated" || rawError === "socket hang up" || rawError.includes("ECONNRESET")) {
+                errorMsg = `The server closed the connection mid-stream. This usually means a usage or rate limit was hit on your subscription. Please wait a moment and try again, or switch to a different model.`;
+              }
+              // Pattern: Overloaded errors (server capacity issues)
               else if (
                 rawError.includes("overloaded_error") ||
                 rawError.includes("Overloaded") ||
                 rawError.includes("temporarily overloaded")
               ) {
-                errorMsg = `🔄 Claude servers are temporarily overloaded. This is an issue from Anthropic, not your connection. Please wait a moment and try again, or switch to a different model (Sonnet/Haiku).`;
+                errorMsg = `🔄 The AI servers are temporarily overloaded. This is an issue from the provider, not your connection. Please wait a moment and try again, or switch to a different model.`;
               }
               // Pattern: Rate limit errors
               else if (

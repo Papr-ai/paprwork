@@ -1,5 +1,6 @@
 import Papr from "@papr/memory";
 import { getApiKey } from "../utils/keyResolver.js";
+import { getPaprUserId } from "../utils/paprUserId.js";
 import type { JobMemoryPolicy } from "./jobs/types.js";
 
 export interface MemoryWritebackInput {
@@ -10,7 +11,7 @@ export interface MemoryWritebackInput {
   runId: string;
   jobId: string;
   chatId?: string;
-  externalUserId?: string;
+  userId?: string;
 }
 
 function compactContent(input: MemoryWritebackInput): string {
@@ -37,9 +38,10 @@ export async function writeRunMemory(
   });
   
   try {
+    const userId = input.userId ?? getPaprUserId();
     await client.memory.add({
       content: compactContent(input),
-      external_user_id: input.externalUserId,
+      ...(userId ? { user_id: userId } : {}),
       metadata: {
         category: "learning",
         role: "assistant",

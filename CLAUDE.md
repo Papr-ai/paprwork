@@ -4392,13 +4392,14 @@ source ~/.zshrc  # or source ~/.bashrc
 
 ### Issue 65: Pi-AI Validation Loop - Critical Memory Exhaustion ✅ FIXED
 **Added:** 2026-04-22
+**Status:** ✅ FIXED (Implementation completed 2026-05-24)
 **Problem:** Users experiencing macOS system logout dialog when using chat via Papr AI proxy (pi-ai OAuth path) with tool calls. Massive validation errors flooding console causing memory exhaustion and system instability.
 **Symptoms:**
 - Text-only chat works fine ✅
 - Agent starts making tool calls → massive validation errors appear
 - Repeated Zod validation errors: `invalid_union`, `invalid_type`, `expected: string, received: undefined`
 - macOS shows emergency logout dialog ("You will be logged out in 59 seconds")
-- System memory exhaustion
+- System memory exhaustion (1.5GB+ heap)
 **Root Cause:** Infinite validation loop during pi-ai tool calling:
 1. Tool call validation fails (undefined values where strings expected)
 2. Error gets logged/serialized with `JSON.stringify`
@@ -4406,23 +4407,27 @@ source ~/.zshrc  # or source ~/.bashrc
 4. Failure triggers more validation attempts
 5. Loop consumes all system memory (1.5GB+ heap)
 6. macOS triggers emergency logout due to memory pressure
-**Solution:** Added three layers of defensive protection:
+**Solution:** Added three layers of defensive protection (circuit breakers):
 1. **Validation Error Circuit Breaker** (`PiCodexStreamWithToolLoop.ts`):
-   - Track validation error count per request
-   - Abort after 20 validation errors (prevents infinite loops)
-   - Reset counter on successful tool execution
+ - Track validation error count per request
+ - Abort after 20 validation errors (prevents infinite loops)
+ - Reset counter on successful tool execution
+ - Try-catch around stream creation to detect validation errors early
 2. **Memory Circuit Breaker** (`PiCodexStreamWithToolLoop.ts`):
-   - Check heap usage before each tool execution and context building
-   - Critical threshold: 1.5GB (prevents system-level exhaustion)
-   - Warning threshold: 1GB
+ - Check heap usage before each tool execution and context building
+ - Critical threshold: 1.5GB (prevents system-level exhaustion)
+ - Warning threshold: 1GB
+ - Clear error messages with recovery suggestions
 3. **Schema Conversion Circuit Breaker** (`piAiHelpers.ts`):
-   - Track schema conversions per request
-   - Abort after 100 conversions (normal: ~70-95 tools)
-   - Prevents recursive schema conversion loops
+ - Track schema conversions per request
+ - Abort after 100 conversions (normal: ~70-95 tools)
+ - Prevents recursive schema conversion loops
+ - Reset counter at start of each request
 4. **Safe JSON Serialization** (`PiCodexStreamWithToolLoop.ts`):
-   - Replaced `JSON.stringify` with `safeStringify` for tool results
-   - Handles circular references, undefined values, serialization failures
-**Fix Applied:** 2026-04-22
+ - Replaced `JSON.stringify` with `safeStringify` for tool results
+ - Handles circular references, undefined values, serialization failures
+ - Prevents crashes from malformed tool results
+**Fix Applied:** 2026-05-24
 **Files Changed:**
 - `src/gateway/services/providers/PiCodexStreamWithToolLoop.ts` - Added validation counter, memory checker, safe serialization
 - `src/gateway/services/providers/piAiHelpers.ts` - Added schema conversion counter, logging

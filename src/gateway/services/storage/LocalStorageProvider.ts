@@ -420,10 +420,10 @@ export class LocalStorageProvider implements IStorageProvider {
     console.log(`[LocalStorage] 🔀 Taking WITH SUMMARY path`);
 
     // Get recent messages AFTER summary
-    // When we have a summary, we only need the most recent messages (10-15)
+    // When we have a summary, we only need the most recent messages (~6)
     // because the summary covers all earlier context
     // Without summary, load more messages (50) for full context
-    const recentMessageLimit = chat.summary_long ? 15 : 50;
+    const recentMessageLimit = chat.summary_long ? 6 : 50;
 
     console.log(`[LocalStorage] 🔎 Summary exists - querying for ${recentMessageLimit} most recent messages...`);
 

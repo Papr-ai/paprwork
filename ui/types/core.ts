@@ -28,7 +28,7 @@ export interface CoreMessage {
 }
 
 // Agent types
-export type Provider = "anthropic" | "openai" | "google";
+export type Provider = "anthropic" | "openai" | "google" | "ollama" | "openai-codex";
 
 /**
  * Agent configuration (public interface)

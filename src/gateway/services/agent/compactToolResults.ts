@@ -9,7 +9,8 @@
  *
  * Works with both message formats:
  * - Pi-ai: { role: "toolResult", content: [{ type: "text", text }] }
- * - AI SDK: { role: "tool", content: [{ type: "tool-result", result }] }
+ * - AI SDK 6: { role: "tool", content: [{ type: "tool-result", output: { type, value } }] }
+ * - AI SDK 5 (legacy): { role: "tool", content: [{ type: "tool-result", result }] }
  *
  * IMPORTANT: This should be called on a CLONED messages array right before
  * sending to the model. Never mutate persisted history.
@@ -22,15 +23,12 @@ export interface CompactOpts {
   maxStaleLength?: number;
   /** Hard cap per fresh result (prevents pathological cases). Default: 50000 (~12.5K tokens) */
   maxFreshLength?: number;
-  /** Never truncate error results. Default: true */
-  preserveErrors?: boolean;
 }
 
 const DEFAULTS: Required<CompactOpts> = {
   keepLastBatches: 1,
   maxStaleLength: 2000,
   maxFreshLength: 50_000,
-  preserveErrors: true,
 };
 
 /**
@@ -66,40 +64,6 @@ function findToolBatchBoundaries(messages: any[]): number[] {
 }
 
 /**
- * Check if a tool result message represents an error.
- */
-function isErrorResult(msg: any): boolean {
-  // Pi-ai format
-  if (msg.isError) return true;
-
-  // Check content for error indicators
-  const content = msg.content;
-  if (Array.isArray(content)) {
-    return content.some((part: any) => {
-      if (part.type === "tool-result" && part.result) {
-        const r = part.result;
-        if (typeof r === "object" && r !== null) {
-          return r.error || r.success === false;
-        }
-      }
-      if (part.type === "text" && typeof part.text === "string") {
-        return (
-          part.text.startsWith("[Tool ") && part.text.includes("error")
-        );
-      }
-      return false;
-    });
-  }
-
-  // Direct result check (some formats)
-  if (msg.result && typeof msg.result === "object") {
-    return msg.result.error || msg.result.success === false;
-  }
-
-  return false;
-}
-
-/**
  * Truncate a string to maxLen, appending an elision marker.
  */
 function truncateStr(s: string, maxLen: number, label?: string): string {
@@ -109,6 +73,33 @@ function truncateStr(s: string, maxLen: number, label?: string): string {
     ? `\n\n[… ${elided.toLocaleString()} chars truncated. tool=${label}]`
     : `\n\n[… ${elided.toLocaleString()} chars truncated]`;
   return s.substring(0, maxLen) + suffix;
+}
+
+type ToolResultPart = {
+  type: "tool-result";
+  result?: unknown;
+  output?: { type: string; value: unknown };
+};
+
+function readToolResultString(part: ToolResultPart): string | undefined {
+  if (part.output?.type === "text" && typeof part.output.value === "string") {
+    return part.output.value;
+  }
+  if (part.output?.type === "json" && part.output.value !== undefined) {
+    return JSON.stringify(part.output.value);
+  }
+  if (typeof part.result === "string") {
+    return part.result;
+  }
+  if (part.result !== undefined && part.result !== null) {
+    return JSON.stringify(part.result);
+  }
+  return undefined;
+}
+
+function writeToolResultString(part: ToolResultPart, value: string): void {
+  part.output = { type: "text", value };
+  delete part.result;
 }
 
 /**
@@ -128,15 +119,17 @@ function truncateToolMessage(msg: any, maxLen: number): void {
     return;
   }
 
-  // AI SDK format: { role: "tool", content: [{ type: "tool-result", result }] }
+  // AI SDK format: { role: "tool", content: [{ type: "tool-result", output | result }] }
   if (msg.role === "tool" && Array.isArray(msg.content)) {
     for (const part of msg.content) {
       if (part.type === "tool-result") {
-        if (typeof part.result === "string") {
-          part.result = truncateStr(part.result, maxLen, label);
-        } else if (part.result && typeof part.result === "object") {
-          // Truncate string values inside structured results
-          truncateObjectStrings(part.result, maxLen, label);
+        const toolPart = part as ToolResultPart;
+        const current = readToolResultString(toolPart);
+        if (current !== undefined) {
+          writeToolResultString(toolPart, truncateStr(current, maxLen, label));
+        } else if (toolPart.result && typeof toolPart.result === "object") {
+          // Legacy structured results without output wrapper
+          truncateObjectStrings(toolPart.result, maxLen, label);
         }
       }
     }
@@ -199,8 +192,14 @@ function approxBytes(messages: any[]): number {
     if (Array.isArray(m.content)) {
       for (const p of m.content) {
         if (typeof p?.text === "string") n += p.text.length;
-        else if (typeof p?.result === "string") n += p.result.length;
-        else if (p?.result) n += JSON.stringify(p.result).length;
+        else {
+          const toolPart = p as ToolResultPart | undefined;
+          const resultStr =
+            toolPart?.type === "tool-result"
+              ? readToolResultString(toolPart)
+              : undefined;
+          if (resultStr !== undefined) n += resultStr.length;
+        }
       }
     }
   }
@@ -266,8 +265,9 @@ export function compactStaleToolResults(
     const msg = messages[i];
     if (!isToolResultMessage(msg)) continue;
 
-    // Skip error results if preserveErrors is on
-    if (o.preserveErrors && isErrorResult(msg)) continue;
+    // Note: errors in the FRESH batch are preserved naturally (fresh cap is generous).
+    // Stale errors get the same maxStaleLength treatment as any stale result —
+    // they're noise once the model has moved past them.
 
     if (i < freshCutoffIdx) {
       // Stale: aggressive truncation

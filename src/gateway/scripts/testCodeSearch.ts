@@ -69,7 +69,7 @@ async function testSearch(client: Papr, query: TestQuery): Promise<{
   try {
     const response = await client.memory.search({
       query: query.query,
-      external_user_id: 'paprwork_system',
+      user_id: 'paprwork_system',
       max_memories: 10,
       enable_agentic_graph: true,
       rank_results: true

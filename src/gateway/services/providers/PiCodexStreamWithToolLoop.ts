@@ -13,6 +13,7 @@ import {
   sanitizeToolOutput,
 } from "../../../core/tools/index.js";
 import { compactStaleToolResults, estimateMessagesTokens } from "../agent/compactToolResults.js";
+import { resetSchemaConversionCounter } from "./piAiHelpers.js";
 
 /**
  * Truncate tool call ID to 64 characters (OpenAI's maximum length requirement).
@@ -190,7 +191,7 @@ function appendToolTurnToContext(
     let text =
       typeof tr.result === "string"
         ? tr.result
-        : JSON.stringify(tr.result ?? "");
+        : safeStringify(tr.result ?? "");
 
     // Warn if result is empty
     if (text === "" || text === '""' || text === "{}") {
@@ -223,6 +224,26 @@ function appendToolTurnToContext(
  * Create a stream that runs multiple pi-ai turns when the model returns tool calls
  * Now includes context pressure monitoring and auto-summarization
  */
+/**
+ * Safe JSON serialization that handles circular references and errors
+ */
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value, (_, val) => {
+      // Handle circular references
+      if (val && typeof val === 'object') {
+        if (val[Symbol.for('__visited')]) {
+          return '[Circular]';
+        }
+        val[Symbol.for('__visited')] = true;
+      }
+      return val;
+    }, 2);
+  } catch (err) {
+    return `[Serialization failed: ${err instanceof Error ? err.message : String(err)}]`;
+  }
+}
+
 export async function* createPiCodexStreamWithToolLoop(
   streamSimple: (
     model: unknown,
@@ -250,6 +271,9 @@ export async function* createPiCodexStreamWithToolLoop(
   onContextPressure?: () => Promise<void>, // Callback to trigger summarization
   modelId?: string, // Add modelId to determine context threshold
 ): AsyncGenerator<OurChunk> {
+  // Reset circuit breakers at start of request
+  resetSchemaConversionCounter();
+  
   const context = {
     ...initialContext,
     messages: [...initialContext.messages],
@@ -258,6 +282,14 @@ export async function* createPiCodexStreamWithToolLoop(
   let step = 0;
   let totalToolCalls = 0; // Track total tool calls across all steps
   let cumulativeTokens = 0; // Track token usage for adaptive truncation
+  
+  // CIRCUIT BREAKER 1: Validation error tracking (Issue 65)
+  let validationErrorCount = 0;
+  const MAX_VALIDATION_ERRORS = 20; // Abort after 20 validation errors
+  
+  // CIRCUIT BREAKER 2: Memory tracking (Issue 65)
+  const MEMORY_CRITICAL_THRESHOLD = 1.5 * 1024 * 1024 * 1024; // 1.5GB
+  const MEMORY_WARNING_THRESHOLD = 1.0 * 1024 * 1024 * 1024; // 1GB
   
   // Detect repetitive tool calls (possible infinite loop)
   const recentToolCalls: Array<{ name: string; args: string }> = [];
@@ -315,6 +347,45 @@ export async function* createPiCodexStreamWithToolLoop(
   );
 
   while (step < maxSteps) {
+    // CIRCUIT BREAKER 1: Check validation error count (Issue 65)
+    if (validationErrorCount >= MAX_VALIDATION_ERRORS) {
+      console.error(
+        `[PiCodexToolLoop] 🚨 CRITICAL: ${validationErrorCount} validation errors detected. ` +
+        `Aborting to prevent infinite validation loop.`
+      );
+      yield {
+        type: "error",
+        error: {
+          type: "validation_loop",
+          message: `Too many validation errors (${validationErrorCount}). This usually indicates a schema mismatch or malformed data. Please refresh and try again.`,
+        },
+      };
+      break;
+    }
+    
+    // CIRCUIT BREAKER 2: Check memory usage (Issue 65)
+    const heapUsed = process.memoryUsage().heapUsed;
+    if (heapUsed > MEMORY_CRITICAL_THRESHOLD) {
+      console.error(
+        `[PiCodexToolLoop] 🚨 CRITICAL: Memory exhaustion detected! ` +
+        `${Math.round(heapUsed / 1024 / 1024)}MB > ${Math.round(MEMORY_CRITICAL_THRESHOLD / 1024 / 1024)}MB. ` +
+        `Aborting to prevent system crash.`
+      );
+      yield {
+        type: "error",
+        error: {
+          type: "memory_exhaustion",
+          message: "Memory limit exceeded. Please refresh and try a simpler query.",
+        },
+      };
+      break;
+    } else if (heapUsed > MEMORY_WARNING_THRESHOLD) {
+      console.warn(
+        `[PiCodexToolLoop] ⚠️ High memory usage: ${Math.round(heapUsed / 1024 / 1024)}MB. ` +
+        `Approaching critical threshold.`
+      );
+    }
+    
     // Estimate the size we'd ACTUALLY send (post-compaction) for the
     // threshold check. Cheap — just walks the array measuring strings.
     // Falls back to cumulativeTokens (last known prompt size) if no batches yet.
@@ -360,7 +431,40 @@ export async function* createPiCodexStreamWithToolLoop(
     // Fresh batch (most recent) stays full; older batches get truncated.
     compactStaleToolResults(context.messages);
 
-    const piStream = streamSimple(piModel, context, streamOptions);
+    let piStream: AsyncIterable<AssistantMessageEvent>;
+    try {
+      piStream = streamSimple(piModel, context, streamOptions);
+    } catch (err) {
+      // Check if this is a validation error
+      if (err && typeof err === 'object' && 'errors' in err) {
+        validationErrorCount++;
+        console.error(
+          `[PiCodexToolLoop] ❌ Validation error #${validationErrorCount}: ${safeStringify(err)}`
+        );
+        
+        // Check if we should abort
+        if (validationErrorCount >= MAX_VALIDATION_ERRORS) {
+          console.error(
+            `[PiCodexToolLoop] 🚨 CRITICAL: Reached ${MAX_VALIDATION_ERRORS} validation errors. Aborting.`
+          );
+          yield {
+            type: "error",
+            error: {
+              type: "validation_loop",
+              message: `Too many validation errors. This usually indicates a schema mismatch. Please refresh and try again.`,
+            },
+          };
+          break;
+        }
+        
+        // Try to continue with next step
+        continue;
+      }
+      
+      // Non-validation error, rethrow
+      throw err;
+    }
+    
     const toolCallsThisTurn: ToolCallAccum[] = [];
     let lastFinishReason: string | null = null;
     let finalMessage: {
