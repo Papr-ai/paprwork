@@ -29,6 +29,25 @@ export interface BrowserNetworkLog {
 
 let browserSession: BrowserSessionState | null = null;
 
+/** Cap wait timeouts — LLM args skip Zod parse; timeout:0 hangs forever in Playwright */
+const DEFAULT_WAIT_MS = 30_000;
+const MAX_WAIT_MS = 30_000;
+const CHROMIUM_LAUNCH_MS = 20_000;
+
+function resolveWaitTimeoutMs(raw: number | undefined): number {
+  if (raw === undefined || Number.isNaN(raw) || raw <= 0) {
+    return DEFAULT_WAIT_MS;
+  }
+  return Math.min(raw, MAX_WAIT_MS);
+}
+
+function resolveFixedDelaySeconds(raw: number | undefined): number {
+  if (raw === undefined || Number.isNaN(raw) || raw <= 0) {
+    return 1;
+  }
+  return Math.min(raw, 30);
+}
+
 async function requestBrowserPermission(action: string): Promise<void> {
   try {
     const { requestKeyPermission } =
@@ -60,7 +79,20 @@ async function getBrowserSession(): Promise<BrowserSessionState> {
   }
 
   const module = await import("playwright");
-  const browser = await module.chromium.launch({ headless: true });
+  const browser = await Promise.race([
+    module.chromium.launch({ headless: true }),
+    new Promise<never>((_, reject) => {
+      setTimeout(
+        () =>
+          reject(
+            new Error(
+              `Chromium launch timed out after ${CHROMIUM_LAUNCH_MS / 1000}s. Run: npx playwright install chromium`,
+            ),
+          ),
+        CHROMIUM_LAUNCH_MS,
+      );
+    }),
+  ]);
   const context = await browser.newContext();
   const page = await context.newPage();
   const consoleLogs: BrowserConsoleLog[] = [];
@@ -407,52 +439,116 @@ export const browserEvaluateScriptTool = createTool({
 export const browserWaitForTool = createTool({
   id: "browser_wait_for",
   description:
-    "Wait for text/element to appear/disappear or fixed time delay. " +
-    "Essential for SPAs that load content asynchronously.",
+    "Wait in the separate headless Playwright browser (NOT mini-app webview preview). " +
+    "After webview_launch_app use webview_wait_for instead. " +
+    "For fixed delays prefer { time: N }. Max wait 30s.",
   inputSchema: waitForSchema,
   execute: async (input) => {
-    const args =
+    const raw =
       (input as { context?: z.infer<typeof waitForSchema> }).context ?? input;
+    const parsed = waitForSchema.safeParse(raw);
+    const args = parsed.success ? parsed.data : waitForSchema.parse({});
     await requestBrowserPermission("wait_for");
     const session = await getBrowserSession();
+    const timeoutMs = resolveWaitTimeoutMs(args.timeout);
+    const pageUrl = session.page.url();
 
-    if (args.time) {
-      await new Promise((resolve) => setTimeout(resolve, args.time! * 1000));
-      return { success: true, data: { waited: args.time, unit: "seconds" } };
+    const runWait = async (): Promise<{
+      success: boolean;
+      data?: Record<string, unknown>;
+      error?: string;
+    }> => {
+      if (args.time !== undefined) {
+        const seconds = resolveFixedDelaySeconds(args.time);
+        await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+        return { success: true, data: { waited: seconds, unit: "seconds" } };
+      }
+
+      const isBlankPage =
+        !pageUrl ||
+        pageUrl === "about:blank" ||
+        pageUrl.startsWith("about:");
+      if (isBlankPage && (args.text || args.textGone || args.selector)) {
+        return {
+          success: false,
+          error:
+            "browser_wait_for uses a separate headless browser (currently about:blank), not the mini-app preview. " +
+            "After webview_launch_app, use webview_wait_for or webview_snapshot. " +
+            "For external sites, call browser_navigate first.",
+        };
+      }
+
+      if (args.text) {
+        await session.page.waitForFunction(
+          (text: string) => {
+            // @ts-expect-error - runs in browser context
+            return document.body?.innerText?.includes(text) ?? false;
+          },
+          args.text,
+          { timeout: timeoutMs },
+        );
+        return { success: true, data: { found: args.text, url: pageUrl } };
+      }
+
+      if (args.textGone) {
+        await session.page.waitForFunction(
+          (text: string) => {
+            // @ts-expect-error - runs in browser context
+            return !document.body?.innerText?.includes(text);
+          },
+          args.textGone,
+          { timeout: timeoutMs },
+        );
+        return { success: true, data: { gone: args.textGone, url: pageUrl } };
+      }
+
+      if (args.selector) {
+        await session.page.waitForSelector(args.selector, {
+          timeout: timeoutMs,
+        });
+        return {
+          success: true,
+          data: { found: args.selector, url: pageUrl },
+        };
+      }
+
+      return {
+        success: false,
+        error: "Must specify text, textGone, selector, or time",
+      };
+    };
+
+    try {
+      const result = await Promise.race([
+        runWait(),
+        new Promise<never>((_, reject) => {
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `browser_wait_for exceeded ${timeoutMs + 2000}ms hard limit`,
+                ),
+              ),
+            timeoutMs + 2000,
+          );
+        }),
+      ]);
+      return result;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : String(error);
+      const timedOut =
+        message.includes("Timeout") ||
+        message.includes("exceeded") ||
+        message.includes("timed out");
+      return {
+        success: false,
+        data: { url: pageUrl, timeoutMs, timedOut },
+        error: timedOut
+          ? `${message}. Use webview_wait_for after webview_launch_app, or browser_navigate before waiting on external pages.`
+          : message,
+      };
     }
-
-    if (args.text) {
-      await session.page.waitForFunction(
-        (text: string) => {
-          // @ts-expect-error - This function runs in browser context
-          return document.body.innerText.includes(text);
-        },
-        args.text,
-        { timeout: args.timeout },
-      );
-      return { success: true, data: { found: args.text } };
-    }
-
-    if (args.textGone) {
-      await session.page.waitForFunction(
-        (text: string) => {
-          // @ts-expect-error - This function runs in browser context
-          return !document.body.innerText.includes(text);
-        },
-        args.textGone,
-        { timeout: args.timeout },
-      );
-      return { success: true, data: { gone: args.textGone } };
-    }
-
-    if (args.selector) {
-      await session.page.waitForSelector(args.selector, {
-        timeout: args.timeout,
-      });
-      return { success: true, data: { found: args.selector } };
-    }
-
-    throw new Error("Must specify text, textGone, selector, or time");
   },
 });
 

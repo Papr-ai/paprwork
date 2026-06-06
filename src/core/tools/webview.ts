@@ -31,6 +31,22 @@ const closeSchema = z.object({
   webviewId: z.string().optional(),
 });
 
+const webviewWaitForSchema = z.object({
+  webviewId: z.string().optional(),
+  text: z.string().optional().describe("Wait for this text in the preview"),
+  textGone: z.string().optional().describe("Wait until this text disappears"),
+  selector: z.string().optional().describe("Wait for CSS selector"),
+  time: z
+    .number()
+    .optional()
+    .describe("Fixed delay in seconds (e.g., 2 for SPA render)"),
+  timeout: z
+    .number()
+    .optional()
+    .default(30000)
+    .describe("Max wait time in ms (capped at 30s)"),
+});
+
 function sanitizeWebviewResult(data: unknown): unknown {
   const apiKeys = getApiKeysForSanitization();
   const sanitized = sanitizeToolOutput(data, apiKeys);
@@ -58,11 +74,41 @@ export const webviewLaunchAppTool = createTool({
   execute: async (input) => {
     const args =
       (input as { context?: z.infer<typeof launchSchema> }).context ?? input;
-    const data = await request("launch", {
+    const data = (await request("launch", {
       appId: args.appId,
       visible: args.visible ?? false,
       width: args.width ?? 1280,
       height: args.height ?? 720,
+    })) as Record<string, unknown>;
+    return {
+      success: true,
+      data,
+      _testingReminder:
+        "Use webview_wait_for ({ time: 2 }) or webview_snapshot to verify the preview. " +
+        "Do NOT use browser_wait_for — it runs in a separate headless browser, not this preview.",
+    };
+  },
+});
+
+export const webviewWaitForTool = createTool({
+  id: "webview_wait_for",
+  description:
+    "Wait in the mini-app preview webview (use after webview_launch_app). " +
+    "Supports fixed delay ({ time: 2 }), text, selector, or textGone. Max 30s.",
+  inputSchema: webviewWaitForSchema,
+  execute: async (input) => {
+    const raw =
+      (input as { context?: z.infer<typeof webviewWaitForSchema> }).context ??
+      input;
+    const parsed = webviewWaitForSchema.safeParse(raw);
+    const args = parsed.success ? parsed.data : webviewWaitForSchema.parse({});
+    const data = await request("wait_for", {
+      webviewId: args.webviewId,
+      text: args.text,
+      textGone: args.textGone,
+      selector: args.selector,
+      time: args.time,
+      timeout: args.timeout,
     });
     return { success: true, data };
   },
@@ -155,6 +201,7 @@ export const webviewCloseTool = createTool({
 
 export const webviewTools = [
   webviewLaunchAppTool,
+  webviewWaitForTool,
   webviewSnapshotTool,
   webviewExecuteTool,
   webviewGetConsoleTool,

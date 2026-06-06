@@ -45,7 +45,8 @@ export interface WebviewTestRequest {
     | "get_console"
     | "get_network"
     | "list"
-    | "close";
+    | "close"
+    | "wait_for";
   payload?: Record<string, unknown>;
 }
 

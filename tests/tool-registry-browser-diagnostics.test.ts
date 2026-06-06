@@ -8,6 +8,7 @@ describe("Browser diagnostics tool registry", () => {
     expect(ids).toContain("browser_network_logs");
     expect(ids).toContain("browser_test_script");
     expect(ids).toContain("webview_launch_app");
+    expect(ids).toContain("webview_wait_for");
     expect(ids).toContain("webview_snapshot");
     expect(ids).toContain("webview_execute");
     expect(ids).toContain("webview_get_console");

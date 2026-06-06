@@ -53,7 +53,7 @@ describe("Browser Tools Phase 1", () => {
   describe("browserWaitForTool", () => {
     it("should have correct id and schema", () => {
       expect(browserWaitForTool.id).toBe("browser_wait_for");
-      expect(browserWaitForTool.description).toContain("SPAs");
+      expect(browserWaitForTool.description).toContain("webview_wait_for");
       expect(browserWaitForTool.inputSchema).toBeDefined();
     });
 

@@ -1,0 +1,429 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   App Workflow — n8n-style canvas
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.wf-canvas-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background-color: var(--background-secondary);
+}
+
+.wf-canvas-viewport {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 12px 12px 0 0;
+}
+
+.wf-canvas-content {
+  position: relative;
+  min-width: 100%;
+  min-height: 100%;
+  background-image: radial-gradient(
+    circle,
+    var(--border-color) 1px,
+    transparent 1px
+  );
+  background-size: 20px 20px;
+}
+
+.wf-edges {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.wf-edge {
+  fill: none;
+  stroke-width: 2;
+}
+
+.wf-edge--dep {
+  stroke: #3b82f6;
+  stroke-opacity: 0.55;
+}
+
+.wf-edge--data {
+  stroke: #8b5cf6;
+  stroke-opacity: 0.7;
+  stroke-dasharray: 6 4;
+}
+
+.wf-edge--runtime {
+  stroke: #6b7280;
+  stroke-opacity: 0.4;
+  stroke-dasharray: 4 4;
+}
+
+.wf-edge--failed {
+  stroke: #ef4444;
+  stroke-opacity: 0.65;
+}
+
+.wf-arrow-default {
+  fill: #3b82f6;
+}
+
+.wf-arrow-data {
+  fill: #8b5cf6;
+}
+
+.wf-arrow-failed {
+  fill: #ef4444;
+}
+
+.wf-nodes {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+}
+
+/* ── Nodes ───────────────────────────────────────────────────────────────── */
+
+.wf-node {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: 10px;
+  background: var(--background-color);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.wf-node--job {
+  cursor: pointer;
+  border-left: 4px solid var(--wf-type-color, #6b7280);
+  display: flex;
+  align-items: stretch;
+}
+
+.wf-node--job:hover {
+  border-color: var(--primary-color);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+}
+
+.wf-node--selected {
+  border-color: var(--primary-color) !important;
+  box-shadow: 0 0 0 2px rgba(0, 113, 227, 0.15), 0 4px 16px rgba(0, 0, 0, 0.1) !important;
+}
+
+.wf-node--app {
+  border: 2px solid var(--primary-color);
+  background: linear-gradient(
+    135deg,
+    rgba(0, 113, 227, 0.04) 0%,
+    var(--background-color) 60%
+  );
+  cursor: default;
+}
+
+.wf-node-port {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--background-color);
+  border: 2px solid var(--border-color);
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 3;
+}
+
+.wf-node-port--in {
+  left: -6px;
+}
+
+.wf-node-port--out {
+  right: -6px;
+  border-color: var(--wf-type-color, #6b7280);
+  background: var(--wf-type-color, #6b7280);
+}
+
+.wf-node--app .wf-node-port--in {
+  border-color: var(--primary-color);
+  background: var(--primary-color);
+}
+
+.wf-node-body {
+  flex: 1;
+  padding: 12px 14px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+}
+
+.wf-node-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wf-node-type-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  background: var(--background-secondary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.wf-status--running {
+  color: #10b981;
+  border-color: rgba(16, 185, 129, 0.35);
+  background: rgba(16, 185, 129, 0.08);
+  animation: wf-pulse 2s ease infinite;
+}
+
+.wf-status--waiting {
+  color: #f59e0b;
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.wf-status--failed {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.wf-status--completed {
+  color: #3b82f6;
+  border-color: rgba(59, 130, 246, 0.35);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.wf-status--cancelled {
+  color: #f59e0b;
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.wf-status--pending {
+  color: var(--text-secondary);
+}
+
+@keyframes wf-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.wf-node-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wf-node-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 16px;
+}
+
+.wf-node-type {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-secondary);
+}
+
+.wf-node-trigger {
+  font-size: 10px;
+  color: var(--primary-color);
+  background: rgba(0, 113, 227, 0.08);
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 110px;
+}
+
+.wf-node-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  align-self: center;
+  margin-right: 8px;
+  background: var(--background-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.wf-node-action:hover {
+  background: var(--background-tertiary);
+  color: var(--text-primary);
+  border-color: var(--primary-color);
+}
+
+/* ── App node ────────────────────────────────────────────────────────────── */
+
+.wf-app-body {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.wf-app-icon-wrap {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: rgba(0, 113, 227, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary-color);
+  flex-shrink: 0;
+}
+
+.wf-app-icon-svg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wf-app-icon-svg svg {
+  width: 20px;
+  height: 20px;
+}
+
+.wf-app-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wf-app-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--primary-color);
+}
+
+.wf-app-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wf-app-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* ── Legend ──────────────────────────────────────────────────────────────── */
+
+.wf-legend {
+  display: flex;
+  gap: 16px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border-color);
+  background: var(--background-color);
+  border-radius: 0 0 12px 12px;
+  flex-shrink: 0;
+}
+
+.wf-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.wf-legend-line {
+  width: 20px;
+  height: 2px;
+  border-radius: 1px;
+}
+
+.wf-legend-line--dep {
+  background: #3b82f6;
+}
+
+.wf-legend-line--data {
+  background: #8b5cf6;
+  background-image: repeating-linear-gradient(
+    90deg,
+    #8b5cf6 0,
+    #8b5cf6 4px,
+    transparent 4px,
+    transparent 7px
+  );
+}
+
+.wf-legend-line--runtime {
+  background: #6b7280;
+  opacity: 0.5;
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────────── */
+
+.wf-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 48px 24px;
+  background: var(--background-secondary);
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+}
+
+.wf-empty-icon {
+  color: var(--text-secondary);
+  opacity: 0.5;
+  margin-bottom: 8px;
+}
+
+.wf-empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.wf-empty-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+  text-align: center;
+  max-width: 320px;
+  line-height: 1.5;
+}

@@ -47,10 +47,23 @@ interface ContextBreakdown {
   };
 }
 
-interface ContextInfo {
+export interface ContextInfo {
   model: string;
   totalTokens: number;
   breakdown: ContextBreakdown;
+}
+
+export function isContextInfo(data: unknown): data is ContextInfo {
+  if (typeof data !== "object" || data === null) {
+    return false;
+  }
+  const record = data as Record<string, unknown>;
+  return (
+    typeof record.model === "string" &&
+    typeof record.totalTokens === "number" &&
+    typeof record.breakdown === "object" &&
+    record.breakdown !== null
+  );
 }
 
 interface ContextInspectorModalProps {

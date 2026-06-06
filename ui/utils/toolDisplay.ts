@@ -377,6 +377,10 @@ export const TOOL_DESCRIPTIONS: Record<
     running: "Launching app preview",
     complete: "App preview ready",
   },
+  webview_wait_for: {
+    running: "Waiting on app preview",
+    complete: "App preview ready",
+  },
   webview_snapshot: {
     running: "Reading app preview",
     complete: "App preview read",

@@ -74,6 +74,8 @@ export interface JobGraphEdge {
   from: string;
   to: string;
   onStatus: "completed" | "failed";
+  isRuntimeCall?: boolean;
+  autoTrigger?: boolean;
 }
 
 export interface JobGraph {

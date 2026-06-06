@@ -637,8 +637,10 @@ Use CLI for everything else. This keeps the tool simple and reliable.`;
         details:
           "navigate/snapshot/click/type/tabs/test_script/wait_for/fill_form/scroll — " +
           "browser_test_script for data extraction (write JS to run in page via page.evaluate), " +
-          "browser_wait_for for SPAs, browser_fill_form for multi-field forms, " +
-          "browser_scroll to bring elements into view. Use ONLY for visual/interactive browsing, NOT for simple searches (use bash curl instead)",
+          "browser_wait_for for external SPAs (after browser_navigate). " +
+          "NEVER browser_wait_for after webview_launch_app — use webview_wait_for or webview_snapshot for mini-app previews. " +
+          "browser_fill_form for multi-field forms, browser_scroll to bring elements into view. " +
+          "Use ONLY for visual/interactive browsing, NOT for simple searches (use bash curl instead)",
       },
       {
         area: "Apps + Jobs",

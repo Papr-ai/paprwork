@@ -22,7 +22,11 @@ import {
 import type { AIModel } from "../../constants/models";
 import { gateway } from "../../src/lib/gateway";
 import { JobPermissionBanner } from "./JobPermissionBanner";
-import { ContextInspectorModal } from "./ContextInspectorModal";
+import {
+  ContextInspectorModal,
+  isContextInfo,
+  type ContextInfo,
+} from "./ContextInspectorModal";
 import {
   artifactTypeLabel,
   type Artifact,
@@ -148,7 +152,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     CHAT_MODELS.find((m) => m.id === "claude-sonnet-4-6") || CHAT_MODELS[0];
 
   const [selectedModel, setSelectedModel] = useState<AIModel>(fallbackModel);
-  const [contextInfo, setContextInfo] = useState<unknown | null>(null);
+  const [contextInfo, setContextInfo] = useState<ContextInfo | null>(null);
   const [gatewayStatus, setGatewayStatus] = useState<{ status: string; message?: string } | null>(null);
   const [isFileDragOver, setIsFileDragOver] = useState(false);
   const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
@@ -313,7 +317,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
               chatId,
               model: selectedModel.id,
             });
-            setContextInfo(response.data);
+            if (isContextInfo(response.data)) {
+              setContextInfo(response.data);
+            }
           } catch (err) {
             console.error("[ChatContainer] Context inspection error:", err);
             alert("Failed to load context information. Check console for details.");
@@ -706,12 +712,12 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         onOpenSettings={handleOpenSettings}
       />
 
-      {contextInfo && (
+      {contextInfo !== null ? (
         <ContextInspectorModal
-          contextInfo={contextInfo as any}
+          contextInfo={contextInfo}
           onClose={() => setContextInfo(null)}
         />
-      )}
+      ) : null}
     </div>
   );
 };

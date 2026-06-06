@@ -352,6 +352,83 @@ async function handleWebviewTestRequest(request) {
     return { success: true, data: { webviewId: id, logs } };
   }
 
+  if (action === "wait_for") {
+    const rawTimeout = Number(payload.timeout);
+    const timeoutMs =
+      Number.isFinite(rawTimeout) && rawTimeout > 0
+        ? Math.min(rawTimeout, 30000)
+        : 30000;
+    const pollMs = 250;
+    const deadline = Date.now() + timeoutMs;
+
+    if (payload.time !== undefined && payload.time !== null) {
+      const seconds = Math.min(
+        Math.max(Number(payload.time) || 1, 0.1),
+        30,
+      );
+      await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+      return {
+        success: true,
+        data: { webviewId: id, waited: seconds, unit: "seconds" },
+      };
+    }
+
+    const hasText =
+      typeof payload.text === "string" && payload.text.length > 0;
+    const hasTextGone =
+      typeof payload.textGone === "string" && payload.textGone.length > 0;
+    const hasSelector =
+      typeof payload.selector === "string" && payload.selector.length > 0;
+
+    if (!hasText && !hasTextGone && !hasSelector) {
+      return {
+        success: false,
+        error: "wait_for requires text, textGone, selector, or time",
+      };
+    }
+
+    while (Date.now() < deadline) {
+      if (hasText) {
+        const found = await win.webContents.executeJavaScript(
+          `(function(){var t=${JSON.stringify(payload.text)};return !!(document.body&&document.body.innerText&&document.body.innerText.includes(t));})()`,
+        );
+        if (found) {
+          return {
+            success: true,
+            data: { webviewId: id, found: payload.text },
+          };
+        }
+      } else if (hasTextGone) {
+        const gone = await win.webContents.executeJavaScript(
+          `(function(){var t=${JSON.stringify(payload.textGone)};return !(document.body&&document.body.innerText&&document.body.innerText.includes(t));})()`,
+        );
+        if (gone) {
+          return {
+            success: true,
+            data: { webviewId: id, gone: payload.textGone },
+          };
+        }
+      } else if (hasSelector) {
+        const found = await win.webContents.executeJavaScript(
+          `(function(){return !!document.querySelector(${JSON.stringify(payload.selector)});})()`,
+        );
+        if (found) {
+          return {
+            success: true,
+            data: { webviewId: id, found: payload.selector },
+          };
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+
+    return {
+      success: false,
+      error: `Preview wait timed out after ${timeoutMs}ms`,
+      data: { webviewId: id, url: win.webContents.getURL() },
+    };
+  }
+
   return { success: false, error: `Unknown webview action: ${action}` };
 }
 
