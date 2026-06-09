@@ -1,6 +1,8 @@
 import { resolveTelemetryBaseUrl } from "../../core/telemetry/telemetryEnv.js";
 import { sanitizeTelemetryProperties } from "../../core/telemetry/sanitizeTelemetryProperties.js";
 import { isTelemetrySendingEnabled } from "../../core/telemetry/telemetryEnv.js";
+import { mergeTelemetryEnvelope } from "../../core/telemetry/telemetryProductContext.js";
+import { getPaprUserId } from "../utils/paprUserId.js";
 
 const TELEMETRY_PATH = "/v1/telemetry/events";
 const REQUEST_TIMEOUT_MS = 5000;
@@ -44,6 +46,7 @@ export async function forwardRendererTelemetry(
   const body = rawBody as {
     events?: unknown;
     anonymous_id?: unknown;
+    papr_account_id?: unknown;
     papr_user_id?: unknown;
   };
 
@@ -51,11 +54,10 @@ export async function forwardRendererTelemetry(
     return { status: 403, error: "anonymous_id mismatch" };
   }
 
-  const rendererPaprUserId =
-    typeof body.papr_user_id === "string" ? body.papr_user_id.trim() : "";
-  const effectivePaprUserId =
-    rendererPaprUserId ||
-    (process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID?.trim() ?? "");
+  const rendererAccountId =
+    (typeof body.papr_account_id === "string" ? body.papr_account_id.trim() : "") ||
+    (typeof body.papr_user_id === "string" ? body.papr_user_id.trim() : "");
+  const effectivePaprUserId = rendererAccountId || getPaprUserId() || "";
 
   if (!Array.isArray(body.events) || body.events.length === 0) {
     return { status: 400, error: "events required" };
@@ -102,15 +104,15 @@ export async function forwardRendererTelemetry(
         ? (ev.properties as Record<string, unknown>)
         : {};
 
-    const merged: Record<string, unknown> = {
-      client: "paprwork-renderer",
-      app_version: appVersion(),
-      platform: process.platform,
-      ...propsIn,
-    };
-    if (effectivePaprUserId) {
-      merged.papr_user_id = effectivePaprUserId;
-    }
+    const merged = mergeTelemetryEnvelope(
+      {
+        client: "paprwork-renderer",
+        app_version: appVersion(),
+        platform: process.platform,
+        ...propsIn,
+      },
+      { paprAccountId: effectivePaprUserId },
+    );
     const safeProps = sanitizeTelemetryProperties(merged);
 
     const ts =

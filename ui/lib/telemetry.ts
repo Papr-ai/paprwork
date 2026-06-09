@@ -49,10 +49,7 @@ export async function initializeAmplitudeBrowser(
     return;
   }
   if (isInitialized) {
-    if (paprUserId && paprUserId !== paprUserIdCached) {
-      paprUserIdCached = paprUserId;
-      console.log("[Telemetry] Updated Papr user ID");
-    }
+    setTelemetryPaprUserId(paprUserId ?? null);
     return;
   }
   if (initPromise) {
@@ -96,12 +93,12 @@ async function postEvents(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         anonymous_id: installId,
-        papr_user_id: paprUserIdCached ?? undefined,
+        papr_account_id: paprUserIdCached ?? undefined,
         events: events.map((e) => ({
           event_name: e.event_name,
           properties: {
             ...(e.properties ?? {}),
-            ...(paprUserIdCached ? { papr_user_id: paprUserIdCached } : {}),
+            ...(paprUserIdCached ? { papr_account_id: paprUserIdCached } : {}),
           },
           user_id: userId,
           timestamp: e.timestamp ?? Date.now(),
@@ -120,6 +117,22 @@ async function postEvents(
       console.warn("[Telemetry] Renderer POST error:", err);
     }
   }
+}
+
+/**
+ * Update Papr user ID after login/logout without re-initializing telemetry.
+ */
+export function setTelemetryPaprUserId(paprUserId: string | null): void {
+  const next = paprUserId?.trim() || null;
+  if (next === paprUserIdCached) {
+    return;
+  }
+  paprUserIdCached = next;
+  console.log(
+    next
+      ? `[Telemetry] Identified user: ${next.substring(0, 8)}…`
+      : "[Telemetry] Reverted to anonymous tracking",
+  );
 }
 
 /**
@@ -188,5 +201,6 @@ export async function flushEvents(): Promise<void> {
 export async function shutdownAmplitude(): Promise<void> {
   isInitialized = false;
   installId = null;
+  paprUserIdCached = null;
   httpBase = "";
 }

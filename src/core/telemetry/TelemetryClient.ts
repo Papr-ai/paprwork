@@ -1,4 +1,5 @@
 import { sanitizeTelemetryProperties } from "./sanitizeTelemetryProperties.js";
+import { mergeTelemetryEnvelope } from "./telemetryProductContext.js";
 import {
   isTelemetrySendingEnabled,
   resolveTelemetryBaseUrl,
@@ -11,8 +12,10 @@ export interface TelemetryClientDeps {
   /** Resolved preference: user setting and/or env must be applied by caller. */
   getEffectiveEnabled: () => boolean;
   getAnonymousInstallId: () => string;
-  /** Papr user ID for identified analytics (commercial builds). */
+  /** Papr Parse objectId for identified analytics when user is logged in. */
   getPaprUserId?: () => string;
+  /** Packaged app install (false for dev / npm run dev). */
+  getIsPackaged?: () => boolean;
   appVersion: string;
   fetchImpl?: typeof fetch;
 }
@@ -83,17 +86,18 @@ export class TelemetryClient {
 
     const paprUserId = this.deps.getPaprUserId?.() ?? "";
 
-    const merged: Record<string, unknown> = {
-      client: "paprwork",
-      app_version: this.deps.appVersion,
-      platform: process.platform,
-    };
-    if (paprUserId) {
-      merged.papr_user_id = paprUserId;
-    }
-    if (properties) {
-      Object.assign(merged, properties);
-    }
+    const merged = mergeTelemetryEnvelope(
+      {
+        client: "paprwork",
+        app_version: this.deps.appVersion,
+        platform: process.platform,
+        ...(properties ?? {}),
+      },
+      {
+        isPackaged: this.deps.getIsPackaged?.(),
+        paprAccountId: paprUserId,
+      },
+    );
     const safeProps = sanitizeTelemetryProperties(merged);
 
     const userId = paprUserId || installId;

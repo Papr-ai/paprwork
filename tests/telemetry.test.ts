@@ -6,6 +6,10 @@ import {
   resolveTelemetryBaseUrl,
 } from "../src/core/telemetry/telemetryEnv.js";
 import { TelemetryClient } from "../src/core/telemetry/TelemetryClient.js";
+import {
+  mergeTelemetryEnvelope,
+  resolvePaprworkProductContext,
+} from "../src/core/telemetry/telemetryProductContext.js";
 
 describe("sanitizeTelemetryProperties", () => {
   it("keeps safe primitive properties", () => {
@@ -18,15 +22,31 @@ describe("sanitizeTelemetryProperties", () => {
     ).toEqual({ feature: "chat", count: 2, ok: true });
   });
 
-  it("removes keys that look like PII or content", () => {
+  it("removes exact-match PII keys", () => {
     expect(
       sanitizeTelemetryProperties({
         safe: 1,
-        user_email: "x@y.com",
-        query_text: "secret",
-        file_path: "/home/me",
+        email: "x@y.com",
+        query: "secret",
+        user_id: "abc",
       }),
     ).toEqual({ safe: 1 });
+  });
+
+  it("keeps papr_account_id and edition tags", () => {
+    expect(
+      sanitizeTelemetryProperties({
+        papr_account_id: "WkPutXGdqg",
+        edition: "paprwork",
+        product: "paprwork",
+        is_oss: false,
+      }),
+    ).toEqual({
+      papr_account_id: "WkPutXGdqg",
+      edition: "paprwork",
+      product: "paprwork",
+      is_oss: false,
+    });
   });
 
   it("replaces arrays with length counts", () => {
@@ -160,5 +180,61 @@ describe("TelemetryClient", () => {
     expect(body.events[0].properties.client).toBe("paprwork");
     expect(body.events[0].properties.foo).toBe("bar");
     expect(body.anonymous_id).toBe("install-2");
+  });
+
+  it("tags packaged vs dev edition", () => {
+    expect(resolvePaprworkProductContext(true)).toEqual({
+      product: "paprwork",
+      edition: "paprwork",
+      is_oss: false,
+      is_packaged: true,
+    });
+    expect(resolvePaprworkProductContext(false)).toEqual({
+      product: "paprwork",
+      edition: "paprwork-dev",
+      is_oss: true,
+      is_packaged: false,
+    });
+  });
+
+  it("mergeTelemetryEnvelope adds papr_account_id without blocking", () => {
+    const merged = mergeTelemetryEnvelope(
+      { client: "paprwork", feature: "chat" },
+      { isPackaged: true, paprAccountId: "WkPutXGdqg" },
+    );
+    expect(merged.papr_account_id).toBe("WkPutXGdqg");
+    expect(merged.edition).toBe("paprwork");
+    expect(merged.is_oss).toBe(false);
+    expect(merged.feature).toBe("chat");
+  });
+
+  it("sends Papr user id when getPaprUserId is set", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "",
+    });
+    const client = new TelemetryClient({
+      getEffectiveEnabled: () => true,
+      getAnonymousInstallId: () => "install-2",
+      getPaprUserId: () => "papr-user-abc",
+      getIsPackaged: () => true,
+      appVersion: "1.0.0",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+    await client.track("paprwork_test_event");
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      events: Array<{
+        user_id: string;
+        properties: Record<string, unknown>;
+      }>;
+      anonymous_id: string;
+    };
+    expect(body.anonymous_id).toBe("install-2");
+    expect(body.events[0].user_id).toBe("papr-user-abc");
+    expect(body.events[0].properties.papr_account_id).toBe("papr-user-abc");
+    expect(body.events[0].properties.edition).toBe("paprwork");
+    expect(body.events[0].properties.is_oss).toBe(false);
+    expect(body.events[0].properties.product).toBe("paprwork");
   });
 });

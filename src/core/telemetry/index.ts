@@ -5,6 +5,16 @@ export {
   isTelemetrySendingEnabled,
 } from "./telemetryEnv.js";
 export { TelemetryClient } from "./TelemetryClient.js";
+export {
+  isTelemetryPackagedFromEnv,
+  mergeTelemetryEnvelope,
+  paprAccountProperty,
+  resolvePaprworkProductContext,
+} from "./telemetryProductContext.js";
+export type {
+  TelemetryEdition,
+  TelemetryProductContext,
+} from "./telemetryProductContext.js";
 export type {
   TelemetryClientDeps,
   TelemetryClientOptions,

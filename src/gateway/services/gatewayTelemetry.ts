@@ -1,5 +1,7 @@
 import { TelemetryClient } from "../../core/telemetry/TelemetryClient.js";
+import { isTelemetryPackagedFromEnv } from "../../core/telemetry/telemetryProductContext.js";
 import { isTelemetrySendingEnabled } from "../../core/telemetry/telemetryEnv.js";
+import { getPaprUserId } from "../utils/paprUserId.js";
 
 let client: TelemetryClient | null = null;
 
@@ -16,8 +18,8 @@ export function getGatewayTelemetry(): TelemetryClient {
         ),
       getAnonymousInstallId: () =>
         process.env.PAPRWORK_TELEMETRY_ANONYMOUS_ID?.trim() ?? "",
-      getPaprUserId: () =>
-        process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID?.trim() ?? "",
+      getPaprUserId: () => getPaprUserId() ?? "",
+      getIsPackaged: () => isTelemetryPackagedFromEnv(),
       appVersion: process.env.PAPRWORK_APP_VERSION?.trim() || "unknown",
     });
   }

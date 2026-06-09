@@ -24,7 +24,10 @@ import { KeyPermissionModal } from "./components/Permissions/KeyPermissionModal"
 import { UpdateBanner } from "./components/UpdateBanner/UpdateBanner";
 import { useAppStatePersistence } from "./hooks/useAppStatePersistence";
 import { useChatStore } from "./stores/chatStore";
-import { initializeAmplitudeBrowser } from "./lib/telemetry";
+import {
+  initializeAmplitudeBrowser,
+  setTelemetryPaprUserId,
+} from "./lib/telemetry";
 import { gateway } from "./src/lib/gateway";
 import "./styles/liquid-glass.css";
 import "./App.css";
@@ -248,7 +251,53 @@ export function App() {
     initTelemetry();
   }, []);
 
+  // Re-identify telemetry when Papr login state changes mid-session
+  useEffect(() => {
+    const paprApi = window.electronAPI?.papr;
+    if (!paprApi) {
+      return;
+    }
 
+    const handleLoginSuccess = async (data?: {
+      email?: string;
+      name?: string;
+      userId?: string;
+    }) => {
+      let userId = data?.userId;
+      if (!userId) {
+        try {
+          const profileResult = await paprApi.getProfile();
+          userId = profileResult?.profile?.userId;
+        } catch {
+          return;
+        }
+      }
+      if (userId) {
+        setTelemetryPaprUserId(userId);
+      }
+    };
+
+    const handleLogoutSuccess = () => {
+      setTelemetryPaprUserId(null);
+    };
+
+    paprApi.onLoginSuccess(handleLoginSuccess);
+    paprApi.onLogoutSuccess(handleLogoutSuccess);
+
+    const onAuthSuccess = (event: Event) => {
+      const detail = (event as CustomEvent<{ userId?: string }>).detail;
+      void handleLoginSuccess(detail);
+    };
+    window.addEventListener("papr-auth-success", onAuthSuccess);
+    window.addEventListener("papr-logout-success", handleLogoutSuccess);
+
+    return () => {
+      paprApi.removeLoginSuccessListener(handleLoginSuccess);
+      paprApi.removeLogoutSuccessListener(handleLogoutSuccess);
+      window.removeEventListener("papr-auth-success", onAuthSuccess);
+      window.removeEventListener("papr-logout-success", handleLogoutSuccess);
+    };
+  }, []);
 
   // Cmd+K to open command palette
   useEffect(() => {

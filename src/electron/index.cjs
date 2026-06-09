@@ -37,6 +37,7 @@ let telemetryClientInstance = null;
 let initializePaprLoginIPC;
 let cleanupPaprLogin;
 let handlePaprAuthCallback;
+let syncProfileToGatewaySettings;
 
 
 /**
@@ -87,6 +88,7 @@ async function loadESMModules() {
   initializePaprLoginIPC = paprLoginIpcModule.initializePaprLoginIPC;
   cleanupPaprLogin = paprLoginIpcModule.cleanupPaprLogin;
   handlePaprAuthCallback = paprLoginIpcModule.handlePaprAuthCallback;
+  syncProfileToGatewaySettings = paprLoginIpcModule.syncProfileToGatewaySettings;
 
   // Import Ollama IPC module
   const ollamaIpcModule =
@@ -676,6 +678,7 @@ const {
 class GatewayProcessSupervisor {
   constructor(options) {
     this.gatewayScript = options.gatewayScript;
+    this.gatewayArgs = options.gatewayArgs ?? [];
     this.electronNodePath = options.electronNodePath;
     this.gatewayEnv = options.gatewayEnv;
     this.port = options.port;
@@ -830,11 +833,18 @@ class GatewayProcessSupervisor {
 
   _spawnProcess() {
     console.log(`[Supervisor] Starting Gateway on port ${this.port}...`);
+    console.log(
+      `[Supervisor] Gateway spawn: ${this.electronNodePath} ${this.gatewayScript} ${this.gatewayArgs.join(" ")}`.trim(),
+    );
 
-    this.process = spawn(this.electronNodePath, [this.gatewayScript], {
+    this.process = spawn(
+      this.electronNodePath,
+      [this.gatewayScript, ...this.gatewayArgs],
+      {
       stdio: ["inherit", "inherit", "inherit", "ipc"],
       env: this.gatewayEnv,
-    });
+      },
+    );
 
     // Update module-level reference for backward compatibility
     gatewayProcess = this.process;
@@ -1500,6 +1510,12 @@ app.whenReady().then(async () => {
 
   ipcMain.handle("app:get-version", () => app.getVersion());
 
+  // Backfill gateway settings with Papr user id before telemetry + gateway spawn
+  const paprProfile = settingsStorage.getPaprProfile();
+  if (paprProfile?.userId && paprProfile.email && syncProfileToGatewaySettings) {
+    await syncProfileToGatewaySettings(paprProfile.email, paprProfile.userId);
+  }
+
   if (TelemetryClientClass && isTelemetrySendingEnabledFn) {
     telemetryClientInstance = new TelemetryClientClass({
       getEffectiveEnabled: () =>
@@ -1508,6 +1524,8 @@ app.whenReady().then(async () => {
         ),
       getAnonymousInstallId: () =>
         settingsStorage.getOrCreateTelemetryInstallId(),
+      getPaprUserId: () => settingsStorage.getPaprProfile()?.userId ?? "",
+      getIsPackaged: () => app.isPackaged,
       appVersion: app.getVersion(),
     });
     telemetryClientInstance.trackFireAndForget("paprwork_app_started");
@@ -1547,6 +1565,7 @@ app.whenReady().then(async () => {
     PAPRWORK_TELEMETRY_PAPR_USER_ID:
       settingsStorage.getPaprProfile()?.userId ?? "",
     PAPRWORK_APP_VERSION: app.getVersion(),
+    PAPRWORK_IS_PACKAGED: app.isPackaged ? "true" : "false",
   };
   if (IS_PRODUCTION) {
     const asarUnpacked = path.join(__dirname, "../..").replace("app.asar", "app.asar.unpacked");
@@ -1559,8 +1578,22 @@ app.whenReady().then(async () => {
   }
 
   // Start Gateway with process supervisor
+  const gatewayRoot = path.join(__dirname, "../..");
+  const isDevGateway = process.env.NODE_ENV === "development";
+  let gatewayScript;
+  let gatewayArgs = [];
+
+  // Always spawn dist/gateway directly so the child keeps Electron IPC.
+  // tsx watch wraps the gateway in a subprocess that breaks process.send ↔ main.
+  // npm run dev already runs build:gateway before electron:dev.
+  gatewayScript = path.join(gatewayRoot, "dist/gateway/index.js");
+  if (isDevGateway) {
+    console.log("[Electron] Dev mode: Gateway via dist/gateway/index.js (IPC-safe)");
+  }
+
   supervisor = new GatewayProcessSupervisor({
-    gatewayScript: path.join(__dirname, "../../dist/gateway/index.js"),
+    gatewayScript,
+    gatewayArgs,
     electronNodePath: process.execPath,
     gatewayEnv,
     port: GATEWAY_PORT,
