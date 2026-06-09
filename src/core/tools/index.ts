@@ -8,6 +8,7 @@
 import { bashTool } from "./bash.js";
 import { filesystemTools } from "./filesystem.js";
 import { browserTools } from "./browser.js";
+import { pageWaitTools } from "./pageWait.js";
 import { documentTools } from "./documents.js";
 import { paprMemoryTools } from "./paprMemory.js";
 import { skillsTools } from "./skills.js";
@@ -28,6 +29,7 @@ export const allTools = [
   bashTool,
   ...filesystemTools,
   ...browserTools,
+  ...pageWaitTools,
   ...documentTools,
   ...paprMemoryTools,
   ...skillsTools,

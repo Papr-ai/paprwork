@@ -31,6 +31,19 @@ interface IpcProcessLike {
   off: (event: "message", listener: (message: unknown) => void) => void;
 }
 
+const IPC_KEY_RESOLVE_TIMEOUT_MS = 15_000;
+
+/**
+ * Request keys from main process via IPC.
+ * Used for Settings custom keys and provider keys (works in dev + prod when gateway is an Electron child).
+ */
+export async function resolveKeysViaIpc(
+  keyNames: string[],
+  ipcProcess: IpcProcessLike = process,
+): Promise<Record<string, string>> {
+  return requestKeysViaIPC(keyNames, ipcProcess);
+}
+
 /**
  * Request keys from main process via IPC (production mode)
  */
@@ -48,7 +61,7 @@ async function requestKeysViaIPC(
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error("Key resolution timeout"));
-    }, 5000);
+    }, IPC_KEY_RESOLVE_TIMEOUT_MS);
 
     const messageHandler = (message: unknown) => {
       if (isKeysResponseMessage(message) && message.requestId === reqId) {

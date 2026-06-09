@@ -6,7 +6,9 @@
  * In development, uses a local fallback (not secure, for testing only).
  */
 
+import { randomUUID } from "node:crypto";
 import type { CustomKeyInput } from "../../core/storage/CustomKeysStorage.js";
+import { loadCustomKeysMetadataFromFile } from "../utils/customKeysFile.js";
 
 interface CustomKey {
   id: string;
@@ -18,6 +20,23 @@ interface CustomKey {
   updatedAt?: string;
 }
 
+type CustomKeyMetadata = Omit<CustomKey, "value">;
+
+interface PendingIpcRequest {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
+interface CustomKeysIpcMessage {
+  type?: string;
+  requestId?: string;
+  error?: string;
+  keys?: CustomKeyMetadata[];
+  value?: string | null;
+  key?: CustomKey;
+}
+
 /**
  * Custom Keys Service - Singleton
  */
@@ -27,6 +46,18 @@ export class CustomKeysService {
   private ipcWaitAttempts = 0;
   private readonly MAX_IPC_WAIT_ATTEMPTS = 10; // Wait up to 1 second
   private readonly IPC_WAIT_INTERVAL_MS = 100;
+  private readonly IPC_TIMEOUT_MS = 15_000;
+  private readonly CACHE_TTL_MS = 30_000;
+
+  private ipcDispatcherRegistered = false;
+  private readonly pendingRequests = new Map<string, PendingIpcRequest>();
+
+  private listKeysCache: CustomKeyMetadata[] | null = null;
+  private listKeysCacheAt = 0;
+  private listKeysInFlight: Promise<CustomKeyMetadata[]> | null = null;
+
+  private readonly valueCache = new Map<string, { value: string | null; cachedAt: number }>();
+  private readonly valueInFlight = new Map<string, Promise<string | null>>();
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
@@ -94,7 +125,7 @@ export class CustomKeysService {
   /**
    * Safe IPC send - returns false if channel closed
    */
-  private safeSend(message: any): boolean {
+  private safeSend(message: Record<string, unknown>): boolean {
     if (!this.checkIpcAvailable()) {
       return false;
     }
@@ -116,63 +147,157 @@ export class CustomKeysService {
     }
   }
 
+  private ensureIpcDispatcher(): void {
+    if (this.ipcDispatcherRegistered) return;
+    this.ipcDispatcherRegistered = true;
+
+    process.on("message", (message: unknown) => {
+      if (typeof message !== "object" || message === null) return;
+      const msg = message as CustomKeysIpcMessage;
+
+      if (msg.type === "INVALIDATE_KEY_CACHE") {
+        this.invalidateCache();
+        return;
+      }
+
+      if (msg.type !== "CUSTOM_KEYS_RESPONSE" || !msg.requestId) return;
+
+      const pending = this.pendingRequests.get(msg.requestId);
+      if (!pending) return;
+
+      clearTimeout(pending.timeout);
+      this.pendingRequests.delete(msg.requestId);
+
+      if (msg.error) {
+        pending.reject(new Error(msg.error));
+        return;
+      }
+
+      pending.resolve(msg);
+    });
+  }
+
+  private createRequestId(prefix: string): string {
+    return `${prefix}-${Date.now()}-${randomUUID()}`;
+  }
+
+  private sendIpcRequest(
+    message: Record<string, unknown>,
+    timeoutMessage: string,
+  ): Promise<CustomKeysIpcMessage> {
+    this.ensureIpcDispatcher();
+
+    return new Promise((resolve, reject) => {
+      const requestId = this.createRequestId(
+        typeof message.type === "string" ? message.type : "custom-keys",
+      );
+
+      const timeout = setTimeout(() => {
+        this.pendingRequests.delete(requestId);
+        reject(new Error(timeoutMessage));
+      }, this.IPC_TIMEOUT_MS);
+
+      this.pendingRequests.set(requestId, {
+        resolve: (value) => resolve(value as CustomKeysIpcMessage),
+        reject,
+        timeout,
+      });
+
+      if (!this.safeSend({ ...message, requestId })) {
+        clearTimeout(timeout);
+        this.pendingRequests.delete(requestId);
+        reject(new Error("IPC channel closed"));
+      }
+    });
+  }
+
+  invalidateCache(keyName?: string): void {
+    if (keyName) {
+      this.valueCache.delete(keyName);
+      this.valueInFlight.delete(keyName);
+      return;
+    }
+
+    this.listKeysCache = null;
+    this.listKeysCacheAt = 0;
+    this.listKeysInFlight = null;
+    this.valueCache.clear();
+    this.valueInFlight.clear();
+  }
+
+  private isListCacheFresh(): boolean {
+    return (
+      this.listKeysCache !== null &&
+      Date.now() - this.listKeysCacheAt < this.CACHE_TTL_MS
+    );
+  }
+
+  private isValueCacheFresh(name: string): boolean {
+    const cached = this.valueCache.get(name);
+    return cached !== undefined && Date.now() - cached.cachedAt < this.CACHE_TTL_MS;
+  }
+
   /**
    * List all custom keys (metadata only, no values)
    */
-  async listKeys(): Promise<Omit<CustomKey, "value">[]> {
+  async listKeys(): Promise<CustomKeyMetadata[]> {
     if (!this.initialized) {
       await this.initialize();
     }
 
-    // Gateway → Electron IPC
-    if (this.ipcAvailable) {
-      return new Promise((resolve, reject) => {
-        const requestId = `custom-keys-list-${Date.now()}`;
-        //console.log(`[CustomKeysService] Listing keys (request: ${requestId})`);
-        const timeout = setTimeout(() => {
-          cleanup();
-          //console.error(`[CustomKeysService] List request ${requestId} timed out`);
-          reject(new Error("Custom keys list request timed out"));
-        }, 5000);
-
-        const messageHandler = (message: any) => {
-          if (
-            message.type === "CUSTOM_KEYS_RESPONSE" &&
-            message.requestId === requestId
-          ) {
-            cleanup();
-            if (message.error) {
-              console.error(
-                `[CustomKeysService] List failed: ${message.error}`
-              );
-              reject(new Error(message.error));
-            } else {
-              resolve(message.keys || []);
-            }
-          }
-        };
-
-        const cleanup = () => {
-          clearTimeout(timeout);
-          process.off("message", messageHandler);
-        };
-
-        process.on("message", messageHandler);
-
-        // Try to send - fall back to dev mode if channel closed
-        if (!this.safeSend({ type: "CUSTOM_KEYS_LIST", requestId })) {
-          cleanup();
-          console.warn(
-            "[CustomKeysService] IPC channel closed - falling back to dev mode"
-          );
-          resolve([]);
-        }
-      });
+    if (this.isListCacheFresh() && this.listKeysCache) {
+      return this.listKeysCache;
     }
 
-    // Dev fallback: no keys available
-    console.warn("[CustomKeysService] No IPC available - running in dev mode");
-    return [];
+    if (this.listKeysInFlight) {
+      return this.listKeysInFlight;
+    }
+
+    if (!this.ipcAvailable) {
+      console.warn("[CustomKeysService] No IPC available - running in dev mode");
+      return [];
+    }
+
+    this.listKeysInFlight = (async () => {
+      try {
+        const response = await this.sendIpcRequest(
+          { type: "CUSTOM_KEYS_LIST" },
+          "Custom keys list request timed out",
+        );
+        const keys = response.keys ?? [];
+        this.listKeysCache = keys;
+        this.listKeysCacheAt = Date.now();
+        return keys;
+      } catch (error) {
+        if (error instanceof Error && error.message === "IPC channel closed") {
+          console.warn(
+            "[CustomKeysService] IPC channel closed - falling back to dev mode",
+          );
+          return [];
+        }
+
+        // IPC timeout: read metadata from on-disk index (no decryption needed)
+        try {
+          const keys = await loadCustomKeysMetadataFromFile();
+          console.warn(
+            `[CustomKeysService] IPC list timed out — loaded ${keys.length} key(s) from custom-keys.json`,
+          );
+          this.listKeysCache = keys;
+          this.listKeysCacheAt = Date.now();
+          return keys;
+        } catch (fileError) {
+          console.error(
+            "[CustomKeysService] IPC list timed out and file fallback failed:",
+            fileError,
+          );
+          throw error;
+        }
+      } finally {
+        this.listKeysInFlight = null;
+      }
+    })();
+
+    return this.listKeysInFlight;
   }
 
   /**
@@ -183,62 +308,71 @@ export class CustomKeysService {
       await this.initialize();
     }
 
-    //console.log(`[CustomKeysService] Getting key by name: "${name}"`);
-
-    // Gateway → Electron IPC
-    if (this.ipcAvailable) {
-      return new Promise((resolve, reject) => {
-        const requestId = `custom-keys-get-${Date.now()}`;
-        const timeout = setTimeout(() => {
-          cleanup();
-          console.error(`[CustomKeysService] Get key "${name}" request timed out`);
-          reject(new Error("Custom key get request timed out"));
-        }, 5000);
-
-        const messageHandler = (message: any) => {
-          if (
-            message.type === "CUSTOM_KEYS_RESPONSE" &&
-            message.requestId === requestId
-          ) {
-            cleanup();
-            if (message.error) {
-              console.error(
-                `[CustomKeysService] Failed to get key "${name}": ${message.error}`
-              );
-              reject(new Error(message.error));
-            } else {
-              resolve(message.value || null);
-            }
-          }
-        };
-
-        const cleanup = () => {
-          clearTimeout(timeout);
-          process.off("message", messageHandler);
-        };
-
-        process.on("message", messageHandler);
-
-        // Try to send - fall back to env vars if channel closed
-        if (
-          !this.safeSend({
-            type: "CUSTOM_KEYS_GET_BY_NAME",
-            requestId,
-            name,
-          })
-        ) {
-          cleanup();
-          console.warn(
-            `[CustomKeysService] IPC channel closed - checking env for ${name}`
-          );
-          resolve(process.env[name] || null);
-        }
-      });
+    if (this.isValueCacheFresh(name)) {
+      return this.valueCache.get(name)?.value ?? null;
     }
 
-    // Dev fallback: check process.env
-    console.warn(`[CustomKeysService] No IPC - checking env for ${name}`);
-    return process.env[name] || null;
+    const inFlight = this.valueInFlight.get(name);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    if (!this.ipcAvailable) {
+      console.warn(`[CustomKeysService] No IPC - checking env for ${name}`);
+      return process.env[name] || null;
+    }
+
+    const request = (async () => {
+      try {
+        const response = await this.sendIpcRequest(
+          { type: "CUSTOM_KEYS_GET_BY_NAME", name },
+          "Custom key get request timed out",
+        );
+        const value = response.value ?? null;
+        this.valueCache.set(name, { value, cachedAt: Date.now() });
+        return value;
+      } catch (error) {
+        if (error instanceof Error && error.message === "IPC channel closed") {
+          console.warn(
+            `[CustomKeysService] IPC channel closed - checking env for ${name}`,
+          );
+          return process.env[name] || null;
+        }
+
+        // IPC timeout: reuse REQUEST_KEYS (works even when CUSTOM_KEYS_GET_BY_NAME stalls)
+        try {
+          const { resolveKeysViaIpc } = await import("../utils/keyResolver.js");
+          const resolved = await resolveKeysViaIpc([name], process);
+          const value = resolved[name] ?? null;
+          if (value) {
+            console.warn(
+              `[CustomKeysService] IPC get timed out for "${name}" — resolved via REQUEST_KEYS`,
+            );
+            this.valueCache.set(name, { value, cachedAt: Date.now() });
+            return value;
+          }
+        } catch (fallbackError) {
+          console.warn(
+            `[CustomKeysService] REQUEST_KEYS fallback failed for "${name}":`,
+            fallbackError,
+          );
+        }
+
+        const envValue = process.env[name] || null;
+        if (envValue) {
+          this.valueCache.set(name, { value: envValue, cachedAt: Date.now() });
+          return envValue;
+        }
+
+        console.error(`[CustomKeysService] Failed to get key "${name}":`, error);
+        throw error;
+      } finally {
+        this.valueInFlight.delete(name);
+      }
+    })();
+
+    this.valueInFlight.set(name, request);
+    return request;
   }
 
   /**
@@ -249,53 +383,21 @@ export class CustomKeysService {
       await this.initialize();
     }
 
-    // Gateway → Electron IPC
-    if (this.ipcAvailable) {
-      return new Promise((resolve, reject) => {
-        const requestId = `custom-keys-add-${Date.now()}`;
-        const timeout = setTimeout(() => {
-          cleanup();
-          reject(new Error("Custom key add request timed out"));
-        }, 5000);
-
-        const messageHandler = (message: any) => {
-          if (
-            message.type === "CUSTOM_KEYS_RESPONSE" &&
-            message.requestId === requestId
-          ) {
-            cleanup();
-            if (message.error) {
-              reject(new Error(message.error));
-            } else {
-              resolve(message.key);
-            }
-          }
-        };
-
-        const cleanup = () => {
-          clearTimeout(timeout);
-          process.off("message", messageHandler);
-        };
-
-        process.on("message", messageHandler);
-
-        // Try to send - fail if channel closed
-        if (
-          !this.safeSend({
-            type: "CUSTOM_KEYS_ADD",
-            requestId,
-            input,
-          })
-        ) {
-          cleanup();
-          reject(
-            new Error("Cannot add keys - IPC channel closed (dev mode)")
-          );
-        }
-      });
+    if (!this.ipcAvailable) {
+      throw new Error("Cannot add keys - IPC not available (dev mode)");
     }
 
-    throw new Error("Cannot add keys - IPC not available (dev mode)");
+    const response = await this.sendIpcRequest(
+      { type: "CUSTOM_KEYS_ADD", input },
+      "Custom key add request timed out",
+    );
+
+    if (!response.key) {
+      throw new Error("Custom key add response missing key payload");
+    }
+
+    this.invalidateCache(input.name);
+    return response.key;
   }
 
   /**
@@ -306,60 +408,22 @@ export class CustomKeysService {
       await this.initialize();
     }
 
-    // Find key ID by name first
     const keys = await this.listKeys();
     const key = keys.find((k) => k.name === name);
     if (!key) {
       throw new Error(`Key '${name}' not found`);
     }
 
-    // Gateway → Electron IPC
-    if (this.ipcAvailable) {
-      return new Promise((resolve, reject) => {
-        const requestId = `custom-keys-delete-${Date.now()}`;
-        const timeout = setTimeout(() => {
-          cleanup();
-          reject(new Error("Custom key delete request timed out"));
-        }, 5000);
-
-        const messageHandler = (message: any) => {
-          if (
-            message.type === "CUSTOM_KEYS_RESPONSE" &&
-            message.requestId === requestId
-          ) {
-            cleanup();
-            if (message.error) {
-              reject(new Error(message.error));
-            } else {
-              resolve();
-            }
-          }
-        };
-
-        const cleanup = () => {
-          clearTimeout(timeout);
-          process.off("message", messageHandler);
-        };
-
-        process.on("message", messageHandler);
-
-        // Try to send - fail if channel closed
-        if (
-          !this.safeSend({
-            type: "CUSTOM_KEYS_DELETE",
-            requestId,
-            keyId: key.id,
-          })
-        ) {
-          cleanup();
-          reject(
-            new Error("Cannot delete keys - IPC channel closed (dev mode)")
-          );
-        }
-      });
+    if (!this.ipcAvailable) {
+      throw new Error("Cannot delete keys - IPC not available (dev mode)");
     }
 
-    throw new Error("Cannot delete keys - IPC not available (dev mode)");
+    await this.sendIpcRequest(
+      { type: "CUSTOM_KEYS_DELETE", keyId: key.id },
+      "Custom key delete request timed out",
+    );
+
+    this.invalidateCache(name);
   }
 }
 

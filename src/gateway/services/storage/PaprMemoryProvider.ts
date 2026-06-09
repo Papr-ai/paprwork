@@ -14,6 +14,10 @@ import type {
   StoredSummary,
   ChatMetadata,
 } from "./IStorageProvider";
+import {
+  extractEnhancedFields,
+  formatSummaryForLLM,
+} from "./summaryFormatting.js";
 import { getPaprUserId } from "../../utils/paprUserId.js";
 
 export interface PaprConfig {
@@ -117,13 +121,18 @@ export class PaprMemoryProvider implements IStorageProvider {
 
       const userId = getPaprUserId();
 
-      // POST to PAPR /v1/messages using SDK
-      const response = await this.client.messages.store({
+      // POST to PAPR /v1/messages using SDK.
+      // user_id is a top-level MessageRequest field on the memory server; include it
+      // whenever we have the Parse _User.objectId from login/profile sync.
+      type MessageStoreBody = Parameters<Papr["messages"]["store"]>[0] & {
+        user_id?: string;
+      };
+
+      const storeBody: MessageStoreBody = {
         content: contentForPapr,
         role: message.role,
         sessionId: chatId,
         process_messages: true, // Let PAPR do batch analysis & auto-summarize
-        ...(userId ? { user_id: userId } : {}),
         metadata: {
           // Typed MemoryMetadata fields
           conversationId: chatId,
@@ -132,7 +141,13 @@ export class PaprMemoryProvider implements IStorageProvider {
           // Custom fields in their proper container
           customMetadata,
         },
-      });
+      };
+
+      if (userId) {
+        storeBody.user_id = userId;
+      }
+
+      const response = await this.client.messages.store(storeBody);
 
       // Store the PAPR objectId in the message
       message.papr_message_id = response.objectId;
@@ -275,13 +290,21 @@ export class PaprMemoryProvider implements IStorageProvider {
         }
 
         if (summary) {
-          // Format summary for system prompt (NOT as a user message)
-          const summaryForSystemPrompt = this.formatSummaryForLLM(
-            summary,
-            response.total_count,
-            recentMessages.length,
-            chatId,
-          );
+          const enhanced = extractEnhancedFields(response);
+          const summaryForSystemPrompt = formatSummaryForLLM({
+            tiers: {
+              short_term: summary.short_term ?? "",
+              medium_term: summary.medium_term ?? "",
+              long_term: summary.long_term ?? "",
+              topics: summary.topics ?? [],
+              last_updated:
+                summary.last_updated ?? new Date().toISOString(),
+            },
+            enhanced,
+            totalCount: response.total_count,
+            recentCount: recentMessages.length,
+            chatFilePath: `~/Papr/Chats/${chatId}.txt`,
+          });
 
           // Inject summary as special __summary property for AgentService to extract
           return [
@@ -307,41 +330,6 @@ export class PaprMemoryProvider implements IStorageProvider {
     }
   }
 
-  private formatSummaryForLLM(
-    summary: any,
-    totalCount: number,
-    recentCount: number,
-    chatId: string,
-  ): string {
-    const archivedCount = totalCount - recentCount;
-    const chatFilePath = `~/Papr/Chats/${chatId}.txt`;
-
-    return `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📚 ARCHIVED CONVERSATION SUMMARY (${archivedCount} older messages archived)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-This conversation has been ongoing for ${totalCount} messages total.
-The summary below covers the first ${archivedCount} messages.
-The actual recent ${recentCount} messages follow this summary in the conversation history.
-
-Full conversation export: ${chatFilePath}
-You can use bash/grep/read tools to search the full history if needed.
-
-───────────────────────────────────────────────────────────
-
-FULL SESSION SUMMARY:
-${summary.long_term}
-
-RECENT CONTEXT (last ~100 messages):
-${summary.medium_term}
-
-CURRENT BATCH (last 15 messages):
-${summary.short_term}
-
-KEY TOPICS: ${summary.topics?.join(", ") || "N/A"}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-  }
 
   // ===== Summary Operations =====
 
@@ -351,13 +339,14 @@ KEY TOPICS: ${summary.topics?.join(", ") || "N/A"}
       const response = await this.client.messages.sessions.compress(chatId);
 
       if (response.summaries) {
+        const s = response.summaries;
         return {
-          short_term: response.summaries.short_term || "",
-          medium_term: response.summaries.medium_term || "",
-          long_term: response.summaries.long_term || "",
-          topics: response.summaries.topics || [],
-          last_updated:
-            response.summaries.last_updated || new Date().toISOString(),
+          short_term: s.short_term || "",
+          medium_term: s.medium_term || "",
+          long_term: s.long_term || "",
+          topics: s.topics || [],
+          last_updated: s.last_updated || new Date().toISOString(),
+          enhanced: extractEnhancedFields(response),
           fetched_from_papr: true,
           last_fetched_at: new Date().toISOString(),
         };
@@ -483,8 +472,17 @@ KEY TOPICS: ${summary.topics?.join(", ") || "N/A"}
     thisWeek: number;
     thisMonth: number;
     total: number;
+    totalTokens: number;
+    todayTokens: number;
+    thisWeekTokens: number;
+    thisMonthTokens: number;
     totalMessages: number;
-    topModels: Array<{ model: string; cost: number; count: number }>;
+    topModels: Array<{
+      model: string;
+      cost: number;
+      tokens: number;
+      count: number;
+    }>;
   }> {
     // PAPR doesn't provide global cost stats
     return {
@@ -492,6 +490,10 @@ KEY TOPICS: ${summary.topics?.join(", ") || "N/A"}
       thisWeek: 0,
       thisMonth: 0,
       total: 0,
+      totalTokens: 0,
+      todayTokens: 0,
+      thisWeekTokens: 0,
+      thisMonthTokens: 0,
       totalMessages: 0,
       topModels: [],
     };
@@ -499,7 +501,9 @@ KEY TOPICS: ${summary.topics?.join(", ") || "N/A"}
 
   async getDailyCostTrends(
     _days?: number,
-  ): Promise<Array<{ date: string; cost: number; messages: number }>> {
+  ): Promise<
+    Array<{ date: string; cost: number; messages: number; tokens: number }>
+  > {
     // PAPR doesn't provide cost trends
     return [];
   }
@@ -532,6 +536,23 @@ KEY TOPICS: ${summary.topics?.join(", ") || "N/A"}
     };
   }
 
+  async getAllAgentStats(): Promise<
+    Record<
+      string,
+      {
+        totalMessages: number;
+        totalTokens: number;
+        totalCost: number;
+        toolCallsCount: number;
+        avgTokensPerMessage: number;
+        avgCostPerMessage: number;
+        mostUsedTools: Array<{ tool: string; count: number }>;
+      }
+    >
+  > {
+    return {};
+  }
+
   async getAgentOutputs(_agentId?: string): Promise<{
     documents: Array<{ id: string; title: string; createdAt: string }>;
     apps: Array<{ id: string; title: string; createdAt: string }>;
@@ -542,6 +563,49 @@ KEY TOPICS: ${summary.topics?.join(", ") || "N/A"}
       documents: [],
       apps: [],
       plans: [],
+    };
+  }
+
+  getToolUsageByAgent(): Record<
+    string,
+    {
+      mostUsedTools: Array<{ tool: string; count: number }>;
+      totalToolInvocations: number;
+    }
+  > {
+    return {};
+  }
+
+  getContextEfficiencyStats() {
+    return {
+      fullChatTokensPerTurn: 0,
+      agentContextTokensPerTurn: 0,
+      truncationTokensSaved: 0,
+      summaryTokensSaved: 0,
+      memorySearchTokensSaved: 0,
+      totalTokensSaved: 0,
+      totalTokensConsumed: 0,
+      hypotheticalTokensWithoutOptimizations: 0,
+      lifetimeTokensSaved: 0,
+      contextInflationRatio: 1,
+      efficiencyScore: 0,
+      actualCost: 0,
+      hypotheticalCostWithoutOptimizations: 0,
+      lifetimeCostSaved: 0,
+      costEfficiencyScore: 0,
+      dataSource: "live" as const,
+      pendingFootprintTurns: 0,
+      breakdown: {
+        chatsAnalyzed: 0,
+        chatsWithSummaries: 0,
+        assistantTurnsAnalyzed: 0,
+        memorySearchCount: 0,
+        hybridBashCount: 0,
+        memoryHitsAnalyzed: 0,
+        memoryHitsWithSource: 0,
+        fullReadAvgTokens: 0,
+        memorySearchAvgTokens: 0,
+      },
     };
   }
 }

@@ -23,7 +23,7 @@ import * as crypto from "crypto";
  * Sync Papr profile fields to gateway settings file so the gateway process
  * (including CodeIndexerService) can use it as user_id on memory writes.
  */
-async function syncProfileToGatewaySettings(
+export async function syncProfileToGatewaySettings(
   email: string,
   userId: string,
 ): Promise<void> {
@@ -55,6 +55,36 @@ async function syncProfileToGatewaySettings(
   }
 }
 
+/** Remove Papr user id from gateway settings after logout. */
+export async function clearPaprUserIdFromGatewaySettings(): Promise<void> {
+  try {
+    const fsP = await import("fs/promises");
+    const pathM = await import("path");
+    const osM = await import("os");
+    const { invalidatePaprUserIdCache } = await import(
+      "../../gateway/utils/paprUserId.js"
+    );
+    const settingsPath = pathM.join(osM.homedir(), "Papr", "data", "settings.json");
+    let settings: Record<string, unknown> = {};
+    try {
+      const raw = await fsP.readFile(settingsPath, "utf-8");
+      settings = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (!settings.profile || typeof settings.profile !== "object") {
+      return;
+    }
+    const profile = settings.profile as Record<string, string>;
+    delete profile.paprUserId;
+    await fsP.writeFile(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
+    invalidatePaprUserIdCache();
+    console.log("[PaprLogin] Cleared paprUserId from gateway settings");
+  } catch (e) {
+    console.warn("[PaprLogin] Failed to clear paprUserId from gateway settings:", e);
+  }
+}
+
 // Auth0 configuration — env vars for dev, defaults for prod
 // Remove https:// prefix if present (to avoid double https in URLs)
 const AUTH0_DOMAIN = (process.env.AUTH0_DOMAIN || "papr.auth0.com").replace(/^https?:\/\//, "");
@@ -72,12 +102,87 @@ console.log(`  ENV AUTH0_CLIENT_ID: ${process.env.AUTH0_CLIENT_ID || "(not set)"
 const PARSE_GRAPHQL_URL = process.env.PARSE_GRAPHQL_URL || "https://server.papr.ai/graphql";
 const PARSE_APP_ID = process.env.PARSE_APP_ID || "671e705a-f735-4ec0-8474-15899a475440";
 
+export type PaprAuthMode = "login" | "signup";
+
 interface PaprLoginState {
   pendingState?: string;
   codeVerifier?: string;
 }
 
 const loginState: PaprLoginState = {};
+
+/** Build Auth0 authorize URL. Use screen_hint=signup so new users see registration, not login. */
+export function buildAuth0AuthorizeUrl(params: {
+  state: string;
+  codeChallenge: string;
+  mode?: PaprAuthMode;
+}): URL {
+  const authUrl = new URL(`https://${AUTH0_DOMAIN}/authorize`);
+  authUrl.searchParams.set("client_id", AUTH0_CLIENT_ID);
+  authUrl.searchParams.set("redirect_uri", AUTH0_REDIRECT_URI);
+  authUrl.searchParams.set("response_type", "code");
+  authUrl.searchParams.set("code_challenge", params.codeChallenge);
+  authUrl.searchParams.set("code_challenge_method", "S256");
+  authUrl.searchParams.set("scope", AUTH0_SCOPE);
+  authUrl.searchParams.set("state", params.state);
+  authUrl.searchParams.set("audience", `https://${AUTH0_DOMAIN}/userinfo`);
+
+  if (params.mode === "signup") {
+    authUrl.searchParams.set("screen_hint", "signup");
+  } else if (params.mode === "login") {
+    authUrl.searchParams.set("screen_hint", "login");
+  }
+
+  return authUrl;
+}
+
+/** Map Auth0 callback errors to actionable messages for the app UI. */
+export function formatAuth0CallbackError(
+  error: string,
+  errorDescription?: string | null,
+): string {
+  const code = error.toLowerCase();
+  const desc = (errorDescription || "").toLowerCase();
+
+  if (code === "access_denied") {
+    if (
+      desc.includes("wrong") ||
+      desc.includes("invalid") ||
+      desc.includes("password") ||
+      desc.includes("credentials")
+    ) {
+      return (
+        "Incorrect email or password. If you don't have a Papr account yet, " +
+        "use Create Account instead of Sign in."
+      );
+    }
+    if (desc.includes("signup") || desc.includes("sign up") || desc.includes("register")) {
+      return "No Papr account found for that email. Use Create Account to register.";
+    }
+    return "Sign-in was cancelled. Please try again.";
+  }
+
+  if (
+    desc.includes("user") &&
+    (desc.includes("not found") ||
+      desc.includes("doesn't exist") ||
+      desc.includes("does not exist") ||
+      desc.includes("no user"))
+  ) {
+    return "No Papr account found for that email. Use Create Account to register a new account.";
+  }
+
+  if (errorDescription) {
+    return `Authentication failed: ${errorDescription}`;
+  }
+
+  return `Authentication failed (${error}). Please try again.`;
+}
+
+function notifyLoginError(win: BrowserWindow | undefined, message: string): void {
+  if (!win) return;
+  win.webContents.send("papr:login-error", { error: message });
+}
 
 // ─── PKCE Helpers ──────────────────────────────────────────────
 
@@ -865,6 +970,116 @@ const GET_USER_WORKSPACE = `
 
 // ─── IPC Handlers ──────────────────────────────────────────────
 
+async function completePaprAuthCallback(
+  code: string | null,
+  state: string | null,
+  customKeysStorage: CustomKeysStorage,
+  settingsStorage: SettingsStorage,
+): Promise<{
+  success: true;
+  email: string;
+  name: string;
+  userId: string;
+}> {
+  if (!code) throw new Error("No authorization code received");
+  if (!state || state !== loginState.pendingState) {
+    throw new Error("Invalid state parameter — possible CSRF attack");
+  }
+  if (!loginState.codeVerifier) {
+    throw new Error("No code verifier found — login flow may have expired. Please try again.");
+  }
+
+  console.log("[PaprLogin] Exchanging authorization code for tokens...");
+  const tokens = await exchangeCodeForTokens(code, loginState.codeVerifier);
+
+  loginState.pendingState = undefined;
+  loginState.codeVerifier = undefined;
+
+  if (!tokens.id_token) {
+    throw new Error("No ID token received from Auth0");
+  }
+
+  const claims = decodeIdToken(tokens.id_token);
+  const parseSessionToken = claims["https://papr.scope.com/sessionToken"];
+  const objectId = claims["https://papr.scope.com/objectId"];
+  const displayName =
+    claims["https://papr.scope.com/displayName"] || claims.nickname || claims.name;
+  const email = claims.email;
+
+  if (!parseSessionToken || !objectId) {
+    throw new Error(
+      "Your account setup didn't finish. If you just signed up, wait a moment and try Sign in again.",
+    );
+  }
+
+  console.log(`[PaprLogin] Authenticated user: ${email} (${objectId})`);
+
+  let workspaceId: string | undefined;
+  try {
+    const userData = await parseGraphQL(parseSessionToken, GET_USER_WORKSPACE, {
+      userId: objectId,
+    });
+    workspaceId = userData.user?.isSelectedWorkspaceFollower?.workspace?.objectId;
+  } catch (e) {
+    console.warn("[PaprLogin] Could not fetch workspace ID:", e);
+  }
+
+  const provision = await provisionOrGetApiKey(
+    parseSessionToken,
+    objectId,
+    email || "user",
+    workspaceId,
+  );
+
+  await customKeysStorage.addKey({
+    name: "PAPR_API_KEY",
+    value: provision.apiKey,
+  });
+  invalidateKeyCache("PAPR_API_KEY");
+
+  await customKeysStorage.addKey({
+    name: "PAPR_SESSION_TOKEN",
+    value: parseSessionToken,
+  });
+
+  if (tokens.refresh_token) {
+    await customKeysStorage.addKey({
+      name: "PAPR_REFRESH_TOKEN",
+      value: tokens.refresh_token,
+    });
+  }
+
+  settingsStorage.setPaprProfile({
+    userId: objectId,
+    email: email || "",
+    displayName: displayName || "",
+    authenticatedAt: new Date().toISOString(),
+    sessionToken: parseSessionToken,
+    organizationId: provision.organizationId,
+    activeNamespaceId: provision.namespaceId,
+    activeNamespaceName: provision.namespaceName,
+  });
+
+  await syncProfileToGatewaySettings(email || "", objectId);
+  console.log("[PaprLogin] Login complete. API key stored as PAPR_API_KEY.");
+
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win) {
+    win.webContents.send("papr:login-success", {
+      email: email || "",
+      name: displayName || "",
+      userId: objectId,
+    });
+  }
+
+  return {
+    success: true,
+    email: email || "",
+    name: displayName || "",
+    userId: objectId,
+  };
+}
+
 export function initializePaprLoginIPC(
   customKeysStorage: CustomKeysStorage,
   settingsStorage: SettingsStorage,
@@ -907,9 +1122,10 @@ export function initializePaprLoginIPC(
     }
   });
 
-  // Start PKCE login flow
-  ipcMain.handle("papr:start-login", async () => {
+  // Start PKCE login flow (mode: signup shows Auth0 registration, login shows sign-in)
+  ipcMain.handle("papr:start-login", async (_event, mode?: PaprAuthMode) => {
     try {
+      const authMode: PaprAuthMode = mode === "signup" ? "signup" : "login";
       const codeVerifier = generateCodeVerifier();
       const codeChallenge = generateCodeChallenge(codeVerifier);
       const state = generateState();
@@ -917,16 +1133,13 @@ export function initializePaprLoginIPC(
       loginState.pendingState = state;
       loginState.codeVerifier = codeVerifier;
 
-      const authUrl = new URL(`https://${AUTH0_DOMAIN}/authorize`);
-      authUrl.searchParams.set("client_id", AUTH0_CLIENT_ID);
-      authUrl.searchParams.set("redirect_uri", AUTH0_REDIRECT_URI);
-      authUrl.searchParams.set("response_type", "code");
-      authUrl.searchParams.set("code_challenge", codeChallenge);
-      authUrl.searchParams.set("code_challenge_method", "S256");
-      authUrl.searchParams.set("scope", AUTH0_SCOPE);
-      authUrl.searchParams.set("state", state);
-      authUrl.searchParams.set("audience", `https://${AUTH0_DOMAIN}/userinfo`);
+      const authUrl = buildAuth0AuthorizeUrl({
+        state,
+        codeChallenge,
+        mode: authMode,
+      });
 
+      console.log(`[PaprLogin] Starting Auth0 flow (mode=${authMode})`);
       await shell.openExternal(authUrl.toString());
 
       return { success: true };
@@ -950,135 +1163,27 @@ export function initializePaprLoginIPC(
 
       if (error) {
         throw new Error(
-          `Auth0 error: ${error} - ${url.searchParams.get("error_description") || ""}`,
+          formatAuth0CallbackError(error, url.searchParams.get("error_description")),
         );
       }
 
-      if (!code) throw new Error("No authorization code received");
-      if (!state || state !== loginState.pendingState) {
-        throw new Error("Invalid state parameter — possible CSRF attack");
-      }
-      if (!loginState.codeVerifier) {
-        throw new Error("No code verifier found — login flow may have expired");
-      }
-
-      // Exchange code for tokens
-      console.log("[PaprLogin] Exchanging authorization code for tokens...");
-      const tokens = await exchangeCodeForTokens(code, loginState.codeVerifier);
-
-      // Clear login state
-      loginState.pendingState = undefined;
-      loginState.codeVerifier = undefined;
-
-      // Decode ID token to extract Parse session token and user info
-      if (!tokens.id_token) {
-        throw new Error("No ID token received from Auth0");
-      }
-
-      const claims = decodeIdToken(tokens.id_token);
-      const parseSessionToken = claims["https://papr.scope.com/sessionToken"];
-      const objectId = claims["https://papr.scope.com/objectId"];
-      const displayName =
-        claims["https://papr.scope.com/displayName"] || claims.nickname || claims.name;
-      const email = claims.email;
-
-      if (!parseSessionToken || !objectId) {
-        throw new Error(
-          "Missing Parse session token or objectId in Auth0 claims. " +
-            "Auth0 Actions may not have run correctly.",
-        );
-      }
-
-      console.log(`[PaprLogin] Authenticated user: ${email} (${objectId})`);
-
-      // Get user's workspace ID
-      let workspaceId: string | undefined;
-      try {
-        const userData = await parseGraphQL(parseSessionToken, GET_USER_WORKSPACE, {
-          userId: objectId,
-        });
-        workspaceId = userData.user?.isSelectedWorkspaceFollower?.workspace?.objectId;
-      } catch (e) {
-        console.warn("[PaprLogin] Could not fetch workspace ID:", e);
-      }
-
-      // Provision org/namespace/API key or retrieve existing one
-      const provision = await provisionOrGetApiKey(
-        parseSessionToken,
-        objectId,
-        email || "user",
-        workspaceId,
+      return await completePaprAuthCallback(
+        code,
+        state,
+        customKeysStorage,
+        settingsStorage,
       );
-
-      // Store the API key as PAPR_API_KEY (same key the rest of the app expects)
-      await customKeysStorage.addKey({
-        name: "PAPR_API_KEY",
-        value: provision.apiKey,
-      });
-
-      // Invalidate Gateway's cached PAPR_API_KEY so it picks up the new key
-      invalidateKeyCache("PAPR_API_KEY");
-
-      // Also store the session token for later namespace queries
-      await customKeysStorage.addKey({
-        name: "PAPR_SESSION_TOKEN",
-        value: parseSessionToken,
-      });
-
-      // Store refresh token for automatic session renewal
-      if (tokens.refresh_token) {
-        await customKeysStorage.addKey({
-          name: "PAPR_REFRESH_TOKEN",
-          value: tokens.refresh_token,
-        });
-      }
-
-      // Save user profile with org/namespace info
-      settingsStorage.setPaprProfile({
-        userId: objectId,
-        email: email || "",
-        displayName: displayName || "",
-        authenticatedAt: new Date().toISOString(),
-        sessionToken: parseSessionToken,
-        organizationId: provision.organizationId,
-        activeNamespaceId: provision.namespaceId,
-        activeNamespaceName: provision.namespaceName,
-      });
-
-
-      // Sync profile to gateway settings for user_id attribution on memory writes
-      await syncProfileToGatewaySettings(email || "", objectId);
-      console.log("[PaprLogin] Login complete. API key stored as PAPR_API_KEY.");
-
-      // Notify renderer
-      const win = BrowserWindow.getAllWindows()[0];
-      if (win) {
-        win.webContents.send("papr:login-success", {
-          email: email || "",
-          name: displayName || "",
-        });
-      }
-
-      return {
-        success: true,
-        email: email || "",
-        name: displayName || "",
-      };
     } catch (error) {
       loginState.pendingState = undefined;
       loginState.codeVerifier = undefined;
       console.error("[PaprLogin] Login failed:", error);
 
-      const win = BrowserWindow.getAllWindows()[0];
-      if (win) {
-        win.webContents.send("papr:login-error", {
-          error: error instanceof Error ? error.message : "Login failed",
-        });
-      }
+      const message = error instanceof Error ? error.message : "Login failed";
+      notifyLoginError(BrowserWindow.getAllWindows()[0], message);
 
       return {
         success: false,
-        error: error instanceof Error ? error.message : "Login failed",
+        error: message,
       };
     }
   });
@@ -1102,6 +1207,7 @@ export function initializePaprLoginIPC(
       loginState.pendingState = undefined;
 
       settingsStorage.clearPaprProfile();
+      await clearPaprUserIdFromGatewaySettings();
       console.log("[PaprLogin] Logged out, all tokens cleared.");
 
       // Notify renderer about logout success
@@ -1330,125 +1436,18 @@ export async function handlePaprAuthCallback(
 
     if (error) {
       throw new Error(
-        `Auth0 error: ${error} - ${url.searchParams.get("error_description") || ""}`,
+        formatAuth0CallbackError(error, url.searchParams.get("error_description")),
       );
     }
 
-    if (!code) throw new Error("No authorization code received");
-    if (!state || state !== loginState.pendingState) {
-      throw new Error("Invalid state parameter — possible CSRF attack");
-    }
-    if (!loginState.codeVerifier) {
-      throw new Error("No code verifier found — login flow may have expired");
-    }
-
-    // Exchange code for tokens
-    console.log("[PaprLogin] Exchanging authorization code for tokens...");
-    const tokens = await exchangeCodeForTokens(code, loginState.codeVerifier);
-
-    // Clear login state
-    loginState.pendingState = undefined;
-    loginState.codeVerifier = undefined;
-
-    // Decode ID token to extract Parse session token and user info
-    if (!tokens.id_token) {
-      throw new Error("No ID token received from Auth0");
-    }
-
-    const claims = decodeIdToken(tokens.id_token);
-    const parseSessionToken = claims["https://papr.scope.com/sessionToken"];
-    const objectId = claims["https://papr.scope.com/objectId"];
-    const displayName =
-      claims["https://papr.scope.com/displayName"] || claims.nickname || claims.name;
-    const email = claims.email;
-
-    if (!parseSessionToken || !objectId) {
-      throw new Error(
-        "Missing Parse session token or objectId in Auth0 claims. " +
-          "Auth0 Actions may not have run correctly.",
-      );
-    }
-
-    console.log(`[PaprLogin] Authenticated user: ${email} (${objectId})`);
-
-    // Get user's workspace ID
-    let workspaceId: string | undefined;
-    try {
-      const userData = await parseGraphQL(parseSessionToken, GET_USER_WORKSPACE, {
-        userId: objectId,
-      });
-      workspaceId = userData.user?.isSelectedWorkspaceFollower?.workspace?.objectId;
-    } catch (e) {
-      console.warn("[PaprLogin] Could not fetch workspace ID:", e);
-    }
-
-    // Provision org/namespace/API key or retrieve existing one
-    const provision = await provisionOrGetApiKey(
-      parseSessionToken,
-      objectId,
-      email || "user",
-      workspaceId,
-    );
-
-    // Store the API key as PAPR_API_KEY (same key the rest of the app expects)
-    await customKeysStorage.addKey({
-      name: "PAPR_API_KEY",
-      value: provision.apiKey,
-    });
-
-    // Invalidate Gateway's cached PAPR_API_KEY so it picks up the new key
-    invalidateKeyCache("PAPR_API_KEY");
-
-    // Also store the session token for later namespace queries
-    await customKeysStorage.addKey({
-      name: "PAPR_SESSION_TOKEN",
-      value: parseSessionToken,
-    });
-
-    // Store refresh token for automatic session renewal
-    if (tokens.refresh_token) {
-      await customKeysStorage.addKey({
-        name: "PAPR_REFRESH_TOKEN",
-        value: tokens.refresh_token,
-      });
-    }
-
-    // Save user profile with org/namespace info
-    settingsStorage.setPaprProfile({
-      userId: objectId,
-      email: email || "",
-      displayName: displayName || "",
-      authenticatedAt: new Date().toISOString(),
-      sessionToken: parseSessionToken,
-      organizationId: provision.organizationId,
-      activeNamespaceId: provision.namespaceId,
-      activeNamespaceName: provision.namespaceName,
-    });
-
-
-    // Sync profile to gateway settings for user_id attribution on memory writes
-    await syncProfileToGatewaySettings(email || "", objectId);
-    console.log("[PaprLogin] Login complete. API key stored as PAPR_API_KEY.");
-
-    // Notify renderer
-    const win = BrowserWindow.getAllWindows()[0];
-    if (win) {
-      win.webContents.send("papr:login-success", {
-        email: email || "",
-        name: displayName || "",
-      });
-    }
+    await completePaprAuthCallback(code, state, customKeysStorage, settingsStorage);
   } catch (err) {
     loginState.pendingState = undefined;
     loginState.codeVerifier = undefined;
     console.error("[PaprLogin] Callback failed:", err);
 
-    const win = BrowserWindow.getAllWindows()[0];
-    if (win) {
-      win.webContents.send("papr:login-error", {
-        error: err instanceof Error ? err.message : "Login failed",
-      });
-    }
+    const message = err instanceof Error ? err.message : "Login failed";
+    notifyLoginError(BrowserWindow.getAllWindows()[0], message);
   }
 }
 

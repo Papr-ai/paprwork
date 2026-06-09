@@ -5,6 +5,7 @@ interface AgentStats {
   totalTokens: number;
   totalCost: number;
   toolCallsCount: number;
+  totalToolInvocations?: number;
   avgTokensPerMessage: number;
   avgCostPerMessage: number;
   mostUsedTools: Array<{ tool: string; count: number }>;
@@ -32,8 +33,11 @@ export function ToolsSkillsCard({ agentStats }: Props) {
     .slice(0, 10);
 
   const maxCount = topTools[0]?.count ?? 1;
-  const totalToolCalls = Object.values(agentStats).reduce(
-    (sum, stats) => sum + stats.toolCallsCount,
+  const totalToolInvocations = Object.values(agentStats).reduce(
+    (sum, stats) =>
+      sum +
+      (stats.totalToolInvocations ??
+        stats.mostUsedTools.reduce((toolSum, tool) => toolSum + tool.count, 0)),
     0,
   );
 
@@ -50,7 +54,9 @@ export function ToolsSkillsCard({ agentStats }: Props) {
           </svg>
           Tools & Skills Usage
         </div>
-        <div className="card-badge">{totalToolCalls} calls</div>
+        <div className="card-badge">
+          {totalToolInvocations.toLocaleString()} invocations
+        </div>
       </div>
 
       <div className="card-content">
@@ -84,7 +90,9 @@ export function ToolsSkillsCard({ agentStats }: Props) {
                       <div className="tool-name">
                         {formatToolName(tool.tool)}
                       </div>
-                      <div className="tool-count">{tool.count} calls</div>
+                      <div className="tool-count">
+                        {tool.count.toLocaleString()} invocations
+                      </div>
                     </div>
                   </div>
                   <div className="tool-usage-bar">

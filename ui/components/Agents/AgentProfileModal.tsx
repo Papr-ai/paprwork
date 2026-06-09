@@ -81,7 +81,15 @@ export function AgentProfileModal({ agentId, onClose }: Props) {
         setStats(statsResp.data);
       }
       if (runsResp.success && runsResp.data) {
-        const agentRuns = runsResp.data.filter(
+        const allRuns = Array.isArray(runsResp.data)
+          ? runsResp.data
+          : runsResp.data &&
+              typeof runsResp.data === "object" &&
+              "runs" in runsResp.data &&
+              Array.isArray((runsResp.data as { runs: DelegationRun[] }).runs)
+            ? (runsResp.data as { runs: DelegationRun[] }).runs
+            : [];
+        const agentRuns = allRuns.filter(
           (run: DelegationRun) => run.agentId === agentId,
         );
         setRuns(agentRuns.slice(0, 10));

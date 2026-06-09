@@ -8,6 +8,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { PaprMemoryProvider } from '../src/gateway/services/storage/PaprMemoryProvider';
 import type { StoredMessage } from '../src/gateway/services/storage/IStorageProvider';
 
+vi.mock('../src/gateway/utils/paprUserId.js', () => ({
+  getPaprUserId: vi.fn(() => 'WkPutXGdqg'),
+  invalidatePaprUserIdCache: vi.fn(),
+}));
+
 // Mock @papr/memory SDK
 vi.mock('@papr/memory', () => {
   return {
@@ -50,6 +55,25 @@ describe('PAPR Memory Metadata Enhancement', () => {
     // Get the mocked store function
     mockStore = (provider as any).client.messages.store;
     mockStore.mockClear();
+  });
+
+  it('should send top-level user_id when papr user is available', async () => {
+    const message: StoredMessage = {
+      id: 'msg-user-id',
+      chat_id: 'chat-123',
+      role: 'user',
+      content: 'Hello world',
+      timestamp: new Date().toISOString(),
+      sync_status: 'sync_pending',
+    };
+
+    await provider.saveMessage('chat-123', message);
+
+    expect(mockStore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user_id: 'WkPutXGdqg',
+      }),
+    );
   });
 
   it('should include basic metadata for simple messages', async () => {

@@ -100,6 +100,8 @@ export interface BashOutput {
   exitCode: number;
   command: string;
   duration: number;
+  /** Nudge to use search_agent_memory when PAPR is configured */
+  _memorySearchReminder?: string;
 }
 
 /** Matches ~/Papr/apps/{appId}/{filename} or $HOME/Papr/apps/... or /path/Papr/apps/... */
@@ -305,6 +307,54 @@ async function executeBackgroundedCommand(
 
 
 const WRITE_KEYWORDS_RE = /(>|>>|tee\b|sed\s+-i|cat\s+>|patch\b|git\s+(commit|reset|checkout|merge|rebase|cherry-pick|apply|am|stash\s+pop|revert)|cp\b|mv\b|rm\b|mkdir\b|touch\b|npm\s+(install|i|ci|update)|yarn\s+(add|install|upgrade)|pnpm\s+(add|install|update)|pip\s+install|poetry\s+(add|install|update)|cargo\s+(add|install|update)|brew\s+(install|upgrade)|make\b)/i;
+
+/** Commands too trivial to warrant a memory search reminder */
+function isTrivialBashCommand(command: string): boolean {
+  const trimmed = command.trim();
+  if (/^(pwd|whoami|date|clear|true|false)\s*$/.test(trimmed)) {
+    return true;
+  }
+  if (/^echo(\s|$)/.test(trimmed)) {
+    return true;
+  }
+  if (/^cd(\s|$)/.test(trimmed)) {
+    return true;
+  }
+  if (/^ls(\s|$)/.test(trimmed) && !WRITE_KEYWORDS_RE.test(trimmed)) {
+    return true;
+  }
+  if (/^git\s+(status|log|diff|branch)(\s|$)/.test(trimmed)) {
+    return true;
+  }
+  if (/^cat\s+\S+\s*$/.test(trimmed) && !/>/.test(trimmed)) {
+    return true;
+  }
+  return false;
+}
+
+async function buildMemorySearchReminder(
+  command: string,
+  ranHybridMemorySearch: boolean,
+): Promise<string | undefined> {
+  if (ranHybridMemorySearch || isTrivialBashCommand(command)) {
+    return undefined;
+  }
+
+  try {
+    const { getApiKey } = await import("../../gateway/utils/keyResolver.js");
+    const paprKey = await getApiKey("PAPR_API_KEY");
+    if (!paprKey) {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+
+  return (
+    "Tip: search_agent_memory can recall relevant facts from past conversations " +
+    "if this command relates to user preferences, prior work, or cross-session context."
+  );
+}
 
 /**
  * Probe whether `cwd` is inside a git work tree, and if so capture a quick
@@ -627,6 +677,11 @@ export async function executeBashCommand(
       // best-effort only
     }
 
+    const memorySearchReminder = await buildMemorySearchReminder(
+      command,
+      grepInfo !== null,
+    );
+
     return {
       success: true,
       data: {
@@ -635,6 +690,9 @@ export async function executeBashCommand(
         exitCode: 0,
         command: sanitizeError(command, apiKeys), // Sanitize command too
         duration,
+        ...(memorySearchReminder
+          ? { _memorySearchReminder: memorySearchReminder }
+          : {}),
       },
     };
   } catch (error: unknown) {

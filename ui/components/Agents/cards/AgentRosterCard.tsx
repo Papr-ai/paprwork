@@ -33,13 +33,12 @@ interface SubAgentProfile {
 interface SubAgentRun {
   id: string;
   agentId: string;
-  agentName: string;
-  taskId: string;
-  sessionId: string;
+  agentName?: string;
+  task?: string;
   status: "pending" | "running" | "completed" | "failed";
-  startTime: string;
-  endTime?: string;
-  result?: unknown;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
   error?: string;
 }
 

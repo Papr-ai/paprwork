@@ -294,15 +294,26 @@ export class HybridStorageProvider implements IStorageProvider {
     thisWeek: number;
     thisMonth: number;
     total: number;
+    totalTokens: number;
+    todayTokens: number;
+    thisWeekTokens: number;
+    thisMonthTokens: number;
     totalMessages: number;
-    topModels: Array<{ model: string; cost: number; count: number }>;
+    topModels: Array<{
+      model: string;
+      cost: number;
+      tokens: number;
+      count: number;
+    }>;
   }> {
     return this.local.getGlobalCostStats();
   }
 
   async getDailyCostTrends(
     days?: number,
-  ): Promise<Array<{ date: string; cost: number; messages: number }>> {
+  ): Promise<
+    Array<{ date: string; cost: number; messages: number; tokens: number }>
+  > {
     return this.local.getDailyCostTrends(days);
   }
 
@@ -324,6 +335,23 @@ export class HybridStorageProvider implements IStorageProvider {
     return this.local.getAgentStats(agentId);
   }
 
+  async getAllAgentStats(): Promise<
+    Record<
+      string,
+      {
+        totalMessages: number;
+        totalTokens: number;
+        totalCost: number;
+        toolCallsCount: number;
+        avgTokensPerMessage: number;
+        avgCostPerMessage: number;
+        mostUsedTools: Array<{ tool: string; count: number }>;
+      }
+    >
+  > {
+    return this.local.getAllAgentStats();
+  }
+
   async getAgentOutputs(agentId?: string): Promise<{
     documents: Array<{ id: string; title: string; createdAt: string }>;
     apps: Array<{ id: string; title: string; createdAt: string }>;
@@ -331,6 +359,20 @@ export class HybridStorageProvider implements IStorageProvider {
   }> {
     // Use local for agent outputs (tracked locally)
     return this.local.getAgentOutputs(agentId);
+  }
+
+  getContextEfficiencyStats() {
+    return this.local.getContextEfficiencyStats();
+  }
+
+  getToolUsageByAgent(): Record<
+    string,
+    {
+      mostUsedTools: Array<{ tool: string; count: number }>;
+      totalToolInvocations: number;
+    }
+  > {
+    return this.local.getToolUsageByAgent();
   }
 
   // ===== Sync Management =====

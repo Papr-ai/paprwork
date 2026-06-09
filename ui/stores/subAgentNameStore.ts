@@ -32,14 +32,19 @@ let pollingTimer: ReturnType<typeof setInterval> | null = null;
 
 async function fetchAgentNames(): Promise<Map<string, string>> {
   try {
-    const response = (await gateway.send("subagent:list")) as {
-      agents?: Array<{ id: string; name: string }>;
-    };
+    const response = await gateway.send("subagent:list");
     const map = new Map<string, string>();
-    if (Array.isArray(response?.agents)) {
-      for (const a of response.agents) {
-        map.set(a.id, a.name);
-      }
+    const data = response.data;
+    const agents = Array.isArray(data)
+      ? data
+      : data &&
+          typeof data === "object" &&
+          "agents" in data &&
+          Array.isArray((data as { agents: unknown }).agents)
+        ? (data as { agents: Array<{ id: string; name: string }> }).agents
+        : [];
+    for (const a of agents) {
+      map.set(a.id, a.name);
     }
     return map;
   } catch {

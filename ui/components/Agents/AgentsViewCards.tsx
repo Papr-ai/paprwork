@@ -1,78 +1,240 @@
 import React, { useEffect, useState } from "react";
 import { useSubAgents } from "../../hooks/useSubAgents";
 import { gateway } from "../../src/lib/gateway";
+import {
+  loadAgentStatsMap,
+  type AgentStats,
+} from "../../utils/loadAgentStats";
 import { CostOverviewCard } from "./cards/CostOverviewCard";
-import { TokenUsageCard } from "./cards/TokenUsageCard";
+import { UsageAndEfficiencyCard } from "./cards/UsageAndEfficiencyCard";
 import { JobsRunsCard } from "./cards/JobsRunsCard";
 import { AgentRosterCard } from "./cards/AgentRosterCard";
 import { ActiveOperationsCard } from "./cards/ActiveOperationsCard";
 import { ToolsSkillsCard } from "./cards/ToolsSkillsCard";
 import { OutputsCard } from "./cards/OutputsCard";
+import type { ContextEfficiencyStats } from "./cards/ContextEfficiencyCard";
+import type { DailyUsageTrend } from "./cards/UsageTrendChart";
 import "./AgentsViewCards.css";
-
-interface AgentStats {
-  totalMessages: number;
-  totalTokens: number;
-  totalCost: number;
-  toolCallsCount: number;
-  avgTokensPerMessage: number;
-  avgCostPerMessage: number;
-  mostUsedTools: Array<{ tool: string; count: number }>;
-}
 
 interface CostStats {
   today: number;
   thisWeek: number;
   thisMonth: number;
   total: number;
+  totalTokens: number;
+  todayTokens: number;
+  thisWeekTokens: number;
+  thisMonthTokens: number;
   totalMessages: number;
-  topModels: Array<{ model: string; cost: number; count: number }>;
+  topModels: Array<{
+    model: string;
+    cost: number;
+    tokens: number;
+    count: number;
+  }>;
+}
+
+const EMPTY_COST_STATS: CostStats = {
+  today: 0,
+  thisWeek: 0,
+  thisMonth: 0,
+  total: 0,
+  totalTokens: 0,
+  todayTokens: 0,
+  thisWeekTokens: 0,
+  thisMonthTokens: 0,
+  totalMessages: 0,
+  topModels: [],
+};
+
+const EMPTY_AGENT_STATS: AgentStats = {
+  totalMessages: 0,
+  totalTokens: 0,
+  totalCost: 0,
+  toolCallsCount: 0,
+  avgTokensPerMessage: 0,
+  avgCostPerMessage: 0,
+  mostUsedTools: [],
+};
+
+function mergeToolUsage(
+  stats: Record<string, AgentStats>,
+  toolUsage: Record<
+    string,
+    {
+      mostUsedTools: Array<{ tool: string; count: number }>;
+      totalToolInvocations: number;
+    }
+  >,
+): Record<string, AgentStats> {
+  const merged = { ...stats };
+  for (const [agentId, usage] of Object.entries(toolUsage)) {
+    const existing = merged[agentId] ?? EMPTY_AGENT_STATS;
+    merged[agentId] = {
+      ...existing,
+      mostUsedTools: usage.mostUsedTools,
+      totalToolInvocations: usage.totalToolInvocations,
+    };
+  }
+  return merged;
+}
+
+async function fetchToolUsageByAgent(): Promise<
+  Record<
+    string,
+    {
+      mostUsedTools: Array<{ tool: string; count: number }>;
+      totalToolInvocations: number;
+    }
+  >
+> {
+  try {
+    const response = await gateway.send("agent:get-tool-usage");
+    if (response.success && response.data) {
+      return response.data as Record<
+        string,
+        {
+          mostUsedTools: Array<{ tool: string; count: number }>;
+          totalToolInvocations: number;
+        }
+      >;
+    }
+  } catch (err) {
+    console.error("[AgentsView] Tool usage failed:", err);
+  }
+  return {};
 }
 
 export function AgentsView() {
   const { agents, runs, loading, error, dashboard } = useSubAgents();
   const [costStats, setCostStats] = useState<CostStats | null>(null);
   const [agentStats, setAgentStats] = useState<Record<string, AgentStats>>({});
+  const [contextEfficiency, setContextEfficiency] =
+    useState<ContextEfficiencyStats | null>(null);
+  const [dailyTrends, setDailyTrends] = useState<DailyUsageTrend[] | null>(
+    null,
+  );
+  const [trendsLoading, setTrendsLoading] = useState(true);
+  const [trendRange, setTrendRange] = useState<7 | 30 | 90>(30);
+  const [efficiencyLoading, setEfficiencyLoading] = useState(true);
 
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        const response = await gateway.send("agent:get-cost-stats");
+    let cancelled = false;
+
+    void gateway
+      .send("agent:get-cost-stats")
+      .then((response) => {
+        if (cancelled) return;
         if (response.success && response.data) {
-          setCostStats(response.data);
+          setCostStats(response.data as CostStats);
+        } else {
+          setCostStats(EMPTY_COST_STATS);
         }
-      } catch (error) {
-        console.error("[AgentsView] Failed to load cost stats:", error);
-      }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error("[AgentsView] Cost stats failed:", err);
+          setCostStats(EMPTY_COST_STATS);
+        }
+      });
+
+    const pollEfficiency = (attempt = 0): void => {
+      void gateway
+        .send("agent:get-context-efficiency")
+        .then((response) => {
+          if (cancelled) return;
+          if (response.success && response.data) {
+            const data = response.data as ContextEfficiencyStats;
+            setContextEfficiency(data);
+            if (data.breakdown.chatsAnalyzed > 0 || attempt >= 8) {
+              setEfficiencyLoading(false);
+              return;
+            }
+          }
+          if (attempt < 8) {
+            window.setTimeout(() => pollEfficiency(attempt + 1), 2000);
+          } else {
+            setEfficiencyLoading(false);
+          }
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            console.error("[AgentsView] Context efficiency failed:", err);
+            if (attempt < 8) {
+              window.setTimeout(() => pollEfficiency(attempt + 1), 2000);
+            } else {
+              setEfficiencyLoading(false);
+            }
+          }
+        });
     };
-    void loadData();
-  }, []);
+
+    pollEfficiency();
+
+    const statsTimer = window.setTimeout(() => {
+      void loadAgentStatsMap(agents, (partialStats) => {
+        if (!cancelled) {
+          setAgentStats((prev) => ({ ...prev, ...partialStats }));
+        }
+      })
+        .then(async (statsMap) => {
+          if (cancelled) return;
+          const toolUsage = await fetchToolUsageByAgent();
+          if (cancelled) return;
+          setAgentStats(mergeToolUsage(statsMap, toolUsage));
+        })
+        .catch((statsError) => {
+          console.error("[AgentsView] Failed to load agent stats:", statsError);
+        });
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(statsTimer);
+      setEfficiencyLoading(true);
+    };
+  }, [agents]);
 
   useEffect(() => {
-    const loadAgentStats = async () => {
-      const statsMap: Record<string, AgentStats> = {};
-      for (const agent of agents) {
-        try {
-          const response = await gateway.send("agent:get-agent-stats", {
-            agentId: agent.id,
-          });
-          if (response.success && response.data) {
-            statsMap[agent.id] = response.data;
-          }
-        } catch (error) {
-          console.error(
-            `[AgentsView] Failed to load stats for ${agent.id}:`,
-            error,
-          );
-        }
-      }
-      setAgentStats(statsMap);
-    };
+    let cancelled = false;
+    setTrendsLoading(true);
 
-    if (agents.length > 0) {
-      void loadAgentStats();
-    }
-  }, [agents]);
+    const trendsTimer = window.setTimeout(() => {
+      void gateway
+        .send("agent:get-cost-trends", { days: trendRange })
+      .then((response) => {
+        if (cancelled) return;
+        if (response.success && Array.isArray(response.data)) {
+          setDailyTrends(
+            (response.data as DailyUsageTrend[]).map((day) => ({
+              date: day.date,
+              cost: Number(day.cost ?? 0),
+              messages: Number(day.messages ?? 0),
+              tokens: Number(day.tokens ?? 0),
+            })),
+          );
+        } else {
+          setDailyTrends([]);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.error("[AgentsView] Failed to load usage trends:", error);
+          setDailyTrends([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setTrendsLoading(false);
+        }
+      });
+    }, 800);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(trendsTimer);
+    };
+  }, [trendRange]);
 
   const totalAgents = (dashboard?.totalAgents ?? agents.length) + 1;
   const totalRuns = dashboard?.totalRuns ?? runs.length;
@@ -82,10 +244,11 @@ export function AgentsView() {
   const avgScore = dashboard?.successRate
     ? Math.round(dashboard.successRate * 100)
     : 0;
-  const totalTokens = Object.values(agentStats).reduce(
+  const agentStatsTokens = Object.values(agentStats).reduce(
     (sum, stats) => sum + stats.totalTokens,
     0,
   );
+  const totalTokens = agentStatsTokens || costStats?.totalTokens || 0;
 
   if (loading && agents.length === 0) {
     return (
@@ -229,12 +392,33 @@ export function AgentsView() {
 
       {/* Cards Grid */}
       <div className="cards-grid">
-        {/* Row 1: Cost & Tokens */}
-        <CostOverviewCard costStats={costStats} />
-        <TokenUsageCard
+        {/* Row 1: Cost & Token usage (with savings) */}
+        <CostOverviewCard
+          costStats={costStats}
+          efficiency={contextEfficiency}
+          efficiencyLoading={efficiencyLoading}
+          dailyTrends={dailyTrends}
+          trendsLoading={trendsLoading}
+          trendRange={trendRange}
+          onTrendRangeChange={setTrendRange}
+        />
+        <UsageAndEfficiencyCard
           agents={agents}
           agentStats={agentStats}
-          totalTokens={totalTokens}
+          tokenStats={{
+            totalTokens,
+            todayTokens: costStats?.todayTokens ?? 0,
+            thisWeekTokens: costStats?.thisWeekTokens ?? 0,
+            thisMonthTokens: costStats?.thisMonthTokens ?? 0,
+            totalMessages: costStats?.totalMessages ?? 0,
+          }}
+          topModels={costStats?.topModels ?? []}
+          efficiency={contextEfficiency}
+          efficiencyLoading={efficiencyLoading}
+          dailyTrends={dailyTrends}
+          trendsLoading={trendsLoading}
+          trendRange={trendRange}
+          onTrendRangeChange={setTrendRange}
         />
 
         {/* Row 2: Jobs & Outputs */}

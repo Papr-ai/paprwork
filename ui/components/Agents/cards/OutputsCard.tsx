@@ -16,20 +16,35 @@ export function OutputsCard({ agentId }: Props) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const loadOutputs = async () => {
+    let cancelled = false;
+
+    const loadOutputs = async (): Promise<void> => {
       try {
+        await gateway.waitForConnection();
+        await new Promise((resolve) => setTimeout(resolve, 3500));
+        if (cancelled) return;
         const response = await gateway.send("agent:get-outputs", { agentId });
+        if (cancelled) return;
         if (response.success && response.data) {
-          setOutputs(response.data);
+          setOutputs(response.data as AgentOutputs);
+        } else {
+          setOutputs({ documents: [], apps: [], plans: [] });
         }
       } catch (error) {
+        if (cancelled) return;
         console.error("[OutputsCard] Failed to load outputs:", error);
+        setOutputs({ documents: [], apps: [], plans: [] });
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     };
 
     void loadOutputs();
+    return () => {
+      cancelled = true;
+    };
   }, [agentId]);
 
   if (loading) {

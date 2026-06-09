@@ -1,4 +1,8 @@
 import React from "react";
+import {
+  UsageTrendChart,
+  type DailyUsageTrend,
+} from "./UsageTrendChart";
 
 interface AgentStats {
   totalMessages: number;
@@ -33,9 +37,27 @@ interface Props {
   agents: SubAgentProfile[];
   agentStats: Record<string, AgentStats>;
   totalTokens: number;
+  dailyTrends?: DailyUsageTrend[] | null;
+  trendsLoading?: boolean;
+  trendRange?: 7 | 30 | 90;
+  onTrendRangeChange?: (days: 7 | 30 | 90) => void;
 }
 
-export function TokenUsageCard({ agents, agentStats, totalTokens }: Props) {
+function formatTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return value.toLocaleString();
+}
+
+export function TokenUsageCard({
+  agents,
+  agentStats,
+  totalTokens,
+  dailyTrends = null,
+  trendsLoading = false,
+  trendRange = 30,
+  onTrendRangeChange,
+}: Props) {
   const totalMessages = Object.values(agentStats).reduce(
     (sum, stats) => sum + stats.totalMessages,
     0,
@@ -43,13 +65,19 @@ export function TokenUsageCard({ agents, agentStats, totalTokens }: Props) {
   const avgTokensPerMessage =
     totalMessages > 0 ? totalTokens / totalMessages : 0;
 
-  // Get top 5 agents by token usage
-  const agentsByTokens = agents
-    .map((agent) => ({
-      agent,
-      stats: agentStats[agent.id],
+  const agentNameById = new Map(agents.map((agent) => [agent.id, agent.name]));
+
+  // Include all agents with stats (main-agent = Pen holds most usage)
+  const agentsByTokens = Object.entries(agentStats)
+    .map(([agentId, stats]) => ({
+      id: agentId,
+      name:
+        agentId === "main-agent"
+          ? "Pen"
+          : (agentNameById.get(agentId) ?? agentId),
+      stats,
     }))
-    .filter((item) => item.stats && item.stats.totalTokens > 0)
+    .filter((item) => item.stats.totalTokens > 0)
     .sort((a, b) => b.stats.totalTokens - a.stats.totalTokens)
     .slice(0, 5);
 
@@ -73,7 +101,7 @@ export function TokenUsageCard({ agents, agentStats, totalTokens }: Props) {
           </svg>
           Token Usage
         </div>
-        <div className="card-badge">{totalMessages} msgs</div>
+        <div className="card-badge">{formatTokens(totalTokens)} tokens</div>
       </div>
 
       <div className="card-content">
@@ -92,12 +120,20 @@ export function TokenUsageCard({ agents, agentStats, totalTokens }: Props) {
           </div>
         </div>
 
+        <UsageTrendChart
+          trends={dailyTrends}
+          metric="tokens"
+          loading={trendsLoading}
+          range={trendRange}
+          onRangeChange={onTrendRangeChange}
+        />
+
         {/* Top Agents by Tokens */}
         {agentsByTokens.length > 0 && (
           <div className="tokens-agents">
             <div className="agents-label">Top Agents</div>
             <div className="agents-list">
-              {agentsByTokens.map(({ agent, stats }) => {
+              {agentsByTokens.map(({ id, name, stats }) => {
                 const percentage =
                   totalTokens > 0 ? (stats.totalTokens / totalTokens) * 100 : 0;
                 const formatted =
@@ -106,9 +142,9 @@ export function TokenUsageCard({ agents, agentStats, totalTokens }: Props) {
                     : stats.totalTokens.toString();
 
                 return (
-                  <div key={agent.id} className="agent-token-item">
+                  <div key={id} className="agent-token-item">
                     <div className="agent-token-info">
-                      <span className="agent-token-name">{agent.name}</span>
+                      <span className="agent-token-name">{name}</span>
                       <span className="agent-token-count">{formatted}</span>
                     </div>
                     <div className="agent-token-bar-container">
@@ -124,21 +160,6 @@ export function TokenUsageCard({ agents, agentStats, totalTokens }: Props) {
           </div>
         )}
 
-        {/* Token Efficiency */}
-        {totalMessages > 0 && (
-          <div className="token-efficiency">
-            <div className="efficiency-item">
-              <div className="efficiency-label">Efficiency Score</div>
-              <div className="efficiency-value">
-                {avgTokensPerMessage < 500
-                  ? "High"
-                  : avgTokensPerMessage < 1000
-                    ? "Medium"
-                    : "Low"}
-              </div>
-            </div>
-          </div>
-        )}
       </div>
 
       <style>{`
@@ -221,31 +242,6 @@ export function TokenUsageCard({ agents, agentStats, totalTokens }: Props) {
           height: 100%;
           background: linear-gradient(90deg, #6366f1, #8b5cf6);
           transition: width 0.3s ease;
-        }
-
-        .token-efficiency {
-          padding: 12px;
-          background: var(--bg-secondary);
-          border-radius: 8px;
-          margin-top: 12px;
-        }
-
-        .efficiency-item {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-
-        .efficiency-label {
-          font-size: 11px;
-          color: var(--text-tertiary);
-          text-transform: uppercase;
-        }
-
-        .efficiency-value {
-          font-size: 13px;
-          font-weight: 600;
-          color: var(--primary-color);
         }
       `}</style>
     </div>

@@ -66,24 +66,34 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
     }
   };
 
-  const handleLogin = async () => {
+  const handleAuth = async (mode: "login" | "signup") => {
     setIsAuthenticating(true);
-    setShowRefresh(false); // Reset refresh button
+    setShowRefresh(false);
     setError(null);
 
     try {
-      const result = await window.electronAPI.papr.startLogin();
+      const result = await window.electronAPI.papr.startLogin(mode);
       if (!result.success) {
-        setError(result.error || "Failed to start login");
+        setError(result.error || "Failed to start authentication");
         setIsAuthenticating(false);
       }
-      // After user completes login in browser, the deep link will fire
-      // and trigger the 'papr-auth-success' event listener above
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to open login page");
       setIsAuthenticating(false);
     }
   };
+
+  useEffect(() => {
+    const handleLoginError = (event: CustomEvent<{ error: string }>) => {
+      setError(event.detail.error);
+      setIsAuthenticating(false);
+    };
+
+    window.addEventListener("papr-login-error", handleLoginError as EventListener);
+    return () => {
+      window.removeEventListener("papr-login-error", handleLoginError as EventListener);
+    };
+  }, []);
 
   const handleRefresh = () => {
     console.log('[AuthWall] Manual refresh triggered');
@@ -110,9 +120,9 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
           {isAuthenticating ? (
             <div className="auth-wall-waiting">
               <div className="auth-wall-spinner" />
-              <p className="auth-wall-status">Waiting for login...</p>
+              <p className="auth-wall-status">Waiting for authentication...</p>
               <p className="auth-wall-hint">
-                Complete the login in your browser, then return here
+                Complete sign-up or sign-in in your browser, then return here
               </p>
               
               {showRefresh && (
@@ -128,7 +138,7 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
             <>
               <button
                 className="auth-wall-login-button"
-                onClick={handleLogin}
+                onClick={() => void handleAuth("signup")}
               >
                 Create Account
               </button>
@@ -144,7 +154,7 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
                   I already have an account!{' '}
                   <button 
                     className="auth-wall-link"
-                    onClick={handleLogin}
+                    onClick={() => void handleAuth("login")}
                   >
                     Sign in
                   </button>

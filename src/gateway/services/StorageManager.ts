@@ -209,8 +209,17 @@ export class StorageManager {
     thisWeek: number;
     thisMonth: number;
     total: number;
+    totalTokens: number;
+    todayTokens: number;
+    thisWeekTokens: number;
+    thisMonthTokens: number;
     totalMessages: number;
-    topModels: Array<{ model: string; cost: number; count: number }>;
+    topModels: Array<{
+      model: string;
+      cost: number;
+      tokens: number;
+      count: number;
+    }>;
   }> {
     const provider = this.ensureInitialized();
     return await provider.getGlobalCostStats();
@@ -228,7 +237,9 @@ export class StorageManager {
 
   async getDailyCostTrends(
     days?: number,
-  ): Promise<Array<{ date: string; cost: number; messages: number }>> {
+  ): Promise<
+    Array<{ date: string; cost: number; messages: number; tokens: number }>
+  > {
     const provider = this.ensureInitialized();
     return await provider.getDailyCostTrends(days);
   }
@@ -253,6 +264,24 @@ export class StorageManager {
     return await provider.getAgentStats(agentId);
   }
 
+  async getAllAgentStats(): Promise<
+    Record<
+      string,
+      {
+        totalMessages: number;
+        totalTokens: number;
+        totalCost: number;
+        toolCallsCount: number;
+        avgTokensPerMessage: number;
+        avgCostPerMessage: number;
+        mostUsedTools: Array<{ tool: string; count: number }>;
+      }
+    >
+  > {
+    const provider = this.ensureInitialized();
+    return await provider.getAllAgentStats();
+  }
+
   async getAgentOutputs(agentId?: string): Promise<{
     documents: Array<{ id: string; title: string; createdAt: string }>;
     apps: Array<{ id: string; title: string; createdAt: string }>;
@@ -260,6 +289,22 @@ export class StorageManager {
   }> {
     const provider = this.ensureInitialized();
     return await provider.getAgentOutputs(agentId);
+  }
+
+  getContextEfficiencyStats() {
+    const provider = this.ensureInitialized();
+    return provider.getContextEfficiencyStats();
+  }
+
+  getToolUsageByAgent(): Record<
+    string,
+    {
+      mostUsedTools: Array<{ tool: string; count: number }>;
+      totalToolInvocations: number;
+    }
+  > {
+    const provider = this.ensureInitialized();
+    return provider.getToolUsageByAgent();
   }
 
   // ===== Summary Operations =====

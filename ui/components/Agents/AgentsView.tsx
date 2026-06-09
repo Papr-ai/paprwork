@@ -643,7 +643,9 @@ export function AgentsView() {
               <div className="activity-marker-native" />
               <div className="activity-content-native">
                 <div className="activity-header-native">
-                  <div className="activity-title-native">{run.agentId}</div>
+                  <div className="activity-title-native">
+                    {run.agentName ?? run.agentId}
+                  </div>
                   <div className="activity-time-native">
                     {new Date(run.createdAt).toLocaleString()}
                   </div>

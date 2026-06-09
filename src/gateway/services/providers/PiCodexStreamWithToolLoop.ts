@@ -13,8 +13,6 @@ import {
   sanitizeToolOutput,
 } from "../../../core/tools/index.js";
 import { compactStaleToolResults, estimateMessagesTokens } from "../agent/compactToolResults.js";
-import { resetSchemaConversionCounter } from "./piAiHelpers.js";
-
 /**
  * Truncate tool call ID to 64 characters (OpenAI's maximum length requirement).
  * IDs from various APIs may exceed this limit, causing validation errors.
@@ -271,9 +269,6 @@ export async function* createPiCodexStreamWithToolLoop(
   onContextPressure?: () => Promise<void>, // Callback to trigger summarization
   modelId?: string, // Add modelId to determine context threshold
 ): AsyncGenerator<OurChunk> {
-  // Reset circuit breakers at start of request
-  resetSchemaConversionCounter();
-  
   const context = {
     ...initialContext,
     messages: [...initialContext.messages],

@@ -2653,6 +2653,8 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
         valid: true,
         filesChecked: result.filesChecked,
         message: `✓ All ${result.filesChecked} files passed validation`,
+        nextStep:
+          "webview_launch_app → page_wait_for({ target: 'mini_app', time: 2 }) or webview_snapshot",
       },
     };
   },

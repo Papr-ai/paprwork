@@ -3,13 +3,12 @@ import React from "react";
 interface SubAgentRun {
   id: string;
   agentId: string;
-  agentName: string;
-  taskId: string;
-  sessionId: string;
+  agentName?: string;
+  task?: string;
   status: "pending" | "running" | "completed" | "failed";
-  startTime: string;
-  endTime?: string;
-  result?: unknown;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
   error?: string;
 }
 
@@ -65,13 +64,18 @@ export function ActiveOperationsCard({ activeRuns, agents }: Props) {
               />
               <path d="M9 12h6" stroke="currentColor" strokeWidth="2" />
             </svg>
-            <div className="empty-text">No active operations</div>
+            <div className="empty-text">
+              No sub-agent delegations running — Pen and other main chat work
+              won&apos;t appear here
+            </div>
           </div>
         ) : (
           <div className="operations-list">
             {activeRuns.map((run) => {
               const agent = agentsMap.get(run.agentId);
-              const duration = getDuration(new Date(run.startTime));
+              const duration = getDuration(
+                new Date(run.startedAt ?? run.createdAt),
+              );
               const isRunning = run.status === "running";
 
               return (
@@ -80,7 +84,7 @@ export function ActiveOperationsCard({ activeRuns, agents }: Props) {
                     <div className="operation-agent">
                       <div className={`operation-status ${run.status}`} />
                       <span className="operation-agent-name">
-                        {run.agentName}
+                        {run.agentName ?? agent?.name ?? run.agentId}
                       </span>
                     </div>
                     <div className="operation-duration">{duration}</div>
@@ -94,7 +98,7 @@ export function ActiveOperationsCard({ activeRuns, agents }: Props) {
 
                   <div className="operation-meta">
                     <span className="operation-session">
-                      {(run.sessionId ?? "").slice(0, 8)}
+                      {run.id.slice(0, 8)}
                     </span>
                     {isRunning && (
                       <div className="operation-progress">

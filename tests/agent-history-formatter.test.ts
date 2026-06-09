@@ -284,4 +284,28 @@ describe("agent history formatter", () => {
       expect(err.cause?.name).not.toBe("AI_TypeValidationError");
     }
   });
+
+  test("buildModelMessages injects memory blocks after summary and before history", () => {
+    const history: unknown[] = [{ role: "assistant", content: "prior response" }];
+    const messages = buildModelMessages(
+      history,
+      "new prompt",
+      "system instructions",
+      "Earlier we discussed deployment.",
+      ["[CROSS-CHAT USER CONTEXT] tier data", "[RELATED MEMORY] search hit"],
+    );
+
+    expect(messages[0].role).toBe("system");
+    expect(messages[1].content).toContain("CONVERSATION CONTEXT");
+    expect(messages[2].content).toBe("[CROSS-CHAT USER CONTEXT] tier data");
+    expect(messages[3].content).toBe("[RELATED MEMORY] search hit");
+    expect(messages[4]).toEqual({
+      role: "assistant",
+      content: "prior response",
+    });
+    expect(messages[messages.length - 1]).toEqual({
+      role: "user",
+      content: "new prompt",
+    });
+  });
 });

@@ -118,7 +118,7 @@ export interface ElectronAPI {
       email?: string;
       error?: string;
     }>;
-    startLogin: () => Promise<{
+    startLogin: (mode?: "login" | "signup") => Promise<{
       success: boolean;
       error?: string;
     }>;
@@ -137,8 +137,10 @@ export interface ElectronAPI {
       };
       error?: string;
     }>;
-    onLoginSuccess: (callback: (data: { apiKey: string; email: string }) => void) => void;
-    removeLoginSuccessListener: (callback: (data: { apiKey: string; email: string }) => void) => void;
+    onLoginSuccess: (callback: (data: { email: string; name?: string; userId?: string }) => void) => void;
+    removeLoginSuccessListener: (callback: (data: { email: string; name?: string; userId?: string }) => void) => void;
+    onLoginError: (callback: (data: { error: string }) => void) => void;
+    removeLoginErrorListener: (callback: (data: { error: string }) => void) => void;
     onLogoutSuccess: (callback: () => void) => void;
     removeLogoutSuccessListener: (callback: () => void) => void;
     listNamespaces: () => Promise<{

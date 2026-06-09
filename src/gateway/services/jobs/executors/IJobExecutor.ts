@@ -41,6 +41,8 @@ export interface ExecutorLaunchResult {
   exitCode?: number;
   outputMessage?: string;
   errorMessage?: string;
+  /** Secret values substituted into the command — for log redaction without re-fetching all keys */
+  sanitizationValues?: string[];
 }
 
 export interface IJobExecutor {

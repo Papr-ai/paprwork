@@ -1398,7 +1398,7 @@ create_app({
 ```
 
 - Use Liquid Glass design tokens (see Liquid Glass Design skill)
-- Test with `webview_launch_app` + `webview_wait_for({ time: 2 })` or `webview_snapshot` — never `browser_wait_for` after preview launch (different browser)
+- Test with `webview_launch_app` + `page_wait_for({ target: 'mini_app', time: 2 })` or `webview_snapshot`
 
 #### App Logo / Icon — Shown in Tabs, Favorites, and Bundles
 

@@ -177,11 +177,11 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
     }
   };
 
-  const handleLogin = async () => {
+  const handleLogin = async (mode: "login" | "signup" = "login") => {
     setIsLoading(true);
     setError(null);
     try {
-      const result = await window.electronAPI.papr.startLogin();
+      const result = await window.electronAPI.papr.startLogin(mode);
       if (!result.success) {
         throw new Error(result.error || "Failed to start login flow");
       }
@@ -421,7 +421,7 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
       <button
         type="button"
         className="papr-section__login-btn"
-        onClick={handleLogin}
+        onClick={() => void handleLogin("login")}
         disabled={isLoading}
       >
         {isLoading ? (
@@ -435,7 +435,15 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
       </button>
 
       <p className="papr-section__note">
-        Don't have an account? <a href="https://dashboard.papr.ai" target="_blank" rel="noopener noreferrer">Sign up</a>
+        Don't have an account?{" "}
+        <button
+          type="button"
+          className="papr-section__inline-link"
+          onClick={() => void handleLogin("signup")}
+          disabled={isLoading}
+        >
+          Create account
+        </button>
       </p>
     </div>
   );

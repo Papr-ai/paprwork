@@ -3,13 +3,12 @@ import React from "react";
 interface SubAgentRun {
   id: string;
   agentId: string;
-  agentName: string;
-  taskId: string;
-  sessionId: string;
+  agentName?: string;
+  task?: string;
   status: "pending" | "running" | "completed" | "failed";
-  startTime: string;
-  endTime?: string;
-  result?: unknown;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
   error?: string;
 }
 
@@ -57,7 +56,8 @@ export function JobsRunsCard({ runs, agents, dashboard }: Props) {
   const recentRuns = runs
     .sort(
       (a, b) =>
-        new Date(b.startTime).getTime() - new Date(a.startTime).getTime(),
+        new Date(b.startedAt ?? b.createdAt).getTime() -
+        new Date(a.startedAt ?? a.createdAt).getTime(),
     )
     .slice(0, 3);
 
@@ -128,12 +128,16 @@ export function JobsRunsCard({ runs, agents, dashboard }: Props) {
             <div className="jobs-history-label">Recent Activity</div>
             <div className="jobs-history-list">
               {recentRuns.map((run) => {
-                const timeAgo = getTimeAgo(new Date(run.startTime));
+                const timeAgo = getTimeAgo(
+                  new Date(run.startedAt ?? run.createdAt),
+                );
                 return (
                   <div key={run.id} className="jobs-history-item">
                     <div className={`jobs-status-dot ${run.status}`} />
                     <div className="jobs-history-info">
-                      <div className="jobs-history-name">{run.agentName}</div>
+                      <div className="jobs-history-name">
+                        {run.agentName ?? run.agentId}
+                      </div>
                       <div className="jobs-history-time">{timeAgo}</div>
                     </div>
                   </div>

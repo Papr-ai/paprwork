@@ -16,11 +16,38 @@ import type {
   ChatMetadata,
 } from "./IStorageProvider";
 import { ChatExporter } from "./ChatExporter.js";
+import {
+  deserializeEnhancedFields,
+  formatSummaryForLLM,
+  serializeEnhancedFields,
+} from "./summaryFormatting.js";
+import {
+  computeContextEfficiencyStats,
+  EMPTY_CONTEXT_EFFICIENCY_STATS,
+} from "./contextEfficiencyStats.js";
+import type { ContextEfficiencyStats } from "./contextEfficiencyStats.js";
+import {
+  invalidateChatFootprints,
+  migrateFootprintColumns,
+  scheduleContextFootprintBackfill,
+  storeFootprintForNewMessage,
+} from "./contextFootprintStore.js";
+import {
+  getToolCountsByAgent,
+  getToolCountsForAgent,
+  getTotalToolInvocationsForAgent,
+  sumToolInvocations,
+} from "./agentToolCountsSql.js";
 
 export class LocalStorageProvider implements IStorageProvider {
   private db!: Database.Database;
   private dbPath: string;
   private exporter: ChatExporter;
+  private contextEfficiencyCache: {
+    expiresAt: number;
+    stats: ContextEfficiencyStats;
+  } | null = null;
+  private contextEfficiencyComputing = false;
 
   constructor(userDataPath: string) {
     this.dbPath = path.join(userDataPath, "chats.db");
@@ -71,6 +98,12 @@ export class LocalStorageProvider implements IStorageProvider {
     console.log("[LocalStorageProvider] Initializing chat exporter...");
     await this.exporter.initialize();
     console.log("[LocalStorageProvider] Chat exporter initialized");
+
+    scheduleContextFootprintBackfill(this.db, {
+      onBatchComplete: () => {
+        this.contextEfficiencyCache = null;
+      },
+    });
   }
 
   private createSchema(): void {
@@ -91,6 +124,7 @@ export class LocalStorageProvider implements IStorageProvider {
         summary_last_updated TEXT,
         summary_fetched_from_papr INTEGER DEFAULT 0,  -- Boolean: 0 or 1
         summary_last_fetched_at TEXT,
+        summary_enhanced TEXT,            -- JSON: session_intent, key_decisions, etc.
         
         -- Sync tracking
         sync_status TEXT DEFAULT 'local', -- 'local' | 'synced' | 'papr_only'
@@ -212,6 +246,19 @@ export class LocalStorageProvider implements IStorageProvider {
       this.db.exec("ALTER TABLE messages ADD COLUMN sequence TEXT"); // Store as JSON
     }
 
+    const chatColumns = this.db.pragma("table_info(chats)") as Array<{
+      name: string;
+    }>;
+    const chatColumnNames = chatColumns.map((column) => column.name);
+    if (!chatColumnNames.includes("summary_enhanced")) {
+      console.log(
+        '[LocalStorage] Adding "summary_enhanced" column to chats table...',
+      );
+      this.db.exec("ALTER TABLE chats ADD COLUMN summary_enhanced TEXT");
+    }
+
+    migrateFootprintColumns(this.db);
+
     console.log("[LocalStorage] Database migration complete");
 
     // Create indexes
@@ -221,6 +268,8 @@ export class LocalStorageProvider implements IStorageProvider {
       CREATE INDEX IF NOT EXISTS idx_messages_sync_status ON messages(chat_id, sync_status);
       CREATE INDEX IF NOT EXISTS idx_messages_unsynced ON messages(chat_id, sync_status) 
         WHERE sync_status IN ('sync_pending', 'sync_failed');
+      CREATE INDEX IF NOT EXISTS idx_messages_assistant_timestamp ON messages(role, timestamp);
+      CREATE INDEX IF NOT EXISTS idx_messages_source_agent_role ON messages(source_agent_id, role);
     `);
   }
 
@@ -258,6 +307,8 @@ export class LocalStorageProvider implements IStorageProvider {
       incomplete: message.incomplete,
     });
 
+    const messageId = message.id || uuidv4();
+
     // Insert message
     this.db
       .prepare(`
@@ -271,7 +322,7 @@ export class LocalStorageProvider implements IStorageProvider {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
       .run(
-        message.id || uuidv4(),
+        messageId,
         chatId,
         message.role,
         message.content,
@@ -307,6 +358,11 @@ export class LocalStorageProvider implements IStorageProvider {
       .prepare(`SELECT id, message_count FROM chats WHERE id = ?`)
       .get(chatId) as { id: string; message_count: number } | undefined;
     
+    if (message.role === "assistant" && promptTokens > 0) {
+      storeFootprintForNewMessage(this.db, chatId, messageId, promptTokens);
+      this.contextEfficiencyCache = null;
+    }
+
     console.log(`[LocalStorage] ✅ Message saved successfully`);
     console.log(`[LocalStorage] 📊 Chat stats after save: message_count=${updatedChat?.message_count || 0} (changes=${updateResult.changes})`);
   }
@@ -382,7 +438,8 @@ export class LocalStorageProvider implements IStorageProvider {
     const chat = this.db
       .prepare(`
       SELECT id, title, message_count, 
-             summary_short, summary_medium, summary_long, summary_topics
+             summary_short, summary_medium, summary_long, summary_topics,
+             summary_enhanced
       FROM chats 
       WHERE id = ?
     `)
@@ -449,6 +506,7 @@ export class LocalStorageProvider implements IStorageProvider {
 
     const archivedCount = chat.message_count - recentMessages.length;
     const topics = chat.summary_topics ? JSON.parse(chat.summary_topics) : [];
+    const enhanced = deserializeEnhancedFields(chat.summary_enhanced);
 
     console.log(`[LocalStorage] Loading LLM context for chat ${chatId}:`);
     console.log(`  Total messages in DB: ${chat.message_count}`);
@@ -466,31 +524,19 @@ export class LocalStorageProvider implements IStorageProvider {
     );
 
     // Build summary for injection as user message
-    const summaryForSystemPrompt = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📚 ARCHIVED CONVERSATION SUMMARY (${archivedCount} older messages archived)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-This conversation has been ongoing for ${chat.message_count} messages total.
-The summary below covers the first ${archivedCount} messages.
-Only the most recent ${recentMessages.length} messages are loaded in context after this summary.
-
-Full conversation export: ${chatFilePath}
-You can use bash/grep/read tools to search the full history if needed.
-
-───────────────────────────────────────────────────────────
-
-FULL SESSION SUMMARY:
-${chat.summary_long}
-
-RECENT CONTEXT (last ~100 messages):
-${chat.summary_medium}
-
-CURRENT BATCH (last 15 messages):
-${chat.summary_short}
-
-KEY TOPICS: ${topics.join(", ")}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    const summaryForSystemPrompt = formatSummaryForLLM({
+      tiers: {
+        short_term: chat.summary_short,
+        medium_term: chat.summary_medium,
+        long_term: chat.summary_long,
+        topics,
+        last_updated: chat.summary_last_updated ?? new Date().toISOString(),
+      },
+      enhanced,
+      totalCount: chat.message_count,
+      recentCount: recentMessages.length,
+      chatFilePath,
+    });
 
     // Format recent messages — pass toolCalls through for structured AI SDK format
     const formattedRecent = recentMessages.map((message) => {
@@ -532,7 +578,8 @@ KEY TOPICS: ${topics.join(", ")}
       .prepare(`
       SELECT summary_short, summary_medium, summary_long, 
              summary_topics, summary_last_updated,
-             summary_fetched_from_papr, summary_last_fetched_at
+             summary_fetched_from_papr, summary_last_fetched_at,
+             summary_enhanced
       FROM chats 
       WHERE id = ?
     `)
@@ -548,6 +595,7 @@ KEY TOPICS: ${topics.join(", ")}
       long_term: chat.summary_long,
       topics: chat.summary_topics ? JSON.parse(chat.summary_topics) : [],
       last_updated: chat.summary_last_updated,
+      enhanced: deserializeEnhancedFields(chat.summary_enhanced),
       fetched_from_papr: chat.summary_fetched_from_papr === 1,
       last_fetched_at: chat.summary_last_fetched_at,
     };
@@ -563,7 +611,8 @@ KEY TOPICS: ${topics.join(", ")}
           summary_topics = ?,
           summary_last_updated = ?,
           summary_fetched_from_papr = ?,
-          summary_last_fetched_at = ?
+          summary_last_fetched_at = ?,
+          summary_enhanced = ?
       WHERE id = ?
     `)
       .run(
@@ -574,8 +623,17 @@ KEY TOPICS: ${topics.join(", ")}
         summary.last_updated,
         summary.fetched_from_papr ? 1 : 0,
         summary.last_fetched_at || null,
+        serializeEnhancedFields(summary.enhanced),
         chatId,
       );
+
+    invalidateChatFootprints(this.db, chatId);
+    this.contextEfficiencyCache = null;
+    scheduleContextFootprintBackfill(this.db, {
+      onBatchComplete: () => {
+        this.contextEfficiencyCache = null;
+      },
+    });
   }
 
   // ===== Chat Operations =====
@@ -808,8 +866,17 @@ KEY TOPICS: ${topics.join(", ")}
     thisWeek: number;
     thisMonth: number;
     total: number;
+    totalTokens: number;
+    todayTokens: number;
+    thisWeekTokens: number;
+    thisMonthTokens: number;
     totalMessages: number;
-    topModels: Array<{ model: string; cost: number; count: number }>;
+    topModels: Array<{
+      model: string;
+      cost: number;
+      tokens: number;
+      count: number;
+    }>;
   }> {
     const now = new Date();
     const todayStart = new Date(
@@ -826,50 +893,46 @@ KEY TOPICS: ${topics.join(", ")}
       1,
     ).toISOString();
 
-    // Today's cost
-    const todayStats = this.db
-      .prepare(
-        `SELECT COALESCE(SUM(cost), 0) as cost
-        FROM messages 
-        WHERE role = 'assistant' AND timestamp >= ?`,
-      )
-      .get(todayStart) as any;
-
-    // This week's cost
-    const weekStats = this.db
-      .prepare(
-        `SELECT COALESCE(SUM(cost), 0) as cost
-        FROM messages 
-        WHERE role = 'assistant' AND timestamp >= ?`,
-      )
-      .get(weekStart) as any;
-
-    // This month's cost
-    const monthStats = this.db
-      .prepare(
-        `SELECT COALESCE(SUM(cost), 0) as cost
-        FROM messages 
-        WHERE role = 'assistant' AND timestamp >= ?`,
-      )
-      .get(monthStart) as any;
-
-    // Total cost and messages
     const totalStats = this.db
       .prepare(
         `SELECT 
           COALESCE(SUM(cost), 0) as cost,
-          COUNT(*) as count
+          COALESCE(SUM(total_tokens), 0) as total_tokens,
+          COUNT(*) as count,
+          COALESCE(SUM(CASE WHEN timestamp >= ? THEN cost ELSE 0 END), 0) as today_cost,
+          COALESCE(SUM(CASE WHEN timestamp >= ? THEN cost ELSE 0 END), 0) as week_cost,
+          COALESCE(SUM(CASE WHEN timestamp >= ? THEN cost ELSE 0 END), 0) as month_cost,
+          COALESCE(SUM(CASE WHEN timestamp >= ? THEN total_tokens ELSE 0 END), 0) as today_tokens,
+          COALESCE(SUM(CASE WHEN timestamp >= ? THEN total_tokens ELSE 0 END), 0) as week_tokens,
+          COALESCE(SUM(CASE WHEN timestamp >= ? THEN total_tokens ELSE 0 END), 0) as month_tokens
         FROM messages 
         WHERE role = 'assistant'`,
       )
-      .get() as any;
+      .get(
+        todayStart,
+        weekStart,
+        monthStart,
+        todayStart,
+        weekStart,
+        monthStart,
+      ) as {
+      cost: number;
+      total_tokens: number;
+      count: number;
+      today_cost: number;
+      week_cost: number;
+      month_cost: number;
+      today_tokens: number;
+      week_tokens: number;
+      month_tokens: number;
+    };
 
-    // Top models by cost
     const topModelsRows = this.db
       .prepare(
         `SELECT 
           model,
           COALESCE(SUM(cost), 0) as cost,
+          COALESCE(SUM(total_tokens), 0) as tokens,
           COUNT(*) as count
         FROM messages 
         WHERE role = 'assistant' AND model IS NOT NULL
@@ -877,17 +940,27 @@ KEY TOPICS: ${topics.join(", ")}
         ORDER BY cost DESC
         LIMIT 10`,
       )
-      .all() as any[];
+      .all() as Array<{
+      model: string;
+      cost: number;
+      tokens: number;
+      count: number;
+    }>;
 
     return {
-      today: todayStats?.cost || 0,
-      thisWeek: weekStats?.cost || 0,
-      thisMonth: monthStats?.cost || 0,
+      today: totalStats?.today_cost || 0,
+      thisWeek: totalStats?.week_cost || 0,
+      thisMonth: totalStats?.month_cost || 0,
       total: totalStats?.cost || 0,
+      totalTokens: totalStats?.total_tokens || 0,
+      todayTokens: totalStats?.today_tokens || 0,
+      thisWeekTokens: totalStats?.week_tokens || 0,
+      thisMonthTokens: totalStats?.month_tokens || 0,
       totalMessages: totalStats?.count || 0,
       topModels: topModelsRows.map((row) => ({
         model: row.model,
         cost: row.cost,
+        tokens: row.tokens,
         count: row.count,
       })),
     };
@@ -898,7 +971,9 @@ KEY TOPICS: ${topics.join(", ")}
    */
   async getDailyCostTrends(
     days: number = 30,
-  ): Promise<Array<{ date: string; cost: number; messages: number }>> {
+  ): Promise<
+    Array<{ date: string; cost: number; messages: number; tokens: number }>
+  > {
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
     const startDateStr = startDate.toISOString();
@@ -908,18 +983,25 @@ KEY TOPICS: ${topics.join(", ")}
         `SELECT
           DATE(timestamp) as date,
           COALESCE(SUM(cost), 0) as cost,
+          COALESCE(SUM(total_tokens), 0) as tokens,
           COUNT(*) as messages
         FROM messages
         WHERE role = 'assistant' AND timestamp >= ?
         GROUP BY DATE(timestamp)
         ORDER BY date ASC`,
       )
-      .all(startDateStr) as any[];
+      .all(startDateStr) as Array<{
+      date: string;
+      cost: number;
+      tokens: number;
+      messages: number;
+    }>;
 
     return dailyStats.map((row) => ({
       date: row.date,
       cost: row.cost,
       messages: row.messages,
+      tokens: row.tokens,
     }));
   }
 
@@ -972,6 +1054,7 @@ KEY TOPICS: ${topics.join(", ")}
     totalTokens: number;
     totalCost: number;
     toolCallsCount: number;
+    totalToolInvocations?: number;
     avgTokensPerMessage: number;
     avgCostPerMessage: number;
     mostUsedTools: Array<{ tool: string; count: number }>;
@@ -985,50 +1068,108 @@ KEY TOPICS: ${topics.join(", ")}
           COALESCE(SUM(cost), 0) as total_cost,
           COALESCE(SUM(CASE WHEN tool_calls IS NOT NULL AND tool_calls != '' THEN 1 ELSE 0 END), 0) as tool_calls_count
         FROM messages
-        WHERE source_agent_id = ? AND role = 'assistant'`,
+        WHERE COALESCE(source_agent_id, 'main-agent') = ? AND role = 'assistant'`,
       )
-      .get(agentId) as any;
+      .get(agentId) as {
+      message_count: number;
+      total_tokens: number;
+      total_cost: number;
+      tool_calls_count: number;
+    };
 
     const messageCount = stats?.message_count || 0;
     const totalTokens = stats?.total_tokens || 0;
     const totalCost = stats?.total_cost || 0;
     const toolCallsCount = stats?.tool_calls_count || 0;
 
-    // Get tool usage stats
-    const messages = this.db
-      .prepare(
-        `SELECT tool_calls
-        FROM messages
-        WHERE source_agent_id = ? AND role = 'assistant' AND tool_calls IS NOT NULL AND tool_calls != ''`,
-      )
-      .all(agentId) as any[];
-
-    const toolCounts: Record<string, number> = {};
-    for (const msg of messages) {
-      try {
-        const toolCalls = JSON.parse(msg.tool_calls) as Array<{ name: string }>;
-        for (const call of toolCalls) {
-          toolCounts[call.name] = (toolCounts[call.name] || 0) + 1;
-        }
-      } catch {
-        // Ignore parse errors
-      }
-    }
-
-    const mostUsedTools = Object.entries(toolCounts)
-      .map(([tool, count]) => ({ tool, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 5);
+    const mostUsedTools = getToolCountsForAgent(this.db, agentId).slice(0, 5);
+    const totalToolInvocations = getTotalToolInvocationsForAgent(
+      this.db,
+      agentId,
+    );
 
     return {
       totalMessages: messageCount,
       totalTokens,
       totalCost,
       toolCallsCount,
+      totalToolInvocations,
       avgTokensPerMessage: messageCount > 0 ? totalTokens / messageCount : 0,
       avgCostPerMessage: messageCount > 0 ? totalCost / messageCount : 0,
       mostUsedTools,
     };
+  }
+
+  async getAllAgentStats(): Promise<
+    Record<
+      string,
+      {
+        totalMessages: number;
+        totalTokens: number;
+        totalCost: number;
+        toolCallsCount: number;
+        avgTokensPerMessage: number;
+        avgCostPerMessage: number;
+        mostUsedTools: Array<{ tool: string; count: number }>;
+      }
+    >
+  > {
+    const aggregateRows = this.db
+      .prepare(
+        `SELECT
+          source_agent_id as agent_id,
+          COUNT(*) as message_count,
+          COALESCE(SUM(total_tokens), 0) as total_tokens,
+          COALESCE(SUM(cost), 0) as total_cost,
+          COALESCE(SUM(CASE WHEN tool_calls IS NOT NULL AND tool_calls != '' THEN 1 ELSE 0 END), 0) as tool_calls_count
+        FROM messages
+        WHERE role = 'assistant'
+        GROUP BY source_agent_id`,
+      )
+      .all() as Array<{
+      agent_id: string;
+      message_count: number;
+      total_tokens: number;
+      total_cost: number;
+      tool_calls_count: number;
+    }>;
+
+    const toolCountsByAgent = getToolCountsByAgent(this.db);
+
+    const result: Record<
+      string,
+      {
+        totalMessages: number;
+        totalTokens: number;
+        totalCost: number;
+        toolCallsCount: number;
+        totalToolInvocations?: number;
+        avgTokensPerMessage: number;
+        avgCostPerMessage: number;
+        mostUsedTools: Array<{ tool: string; count: number }>;
+      }
+    > = {};
+
+    for (const row of aggregateRows) {
+      const agentId = row.agent_id || "main-agent";
+      const messageCount = row.message_count || 0;
+      const totalTokens = row.total_tokens || 0;
+      const totalCost = row.total_cost || 0;
+      const toolCallsCount = row.tool_calls_count || 0;
+      const agentTools = toolCountsByAgent.get(agentId) ?? [];
+      result[agentId] = {
+        totalMessages: messageCount,
+        totalTokens,
+        totalCost,
+        toolCallsCount,
+        totalToolInvocations: sumToolInvocations(agentTools),
+        avgTokensPerMessage: messageCount > 0 ? totalTokens / messageCount : 0,
+        avgCostPerMessage: messageCount > 0 ? totalCost / messageCount : 0,
+        mostUsedTools: agentTools.slice(0, 5),
+      };
+    }
+
+    return result;
   }
 
   async getAgentOutputs(agentId?: string): Promise<{
@@ -1097,6 +1238,67 @@ KEY TOPICS: ${topics.join(", ")}
     if (!exists) {
       await this.createChat(chatId);
     }
+  }
+
+  getContextEfficiencyStats(): ContextEfficiencyStats {
+    scheduleContextFootprintBackfill(this.db, {
+      onBatchComplete: () => {
+        this.contextEfficiencyCache = null;
+      },
+    });
+
+    const now = Date.now();
+    if (
+      this.contextEfficiencyCache &&
+      this.contextEfficiencyCache.expiresAt > now
+    ) {
+      return this.contextEfficiencyCache.stats;
+    }
+
+    if (this.contextEfficiencyComputing) {
+      return (
+        this.contextEfficiencyCache?.stats ?? EMPTY_CONTEXT_EFFICIENCY_STATS
+      );
+    }
+
+    this.contextEfficiencyComputing = true;
+    try {
+      const stats = computeContextEfficiencyStats(this.db);
+      const cacheTtlMs =
+        stats.pendingFootprintTurns > 0 ? 10_000 : 300_000;
+      this.contextEfficiencyCache = {
+        expiresAt: Date.now() + cacheTtlMs,
+        stats,
+      };
+      return stats;
+    } catch (error) {
+      console.error("[LocalStorage] Context efficiency compute failed:", error);
+      return EMPTY_CONTEXT_EFFICIENCY_STATS;
+    } finally {
+      this.contextEfficiencyComputing = false;
+    }
+  }
+
+  getToolUsageByAgent(): Record<
+    string,
+    { mostUsedTools: Array<{ tool: string; count: number }>; totalToolInvocations: number }
+  > {
+    const toolCountsByAgent = getToolCountsByAgent(this.db);
+    const result: Record<
+      string,
+      {
+        mostUsedTools: Array<{ tool: string; count: number }>;
+        totalToolInvocations: number;
+      }
+    > = {};
+
+    for (const [agentId, tools] of toolCountsByAgent.entries()) {
+      result[agentId] = {
+        mostUsedTools: tools.slice(0, 5),
+        totalToolInvocations: sumToolInvocations(tools),
+      };
+    }
+    return result;
   }
 
   /**

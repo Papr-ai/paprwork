@@ -8,6 +8,7 @@ import chokidar, { FSWatcher } from 'chokidar';
 import * as path from 'path';
 import * as os from 'os';
 import { Papr } from '@papr/memory';
+import { isIndexableCodePath } from './codeIndexPaths.js';
 // import { CodeIndexerService } from './CodeIndexerService.js';
 
 export class CodeFileWatcher {
@@ -92,24 +93,13 @@ export class CodeFileWatcher {
     console.log(`📝 File ${action}: ${path.relative(this.paprDir, filePath)}`);
     
     try {
-      // Determine if this is a job or mini-app (use path.sep for cross-platform)
-      const pathParts = filePath.split(path.sep);
-      const isJob = pathParts.includes('Jobs');
-      const isMiniApp = pathParts.includes('apps');
-      
-      if (!isJob && !isMiniApp) {
-        console.log('   ⚠️  Ignoring file outside Jobs/apps folders');
+      if (!isIndexableCodePath(filePath, this.paprDir)) {
+        console.log(`   ⚠️  Ignoring unindexable path: ${path.relative(this.paprDir, filePath)}`);
         return;
       }
-      
-      // Extract project ID from path
-      const projectId = this.extractProjectId(filePath, isJob);
-      if (!projectId) {
-        console.log('   ⚠️  Could not extract project ID');
-        return;
-      }
-      
-      console.log(`   ✓ Queueing for re-index: ${projectId}`);
+
+      const relativePath = path.relative(this.paprDir, filePath);
+      console.log(`   ✓ Queueing for re-index: ${relativePath}`);
       
       // Notify the manager to queue this file
       if (this.onFileChange) {
@@ -132,18 +122,4 @@ export class CodeFileWatcher {
     console.log('   💡 Note: Deleted files remain in memory (historical record)');
   }
   
-  /**
-   * Extract project ID from file path
-   */
-  private extractProjectId(filePath: string, isJob: boolean): string | null {
-    const parts = filePath.split(path.sep);
-    const targetFolder = isJob ? 'Jobs' : 'apps';
-    const folderIndex = parts.indexOf(targetFolder);
-    
-    if (folderIndex >= 0 && folderIndex < parts.length - 1) {
-      return parts[folderIndex + 1];
-    }
-    
-    return null;
-  }
 }

@@ -60,6 +60,9 @@ export interface StoredSummary {
   topics: string[];
   last_updated: string;
 
+  // Enhanced fields from Papr /compress (session_intent, key_decisions, etc.)
+  enhanced?: import("./summaryFormatting.js").SummaryEnhancedFields;
+
   // Source tracking
   fetched_from_papr: boolean;
   last_fetched_at?: string;
@@ -213,13 +216,24 @@ export interface IStorageProvider {
     thisWeek: number;
     thisMonth: number;
     total: number;
+    totalTokens: number;
+    todayTokens: number;
+    thisWeekTokens: number;
+    thisMonthTokens: number;
     totalMessages: number;
-    topModels: Array<{ model: string; cost: number; count: number }>;
+    topModels: Array<{
+      model: string;
+      cost: number;
+      tokens: number;
+      count: number;
+    }>;
   }>;
 
   getDailyCostTrends(
     days?: number,
-  ): Promise<Array<{ date: string; cost: number; messages: number }>>;
+  ): Promise<
+    Array<{ date: string; cost: number; messages: number; tokens: number }>
+  >;
 
   getModelDistribution(): Promise<
     Array<{ model: string; percentage: number; cost: number; messages: number }>
@@ -230,14 +244,70 @@ export interface IStorageProvider {
     totalTokens: number;
     totalCost: number;
     toolCallsCount: number;
+    totalToolInvocations?: number;
     avgTokensPerMessage: number;
     avgCostPerMessage: number;
     mostUsedTools: Array<{ tool: string; count: number }>;
   }>;
+
+  getAllAgentStats(): Promise<
+    Record<
+      string,
+      {
+        totalMessages: number;
+        totalTokens: number;
+        totalCost: number;
+        toolCallsCount: number;
+        totalToolInvocations?: number;
+        avgTokensPerMessage: number;
+        avgCostPerMessage: number;
+        mostUsedTools: Array<{ tool: string; count: number }>;
+      }
+    >
+  >;
 
   getAgentOutputs(agentId?: string): Promise<{
     documents: Array<{ id: string; title: string; createdAt: string }>;
     apps: Array<{ id: string; title: string; createdAt: string }>;
     plans: Array<{ planId: string; title: string; createdAt: string }>;
   }>;
+
+  getToolUsageByAgent(): Record<
+    string,
+    {
+      mostUsedTools: Array<{ tool: string; count: number }>;
+      totalToolInvocations: number;
+    }
+  >;
+
+  getContextEfficiencyStats(): {
+    fullChatTokensPerTurn: number;
+    agentContextTokensPerTurn: number;
+    truncationTokensSaved: number;
+    summaryTokensSaved: number;
+    memorySearchTokensSaved: number;
+    totalTokensSaved: number;
+    totalTokensConsumed: number;
+    hypotheticalTokensWithoutOptimizations: number;
+    lifetimeTokensSaved: number;
+    contextInflationRatio: number;
+    efficiencyScore: number;
+    actualCost: number;
+    hypotheticalCostWithoutOptimizations: number;
+    lifetimeCostSaved: number;
+    costEfficiencyScore: number;
+    dataSource: "cached" | "partial" | "live";
+    pendingFootprintTurns: number;
+    breakdown: {
+      chatsAnalyzed: number;
+      chatsWithSummaries: number;
+      assistantTurnsAnalyzed: number;
+      memorySearchCount: number;
+      hybridBashCount: number;
+      memoryHitsAnalyzed: number;
+      memoryHitsWithSource: number;
+      fullReadAvgTokens: number;
+      memorySearchAvgTokens: number;
+    };
+  };
 }

@@ -635,18 +635,18 @@ Use CLI for everything else. This keeps the tool simple and reliable.`;
         area: "Browser",
         enabled: has("browser_navigate") || has("browser_snapshot"),
         details:
-          "navigate/snapshot/click/type/tabs/test_script/wait_for/fill_form/scroll — " +
-          "browser_test_script for data extraction (write JS to run in page via page.evaluate), " +
-          "browser_wait_for for external SPAs (after browser_navigate). " +
-          "NEVER browser_wait_for after webview_launch_app — use webview_wait_for or webview_snapshot for mini-app previews. " +
-          "browser_fill_form for multi-field forms, browser_scroll to bring elements into view. " +
+          "navigate/snapshot/click/type/tabs/test_script/fill_form/scroll — " +
+          "page_wait_for({ target: 'browser', ... }) after browser_navigate for external sites; " +
+          "page_wait_for({ target: 'mini_app', ... }) after webview_launch_app for mini-app previews. " +
+          "browser_test_script for data extraction, browser_fill_form for multi-field forms, browser_scroll to bring elements into view. " +
           "Use ONLY for visual/interactive browsing, NOT for simple searches (use bash curl instead)",
       },
       {
         area: "Apps + Jobs",
         enabled: has("create_app") || has("create_job"),
         details:
-          "mini-app and job creation; use list_jobs to see existing jobs before creating new ones. File version history is automatic — use list_app_file_versions / list_job_file_versions to see previous versions, restore_app_file_version / restore_job_file_version to revert.",
+          "mini-app and job creation; use list_jobs to see existing jobs before creating new ones. File version history is automatic — use list_app_file_versions / list_job_file_versions to see previous versions, restore_app_file_version / restore_job_file_version to revert. " +
+          "Mini-app testing: webview_launch_app → page_wait_for({ target: 'mini_app', time: 2 }) or webview_snapshot.",
       },
       {
         area: "Sub-agents",

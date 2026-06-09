@@ -367,6 +367,7 @@ export function buildModelMessages(
   userMessage: string,
   systemPrompt: string,
   conversationSummary?: string,
+  memoryContextBlocks?: string[],
 ): AIModelMessage[] {
   const messages = formatHistoryMessagesForModel(history);
 
@@ -378,14 +379,13 @@ export function buildModelMessages(
     });
   }
 
+  let contextInsertIndex = messages.findIndex((m) => m.role === "system");
+  contextInsertIndex = contextInsertIndex >= 0 ? contextInsertIndex + 1 : 0;
+
   // If we have a compressed summary, inject it as a user message AFTER system prompt but BEFORE recent history
   // This gives the model context about what happened earlier in the conversation
   if (conversationSummary) {
-    // Find index after system prompt (should be index 1 if system exists, 0 if not)
-    const systemIndex = messages.findIndex((m) => m.role === "system");
-    const insertIndex = systemIndex >= 0 ? systemIndex + 1 : 0;
-    
-    messages.splice(insertIndex, 0, {
+    messages.splice(contextInsertIndex, 0, {
       role: "user",
       content: `[CONVERSATION CONTEXT - Earlier messages have been compressed for efficiency]
 
@@ -393,6 +393,18 @@ ${conversationSummary}
 
 [The messages below are the most recent conversation history]`,
     });
+    contextInsertIndex += 1;
+  }
+
+  // Cross-chat memory bootstrap (sync tiers + message search) — after summary, before history
+  if (memoryContextBlocks && memoryContextBlocks.length > 0) {
+    for (const block of memoryContextBlocks) {
+      messages.splice(contextInsertIndex, 0, {
+        role: "user",
+        content: block,
+      });
+      contextInsertIndex += 1;
+    }
   }
 
   // Add the current user message at the end (only if not already present)

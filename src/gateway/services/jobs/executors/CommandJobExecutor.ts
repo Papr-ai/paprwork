@@ -48,9 +48,11 @@ export class CommandJobExecutor implements IJobExecutor {
     // ── Substitute custom API keys (${KEY_NAME} syntax) ───────────────────────
     // Jobs bypass the bash tool, so we need to substitute keys here
     // For "ask" keys, requests permission before substituting
+    let sanitizationValues: string[] = [];
     try {
       const result = await this.substituteCustomKeys(finalCommand, params);
       finalCommand = result.command;
+      sanitizationValues = result.sanitizationValues;
       // Do NOT inject customKeys into env - that's a security risk!
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -80,6 +82,7 @@ export class CommandJobExecutor implements IJobExecutor {
       mode: "process",
       command: finalCommand,
       process: proc,
+      sanitizationValues,
     };
   }
 
@@ -96,7 +99,7 @@ export class CommandJobExecutor implements IJobExecutor {
   private async substituteCustomKeys(
     command: string,
     params: ExecutorLaunchParams,
-  ): Promise<{ command: string }> {
+  ): Promise<{ command: string; sanitizationValues: string[] }> {
     const customKeys: Record<string, string> = {};
     const job = params.job;
 
@@ -179,7 +182,10 @@ export class CommandJobExecutor implements IJobExecutor {
         }
       }
     }
-    return { command: result };
+    const sanitizationValues = Object.values(customKeys).filter(
+      (value) => value.length > 0,
+    );
+    return { command: result, sanitizationValues };
   }
 
   /**

@@ -1321,9 +1321,12 @@ export class JobsService {
       },
     });
 
+    const runSanitizationValues = launch.sanitizationValues ?? [];
+
     // Sanitize command before logging (replace API key values with ***)
     const sanitizedCommand = await this.sanitizeCommandForLogging(
       launch.command,
+      runSanitizationValues,
     );
     await appendRunLog(`Starting command: ${sanitizedCommand}`);
 
@@ -1383,7 +1386,10 @@ export class JobsService {
       proc.stdout.on("data", async (chunk: Buffer) => {
         const text = chunk.toString("utf8").trimEnd();
         // Sanitize stdout before logging
-        const sanitized = await this.sanitizeCommandForLogging(text);
+        const sanitized = await this.sanitizeCommandForLogging(
+          text,
+          runSanitizationValues,
+        );
         void appendRunLog(sanitized);
         if (outputSize < MAX_OUTPUT_BYTES) {
           outputChunks.push(sanitized);
@@ -1393,7 +1399,10 @@ export class JobsService {
       proc.stderr.on("data", async (chunk: Buffer) => {
         const text = chunk.toString("utf8").trimEnd();
         // Sanitize stderr before logging
-        const sanitized = await this.sanitizeCommandForLogging(text);
+        const sanitized = await this.sanitizeCommandForLogging(
+          text,
+          runSanitizationValues,
+        );
         void appendRunLog(`[stderr] ${sanitized}`);
       });
       proc.on("close", (code: number | null) => {
@@ -1992,8 +2001,11 @@ export class JobsService {
    * Sanitize command string for logging by replacing API key values with ***
    * CRITICAL for security - prevents key leakage in job logs
    */
-  private async sanitizeCommandForLogging(command: string): Promise<string> {
-    const apiKeys: string[] = [];
+  private async sanitizeCommandForLogging(
+    command: string,
+    knownValues: string[] = [],
+  ): Promise<string> {
+    const apiKeys: string[] = [...knownValues];
 
     // 1. Collect environment keys (from .env.local)
     const envKeys = [
@@ -2005,28 +2017,32 @@ export class JobsService {
 
     for (const keyName of envKeys) {
       const value = process.env[keyName];
-      if (value) {
+      if (value && !apiKeys.includes(value)) {
         apiKeys.push(value);
       }
     }
 
-    // 2. Collect custom keys from CustomKeysStorage
-    try {
-      const { getCustomKeysService } = await import("./CustomKeysService.js");
-      const service = getCustomKeysService();
-      const storedKeys = await service.listKeys();
+    // 2. Only resolve custom keys referenced in this text (not all 50+ keys)
+    const placeholderMatches = command.matchAll(/\$\{([A-Z_][A-Z0-9_]*)\}/g);
+    const referencedNames = [
+      ...new Set([...placeholderMatches].map((match) => match[1])),
+    ].filter((name) => !envKeys.includes(name));
 
-      for (const keyMeta of storedKeys) {
-        const value = await service.getKeyByName(keyMeta.name);
-        if (value) {
-          apiKeys.push(value);
+    if (referencedNames.length > 0) {
+      try {
+        const { resolveKeysViaIpc } = await import("../utils/keyResolver.js");
+        const resolved = await resolveKeysViaIpc(referencedNames);
+        for (const value of Object.values(resolved)) {
+          if (value && !apiKeys.includes(value)) {
+            apiKeys.push(value);
+          }
         }
+      } catch (error) {
+        console.warn(
+          "[JobsService] Failed to resolve referenced keys for sanitization:",
+          error,
+        );
       }
-    } catch (error) {
-      console.warn(
-        "[JobsService] Failed to load custom keys for sanitization:",
-        error,
-      );
     }
 
     // 3. Sanitize command by replacing all key values with ***

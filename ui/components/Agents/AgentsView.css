@@ -298,8 +298,11 @@
 
 /* V1 parity styles */
 .agents-page-native {
-  padding: 24px;
+  flex: 1;
+  min-height: 0;
   width: 100%;
+  padding: 24px;
+  overflow-y: auto;
 }
 
 .agents-header-native {

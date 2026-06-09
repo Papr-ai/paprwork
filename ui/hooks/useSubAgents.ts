@@ -27,6 +27,7 @@ export interface SubAgentProfile {
 export interface DelegationRun {
   id: string;
   agentId: string;
+  agentName?: string;
   task: string;
   context?: string;
   status: "pending" | "running" | "completed" | "failed";
@@ -35,6 +36,28 @@ export interface DelegationRun {
   startedAt?: string;
   completedAt?: string;
   error?: string;
+}
+
+function parseAgentsPayload(data: unknown): SubAgentProfile[] {
+  if (Array.isArray(data)) {
+    return data as SubAgentProfile[];
+  }
+  if (data && typeof data === "object" && "agents" in data) {
+    const agents = (data as { agents?: unknown }).agents;
+    return Array.isArray(agents) ? (agents as SubAgentProfile[]) : [];
+  }
+  return [];
+}
+
+function parseRunsPayload(data: unknown): DelegationRun[] {
+  if (Array.isArray(data)) {
+    return data as DelegationRun[];
+  }
+  if (data && typeof data === "object" && "runs" in data) {
+    const runs = (data as { runs?: unknown }).runs;
+    return Array.isArray(runs) ? (runs as DelegationRun[]) : [];
+  }
+  return [];
 }
 
 export interface SubAgentDashboard {
@@ -104,8 +127,7 @@ export function useSubAgents() {
     setError(null);
     try {
       const response = await gateway.send("subagent:runs", { limit: 100 });
-      const data = response.data as { runs?: DelegationRun[] };
-      setRuns(data.runs ?? []);
+      setRuns(parseRunsPayload(response.data));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load runs");
     }

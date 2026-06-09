@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   browserParseHtmlTool,
-  browserWaitForTool,
   browserFillFormTool,
   browserScrollTool,
 } from "../src/core/tools/browser.js";
+import { pageWaitForTool } from "../src/core/tools/pageWait.js";
 import { spawn } from "child_process";
 
 // Mock child_process for Python execution tests
@@ -50,25 +50,25 @@ describe("Browser Tools Phase 1", () => {
     });
   });
 
-  describe("browserWaitForTool", () => {
+  describe("pageWaitForTool", () => {
     it("should have correct id and schema", () => {
-      expect(browserWaitForTool.id).toBe("browser_wait_for");
-      expect(browserWaitForTool.description).toContain("webview_wait_for");
-      expect(browserWaitForTool.inputSchema).toBeDefined();
+      expect(pageWaitForTool.id).toBe("page_wait_for");
+      expect(pageWaitForTool.description).toContain("mini_app");
+      expect(pageWaitForTool.description).toContain("browser");
+      expect(pageWaitForTool.inputSchema).toBeDefined();
     });
 
-    it("should accept text, textGone, selector, or time parameters", () => {
-      const schema = browserWaitForTool.inputSchema;
+    it("should require target and accept wait parameters", () => {
+      const schema = pageWaitForTool.inputSchema;
 
-      expect(() => schema.parse({ text: "Sign in" })).not.toThrow();
-      expect(() => schema.parse({ textGone: "Loading..." })).not.toThrow();
-      expect(() => schema.parse({ selector: "#submit" })).not.toThrow();
-      expect(() => schema.parse({ time: 2 })).not.toThrow();
+      expect(() => schema.parse({ target: "browser", text: "Sign in" })).not.toThrow();
+      expect(() => schema.parse({ target: "mini_app", time: 2 })).not.toThrow();
+      expect(() => schema.parse({ text: "Sign in" })).toThrow();
     });
 
     it("should have default timeout of 30000ms", () => {
-      const schema = browserWaitForTool.inputSchema;
-      const parsed = schema.parse({ text: "test" });
+      const schema = pageWaitForTool.inputSchema;
+      const parsed = schema.parse({ target: "browser", text: "test" });
       expect(parsed.timeout).toBe(30000);
     });
   });
@@ -167,9 +167,9 @@ describe("Manual Testing Checklist", () => {
           "Successfully extracts product names, prices, ratings as JSON",
       },
       {
-        tool: "browser_wait_for",
+        tool: "page_wait_for",
         scenario: "Navigate to GitHub, wait for 'Sign in' button",
-        expected: "Waits for button to appear before timing out",
+        expected: "Waits with target browser before timing out",
       },
       {
         tool: "browser_fill_form",

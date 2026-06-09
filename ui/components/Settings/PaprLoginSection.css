@@ -224,13 +224,25 @@
   margin: 10px 0 0 0;
 }
 
-.papr-section__note a {
+.papr-section__note a,
+.papr-section__inline-link {
   color: var(--accent-color);
   text-decoration: none;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
 }
 
-.papr-section__note a:hover {
+.papr-section__note a:hover,
+.papr-section__inline-link:hover:not(:disabled) {
   text-decoration: underline;
+}
+
+.papr-section__inline-link:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 /* ─── Spinner ─── */

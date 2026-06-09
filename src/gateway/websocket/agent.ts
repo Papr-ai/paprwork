@@ -447,6 +447,16 @@ export async function setupAgentHandlers(
         break;
       }
 
+      case "agent:get-all-agent-stats": {
+        const stats = await agentService.getAllAgentStats();
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: stats,
+        });
+        break;
+      }
+
       case "agent:get-outputs": {
         const payload = message.payload as { agentId?: string };
         const agentId = payload?.agentId;
@@ -455,6 +465,26 @@ export async function setupAgentHandlers(
           id: message.id,
           success: true,
           data: outputs,
+        });
+        break;
+      }
+
+      case "agent:get-context-efficiency": {
+        const stats = agentService.getContextEfficiencyStats();
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: stats,
+        });
+        break;
+      }
+
+      case "agent:get-tool-usage": {
+        const usage = agentService.getToolUsageByAgent();
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: usage,
         });
         break;
       }

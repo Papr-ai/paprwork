@@ -372,13 +372,21 @@ export const TOOL_DESCRIPTIONS: Record<
     running: "Running browser test",
     complete: "Browser test done",
   },
-  // Webview
-  webview_launch_app: {
-    running: "Launching app preview",
-    complete: "App preview ready",
+  page_wait_for: {
+    running: "Waiting for page",
+    complete: "Page ready",
+  },
+  browser_wait_for: {
+    running: "Waiting for page",
+    complete: "Page ready",
   },
   webview_wait_for: {
     running: "Waiting on app preview",
+    complete: "App preview ready",
+  },
+  // Webview
+  webview_launch_app: {
+    running: "Launching app preview",
     complete: "App preview ready",
   },
   webview_snapshot: {

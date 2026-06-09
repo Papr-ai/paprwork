@@ -1,4 +1,12 @@
 import React from "react";
+import { MetricPeriodSummary } from "./MetricPeriodSummary";
+import { SavingsCompare } from "./SavingsCompare";
+import {
+  UsageTrendChart,
+  type DailyUsageTrend,
+} from "./UsageTrendChart";
+import type { ContextEfficiencyStats } from "./ContextEfficiencyCard";
+import { ModelBreakdown, type ModelUsageRow } from "./ModelBreakdown";
 
 interface CostStats {
   today: number;
@@ -6,14 +14,28 @@ interface CostStats {
   thisMonth: number;
   total: number;
   totalMessages: number;
-  topModels: Array<{ model: string; cost: number; count: number }>;
+  topModels: ModelUsageRow[];
 }
 
 interface Props {
   costStats: CostStats | null;
+  efficiency?: ContextEfficiencyStats | null;
+  efficiencyLoading?: boolean;
+  dailyTrends?: DailyUsageTrend[] | null;
+  trendsLoading?: boolean;
+  trendRange?: 7 | 30 | 90;
+  onTrendRangeChange?: (days: 7 | 30 | 90) => void;
 }
 
-export function CostOverviewCard({ costStats }: Props) {
+export function CostOverviewCard({
+  costStats,
+  efficiency = null,
+  efficiencyLoading = false,
+  dailyTrends = null,
+  trendsLoading = false,
+  trendRange = 30,
+  onTrendRangeChange,
+}: Props) {
   if (!costStats) {
     return (
       <div className="metric-card">
@@ -36,11 +58,15 @@ export function CostOverviewCard({ costStats }: Props) {
     );
   }
 
-  const lastWeekCost = costStats.thisWeek - costStats.today;
-  const weekTrend =
-    lastWeekCost > 0
-      ? ((costStats.today - lastWeekCost) / lastWeekCost) * 100
-      : 0;
+  const showSavings =
+    efficiency !== null &&
+    efficiency.lifetimeCostSaved > 0 &&
+    !efficiencyLoading;
+
+  const savingsBadge =
+    showSavings && efficiency.costEfficiencyScore > 0
+      ? `${efficiency.costEfficiencyScore}% saved`
+      : null;
 
   return (
     <div className="metric-card">
@@ -55,206 +81,66 @@ export function CostOverviewCard({ costStats }: Props) {
           </svg>
           Cost Overview
         </div>
-        {weekTrend !== 0 && (
-          <div
-            className={`trend-badge ${weekTrend > 0 ? "trend-up" : "trend-down"}`}
-          >
-            {weekTrend > 0 ? "↑" : "↓"} {Math.abs(weekTrend).toFixed(1)}%
-          </div>
-        )}
+        {savingsBadge ? (
+          <div className="card-badge cost-saved-badge">{savingsBadge}</div>
+        ) : null}
       </div>
 
       <div className="card-content">
-        {/* Total Cost - Large Display */}
-        <div className="cost-total">
-          <div className="cost-label">Total Spend</div>
-          <div className="cost-value-large">${costStats.total.toFixed(2)}</div>
-          <div className="cost-sublabel">
-            {costStats.totalMessages.toLocaleString()} messages
-          </div>
-        </div>
+        <MetricPeriodSummary
+          label="Total spend"
+          total={costStats.total}
+          sublabel={`${costStats.totalMessages.toLocaleString()} messages`}
+          periods={{
+            today: costStats.today,
+            thisWeek: costStats.thisWeek,
+            thisMonth: costStats.thisMonth,
+          }}
+          format="cost"
+        />
 
-        {/* Time Breakdown */}
-        <div className="cost-breakdown">
-          <div className="cost-breakdown-item">
-            <div className="breakdown-label">Today</div>
-            <div className="breakdown-value">${costStats.today.toFixed(3)}</div>
-          </div>
-          <div className="cost-breakdown-item">
-            <div className="breakdown-label">This Week</div>
-            <div className="breakdown-value">
-              ${costStats.thisWeek.toFixed(2)}
-            </div>
-          </div>
-          <div className="cost-breakdown-item">
-            <div className="breakdown-label">This Month</div>
-            <div className="breakdown-value">
-              ${costStats.thisMonth.toFixed(2)}
-            </div>
-          </div>
-        </div>
+        {showSavings ? (
+          <SavingsCompare
+            actual={efficiency.actualCost}
+            hypothetical={efficiency.hypotheticalCostWithoutOptimizations}
+            saved={efficiency.lifetimeCostSaved}
+            format="cost"
+            compact
+          />
+        ) : efficiencyLoading ? (
+          <div className="cost-savings-loading">Computing cost savings…</div>
+        ) : null}
 
-        {/* Top Models */}
-        {(costStats.topModels ?? []).length > 0 && (
-          <div className="cost-models">
-            <div className="models-label">By Model</div>
-            <div className="models-list">
-              {(costStats.topModels ?? []).slice(0, 3).map((model) => {
-                const percentage =
-                  costStats.total > 0
-                    ? (model.cost / costStats.total) * 100
-                    : 0;
-                return (
-                  <div key={model.model} className="model-item">
-                    <div className="model-info">
-                      <span className="model-name">{model.model}</span>
-                      <span className="model-cost">
-                        ${model.cost.toFixed(2)}
-                      </span>
-                    </div>
-                    <div className="model-bar-container">
-                      <div
-                        className="model-bar"
-                        style={{ width: `${percentage}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
+        <UsageTrendChart
+          trends={dailyTrends}
+          metric="cost"
+          loading={trendsLoading}
+          range={trendRange}
+          onRangeChange={onTrendRangeChange}
+        />
+
+        <ModelBreakdown
+          models={costStats.topModels ?? []}
+          total={costStats.total}
+          metric="cost"
+        />
       </div>
 
       <style>{`
-        .cost-total {
-          text-align: center;
-          padding: 16px 0;
+        .cost-saved-badge {
+          color: #059669;
+          background: rgba(5, 150, 105, 0.1);
         }
 
-        .cost-label {
-          font-size: 11px;
-          color: var(--text-tertiary);
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          margin-bottom: 8px;
-        }
-
-        .cost-value-large {
-          font-size: 36px;
-          font-weight: 700;
-          color: var(--text-primary);
-          font-variant-numeric: tabular-nums;
-        }
-
-        .cost-sublabel {
-          font-size: 11px;
-          color: var(--text-secondary);
-          margin-top: 4px;
-        }
-
-        .cost-breakdown {
-          display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          gap: 12px;
-          padding: 16px 0;
-          border-top: 1px solid var(--border-color);
-          border-bottom: 1px solid var(--border-color);
-        }
-
-        .cost-breakdown-item {
-          text-align: center;
-        }
-
-        .breakdown-label {
+        .cost-savings-loading {
           font-size: 10px;
           color: var(--text-tertiary);
-          margin-bottom: 6px;
-          text-transform: uppercase;
-        }
-
-        .breakdown-value {
-          font-size: 16px;
-          font-weight: 600;
-          color: var(--text-primary);
-          font-variant-numeric: tabular-nums;
-        }
-
-        .cost-models {
-          padding-top: 12px;
-        }
-
-        .models-label {
-          font-size: 11px;
-          color: var(--text-tertiary);
-          text-transform: uppercase;
-          margin-bottom: 12px;
-        }
-
-        .models-list {
-          display: flex;
-          flex-direction: column;
-          gap: 10px;
-        }
-
-        .model-item {
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
-        }
-
-        .model-info {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-
-        .model-name {
-          font-size: 11px;
-          color: var(--text-secondary);
-          font-family: 'SF Mono', Monaco, monospace;
-        }
-
-        .model-cost {
-          font-size: 12px;
-          font-weight: 600;
-          color: var(--text-primary);
-          font-variant-numeric: tabular-nums;
-        }
-
-        .model-bar-container {
-          height: 4px;
-          background: var(--bg-secondary);
-          border-radius: 2px;
-          overflow: hidden;
-        }
-
-        .model-bar {
-          height: 100%;
-          background: var(--primary-color);
-          transition: width 0.3s ease;
-        }
-
-        .trend-badge {
-          font-size: 11px;
-          font-weight: 600;
-          padding: 4px 8px;
-          border-radius: 4px;
-        }
-
-        .trend-up {
-          color: #ef4444;
-          background: rgba(239, 68, 68, 0.1);
-        }
-
-        .trend-down {
-          color: #10b981;
-          background: rgba(16, 185, 129, 0.1);
+          margin-bottom: 8px;
         }
 
         .loading-message {
           text-align: center;
-          padding: 40px 20px;
+          padding: 24px 12px;
           color: var(--text-secondary);
           font-size: 12px;
         }

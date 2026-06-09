@@ -21,6 +21,7 @@ interface DailyTrend {
   date: string;
   cost: number;
   messages: number;
+  tokens: number;
 }
 
 interface ModelDistribution {

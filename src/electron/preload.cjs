@@ -85,13 +85,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Papr Login API - Authenticate with Papr platform for automatic API key provisioning
   papr: (() => {
     const loginSuccessListenerMap = new WeakMap();
+    const loginErrorListenerMap = new WeakMap();
     const logoutSuccessListenerMap = new WeakMap();
     const namespaceChangedListenerMap = new WeakMap();
     const organizationChangedListenerMap = new WeakMap();
 
     return {
       checkLoginStatus: () => ipcRenderer.invoke("papr:check-login-status"),
-      startLogin: () => ipcRenderer.invoke("papr:start-login"),
+      startLogin: (mode) => ipcRenderer.invoke("papr:start-login", mode),
       logout: () => ipcRenderer.invoke("papr:logout"),
       getProfile: () => ipcRenderer.invoke("papr:get-profile"),
       
@@ -110,6 +111,22 @@ contextBridge.exposeInMainWorld("electronAPI", {
         if (wrapper) {
           ipcRenderer.removeListener("papr:login-success", wrapper);
           loginSuccessListenerMap.delete(callback);
+        }
+      },
+
+      onLoginError: (callback) => {
+        const wrapper = (_event, data) => {
+          callback(data);
+          window.dispatchEvent(new CustomEvent("papr-login-error", { detail: data }));
+        };
+        loginErrorListenerMap.set(callback, wrapper);
+        ipcRenderer.on("papr:login-error", wrapper);
+      },
+      removeLoginErrorListener: (callback) => {
+        const wrapper = loginErrorListenerMap.get(callback);
+        if (wrapper) {
+          ipcRenderer.removeListener("papr:login-error", wrapper);
+          loginErrorListenerMap.delete(callback);
         }
       },
       

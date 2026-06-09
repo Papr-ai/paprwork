@@ -12,6 +12,11 @@ import { Papr } from '@papr/memory';
 import { CodeIndexerService } from './CodeIndexerService.js';
 import { CodeIndexTracker } from './CodeIndexTracker.js';
 import { CodeFileWatcher } from './CodeFileWatcher.js';
+import {
+  getProjectPathInfo,
+  isIndexableCodePath,
+  isPermanentIndexError,
+} from './codeIndexPaths.js';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
@@ -31,6 +36,7 @@ export class SmartCodeIndexManager {
   private watcher: CodeFileWatcher;
   
   private debounceTimer: NodeJS.Timeout | null = null;
+  private batchTimer: NodeJS.Timeout | null = null;
   private isIndexing: boolean = false;
   private rateLimitHit: boolean = false;
   
@@ -78,6 +84,10 @@ export class SmartCodeIndexManager {
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
     }
+
+    if (this.batchTimer) {
+      clearTimeout(this.batchTimer);
+    }
     
     this.watcher.stop();
     this.tracker.close();
@@ -94,6 +104,8 @@ export class SmartCodeIndexManager {
     const stats = this.tracker.getStats();
     console.log(`   Current: ${stats.total_files} files indexed, ${stats.queue_size} queued`);
     
+    this.purgeInvalidQueuedFiles();
+
     // Scan filesystem for all code files
     const allFiles = this.scanAllFiles();
     console.log(`   Found: ${allFiles.length} total code files`);
@@ -126,34 +138,29 @@ export class SmartCodeIndexManager {
   }
   
   /**
-   * Scan filesystem for all code files
+   * Scan filesystem for all code files inside project directories only.
    */
   private scanAllFiles(): string[] {
     const files: string[] = [];
     const codeExtensions = ['.ts', '.tsx', '.js', '.jsx', '.py'];
-    
-    // Load excluded folders from settings (will be done dynamically in real implementation)
-    // For now, use the default list + any folder containing "repo" in the name
     const excludeDirs = [
       'node_modules', '.venv', 'venv', '.git', 'dist', 'build', 'data',
       '__pycache__', '.next', '.nuxt', 'papr_repo'
     ];
-    
-    const scanDir = (dir: string) => {
+
+    const scanProjectTree = (dir: string): void => {
       if (!fs.existsSync(dir)) return;
-      
-      const entries = fs.readdirSync(dir);
-      for (const entry of entries) {
-        // Skip excluded folders
+
+      for (const entry of fs.readdirSync(dir)) {
         if (excludeDirs.includes(entry) || entry.includes('_repo')) {
           continue;
         }
-        
+
         const fullPath = path.join(dir, entry);
         const stat = fs.statSync(fullPath);
-        
+
         if (stat.isDirectory()) {
-          scanDir(fullPath);
+          scanProjectTree(fullPath);
         } else if (stat.isFile()) {
           const ext = path.extname(entry);
           if (codeExtensions.includes(ext)) {
@@ -162,11 +169,43 @@ export class SmartCodeIndexManager {
         }
       }
     };
-    
-    scanDir(path.join(this.config.paprDir, 'apps'));
-    scanDir(path.join(this.config.paprDir, 'Jobs'));
-    
+
+    for (const container of ['apps', 'Jobs'] as const) {
+      const containerPath = path.join(this.config.paprDir, container);
+      if (!fs.existsSync(containerPath)) continue;
+
+      for (const entry of fs.readdirSync(containerPath)) {
+        const projectPath = path.join(containerPath, entry);
+        try {
+          if (fs.statSync(projectPath).isDirectory()) {
+            scanProjectTree(projectPath);
+          }
+        } catch {
+          // Skip unreadable entries
+        }
+      }
+    }
+
     return files;
+  }
+
+  /**
+   * Remove queued files that cannot be indexed (e.g. loose files in Jobs/ root).
+   */
+  private purgeInvalidQueuedFiles(): void {
+    const queuedFiles = this.tracker.getQueuedFiles(Number.MAX_SAFE_INTEGER);
+    let removed = 0;
+
+    for (const queuedFile of queuedFiles) {
+      if (!isIndexableCodePath(queuedFile.file_path, this.config.paprDir)) {
+        this.tracker.dequeueFile(queuedFile.file_path);
+        removed++;
+      }
+    }
+
+    if (removed > 0) {
+      console.log(`   🧹 Removed ${removed} unindexable file(s) from queue`);
+    }
   }
   
   /**
@@ -190,54 +229,66 @@ export class SmartCodeIndexManager {
    * Queue a file change (called by file watcher)
    */
   queueFileChange(filePath: string): void {
-    // Add to queue
+    if (!isIndexableCodePath(filePath, this.config.paprDir)) {
+      console.log(`   ⚠️  Skipped unindexable path: ${path.relative(this.config.paprDir, filePath)}`);
+      return;
+    }
+
     this.tracker.queueFile(filePath, 0);
-    
-    // Debounce: reset 5-second timer
+
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
     }
-    
+
     this.debounceTimer = setTimeout(() => {
-      this.triggerBatchIndex();
+      this.scheduleBatch(0);
     }, this.config.debounceMs);
   }
-  
+
   /**
-   * Trigger batch indexing
+   * Schedule a single batch run. Only one timer is active at a time.
    */
-  private async triggerBatchIndex(): Promise<void> {
+  private scheduleBatch(delayMs: number): void {
+    if (this.batchTimer) {
+      return;
+    }
+
+    this.batchTimer = setTimeout(() => {
+      this.batchTimer = null;
+      void this.runBatch();
+    }, delayMs);
+  }
+
+  /**
+   * Run batch indexing
+   */
+  private async runBatch(): Promise<void> {
     if (this.rateLimitHit) {
-      console.log('   🛑 Indexing paused - PAPR Memory quota exceeded.');
-      console.log('   💡 Please upgrade your account at: https://platform.papr.ai/settings');
-      console.log('   💡 Restart the app after upgrading to resume indexing.');
       return;
     }
-    
+
     if (this.isIndexing) {
-      console.log('   ⏸️  Already indexing, will retry in 5s...');
-      setTimeout(() => this.triggerBatchIndex(), 5000);
+      this.scheduleBatch(5000);
       return;
     }
-    
+
     const queueSize = this.tracker.getQueueSize();
     if (queueSize === 0) {
       return;
     }
-    
+
     console.log(`\n🔄 Processing batch: ${queueSize} files queued`);
     this.isIndexing = true;
-    
+
     try {
       await this.processBatch();
     } catch (error) {
       console.error('❌ Batch processing error:', error);
     } finally {
       this.isIndexing = false;
-      
-      // Only schedule next batch if we haven't hit rate limit
+
       if (!this.rateLimitHit && this.tracker.getQueueSize() > 0) {
-        setTimeout(() => this.triggerBatchIndex(), 1000);
+        this.scheduleBatch(1000);
       }
     }
   }
@@ -254,6 +305,12 @@ export class SmartCodeIndexManager {
         // Skip if file no longer exists
         if (!fs.existsSync(queuedFile.file_path)) {
           console.log(`   ⚠️  Skipped (deleted): ${queuedFile.file_path}`);
+          this.tracker.dequeueFile(queuedFile.file_path);
+          continue;
+        }
+
+        if (!isIndexableCodePath(queuedFile.file_path, this.config.paprDir)) {
+          console.log(`   ⚠️  Skipped (not in project folder): ${queuedFile.file_path}`);
           this.tracker.dequeueFile(queuedFile.file_path);
           continue;
         }
@@ -305,9 +362,13 @@ export class SmartCodeIndexManager {
           this.tracker.dequeueFile(queuedFile.file_path);
           hitRateLimit = true;
           break; // Stop processing batch entirely
+        } else if (isPermanentIndexError(err.message)) {
+          console.error(`   ❌ Failed to index ${queuedFile.file_path}: ${err.message}`);
+          console.error('   ⚠️  Removing from queue (permanent error)');
+          this.tracker.dequeueFile(queuedFile.file_path);
         } else {
           console.error(`   ❌ Failed to index ${queuedFile.file_path}: ${err.message}`);
-          // Keep in queue for retry on other errors
+          // Keep in queue for transient errors
         }
       }
     }
@@ -322,11 +383,10 @@ export class SmartCodeIndexManager {
         console.log(`   💡 This may be temporary rate limiting - will retry in 30 seconds.`);
         console.log(`   💡 If errors persist, check https://platform.papr.ai/settings for quota.\n`);
         
-        // Schedule retry in 30 seconds
         setTimeout(() => {
           console.log('\n🔄 Retrying indexing after 30-second cooldown...');
           this.rateLimitHit = false;
-          this.triggerBatchIndex();
+          this.scheduleBatch(0);
         }, 30000);
       }
     }
@@ -339,22 +399,15 @@ export class SmartCodeIndexManager {
     const hash = this.tracker.calculateFileHash(filePath);
     const content = fs.readFileSync(filePath, 'utf-8');
     
-    // Determine project ID from path
-    const projectId = this.extractProjectId(filePath);
-    if (!projectId) {
-      throw new Error('Could not determine project ID');
+    const projectInfo = getProjectPathInfo(filePath, this.config.paprDir);
+    if (!projectInfo) {
+      throw new Error('File is not indexable — must be inside apps/{id}/ or Jobs/{id}/');
     }
-    
-    // Use CodeIndexerService to actually index to PAPR Memory API
-    const isJob = filePath.includes('/Jobs/');
-    const isMiniApp = filePath.includes('/apps/');
-    
-    if (isJob) {
-      await this.indexer.indexSingleJob(projectId);
-    } else if (isMiniApp) {
-      await this.indexer.indexSingleMiniApp(projectId);
+
+    if (projectInfo.type === 'job') {
+      await this.indexer.indexSingleJob(projectInfo.projectId);
     } else {
-      throw new Error('File not in Jobs or apps folder');
+      await this.indexer.indexSingleMiniApp(projectInfo.projectId);
     }
     
     // Record in tracker after successful API indexing
@@ -363,28 +416,10 @@ export class SmartCodeIndexManager {
       content_hash: hash,
       last_indexed_at: new Date(),
       schema_version: this.config.schemaId,
-      project_id: projectId,
+      project_id: projectInfo.projectId,
       lines_of_code: content.split('\n').length,
       language: this.detectLanguage(path.extname(filePath))
     });
-  }
-  
-  /**
-   * Extract project ID from file path
-   */
-  private extractProjectId(filePath: string): string | null {
-    const parts = filePath.split(path.sep);
-    const appsIndex = parts.indexOf('apps');
-    const jobsIndex = parts.indexOf('Jobs');
-    
-    if (appsIndex >= 0 && appsIndex < parts.length - 1) {
-      return parts[appsIndex + 1];
-    }
-    if (jobsIndex >= 0 && jobsIndex < parts.length - 1) {
-      return parts[jobsIndex + 1];
-    }
-    
-    return null;
   }
   
   /**
@@ -407,12 +442,16 @@ export class SmartCodeIndexManager {
   private startQueueProcessor(): void {
     // Check queue every 10 seconds
     const checkQueue = () => {
-      if (!this.isIndexing && this.tracker.getQueueSize() > 0) {
-        this.triggerBatchIndex();
+      if (this.tracker.getQueueSize() > 0) {
+        this.scheduleBatch(0);
       }
     };
-    
+
     setInterval(checkQueue, 10000);
+
+    if (this.tracker.getQueueSize() > 0) {
+      this.scheduleBatch(0);
+    }
   }
   
   /**

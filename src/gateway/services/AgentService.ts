@@ -34,6 +34,7 @@ import { ChatExporter } from "./storage/ChatExporter.js";
 import type { StoredMessage } from "./storage/IStorageProvider.js";
 import { generateFallbackTitle } from "./agent/fallbackTitle.js";
 import { buildModelMessages } from "./agent/historyFormatter.js";
+import { getUserMemoryContextService } from "./UserMemoryContextService.js";
 import {
   type ToolCallEvent,
   type ToolResultEvent,
@@ -458,11 +459,25 @@ export class AgentService {
           enabledSkills,
           config.provider,
         ));
+
+      let memoryContextBlocks: string[] = [];
+      try {
+        memoryContextBlocks =
+          await getUserMemoryContextService().getMemoryContextBlocks(
+            chatId,
+            userMessage,
+            history,
+          );
+      } catch (error) {
+        console.warn("[AgentService] Memory bootstrap failed:", error);
+      }
+
       const messages = buildModelMessages(
         history,
         userMessage,
         systemPrompt,
         conversationSummary,
+        memoryContextBlocks,
       );
       timings.buildMessages = performance.now() - t;
 
@@ -1493,6 +1508,9 @@ export class AgentService {
           const response = await papr.messages.sessions.compress(chatId);
           if (response.summaries) {
             const s = response.summaries;
+            const { extractEnhancedFields } = await import(
+              "./storage/summaryFormatting.js"
+            );
             const summary: import("./storage/IStorageProvider.js").StoredSummary =
               {
                 short_term: s.short_term ?? "",
@@ -1500,6 +1518,7 @@ export class AgentService {
                 long_term: s.long_term ?? "",
                 topics: s.topics ?? [],
                 last_updated: s.last_updated ?? new Date().toISOString(),
+                enhanced: extractEnhancedFields(response),
                 fetched_from_papr: true,
                 last_fetched_at: new Date().toISOString(),
               };
@@ -3097,8 +3116,17 @@ ${last15.substring(0, 8_000)}`;
     thisWeek: number;
     thisMonth: number;
     total: number;
+    totalTokens: number;
+    todayTokens: number;
+    thisWeekTokens: number;
+    thisMonthTokens: number;
     totalMessages: number;
-    topModels: Array<{ model: string; cost: number; count: number }>;
+    topModels: Array<{
+      model: string;
+      cost: number;
+      tokens: number;
+      count: number;
+    }>;
   }> {
     return this.storageManager.getGlobalCostStats();
   }
@@ -3114,7 +3142,9 @@ ${last15.substring(0, 8_000)}`;
 
   async getDailyCostTrends(
     days?: number,
-  ): Promise<Array<{ date: string; cost: number; messages: number }>> {
+  ): Promise<
+    Array<{ date: string; cost: number; messages: number; tokens: number }>
+  > {
     return this.storageManager.getDailyCostTrends(days);
   }
 
@@ -3136,12 +3166,43 @@ ${last15.substring(0, 8_000)}`;
     return this.storageManager.getAgentStats(agentId);
   }
 
+  async getAllAgentStats(): Promise<
+    Record<
+      string,
+      {
+        totalMessages: number;
+        totalTokens: number;
+        totalCost: number;
+        toolCallsCount: number;
+        avgTokensPerMessage: number;
+        avgCostPerMessage: number;
+        mostUsedTools: Array<{ tool: string; count: number }>;
+      }
+    >
+  > {
+    return this.storageManager.getAllAgentStats();
+  }
+
   async getAgentOutputs(agentId?: string): Promise<{
     documents: Array<{ id: string; title: string; createdAt: string }>;
     apps: Array<{ id: string; title: string; createdAt: string }>;
     plans: Array<{ planId: string; title: string; createdAt: string }>;
   }> {
     return this.storageManager.getAgentOutputs(agentId);
+  }
+
+  getContextEfficiencyStats() {
+    return this.storageManager.getContextEfficiencyStats();
+  }
+
+  getToolUsageByAgent(): Record<
+    string,
+    {
+      mostUsedTools: Array<{ tool: string; count: number }>;
+      totalToolInvocations: number;
+    }
+  > {
+    return this.storageManager.getToolUsageByAgent();
   }
 
   /**
