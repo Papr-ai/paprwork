@@ -49,11 +49,13 @@ export class CommandJobExecutor implements IJobExecutor {
     // Jobs bypass the bash tool, so we need to substitute keys here
     // For "ask" keys, requests permission before substituting
     let sanitizationValues: string[] = [];
+    const keyEnvVars: Record<string, string> = {};
     try {
-      const result = await this.substituteCustomKeys(finalCommand, params);
+      const result = await this.resolveCustomKeys(finalCommand, params);
       finalCommand = result.command;
       sanitizationValues = result.sanitizationValues;
-      // Do NOT inject customKeys into env - that's a security risk!
+      // Inject resolved keys as env vars to child process
+      Object.assign(keyEnvVars, result.keyEnvVars);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to substitute API keys: ${message}`);
@@ -71,6 +73,8 @@ export class CommandJobExecutor implements IJobExecutor {
       JOB_DIR: params.jobDir,
       JOB_DB: jobDbPath,
       ...(params.runtimeParams ?? {}),
+      // Inject resolved keys as env vars (child process only — never in command string)
+      ...keyEnvVars,
     }
     
     const proc = spawn(shellPath, shellArgs, {
@@ -87,19 +91,20 @@ export class CommandJobExecutor implements IJobExecutor {
   }
 
   /**
-   * Substitute custom API keys in command (${KEY_NAME} syntax).
-   * Loads keys from both environment AND CustomKeysStorage.
+   * Resolve custom API keys referenced in the command template.
+   * Keys are returned as env vars for child process injection.
    * For keys with permission "ask", requests user approval before substituting.
    *
-   * SECURITY: Keys are ONLY substituted in command string, NOT injected into env.
+   * SECURITY: Keys are injected as env vars to the child process.
+   * They are NEVER substituted into the command string.
    *
    * @returns Object with substituted command
    * @throws Error if permission denied for an "ask" key
    */
-  private async substituteCustomKeys(
+  private async resolveCustomKeys(
     command: string,
     params: ExecutorLaunchParams,
-  ): Promise<{ command: string; sanitizationValues: string[] }> {
+  ): Promise<{ command: string; keyEnvVars: Record<string, string>; sanitizationValues: string[] }> {
     const customKeys: Record<string, string> = {};
     const job = params.job;
 
@@ -172,20 +177,28 @@ export class CommandJobExecutor implements IJobExecutor {
       );
     }
 
-    // 4. Substitute ${KEY_NAME} with actual values
+    // 4. Strip ${KEY_NAME} placeholders — keys are injected via env vars
+    // The command seen by the agent/logs shows placeholders, never values
     let result = command;
     if (command.includes("${")) {
-      for (const [name, value] of Object.entries(customKeys)) {
-        if (value && value.length > 0) {
-          const regex = new RegExp(`\\$\\{${this.escapeRegex(name)}\\}`, "g");
-          result = result.replace(regex, value);
+      for (const name of Object.keys(customKeys)) {
+        // Remove --flag "${KEY_NAME}" arg pairs
+        const flagRe = new RegExp(
+          `\\s+--[a-z][-a-z]*\\s+["']?\\$\\{${this.escapeRegex(name)}\\}["']?`, "g",
+        );
+        if (flagRe.test(result)) {
+          result = result.replace(flagRe, "");
+        } else {
+          const re = new RegExp(`["']?\\$\\{${this.escapeRegex(name)}\\}["']?`, "g");
+          result = result.replace(re, "");
         }
       }
+      result = result.replace(/  +/g, " ").trim();
     }
     const sanitizationValues = Object.values(customKeys).filter(
-      (value) => value.length > 0,
+      (v) => v && v.length > 0,
     );
-    return { command: result, sanitizationValues };
+    return { command: result, keyEnvVars: customKeys, sanitizationValues };
   }
 
   /**

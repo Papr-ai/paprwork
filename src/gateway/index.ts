@@ -193,24 +193,42 @@ async function startGateway(): Promise<void> {
     setupKeyCacheInvalidationListener();
     console.log("[Gateway] Key cache invalidation listener ready");
 
-    // Initialize services first
-    await initializeServices();
-
-    // Create Express app
+    // Create Express app and bind port BEFORE initializing services.
+    // This lets the supervisor health probes succeed while services load.
     const app = express();
     const server = createServer(app);
 
-    // Create WebSocket server
+    // Health probe — available immediately (before services init)
+    let servicesReady = false;
+    app.get("/health", (_req, res) => {
+      res.json({ status: "ok", ready: servicesReady, timestamp: Date.now() });
+    });
+
+    // Bind port early so supervisor can reach /health during service init
+    await new Promise<void>((resolve, reject) => {
+      server.on("error", (error: NodeJS.ErrnoException) => {
+        if (error.code === "EADDRINUSE") {
+          console.error("[Gateway] Port " + PORT + " is already in use");
+        }
+        reject(error);
+      });
+      server.listen(PORT as number, HOST, () => {
+        console.log("[Gateway] Server listening on http://" + HOST + ":" + PORT + " (services loading...)");
+        resolve();
+      });
+    });
+
+    // Initialize services (can take several seconds on first run)
+    await initializeServices();
+    servicesReady = true;
+    console.log("[Gateway] All services ready");
+
+    // Create WebSocket server (after services are ready)
     const wss = new WebSocketServer({ server });
     console.log("[Gateway] WebSocket server created");
 
     // Setup WebSocket handlers
     setupWebSocketHandlers(wss);
-
-    // Health check endpoint (before static files)
-    app.get("/health", (_req, res) => {
-      res.json({ status: "ok", timestamp: Date.now() });
-    });
 
     // ── Mini-app SQLite query API ────────────────────────────────────────────
     // All synchronous better-sqlite3 calls run in a worker-thread pool so they
@@ -1074,26 +1092,9 @@ async function startGateway(): Promise<void> {
       console.log("[Gateway] Serving UI from:", uiPath);
     }
 
-    // Start server with error handling
-    await new Promise<void>((resolve, reject) => {
-      server.on("error", (error: NodeJS.ErrnoException) => {
-        if (error.code === "EADDRINUSE") {
-          console.error(`[Gateway] ERROR: Port ${PORT} is already in use!`);
-          console.error(`[Gateway] Another Gateway process may be running.`);
-          console.error(`[Gateway] Run: npm run kill:gateway`);
-          reject(error);
-        } else {
-          console.error("[Gateway] Server error:", error);
-          reject(error);
-        }
-      });
+    // Server already listening (port was bound early for health probes)
+    console.log(`[Gateway] WebSocket available at ws://${HOST}:${PORT}`);
 
-      server.listen(PORT as number, HOST, () => {
-        console.log(`[Gateway] Server listening on http://${HOST}:${PORT}`);
-        console.log(`[Gateway] WebSocket available at ws://${HOST}:${PORT}`);
-        resolve();
-      });
-    });
 
     // Handle shutdown
     const shutdown = async () => {
