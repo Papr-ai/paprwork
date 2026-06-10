@@ -14,6 +14,7 @@ import type {
   StoredMessage,
   StoredSummary,
   ChatMetadata,
+  ChatSummarySnapshot,
 } from "./IStorageProvider";
 import { ChatExporter } from "./ChatExporter.js";
 import {
@@ -689,6 +690,45 @@ export class LocalStorageProvider implements IStorageProvider {
     }));
   }
 
+  async listRecentChatSummaries(
+    limit: number,
+    maxAgeDays: number,
+  ): Promise<ChatSummarySnapshot[]> {
+    const rows = this.db
+      .prepare(
+        `
+      SELECT id, title, message_count, updated_at as updatedAt,
+             summary_short, summary_medium, summary_topics
+      FROM chats
+      WHERE summary_short IS NOT NULL AND trim(summary_short) != ''
+        AND updated_at >= datetime('now', ?)
+      ORDER BY updated_at DESC
+      LIMIT ?
+    `,
+      )
+      .all(`-${maxAgeDays} days`, limit) as Array<{
+      id: string;
+      title: string | null;
+      message_count: number;
+      updatedAt: string;
+      summary_short: string | null;
+      summary_medium: string | null;
+      summary_topics: string | null;
+    }>;
+
+    return rows.map((row) => ({
+      id: row.id,
+      title: row.title || row.id,
+      updated_at: row.updatedAt,
+      message_count: row.message_count,
+      summary_short: row.summary_short,
+      summary_medium: row.summary_medium,
+      summary_topics: row.summary_topics
+        ? (JSON.parse(row.summary_topics) as string[])
+        : [],
+    }));
+  }
+
   async getChat(chatId: string): Promise<ChatMetadata | null> {
     const row = this.db
       .prepare(`
@@ -739,6 +779,74 @@ export class LocalStorageProvider implements IStorageProvider {
       WHERE id = ?
     `)
       .run(new Date().toISOString(), error, messageId);
+  }
+
+  async getChatSyncStats(chatId: string): Promise<{
+    total: number;
+    synced: number;
+    sync_pending: number;
+    sync_failed: number;
+    local: number;
+    papr_only: number;
+    recentFailures: Array<{
+      messageId: string;
+      error: string;
+      timestamp: string;
+    }>;
+  }> {
+    const rows = this.db
+      .prepare(
+        `
+      SELECT sync_status, COUNT(*) as count
+      FROM messages
+      WHERE chat_id = ?
+      GROUP BY sync_status
+    `,
+      )
+      .all(chatId) as Array<{ sync_status: string; count: number }>;
+
+    const stats = {
+      total: 0,
+      synced: 0,
+      sync_pending: 0,
+      sync_failed: 0,
+      local: 0,
+      papr_only: 0,
+    };
+
+    for (const row of rows) {
+      stats.total += row.count;
+      if (row.sync_status in stats) {
+        stats[row.sync_status as keyof typeof stats] = row.count;
+      }
+    }
+
+    const failureRows = this.db
+      .prepare(
+        `
+      SELECT id, sync_error, timestamp
+      FROM messages
+      WHERE chat_id = ?
+        AND sync_status = 'sync_failed'
+        AND sync_error IS NOT NULL
+      ORDER BY timestamp DESC
+      LIMIT 3
+    `,
+      )
+      .all(chatId) as Array<{
+      id: string;
+      sync_error: string;
+      timestamp: string;
+    }>;
+
+    return {
+      ...stats,
+      recentFailures: failureRows.map((row) => ({
+        messageId: row.id,
+        error: row.sync_error,
+        timestamp: row.timestamp,
+      })),
+    };
   }
 
   async getUnsyncedMessages(chatId: string): Promise<StoredMessage[]> {

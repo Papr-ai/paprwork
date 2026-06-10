@@ -47,7 +47,7 @@ export async function getDefaultProviderAndModel(): Promise<{
     openai: "gpt-5.5",
     "openai-codex": "gpt-5.3-codex",
     anthropic: "claude-sonnet-4-6",
-    google: "gemini-2.5-flash",
+    google: "gemini-3.5-flash",
     ollama: resolveDefaultOllamaModelId(),
   };
 
@@ -108,7 +108,7 @@ export async function getAvailableProviders(): Promise<AvailableProvider[]> {
     openai: "gpt-5.5",
     "openai-codex": "gpt-5.3-codex",
     anthropic: "claude-sonnet-4-6",
-    google: "gemini-2.5-flash",
+    google: "gemini-3.5-flash",
     ollama: resolveDefaultOllamaModelId(),
   };
 

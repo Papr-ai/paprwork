@@ -3,6 +3,11 @@
  * Manual integration test for chat-start memory bootstrap.
  * Run: node --import tsx scripts/test-memory-bootstrap.mjs
  */
+import dotenv from "dotenv";
+import { resolve } from "path";
+
+dotenv.config({ path: resolve(process.cwd(), ".env.local") });
+
 import {
   formatSyncTiersBlock,
   formatMessageSearchBlock,
@@ -70,6 +75,7 @@ const blocks = await getUserMemoryContextService().getMemoryContextBlocks(
   "test-chat-id",
   testMessage,
   [{ role: "user", content: testMessage, timestamp: new Date().toISOString() }],
+  { mode: "inspect" },
 );
 
 console.log(`\nGot ${blocks.length} block(s):\n`);

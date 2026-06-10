@@ -119,6 +119,7 @@ const GATEWAY_PORT = parseInt(process.env.GATEWAY_PORT || "18789", 10);
 const IS_PRODUCTION = process.env.NODE_ENV === "production" || require("path").dirname(__dirname).includes("app.asar");
 
 let mainWindow = null;
+let isQuitting = false;
 let gatewayProcess = null;
 const webviewSessions = new Map();
 let defaultWebviewId = null;
@@ -308,6 +309,31 @@ async function handleWebviewTestRequest(request) {
     const text = await win.webContents.executeJavaScript(
       "document.body ? document.body.innerText : ''",
     );
+    const visualState = await win.webContents.executeJavaScript(`(() => {
+      function isVisible(el) {
+        const s = getComputedStyle(el);
+        if (s.display === 'none' || s.visibility === 'hidden' || Number(s.opacity) === 0) return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      }
+      const brokenHidden = Array.from(document.querySelectorAll('.hidden')).filter(isVisible);
+      const overlays = Array.from(document.querySelectorAll('#modal-overlay, .modal-overlay')).filter(isVisible);
+      const main = document.getElementById('content') || document.querySelector('main');
+      const warnings = [];
+      if (brokenHidden.length > 0) {
+        warnings.push(brokenHidden.length + ' element(s) have class "hidden" but are still visible — add .hidden { display: none } to CSS');
+      }
+      if (overlays.length > 0 && main && !main.innerText.trim()) {
+        warnings.push('Modal overlay is visible but main content is empty — UI may look blank/blurred to the user');
+      }
+      return {
+        brokenHiddenCount: brokenHidden.length,
+        visibleOverlayCount: overlays.length,
+        mainContentEmpty: main ? !main.innerText.trim() : null,
+        warnings,
+        userWouldSeeBlankUi: brokenHidden.length > 0 || (overlays.length > 0 && main && !main.innerText.trim()),
+      };
+    })()`);
     return {
       success: true,
       data: {
@@ -316,6 +342,7 @@ async function handleWebviewTestRequest(request) {
         title: win.webContents.getTitle(),
         html: typeof html === "string" ? html.slice(0, maxHtmlChars) : "",
         text: typeof text === "string" ? text.slice(0, maxTextChars) : "",
+        visualState,
       },
     };
   }
@@ -641,13 +668,17 @@ function createMainWindow() {
   // macOS: Close button should hide the window (app stays in dock)
   mainWindow.on("close", (event) => {
     if (process.platform === "darwin") {
+      // During Cmd+Q / app.quit(), allow destroy() to proceed — don't intercept
+      if (isQuitting) {
+        return;
+      }
       // macOS: Hide window but keep app running (standard macOS behavior)
       event.preventDefault();
-      mainWindow.hide();
-    } else {
-      // Windows/Linux: Let the window close normally, which triggers app.quit()
-      // Don't prevent default - allow normal close behavior
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.hide();
+      }
     }
+    // Windows/Linux: Let the window close normally, which triggers app.quit()
   });
 
   mainWindow.on("closed", () => {
@@ -1729,9 +1760,6 @@ app.on("activate", () => {
     mainWindow.show();
   }
 });
-
-// Track whether we're in the process of quitting to avoid duplicate cleanup
-let isQuitting = false;
 
 app.on("before-quit", async (event) => {
   if (isQuitting) {

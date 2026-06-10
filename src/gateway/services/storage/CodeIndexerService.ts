@@ -9,6 +9,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { Papr } from '@papr/memory';
+import { buildCodeIndexAddPolicy } from '../../utils/paprMemoryPolicy.js';
 import { getPaprUserId } from '../../utils/paprUserId.js';
 
 export interface CodeFileMetadata {
@@ -456,10 +457,7 @@ export class CodeIndexerService {
         category: 'learning',
         customMetadata: paprMetadata
       },
-      memory_policy: {
-        schema_id: this.schemaId,
-        mode: 'auto'
-      }
+      policy: buildCodeIndexAddPolicy(this.schemaId),
     });
   }
   
@@ -507,10 +505,7 @@ export class CodeIndexerService {
         category: 'learning',
         customMetadata: paprMetadata
       },
-      memory_policy: {
-        schema_id: this.schemaId,
-        mode: 'auto' // LLM will extract holographic fields + create graph nodes
-      }
+      policy: buildCodeIndexAddPolicy(this.schemaId),
     }).catch((error) => {
       // Enhance error message with more context
       const err = error as any;

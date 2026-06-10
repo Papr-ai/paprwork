@@ -114,7 +114,7 @@ export {
   updateSchemaTool,
   listSchemasTool,
   getSchemaTool,
-  listFrequencySchemasTool,
+  listSignalDomainsTool,
   introspectMemoryGraphTool,
   queryMemoryGraphTool,
   deleteMemoryTool,

@@ -33,8 +33,17 @@ import { getSkillService, type SkillRecord } from "./SkillService.js";
 import { ChatExporter } from "./storage/ChatExporter.js";
 import type { StoredMessage } from "./storage/IStorageProvider.js";
 import { generateFallbackTitle } from "./agent/fallbackTitle.js";
-import { buildModelMessages } from "./agent/historyFormatter.js";
-import { getUserMemoryContextService } from "./UserMemoryContextService.js";
+import {
+  buildModelMessages,
+  extractToolResultText,
+} from "./agent/historyFormatter.js";
+import {
+  classifyMemoryBlock,
+  getUserMemoryContextService,
+  isMemoryContextUserMessage,
+  shouldBootstrapUserMemory,
+} from "./UserMemoryContextService.js";
+import { getPaprUserId } from "../utils/paprUserId.js";
 import {
   type ToolCallEvent,
   type ToolResultEvent,
@@ -326,7 +335,7 @@ export class AgentService {
       }
       
       // Claude Opus 4.7 (1M context)
-      if (model === "claude-opus-4-7") {
+      if (model === "claude-opus-4-7" || model === "claude-fable-5") {
         return 750000; // 1M - 250K buffer
       }
       
@@ -467,6 +476,7 @@ export class AgentService {
             chatId,
             userMessage,
             history,
+            { mode: "stream" },
           );
       } catch (error) {
         console.warn("[AgentService] Memory bootstrap failed:", error);
@@ -880,22 +890,40 @@ export class AgentService {
             );
             
             // Map model ID to display name and pricing
-            const modelInfo = piModelId.includes("opus") ? {
-              name: "Claude Opus 4.6",
-              inputCost: 5.0,
-              outputCost: 25.0,
-              contextWindow: 200000,
-            } : piModelId.includes("sonnet") ? {
-              name: "Claude Sonnet 4.6", 
-              inputCost: 3.0,
-              outputCost: 15.0,
-              contextWindow: 200000,
-            } : {
-              name: "Claude Haiku 4.5",
-              inputCost: 1.0,
-              outputCost: 5.0,
-              contextWindow: 200000,
-            };
+            const modelInfo = piModelId.includes("fable")
+              ? {
+                  name: "Claude Fable 5",
+                  inputCost: 10.0,
+                  outputCost: 50.0,
+                  contextWindow: 1000000,
+                }
+              : piModelId.includes("opus-4-7")
+                ? {
+                    name: "Claude Opus 4.7",
+                    inputCost: 5.0,
+                    outputCost: 25.0,
+                    contextWindow: 1000000,
+                  }
+                : piModelId.includes("opus")
+                  ? {
+                      name: "Claude Opus 4.6",
+                      inputCost: 15.0,
+                      outputCost: 75.0,
+                      contextWindow: 200000,
+                    }
+                  : piModelId.includes("sonnet")
+                    ? {
+                        name: "Claude Sonnet 4.6",
+                        inputCost: 3.0,
+                        outputCost: 15.0,
+                        contextWindow: 200000,
+                      }
+                    : {
+                        name: "Claude Haiku 4.5",
+                        inputCost: 0.8,
+                        outputCost: 4.0,
+                        contextWindow: 200000,
+                      };
             
             finalModel = {
               id: piModelId,
@@ -903,7 +931,10 @@ export class AgentService {
               api: piApiId, // CRITICAL: "anthropic-messages" routes to /v1/messages
               provider: piProvider,
               baseUrl: "https://api.anthropic.com",
-              reasoning: piModelId.includes("opus") || piModelId.includes("sonnet"),
+              reasoning:
+                piModelId.includes("fable") ||
+                piModelId.includes("opus") ||
+                piModelId.includes("sonnet"),
               input: ["text", "image"],
               cost: {
                 input: modelInfo.inputCost,
@@ -912,7 +943,7 @@ export class AgentService {
                 cacheWrite: modelInfo.inputCost * 1.25, // 25% markup for write
               },
               contextWindow: modelInfo.contextWindow,
-              maxTokens: 8192,
+              maxTokens: piModelId.includes("fable") ? 128000 : 8192,
             };
           }
         }
@@ -1745,6 +1776,8 @@ ${last15.substring(0, 8_000)}`;
     // Clear session if active
     await this.sessionManager.clearSession(chatId);
 
+    getUserMemoryContextService().clearChatBootstrap(chatId);
+
     // Delete from storage
     await this.storageManager.deleteChat(chatId);
   }
@@ -1763,6 +1796,22 @@ ${last15.substring(0, 8_000)}`;
     return await this.storageManager.getChatStats(chatId);
   }
 
+  /** Last user message in history, for memory search query in context inspector. */
+  private getLastUserMessageForInspect(history: unknown[]): string {
+    for (let i = history.length - 1; i >= 0; i--) {
+      const entry = history[i];
+      if (typeof entry !== "object" || entry === null) {
+        continue;
+      }
+      const msg = entry as { role?: unknown; content?: unknown };
+      if (msg.role !== "user" || typeof msg.content !== "string") {
+        continue;
+      }
+      return msg.content;
+    }
+    return "[Next user message will appear here]";
+  }
+
   /**
    * Get detailed context breakdown for inspection
    * Shows what will be sent to the LLM on next turn
@@ -1771,6 +1820,9 @@ ${last15.substring(0, 8_000)}`;
    * the context inspector shows exactly what the LLM sees
    */
   async inspectContext(chatId: string, selectedModel: string) {
+    // Match streamAgent: lazy-load keys so hybrid mode + memory bootstrap work in /context
+    await this.ensureKeysLoaded();
+
     // Get actual model from active session if it exists, otherwise use selectedModel
     let actualModel = selectedModel;
     const session = this.sessionManager.getSessionIfExists(chatId);
@@ -1877,16 +1929,71 @@ ${last15.substring(0, 8_000)}`;
       // No plans
     }
 
+    const nextUserMessage = this.getLastUserMessageForInspect(history);
+    const memoryContextService = getUserMemoryContextService();
+    const memoryBootstrapOnNextTurn =
+      memoryContextService.willInjectOnNextSend(chatId, history) ||
+      shouldBootstrapUserMemory(history);
+
+    let memoryContextBlocks: string[] = [];
+    if (memoryBootstrapOnNextTurn) {
+      try {
+        memoryContextBlocks = await memoryContextService.getMemoryContextBlocks(
+          chatId,
+          nextUserMessage,
+          history,
+          { mode: "inspect" },
+        );
+      } catch (error) {
+        console.warn("[AgentService] Context inspector memory bootstrap failed:", error);
+      }
+    }
+
     // Format messages for model (same as actual run)
     const messages = buildModelMessages(
       history,
       "[Next user message will appear here]",
       systemPrompt,
       conversationSummary,
+      memoryContextBlocks,
     );
 
     // Count tokens (rough estimate: 1 token ≈ 4 chars)
     const estimateTokens = (text: string) => Math.ceil(text.length / 4);
+
+    let goalsOkrsContent: string | null = null;
+    let useCasesContent: string | null = null;
+    let syncTiersContent: string | null = null;
+    let relatedMemoryContent: string | null = null;
+    for (const block of memoryContextBlocks) {
+      const kind = classifyMemoryBlock(block);
+      if (kind === "parse_goals") {
+        goalsOkrsContent = block;
+      } else if (kind === "parse_usecases") {
+        useCasesContent = block;
+      } else if (kind === "sync_tiers") {
+        syncTiersContent = block;
+      } else if (kind === "related_memory") {
+        relatedMemoryContent = block;
+      }
+    }
+    const goalsOkrsTokens = goalsOkrsContent
+      ? estimateTokens(goalsOkrsContent)
+      : 0;
+    const useCasesTokens = useCasesContent
+      ? estimateTokens(useCasesContent)
+      : 0;
+    const syncTiersTokens = syncTiersContent
+      ? estimateTokens(syncTiersContent)
+      : 0;
+    const relatedMemoryTokens = relatedMemoryContent
+      ? estimateTokens(relatedMemoryContent)
+      : 0;
+    const memoryBootstrapTokens =
+      goalsOkrsTokens +
+      useCasesTokens +
+      syncTiersTokens +
+      relatedMemoryTokens;
 
     // Break down token counts
     const systemPromptTokens = estimateTokens(systemPrompt);
@@ -1916,6 +2023,15 @@ ${last15.substring(0, 8_000)}`;
         msg.role === "user" &&
         typeof msg.content === "string" &&
         msg.content.startsWith("[CONVERSATION CONTEXT - Earlier messages")
+      ) {
+        continue;
+      }
+
+      // Skip Papr memory bootstrap blocks (shown in memoryBootstrap section)
+      if (
+        msg.role === "user" &&
+        typeof msg.content === "string" &&
+        isMemoryContextUserMessage(msg.content)
       ) {
         continue;
       }
@@ -1956,15 +2072,13 @@ ${last15.substring(0, 8_000)}`;
                 // Show more useful preview (500 chars per result - matches LLM history truncation)
                 // This gives enough context to understand what happened without overwhelming the UI
                 const resultSummaries = toolResultParts.map((p: any) => {
-                  const resultStr =
-                    typeof p.result === "string"
-                      ? p.result
-                      : JSON.stringify(p.result);
+                  const resultStr = extractToolResultText(p);
                   const PREVIEW_LENGTH = 500; // ~125 tokens, matches history truncation
                   const truncated = resultStr.substring(0, PREVIEW_LENGTH);
-                  const suffix = resultStr.length > PREVIEW_LENGTH 
-                    ? `... [+${resultStr.length - PREVIEW_LENGTH} chars]` 
-                    : "";
+                  const suffix =
+                    resultStr.length > PREVIEW_LENGTH
+                      ? `... [+${resultStr.length - PREVIEW_LENGTH} chars]`
+                      : "";
                   return `${p.toolName}: ${truncated}${suffix}`;
                 });
                 content += `\n→ Tool results:\n${resultSummaries.join("\n")}`;
@@ -1994,8 +2108,15 @@ ${last15.substring(0, 8_000)}`;
     const totalTokens =
       systemPromptTokens +
       conversationSummaryTokens +
+      memoryBootstrapTokens +
       historyTokens +
       toolTokens;
+
+    const chatStats = await this.storageManager.getChatStats(chatId);
+    const syncStats = await this.storageManager.getChatSyncStats(chatId);
+    const storageMode = this.storageManager.getMode() ?? "local";
+    const paprConfigured = Boolean(this.storageManager.getConfig()?.paprApiKey);
+    const paprUserId = getPaprUserId();
 
     return {
       model: actualModel,
@@ -2013,6 +2134,31 @@ ${last15.substring(0, 8_000)}`;
               note: "Injected as a user message before recent history",
             }
           : null,
+        memoryBootstrap: {
+          tokens: memoryBootstrapTokens,
+          wouldRunOnNextTurn: memoryBootstrapOnNextTurn,
+          deferredBootstrap:
+            memoryContextService.willInjectOnNextSend(chatId, history),
+          note: memoryBootstrapOnNextTurn
+            ? memoryContextService.willInjectOnNextSend(chatId, history)
+              ? "Deferred bootstrap ready — injects as user messages on your next send (after summary, before history)"
+              : shouldBootstrapUserMemory(history)
+                ? "First message starts background fetch — goals/memory inject on your second message (first response is not blocked)"
+                : "Injected as user messages after summary, before chat history"
+            : "Skipped on next turn (bootstrap already injected, or active chat with no pending fetch)",
+          goalsOkrs: goalsOkrsContent
+            ? { tokens: goalsOkrsTokens, content: goalsOkrsContent }
+            : null,
+          useCases: useCasesContent
+            ? { tokens: useCasesTokens, content: useCasesContent }
+            : null,
+          syncTiers: syncTiersContent
+            ? { tokens: syncTiersTokens, content: syncTiersContent }
+            : null,
+          relatedMemory: relatedMemoryContent
+            ? { tokens: relatedMemoryTokens, content: relatedMemoryContent }
+            : null,
+        },
         messages: {
           tokens: historyTokens,
           count: messageBreakdown.length, // Count only what we actually show
@@ -2050,6 +2196,26 @@ ${last15.substring(0, 8_000)}`;
           count: activePlans.length,
           plans: activePlans,
           note: "Plan references are in system prompt (counted there)",
+        },
+        paprSync: {
+          tokens: 0,
+          note: "Cloud sync status (memory tiers shown above when bootstrap runs)",
+          storageMode,
+          syncEnabled: storageMode === "hybrid" && paprConfigured,
+          paprConfigured,
+          paprUserId: paprUserId ?? null,
+          hasLocalSummary: chatStats.has_summary,
+          conversationSummaryInContext: Boolean(conversationSummary),
+          memoryBootstrapOnNextTurn: memoryBootstrapOnNextTurn,
+          messageCounts: {
+            total: syncStats.total,
+            synced: syncStats.synced,
+            sync_pending: syncStats.sync_pending,
+            sync_failed: syncStats.sync_failed,
+            local: syncStats.local,
+            papr_only: syncStats.papr_only,
+          },
+          recentSyncFailures: syncStats.recentFailures,
         },
       },
     };
@@ -2163,7 +2329,7 @@ ${last15.substring(0, 8_000)}`;
       openai: "gpt-5.5",
       "openai-codex": "gpt-5.3-codex",
       anthropic: "claude-sonnet-4-6",
-      google: "gemini-2.5-flash",
+      google: "gemini-3.5-flash",
       ollama: "qwen3.5:latest",
     };
     model = model ?? defaultModelByProvider[provider];
@@ -2593,7 +2759,7 @@ ${last15.substring(0, 8_000)}`;
       openai: "gpt-5.5",
       "openai-codex": "gpt-5.3-codex",
       anthropic: "claude-sonnet-4-6",
-      google: "gemini-2.5-flash",
+      google: "gemini-3.5-flash",
       ollama: "qwen3.5:latest",
     };
     modelId = modelId ?? defaultModelByProvider[provider];
@@ -3222,14 +3388,12 @@ ${last15.substring(0, 8_000)}`;
         try {
           const { google } = await import("@ai-sdk/google");
           if (google.tools?.googleSearch) {
-            const googleSearchTool = google.tools.googleSearch({});
-            // ⚠️ CRITICAL FIX: Override tool ID to remove dot (Gemini requires ^[a-zA-Z0-9_-]+$)
-            // Original ID: "google.google_search" → Fixed ID: "google_search"
-            tools.google_search = {
-              ...googleSearchTool,
-              id: "google_search", // Remove dot from ID
-            };
-            console.log("[AgentService] ✅ Enabled Google Search for Gemini (fixed tool ID: google_search)");
+            // Keep the SDK's provider tool ID (`google.google_search`). The AI SDK
+            // maps it to `{ googleSearch: {} }` in prepareTools — renaming the ID
+            // breaks recognition and drops ALL tools on Gemini 3 when mixed with
+            // function tools (provider tools are not subject to function-name regex).
+            tools.google_search = google.tools.googleSearch({});
+            console.log("[AgentService] ✅ Enabled Google Search for Gemini");
           } else {
             console.warn("[AgentService] ⚠️  Google Search not available in this SDK version");
           }

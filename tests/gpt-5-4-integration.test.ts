@@ -6,7 +6,11 @@
 import { describe, it, expect } from "vitest";
 import { CHAT_MODELS, getModelById } from "../ui/constants/models.js";
 import { MODEL_PRICING, calculateCost } from "../src/gateway/services/CostCalculation.js";
-import { normalizeOpenAIModelId, isOpenAICodexModel } from "../src/gateway/utils/modelNormalizer.js";
+import {
+  normalizeOpenAIModelId,
+  isOpenAICodexModel,
+  requiresOpenAIPlatformApiKey,
+} from "../src/gateway/utils/modelNormalizer.js";
 
 describe("GPT-5.4 Model Definitions", () => {
   it("should include GPT-5.4 model in CHAT_MODELS", () => {
@@ -155,5 +159,13 @@ describe("GPT-5.4 Edge Cases", () => {
     expect(isOpenAICodexModel("gpt-5.4")).toBe(true);
     expect(isOpenAICodexModel("gpt-5.4-mini")).toBe(true);
     expect(isOpenAICodexModel("gpt-5.4-pro")).toBe(true);
+  });
+
+  it("should require Platform API key for retired gpt-5.3-codex on ChatGPT OAuth", () => {
+    expect(requiresOpenAIPlatformApiKey("gpt-5.3-codex")).toBe(true);
+    expect(isOpenAICodexModel("gpt-5.3-codex")).toBe(false);
+    expect(getModelById("gpt-5.3-codex")?.requiresApiKey).toBe(
+      "OPENAI_API_KEY",
+    );
   });
 });

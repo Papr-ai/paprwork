@@ -43,8 +43,8 @@ async function testFrequencySchemas() {
       console.log(`  • ${schema.id.padEnd(15)} → ${schema.name} (${schema.frequency_count} frequencies)`);
     });
     
-    console.log('\n📌 Usage: Use these IDs with frequencySchemaId parameter');
-    console.log('   Example: add_agent_memory({ enableHolographic: true, frequencySchemaId: "general" })');
+    console.log('\n📌 Usage: Use these IDs with signalDomain or vectorPolicy.domainId');
+    console.log('   Example: add_agent_memory({ signalDomain: "general" })');
     
     return data.data;
   } catch (error) {
@@ -86,8 +86,8 @@ async function showDistinction(frequencySchemas, kgSchemas) {
   console.log('  • Created by: Papr (pre-built)');
   console.log('  • ID format: Short names like "general", "cosqa", "scifact"');
   console.log('  • Count:', frequencySchemas.length);
-  console.log('  • List them: list_frequency_schemas tool');
-  console.log('  • Use with: enableHolographic, frequencySchemaId parameters');
+  console.log('  • List them: list_signal_domains tool');
+  console.log('  • Use with: signalDomain (add), vectorPolicy.domainId (search)');
   
   console.log('\n🗺️  KNOWLEDGE GRAPH SCHEMAS:');
   console.log('  • Purpose: Define entity types and relationships for your data');
@@ -98,8 +98,8 @@ async function showDistinction(frequencySchemas, kgSchemas) {
   console.log('  • Use with: schemaId in create_entities, register_schema');
   
   console.log('\n⚠️  DON\'T CONFUSE THEM:');
-  console.log('  ❌ Wrong: add_agent_memory({ frequencySchemaId: "BNSv8YCQXJ" })');
-  console.log('  ✅ Right: add_agent_memory({ frequencySchemaId: "general" })');
+  console.log('  ❌ Wrong: add_agent_memory({ signalDomain: "BNSv8YCQXJ" })');
+  console.log('  ✅ Right: add_agent_memory({ signalDomain: "general" })');
   console.log('  ❌ Wrong: create_entities({ schemaId: "cosqa", nodes: [...] })');
   console.log('  ✅ Right: create_entities({ schemaId: "BNSv8YCQXJ", nodes: [...] })');
 }

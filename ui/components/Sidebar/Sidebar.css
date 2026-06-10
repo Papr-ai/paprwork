@@ -9,18 +9,23 @@
   width: 100%;
 }
 
-/* Header */
+/* Header — drag region + collapse toggle on the far right */
 .sidebar__header {
-  padding: 16px 16px 12px;
-  margin-bottom: 23px;
+  height: 52px;
+  min-height: 52px;
+  flex-shrink: 0;
+  margin-bottom: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  /* Make header draggable for window movement */
+  justify-content: flex-end;
+  padding: 0 10px 0 16px;
   -webkit-app-region: drag;
   -webkit-user-select: none;
   user-select: none;
+}
+
+body.platform-darwin .sidebar__header {
+  padding-left: 78px;
 }
 
 .sidebar__title {

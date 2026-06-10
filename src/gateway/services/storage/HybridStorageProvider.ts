@@ -253,6 +253,13 @@ export class HybridStorageProvider implements IStorageProvider {
     return this.local.listChats();
   }
 
+  async listRecentChatSummaries(
+    limit: number,
+    maxAgeDays: number,
+  ): Promise<import("./IStorageProvider.js").ChatSummarySnapshot[]> {
+    return this.local.listRecentChatSummaries(limit, maxAgeDays);
+  }
+
   // ===== Sync Operations =====
 
   async markMessageSynced(
@@ -268,6 +275,10 @@ export class HybridStorageProvider implements IStorageProvider {
 
   async getUnsyncedMessages(chatId: string): Promise<StoredMessage[]> {
     return this.local.getUnsyncedMessages(chatId);
+  }
+
+  async getChatSyncStats(chatId: string) {
+    return this.local.getChatSyncStats(chatId);
   }
 
   async getChatStats(chatId: string): Promise<{

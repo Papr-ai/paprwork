@@ -465,7 +465,9 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                               }}
                               title={
                                 !available
-                                  ? "Add API key or connect OAuth in Settings"
+                                  ? model.id === "gpt-5.3-codex"
+                                    ? "Requires OpenAI API key — no longer available via ChatGPT OAuth"
+                                    : "Add API key or connect OAuth in Settings"
                                   : ramTight
                                     ? `Estimated RAM needs may exceed this device (~${hostTotalRamGb} GB). Smaller Ollama models may run better.`
                                     : needsInstall

@@ -13,6 +13,7 @@ import { FavoritesList } from "./FavoritesList";
 import { NewChatButton } from "./NewChatButton";
 import { OnboardingCard } from "./OnboardingCard";
 import { ConnectionIndicator } from "../ConnectionIndicator/ConnectionIndicator";
+import { SidebarToggleButton } from "./SidebarToggleButton";
 import "./Sidebar.css";
 
 type View = "chat" | "apps" | "artifacts";
@@ -32,7 +33,7 @@ function tabTypeToView(type: TabType | undefined): View {
   }
 }
 
-export function Sidebar() {
+export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void }) {
   const [isCreatingChat, setIsCreatingChat] = useState(false);
   const { createChat } = useChat();
   const { tabs, createTab, switchToTab, activeLeftTab } = useTabs();
@@ -118,7 +119,12 @@ export function Sidebar() {
   return (
     <div className="sidebar">
       <div className="sidebar__header">
-        <h1 className="sidebar__title" style={{ marginLeft: "70px" }}></h1>
+        {onToggleCollapse && (
+          <SidebarToggleButton
+            onClick={onToggleCollapse}
+            ariaLabel="Hide sidebar"
+          />
+        )}
       </div>
 
       <div className="sidebar__content">

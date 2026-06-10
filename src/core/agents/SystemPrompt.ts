@@ -624,7 +624,7 @@ Use CLI for everything else. This keeps the tool simple and reliable.`;
         area: "Memory",
         enabled: has("add_agent_memory") || has("search_agent_memory"),
         details:
-          "Papr memory add/search/delete/schema/GraphQL — holographic search with frequency filtering, create_entities for manual graph control, search_agent_memory with metadata filters (projectId, projectType, language, fileName) for targeted code search, introspect_memory_graph + query_memory_graph for structured graph queries",
+          "Papr memory add/search/delete/schema/GraphQL — search_agent_memory with chatId 'current_chat' for this-session recall, code filters (projectId, etc.), get_full_tool_result for full truncated tool output",
       },
       {
         area: "Skills",
@@ -646,7 +646,7 @@ Use CLI for everything else. This keeps the tool simple and reliable.`;
         enabled: has("create_app") || has("create_job"),
         details:
           "mini-app and job creation; use list_jobs to see existing jobs before creating new ones. File version history is automatic — use list_app_file_versions / list_job_file_versions to see previous versions, restore_app_file_version / restore_job_file_version to revert. " +
-          "Mini-app testing: webview_launch_app → page_wait_for({ target: 'mini_app', time: 2 }) or webview_snapshot.",
+          "Mini-app testing after edits: validate_app → webview_launch_app → page_wait_for({ target: 'mini_app', time: 2 }) → webview_get_console → webview_snapshot (text-only, not vision).",
       },
       {
         area: "Sub-agents",
@@ -1141,9 +1141,9 @@ Use \`bash\` to edit the Markdown file directly at \`filePath\`. Document editor
 |------|------|
 | Recall past conversations, preferences, facts | \`search_agent_memory\` (semantic search) |
 | Store a new memory for future recall | \`add_agent_memory\` |
-| Store memory with holographic encoding | \`add_agent_memory({ enableHolographic: true, frequencySchemaId: "general" })\` |
-| Search with frequency filtering | \`search_agent_memory({ holographicConfig: { ... } })\` |
-| **List available frequency schemas (for holographic)** | \`list_frequency_schemas\` |
+| Store memory with signal-domain encoding | \`add_agent_memory({ signalDomain: "general" })\` |
+| Search with signal-band filtering | \`search_agent_memory({ vectorPolicy: { ... } })\` |
+| **List available signal domains** | \`list_signal_domains\` |
 | Delete a specific memory | \`delete_memory({ memoryId: "..." })\` |
 | Create exact entities and relationships | \`create_entities({ nodes, relationships })\` |
 | Explore the knowledge graph structure | \`introspect_memory_graph\` |
@@ -1151,21 +1151,53 @@ Use \`bash\` to edit the Markdown file directly at \`filePath\`. Document editor
 | **Create/manage knowledge graph schemas** | \`register_schema\`, \`update_schema\`, \`list_schemas\`, \`get_schema\` |
 | Archive a knowledge graph schema | \`delete_schema({ schemaId: "..." })\` |
 | **Find code** across indexed projects | \`search_agent_memory({ query: "...", category: "code" })\` |
+| **Full output of ONE truncated tool call** | \`get_full_tool_result({ toolCallId: "..." })\` |
+| **Deeper recall from THIS chat** (beyond summary) | \`search_agent_memory({ query: "...", chatId: "current_chat" })\` |
+
+## Recalling Information — Pick the Right Source
+
+**You do NOT always see the full chat.** When a conversation is compressed:
+- Context = **archived summary** (high-level) + only the **~6 most recent messages**
+- Tool results in those messages may be **truncated** (~400 chars each)
+- Papr sync stores the full conversation in the cloud for search
+
+| What you need | What to use |
+|---------------|-------------|
+| Last few turns already in context | Read loaded messages — no tool needed |
+| **Full output of one tool call** (truncation notice with toolCallId) | \`get_full_tool_result({ toolCallId: "..." })\` — reads complete result from local storage |
+| **Specific details from earlier in THIS chat** (summary is too vague) | \`search_agent_memory({ query: "...", chatId: "current_chat" })\` — semantic search scoped to this session |
+| Facts/preferences from **other** chats | \`search_agent_memory({ query: "..." })\` — omit chatId |
+| Code in a specific app/job | \`search_agent_memory({ category: "code", projectId: "..." })\` |
+
+\`\`\`javascript
+// Truncated bash/grep output — get the FULL result for that one call
+get_full_tool_result({ toolCallId: "toolu_abc123" })
+
+// Paginate a huge result
+get_full_tool_result({ toolCallId: "toolu_abc123", startChar: 0, length: 10000 })
+
+// "What did we decide about auth?" — summary exists but lacks detail
+search_agent_memory({
+  query: "authentication approach and decisions we made in this conversation",
+  chatId: "current_chat"
+})
+\`\`\`
+
+**Do NOT** use \`search_agent_memory\` when the answer is in the last ~6 messages or in a truncation notice — use context or \`get_full_tool_result\` instead.
 
 ## Two Types of Schemas — Don't Confuse Them!
 
-### 1. Frequency Schemas (for Holographic Neural Transforms)
+### 1. Signal Domains (for Vector Policy & Transform Embedding)
 
-**Purpose:** Pre-built by Papr for semantic frequency encoding  
-**Usage:** With \`enableHolographic\` and \`frequencySchemaId\` parameters  
-**List them:** \`list_frequency_schemas\`  
+**Purpose:** Pre-built by Papr for semantic signal-band encoding  
+**Usage:** With \`signalDomain\` (add) and \`vectorPolicy.domainId\` (search)  
+**List them:** \`list_signal_domains\`  
 **Examples:** 'general', 'cosqa', 'scifact', 'code', 'legal', 'medical'
 
 \\\`\\\`\\\`typescript
-// Use frequency schemas for holographic search
+// Use signal domains for enhanced semantic encoding
 add_agent_memory({
-  enableHolographic: true,
-  frequencySchemaId: "cosqa" // ← Frequency schema
+  signalDomain: "cosqa" // ← Signal domain
 })
 \\\`\\\`\\\`
 
@@ -1190,7 +1222,7 @@ create_entities({
 \\\`\\\`\\\`
 
 **⚠️ KEY DISTINCTION:**
-- **Frequency schemas** → IDs like 'general', 'cosqa' → for holographic encoding
+- **Signal domains** → IDs like 'general', 'cosqa', 'code' → for vector/transform policy
 - **KG schemas** → IDs like 'BNSv8YCQXJ', 'alkfogVaGa' → for graph structure
 
 ## Code Search Strategy — ALWAYS Use Metadata Filters
@@ -1311,69 +1343,68 @@ Papr stores memories as a Neo4j knowledge graph with typed nodes and relationshi
 
 All GraphQL queries are automatically scoped to the user's data — no cross-tenant access.
 
-## Holographic & Frequency-Based Search
+## Vector Policy & Signal-Domain Search
 
-**Holographic neural transforms** use brain-inspired frequency bands to encode hierarchical semantic metadata for improved search relevance. Results include per-dimension alignment scores showing WHY each result ranked high or low.
+**Signal domains** use semantic signal bands to encode hierarchical metadata for improved search relevance. Results can include per-band alignment scores showing WHY each result ranked high or low.
 
-### Available Frequency Schemas
+### Available Signal Domains
 
-Use these schema IDs with \`frequencySchemaId\` parameter:
+Use these domain IDs with \`signalDomain\` (add) or \`vectorPolicy.domainId\` (search). Call \`list_signal_domains\` for the live list from the API.
 
-- **'general'** (7 frequencies) - Any content type: category, topic, content_type, entities, sentiment, date, summary
-- **'cosqa'** (14 frequencies) - Code search: programming_domain, language, primary_operation, key_apis, data_types_used, algorithm_pattern, specific_task, etc.
-- **'scifact'** (14 frequencies) - Scientific papers: domain, entity_type, causal_agent, causal_target, finding_type, evidence_type, etc.
-- **'code'** (11 frequencies) - Programming: language, paradigm, domain, construct, purpose, complexity, dependencies
-- **'legal'** (13 frequencies) - Legal docs: jurisdiction, document_type, parties, key_clauses, contract_value, governing_law
-- **'medical'** (13 frequencies) - Clinical records: specialty, diagnosis, procedures, medications, lab_values, clinical_impression
-- **'ecommerce'** (13 frequencies) - Product search: category, brand, specifications, price, rating, availability
-- **'text2sql'** (13 frequencies) - SQL queries: domain, sql_task_type, primary_table, join_type, aggregation_type
-- **'codetrans'** (13 frequencies) - DL frameworks: framework, nn_component, tensor_operation, gradient_handling
+- **'general'** (7 bands) - Any content type: category, topic, content_type, entities, sentiment, date, summary
+- **'cosqa'** (14 bands) - NL code Q&A: programming_domain, language, primary_operation, key_apis, specific_task, etc.
+- **'scifact'** (14 bands) - Scientific papers: domain, entity_type, causal_agent, finding_type, evidence_type, etc.
+- **'code'** (11 bands) - Source files / indexing: language, paradigm, construct, purpose, complexity, dependencies
+- **'legal'** (13 bands) - Legal docs: jurisdiction, document_type, parties, key_clauses, contract_value
+- **'medical'** (13 bands) - Clinical records: specialty, diagnosis, procedures, medications, lab_values
+- **'ecommerce'** (13 bands) - Product search: category, brand, specifications, price, rating, availability
+- **'text2sql'** (13 bands) - SQL queries: domain, sql_task_type, primary_table, join_type, aggregation_type
+- **'codetrans'** (13 bands) - DL frameworks: framework, nn_component, tensor_operation, gradient_handling
 
-⚠️ **NOTE:** Schema 'default' does NOT exist. Always use a specific schema from the list above.
+⚠️ **NOTE:** Domain 'default' does NOT exist — use 'general' instead. \`category: "code"\` search auto-defaults to domain **'code'**.
 
-### When to Enable Holographic Search
+### When to Use Vector Policy
 
-Use \`holographicConfig\` when:
-- Searching code repositories (schema: 'cosqa' or 'code')
-- Scientific/technical content (schema: 'scifact')
-- General knowledge (schema: 'general')
+Use \`vectorPolicy\` when:
+- Searching code repositories (\`category: "code"\` or domain 'cosqa' / 'code')
+- Scientific/technical content (domain: 'scifact')
+- General knowledge (domain: 'general')
 - You need to understand WHY results ranked high/low
-- You want to filter by specific semantic dimensions
+- You want to filter by specific semantic bands
 
 ### Key Parameters
 
 \\\`\\\`\\\`typescript
 search_agent_memory({
   query: "authentication handling code",
-  holographicConfig: {
-    enabled: true,
-    frequencySchemaId: "cosqa", // Must be valid schema from list above
-    searchMode: "integrated", // Search transformed embeddings
-    includeFrequencyScores: true, // Show per-dimension scores
-    frequencyFilters: { // Only return results matching thresholds
-      "programming_domain": 0.8, // ≥80% domain match
-      "primary_operation": 0.7   // ≥70% operation match
+  category: "code", // Auto-defaults vectorPolicy to domain 'code'
+  vectorPolicy: {
+    domainId: "cosqa", // Optional override; use list_signal_domains for valid IDs
+    returnSignalScores: true, // Show per-band scores
+    signalThresholds: { // Only return results matching thresholds
+      "programming_domain": 0.8,
+      "primary_operation": 0.7
     }
   }
 })
 \\\`\\\`\\\`
 
-### Frequency Scores
+### Signal Scores
 
-When \`includeFrequencyScores: true\`, each result includes breakdown like:
+When \`returnSignalScores: true\`, each result includes breakdown like:
 - \`programming_domain: 0.95\` — Highly relevant to programming domain
 - \`primary_operation: 0.72\` — Moderately matches operation type
 - Helps understand ranking decisions
 
-**Important:** Frequency scores appear after 10-15 seconds of holographic processing. Memories created with \`enableHolographic: true\` need time for semantic extraction before scores are available.
+**Important:** Signal scores appear after 10-15 seconds of async processing. Memories created with \`signalDomain\` need time for semantic extraction before scores are available.
 
-### Frequency Filters
+### Signal Thresholds
 
-Filter results by minimum alignment on dimensions:
-- Keys: frequency field names (schema-specific)
+Filter results by minimum alignment on bands:
+- Keys: signal band names (domain-specific)
 - Values: minimum scores (0.0-1.0)
-- Use fields that match your schema (e.g., 'category', 'topic' for 'general'; 'programming_domain', 'language' for 'cosqa')
-- Call \`GET /v1/frequencies\` API to see all available fields per schema
+- Use bands that match your domain (e.g., 'category', 'topic' for 'general'; 'programming_domain', 'language' for 'cosqa')
+- Call \`list_signal_domains\` to see available bands per domain
 
 ## Memory & Schema Deletion
 
@@ -1937,24 +1968,26 @@ create_app({
 })
 \`\`\`
 
-**10. Validation (CRITICAL — BLOCKING):**
-Mini-apps have automated validation that runs on every file change:
-- **100-line limit** (enforced): Files >100 significant lines will fail validation
-- HTML syntax checking (unclosed tags, malformed markup)
-- CSS syntax checking (mismatched braces, double semicolons)
-- JavaScript/TypeScript syntax checking (mismatched delimiters)
-- Code quality checks (console.log warnings)
+**10. Validation & test after EVERY edit (CRITICAL — BLOCKING):**
 
-Validation runs automatically, but you can manually check:
-\`\`\`javascript
-validate_app({ appId: "abc-123" })
-\`\`\`
+**Mini-apps — after EVERY \`edit_app_file\` / \`edit_app_file_lines\` / \`create_app\` file write:**
+1. \`validate_app({ appId })\` — syntax, LOC, HTML/CSS/JS checks
+2. Fix ALL errors before any other edits
+3. \`webview_launch_app\` → \`page_wait_for({ target: 'mini_app', time: 2 })\` → \`webview_get_console\` → \`webview_get_network\` → \`webview_snapshot\`
+4. Fix console errors before continuing
+5. **Check \`visualState\` in snapshot** — if \`userWouldSeeBlankUi: true\`, the user sees blur/blank even when DOM text looks fine (common: missing \`.hidden { display: none }\`, stuck modal overlay)
 
-**⛔ MANDATORY: When validate_app returns errors, you MUST fix ALL errors before doing anything else.**
-- Do NOT tell the user about validation errors and move on — FIX THEM IMMEDIATELY.
-- Do NOT skip errors because "the app works anyway" — validation errors are BLOCKING.
-- After fixing, run validate_app again to confirm all errors are resolved.
-- Only once validation passes (0 errors) may you continue with other work.
+\`validate_app\` checks: 100-line limit, HTML/CSS/JS delimiter syntax, console.log warnings, missing \`.hidden\` utility, external \`fetch()\` anti-patterns. It does NOT catch all runtime logic bugs — preview + console + visualState do.
+
+**External APIs from mini-apps:** Do NOT call third-party APIs directly from client \`fetch()\`. Route through \`/api/bash/run\` or job SQLite — agent preview (webview) can succeed while the user's iframe panel fails on CORS/blocked requests.
+
+**Jobs — after EVERY \`edit_job_file\`:**
+1. \`run_job({ jobId })\` → \`read_job_logs({ jobId })\`
+2. For Python: \`bash({ command: 'python3 -m py_compile <file>' })\` if you need a quick syntax check
+
+**⛔ MANDATORY:** Tool results include \`_verifyReminder\` after app/job edits — follow it before more edits.
+- Do NOT batch many file edits then validate once at the end — validate + test after EACH edit.
+- When \`validate_app\` returns errors, fix ALL before doing anything else.
 
 **Fix LOC violations by extracting into smaller files:**
 \`\`\`typescript
@@ -1971,7 +2004,7 @@ validate_app({ appId: "abc-123" })
 1. **ALWAYS** load design system: \`read_skill({ skillId: "preloaded-paprwork-design-system" })\`
 2. Load app & jobs guide: \`read_skill({ skillId: "preloaded-app-and-jobs-guide" })\`
 3. Load API key guide: \`read_skill({ skillId: "preloaded-api-key-testing" })\`
-4. Create plan → 5. Check existing apps → 6. Start work → 7. **Validate after file edits** → 8. Update plan after each step
+4. Create plan → 5. Check existing apps → 6. Start work → 7. **Validate + preview-test after EVERY file edit** → 8. Update plan after each step
 
 **11. File Version History (Undo/Revert):**
 Every file edit is automatically versioned. If you or the user needs to undo changes:

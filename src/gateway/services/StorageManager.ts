@@ -10,6 +10,7 @@ import type {
   StoredMessage,
   StoredSummary,
   ChatMetadata,
+  ChatSummarySnapshot,
 } from "./storage/IStorageProvider.js";
 import { LocalStorageProvider } from "./storage/LocalStorageProvider.js";
 import { PaprMemoryProvider } from "./storage/PaprMemoryProvider.js";
@@ -173,6 +174,14 @@ export class StorageManager {
   async listChats(): Promise<ChatMetadata[]> {
     const provider = this.ensureInitialized();
     return await provider.listChats();
+  }
+
+  async listRecentChatSummaries(
+    limit: number,
+    maxAgeDays: number,
+  ): Promise<ChatSummarySnapshot[]> {
+    const provider = this.ensureInitialized();
+    return provider.listRecentChatSummaries(limit, maxAgeDays);
   }
 
   /**
@@ -371,6 +380,42 @@ export class StorageManager {
     }
 
     return [];
+  }
+
+  async getChatSyncStats(chatId: string): Promise<{
+    total: number;
+    synced: number;
+    sync_pending: number;
+    sync_failed: number;
+    local: number;
+    papr_only: number;
+    recentFailures: Array<{
+      messageId: string;
+      error: string;
+      timestamp: string;
+    }>;
+  }> {
+    const provider = this.ensureInitialized();
+
+    if ("getChatSyncStats" in provider) {
+      return await (
+        provider as {
+          getChatSyncStats: (
+            id: string,
+          ) => Promise<ReturnType<StorageManager["getChatSyncStats"]>>;
+        }
+      ).getChatSyncStats(chatId);
+    }
+
+    return {
+      total: 0,
+      synced: 0,
+      sync_pending: 0,
+      sync_failed: 0,
+      local: 0,
+      papr_only: 0,
+      recentFailures: [],
+    };
   }
 
   // ===== Configuration =====

@@ -75,7 +75,7 @@ export function useAuthStatus() {
   }, [refresh]);
 
   const isModelAvailable = useCallback(
-    (model: { provider: string; requiresApiKey: string }) => {
+    (model: { id: string; provider: string; requiresApiKey: string }) => {
       // Ollama runs locally, always available (no API key required)
       if (model.provider === "ollama") {
         return true;
@@ -84,6 +84,11 @@ export function useAuthStatus() {
       // Papr proxy enables ALL cloud providers (OpenAI, Anthropic, Google)
       if (status.paprProxy) {
         return true;
+      }
+
+      // gpt-5.3-codex retired on ChatGPT OAuth — requires Platform API key
+      if (model.id === "gpt-5.3-codex") {
+        return status.openai.apiKey;
       }
       
       // Otherwise check provider-specific auth

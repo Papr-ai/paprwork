@@ -96,11 +96,14 @@ export async function setupAgentHandlers(
               config.provider === "openai-codex" ||
               config.provider === "anthropic"
             ) {
-              const { getProviderAuth } =
+              const { getProviderAuthForModel } =
                 await import("../utils/keyResolver.js");
               const authProvider =
                 config.provider === "openai-codex" ? "openai" : config.provider;
-              const auth = await getProviderAuth(authProvider);
+              const auth = await getProviderAuthForModel(authProvider, {
+                modelId: config.model,
+                modelProvider: config.provider,
+              });
 
               if (!auth) {
                 // No direct provider auth — try Papr API key as proxy fallback
@@ -114,10 +117,17 @@ export async function setupAgentHandlers(
                   authType = "apiKey";
                   usePaprProxy = true;
                 } else {
+                  const { requiresOpenAIPlatformApiKey } =
+                    await import("../utils/modelNormalizer.js");
+                  const needsPlatformKey = requiresOpenAIPlatformApiKey(
+                    config.model,
+                  );
                   sendError(
                     ws,
                     message.id,
-                    `No authentication found for provider: ${config.provider}`,
+                    needsPlatformKey
+                      ? `${config.model} requires an OpenAI API key. It is no longer available via ChatGPT OAuth.`
+                      : `No authentication found for provider: ${config.provider}`,
                   );
                   return;
                 }

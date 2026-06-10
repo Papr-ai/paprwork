@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   buildModelMessages,
+  extractToolResultText,
   formatHistoryMessagesForModel,
   formatMessageContentForModel,
 } from "../src/gateway/services/agent/historyFormatter.js";
@@ -307,5 +308,26 @@ describe("agent history formatter", () => {
       role: "user",
       content: "new prompt",
     });
+  });
+
+  test("extractToolResultText reads AI SDK 6 output field without throwing", () => {
+    expect(
+      extractToolResultText({
+        output: { type: "text", value: "tool output" },
+      }),
+    ).toBe("tool output");
+
+    expect(
+      extractToolResultText({
+        output: { type: "json", value: { ok: true } },
+      }),
+    ).toBe('{"ok":true}');
+
+    expect(extractToolResultText({ result: undefined })).toBe("");
+    expect(() =>
+      extractToolResultText({
+        output: { type: "text", value: "x" },
+      }).substring(0, 500),
+    ).not.toThrow();
   });
 });

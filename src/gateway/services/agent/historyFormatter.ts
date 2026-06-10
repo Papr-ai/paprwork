@@ -52,6 +52,35 @@ function toToolResultOutput(value: unknown): ToolResultOutput {
   return { type: "json", value };
 }
 
+/** Safely stringify tool result values for previews (handles AI SDK 6 `output` field). */
+export function extractToolResultText(part: {
+  result?: unknown;
+  output?: ToolResultOutput;
+}): string {
+  if (part.output) {
+    if (part.output.type === "text") {
+      return part.output.value;
+    }
+    try {
+      return JSON.stringify(part.output.value);
+    } catch {
+      return String(part.output.value);
+    }
+  }
+
+  if (typeof part.result === "string") {
+    return part.result;
+  }
+  if (part.result === undefined || part.result === null) {
+    return "";
+  }
+  try {
+    return JSON.stringify(part.result);
+  } catch {
+    return String(part.result);
+  }
+}
+
 type AssistantContent = Array<TextContentPart | ToolCallContentPart>;
 type ToolContent = Array<ToolResultContentPart>;
 

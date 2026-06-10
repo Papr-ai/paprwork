@@ -1,0 +1,25 @@
+.sidebar-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease);
+  -webkit-app-region: no-drag;
+}
+
+.sidebar-toggle-btn:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.sidebar-toggle-btn:active {
+  opacity: 0.6;
+}

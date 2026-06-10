@@ -1,5 +1,7 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
+import { applyExactStringReplacement } from "../utils/exactStringReplace.js";
+import { withFileEditLock } from "../utils/fileEditLock.js";
 import { getApiKeysForSanitization, sanitizeError } from "./security.js";
 
 /** Models often send `fileName`; our schemas use `filename`. Normalize before parse to avoid wasted tool calls. */
@@ -17,6 +19,17 @@ function coerceFilenameAliasInToolArgs(raw: unknown): unknown {
 function toolSchemaWithFilenameAlias<T extends z.ZodType>(schema: T) {
   return z.preprocess(coerceFilenameAliasInToolArgs, schema);
 }
+
+const APP_VERIFY_AFTER_EDIT_REMINDER =
+  "REQUIRED after every app file edit (before more edits): " +
+  "validate_app({ appId }) → fix all errors → webview_launch_app → " +
+  "page_wait_for({ target: 'mini_app', time: 2 }) → webview_get_console → webview_snapshot. " +
+  "Do not edit other files until validate_app passes.";
+
+const JOB_VERIFY_AFTER_EDIT_REMINDER =
+  "REQUIRED after every job file edit (before more edits): " +
+  "run_job({ jobId }) → read_job_logs({ jobId }). " +
+  "For Python scripts: bash({ command: 'python3 -m py_compile <file>' }) for quick syntax check.";
 
 const appFileSchema = toolSchemaWithFilenameAlias(
   z.object({
@@ -168,6 +181,7 @@ const createJobSchema = z.object({
       "claude-haiku-4-5",
       "claude-sonnet-4-6",
       "claude-opus-4-6",
+      "claude-fable-5",
       // OpenAI
       "gpt-5.4-mini",
       "gpt-5.5-low",
@@ -177,8 +191,9 @@ const createJobSchema = z.object({
       // Google
       "gemini-2.5-flash-lite",
       "gemini-2.5-flash",
-      "gemini-3-flash-preview",
-      "gemini-3-pro-preview",
+      "gemini-3.1-flash-lite",
+      "gemini-3.5-flash",
+      "gemini-3.1-pro-preview",
       // Ollama - Qwen
       "qwen3.5:0.8b",
       "qwen3.5:2b",
@@ -186,7 +201,12 @@ const createJobSchema = z.object({
       "qwen3.5:latest",
       "qwen3.5:9b-q4_k_m",
       "qwen3.5:27b",
-      // Ollama - Gemma
+      // Ollama - Gemma 4
+      "gemma4:e2b",
+      "gemma4:e4b",
+      "gemma4:12b",
+      "gemma4:26b",
+      // Ollama - Gemma 3 (legacy)
       "gemma3:270m",
       "gemma3:1b",
       "gemma3:4b-it-q4_k_m",
@@ -197,7 +217,7 @@ const createJobSchema = z.object({
     ])
     .optional()
     .describe(
-      "Model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-4-6', 'gpt-5.5', 'gemini-2.5-flash', 'qwen3.5:latest'",
+      "Model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-4-6', 'gpt-5.5', 'gemini-3.5-flash', 'qwen3.5:latest'",
     ),
   recipe: recipeConfigSchema.optional().describe(
     "Execution recipe configuration. When enabled, an agent evaluates each run against the recipe's quality rubric. " +
@@ -352,6 +372,7 @@ export const createAppTool = createTool({
         `Design target: Steve Jobs meets Elon Musk — obsessively clean, premium, zero clutter. ` +
         `2-3 focused sections max, ONE primary action per screen, generous whitespace. ` +
         `Follow these principles unless the user has explicitly provided different design guidelines.`,
+      _verifyReminder: APP_VERIFY_AFTER_EDIT_REMINDER,
     };
   },
 });
@@ -716,6 +737,15 @@ const editAppFileSchema = toolSchemaWithFilenameAlias(
     newString: z
       .string()
       .describe("Replacement string (use empty string to delete)"),
+    occurrence: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe(
+        "Which match to replace when oldString appears multiple times (1-indexed). " +
+          "Required when oldString is ambiguous — the tool errors if oldString matches more than once and occurrence is omitted.",
+      ),
   }),
 );
 
@@ -828,6 +858,7 @@ const updateJobSchema = z.object({
       "claude-haiku-4-5",
       "claude-sonnet-4-6",
       "claude-opus-4-6",
+      "claude-fable-5",
       // OpenAI
       "gpt-5.4-mini",
       "gpt-5.5-low",
@@ -837,8 +868,9 @@ const updateJobSchema = z.object({
       // Google
       "gemini-2.5-flash-lite",
       "gemini-2.5-flash",
-      "gemini-3-flash-preview",
-      "gemini-3-pro-preview",
+      "gemini-3.1-flash-lite",
+      "gemini-3.5-flash",
+      "gemini-3.1-pro-preview",
       // Ollama - Qwen
       "qwen3.5:0.8b",
       "qwen3.5:2b",
@@ -846,7 +878,12 @@ const updateJobSchema = z.object({
       "qwen3.5:latest",
       "qwen3.5:9b-q4_k_m",
       "qwen3.5:27b",
-      // Ollama - Gemma
+      // Ollama - Gemma 4
+      "gemma4:e2b",
+      "gemma4:e4b",
+      "gemma4:12b",
+      "gemma4:26b",
+      // Ollama - Gemma 3 (legacy)
       "gemma3:270m",
       "gemma3:1b",
       "gemma3:4b-it-q4_k_m",
@@ -857,7 +894,7 @@ const updateJobSchema = z.object({
     ])
     .optional()
     .describe(
-      "Update model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-4-6', 'gpt-5.5', 'gemini-2.5-flash', 'qwen3.5:latest'",
+      "Update model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-4-6', 'gpt-5.5', 'gemini-3.5-flash', 'qwen3.5:latest'",
     ),
 });
 
@@ -933,6 +970,15 @@ const editJobFileSchema = toolSchemaWithFilenameAlias(
       .describe(
         "Replacement string. Use empty string to delete the matched section.",
       ),
+    occurrence: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe(
+        "Which match to replace when oldString appears multiple times (1-indexed). " +
+          "Required when oldString is ambiguous.",
+      ),
   }),
 );
 
@@ -962,7 +1008,10 @@ export const readAppFileTool = createTool({
 export const editAppFileTool = createTool({
   id: "edit_app_file",
   description:
-    "Edit a mini-app file by replacing an exact string occurrence with a new string",
+    "Edit a mini-app file by replacing an exact string with a new string. " +
+    "PREFER edit_app_file_lines for HTML/JS/CSS blocks — it avoids ambiguous matches. " +
+    "If oldString appears more than once, pass occurrence or use edit_app_file_lines. " +
+    "After EVERY edit: validate_app + preview test (see _verifyReminder in result).",
   inputSchema: editAppFileSchema,
   execute: async (input) => {
     const args = (input as { context?: EditAppFileArgs }).context ?? input;
@@ -971,20 +1020,50 @@ export const editAppFileTool = createTool({
     const appService = getAppService();
     await appService.initialize();
 
-    const content = await appService.readAppFile(args.appId, args.filename);
-    if (content === null) {
+    let replaceMeta: {
+      occurrencesFound: number;
+      occurrenceReplaced: number;
+    } | null = null;
+
+    const result = await appService.updateAppFile(
+      args.appId,
+      args.filename,
+      (content) => {
+        const applied = applyExactStringReplacement({
+          content,
+          filename: args.filename,
+          oldString: args.oldString,
+          newString: args.newString,
+          occurrence: args.occurrence,
+          linesToolName: "edit_app_file_lines",
+        });
+        replaceMeta = {
+          occurrencesFound: applied.occurrencesFound,
+          occurrenceReplaced: applied.occurrenceReplaced,
+        };
+        return applied.newContent;
+      },
+    );
+
+    if (result === null) {
       throw new Error(`File not found: ${args.filename} in app ${args.appId}`);
     }
-
-    if (!content.includes(args.oldString)) {
+    if (!result.written) {
       throw new Error(
-        `String not found in ${args.filename}. Make sure oldString matches exactly.`,
+        `No changes made to ${args.filename}. oldString may already be replaced.`,
       );
     }
 
-    const newContent = content.replace(args.oldString, args.newString);
-    await appService.writeAppFile(args.appId, args.filename, newContent);
-    return { success: true, data: { filename: args.filename, updated: true } };
+    return {
+      success: true,
+      data: {
+        filename: args.filename,
+        updated: true,
+        occurrencesFound: replaceMeta!.occurrencesFound,
+        occurrenceReplaced: replaceMeta!.occurrenceReplaced,
+      },
+      _verifyReminder: APP_VERIFY_AFTER_EDIT_REMINDER,
+    };
   },
 });
 
@@ -1001,7 +1080,8 @@ Workflow:
 2. edit_app_file_lines to replace specific line range
 3. Verify with read_app_file or webview_snapshot
 
-Example: Replace lines 168-215 in index.html with new HTML structure`,
+Example: Replace lines 168-215 in index.html with new HTML structure.
+After EVERY edit: validate_app + preview test (see _verifyReminder in result).`,
   inputSchema: editAppFileLinesSchema,
   execute: async (input) => {
     const args = (input as { context?: EditAppFileLinesArgs }).context ?? input;
@@ -1010,69 +1090,87 @@ Example: Replace lines 168-215 in index.html with new HTML structure`,
     const appService = getAppService();
     await appService.initialize();
 
-    const content = await appService.readAppFile(args.appId, args.filename);
-    if (content === null) {
+    let lineStats: {
+      originalLines: number;
+      newLines: number;
+      linesRemoved: number;
+      linesAdded: number;
+      netChange: number;
+    } | null = null;
+
+    const result = await appService.updateAppFile(
+      args.appId,
+      args.filename,
+      (content) => {
+        const lines = content.split("\n");
+        const totalLines = lines.length;
+
+        if (args.startLine < 1) {
+          throw new Error(
+            `Invalid startLine: ${args.startLine}. Line numbers start at 1.`,
+          );
+        }
+        if (args.endLine < args.startLine) {
+          throw new Error(
+            `Invalid range: startLine ${args.startLine} > endLine ${args.endLine}`,
+          );
+        }
+        if (args.startLine > totalLines) {
+          throw new Error(
+            `startLine ${args.startLine} exceeds file length (${totalLines} lines). Use read_app_file to see current content.`,
+          );
+        }
+        if (args.endLine > totalLines) {
+          throw new Error(
+            `endLine ${args.endLine} exceeds file length (${totalLines} lines). File has ${totalLines} lines.`,
+          );
+        }
+
+        const startIdx = args.startLine - 1;
+        const endIdx = args.endLine;
+        const before = lines.slice(0, startIdx);
+        const after = lines.slice(endIdx);
+        const newLines = args.newContent ? args.newContent.split("\n") : [];
+        const newContent = [...before, ...newLines, ...after].join("\n");
+
+        const newTotalLines = newContent.split("\n").length;
+        const linesRemoved = args.endLine - args.startLine + 1;
+        const linesAdded = newLines.length;
+        lineStats = {
+          originalLines: totalLines,
+          newLines: newTotalLines,
+          linesRemoved,
+          linesAdded,
+          netChange: linesAdded - linesRemoved,
+        };
+        return newContent;
+      },
+    );
+
+    if (result === null) {
       throw new Error(`File not found: ${args.filename} in app ${args.appId}`);
     }
-
-    const lines = content.split("\n");
-    const totalLines = lines.length;
-
-    // Validate line numbers
-    if (args.startLine < 1) {
-      throw new Error(
-        `Invalid startLine: ${args.startLine}. Line numbers start at 1.`,
-      );
-    }
-    if (args.endLine < args.startLine) {
-      throw new Error(
-        `Invalid range: startLine ${args.startLine} > endLine ${args.endLine}`,
-      );
-    }
-    if (args.startLine > totalLines) {
-      throw new Error(
-        `startLine ${args.startLine} exceeds file length (${totalLines} lines). Use read_app_file to see current content.`,
-      );
-    }
-    if (args.endLine > totalLines) {
-      throw new Error(
-        `endLine ${args.endLine} exceeds file length (${totalLines} lines). File has ${totalLines} lines.`,
-      );
+    if (!result.written) {
+      throw new Error(`No changes made to ${args.filename}.`);
     }
 
-    // Convert to 0-indexed for array operations
-    const startIdx = args.startLine - 1;
-    const endIdx = args.endLine; // endLine is inclusive, so this is the line after the last one to replace
-
-    // Build new content
-    const before = lines.slice(0, startIdx);
-    const after = lines.slice(endIdx);
-    const newLines = args.newContent ? args.newContent.split("\n") : [];
-
-    const newContent = [...before, ...newLines, ...after].join("\n");
-
-    await appService.writeAppFile(args.appId, args.filename, newContent);
-
-    const newTotalLines = newContent.split("\n").length;
-    const linesRemoved = args.endLine - args.startLine + 1;
-    const linesAdded = newLines.length;
-    const netChange = linesAdded - linesRemoved;
-
+    const stats = lineStats!;
     return {
       success: true,
       data: {
         filename: args.filename,
         updated: true,
-        originalLines: totalLines,
-        newLines: newTotalLines,
-        linesRemoved,
-        linesAdded,
-        netChange,
+        originalLines: stats.originalLines,
+        newLines: stats.newLines,
+        linesRemoved: stats.linesRemoved,
+        linesAdded: stats.linesAdded,
+        netChange: stats.netChange,
         tip:
-          netChange !== 0
-            ? `File now has ${newTotalLines} lines (${netChange > 0 ? "+" : ""}${netChange}). Line numbers after ${args.startLine} have shifted.`
-            : `File still has ${newTotalLines} lines. Line numbers unchanged.`,
+          stats.netChange !== 0
+            ? `File now has ${stats.newLines} lines (${stats.netChange > 0 ? "+" : ""}${stats.netChange}). Line numbers after ${args.startLine} have shifted.`
+            : `File still has ${stats.newLines} lines. Line numbers unchanged.`,
       },
+      _verifyReminder: APP_VERIFY_AFTER_EDIT_REMINDER,
     };
   },
 });
@@ -1460,6 +1558,7 @@ export const readJobFileTool = createTool({
 export const editJobFileTool = createTool({
   id: "edit_job_file",
   description: `Edit a job's source file by replacing an exact string with a new string — same pattern as edit_app_file.
+After EVERY edit: run_job + read_job_logs (see _verifyReminder in result).
 Always read_job_file first to get the exact current content before editing.
 Use this to fix bugs in scripts, update SQL queries, change API endpoints, add logging, etc.
 After editing, run_job to test the changes, then read_job_logs to verify.`,
@@ -1498,44 +1597,46 @@ After editing, run_job to test the changes, then read_job_logs to verify.`,
 
     console.log(`[edit_job_file] Editing ${resolvedPath}`);
 
-    let content: string;
-    try {
-      content = await fsPromises.readFile(resolvedPath, "utf8");
-    } catch (err) {
-      const e = err as NodeJS.ErrnoException;
-      if (e.code === "ENOENT") {
-        throw new Error(
-          `File not found: ${args.filename} in job ${args.jobId}. Call list_job_files to see what exists.`,
-        );
+    const lockKey = `job:${args.jobId}:${args.filename}`;
+    let replaceMeta: {
+      occurrencesFound: number;
+      occurrenceReplaced: number;
+    } | null = null;
+
+    const newContent = await withFileEditLock(lockKey, async () => {
+      let content: string;
+      try {
+        content = await fsPromises.readFile(resolvedPath, "utf8");
+      } catch (err) {
+        const e = err as NodeJS.ErrnoException;
+        if (e.code === "ENOENT") {
+          throw new Error(
+            `File not found: ${args.filename} in job ${args.jobId}. Call list_job_files to see what exists.`,
+          );
+        }
+        throw err;
       }
-      throw err;
-    }
 
-    if (!content.includes(args.oldString)) {
-      console.error(
-        `[edit_job_file] oldString not found in ${args.filename}. File length: ${content.length} chars.`,
-      );
-      throw new Error(
-        `String not found in ${args.filename}. The oldString must match exactly including whitespace and indentation. ` +
-          `Use read_job_file to get the current content first.`,
-      );
-    }
+      const applied = applyExactStringReplacement({
+        content,
+        filename: args.filename,
+        oldString: args.oldString,
+        newString: args.newString,
+        occurrence: args.occurrence,
+        linesToolName: "read_job_file + a more specific oldString",
+      });
+      replaceMeta = {
+        occurrencesFound: applied.occurrencesFound,
+        occurrenceReplaced: applied.occurrenceReplaced,
+      };
 
-    const occurrences = content.split(args.oldString).length - 1;
-    if (occurrences > 1) {
-      console.warn(
-        `[edit_job_file] oldString appears ${occurrences} times in ${args.filename} — replacing first occurrence only`,
-      );
-    }
-
-    // Save version before editing
-    await saveJobFileVersion(args.jobId, args.filename, content, "before-edit");
-
-    const newContent = content.replace(args.oldString, args.newString);
-    await fsPromises.writeFile(resolvedPath, newContent, "utf8");
+      await saveJobFileVersion(args.jobId, args.filename, content, "before-edit");
+      await fsPromises.writeFile(resolvedPath, applied.newContent, "utf8");
+      return applied.newContent;
+    });
 
     console.log(
-      `[edit_job_file] Successfully patched ${args.filename} (${occurrences} occurrence replaced)`,
+      `[edit_job_file] Successfully patched ${args.filename} (occurrence ${replaceMeta!.occurrenceReplaced} of ${replaceMeta!.occurrencesFound})`,
     );
 
     return {
@@ -1544,10 +1645,11 @@ After editing, run_job to test the changes, then read_job_logs to verify.`,
         jobId: args.jobId,
         filename: args.filename,
         path: resolvedPath,
-        occurrencesReplaced: occurrences > 1 ? 1 : occurrences,
+        occurrencesFound: replaceMeta!.occurrencesFound,
+        occurrenceReplaced: replaceMeta!.occurrenceReplaced,
         linesAfter: newContent.split("\n").length,
-        tip: "Run run_job({ jobId }) to test, then read_job_logs({ jobId }) to verify the output.",
       },
+      _verifyReminder: JOB_VERIFY_AFTER_EDIT_REMINDER,
     };
   },
 });
@@ -2654,7 +2756,7 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
         filesChecked: result.filesChecked,
         message: `✓ All ${result.filesChecked} files passed validation`,
         nextStep:
-          "webview_launch_app → page_wait_for({ target: 'mini_app', time: 2 }) or webview_snapshot",
+          "webview_launch_app → page_wait_for({ target: 'mini_app', time: 2 }) → webview_get_console → webview_snapshot (text-only, not vision)",
       },
     };
   },

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Papr SDK v2.4.0 - Tool Verification Script
+ * Papr SDK v2.7.0 - Tool Verification Script
  * 
  * This script verifies that all new tools and parameters are properly
  * exported and have the correct schemas. Does NOT require API key.
@@ -43,7 +43,7 @@ function test(name, condition, details = '') {
   }
 }
 
-section('Papr SDK v2.4.0 - Tool Verification');
+section('Papr SDK v2.7.0 - Tool Verification');
 log('Checking tool exports and parameter schemas\n', 'cyan');
 
 try {
@@ -53,7 +53,7 @@ try {
 
   // Test 1: Tool Count
   section('TEST 1: Tool Export Verification');
-  test('Total tools exported', paprTools.length === 11, `Found ${paprTools.length}/11 tools`);
+  test('Total tools exported', paprTools.length === 12, `Found ${paprTools.length}/12 tools`);
 
   // Test 2: Existing Tools
   section('TEST 2: Existing Tools Present');
@@ -75,26 +75,26 @@ try {
 
   // Test 3: New Tools
   section('TEST 3: New Tools Added');
-  const newTools = ['delete_memory', 'delete_schema', 'create_entities'];
+  const newTools = ['delete_memory', 'delete_schema', 'create_entities', 'list_signal_domains'];
   
   newTools.forEach(toolId => {
     const tool = paprTools.find(t => t.id === toolId);
     test(toolId, !!tool, tool ? `Description: ${tool.description.substring(0, 60)}...` : 'Not found');
   });
 
-  // Test 4: Holographic Parameters in add_agent_memory
-  section('TEST 4: Holographic Parameters in add_agent_memory');
+  // Test 4: Signal domain parameter in add_agent_memory
+  section('TEST 4: Signal Domain Parameter in add_agent_memory');
   const addTool = paprTools.find(t => t.id === 'add_agent_memory');
   
   if (addTool) {
     const schema = addTool.inputSchema.shape;
-    test('enableHolographic parameter', 'enableHolographic' in schema);
-    test('frequencySchemaId parameter', 'frequencySchemaId' in schema);
+    test('signalDomain parameter', 'signalDomain' in schema);
+    test('legacy enableHolographic removed', !('enableHolographic' in schema));
+    test('legacy frequencySchemaId removed', !('frequencySchemaId' in schema));
     
-    // Check all expected fields
     const expectedFields = [
       'content', 'role', 'category', 'sourceAgentId', 'sourceAgentName',
-      'runId', 'jobId', 'chatId', 'workspaceId', 'enableHolographic', 'frequencySchemaId'
+      'runId', 'jobId', 'chatId', 'workspaceId', 'signalDomain'
     ];
     const actualFields = Object.keys(schema);
     test('All expected fields present', expectedFields.every(f => actualFields.includes(f)), 
@@ -104,29 +104,29 @@ try {
     log('  ✗ add_agent_memory tool not found!', 'red');
   }
 
-  // Test 5: Holographic Config in search_agent_memory
-  section('TEST 5: Holographic Config in search_agent_memory');
+  // Test 5: Vector policy in search_agent_memory
+  section('TEST 5: Vector Policy in search_agent_memory');
   const searchTool = paprTools.find(t => t.id === 'search_agent_memory');
   
   if (searchTool) {
     const schema = searchTool.inputSchema.shape;
-    test('holographicConfig parameter', 'holographicConfig' in schema);
+    test('vectorPolicy parameter', 'vectorPolicy' in schema);
+    test('chatId parameter', 'chatId' in schema);
+    test('legacy holographicConfig removed', !('holographicConfig' in schema));
     
-    if ('holographicConfig' in schema) {
-      const holographicConfig = schema.holographicConfig._def.innerType.shape;
+    if ('vectorPolicy' in schema) {
+      const vectorPolicy = schema.vectorPolicy._def.innerType.shape;
       const expectedConfigFields = [
-        'enabled', 'frequencySchemaId', 'searchMode', 'scoringMethod',
-        'includeFrequencyScores', 'frequencyFilters', 'hcondBoostFactor',
-        'hcondBoostThreshold', 'hcondPenaltyFactor'
+        'domainId', 'returnSignalScores', 'signalThresholds',
       ];
       
       expectedConfigFields.forEach(field => {
-        test(`holographicConfig.${field}`, field in holographicConfig);
+        test(`vectorPolicy.${field}`, field in vectorPolicy);
       });
       
-      test('All holographic config fields present', 
-           expectedConfigFields.every(f => f in holographicConfig),
-           `9/9 fields: ${Object.keys(holographicConfig).join(', ')}`);
+      test('All vector policy fields present', 
+           expectedConfigFields.every(f => f in vectorPolicy),
+           `3/3 fields: ${Object.keys(vectorPolicy).join(', ')}`);
     }
   } else {
     failed++;

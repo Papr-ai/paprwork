@@ -1,9 +1,13 @@
 import { describe, expect, test } from "vitest";
 import type { MemoryObject } from "@papr/memory/resources/shared.js";
 import {
+  classifyMemoryBlock,
   formatMessageSearchBlock,
   formatSyncTiersBlock,
+  getUserMemoryContextService,
   IDLE_THRESHOLD_MS,
+  isMemoryContextUserMessage,
+  MAX_SEARCH_MEMORIES,
   shouldBootstrapUserMemory,
 } from "../src/gateway/services/UserMemoryContextService.js";
 
@@ -68,7 +72,7 @@ describe("UserMemoryContextService helpers", () => {
     );
 
     expect(block).toContain("[CROSS-CHAT USER CONTEXT");
-    expect(block).toContain("Tier 0");
+    expect(block).toContain("Tier 0 — Priority memories");
     expect(block).toContain("Tier 1");
     expect(block).toContain("Ship v2 by Q2");
   });
@@ -85,5 +89,36 @@ describe("UserMemoryContextService helpers", () => {
   test("format blocks return undefined when empty", () => {
     expect(formatSyncTiersBlock([], [])).toBeUndefined();
     expect(formatMessageSearchBlock([])).toBeUndefined();
+  });
+
+  test("MAX_SEARCH_MEMORIES meets Papr API minimum of 10", () => {
+    expect(MAX_SEARCH_MEMORIES).toBeGreaterThanOrEqual(10);
+  });
+
+  test("stream mode returns immediately on bootstrap trigger turn", async () => {
+    const service = getUserMemoryContextService();
+    service.clearChatBootstrap("chat-stream-test");
+    const blocks = await service.getMemoryContextBlocks(
+      "chat-stream-test",
+      "hello",
+      [{ role: "user", content: "hello" }],
+      { mode: "stream" },
+    );
+    expect(blocks).toEqual([]);
+  });
+
+  test("classifyMemoryBlock and isMemoryContextUserMessage", () => {
+    const tiers = formatSyncTiersBlock([memory("goal")], []);
+    const related = formatMessageSearchBlock([memory("fact")]);
+    expect(tiers).toBeDefined();
+    expect(related).toBeDefined();
+    if (!tiers || !related) {
+      return;
+    }
+    expect(classifyMemoryBlock(tiers)).toBe("sync_tiers");
+    expect(classifyMemoryBlock(related)).toBe("related_memory");
+    expect(isMemoryContextUserMessage(tiers)).toBe(true);
+    expect(isMemoryContextUserMessage(related)).toBe(true);
+    expect(isMemoryContextUserMessage("regular user text")).toBe(false);
   });
 });

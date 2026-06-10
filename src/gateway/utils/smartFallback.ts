@@ -64,6 +64,13 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     cost: "medium",
     specialties: ["reasoning", "writing", "analysis"],
   },
+  "claude-fable-5": {
+    reasoningLevel: "advanced",
+    contextWindow: 1000000,
+    speed: "slow",
+    cost: "expensive",
+    specialties: ["reasoning", "agentic", "long-horizon", "coding"],
+  },
   "claude-sonnet-4": {
     reasoningLevel: "advanced",
     contextWindow: 200000,
@@ -87,6 +94,27 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     cost: "cheap",
     specialties: ["speed", "large-context", "multimodal"],
   },
+  "gemini-3.1-flash-lite": {
+    reasoningLevel: "basic",
+    contextWindow: 1048576,
+    speed: "fast",
+    cost: "cheap",
+    specialties: ["speed", "cost-effective", "high-volume"],
+  },
+  "gemini-3.5-flash": {
+    reasoningLevel: "advanced",
+    contextWindow: 1048576,
+    speed: "fast",
+    cost: "medium",
+    specialties: ["agentic", "coding", "tool-use", "multimodal"],
+  },
+  "gemini-3.1-pro-preview": {
+    reasoningLevel: "advanced",
+    contextWindow: 1048576,
+    speed: "medium",
+    cost: "expensive",
+    specialties: ["reasoning", "research", "multimodal"],
+  },
   "gemini-2.5-pro": {
     reasoningLevel: "advanced",
     contextWindow: 2000000,
@@ -102,6 +130,13 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     speed: "medium",
     cost: "cheap",
     specialties: ["local", "privacy", "free"],
+  },
+  "gemma4:12b": {
+    reasoningLevel: "advanced",
+    contextWindow: 256000,
+    speed: "medium",
+    cost: "cheap",
+    specialties: ["local", "privacy", "free", "multimodal", "agentic"],
   },
   "gemma3:latest": {
     reasoningLevel: "medium",
@@ -142,7 +177,7 @@ export async function getBestFallbackModel(
     openai: "gpt-5.5",
     "openai-codex": "gpt-5.3-codex",
     anthropic: "claude-sonnet-4-6",
-    google: "gemini-2.5-flash",
+    google: "gemini-3.5-flash",
     ollama: "qwen3.5:latest",
   };
 
@@ -249,16 +284,16 @@ export function getUpgradeModelForTask(
       general: "gpt-5.3-codex",
     },
     anthropic: {
-      reasoning: "claude-sonnet-4-6",
-      coding: "claude-sonnet-4",
+      reasoning: "claude-fable-5",
+      coding: "claude-fable-5",
       writing: "claude-sonnet-4-6",
       general: "claude-sonnet-4-6",
     },
     google: {
-      reasoning: "gemini-2.5-pro",
-      coding: "gemini-2.5-flash",
-      writing: "gemini-2.5-pro",
-      general: "gemini-2.5-flash",
+      reasoning: "gemini-3.1-pro-preview",
+      coding: "gemini-3.5-flash",
+      writing: "gemini-3.1-pro-preview",
+      general: "gemini-3.5-flash",
     },
     ollama: {
       reasoning: "qwen3.5:latest",

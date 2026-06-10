@@ -15,8 +15,8 @@ const COMPACT_MODEL_IDS = [
   "gpt-5.4-low",
   "gpt-5.4",
   "gpt-5.4-high",
-  "gemini-2.5-flash-lite",
-  "gemini-2.5-flash",
+  "gemini-3.1-flash-lite",
+  "gemini-3.5-flash",
 ];
 const modelOptions = CHAT_MODELS.filter((m) =>
   COMPACT_MODEL_IDS.includes(m.id),

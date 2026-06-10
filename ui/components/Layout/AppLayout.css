@@ -4,6 +4,7 @@
 
 .app-layout {
   display: flex;
+  position: relative;
   height: 100vh;
   width: 100vw;
   overflow: hidden;
@@ -31,7 +32,42 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: width 0.25s var(--ease);
+  flex-shrink: 0;
+  transition:
+    width 0.2s var(--ease),
+    min-width 0.2s var(--ease),
+    opacity 0.2s var(--ease),
+    border-color 0.2s var(--ease);
+}
+
+.app-layout--sidebar-collapsed .app-layout__sidebar {
+  width: 0;
+  min-width: 0;
+  max-width: 0;
+  opacity: 0;
+  border-right-color: transparent;
+  pointer-events: none;
+}
+
+/* Collapsed-only toggle — fixed after traffic lights to reopen sidebar */
+.app-layout__sidebar-toggle {
+  position: absolute;
+  top: 0;
+  left: 8px;
+  z-index: 30;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
+  pointer-events: none;
+}
+
+.app-layout__sidebar-toggle .sidebar-toggle-btn {
+  pointer-events: auto;
+}
+
+body.platform-darwin .app-layout__sidebar-toggle {
+  left: 78px;
 }
 
 /* Dark mode sidebar tint */

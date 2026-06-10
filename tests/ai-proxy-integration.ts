@@ -217,10 +217,10 @@ async function main() {
     return `${chunks} chunks, "${text.slice(0, 50)}"`;
   });
 
-  await runTest("Google gemini-3-flash-preview (non-stream)", async () => {
+  await runTest("Google gemini-3.5-flash (non-stream)", async () => {
     const result = await generateText({
-      model: google("gemini-3-flash-preview"),
-      prompt: "Say 'gemini 3 works' and nothing else.",
+      model: google("gemini-3.5-flash"),
+      prompt: "Say 'gemini 3.5 works' and nothing else.",
       maxOutputTokens: 20,
     });
     if (!result.text) throw new Error("Empty response");

@@ -104,6 +104,7 @@ export function useAgent() {
         chunk.type !== "done" &&
         chunk.type !== "error" &&
         chunk.type !== "start-step" &&
+        chunk.type !== "step-usage" &&
         chunk.type !== "compression-start" &&
         chunk.type !== "compression-complete"
       ) {

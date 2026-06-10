@@ -306,60 +306,11 @@ export class WorkspaceService {
 
   /**
    * Ensure the built-in "papr-sleep" agent job exists.
-   * This job runs daily at 7pm to review daily logs and distill learnings
-   * into workspace files, bridging local context with Papr Memory.
+   * Delegates to SleepCycleService for dedupe, config, and prompt sync.
    */
   async ensureSleepJob(): Promise<void> {
-    try {
-      const { getJobsService } = await import("./JobsService.js");
-      const jobsService = getJobsService();
-      const allJobs = await jobsService.listJobs();
-
-      const sleepJobExists = allJobs.some(
-        (j) => j.name === "papr-sleep" || j.name === "Papr Sleep Cycle",
-      );
-
-      if (sleepJobExists) {
-        console.log("[WorkspaceService] Sleep job already exists");
-        return;
-      }
-
-      // Read the sleep prompt from the workspace SLEEP.md (user/agent-customisable)
-      const sleepMdPath = path.join(this.workspaceDir, "SLEEP.md");
-      let sleepPrompt: string;
-      try {
-        sleepPrompt = await fs.readFile(sleepMdPath, "utf8");
-      } catch {
-        // Fallback if SLEEP.md is missing for some reason
-        sleepPrompt =
-          "Review daily logs in ~/Papr/workspace/memory/, distill learnings into MEMORY.md/IDENTITY.md/AGENTS.md/TOOLS.md, archive logs older than 14 days.";
-      }
-
-      const job = await jobsService.createJob({
-        name: "Papr Sleep Cycle",
-        type: "agent",
-        command: sleepPrompt,
-        schedule: {
-          enabled: true,
-          cron: "0 19 * * *", // Daily at 7pm local time
-        },
-        memoryPolicy: "summary",
-        maxTurns: 20,
-      });
-
-      // Write task.md alongside job.json for user visibility and customisation
-      const jobDir = await jobsService.getJobPath(job.id);
-      if (jobDir) {
-        await fs.writeFile(path.join(jobDir, "task.md"), sleepPrompt, "utf8");
-      }
-
-      console.log(
-        "[WorkspaceService] Created papr-sleep agent job (daily at 7pm)",
-      );
-    } catch (error) {
-      console.warn("[WorkspaceService] Failed to create sleep job:", error);
-      // Non-fatal: workspace still works without the sleep job
-    }
+    const { getSleepCycleService } = await import("./SleepCycleService.js");
+    await getSleepCycleService().syncSleepJobs();
   }
 
   /**

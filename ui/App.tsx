@@ -140,6 +140,25 @@ export function App() {
   const { createTab, switchToTab } = useTabs();
   const { activeRequest, claimedByChat, respond } = usePermissionStore();
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem("paprwork-sidebar-collapsed") === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleSidebarCollapsed = () => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("paprwork-sidebar-collapsed", String(next));
+      } catch {
+        // Ignore storage errors
+      }
+      return next;
+    });
+  };
   
   // Create getting-started tab on first run
   useEffect(() => {
@@ -364,7 +383,9 @@ export function App() {
   return (
     <>
       <AppLayout
-        sidebar={<Sidebar />}
+        sidebar={<Sidebar onToggleCollapse={toggleSidebarCollapsed} />}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={toggleSidebarCollapsed}
         topBar={<TabBar />}
         content={<ContentArea />}
       />

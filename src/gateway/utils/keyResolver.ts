@@ -291,3 +291,40 @@ export async function getProviderAuth(
   console.log(`[KeyResolver] No authentication found for ${provider}`);
   return null;
 }
+
+/**
+ * Resolve auth for a specific model. Some models (e.g. gpt-5.3-codex) are retired
+ * on ChatGPT OAuth and require a Platform API key even when OAuth is connected.
+ */
+export async function getProviderAuthForModel(
+  provider: "openai" | "anthropic",
+  options: { modelId: string; modelProvider: string },
+  ipcProcess: IpcProcessLike = process,
+): Promise<
+  { type: "oauth"; token: string } | { type: "apiKey"; key: string } | null
+> {
+  const { modelId, modelProvider } = options;
+
+  if (provider === "openai") {
+    const { requiresOpenAIPlatformApiKey } =
+      await import("./modelNormalizer.js");
+    if (
+      requiresOpenAIPlatformApiKey(modelId) &&
+      (modelProvider === "openai-codex" || modelProvider === "openai")
+    ) {
+      const keys = await getApiKeys(["OPENAI_API_KEY"], ipcProcess);
+      if (keys.OPENAI_API_KEY) {
+        console.log(
+          `[KeyResolver] ${modelId} requires Platform API key — using OPENAI_API_KEY`,
+        );
+        return { type: "apiKey", key: keys.OPENAI_API_KEY };
+      }
+      console.log(
+        `[KeyResolver] ${modelId} is not available via ChatGPT OAuth and no OPENAI_API_KEY found`,
+      );
+      return null;
+    }
+  }
+
+  return getProviderAuth(provider, ipcProcess);
+}

@@ -77,6 +77,17 @@ export interface ChatMetadata {
   last_synced_at?: string;
 }
 
+/** Lightweight chat summary row for sleep cycle / cross-chat review */
+export interface ChatSummarySnapshot {
+  id: string;
+  title: string;
+  updated_at: string;
+  message_count: number;
+  summary_short: string | null;
+  summary_medium: string | null;
+  summary_topics: string[];
+}
+
 export interface IStorageProvider {
   /**
    * Initialize storage (create directories, databases, etc.)
@@ -163,6 +174,14 @@ export interface IStorageProvider {
    * List all chats
    */
   listChats(): Promise<ChatMetadata[]>;
+
+  /**
+   * Recent chats that have cached summaries (for sleep cycle preflight).
+   */
+  listRecentChatSummaries(
+    limit: number,
+    maxAgeDays: number,
+  ): Promise<ChatSummarySnapshot[]>;
 
   // ===== Sync Operations =====
 

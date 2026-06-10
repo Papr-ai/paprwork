@@ -1,8 +1,16 @@
 import Papr from "@papr/memory";
-import type { Memory } from "@papr/memory/resources/memory.js";
-import type { SchemaListResponse, UserGraphSchemaOutput as Schema, SchemaCreateParams } from "@papr/memory/resources/schemas.js";
+import type { MemoryObject } from "@papr/memory/resources/shared.js";
+import type { SchemaListResponse, UserGraphSchemaOutput as Schema, SchemaCreateParams, SchemaUpdateParams } from "@papr/memory/resources/schemas.js";
+import {
+  buildAddPolicy,
+  buildSearchPolicy,
+} from "../../gateway/utils/paprMemoryPolicy.js";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
+import {
+  CURRENT_CHAT_SCOPE,
+  resolveConversationId,
+} from "./chatScope.js";
 
 const addMemorySchema = z
   .object({
@@ -27,9 +35,13 @@ const addMemorySchema = z
     jobId: z.string().optional(),
     chatId: z.string().optional(),
     workspaceId: z.string().optional(),
-    // Holographic neural transforms
-    enableHolographic: z.boolean().optional().describe("Enable holographic neural transforms for enhanced semantic search"),
-    frequencySchemaId: z.string().optional().describe("Frequency schema for holographic embedding (e.g. 'cosqa', 'scifact'). Required when enableHolographic=true"),
+    signalDomain: z
+      .string()
+      .optional()
+      .describe(
+        "Optional signal domain for enhanced semantic encoding on add (e.g. 'general', 'code', 'cosqa'). " +
+          "Omit for standard embedding. Use list_signal_domains to see built-in domains.",
+      ),
   })
   .refine(
     (data) => {
@@ -43,19 +55,6 @@ const addMemorySchema = z
       message:
         'When category is "context", role field is required (must be "user" or "assistant")',
       path: ["role"],
-    },
-  )
-  .refine(
-    (data) => {
-      // Require frequency_schema_id when enable_holographic is true
-      if (data.enableHolographic && !data.frequencySchemaId) {
-        return false;
-      }
-      return true;
-    },
-    {
-      message: 'When enableHolographic is true, frequencySchemaId is required',
-      path: ["frequencySchemaId"],
     },
   );
 
@@ -112,18 +111,40 @@ const searchMemorySchema = z.object({
     .describe(
       "Filter code search by file name (e.g. 'app.ts', 'main.py'). Exact match on file_name metadata.",
     ),
-  // Holographic neural embedding configuration
-  holographicConfig: z.object({
-    enabled: z.boolean().optional().describe("Enable holographic neural transforms"),
-    frequencySchemaId: z.string().optional().describe("Frequency schema for holographic scoring (e.g. 'cosqa', 'scifact'). Call GET /v1/frequencies for available schemas"),
-    searchMode: z.enum(['disabled', 'integrated', 'post_search']).optional().describe("How to apply holographic: 'integrated' searches transformed embeddings, 'post_search' fetches then reranks with H-COND"),
-    scoringMethod: z.string().optional().describe("Scoring method (160+ options: 'egr_rerank', 'caesar8', etc.). If null, uses schema's default"),
-    includeFrequencyScores: z.boolean().optional().describe("Return per-frequency score breakdown showing how well query matched on each dimension (e.g. programming_domain: 0.95). Useful for understanding WHY results ranked high/low"),
-    frequencyFilters: z.record(z.string(), z.number()).optional().describe("Filter results by minimum alignment on frequency dimensions. Keys are field names (e.g. 'programming_domain'), values are minimum scores (0.0-1.0). Example: {'programming_domain': 0.8}"),
-    hcondBoostFactor: z.number().min(0).max(0.5).optional().describe("Maximum boost for high phase alignment (0.0-0.5)"),
-    hcondBoostThreshold: z.number().min(0).max(1.0).optional().describe("Phase alignment threshold to apply boost (0.0-1.0)"),
-    hcondPenaltyFactor: z.number().min(0).max(0.5).optional().describe("Maximum penalty for low phase alignment (0.0-0.5)"),
-  }).optional().describe("Configuration for holographic neural embedding transforms and frequency-based scoring"),
+  chatId: z
+    .string()
+    .optional()
+    .describe(
+      `Scope search to one conversation session. Use "${CURRENT_CHAT_SCOPE}" for the active chat, ` +
+      "or pass an explicit chat UUID. Omit to search across all chats. " +
+      "Use when the in-context summary + recent messages are not enough detail from THIS chat.",
+    ),
+  vectorPolicy: z
+    .object({
+      domainId: z
+        .string()
+        .optional()
+        .describe(
+          "Signal domain for enhanced vector search (e.g. 'code', 'general', 'cosqa'). " +
+            "When category='code', defaults to 'code' if omitted. Use list_signal_domains.",
+        ),
+      returnSignalScores: z
+        .boolean()
+        .optional()
+        .describe(
+          "Return per-signal-band score breakdown (e.g. primary_operation: 0.95) explaining ranking.",
+        ),
+      signalThresholds: z
+        .record(z.string(), z.number())
+        .optional()
+        .describe(
+          "Filter by minimum alignment per signal band. Example: { primary_operation: 0.8 }",
+        ),
+    })
+    .optional()
+    .describe(
+      "Optional vector search policy. Omit for standard search; use category='code' for code search defaults.",
+    ),
 });
 
 // Property definition for node/relationship properties
@@ -236,11 +257,14 @@ export const addAgentMemoryTool = createTool({
       if (args.chatId) customMetadata.chatId = args.chatId;
       if (args.workspaceId) customMetadata.workspaceId = args.workspaceId;
 
+      const addPolicy = buildAddPolicy({
+        signalDomain: args.signalDomain,
+      });
+
       const response = await client.memory.add({
         content: args.content,
         ...(userId ? { user_id: userId } : {}),
-        enable_holographic: args.enableHolographic,
-        frequency_schema_id: args.frequencySchemaId,
+        ...(addPolicy ? { policy: addPolicy } : {}),
         metadata: {
           role: args.role,
           category: args.category,
@@ -266,9 +290,9 @@ export const addAgentMemoryTool = createTool({
 export const searchAgentMemoryTool = createTool({
   id: "search_agent_memory",
   description:
-    "Search relevant memories from PAPR memory. Use 2-3 sentence queries for best results. " +
-    "For code search: set category='code' and optionally filter by projectId (appId/jobId), " +
-    "projectType ('mini_app'/'job'), language, or fileName to narrow results to a specific app or job.",
+    "Semantic search over Papr memories (extracted from synced chats, facts, code index). " +
+    "Use 2-3 sentence queries. For THIS chat when context only has a summary + ~6 recent messages, " +
+    `pass chatId: "${CURRENT_CHAT_SCOPE}". For code: category='code' + projectId/projectType/language/fileName filters.`,
   inputSchema: searchMemorySchema,
   execute: async (args) => {
     try {
@@ -286,18 +310,39 @@ export const searchAgentMemoryTool = createTool({
 
       const hasMetadataFilters = Object.keys(customMetadata).length > 0;
 
-      // Build holographic_config if provided (convert camelCase to snake_case for SDK)
-      const holographicConfig = args.holographicConfig ? {
-        enabled: args.holographicConfig.enabled,
-        frequency_schema_id: args.holographicConfig.frequencySchemaId,
-        search_mode: args.holographicConfig.searchMode,
-        scoring_method: args.holographicConfig.scoringMethod,
-        include_frequency_scores: args.holographicConfig.includeFrequencyScores,
-        frequency_filters: args.holographicConfig.frequencyFilters,
-        hcond_boost_factor: args.holographicConfig.hcondBoostFactor,
-        hcond_boost_threshold: args.holographicConfig.hcondBoostThreshold,
-        hcond_penalty_factor: args.holographicConfig.hcondPenaltyFactor,
-      } : undefined;
+      let conversationId: string | undefined;
+      if (args.chatId) {
+        conversationId = resolveConversationId(args.chatId);
+        if (args.chatId === CURRENT_CHAT_SCOPE && !conversationId) {
+          throw new Error(
+            `chatId "${CURRENT_CHAT_SCOPE}" requires an active chat session. ` +
+              "Pass an explicit chat UUID instead.",
+          );
+        }
+      }
+
+      const searchMetadata: {
+        category?: "learning";
+        role?: "assistant";
+        conversationId?: string;
+        customMetadata?: Record<string, string | number | boolean>;
+      } = {};
+
+      if (conversationId) {
+        searchMetadata.conversationId = conversationId;
+      }
+      if (args.category === "code") {
+        searchMetadata.category = "learning";
+        searchMetadata.role = "assistant";
+      }
+      if (hasMetadataFilters) {
+        searchMetadata.customMetadata = customMetadata;
+      }
+
+      const searchPolicy = buildSearchPolicy({
+        vectorPolicy: args.vectorPolicy,
+        defaultDomain: args.category === "code" ? "code" : undefined,
+      });
 
       const response = await client.memory.search({
         query: args.query,
@@ -314,17 +359,9 @@ export const searchAgentMemoryTool = createTool({
           reranking_model: "rerank-v3.5",
         },
         response_format: "toon",
-        ...(holographicConfig && { holographic_config: holographicConfig }),
-        // Pass filters via SDK's metadata.customMetadata + category
-        ...(args.category || hasMetadataFilters
-          ? {
-              metadata: {
-                ...(args.category === "code"
-                  ? { category: "learning" as const, role: "assistant" as const }
-                  : {}),
-                ...(hasMetadataFilters ? { customMetadata } : {}),
-              },
-            }
+        ...(searchPolicy ? { policy: searchPolicy } : {}),
+        ...(Object.keys(searchMetadata).length > 0
+          ? { metadata: searchMetadata }
           : {}),
       });
       return { success: true, data: response };
@@ -397,7 +434,7 @@ export const listSchemasTool = createTool({
   description:
     "List KNOWLEDGE GRAPH schemas (user-created entity/relationship schemas). Returns schemas with node types and relationships. " +
     "Use get_schema to fetch full details (node types, relationships, properties) for a specific schema. " +
-    "⚠️ NOTE: For HOLOGRAPHIC frequency schemas, use list_frequency_schemas instead.",
+    "⚠️ NOTE: For signal domains (vector/transform policy), use list_signal_domains instead.",
   inputSchema: listSchemasSchema,
   execute: async (args) => {
     try {
@@ -485,7 +522,8 @@ export const updateSchemaTool = createTool({
       // Build the update params
       const { schemaId, ...updateParams } = args;
       
-      const response = await client.schemas.update(schemaId, { body: updateParams } as any);
+      const updateBody: SchemaUpdateParams = { body: updateParams };
+      const response = await client.schemas.update(schemaId, updateBody);
       
       return { 
         success: true, 
@@ -851,15 +889,17 @@ export const createEntitiesAndRelationshipsTool = createTool({
         } : {}),
       };
       
+      const manualPolicy = buildAddPolicy({
+        graphMode: "manual",
+        graphSchemaId: args.schemaId,
+        manualNodes: manualGeneration.nodes,
+        manualRelationships: manualGeneration.relationships,
+      });
+
       const response = await client.memory.add({
         content: args.content,
         ...(userId ? { user_id: userId } : {}),
-        memory_policy: {
-          mode: 'manual',
-          nodes: manualGeneration.nodes,
-          relationships: manualGeneration.relationships,
-          ...(args.schemaId && { schema_id: args.schemaId }),
-        },
+        ...(manualPolicy ? { policy: manualPolicy } : {}),
       });
       
       return { 
@@ -882,47 +922,39 @@ export const createEntitiesAndRelationshipsTool = createTool({
   },
 });
 
-// List frequency schemas (for holographic neural transforms)
-export const listFrequencySchemasTool = createTool({
-  id: "list_frequency_schemas",
+// List built-in signal domains for transform_embedding and vector policy
+export const listSignalDomainsTool = createTool({
+  id: "list_signal_domains",
   description:
-    "List available FREQUENCY SCHEMAS for holographic neural transforms. " +
-    "These are pre-built by Papr and used with enableHolographic parameter in add_agent_memory and holographicConfig in search_agent_memory. " +
-    "Returns schema IDs (e.g., 'general', 'cosqa', 'scifact') and their frequency counts. " +
+    "List available signal domains for Papr Memory vector search and transform embedding. " +
+    "Use domain IDs with signalDomain in add_agent_memory and vectorPolicy.domainId in search_agent_memory. " +
+    "Returns built-in domains (e.g. 'general', 'code', 'cosqa', 'scifact') and their signal band counts. " +
     "⚠️ NOTE: These are different from knowledge graph schemas (use list_schemas for those).",
-  inputSchema: z.object({}), // No parameters needed
+  inputSchema: z.object({}),
   execute: async () => {
     try {
       const client = await getPaprClient();
-      
-      // Fetch frequency schemas from /v1/frequencies endpoint
-      // Note: SDK doesn't have a direct method, so we use the underlying fetch
-      const response = await fetch('https://api.papr.ai/v1/frequencies', {
-        headers: {
-          'X-API-Key': client['xAPIKey'], // Access internal API key
-        },
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch frequency schemas: ${response.status} ${response.statusText}`);
-      }
-      
-      const data = await response.json() as { data?: Array<{ id: string; name: string; frequency_count: number; description?: string }> };
-      
-      // Format response for agent readability
-      const schemas = data.data?.map((schema) => ({
-        id: schema.id,
-        name: schema.name,
-        frequencyCount: schema.frequency_count,
-        description: schema.description || `${schema.frequency_count} frequency dimensions for ${schema.name}`
-      })) ?? [];
+
+      const response = await client.graph.domains.list();
+
+      const domains = response.domains.map((domain) => ({
+        id: domain.domain_id,
+        name: domain.name,
+        signalBandCount: domain.signals.length,
+        description:
+          domain.description ||
+          `${domain.signals.length} signal bands for ${domain.name}`,
+        builtin: domain.builtin ?? false,
+      }));
       
       return {
         success: true,
         data: {
-          count: schemas.length,
-          schemas: schemas,
-          note: "Use these IDs with frequencySchemaId parameter in add_agent_memory or holographicConfig in search_agent_memory"
+          count: domains.length,
+          domains,
+          note:
+            "Use domain id with signalDomain (add) or vectorPolicy.domainId (search). " +
+            "category='code' search defaults to domain 'code' automatically.",
         }
       };
     } catch (error) {
@@ -947,7 +979,7 @@ export const paprMemoryTools = [
   updateSchemaTool,
   listSchemasTool,
   getSchemaTool,
-  listFrequencySchemasTool, // NEW: List frequency schemas
+  listSignalDomainsTool,
   introspectMemoryGraphTool,
   queryMemoryGraphTool,
   deleteMemoryTool,
@@ -956,4 +988,4 @@ export const paprMemoryTools = [
 ];
 
 // Re-export SDK types for use in other files
-export type { Memory };
+export type { MemoryObject };

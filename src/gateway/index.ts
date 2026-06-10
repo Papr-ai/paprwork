@@ -1017,6 +1017,13 @@ async function startGateway(): Promise<void> {
           }
         }
 
+        if (ext === ".html" && typeof content === "string") {
+          const { injectMiniAppBaseStyles } = await import(
+            "./utils/miniAppBaseStyles.js"
+          );
+          content = injectMiniAppBaseStyles(content);
+        }
+
         const contentTypeByExt: Record<string, string> = {
           ".html": "text/html; charset=utf-8",
           ".js": "text/javascript; charset=utf-8",

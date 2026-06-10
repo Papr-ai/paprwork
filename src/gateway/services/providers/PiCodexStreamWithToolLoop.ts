@@ -313,8 +313,8 @@ export async function* createPiCodexStreamWithToolLoop(
       return 200000; // 272K - 72K buffer
     }
     
-    // Claude Opus 4.7 (1M context)
-    if (modelId === 'claude-opus-4-7') {
+    // Claude Opus 4.7 / Fable 5 (1M context)
+    if (modelId === 'claude-opus-4-7' || modelId === 'claude-fable-5') {
       return 750000; // 1M - 250K buffer
     }
     

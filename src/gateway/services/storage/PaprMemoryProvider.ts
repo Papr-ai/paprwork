@@ -122,8 +122,9 @@ export class PaprMemoryProvider implements IStorageProvider {
       const userId = getPaprUserId();
 
       // POST to PAPR /v1/messages using SDK.
-      // user_id is a top-level MessageRequest field on the memory server; include it
-      // whenever we have the Parse _User.objectId from login/profile sync.
+      // user_id is a top-level MessageRequest field on the memory server (not yet in
+      // MessageStoreParams as of @papr/memory 2.7). Include whenever we have the Parse
+      // _User.objectId from login/profile sync.
       type MessageStoreBody = Parameters<Papr["messages"]["store"]>[0] & {
         user_id?: string;
       };
@@ -401,6 +402,13 @@ export class PaprMemoryProvider implements IStorageProvider {
   async listChats(): Promise<ChatMetadata[]> {
     // PAPR doesn't have a dedicated "list chats" endpoint
     // This would need to be tracked locally
+    return [];
+  }
+
+  async listRecentChatSummaries(
+    _limit: number,
+    _maxAgeDays: number,
+  ): Promise<import("./IStorageProvider.js").ChatSummarySnapshot[]> {
     return [];
   }
 

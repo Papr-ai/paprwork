@@ -23,7 +23,8 @@ describe("ollamaModelFit", () => {
 
   it("recommends fitting Gemma tier", () => {
     expect(getRecommendedGemmaModel(4)).toBe("gemma3:1b");
-    expect(getRecommendedGemmaModel(12)).toBe("gemma3:4b-it-qat"); // Updated: QAT preferred
+    expect(getRecommendedGemmaModel(12)).toBe("gemma4:e4b");
+    expect(getRecommendedGemmaModel(16)).toBe("gemma4:12b");
   });
 
   it("ollamaModelFitsHostRam uses minimum total RAM from table", () => {

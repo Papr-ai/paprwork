@@ -99,12 +99,20 @@ export function normalizeGoogleModelId(modelId: string): string {
   return modelId.replace(/gemini-2-5/g, "gemini-2.5");
 }
 
+/** Retired on ChatGPT OAuth — require OpenAI Platform API key */
+const OPENAI_PLATFORM_ONLY_MODELS = new Set(["gpt-5.3-codex"]);
+
+export function requiresOpenAIPlatformApiKey(modelId: string): boolean {
+  return OPENAI_PLATFORM_ONLY_MODELS.has(
+    normalizeOpenAIModelId(modelId),
+  );
+}
+
 /** Models that pi-ai openai-codex (ChatGPT OAuth) supports */
 const OPENAI_CODEX_MODELS = new Set([
   "gpt-5.1",
   "gpt-5.1-codex-mini",
   "gpt-5.1-codex-max",
-  "gpt-5.3-codex",
   "gpt-5.3-codex-spark",
   "gpt-5.4",
   "gpt-5.4-mini",
@@ -123,6 +131,9 @@ export function isOpenAICodexModel(modelId: string): boolean {
     .replace(/gpt-5-5/g, "gpt-5.5");
 
   const apiId = normalizeOpenAIModelId(modelId);
+  if (requiresOpenAIPlatformApiKey(apiId)) {
+    return false;
+  }
   if (OPENAI_CODEX_MODELS.has(apiId)) {
     return true;
   }

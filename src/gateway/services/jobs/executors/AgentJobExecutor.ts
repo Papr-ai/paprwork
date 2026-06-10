@@ -8,6 +8,10 @@ import { getAgentService } from "../../AgentService.js";
 import { getJobsService } from "../../JobsService.js";
 import { v4 as uuidv4 } from "uuid";
 import { writeRunMemory } from "../../PaprMemoryWritebackService.js";
+import {
+  getSleepCycleService,
+  isSleepCycleJobName,
+} from "../../SleepCycleService.js";
 
 export class AgentJobExecutor implements IJobExecutor {
   canExecute(type: JobType): boolean {
@@ -95,7 +99,14 @@ export class AgentJobExecutor implements IJobExecutor {
         .filter(Boolean)
         .join("\n");
     } else {
-      prompt = [envBlock, prompt].filter(Boolean).join("\n");
+      if (isSleepCycleJobName(params.job.name)) {
+        const preflight = await getSleepCycleService().buildPreflightContext(
+          params.job.id,
+        );
+        prompt = [envBlock, preflight, prompt].filter(Boolean).join("\n\n");
+      } else {
+        prompt = [envBlock, prompt].filter(Boolean).join("\n");
+      }
     }
     // ─────────────────────────────────────────────────────────────────────────
 

@@ -52,10 +52,16 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "claude-opus-4-6": { input: 15.0, output: 75.0 },
   "claude-opus-4-5-thinking": { input: 15.0, output: 75.0 },
   "claude-opus-4-7": { input: 5.0, output: 25.0 },
+  "claude-fable-5": { input: 10.0, output: 50.0 },
 
   // Google Gemini Series (API format uses dots: gemini-2.5)
+  // Source: https://ai.google.dev/gemini-api/docs/pricing
   "gemini-2.5-flash-lite": { input: 0.15, output: 0.6 },
   "gemini-2.5-flash": { input: 0.3, output: 1.2 },
+  "gemini-3.1-flash-lite": { input: 0.25, output: 1.5 },
+  "gemini-3.5-flash": { input: 1.5, output: 9.0 },
+  "gemini-3.1-pro-preview": { input: 2.0, output: 12.0 },
+  // Deprecated IDs — kept for cost lookup on older chats
   "gemini-3-flash-preview": { input: 0.6, output: 2.4 },
   "gemini-3-pro-preview": { input: 2.5, output: 10.0 },
 
@@ -65,6 +71,10 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "qwen3.5:4b": { input: 0, output: 0 },
   "qwen3.5:latest": { input: 0, output: 0 },
   "qwen3.5:27b": { input: 0, output: 0 },
+  "gemma4:e2b": { input: 0, output: 0 },
+  "gemma4:e4b": { input: 0, output: 0 },
+  "gemma4:12b": { input: 0, output: 0 },
+  "gemma4:26b": { input: 0, output: 0 },
   "gemma3:270m": { input: 0, output: 0 },
   "gemma3:1b": { input: 0, output: 0 },
   "gemma3:4b": { input: 0, output: 0 },

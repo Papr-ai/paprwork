@@ -25,6 +25,20 @@ export const QWEN_MODEL_SIZES: Record<string, number> = {
   "qwen3.5:27b": 17,
 };
 
+export const GEMMA4_RAM_REQUIREMENTS: Record<string, number> = {
+  "gemma4:e2b": 6,
+  "gemma4:e4b": 10,
+  "gemma4:12b": 16,
+  "gemma4:26b": 24,
+};
+
+export const GEMMA4_MODEL_SIZES: Record<string, number> = {
+  "gemma4:e2b": 4.5,
+  "gemma4:e4b": 7.2,
+  "gemma4:12b": 7.6,
+  "gemma4:26b": 16,
+};
+
 export const GEMMA_RAM_REQUIREMENTS: Record<string, number> = {
   "gemma3:270m": 2,
   "gemma3:1b": 4,
@@ -60,7 +74,14 @@ const QWEN_PREFERENCE_ORDER: readonly string[] = [
   "qwen3.5:0.8b",
 ];
 
-const GEMMA_PREFERENCE_ORDER: readonly string[] = [
+const GEMMA4_PREFERENCE_ORDER: readonly string[] = [
+  "gemma4:26b",
+  "gemma4:12b",
+  "gemma4:e4b",
+  "gemma4:e2b",
+];
+
+const GEMMA3_PREFERENCE_ORDER: readonly string[] = [
   "gemma3:27b",
   "gemma3:12b-it-q4_k_m", // Q4 optimized - prefer over full 12B
   "gemma3:12b",
@@ -103,13 +124,21 @@ export function getRecommendedQwenModel(totalRamGb?: number): string {
 
 export function getRecommendedGemmaModel(totalRamGb?: number): string {
   if (totalRamGb === undefined || !Number.isFinite(totalRamGb) || totalRamGb <= 0) {
-    return "gemma3:latest";
+    return "gemma4:12b";
   }
-  return pickFittingOllamaModelId(GEMMA_RAM_REQUIREMENTS, GEMMA_PREFERENCE_ORDER, totalRamGb);
+  return pickFittingOllamaModelId(
+    { ...GEMMA4_RAM_REQUIREMENTS, ...GEMMA_RAM_REQUIREMENTS },
+    [...GEMMA4_PREFERENCE_ORDER, ...GEMMA3_PREFERENCE_ORDER],
+    totalRamGb,
+  );
 }
 
 export function getOllamaRamRequirementGb(modelId: string): number | undefined {
-  return QWEN_RAM_REQUIREMENTS[modelId] ?? GEMMA_RAM_REQUIREMENTS[modelId];
+  return (
+    QWEN_RAM_REQUIREMENTS[modelId] ??
+    GEMMA4_RAM_REQUIREMENTS[modelId] ??
+    GEMMA_RAM_REQUIREMENTS[modelId]
+  );
 }
 
 export function ollamaModelFitsHostRam(modelId: string, totalRamGb: number): boolean {

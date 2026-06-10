@@ -18,12 +18,12 @@ This led to potential confusion about which schema IDs to use where.
 
 ## ✅ The Solution
 
-### 1. New Tool: `list_frequency_schemas`
+### 1. Tool: `list_signal_domains`
 
 Created a dedicated tool to list frequency schemas (for holographic):
 
 ```typescript
-list_frequency_schemas()
+list_signal_domains()
 // Returns: ['general', 'cosqa', 'scifact', 'code', 'legal', 'medical', ...]
 ```
 
@@ -50,37 +50,35 @@ Added clear distinction section in SystemPrompt explaining:
 | **Purpose** | Neural semantic encoding for better search | Define entity types and relationships |
 | **Created By** | Papr (pre-built) | You (via register_schema) |
 | **ID Format** | Short names: `'general'`, `'cosqa'`, `'scifact'` | 10-char random: `'BNSv8YCQXJ'`, `'oo17hKHWic'` |
-| **List Tool** | `list_frequency_schemas` | `list_schemas` |
+| **List Tool** | `list_signal_domains` | `list_schemas` |
 | **Count** | ~12 pre-built | Unlimited (user-created) |
-| **Used With** | `frequencySchemaId` parameter | `schemaId` parameter |
-| **Example** | `enableHolographic: true, frequencySchemaId: "cosqa"` | `create_entities({ schemaId: "BNSv8YCQXJ" })` |
+| **Used With** | `signalDomain` / `vectorPolicy.domainId` | `schemaId` parameter |
+| **Example** | `add_agent_memory({ signalDomain: "cosqa" })` | `create_entities({ schemaId: "BNSv8YCQXJ" })` |
 
 ---
 
 ## 🎯 Correct Usage Examples
 
-### Frequency Schemas (Holographic)
+### Signal Domains (Vector Policy)
 
 ```typescript
-// ✅ CORRECT: Use frequency schema for holographic encoding
+// ✅ CORRECT: Use signal domain for enhanced encoding
 add_agent_memory({
   content: "Python code for CSV parsing",
-  enableHolographic: true,
-  frequencySchemaId: "cosqa", // ← Frequency schema
+  signalDomain: "cosqa", // ← Signal domain
   metadata: { role: "user", category: "fact" }
 })
 
 search_agent_memory({
   query: "how to parse CSV",
-  holographicConfig: {
-    enabled: true,
-    frequencySchemaId: "cosqa", // ← Same frequency schema
-    includeFrequencyScores: true
+  vectorPolicy: {
+    domainId: "cosqa", // ← Same signal domain
+    returnSignalScores: true
   }
 })
 
 // List available frequency schemas
-list_frequency_schemas()
+list_signal_domains()
 // Returns: ['general', 'cosqa', 'scifact', ...]
 ```
 
@@ -128,8 +126,7 @@ list_schemas()
 ```typescript
 // ❌ WRONG: BNSv8YCQXJ is a KG schema, not a frequency schema
 add_agent_memory({
-  enableHolographic: true,
-  frequencySchemaId: "BNSv8YCQXJ" // Wrong type!
+  signalDomain: "BNSv8YCQXJ" // Wrong type!
 })
 ```
 
@@ -137,8 +134,7 @@ add_agent_memory({
 ```typescript
 // ✅ RIGHT: Use frequency schema name
 add_agent_memory({
-  enableHolographic: true,
-  frequencySchemaId: "general" // Correct!
+  signalDomain: "general" // Correct!
 })
 ```
 
@@ -173,7 +169,7 @@ const freqSchemas = await list_schemas()
 **Fix:**
 ```typescript
 // ✅ RIGHT: Use correct tool for each type
-const freqSchemas = await list_frequency_schemas()
+const freqSchemas = await list_signal_domains()
 // Returns: [{ id: "general", frequencyCount: 7, ... }]
 
 const kgSchemas = await list_schemas()
@@ -199,7 +195,7 @@ Based on earlier testing, these frequency schemas are available:
 | `codetrans` | Code Translation | 13 | Deep learning frameworks |
 | `joe_coffee` | Food & Beverage | ~10 | Coffee shop menus |
 
-**To verify:** Call `list_frequency_schemas()` tool for the latest list from API.
+**To verify:** Call `list_signal_domains()` tool for the latest list from API.
 
 ---
 
@@ -208,16 +204,16 @@ Based on earlier testing, these frequency schemas are available:
 ### Files Changed
 
 1. **`src/core/tools/paprMemory.ts`**:
-   - Added `listFrequencySchemasTool` - New tool to list frequency schemas
+   - Added `listSignalDomainsTool` - Tool to list signal domains
    - Updated `listSchemasTool` description to clarify it's for KG schemas only
    - Added to `paprMemoryTools` array
 
 2. **`src/core/tools/index.ts`**:
-   - Exported `listFrequencySchemasTool`
+   - Exported `listSignalDomainsTool`
 
 3. **`src/core/agents/SystemPrompt.ts`**:
    - Added new section "Two Types of Schemas — Don't Confuse Them!"
-   - Added `list_frequency_schemas` to tool table
+   - Added `list_signal_domains` to tool table
    - Clarified KG schema tools with bold text
    - Added comparison examples
 
@@ -246,10 +242,10 @@ node scripts/test-schema-distinction.mjs
 ## 🎓 Quick Reference for Agents
 
 **When to use frequency schemas:**
-- Adding memories with `enableHolographic: true`
-- Searching with `holographicConfig`
+- Adding memories with `signalDomain`
+- Searching with `vectorPolicy`
 - Need semantic frequency-based scoring
-- Tool: `list_frequency_schemas`
+- Tool: `list_signal_domains`
 
 **When to use KG schemas:**
 - Creating structured entities and relationships

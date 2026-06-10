@@ -9,6 +9,7 @@ import path from "path";
 import os from "os";
 import { v4 as uuidv4 } from "uuid";
 import { fileURLToPath } from "url";
+import { withFileEditLock } from "../../core/utils/fileEditLock.js";
 
 // ESM compatibility: get __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -922,6 +923,31 @@ export class AppService {
     }
   }
 
+  /**
+   * Atomic read-modify-write for app files. Serializes concurrent edits to the
+   * same file so parallel tool calls cannot overwrite each other.
+   */
+  async updateAppFile(
+    appId: string,
+    filename: string,
+    updater: (content: string) => string,
+  ): Promise<{ content: string; written: boolean } | null> {
+    const lockKey = `app:${appId}:${filename}`;
+    return withFileEditLock(lockKey, async () => {
+      const content = await this.readAppFile(appId, filename);
+      if (content === null) return null;
+
+      const newContent = updater(content);
+      if (newContent === content) {
+        return { content, written: false };
+      }
+
+      const written = await this.writeAppFile(appId, filename, newContent);
+      if (!written) return null;
+      return { content: newContent, written: true };
+    });
+  }
+
   async writeAppFile(
     appId: string,
     filename: string,
@@ -1128,6 +1154,8 @@ export class AppService {
       };
     }
 
+    const fileContents = new Map<string, string>();
+
     // Check each file
     for (const file of filesToCheck) {
       const relativePath = path.relative(appPath, file);
@@ -1140,7 +1168,8 @@ export class AppService {
 
       try {
         const content = await fs.readFile(file, 'utf-8');
-        
+        fileContents.set(relativePath, content);
+
         // LOC check (100 lines max for mini-apps)
         const locIssues = this.checkLineLimit(content, relativePath, 100);
         issues.push(...locIssues);
@@ -1160,6 +1189,8 @@ export class AppService {
         console.error(`[AppService] Failed to validate ${relativePath}:`, error);
       }
     }
+
+    issues.push(...this.checkMiniAppRuntimePatterns(fileContents));
 
     // Broadcast validation result
     const result: ValidationResult = {
@@ -1251,6 +1282,69 @@ export class AppService {
     }
 
     return [];
+  }
+
+  /**
+   * Cross-file checks that affect what users see in the iframe (not just DOM text).
+   */
+  private checkMiniAppRuntimePatterns(
+    fileContents: Map<string, string>,
+  ): ValidationIssue[] {
+    const issues: ValidationIssue[] = [];
+    const allContent = Array.from(fileContents.values()).join("\n");
+    const cssContent = Array.from(fileContents.entries())
+      .filter(([name]) => name.endsWith(".css"))
+      .map(([, content]) => content)
+      .join("\n");
+
+    const usesHiddenClass =
+      /class=["'][^"']*\bhidden\b/.test(allContent) ||
+      /\.classList\.(add|remove|toggle)\(['"]hidden['"]\)/.test(allContent);
+
+    const definesHiddenRule = /\.hidden\s*\{/.test(cssContent);
+
+    if (usesHiddenClass && !definesHiddenRule) {
+      issues.push({
+        file: "app",
+        severity: "error",
+        message:
+          'Uses class "hidden" but no .hidden { display: none } rule in any CSS file — modals/overlays stay visible and block the UI with blur',
+        rule: "css-hidden-utility",
+      });
+    }
+
+    for (const [filename, content] of fileContents.entries()) {
+      if (!filename.endsWith(".css")) {
+        continue;
+      }
+      if (/@import\s+url\(['"]https?:\/\/fonts\.googleapis\.com/.test(content)) {
+        issues.push({
+          file: filename,
+          severity: "warning",
+          message:
+            "Google Fonts @import in CSS can stall rendering in iframe — use <link rel=\"stylesheet\" href=\"...\"> in index.html instead",
+          rule: "css-font-import",
+        });
+      }
+    }
+
+    const jsTsContent = Array.from(fileContents.entries())
+      .filter(([name]) => /\.(js|ts|tsx|jsx)$/.test(name))
+      .map(([, content]) => content)
+      .join("\n");
+    if (
+      /fetch\s*\(\s*['"]https?:\/\/(?!localhost|127\.0\.0\.1)/.test(jsTsContent)
+    ) {
+      issues.push({
+        file: "app",
+        severity: "warning",
+        message:
+          "Direct external fetch() from mini-app client — prefer /api/bash/run or gateway APIs so preview matches user panel",
+        rule: "external-fetch",
+      });
+    }
+
+    return issues;
   }
 
   /**

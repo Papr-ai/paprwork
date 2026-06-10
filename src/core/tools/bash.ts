@@ -206,23 +206,25 @@ async function searchPaprMemoryForCode(pattern: string): Promise<string | null> 
     
     // Import Papr client
     const { default: Papr } = await import('@papr/memory');
+    const { buildSearchPolicy } = await import(
+      "../../gateway/utils/paprMemoryPolicy.js"
+    );
     const client = new Papr({ xAPIKey: paprKey });
-    
-    // Search for code
+
     const response = await client.memory.search({
       query: pattern,
       max_memories: 10,
       max_nodes: 10,
       enable_agentic_graph: true,
-      rank_results: true,
-      response_format: 'toon',
+      response_format: "toon",
+      policy: buildSearchPolicy({ defaultDomain: "code" }),
       metadata: {
-        role: 'assistant',
-        category: 'learning',
+        role: "assistant",
+        category: "learning",
         customMetadata: {
-          source: 'code_indexer'
-        }
-      }
+          source: "code_indexer",
+        },
+      },
     });
     
     // Format results - response.data.memories

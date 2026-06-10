@@ -22,7 +22,7 @@ export interface AIModel {
 }
 
 export const CHAT_MODELS: AIModel[] = [
-  // Anthropic — weakest to strongest (Haiku → Sonnet 4.6 → Opus 4.6 → Opus 4.5 Deep Thinking)
+  // Anthropic — weakest to strongest (Haiku → Sonnet → Opus → Fable 5)
   {
     id: "claude-haiku-4-5",
     name: "Claude Haiku 4.5",
@@ -79,6 +79,18 @@ export const CHAT_MODELS: AIModel[] = [
     maxTokens: 16000,
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
+  {
+    id: "claude-fable-5",
+    name: "Claude Fable 5",
+    provider: "anthropic",
+    description:
+      "Most capable Claude — adaptive thinking, 1M context, long-horizon agentic work",
+    group: "Anthropic",
+    supportsThinking: true,
+    defaultThinkingBudget: 0,
+    maxTokens: 128000,
+    requiresApiKey: "ANTHROPIC_API_KEY",
+  },
 
   // OpenAI — weakest to strongest
   {
@@ -129,20 +141,20 @@ export const CHAT_MODELS: AIModel[] = [
     id: "gpt-5.3-codex",
     name: "GPT-5.3 Codex",
     provider: "openai-codex",
-    description: "Latest Codex model via OAuth",
+    description: "Codex model — requires OpenAI API key (not available via ChatGPT OAuth)",
     group: "OpenAI",
     supportsThinking: true,
     reasoning: { effort: "medium" },
     maxTokens: 16384,
-    requiresApiKey: "OPENAI_OAUTH",
+    requiresApiKey: "OPENAI_API_KEY",
   },
 
-  // Google — weakest to strongest
+  // Google — weakest to strongest (see ai.google.dev/gemini-api/docs/models)
   {
     id: "gemini-2.5-flash-lite",
     name: "Gemini 2.5 Flash Lite",
     description:
-      "Fastest flash model optimized for cost-efficiency and high throughput",
+      "Legacy budget tier — consider Gemini 3.1 Flash-Lite for new projects",
     provider: "google",
     group: "Google",
     supportsThinking: true,
@@ -151,10 +163,22 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
   },
   {
+    id: "gemini-3.1-flash-lite",
+    name: "Gemini 3.1 Flash-Lite",
+    description:
+      "Most cost-efficient Gemini 3 — high-volume tasks, translation, moderation",
+    provider: "google",
+    group: "Google",
+    supportsThinking: true,
+    defaultThinkingBudget: 3000,
+    maxTokens: 65536,
+    requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
+  },
+  {
     id: "gemini-2.5-flash",
     name: "Gemini 2.5 Flash",
     description:
-      "Best price-performance, large scale processing and low-latency",
+      "Legacy price-performance flash — consider Gemini 3.5 Flash for agentic work",
     provider: "google",
     group: "Google",
     supportsThinking: true,
@@ -163,26 +187,27 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
   },
   {
-    id: "gemini-3-flash-preview",
-    name: "Gemini 3 Flash",
+    id: "gemini-3.5-flash",
+    name: "Gemini 3.5 Flash",
     description:
-      "Balanced model built for speed, scale, and frontier intelligence",
+      "GA flagship flash — agentic loops, coding, long-horizon tool use (recommended)",
     provider: "google",
     group: "Google",
     supportsThinking: true,
     defaultThinkingBudget: 10000,
-    maxTokens: 8192,
+    maxTokens: 65536,
     requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
   },
   {
-    id: "gemini-3-pro-preview",
-    name: "Gemini 3 Pro",
-    description: "Most intelligent model for multimodal understanding",
+    id: "gemini-3.1-pro-preview",
+    name: "Gemini 3.1 Pro",
+    description:
+      "Most capable Gemini — complex reasoning, deep research, multimodal analysis",
     provider: "google",
     group: "Google",
     supportsThinking: true,
     defaultThinkingBudget: 16000,
-    maxTokens: 8192,
+    maxTokens: 65536,
     requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
   },
 
@@ -248,7 +273,49 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "NONE",
   },
 
-  // Gemma (On-Device) — Q4_K_M and QAT optimized variants
+  // Gemma 4 (On-Device) — latest open models (see deepmind.google/models/gemma)
+  {
+    id: "gemma4:e2b",
+    name: "Gemma 4 E2B",
+    provider: "ollama",
+    description: "Edge • ~6GB RAM • Mobile/IoT • 128K context",
+    group: "Ollama (On-Device)",
+    supportsThinking: false,
+    maxTokens: 8192,
+    requiresApiKey: "NONE",
+  },
+  {
+    id: "gemma4:e4b",
+    name: "Gemma 4 E4B",
+    provider: "ollama",
+    description: "Edge • ~10GB RAM • Multimodal • 128K context",
+    group: "Ollama (On-Device)",
+    supportsThinking: false,
+    maxTokens: 8192,
+    requiresApiKey: "NONE",
+  },
+  {
+    id: "gemma4:12b",
+    name: "Gemma 4 12B",
+    provider: "ollama",
+    description: "Recommended • ~16GB RAM • Unified multimodal • 256K context",
+    group: "Ollama (On-Device)",
+    supportsThinking: false,
+    maxTokens: 8192,
+    requiresApiKey: "NONE",
+  },
+  {
+    id: "gemma4:26b",
+    name: "Gemma 4 26B",
+    provider: "ollama",
+    description: "Workstation • ~24GB RAM • MoE (4B active) • 256K context",
+    group: "Ollama (On-Device)",
+    supportsThinking: false,
+    maxTokens: 8192,
+    requiresApiKey: "NONE",
+  },
+
+  // Gemma 3 (On-Device) — legacy Q4_K_M and QAT optimized variants
   {
     id: "gemma3:270m",
     name: "Gemma 3 270M",
@@ -345,15 +412,15 @@ export const MID_TIER_MODEL_IDS = [
   "claude-sonnet-4-6", // Anthropic mid
   "gpt-5.5", // OpenAI flagship
   "gpt-5.4-mini", // OpenAI mini
-  "gpt-5.3-codex", // OpenAI Codex (OAuth)
-  "gemini-2.5-flash", // Google mid
+  "gpt-5.3-codex", // OpenAI Codex (API key only)
+  "gemini-3.5-flash", // Google mid
 ];
 
 /** Default model IDs when no saved preference - first available wins */
 export const DEFAULT_MODEL_IDS = [
   "claude-sonnet-4-6", // Anthropic
   "gpt-5.5", // OpenAI latest
-  "gemini-3-flash-preview", // Google
+  "gemini-3.5-flash", // Google
 ];
 
 export {
@@ -361,6 +428,8 @@ export {
   QWEN_MODEL_SIZES,
   GEMMA_RAM_REQUIREMENTS,
   GEMMA_MODEL_SIZES,
+  GEMMA4_RAM_REQUIREMENTS,
+  GEMMA4_MODEL_SIZES,
   bytesToRamGbRounded,
   pickFittingOllamaModelId,
   getRecommendedQwenModel,

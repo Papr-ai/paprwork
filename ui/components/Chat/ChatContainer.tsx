@@ -319,10 +319,20 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
             });
             if (isContextInfo(response.data)) {
               setContextInfo(response.data);
+            } else {
+              console.error(
+                "[ChatContainer] Invalid context response:",
+                response.data,
+              );
+              alert(
+                "Received invalid context data from gateway. Check console for details.",
+              );
             }
           } catch (err) {
             console.error("[ChatContainer] Context inspection error:", err);
-            alert("Failed to load context information. Check console for details.");
+            const message =
+              err instanceof Error ? err.message : "Unknown error";
+            alert(`Failed to load context information: ${message}`);
           }
           break;
         }

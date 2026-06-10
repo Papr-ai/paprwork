@@ -1,6 +1,7 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import type { ChatMetadata } from "../../gateway/services/storage/IStorageProvider.js";
+import { CURRENT_CHAT_SCOPE, resolveToolResultChatScope } from "./chatScope.js";
 
 /**
  * Chat History Tools
@@ -14,8 +15,17 @@ const getFullToolResultSchema = z.object({
   toolCallId: z.string().min(1).describe("The tool call ID (from truncation notice)"),
   toolName: z.string().optional().describe("The tool name (optional, helps narrow search)"),
   searchIn: z.enum(["current_chat", "all_chats"]).optional().default("current_chat")
-    .describe("Where to search: 'current_chat' (default) or 'all_chats'"),
-  chatId: z.string().optional().describe("Optional: Specific chat ID to search (overrides searchIn)"),
+    .describe(
+      "Where to search. Default 'current_chat' uses the active chat session. " +
+      "Use 'all_chats' only when the toolCallId may be from another conversation.",
+    ),
+  chatId: z
+    .string()
+    .optional()
+    .describe(
+      `Optional chat scope (overrides searchIn). Pass "${CURRENT_CHAT_SCOPE}" for the active chat, ` +
+      "or an explicit chat UUID.",
+    ),
   startChar: z.number().int().min(0).optional().describe("Optional: Start character offset for partial read (0-based)"),
   length: z.number().int().min(1).max(100000).optional().describe("Optional: Number of characters to read (default: all remaining)"),
 });
@@ -23,9 +33,9 @@ const getFullToolResultSchema = z.object({
 export const getFullToolResultTool = createTool({
   id: "get_full_tool_result",
   description:
-    "Retrieve the full result of a tool call that was truncated in context. " +
-    "Use this when you see '[... X chars truncated ... Full result available via: get_full_tool_result(...)]' " +
-    "in a tool result. Searches current chat by toolCallId. You can read the entire result or just a specific section using startChar/length.",
+    "Retrieve the FULL stored result for ONE tool call (by toolCallId) when context shows a truncation notice. " +
+    "Default scope is the active chat. Use startChar/length to paginate very large results. " +
+    "This reads the complete output from local storage — not a semantic search.",
   inputSchema: getFullToolResultSchema,
   execute: async (args) => {
     try {
@@ -34,21 +44,20 @@ export const getFullToolResultTool = createTool({
       const storageManager = getStorageManager();
       const storage = storageManager.currentProvider;
 
-      // Determine which chats to search
+      const scope = resolveToolResultChatScope({
+        chatId: args.chatId,
+        searchIn: args.searchIn,
+      });
+      if ("error" in scope) {
+        return { success: false, error: scope.error };
+      }
+
       let chatIds: string[];
-      if (args.chatId) {
-        chatIds = [args.chatId];
-      } else if (args.searchIn === "all_chats") {
+      if (scope.mode === "single") {
+        chatIds = [scope.chatId];
+      } else {
         const allChats = await storage.listChats();
         chatIds = allChats.map((c: ChatMetadata) => c.id);
-      } else {
-        // Search current chat - we need to get this from somewhere
-        // For now, search all chats but prioritize recent
-        const allChats = await storage.listChats();
-        chatIds = allChats
-          .sort((a: ChatMetadata, b: ChatMetadata) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
-          .slice(0, 5) // Search last 5 chats
-          .map((c: ChatMetadata) => c.id);
       }
 
       // Search for the tool call
@@ -121,8 +130,10 @@ export const getFullToolResultTool = createTool({
       // Not found
       return {
         success: false,
-        error: `Tool call ${args.toolCallId} not found in ${args.searchIn === "all_chats" ? "any chat" : "current/recent chats"}. ` +
-               `Try specifying a chatId if you know which chat contains this result.`,
+        error:
+          `Tool call ${args.toolCallId} not found in ` +
+          `${scope.mode === "all" ? "any chat" : `chat ${chatIds[0]}`}. ` +
+          "Try searchIn: 'all_chats' or pass the chatId from the truncation notice.",
       };
     } catch (error) {
       return {

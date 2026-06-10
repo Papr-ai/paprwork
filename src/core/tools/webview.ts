@@ -105,7 +105,10 @@ export async function runWebviewWait(
 
 export const webviewSnapshotTool = createTool({
   id: "webview_snapshot",
-  description: "Capture HTML/text snapshot from webview app test context",
+  description:
+    "Capture HTML + visible text + visualState from mini-app preview (NOT a screenshot, no vision tokens). " +
+    "Check visualState.userWouldSeeBlankUi and visualState.warnings — DOM can look fine while overlays block the user. " +
+    "Also use webview_get_console and webview_get_network for runtime errors and failed external requests.",
   inputSchema: snapshotSchema,
   execute: async (input) => {
     const args =
