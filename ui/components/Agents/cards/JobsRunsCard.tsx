@@ -1,65 +1,21 @@
 import React from "react";
+import { useJobRunDashboard } from "../../../hooks/useJobRunDashboard";
+import { openJobInJobsTab } from "../../../stores/jobNavigationStore";
 
-interface SubAgentRun {
-  id: string;
-  agentId: string;
-  agentName?: string;
-  task?: string;
-  status: "pending" | "running" | "completed" | "failed";
-  createdAt: string;
-  startedAt?: string;
-  completedAt?: string;
-  error?: string;
-}
+export function JobsRunsCard() {
+  const { dashboard, loading } = useJobRunDashboard();
 
-interface SubAgentProfile {
-  id: string;
-  name: string;
-  runCount: number;
-}
-
-interface DashboardStats {
-  totalAgents: number;
-  totalRuns: number;
-  successRate: number;
-  averageDuration: number;
-}
-
-interface Props {
-  runs: SubAgentRun[];
-  agents: SubAgentProfile[];
-  dashboard?: DashboardStats;
-}
-
-export function JobsRunsCard({ runs, agents, dashboard }: Props) {
-  const totalRuns = dashboard?.totalRuns ?? runs.length;
-  const completedRuns = runs.filter((r) => r.status === "completed").length;
-  const failedRuns = runs.filter((r) => r.status === "failed").length;
-  const activeRuns = runs.filter(
-    (r) => r.status === "running" || r.status === "pending",
-  ).length;
-  const successRate = dashboard?.successRate
+  const totalJobs = dashboard?.totalJobs ?? 0;
+  const activeJobs = dashboard?.activeJobs ?? 0;
+  const completedRuns = dashboard?.completedRuns ?? 0;
+  const failedRuns = dashboard?.failedRuns ?? 0;
+  const successRate = dashboard
     ? Math.round(dashboard.successRate * 100)
-    : totalRuns > 0
-      ? Math.round((completedRuns / totalRuns) * 100)
-      : 0;
+    : 0;
 
-  // Top agents by delegation count
-  const agentsByRuns = agents
-    .filter((agent) => agent.runCount > 0)
-    .sort((a, b) => b.runCount - a.runCount)
-    .slice(0, 5);
-
-  const maxRuns = agentsByRuns[0]?.runCount ?? 1;
-
-  // Recent job history
-  const recentRuns = runs
-    .sort(
-      (a, b) =>
-        new Date(b.startedAt ?? b.createdAt).getTime() -
-        new Date(a.startedAt ?? a.createdAt).getTime(),
-    )
-    .slice(0, 3);
+  const topJobs = dashboard?.topJobs ?? [];
+  const maxRuns = topJobs[0]?.runs ?? 1;
+  const recentRuns = dashboard?.recentRuns ?? [];
 
   return (
     <div className="metric-card">
@@ -71,43 +27,55 @@ export function JobsRunsCard({ runs, agents, dashboard }: Props) {
           </svg>
           Jobs & Runs
         </div>
-        <div className="card-badge">{successRate}% success</div>
+        <div className="card-badge">
+          {loading ? "…" : `${successRate}% success`}
+        </div>
       </div>
 
       <div className="card-content">
-        {/* Stats Grid */}
         <div className="jobs-stats-grid">
           <div className="jobs-stat">
-            <div className="jobs-stat-value">{totalRuns}</div>
-            <div className="jobs-stat-label">Total</div>
+            <div className="jobs-stat-value">{loading ? "—" : totalJobs}</div>
+            <div className="jobs-stat-label">Jobs</div>
           </div>
           <div className="jobs-stat">
-            <div className="jobs-stat-value active">{activeRuns}</div>
+            <div className="jobs-stat-value active">
+              {loading ? "—" : activeJobs}
+            </div>
             <div className="jobs-stat-label">Active</div>
           </div>
           <div className="jobs-stat">
-            <div className="jobs-stat-value success">{completedRuns}</div>
+            <div className="jobs-stat-value success">
+              {loading ? "—" : completedRuns}
+            </div>
             <div className="jobs-stat-label">Success</div>
           </div>
           <div className="jobs-stat">
-            <div className="jobs-stat-value failed">{failedRuns}</div>
+            <div className="jobs-stat-value failed">
+              {loading ? "—" : failedRuns}
+            </div>
             <div className="jobs-stat-label">Failed</div>
           </div>
         </div>
 
-        {/* Top Agents */}
-        {agentsByRuns.length > 0 && (
+        {topJobs.length > 0 && (
           <div className="jobs-agents">
-            <div className="jobs-agents-label">Top Agents by Delegations</div>
+            <div className="jobs-agents-label">Top Jobs by Runs</div>
             <div className="jobs-agents-list">
-              {agentsByRuns.map((agent) => {
+              {topJobs.map((job) => {
                 const percentage =
-                  maxRuns > 0 ? (agent.runCount / maxRuns) * 100 : 0;
+                  maxRuns > 0 ? (job.runs / maxRuns) * 100 : 0;
                 return (
-                  <div key={agent.id} className="jobs-agent-item">
+                  <button
+                    key={job.jobId}
+                    type="button"
+                    className="jobs-agent-item jobs-agent-item--clickable"
+                    onClick={() => openJobInJobsTab(job.jobId)}
+                    title={`Open ${job.jobName} in Jobs`}
+                  >
                     <div className="jobs-agent-info">
-                      <span className="jobs-agent-name">{agent.name}</span>
-                      <span className="jobs-agent-count">{agent.runCount}</span>
+                      <span className="jobs-agent-name">{job.jobName}</span>
+                      <span className="jobs-agent-count">{job.runs}</span>
                     </div>
                     <div className="jobs-agent-bar-container">
                       <div
@@ -115,36 +83,54 @@ export function JobsRunsCard({ runs, agents, dashboard }: Props) {
                         style={{ width: `${percentage}%` }}
                       />
                     </div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
           </div>
         )}
 
-        {/* Recent History */}
         {recentRuns.length > 0 && (
           <div className="jobs-history">
-            <div className="jobs-history-label">Recent Activity</div>
+            <div className="jobs-history-label">Recent Runs</div>
             <div className="jobs-history-list">
               {recentRuns.map((run) => {
-                const timeAgo = getTimeAgo(
-                  new Date(run.startedAt ?? run.createdAt),
-                );
+                const timeAgo = getTimeAgo(new Date(run.startedAt));
+                const isNavigable =
+                  run.status === "completed" || run.status === "failed";
+                if (!isNavigable) {
+                  return (
+                    <div key={run.runId} className="jobs-history-item">
+                      <div className={`jobs-status-dot ${run.status}`} />
+                      <div className="jobs-history-info">
+                        <div className="jobs-history-name">{run.jobName}</div>
+                        <div className="jobs-history-time">{timeAgo}</div>
+                      </div>
+                    </div>
+                  );
+                }
                 return (
-                  <div key={run.id} className="jobs-history-item">
+                  <button
+                    key={run.runId}
+                    type="button"
+                    className="jobs-history-item jobs-history-item--clickable"
+                    onClick={() => openJobInJobsTab(run.jobId)}
+                    title={`Open ${run.jobName} in Jobs`}
+                  >
                     <div className={`jobs-status-dot ${run.status}`} />
                     <div className="jobs-history-info">
-                      <div className="jobs-history-name">
-                        {run.agentName ?? run.agentId}
-                      </div>
+                      <div className="jobs-history-name">{run.jobName}</div>
                       <div className="jobs-history-time">{timeAgo}</div>
                     </div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
           </div>
+        )}
+
+        {!loading && totalJobs === 0 && recentRuns.length === 0 && (
+          <div className="jobs-empty">No jobs yet — create one from chat or the Jobs tab.</div>
         )}
       </div>
 
@@ -211,6 +197,21 @@ export function JobsRunsCard({ runs, agents, dashboard }: Props) {
           gap: 6px;
         }
 
+        .jobs-agent-item--clickable {
+          width: 100%;
+          padding: 0;
+          border: none;
+          background: transparent;
+          text-align: left;
+          cursor: pointer;
+          border-radius: 6px;
+          transition: background 0.15s ease;
+        }
+
+        .jobs-agent-item--clickable:hover {
+          background: var(--bg-secondary);
+        }
+
         .jobs-agent-info {
           display: flex;
           justify-content: space-between;
@@ -220,6 +221,10 @@ export function JobsRunsCard({ runs, agents, dashboard }: Props) {
         .jobs-agent-name {
           font-size: 12px;
           color: var(--text-secondary);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          max-width: 70%;
         }
 
         .jobs-agent-count {
@@ -265,6 +270,26 @@ export function JobsRunsCard({ runs, agents, dashboard }: Props) {
           gap: 10px;
         }
 
+        .jobs-history-item--clickable {
+          width: 100%;
+          padding: 6px 4px;
+          margin: -6px -4px;
+          border: none;
+          background: transparent;
+          text-align: left;
+          cursor: pointer;
+          border-radius: 6px;
+          transition: background 0.15s ease;
+        }
+
+        .jobs-history-item--clickable:hover {
+          background: var(--bg-secondary);
+        }
+
+        .jobs-history-item--clickable:hover .jobs-history-name {
+          color: var(--primary-color);
+        }
+
         .jobs-status-dot {
           width: 8px;
           height: 8px;
@@ -276,19 +301,12 @@ export function JobsRunsCard({ runs, agents, dashboard }: Props) {
           background: #10b981;
         }
 
-        .jobs-status-dot.running,
-        .jobs-status-dot.pending {
-          background: var(--primary-color);
-          animation: pulse 2s infinite;
+        .jobs-status-dot.cancelled {
+          background: var(--text-tertiary);
         }
 
         .jobs-status-dot.failed {
           background: #ef4444;
-        }
-
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.5; }
         }
 
         .jobs-history-info {
@@ -296,16 +314,29 @@ export function JobsRunsCard({ runs, agents, dashboard }: Props) {
           justify-content: space-between;
           align-items: center;
           flex: 1;
+          min-width: 0;
         }
 
         .jobs-history-name {
           font-size: 12px;
           color: var(--text-secondary);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .jobs-history-time {
           font-size: 11px;
           color: var(--text-tertiary);
+          flex-shrink: 0;
+          margin-left: 8px;
+        }
+
+        .jobs-empty {
+          padding-top: 12px;
+          font-size: 12px;
+          color: var(--text-tertiary);
+          text-align: center;
         }
       `}</style>
     </div>

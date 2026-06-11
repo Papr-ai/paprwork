@@ -108,6 +108,89 @@ export class JobRunHistory {
     }
   }
 
+  async getGlobalSummary(): Promise<{
+    totalRuns: number;
+    completedRuns: number;
+    failedRuns: number;
+    cancelledRuns: number;
+    successRate: number;
+    topJobs: Array<{
+      jobId: string;
+      runs: number;
+      completed: number;
+      failed: number;
+    }>;
+  }> {
+    try {
+      const content = await fs.readFile(this.historyPath, "utf8");
+      const lines = content.trim().split("\n").filter(Boolean);
+
+      let completedRuns = 0;
+      let failedRuns = 0;
+      let cancelledRuns = 0;
+      const byJob = new Map<
+        string,
+        { runs: number; completed: number; failed: number }
+      >();
+
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line) as JobRunHistoryEntry;
+          if (entry.status === "completed") {
+            completedRuns += 1;
+          } else if (entry.status === "failed") {
+            failedRuns += 1;
+          } else if (entry.status === "cancelled") {
+            cancelledRuns += 1;
+          }
+
+          const existing = byJob.get(entry.jobId) ?? {
+            runs: 0,
+            completed: 0,
+            failed: 0,
+          };
+          existing.runs += 1;
+          if (entry.status === "completed") {
+            existing.completed += 1;
+          }
+          if (entry.status === "failed") {
+            existing.failed += 1;
+          }
+          byJob.set(entry.jobId, existing);
+        } catch {
+          // Skip malformed lines
+        }
+      }
+
+      const totalRuns = lines.length;
+      const successRate =
+        totalRuns > 0 ? completedRuns / totalRuns : 0;
+
+      const topJobs = Array.from(byJob.entries())
+        .map(([jobId, stats]) => ({ jobId, ...stats }))
+        .sort((a, b) => b.runs - a.runs)
+        .slice(0, 5);
+
+      return {
+        totalRuns,
+        completedRuns,
+        failedRuns,
+        cancelledRuns,
+        successRate,
+        topJobs,
+      };
+    } catch {
+      return {
+        totalRuns: 0,
+        completedRuns: 0,
+        failedRuns: 0,
+        cancelledRuns: 0,
+        successRate: 0,
+        topJobs: [],
+      };
+    }
+  }
+
   async getStats(jobId: string): Promise<{
     totalRuns: number;
     completedRuns: number;

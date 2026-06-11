@@ -1605,7 +1605,7 @@ api_key = "\${OPENAI_API_KEY}"  # This will NOT be substituted!
 
 - **Chat**: \`deliver: { channel: "chat", targetId: currentChatId }\`
 - **Background**: No \`deliver\` field (access via \`read_job_logs\`)
-- **Memory**: \`memoryPolicy: "summary"\` (builds knowledge)
+- **Memory**: Default \`memoryPolicy: "none"\`. On success, user tables in \`~/Papr/jobs/{id}/data/data.db\` sync to Papr Memory automatically. Use \`memoryPolicy: "summary"\` only when you explicitly want job log text in memory too.
 
 ## CRITICAL: Sub-Agent Delegation
 

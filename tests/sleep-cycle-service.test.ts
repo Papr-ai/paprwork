@@ -16,6 +16,7 @@ describe("SleepCycleService", () => {
     expect(SLEEP_JOB_DEFAULTS.provider).toBe("anthropic");
     expect(SLEEP_JOB_DEFAULTS.model).toBe("claude-sonnet-4-6");
     expect(SLEEP_JOB_DEFAULTS.maxTurns).toBe(100);
+    expect(SLEEP_JOB_DEFAULTS.memoryPolicy).toBe("none");
     expect(SLEEP_JOB_DEFAULTS.retries.maxAttempts).toBe(2);
   });
 

@@ -1,5 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import { gateway } from "../src/lib/gateway";
+import {
+  subscribeSubAgentsPolling,
+  useSubAgentsStore,
+} from "../stores/subAgentsStore";
 
 export type SubAgentProvider = "anthropic" | "openai" | "google";
 export type OutputMode = "natural" | "structured";
@@ -36,28 +40,6 @@ export interface DelegationRun {
   startedAt?: string;
   completedAt?: string;
   error?: string;
-}
-
-function parseAgentsPayload(data: unknown): SubAgentProfile[] {
-  if (Array.isArray(data)) {
-    return data as SubAgentProfile[];
-  }
-  if (data && typeof data === "object" && "agents" in data) {
-    const agents = (data as { agents?: unknown }).agents;
-    return Array.isArray(agents) ? (agents as SubAgentProfile[]) : [];
-  }
-  return [];
-}
-
-function parseRunsPayload(data: unknown): DelegationRun[] {
-  if (Array.isArray(data)) {
-    return data as DelegationRun[];
-  }
-  if (data && typeof data === "object" && "runs" in data) {
-    const runs = (data as { runs?: unknown }).runs;
-    return Array.isArray(runs) ? (runs as DelegationRun[]) : [];
-  }
-  return [];
 }
 
 export interface SubAgentDashboard {
@@ -101,84 +83,59 @@ interface DelegateTaskInput {
 }
 
 export function useSubAgents() {
-  const [agents, setAgents] = useState<SubAgentProfile[]>([]);
-  const [runs, setRuns] = useState<DelegationRun[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [dashboard, setDashboard] = useState<SubAgentDashboard | null>(null);
-
-  const loadAgents = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await gateway.send("subagent:list");
-      const data = response.data as { agents?: SubAgentProfile[] };
-      setAgents(data.agents ?? []);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Failed to load sub-agents",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const loadRuns = useCallback(async () => {
-    setError(null);
-    try {
-      const response = await gateway.send("subagent:runs", { limit: 100 });
-      setRuns(parseRunsPayload(response.data));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load runs");
-    }
-  }, []);
-
-  const loadDashboard = useCallback(async () => {
-    setError(null);
-    try {
-      const response = await gateway.send("subagent:dashboard", { limit: 200 });
-      setDashboard((response.data as SubAgentDashboard) ?? null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load dashboard");
-    }
-  }, []);
-
-  const upsertAgent = useCallback(async (input: UpsertSubAgentInput) => {
-    setError(null);
-    const response = await gateway.send("subagent:upsert", input);
-    const data = response.data as { agent?: SubAgentProfile };
-    if (data.agent) {
-      setAgents((prev) => {
-        const next = prev.filter((item) => item.id !== data.agent?.id);
-        return [data.agent as SubAgentProfile, ...next];
-      });
-    }
-    return data.agent;
-  }, []);
-
-  const deleteAgent = useCallback(async (agentId: string) => {
-    setError(null);
-    await gateway.send("subagent:delete", { agentId });
-    setAgents((prev) => prev.filter((item) => item.id !== agentId));
-  }, []);
-
-  const delegateTask = useCallback(async (input: DelegateTaskInput) => {
-    setError(null);
-    const response = await gateway.send("subagent:delegate", input);
-    const data = response.data as { run?: DelegationRun };
-    if (data.run) {
-      setRuns((prev) => [data.run as DelegationRun, ...prev]);
-    }
-    return data.run;
-  }, []);
+  const agents = useSubAgentsStore((state) => state.agents);
+  const runs = useSubAgentsStore((state) => state.runs);
+  const loading = useSubAgentsStore((state) => state.loading);
+  const error = useSubAgentsStore((state) => state.error);
+  const dashboard = useSubAgentsStore((state) => state.dashboard);
+  const loadAgents = useSubAgentsStore((state) => state.loadAgents);
+  const loadRuns = useSubAgentsStore((state) => state.loadRuns);
+  const loadDashboard = useSubAgentsStore((state) => state.loadDashboard);
+  const ensureLoaded = useSubAgentsStore((state) => state.ensureLoaded);
+  const upsertAgentInList = useSubAgentsStore((state) => state.upsertAgentInList);
+  const removeAgent = useSubAgentsStore((state) => state.removeAgent);
+  const prependRun = useSubAgentsStore((state) => state.prependRun);
+  const setError = useSubAgentsStore((state) => state.setError);
 
   useEffect(() => {
-    void Promise.all([loadAgents(), loadRuns(), loadDashboard()]);
-    const timer = setInterval(() => {
-      void Promise.all([loadRuns(), loadDashboard()]);
-    }, 15000);
-    return () => clearInterval(timer);
-  }, [loadAgents, loadRuns, loadDashboard]);
+    void ensureLoaded();
+    return subscribeSubAgentsPolling();
+  }, [ensureLoaded]);
+
+  const upsertAgent = useCallback(
+    async (input: UpsertSubAgentInput) => {
+      setError(null);
+      const response = await gateway.send("subagent:upsert", input);
+      const data = response.data as { agent?: SubAgentProfile };
+      if (data.agent) {
+        upsertAgentInList(data.agent);
+      }
+      return data.agent;
+    },
+    [setError, upsertAgentInList],
+  );
+
+  const deleteAgent = useCallback(
+    async (agentId: string) => {
+      setError(null);
+      await gateway.send("subagent:delete", { agentId });
+      removeAgent(agentId);
+    },
+    [removeAgent, setError],
+  );
+
+  const delegateTask = useCallback(
+    async (input: DelegateTaskInput) => {
+      setError(null);
+      const response = await gateway.send("subagent:delegate", input);
+      const data = response.data as { run?: DelegationRun };
+      if (data.run) {
+        prependRun(data.run);
+      }
+      return data.run;
+    },
+    [prependRun, setError],
+  );
 
   return {
     agents,

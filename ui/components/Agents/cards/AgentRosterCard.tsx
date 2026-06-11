@@ -60,7 +60,7 @@ export function AgentRosterCard({ agents, agentStats, runs }: Props) {
 
   return (
     <>
-      <div className="metric-card full-width">
+      <div className="metric-card metric-card--span-2">
         <div className="card-header">
           <div className="card-title">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none">

@@ -39,12 +39,16 @@ export function jobTypeColor(type: string): string {
 }
 
 export function collectWorkflowJobIds(
-  linkedJobIds: string[],
+  seedJobIds: string[],
   allJobs: JobRecord[],
   edges: JobGraph["edges"],
+  allowedJobIds?: Set<string>,
 ): Set<string> {
-  const included = new Set<string>(linkedJobIds);
-  const queue = [...linkedJobIds];
+  const seeds = allowedJobIds
+    ? seedJobIds.filter((id) => allowedJobIds.has(id))
+    : seedJobIds;
+  const included = new Set<string>(seeds);
+  const queue = [...seeds];
 
   while (queue.length > 0) {
     const jobId = queue.shift();
@@ -52,6 +56,9 @@ export function collectWorkflowJobIds(
 
     const job = allJobs.find((j) => j.id === jobId);
     for (const dep of job?.dependsOn ?? []) {
+      if (allowedJobIds && !allowedJobIds.has(dep.jobId)) {
+        continue;
+      }
       if (!included.has(dep.jobId)) {
         included.add(dep.jobId);
         queue.push(dep.jobId);
@@ -59,7 +66,11 @@ export function collectWorkflowJobIds(
     }
 
     for (const edge of edges) {
-      if (edge.to === jobId && !included.has(edge.from)) {
+      if (edge.to !== jobId) continue;
+      if (allowedJobIds && !allowedJobIds.has(edge.from)) {
+        continue;
+      }
+      if (!included.has(edge.from)) {
         included.add(edge.from);
         queue.push(edge.from);
       }
@@ -104,20 +115,45 @@ export function buildWorkflowEdges(
   return edges;
 }
 
+export function buildStandaloneEdges(
+  workflowJobs: JobRecord[],
+  graph: JobGraph,
+): WorkflowEdge[] {
+  const jobIds = new Set(workflowJobs.map((j) => j.id));
+  const edges: WorkflowEdge[] = [];
+
+  for (const edge of graph.edges) {
+    if (jobIds.has(edge.from) && jobIds.has(edge.to)) {
+      edges.push({
+        from: edge.from,
+        to: edge.to,
+        onStatus: edge.onStatus,
+        isRuntimeCall: edge.isRuntimeCall,
+        autoTrigger: edge.autoTrigger,
+      });
+    }
+  }
+
+  return edges;
+}
+
 export function computeWorkflowLayout(
   jobs: JobRecord[],
   edges: WorkflowEdge[],
-  appId: string,
+  appId?: string,
 ): NodePosition[] {
   if (jobs.length === 0) {
-    return [
-      {
-        id: `app:${appId}`,
-        x: CANVAS_PAD,
-        y: CANVAS_PAD,
-        kind: "app",
-      },
-    ];
+    if (appId) {
+      return [
+        {
+          id: `app:${appId}`,
+          x: CANVAS_PAD,
+          y: CANVAS_PAD,
+          kind: "app",
+        },
+      ];
+    }
+    return [];
   }
 
   const jobIds = new Set(jobs.map((j) => j.id));
@@ -194,22 +230,27 @@ export function computeWorkflowLayout(
     });
   }
 
-  const maxY = positions.reduce((max, p) => Math.max(max, p.y), CANVAS_PAD);
-  const appCol = CANVAS_PAD + (maxLevel + 1) * (NODE_W + COL_GAP);
+  if (appId) {
+    const maxY = positions.reduce((max, p) => Math.max(max, p.y), CANVAS_PAD);
+    const appCol = CANVAS_PAD + (maxLevel + 1) * (NODE_W + COL_GAP);
 
-  positions.push({
-    id: `app:${appId}`,
-    x: appCol,
-    y: maxY,
-    kind: "app",
-  });
+    positions.push({
+      id: `app:${appId}`,
+      x: appCol,
+      y: maxY,
+      kind: "app",
+    });
+  }
 
   return positions;
 }
 
-export function getCanvasSize(positions: NodePosition[]): { width: number; height: number } {
+export function getCanvasSize(
+  positions: NodePosition[],
+  minWidth = 0,
+): { width: number; height: number } {
   if (positions.length === 0) {
-    return { width: 600, height: 400 };
+    return { width: Math.max(minWidth, 600), height: 400 };
   }
 
   let maxX = 0;
@@ -223,7 +264,7 @@ export function getCanvasSize(positions: NodePosition[]): { width: number; heigh
   }
 
   return {
-    width: maxX + CANVAS_PAD,
+    width: Math.max(minWidth, maxX + CANVAS_PAD),
     height: maxY + CANVAS_PAD,
   };
 }

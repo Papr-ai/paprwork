@@ -24,7 +24,7 @@
 
 .wf-canvas-content {
   position: relative;
-  min-width: 100%;
+  width: 100%;
   min-height: 100%;
   background-image: radial-gradient(
     circle,

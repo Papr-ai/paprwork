@@ -95,6 +95,7 @@ function jobsFingerprint(jobs: JobRecord[]): string {
 export function useJobs() {
   const [jobs, setJobs] = useState<JobRecord[]>([]);
   const [graph, setGraph] = useState<JobGraph | null>(null);
+  const [graphLoaded, setGraphLoaded] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [logsByJobId, setLogsByJobId] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -135,6 +136,8 @@ export function useJobs() {
       }
     } catch {
       // graph is optional — don't surface errors
+    } finally {
+      setGraphLoaded(true);
     }
   }, []);
 
@@ -277,6 +280,7 @@ export function useJobs() {
   return {
     jobs,
     graph,
+    graphLoaded,
     selectedJobId,
     logsByJobId,
     defaultModel,

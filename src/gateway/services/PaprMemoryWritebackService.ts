@@ -1,3 +1,7 @@
+/**
+ * Optional text log writeback for agent/subagent jobs (memoryPolicy summary/full).
+ * Structured job output in data.db is synced separately via JobDatabaseMemorySync.
+ */
 import Papr from "@papr/memory";
 import { getApiKey } from "../utils/keyResolver.js";
 import { getPaprUserId } from "../utils/paprUserId.js";

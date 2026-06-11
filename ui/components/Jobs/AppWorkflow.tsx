@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { JobGraph, JobRecord } from "../../hooks/useJobs";
 import { JobTypeIcon } from "../../utils/jobTypeIcon";
 import { renderAppIcon } from "../../utils/renderAppIcon";
@@ -7,6 +7,7 @@ import {
   APP_NODE_W,
   NODE_H,
   NODE_W,
+  buildStandaloneEdges,
   buildWorkflowEdges,
   collectWorkflowJobIds,
   computeWorkflowLayout,
@@ -30,6 +31,11 @@ interface AppWorkflowProps {
   onRunJob: (jobId: string) => void;
   onStopJob: (jobId: string) => void;
   triggerLabel: (job: JobRecord) => string;
+  /** When set, renders jobs from these seeds instead of app data-source links */
+  seedJobIds?: string[];
+  /** When set, dependency expansion cannot pull in jobs outside this set */
+  restrictToJobIds?: string[];
+  showAppNode?: boolean;
 }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -180,30 +186,62 @@ export function AppWorkflow({
   onRunJob,
   onStopJob,
   triggerLabel,
+  seedJobIds,
+  restrictToJobIds,
+  showAppNode = true,
 }: AppWorkflowProps) {
-  const linkedJobIds = useMemo(
-    () => new Set(graph.appLinks[appId]?.jobIds ?? []),
-    [graph.appLinks, appId],
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [viewportWidth, setViewportWidth] = useState(0);
+
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (!element) return;
+
+    const updateWidth = (): void => {
+      setViewportWidth(element.clientWidth);
+    };
+
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const allowedJobIds = useMemo(
+    () =>
+      restrictToJobIds ? new Set(restrictToJobIds) : undefined,
+    [restrictToJobIds],
   );
 
-  const workflowJobIds = useMemo(
-    () => collectWorkflowJobIds([...linkedJobIds], jobs, graph.edges),
-    [linkedJobIds, jobs, graph.edges],
-  );
+  const linkedJobIds = useMemo(() => {
+    if (seedJobIds && seedJobIds.length > 0) {
+      return collectWorkflowJobIds(seedJobIds, jobs, graph.edges, allowedJobIds);
+    }
+    const appJobIds = graph.appLinks[appId]?.jobIds ?? [];
+    const appAllowed = new Set(appJobIds);
+    return collectWorkflowJobIds(appJobIds, jobs, graph.edges, appAllowed);
+  }, [seedJobIds, graph.appLinks, graph.edges, appId, jobs, allowedJobIds]);
+
+  const workflowJobIds = linkedJobIds;
 
   const workflowJobs = useMemo(
     () => jobs.filter((j) => workflowJobIds.has(j.id)),
     [jobs, workflowJobIds],
   );
 
+  const isStandalone = Boolean(seedJobIds);
+
   const edges = useMemo(
-    () => buildWorkflowEdges(workflowJobs, graph, linkedJobIds, appId),
-    [workflowJobs, graph, linkedJobIds, appId],
+    () =>
+      isStandalone
+        ? buildStandaloneEdges(workflowJobs, graph)
+        : buildWorkflowEdges(workflowJobs, graph, linkedJobIds, appId),
+    [workflowJobs, graph, linkedJobIds, appId, isStandalone],
   );
 
   const positions = useMemo(
-    () => computeWorkflowLayout(workflowJobs, edges, appId),
-    [workflowJobs, edges, appId],
+    () => computeWorkflowLayout(workflowJobs, edges, showAppNode ? appId : undefined),
+    [workflowJobs, edges, appId, showAppNode],
   );
 
   const posMap = useMemo(() => {
@@ -218,7 +256,10 @@ export function AppWorkflow({
     return map;
   }, [workflowJobs]);
 
-  const canvasSize = useMemo(() => getCanvasSize(positions), [positions]);
+  const canvasSize = useMemo(
+    () => getCanvasSize(positions, viewportWidth),
+    [positions, viewportWidth],
+  );
 
   const renderEdge = (edge: WorkflowEdge, index: number) => {
     const src = posMap.get(edge.from);
@@ -268,9 +309,13 @@ export function AppWorkflow({
             />
           </svg>
         </div>
-        <p className="wf-empty-title">No workflow for {appName}</p>
+        <p className="wf-empty-title">
+          {isStandalone ? `No jobs in ${appName}` : `No workflow for ${appName}`}
+        </p>
         <p className="wf-empty-desc">
-          Link jobs to this app with data sources, or set job folders to match the app name.
+          {isStandalone
+            ? "Jobs appear here when they are not linked to a mini-app via data sources or a matching folder name."
+            : "Link jobs to this app with data sources, or set job folders to match the app name."}
         </p>
       </div>
     );
@@ -278,10 +323,10 @@ export function AppWorkflow({
 
   return (
     <div className="wf-canvas-wrap">
-      <div className="wf-canvas-viewport">
+      <div className="wf-canvas-viewport" ref={viewportRef}>
         <div
           className="wf-canvas-content"
-          style={{ width: canvasSize.width, height: canvasSize.height }}
+          style={{ width: "100%", minHeight: canvasSize.height, height: canvasSize.height }}
           onClick={onCanvasClick}
         >
         <svg

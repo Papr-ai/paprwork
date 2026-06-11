@@ -22,7 +22,7 @@ export const SLEEP_JOB_DEFAULTS = {
   provider: "anthropic" as const,
   model: "claude-sonnet-4-6",
   maxTurns: 100,
-  memoryPolicy: "summary" as const,
+  memoryPolicy: "none" as const,
   schedule: {
     enabled: true,
     cron: "0 19 * * *",

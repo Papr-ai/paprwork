@@ -94,9 +94,11 @@ write_file({
 })
 ```
 
-### 6. Sync with Papr Memory
+### 6. Sync with Papr Memory (curated only)
 
-After updating files, write a curated summary:
+Automatic job writeback to Papr Memory is **disabled** for this job (`memoryPolicy: none`). Do not rely on run logs appearing in memory.
+
+When you distilled **real new learnings** into workspace files, optionally write one curated summary:
 ```
 add_agent_memory({
   content: "Sleep cycle YYYY-MM-DD: ...",

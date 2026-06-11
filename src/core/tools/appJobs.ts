@@ -167,7 +167,12 @@ const createJobSchema = z.object({
   outputMode: z.enum(["natural", "structured"]).optional(),
   outputSchema: z.record(z.string(), z.unknown()).optional(),
   maxTurns: z.number().int().min(1).max(100).optional(),
-  memoryPolicy: z.enum(["none", "summary", "full"]).optional(),
+  memoryPolicy: z
+    .enum(["none", "summary", "full"])
+    .optional()
+    .describe(
+      "Text log writeback to Papr Memory. Default: none. Job SQLite data (data.db) syncs to memory automatically on successful completion regardless of this setting.",
+    ),
   reportChatId: z.string().min(1).optional(),
   provider: z
     .enum(["openai", "anthropic", "google", "ollama"])
@@ -840,7 +845,9 @@ const updateJobSchema = z.object({
   memoryPolicy: z
     .enum(["none", "summary", "full"])
     .optional()
-    .describe("Update memory policy for agent jobs"),
+    .describe(
+      "Text log writeback policy. Default: none. Structured rows in the job SQLite database sync to Papr Memory automatically after successful runs.",
+    ),
   reportChatId: z
     .string()
     .min(1)

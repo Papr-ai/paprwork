@@ -94,6 +94,10 @@ interface RestoreJobFileVersionPayload {
   versionId: string;
 }
 
+interface JobRunDashboardPayload {
+  recentLimit?: number;
+}
+
 export async function setupJobsHandlers(
   ws: WebSocket,
   message: WSMessage,
@@ -260,6 +264,58 @@ export async function setupJobsHandlers(
           id: message.id,
           success: true,
           data: { restored },
+        });
+        break;
+      }
+
+      case "jobs:run-dashboard": {
+        const payload = (message.payload ?? {}) as JobRunDashboardPayload;
+        const { getJobRunHistory } = await import(
+          "../services/jobs/JobRunHistory.js"
+        );
+        const runHistory = getJobRunHistory();
+        await runHistory.initialize();
+
+        const [summary, recentRuns, jobs] = await Promise.all([
+          runHistory.getGlobalSummary(),
+          runHistory.getAllRuns(payload.recentLimit ?? 5),
+          jobsService.listJobs(),
+        ]);
+
+        const jobNameById = new Map(jobs.map((job) => [job.id, job.name]));
+        const activeJobs = jobs.filter(
+          (job) =>
+            job.status === "running" || job.status === "waiting_permission",
+        ).length;
+
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: {
+            totalJobs: jobs.length,
+            activeJobs,
+            totalRuns: summary.totalRuns,
+            completedRuns: summary.completedRuns,
+            failedRuns: summary.failedRuns,
+            cancelledRuns: summary.cancelledRuns,
+            successRate: summary.successRate,
+            topJobs: summary.topJobs.map((entry) => ({
+              jobId: entry.jobId,
+              jobName: jobNameById.get(entry.jobId) ?? entry.jobId,
+              runs: entry.runs,
+              completed: entry.completed,
+              failed: entry.failed,
+            })),
+            recentRuns: recentRuns.map((run) => ({
+              runId: run.runId,
+              jobId: run.jobId,
+              jobName: jobNameById.get(run.jobId) ?? run.jobId,
+              status: run.status,
+              startedAt: run.startedAt,
+              completedAt: run.completedAt,
+              duration: run.duration,
+            })),
+          },
         });
         break;
       }

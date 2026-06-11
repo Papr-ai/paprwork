@@ -1553,6 +1553,30 @@ export class JobsService {
             attempts: attempt,
           });
 
+          // Sync structured job DB rows to Papr Memory (preferred over log writeback)
+          void import("./JobDatabaseMemorySync.js")
+            .then(({ syncJobDatabaseToMemory }) =>
+              syncJobDatabaseToMemory({
+                job: updated,
+                runId,
+                jobDir: this.getJobDir(job.id),
+              }),
+            )
+            .then(async (result) => {
+              if (result.synced) {
+                await this.appendLog(
+                  job.id,
+                  `Synced ${result.tableCount} job database table(s) to Papr Memory`,
+                );
+              }
+            })
+            .catch((err) => {
+              console.warn(
+                `[JobsService] Job database memory sync failed for ${job.id}:`,
+                err,
+              );
+            });
+
           // ── Recipe Evaluation (fire-and-forget after completion) ──
           if (updated.recipe?.enabled && updated.recipe?.autoEvaluate) {
             void this.runRecipeEvaluation(updated, runId).catch((err) => {

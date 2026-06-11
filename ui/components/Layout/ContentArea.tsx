@@ -201,13 +201,38 @@ export function ContentArea() {
     document.body.appendChild(overlay);
   };
 
+  const [agentsKeepAlive, setAgentsKeepAlive] = useState(false);
+  const [agentsHostPane, setAgentsHostPane] = useState<"left" | "right" | null>(
+    null,
+  );
+
+  const leftTab = leftPaneTabId ? getTab(leftPaneTabId) : null;
+  const rightTab = rightPaneTabId ? getTab(rightPaneTabId) : null;
+  const isAgentsInLeft = leftTab?.type === "agents";
+  const isAgentsInRight = rightTab?.type === "agents";
+
+  useEffect(() => {
+    if (isAgentsInLeft || isAgentsInRight) {
+      setAgentsKeepAlive(true);
+    }
+    if (isAgentsInLeft) {
+      setAgentsHostPane("left");
+    } else if (isAgentsInRight) {
+      setAgentsHostPane("right");
+    }
+  }, [isAgentsInLeft, isAgentsInRight]);
+
   // Render view based on tab type
-  const renderView = (tabId: string | null) => {
+  const renderView = (tabId: string | null, skipAgents = false) => {
     if (!tabId)
       return <div className="content-area__empty">No tab selected</div>;
 
     const tab = getTab(tabId);
     if (!tab) return <div className="content-area__empty">Tab not found</div>;
+
+    if (skipAgents && tab.type === "agents") {
+      return null;
+    }
 
     switch (tab.type) {
       case "chat":
@@ -245,12 +270,36 @@ export function ContentArea() {
     }
   };
 
+  const renderPaneContent = (
+    tabId: string | null,
+    pane: "left" | "right",
+    isAgentsActive: boolean,
+  ) => {
+    const hostsAgentsCache = agentsKeepAlive && agentsHostPane === pane;
+    const useKeepAlive = hostsAgentsCache && isAgentsActive;
+
+    return (
+      <>
+        {hostsAgentsCache && (
+          <div
+            className={`content-pane__keep-alive${
+              isAgentsActive ? " content-pane__keep-alive--visible" : ""
+            }`}
+          >
+            <AgentsView />
+          </div>
+        )}
+        {useKeepAlive ? null : renderView(tabId, agentsKeepAlive)}
+      </>
+    );
+  };
+
   // Show onboarding full-screen if needed
   if (!showSplitView) {
     return (
       <div className="content-area">
         <div className="content-pane content-pane--full">
-          {renderView(leftPaneTabId)}
+          {renderPaneContent(leftPaneTabId, "left", isAgentsInLeft)}
         </div>
       </div>
     );
@@ -263,7 +312,7 @@ export function ContentArea() {
       style={{ "--split-ratio": currentSplitRatio } as React.CSSProperties}
     >
       <div className="content-pane content-pane--left">
-        {renderView(leftPaneTabId)}
+        {renderPaneContent(leftPaneTabId, "left", isAgentsInLeft)}
       </div>
       <div
         className="content-area__resize-handle"
@@ -272,7 +321,7 @@ export function ContentArea() {
         <div className="content-area__resize-line" />
       </div>
       <div className="content-pane content-pane--right">
-        {renderView(rightPaneTabId)}
+        {renderPaneContent(rightPaneTabId, "right", isAgentsInRight)}
       </div>
     </div>
   );

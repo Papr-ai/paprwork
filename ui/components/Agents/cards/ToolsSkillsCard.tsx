@@ -42,7 +42,7 @@ export function ToolsSkillsCard({ agentStats }: Props) {
   );
 
   return (
-    <div className="metric-card full-width">
+    <div className="metric-card">
       <div className="card-header">
         <div className="card-title">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none">

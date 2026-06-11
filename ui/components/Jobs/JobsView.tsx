@@ -1,8 +1,18 @@
-import { useMemo, useState, useRef, useEffect } from "react";
+import { useCallback, useMemo, useState, useRef, useEffect } from "react";
 import { useJobs } from "../../hooks/useJobs";
 import type { JobRecord } from "../../hooks/useJobs";
+import { useChat } from "../../hooks/useChat";
 import { useArtifactsStore } from "../../stores/artifactsStore";
 import { useArtifacts } from "../../hooks/useArtifacts";
+import { useJobNavigationStore } from "../../stores/jobNavigationStore";
+import { useTabStore } from "../../stores/tabStore";
+import {
+  STANDALONE_WORKFLOW_ID,
+  getUnlinkedJobIds,
+  resolveListAppFilterId,
+  resolveWorkflowTarget,
+} from "../../utils/jobGraph";
+import { openJobDiagnosisChat } from "../../utils/jobDiagnosis";
 import { AppWorkflow } from "./AppWorkflow";
 import { renderAppIcon } from "../../utils/renderAppIcon";
 import "./JobsView.css";
@@ -11,8 +21,20 @@ type JobFilter = "all" | "running" | "idle" | "scheduled";
 type ViewMode = "list" | "workflow";
 
 export function JobsView() {
-  const { jobs, graph, loading, error, runJob, stopJob, loadLogs, logsByJobId, defaultModel } =
-    useJobs();
+  const {
+    jobs,
+    graph,
+    graphLoaded,
+    loading,
+    error,
+    runJob,
+    stopJob,
+    loadLogs,
+    logsByJobId,
+    defaultModel,
+  } = useJobs();
+  const { createChat } = useChat();
+  const { createTab, switchToTab } = useTabStore();
   const artifacts = useArtifactsStore((s) => s.artifacts);
   const { loadArtifacts } = useArtifacts();
   const [viewMode, setViewMode] = useState<ViewMode>("workflow");
@@ -23,10 +45,45 @@ export function JobsView() {
   const [appDropdownOpen, setAppDropdownOpen] = useState(false);
   const [workflowSelectedJobId, setWorkflowSelectedJobId] = useState<string | null>(null);
   const appDropdownRef = useRef<HTMLDivElement>(null);
+  const focusJobId = useJobNavigationStore((s) => s.focusJobId);
+  const clearFocusJob = useJobNavigationStore((s) => s.clearFocusJob);
 
   useEffect(() => {
     void loadArtifacts();
   }, [loadArtifacts]);
+
+  useEffect(() => {
+    if (!focusJobId || loading || !graphLoaded) return;
+
+    const job = jobs.find((entry) => entry.id === focusJobId);
+    if (!job) {
+      // Keep focusJobId until jobs finish loading (avoid clearing on empty initial state)
+      return;
+    }
+
+    setCurrentFilter("all");
+    setSearchQuery("");
+
+    const { appId } = resolveWorkflowTarget(graph, focusJobId);
+    setViewMode("workflow");
+    setSelectedAppId(appId);
+    setWorkflowSelectedJobId(focusJobId);
+    setExpandedJobId(null);
+
+    void loadLogs(focusJobId);
+    clearFocusJob();
+  }, [focusJobId, jobs, loading, graph, graphLoaded, loadLogs, clearFocusJob]);
+
+  const handleDiagnose = useCallback(
+    (job: JobRecord) => {
+      void openJobDiagnosisChat(job, logsByJobId[job.id] ?? "", {
+        createChat,
+        createTab,
+        switchToTab,
+      });
+    },
+    [createChat, createTab, switchToTab, logsByJobId],
+  );
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -52,6 +109,18 @@ export function JobsView() {
     }));
   }, [graph]);
 
+  const unlinkedJobIds = useMemo(
+    () => getUnlinkedJobIds(graph, jobs.map((job) => job.id)),
+    [graph, jobs],
+  );
+
+  const standaloneSeedJobIds = useMemo(() => {
+    if (workflowSelectedJobId) {
+      return [workflowSelectedJobId];
+    }
+    return unlinkedJobIds;
+  }, [workflowSelectedJobId, unlinkedJobIds]);
+
   // Auto-select first app in workflow view (default landing experience)
   useEffect(() => {
     if (viewMode === "workflow" && !selectedAppId && appChips.length > 0) {
@@ -61,6 +130,14 @@ export function JobsView() {
 
   const selectedApp = useMemo(() => {
     if (!selectedAppId) return null;
+    if (selectedAppId === STANDALONE_WORKFLOW_ID) {
+      return {
+        appId: STANDALONE_WORKFLOW_ID,
+        name: "Ungrouped",
+        icon: undefined,
+        jobCount: unlinkedJobIds.length,
+      };
+    }
     const chip = appChips.find((c) => c.appId === selectedAppId);
     const artifact = artifacts.find((a) => a.id === selectedAppId && a.type === "app");
     return {
@@ -69,12 +146,17 @@ export function JobsView() {
       icon: artifact?.icon,
       jobCount: chip?.count ?? 0,
     };
-  }, [selectedAppId, appChips, artifacts]);
+  }, [selectedAppId, appChips, artifacts, unlinkedJobIds.length]);
+
+  const listAppFilterId = useMemo(
+    () => resolveListAppFilterId(selectedAppId),
+    [selectedAppId],
+  );
 
   const appFilteredJobIds = useMemo<Set<string> | null>(() => {
-    if (!selectedAppId || !graph) return null;
-    return new Set(graph.appLinks[selectedAppId]?.jobIds ?? []);
-  }, [selectedAppId, graph]);
+    if (!listAppFilterId || !graph) return null;
+    return new Set(graph.appLinks[listAppFilterId]?.jobIds ?? []);
+  }, [listAppFilterId, graph]);
 
   const filteredJobs = useMemo(() => {
     const isActive = (j: JobRecord) =>
@@ -98,33 +180,34 @@ export function JobsView() {
   const groupedJobs = useMemo(() => {
     const appMap = new Map<string, JobRecord[]>();
     const ungrouped: JobRecord[] = [];
+    const unlinkedSet = new Set(unlinkedJobIds);
 
     for (const job of filteredJobs) {
-      let grouped = false;
+      if (unlinkedSet.has(job.id)) {
+        ungrouped.push(job);
+        continue;
+      }
+
       if (graph) {
         for (const [, appLink] of Object.entries(graph.appLinks)) {
           if (appLink.jobIds.includes(job.id)) {
             const group = appMap.get(appLink.name) ?? [];
             group.push(job);
             appMap.set(appLink.name, group);
-            grouped = true;
             break;
           }
         }
-      }
-      if (!grouped) {
-        ungrouped.push(job);
       }
     }
 
     const sortedApps = [...appMap.entries()].sort(([a], [b]) => a.localeCompare(b));
     return { apps: sortedApps, ungrouped };
-  }, [filteredJobs, graph]);
+  }, [filteredJobs, graph, unlinkedJobIds]);
 
   const selectedAppName = useMemo(() => {
-    if (!selectedAppId) return "All Apps";
-    return appChips.find((c) => c.appId === selectedAppId)?.name ?? "All Apps";
-  }, [selectedAppId, appChips]);
+    if (!listAppFilterId) return "All Apps";
+    return appChips.find((c) => c.appId === listAppFilterId)?.name ?? "All Apps";
+  }, [listAppFilterId, appChips]);
 
   const workflowSelectedJob = useMemo(
     () => jobs.find((j) => j.id === workflowSelectedJobId) ?? null,
@@ -260,6 +343,7 @@ export function JobsView() {
 
     return (
       <div
+        id={`job-row-${job.id}`}
         className={`jv2-row ${isExpanded ? "jv2-row--expanded" : ""}`}
         key={job.id}
       >
@@ -309,6 +393,31 @@ export function JobsView() {
 
         {isExpanded && (
           <div className="jv2-detail">
+            <div className="jv2-wf-panel-actions jv2-detail-actions">
+              {isActive ? (
+                <button
+                  className="jv2-wf-action-btn"
+                  onClick={() => void stopJob(job.id)}
+                >
+                  Stop
+                </button>
+              ) : (
+                <>
+                  <button
+                    className="jv2-wf-action-btn jv2-wf-action-btn--primary"
+                    onClick={() => void runJob(job.id)}
+                  >
+                    Run
+                  </button>
+                  <button
+                    className="jv2-wf-action-btn"
+                    onClick={() => handleDiagnose(job)}
+                  >
+                    Diagnose
+                  </button>
+                </>
+              )}
+            </div>
             <div className="jv2-detail-grid">
               <div className="jv2-detail-cell">
                 <span className="jv2-detail-label">Status</span>
@@ -418,9 +527,20 @@ export function JobsView() {
               Stop
             </button>
           ) : (
-            <button className="jv2-wf-action-btn jv2-wf-action-btn--primary" onClick={() => void runJob(job.id)}>
-              Run
-            </button>
+            <>
+              <button
+                className="jv2-wf-action-btn jv2-wf-action-btn--primary"
+                onClick={() => void runJob(job.id)}
+              >
+                Run
+              </button>
+              <button
+                className="jv2-wf-action-btn"
+                onClick={() => handleDiagnose(job)}
+              >
+                Diagnose
+              </button>
+            </>
           )}
         </div>
 
@@ -514,7 +634,12 @@ export function JobsView() {
           <div className="jv2-view-toggle">
             <button
               className={viewMode === "list" ? "jv2-toggle jv2-toggle--active" : "jv2-toggle"}
-              onClick={() => setViewMode("list")}
+              onClick={() => {
+                setViewMode("list");
+                if (selectedAppId === STANDALONE_WORKFLOW_ID) {
+                  setSelectedAppId(null);
+                }
+              }}
             >
               List
             </button>
@@ -536,7 +661,21 @@ export function JobsView() {
               <span className="jv2-app-sidebar-count">{appChips.length}</span>
             </div>
             <div className="jv2-app-sidebar-list">
-              {appChips.length === 0 && (
+              {unlinkedJobIds.length > 0 && (
+                <button
+                  className={`jv2-app-sidebar-item ${selectedAppId === STANDALONE_WORKFLOW_ID ? "jv2-app-sidebar-item--active" : ""}`}
+                  title="Jobs not linked to a mini-app via data sources or folder name"
+                  onClick={() => {
+                    setSelectedAppId(STANDALONE_WORKFLOW_ID);
+                    setWorkflowSelectedJobId(null);
+                  }}
+                >
+                  <span className="jv2-app-sidebar-icon">📋</span>
+                  <span className="jv2-app-sidebar-name">Ungrouped</span>
+                  <span className="jv2-app-count">{unlinkedJobIds.length}</span>
+                </button>
+              )}
+              {appChips.length === 0 && unlinkedJobIds.length === 0 && (
                 <p className="jv2-app-sidebar-empty">No apps with linked jobs</p>
               )}
               {appChips.map(({ appId, name, count }) => {
@@ -576,6 +715,17 @@ export function JobsView() {
                 onRunJob={(id) => void runJob(id)}
                 onStopJob={(id) => void stopJob(id)}
                 triggerLabel={triggerLabel}
+                seedJobIds={
+                  selectedApp.appId === STANDALONE_WORKFLOW_ID
+                    ? standaloneSeedJobIds
+                    : undefined
+                }
+                restrictToJobIds={
+                  selectedApp.appId === STANDALONE_WORKFLOW_ID
+                    ? unlinkedJobIds
+                    : graph.appLinks[selectedApp.appId]?.jobIds
+                }
+                showAppNode={selectedApp.appId !== STANDALONE_WORKFLOW_ID}
               />
             ) : (
               <div className="wf-empty">
@@ -599,7 +749,7 @@ export function JobsView() {
             {appChips.length > 0 && (
               <div className="jv2-app-dropdown" ref={appDropdownRef}>
                 <button
-                  className={`jv2-app-trigger ${selectedAppId ? "jv2-app-trigger--active" : ""}`}
+                  className={`jv2-app-trigger ${listAppFilterId ? "jv2-app-trigger--active" : ""}`}
                   onClick={() => setAppDropdownOpen(!appDropdownOpen)}
                 >
                   {selectedAppName}
@@ -610,7 +760,7 @@ export function JobsView() {
                 {appDropdownOpen && (
                   <div className="jv2-app-menu">
                     <button
-                      className={`jv2-app-option ${!selectedAppId ? "jv2-app-option--active" : ""}`}
+                      className={`jv2-app-option ${!listAppFilterId ? "jv2-app-option--active" : ""}`}
                       onClick={() => { setSelectedAppId(null); setAppDropdownOpen(false); }}
                     >
                       All Apps
@@ -619,7 +769,7 @@ export function JobsView() {
                     {appChips.map(({ appId, name, count }) => (
                       <button
                         key={appId}
-                        className={`jv2-app-option ${selectedAppId === appId ? "jv2-app-option--active" : ""}`}
+                        className={`jv2-app-option ${listAppFilterId === appId ? "jv2-app-option--active" : ""}`}
                         onClick={() => { setSelectedAppId(appId); setAppDropdownOpen(false); }}
                       >
                         {name}

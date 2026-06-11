@@ -36,6 +36,20 @@
 .content-pane--left,
 .content-pane--right {
   height: 100%;
+  position: relative;
+}
+
+/* Keep Agents dashboard mounted when user switches tabs */
+.content-pane__keep-alive {
+  display: none;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  flex-direction: column;
+}
+
+.content-pane__keep-alive--visible {
+  display: flex;
 }
 
 /* Add border to left pane in split view for better visual separation */

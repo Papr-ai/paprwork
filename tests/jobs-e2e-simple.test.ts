@@ -275,5 +275,12 @@ describe("Run History Management", () => {
     expect(stats.completedRuns).toBe(2);
     expect(stats.failedRuns).toBe(1);
     expect(stats.avgDuration).toBe(2000); // (1000 + 2000 + 3000) / 3
+
+    const summary = await runHistory.getGlobalSummary();
+    expect(summary.totalRuns).toBeGreaterThanOrEqual(3);
+    expect(summary.completedRuns).toBeGreaterThanOrEqual(2);
+    expect(summary.failedRuns).toBeGreaterThanOrEqual(1);
+    expect(summary.successRate).toBeGreaterThan(0);
+    expect(summary.topJobs.length).toBeGreaterThan(0);
   }, 10000);
 });

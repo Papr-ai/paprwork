@@ -1046,7 +1046,7 @@ export class LocalStorageProvider implements IStorageProvider {
         WHERE role = 'assistant' AND model IS NOT NULL
         GROUP BY model
         ORDER BY cost DESC
-        LIMIT 10`,
+        LIMIT 20`,
       )
       .all() as Array<{
       model: string;
