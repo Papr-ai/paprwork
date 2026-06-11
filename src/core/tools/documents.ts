@@ -32,9 +32,25 @@ const importDocumentSchema = z.object({
     ),
 });
 
-const readDocumentSchema = z.object({
-  documentId: z.string().min(1).describe("Document UUID"),
-});
+// Accept `id` as an alias for `documentId` — LLMs frequently call read_document
+// with `id` instead of `documentId`. Silently normalize to avoid validation retry.
+const readDocumentSchema = z.preprocess(
+  (val) => {
+    if (val && typeof val === "object" && val !== null) {
+      const obj = val as Record<string, unknown>;
+      if (typeof obj.id === "string" && !obj.documentId) {
+        return { ...obj, documentId: obj.id };
+      }
+    }
+    return val;
+  },
+  z.object({
+    documentId: z
+      .string()
+      .min(1)
+      .describe("Document UUID (also accepted as 'id')"),
+  }),
+);
 
 const listDocumentsSchema = z.object({
   query: z
