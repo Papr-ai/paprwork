@@ -225,9 +225,9 @@ class GatewayClient {
   /**
    * Wait until the WebSocket connection is open.
    * Resolves immediately if already connected.
-   * Times out after `timeoutMs` (default 10 s).
+   * Times out after `timeoutMs` (default 30 s — Gateway needs ~12-15s in dev).
    */
-  waitForConnection(timeoutMs = 10_000): Promise<void> {
+  waitForConnection(timeoutMs = 30_000): Promise<void> {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       return Promise.resolve();
     }
@@ -248,7 +248,7 @@ class GatewayClient {
    * Automatically waits for connection if not yet open.
    */
   async send(type: string, payload?: unknown): Promise<GatewayResponse> {
-    // Wait up to 10 s for the WebSocket to connect
+    // Wait for the WebSocket to connect (default 30s — Gateway needs ~12-15s in dev)
     await this.waitForConnection();
 
     return new Promise((resolve, reject) => {
@@ -299,7 +299,7 @@ class GatewayClient {
   ): Promise<void> {
     console.log("[Gateway.stream] START", { type, payload });
 
-    // Wait up to 10 s for the WebSocket to connect
+    // Wait for the WebSocket to connect (default 30s — Gateway needs ~12-15s in dev)
     await this.waitForConnection();
 
     return new Promise((resolve, reject) => {
