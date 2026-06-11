@@ -726,6 +726,7 @@ export class JobsService {
       status: "pending",
       folder: input.folder,
       command: input.command,
+      requiredKeys: input.requiredKeys ?? [],
       requirements: input.requirements,
       dependsOn: input.dependsOn ?? [],
       retries: input.retries ?? { maxAttempts: 1, backoffMs: 1000 },
