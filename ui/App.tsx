@@ -366,7 +366,12 @@ export function App() {
 
   // Show authentication wall IMMEDIATELY if required (before loading anything else)
   if (REQUIRE_PAPR_AUTH && !authChecked) {
-    return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: 'var(--background-color, #1a1a2e)' }} />;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#1a1a2e' }}>
+        <div style={{ width: 24, height: 24, border: '2px solid rgba(255,255,255,0.2)', borderTopColor: '#0080FF', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
   }
 
   if (REQUIRE_PAPR_AUTH && !isAuthenticated) {

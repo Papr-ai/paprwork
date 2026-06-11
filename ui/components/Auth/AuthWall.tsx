@@ -16,6 +16,25 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
   const [error, setError] = useState<string | null>(null);
   const [showRefresh, setShowRefresh] = useState(false);
 
+  // Register IPC-to-DOM bridge listeners so deep link callbacks reach us.
+  // Without this, preload.cjs never dispatches the DOM events AuthWall listens for.
+  useEffect(() => {
+    const successCb = () => {
+      console.log('[AuthWall] Login success via IPC bridge');
+    };
+    const errorCb = (data: { error: string }) => {
+      console.log('[AuthWall] Login error via IPC bridge:', data?.error);
+    };
+
+    window.electronAPI.papr.onLoginSuccess(successCb);
+    window.electronAPI.papr.onLoginError(errorCb);
+
+    return () => {
+      window.electronAPI.papr.removeLoginSuccessListener?.(successCb);
+      window.electronAPI.papr.removeLoginErrorListener?.(errorCb);
+    };
+  }, []);
+
   // Check if user is already authenticated
   useEffect(() => {
     checkAuthentication();
@@ -29,7 +48,6 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
     window.addEventListener('papr-auth-success', handleAuthSuccess);
     
     // Also poll for authentication status while waiting
-    // This ensures we catch auth even if the IPC event is missed
     let pollInterval: NodeJS.Timeout | null = null;
     let refreshTimer: NodeJS.Timeout | null = null;
     
@@ -37,9 +55,8 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
       pollInterval = setInterval(() => {
         console.log('[AuthWall] Polling authentication status...');
         checkAuthentication();
-      }, 2000); // Check every 2 seconds
+      }, 2000);
 
-      // Show refresh button after 5 seconds
       refreshTimer = setTimeout(() => {
         setShowRefresh(true);
       }, 5000);
