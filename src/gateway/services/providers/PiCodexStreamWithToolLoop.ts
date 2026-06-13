@@ -370,7 +370,7 @@ export async function* createPiCodexStreamWithToolLoop(
         type: "error",
         error: {
           type: "memory_exhaustion",
-          message: "Memory limit exceeded. Please refresh and try a simpler query.",
+          message: "Your computer's memory limit has been exceeded. Please refresh and try a simpler query.",
         },
       };
       break;
