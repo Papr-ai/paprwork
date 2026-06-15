@@ -1098,11 +1098,22 @@ export class AppService {
   private handleFileChange(appId: string, filename: string): void {
     console.log(`[AppService] File changed on disk: ${appId}/${filename}`);
     this.broadcastFileChange(appId, filename);
-    
-    // Run validation asynchronously (don't block file change broadcast)
-    this.runValidation(appId).catch((error) => {
-      console.error(`[AppService] Validation error for app ${appId}:`, error);
-    });
+
+    // Debounce per-app validation so a burst of file writes (e.g. agent
+    // creating/refactoring an app) doesn't trigger a full re-validation of
+    // every file for every write, which spams logs and exhausts memory.
+    const debounceKey = `${appId}:validate`;
+    const existingTimer = this.debounceTimers.get(debounceKey);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    const timer = setTimeout(() => {
+      this.debounceTimers.delete(debounceKey);
+      this.runValidation(appId).catch((error) => {
+        console.error(`[AppService] Validation error for app ${appId}:`, error);
+      });
+    }, 500);
+    this.debounceTimers.set(debounceKey, timer);
   }
 
   /**
@@ -1509,12 +1520,21 @@ export class AppService {
       console.log(
         `[AppService] Validation found ${result.issues.length} issue(s) in app ${result.appId}`,
       );
-      
-      // Log errors to console for agent visibility
-      for (const issue of result.issues) {
+
+      // Log first few issues only — full list is broadcast over the socket
+      // and returned to callers. Logging every issue on every change is a
+      // memory hog when an app has many files.
+      const MAX_LOGGED_ISSUES = 5;
+      const toLog = result.issues.slice(0, MAX_LOGGED_ISSUES);
+      for (const issue of toLog) {
         const prefix = issue.severity === 'error' ? '❌' : '⚠️';
         const location = issue.line ? `:${issue.line}` : '';
         console.log(`${prefix} ${issue.file}${location} - ${issue.message}`);
+      }
+      if (result.issues.length > MAX_LOGGED_ISSUES) {
+        console.log(
+          `   …and ${result.issues.length - MAX_LOGGED_ISSUES} more (see app:validation-result broadcast)`,
+        );
       }
     }
 
