@@ -498,19 +498,40 @@ export async function* createPiCodexStreamWithToolLoop(
           );
         }
 
-        // Don't yield "finish" when toolUse - we're continuing the loop
+        // Don't yield "finish" when toolUse - we're continuing the loop.
+        // ALSO suppress finish when reason==="length" but we have pending tool
+        // calls this turn — Anthropic truncates mid-response when maxTokens is hit,
+        // but the tool_use blocks already streamed are complete and valid JSON.
+        // If we yield finish here the orchestrator terminates and we orphan them.
+        // Instead, execute the pending tools and let the loop continue with a
+        // fresh model call (which gets a fresh maxTokens budget).
         if (event.reason === "toolUse") continue;
+        if (event.reason === "length" && toolCallsThisTurn.length > 0) {
+          console.warn(
+            `[PiCodexToolLoop] ⚠️ Model hit maxTokens mid-turn with ${toolCallsThisTurn.length} pending tool call(s). ` +
+            `Executing them and continuing loop instead of terminating (would orphan tool_use blocks).`
+          );
+          continue;
+        }
       }
 
       const chunk = adaptPiStreamToAISDKEvent(event, cumulativeTokens);
       if (chunk) yield chunk;
     }
 
-    if (
-      lastFinishReason === "tool-calls" &&
-      toolCallsThisTurn.length > 0 &&
-      finalMessage
-    ) {
+    // Execute pending tools when:
+    //   - finish==="tool-calls" (normal Anthropic tool turn), OR
+    //   - finish==="length" but we have completed tool_use blocks in this turn.
+    // The second case happens when Anthropic exhausts maxTokens mid-response;
+    // any tool_use blocks already streamed have complete JSON args and must be
+    // executed, otherwise the next turn sees orphaned tool_use → recovery markers
+    // → permanent stuck state.
+    const hasPendingToolCalls = toolCallsThisTurn.length > 0 && finalMessage;
+    const shouldExecuteTools =
+      hasPendingToolCalls &&
+      (lastFinishReason === "tool-calls" || lastFinishReason === "length");
+
+    if (shouldExecuteTools) {
       // Update total tool call counter
       totalToolCalls += toolCallsThisTurn.length;
       
@@ -639,7 +660,7 @@ export async function* createPiCodexStreamWithToolLoop(
 
       // Append full results — compaction happens in compactStaleToolResults
       // before the next model call (next loop iteration).
-      appendToolTurnToContext(context, finalMessage, toolResults, cumulativeTokens);
+      appendToolTurnToContext(context, finalMessage!, toolResults, cumulativeTokens);
 
       // Do NOT update cumulativeTokens here from raw context size — that
       // double-counts results that will be compacted before the next model call.
