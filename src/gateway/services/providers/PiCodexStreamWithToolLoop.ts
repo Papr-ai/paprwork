@@ -182,7 +182,37 @@ function appendToolTurnToContext(
   toolResults: Array<{ toolCallId: string; toolName: string; result: unknown }>,
   _cumulativeTokens: number,
 ): void {
-  context.messages.push(assistantMessage);
+  // Sanitize: Anthropic strictly requires every `tool_use` block in an assistant
+  // message to have a matching `tool_result` in the immediately following message.
+  // If finish_reason=length truncated a tool_use block mid-stream (no toolcall_end fired),
+  // it won't have a corresponding result. Filter those out before persisting to context,
+  // otherwise the NEXT request to Anthropic fails with:
+  //   "tool_use ids were found without tool_result blocks immediately after"
+  const executedIds = new Set(toolResults.map((tr) => tr.toolCallId));
+  const sanitizedContent: unknown[] = [];
+  let droppedCount = 0;
+  for (const part of assistantMessage.content as Array<Record<string, unknown>>) {
+    if (part && (part as any).type === "toolCall") {
+      const id = (part as any).id;
+      if (typeof id !== "string" || !executedIds.has(id)) {
+        droppedCount++;
+        continue;
+      }
+    }
+    sanitizedContent.push(part);
+  }
+  if (droppedCount > 0) {
+    console.warn(
+      `[PiCodexToolLoop] ⚠️ Dropped ${droppedCount} unmatched tool_use block(s) from assistant message ` +
+      `(likely truncated by finish_reason=length). Prevents Anthropic 400 on next request.`
+    );
+  }
+
+  const sanitizedAssistantMessage = {
+    ...assistantMessage,
+    content: sanitizedContent,
+  };
+  context.messages.push(sanitizedAssistantMessage);
   const now = Date.now();
 
   for (const tr of toolResults) {
