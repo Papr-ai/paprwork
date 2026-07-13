@@ -5,11 +5,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Markdown } from "../common/Markdown";
 import { gateway } from "../../src/lib/gateway";
+import { isTransientGatewayError, sleep } from "../../utils/gatewayRetry";
 import type { WikiEntityData, WikiHomeData, WikiNode, WikiRail, WikiRelationship, WikiEvidence, WikiRelatedMemory } from "../../types/wiki";
 import { collectWikiNodes, normalizeWikiNode, wikiTypeMeta } from "../../types/wiki";
 import {
-  countPlaceholderContextFiles,
+  countSetupBlockingPlaceholderFiles,
+  isBrandFileUnset,
+  isEffectiveOnboardingPending,
+  isOptionalContextFile,
   isWorkspaceFilePlaceholder,
+  shouldShowMemorySetupPanel,
 } from "../../utils/memoryWorkspaceHealth";
 import { MemorySetupPanel } from "./MemorySetupPanel";
 import "./WikiLibrary.css";
@@ -88,12 +93,16 @@ function EntityCard({ node, onClick }: { node: WikiNode; onClick: () => void }) 
 
 
 function ContextFileCard({ file, onOpen }: { file: WorkspaceFilePreview; onOpen: (file: WorkspaceFilePreview) => void }) {
-  const needsSetup = isWorkspaceFilePlaceholder(file.content);
+  const isOptionalBrand = isOptionalContextFile(file.name);
+  const needsSetup =
+    !isOptionalBrand && isWorkspaceFilePlaceholder(file.content);
+  const brandUnset = isOptionalBrand && isBrandFileUnset(file.content);
+  const chipLabel = needsSetup ? "Setup needed" : brandUnset ? "Optional" : "Context";
   return (
-    <article className={`wiki-card poster wiki-card--context${needsSetup ? " wiki-card--context-setup" : ""}`} onClick={() => onOpen(file)}>
+    <article className={`wiki-card poster wiki-card--context${needsSetup ? " wiki-card--context-setup" : brandUnset ? " wiki-card--context-optional" : ""}`} onClick={() => onOpen(file)}>
       <div className="wiki-card__art wiki-card__art--context">
         <div className="wiki-card__gradient wiki-card__gradient--context" />
-        <span className="wiki-card__type-chip">{needsSetup ? "Setup needed" : "Context"}</span>
+        <span className="wiki-card__type-chip">{chipLabel}</span>
         <span className="wiki-card__glyph">md</span>
       </div>
       <div className="wiki-card__body">
@@ -101,7 +110,9 @@ function ContextFileCard({ file, onOpen }: { file: WorkspaceFilePreview; onOpen:
         <p className="wiki-card__preview">
           {needsSetup
             ? "Template placeholder — edit or complete setup chat"
-            : bodyPreview(file.content, 240) || "Empty context file"}
+            : brandUnset
+              ? "Brand colors and logo not configured yet"
+              : bodyPreview(file.content, 240) || "Empty context file"}
         </p>
         <div className="wiki-card__meta">
           <span>{Math.max(1, Math.round(file.size / 1024))} KB</span>
@@ -551,18 +562,25 @@ function ContextFilePage({
 
 /* ── Home ────────────────────────────────────────── */
 
-function WikiHome({ data, loading, onPick, onSearch, onAdd, onOpenContextFile, contextFiles, onboardingPending }: {
-  data: WikiHomeData | null; loading: boolean; onPick: (n: WikiNode) => void;
+function WikiHome({ data, loading, loadError, onRetry, onPick, onSearch, onAdd, onOpenContextFile, contextFiles, onboardingPending }: {
+  data: WikiHomeData | null; loading: boolean; loadError?: string | null;
+  onRetry?: () => void;
+  onPick: (n: WikiNode) => void;
   onSearch: () => void; onAdd?: () => void; onOpenContextFile: (file: WorkspaceFilePreview) => void;
   contextFiles: WorkspaceFilePreview[];
   onboardingPending: boolean;
 }) {
   const featured = data?.featured ?? null;
   const meta = featured ? wikiTypeMeta(featured.type) : null;
-  const placeholderFileCount = countPlaceholderContextFiles(contextFiles);
+  const placeholderFileCount = countSetupBlockingPlaceholderFiles(contextFiles);
   const identityFile = contextFiles.find((file) => file.name === "IDENTITY.md");
-  const showSetupPanel =
-    onboardingPending || placeholderFileCount > 0;
+  const wikiHasContent = (data?.rails.length ?? 0) > 0 || !!featured;
+  const setupPending = isEffectiveOnboardingPending(onboardingPending, contextFiles);
+  const showSetupPanel = shouldShowMemorySetupPanel({
+    onboardingPending,
+    contextFiles,
+    wikiHasContent,
+  });
   const wikiEmpty = (data?.rails.length ?? 0) === 0 && !featured;
 
   if (loading && !data) {
@@ -570,7 +588,27 @@ function WikiHome({ data, loading, onPick, onSearch, onAdd, onOpenContextFile, c
       <div className="wiki-loading__shimmer wiki-loading__shimmer--wide" /></div>);
   }
 
-  if (!data?.configured) {
+  if (!data && loadError) {
+    return (
+      <div className="wiki-library wiki-library--setup-only">
+        <section className="wiki-setup-panel wiki-setup-panel--connecting">
+          <div className="wiki-setup-panel__icon" aria-hidden>↻</div>
+          <h2 className="wiki-setup-panel__title">Connecting to Papr…</h2>
+          <p className="wiki-setup-panel__body">
+            Your knowledge graph is still loading. This usually resolves in a few seconds once the gateway connects.
+          </p>
+          <div className="wiki-setup-panel__actions">
+            <button type="button" className="wiki-btn wiki-btn--primary" onClick={onRetry}>
+              Try again
+            </button>
+          </div>
+          <p className="wiki-setup-panel__footnote">{loadError}</p>
+        </section>
+      </div>
+    );
+  }
+
+  if (data && !data.configured) {
     return (
       <div className="wiki-library wiki-library--setup-only">
         <MemorySetupPanel variant="sign-in" />
@@ -603,7 +641,7 @@ function WikiHome({ data, loading, onPick, onSearch, onAdd, onOpenContextFile, c
       {showSetupPanel ? (
         <MemorySetupPanel
           variant="setup"
-          onboardingPending={onboardingPending}
+          onboardingPending={setupPending}
           placeholderFileCount={placeholderFileCount}
           onEditIdentity={
             identityFile
@@ -624,7 +662,7 @@ function WikiHome({ data, loading, onPick, onSearch, onAdd, onOpenContextFile, c
           <div className="wiki-rail__head">
             <h2>Content</h2>
             <span className="wiki-rail__reason">
-              {onboardingPending
+              {setupPending
                 ? "Files Papr reads every conversation · Setup in progress"
                 : "Markdown context Papr reads each chat · Wiki refreshes overnight"}
               {" · "}
@@ -645,7 +683,7 @@ function WikiHome({ data, loading, onPick, onSearch, onAdd, onOpenContextFile, c
 
       {wikiEmpty ? (
         showSetupPanel ? null : (
-          <MemorySetupPanel variant="wiki-empty" onboardingPending={onboardingPending} />
+          <MemorySetupPanel variant="wiki-empty" onboardingPending={setupPending} />
         )
       ) : data.error ? (
         <div className="wiki-nudge">
@@ -784,6 +822,7 @@ function WikiEntityPage({ node, rails, relatedMemories, allNodes, loading, error
 export function WikiLibrary({ refreshToken = 0, paletteOpen: paletteOpenProp, onPaletteOpenChange, onFocusChange }: WikiLibraryProps) {
   const [home, setHome] = useState<WikiHomeData | null>(null);
   const [homeLoading, setHomeLoading] = useState(true);
+  const [homeLoadError, setHomeLoadError] = useState<string | null>(null);
   const [focus, setFocus] = useState<WikiNode | null>(null);
   const [contextFocus, setContextFocus] = useState<WorkspaceFilePreview | null>(null);
   const [contextLoading, setContextLoading] = useState(false);
@@ -817,30 +856,72 @@ export function WikiLibrary({ refreshToken = 0, paletteOpen: paletteOpenProp, on
     return merged;
   }, [home, focus, entityRails]);
 
-  const loadHome = useCallback(async () => {
-    setHomeLoading(true);
+  const loadHome = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setHomeLoading(true);
+    }
+    setHomeLoadError(null);
+
     try {
-      const response = await gateway.send("memory:wiki-home", {}, { timeoutMs: 30_000 });
-      if (response.success && response.data) setHome(response.data as WikiHomeData);
-    } catch {
-      setHome({ featured: null, rails: [], typeCounts: {}, configured: false, error: "Could not load your knowledge graph." });
-    } finally { setHomeLoading(false); }
+      const maxAttempts = 4;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+          await gateway.waitForConnection(20_000);
+          const response = await gateway.send("memory:wiki-home", {}, { timeoutMs: 30_000 });
+          if (response.success && response.data) {
+            setHome(response.data as WikiHomeData);
+            setHomeLoadError(null);
+            return;
+          }
+          throw new Error(response.error ?? "Could not load your knowledge graph.");
+        } catch (error) {
+          const canRetry = attempt < maxAttempts && isTransientGatewayError(error);
+          if (canRetry) {
+            await sleep(Math.min(1000 * attempt, 4000));
+            continue;
+          }
+          setHomeLoadError(
+            error instanceof Error ? error.message : "Could not load your knowledge graph.",
+          );
+          return;
+        }
+      }
+    } finally {
+      if (!options?.silent) {
+        setHomeLoading(false);
+      }
+    }
   }, []);
 
   /** Load context files for inline display */
   const loadContext = useCallback(async () => {
-    try {
-      const response = await gateway.send("memory:get-context-preview", { forceRefresh: false }, { timeoutMs: 15_000 });
-      if (response.success && response.data) {
-        const data = response.data as {
-          workspaceFiles?: WorkspaceFilePreview[];
-          onboardingPending?: boolean;
-        };
-        setContextFiles(data.workspaceFiles ?? []);
-        setOnboardingPending(data.onboardingPending === true);
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        await gateway.waitForConnection(20_000);
+        const response = await gateway.send("memory:get-context-preview", { forceRefresh: false }, { timeoutMs: 15_000 });
+        if (response.success && response.data) {
+          const data = response.data as {
+            workspaceFiles?: WorkspaceFilePreview[];
+            onboardingPending?: boolean;
+          };
+          setContextFiles(data.workspaceFiles ?? []);
+          setOnboardingPending(data.onboardingPending === true);
+          return;
+        }
+      } catch (error) {
+        if (attempt < maxAttempts && isTransientGatewayError(error)) {
+          await sleep(Math.min(1000 * attempt, 3000));
+          continue;
+        }
       }
-    } catch { /* silent */ }
+    }
   }, []);
+
+  const reloadLibrary = useCallback(() => {
+    void loadHome();
+    void loadContext();
+  }, [loadHome, loadContext]);
 
   const clearContextFocus = useCallback(() => {
     setContextFocus(null);
@@ -970,6 +1051,16 @@ export function WikiLibrary({ refreshToken = 0, paletteOpen: paletteOpenProp, on
     } catch { /* noop */ }
   }, []);
 
+  useEffect(() => {
+    const unsubscribe = gateway.onConnectionChange((connected) => {
+      if (connected && homeLoadError) {
+        void loadHome();
+        void loadContext();
+      }
+    });
+    return unsubscribe;
+  }, [homeLoadError, loadHome, loadContext]);
+
   useEffect(() => { if (refreshToken > 0 && focus) void loadEntity(focus); }, [refreshToken]);
   useEffect(() => { if (refreshToken > 0 && !focus) { void loadHome(); void loadContext(); } }, [refreshToken]);
 
@@ -1003,7 +1094,9 @@ export function WikiLibrary({ refreshToken = 0, paletteOpen: paletteOpenProp, on
             onSave={saveContextFile}
           />
         ) : (
-          <WikiHome data={home} loading={homeLoading} onPick={handlePick}
+          <WikiHome data={home} loading={homeLoading} loadError={homeLoadError}
+            onRetry={reloadLibrary}
+            onPick={handlePick}
             onSearch={() => setPaletteOpen(true)} onAdd={() => setCreateOpen(true)}
             onOpenContextFile={(file) => { void openContextFile(file); }}
             contextFiles={contextFiles}

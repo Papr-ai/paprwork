@@ -746,6 +746,15 @@
   box-shadow: var(--shadow-sm);
 }
 
+.wiki-setup-panel--connecting .wiki-setup-panel__icon {
+  animation: wiki-connect-spin 1.2s linear infinite;
+}
+
+@keyframes wiki-connect-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .wiki-setup-panel--sign-in {
   margin-top: 48px;
 }
@@ -823,6 +832,11 @@
 .wiki-card--context-setup .wiki-card__type-chip {
   background: color-mix(in srgb, #f59e0b 22%, transparent);
   color: #fcd34d;
+}
+
+.wiki-card--context-optional .wiki-card__type-chip {
+  background: color-mix(in srgb, var(--text-dim) 35%, transparent);
+  color: var(--text-mute);
 }
 
 .wiki-loading__shimmer {

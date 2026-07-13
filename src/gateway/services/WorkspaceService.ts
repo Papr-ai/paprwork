@@ -163,6 +163,9 @@ export class WorkspaceService {
       totalChars += log.content.length;
     }
 
+    // If sleep cycle or chat already populated IDENTITY, close stale ONBOARD.md
+    await this.autoCompleteOnboardingIfReady();
+
     // Check onboarding status
     const onboardPath = path.join(this.workspaceDir, "ONBOARD.md");
     const onboardCompletedPath = path.join(
@@ -208,6 +211,45 @@ export class WorkspaceService {
 
     // Complete if: ONBOARD.md doesn't exist, OR ONBOARD.completed.md exists
     return !onboardExists || completedExists;
+  }
+
+  /**
+   * Rename ONBOARD.md when IDENTITY is already populated (e.g. sleep cycle wrote profile
+   * but the first-run chat never ran the completion mv step).
+   */
+  async autoCompleteOnboardingIfReady(): Promise<boolean> {
+    const onboardPath = path.join(this.workspaceDir, "ONBOARD.md");
+    const onboardCompletedPath = path.join(
+      this.workspaceDir,
+      "ONBOARD.completed.md",
+    );
+
+    if (
+      !(await this.fileExists(onboardPath)) ||
+      (await this.fileExists(onboardCompletedPath))
+    ) {
+      return false;
+    }
+
+    const { getWorkspaceFileHealth } = await import("./identityAboutSeed.js");
+    const health = await getWorkspaceFileHealth();
+    if (!health.identityAboutComplete) {
+      return false;
+    }
+
+    try {
+      await fs.rename(onboardPath, onboardCompletedPath);
+      console.log(
+        "[WorkspaceService] Auto-completed onboarding — IDENTITY.md already populated",
+      );
+      return true;
+    } catch (error) {
+      console.warn(
+        "[WorkspaceService] Failed to auto-complete onboarding:",
+        (error as Error).message,
+      );
+      return false;
+    }
   }
 
   // ——— Private helpers ———
