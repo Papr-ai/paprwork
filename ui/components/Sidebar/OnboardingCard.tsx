@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import { ONBOARDING_SETUP_MESSAGE } from "../../constants/onboardingMessages";
 import "./OnboardingCard.css";
 
 type StepState = "locked" | "active" | "completed";
@@ -96,9 +97,7 @@ export function OnboardingCard({
     if (stepState === "locked" || stepState === "completed") return;
 
     if (step === 1) {
-      onSendMessage(
-        "Let's get started with onboarding! I'd like you to learn about me and set things up.",
-      );
+      onSendMessage(ONBOARDING_SETUP_MESSAGE);
       setTimeout(() => {
         setState((prev) => ({ ...prev, step1Completed: true }));
       }, 2000);

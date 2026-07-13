@@ -13,9 +13,82 @@ Complete guide for building mini-apps, jobs, and app+job pipelines in Paprwork V
 2. **Validate upstream data** — Run small API/data probes with `bash` before committing schema. Inspect actual field names, pagination, auth constraints.
 3. **Define contracts** — Lock SQLite write model (what jobs produce) and read model (what the app queries). Add indexes for app query paths.
 4. **Implement jobs** — Create with `create_job`, execute with `run_job`, inspect with `read_job_logs`. Adjust schema based on observed outputs.
-5. **Wire app to data** — Link with `link_app_data_source`. Validate end-to-end with realistic records across all UX states.
+5. **Wire app to data** — `create_job` with `appIds` auto-links, or `attach_database` / `link_app_data_source({ dbId })` for standalone DBs. Validate end-to-end with realistic records across all UX states.
 
 If the task is tiny and explicit, merge steps. Always explain tradeoffs when skipping discovery.
+
+---
+
+## Database linking (job-owned vs standalone)
+
+**Not every mini-app needs a database.** Content-only apps (no `/api/db/*`) skip linking entirely.
+
+### Path A — Job owns the DB (default)
+
+```javascript
+create_job({ name: "Sync", appIds: [appId], type: "python", command: "python3 code/main.py" })
+// Auto-links ~/Papr/Jobs/{jobId}/data/data.db → app's data-sources.json (primary if first source)
+```
+
+- Job writes UI-facing tables to **`$APP_DB`** (same file as primary linked source)
+- Job scratch (`job_runs`, temp) uses **`$JOB_DB`** (always the job's own `data.db`)
+
+### Path B — Standalone shared DB (no job owner)
+
+```javascript
+const { dbId } = await create_database({ name: "CRM" })
+await attach_database({ appId, dbId, setPrimary: true })
+```
+
+### Legacy / manual link (fallback only)
+
+Use only when auto-link did not run (orphan job, app created before job, or re-linking after edits):
+
+```javascript
+link_app_data_source({ appId, jobId, setPrimary: true })   // job-owned
+link_app_data_source({ appId, dbId, setPrimary: true })    // registry DB
+```
+
+### Typical mini-app + job build flow
+
+```javascript
+// 1. UI mock (optional)
+create_app({ title: "Dashboard", ... })
+
+// 2. Job with appIds — auto-links data.db (no separate link step)
+create_job({ name: "Sync", appIds: [appId], type: "python", command: "python3 code/main.py" })
+
+// 3. Run job, then wire app to /api/db/*
+// Job writes UI tables to $APP_DB; scratch to $JOB_DB (same file when job DB is primary)
+```
+
+For **standalone shared data** (CRM, team inbox without a job owner):
+
+```javascript
+const { dbId } = await create_database({ name: "CRM", isolation: "shared" })
+await attach_database({ appId, dbId, setPrimary: true })
+```
+
+### Cloud Turso naming (paprwork-v2 ↔ memory server)
+
+| Linked source | Turso short name | With `isolation: "per-user"` |
+|---------------|------------------|--------------------------------|
+| Job `~/Papr/Jobs/{jobId}/data/data.db` | `j-{jobId8}` | `j-{jobId8}-u-{userId8}` |
+| Registry `~/Papr/data/databases/.../data.db` | `d-{dbId8}` | `d-{dbId8}-u-{userId8}` |
+
+- `data-sources.json` is the contract — cloud app host and cloud agent runs only see linked sources.
+- `create_job({ appIds })` writes `data-sources.json` automatically; Turso sync follows on cloud sync.
+- Cloud agent prepare (`memory` server) returns `tursoSources[]` for each linked source; gateway bookends pull/push by `syncKey` (jobId or dbId).
+
+### Multi-user data models (do not confuse with publish settings)
+
+| Model | When to use | Agent action |
+|-------|-------------|--------------|
+| **Publish access only** | Control who can open `apps.papr.ai` URL | Cloud publish prefs (`loginAccess`, `externalLink`) — no DB change |
+| **Shared DB + `user_id` column** | Simple filtering; all users share one Turso DB | Add `user_id` to schema; app queries `WHERE user_id = ?` |
+| **Per-user DB isolation** | Strong separation; no cross-user reads | `create_database({ isolation: "per-user" })` — platform creates `-u-{userId8}` Turso DB per user |
+
+Publish access and per-user DB isolation are **independent**. A team-visible app can still use per-user databases.
 
 ---
 
@@ -26,8 +99,8 @@ If the task is tiny and explicit, merge steps. Always explain tradeoffs when ski
 | `list_apps` | List all existing mini-apps (ALWAYS call this first!) |
 | `create_app` | Create a mini-app with HTML/CSS/JS files |
 | `read_app_file` | Read app file content with line numbers |
-| `edit_app_file` | Edit via string replacement (simple text changes) |
-| `edit_app_file_lines` | Edit via line ranges (RECOMMENDED for code) |
+| `edit_file` | Patch any file by path (mini-apps, jobs, repos — routes automatically) |
+| `edit_app_file_lines` | Mini-app line-range edits (multi-line HTML/JS blocks) |
 | `list_app_files` | List all files in an app |
 | `list_jobs` | List all jobs with status, deps, dir path (call before create!) |
 | `create_job` | Create a job with retries, dependencies, delivery |
@@ -35,8 +108,11 @@ If the task is tiny and explicit, merge steps. Always explain tradeoffs when ski
 | `delete_job` | Remove a job from the index (optionally wipe files) |
 | `run_job` | Execute a job and inspect output |
 | `read_job_logs` | Read job execution logs |
-| `list_job_files` / `read_job_file` / `edit_job_file` | Browse and patch job scripts directly |
-| `link_app_data_source` | Wire app to job's SQLite database |
+| `list_job_files` / `read_job_file` / `edit_file` | Browse and patch job scripts (use `~/Papr/Jobs/{jobId}/…` path) |
+| `link_app_data_source` | Wire app to job's SQLite database **or** registry `dbId` |
+| `create_database` | Create standalone DB in registry (no job required) |
+| `attach_database` | Link registry `dbId` to mini-app (`setPrimary: true`) |
+| `delete_database` | Tombstone registry DB (safe when apps still linked) |
 | `read_app_data_sources` | List linked data sources for an app |
 | `export_app_bundle` | Package app + jobs + schemas as portable app bundle |
 | `import_app_bundle` | Install app bundle from local path or GitHub URL |
@@ -54,14 +130,139 @@ If the task is tiny and explicit, merge steps. Always explain tradeoffs when ski
 | `/api/jobs/list` | GET | List all jobs (id, name, type, status) |
 | `/api/jobs/status/:jobId` | GET | Poll job status |
 | `/api/jobs/run` | POST | Trigger a job (fire-and-forget or wait) |
-| `/api/jobs/create` | POST | **NEW:** Create jobs programmatically (same as `create_job` tool) |
-| `/api/bash/run` | POST | Run a bash command and get stdout/stderr |
+| `/api/app/backend/:action` | POST | Run an app-defined backend handler (see **App backend** below) |
+| `/api/jobs/create` | POST | **Desktop-only:** Create jobs programmatically (same as `create_job` tool) |
 
-> **When a button in a mini-app needs to do backend work** (re-generate content, reset data, call an API, run a script) — use `/api/jobs/run` or `/api/bash/run`. These give mini-apps the same power agents have via `run_job` and `bash`. Do NOT build a separate HTTP server job as a bridge — that is always the wrong approach.
+> **When a button in a mini-app needs backend work** — use the right layer:
+> - **Fast server handler** (API call, small script): `POST /api/app/backend/:action` with handlers in `apps/{appId}/backend/`
+> - **Sandbox / agent / heavy ETL / scheduled work**: `POST /api/jobs/run` (normal for share-link users too)
+> - **Data reads/writes**: `/api/db/query` and `/api/db/write`
+>
+> **Do NOT** use `/api/bash/run` from mini-apps — it is disabled. Agents still use the `bash` tool directly.
 
-> **NEW: Mini-apps can now CREATE jobs dynamically via `/api/jobs/create`**. This enables lazy job creation patterns (e.g., LinkedIn Autopilot creates action jobs on-demand when campaigns need them). Rate limited to 10 jobs/min per app. See "Mini-App Job Creation" section below.
+> **NEW: Mini-apps can CREATE jobs dynamically via `/api/jobs/create` (desktop only)**. Rate limited to 10 jobs/min per app. See "Mini-App Job Creation" section below.
 
 > **CRITICAL:** If a mini-app needs to **INSERT/UPDATE/DELETE**, use **`POST /api/db/write`**, not `/api/db/query`. A 403 on `/api/db/query` means you used the read endpoint for a write — switch endpoints; **writes from apps are supported.**
+
+---
+
+## Cloud hosting (automatic — ready)
+
+When **Cloud Sync** is enabled (default), Paprwork syncs mini-apps to a private GitHub repo and linked job SQLite databases to Turso (one database per job). **Cloud publishing is also on by default**: after sync, each mini-app is automatically published to **`https://apps.papr.ai`** with **private** access (Papr account required). This pipeline is **production-ready** — agents do not run a separate deploy.
+
+### What happens automatically
+
+| Step | Agent action |
+|------|--------------|
+| App source → private GitHub repo | None — edit files under `~/Papr/apps/{appId}/` as usual |
+| `data-sources.json` → Turso replicas | **`create_job({ appIds })` auto-links** (writes `data-sources.json`). For standalone DBs: `attach_database` / `link_app_data_source({ dbId })`. Manual `link_app_data_source({ jobId })` only if auto-link failed. |
+| Publish URL on `apps.papr.ai` | None — runs after GitHub + Turso sync succeed |
+
+**Without a linked source in `data-sources.json`**, cloud `/api/db/*` fails — the Cloud App Host only serves registered databases. Auto-link via `create_job({ appIds })` satisfies this for the common job-owned path.
+
+### Desktop vs cloud capabilities
+
+Build with relative `/api/...` paths — never hardcode `localhost:18789`.
+
+| Capability | Desktop gateway | Cloud (`apps.papr.ai`) |
+|------------|-----------------|------------------------|
+| `/api/db/schema`, `/api/db/query`, `/api/db/write`, `/api/db/exec` | ✅ Local SQLite | ✅ Turso — **same contract, same app code** |
+| `/api/db/*` | ✅ | ✅ on `apps.papr.ai` |
+| `/api/app/backend/:action` | ✅ local subprocess | ✅ Cloud App Host edge subprocess (handlers in `apps/{appId}/backend/`) |
+| `/api/jobs/list`, `/api/jobs/status`, `/api/jobs/run`, `/api/jobs/events` | ✅ | ✅ on `apps.papr.ai` — **including share links** (requires `canRead`) |
+| `/api/bash/run` | ❌ **Disabled for mini-apps** | ❌ **Disabled for mini-apps** |
+| `/api/jobs/create` | ✅ | ❌ **Desktop-only** — create jobs locally; they sync via git |
+| `window.paprAPI` (`chat.open`, `shell`, etc.) | ✅ Electron iframe | ❌ **Desktop-only** — not injected on cloud URLs |
+
+### App backend (`apps/{appId}/backend/`)
+
+Lightweight server handlers for share-safe API calls and small scripts — **not** full workspace jobs.
+
+```
+apps/{appId}/backend/
+  manifest.json          ← declares actions
+  fetch_attention_calls.py
+```
+
+**Runtimes:** `python` (`.py`), `node` (`.js` / `.mjs` / `.cjs`), `typescript` (`.ts` — transpiled with esbuild at invoke). Cloud App Host already includes Node 24 + Python 3.
+
+**manifest.json (v1):**
+```json
+{
+  "version": 1,
+  "actions": {
+    "fetch-attention-calls": {
+      "handler": "fetch_attention_calls.py",
+      "runtime": "python",
+      "keys": ["RR_ATTENTION_API_KEY"],
+      "timeoutMs": 120000
+    }
+  }
+}
+```
+
+**Frontend:**
+```javascript
+const res = await fetch('/api/app/backend/fetch-attention-calls', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ appId, params: { limit: '50' } }),
+});
+const { stdout, stderr, exitCode } = await res.json();
+```
+
+Handlers receive `PAPR_ACTION_PARAMS` (JSON) and vault keys as env vars. Print JSON to stdout (Python: `json.dump`, Node/TS: `console.log(JSON.stringify(...))`).
+
+**Vault key injection (do not reverse-engineer):**
+1. User stores keys in **Settings → Integration Keys** (syncs to cloud vault on publish).
+2. List exact key names in **backend/manifest.json** `"keys": ["RR_ATTENTION_API_KEY"]` (per-action allowlist).
+3. **Cloud only:** same keys must be in **requirements.json** (published catalog). `publish_cloud_app` **auto-syncs** manifest keys into requirements.json — republish after adding backend keys.
+4. Gateway injects as env vars — handler uses `os.environ["RR_ATTENTION_API_KEY"]` or `process.env.RR_ATTENTION_API_KEY`.
+5. **Never** grep keychain, read `custom-keys.json`, or call `get_key` / `/api/keys` — those are agent-only.
+6. Cloud error "No matching catalog requirements" → republish the app (catalog out of date), not more keychain debugging.
+
+**Frontend body shape:** `{ appId, params: { limit: "50" } }` — nested `params` required (`PAPR_ACTION_PARAMS`).
+
+**Publishable browser keys:** `POST /api/credentials/client-keys` + `clientAccess: "client"` in requirements.json — not manifest `keys`.
+
+**Backend vs jobs (wire buttons correctly):**
+
+| Need | Use | Do NOT |
+|------|-----|--------|
+| Fast API call, small script, vault secret | `POST /api/app/backend/:action` | LLM/agent loops in backend |
+| AI analysis, summarization, multi-step reasoning | `POST /api/jobs/run` → **agent job** | OpenAI/Anthropic in `backend/` handler |
+| Heavy ETL, long scripts, schedules | `POST /api/jobs/run` → python/node/bash job | Backend (600s cap, edge subprocess) |
+| Publishable/public API key (browser-safe) | `POST /api/credentials/client-keys` then `fetch(thirdPartyUrl)` | `/api/bash/run` (always disabled); hardcoding vault values |
+
+**Rule:** Backend = one-shot handler (<2 min, no LLM). Jobs = agent work, schedules, sandbox/heavy work. App buttons calling agent jobs via `/api/jobs/run` is **normal** and works on share links.
+
+### Mini-app ↔ job communication (cloud-safe — REQUIRED for published apps)
+
+On **desktop**, a job and mini-app share the same machine — `/tmp/foo.json` can work during dev. On **`apps.papr.ai`**, **job runs use an isolated sandbox** — no shared filesystem with the browser or app-backend runner.
+
+**❌ NEVER use `/api/bash/run` or `/tmp` file handoffs between job and app:**
+```javascript
+// WRONG — bash disabled for mini-apps; /tmp does not bridge sandboxes on cloud
+await fetch('/api/bash/run', { body: JSON.stringify({ command: 'cat /tmp/result.json' }) });
+```
+
+**✅ Use instead:**
+
+| Need | Pattern |
+|------|---------|
+| Pass mode/params to job | `/api/jobs/run` with `params: { KEY: 'value' }` → job reads `os.environ['KEY']` |
+| Job output → mini-app UI | Job writes to **`$APP_DB`**; app reads via **`/api/db/query`** |
+| Live progress | `subscribeJobEvents({ onStatusChanged, onProgress })` — not SQL polling |
+| One-shot API / small server script | **`/api/app/backend/:action`** — handler in `backend/` |
+| Heavy ETL, agent work, schedules | **`/api/jobs/run`** |
+
+Jobs linked via `appIds` receive `APP_DB` pointing at the mini-app's primary linked database. Create cache tables there (e.g. `attention_calls_cache`) — both desktop and cloud see the same data through `/api/db/*`.
+
+### Do NOT manually deploy to Vercel/Netlify/custom domains
+
+Papr auto-publish is the supported cloud path (source from git + Cloud App Host API). Manual static deploys often ship an incomplete API (e.g. only `/api/query`, no `/api/db/write`). If writes 404 on a custom URL, the deployment is wrong — **do not** shim INSERTs through `/api/db/query`. On `apps.papr.ai`, `/api/db/write` is available and returns `{ changes, lastInsertRowid }`.
+
+Users can opt out globally in **Settings → Privacy → Cloud Sync**, or per-app under **Sync Status → Cloud links** (disable **Auto** or turn the link **Off**). Do not add Turso credentials, cloud URLs, or publish steps to agent plans.
 
 ---
 
@@ -161,7 +362,9 @@ fetch('http://localhost:18789/api/jobs/list')
 
 ## Editing App Files: Which Tool to Use?
 
-### Use `edit_app_file_lines` (RECOMMENDED for most edits)
+**One patch tool for all paths:** `edit_file({ path, oldString, newString })`. When `path` is under `~/Papr/apps/{appId}/…`, Paprwork automatically runs the same mini-app pipeline as before (esbuild + `validate_app` + `_verifyReminder`). You do not call `edit_app_file` — that name is legacy-only for old sub-agent profiles.
+
+### Use `edit_app_file_lines` (RECOMMENDED for multi-line blocks)
 
 **When:** Making any code changes — HTML structure, JavaScript functions, CSS blocks
 
@@ -191,7 +394,7 @@ edit_app_file_lines({
 // Returns: { linesRemoved: 16, linesAdded: 3, netChange: -13, tip: "..." }
 ```
 
-### Use `edit_app_file` (Only for simple text replacements)
+### Use `edit_file` (simple string replacements)
 
 **When:** Changing a simple string value, URL, or variable that appears once
 
@@ -203,12 +406,12 @@ edit_app_file_lines({
 **Workflow:**
 ```javascript
 // Quick replacement - no line numbers needed
-edit_app_file({
-  appId: "abc-123",
-  filename: "app.js",
+edit_file({
+  path: "~/Papr/apps/abc-123/app.js",
   oldString: "const API_URL = 'http://localhost:3000'",
   newString: "const API_URL = 'http://localhost:18789'"
 })
+// Mini-app path → esbuild + validate_app run automatically after the patch
 ```
 
 **⚠️ Limitations:**
@@ -224,7 +427,7 @@ Need to edit app file?
 ├─ Changing HTML structure / JS function / CSS block?
 │  └─ Use edit_app_file_lines (read file first for line numbers)
 ├─ Replacing simple text that appears once?
-│  └─ Use edit_app_file (if you know exact string)
+│  └─ Use edit_file with path ~/Papr/apps/{appId}/{filename}
 └─ Complex multi-step refactor?
    └─ Use bash with sed/awk OR multiple edit_app_file_lines calls
 ```
@@ -241,6 +444,8 @@ Mini-apps are static HTML/JS/CSS served from `http://localhost:18789/apps/<appId
 // Agent calls this tool after the job has run:
 link_app_data_source({ appId: "...", jobId: "..." })
 ```
+
+This creates `data-sources.json` in the app folder (synced to git). **Required for cloud DB** — without it, `/api/db/*` on `apps.papr.ai` has no linked Turso databases.
 
 ### Step 2 — Inspect the schema (optional)
 
@@ -374,51 +579,78 @@ ACTION=${ACTION:-draft}
 
 This solves the "I need to regen a specific thread" problem cleanly — no file bridges, no polling, no watcher jobs needed.
 
-### Preferred pattern: WebSocket push (no polling)
+### Preferred pattern: SSE push via papr-job-events (no polling)
 
-The gateway broadcasts a `jobs:status-changed` event over WebSocket the instant any job completes, fails, or starts. Mini-apps can open their own WebSocket connection to `ws://localhost:18789` and react immediately — no polling loop needed.
+Mini-apps subscribe to job lifecycle + progress over **Server-Sent Events** at `/api/jobs/events`.
+Works on **desktop gateway and cloud (`apps.papr.ai`)** — same origin, no WebSocket setup.
+
+**1. Include the SDK** (copy into app folder OR import URL):
 
 ```typescript
-const JOB_ID = 'your-job-id-here';  // hardcode the job id
-
-// Set up WebSocket listener once on app load
-function subscribeToJobEvents(onJobComplete: (jobId: string) => void): WebSocket {
-  const ws = new WebSocket('ws://localhost:18789');
-  ws.onmessage = (e: MessageEvent) => {
-    const msg = JSON.parse(e.data as string) as {
-      type: string;
-      data?: { jobId: string; status: string; error?: string };
-    };
-    if (
-      msg.type === 'jobs:status-changed' &&
-      (msg.data?.status === 'completed' || msg.data?.status === 'failed')
-    ) {
-      onJobComplete(msg.data.jobId);
-    }
-  };
-  ws.onerror = () => console.warn('WebSocket error — will not receive job push events');
-  return ws;
-}
-
-// In your app initialisation:
-subscribeToJobEvents((completedJobId) => {
-  if (completedJobId === JOB_ID) {
-    loadData();   // re-query /api/db/query and re-render
-  }
-});
-
-async function triggerRegen(): Promise<void> {
-  const res = await fetch('/api/jobs/run', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jobId: JOB_ID })
-  });
-  if (!res.ok) throw new Error((await res.json() as { error: string }).error);
-  // Done — WebSocket listener above will call loadData() when job finishes
-}
+import { subscribeJobEvents, runJobAndWaitForComplete } from './papr-job-events.ts';
+// Cloud/desktop also works: import from '/__papr__/papr-job-events.ts'
 ```
 
-### Fallback: polling (use only if WebSocket is unavailable)
+**2. Subscribe once on view load — refresh UI on events (NOT on a timer):**
+
+```typescript
+const SCORER_JOB = 'your-job-id';
+
+let unsub = subscribeJobEvents({
+  jobIds: [SCORER_JOB],
+  onStatusChanged: (data) => {
+    if (data.status === 'completed' || data.status === 'failed') {
+      void reloadFromDb();  // ONE /api/db/query after job finishes
+    }
+  },
+  onProgress: (data) => {
+    if (data.event === 'score_count') {
+      updateScoreLabel(data.payload);  // no SQL — payload from job stdout
+    }
+  },
+});
+
+// On view teardown:
+unsub();
+```
+
+**3. Jobs emit structured progress to stdout** (Python example):
+
+```python
+import json
+print("PAPR_PROGRESS " + json.dumps({
+    "event": "score_count",
+    "payload": {"sourceId": 5, "count": 12}
+}), flush=True)
+```
+
+Gateway/cloud host converts `PAPR_PROGRESS` lines into `jobs:progress` SSE events.
+
+**4. Trigger jobs without polling:**
+
+```typescript
+await fetch('/api/jobs/run', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ jobId: SCORER_JOB }),
+});
+// UI updates via subscribeJobEvents callbacks — NOT setInterval + /api/db/query
+```
+
+`validate_app` **errors** if it finds `setInterval` + `/api/db/query` polling. Fix before shipping.
+
+### Anti-pattern: polling SQL (NEVER on cloud)
+
+```typescript
+// ❌ FORBIDDEN — caused 1B+ Turso row reads in production
+setInterval(async () => {
+  const rows = await fetch('/api/db/query', { ... });  // expensive on cloud
+}, 2000);
+```
+
+### Fallback: poll job status only (not SQL)
+
+Use only when SSE unavailable. Minimum 5s interval. Prefer `subscribeJobEvents`.
 
 ```typescript
 async function pollJobStatus(
@@ -427,7 +659,7 @@ async function pollJobStatus(
 ): Promise<{ status: string; error?: string }> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 5000));
     const res = await fetch(`/api/jobs/status/${jobId}`);
     const job = await res.json() as { status: string; error?: string };
     if (job.status === 'completed' || job.status === 'failed') return job;
@@ -655,11 +887,11 @@ const users = await loadUsers(); // Uses /api/bash/run
 
 ---
 
-### Mini-Apps and System Integration (window.paprAPI)
+### Mini-Apps and System Integration (window.paprAPI — desktop Paprwork only)
 
 **IMPORTANT:** Mini-apps run in sandboxed iframes. Native browser APIs like `<a download>`, `window.open()`, and `navigator.clipboard` **do not work** because they're blocked by the iframe sandbox.
 
-Instead, use `window.paprAPI.invoke()` to call Electron system APIs. This method is automatically available in all mini-apps.
+Instead, use `window.paprAPI.invoke()` to call Electron system APIs. Available when the app runs **inside Paprwork desktop** — **not** on cloud URLs (`apps.papr.ai`); cloud users in a browser have no paprAPI.
 
 #### Common System Actions
 
@@ -1207,9 +1439,8 @@ list_apps()
 }
 
 // 2. If similar app exists, UPDATE it instead of creating new one
-edit_app_file({
-  appId: "abc-123",
-  filename: "app.js",
+edit_file({
+  path: "~/Papr/apps/abc-123/app.js",
   oldString: "const metrics = [...old data...]",
   newString: "const metrics = [...new data...]"
 })
@@ -1278,35 +1509,42 @@ Every app must handle these four states:
 
 ### App Structure Guidelines — MANDATORY
 
-Mini-apps support **TypeScript** (`.ts`/`.tsx`) — the gateway transpiles them automatically. **Always use TypeScript and modular architecture.**
+Mini-apps use **TypeScript** + **esbuild bundling**. The build pipeline resolves all imports (TS + CSS) exactly like an IDE — missing files and syntax errors are caught at build time, not at runtime.
 
 #### Required File Structure
 
 ```
 ~/Papr/apps/{appId}/
-  index.html          # Entry point — loads modules, no inline JS
-  style.css           # Global styles (Liquid Glass tokens)
-  app.ts              # Main entry — initialises app, wires components
+  index.html          # Entry point — references dist/app.js + dist/app.css
+  base.css            # Design tokens (Liquid Glass — auto-provided)
+  app.ts              # Main entry — imports base.css + components
   components/
-    header.ts         # Header component
+    header.ts         # Component logic
+    header.css        # Component styles (imported by header.ts)
     metricCard.ts     # Reusable metric card
+    metricCard.css    # Card styles (imported by metricCard.ts)
     chart.ts          # Chart component
-    ...
+    chart.css         # Chart styles
   utils/
     api.ts            # Data fetching helpers
     formatters.ts     # Number/date formatting
   types.ts            # Shared interfaces and type definitions
+  dist/               # Build output (auto-generated, never edit manually)
+    app.js            # Bundled JavaScript
+    app.css           # Bundled CSS (all imported CSS merged)
 ```
 
 #### Rules
 
-1. **TypeScript required** — use `.ts` files, not `.js`. The gateway transpiles them on-the-fly via esbuild.
-2. **Max 150 lines per file** — if a file exceeds this, split it into smaller components.
-3. **ES modules** — use `import`/`export` between files. Load in `index.html` via `<script type="module" src="app.ts"></script>`.
-4. **No inline JavaScript** — keep `<script>` content in `.ts` files, not inside HTML.
-5. **One component per file** — each UI section (header, card, chart, list, form) is its own file.
-6. **Shared types** — define interfaces in `types.ts` and import them.
-7. **Utility separation** — formatters, API calls, and helpers go in `utils/`.
+1. **TypeScript required** — use `.ts` files, not `.js`. esbuild bundles them.
+2. **Max 100 lines per file** — if a file exceeds this, split it into smaller components.
+3. **CSS imports** — every component MUST `import './component.css'` for its styles. esbuild bundles all CSS into `dist/app.css`. If a CSS file is missing, the build fails with a clear error.
+4. **ES modules** — use `import`/`export` between files. The bundler resolves the import graph.
+5. **No inline JavaScript** — keep `<script>` content in `.ts` files, not inside HTML.
+6. **One component per file** — each UI section (header, card, chart, list, form) is its own `.ts` + `.css` pair.
+7. **Shared types** — define interfaces in `types.ts` and import them.
+8. **Utility separation** — formatters, API calls, and helpers go in `utils/`.
+9. **Never edit dist/** — build output is auto-generated on every file save.
 
 #### Example: index.html
 
@@ -1317,11 +1555,11 @@ Mini-apps support **TypeScript** (`.ts`/`.tsx`) — the gateway transpiles them 
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>My Dashboard</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="dist/app.css">
 </head>
 <body>
   <div id="app"></div>
-  <script type="module" src="app.ts"></script>
+  <script type="module" src="dist/app.js"></script>
 </body>
 </html>
 ```
@@ -1329,6 +1567,7 @@ Mini-apps support **TypeScript** (`.ts`/`.tsx`) — the gateway transpiles them 
 #### Example: app.ts (entry point)
 
 ```typescript
+import './base.css';
 import { renderHeader } from './components/header.ts';
 import { renderMetrics } from './components/metricCard.ts';
 import { fetchMetrics } from './utils/api.ts';
@@ -1358,6 +1597,7 @@ init();
 #### Example: components/metricCard.ts
 
 ```typescript
+import './metricCard.css';
 import type { Metric } from '../types.ts';
 
 export function renderMetrics(container: HTMLElement, metrics: Metric[]): void {
@@ -1378,6 +1618,35 @@ export function renderMetrics(container: HTMLElement, metrics: Metric[]): void {
 }
 ```
 
+#### Example: components/metricCard.css
+
+```css
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-4);
+}
+
+.metric-card {
+  text-align: center;
+  padding: var(--space-6);
+}
+
+.metric-label {
+  font-size: var(--text-sm);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.metric-value {
+  display: block;
+  font-size: var(--text-2xl);
+  font-weight: 800;
+  color: var(--text);
+}
+```
+
 #### Using `create_app` with Modular Files
 
 ```javascript
@@ -1386,11 +1655,13 @@ create_app({
   description: "Track sales metrics and conversion",
   files: [
     { filename: "index.html", content: "..." },
-    { filename: "style.css", content: "..." },
+    { filename: "base.css", content: "..." },
     { filename: "app.ts", content: "..." },
     { filename: "types.ts", content: "..." },
     { filename: "components/header.ts", content: "..." },
+    { filename: "components/header.css", content: "..." },
     { filename: "components/metricCard.ts", content: "..." },
+    { filename: "components/metricCard.css", content: "..." },
     { filename: "utils/api.ts", content: "..." },
     { filename: "utils/formatters.ts", content: "..." }
   ]
@@ -1404,7 +1675,7 @@ create_app({
 
 Every mini-app **MUST** have an icon. It appears in the tab bar, sidebar favorites, artifact cards, and is automatically included in bundle manifests when exported. There are two ways to set it:
 
-**Option A — `icon` parameter (recommended):** Pass an SVG string or emoji directly to `create_app`:
+**Option A — `icon` parameter (recommended):** Pass an inline SVG string directly to `create_app`:
 
 ```javascript
 create_app({
@@ -1414,15 +1685,7 @@ create_app({
 })
 ```
 
-Or use an emoji (concise, great for quick apps):
-
-```javascript
-create_app({
-  title: "Weather Widget",
-  icon: "⛅",
-  // ...
-})
-```
+**Do not use emoji** for icons or anywhere in mini-app UI — `validate_app` errors on the `no-emojis` rule. Use SVG or a PNG `data:image/...;base64,...` URI instead.
 
 **Option B — favicon in `index.html` (auto-extracted):** Add a `<link rel="icon">` with a data URI SVG in the `<head>` of `index.html`. The app service auto-extracts it as the icon — no `icon` param needed:
 
@@ -1488,18 +1751,7 @@ Design icons in the same spirit as [Lucide](https://lucide.dev) icons: clean, mi
 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 12.572 12 20l-7.5-7.428A5 5 0 1 1 12 6.006a5 5 0 1 1 7.5 6.572"/><path d="M5 12h2l2-3 3 6 2-3h2"/></svg>
 ```
 
-##### When to Use Emoji vs SVG
-
-| Use Case | Recommendation |
-|----------|---------------|
-| Quick prototype / demo app | Emoji (`"📊"`, `"⛅"`, `"✅"`) |
-| Production / polished app | SVG (matches Liquid Glass aesthetic) |
-| Community bundle / shared app | SVG (looks professional in registry) |
-| App with dark/light mode | SVG with `currentColor` (adapts automatically) |
-
-**Emoji examples:** `"💰"` (finance), `"📝"` (notes), `"🏋️"` (fitness), `"🌤️"` (weather), `"📅"` (calendar), `"🛒"` (shopping), `"🎵"` (music), `"📸"` (photos)
-
-The icon shows in: tab bar, sidebar favorites, artifact card preview, and bundle manifests (auto-included on export)
+The icon shows in: tab bar, sidebar favorites, artifact card preview, and bundle manifests (auto-included on export). **Never use emoji** anywhere in mini-app UI — `validate_app` enforces the `no-emojis` rule.
 
 ---
 
@@ -2245,9 +2497,28 @@ import_app_bundle({
 - Set `renameConflicts: false` to block import on conflicts
 - Manual rename via `update_job` if needed after import
 
-### Sharing Workflow — Publish to the Paprwork Community
+### Sharing Workflow — Publish to the Community
 
-**IMPORTANT:** When users want to publish/share a mini-app, publish it to the official **paprwork-community-apps** repo so it appears in the Community Apps tab for all Paprwork users.
+**Prefer Papr Cloud** when Cloud Sync and Papr login are enabled (recommended):
+
+```javascript
+// Community catalog + live app + fork/install (Edit the code)
+publish_cloud_app({
+  appId: "your-app-uuid",
+  loginAccess: "public",
+  codeAccess: "install",
+})
+```
+
+Others discover it in **Community Apps** and install with `install_cloud_app`. Source stays on your private papr-work repo — not exposed in git.
+
+If `publish_cloud_app` returns an error (`Cloud Sync is disabled` or `Papr login required`), **recommend enabling Cloud Sync** (Settings → Cloud Sync + Papr sign-in). If the user declines, use the **export fallback** below.
+
+---
+
+**Fallback — open-source export** (works without Cloud Sync):
+
+**IMPORTANT:** When cloud is unavailable or the user wants OSS distribution, publish to the official **paprwork-community-apps** repo so it appears in the Community Apps tab for all Paprwork users.
 
 **1. Call the `export_app_bundle` tool (REQUIRED — do NOT manually create bundles):**
 ```javascript
@@ -2333,7 +2604,7 @@ cp -r ~/Papr/bundles/{bundleId} /tmp/paprwork-community-apps/bundles/{bundleId}
 - `tags`: string[] (category tags shown as chips, e.g. `["finance", "data"]`)
 - `minPaprworkVersion`: string, min 1 char (e.g. "2.0.0")
 - `path`: string (always `bundles/{bundleId}`)
-- `icon`: string, optional (SVG string or emoji)
+- `icon`: string, optional (inline SVG string or PNG data URI — never emoji)
 - `requirements`: string[], optional (flat string array — e.g. `["OPENAI_API_KEY", "Python 3.8+"]`)
 - `platform`: string[], optional (auto-detected — e.g. `["macos"]` or `["macos", "windows", "linux"]`). Use the `detectedPlatform` from the export tool result. Values: `"macos"`, `"windows"`, `"linux"`. Defaults to all three if omitted.
 
@@ -2466,7 +2737,7 @@ export_app_bundle({
 import_app_bundle({ source: "github.com/user/original" })
 
 // 2. Modify
-edit_app_file({ appId: "...", filename: "style.css", ... })
+edit_file({ path: "~/Papr/apps/{appId}/style.css", oldString: "...", newString: "..." })
 update_job({ jobId: "...", ... })
 
 // 3. Export as new app bundle
@@ -2481,6 +2752,7 @@ export_app_bundle({ appId: "...", bundleId: "my-fork", version: "1.0.0" })
 
 - **Always** call `get_job_graph()` before creating jobs for an existing pipeline
 - Assign `folder` when creating a job using `create_job({ folder: "ingestion", ... })`
+- **REQUIRED:** pass `appIds: ["<app-uuid>"]` (one or more from `list_apps()`) on every `create_job` — this is how the Jobs page groups jobs under apps. Use `folder` for pipeline stage only.
 - Use `set_job_folder` to assign or move existing jobs
 - Folders show as collapsible sections in the UI; apps can filter to their linked jobs
 

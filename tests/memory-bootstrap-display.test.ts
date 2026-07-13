@@ -46,6 +46,22 @@ Align your assistance with these goals when relevant.`;
     expect(parsed.sections[0].items[0].body).toContain("Key Results:");
   });
 
+  test("parses tier-only sync body without cross-chat intro (settings cache)", () => {
+    const content = `**Tier 0 — Priority memories (Papr-ranked; may include goals, OKRs, or conversation summaries):**
+- [TextMemoryItem] (fact) # Conversation Batch 1
+- [TextMemoryItem] (fact) Sleep cycle run on 2026-05-31
+
+**Tier 1 — Recent / hot memories:**
+- [TextMemoryItem] (fact) GPT-4 demonstrates emergent reasoning`;
+
+    const parsed = parseMemoryBootstrapBlock(content, "sync_tiers");
+
+    expect(parsed.sections).toHaveLength(2);
+    expect(parsed.sections[0].title).toContain("Tier 0");
+    expect(parsed.sections[0].items).toHaveLength(2);
+    expect(parsed.sections[1].items).toHaveLength(1);
+  });
+
   test("parses related memory block", () => {
     const content = `[RELATED MEMORY — matched to the user's current message]
 

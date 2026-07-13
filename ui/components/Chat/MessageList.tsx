@@ -9,6 +9,7 @@ import { PermissionCard } from "./PermissionCard";
 import { usePermissionStore } from "../../stores/permissionStore";
 import { useChatStore } from "../../stores/chatStore";
 import type { ChatMessage } from "../../stores/chatStore";
+import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
 import "./MessageList.css";
 
 interface MessageListProps {
@@ -175,9 +176,10 @@ export const MessageList: React.FC<MessageListProps> = ({
           onFilesDropped
             ? (e) => {
                 e.preventDefault();
-                const { files } = e.dataTransfer;
-                if (files?.length) {
-                  onFilesDropped(Array.from(files));
+                e.stopPropagation();
+                const files = extractFilesFromDataTransfer(e.dataTransfer);
+                if (files.length > 0) {
+                  onFilesDropped(files);
                 }
               }
             : undefined
@@ -207,9 +209,10 @@ export const MessageList: React.FC<MessageListProps> = ({
         onFilesDropped
           ? (e) => {
               e.preventDefault();
-              const { files } = e.dataTransfer;
-              if (files?.length) {
-                onFilesDropped(Array.from(files));
+              e.stopPropagation();
+              const files = extractFilesFromDataTransfer(e.dataTransfer);
+              if (files.length > 0) {
+                onFilesDropped(files);
               }
             }
           : undefined

@@ -20,6 +20,27 @@ interface ModelCapabilities {
  */
 const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
   // OpenAI
+  "gpt-5-6-sol": {
+    reasoningLevel: "advanced",
+    contextWindow: 1050000,
+    speed: "slow",
+    cost: "expensive",
+    specialties: ["reasoning", "computer-use", "complex-tasks", "agentic-coding"],
+  },
+  "gpt-5-6-terra": {
+    reasoningLevel: "advanced",
+    contextWindow: 1050000,
+    speed: "medium",
+    cost: "medium",
+    specialties: ["coding", "knowledge-work", "analysis"],
+  },
+  "gpt-5-6-luna": {
+    reasoningLevel: "medium",
+    contextWindow: 1050000,
+    speed: "fast",
+    cost: "cheap",
+    specialties: ["speed", "classification", "drafts", "high-volume"],
+  },
   "gpt-5.5": {
     reasoningLevel: "advanced",
     contextWindow: 1000000,
@@ -57,6 +78,20 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
   },
 
   // Anthropic
+  "claude-opus-4-6": {
+    reasoningLevel: "advanced",
+    contextWindow: 200000,
+    speed: "slow",
+    cost: "expensive",
+    specialties: ["reasoning", "architecture", "planning", "analysis"],
+  },
+  "claude-opus-4-8": {
+    reasoningLevel: "advanced",
+    contextWindow: 1000000,
+    speed: "slow",
+    cost: "expensive",
+    specialties: ["reasoning", "agentic", "coding", "long-horizon"],
+  },
   "claude-sonnet-4-6": {
     reasoningLevel: "advanced",
     contextWindow: 200000,
@@ -174,11 +209,14 @@ export async function getBestFallbackModel(
 
   // Default models by provider
   const defaultModelByProvider: Record<Provider, string> = {
-    openai: "gpt-5.5",
+    openai: "gpt-5-6-sol",
     "openai-codex": "gpt-5.3-codex",
     anthropic: "claude-sonnet-4-6",
     google: "gemini-3.5-flash",
     ollama: "qwen3.5:latest",
+    cursor: "composer-2.5",
+    zai: "glm-5.2",
+    groq: "openai/gpt-oss-120b",
   };
 
   // If we don't know the original model's capabilities, use default provider
@@ -272,10 +310,10 @@ export function getUpgradeModelForTask(
     Record<string, string>
   > = {
     openai: {
-      reasoning: "gpt-5.5",
+      reasoning: "gpt-5-6-sol",
       coding: "gpt-5.3-codex",
-      writing: "gpt-5.5",
-      general: "gpt-5.5",
+      writing: "gpt-5-6-sol",
+      general: "gpt-5-6-sol",
     },
     "openai-codex": {
       reasoning: "gpt-5.3-codex",
@@ -300,6 +338,24 @@ export function getUpgradeModelForTask(
       coding: "qwen3.5:latest",
       writing: "qwen3.5:latest",
       general: "qwen3.5:latest",
+    },
+    cursor: {
+      reasoning: "composer-2.5",
+      coding: "composer-2.5",
+      writing: "composer-2.5",
+      general: "composer-2.5",
+    },
+    zai: {
+      reasoning: "glm-5.2-max",
+      coding: "glm-5.2",
+      writing: "glm-5.2",
+      general: "glm-5.2",
+    },
+    groq: {
+      reasoning: "openai/gpt-oss-120b",
+      coding: "qwen/qwen3-32b",
+      writing: "qwen/qwen3-32b",
+      general: "openai/gpt-oss-120b",
     },
   };
 

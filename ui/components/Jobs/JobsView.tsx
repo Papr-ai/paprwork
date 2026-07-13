@@ -20,6 +20,18 @@ import "./JobsView.css";
 type JobFilter = "all" | "running" | "idle" | "scheduled";
 type ViewMode = "list" | "workflow";
 
+function CloudRunIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M7 18h11a4 4 0 000-8 5 5 0 00-9.8-1.2A3.5 3.5 0 007 18z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+    </svg>
+  );
+}
+
 export function JobsView() {
   const {
     jobs,
@@ -47,6 +59,8 @@ export function JobsView() {
   const appDropdownRef = useRef<HTMLDivElement>(null);
   const focusJobId = useJobNavigationStore((s) => s.focusJobId);
   const clearFocusJob = useJobNavigationStore((s) => s.clearFocusJob);
+  const setSelectedJob = useJobNavigationStore((s) => s.setSelectedJob);
+  const clearSelectedJob = useJobNavigationStore((s) => s.clearSelectedJob);
 
   useEffect(() => {
     void loadArtifacts();
@@ -73,6 +87,33 @@ export function JobsView() {
     void loadLogs(focusJobId);
     clearFocusJob();
   }, [focusJobId, jobs, loading, graph, graphLoaded, loadLogs, clearFocusJob]);
+
+  useEffect(() => {
+    if (viewMode === "workflow" && workflowSelectedJobId) {
+      const job = jobs.find((entry) => entry.id === workflowSelectedJobId);
+      if (job) {
+        setSelectedJob(job.id, job.name);
+      }
+      return;
+    }
+
+    if (viewMode === "list" && expandedJobId) {
+      const job = jobs.find((entry) => entry.id === expandedJobId);
+      if (job) {
+        setSelectedJob(job.id, job.name);
+      }
+      return;
+    }
+
+    clearSelectedJob();
+  }, [
+    viewMode,
+    workflowSelectedJobId,
+    expandedJobId,
+    jobs,
+    setSelectedJob,
+    clearSelectedJob,
+  ]);
 
   const handleDiagnose = useCallback(
     (job: JobRecord) => {
@@ -377,15 +418,24 @@ export function JobsView() {
                   </svg>
                 </button>
               ) : (
-                <button
-                  className="jv2-btn"
-                  title="Run"
-                  onClick={() => void runJob(job.id)}
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
-                    <path d="M8 5v14l11-7-11-7z" stroke="currentColor" strokeWidth="1.5" />
-                  </svg>
-                </button>
+                <>
+                  <button
+                    className="jv2-btn"
+                    title="Run locally"
+                    onClick={() => void runJob(job.id)}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                      <path d="M8 5v14l11-7-11-7z" stroke="currentColor" strokeWidth="1.5" />
+                    </svg>
+                  </button>
+                  <button
+                    className="jv2-btn jv2-btn--cloud"
+                    title="Run in cloud"
+                    onClick={() => void runJob(job.id, "cloud")}
+                  >
+                    <CloudRunIcon />
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -408,6 +458,13 @@ export function JobsView() {
                     onClick={() => void runJob(job.id)}
                   >
                     Run
+                  </button>
+                  <button
+                    className="jv2-wf-action-btn jv2-wf-action-btn--cloud"
+                    title="Push to cloud and run on Papr Cloud"
+                    onClick={() => void runJob(job.id, "cloud")}
+                  >
+                    Run in Cloud
                   </button>
                   <button
                     className="jv2-wf-action-btn"
@@ -533,6 +590,13 @@ export function JobsView() {
                 onClick={() => void runJob(job.id)}
               >
                 Run
+              </button>
+              <button
+                className="jv2-wf-action-btn jv2-wf-action-btn--cloud"
+                title="Push to cloud and run on Papr Cloud"
+                onClick={() => void runJob(job.id, "cloud")}
+              >
+                Run in Cloud
               </button>
               <button
                 className="jv2-wf-action-btn"

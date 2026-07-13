@@ -31,6 +31,7 @@ let requestPermissionFromGateway;
 let initializeOllamaIPC;
 let cleanupOllama;
 let initializeTelemetryIPC;
+let initializeChatAttachmentsIPC;
 let TelemetryClientClass;
 let isTelemetrySendingEnabledFn;
 let telemetryClientInstance = null;
@@ -106,6 +107,11 @@ async function loadESMModules() {
   );
   initializeTelemetryIPC = telemetryIpcModule.initializeTelemetryIPC;
 
+  const chatAttachmentsIpcModule = await import(
+    "../../dist/electron/electron/ipc/chatAttachments.js"
+  );
+  initializeChatAttachmentsIPC = chatAttachmentsIpcModule.initializeChatAttachmentsIPC;
+
   const telemetryClientModule = await import(
     "../../dist/electron/core/telemetry/index.js"
   );
@@ -120,10 +126,57 @@ const IS_PRODUCTION = process.env.NODE_ENV === "production" || require("path").d
 
 let mainWindow = null;
 let isQuitting = false;
+let isInstallingUpdate = false;
 let gatewayProcess = null;
 const webviewSessions = new Map();
 let defaultWebviewId = null;
 let webviewCounter = 0;
+const webviewNetworkDispatchSessions = new WeakSet();
+
+// Single shared webRequest.onCompleted listener per Electron session.
+// Electron replaces (not stacks) webRequest listeners, so per-window
+// registration silently broke network logging for earlier sessions —
+// which is why module/script requests appeared to be "missing" from logs.
+function registerWebviewNetworkDispatch(session) {
+  if (webviewNetworkDispatchSessions.has(session)) return;
+  webviewNetworkDispatchSessions.add(session);
+  session.webRequest.onCompleted((details) => {
+    for (const entry of webviewSessions.values()) {
+      if (entry.webContentsId !== details.webContentsId) continue;
+      entry.networkLogs.push({
+        url: details.url,
+        statusCode: details.statusCode,
+        method: details.method,
+        resourceType: details.resourceType,
+        timestamp: new Date().toISOString(),
+      });
+      if (entry.networkLogs.length > 500) {
+        entry.networkLogs.shift();
+      }
+    }
+  });
+}
+
+// executeJavaScript can hang indefinitely when the renderer is busy or
+// frozen — which made snapshot/execute tools time out with no diagnosis.
+// Bound every call and surface a labeled "renderer unresponsive" error.
+function execJsWithTimeout(win, script, timeoutMs = 8000, label = "script") {
+  return Promise.race([
+    win.webContents.executeJavaScript(script),
+    new Promise((_, reject) =>
+      setTimeout(
+        () =>
+          reject(
+            new Error(
+              `Renderer unresponsive: ${label} did not complete within ${Math.round(timeoutMs / 1000)}s. ` +
+                "The page may be frozen during startup (heavy synchronous work or a hung module load).",
+            ),
+          ),
+        timeoutMs,
+      ),
+    ),
+  ]);
+}
 
 function isRequestKeysMessage(message) {
   return (
@@ -237,21 +290,14 @@ async function handleWebviewTestRequest(request) {
 
     const session = win.webContents.session;
     // Capture the webContentsId now — before the window can be destroyed —
-    // so the onCompleted filter never touches a dead webContents object.
+    // so the network dispatch never touches a dead webContents object.
     const webContentsId = win.webContents.id;
-    const onCompleted = (details) => {
-      if (details.webContentsId !== webContentsId) return;
-      entry.networkLogs.push({
-        url: details.url,
-        statusCode: details.statusCode,
-        method: details.method,
-        timestamp: new Date().toISOString(),
-      });
-      if (entry.networkLogs.length > 500) {
-        entry.networkLogs.shift();
-      }
-    };
-    session.webRequest.onCompleted(onCompleted);
+    entry.webContentsId = webContentsId;
+    // NOTE: Electron only supports ONE webRequest.onCompleted listener per
+    // session. Registering per-window listeners silently replaced earlier
+    // ones (and closing any window cleared logging for all). Use a single
+    // shared listener that dispatches to every live session instead.
+    registerWebviewNetworkDispatch(session);
 
     const onConsoleMessage = (_event, level, message, line, sourceId) => {
       entry.consoleLogs.push({
@@ -268,24 +314,53 @@ async function handleWebviewTestRequest(request) {
     win.webContents.on("console-message", onConsoleMessage);
 
     win.on("closed", () => {
-      // Remove the session-level network listener so it never fires on a dead window.
-      // webRequest.onCompleted(null) clears the listener for this session.
-      try {
-        session.webRequest.onCompleted(null);
-      } catch (_) {}
+      // The shared network dispatch listener stays registered; it simply
+      // finds no matching live session for this webContentsId anymore.
       webviewSessions.delete(id);
       if (defaultWebviewId === id) {
         defaultWebviewId = null;
       }
     });
 
-    await win.loadURL(url);
+    // Non-blocking launch: never let a slow/hung page load exceed the IPC
+    // bridge timeout. Wait up to 10s for load; on timeout return the session
+    // anyway with status "launching" so callers can poll with page_wait_for.
+    const LAUNCH_WAIT_MS = 10000;
+    let loadStatus = "loaded";
+    let loadError = null;
+    try {
+      await Promise.race([
+        win.loadURL(url),
+        new Promise((_, rejectRace) =>
+          setTimeout(
+            () => rejectRace(new Error("launch-wait-timeout")),
+            LAUNCH_WAIT_MS,
+          ),
+        ),
+      ]);
+    } catch (err) {
+      if (err && err.message === "launch-wait-timeout") {
+        loadStatus = "launching";
+      } else {
+        loadStatus = "load-error";
+        loadError = err && err.message ? err.message : String(err);
+      }
+    }
     return {
       success: true,
       data: {
         webviewId: id,
         url,
         title: win.webContents.getTitle(),
+        status: loadStatus,
+        ...(loadError ? { loadError } : {}),
+        ...(loadStatus !== "loaded"
+          ? {
+              hint:
+                "Session was created but the page has not finished loading. " +
+                "Use page_wait_for({ target: 'mini_app' }) then webview_snapshot.",
+            }
+          : {}),
       },
     };
   }
@@ -303,13 +378,19 @@ async function handleWebviewTestRequest(request) {
   if (action === "snapshot") {
     const maxHtmlChars = Number(payload.maxHtmlChars) || 80000;
     const maxTextChars = Number(payload.maxTextChars) || 12000;
-    const html = await win.webContents.executeJavaScript(
+    const html = await execJsWithTimeout(
+      win,
       "document.documentElement.outerHTML",
+      8000,
+      "snapshot(html)",
     );
-    const text = await win.webContents.executeJavaScript(
+    const text = await execJsWithTimeout(
+      win,
       "document.body ? document.body.innerText : ''",
+      8000,
+      "snapshot(text)",
     );
-    const visualState = await win.webContents.executeJavaScript(`(() => {
+    const visualState = await execJsWithTimeout(win, `(() => {
       function isVisible(el) {
         const s = getComputedStyle(el);
         if (s.display === 'none' || s.visibility === 'hidden' || Number(s.opacity) === 0) return false;
@@ -326,14 +407,28 @@ async function handleWebviewTestRequest(request) {
       if (overlays.length > 0 && main && !main.innerText.trim()) {
         warnings.push('Modal overlay is visible but main content is empty — UI may look blank/blurred to the user');
       }
+      const boot = window.__paprBoot
+        ? {
+            moduleRan: !!window.__paprBoot.moduleRan,
+            errors: (window.__paprBoot.errors || []).slice(0, 5),
+            phases: window.__paprBoot.phases || {},
+          }
+        : null;
+      if (boot && !boot.moduleRan) {
+        warnings.push('Boot watchdog: entry script module has not executed — app code is not running');
+      }
+      if (boot && boot.errors.length > 0) {
+        warnings.push('Boot watchdog errors: ' + boot.errors.join(' | '));
+      }
       return {
         brokenHiddenCount: brokenHidden.length,
         visibleOverlayCount: overlays.length,
         mainContentEmpty: main ? !main.innerText.trim() : null,
         warnings,
+        boot,
         userWouldSeeBlankUi: brokenHidden.length > 0 || (overlays.length > 0 && main && !main.innerText.trim()),
       };
-    })()`);
+    })()`, 8000, "snapshot(visualState)");
     return {
       success: true,
       data: {
@@ -352,7 +447,7 @@ async function handleWebviewTestRequest(request) {
     if (typeof script !== "string" || script.length === 0) {
       return { success: false, error: "script is required for execute" };
     }
-    const result = await win.webContents.executeJavaScript(script);
+    const result = await execJsWithTimeout(win, script, 15000, "execute");
     return {
       success: true,
       data: {
@@ -462,7 +557,47 @@ async function handleWebviewTestRequest(request) {
 }
 
 // Minimal window setup - just load the UI
-function createMainWindow() {
+async function waitForGatewayFullyReady(
+  maxAttempts = 120,
+  intervalMs = 500,
+) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const ready = await new Promise((resolve) => {
+      const req = http.get(`http://localhost:${GATEWAY_PORT}/health`, (res) => {
+        let body = "";
+        res.on("data", (chunk) => {
+          body += chunk;
+        });
+        res.on("end", () => {
+          try {
+            resolve(JSON.parse(body).status === "ok");
+          } catch {
+            resolve(false);
+          }
+        });
+      });
+      req.on("error", () => resolve(false));
+      req.setTimeout(3000, () => {
+        req.destroy();
+        resolve(false);
+      });
+    });
+    if (ready) {
+      console.log(`[Electron] Gateway fully ready (attempt ${attempt})`);
+      return true;
+    }
+    if (attempt === 1 || attempt % 10 === 0) {
+      console.log(
+        `[Electron] Waiting for Gateway routes... (${attempt}/${maxAttempts})`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  console.warn("[Electron] Gateway not fully ready — loading UI anyway");
+  return false;
+}
+
+async function createMainWindow() {
   const preloadPath = path.join(__dirname, "preload.cjs");
   console.log(`[Electron] Preload script path: ${preloadPath}`);
 
@@ -581,6 +716,9 @@ function createMainWindow() {
   const uiUrl = IS_PRODUCTION ? `http://localhost:${GATEWAY_PORT}` : UI_DEV_URL;
 
   const loadStartTime = Date.now();
+  if (IS_PRODUCTION) {
+    await waitForGatewayFullyReady();
+  }
   console.log(`[Electron] Loading UI from: ${uiUrl} at ${new Date(loadStartTime).toISOString()}`);
 
   // Add error handler for load failures
@@ -703,6 +841,8 @@ const {
   pruneTimestamps,
   getNotificationType,
   shouldKillProcess,
+  parseHealthResponse,
+  shouldKillUnhealthyGateway,
   isValidTransition,
 } = require("./supervisor-logic.cjs");
 
@@ -722,6 +862,7 @@ class GatewayProcessSupervisor {
     this.restartTimestamps = [];
     this.healthCheckTimer = null;
     this.healthFailures = 0;
+    this.hasEverBeenHealthy = false;
     this.backoffTimer = null;
     this.isStopping = false;
 
@@ -876,6 +1017,9 @@ class GatewayProcessSupervisor {
       env: this.gatewayEnv,
       },
     );
+
+    this.hasEverBeenHealthy = false;
+    this.healthFailures = 0;
 
     // Update module-level reference for backward compatibility
     gatewayProcess = this.process;
@@ -1120,18 +1264,16 @@ class GatewayProcessSupervisor {
         let body = "";
         res.on("data", (d) => (body += d));
         res.on("end", () => {
-          try {
-            const parsed = JSON.parse(body);
-            this._onHealthCheckResult(parsed.status === "ok");
-          } catch {
-            this._onHealthCheckResult(false);
-          }
+          const health = parseHealthResponse(body);
+          this._onHealthCheckResult(health);
         });
       });
-      req.on("error", () => this._onHealthCheckResult(false));
+      req.on("error", () =>
+        this._onHealthCheckResult({ alive: false, ready: false }),
+      );
       req.setTimeout(5000, () => {
         req.destroy();
-        this._onHealthCheckResult(false);
+        this._onHealthCheckResult({ alive: false, ready: false });
       });
     }, this.HEALTH_INTERVAL_MS);
   }
@@ -1143,8 +1285,17 @@ class GatewayProcessSupervisor {
     }
   }
 
-  _onHealthCheckResult(ok) {
-    const result = shouldKillProcess(this.healthFailures, ok, this.HEALTH_FAILURE_THRESHOLD);
+  _onHealthCheckResult(health) {
+    if (health.ready) {
+      this.hasEverBeenHealthy = true;
+    }
+
+    const result = shouldKillUnhealthyGateway(
+      this.healthFailures,
+      health,
+      this.hasEverBeenHealthy,
+      this.HEALTH_FAILURE_THRESHOLD,
+    );
     this.healthFailures = result.newCount;
 
     if (result.shouldKill) {
@@ -1154,8 +1305,10 @@ class GatewayProcessSupervisor {
         this.process.kill("SIGKILL");
         // _onProcessExit will handle restart scheduling
       }
-    } else if (!ok) {
+    } else if (!health.alive && this.hasEverBeenHealthy) {
       console.warn(`[Supervisor] Health check failed (${this.healthFailures}/${this.HEALTH_FAILURE_THRESHOLD})`);
+    } else if (health.alive && !health.ready) {
+      console.log("[Supervisor] Gateway still starting (services loading)...");
     }
   }
 
@@ -1210,7 +1363,7 @@ class GatewayProcessSupervisor {
     }
   }
 
-  _waitForReady(maxAttempts = 20, intervalMs = 500) {
+  _waitForReady(maxAttempts = 240, intervalMs = 500) {
     return new Promise((resolve) => {
       let attempts = 0;
       let resolved = false;
@@ -1222,12 +1375,28 @@ class GatewayProcessSupervisor {
           return;
         }
         attempts++;
-        const req = http.get(`http://localhost:${this.port}/`, (res) => {
-          if (resolved) return;
-          resolved = true;
-          clearInterval(check);
-          console.log(`[Supervisor] Gateway is ready (status: ${res.statusCode})`);
-          resolve();
+        const req = http.get(`http://localhost:${this.port}/health`, (res) => {
+          let body = "";
+          res.on("data", (d) => (body += d));
+          res.on("end", () => {
+            if (resolved) return;
+            const health = parseHealthResponse(body);
+            if (health.alive) {
+              resolved = true;
+              clearInterval(check);
+              console.log(
+                `[Supervisor] Gateway is ${health.ready ? "ready" : "starting"} (health probe)`,
+              );
+              resolve();
+            } else if (attempts >= maxAttempts) {
+              resolved = true;
+              clearInterval(check);
+              console.error(`[Supervisor] Gateway failed to respond after ${maxAttempts} attempts`);
+              resolve();
+            } else {
+              console.log(`[Supervisor] Waiting for Gateway... (${attempts}/${maxAttempts})`);
+            }
+          });
         });
         req.on("error", () => {
           if (resolved) return;
@@ -1239,6 +1408,9 @@ class GatewayProcessSupervisor {
           } else {
             console.log(`[Supervisor] Waiting for Gateway... (${attempts}/${maxAttempts})`);
           }
+        });
+        req.setTimeout(5000, () => {
+          req.destroy();
         });
         req.end();
       }, intervalMs);
@@ -1253,9 +1425,67 @@ class GatewayProcessSupervisor {
 //  Sends status to renderer via IPC so the UI can show an update banner.
 // ---------------------------------------------------------------------------
 
+const UPDATE_RECOVERY_HINT =
+  "If the app won't open after updating: quit Papr Work, delete " +
+  "~/Library/Caches/com.paprwork.v2.ShipIt, remove /Applications/Papr Work.app, " +
+  "then reinstall the latest arm64 .pkg from GitHub Releases.";
+
+function formatUpdateError(rawMessage) {
+  const message =
+    typeof rawMessage === "string" ? rawMessage : String(rawMessage ?? "Unknown error");
+  const lower = message.toLowerCase();
+
+  if (lower.includes("read-only volume") || lower.includes("readonly")) {
+    return {
+      error:
+        "Update cannot install while Papr Work is on a read-only volume. " +
+        "Install to /Applications using the .pkg installer.",
+      recoveryHint: UPDATE_RECOVERY_HINT,
+    };
+  }
+
+  if (
+    lower.includes("shipit") ||
+    lower.includes("signature") ||
+    lower.includes("codesign") ||
+    lower.includes("seckey") ||
+    lower.includes("corrupt") ||
+    lower.includes("damaged")
+  ) {
+    return {
+      error: `Update installation failed: ${message}`,
+      recoveryHint: UPDATE_RECOVERY_HINT,
+    };
+  }
+
+  if (
+    lower.includes("enotfound") ||
+    lower.includes("network") ||
+    lower.includes("net::") ||
+    lower.includes("econnrefused") ||
+    lower.includes("timed out")
+  ) {
+    return {
+      error: `Could not reach the update server: ${message}`,
+      recoveryHint: "Check your internet connection and try again.",
+    };
+  }
+
+  if (lower.includes("not packaged")) {
+    return {
+      error: message,
+      recoveryHint: "Auto-updates only work in packaged builds from GitHub Releases.",
+    };
+  }
+
+  return { error: message };
+}
+
 function setupAutoUpdater() {
   autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  // Only install when the user explicitly clicks "Restart to update".
+  // autoInstallOnAppQuit races with before-quit cleanup and can corrupt ShipIt installs.
+  autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.logger = null; // We handle logging ourselves
 
   autoUpdater.on("checking-for-update", () => {
@@ -1284,12 +1514,15 @@ function setupAutoUpdater() {
 
   autoUpdater.on("error", (err) => {
     console.error("[AutoUpdater] Error:", err.message);
-    sendUpdateStatus("error", { error: err.message });
+    const formatted = formatUpdateError(err.message);
+    sendUpdateStatus("error", formatted);
   });
 
   // IPC: renderer can request "install now" (quit & install)
   ipcMain.on("updater:install", () => {
     console.log("[AutoUpdater] User requested install, quitting and installing...");
+    isInstallingUpdate = true;
+    isQuitting = true;
     autoUpdater.quitAndInstall(false, true);
   });
 
@@ -1300,15 +1533,15 @@ function setupAutoUpdater() {
     // Check if running in development/unpackaged mode
     if (!app.isPackaged) {
       console.log("[AutoUpdater] Skipping check - app is not packaged");
-      sendUpdateStatus("error", { 
-        error: "Updates are only available in packaged builds. Running from source doesn't support auto-updates." 
-      });
+      sendUpdateStatus("error", formatUpdateError(
+        "Updates are only available in packaged builds. Running from source doesn't support auto-updates."
+      ));
       return;
     }
     
     autoUpdater.checkForUpdates().catch((err) => {
       console.error("[AutoUpdater] Manual check failed:", err.message);
-      sendUpdateStatus("error", { error: err.message });
+      sendUpdateStatus("error", formatUpdateError(err.message));
     });
   });
 
@@ -1322,7 +1555,7 @@ function setupAutoUpdater() {
     
     autoUpdater.checkForUpdates().catch((err) => {
       console.error("[AutoUpdater] Initial check failed:", err.message);
-      sendUpdateStatus("error", { error: err.message });
+      sendUpdateStatus("error", formatUpdateError(err.message));
     });
   }, 5000);
 
@@ -1475,6 +1708,32 @@ let customKeysStorage;
 let keyPermissionsStorage;
 let settingsStorage;
 
+/** Deep links received before auth IPC is ready (macOS open-url can fire pre-ready). */
+const pendingDeepLinks = [];
+
+async function flushPendingDeepLinks() {
+  if (!handlePaprAuthCallback || !customKeysStorage || !settingsStorage) {
+    return;
+  }
+  while (pendingDeepLinks.length > 0) {
+    const url = pendingDeepLinks.shift();
+    try {
+      await handlePaprAuthCallback(url, customKeysStorage, settingsStorage);
+    } catch (err) {
+      console.error("[Electron] Deep link handler failed:", err);
+    }
+  }
+}
+
+function queueDeepLink(url) {
+  if (typeof url !== "string" || !url.startsWith("papr://")) {
+    return;
+  }
+  console.log("[Electron] Queued deep link:", url);
+  pendingDeepLinks.push(url);
+  void flushPendingDeepLinks();
+}
+
 // Single instance lock - prevent multiple instances on Windows/Linux
 // When a second instance tries to start, send its command line args to the first instance
 const gotTheLock = app.requestSingleInstanceLock();
@@ -1495,10 +1754,16 @@ if (!gotTheLock) {
     
     // Check if the second instance was launched with a deep link
     const url = commandLine.find(arg => arg.startsWith('papr://'));
-    if (url && handlePaprAuthCallback && customKeysStorage && settingsStorage) {
+    if (url) {
       console.log('[Electron] Second instance opened with deep link:', url);
-      await handlePaprAuthCallback(url, customKeysStorage, settingsStorage);
+      queueDeepLink(url);
     }
+  });
+
+  // macOS: capture papr:// callbacks before app.whenReady (Electron best practice)
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    queueDeepLink(url);
   });
 }
 
@@ -1539,12 +1804,22 @@ app.whenReady().then(async () => {
     initializeTelemetryIPC(settingsStorage);
   }
 
+  if (initializeChatAttachmentsIPC) {
+    initializeChatAttachmentsIPC();
+  }
+
   ipcMain.handle("app:get-version", () => app.getVersion());
 
   // Backfill gateway settings with Papr user id before telemetry + gateway spawn
   const paprProfile = settingsStorage.getPaprProfile();
   if (paprProfile?.userId && paprProfile.email && syncProfileToGatewaySettings) {
-    await syncProfileToGatewaySettings(paprProfile.email, paprProfile.userId);
+    await syncProfileToGatewaySettings(
+      paprProfile.email,
+      paprProfile.userId,
+      paprProfile.displayName,
+      paprProfile.profileImage,
+      paprProfile.activeNamespaceName,
+    );
   }
 
   if (TelemetryClientClass && isTelemetrySendingEnabledFn) {
@@ -1568,7 +1843,20 @@ app.whenReady().then(async () => {
   await initializeOAuthIPC(customKeysStorage);
 
   // Initialize Papr Login IPC handlers
-  initializePaprLoginIPC(customKeysStorage, settingsStorage);
+  initializePaprLoginIPC(customKeysStorage, settingsStorage, {
+    trackLoginEvent: (eventName, properties) => {
+      if (telemetryClientInstance) {
+        telemetryClientInstance.trackFireAndForget(eventName, properties);
+      }
+    },
+  });
+
+  // Process deep links queued during startup (Windows cold start + early macOS open-url)
+  const coldStartUrl = process.argv.find((arg) => arg.startsWith("papr://"));
+  if (coldStartUrl) {
+    queueDeepLink(coldStartUrl);
+  }
+  await flushPendingDeepLinks();
 
 
   // Check Python installation on Windows (for non-technical users)
@@ -1590,6 +1878,30 @@ app.whenReady().then(async () => {
     GATEWAY_PORT: String(GATEWAY_PORT),
     NODE_ENV: IS_PRODUCTION ? "production" : "development",
     ELECTRON_RUN_AS_NODE: "1",
+    CLOUD_SYNC_ENABLED: (() => {
+      try {
+        const settingsPath = require("path").join(require("os").homedir(), "Papr", "data", "settings.json");
+        if (require("fs").existsSync(settingsPath)) {
+          const data = JSON.parse(require("fs").readFileSync(settingsPath, "utf-8"));
+          if (data?.preferences?.cloudSyncEnabled === false) return "false";
+        }
+        return "true";
+      } catch {
+        return "true";
+      }
+    })(),
+    CLOUD_AUTO_PUBLISH_ENABLED: (() => {
+      try {
+        const settingsPath = require("path").join(require("os").homedir(), "Papr", "data", "settings.json");
+        if (require("fs").existsSync(settingsPath)) {
+          const data = JSON.parse(require("fs").readFileSync(settingsPath, "utf-8"));
+          if (data?.preferences?.cloudAutoPublishEnabled === false) return "false";
+        }
+        return "true";
+      } catch {
+        return "true";
+      }
+    })(),
     PAPRWORK_TELEMETRY_ENABLED: gatewayTelemetryOn ? "true" : "false",
     PAPRWORK_TELEMETRY_ANONYMOUS_ID:
       settingsStorage.getOrCreateTelemetryInstallId(),
@@ -1632,7 +1944,7 @@ app.whenReady().then(async () => {
   });
 
   await supervisor.start();
-  createMainWindow();
+  await createMainWindow();
   setupAutoUpdater();
 
   // Initialize permissions IPC after window is created
@@ -1645,34 +1957,6 @@ app.whenReady().then(async () => {
 
   // Initialize system:invoke handler for mini-app system integration
   initializeSystemInvokeHandler(mainWindow);
-
-  // Handle deep links for Papr auth callback (papr://auth/callback?...)
-  // This handles the case when the app is already running
-  app.on('open-url', async (event, url) => {
-    event.preventDefault();
-    console.log('[Electron] ========================================');
-    console.log('[Electron] Received deep link via open-url event:', url);
-    console.log('[Electron] ========================================');
-    if (handlePaprAuthCallback) {
-      await handlePaprAuthCallback(url, customKeysStorage, settingsStorage);
-    } else {
-      console.error('[Electron] handlePaprAuthCallback not available!');
-    }
-  });
-
-  // Handle deep links when app is opened from a URL (macOS/Windows)
-  // Check if the app was opened with a URL argument
-  if (process.platform === 'darwin') {
-    // macOS - URL is passed via 'open-url' event
-    // Already handled above
-  } else {
-    // Windows/Linux - URL is passed as command line argument
-    const url = process.argv.find(arg => arg.startsWith('papr://'));
-    if (url && handlePaprAuthCallback) {
-      console.log('[Electron] App opened with deep link:', url);
-      await handlePaprAuthCallback(url, customKeysStorage, settingsStorage);
-    }
-  }
 
   // System power state monitoring (sleep/wake/lock/unlock)
   // Works on macOS, Windows, and Linux
@@ -1752,16 +2036,23 @@ app.on("window-all-closed", () => {
   }
 });
 
-app.on("activate", () => {
+app.on("activate", async () => {
   // macOS: Re-create window when dock icon clicked and no windows open
   if (mainWindow === null) {
-    createMainWindow();
+    await createMainWindow();
   } else if (!mainWindow.isVisible()) {
     mainWindow.show();
   }
 });
 
 app.on("before-quit", async (event) => {
+  // ShipIt needs an immediate quit — async cleanup races the bundle swap.
+  if (isInstallingUpdate) {
+    console.log("[Electron] Installing update — fast quit (skipping cleanup)");
+    isQuitting = true;
+    return;
+  }
+
   if (isQuitting) {
     console.log("[Electron] Already quitting, allowing quit to proceed");
     // Close all windows to ensure app actually quits
@@ -1834,6 +2125,11 @@ app.on("before-quit", async (event) => {
 
 app.on("will-quit", (event) => {
   console.log("[Electron] App will quit - final cleanup");
+
+  if (isInstallingUpdate) {
+    console.log("[Electron] Installing update — skipping Gateway force-kill");
+    return;
+  }
   
   // Force stop Gateway if somehow still running
   if (supervisor && supervisor.getProcess() && !supervisor.getProcess().killed) {

@@ -3,7 +3,7 @@
  * Clean, minimal interface focused on app discovery and creation
  */
 
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useMemo, useEffect } from "react";
 import { useArtifacts } from "../../hooks/useArtifacts";
 import { useTabs } from "../../hooks/useTabs";
 import { gateway } from "../../src/lib/gateway";
@@ -31,6 +31,17 @@ export function AppsView() {
   const [viewTab, setViewTab] = useState<ViewTab>("my-apps");
   const [sortBy, setSortBy] = useState<SortOption>("recent");
   const [showCreateModal, setShowCreateModal] = useState(false);
+
+  useEffect(() => {
+    const onAppsTab = (event: Event) => {
+      const tab = (event as CustomEvent<{ tab?: ViewTab }>).detail?.tab;
+      if (tab === "community" || tab === "my-apps") {
+        setViewTab(tab);
+      }
+    };
+    window.addEventListener("papr-apps-view-tab", onAppsTab);
+    return () => window.removeEventListener("papr-apps-view-tab", onAppsTab);
+  }, []);
 
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchQuery(e.target.value);

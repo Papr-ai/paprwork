@@ -139,6 +139,15 @@ export const ExploringCard: React.FC<ExploringCardProps> = ({
           } else if (toolCall.status === "success") {
             // Success checkmark
             statusIndicator = <span className="exploring-tool-success">✓</span>;
+          } else if (toolCall.status === "interrupted") {
+            statusIndicator = (
+              <span
+                className="exploring-tool-interrupted"
+                title="Interrupted before this tool finished"
+              >
+                ⚠️
+              </span>
+            );
           } else if (toolCall.status === "error") {
             // Error X
             statusIndicator = <span className="exploring-tool-error">✗</span>;

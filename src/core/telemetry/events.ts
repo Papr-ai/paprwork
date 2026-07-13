@@ -23,6 +23,7 @@ export const AmplitudeEvents = {
   ONBOARDING_COMPLETED: "paprwork_onboarding_completed",
   PAPR_LOGIN_STARTED: "paprwork_papr_login_started",
   PAPR_LOGIN_COMPLETED: "paprwork_papr_login_completed",
+  PAPR_LOGIN_FAILED: "paprwork_papr_login_failed",
 
   // Chat Events
   CHAT_CREATED: "paprwork_chat_created",
@@ -106,6 +107,23 @@ export interface OnboardingStepProperties extends BaseEventProperties {
 export interface OnboardingCompletedProperties extends BaseEventProperties {
   time_spent_seconds: number;
   steps_completed: number;
+}
+
+export interface PaprLoginStartedProperties extends BaseEventProperties {
+  mode: "login" | "signup";
+  source?: "auth_wall" | "settings" | "unknown";
+}
+
+export interface PaprLoginCompletedProperties extends BaseEventProperties {
+  mode?: "login" | "signup";
+  source?: "auth_wall" | "settings" | "unknown";
+}
+
+export interface PaprLoginFailedProperties extends BaseEventProperties {
+  error: string;
+  mode?: "login" | "signup";
+  source?: "auth_wall" | "settings" | "unknown";
+  stage?: "start" | "callback";
 }
 
 export interface MessageSentProperties extends BaseEventProperties {

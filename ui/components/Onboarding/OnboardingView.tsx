@@ -5,6 +5,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import { ONBOARDING_SETUP_MESSAGE } from "../../constants/onboardingMessages";
 import { useTabs } from "../../hooks/useTabs";
 import { useChat } from "../../hooks/useChat";
 import { trackEvent } from "../../lib/telemetry";
@@ -98,9 +99,7 @@ export function OnboardingView() {
     if (stepState === "locked" || stepState === "completed") return;
 
     if (step === 1) {
-      const ok = await sendInNewChat(
-        "Let's get started with onboarding! I'd like you to learn about me and set things up.",
-      );
+      const ok = await sendInNewChat(ONBOARDING_SETUP_MESSAGE);
       if (!ok) return;
       trackEvent("paprwork_onboarding_step_completed", { step_number: 1, step_name: "setup_agents" } as Record<string, unknown>);
       window.setTimeout(() => {

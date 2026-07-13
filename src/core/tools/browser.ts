@@ -1,6 +1,7 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import type { Browser, Page } from "playwright";
+import { isCloudAgentGatewayMode } from "../utils/paprRoot.js";
 import { getApiKeysForSanitization, sanitizeToolOutput } from "./security.js";
 import { wrapUntrustedContent } from "./contentProvenance.js";
 
@@ -79,8 +80,18 @@ async function getBrowserSession(): Promise<BrowserSessionState> {
   }
 
   const module = await import("playwright");
+  const launchOptions: Parameters<typeof module.chromium.launch>[0] = {
+    headless: true,
+  };
+  if (isCloudAgentGatewayMode() || process.env.PLAYWRIGHT_DOCKER === "1") {
+    launchOptions.args = [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+    ];
+  }
   const browser = await Promise.race([
-    module.chromium.launch({ headless: true }),
+    module.chromium.launch(launchOptions),
     new Promise<never>((_, reject) => {
       setTimeout(
         () =>

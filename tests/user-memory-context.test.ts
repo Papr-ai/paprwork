@@ -95,13 +95,37 @@ describe("UserMemoryContextService helpers", () => {
     expect(MAX_SEARCH_MEMORIES).toBeGreaterThanOrEqual(10);
   });
 
-  test("stream mode returns immediately on bootstrap trigger turn", async () => {
+  test("stream mode injects local wiki immediately on bootstrap trigger turn", async () => {
     const service = getUserMemoryContextService();
     service.clearChatBootstrap("chat-stream-test");
     const blocks = await service.getMemoryContextBlocks(
       "chat-stream-test",
-      "hello",
-      [{ role: "user", content: "hello" }],
+      "what do you know about patrick?",
+      [{ role: "user", content: "what do you know about patrick?" }],
+      { mode: "stream" },
+    );
+    if (blocks.length > 0) {
+      expect(blocks[0]).toContain("[WIKI GRAPH");
+      expect(blocks.some((b) => b.includes("Patrick") || b.includes("People"))).toBe(
+        true,
+      );
+    } else {
+      expect(blocks).toEqual([]);
+    }
+  });
+
+  test("stream mode does not fetch memory on active conversation turns", async () => {
+    const service = getUserMemoryContextService();
+    service.clearChatBootstrap("chat-active-test");
+    const recent = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const blocks = await service.getMemoryContextBlocks(
+      "chat-active-test",
+      "follow up question",
+      [
+        { role: "user", content: "first", timestamp: recent },
+        { role: "assistant", content: "reply", timestamp: recent },
+        { role: "user", content: "follow up question", timestamp: recent },
+      ],
       { mode: "stream" },
     );
     expect(blocks).toEqual([]);

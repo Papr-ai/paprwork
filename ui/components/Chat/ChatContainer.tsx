@@ -8,6 +8,7 @@ import { MessageList } from "./MessageList";
 import { InputBar, InputBarRef } from "./InputBar";
 import { QueuedMessages, type QueuedMessage } from "./QueuedMessages";
 import { useAgent } from "../../hooks/useAgent";
+import { resolveAgentFocusContext } from "../../utils/agentFocusContext";
 import { useAuthStatus } from "../../hooks/useAuthStatus";
 import { useOllama } from "../../hooks/useOllama";
 import { useChat } from "../../hooks/useChat";
@@ -20,6 +21,8 @@ import {
   DEFAULT_MODEL_IDS,
 } from "../../constants/models";
 import type { AIModel } from "../../constants/models";
+import { migratePickerModelId } from "../../constants/modelPicker";
+import { useModelPickerSettings } from "../../hooks/useModelPickerSettings";
 import { gateway } from "../../src/lib/gateway";
 import { JobPermissionBanner } from "./JobPermissionBanner";
 import {
@@ -31,7 +34,9 @@ import {
   artifactTypeLabel,
   type Artifact,
 } from "../../stores/artifactsStore";
+import { artifactsToMessageAttachments } from "../../utils/messageAttachments";
 import { mapHistoryMessages } from "../../utils/historyMapper";
+import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
 import "./ChatContainer.css";
 
 const DEFAULT_SYSTEM_PROMPT = `You're Pen, an AI assistant running in Paprwork—a cross-platform AI workspace.
@@ -143,11 +148,12 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
 
   const error = useChatStore((state) => state.error);
 
-  const { sendMessage } = useAgent();
+  const { sendMessage, interruptActiveStream } = useAgent();
   const { loadMessages, loadOlderMessages } = useChat();
   const inputBarRef = useRef<InputBarRef>(null);
   const { isModelAvailable, status: authStatus } = useAuthStatus();
   const { ensureModel, progress, installing } = useOllama();
+  const { pickerModels } = useModelPickerSettings();
   const fallbackModel =
     CHAT_MODELS.find((m) => m.id === "claude-sonnet-4-6") || CHAT_MODELS[0];
 
@@ -183,24 +189,27 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   const isWaitingForModel = selectedModel.provider === 'ollama' && installing === selectedModel.id;
 
   // When chatId or auth status changes: pick best default
-  // Priority: last selected (persisted in localStorage) > default order (sonnet-4-6 → gpt-5.4 → gemini-3-flash) > first available
+  // Priority: last selected (persisted in localStorage) > default order (sonnet-4-6 → gpt-5-6-sol → gemini-3-flash) > first available
   useEffect(() => {
     setSelectedModel((prev) => {
       const lastId = useChatStore.getState().getLastSelectedModel(chatId);
       if (lastId) {
-        const lastModel = getModelById(lastId);
+        const migratedId = migratePickerModelId(lastId);
+        const lastModel = getModelById(migratedId);
         if (lastModel && isModelAvailable(lastModel)) return lastModel;
       }
       const defaultAvailable = DEFAULT_MODEL_IDS.map(getModelById).find(
         (m) => m && isModelAvailable(m),
       );
       if (defaultAvailable) return defaultAvailable;
+      const pickerAvailable = pickerModels.find((m) => isModelAvailable(m));
+      if (pickerAvailable) return pickerAvailable;
       const firstAvailable = CHAT_MODELS.find((m) => isModelAvailable(m));
       if (firstAvailable) return firstAvailable;
       if (!isModelAvailable(prev)) return fallbackModel;
       return prev;
     });
-  }, [chatId, authStatus]);
+  }, [chatId, authStatus, pickerModels]);
 
   // Focus input when this chat's container mounts
   useEffect(() => {
@@ -303,11 +312,27 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         }
         case "summarize": {
           try {
-            await gateway.send("chat:stats", { chatId });
-            // The summarize action is primarily for fetching/displaying a summary
-            // For now, trigger a stats update
+            const response = await gateway.send("chat:summarize", { chatId });
+            const data = response.data as {
+              success?: boolean;
+              has_summary?: boolean;
+              error?: string;
+            };
+            if (data?.has_summary) {
+              alert(
+                "Conversation summarized. Run /context to see the summary in your context breakdown.",
+              );
+            } else {
+              alert(
+                data?.error ??
+                  "Summarization did not produce a summary. Check gateway logs.",
+              );
+            }
           } catch (err) {
             console.error("[ChatContainer] Summarize error:", err);
+            const message =
+              err instanceof Error ? err.message : "Unknown error";
+            alert(`Failed to summarize conversation: ${message}`);
           }
           break;
         }
@@ -316,6 +341,10 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
             const response = await gateway.send("chat:inspect-context", {
               chatId,
               model: selectedModel.id,
+              ...(() => {
+                const focusContext = resolveAgentFocusContext(chatId);
+                return focusContext ? { focusContext } : {};
+              })(),
             });
             if (isContextInfo(response.data)) {
               setContextInfo(response.data);
@@ -377,6 +406,17 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     createTab("settings", "settings", "Settings");
   }, []);
 
+  const handleOpenSettingsModels = useCallback(() => {
+    const { createTab, switchToTab } = useTabStore.getState();
+    const tabId = createTab("settings", "settings", "Settings");
+    switchToTab(tabId);
+    window.dispatchEvent(
+      new CustomEvent("papr:open-settings", {
+        detail: { tab: "models", section: "picker-models" },
+      }),
+    );
+  }, []);
+
   const handleSendMessage = useCallback(
     async (message: string, contextArtifacts?: Artifact[]) => {
       const mergedArtifact = findMergedArtifact(chatId);
@@ -398,12 +438,58 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
           artifactsContext += `Type: ${isAttachedFile ? "File" : artifactTypeLabel(artifact.type)}\n`;
 
           if (isAttachedFile && artifact.metadata?.filePath) {
-            artifactsContext += `File Path: ${artifact.metadata.filePath}\n`;
-            if (artifact.metadata.fileType) {
-              artifactsContext += `File Type: ${artifact.metadata.fileType}\n`;
+            const filePath = artifact.metadata.filePath as string;
+            const fileType = (artifact.metadata.fileType as string) || "";
+            artifactsContext += `File Path: ${filePath}\n`;
+            if (fileType) {
+              artifactsContext += `File Type: ${fileType}\n`;
             }
-            artifactsContext +=
-              "\nThe user attached this file from disk. Read it with the read_file tool using the path above (use encoding: \"base64\" for binary files).\n";
+
+            const isPdfOrImage =
+              fileType === "application/pdf" ||
+              fileType.startsWith("image/") ||
+              /\.(pdf|png|jpe?g|gif|webp|bmp|tiff?)$/i.test(filePath);
+
+            if (isPdfOrImage) {
+              try {
+                const uploadResponse = await gateway.send("memory:upload-attachment", {
+                  filePath,
+                  chatId,
+                  fileName: artifact.title,
+                  mimeType: fileType,
+                });
+                const uploadData =
+                  uploadResponse.success
+                    ? (uploadResponse.data as {
+                        skipped?: boolean;
+                        uploadId?: string | null;
+                        memoryIds?: string[];
+                        status?: string;
+                        progress?: number;
+                      } | null)
+                    : null;
+
+                if (uploadData && !uploadData.skipped && uploadData.uploadId) {
+                  artifactsContext += `Upload ID: ${uploadData.uploadId}\n`;
+                  if (uploadData.memoryIds?.length) {
+                    artifactsContext += `Memory IDs: ${uploadData.memoryIds.join(", ")}\n`;
+                  }
+                  artifactsContext += `Papr Memory Status: ${uploadData.status ?? "processing"} (${Math.round((uploadData.progress ?? 0) * 100)}%)\n`;
+                  artifactsContext +=
+                    "\nThis PDF/image was auto-uploaded to Papr Memory. Poll get_document_upload_status({ uploadId }) until completed, then search_agent_memory({ memoryId }) for extracted text. Use parse_pdf({ filePath }) if you need text before processing finishes.\n";
+                } else {
+                  artifactsContext +=
+                    "\nPoll upload_document_to_memory({ filePath, chatId }) if PAPR_API_KEY is configured, or parse_pdf({ filePath }) for quick local extraction.\n";
+                }
+              } catch (uploadError) {
+                console.warn("[ChatContainer] Attachment memory upload failed:", uploadError);
+                artifactsContext +=
+                  "\nUse upload_document_to_memory({ filePath, chatId }) or parse_pdf({ filePath }) for PDF/image content.\n";
+              }
+            } else {
+              artifactsContext +=
+                "\nThe user attached this text file from disk. Read it with read_file using the path above. Use import_document + add_agent_memory if the user wants it indexed for future recall.\n";
+            }
           } else if (artifact.content) {
             artifactsContext += `\n${artifact.content}\n`;
           }
@@ -437,80 +523,26 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       };
 
       // Send message for THIS chat (not activeChat)
-      await sendMessage(message, config, chatId);
+      await sendMessage(
+        message,
+        config,
+        chatId,
+        contextArtifacts && contextArtifacts.length > 0
+          ? artifactsToMessageAttachments(contextArtifacts)
+          : undefined,
+      );
     },
     [selectedModel, sendMessage, chatId, ensureModel],
   );
 
   const handleStopAgent = useCallback(async () => {
     try {
-      await gateway.send("agent:stop", { chatId });
+      await interruptActiveStream(chatId);
       console.log(`[ChatContainer] Stopped agent for chat ${chatId}`);
     } catch (error) {
       console.error("[ChatContainer] Failed to stop agent:", error);
-    } finally {
-      // Optimistically reset UI immediately so Stop icon returns to Send
-      useChatStore.getState().setSending(chatId, false);
-      useChatStore.getState().setChatStreaming(chatId, false);
-      useTabStore.getState().setTabStreaming(`chat-${chatId}`, false);
-      
-      // Finalize any streaming message to update its status from "Working" to "Finished Working"
-      const chatState = useChatStore.getState().chatStates.get(chatId);
-      if (chatState?.messages) {
-        const streamingMessage = chatState.messages.find(msg => msg.isStreaming);
-        if (streamingMessage) {
-          // Update sequence to mark any "calling" tools as stopped
-          const updatedSequence = streamingMessage.sequence?.map(item => {
-            if (item.type === "tool" && (item.data as any)?.status === "calling") {
-              return {
-                ...item,
-                data: {
-                  ...(item.data as any),
-                  status: "stopped",
-                  error: "Stopped by user"
-                }
-              };
-            }
-            return item;
-          });
-          
-          // Update toolCalls to mark any calling tools as stopped
-          const updatedToolCalls = streamingMessage.toolCalls?.map(tc => {
-            if (tc.status === "calling") {
-              return {
-                ...tc,
-                status: "error" as const,
-                error: "Stopped by user"
-              };
-            }
-            return tc;
-          });
-          
-          // Update the message in the store with the modified sequence and toolCalls
-          const updatedMessages = chatState.messages.map(msg => 
-            msg.id === streamingMessage.id 
-              ? { 
-                  ...msg, 
-                  sequence: updatedSequence,
-                  toolCalls: updatedToolCalls 
-                }
-              : msg
-          );
-          
-          const newChatStates = new Map(useChatStore.getState().chatStates);
-          newChatStates.set(chatId, {
-            ...chatState,
-            messages: updatedMessages
-          });
-          
-          useChatStore.setState({ chatStates: newChatStates });
-          
-          // Now finalize the streaming message
-          useChatStore.getState().finalizeStreamingMessage(streamingMessage.id, chatId);
-        }
-      }
     }
-  }, [chatId]);
+  }, [chatId, interruptActiveStream]);
 
   // Queue management handlers
   const handleQueueMessage = useCallback((message: string, _context?: Artifact[]) => {
@@ -528,18 +560,16 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     const queued = messageQueue.find(q => q.id === messageId && q.chatId === chatId);
     if (!queued) return;
 
-    // Remove from queue
+    // Remove from queue — sendMessage handles interrupting any active stream
     setMessageQueue(prev => prev.filter(q => q.id !== messageId));
 
-    // Only stop the agent if it's actually streaming — avoids sending a spurious
-    // agent:stop that could race with a newly-started stream.
-    if (isSending) {
-      await handleStopAgent();
+    isProcessingQueue.current = true;
+    try {
+      await handleSendMessage(queued.text);
+    } finally {
+      isProcessingQueue.current = false;
     }
-
-    // Send the queued message
-    await handleSendMessage(queued.text);
-  }, [messageQueue, isSending, handleStopAgent, handleSendMessage, chatId]);
+  }, [messageQueue, handleSendMessage, chatId]);
 
   const handleRemoveQueued = useCallback((messageId: string) => {
     setMessageQueue(prev => prev.filter(q => q.id !== messageId));
@@ -567,7 +597,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
 
   // Auto-send next queued message when agent finishes responding
   useEffect(() => {
-    if (!isSending && currentChatQueue.length > 0) {
+    if (!isSending && currentChatQueue.length > 0 && !isProcessingQueue.current) {
       processNextQueued();
     }
   }, [isSending, currentChatQueue.length, processNextQueued]);
@@ -615,9 +645,10 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault();
       e.stopPropagation();
-      const { files } = e.dataTransfer;
-      if (!files?.length) return;
-      handleFilesDroppedToChat(Array.from(files));
+      setIsFileDragOver(false);
+      const files = extractFilesFromDataTransfer(e.dataTransfer);
+      if (files.length === 0) return;
+      handleFilesDroppedToChat(files);
     },
     [handleFilesDroppedToChat],
   );
@@ -720,6 +751,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         onModelChange={handleModelChange}
         isModelAvailable={isModelAvailable}
         onOpenSettings={handleOpenSettings}
+        onOpenSettingsModels={handleOpenSettingsModels}
+        pickerModels={pickerModels}
       />
 
       {contextInfo !== null ? (

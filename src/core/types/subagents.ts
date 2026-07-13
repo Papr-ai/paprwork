@@ -15,6 +15,9 @@ export interface SubAgentProfile {
   systemPrompt: string;
   provider?: Provider;
   model?: string;
+  /** When primary provider auth is unavailable, try this model next */
+  fallbackProvider?: Provider;
+  fallbackModel?: string;
   allowedToolIds?: string[];
   assignedSkills?: string[];
   outputMode?: "natural" | "structured";
@@ -56,7 +59,8 @@ export interface DelegationRunRecord {
 export interface DelegateTaskInput {
   task: string;
   context?: string;
-  useAgentId?: string;
+  /** Required — exact id from list_sub_agents() or create_sub_agent() return value */
+  useAgentId: string;
   reportChatId?: string;
   background?: boolean;
   outputMode?: "natural" | "structured";

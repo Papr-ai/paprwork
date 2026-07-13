@@ -13,6 +13,7 @@ interface WorkingCardProps {
   isExploring?: boolean;
   lastActivity?: string; // Last tool call or response text
   wasStopped?: boolean; // Whether the agent was manually stopped
+  connectionPaused?: boolean; // Gateway disconnected mid-stream
 }
 
 export const WorkingCard: React.FC<WorkingCardProps> = ({
@@ -20,6 +21,7 @@ export const WorkingCard: React.FC<WorkingCardProps> = ({
   isExploring = false,
   lastActivity,
   wasStopped = false,
+  connectionPaused = false,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(true);
   const [showShimmer, setShowShimmer] = useState(false);
@@ -57,11 +59,19 @@ export const WorkingCard: React.FC<WorkingCardProps> = ({
         </span>
         <div className="working-label-container">
           <span className={`working-label-primary${shimmerActive ? " working-label-shimmer" : ""}`}>
-            {isExploring ? "Working" : wasStopped ? "Stopped" : "Finished Working"}
+            {connectionPaused
+              ? "Reconnecting"
+              : isExploring
+                ? "Working"
+                : wasStopped
+                  ? "Stopped"
+                  : "Finished Working"}
           </span>
-          {isCollapsed && lastActivity && (
+          {isCollapsed && (connectionPaused || lastActivity) && (
             <span className={`working-label-secondary${shimmerActive ? " working-secondary-shimmer" : ""}`}>
-              {lastActivity}
+              {connectionPaused
+                ? "Connection paused — resuming when back online"
+                : lastActivity}
             </span>
           )}
         </div>

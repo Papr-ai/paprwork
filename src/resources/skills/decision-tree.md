@@ -20,20 +20,23 @@ User wants to build something?
 |       +-- NO  -> Just create_app
 |
 +-- "Automate something with AI" (recurring/scheduled)
-|   +-- Do you know ALL the steps?
-|       +-- YES (known flow + one LLM call) -> Python job with requirements: ["anthropic"]
-|       +-- NO (agent must explore/decide)  -> Agent Job (type: "agent")
+|   +-- DEFAULT -> Agent Job (type: "agent")
+|       Built-in OAuth/API routing, tools, delivery, recipes — no LLM SDK boilerplate
+|   +-- EXCEPTION: Fixed batch pipeline only?
+|       +-- YES (read known data → single LLM call → write SQLite, no tools/exploration)
+|           -> Python job with requirements: ["anthropic"] — rare, last resort
+|       +-- NO -> Agent Job
 |
 +-- "Automate something" (no AI needed, just scripts)
 |   +-- Script Job (python/node/bash)
 |       Examples: backup database, process CSV, sync files, ETL pipeline
 |
 +-- "Create a complete system" (UI + automation + AI)
-|   +-- FULL STACK: Mini-app + Job(s) + SQLite + (optional) Sub-agent
-|       1. Python job: Collect/process data (with LLM call if needed)
-|       2. SQLite: Store structured results (per-job data.db)
-|       3. Mini-app: Dashboard to view/filter/manage (link_app_data_source)
-|       4. Agent job (optional): Autonomous analysis that needs multi-step reasoning
+|   +-- FULL STACK: Mini-app + Job(s) + SQLite + (optional) Agent job
+|       1. Python job: Collect/process data (deterministic scraping, ETL — no LLM)
+|       2. Agent job: AI analysis, classification, summarization, research
+|       3. SQLite: Store structured results (per-job data.db)
+|       4. Mini-app: Dashboard to view/filter/manage (link_app_data_source)
 |
 +-- "Help me with something RIGHT NOW"
     +-- delegate_task (sub-agent for immediate help)
@@ -44,31 +47,40 @@ User wants to build something?
 
 ## When to Use Each Pattern
 
-### Python/Node Job with LLM Call (MOST COMMON for AI tasks)
-- Task has **known steps** but needs **one AI judgment call**
-- You control the flow: query DB → call LLM → save results
-- Faster, cheaper, more debuggable than agent jobs
-- Python gets auto-venv + auto-pip via `requirements` field
-- API keys available via `os.environ['ANTHROPIC_API_KEY']` etc.
+### Agent Job (DEFAULT for AI tasks)
+- **Default choice** for any recurring task that needs AI reasoning
+- Built-in **OAuth/subscription routing** — no anthropic/openai Python packages or API key boilerplate
+- Full **tool access** (bash, read_file, write_file, browser)
+- **Delivery**, **recipes**, **retries**, and **scheduling** built in
+- Agent jobs get auto-injected `JOB_DIR`, `JOB_DB`, `DEP_*` paths
 
-Examples: "Score 20 threads and pick the best 5" · "Classify 100 emails" · "Summarize today's news"
+Examples: "Score 20 threads and pick the best 5" · "Classify 100 emails" · "Summarize today's news" · "Research competitors" · "Debug why this job keeps failing"
 
 ```javascript
 create_job({
   name: "Thread Selector",
-  type: "python",
-  requirements: ["anthropic"],
-  command: "python3 code/selector.py"
+  type: "agent",
+  command: "Read threads from $JOB_DB, score them, and save the top 5 back to $JOB_DB",
+  provider: "anthropic",
+  schedule: { enabled: true, cron: "0 9 * * *" }
 })
 ```
 
-### Agent Job (autonomous, multi-step reasoning)
-- Task requires **autonomy** — agent decides what to do next
-- Path is **not predetermined** (explores, adapts, iterates)
-- Task involves **web browsing** with dynamic navigation
-- Agent jobs get auto-injected `JOB_DIR`, `JOB_DB`, `DEP_*` paths
+`create_job` returns `_agentJobReminder` if you add LLM SDK packages (`anthropic`, `openai`, etc.) to a script job — switch to `type: "agent"`.
 
-Examples: "Research competitors and write a report" · "Debug why this job keeps failing" · "Find and analyze 10 new leads"
+### Python/Node Job with Direct LLM Call (RARE EXCEPTION)
+- **Only** when ALL are true: fully fixed steps, exactly one LLM call, known I/O shapes, no tools/browsing
+- If any condition is false → use **Agent Job**
+
+```javascript
+// ONLY for fixed batch pipelines — prefer agent job in most cases
+create_job({
+  name: "Batch Classifier",
+  type: "python",
+  requirements: ["anthropic"],
+  command: "python3 code/classify.py --api-key ${ANTHROPIC_API_KEY}"
+})
+```
 
 ### Pure Script Job (deterministic, no AI)
 - Fully **deterministic** (no AI reasoning needed)
@@ -97,46 +109,50 @@ Examples: "Create a lead management system" · "Build a social media tracker" ·
 
 | User Says | Use This | NOT This |
 |-----------|----------|----------|
-| "Score/rank/classify these items" | Python job + LLM call | Agent Job (overkill) |
-| "Pick the best 5 from this list" | Python job + LLM call | Agent Job (overkill) |
-| "Summarize this data" | Python job + LLM call | Agent Job (overkill) |
+| "Score/rank/classify these items" | Agent Job | Python + LLM SDK |
+| "Pick the best 5 from this list" | Agent Job | Python + LLM SDK |
+| "Summarize this data" | Agent Job | Python + LLM SDK |
 | "Research competitors deeply" | Agent Job (needs autonomy) | Python job (can't browse) |
 | "Debug why X is failing" | Agent Job (needs iteration) | Script job |
 | "Monitor Twitter for mentions" | Agent Job (needs browsing) | Script + API calls |
 | "Process CSV files" | Script Job | Agent Job |
 | "Review this code now" | Sub-agent (immediate) | Agent Job |
-| "Build a CRM" | App + Python jobs + SQLite | Just an app |
+| "Build a CRM" | App + Jobs + SQLite | Just an app |
 | "Analyze this now" | Sub-agent | Agent Job |
+| "Batch-classify 50K frozen rows" | Python + LLM (exception) | Agent Job (expensive) |
 
 ## Decision Shortcuts
 
-**Known steps + one AI judgment?** → Python job with `requirements: ["anthropic"]`  
+**Needs AI reasoning (default)?** → Agent Job (`type: "agent"`)  
+**Fixed batch: read DB → one LLM call → write DB, no tools?** → Python + LLM (rare exception)  
 **Agent must explore/decide/iterate?** → Agent Job  
 **Has "now/currently/this"?** → Sub-agent (delegate_task)  
 **Just data transformation?** → Script Job (Python/Node)  
-**Needs UI?** → Add Mini-app (reads from job's SQLite via link_app_data_source)  
+**Needs UI?** → Add Mini-app (reads from linked SQLite via `create_job({ appIds })` auto-link or `attach_database`)  
 **Recurring + UI?** → Full stack: Jobs + SQLite + Mini-app
 
 ---
 
 ## Common Anti-Patterns
 
-**Do NOT ask for API keys to create sub-agents** — Paprwork has built-in AI agents. Use Agent Jobs.
+**Do NOT create Python/Node jobs that call OpenAI/Anthropic directly** — Use `type: "agent"`. `create_job` warns with `_agentJobReminder` when it detects LLM SDK packages on script jobs.
+
+**Do NOT ask for API keys to create sub-agents or agent jobs** — Paprwork has built-in OAuth/API routing.
 
 **Do NOT create sub-agent for recurring tasks** — `delegate_task` executes once. For recurring, use Agent Job with schedule.
 
-**Do NOT use Agent Job when Python + LLM call works** — If you know the steps (query → call LLM → save), use Python. Agent jobs are for autonomous exploration.
+**Do NOT use Python + LLM when an agent job would work** — Agent jobs are the default for AI. Python + LLM is only for rigid batch pipelines.
 
 **Do NOT create script job when AUTONOMOUS reasoning is needed** — If the agent must decide what to search/fix/explore, use Agent Job.
 
-**Do NOT build a separate backend when SQLite works** — Jobs write to per-job SQLite, apps read via `link_app_data_source`. No API server needed.
+**Do NOT build a separate backend when SQLite works** — Jobs write to `$APP_DB` / `$JOB_DB`; apps read via `/api/db/*`. `create_job({ appIds })` auto-links — manual `link_app_data_source` only as fallback.
 
 ---
 
 ## Multi-Stage Pipeline Example
 
 ```javascript
-// Stage 1: Data Collection (python - fast, cheap, deterministic)
+// Stage 1: Data Collection (python - deterministic, no LLM)
 create_job({
   name: "Social Scraper",
   type: "python",
@@ -145,21 +161,21 @@ create_job({
   schedule: { enabled: true, cron: "0 */6 * * *" }
 })
 
-// Stage 2: Analysis (python + LLM - known steps, one AI call)
-// NOT an agent job! We know the steps: read DB → call Claude → write results
+// Stage 2: Analysis (agent job — DEFAULT for AI)
 create_job({
   name: "Sentiment Analyzer",
-  type: "python",
-  requirements: ["anthropic"],
-  command: "python3 code/analyze.py",
-  dependsOn: [{ jobId: "<scraper-id>", onStatus: "completed" }]
+  type: "agent",
+  command: "Read new posts from $DEP_<scraper-id>_DB, classify sentiment, write results to $JOB_DB",
+  provider: "anthropic",
+  dependsOn: [{ jobId: "<scraper-id>", onStatus: "completed", autoTrigger: true }]
 })
 
-// Stage 3: Deep Research (agent - only if autonomous exploration needed)
+// Stage 3: Deep Research (agent — multi-step exploration)
 create_job({
   name: "Trend Researcher",
   type: "agent",
-  dependsOn: [{ jobId: "<analyzer-id>", onStatus: "completed" }],
+  command: "Research emerging trends from analyzed posts and write a weekly brief to $JOB_DB",
+  dependsOn: [{ jobId: "<analyzer-id>", onStatus: "completed", autoTrigger: true }],
   deliver: { channel: "chat", targetId: "main" }
 })
 
@@ -167,6 +183,8 @@ create_job({
 create_app({ title: "Social Intelligence" })
 link_app_data_source({ appId: "...", jobId: "<scraper-id>", alias: "social" })
 ```
+
+**When to use Python + LLM in a pipeline (rare):** Only when you have 10K+ identical rows, a frozen prompt template, zero tool use, and need strict per-call cost accounting.
 
 ---
 
@@ -185,7 +203,7 @@ create_job({
 create_app({ title: "Lead Manager" })
 link_app_data_source({ appId: "lead-manager", jobId: "lead-finder", alias: "leads" })
 ```
-**WRONG:** Requesting external AI API keys · Suggesting paid lead services before trying browser tool
+**WRONG:** Requesting external AI API keys · Suggesting paid lead services before trying browser tool · Python job with `requirements: ["anthropic"]`
 
 ### Social Media Monitoring
 
@@ -241,4 +259,4 @@ create_job({
   deliver: { channel: "chat", targetId: "main" }
 })
 ```
-**WRONG:** Using `delegate_task` for recurring tasks (it only runs once).
+**WRONG:** Using `delegate_task` for recurring tasks (it only runs once) · Python job calling Anthropic directly.

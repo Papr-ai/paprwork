@@ -286,7 +286,7 @@ describe("agent history formatter", () => {
     }
   });
 
-  test("buildModelMessages injects memory blocks after summary and before history", () => {
+  test("buildModelMessages injects memory blocks before summary and history", () => {
     const history: unknown[] = [{ role: "assistant", content: "prior response" }];
     const messages = buildModelMessages(
       history,
@@ -297,9 +297,9 @@ describe("agent history formatter", () => {
     );
 
     expect(messages[0].role).toBe("system");
-    expect(messages[1].content).toContain("CONVERSATION CONTEXT");
-    expect(messages[2].content).toBe("[CROSS-CHAT USER CONTEXT] tier data");
-    expect(messages[3].content).toBe("[RELATED MEMORY] search hit");
+    expect(messages[1].content).toBe("[CROSS-CHAT USER CONTEXT] tier data");
+    expect(messages[2].content).toBe("[RELATED MEMORY] search hit");
+    expect(messages[3].content).toContain("CONVERSATION CONTEXT");
     expect(messages[4]).toEqual({
       role: "assistant",
       content: "prior response",

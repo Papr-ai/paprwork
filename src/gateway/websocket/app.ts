@@ -5,10 +5,30 @@
 import type { WebSocket } from "ws";
 import type { WSMessage } from "./index.js";
 import { getAppService } from "../services/AppService.js";
+import { getCloudAppLineageService } from "../services/CloudAppLineageService.js";
 import type { AppFile } from "../services/AppService.js";
 import { getAppStateStorage, type TabMetadata, type AppState } from "../services/storage/AppStateStorage.js";
 
 const appStateStorage = getAppStateStorage();
+
+async function enrichAppWithLineage<T extends { id: string }>(
+  app: T,
+  appsRoot: string,
+): Promise<T & { cloudLineage?: import("../services/AppService.js").MiniAppCloudLineage }> {
+  const lineage = await getCloudAppLineageService(appsRoot).readLineageForApp(app.id);
+  if (!lineage) return app;
+  return {
+    ...app,
+    cloudLineage: {
+      mode: lineage.mode,
+      sourceAppId: lineage.sourceAppId,
+      sourceSlug: lineage.sourceSlug,
+      sourceNamespaceId: lineage.sourceNamespaceId,
+      installedAt: lineage.installedAt,
+      lastSyncedAt: lineage.lastSyncedAt,
+    },
+  };
+}
 
 interface CreateAppPayload {
   title: string;
@@ -71,6 +91,10 @@ interface ValidateAppPayload {
   appId: string;
 }
 
+interface ListAppFilesPayload {
+  appId: string;
+}
+
 export async function setupAppHandlers(
   ws: WebSocket,
   message: WSMessage,
@@ -81,12 +105,30 @@ export async function setupAppHandlers(
     switch (message.type) {
       case "app:list": {
         const apps = await appService.listApps();
+        const lineageIndex = await getCloudAppLineageService(
+          appService.getAppsRootPath(),
+        ).buildIndex();
+        const enriched = apps.map((app) => {
+          const lineage = lineageIndex.byAppId[app.id];
+          if (!lineage) return app;
+          return {
+            ...app,
+            cloudLineage: {
+              mode: lineage.mode,
+              sourceAppId: lineage.sourceAppId,
+              sourceSlug: lineage.sourceSlug,
+              sourceNamespaceId: lineage.sourceNamespaceId,
+              installedAt: lineage.installedAt,
+              lastSyncedAt: lineage.lastSyncedAt,
+            },
+          };
+        });
         ws.send(
           JSON.stringify({
             id: message.id,
             type: "app:list:response",
             success: true,
-            data: apps,
+            data: enriched,
           }),
         );
         break;
@@ -113,12 +155,24 @@ export async function setupAppHandlers(
       case "app:get": {
         const payload = message.payload as GetAppPayload;
         const app = await appService.getApp(payload.appId);
+        if (!app) {
+          ws.send(
+            JSON.stringify({
+              id: message.id,
+              type: "app:get:response",
+              success: false,
+              error: "App not found",
+            }),
+          );
+          break;
+        }
+        const enriched = await enrichAppWithLineage(app, appService.getAppsRootPath());
         ws.send(
           JSON.stringify({
             id: message.id,
             type: "app:get:response",
             success: true,
-            data: app,
+            data: enriched,
           }),
         );
         break;
@@ -358,6 +412,20 @@ export async function setupAppHandlers(
             type: "app:validate:response",
             success: true,
             data: result,
+          }),
+        );
+        break;
+      }
+
+      case "app:list-files": {
+        const payload = message.payload as ListAppFilesPayload;
+        const files = await appService.listWorkspaceFiles(payload.appId);
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:list-files:response",
+            success: true,
+            data: files,
           }),
         );
         break;

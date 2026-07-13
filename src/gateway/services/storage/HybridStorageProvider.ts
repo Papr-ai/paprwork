@@ -111,17 +111,32 @@ export class HybridStorageProvider implements IStorageProvider {
     try {
       const paprData = await this.papr.loadMessagesForLLM(chatId);
 
+      const localHasSummary = localMessages.some(
+        (item: unknown) =>
+          typeof item === "object" &&
+          item !== null &&
+          "__summary" in (item as Record<string, unknown>),
+      );
+
+      // Local summary is authoritative — avoid duplicate __summary blocks (confuses the model)
+      if (localHasSummary) {
+        return localMessages;
+      }
+
       // Extract summary from PAPR (if it exists)
       const summaryItem = paprData.find((item: any) => item.__summary);
 
       if (summaryItem) {
-        // BEST OF BOTH WORLDS:
-        // - Use PAPR's summary (compressed context for long chats)
-        // - Use LOCAL's messages (always current, no race condition)
-        console.log(
-          `[HybridStorage] Using PAPR summary + ${localMessages.length} local messages`,
+        const localWithoutSummary = localMessages.filter(
+          (item: unknown) =>
+            typeof item !== "object" ||
+            item === null ||
+            !("__summary" in (item as Record<string, unknown>)),
         );
-        return [summaryItem, ...localMessages];
+        console.log(
+          `[HybridStorage] Using PAPR summary + ${localWithoutSummary.length} local messages`,
+        );
+        return [summaryItem, ...localWithoutSummary];
       }
 
       // No summary from PAPR, check if PAPR has messages from other devices
@@ -170,7 +185,10 @@ export class HybridStorageProvider implements IStorageProvider {
     }
 
     try {
-      // 1. Fetch from PAPR compress endpoint
+      // Ensure PAPR has the latest messages before compressing
+      await this.bulkSyncToPapr(chatId);
+
+      // 1. Fetch from PAPR (retrieveHistory cache first, then /compress)
       const summary = await this.papr.fetchAndCacheSummary(chatId);
 
       if (summary) {
@@ -189,23 +207,8 @@ export class HybridStorageProvider implements IStorageProvider {
   }
 
   async getSummary(chatId: string): Promise<StoredSummary | null> {
-    // Check local cache first
-    const cached = await this.local.getSummary(chatId);
-
-    if (cached) {
-      // Check if cache is fresh (< 1 hour old)
-      const cacheAge = cached.last_fetched_at
-        ? Date.now() - new Date(cached.last_fetched_at).getTime()
-        : Infinity;
-
-      if (cacheAge < 60 * 60 * 1000) {
-        // 1 hour
-        return cached;
-      }
-    }
-
-    // Cache stale or missing, fetch fresh
-    return this.fetchAndCacheSummary(chatId);
+    // Cache-only read — callers that need a fresh summary use fetchAndCacheSummary().
+    return this.local.getSummary(chatId);
   }
 
   async saveSummary(chatId: string, summary: StoredSummary): Promise<void> {

@@ -3,7 +3,7 @@
  * Matching Paprwork v1 model list exactly
  */
 
-import type { Provider } from "../types/core";
+import type { Provider, ModelReasoning } from "../../src/core/types/agents";
 
 export interface AIModel {
   id: string;
@@ -14,9 +14,7 @@ export interface AIModel {
   supportsThinking?: boolean;
   defaultThinkingBudget?: number;
   extendedThinking?: boolean;
-  reasoning?: {
-    effort?: "low" | "medium" | "high" | "xhigh";
-  };
+  reasoning?: ModelReasoning;
   maxTokens?: number; // Output token limit
   requiresApiKey: string;
 }
@@ -80,6 +78,18 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
   {
+    id: "claude-opus-4-8",
+    name: "Claude Opus 4.8",
+    provider: "anthropic",
+    description:
+      "Latest Opus frontier — adaptive thinking, 1M context, agentic coding",
+    group: "Anthropic",
+    supportsThinking: true,
+    defaultThinkingBudget: 0,
+    maxTokens: 64000,
+    requiresApiKey: "ANTHROPIC_API_KEY",
+  },
+  {
     id: "claude-fable-5",
     name: "Claude Fable 5",
     provider: "anthropic",
@@ -90,6 +100,57 @@ export const CHAT_MODELS: AIModel[] = [
     defaultThinkingBudget: 0,
     maxTokens: 128000,
     requiresApiKey: "ANTHROPIC_API_KEY",
+  },
+
+  // Z.ai GLM — via Papr proxy (OpenAI-compatible API)
+  {
+    id: "glm-5.2",
+    name: "GLM-5.2",
+    provider: "zai",
+    description:
+      "Z.ai frontier coding model — 1M context, strong agentic and long-horizon tasks",
+    group: "Z.ai (via Papr)",
+    supportsThinking: true,
+    reasoning: { effort: "high" },
+    maxTokens: 131072,
+    requiresApiKey: "PAPR_API_KEY",
+  },
+  {
+    id: "glm-5.2-max",
+    name: "GLM-5.2 (Max Reasoning)",
+    provider: "zai",
+    description:
+      "GLM-5.2 with maximum reasoning effort for complex multi-step coding",
+    group: "Z.ai (via Papr)",
+    supportsThinking: true,
+    reasoning: { effort: "max" },
+    maxTokens: 131072,
+    requiresApiKey: "PAPR_API_KEY",
+  },
+
+  // Groq — via Papr proxy (fast LPU inference, auto prompt caching on GPT-OSS)
+  {
+    id: "qwen/qwen3-32b",
+    name: "Qwen3 32B",
+    provider: "groq",
+    description:
+      "Qwen3 32B on Groq — 131k context, fast inference (~662 TPS)",
+    group: "Groq (via Papr)",
+    supportsThinking: false,
+    maxTokens: 131072,
+    requiresApiKey: "PAPR_API_KEY",
+  },
+  {
+    id: "openai/gpt-oss-120b",
+    name: "GPT-OSS 120B",
+    provider: "groq",
+    description:
+      "OpenAI GPT-OSS 120B on Groq — 128k context, reasoning, automatic prompt caching",
+    group: "Groq (via Papr)",
+    supportsThinking: true,
+    reasoning: { effort: "medium" },
+    maxTokens: 131072,
+    requiresApiKey: "PAPR_API_KEY",
   },
 
   // OpenAI — weakest to strongest
@@ -105,10 +166,68 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "OPENAI_API_KEY",
   },
   {
+    id: "gpt-5-6-luna",
+    name: "GPT-5.6 Luna",
+    provider: "openai",
+    description:
+      "Fastest GPT-5.6 tier — high-volume tasks, drafts, and classification",
+    group: "OpenAI",
+    supportsThinking: true,
+    reasoning: { effort: "medium" },
+    maxTokens: 128000,
+    requiresApiKey: "OPENAI_API_KEY",
+  },
+  {
+    id: "gpt-5-6-terra",
+    name: "GPT-5.6 Terra",
+    provider: "openai",
+    description:
+      "Balanced GPT-5.6 tier — everyday coding, analysis, and knowledge work",
+    group: "OpenAI",
+    supportsThinking: true,
+    reasoning: { effort: "medium" },
+    maxTokens: 128000,
+    requiresApiKey: "OPENAI_API_KEY",
+  },
+  {
+    id: "gpt-5-6-sol-low",
+    name: "GPT-5.6 Sol (Low Reasoning)",
+    provider: "openai",
+    description: "GPT-5.6 flagship with faster, lighter reasoning",
+    group: "OpenAI",
+    supportsThinking: true,
+    reasoning: { effort: "low" },
+    maxTokens: 128000,
+    requiresApiKey: "OPENAI_API_KEY",
+  },
+  {
+    id: "gpt-5-6-sol",
+    name: "GPT-5.6 Sol",
+    provider: "openai",
+    description:
+      "Latest frontier flagship — coding, agentic work, computer use (recommended)",
+    group: "OpenAI",
+    supportsThinking: true,
+    reasoning: { effort: "medium" },
+    maxTokens: 128000,
+    requiresApiKey: "OPENAI_API_KEY",
+  },
+  {
+    id: "gpt-5-6-sol-high",
+    name: "GPT-5.6 Sol (High Reasoning)",
+    provider: "openai",
+    description: "GPT-5.6 flagship with deeper reasoning for complex tasks",
+    group: "OpenAI",
+    supportsThinking: true,
+    reasoning: { effort: "high" },
+    maxTokens: 128000,
+    requiresApiKey: "OPENAI_API_KEY",
+  },
+  {
     id: "gpt-5.5-low",
     name: "GPT-5.5 (Low Reasoning)",
     provider: "openai",
-    description: "Frontier model with faster, lighter reasoning",
+    description: "Previous-gen frontier model with lighter reasoning",
     group: "OpenAI",
     supportsThinking: true,
     reasoning: { effort: "low" },
@@ -119,7 +238,7 @@ export const CHAT_MODELS: AIModel[] = [
     id: "gpt-5.5",
     name: "GPT-5.5",
     provider: "openai",
-    description: "Frontier flagship with balanced reasoning (recommended)",
+    description: "Previous-gen frontier flagship with balanced reasoning",
     group: "OpenAI",
     supportsThinking: true,
     reasoning: { effort: "medium" },
@@ -130,7 +249,7 @@ export const CHAT_MODELS: AIModel[] = [
     id: "gpt-5.5-high",
     name: "GPT-5.5 (High Reasoning)",
     provider: "openai",
-    description: "Frontier model with deeper reasoning",
+    description: "Previous-gen frontier model with deeper reasoning",
     group: "OpenAI",
     supportsThinking: true,
     reasoning: { effort: "high" },
@@ -410,7 +529,8 @@ export const getModelById = (id: string): AIModel | undefined => {
 /** Mid-tier model IDs per provider, in preference order for default selection */
 export const MID_TIER_MODEL_IDS = [
   "claude-sonnet-4-6", // Anthropic mid
-  "gpt-5.5", // OpenAI flagship
+  "gpt-5-6-sol", // OpenAI flagship
+  "gpt-5-6-terra", // OpenAI balanced
   "gpt-5.4-mini", // OpenAI mini
   "gpt-5.3-codex", // OpenAI Codex (API key only)
   "gemini-3.5-flash", // Google mid
@@ -419,7 +539,7 @@ export const MID_TIER_MODEL_IDS = [
 /** Default model IDs when no saved preference - first available wins */
 export const DEFAULT_MODEL_IDS = [
   "claude-sonnet-4-6", // Anthropic
-  "gpt-5.5", // OpenAI latest
+  "gpt-5-6-sol", // OpenAI latest
   "gemini-3.5-flash", // Google
 ];
 

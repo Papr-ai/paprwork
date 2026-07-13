@@ -17,6 +17,7 @@ import {
   getJobsService,
   type JobRecord,
 } from "../../src/gateway/services/JobsService.js";
+import { STANDALONE_APP_ID } from "../../src/gateway/services/jobs/appIds.js";
 import { JobsScheduler } from "../../src/gateway/services/JobsScheduler.js";
 
 describe("E2E: Job Scheduling", () => {
@@ -67,6 +68,7 @@ describe("E2E: Job Scheduling", () => {
     it("should create job with cron schedule", async () => {
       const job = await jobsService.createJob({
         name: "Test Cron Job",
+        appIds: [STANDALONE_APP_ID],
         type: "shell",
         command: 'echo "Scheduled run at $(date)"',
         schedule: {
@@ -215,6 +217,7 @@ describe("E2E: Job Scheduling", () => {
     it("should create job with interval schedule", async () => {
       const job = await jobsService.createJob({
         name: "Test Interval Job",
+        appIds: [STANDALONE_APP_ID],
         type: "shell",
         command: 'echo "Interval run"',
         schedule: {
@@ -276,6 +279,7 @@ describe("E2E: Job Scheduling", () => {
       // Create 3 jobs with different schedules
       const job1 = await jobsService.createJob({
         name: "Multi Job 1",
+        appIds: [STANDALONE_APP_ID],
         type: "shell",
         command: 'echo "Job 1"',
         schedule: {
@@ -286,6 +290,7 @@ describe("E2E: Job Scheduling", () => {
 
       const job2 = await jobsService.createJob({
         name: "Multi Job 2",
+        appIds: [STANDALONE_APP_ID],
         type: "shell",
         command: 'echo "Job 2"',
         schedule: {
@@ -296,6 +301,7 @@ describe("E2E: Job Scheduling", () => {
 
       const job3 = await jobsService.createJob({
         name: "Multi Job 3",
+        appIds: [STANDALONE_APP_ID],
         type: "shell",
         command: 'echo "Job 3"',
         schedule: {
@@ -339,6 +345,7 @@ describe("E2E: Job Scheduling", () => {
     it("should not run job when schedule is disabled", async () => {
       const job = await jobsService.createJob({
         name: "Disabled Schedule Job",
+        appIds: [STANDALONE_APP_ID],
         type: "shell",
         command: 'echo "Should not run"',
         schedule: {

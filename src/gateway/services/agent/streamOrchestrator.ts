@@ -190,8 +190,9 @@ export async function* orchestrateModelStream(
   fullStream: AsyncIterable<unknown>,
   chatId: string,
   apiKeys: string[],
+  streamOptions?: { textBufferMin?: number },
 ): AsyncGenerator<ChatStreamChunk, StreamOrchestratorResult> {
-  const TEXT_BUFFER_MIN = 50;
+  const TEXT_BUFFER_MIN = streamOptions?.textBufferMin ?? 50;
   const REASONING_BUFFER_MIN = 1; // Stream reasoning in real-time (no batching)
   let textBuffer = "";
   let reasoningBuffer = "";
@@ -571,16 +572,39 @@ export async function* orchestrateModelStream(
             inputTokens?: number;
             outputTokens?: number;
             totalTokens?: number;
+            inputTokenDetails?: {
+              cacheReadTokens?: number;
+              cacheWriteTokens?: number;
+            };
+            cachedInputTokens?: number;
+          };
+          providerMetadata?: {
+            anthropic?: {
+              cacheCreationInputTokens?: number;
+              cacheReadInputTokens?: number;
+            };
           };
           finishReason?: string;
         };
 
         if (finishStepChunk.usage) {
           const usage = finishStepChunk.usage;
+          const { extractCacheUsageFromUsage } = await import(
+            "./promptCacheControl.js"
+          );
+          const cache = extractCacheUsageFromUsage({
+            inputTokenDetails: usage.inputTokenDetails,
+            cachedInputTokens: usage.cachedInputTokens,
+            providerMetadata: finishStepChunk.providerMetadata,
+          });
           console.log(
             `[StreamOrchestrator] 💰 Usage from finish-step: ` +
               `${usage.totalTokens || 0} total ` +
-              `(${usage.inputTokens || 0} input + ${usage.outputTokens || 0} output)`,
+              `(${usage.inputTokens || 0} input + ${usage.outputTokens || 0} output` +
+              (cache.cacheReadTokens || cache.cacheWriteTokens
+                ? `, cache read ${cache.cacheReadTokens} / write ${cache.cacheWriteTokens}`
+                : "") +
+              `)`,
           );
 
           // Yield a step-usage chunk (NOT "done") for AgentService to capture
@@ -592,6 +616,8 @@ export async function* orchestrateModelStream(
                 promptTokens: usage.inputTokens || 0,
                 completionTokens: usage.outputTokens || 0,
                 totalTokens: usage.totalTokens || 0,
+                cacheReadTokens: cache.cacheReadTokens,
+                cacheWriteTokens: cache.cacheWriteTokens,
               },
             },
             chatId,
@@ -618,14 +644,30 @@ export async function* orchestrateModelStream(
         
         // If we have token usage from the model, yield it as a step-usage chunk
         // so AgentService can use it for summarization decisions
-        if (usage?.promptTokens) {
+        if (usage?.promptTokens || usage?.contextTokens) {
           console.log(
             `[StreamOrchestrator] 💰 Token usage from model: ${usage.totalTokens || 0} total ` +
-            `(${usage.promptTokens} prompt + ${usage.completionTokens || 0} completion)`,
+              `(${usage.promptTokens} prompt + ${usage.completionTokens || 0} completion` +
+              (usage.cacheReadTokens || usage.cacheWriteTokens
+                ? `, cache read ${usage.cacheReadTokens ?? 0} / write ${usage.cacheWriteTokens ?? 0}`
+                : "") +
+              (usage.contextTokens
+                ? `, context window: ${usage.contextTokens}`
+                : "") +
+              `)`,
           );
           yield createChatStreamChunk(
             "step-usage",
-            { usage },
+            {
+              usage: {
+                promptTokens: usage.promptTokens,
+                completionTokens: usage.completionTokens ?? 0,
+                totalTokens: usage.totalTokens ?? 0,
+                cacheReadTokens: usage.cacheReadTokens,
+                cacheWriteTokens: usage.cacheWriteTokens,
+                contextTokens: usage.contextTokens,
+              },
+            },
             chatId,
           );
         }
@@ -684,7 +726,7 @@ export async function* orchestrateModelStream(
           name: tc.toolName,
           input: tc.args,
           output: recoveryMarker,
-          status: "orphaned",
+          status: "interrupted",
           toolCallId: tc.toolCallId,
         };
       }

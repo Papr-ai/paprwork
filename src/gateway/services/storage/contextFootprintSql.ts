@@ -5,13 +5,13 @@ import {
   capInflationRatio,
   computeChatTurnFootprint,
   computeWeightedPromptProjection,
-  RECENT_MESSAGES_WITH_SUMMARY,
   type AggregatedCumulativeProjection,
   type ChatContextRow,
   type ChatTurnFootprint,
   type MessageWithUsageRow,
   type StoredMessageRow,
 } from "./contextFootprint.js";
+import { computeRecentMessageLimit } from "./recentMessageWindow.js";
 
 const messageCharExpr = `LENGTH(COALESCE(content, ''))
   + LENGTH(COALESCE(thinking, ''))
@@ -27,7 +27,8 @@ function fetchTopChats(db: Database.Database): ChatContextRow[] {
     .prepare(
       `SELECT id, message_count, title,
               summary_short, summary_medium, summary_long,
-              summary_topics, summary_enhanced, summary_last_updated
+              summary_topics, summary_enhanced, summary_last_updated,
+              summary_base_message_count
        FROM chats
        WHERE message_count > 0
        ORDER BY message_count DESC
@@ -42,7 +43,8 @@ function fetchChatsWithBilling(db: Database.Database): ChatContextRow[] {
     .prepare(
       `SELECT c.id, c.message_count, c.title,
               c.summary_short, c.summary_medium, c.summary_long,
-              c.summary_topics, c.summary_enhanced, c.summary_last_updated
+              c.summary_topics, c.summary_enhanced, c.summary_last_updated,
+              c.summary_base_message_count
        FROM chats c
        WHERE c.message_count > 0
          AND EXISTS (
@@ -85,9 +87,13 @@ function computeChatFootprintSnapshot(
   const hasSummary = Boolean(chat.summary_long);
 
   if (hasSummary) {
+    const recentLimit = computeRecentMessageLimit(
+      chat.message_count,
+      chat.summary_base_message_count,
+    );
     const recentRows = recentMessagesStmt.all(
       chat.id,
-      RECENT_MESSAGES_WITH_SUMMARY,
+      recentLimit,
     ) as StoredMessageRow[];
     recentRows.reverse();
     return computeChatTurnFootprint(chat, recentRows, {
@@ -188,7 +194,7 @@ function estimateLargeChatPromptProjection(
 
 /**
  * Fast path: SQL aggregates for full-chat size; only load message rows
- * needed for per-turn agent context (recent 6 when summarized).
+ * needed for per-turn agent context (chunked recent window when summarized).
  */
 export function computeTurnFootprintsFast(
   db: Database.Database,

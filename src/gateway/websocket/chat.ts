@@ -8,6 +8,7 @@ import type { WebSocket } from "ws";
 import type { WSMessage } from "./index.js";
 import { sendResponse, sendError } from "./index.js";
 import { getAgentService } from "../services/AgentService.js";
+import type { UiAgentFocusContext } from "../../core/types/agentFocus.js";
 
 interface CreateChatPayload {
   chatId?: string;
@@ -170,12 +171,30 @@ export async function setupChatHandlers(
         break;
       }
 
+      case "chat:summarize": {
+        const { chatId } = message.payload as GetStatsPayload;
+        const result = await agentService.summarizeChat(chatId);
+
+        sendResponse(ws, {
+          id: message.id,
+          success: result.success,
+          data: result,
+          error: result.error,
+        });
+        break;
+      }
+
       case "chat:inspect-context": {
-        const { chatId, model } = message.payload as {
+        const { chatId, model, focusContext } = message.payload as {
           chatId: string;
           model: string;
+          focusContext?: UiAgentFocusContext;
         };
-        const contextInfo = await agentService.inspectContext(chatId, model);
+        const contextInfo = await agentService.inspectContext(
+          chatId,
+          model,
+          focusContext,
+        );
 
         sendResponse(ws, {
           id: message.id,

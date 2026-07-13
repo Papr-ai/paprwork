@@ -187,13 +187,27 @@ export function AppCard({
             autoFocus
           />
         ) : (
-          <h3
-            className="app-card__title"
-            onDoubleClick={startRename}
-            title="Double-click to rename"
-          >
-            {artifact.title}
-          </h3>
+          <div className="app-card__title-row">
+            <h3
+              className="app-card__title"
+              onDoubleClick={startRename}
+              title="Double-click to rename"
+            >
+              {artifact.title}
+            </h3>
+            {artifact.cloudLineage ? (
+              <span
+                className={
+                  artifact.cloudLineage.mode === "track"
+                    ? "app-card__cloud-badge app-card__cloud-badge--track"
+                    : "app-card__cloud-badge app-card__cloud-badge--fork"
+                }
+                title={`From cloud: ${artifact.cloudLineage.sourceSlug}`}
+              >
+                {artifact.cloudLineage.mode === "track" ? "Track" : "Fork"}
+              </span>
+            ) : null}
+          </div>
         )}
         {artifact.description && (
           <p className="app-card__description">{artifact.description}</p>

@@ -8,6 +8,7 @@ import { useTabs } from "../../hooks/useTabs";
 import { useArtifactsStore } from "../../stores/artifactsStore";
 import { useArtifacts } from "../../hooks/useArtifacts";
 import type { TabType } from "../../types/tabs";
+import { MemoryIcon } from "../Memory/MemoryIcon";
 import "./CommandPalette.css";
 
 // Platform-aware modifier key detection
@@ -103,6 +104,15 @@ const COMMANDS: CommandItem[] = [
         <path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     ),
+  },
+  {
+    id: "memory",
+    label: "Memory Wiki",
+    description: "Browse your personal knowledge graph",
+    tabType: "memory",
+    entityId: "memory",
+    shortcut: `${modKey}Shift+M`,
+    icon: <MemoryIcon size={20} />,
   },
   {
     id: "settings",

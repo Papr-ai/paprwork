@@ -36,8 +36,13 @@ With a contract:
 
 ### Read Model (what the app queries)
 - Queries: exact SQL the app will run
-- Refresh: how often the app re-queries
-- Fallback: what to show when data is empty/missing
+- Refresh: on app load + **push events** via `subscribeJobEvents()` (`/api/jobs/events` SSE)
+- Use `onDbChanged` to auto-refresh when any write path changes the DB (job, agent, Turso pull)
+- Use `onStatusChanged` to react to job lifecycle (completed, failed, running)
+- **Never** poll `/api/db/query` on an interval — cloud apps bill Turso per row read
+- **Batch page-load queries**: if the app fires 2+ queries on mount, use one `POST /api/db/batch` with `{ appId, statements: [{ sql, params?, sourceId? }, ...] }` (max 25) → `{ results: [{ ok, rows, ... }] }`. One round trip instead of N — works local and cloud.
+- Jobs emit live progress: `PAPR_PROGRESS {"event":"...","payload":{...}}` on stdout
+- Fallback: manual refresh button only
 
 ### Schema Migrations
 - Version tracking via `schema_migrations` table
@@ -72,18 +77,42 @@ With a contract:
 - v2: Added conversion_rate column (nullable for backcompat)
 ```
 
-## Linking Apps to Data
+## Linking Apps to Data (required for cloud DB)
 
-Use `link_app_data_source` to wire an app to a job's database:
+**Job-owned (default):** `create_job({ appIds: [appId], ... })` **auto-links** the job's `data.db` and writes `data-sources.json` (synced to git). Cloud `/api/db/*` requires this file — auto-link satisfies it for the common path.
+
+**Manual fallback** (re-link, standalone `dbId`, or auto-link failed):
 
 ```javascript
 link_app_data_source({
   appId: "funnel-dashboard",
-  jobId: "amplitude-sync",
+  jobId: "amplitude-sync",  // OR dbId for registry DB
   alias: "funnel",
+  setPrimary: true,
   tables: ["funnel_runs"]
 })
 ```
+
+Call linking **before** implementing `/api/db/query` or `/api/db/write` if `read_app_data_sources` shows no sources. Linked databases sync to Turso automatically after cloud sync is enabled.
+
+## Cloud hosting (automatic — ready)
+
+When cloud sync is enabled (default):
+
+1. App source syncs to GitHub and auto-publishes to `apps.papr.ai` (private by default)
+2. Linked job databases (via `data-sources.json` — auto-created by `create_job({ appIds })` or manual link) sync to Turso
+3. App code using relative `/api/db/*` works **unchanged** on the cloud URL
+
+**No extra deploy steps** — do not add Vercel/Netlify publish, Turso credentials, or cloud URL wiring to plans.
+
+| Works on cloud | Desktop-only |
+|----------------|--------------|
+| `/api/db/schema`, `/api/db/query`, `/api/db/batch`, `/api/db/write`, `/api/db/exec` | `window.paprAPI` (chat.open, shell, etc.) |
+| `/api/jobs/list`, `/api/jobs/status`, `/api/jobs/run`, `/api/jobs/events` (SSE) | `/api/jobs/create` |
+
+If an app needs job triggers or paprAPI on cloud later, tell the user those features require Paprwork desktop open, or redesign around `/api/db/*` for cloud-first flows.
+
+Users can disable auto-publish globally or per-app in Settings.
 
 ## Required UX States
 

@@ -1,0 +1,171 @@
+# Wiki Entity Configuration
+# Edit this file to customize what the sleep agent tracks in your wiki.
+# Add new entity types, adjust discovery queries, or change what gets tracked.
+
+# Entity types — each becomes a section/rail in the Memory wiki.
+# The sleep agent will search Papr Memory + job databases for entities of each type.
+entity_types:
+  projects:
+    icon: "📋"
+    description: "Major initiatives, products, platforms being built"
+    discovery_queries:
+      - "projects initiatives platforms products I am building or working on"
+      - "new project started, building something, launching"
+    min_confidence: 0.6
+    
+  apps:
+    icon: "⚡"
+    description: "Mini-apps, tools, dashboards built in Paprwork"
+    discovery_queries:
+      - "mini-app created built dashboard tool calculator"
+    source: "apps.json"  # Also scan apps.json directly
+    min_confidence: 0.7
+
+  people:
+    icon: "👤"
+    description: "Contacts, collaborators, stakeholders, team members"
+    discovery_queries:
+      - "people contacts I work with, met with, emailed, discussed"
+      - "meeting with person, call with, discussion with, email from"
+      - "stakeholder team member collaborator advisor investor mentor"
+    # Graph query — correct schema fields for the Papr Memory graph
+    graph_query: "{ people(sort: [{ updated_at: DESC }], first: 30) { id name title description worksAtCompany { id name } } }"
+    # Known job sources (optional — generic scan covers these too)
+    job_sources:
+      - job_name: "LinkedIn Autopilot"
+        query: "SELECT name, title, company, stage FROM leads WHERE stage NOT IN ('skipped','rejected') ORDER BY created_at DESC LIMIT 30"
+        entity_template: "person"
+      - job_name: "Mac Mail Email Sync"
+        query: "SELECT DISTINCT sender_name, sender_email FROM emails WHERE date > date('now', '-30 days') AND sender_email NOT LIKE '%newsletter%' AND sender_email NOT LIKE '%noreply%' AND sender_name != '' ORDER BY date DESC LIMIT 30"
+        entity_template: "person"
+      - job_name: "Meeting Summarizer"
+        query: "SELECT title, attendees, summary FROM meetings WHERE date > date('now', '-14 days') ORDER BY date DESC LIMIT 20"
+        entity_template: "meeting_people"
+    min_confidence: 0.4
+
+  companies:
+    icon: "🏢"
+    description: "Organizations, clients, partners, vendors"
+    discovery_queries:
+      - "companies organizations clients partners we work with"
+      - "company mentioned discussed evaluated"
+    # Graph query — correct schema fields
+    graph_query: "{ companies(sort: [{ updated_at: DESC }], first: 30) { id name domain industry description employeesPerson { id name title } } }"
+    # Known job sources (optional)
+    job_sources:
+      - job_name: "Pipeline Sync"
+        query: "SELECT name, vertical, stage, arr FROM deals WHERE stage NOT IN ('passed','lost','dead') ORDER BY updated_at DESC LIMIT 20"
+        entity_template: "company"
+      - job_name: "Target Finder"
+        query: "SELECT company_name, vertical FROM companies ORDER BY created_at DESC LIMIT 20"
+        entity_template: "company"
+    min_confidence: 0.5
+
+  learnings:
+    icon: "💡"
+    description: "Technical insights, patterns, best practices, mistakes to avoid"
+    discovery_queries:
+      - "learned discovered insight pattern best practice mistake to avoid"
+      - "technical decision architecture choice tradeoff"
+    min_confidence: 0.7
+
+  collections:
+    icon: "📂"
+    description: "Groups of related entities — platform suites, feature sets"
+    discovery_queries:
+      - "platform suite system collection of tools apps"
+    min_confidence: 0.7
+
+  # USER-DEFINED TYPES — add your own below!
+  # Uncomment or add new types. The sleep agent will start tracking them.
+  
+  ideas:
+    icon: "💭"
+    description: "Product ideas, feature concepts, things to explore or build"
+    discovery_queries:
+      - "idea concept feature to build explore try experiment"
+      - "what if we could, would be cool to, should we build"
+    min_confidence: 0.5
+
+  tasks:
+    icon: "☑️"
+    description: "Active tasks, todos, action items across projects"
+    discovery_queries:
+      - "need to do, action item, todo, task, blocker, next step"
+      - "should fix, need to update, pending work"
+    min_confidence: 0.5
+    max_entities: 20  # Cap to prevent noise
+
+  investors:
+    icon: "💰"
+    description: "Investors, VCs, angels, funds interacted with"
+    discovery_queries:
+      - "investor VC angel fund investment fundraising pitch"
+      - "meeting with investor, pitch deck, term sheet"
+    min_confidence: 0.5
+
+  workflows:
+    icon: "🔄"
+    description: "Recurring processes, automation patterns, pipelines"
+    discovery_queries:
+      - "workflow process pipeline automation recurring daily weekly"
+      - "job pipeline schedule cron trigger automation"
+    min_confidence: 0.6
+
+# Discovery settings
+discovery:
+  # How many memory search results to scan per query
+  results_per_query: 15
+  # Minimum relevance score to consider a memory result
+  min_relevance: 0.4
+  # How far back to look for new entities (days)
+  lookback_days: 30
+  # Maximum new entities to create per sleep cycle
+  max_new_per_cycle: 10
+
+  # --- Generic database scanning ---
+  # When true, Sleep scans ALL job databases (~/Papr/jobs/*/data/data.db)
+  # for entity name mentions. This is the primary discovery mechanism —
+  # works for any app, any job, without hardcoded job names.
+  # The job_sources above are optional optimizations for known schemas.
+  scan_job_databases: true
+  
+  # When true, Sleep writes a data footprint for each entity in the daily
+  # log so Wiki Writer knows exactly which databases and tables to query.
+  # Format: job ID, job name, table names, row counts.
+  write_data_footprint: true
+
+# Graph schema reference — correct field names for the Papr Memory graph.
+# Use these when constructing query_memory_graph() calls.
+graph_schema:
+  # Query root types (plural lowercase):
+  #   people, companies, projects, meetings, tasks, insights, deals, contacts
+  # NOT: persons, companys
+  
+  person_fields:
+    - name          # string
+    - title         # string (job title)
+    - role          # string
+    - description   # string
+    - worksAtCompany  # → [Company] relationship
+    - participatedInProject  # → [Project] relationship
+    - participatedInMeeting  # → [Meeting] relationship
+  
+  company_fields:
+    - name          # string
+    - domain        # string (website domain)
+    - industry      # string
+    - description   # string
+    - categories    # string
+    - location      # string
+    - employeesPerson  # → [Person] relationship (people who work here)
+  
+  # Filter syntax: where: { name_CONTAINS: "..." }
+  # Sort syntax: sort: [{ updated_at: DESC }]
+
+# Quality gate — entity must meet these to be created
+quality_gate:
+  min_evidence: 1
+  min_sections: 3
+  min_description_length: 50
+  require_at_least_one_relationship: false

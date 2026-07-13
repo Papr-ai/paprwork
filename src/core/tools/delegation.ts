@@ -3,6 +3,11 @@ import { z } from "zod";
 
 /** Valid model IDs for sub-agents — prevents agent from typing name/id in model field */
 const SUBAGENT_MODEL_IDS = [
+  "gpt-5-6-luna",
+  "gpt-5-6-terra",
+  "gpt-5-6-sol-low",
+  "gpt-5-6-sol",
+  "gpt-5-6-sol-high",
   "gpt-5.4-mini",
   "gpt-5.5-low",
   "gpt-5.5",
@@ -12,6 +17,7 @@ const SUBAGENT_MODEL_IDS = [
   "claude-sonnet-4-6",
   "claude-sonnet-4-5",
   "claude-opus-4-6",
+  "claude-opus-4-8",
   "claude-fable-5",
   "gemini-2.5-flash",
   "gemini-2.5-flash-lite",
@@ -52,7 +58,12 @@ const deleteSubAgentSchema = z.object({
 const delegateTaskSchema = z.object({
   task: z.string().min(1),
   context: z.string().optional(),
-  useAgentId: z.string().min(1).optional(),
+  useAgentId: z
+    .string()
+    .min(1)
+    .describe(
+      "REQUIRED. Exact sub-agent id from list_sub_agents() or create_sub_agent() — e.g. 'research-specialist' or 'agent-uuid'. Never omit; omitting previously routed to the wrong agent.",
+    ),
   reportChatId: z
     .string()
     .min(1)
@@ -83,7 +94,8 @@ type ListDelegationRunsArgs = z.infer<typeof listDelegationRunsSchema>;
 
 export const listSubAgentsTool = createTool({
   id: "list_sub_agents",
-  description: "List available sub-agent profiles and their capabilities",
+  description:
+    "List available sub-agent profiles. For complex app+job automation, use product-architect before create_app/create_job.",
   // OpenAI function tools require parameters schema to always be an object.
   inputSchema: z.object({}),
   execute: async () => {
@@ -117,7 +129,11 @@ export const createSubAgentTool = createTool({
     };
 
     const agent = await service.createOrUpdateAgent(argsWithDefaults);
-    return { success: true, data: agent };
+    return {
+      success: true,
+      data: agent,
+      _delegationHint: `To delegate to this agent: delegate_task({ useAgentId: "${agent.id}", task: "...", context: "..." })`,
+    };
   },
 });
 
@@ -138,7 +154,7 @@ export const deleteSubAgentTool = createTool({
 export const delegateTaskTool = createTool({
   id: "delegate_task",
   description:
-    "Delegate a task to a sub-agent, optionally in background with chat report-back",
+    "Delegate a task to a specific sub-agent (background job with MiniChat). REQUIRED: call list_sub_agents() first, then pass useAgentId with the exact id field from the agent list — not the display name unless it uniquely matches.",
   inputSchema: delegateTaskSchema,
   execute: async (input) => {
     const args = (input as { context?: DelegateTaskArgs }).context ?? input;

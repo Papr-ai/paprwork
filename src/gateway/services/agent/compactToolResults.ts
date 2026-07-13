@@ -1,3 +1,10 @@
+import {
+  ABSOLUTE_TOOL_RESULT_MAX_CHARS,
+  categorizeTool,
+  getDefaultHistoryCharLimit,
+  truncateToCharLimit,
+} from "./toolResultTruncation.js";
+
 /**
  * Compact Stale Tool Results
  *
@@ -6,6 +13,12 @@
  *
  * A tool result is "fresh" if the model has NOT yet produced a response after
  * seeing it. The moment the next assistant message exists, the batch becomes "stale".
+ *
+ * Cross-turn category limits (file reads full, bash truncated): toolResultTruncation.ts,
+ * docs/TOOL_RESULT_TRUNCATION_STRATEGY.md
+ *
+ * Stale-batch compaction uses the same per-tool categories: file reads stay up to
+ * ABSOLUTE_TOOL_RESULT_MAX_CHARS even in older batches (fixes re-read loops mid-turn).
  *
  * Works with both message formats:
  * - Pi-ai: { role: "toolResult", content: [{ type: "text", text }] }
@@ -21,14 +34,14 @@ export interface CompactOpts {
   keepLastBatches?: number;
   /** Max chars per stale tool result. Default: 2000 (~500 tokens) */
   maxStaleLength?: number;
-  /** Hard cap per fresh result (prevents pathological cases). Default: 50000 (~12.5K tokens) */
+  /** Hard cap per fresh result (~10K tokens). Default: ABSOLUTE_TOOL_RESULT_MAX_CHARS */
   maxFreshLength?: number;
 }
 
 const DEFAULTS: Required<CompactOpts> = {
   keepLastBatches: 1,
   maxStaleLength: 2000,
-  maxFreshLength: 50_000,
+  maxFreshLength: ABSOLUTE_TOOL_RESULT_MAX_CHARS,
 };
 
 /**
@@ -64,15 +77,20 @@ function findToolBatchBoundaries(messages: any[]): number[] {
 }
 
 /**
- * Truncate a string to maxLen, appending an elision marker.
+ * Truncate a string to maxLen, appending an actionable recovery hint when possible.
  */
-function truncateStr(s: string, maxLen: number, label?: string): string {
+function truncateStr(
+  s: string,
+  maxLen: number,
+  toolCallId?: string,
+  toolName?: string,
+): string {
   if (s.length <= maxLen) return s;
+  if (toolCallId && toolName) {
+    return truncateToCharLimit(s, maxLen, toolCallId, toolName);
+  }
   const elided = s.length - maxLen;
-  const suffix = label
-    ? `\n\n[… ${elided.toLocaleString()} chars truncated. tool=${label}]`
-    : `\n\n[… ${elided.toLocaleString()} chars truncated]`;
-  return s.substring(0, maxLen) + suffix;
+  return `${s.substring(0, maxLen)}\n\n[… ${elided.toLocaleString()} chars truncated]`;
 }
 
 type ToolResultPart = {
@@ -102,18 +120,36 @@ function writeToolResultString(part: ToolResultPart, value: string): void {
   delete part.result;
 }
 
+function resolveEffectiveMaxLen(toolName: string | undefined, maxLen: number): number {
+  const category = toolName ? categorizeTool(toolName) : "bash";
+  const historyLimit = getDefaultHistoryCharLimit(category);
+  if (historyLimit === null) {
+    return ABSOLUTE_TOOL_RESULT_MAX_CHARS;
+  }
+  return Math.min(maxLen, historyLimit);
+}
+
 /**
  * Apply a character limit to a single tool result message (in-place).
  * Handles both pi-ai and AI SDK message formats.
  */
 function truncateToolMessage(msg: any, maxLen: number): void {
-  const label = msg.toolName || msg.tool_call_id || undefined;
+  const toolCallId =
+    typeof msg.toolCallId === "string" ? msg.toolCallId : undefined;
+  const messageToolName =
+    typeof msg.toolName === "string" ? msg.toolName : undefined;
 
   // Pi-ai format: { role: "toolResult", content: [{ type: "text", text }] }
   if (msg.role === "toolResult" && Array.isArray(msg.content)) {
+    const effectiveMaxLen = resolveEffectiveMaxLen(messageToolName, maxLen);
     for (const part of msg.content) {
       if (part.type === "text" && typeof part.text === "string") {
-        part.text = truncateStr(part.text, maxLen, label);
+        part.text = truncateStr(
+          part.text,
+          effectiveMaxLen,
+          toolCallId ?? msg.tool_call_id,
+          messageToolName ?? msg.toolName,
+        );
       }
     }
     return;
@@ -123,13 +159,30 @@ function truncateToolMessage(msg: any, maxLen: number): void {
   if (msg.role === "tool" && Array.isArray(msg.content)) {
     for (const part of msg.content) {
       if (part.type === "tool-result") {
-        const toolPart = part as ToolResultPart;
+        const toolPart = part as ToolResultPart & {
+          toolCallId?: string;
+          toolName?: string;
+        };
+        const partToolCallId = toolPart.toolCallId ?? toolCallId;
+        const partToolName = toolPart.toolName ?? messageToolName ?? "unknown";
+        const effectiveMaxLen = resolveEffectiveMaxLen(partToolName, maxLen);
         const current = readToolResultString(toolPart);
         if (current !== undefined) {
-          writeToolResultString(toolPart, truncateStr(current, maxLen, label));
-        } else if (toolPart.result && typeof toolPart.result === "object") {
-          // Legacy structured results without output wrapper
-          truncateObjectStrings(toolPart.result, maxLen, label);
+          writeToolResultString(
+            toolPart,
+            truncateStr(current, effectiveMaxLen, partToolCallId, partToolName),
+          );
+        } else if (
+          toolPart.result &&
+          typeof toolPart.result === "object" &&
+          !Array.isArray(toolPart.result)
+        ) {
+          truncateObjectStrings(
+            toolPart.result as Record<string, unknown>,
+            effectiveMaxLen,
+            partToolCallId,
+            partToolName,
+          );
         }
       }
     }
@@ -142,18 +195,25 @@ function truncateToolMessage(msg: any, maxLen: number): void {
  * Only goes 2 levels deep to avoid pathological nesting.
  */
 function truncateObjectStrings(
-  obj: any,
+  obj: Record<string, unknown>,
   maxLen: number,
-  label?: string,
+  toolCallId?: string,
+  toolName?: string,
   depth = 0,
 ): void {
   if (depth > 2 || !obj || typeof obj !== "object") return;
   for (const key of Object.keys(obj)) {
     const val = obj[key];
     if (typeof val === "string") {
-      obj[key] = truncateStr(val, maxLen, label);
+      obj[key] = truncateStr(val, maxLen, toolCallId, toolName);
     } else if (val && typeof val === "object" && !Array.isArray(val)) {
-      truncateObjectStrings(val, maxLen, label, depth + 1);
+      truncateObjectStrings(
+        val as Record<string, unknown>,
+        maxLen,
+        toolCallId,
+        toolName,
+        depth + 1,
+      );
     }
   }
 }

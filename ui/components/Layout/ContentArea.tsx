@@ -19,6 +19,7 @@ import { ViewsView } from "../Views/ViewsView";
 import { TableView } from "../Views/TableView";
 import { ChatGPTConvHistoryView } from "../ChatGPT/ChatGPTConvHistoryView";
 import { OnboardingView } from "../Onboarding/OnboardingView";
+import { MemoryView } from "../Memory/MemoryView";
 import { gateway } from "../../src/lib/gateway";
 import "./ContentArea.css";
 
@@ -261,6 +262,8 @@ export function ContentArea() {
         return <AgentsView />;
       case "skills":
         return <SkillsView />;
+      case "memory":
+        return <MemoryView />;
       case "settings":
         return <SettingsView />;
       case "chatgpt-conv-history":

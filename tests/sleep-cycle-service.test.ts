@@ -21,6 +21,6 @@ describe("SleepCycleService", () => {
   });
 
   it("bumps sleep prompt template version", () => {
-    expect(SLEEP_PROMPT_VERSION).toBeGreaterThanOrEqual(2);
+    expect(SLEEP_PROMPT_VERSION).toBeGreaterThanOrEqual(3);
   });
 });

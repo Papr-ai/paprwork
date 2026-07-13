@@ -34,6 +34,7 @@ export interface UpdateStatus {
   releaseNotes?: string;
   percent?: number;
   error?: string;
+  recoveryHint?: string;
 }
 
 export interface ElectronAPI {
@@ -118,7 +119,10 @@ export interface ElectronAPI {
       email?: string;
       error?: string;
     }>;
-    startLogin: (mode?: "login" | "signup") => Promise<{
+    startLogin: (
+      mode?: "login" | "signup",
+      source?: "auth_wall" | "settings" | "unknown",
+    ) => Promise<{
       success: boolean;
       error?: string;
     }>;
@@ -134,6 +138,11 @@ export interface ElectronAPI {
         displayName?: string;
         profileImage?: string;
         authenticatedAt: string;
+        organizationId?: string;
+        activeNamespaceId?: string;
+        activeNamespaceName?: string;
+        workspaceId?: string;
+        workspaceName?: string;
       };
       error?: string;
     }>;
@@ -170,6 +179,29 @@ export interface ElectronAPI {
     }>;
     onOrganizationChanged: (callback: (data: { organizationId: string; organizationName: string }) => void) => void;
     removeOrganizationChangedListener: (callback: (data: { organizationId: string; organizationName: string }) => void) => void;
+    listWorkspaceMembers: () => Promise<{
+      success: boolean;
+      workspaceId?: string;
+      workspaceName?: string;
+      members?: Array<{
+        objectId: string;
+        user: {
+          objectId: string;
+          email: string;
+          displayName: string;
+          profileImageUrl?: string;
+          role: string;
+        };
+      }>;
+      error?: string;
+    }>;
+    inviteWorkspaceMember: (email: string) => Promise<{
+      success: boolean;
+      email?: string;
+      inviteLink?: string;
+      error?: string;
+    }>;
+    openWorkspaceTeam: () => Promise<{ success: boolean; error?: string }>;
   };
 
   // Ollama API - Auto-install and manage local AI models
@@ -228,6 +260,15 @@ export interface ElectronAPI {
     setEnabled: (
       enabled: boolean,
     ) => Promise<{ success: boolean; enabled: boolean }>;
+  };
+
+  chatAttachments: {
+    save: (input: {
+      chatId: string;
+      fileName: string;
+      mimeType: string;
+      dataBase64: string;
+    }) => Promise<{ success: boolean; filePath?: string; error?: string }>;
   };
 
   // App metadata

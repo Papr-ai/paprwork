@@ -174,6 +174,35 @@ export async function getApiKey(keyName: string): Promise<string | undefined> {
 }
 
 /**
+ * Papr cloud identity key — always prefer Papr login (keychain via IPC) over .env.local.
+ * Used for cloud sync, Turso, memory server proxy, Composer.
+ */
+export async function getPaprApiKey(
+  ipcProcess: IpcProcessLike = process,
+): Promise<string | undefined> {
+  if (ipcProcess.send) {
+    try {
+      const keys = await requestKeysViaIPC(["PAPR_API_KEY"], ipcProcess);
+      if (keys.PAPR_API_KEY) {
+        keyCache.PAPR_API_KEY = keys.PAPR_API_KEY;
+        return keys.PAPR_API_KEY;
+      }
+    } catch (error) {
+      console.warn(
+        "[KeyResolver] PAPR_API_KEY IPC lookup failed:",
+        (error as Error).message,
+      );
+    }
+  }
+
+  if (keyCache.PAPR_API_KEY) {
+    return keyCache.PAPR_API_KEY;
+  }
+
+  return process.env.PAPR_API_KEY;
+}
+
+/**
  * Clear the key cache (useful for testing or when keys are updated)
  * @param keyName - Optional specific key to clear, or undefined to clear all
  */

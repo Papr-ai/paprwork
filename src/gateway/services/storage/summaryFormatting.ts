@@ -252,21 +252,17 @@ function formatEnhancedFieldsBlock(enhanced: SummaryEnhancedFields): string {
 export function formatSummaryForLLM(params: {
   tiers: SummaryTierFields;
   enhanced?: SummaryEnhancedFields;
-  totalCount: number;
-  recentCount: number;
   chatFilePath: string;
 }): string {
-  const { tiers, enhanced, totalCount, recentCount, chatFilePath } = params;
-  const archivedCount = totalCount - recentCount;
+  const { tiers, enhanced, chatFilePath } = params;
   const enhancedBlock = enhanced ? formatEnhancedFieldsBlock(enhanced) : "";
 
   return `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📚 ARCHIVED CONVERSATION SUMMARY (${archivedCount} older messages archived)
+📚 ARCHIVED CONVERSATION SUMMARY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-This conversation has been ongoing for ${totalCount} messages total.
-The summary below covers the first ${archivedCount} messages.
-Only the most recent ${recentCount} messages are loaded in context after this summary.
+Earlier messages in this chat have been compressed into the summary below.
+Recent messages follow after this block in the conversation history.
 
 Full conversation export: ${chatFilePath}
 You can use bash/grep/read tools to search the full history if needed.

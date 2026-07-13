@@ -14,6 +14,9 @@ export type {
 // Agents
 export type {
   Provider,
+  OpenAIReasoningEffort,
+  ReasoningEffort,
+  ModelReasoning,
   AgentConfig,
   AgentConfigInternal,
   ProviderConfig,
@@ -21,6 +24,13 @@ export type {
   ModelInfo,
   SessionState,
 } from "./agents";
+export type {
+  UiActiveAppFocus,
+  UiAgentFocusContext,
+  LastEditedKind,
+  LastEditedFileRef,
+  ResolvedAgentFocusContext,
+} from "./agentFocus";
 export type {
   SubAgentProfile,
   DelegationRunRecord,

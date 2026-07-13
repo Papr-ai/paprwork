@@ -59,6 +59,22 @@ interface ContextBreakdown {
       steps: Array<{ id: string; description: string; status: string }>;
     }>;
   };
+  focusContext?: ContextSection & {
+    content: string;
+    resolved: {
+      activeApp?: { appId: string; title: string; files?: string[] };
+      activeJob?: { jobId: string; name: string; files?: string[] };
+      lastEdited?: Array<{
+        kind: string;
+        path: string;
+        appId?: string;
+        jobId?: string;
+        repoRoot?: string;
+        filename?: string;
+        editedAt: string;
+      }>;
+    } | null;
+  };
   paprSync?: ContextSection & {
     storageMode: string;
     syncEnabled: boolean;
@@ -534,6 +550,63 @@ export const ContextInspectorModal: React.FC<ContextInspectorModalProps> = ({
     );
   };
 
+  const renderFocusContext = () => {
+    const focus = contextInfo.breakdown.focusContext;
+    if (!focus || focus.tokens === 0) {
+      return <div className="context-empty">No UI focus (open a mini-app or select a job to bind context)</div>;
+    }
+
+    const resolved = focus.resolved;
+    return (
+      <div className="context-focus">
+        {focus.note && (
+          <div className="context-section-note">ℹ️ {focus.note}</div>
+        )}
+        {resolved?.activeApp && (
+          <div className="context-focus-app">
+            <strong>Active app:</strong> {resolved.activeApp.title}{" "}
+            <code>{resolved.activeApp.appId}</code>
+            {resolved.activeApp.files && resolved.activeApp.files.length > 0 && (
+              <ul>
+                {resolved.activeApp.files.map((file) => (
+                  <li key={file}>{file}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+        {resolved?.activeJob && (
+          <div className="context-focus-job">
+            <strong>Active job:</strong> {resolved.activeJob.name}{" "}
+            <code>{resolved.activeJob.jobId}</code>
+            {resolved.activeJob.files && resolved.activeJob.files.length > 0 && (
+              <ul>
+                {resolved.activeJob.files.map((file) => (
+                  <li key={file}>{file}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+        {resolved?.lastEdited && resolved.lastEdited.length > 0 && (
+          <div className="context-focus-edits">
+            <strong>Recent edits:</strong>
+            <ul>
+              {resolved.lastEdited.map((entry) => (
+                <li key={`${entry.kind}-${entry.path}-${entry.editedAt}`}>
+                  {entry.kind}: {entry.filename ?? entry.path}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {focus.content && (
+          <pre className="context-preview">{focus.content}</pre>
+        )}
+      </div>
+    );
+  };
+
   const renderPlans = () => {
     const { plans } = contextInfo.breakdown;
     if (plans.count === 0) {
@@ -643,6 +716,15 @@ export const ContextInspectorModal: React.FC<ContextInspectorModalProps> = ({
             contextInfo.breakdown.plans.tokens,
             renderPlans(),
           )}
+
+          {contextInfo.breakdown.focusContext &&
+            renderSection(
+              "focus",
+              "UI Focus Context",
+              contextInfo.breakdown.focusContext.tokens,
+              renderFocusContext(),
+              "Volatile user message",
+            )}
 
           {contextInfo.breakdown.paprSync &&
             renderSection(

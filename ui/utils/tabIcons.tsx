@@ -4,6 +4,7 @@
 
 import React from "react";
 import type { TabType } from "../stores/tabStore";
+import { MemoryIcon } from "../components/Memory/MemoryIcon";
 
 export function getTabIcon(type: TabType): React.ReactNode {
   switch (type) {
@@ -260,6 +261,9 @@ export function getTabIcon(type: TabType): React.ReactNode {
           />
         </svg>
       );
+
+    case "memory":
+      return <MemoryIcon size={14} />;
 
     case "settings":
       return (

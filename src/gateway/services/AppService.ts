@@ -10,10 +10,49 @@ import os from "os";
 import { v4 as uuidv4 } from "uuid";
 import { fileURLToPath } from "url";
 import { withFileEditLock } from "../../core/utils/fileEditLock.js";
+import { buildMiniApp, type MiniAppBuildResult } from "../utils/miniAppBuild.js";
+import {
+  type AppDataSource,
+  type AppDataSourceRole,
+  type AppDataSourcesFile,
+  buildAppDbTsContent,
+  dbHasOnlyBaselineTables,
+  inferPrimaryAlias,
+  parseDataSourcesFile,
+  serializeDataSourcesFile,
+} from "./appDataSources.js";
+import { jobBelongsToApp } from "./jobs/appIds.js";
+import {
+  BACKEND_FOLDER,
+  DEFAULT_BACKEND_MANIFEST,
+  DEFAULT_BACKEND_PING_HANDLER,
+  hasBackendFiles,
+} from "../utils/appBackendScaffold.js";
+import {
+  appFilesUseDatabaseApi,
+  buildMissingDataSourceValidationIssue,
+} from "./appDatabaseEnforcement.js";
+import { writeCloudAppMetadataFile } from "./cloudAppMetadataFile.js";
+import {
+  getPaprAppsRoot,
+  getPaprDataDir,
+  getPaprRoot,
+} from "../../core/utils/paprRoot.js";
+
+export type { AppDataSource, AppDataSourceRole, AppDataSourcesFile };
 
 // ESM compatibility: get __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+export interface MiniAppCloudLineage {
+  mode: "fork" | "track";
+  sourceAppId: string;
+  sourceSlug: string;
+  sourceNamespaceId: string;
+  installedAt: string;
+  lastSyncedAt?: string;
+}
 
 export interface MiniApp {
   id: string;
@@ -27,6 +66,8 @@ export interface MiniApp {
   preview?: string;
   createdByAgentId?: string;
   createdByAgentName?: string;
+  /** Set when app was installed from Papr Cloud (fork or track). */
+  cloudLineage?: MiniAppCloudLineage;
 }
 
 export interface AppFile {
@@ -44,16 +85,6 @@ export interface AppFileVersion {
 
 export interface AppFileVersionFull extends AppFileVersion {
   content: string;
-}
-
-export interface AppDataSource {
-  id: string;
-  type: "sqlite";
-  jobId: string;
-  alias: string;
-  dbPath: string;
-  tables: string[];
-  linkedAt: string;
 }
 
 export interface ValidationIssue {
@@ -76,22 +107,24 @@ export interface ValidationResult {
 let appServiceInstance: AppService | null = null;
 
 export class AppService {
-  private paprRootDir: string;
-  private appsDir: string;
-  private appsIndexPath: string;
   private legacyAppsDir: string;
   private legacyAppsIndexPath: string;
   private apps: Map<string, MiniApp>;
   private initialized: boolean;
   private watchers: Map<string, FSWatcher>;
   private debounceTimers: Map<string, NodeJS.Timeout>;
+  private reloadBroadcastTimers: Map<string, NodeJS.Timeout>;
+  private buildInFlight: Map<string, Promise<MiniAppBuildResult>>;
   private pendingDefaultJobs: Array<{ sourceDir: string; targetDir: string; appId: string }>;
+  private lastBuildResult: Map<string, MiniAppBuildResult>;
+
+  /** Coalesce rapid multi-file agent edits into one rebuild + reload. */
+  private static readonly FILE_CHANGE_DEBOUNCE_MS = 800;
+  /** Wait for edit bursts to settle after build before telling UI to reload. */
+  private static readonly RELOAD_BROADCAST_DEBOUNCE_MS = 1500;
 
   constructor() {
     const homeDir = os.homedir();
-    this.paprRootDir = path.join(homeDir, "Papr");
-    this.appsDir = path.join(this.paprRootDir, "apps");
-    this.appsIndexPath = path.join(this.paprRootDir, "data", "apps.json");
     this.legacyAppsDir = path.join(homeDir, ".paprwork", "apps");
     this.legacyAppsIndexPath = path.join(
       homeDir,
@@ -103,7 +136,39 @@ export class AppService {
     this.initialized = false;
     this.watchers = new Map();
     this.debounceTimers = new Map();
+    this.reloadBroadcastTimers = new Map();
+    this.buildInFlight = new Map();
     this.pendingDefaultJobs = [];
+    this.lastBuildResult = new Map();
+  }
+
+  private get paprRootDir(): string {
+    return getPaprRoot();
+  }
+
+  private get appsDir(): string {
+    return getPaprAppsRoot();
+  }
+
+  private get appsIndexPath(): string {
+    return path.join(getPaprDataDir(), "apps.json");
+  }
+
+  /** Reload index from disk after PAPR_HOME changes (cloud agent gateway). */
+  async resetForWorkspaceReload(): Promise<void> {
+    for (const timer of this.debounceTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.debounceTimers.clear();
+    this.buildInFlight.clear();
+    for (const watcher of this.watchers.values()) {
+      await watcher.close();
+    }
+    this.watchers.clear();
+    this.initialized = false;
+    this.apps.clear();
+    this.pendingDefaultJobs = [];
+    this.lastBuildResult.clear();
   }
 
   private async migrateLegacyIfNeeded(): Promise<void> {
@@ -340,7 +405,10 @@ export class AppService {
     await jobsService.initialize();
 
     const { installed, dbPath } = await jobsService.installDefaultJob(
-      jobDef as Parameters<typeof jobsService.installDefaultJob>[0],
+      {
+        ...(jobDef as Parameters<typeof jobsService.installDefaultJob>[0]),
+        appIds: [appId],
+      },
       [
         `CREATE TABLE IF NOT EXISTS briefs (
           date TEXT PRIMARY KEY,
@@ -354,14 +422,10 @@ export class AppService {
     const dataSourcesPath = path.join(targetDir, "data-sources.json");
     try {
       const dsContent = await fs.readFile(dataSourcesPath, "utf-8");
-      const dataSources = JSON.parse(dsContent) as Array<{
-        jobId?: string;
-        dbPath?: string;
-        [key: string]: unknown;
-      }>;
+      const config = parseDataSourcesFile(dsContent);
 
       let updated = false;
-      for (const ds of dataSources) {
+      for (const ds of config.sources) {
         if (ds.jobId === jobDef.id && (!ds.dbPath || ds.dbPath === "")) {
           ds.dbPath = dbPath;
           updated = true;
@@ -369,7 +433,14 @@ export class AppService {
       }
 
       if (updated) {
-        await fs.writeFile(dataSourcesPath, JSON.stringify(dataSources, null, 2));
+        if (!config.primary && config.sources.length > 0) {
+          config.primary = inferPrimaryAlias(config.sources);
+        }
+        await fs.writeFile(
+          dataSourcesPath,
+          serializeDataSourcesFile(config),
+          "utf8",
+        );
         console.log(`[AppService] Linked data-source dbPath for app ${appId} → ${dbPath}`);
       }
     } catch (dsErr) {
@@ -441,6 +512,10 @@ export class AppService {
     await this.rebuildIndexIfCorrupted(); // Safety net: check for missing apps
     await this.pruneStaleAppEntries(); // Index entries whose folders were removed (e.g. bash rm)
     await this.installDefaultApps(); // Then install defaults (won't overwrite existing)
+    const { initializeDatabaseRegistry } = await import(
+      "./DatabaseRegistryService.js"
+    );
+    await initializeDatabaseRegistry();
     await this.startWatchingApps();
     this.initialized = true;
     console.log(`[AppService] Initialized with ${this.apps.size} apps`);
@@ -745,6 +820,15 @@ export class AppService {
       }),
     );
 
+    const hasDbTs = files.some((f) => path.basename(f.filename) === "db.ts");
+    if (!hasDbTs) {
+      await fs.writeFile(
+        path.join(appPath, "db.ts"),
+        buildAppDbTsContent(app.id, "primary"),
+        "utf8",
+      );
+    }
+
     // Verify critical file (index.html) exists and is readable
     // This ensures files are actually on disk before returning
     const indexPath = path.join(appPath, "index.html");
@@ -783,7 +867,63 @@ export class AppService {
     console.log(
       `[AppService] Created app: ${app.id} - ${title} (verified files on disk)`,
     );
+
+    void (process.env.PAPR_AUTO_DISCOVER_DATA_SOURCES === "true"
+      ? this.autoDiscoverDataSources(app.id)
+      : Promise.resolve()
+    ).catch((err) => {
+      console.warn(
+        `[AppService] Auto-discovery failed for new app ${app.id}:`,
+        err,
+      );
+    });
+
+    void writeCloudAppMetadataFile(this.paprRootDir, app.id).catch((err) => {
+      console.warn(
+        `[AppService] Failed to write metadata.json for ${app.id}:`,
+        (err as Error).message,
+      );
+    });
+
+    if (!hasBackendFiles(files)) {
+      await this.scaffoldAppBackend(appPath);
+    }
+
     return app;
+  }
+
+  /**
+   * Create default backend/manifest.json + ping handler for new apps.
+   * Server code lives under backend/ (not bundled into the browser).
+   */
+  private async scaffoldAppBackend(appPath: string): Promise<void> {
+    const backendDir = path.join(appPath, BACKEND_FOLDER);
+    const manifestPath = path.join(backendDir, "manifest.json");
+    try {
+      await fs.access(manifestPath);
+      return;
+    } catch {
+      /* create scaffold */
+    }
+
+    await fs.mkdir(backendDir, { recursive: true });
+    await fs.writeFile(
+      manifestPath,
+      `${JSON.stringify(DEFAULT_BACKEND_MANIFEST, null, 2)}\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(backendDir, "ping.py"),
+      DEFAULT_BACKEND_PING_HANDLER,
+      "utf8",
+    );
+    const dbHelperSrc = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "appRuntime",
+      "backendDbHelper.py",
+    );
+    await fs.copyFile(dbHelperSrc, path.join(backendDir, "papr_db.py"));
+    console.log(`[AppService] Scaffolded ${BACKEND_FOLDER}/ for ${path.basename(appPath)}`);
   }
 
   async getApp(id: string): Promise<MiniApp | null> {
@@ -814,6 +954,14 @@ export class AppService {
     }).catch(() => {});
 
     console.log(`[AppService] Updated app: ${id}`);
+
+    void writeCloudAppMetadataFile(this.paprRootDir, id).catch((err) => {
+      console.warn(
+        `[AppService] Failed to write metadata.json for ${id}:`,
+        (err as Error).message,
+      );
+    });
+
     return updatedApp;
   }
 
@@ -910,11 +1058,26 @@ export class AppService {
     );
   }
 
-  async readAppFile(appId: string, filename: string): Promise<string | null> {
+  async resolveAppFilePath(
+    appId: string,
+    filename: string,
+  ): Promise<string | null> {
     const app = this.apps.get(appId);
     if (!app) return null;
 
     const filePath = path.join(this.appsDir, appId, filename);
+    try {
+      await fs.access(filePath);
+      return filePath;
+    } catch {
+      return null;
+    }
+  }
+
+  async readAppFile(appId: string, filename: string): Promise<string | null> {
+    const filePath = await this.resolveAppFilePath(appId, filename);
+    if (!filePath) return null;
+
     try {
       return await fs.readFile(filePath, "utf-8");
     } catch (error) {
@@ -999,14 +1162,72 @@ export class AppService {
       app.updatedAt = new Date().toISOString();
       await this.saveApps();
 
-      // Broadcast file change to all connected clients (triggers iframe reload)
-      this.broadcastFileChange(appId, filename);
+      // Rebuild + iframe reload are handled by the filesystem watcher (debounced)
+      // so multi-file agent edits coalesce into a single build/reload cycle.
 
       return true;
     } catch (error) {
       console.error(`[AppService] Failed to write file: ${filename}`, error);
       return false;
     }
+  }
+
+  /**
+   * Run esbuild.build() on a bundled mini-app. Returns structured build errors
+   * that replace regex-based CSS validation. For legacy apps (no ES module entry),
+   * returns success with legacy flag — they still use per-file transpilation.
+   */
+  async buildApp(appId: string): Promise<MiniAppBuildResult> {
+    const inFlight = this.buildInFlight.get(appId);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const run = (async (): Promise<MiniAppBuildResult> => {
+      const app = this.apps.get(appId);
+      if (!app) {
+        return {
+          success: false,
+          errors: [
+            {
+              file: "app",
+              message: `App not found: ${appId}`,
+              severity: "error",
+            },
+          ],
+          outputFiles: [],
+          legacy: false,
+        };
+      }
+      const appDir = path.join(this.appsDir, appId);
+      const result = await buildMiniApp(appDir);
+      this.lastBuildResult.set(appId, result);
+
+      if (!result.legacy) {
+        const status = result.success
+          ? `✓ Build passed (${result.outputFiles.length} output files)`
+          : `✗ Build failed (${result.errors.filter((e) => e.severity === "error").length} errors)`;
+        console.log(`[AppService] Build ${appId}: ${status}`);
+      }
+
+      return result;
+    })();
+
+    this.buildInFlight.set(appId, run);
+    try {
+      return await run;
+    } finally {
+      if (this.buildInFlight.get(appId) === run) {
+        this.buildInFlight.delete(appId);
+      }
+    }
+  }
+
+  /**
+   * Get the cached build result for an app (from last buildApp call).
+   */
+  getLastBuildResult(appId: string): MiniAppBuildResult | undefined {
+    return this.lastBuildResult.get(appId);
   }
 
   /**
@@ -1044,6 +1265,8 @@ export class AppService {
         ignored: [
           "**/.versions/**",
           "**/data-sources.json",
+          "**/dist/**",
+          "**/.dist-staging/**",
           "**/.*", // Hidden files
         ],
         awaitWriteFinish: {
@@ -1097,18 +1320,62 @@ export class AppService {
    */
   private handleFileChange(appId: string, filename: string): void {
     console.log(`[AppService] File changed on disk: ${appId}/${filename}`);
-    this.broadcastFileChange(appId, filename);
-    
-    // Run validation asynchronously (don't block file change broadcast)
-    this.runValidation(appId).catch((error) => {
-      console.error(`[AppService] Validation error for app ${appId}:`, error);
-    });
+
+    // Skip rebuild for dist/ output files (avoids infinite loop)
+    if (filename.startsWith("dist/") || filename.startsWith("dist\\")) {
+      return;
+    }
+
+    // Debounce per app: agent edits often touch many files in one turn.
+    // One rebuild + one reload after edits settle (avoids aborting in-flight DB fetches).
+    if (this.debounceTimers.has(appId)) {
+      clearTimeout(this.debounceTimers.get(appId)!);
+    }
+
+    const timer = setTimeout(() => {
+      this.debounceTimers.delete(appId);
+      void this.processFileChange(appId, filename);
+    }, AppService.FILE_CHANGE_DEBOUNCE_MS);
+
+    this.debounceTimers.set(appId, timer);
+  }
+
+  private async processFileChange(appId: string, filename: string): Promise<void> {
+    try {
+      await this.buildApp(appId);
+      await this.runValidation(appId);
+      this.scheduleReloadBroadcast(appId, filename);
+    } catch (error) {
+      console.error(`[AppService] Build/validation error for app ${appId}:`, error);
+      // Still broadcast on error so UI shows the latest source/build state
+      this.scheduleReloadBroadcast(appId, filename);
+    }
+  }
+
+  /**
+   * Debounce reload broadcasts so spaced-out agent edits (e.g. file at T=0 and
+   * T=2s) collapse into one iframe reload after the burst settles.
+   */
+  private scheduleReloadBroadcast(appId: string, filename: string): void {
+    const existing = this.reloadBroadcastTimers.get(appId);
+    if (existing) {
+      clearTimeout(existing);
+    }
+
+    const timer = setTimeout(() => {
+      this.reloadBroadcastTimers.delete(appId);
+      this.broadcastFileChange(appId, filename);
+    }, AppService.RELOAD_BROADCAST_DEBOUNCE_MS);
+
+    this.reloadBroadcastTimers.set(appId, timer);
   }
 
   /**
    * Validate an app's files (linting + LOC checks) - Public API
    */
   async validateApp(appId: string): Promise<ValidationResult> {
+    // Always rebuild first — validation reads lastBuildResult; stale cache hid compile failures.
+    await this.buildApp(appId);
     return await this.runValidation(appId);
   }
 
@@ -1156,13 +1423,34 @@ export class AppService {
 
     const fileContents = new Map<string, string>();
 
+    // Use esbuild build result for bundled apps — catches CSS import errors,
+    // missing files, and syntax issues the same way an IDE bundler would.
+    const buildResult = this.lastBuildResult.get(appId);
+    const isBundledApp = buildResult !== undefined && !buildResult.legacy;
+
+    if (isBundledApp) {
+      for (const buildError of buildResult.errors) {
+        issues.push({
+          file: buildError.file,
+          line: buildError.line,
+          column: buildError.column,
+          severity: buildError.severity,
+          message: buildError.message,
+          rule: "esbuild",
+        });
+      }
+    }
+
     // Check each file
     for (const file of filesToCheck) {
       const relativePath = path.relative(appPath, file);
       const ext = path.extname(file).toLowerCase();
 
-      // Skip non-source files
+      // Skip non-source files and build output
       if (!['.html', '.css', '.js', '.ts', '.tsx', '.jsx'].includes(ext)) {
+        continue;
+      }
+      if (relativePath.startsWith("dist/") || relativePath.startsWith("dist\\")) {
         continue;
       }
 
@@ -1174,16 +1462,31 @@ export class AppService {
         const locIssues = this.checkLineLimit(content, relativePath, 100);
         issues.push(...locIssues);
 
-        // Basic syntax checks
+        // HTML checks always run
         if (ext === '.html') {
           const htmlIssues = this.checkHtmlSyntax(content, relativePath);
           issues.push(...htmlIssues);
-        } else if (ext === '.css') {
-          const cssIssues = this.checkCssSyntax(content, relativePath);
-          issues.push(...cssIssues);
-        } else if (['.js', '.ts', '.tsx', '.jsx'].includes(ext)) {
-          const jsIssues = this.checkJavaScriptSyntax(content, relativePath);
-          issues.push(...jsIssues);
+        }
+
+        // For bundled apps, esbuild already validates CSS and TS syntax
+        // — skip redundant per-file checks. For legacy apps, keep them.
+        if (!isBundledApp) {
+          if (ext === '.css') {
+            const cssIssues = this.checkCssSyntax(content, relativePath);
+            issues.push(...cssIssues);
+          } else if (ext === '.js' || ext === '.jsx') {
+            // esbuild-based syntax check (string/comment-aware)
+            const jsIssues = await this.checkJavaScriptSyntax(content, relativePath);
+            issues.push(...jsIssues);
+          } else if (ext === '.ts' || ext === '.tsx') {
+            // esbuild transpile validates syntax for TS — no separate pass needed
+            const transpileIssues = await this.checkTypeScriptTranspile(
+              content,
+              relativePath,
+            );
+            issues.push(...transpileIssues);
+            issues.push(...this.checkNoConsole(content, relativePath));
+          }
         }
       } catch (error) {
         console.error(`[AppService] Failed to validate ${relativePath}:`, error);
@@ -1191,6 +1494,74 @@ export class AppService {
     }
 
     issues.push(...this.checkMiniAppRuntimePatterns(fileContents));
+    try {
+      const { checkMiniAppBashPatterns, checkBackendManifestIntegrity } =
+        await import("../utils/miniAppBackendLint.js");
+      issues.push(...checkMiniAppBashPatterns(fileContents));
+      issues.push(...(await checkBackendManifestIntegrity(appPath)));
+    } catch (lintError) {
+      console.warn("[AppService] Backend lint failed:", lintError);
+    }
+    try {
+      const { checkMiniAppJobEventPatterns } = await import(
+        "../utils/miniAppJobEventLint.js"
+      );
+      issues.push(...checkMiniAppJobEventPatterns(fileContents));
+    } catch (lintError) {
+      console.warn("[AppService] Job event lint failed:", lintError);
+    }
+    try {
+      const { checkMiniAppEmojiPatterns } = await import(
+        "../utils/miniAppEmojiLint.js"
+      );
+      issues.push(...checkMiniAppEmojiPatterns(fileContents));
+    } catch (lintError) {
+      console.warn("[AppService] Emoji lint failed:", lintError);
+    }
+    issues.push(...(await this.checkLinkedDataSources(appId, fileContents)));
+
+    // Startup health: heavy eager import graphs, render-blocking CSS count,
+    // selector drift, and stale dist bundles (all warnings; stale-missing
+    // bundle is an error since the app cannot boot at all).
+    try {
+      const { checkMiniAppStartupHealth, checkStaleBundle } = await import(
+        "../utils/miniAppStartupHealth.js"
+      );
+      issues.push(...checkMiniAppStartupHealth(fileContents));
+
+      const indexHtmlContent = fileContents.get("index.html");
+      if (indexHtmlContent && /src=["'][^"']*dist\//.test(indexHtmlContent)) {
+        let distMtimeMs: number | null = null;
+        let newestSourceMtimeMs: number | null = null;
+        // Read dist/ files directly (getAllAppFiles skips dist/)
+        const distDir = path.join(appPath, "dist");
+        try {
+          const distEntries = await fs.readdir(distDir);
+          for (const df of distEntries) {
+            try {
+              const stat = await fs.stat(path.join(distDir, df));
+              distMtimeMs = Math.max(distMtimeMs ?? 0, stat.mtimeMs);
+            } catch { /* skip */ }
+          }
+        } catch { /* no dist dir */ }
+        for (const file of filesToCheck) {
+          const rel = path.relative(appPath, file);
+          try {
+            const stat = await fs.stat(file);
+            if (/\.(ts|tsx|js|jsx|css|html)$/.test(rel)) {
+              newestSourceMtimeMs = Math.max(newestSourceMtimeMs ?? 0, stat.mtimeMs);
+            }
+          } catch {
+            // ignore unreadable files
+          }
+        }
+        issues.push(
+          ...checkStaleBundle(indexHtmlContent, distMtimeMs, newestSourceMtimeMs),
+        );
+      }
+    } catch (healthError) {
+      console.warn("[AppService] Startup health checks failed:", healthError);
+    }
 
     // Broadcast validation result
     const result: ValidationResult = {
@@ -1217,8 +1588,13 @@ export class AppService {
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
         
-        // Skip hidden files, versions, and node_modules
-        if (entry.name.startsWith('.') || entry.name === 'node_modules') {
+        // Skip hidden files, versions, node_modules, build output, and server backend
+        if (
+          entry.name.startsWith(".") ||
+          entry.name === "node_modules" ||
+          entry.name === "dist" ||
+          entry.name === "backend"
+        ) {
           continue;
         }
         
@@ -1285,6 +1661,25 @@ export class AppService {
   }
 
   /**
+   * Block apps that call /api/db/* without a linked job database.
+   */
+  private async checkLinkedDataSources(
+    appId: string,
+    fileContents: Map<string, string>,
+  ): Promise<ValidationIssue[]> {
+    if (!appFilesUseDatabaseApi(fileContents)) {
+      return [];
+    }
+
+    const config = await this.getDataSourcesConfig(appId);
+    if (config.sources.length === 0) {
+      return [buildMissingDataSourceValidationIssue(appId)];
+    }
+
+    return [];
+  }
+
+  /**
    * Cross-file checks that affect what users see in the iframe (not just DOM text).
    */
   private checkMiniAppRuntimePatterns(
@@ -1339,7 +1734,7 @@ export class AppService {
         file: "app",
         severity: "warning",
         message:
-          "Direct external fetch() from mini-app client — prefer /api/bash/run or gateway APIs so preview matches user panel",
+          "Direct external fetch() from mini-app client — use /api/app/backend/:action, /api/jobs/run, or /api/db/* so preview matches cloud",
         rule: "external-fetch",
       });
     }
@@ -1437,67 +1832,85 @@ export class AppService {
   /**
    * Basic JavaScript/TypeScript syntax validation
    */
-  private checkJavaScriptSyntax(content: string, filename: string): ValidationIssue[] {
+  private async checkTypeScriptTranspile(
+    content: string,
+    filename: string,
+  ): Promise<ValidationIssue[]> {
+    const { transpileMiniAppTypeScript } = await import(
+      "../utils/miniAppTranspile.js"
+    );
+    const result = await transpileMiniAppTypeScript(content, filename);
+    if (result.success) {
+      return [];
+    }
+
+    const location =
+      result.line !== undefined
+        ? ` (line ${result.line}${result.column !== undefined ? `, col ${result.column}` : ""})`
+        : "";
+
+    return [
+      {
+        file: filename,
+        line: result.line,
+        column: result.column,
+        severity: "error",
+        message: `TypeScript build failed${location}: ${result.message ?? "Unknown transpile error"}`,
+        rule: "transpile",
+      },
+    ];
+  }
+
+  /**
+   * JavaScript/TypeScript syntax validation via esbuild (string/comment-aware).
+   * Replaces the old naive delimiter counting, which produced false
+   * "mismatched parentheses" errors on literals like indexOf('(').
+   * Non-syntax lint (console.log) is kept as a line-based warning pass.
+   */
+  private async checkJavaScriptSyntax(
+    content: string,
+    filename: string,
+  ): Promise<ValidationIssue[]> {
     const issues: ValidationIssue[] = [];
-    const lines = content.split('\n');
 
-    let braceCount = 0;
-    let parenCount = 0;
-    let bracketCount = 0;
+    const { validateMiniAppScriptSyntax } = await import(
+      "../utils/miniAppTranspile.js"
+    );
+    const result = await validateMiniAppScriptSyntax(content, filename);
+    if (!result.success) {
+      const location =
+        result.line !== undefined
+          ? ` (line ${result.line}${result.column !== undefined ? `, col ${result.column}` : ""})`
+          : "";
+      issues.push({
+        file: filename,
+        line: result.line,
+        column: result.column,
+        severity: "error",
+        message: `Syntax error${location}: ${result.message ?? "Unknown parse error"}`,
+        rule: "syntax",
+      });
+    }
 
+    issues.push(...this.checkNoConsole(content, filename));
+
+    return issues;
+  }
+
+  private checkNoConsole(content: string, filename: string): ValidationIssue[] {
+    const issues: ValidationIssue[] = [];
+    const lines = content.split("\n");
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      
-      // Skip comments and strings (basic check)
-      if (line.startsWith('//') || line.startsWith('/*')) continue;
-      
-      // Count delimiters
-      braceCount += (line.match(/{/g) || []).length;
-      braceCount -= (line.match(/}/g) || []).length;
-      parenCount += (line.match(/\(/g) || []).length;
-      parenCount -= (line.match(/\)/g) || []).length;
-      bracketCount += (line.match(/\[/g) || []).length;
-      bracketCount -= (line.match(/]/g) || []).length;
-      
-      // Check for console.log (should be removed in production)
-      if (line.includes('console.log')) {
+      if (lines[i].includes("console.log")) {
         issues.push({
           file: filename,
           line: i + 1,
-          severity: 'warning',
-          message: 'Remove console.log statements before production',
-          rule: 'no-console',
+          severity: "warning",
+          message: "Remove console.log statements before production",
+          rule: "no-console",
         });
       }
     }
-
-    if (braceCount !== 0) {
-      issues.push({
-        file: filename,
-        severity: 'error',
-        message: `Mismatched braces (${braceCount > 0 ? 'missing closing' : 'extra closing'})`,
-        rule: 'syntax',
-      });
-    }
-
-    if (parenCount !== 0) {
-      issues.push({
-        file: filename,
-        severity: 'error',
-        message: `Mismatched parentheses (${parenCount > 0 ? 'missing closing' : 'extra closing'})`,
-        rule: 'syntax',
-      });
-    }
-
-    if (bracketCount !== 0) {
-      issues.push({
-        file: filename,
-        severity: 'error',
-        message: `Mismatched brackets (${bracketCount > 0 ? 'missing closing' : 'extra closing'})`,
-        rule: 'syntax',
-      });
-    }
-
     return issues;
   }
 
@@ -1686,7 +2099,6 @@ export class AppService {
       await this.saveApps();
     }
 
-    this.broadcastFileChange(appId, filename);
     console.log(`[AppService] Restored ${filename} to version ${versionId} for app ${appId}`);
     return true;
   }
@@ -1701,7 +2113,7 @@ export class AppService {
     return path.join(this.appsDir, appId, "data-sources.json");
   }
 
-  async listAppDataSources(appId: string): Promise<AppDataSource[]> {
+  async getDataSourcesConfig(appId: string): Promise<AppDataSourcesFile> {
     const app = this.apps.get(appId);
     if (!app) {
       throw new Error(`App not found: ${appId}`);
@@ -1709,48 +2121,322 @@ export class AppService {
     const dataSourcesPath = this.getDataSourcesPath(appId);
     try {
       const raw = await fs.readFile(dataSourcesPath, "utf8");
-      const parsed = JSON.parse(raw) as AppDataSource[];
-      if (!Array.isArray(parsed)) {
-        return [];
-      }
-      return parsed;
+      return parseDataSourcesFile(raw);
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code === "ENOENT") {
-        return [];
+        return { sources: [] };
       }
       throw error;
     }
   }
 
+  async listAppDataSources(appId: string): Promise<AppDataSource[]> {
+    const config = await this.getDataSourcesConfig(appId);
+    return config.sources;
+  }
+
+  async listWorkspaceFiles(appId: string) {
+    const { listAppWorkspaceFiles, listJobWorkspaceFiles } = await import(
+      "./appWorkspaceFiles.js"
+    );
+    const { getJobsService } = await import("./JobsService.js");
+    const jobsService = getJobsService();
+    await jobsService.initialize();
+
+    return listAppWorkspaceFiles({
+      appId,
+      appsDir: this.appsDir,
+      getDataSources: (id) => this.getDataSourcesConfig(id),
+      listJobFiles: async (jobId, jobName, alias) => {
+        const job = await jobsService.getJob(jobId);
+        if (!job) return null;
+        const jobDir = await jobsService.getJobPath(jobId);
+        if (!jobDir) return null;
+        return listJobWorkspaceFiles(jobDir, jobId, job.name ?? jobName, alias);
+      },
+    });
+  }
+
+  async getPrimaryDataSource(appId: string): Promise<AppDataSource | undefined> {
+    const { getPrimarySource } = await import("./appDataSources.js");
+    const config = await this.getDataSourcesConfig(appId);
+    return getPrimarySource(config);
+  }
+
+  private async writeDataSourcesConfig(
+    appId: string,
+    config: AppDataSourcesFile,
+    previousSources?: AppDataSource[],
+  ): Promise<void> {
+    await fs.writeFile(
+      this.getDataSourcesPath(appId),
+      serializeDataSourcesFile(config),
+      "utf8",
+    );
+
+    if (previousSources) {
+      const normalizePath = (p: string) => path.normalize(p);
+      const removedSources = previousSources.filter(
+        (prev) =>
+          !config.sources.some(
+            (next) =>
+              normalizePath(next.dbPath) === normalizePath(prev.dbPath) ||
+              (next.dbId && prev.dbId && next.dbId === prev.dbId),
+          ),
+      );
+      if (removedSources.length > 0) {
+        void this.onDataSourcesUnlinked(removedSources);
+      }
+    }
+  }
+
+  /**
+   * Unlinking an app from a database must NOT delete shared Turso replicas.
+   * Only clear local sync state for the detached link.
+   */
+  private async onDataSourcesUnlinked(
+    removedSources: AppDataSource[],
+  ): Promise<void> {
+    const { clearTursoPushState } = await import("./tursoSyncState.js");
+
+    for (const source of removedSources) {
+      const syncKey =
+        source.dbId ??
+        source.jobId ??
+        path.normalize(source.dbPath);
+      clearTursoPushState(syncKey);
+      console.log(
+        `[AppService] Cleared Turso sync state for unlinked source ${source.alias} (${syncKey})`,
+      );
+    }
+  }
+
+  async ensureAppDbTs(appId: string): Promise<void> {
+    const app = this.apps.get(appId);
+    if (!app) return;
+
+    const primary = await this.getPrimaryDataSource(appId);
+    if (!primary) return;
+
+    const alias = primary.alias;
+    const appPath = path.join(this.appsDir, appId);
+    const dbTsPath = path.join(appPath, "db.ts");
+
+    try {
+      await fs.access(dbTsPath);
+      const existing = await fs.readFile(dbTsPath, "utf8");
+      if (existing.includes("PRIMARY_SOURCE") && existing.includes(appId)) {
+        if (primary && !existing.includes(`PRIMARY_SOURCE = '${alias}'`)) {
+          await fs.writeFile(dbTsPath, buildAppDbTsContent(appId, alias), "utf8");
+        }
+        return;
+      }
+    } catch {
+      // create below
+    }
+
+    await fs.writeFile(dbTsPath, buildAppDbTsContent(appId, alias), "utf8");
+  }
+
   async linkAppDataSource(
     appId: string,
-    source: Omit<AppDataSource, "linkedAt">,
+    source: Omit<AppDataSource, "linkedAt"> & {
+      role?: AppDataSourceRole;
+      setPrimary?: boolean;
+    },
   ): Promise<AppDataSource[]> {
     const app = this.apps.get(appId);
     if (!app) {
       throw new Error(`App not found: ${appId}`);
     }
 
-    const existing = await this.listAppDataSources(appId);
+    const config = await this.getDataSourcesConfig(appId);
+    const previousSources = config.sources;
+    const { setPrimary, ...sourceFields } = source;
+
+    const isUpdate = config.sources.some((entry) => entry.id === sourceFields.id);
+    if (config.sources.length >= 1 && !isUpdate && !setPrimary) {
+      const existing = config.primary ?? config.sources[0]?.alias ?? "primary";
+      throw new Error(
+        `App "${app.title}" already has database "${existing}". ` +
+          `One database per mini-app — additional jobs must write to $APP_DB, not link another source. ` +
+          `Pass setPrimary: true only when intentionally replacing the app's database.`,
+      );
+    }
+
+    let role = sourceFields.role;
+    if (!role && (config.sources.length === 0 || setPrimary)) {
+      role = "primary";
+    }
+
+    let dbPath = sourceFields.dbPath;
+    let dbId = sourceFields.dbId;
+    let jobDirForScratch: string | undefined;
+
+    if (sourceFields.jobId) {
+      const { getJobsService } = await import("./JobsService.js");
+      const jobsService = getJobsService();
+      await jobsService.initialize();
+      jobDirForScratch =
+        (await jobsService.getJobPath(sourceFields.jobId)) ?? undefined;
+    }
+
+    const willBePrimary =
+      setPrimary ||
+      role === "primary" ||
+      config.sources.length === 0;
+
+    if (willBePrimary) {
+      const { isJobOwnedDatabasePath, promoteJobDatabaseToRegistry } =
+        await import("./databasePromotion.js");
+      if (isJobOwnedDatabasePath(dbPath)) {
+        const promoted = await promoteJobDatabaseToRegistry({
+          sourcePath: dbPath,
+          label: sourceFields.alias || app.title,
+          moveFromJobFolder: true,
+          jobDirForScratchReset: jobDirForScratch,
+        });
+        dbPath = promoted.dbPath;
+        dbId = promoted.dbId;
+        console.log(
+          `[AppService] Promoted job database → ${dbPath} (${promoted.dbId})`,
+        );
+      }
+    }
+
+    const { initializeDatabaseRegistry } = await import(
+      "./DatabaseRegistryService.js"
+    );
+    const registry = await initializeDatabaseRegistry();
+    const record = await registry.ensureForPath(dbPath, {
+      label: sourceFields.alias,
+    });
+
     const linked: AppDataSource = {
-      ...source,
+      ...sourceFields,
+      dbPath,
+      dbId: dbId ?? record.dbId,
+      ...(role ? { role } : {}),
       linkedAt: new Date().toISOString(),
     };
-    const next = [
-      linked,
-      ...existing.filter((entry) => entry.id !== linked.id),
-    ];
-    await fs.writeFile(
-      this.getDataSourcesPath(appId),
-      JSON.stringify(next, null, 2),
-      "utf8",
+
+    const nextSources = isUpdate
+      ? config.sources.map((entry) =>
+          entry.id === linked.id ? linked : entry,
+        )
+      : [linked];
+
+    let primary = config.primary;
+    if (setPrimary || linked.role === "primary" || config.sources.length === 0) {
+      primary = linked.alias;
+    }
+
+    await this.writeDataSourcesConfig(
+      appId,
+      {
+        primary,
+        sources: nextSources,
+      },
+      previousSources,
     );
+
+    await this.ensureAppDbTs(appId);
 
     app.updatedAt = new Date().toISOString();
     this.apps.set(app.id, app);
     await this.saveApps();
-    return next;
+
+    if (linked.jobId) {
+      void import("./tursoPushScheduler.js")
+        .then(({ scheduleTursoPushForJob }) =>
+          scheduleTursoPushForJob(linked.jobId!, "completion"),
+        )
+        .catch(() => undefined);
+    }
+    void import("./TursoLinkedDbWatcher.js")
+      .then(({ refreshTursoLinkedDbWatcher }) => refreshTursoLinkedDbWatcher())
+      .catch(() => undefined);
+
+    return nextSources;
+  }
+
+  /**
+   * Link a job's data.db to every app in job.appIds (skips STANDALONE).
+   * Called after createJob (allowBaseline) and after job completion (data populated).
+   */
+  async autoLinkJobToApps(
+    jobId: string,
+    options?: { allowBaseline?: boolean },
+  ): Promise<AppDataSource[]> {
+    const { getJobsService } = await import("./JobsService.js");
+    const { STANDALONE_APP_ID } = await import("./jobs/appIds.js");
+    const jobsService = getJobsService();
+    await jobsService.initialize();
+
+    const job = await jobsService.getJob(jobId);
+    if (!job) {
+      return [];
+    }
+
+    const appIds = (job.appIds ?? []).filter((id) => id !== STANDALONE_APP_ID);
+    if (appIds.length === 0) {
+      return [];
+    }
+
+    const dbPath = await jobsService.getJobDatabasePath(jobId);
+    if (!dbPath) {
+      return [];
+    }
+
+    if (!options?.allowBaseline && dbHasOnlyBaselineTables(dbPath)) {
+      return [];
+    }
+
+    const linked: AppDataSource[] = [];
+    for (const appId of appIds) {
+      const app = this.apps.get(appId);
+      if (!app) {
+        continue;
+      }
+
+      const config = await this.getDataSourcesConfig(appId);
+      if (config.sources.some((entry) => entry.jobId === jobId)) {
+        continue;
+      }
+
+      if (config.sources.length > 0) {
+        console.log(
+          `[AppService] Skipping auto-link for job ${job.name} → app ${app.title}: ` +
+            `app already has primary database "${config.primary ?? config.sources[0]?.alias}". ` +
+            `Job should write UI data to $APP_DB.`,
+        );
+        continue;
+      }
+
+      const source: Omit<AppDataSource, "linkedAt"> & {
+        role?: AppDataSourceRole;
+      } = {
+        id: `${jobId}:auto-linked`,
+        type: "sqlite",
+        jobId,
+        alias: job.name,
+        dbPath,
+        tables: [],
+        role: config.sources.length === 0 ? "primary" : undefined,
+      };
+
+      const nextSources = await this.linkAppDataSource(appId, source);
+      const entry = nextSources.find((s) => s.jobId === jobId);
+      if (entry) {
+        linked.push(entry);
+        console.log(
+          `[AppService] Auto-linked job ${job.name} → app ${app.title}`,
+        );
+      }
+    }
+
+    return linked;
   }
 
   /**
@@ -1775,39 +2461,56 @@ export class AppService {
     await jobsService.initialize();
 
     const allJobs = await jobsService.listJobs();
-    const existingSources = await this.listAppDataSources(appId);
-    const existingJobIds = new Set(existingSources.map(ds => ds.jobId));
-    
-    // Build map of database paths to jobs
-    const dbPathToJob = new Map<string, typeof allJobs[0]>();
+    const config = await this.getDataSourcesConfig(appId);
+    if (config.sources.length > 0) {
+      return [];
+    }
+
+    const existingJobIds = new Set(config.sources.map((ds) => ds.jobId));
+
+    const appLinkedJobIds = new Set(
+      allJobs.filter((j) => jobBelongsToApp(j.appIds, appId)).map((j) => j.id),
+    );
+
+    // Build map of database paths to jobs (app-linked jobs only)
+    const dbPathToJob = new Map<string, (typeof allJobs)[0]>();
     for (const job of allJobs) {
+      if (!appLinkedJobIds.has(job.id)) continue;
       const dbPath = await jobsService.getJobDatabasePath(job.id);
       if (dbPath) {
         dbPathToJob.set(dbPath, job);
       }
     }
-    
+
     // Scan app code for database references
     const appDir = path.join(this.appsDir, appId);
     const referencedDbPaths = await this.scanAppCodeForDatabasePaths(appDir);
-    
-    // Link jobs whose databases are referenced in the app
+
     const newSources: AppDataSource[] = [];
     for (const dbPath of referencedDbPaths) {
       const job = dbPathToJob.get(dbPath);
       if (!job || existingJobIds.has(job.id)) continue;
+      if (dbHasOnlyBaselineTables(dbPath)) {
+        console.log(
+          `[AppService] Skipping auto-link for ${job.name}: DB has only job infrastructure tables`,
+        );
+        continue;
+      }
 
-      const source: Omit<AppDataSource, "linkedAt"> = {
+      const source: Omit<AppDataSource, "linkedAt"> & {
+        role?: AppDataSourceRole;
+      } = {
         id: `${job.id}:auto-discovered`,
         type: "sqlite",
         jobId: job.id,
         alias: job.name,
         dbPath,
-        tables: [], // Tables will be discovered on first query
+        tables: [],
+        role: config.sources.length === 0 ? "primary" : undefined,
       };
 
-      await this.linkAppDataSource(appId, source);
-      newSources.push({ ...source, linkedAt: new Date().toISOString() });
+      const linked = await this.linkAppDataSource(appId, source);
+      newSources.push(linked.find((s) => s.jobId === job.id)!);
       console.log(`[AppService] Auto-linked data source: ${job.name} → ${app.title}`);
     }
 
@@ -1827,7 +2530,12 @@ export class AppService {
     const dbPaths = new Set<string>();
     
     try {
-      const files = await fs.readdir(appDir);
+      let files: string[];
+      try {
+        files = await fs.readdir(appDir);
+      } catch {
+        return dbPaths;
+      }
       const codeFiles = files.filter(f => 
         f.endsWith('.js') || 
         f.endsWith('.ts') || 
@@ -1836,7 +2544,12 @@ export class AppService {
 
       for (const file of codeFiles) {
         const filePath = path.join(appDir, file);
-        const content = await fs.readFile(filePath, 'utf8');
+        let content: string;
+        try {
+          content = await fs.readFile(filePath, 'utf8');
+        } catch {
+          continue;
+        }
         
         // Look for database paths in the code
         // Pattern 1: Explicit db paths: /Users/.../Papr/jobs/{jobId}/data/*.db
@@ -1952,6 +2665,12 @@ export function getAppService(): AppService {
     appServiceInstance = new AppService();
   }
   return appServiceInstance;
+}
+
+/** Reset singleton between unit tests (avoids stale HOME paths). */
+export function resetAppServiceSingletonForTests(): void {
+  appServiceInstance?.cleanup();
+  appServiceInstance = null;
 }
 
 /**

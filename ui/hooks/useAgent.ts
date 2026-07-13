@@ -4,16 +4,26 @@
  */
 
 import { useCallback, useEffect, useRef } from "react";
+import {
+  isInterruptedToolResult,
+  resolveToolCallStatus,
+} from "../../src/core/utils/interruptedToolResult";
 import type { AgentConfig, StreamChunk } from "../types/core";
+import type { MessageAttachment } from "../types/chat";
 import { useChatStore } from "../stores/chatStore";
 import { useTabStore } from "../stores/tabStore";
-import { gateway } from "../src/lib/gateway";
+import { gateway, GATEWAY_DISCONNECTED_ERROR } from "../src/lib/gateway";
+import { fetchChatHistory } from "../utils/chatHistoryApi";
+import { mapHistoryMessages } from "../utils/historyMapper";
+import { resolveAgentFocusContext } from "../utils/agentFocusContext";
+import { parseAppIdFromEditFilePath } from "../utils/parseEditFileAppId";
 
 export function useAgent() {
   const addMessage = useChatStore((s) => s.addMessage);
   const updateStreamingMessage = useChatStore((s) => s.updateStreamingMessage);
   const finalizeStreamingMessage = useChatStore((s) => s.finalizeStreamingMessage);
   const setSending = useChatStore((s) => s.setSending);
+  const setConnectionPaused = useChatStore((s) => s.setConnectionPaused);
   const setError = useChatStore((s) => s.setError);
   
   // Streaming state management functions
@@ -33,6 +43,13 @@ export function useAgent() {
   const updateBatchRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const reasoningBatchRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const activeStreamRequestByChatRef = useRef<Map<string, string>>(new Map());
+  const resumingStreamsRef = useRef<Set<string>>(new Set());
+  /** Chunks already applied to UI — subscribe replays only from this index */
+  const appliedChunkCountRef = useRef<Map<string, number>>(new Map());
+  /** Request IDs whose chunks should be ignored after interrupt/stop */
+  const rejectedRequestIdsRef = useRef<Set<string>>(new Set());
+  /** Serialize sendMessage per chat so interrupt + new stream don't overlap */
+  const sendMessageLockRef = useRef<Map<string, Promise<void>>>(new Map());
 
   // Sequence tracking (V1-style interleaving)
   const sequenceRef = useRef<
@@ -40,20 +57,10 @@ export function useAgent() {
   >(new Map());
   const currentTextSegmentRef = useRef<Map<string, string>>(new Map());
 
-  // Listen for Gateway connection changes
-  useEffect(() => {
-    const unsubscribe = gateway.onConnectionChange((connected) => {
-      if (connected) {
-        // Clear error when Gateway reconnects
-        setError(null);
-      } else {
-        // Show error when Gateway disconnects
-        setError("Gateway not connected");
-      }
-    });
-
-    return unsubscribe;
-  }, [setError]);
+  // Listen for Gateway connection changes — populated after handleStreamChunk
+  const handleStreamChunkRef = useRef<
+    (chunk: StreamChunk) => void
+  >(() => {});
 
   // Handle streaming chunks
   const handleStreamChunk = useCallback(
@@ -86,6 +93,12 @@ export function useAgent() {
       }
 
       if (requestId) {
+        if (rejectedRequestIdsRef.current.has(requestId)) {
+          console.log(
+            `[useAgent] Ignoring rejected chunk for ${chatId} (${requestId})`,
+          );
+          return;
+        }
         const activeRequestId =
           activeStreamRequestByChatRef.current.get(chatId);
         if (activeRequestId && activeRequestId !== requestId) {
@@ -98,15 +111,12 @@ export function useAgent() {
 
       // Ensure we have a streaming message for all chunk types
       // Note: start-step should continue existing message, not create a new one
-      // Also: compression-start/compression-complete should NOT create new message
       if (
         !streamingMessageIdRef.current.has(chatId) &&
         chunk.type !== "done" &&
         chunk.type !== "error" &&
         chunk.type !== "start-step" &&
-        chunk.type !== "step-usage" &&
-        chunk.type !== "compression-start" &&
-        chunk.type !== "compression-complete"
+        chunk.type !== "step-usage"
       ) {
         const messageId = `msg-${Date.now()}`;
         streamingMessageIdRef.current.set(chatId, messageId);
@@ -301,26 +311,42 @@ export function useAgent() {
             // Update tool call with result
             const payload = chunk.payload as {
               toolCallId: string;
-              result?: string;
+              result?: unknown;
               error?: string;
             };
             const chatToolCalls = toolCallsMapRef.current.get(chatId);
             const existingCall = chatToolCalls?.get(payload.toolCallId);
+            const toolStatus = resolveToolCallStatus({
+              hasError: !!payload.error,
+              result: payload.result,
+            });
+            const displayResult =
+              toolStatus === "interrupted" ||
+              isInterruptedToolResult(payload.result)
+                ? undefined
+                : payload.result;
 
             console.log(
               `[useAgent] Tool result for ${existingCall?.toolName || payload.toolCallId}:`,
-              payload.result
-                ? typeof payload.result === "string"
-                  ? payload.result.substring(0, 100)
-                  : JSON.stringify(payload.result).substring(0, 100)
-                : "no result",
+              displayResult
+                ? typeof displayResult === "string"
+                  ? displayResult.substring(0, 100)
+                  : JSON.stringify(displayResult).substring(0, 100)
+                : toolStatus === "interrupted"
+                  ? "interrupted"
+                  : "no result",
             );
 
             if (existingCall && chatToolCalls) {
               chatToolCalls.set(payload.toolCallId, {
                 ...existingCall,
-                status: payload.error ? "error" : "success",
-                result: payload.result,
+                status: toolStatus,
+                result:
+                  typeof displayResult === "string"
+                    ? displayResult
+                    : displayResult !== undefined
+                      ? JSON.stringify(displayResult)
+                      : undefined,
                 error: payload.error,
               });
               toolCallsMapRef.current.set(chatId, chatToolCalls);
@@ -330,7 +356,8 @@ export function useAgent() {
               const toolIndex = sequence.findIndex(
                 (item) =>
                   item.type === "tool" &&
-                  (item.data as any).toolCallId === payload.toolCallId,
+                  (item.data as { toolCallId?: string }).toolCallId ===
+                    payload.toolCallId,
               );
 
               if (toolIndex !== -1) {
@@ -340,8 +367,8 @@ export function useAgent() {
                 sequence[toolIndex].data = {
                   name: existingCall.toolName,
                   input: existingCall.args,
-                  output: payload.result,
-                  status: payload.error ? "error" : "success",
+                  output: displayResult,
+                  status: toolStatus,
                   toolCallId: payload.toolCallId, // Preserve so sequence stays identifiable
                 };
                 sequenceRef.current.set(chatId, sequence);
@@ -355,8 +382,8 @@ export function useAgent() {
                   data: {
                     name: existingCall.toolName,
                     input: existingCall.args,
-                    output: payload.result,
-                    status: payload.error ? "error" : "success",
+                    output: displayResult,
+                    status: toolStatus,
                     toolCallId: payload.toolCallId,
                   },
                 });
@@ -416,7 +443,8 @@ export function useAgent() {
                 (existingCall.toolName === "create_document" ||
                   existingCall.toolName === "import_document" ||
                   existingCall.toolName === "create_app" ||
-                  existingCall.toolName === "edit_app_file" || // Auto-open on edits too
+                  existingCall.toolName === "edit_app_file" ||
+                  existingCall.toolName === "edit_file" ||
                   existingCall.toolName === "update_app")
               ) {
                 try {
@@ -440,12 +468,15 @@ export function useAgent() {
                     isApp = existingCall.toolName === "create_app";
                   }
 
-                  // For edit_app_file, get appId from args
+                  // For app edits, get appId from args (legacy) or path (edit_file)
                   if (
                     existingCall.toolName === "edit_app_file" ||
+                    existingCall.toolName === "edit_file" ||
                     existingCall.toolName === "update_app"
                   ) {
-                    docId = existingCall.args?.appId as string | undefined;
+                    docId =
+                      (existingCall.args?.appId as string | undefined) ??
+                      parseAppIdFromEditFilePath(existingCall.args?.path);
                     isApp = true;
 
                     // Resolve title from existing tab if available
@@ -456,7 +487,7 @@ export function useAgent() {
                       docTitle = "App";
                     }
 
-                    console.log("[useAgent] edit_app_file auto-open:", {
+                    console.log("[useAgent] app edit auto-open:", {
                       toolName: existingCall.toolName,
                       appId: docId,
                       args: existingCall.args,
@@ -584,6 +615,50 @@ export function useAgent() {
               chunk as { payload?: { finalMessage?: Record<string, unknown> } }
             ).payload;
             const finalMessageFromBackend = payload?.finalMessage;
+            const streamingMessageIdEarly =
+              streamingMessageIdRef.current.get(chatId);
+
+            if (
+              finalMessageFromBackend &&
+              streamingMessageIdEarly &&
+              typeof finalMessageFromBackend.id === "string"
+            ) {
+              const fmId = finalMessageFromBackend.id;
+              const chatStateEarly =
+                useChatStore.getState().chatStates.get(chatId);
+              if (
+                chatStateEarly?.messages.some(
+                  (m) => m.id === fmId && m.id !== streamingMessageIdEarly,
+                )
+              ) {
+                const filtered = chatStateEarly.messages.filter(
+                  (m) => m.id !== streamingMessageIdEarly,
+                );
+                const newChatStates = new Map(
+                  useChatStore.getState().chatStates,
+                );
+                newChatStates.set(chatId, {
+                  ...chatStateEarly,
+                  messages: filtered,
+                  isStreaming: false,
+                });
+                useChatStore.setState({ chatStates: newChatStates });
+                clearStreamingState(chatId);
+                streamingMessageIdRef.current.delete(chatId);
+                streamingContentRef.current.delete(chatId);
+                streamingReasoningRef.current.delete(chatId);
+                toolCallsMapRef.current.delete(chatId);
+                sequenceRef.current.delete(chatId);
+                currentTextSegmentRef.current.delete(chatId);
+                activeStreamRequestByChatRef.current.delete(chatId);
+                appliedChunkCountRef.current.delete(chatId);
+                setSending(chatId, false);
+                setConnectionPaused(chatId, false);
+                const { setTabStreaming } = useTabStore.getState();
+                setTabStreaming(`chat-${chatId}`, false);
+                break;
+              }
+            }
 
             // ✅ SEQUENCE: Build final sequence from streaming refs OR fallback to backend's finalMessage
             const currentSegment =
@@ -593,11 +668,13 @@ export function useAgent() {
             let content = streamingContentRef.current.get(chatId);
             let chatToolCalls = toolCallsMapRef.current.get(chatId);
 
-            // If backend sent finalMessage and we have little/no streaming data, use it
+            // Only use backend finalMessage when the client has no live stream data
             if (
               finalMessageFromBackend &&
               typeof finalMessageFromBackend === "object" &&
-              (sequence.length === 0 || !finalReasoning) &&
+              sequence.length === 0 &&
+              (!chatToolCalls || chatToolCalls.size === 0) &&
+              !content &&
               (finalMessageFromBackend.sequence ||
                 finalMessageFromBackend.reasoning ||
                 finalMessageFromBackend.toolCalls)
@@ -695,7 +772,8 @@ export function useAgent() {
             }
 
             // Set isSending to false FIRST to prevent empty loading indicator from appearing
-            setSending(chatId, false); // ✅ Per-chat isSending
+            setSending(chatId, false);
+            setConnectionPaused(chatId, false);
             
             // Clear streaming status (blue dot) for THIS chat's tab
             const { setTabStreaming } = useTabStore.getState();
@@ -762,6 +840,7 @@ export function useAgent() {
               currentTextSegmentRef.current.delete(chatId); // Clear text segment
             }
             activeStreamRequestByChatRef.current.delete(chatId);
+            appliedChunkCountRef.current.delete(chatId);
           }
           break;
 
@@ -771,24 +850,13 @@ export function useAgent() {
             const payload = chunk.payload as { error: string };
             const rawError = payload.error || "Unknown error";
 
-            // Check if this is a context limit error (compression will follow)
-            const isContextLimitError =
-              rawError.includes("Context limit approaching") ||
-              rawError.includes("context_length_exceeded");
-
             // Don't show abort errors - expected when user stops or sends new message
             const isAbortError =
               rawError.includes("aborted") ||
               rawError.includes("abort") ||
               rawError.toLowerCase().includes("the user aborted");
             
-            if (isContextLimitError) {
-              console.log(
-                "[useAgent] Context limit error detected - compression will follow, NOT finalizing message",
-              );
-              // DO NOT finalize message - compression chunks will follow
-              // Just log the error, don't clear state
-            } else if (isAbortError) {
+            if (isAbortError) {
               console.log(
                 "[useAgent] Ignoring expected abort error (user stopped or sent new message)",
               );
@@ -836,6 +904,21 @@ export function useAgent() {
               ) {
                 errorMsg = `Rate limit exceeded. Please try again in a moment.`;
               }
+              // Pattern: Composer cloud repo / branch not ready
+              else if (
+                rawError.includes("Failed to determine repository default branch") ||
+                rawError.includes("Failed to verify existence of branch")
+              ) {
+                errorMsg =
+                  "Composer cloud workspace is not ready yet. Paprwork is syncing your GitHub repo — wait a moment and try again. If this persists, open Settings and ensure you are signed in with Papr.";
+              }
+              else if (
+                rawError.includes("agent_not_found") ||
+                rawError.includes("Agent not found")
+              ) {
+                errorMsg =
+                  "The cloud agent session expired before your message was processed. Send your message again — Paprwork will start a fresh cloud agent automatically.";
+              }
               // Pattern: Invalid API key (specific patterns, not just "API key" anywhere)
               else if (
                 rawError.includes("Invalid API key") ||
@@ -863,105 +946,24 @@ export function useAgent() {
               setError(errorMsg);
             }
             
-            // Only clean up state if NOT a context limit error
-            if (!isContextLimitError) {
-              // Set isSending to false FIRST to prevent empty loading indicator from appearing
-              setSending(chatId, false); // ✅ Per-chat isSending
-              
-              const streamingMessageId =
-                streamingMessageIdRef.current.get(chatId);
-              if (streamingMessageId) {
-                // Flush any partial streaming state into the message before
-                // finalizing — preserves whatever text/tools we already have.
-                flushStreamingState(chatId, { isStreaming: false });
-                finalizeStreamingMessage(streamingMessageId, chatId);
-                streamingMessageIdRef.current.delete(chatId);
-                streamingContentRef.current.delete(chatId);
-                streamingReasoningRef.current.delete(chatId);
-                toolCallsMapRef.current.delete(chatId);
-              }
-              activeStreamRequestByChatRef.current.delete(chatId);
-            }
-          }
-          break;
-
-        case "compression-start":
-          {
-            // Show compression indicator to user without finalizing message
-            console.log(
-              "[useAgent] Compression starting - continuing in same message",
-            );
+            // Set isSending to false FIRST to prevent empty loading indicator from appearing
+            setSending(chatId, false);
+            setConnectionPaused(chatId, false);
+            
             const streamingMessageId =
               streamingMessageIdRef.current.get(chatId);
             if (streamingMessageId) {
-              // Add a visual indicator to the sequence
-              const sequence = sequenceRef.current.get(chatId) || [];
-              sequence.push({
-                type: "text",
-                data: "\n\n_Compressing conversation history..._\n\n",
-              });
-              sequenceRef.current.set(chatId, sequence);
-
-              // Update UI with compression indicator
-              const { chatStates } = useChatStore.getState();
-              const chatState = chatStates.get(chatId);
-              if (chatState) {
-                const updatedMessages = chatState.messages.map((msg) =>
-                  msg.id === streamingMessageId
-                    ? { ...msg, sequence: [...sequence] }
-                    : msg,
-                );
-                const newChatStates = new Map(chatStates);
-                newChatStates.set(chatId, {
-                  ...chatState,
-                  messages: updatedMessages,
-                });
-                useChatStore.setState({ chatStates: newChatStates });
-              }
+              // Flush any partial streaming state into the message before
+              // finalizing — preserves whatever text/tools we already have.
+              flushStreamingState(chatId, { isStreaming: false });
+              finalizeStreamingMessage(streamingMessageId, chatId);
+              streamingMessageIdRef.current.delete(chatId);
+              streamingContentRef.current.delete(chatId);
+              streamingReasoningRef.current.delete(chatId);
+              toolCallsMapRef.current.delete(chatId);
             }
-            // DO NOT clear state - we're continuing the same message
-          }
-          break;
-
-        case "compression-complete":
-          {
-            // Remove compression indicator and continue
-            console.log(
-              "[useAgent] Compression complete - continuing in same message",
-            );
-            const streamingMessageId =
-              streamingMessageIdRef.current.get(chatId);
-            if (streamingMessageId) {
-              // Remove compression text from sequence
-              const sequence = sequenceRef.current.get(chatId) || [];
-              const compressionIdx = sequence.findIndex(
-                (item) =>
-                  item.type === "text" &&
-                  item.data.includes("Compressing conversation"),
-              );
-              if (compressionIdx !== -1) {
-                sequence.splice(compressionIdx, 1);
-                sequenceRef.current.set(chatId, sequence);
-              }
-
-              // Update UI
-              const { chatStates } = useChatStore.getState();
-              const chatState = chatStates.get(chatId);
-              if (chatState) {
-                const updatedMessages = chatState.messages.map((msg) =>
-                  msg.id === streamingMessageId
-                    ? { ...msg, sequence: [...sequence] }
-                    : msg,
-                );
-                const newChatStates = new Map(chatStates);
-                newChatStates.set(chatId, {
-                  ...chatState,
-                  messages: updatedMessages,
-                });
-                useChatStore.setState({ chatStates: newChatStates });
-              }
-            }
-            // DO NOT clear state - we're continuing the same message
+            activeStreamRequestByChatRef.current.delete(chatId);
+            appliedChunkCountRef.current.delete(chatId);
           }
           break;
 
@@ -1018,12 +1020,16 @@ export function useAgent() {
           }
           break;
       }
+
+      const applied = appliedChunkCountRef.current.get(chatId) ?? 0;
+      appliedChunkCountRef.current.set(chatId, applied + 1);
     },
     [
       addMessage,
       updateStreamingMessage,
       finalizeStreamingMessage,
       setSending,
+      setConnectionPaused,
       setError,
       initStreamingState,
       setStreamingText,
@@ -1034,6 +1040,301 @@ export function useAgent() {
       clearStreamingState,
     ],
   );
+
+  handleStreamChunkRef.current = handleStreamChunk;
+
+  const hasActiveStreamWork = useCallback((chatId: string): boolean => {
+    const chatState = useChatStore.getState().chatStates.get(chatId);
+    return (
+      activeStreamRequestByChatRef.current.has(chatId) ||
+      streamingMessageIdRef.current.has(chatId) ||
+      chatState?.messages.some((m) => m.isStreaming) === true ||
+      chatState?.isSending === true ||
+      chatState?.isStreaming === true
+    );
+  }, []);
+
+  const interruptActiveStream = useCallback(
+    async (chatId: string): Promise<void> => {
+      const oldRequestId = activeStreamRequestByChatRef.current.get(chatId);
+      if (oldRequestId) {
+        rejectedRequestIdsRef.current.add(oldRequestId);
+        gateway.cancelRequest(oldRequestId);
+        activeStreamRequestByChatRef.current.delete(chatId);
+      }
+
+      await gateway.send("agent:stop", { chatId }).catch((stopError) => {
+        console.warn("[useAgent] Failed to stop existing stream:", stopError);
+      });
+
+      const existingStreamingMessageId =
+        streamingMessageIdRef.current.get(chatId);
+      const streamingMessageId =
+        existingStreamingMessageId ??
+        useChatStore
+          .getState()
+          .chatStates.get(chatId)
+          ?.messages.find((m) => m.isStreaming)?.id;
+
+      if (streamingMessageId) {
+        const chatToolCalls = toolCallsMapRef.current.get(chatId);
+        if (chatToolCalls) {
+          chatToolCalls.forEach((toolCall, toolCallId) => {
+            if (toolCall.status === "calling") {
+              chatToolCalls.set(toolCallId, {
+                ...toolCall,
+                status: "error" as const,
+                error: "Stopped by user",
+              });
+            }
+          });
+
+          const sequence = sequenceRef.current.get(chatId) || [];
+          const updatedSequence = sequence.map((item) => {
+            if (
+              item.type === "tool" &&
+              (item.data as { status?: string })?.status === "calling"
+            ) {
+              return {
+                ...item,
+                data: {
+                  ...(item.data as object),
+                  status: "stopped",
+                  error: "Stopped by user",
+                },
+              };
+            }
+            return item;
+          });
+          sequenceRef.current.set(chatId, updatedSequence);
+
+          const { chatStates } = useChatStore.getState();
+          const chatState = chatStates.get(chatId);
+          if (chatState) {
+            const updatedMessages = chatState.messages.map((msg) =>
+              msg.id === streamingMessageId
+                ? {
+                    ...msg,
+                    toolCalls: Array.from(chatToolCalls.values()),
+                    sequence: updatedSequence,
+                    isStreaming: false,
+                  }
+                : msg,
+            );
+            const newChatStates = new Map(chatStates);
+            newChatStates.set(chatId, {
+              ...chatState,
+              messages: updatedMessages,
+            });
+            useChatStore.setState({ chatStates: newChatStates });
+          }
+        }
+
+        finalizeStreamingMessage(streamingMessageId, chatId);
+      }
+
+      streamingMessageIdRef.current.delete(chatId);
+      streamingContentRef.current.delete(chatId);
+      streamingReasoningRef.current.delete(chatId);
+      toolCallsMapRef.current.delete(chatId);
+      appliedChunkCountRef.current.delete(chatId);
+      sequenceRef.current.delete(chatId);
+      currentTextSegmentRef.current.delete(chatId);
+
+      setSending(chatId, false);
+      setConnectionPaused(chatId, false);
+      useChatStore.getState().setChatStreaming(chatId, false);
+      useTabStore.getState().setTabStreaming(`chat-${chatId}`, false);
+      clearStreamingState(chatId);
+    },
+    [
+      finalizeStreamingMessage,
+      setSending,
+      setConnectionPaused,
+      clearStreamingState,
+    ],
+  );
+
+  const syncStreamFromHistory = useCallback(
+    async (chatId: string) => {
+      const streamingMessageId = streamingMessageIdRef.current.get(chatId);
+      const { setTabStreaming } = useTabStore.getState();
+
+      const cleanupStreamState = () => {
+        streamingMessageIdRef.current.delete(chatId);
+        streamingContentRef.current.delete(chatId);
+        streamingReasoningRef.current.delete(chatId);
+        toolCallsMapRef.current.delete(chatId);
+        sequenceRef.current.delete(chatId);
+        currentTextSegmentRef.current.delete(chatId);
+        appliedChunkCountRef.current.delete(chatId);
+        activeStreamRequestByChatRef.current.delete(chatId);
+        setSending(chatId, false);
+        setConnectionPaused(chatId, false);
+        setTabStreaming(`chat-${chatId}`, false);
+        clearStreamingState(chatId);
+      };
+
+      try {
+        try {
+          const sessionsResp = await gateway.send("agent:sessions", {});
+          const sessions =
+            (
+              sessionsResp.data as {
+                sessions?: Array<{ chatId: string; isStreaming: boolean }>;
+              }
+            )?.sessions ?? [];
+          if (sessions.some((s) => s.chatId === chatId && s.isStreaming)) {
+            setConnectionPaused(chatId, true);
+            setError("Agent still working — waiting to reconnect to stream…");
+            return;
+          }
+        } catch {
+          // Non-fatal — continue with history sync
+        }
+
+        const chatState = useChatStore.getState().chatStates.get(chatId);
+        if (!chatState) {
+          cleanupStreamState();
+          return;
+        }
+
+        const withoutPlaceholder = streamingMessageId
+          ? chatState.messages.filter((m) => m.id !== streamingMessageId)
+          : chatState.messages;
+
+        const history = await fetchChatHistory(chatId, { limit: 30 });
+        const serverMessages = mapHistoryMessages(history);
+        const localIds = new Set(withoutPlaceholder.map((m) => m.id));
+        const newFromServer = serverMessages.filter((m) => !localIds.has(m.id));
+
+        const newChatStates = new Map(useChatStore.getState().chatStates);
+        newChatStates.set(chatId, {
+          ...chatState,
+          messages: [...withoutPlaceholder, ...newFromServer],
+          isStreaming: false,
+          isSending: false,
+          connectionPaused: false,
+        });
+        useChatStore.setState({ chatStates: newChatStates });
+      } catch (syncError) {
+        console.error(
+          `[useAgent] Failed to sync stream from history for ${chatId}:`,
+          syncError,
+        );
+        const chatState = useChatStore.getState().chatStates.get(chatId);
+        if (chatState && streamingMessageId) {
+          const withoutPlaceholder = chatState.messages.filter(
+            (m) => m.id !== streamingMessageId,
+          );
+          const newChatStates = new Map(useChatStore.getState().chatStates);
+          newChatStates.set(chatId, {
+            ...chatState,
+            messages: withoutPlaceholder,
+            isStreaming: false,
+            isSending: false,
+            connectionPaused: false,
+          });
+          useChatStore.setState({ chatStates: newChatStates });
+        }
+      } finally {
+        cleanupStreamState();
+      }
+    },
+    [clearStreamingState, setConnectionPaused, setError, setSending],
+  );
+
+  const resumeInterruptedStream = useCallback(
+    async (chatId: string, requestId: string) => {
+      const fromChunkIndex = appliedChunkCountRef.current.get(chatId) ?? 0;
+      console.log(
+        `[useAgent] Resuming stream for ${chatId} (requestId=${requestId}, fromChunk=${fromChunkIndex})`,
+      );
+      setConnectionPaused(chatId, false);
+      setSending(chatId, true);
+
+      const { setTabStreaming } = useTabStore.getState();
+      setTabStreaming(`chat-${chatId}`, true);
+
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await gateway.subscribeStream(
+            chatId,
+            requestId,
+            fromChunkIndex,
+            (chunk) => handleStreamChunkRef.current(chunk as StreamChunk),
+          );
+          return;
+        } catch (error) {
+          lastError = error;
+          const message =
+            error instanceof Error ? error.message : String(error);
+          if (message.includes("Retry shortly") && attempt < 2) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            continue;
+          }
+          throw error;
+        }
+      }
+      throw lastError;
+    },
+    [setConnectionPaused, setSending],
+  );
+
+  useEffect(() => {
+    const resumeAllActiveStreams = async () => {
+      const activeStreams = [
+        ...activeStreamRequestByChatRef.current.entries(),
+      ];
+      if (activeStreams.length === 0) return;
+
+      for (const [chatId, requestId] of activeStreams) {
+        if (resumingStreamsRef.current.has(chatId)) continue;
+        resumingStreamsRef.current.add(chatId);
+        try {
+          await resumeInterruptedStream(chatId, requestId);
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          if (message === GATEWAY_DISCONNECTED_ERROR) {
+            setConnectionPaused(chatId, true);
+            continue;
+          }
+          console.warn(
+            `[useAgent] Stream resume failed for ${chatId}, syncing history:`,
+            error,
+          );
+          await syncStreamFromHistory(chatId);
+        } finally {
+          resumingStreamsRef.current.delete(chatId);
+        }
+      }
+    };
+
+    const unsubscribe = gateway.onConnectionChange((connected) => {
+      if (connected) {
+        setError(null);
+        void resumeAllActiveStreams();
+        return;
+      }
+
+      for (const chatId of activeStreamRequestByChatRef.current.keys()) {
+        setConnectionPaused(chatId, true);
+      }
+
+      if (activeStreamRequestByChatRef.current.size === 0) {
+        setError("Gateway not connected");
+      }
+    });
+
+    return unsubscribe;
+  }, [
+    resumeInterruptedStream,
+    syncStreamFromHistory,
+    setConnectionPaused,
+    setError,
+  ]);
 
   // Listen for broadcast agent chunks (e.g. auto-response to sub-agent questions)
   useEffect(() => {
@@ -1079,6 +1380,7 @@ export function useAgent() {
       message: string,
       config: AgentConfig,
       chatId: string, // ✅ Now passed explicitly, not derived from activeTab
+      attachments?: MessageAttachment[],
     ): Promise<void> => {
       console.log("=".repeat(80));
       console.log("[useAgent.sendMessage] ========== START ==========");
@@ -1091,6 +1393,17 @@ export function useAgent() {
       const isFirstMessage = chatId.startsWith("temp-");
       let finalChatId = chatId; // Will be updated if temp
       const tabId = `chat-${chatId}`;
+
+      const priorSend = sendMessageLockRef.current.get(chatId);
+      if (priorSend) {
+        await priorSend.catch(() => {});
+      }
+
+      let releaseSendLock: (() => void) | undefined;
+      const sendLock = new Promise<void>((resolve) => {
+        releaseSendLock = resolve;
+      });
+      sendMessageLockRef.current.set(chatId, sendLock);
 
       console.log(
         "[useAgent.sendMessage]   - Is first message:",
@@ -1120,87 +1433,11 @@ export function useAgent() {
           finalChatId = newChatId; // Use permanent ID for streaming
         }
 
-        const existingChatState = useChatStore
-          .getState()
-          .chatStates.get(finalChatId);
-        if (existingChatState?.isSending || existingChatState?.isStreaming) {
+        if (hasActiveStreamWork(finalChatId)) {
           console.log(
             `[useAgent] Interrupting active stream for ${finalChatId}`,
           );
-          await gateway
-            .send("agent:stop", { chatId: finalChatId })
-            .catch((stopError) => {
-              console.warn(
-                "[useAgent] Failed to stop existing stream:",
-                stopError,
-              );
-            });
-
-          const existingStreamingMessageId =
-            streamingMessageIdRef.current.get(finalChatId);
-          if (existingStreamingMessageId) {
-            // Mark any calling tools as stopped before finalizing
-            const chatToolCalls = toolCallsMapRef.current.get(finalChatId);
-            if (chatToolCalls) {
-              chatToolCalls.forEach((toolCall, toolCallId) => {
-                if (toolCall.status === "calling") {
-                  chatToolCalls.set(toolCallId, {
-                    ...toolCall,
-                    status: "error" as const,
-                    error: "Stopped by user"
-                  });
-                }
-              });
-              
-              // Update sequence to mark any "calling" tools as stopped
-              const sequence = sequenceRef.current.get(finalChatId) || [];
-              const updatedSequence = sequence.map(item => {
-                if (item.type === "tool" && (item.data as any)?.status === "calling") {
-                  return {
-                    ...item,
-                    data: {
-                      ...(item.data as any),
-                      status: "stopped",
-                      error: "Stopped by user"
-                    }
-                  };
-                }
-                return item;
-              });
-              sequenceRef.current.set(finalChatId, updatedSequence);
-              
-              // Update the message with stopped status
-              const { chatStates } = useChatStore.getState();
-              const chatState = chatStates.get(finalChatId);
-              if (chatState) {
-                const updatedMessages = chatState.messages.map(msg =>
-                  msg.id === existingStreamingMessageId
-                    ? {
-                        ...msg,
-                        toolCalls: Array.from(chatToolCalls.values()),
-                        sequence: updatedSequence,
-                        isStreaming: false,
-                      }
-                    : msg
-                );
-                const newChatStates = new Map(chatStates);
-                newChatStates.set(finalChatId, {
-                  ...chatState,
-                  messages: updatedMessages,
-                });
-                useChatStore.setState({ chatStates: newChatStates });
-              }
-            }
-            
-            finalizeStreamingMessage(existingStreamingMessageId, finalChatId);
-          }
-
-          streamingMessageIdRef.current.delete(finalChatId);
-          streamingContentRef.current.delete(finalChatId);
-          streamingReasoningRef.current.delete(finalChatId);
-          toolCallsMapRef.current.delete(finalChatId);
-          setSending(finalChatId, false);
-          setTabStreaming(`chat-${finalChatId}`, false);
+          await interruptActiveStream(finalChatId);
         }
 
         // Set tab streaming status (blue dot) for THIS chat's tab
@@ -1212,6 +1449,7 @@ export function useAgent() {
             id: `msg-user-${Date.now()}`,
             role: "user",
             content: message,
+            ...(attachments && attachments.length > 0 ? { attachments } : {}),
           },
           finalChatId,
         );
@@ -1222,18 +1460,21 @@ export function useAgent() {
         streamingContentRef.current.delete(finalChatId);
         streamingReasoningRef.current.delete(finalChatId);
         toolCallsMapRef.current.delete(finalChatId);
+        appliedChunkCountRef.current.set(finalChatId, 0);
 
         setSending(finalChatId, true); // ✅ Per-chat isSending
         setError(null);
         console.log("[useAgent] State reset, about to call gateway.stream");
 
         // Stream message via WebSocket (with permanent chatId)
+        const focusContext = resolveAgentFocusContext(finalChatId);
         await gateway.stream(
           "agent:stream",
           {
             chatId: finalChatId, // Always permanent at this point
             message,
             config,
+            ...(focusContext ? { focusContext } : {}),
           },
           (chunk) => handleStreamChunk(chunk as StreamChunk),
           (requestId) => {
@@ -1273,6 +1514,16 @@ export function useAgent() {
           errorMessage.includes("aborted") ||
           errorMessage.includes("abort") ||
           errorMessage.toLowerCase().includes("the user aborted");
+        const isDisconnectError = errorMessage === GATEWAY_DISCONNECTED_ERROR;
+
+        if (isDisconnectError) {
+          console.log(
+            `[useAgent] Gateway disconnected mid-stream for ${finalChatId} — will resume on reconnect`,
+          );
+          setConnectionPaused(finalChatId, true);
+          return;
+        }
+
         if (isAbortError) {
           console.log(
             "[useAgent] Ignoring expected abort (user stopped or sent new message)",
@@ -1288,9 +1539,22 @@ export function useAgent() {
 
         // Clear streaming status on error for THIS chat's tab
         setTabStreaming(`chat-${finalChatId}`, false);
+      } finally {
+        releaseSendLock?.();
+        if (sendMessageLockRef.current.get(chatId) === sendLock) {
+          sendMessageLockRef.current.delete(chatId);
+        }
       }
     },
-    [addMessage, setSending, setError, handleStreamChunk],
+    [
+      addMessage,
+      setSending,
+      setConnectionPaused,
+      setError,
+      handleStreamChunk,
+      hasActiveStreamWork,
+      interruptActiveStream,
+    ],
   );
 
   // Get chat history
@@ -1329,6 +1593,7 @@ export function useAgent() {
     sendMessage,
     getHistory,
     clearHistory,
+    interruptActiveStream,
   };
 }
 
@@ -1338,6 +1603,7 @@ export type UseAgentReturn = {
     message: string,
     config: AgentConfig,
     chatId: string,
+    attachments?: MessageAttachment[],
   ) => Promise<void>;
   getHistory: (sessionId: string) => Promise<any>;
   clearHistory: (sessionId: string) => Promise<void>;

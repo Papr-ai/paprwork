@@ -16,6 +16,7 @@ export type TabType =
   | "jobs"
   | "agents"
   | "skills"
+  | "memory"
   | "settings"
   | "getting-started"
   | "chatgpt-conv-history";

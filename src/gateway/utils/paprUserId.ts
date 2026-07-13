@@ -9,7 +9,9 @@ let cachedUserId: string | undefined;
 let cachedAt = 0;
 
 /**
- * Parse _User.objectId for PAPR memory/message writes (user_id field).
+ * Parse _User.objectId from Papr login — your app's user identifier.
+ * Pass as `external_user_id` on Papr Memory API calls (NOT `user_id`, which is
+ * Papr's internal user record and rejects unknown IDs).
  * Prefers gateway env (set at spawn); falls back to settings.json after login.
  */
 export function getPaprUserId(): string | undefined {
@@ -38,4 +40,10 @@ export function getPaprUserId(): string | undefined {
 export function invalidatePaprUserIdCache(): void {
   cachedUserId = undefined;
   cachedAt = 0;
+}
+
+/** Spread into Papr SDK request bodies when the logged-in user should be scoped. */
+export function paprUserScope(): { external_user_id: string } | Record<string, never> {
+  const userId = getPaprUserId();
+  return userId ? { external_user_id: userId } : {};
 }

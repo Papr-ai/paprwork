@@ -17,7 +17,7 @@ import { gateway } from "../src/lib/gateway";
 import { trackEvent } from "../lib/telemetry";
 
 // Re-export types for backward compatibility
-export type { ChatMetadata, ChatMessage, ChatState, StreamingState, SequenceItem };
+export type { ChatMetadata, ChatMessage, ChatState, StreamingState, SequenceItem, MessageAttachment };
 
 interface ChatStore {
   // All chat metadata
@@ -42,6 +42,7 @@ interface ChatStore {
   setChats: (chats: ChatMetadata[]) => void;
   setLoading: (loading: boolean) => void;
   setSending: (chatId: string, sending: boolean) => void;
+  setConnectionPaused: (chatId: string, paused: boolean) => void;
   setError: (error: string | null) => void;
 
   // Parallel chat state management
@@ -288,6 +289,20 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       newChatStates.set(chatId, {
         ...chatState,
         isSending: sending,
+      });
+
+      return { chatStates: newChatStates };
+    }),
+
+  setConnectionPaused: (chatId, paused) =>
+    set((state) => {
+      const chatState = state.chatStates.get(chatId);
+      if (!chatState) return state;
+
+      const newChatStates = new Map(state.chatStates);
+      newChatStates.set(chatId, {
+        ...chatState,
+        connectionPaused: paused,
       });
 
       return { chatStates: newChatStates };

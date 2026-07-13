@@ -18,6 +18,7 @@ interface KeyDisplayItem {
   hasValue: boolean;
   addedAt?: string;
   permission: "always" | "ask";
+  clientAccess: "server" | "client";
 }
 
 export function IntegrationKeysTab() {
@@ -26,6 +27,7 @@ export function IntegrationKeysTab() {
   const [editingKeyId, setEditingKeyId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [editPermission, setEditPermission] = useState<"always" | "ask">("ask");
+  const [editClientAccess, setEditClientAccess] = useState<"server" | "client">("server");
   const [showEditValue, setShowEditValue] = useState(false);
   const [loadingEditValue, setLoadingEditValue] = useState(false);
   const [showAddKey, setShowAddKey] = useState(false);
@@ -35,6 +37,7 @@ export function IntegrationKeysTab() {
     value: "",
     description: "",
     permission: "ask",
+    clientAccess: "server",
   });
 
   // Filter out AI keys — those are managed in AI Models tab
@@ -48,6 +51,7 @@ export function IntegrationKeysTab() {
         hasValue: true,
         addedAt: k.createdAt,
         permission: k.permission as "always" | "ask",
+        clientAccess: (k.clientAccess ?? "server") as "server" | "client",
       }));
   }, [keys]);
 
@@ -58,6 +62,7 @@ export function IntegrationKeysTab() {
   const handleStartEdit = async (keyItem: KeyDisplayItem) => {
     setEditingKeyId(keyItem.id);
     setEditPermission(keyItem.permission);
+    setEditClientAccess(keyItem.clientAccess);
     setShowEditValue(false);
     setEditValue("");
     setLoadingEditValue(true);
@@ -78,6 +83,7 @@ export function IntegrationKeysTab() {
         name: keyItem.name,
         description: keyItem.description,
         permission: editPermission,
+        clientAccess: editClientAccess,
       };
       if (valueToSave) updates.value = valueToSave;
       await updateKey(keyItem.id, updates);
@@ -104,7 +110,7 @@ export function IntegrationKeysTab() {
     const success = await addKey(keyForm);
     if (success) {
       setShowAddKey(false);
-      setKeyForm({ name: "", value: "", description: "", permission: "ask" });
+      setKeyForm({ name: "", value: "", description: "", permission: "ask", clientAccess: "server" });
       setShowAddKeyValue(false);
     }
   };
@@ -128,6 +134,7 @@ export function IntegrationKeysTab() {
             <p className="settings-section__description">
               API keys for jobs, automations, and third-party services.
               AI model keys are managed in the AI Models tab.
+              Mark publishable keys (Maps, analytics) as &quot;Browser-safe&quot; so cloud mini-apps can fetch them.
             </p>
           </div>
           <button
@@ -211,6 +218,25 @@ export function IntegrationKeysTab() {
                 <option value="ask">Ask each time</option>
               </select>
             </div>
+            <div className="form-group">
+              <label className="form-label">Browser access</label>
+              <select
+                className="form-input"
+                value={keyForm.clientAccess ?? "server"}
+                onChange={e =>
+                  setKeyForm(prev => ({
+                    ...prev,
+                    clientAccess: e.target.value as "server" | "client",
+                  }))
+                }
+              >
+                <option value="server">Server only (backend/jobs)</option>
+                <option value="client">Browser-safe (publishable)</option>
+              </select>
+              <p className="form-hint">
+                Browser-safe keys can be fetched by mini-app frontends via /api/credentials/client-keys on cloud.
+              </p>
+            </div>
             <div className="key-add-form__actions">
               <button className="settings-btn settings-btn--secondary" onClick={() => setShowAddKey(false)}>
                 Cancel
@@ -274,6 +300,19 @@ export function IntegrationKeysTab() {
                         <option value="ask">Ask each time</option>
                       </select>
                     </div>
+                    <div className="form-group">
+                      <label className="form-label">Browser access</label>
+                      <select
+                        className="form-input"
+                        value={editClientAccess}
+                        onChange={e =>
+                          setEditClientAccess(e.target.value as "server" | "client")
+                        }
+                      >
+                        <option value="server">Server only (backend/jobs)</option>
+                        <option value="client">Browser-safe (publishable)</option>
+                      </select>
+                    </div>
                     <div className="key-item__edit-actions">
                       <button
                         className="settings-btn settings-btn--secondary"
@@ -305,6 +344,11 @@ export function IntegrationKeysTab() {
                       <span className={`key-item__permission key-item__permission--${keyItem.permission}`}>
                         {keyItem.permission === "always" ? "Auto" : "Ask"}
                       </span>
+                      {keyItem.clientAccess === "client" && (
+                        <span className="key-item__permission key-item__permission--client">
+                          Browser
+                        </span>
+                      )}
                       <button
                         className="settings-btn settings-btn--small"
                         onClick={() => handleStartEdit(keyItem)}

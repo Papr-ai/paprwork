@@ -1,0 +1,119 @@
+.databases-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 720px;
+}
+
+.databases-tab__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.databases-tab__title {
+  margin: 0 0 6px;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.databases-tab__subtitle {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.databases-tab__refresh {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.databases-tab__refresh:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.databases-tab__status,
+.databases-tab__empty {
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.databases-tab__error {
+  color: #ff3b30;
+  font-size: 14px;
+}
+
+.databases-tab__list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.databases-tab__card {
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+}
+
+.databases-tab__card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.databases-tab__card-head h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.databases-tab__badge {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(1, 97, 224, 0.12);
+  color: #0161e0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.databases-tab__meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+  margin: 0;
+}
+
+.databases-tab__meta div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.databases-tab__meta dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary, var(--text-secondary));
+}
+
+.databases-tab__meta dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.databases-tab__meta code {
+  font-size: 12px;
+}

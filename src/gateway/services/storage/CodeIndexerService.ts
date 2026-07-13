@@ -10,7 +10,8 @@ import * as path from 'path';
 import * as os from 'os';
 import { Papr } from '@papr/memory';
 import { buildCodeIndexAddPolicy } from '../../utils/paprMemoryPolicy.js';
-import { getPaprUserId } from '../../utils/paprUserId.js';
+import { paprUserScope } from '../../utils/paprUserId.js';
+import { getProjectPathInfo } from './codeIndexPaths.js';
 
 export interface CodeFileMetadata {
   file_path: string;
@@ -126,6 +127,24 @@ export class CodeIndexerService {
     return stats;
   }
   
+  /**
+   * Index one code file to PAPR (used by incremental queue processing).
+   */
+  async indexSingleCodeFile(filePath: string): Promise<void> {
+    const projectInfo = getProjectPathInfo(filePath, this.paprDir);
+    if (!projectInfo) {
+      throw new Error(`File is not indexable — must be inside apps/{id}/ or Jobs/{id}/`);
+    }
+
+    const metadata =
+      projectInfo.type === 'mini_app'
+        ? await this.extractMiniAppMetadata(projectInfo.projectDir, projectInfo.projectId)
+        : await this.extractJobMetadata(projectInfo.projectDir, projectInfo.projectId);
+
+    const fileMetadata = this.extractCodeFileMetadata(filePath, metadata);
+    await this.indexCodeFile(fileMetadata, metadata);
+  }
+
   /**
    * Index a single mini-app project
    */
@@ -447,11 +466,9 @@ export class CodeIndexerService {
     if (metadata.created_at) paprMetadata.created_at = metadata.created_at.toISOString();
     if (metadata.updated_at) paprMetadata.updated_at = metadata.updated_at.toISOString();
     
-    const userId = getPaprUserId();
-
     await this.client.memory.add({
       content: `Project: ${metadata.name}\nType: ${metadata.type}\nID: ${metadata.project_id}`,
-      ...(userId ? { user_id: userId } : {}),
+      ...paprUserScope(),
       metadata: {
         role: 'assistant',
         category: 'learning',
@@ -495,22 +512,24 @@ export class CodeIndexerService {
       paprMetadata.data_source_path = fileMetadata.data_source_path;
     }
     
-    const userId = getPaprUserId();
-
     await this.client.memory.add({
       content: truncatedContent,
-      ...(userId ? { user_id: userId } : {}),
+      ...paprUserScope(),
       metadata: {
         role: 'assistant',
         category: 'learning',
         customMetadata: paprMetadata
       },
       policy: buildCodeIndexAddPolicy(this.schemaId),
-    }).catch((error) => {
-      // Enhance error message with more context
-      const err = error as any;
+    }).catch((error: unknown) => {
+      const err = error as {
+        statusCode?: number;
+        code?: number;
+        body?: unknown;
+        message?: string;
+      };
       throw new Error(
-        `${err.statusCode || err.code || 'Unknown'} ${JSON.stringify(err.body || err.message || err)}`
+        `${err.statusCode ?? err.code ?? 'Unknown'} ${JSON.stringify(err.body ?? err.message ?? error)}`,
       );
     });
   }

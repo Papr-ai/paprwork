@@ -126,9 +126,11 @@ export class MastraAgent {
         // Configure provider options for reasoning models
         const providerOptions: Record<string, unknown> = {};
         if (config.provider === "openai" && config.reasoning?.effort) {
-          // Use the reasoning effort from the model config
+          const { toOpenAIReasoningEffort } = await import(
+            "../../gateway/utils/modelNormalizer.js"
+          );
           providerOptions.openai = {
-            reasoningEffort: config.reasoning.effort, // "low" | "medium" | "high" | "xhigh"
+            reasoningEffort: toOpenAIReasoningEffort(config.reasoning.effort),
           };
         }
 

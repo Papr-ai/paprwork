@@ -1,0 +1,49 @@
+# Cloud App Host — deploy to Cloud Run as apps.papr.ai
+# Build: docker build -f Dockerfile.cloud-app-host -t cloud-app-host .
+# Deploy: node scripts/deploy-cloud-app-host.mjs --project=YOUR_APPS_PROJECT
+#
+# Runtime env (via Secret Manager + Cloud Run):
+#   PAPR_CLOUD_APP_HOST_KEY  — shared with memory server (NOT user API keys)
+#   PAPR_MEMORY_SERVER_URL   — https://memory.papr.ai
+#   PAPR_CLOUD_APP_PUBLIC_URL — https://apps.papr.ai
+#   AUTH0_DOMAIN / AUTH0_CLIENT_ID — Papr Auth0 tenant
+
+FROM node:24-alpine AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+# Remove macOS-only esbuild + Electron postinstall (not needed on Cloud Run)
+RUN node -e "\
+  const fs=require('fs');\
+  const drop=(o)=>{ if(!o) return; delete o['@esbuild/darwin-arm64']; delete o['@esbuild/darwin-x64']; };\
+  const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));\
+  drop(pkg.dependencies); drop(pkg.devDependencies);\
+  delete pkg.scripts?.postinstall;\
+  fs.writeFileSync('package.json', JSON.stringify(pkg,null,2));\
+  const lock=JSON.parse(fs.readFileSync('package-lock.json','utf8'));\
+  drop(lock.packages?.['']?.dependencies); drop(lock.packages?.['']?.devDependencies);\
+  fs.writeFileSync('package-lock.json', JSON.stringify(lock,null,2));\
+" && npm install --omit=optional --no-audit --no-fund
+COPY tsconfig.gateway.json tsconfig.json ./
+COPY src ./src
+RUN npm run build:gateway
+
+FROM node:24-alpine
+WORKDIR /app
+# Backend handlers: python3 subprocess + node (typescript transpiled via esbuild) at the edge
+RUN apk add --no-cache python3
+ENV NODE_ENV=production
+COPY package.json package-lock.json ./
+RUN node -e "\
+  const fs=require('fs');\
+  const drop=(o)=>{ if(!o) return; delete o['@esbuild/darwin-arm64']; delete o['@esbuild/darwin-x64']; };\
+  const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));\
+  drop(pkg.dependencies); drop(pkg.devDependencies);\
+  delete pkg.scripts?.postinstall;\
+  fs.writeFileSync('package.json', JSON.stringify(pkg,null,2));\
+  const lock=JSON.parse(fs.readFileSync('package-lock.json','utf8'));\
+  drop(lock.packages?.['']?.dependencies); drop(lock.packages?.['']?.devDependencies);\
+  fs.writeFileSync('package-lock.json', JSON.stringify(lock,null,2));\
+" && npm install --omit=dev --no-audit --no-fund
+COPY --from=build /app/dist ./dist
+EXPOSE 8080
+CMD ["node", "dist/gateway/cloud-app-host.js"]

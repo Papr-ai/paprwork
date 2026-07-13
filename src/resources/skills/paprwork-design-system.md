@@ -23,6 +23,7 @@ Blends:
 - Progressive disclosure for everything else.
 - No friction onboarding: get the user to the first success fast.
 - Measure success with 1-2 metrics.
+- **No emojis** in UI text, labels, buttons, headings, or tab icons — use SVG icons and plain text only (`validate_app` enforces `no-emojis`).
 
 ---
 
@@ -343,6 +344,25 @@ Timing: 150-250ms for UI transitions. Use `var(--dur-1)` and `var(--dur-2)`.
 /* Desktop */
 @media (min-width: 1024px) { .grid { max-width: 1200px; margin: 0 auto; } }
 ```
+
+---
+
+## Data & `/api/db/*` (required before persistence UI)
+
+Mini-apps that read or write data through `/api/db/query`, `/api/db/write`, or `window.paprAPI.invoke('db.*')` **must have a linked database first**. UI-only apps (static dashboards, calculators, no DB calls) do not need one.
+
+**Before writing any persistence code:**
+
+1. **Create or choose a database**
+   - Job-owned scratch: `create_job` with `appIds` (auto-links job `data.db` to the app)
+   - Shared / standalone: `create_database` then `attach_database` or `link_app_data_source({ appId, dbId })`
+2. **Set primary** — first link becomes primary; use `setPrimary: true` when attaching a registry DB
+3. **Use the right env in jobs**
+   - `APP_DB` / `$APP_DB` — mini-app tables (what users see; same file as primary linked source)
+   - `JOB_DB` / `$JOB_DB` — job scratch only (`job_runs`, temp ETL). When job DB is primary, **same file** as `$APP_DB`, different role.
+4. **Then build UI** — query via `/api/db/*` or the mini-app SDK; never hardcode absolute `dbPath` in browser code
+
+**Anti-pattern:** Building tables/views in the mini-app before `data-sources.json` exists → runtime 404 / "no database linked".
 
 ---
 

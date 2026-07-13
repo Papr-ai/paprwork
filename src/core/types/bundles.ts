@@ -30,12 +30,24 @@ export type ServiceCategory = (typeof SERVICE_CATEGORIES)[number];
 // Rich key requirement spec — replaces bare key-name strings in manifests
 // ---------------------------------------------------------------------------
 
+export const CredentialScopeSchema = z.enum(["owner", "user"]);
+
+export type CredentialScope = z.infer<typeof CredentialScopeSchema>;
+
+export const KeyClientAccessSchema = z.enum(["server", "client"]);
+
+export type KeyClientAccessSpec = z.infer<typeof KeyClientAccessSchema>;
+
 export const RequiredKeySpecSchema = z.object({
   name: z.string().min(1),
   service: z.string().min(1),
   category: z.enum(SERVICE_CATEGORIES).default("other"),
   description: z.string().default(""),
   required: z.boolean().default(true),
+  /** owner = publisher's keys; user = each visitor/installer brings their own */
+  credentialScope: CredentialScopeSchema.default("user"),
+  /** server = backend/jobs only; client = may be fetched by mini-app browser via /api/credentials/client-keys */
+  clientAccess: KeyClientAccessSchema.default("server"),
   signupUrl: z.string().optional(),
   docsUrl: z.string().optional(),
   instructions: z.string().optional(),
@@ -68,6 +80,8 @@ export function normalizeRequirements(
         category: "other" as ServiceCategory,
         description: "",
         required: true,
+        credentialScope: "user" as const,
+        clientAccess: "server" as const,
       };
     }
     return RequiredKeySpecSchema.parse(item);
@@ -145,6 +159,7 @@ const JobSpecSchema = z.object({
   outputTables: z.array(z.string()).default([]),
   requirements: z.array(z.string()).default([]),
   folder: z.string().optional(),
+  appIds: z.array(z.string().min(1)).default([]),
   provider: z.string().optional(),
   model: z.string().optional(),
   retries: BundleJobRetrySchema.optional(),
@@ -161,6 +176,13 @@ const SqliteIndexSchema = z.object({
   name: z.string().min(1),
   columns: z.array(z.string()).min(1),
   unique: z.boolean().default(false),
+});
+
+const RegistryDatabaseBundleSchema = z.object({
+  dbId: z.string().min(1),
+  bundlePath: z.string().min(1),
+  label: z.string().optional(),
+  isolation: z.enum(["shared", "per-user"]).optional(),
 });
 
 const SqliteTableSchema = z.object({
@@ -208,6 +230,7 @@ export const BundleManifestSchema = z.object({
   app: BundleAppSchema,
   jobs: z.array(JobSpecSchema).default([]),
   sqlite: z.array(SqliteDatabaseSchema).default([]),
+  registryDatabases: z.array(RegistryDatabaseBundleSchema).default([]),
   deploymentProfiles: z.array(DeploymentProfileSchema).default([]),
   sync: SyncSettingsSchema.default({
     preferredRoot: "~/Papr",
@@ -220,6 +243,9 @@ export type BundleManifest = z.infer<typeof BundleManifestSchema>;
 export type BundleAppSpec = z.infer<typeof BundleAppSchema>;
 export type BundleJobSpec = z.infer<typeof JobSpecSchema>;
 export type BundleDatabaseSpec = z.infer<typeof SqliteDatabaseSchema>;
+export type BundleRegistryDatabaseSpec = z.infer<
+  typeof RegistryDatabaseBundleSchema
+>;
 export type BundleDeploymentProfile = z.infer<typeof DeploymentProfileSchema>;
 
 export function parseBundleManifest(input: unknown): BundleManifest {

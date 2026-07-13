@@ -1,0 +1,270 @@
+/**
+ * Vault Sync Service — syncs local custom keys (macOS Keychain) to cloud vault
+ * (GCP Secret Manager) via the memory server.
+ *
+ * Flow:
+ *   1. On init: push all local keys → cloud vault (idempotent)
+ *   2. On init: pull vault key names → add any missing to local keychain
+ *   3. On key change: push updated keys → cloud vault
+ *
+ * The cloud proxy at /api/cloud/vault/* forwards to /v1/cloud/vault/*
+ * on the memory server, attaching the user's PAPR_API_KEY automatically.
+ */
+
+import { getCustomKeysService } from "./CustomKeysService.js";
+import { getPaprApiKey } from "../utils/keyResolver.js";
+
+const GATEWAY_PORT = parseInt(process.env.GATEWAY_PORT ?? "18789", 10);
+const PUSH_TIMEOUT_MS = 120_000; // 52 keys × ~2s each on GCP Secret Manager
+const PULL_TIMEOUT_MS = 15_000;
+
+interface VaultKeyInfo {
+  name: string;
+  syncedAt: string;
+}
+
+interface VaultSyncResponse {
+  synced: number;
+  created: string[];
+  updated: string[];
+  deleted: string[];
+}
+
+function inferVaultKeySource(name: string, value: string): string {
+  if (value.startsWith("sk-ant-oat") || value.startsWith("sk-oat")) {
+    return "oauth";
+  }
+  if (name.toLowerCase().includes("oauth")) {
+    return "oauth";
+  }
+  return "manual";
+}
+
+interface VaultListKeysResponse {
+  keys: VaultKeyInfo[];
+}
+
+type VaultSyncStatus = "idle" | "syncing" | "error" | "disabled";
+
+interface VaultState {
+  status: VaultSyncStatus;
+  lastSyncAt: string | null;
+  lastError: string | null;
+  keyCount: number;
+}
+
+export class VaultSyncService {
+  private state: VaultState = {
+    status: "idle",
+    lastSyncAt: null,
+    lastError: null,
+    keyCount: 0,
+  };
+
+  private readonly gatewayPort: number;
+
+  constructor(opts?: { gatewayPort?: number }) {
+    this.gatewayPort = opts?.gatewayPort ?? GATEWAY_PORT;
+  }
+
+  getState(): VaultState {
+    return { ...this.state };
+  }
+
+  /**
+   * Initialize: push local keys to cloud, then pull to discover cross-device keys.
+   */
+  async initialize(): Promise<void> {
+    console.log("[VaultSync] Initializing...");
+
+    const paprKey = await getPaprApiKey();
+    if (!paprKey) {
+      console.warn("[VaultSync] No PAPR_API_KEY — vault sync disabled");
+      this.state.status = "disabled";
+      return;
+    }
+
+    try {
+      await this.pushAllKeys();
+      await this.pullKeys();
+      console.log(
+        `[VaultSync] Ready — ${this.state.keyCount} keys synced`,
+      );
+    } catch (err) {
+      const msg = (err as Error).message;
+      console.error("[VaultSync] Init failed:", msg);
+      this.state.status = "error";
+      this.state.lastError = msg;
+    }
+  }
+
+  /**
+   * Push all local custom keys to the cloud vault.
+   * Called on init and after any key add/update/delete.
+   */
+  async pushAllKeys(): Promise<VaultSyncResponse | null> {
+    const customKeys = getCustomKeysService();
+
+    const keyList = await customKeys.listKeys();
+    if (keyList.length === 0) {
+      console.log("[VaultSync] No local keys to push");
+      this.state.keyCount = 0;
+      return null;
+    }
+
+    const keyPairs: Array<{
+      name: string;
+      value: string;
+      clientAccess: "server" | "client";
+    }> = [];
+    for (const meta of keyList) {
+      try {
+        const value = await customKeys.getKeyByName(meta.name);
+        if (value) {
+          keyPairs.push({
+            name: meta.name,
+            value,
+            clientAccess: meta.clientAccess ?? "server",
+          });
+        }
+      } catch (err) {
+        console.warn(
+          `[VaultSync] Could not read key "${meta.name}":`,
+          (err as Error).message,
+        );
+      }
+    }
+
+    if (keyPairs.length === 0) {
+      console.log("[VaultSync] No readable key values to push");
+      return null;
+    }
+
+    this.state.status = "syncing";
+    console.log(`[VaultSync] Pushing ${keyPairs.length} keys to vault...`);
+
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), PUSH_TIMEOUT_MS);
+      const resp = await fetch(
+        `http://localhost:${this.gatewayPort}/api/cloud/vault/sync`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            scope: "user",
+            keys: keyPairs.map(({ name, value, clientAccess }) => ({
+              name,
+              value,
+              source: inferVaultKeySource(name, value),
+              clientAccess,
+            })),
+          }),
+          signal: controller.signal,
+        },
+      );
+      clearTimeout(timer);
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(`Vault sync failed (${resp.status}): ${text}`);
+      }
+
+      const result = (await resp.json()) as VaultSyncResponse;
+      this.state.status = "idle";
+      this.state.lastSyncAt = new Date().toISOString();
+      this.state.lastError = null;
+      this.state.keyCount = keyPairs.length;
+
+      console.log(
+        `[VaultSync] Pushed ${result.synced} keys (${result.created.length} created, ${result.updated.length} updated)`,
+      );
+      return result;
+    } catch (err) {
+      const msg = (err as Error).message;
+      this.state.status = "error";
+      this.state.lastError = msg;
+      console.error("[VaultSync] Push failed:", msg);
+      return null;
+    }
+  }
+
+  /**
+   * Pull vault key names and add any missing keys to local keychain.
+   * Values are NOT pulled (would require a resolve endpoint). Only names
+   * are checked so the user knows which keys exist across devices.
+   */
+  async pullKeys(): Promise<string[]> {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), PULL_TIMEOUT_MS);
+      const resp = await fetch(
+        `http://localhost:${this.gatewayPort}/api/cloud/vault/keys?scope=user`,
+        { signal: controller.signal },
+      );
+      clearTimeout(timer);
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        console.warn(`[VaultSync] Pull failed (${resp.status}): ${text}`);
+        return [];
+      }
+
+      const data = (await resp.json()) as VaultListKeysResponse;
+      const vaultKeyNames = data.keys.map((k) => k.name);
+
+      const customKeys = getCustomKeysService();
+      const localKeys = await customKeys.listKeys();
+      const localNames = new Set(localKeys.map((k) => k.name));
+
+      const missingLocally = vaultKeyNames.filter((n) => !localNames.has(n));
+
+      if (missingLocally.length > 0) {
+        console.log(
+          `[VaultSync] Found ${missingLocally.length} vault keys not in local keychain: ${missingLocally.join(", ")}`,
+        );
+        // We log but don't auto-add — values aren't available from list endpoint.
+        // The user would need to re-add them or we'd need a resolve endpoint for pull.
+      }
+
+      return vaultKeyNames;
+    } catch (err) {
+      console.warn("[VaultSync] Pull failed:", (err as Error).message);
+      return [];
+    }
+  }
+
+  /**
+   * Notify that a key was added or updated. Triggers a full push.
+   */
+  async onKeyChanged(keyName: string): Promise<void> {
+    console.log(`[VaultSync] Key changed: ${keyName} — syncing to vault`);
+    await this.pushAllKeys();
+  }
+
+  /**
+   * Notify that a key was deleted. Triggers a full push (vault sync is
+   * idempotent — server will detect removed keys and delete them).
+   */
+  async onKeyDeleted(keyName: string): Promise<void> {
+    console.log(`[VaultSync] Key deleted: ${keyName} — syncing to vault`);
+    await this.pushAllKeys();
+  }
+}
+
+// ── Singleton ──────────────────────────────────────────────────────────────
+
+let instance: VaultSyncService | null = null;
+
+export function getVaultSyncService(): VaultSyncService | null {
+  return instance;
+}
+
+export async function initializeVaultSyncService(opts?: {
+  gatewayPort?: number;
+}): Promise<VaultSyncService> {
+  if (instance) return instance;
+  instance = new VaultSyncService(opts);
+  await instance.initialize();
+  return instance;
+}

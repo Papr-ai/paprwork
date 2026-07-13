@@ -10,8 +10,12 @@ export function getElectronFilePath(file: File): string {
   return typeof p === "string" && p.length > 0 ? p : file.name;
 }
 
-export function createFileContextArtifact(file: File, uniqueId: string): Artifact {
-  const filePath = getElectronFilePath(file);
+export function createFileContextArtifact(
+  file: File,
+  uniqueId: string,
+  filePathOverride?: string,
+): Artifact {
+  const filePath = filePathOverride ?? getElectronFilePath(file);
   return {
     id: `file-${uniqueId}`,
     title: file.name,

@@ -13,14 +13,18 @@ import {
   useImperativeHandle,
   useCallback,
 } from "react";
-import { CHAT_MODELS, getModelGroups, ollamaModelFitsHostRam } from "../../constants/models";
+import { CHAT_MODELS } from "../../constants/models";
 import type { AIModel } from "../../constants/models";
+import { ModelPickerDropdown } from "./ModelPickerDropdown";
 import { ChatHistoryDropdown } from "./ChatHistoryDropdown";
 import { ContextDropdown } from "./ContextDropdown";
 import { ContextPills } from "./ContextPills";
 import { SlashCommandMenu } from "./SlashCommandMenu";
 import type { Artifact } from "../../stores/artifactsStore";
-import { createFileContextArtifactsFromFiles } from "../../utils/fileContextArtifact";
+import {
+  createArtifactsFromIncomingFiles,
+  extractFilesFromDataTransfer,
+} from "../../utils/chatAttachmentFiles";
 import { useChatStore } from "../../stores/chatStore";
 import { useOllama } from "../../hooks/useOllama";
 import { useDebouncedCallback } from "../../hooks/useDebouncedCallback";
@@ -42,6 +46,10 @@ interface InputBarProps {
   isModelAvailable?: (model: AIModel) => boolean;
   /** Called when user clicks a locked model - open settings to add key/OAuth */
   onOpenSettings?: () => void;
+  /** Open Settings → model picker visibility section */
+  onOpenSettingsModels?: () => void;
+  /** Models pinned to the chat picker (from Settings) */
+  pickerModels?: AIModel[];
   /** Fires after file context pills are added (e.g. drag-drop) so parent can clear drag-over UI */
   onFileAttachmentsAdded?: () => void;
 }
@@ -67,7 +75,9 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       onModelChange,
       isModelAvailable,
       onOpenSettings,
+      onOpenSettingsModels,
       onFileAttachmentsAdded,
+      pickerModels,
     },
     ref,
   ) => {
@@ -87,13 +97,14 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     const [showSlashMenu, setShowSlashMenu] = useState(false);
     const [slashQuery, setSlashQuery] = useState("");
     const [selectedArtifacts, setSelectedArtifacts] = useState<Artifact[]>([]);
+    const [isSavingAttachments, setIsSavingAttachments] = useState(false);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const inputBarRef = useRef<HTMLDivElement>(null);
     const lastSendAttemptRef = useRef<number>(0);
 
     // Use first model as default if none selected
     const currentModel = selectedModel || CHAT_MODELS[0];
-    const modelGroups = getModelGroups();
+    const visiblePickerModels = pickerModels ?? [currentModel];
 
     // Sync message state with store when chatId changes
     useEffect(() => {
@@ -115,21 +126,27 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     }, [message, chatId, debouncedSaveDraft]);
 
     const appendFileArtifacts = useCallback(
-      (files: File[]) => {
+      async (files: File[]) => {
         if (files.length === 0) return;
-        const newArtifacts = createFileContextArtifactsFromFiles(files);
-        setSelectedArtifacts((prev) => {
-          const out = [...prev];
-          for (const a of newArtifacts) {
-            if (!out.some((x) => x.id === a.id)) out.push(a);
-          }
-          return out;
-        });
-        setIsFocused(true);
-        onFileAttachmentsAdded?.();
-        queueMicrotask(() => textareaRef.current?.focus());
+        setIsSavingAttachments(true);
+        try {
+          const newArtifacts = await createArtifactsFromIncomingFiles(files, chatId);
+          if (newArtifacts.length === 0) return;
+          setSelectedArtifacts((prev) => {
+            const out = [...prev];
+            for (const a of newArtifacts) {
+              if (!out.some((x) => x.id === a.id)) out.push(a);
+            }
+            return out;
+          });
+          setIsFocused(true);
+          onFileAttachmentsAdded?.();
+          queueMicrotask(() => textareaRef.current?.focus());
+        } finally {
+          setIsSavingAttachments(false);
+        }
       },
-      [onFileAttachmentsAdded],
+      [chatId, onFileAttachmentsAdded],
     );
 
     const handleFileDragOver = useCallback((e: React.DragEvent) => {
@@ -141,10 +158,21 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
 
     const handleFileDrop = useCallback(
       (e: React.DragEvent) => {
-        const { files } = e.dataTransfer;
-        if (!files?.length) return;
+        const files = extractFilesFromDataTransfer(e.dataTransfer);
+        if (files.length === 0) return;
         e.preventDefault();
-        appendFileArtifacts(Array.from(files));
+        e.stopPropagation();
+        void appendFileArtifacts(files);
+      },
+      [appendFileArtifacts],
+    );
+
+    const handlePaste = useCallback(
+      (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+        const files = extractFilesFromDataTransfer(e.clipboardData);
+        if (files.length === 0) return;
+        e.preventDefault();
+        void appendFileArtifacts(files);
       },
       [appendFileArtifacts],
     );
@@ -156,7 +184,9 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
         focus: () => {
           textareaRef.current?.focus();
         },
-        attachFiles: (files: File[]) => appendFileArtifacts(files),
+        attachFiles: (files: File[]) => {
+          void appendFileArtifacts(files);
+        },
       }),
       [appendFileArtifacts],
     );
@@ -192,62 +222,68 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
 
     const handleSend = () => {
       const trimmedMessage = message.trim();
-      if (trimmedMessage) {
-        const now = Date.now();
-        const timeSinceLastAttempt = now - lastSendAttemptRef.current;
-        
-        // If agent is working
-        if (isSending) {
-          // If user pressed send again within 1 second (double-enter or double-click), 
-          // stop agent and send immediately
-          if (timeSinceLastAttempt < 1000) {
-            if (onStop) {
-              onStop();
-            }
-            onSend(
-              trimmedMessage,
-              selectedArtifacts.length > 0 ? selectedArtifacts : undefined,
-            );
-            setMessage("");
-            clearDraftMessage(chatId);
-            setSelectedArtifacts([]);
-            
-            if (textareaRef.current) {
-              textareaRef.current.style.height = "auto";
-            }
-            lastSendAttemptRef.current = 0; // Reset
-          } else {
-            // First attempt while agent is working - queue the message
-            if (onQueue) {
-              onQueue(
-                trimmedMessage,
-                selectedArtifacts.length > 0 ? selectedArtifacts : undefined,
-              );
-            }
-            setMessage("");
-            clearDraftMessage(chatId);
-            setSelectedArtifacts([]);
-            
-            if (textareaRef.current) {
-              textareaRef.current.style.height = "auto";
-            }
-            lastSendAttemptRef.current = now;
+      const hasAttachments = selectedArtifacts.length > 0;
+      if (!trimmedMessage && !hasAttachments) return;
+
+      const messageToSend =
+        trimmedMessage ||
+        (hasAttachments
+          ? "Please review the attached file(s)."
+          : "");
+      const now = Date.now();
+      const timeSinceLastAttempt = now - lastSendAttemptRef.current;
+      
+      // If agent is working
+      if (isSending) {
+        // If user pressed send again within 1 second (double-enter or double-click), 
+        // stop agent and send immediately
+        if (timeSinceLastAttempt < 1000) {
+          if (onStop) {
+            onStop();
           }
-        } else {
-          // Agent not working - send normally
           onSend(
-            trimmedMessage,
+            messageToSend,
             selectedArtifacts.length > 0 ? selectedArtifacts : undefined,
           );
           setMessage("");
           clearDraftMessage(chatId);
           setSelectedArtifacts([]);
-
+          
           if (textareaRef.current) {
             textareaRef.current.style.height = "auto";
           }
-          lastSendAttemptRef.current = 0;
+          lastSendAttemptRef.current = 0; // Reset
+        } else {
+          // First attempt while agent is working - queue the message
+          if (onQueue) {
+            onQueue(
+              messageToSend,
+              selectedArtifacts.length > 0 ? selectedArtifacts : undefined,
+            );
+          }
+          setMessage("");
+          clearDraftMessage(chatId);
+          setSelectedArtifacts([]);
+          
+          if (textareaRef.current) {
+            textareaRef.current.style.height = "auto";
+          }
+          lastSendAttemptRef.current = now;
         }
+      } else {
+        // Agent not working - send normally
+        onSend(
+          messageToSend,
+          selectedArtifacts.length > 0 ? selectedArtifacts : undefined,
+        );
+        setMessage("");
+        clearDraftMessage(chatId);
+        setSelectedArtifacts([]);
+
+        if (textareaRef.current) {
+          textareaRef.current.style.height = "auto";
+        }
+        lastSendAttemptRef.current = 0;
       }
     };
 
@@ -349,6 +385,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                 onAddClick={() => setShowContextDropdown(!showContextDropdown)}
               />
               <ContextDropdown
+                chatId={chatId}
                 isOpen={showContextDropdown}
                 onClose={() => setShowContextDropdown(false)}
                 onSelectArtifact={handleSelectArtifact}
@@ -368,6 +405,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
               onKeyDown={handleKeyDown}
               onFocus={() => setIsFocused(true)}
               onBlur={handleBlur}
+              onPaste={handlePaste}
               onDragOver={handleFileDragOver}
               onDrop={handleFileDrop}
               placeholder={placeholder}
@@ -433,130 +471,36 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
 
                 {/* Model Picker Dropdown */}
                 {showModelPicker && (
-                  <div className="model-picker-dropdown">
-                    {Object.entries(modelGroups).map(([groupName, models]) => (
-                      <div key={groupName} className="model-picker-group">
-                        <div className="model-picker-group-label">
-                          {groupName}
-                        </div>
-                        {models.map((model) => {
-                          const available = isModelAvailable?.(model) ?? true;
-                          const isOllama = model.provider === 'ollama';
-                          const needsInstall = isOllama && !hasModel(model.id);
-                          const ramTight =
-                            isOllama &&
-                            hostTotalRamGb !== null &&
-                            !ollamaModelFitsHostRam(model.id, hostTotalRamGb);
-                          
-                          return (
-                            <button
-                              key={model.id}
-                              className={`model-picker-item ${currentModel.id === model.id ? "model-picker-item--selected" : ""} ${!available ? "model-picker-item--locked" : ""} ${needsInstall ? "model-picker-item--needs-install" : ""}`}
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => {
-                                if (available) {
-                                  onModelChange?.(model);
-                                  setShowModelPicker(false);
-                                  textareaRef.current?.focus();
-                                } else {
-                                  onOpenSettings?.();
-                                  setShowModelPicker(false);
-                                }
-                              }}
-                              title={
-                                !available
-                                  ? model.id === "gpt-5.3-codex"
-                                    ? "Requires OpenAI API key — no longer available via ChatGPT OAuth"
-                                    : "Add API key or connect OAuth in Settings"
-                                  : ramTight
-                                    ? `Estimated RAM needs may exceed this device (~${hostTotalRamGb} GB). Smaller Ollama models may run better.`
-                                    : needsInstall
-                                      ? "Click to download and install"
-                                      : undefined
-                              }
-                            >
-                              <div className="model-picker-item-content">
-                                <div className="model-picker-item-name">
-                                  {model.name}
-                                  {!available && (
-                                    <span
-                                      className="model-badge-locked"
-                                      title="Add API key or connect OAuth"
-                                    >
-                                      <svg
-                                        width="12"
-                                        height="12"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        strokeWidth="1.5"
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                      >
-                                        <path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                                      </svg>
-                                    </span>
-                                  )}
-                                  {ramTight && available && (
-                                    <span
-                                      className="model-badge-ram-warn"
-                                      title="May need more RAM than this Mac/PC"
-                                    >
-                                      RAM
-                                    </span>
-                                  )}
-                                  {needsInstall && available && (
-                                    <span
-                                      className="model-badge-install"
-                                      title="Download required"
-                                    >
-                                      <svg
-                                        width="12"
-                                        height="12"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        strokeWidth="2"
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                      >
-                                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
-                                      </svg>
-                                    </span>
-                                  )}
-                                  {model.supportsThinking && available && (
-                                    <span className="model-badge-thinking">
-                                      thinking
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="model-picker-item-desc">
-                                  {model.description}
-                                </div>
-                              </div>
-                              {currentModel.id === model.id && available && (
-                                <svg
-                                  width="16"
-                                  height="16"
-                                  viewBox="0 0 24 24"
-                                  fill="currentColor"
-                                >
-                                  <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />
-                                </svg>
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ))}
-                  </div>
+                  <ModelPickerDropdown
+                    currentModelId={currentModel.id}
+                    pickerModels={visiblePickerModels}
+                    isModelAvailable={isModelAvailable}
+                    hasModel={hasModel}
+                    hostTotalRamGb={hostTotalRamGb}
+                    onSelect={(model) => {
+                      onModelChange?.(model);
+                      setShowModelPicker(false);
+                      textareaRef.current?.focus();
+                    }}
+                    onOpenSettings={() => {
+                      onOpenSettings?.();
+                      setShowModelPicker(false);
+                    }}
+                    onOpenSettingsModels={() => {
+                      onOpenSettingsModels?.();
+                      setShowModelPicker(false);
+                    }}
+                  />
                 )}
               </div>
               <button
-                className={`send-button ${isSending ? "send-button-stop" : message.trim() ? "send-button-active" : ""}`}
+                className={`send-button ${isSending ? "send-button-stop" : message.trim() || selectedArtifacts.length > 0 ? "send-button-active" : ""}`}
                 data-testid={isSending ? "stop-button" : "send-button"}
                 onClick={isSending ? handleStop : handleSend}
-                disabled={!isSending && !message.trim()}
+                disabled={
+                  isSavingAttachments ||
+                  (!isSending && !message.trim() && selectedArtifacts.length === 0)
+                }
                 type="button"
                 aria-label={isSending ? "Stop agent" : "Send message"}
                 title={

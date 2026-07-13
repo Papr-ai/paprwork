@@ -20,6 +20,8 @@ export interface JobRecord {
   name: string;
   type: JobType;
   status: JobStatus;
+  /** Mini-app UUIDs this job belongs to (from list_apps). At least one required on create. */
+  appIds: string[];
   /** Free-form folder label for grouping related jobs (e.g. "ingestion", "reporting"). Agent-assigned. */
   folder?: string;
   command?: string;
@@ -70,6 +72,8 @@ export interface JobRecord {
 export interface CreateJobInput {
   name: string;
   type: JobType;
+  /** Mini-app UUID(s) this job belongs to. Required — use ['__standalone__'] for orphan jobs. */
+  appIds: string[];
   folder?: string;
   command?: string;
   requirements?: string[];
@@ -120,7 +124,7 @@ export interface JobGraph {
   updatedAt: string;
   /** folder name → job IDs in that folder */
   folders: Record<string, string[]>;
-  /** app ID → { name, jobIds } from data-sources.json reverse lookup */
+  /** app ID → { name, jobIds } from job.appIds (+ data-sources fallback) */
   appLinks: Record<string, JobGraphAppLink>;
   edges: JobGraphEdge[];
 }

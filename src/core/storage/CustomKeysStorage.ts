@@ -5,6 +5,8 @@
 
 import fs from "fs/promises";
 import path from "path";
+import type { KeyClientAccess } from "../types/customKeys.js";
+import { DEFAULT_KEY_CLIENT_ACCESS, normalizeKeyClientAccess } from "../types/customKeys.js";
 import electron from "electron";
 const { app, safeStorage } = electron;
 
@@ -13,6 +15,7 @@ export interface CustomKey {
   name: string;
   description?: string;
   permission: "always" | "ask"; // Always allow or ask each time
+  clientAccess: KeyClientAccess; // server = backend/jobs; client = mini-app browser
   encryptedValue: string; // Base64 encoded encrypted value
   createdAt: string;
   updatedAt: string;
@@ -26,6 +29,7 @@ export interface CustomKeyInput {
   value: string;
   description?: string;
   permission?: "always" | "ask";
+  clientAccess?: KeyClientAccess;
 }
 
 export class CustomKeysStorage {
@@ -83,6 +87,11 @@ export class CustomKeysStorage {
         const fileContent = await fs.readFile(this.keysFile, "utf-8");
         const data = JSON.parse(fileContent);
         this.keys = new Map(Object.entries(data));
+        for (const [, key] of this.keys) {
+          if (!key.clientAccess) {
+            key.clientAccess = DEFAULT_KEY_CLIENT_ACCESS;
+          }
+        }
         //console.log(`[CustomKeys] Loaded ${this.keys.size} custom keys from storage`,);
       }
     } catch (error) {
@@ -119,6 +128,7 @@ export class CustomKeysStorage {
       name: key.name,
       description: key.description,
       permission: key.permission,
+      clientAccess: normalizeKeyClientAccess(key.clientAccess),
       createdAt: key.createdAt,
       updatedAt: key.updatedAt,
       source: key.source,
@@ -181,6 +191,7 @@ export class CustomKeysStorage {
       name: key.name,
       description: key.description,
       permission: key.permission,
+      clientAccess: normalizeKeyClientAccess(key.clientAccess),
       createdAt: key.createdAt,
       updatedAt: key.updatedAt,
       source: key.source,
@@ -211,6 +222,9 @@ export class CustomKeysStorage {
         encryptedValue: this.encryptValue(input.value),
         ...(input.description !== undefined && { description: input.description }),
         ...(input.permission && { permission: input.permission }),
+        ...(input.clientAccess !== undefined && {
+          clientAccess: normalizeKeyClientAccess(input.clientAccess),
+        }),
         updatedAt: now,
       };
       this.keys.set(existingId, updatedKey);
@@ -227,6 +241,7 @@ export class CustomKeysStorage {
       name: input.name,
       description: input.description,
       permission: input.permission || "always",
+      clientAccess: normalizeKeyClientAccess(input.clientAccess),
       encryptedValue: this.encryptValue(input.value),
       createdAt: now,
       updatedAt: now,
@@ -258,6 +273,9 @@ export class CustomKeysStorage {
         description: updates.description,
       }),
       ...(updates.permission && { permission: updates.permission }),
+      ...(updates.clientAccess !== undefined && {
+        clientAccess: normalizeKeyClientAccess(updates.clientAccess),
+      }),
       ...(updates.value && {
         encryptedValue: this.encryptValue(updates.value),
       }),

@@ -19,6 +19,7 @@
     "@tiptap/react": "3.19.0",
     "@tiptap/starter-kit": "3.19.0",
     "@tiptap/suggestion": "3.19.0",
+    "markdown-it-multimd-table": "^4.2.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
@@ -27,7 +28,6 @@
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
-    "markdown-it-multimd-table": "^4.2.3",
     "tippy.js": "^6.3.7",
     "tiptap-markdown": "^0.9.0",
     "zustand": "^4.5.0"
@@ -41,7 +41,7 @@
     "@vitejs/plugin-react": "^4.7.0",
     "@vitest/ui": "^2.1.9",
     "happy-dom": "^17.6.1",
-    "vite": "^6.4.1",
+    "vite": "^6.4.3",
     "vitest": "^2.1.9"
   }
 }

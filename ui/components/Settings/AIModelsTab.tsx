@@ -6,8 +6,13 @@ import React, { useState } from "react";
 import { useCustomKeys } from "../../hooks/useCustomKeys";
 import { OAuthSection } from "./OAuthSection";
 import { PaprLoginSection } from "./PaprLoginSection";
+import { ModelPickerSettings } from "./ModelPickerSettings";
 
-export function AIModelsTab() {
+interface AIModelsTabProps {
+  scrollToPickerModels?: boolean;
+}
+
+export function AIModelsTab({ scrollToPickerModels = false }: AIModelsTabProps) {
   const { keys, loading, addKey, updateKey, deleteKey, getKeyValue, loadKeys } = useCustomKeys();
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [apiKeyInputs, setApiKeyInputs] = useState<Record<string, string>>({});
@@ -214,6 +219,8 @@ export function AIModelsTab() {
           );
         })}
       </div>
+
+      <ModelPickerSettings scrollIntoView={scrollToPickerModels} />
     </div>
   );
 }

@@ -1,0 +1,86 @@
+.workspace-code-editor {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--panel-bg-active, #fff);
+}
+
+.workspace-code-editor__highlight,
+.workspace-code-editor__textarea {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.55;
+  letter-spacing: 0;
+  font-variant-ligatures: none;
+  font-feature-settings: normal;
+  tab-size: 2;
+  white-space: pre;
+  word-wrap: normal;
+  overflow-wrap: normal;
+}
+
+.workspace-code-editor__highlight {
+  z-index: 1;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--text-primary);
+}
+
+.workspace-code-editor__highlight pre,
+.workspace-code-editor__highlight code {
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  font-family: inherit !important;
+  font-size: inherit !important;
+  font-weight: inherit !important;
+  line-height: inherit !important;
+  letter-spacing: inherit !important;
+  white-space: inherit !important;
+  word-wrap: inherit !important;
+  overflow-wrap: inherit !important;
+  tab-size: inherit !important;
+}
+
+.workspace-code-editor__highlight .token {
+  font-family: inherit !important;
+  font-size: inherit !important;
+  font-weight: inherit !important;
+  font-style: normal !important;
+  line-height: inherit !important;
+  letter-spacing: inherit !important;
+}
+
+.workspace-code-editor__textarea {
+  z-index: 2;
+  resize: none;
+  border: 0;
+  overflow: auto;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--text-primary);
+  background: transparent;
+}
+
+.workspace-code-editor__textarea::selection {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background: rgba(10, 132, 255, 0.28);
+}
+
+.workspace-code-editor__textarea:focus {
+  outline: none;
+}
+
+.workspace-code-editor__textarea:read-only {
+  caret-color: transparent;
+}

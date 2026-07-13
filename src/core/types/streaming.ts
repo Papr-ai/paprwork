@@ -12,9 +12,9 @@ export type StreamChunkType =
   | "tool-call-delta"
   | "tool-result"
   | "tool-error"
-  | "compression-start"
-  | "compression-complete"
   | "step-usage" // Token usage from intermediate steps (not final)
+  | "compression-start" // Context overflow — summarization in progress
+  | "compression-complete" // Summarization finished, stream will retry
   | "error"
   | "done";
 
@@ -98,13 +98,6 @@ export interface DonePayload {
     output: number;
     total: number;
   };
-}
-
-/**
- * Compression status payload
- */
-export interface CompressionPayload {
-  message: string;
 }
 
 /**

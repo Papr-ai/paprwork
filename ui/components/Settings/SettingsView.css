@@ -2168,6 +2168,13 @@
   margin-bottom: 0;
 }
 
+.update-recovery-hint {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary, #636366);
+}
+
 .dev-mode-hint {
   background: rgba(255, 255, 255, 0.1);
   padding: 8px;

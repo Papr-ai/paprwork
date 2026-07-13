@@ -3,7 +3,7 @@
  * Reference: Paprwork v1 index.html lines 21-215
  */
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useChat } from "../../hooks/useChat";
 import { useTabs } from "../../hooks/useTabs";
 import type { TabType } from "../../types/tabs";
@@ -14,9 +14,10 @@ import { NewChatButton } from "./NewChatButton";
 import { OnboardingCard } from "./OnboardingCard";
 import { ConnectionIndicator } from "../ConnectionIndicator/ConnectionIndicator";
 import { SidebarToggleButton } from "./SidebarToggleButton";
+import { MemoryIcon } from "../Memory/MemoryIcon";
 import "./Sidebar.css";
 
-type View = "chat" | "apps" | "artifacts";
+type View = "chat" | "apps" | "memory" | "artifacts";
 
 /** Map tab types to sidebar nav views */
 function tabTypeToView(type: TabType | undefined): View {
@@ -24,6 +25,8 @@ function tabTypeToView(type: TabType | undefined): View {
     case "app":
     case "apps":
       return "apps";
+    case "memory":
+      return "memory";
     case "document":
     case "documents":
       return "artifacts";
@@ -104,6 +107,8 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
     let tabId: string | undefined;
     if (view === "apps") {
       tabId = createTab("apps" as TabType, "apps", "Apps");
+    } else if (view === "memory") {
+      tabId = createTab("memory" as TabType, "memory", "Memory");
     } else if (view === "artifacts") {
       tabId = createTab("documents" as TabType, "documents", "Artifacts");
     } else if (view === "chat") {
@@ -115,6 +120,20 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
       switchToTab(tabId);
     }
   };
+
+  useEffect(() => {
+    const openCommunity = () => {
+      const tabId = createTab("apps" as TabType, "apps", "Apps");
+      switchToTab(tabId);
+      window.setTimeout(() => {
+        window.dispatchEvent(
+          new CustomEvent("papr-apps-view-tab", { detail: { tab: "community" } }),
+        );
+      }, 100);
+    };
+    window.addEventListener("papr-open-community-apps", openCommunity);
+    return () => window.removeEventListener("papr-open-community-apps", openCommunity);
+  }, [createTab, switchToTab]);
 
   return (
     <div className="sidebar">
@@ -193,6 +212,12 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
             label="Apps"
             isActive={activeView === "apps"}
             onClick={() => handleNavClick("apps")}
+          />
+          <NavButton
+            icon={<MemoryIcon size={20} />}
+            label="Memory"
+            isActive={activeView === "memory"}
+            onClick={() => handleNavClick("memory")}
           />
           <NavButton
             icon={

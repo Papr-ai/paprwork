@@ -10,13 +10,14 @@ import path from "path";
 import os from "os";
 import { fileURLToPath } from "url";
 import type { JobRecord } from "./jobs/types.js";
+import { STANDALONE_APP_ID } from "./jobs/appIds.js";
 import type { ChatSummarySnapshot } from "./storage/IStorageProvider.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const SLEEP_JOB_NAMES = ["Papr Sleep Cycle", "papr-sleep"] as const;
-export const SLEEP_PROMPT_VERSION = 2;
+export const SLEEP_PROMPT_VERSION = 10;
 
 export const SLEEP_JOB_DEFAULTS = {
   provider: "anthropic" as const,
@@ -181,6 +182,7 @@ export class SleepCycleService {
         const job = await jobsService.createJob({
           name: "Papr Sleep Cycle",
           type: "agent",
+          appIds: [STANDALONE_APP_ID],
           command: sleepPrompt,
           schedule: SLEEP_JOB_DEFAULTS.schedule,
           memoryPolicy: SLEEP_JOB_DEFAULTS.memoryPolicy,
@@ -285,6 +287,21 @@ export class SleepCycleService {
     } catch (error) {
       sections.push(
         "## Recent job activity",
+        "",
+        `_Could not load: ${error instanceof Error ? error.message : String(error)}_`,
+        "",
+      );
+    }
+
+    try {
+      const { loadGatewayProfile, getWorkspaceFileHealth, formatWorkspaceFileHealthForSleep } =
+        await import("./identityAboutSeed.js");
+      const profile = await loadGatewayProfile();
+      const health = await getWorkspaceFileHealth();
+      sections.push(formatWorkspaceFileHealthForSleep(health, profile));
+    } catch (error) {
+      sections.push(
+        "## Workspace file health",
         "",
         `_Could not load: ${error instanceof Error ? error.message : String(error)}_`,
         "",

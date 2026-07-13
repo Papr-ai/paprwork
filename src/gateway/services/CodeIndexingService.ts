@@ -11,11 +11,13 @@
 import { Papr } from '@papr/memory';
 import { registerCodeSchema, seedControlledVocabulary } from './CodeSchemaRegistration.js';
 import { SmartCodeIndexManager } from './storage/SmartCodeIndexManager.js';
+import { CodeIndexTracker } from './storage/CodeIndexTracker.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
 let indexManager: SmartCodeIndexManager | null = null;
+let fallbackTracker: CodeIndexTracker | null = null;
 let schemaId: string | null = null;
 let indexingInitialized = false;
 let initializationPromise: Promise<void> | null = null; // Mutex to prevent duplicate initialization
@@ -168,6 +170,21 @@ export async function initializeCodeIndexing(paprApiKey: string): Promise<void> 
     console.error('[CodeIndexing] Failed to initialize:', error);
     throw error;
   }
+}
+
+/**
+ * Shared tracker for agent tools (local summary cache).
+ */
+export function getSharedCodeIndexTracker(): CodeIndexTracker {
+  if (indexManager) {
+    return indexManager.getTracker();
+  }
+
+  if (!fallbackTracker) {
+    fallbackTracker = new CodeIndexTracker();
+  }
+
+  return fallbackTracker;
 }
 
 /**

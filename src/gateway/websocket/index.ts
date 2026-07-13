@@ -212,6 +212,11 @@ export function setupWebSocketHandlers(wss: WebSocketServer): void {
 
     ws.on("close", () => {
       console.log("[WebSocket] Client disconnected");
+      void import("../services/AgentStreamRegistry.js").then(
+        ({ getAgentStreamRegistry }) => {
+          getAgentStreamRegistry().removeSubscriber(ws);
+        },
+      );
     });
 
     ws.on("error", (error) => {

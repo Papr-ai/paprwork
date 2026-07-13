@@ -12,6 +12,15 @@ import {
   getSleepCycleService,
   isSleepCycleJobName,
 } from "../../SleepCycleService.js";
+import {
+  getWikiWriterService,
+  isWikiWriterJobName,
+} from "../../WikiWriterService.js";
+import type { SubAgentIconName } from "../../../../core/types/subagents.js";
+import {
+  jobAppDatabasePromptLines,
+  resolveJobAppDatabase,
+} from "../../jobAppDatabase.js";
 
 export class AgentJobExecutor implements IJobExecutor {
   canExecute(type: JobType): boolean {
@@ -34,9 +43,23 @@ export class AgentJobExecutor implements IJobExecutor {
       | "openai-codex"
       | "google"
       | "ollama"
+      | "cursor"
+      | "zai"
+      | "groq"
       | undefined;
     let model: string | undefined;
     let allowedToolIds: string[] | undefined;
+    let fallbackProvider:
+      | "anthropic"
+      | "openai"
+      | "openai-codex"
+      | "google"
+      | "ollama"
+      | "cursor"
+      | "zai"
+      | "groq"
+      | undefined;
+    let fallbackModel: string | undefined;
     let sourceAgentId = "main-agent";
     let sourceAgentName = "Main Agent";
 
@@ -47,7 +70,10 @@ export class AgentJobExecutor implements IJobExecutor {
         | "openai"
         | "openai-codex"
         | "google"
-        | "ollama";
+        | "ollama"
+        | "cursor"
+        | "zai"
+        | "groq";
     }
     if (params.job.model) {
       model = params.job.model;
@@ -57,6 +83,7 @@ export class AgentJobExecutor implements IJobExecutor {
     // ── Resolve sub-agent profile (may override provider/model) ───────────────────────
     let subAgentSystemPrompt: string | undefined;
     let subAgentName: string | undefined;
+    let subAgentIcon: SubAgentIconName | undefined;
 
     if (params.job.type === "subagent") {
       if (!params.job.subAgentId) {
@@ -73,9 +100,12 @@ export class AgentJobExecutor implements IJobExecutor {
       // Subagent profile provider/model takes precedence over job record
       if (profile.provider) provider = profile.provider;
       if (profile.model) model = profile.model;
+      if (profile.fallbackProvider) fallbackProvider = profile.fallbackProvider;
+      if (profile.fallbackModel) fallbackModel = profile.fallbackModel;
       allowedToolIds = profile.allowedToolIds;
       subAgentName = profile.name;
       subAgentSystemPrompt = profile.systemPrompt;
+      subAgentIcon = profile.icon;
     }
     // ─────────────────────────────────────────────────────────────────────────────────
 
@@ -104,6 +134,11 @@ export class AgentJobExecutor implements IJobExecutor {
           params.job.id,
         );
         prompt = [envBlock, preflight, prompt].filter(Boolean).join("\n\n");
+      } else if (isWikiWriterJobName(params.job.name)) {
+        const preflight = await getWikiWriterService().buildPreflightContext(
+          params.job.id,
+        );
+        prompt = [envBlock, preflight, prompt].filter(Boolean).join("\n\n");
       } else {
         prompt = [envBlock, prompt].filter(Boolean).join("\n");
       }
@@ -128,7 +163,13 @@ export class AgentJobExecutor implements IJobExecutor {
         const { broadcast } = await import("../../../websocket/index.js");
         broadcast({
           type: "subagent-job-started",
-          data: { jobId: params.job.id, reportChatId },
+          data: {
+            jobId: params.job.id,
+            reportChatId,
+            subAgentId: params.job.subAgentId,
+            agentName: subAgentName,
+            agentIcon: subAgentIcon,
+          },
         });
       }
     }
@@ -169,6 +210,8 @@ export class AgentJobExecutor implements IJobExecutor {
           prompt,
           provider,
           model,
+          fallbackProvider,
+          fallbackModel,
           allowedToolIds,
           maxTurns: params.job.maxTurns,
           appendLog: params.appendLog,
@@ -229,7 +272,7 @@ export class AgentJobExecutor implements IJobExecutor {
     const modelInfo =
       provider && model
         ? ` (${provider}/${model})`
-        : " (default openai/gpt-5.5)";
+        : " (default openai/gpt-5-6-sol)";
 
     if (outputText.length === 0) {
       await params.appendLog(
@@ -279,6 +322,11 @@ export class AgentJobExecutor implements IJobExecutor {
     const ownDbPath = await jobsService.getJobDatabasePath(params.job.id);
     envLines.push(`JOB_DIR="${params.jobDir}"`);
     if (ownDbPath) envLines.push(`JOB_DB="${ownDbPath}"`);
+
+    const appDb = await resolveJobAppDatabase(params.job.appIds);
+    if (appDb) {
+      envLines.push(...jobAppDatabasePromptLines(appDb));
+    }
 
     for (const dep of params.job.dependsOn ?? []) {
       const depJob = await jobsService.getJob(dep.jobId);

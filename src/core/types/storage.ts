@@ -67,6 +67,16 @@ export interface AppSettings {
      * If not set, shows placeholder "Agent Lounge (Coming Soon)".
      */
     defaultHomeAppId?: string;
+    /**
+     * Cloud sync: bidirectional git sync of ~/Papr to GitHub.
+     * Enabled by default. Users can disable in Settings → General.
+     */
+    cloudSyncEnabled: boolean;
+    /**
+     * When cloud sync is on, automatically publish synced mini-apps to apps.papr.ai.
+     * Enabled by default. Users can disable in Settings → Cloud Sync.
+     */
+    cloudAutoPublishEnabled: boolean;
   };
   /** Anonymous install id for telemetry correlation only; not derived from user data. */
   telemetry: {
@@ -86,6 +96,9 @@ export interface AppSettings {
     /** Currently active namespace */
     activeNamespaceId?: string;
     activeNamespaceName?: string;
+    /** Papr workspace tied to the active namespace (for team access on cloud apps) */
+    workspaceId?: string;
+    workspaceName?: string;
   };
   compaction: CompactionConfig;
   permissions: PermissionSettings;

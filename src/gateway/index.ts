@@ -30,13 +30,17 @@ if (!globalThis.crypto) {
 import express from "express";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
+import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import { initializeAgentService } from "./services/AgentService.js";
+import { isCloudAgentGatewayMode } from "../core/utils/paprRoot.js";
 import { initializeChatService } from "./services/ChatService.js";
 import { initializeDocumentService } from "./services/DocumentService.js";
-import { initializeAppService } from "./services/AppService.js";
-import { getAppService } from "./services/AppService.js";
+import { initializeAppService, getAppService } from "./services/AppService.js";
+import {
+  resolveAppDataSource,
+} from "./services/appDataSources.js";
 import {
   initializeJobsService,
   getJobsService,
@@ -49,7 +53,10 @@ import { initializeSubAgentService } from "./services/SubAgentService.js";
 import { initializePlanService } from "./services/PlanService.js";
 import { getJobsScheduler } from "./services/JobsScheduler.js";
 import { initializeWorkspaceService } from "./services/WorkspaceService.js";
-import { setupWebSocketHandlers } from "./websocket/index.js";
+import { setupWebSocketHandlers, broadcast } from "./websocket/index.js";
+import { getJobEventHub } from "./services/JobEventHub.js";
+import { registerJobEventsSseRoutes } from "./services/registerJobEventsSse.js";
+import { registerPaprMiniAppSdkRoutes } from "./utils/registerPaprMiniAppSdkRoutes.js";
 import {
   initializePermissionBridge,
   requestPermissionFromMain,
@@ -57,7 +64,45 @@ import {
 import { setPermissionRequester } from "./permissions/PermissionRequester.js";
 import type { KeyPermissionRequest } from "../core/types/permissions.js";
 import { initializeDbPool } from "./services/DbQueryPool.js";
+import { initializeDbRouter } from "./services/appRuntime/DbRouter.js";
 import { forwardRendererTelemetry } from "./services/rendererTelemetryForward.js";
+import { getPaprApiKey } from "./utils/keyResolver.js";
+import { getMemoryServerBaseUrl } from "./utils/cloudApiClient.js";
+import {
+  initializeCloudSyncService,
+  getCloudSyncService,
+} from "./services/CloudSyncService.js";
+import { initializeTursoSyncBridge } from "./services/TursoSyncBridge.js";
+import { buildTursoSyncItemsReport } from "./services/tursoSyncStatus.js";
+import { buildCloudLinkSyncReport } from "./services/cloudPublishStatus.js";
+import {
+  getCachedCloudLinkSyncReport,
+  invalidateCloudLinkSyncReportCache,
+  setCachedCloudLinkSyncReport,
+} from "./services/syncItemsCache.js";
+import {
+  getCloudAppPublishService,
+} from "./services/CloudAppPublishService.js";
+import { getCloudAppInstallService } from "./services/CloudAppInstallService.js";
+import {
+  readAppRequirements,
+  writeAppRequirements,
+} from "./services/cloudAppRequirements.js";
+import type { RequiredKeySpec } from "../core/types/bundles.js";
+import { getCloudAppLineageService } from "./services/CloudAppLineageService.js";
+import { getCloudAppChangeMergeService } from "./services/CloudAppChangeMergeService.js";
+import { getCloudAppTrackSyncService } from "./services/CloudAppTrackSyncService.js";
+import {
+  getAppPublishPrefs,
+  setAppPublishPrefs,
+  type CloudAccessMode,
+} from "./services/cloudPublishPrefs.js";
+import { prefsSharingFieldsChanged } from "./services/cloudPublishDrift.js";
+import {
+  initializeVaultSyncService,
+  getVaultSyncService,
+} from "./services/VaultSyncService.js";
+import { getCustomKeysService } from "./services/CustomKeysService.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -156,12 +201,12 @@ async function initializeServices(): Promise<void> {
     const { getWorkspaceService } =
       await import("./services/WorkspaceService.js");
     await getWorkspaceService().ensureSleepJob();
+    await getWorkspaceService().ensureWikiWriterJob();
 
     console.log("[Gateway] All services initialized");
     console.log(
       `[Gateway] Storage mode: ${storageMode} (keys will load on demand)`,
     );
-
   } catch (error) {
     console.error("[Gateway] Failed to initialize services:", error);
     throw error;
@@ -171,6 +216,69 @@ async function initializeServices(): Promise<void> {
 /**
  * Start the Gateway server
  */
+const productionUiPath =
+  process.env.NODE_ENV === "production"
+    ? path.join(__dirname, "../ui")
+    : null;
+
+function registerEarlyProductionUi(app: express.Application): void {
+  if (!productionUiPath) return;
+
+  app.use(
+    express.static(productionUiPath, {
+      setHeaders: (res, filepath) => {
+        if (filepath.endsWith(".js") || filepath.endsWith(".mjs")) {
+          res.setHeader(
+            "Content-Type",
+            "application/javascript; charset=utf-8",
+          );
+        }
+      },
+    }),
+  );
+
+  app.get("/", (_req, res) => {
+    res.sendFile(path.join(productionUiPath, "index.html"));
+  });
+
+  console.log("[Gateway] Serving UI static assets (early):", productionUiPath);
+}
+
+function registerProductionUiCatchAll(app: express.Application): void {
+  if (!productionUiPath) return;
+
+  app.use((req, res, next) => {
+    if (req.path.startsWith("/assets/")) {
+      return next();
+    }
+    res.sendFile(path.join(productionUiPath, "index.html"));
+  });
+}
+
+async function listenGatewayServer(
+  server: ReturnType<typeof createServer>,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "EADDRINUSE") {
+        console.error(`[Gateway] ERROR: Port ${PORT} is already in use!`);
+        console.error(`[Gateway] Another Gateway process may be running.`);
+        console.error(`[Gateway] Run: npm run kill:gateway`);
+        reject(error);
+      } else {
+        console.error("[Gateway] Server error:", error);
+        reject(error);
+      }
+    });
+
+    server.listen(PORT as number, HOST, () => {
+      console.log(`[Gateway] Server listening on http://${HOST}:${PORT}`);
+      console.log(`[Gateway] WebSocket available at ws://${HOST}:${PORT}`);
+      resolve();
+    });
+  });
+}
+
 async function startGateway(): Promise<void> {
   console.log("[Gateway] Paprwork V2 Gateway starting...");
   console.log("[Gateway] Platform:", process.platform);
@@ -193,24 +301,32 @@ async function startGateway(): Promise<void> {
     setupKeyCacheInvalidationListener();
     console.log("[Gateway] Key cache invalidation listener ready");
 
-    // Initialize services first
-    await initializeServices();
-
-    // Create Express app
+    // Bind HTTP early so supervisor health checks succeed while services load.
+    // Large chats.db + tool registration can take 60s+ on cold start.
+    let gatewayReady = false;
     const app = express();
     const server = createServer(app);
-
-    // Create WebSocket server
     const wss = new WebSocketServer({ server });
-    console.log("[Gateway] WebSocket server created");
 
-    // Setup WebSocket handlers
-    setupWebSocketHandlers(wss);
-
-    // Health check endpoint (before static files)
     app.get("/health", (_req, res) => {
-      res.json({ status: "ok", timestamp: Date.now() });
+      res.json({
+        status: gatewayReady ? "ok" : "starting",
+        timestamp: Date.now(),
+      });
     });
+
+    registerEarlyProductionUi(app);
+
+    await listenGatewayServer(server);
+    console.log("[Gateway] Health endpoint live (services still loading)...");
+
+    await initializeServices();
+
+    setupWebSocketHandlers(wss);
+    getJobEventHub().subscribe((event) => {
+      broadcast({ type: event.type, data: event.data });
+    });
+    console.log("[Gateway] WebSocket server created");
 
     // ── Mini-app SQLite query API ────────────────────────────────────────────
     // All synchronous better-sqlite3 calls run in a worker-thread pool so they
@@ -225,92 +341,46 @@ async function startGateway(): Promise<void> {
     //  - Path traversal blocked at the linked dbPath level
     //
     // Source routing (when sourceId is omitted):
+    //  - Uses primary source from data-sources.json when configured
     //  - Single source → use it automatically
-    //  - Multiple sources → extract primary table from SQL, find which source has it
-    //  - If ambiguous → error lists available aliases so the caller can add sourceId
+    //  - Multiple sources → secondary table routing for reads only
     // ─────────────────────────────────────────────────────────────────────────
 
     const dbPool = initializeDbPool(
       new URL("./workers/db-query-worker.js", import.meta.url),
     );
+    const dbRouter = initializeDbRouter(dbPool);
 
-    /**
-     * Extract the primary table name from a SQL statement for auto-routing across
-     * multiple linked data sources. Handles INSERT INTO, UPDATE, DELETE FROM, SELECT FROM.
-     * Returns null if the table name cannot be determined.
-     */
-    function extractPrimaryTable(sql: string): string | null {
-      const s = sql.trim();
-      let m: RegExpMatchArray | null;
-      m = s.match(/\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+["'`]?(\w+)/i);
-      if (m) return m[1];
-      m = s.match(/\bREPLACE\s+INTO\s+["'`]?(\w+)/i);
-      if (m) return m[1];
-      m = s.match(/\bUPDATE\s+(?:OR\s+\w+\s+)?["'`]?(\w+)/i);
-      if (m) return m[1];
-      m = s.match(/\bDELETE\s+FROM\s+["'`]?(\w+)/i);
-      if (m) return m[1];
-      m = s.match(/\bFROM\s+["'`]?(\w+)/i);
-      if (m) return m[1];
-      return null;
-    }
-
-    /**
-     * Resolve which linked data source to use for a query.
-     *
-     * Priority:
-     * 1. Explicit sourceId (by id or alias) — exact match.
-     * 2. Single source — use it automatically.
-     * 3. Multiple sources + SQL provided — extract table name, check sqlite_master
-     *    on each source via the worker pool, pick the first that has the table.
-     * 4. Multiple sources + no match — throw a descriptive error listing aliases.
-     */
-    async function resolveDataSource(
-      sources: import("./services/AppService.js").AppDataSource[],
-      sourceId?: string,
-      sql?: string,
-    ): Promise<import("./services/AppService.js").AppDataSource> {
-      if (sourceId) {
-        const found = sources.find(
-          (s) => s.id === sourceId || s.alias === sourceId,
+    async function resolveLinkedSource(
+      appId: string,
+      sourceId: string | undefined,
+      sql: string | undefined,
+      operation: "read" | "write",
+    ): Promise<import("./services/appDataSources.js").AppDataSource> {
+      const appService = getAppService();
+      const config = await appService.getDataSourcesConfig(appId);
+      if (!config.sources.length) {
+        throw Object.assign(
+          new Error(
+            `No data sources linked to app ${appId}. Use link_app_data_source first.`,
+          ),
+          { status: 404 },
         );
-        if (!found) {
-          const available = sources.map((s) => s.alias ?? s.id).join(", ");
-          throw Object.assign(
-            new Error(
-              `Data source "${sourceId}" not found. Available: ${available}`,
-            ),
-            { status: 404 },
+      }
+      return resolveAppDataSource(config, {
+        sourceId,
+        sql,
+        operation,
+        tableExists: (dbPath, table) => {
+          const source = config.sources.find(
+            (entry) => path.normalize(entry.dbPath) === path.normalize(dbPath),
           );
-        }
-        return found;
-      }
-
-      if (sources.length === 1) return sources[0];
-
-      const tableName = sql ? extractPrimaryTable(sql) : null;
-      if (tableName) {
-        for (const source of sources) {
-          try {
-            if (await dbPool.tableExists(source.dbPath, tableName)) {
-              return source;
-            }
-          } catch {
-            // source unreadable — skip
+          if (!source) {
+            return dbPool.tableExists(dbPath, table);
           }
-        }
-      }
-
-      const aliases = sources.map((s) => `"${s.alias ?? s.id}"`).join(", ");
-      const tableHint = tableName
-        ? ` Table "${tableName}" was not found in any linked source.`
-        : "";
-      throw Object.assign(
-        new Error(
-          `Multiple data sources are linked (${aliases}) and the target could not be determined automatically.${tableHint} Pass sourceId to specify which source to use.`,
-        ),
-        { status: 400 },
-      );
+          return dbRouter.tableExists(dbPath, table, source);
+        },
+      });
     }
 
     app.use(express.json({ limit: "5mb" }));
@@ -325,14 +395,17 @@ async function startGateway(): Promise<void> {
         const appService = getAppService();
         const sources = await appService.listAppDataSources(appId);
         if (!sources.length) {
-          res.json({ sources: [] });
+          res.status(404).json({
+            error: `No data sources linked to app ${appId}. Create a job with appIds: ["${appId}"] or call link_app_data_source first.`,
+            sources: [],
+          });
           return;
         }
 
         const result = await Promise.all(
           sources.map(async (source) => {
             try {
-              const schema = await dbPool.schema(source.dbPath);
+              const schema = await dbRouter.schema(source.dbPath, source);
               return {
                 sourceId: source.id,
                 alias: source.alias,
@@ -354,6 +427,134 @@ async function startGateway(): Promise<void> {
       } catch (err) {
         console.error("[Gateway] /api/db/schema error:", err);
         res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    // ── App data health (primary DB row counts, contract status, orphan files) ──
+    app.get("/api/apps/:appId/data-health", async (req, res) => {
+      try {
+        const appId = req.params.appId;
+        if (!appId) {
+          res.status(400).json({ error: "appId required" });
+          return;
+        }
+        const { getDataContractService } = await import(
+          "./services/DataContractService.js"
+        );
+        const report = await getDataContractService().getDataHealth(appId);
+        res.json(report);
+      } catch (err) {
+        const message = (err as Error).message;
+        if (message.includes("App not found")) {
+          res.status(404).json({ error: message });
+          return;
+        }
+        console.error("[Gateway] /api/apps/data-health error:", err);
+        res.status(500).json({ error: message });
+      }
+    });
+
+    // ── Database registry (independent first-class DBs) ──
+    app.get("/api/databases", async (_req, res) => {
+      try {
+        const { initializeDatabaseRegistry } = await import(
+          "./services/DatabaseRegistryService.js"
+        );
+        const registry = await initializeDatabaseRegistry();
+        const databases = await Promise.all(
+          registry.listActive().map(async (record) => ({
+            dbId: record.dbId,
+            label: record.label ?? record.dbId,
+            localPath: record.localPath,
+            tursoShortName: record.tursoShortName,
+            ownerJobId: record.ownerJobId,
+            isolation: record.isolation,
+            createdAt: record.createdAt,
+            updatedAt: record.updatedAt,
+            linkedAppCount: await registry.countReferences(
+              record.dbId,
+              record.localPath,
+            ),
+            linkedAppIds: await registry.listReferencingAppIds(
+              record.dbId,
+              record.localPath,
+            ),
+          })),
+        );
+        res.json({ databases });
+      } catch (err) {
+        console.error("[Gateway] /api/databases error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/apps/:appId/link-database", async (req, res) => {
+      try {
+        const appId = req.params.appId;
+        const body = req.body as {
+          dbId?: string;
+          alias?: string;
+          role?: "primary" | "readonly" | "scratch";
+          setPrimary?: boolean;
+        };
+        if (!appId || !body.dbId) {
+          res.status(400).json({ error: "appId and dbId required" });
+          return;
+        }
+        const { initializeDatabaseRegistry } = await import(
+          "./services/DatabaseRegistryService.js"
+        );
+        const registry = await initializeDatabaseRegistry();
+        const record = registry.getById(body.dbId);
+        if (!record) {
+          res.status(404).json({ error: `Database not found: ${body.dbId}` });
+          return;
+        }
+        const appService = getAppService();
+        await appService.initialize();
+        const sources = await appService.linkAppDataSource(appId, {
+          id: body.dbId,
+          type: "sqlite",
+          dbId: body.dbId,
+          alias: body.alias ?? record.label ?? body.dbId,
+          dbPath: record.localPath,
+          tables: [],
+          role: body.role,
+          setPrimary: body.setPrimary,
+        });
+        res.json({ success: true, sources });
+      } catch (err) {
+        const message = (err as Error).message;
+        if (message.includes("App not found")) {
+          res.status(404).json({ error: message });
+          return;
+        }
+        console.error("[Gateway] /api/apps/link-database error:", err);
+        res.status(500).json({ error: message });
+      }
+    });
+
+    app.post("/api/apps/:appId/normalize-databases", async (req, res) => {
+      try {
+        const appId = req.params.appId;
+        if (!appId) {
+          res.status(400).json({ error: "appId required" });
+          return;
+        }
+        const apply = (req.body as { apply?: boolean } | undefined)?.apply === true;
+        const { normalizeAppDatabases } = await import(
+          "./services/dbPathNormalization.js"
+        );
+        const report = await normalizeAppDatabases(appId, { dryRun: !apply });
+        res.json(report);
+      } catch (err) {
+        const message = (err as Error).message;
+        if (message.includes("App not found")) {
+          res.status(404).json({ error: message });
+          return;
+        }
+        console.error("[Gateway] /api/apps/normalize-databases error:", err);
+        res.status(500).json({ error: message });
       }
     });
 
@@ -379,27 +580,18 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        const appService = getAppService();
-        const sources = await appService.listAppDataSources(appId);
-        if (!sources.length) {
-          res.status(404).json({
-            error: `No data sources linked to app ${appId}. Use link_app_data_source first.`,
-          });
-          return;
-        }
-
-        let source: import("./services/AppService.js").AppDataSource;
+        let source: import("./services/appDataSources.js").AppDataSource;
         try {
-          source = await resolveDataSource(sources, sourceId, sql);
+          source = await resolveLinkedSource(appId, sourceId, sql, "read");
         } catch (err) {
           const e = err as Error & { status?: number };
           res.status(e.status ?? 400).json({ error: e.message });
           return;
         }
 
-        const result = await dbPool.query(appId, source.dbPath, sql, params);
+        const result = await dbRouter.query(appId, source, sql, params);
         console.log(
-          `[Gateway] /api/db/query app=${appId} source=${source.alias} rows=${result.count}`,
+          `[Gateway] /api/db/query app=${appId} source=${source.alias} backend=${result.backend} rows=${result.count}`,
         );
         res.json({ ...result, source: source.alias });
       } catch (err) {
@@ -407,6 +599,55 @@ async function startGateway(): Promise<void> {
         res.status(500).json({ error: (err as Error).message });
       }
     });
+    // ── Mini-app batch read API ─────────────────────────────────────────────
+    // Runs multiple read-only statements in one HTTP round trip. Mirrors the
+    // Cloud App Host /api/db/batch contract so apps behave identically in
+    // local preview and on apps.papr.ai.
+    app.post("/api/db/batch", async (req, res) => {
+      try {
+        const { appId, statements } = req.body as {
+          appId?: string;
+          statements?: Array<{ sourceId?: string; sql?: string; params?: unknown[] }>;
+        };
+        if (!appId || !Array.isArray(statements) || statements.length === 0) {
+          res.status(400).json({ error: "appId and non-empty statements[] are required" });
+          return;
+        }
+        if (statements.length > 25) {
+          res.status(400).json({ error: "Batch limited to 25 statements" });
+          return;
+        }
+
+        const results: Array<Record<string, unknown>> = [];
+        for (const stmt of statements) {
+          const sql = stmt?.sql;
+          if (!sql) {
+            results.push({ ok: false, error: "sql is required" });
+            continue;
+          }
+          const trimmed = sql.trim().toLowerCase();
+          if (!trimmed.startsWith("select") && !trimmed.startsWith("with")) {
+            results.push({
+              ok: false,
+              error: "Only SELECT (and WITH ... SELECT) queries are allowed",
+            });
+            continue;
+          }
+          try {
+            const source = await resolveLinkedSource(appId, stmt.sourceId, sql, "read");
+            const result = await dbRouter.query(appId, source, sql, stmt.params);
+            results.push({ ok: true, ...result, source: source.alias });
+          } catch (stmtErr) {
+            results.push({ ok: false, error: (stmtErr as Error).message });
+          }
+        }
+        res.json({ results });
+      } catch (err) {
+        console.error("[Gateway] /api/db/batch error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
     // ── Mini-app SQLite write API ────────────────────────────────────────────
     // Apps call: fetch('/api/db/write', { method: 'POST', body: JSON.stringify({ appId, sql, params }) })
     //
@@ -448,32 +689,28 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        const appService = getAppService();
-        const sources = await appService.listAppDataSources(appId);
-        if (!sources.length) {
-          res.status(404).json({
-            error: `No data sources linked to app ${appId}. Use link_app_data_source first.`,
-          });
-          return;
-        }
-
-        let source: import("./services/AppService.js").AppDataSource;
+        let source: import("./services/appDataSources.js").AppDataSource;
         try {
-          source = await resolveDataSource(sources, sourceId, sql);
+          source = await resolveLinkedSource(appId, sourceId, sql, "write");
         } catch (err) {
           const e = err as Error & { status?: number };
           res.status(e.status ?? 400).json({ error: e.message });
           return;
         }
 
-        const result = await dbPool.write(appId, source.dbPath, sql, params);
+        const result = await dbRouter.write(appId, source, sql, params);
         console.log(
           `[Gateway] /api/db/write app=${appId} source=${source.alias} changes=${result.changes}`,
         );
+        const syncKey = source.dbId ?? source.jobId ?? source.dbPath;
+        void import("./services/tursoPushScheduler.js").then(({ scheduleTursoPushForJob }) =>
+          scheduleTursoPushForJob(syncKey),
+        );
         res.json(result);
       } catch (err) {
+        const e = err as Error & { status?: number };
         console.error("[Gateway] /api/db/write error:", err);
-        res.status(500).json({ error: (err as Error).message });
+        res.status(e.status ?? 500).json({ error: e.message });
       }
     });
     // ─────────────────────────────────────────────────────────────────────────
@@ -503,24 +740,28 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        const appService = getAppService();
-        const sources = await appService.listAppDataSources(appId);
-        if (!sources.length) {
-          res.status(404).json({
-            error: `No data sources linked to app ${appId}.`,
-          });
+        let source: import("./services/appDataSources.js").AppDataSource;
+        try {
+          source = await resolveLinkedSource(appId, undefined, sql, "write");
+        } catch (err) {
+          const e = err as Error & { status?: number };
+          res.status(e.status ?? 400).json({ error: e.message });
           return;
         }
 
-        const source = sources[0];
-        await dbPool.exec(appId, source.dbPath, sql);
+        await dbRouter.exec(appId, source, sql);
         console.log(
           `[Gateway] /api/db/exec app=${appId} source=${source.alias}`,
         );
+        const syncKey = source.dbId ?? source.jobId ?? source.dbPath;
+        void import("./services/tursoPushScheduler.js").then(({ scheduleTursoPushForJob }) =>
+          scheduleTursoPushForJob(syncKey),
+        );
         res.json({ success: true });
       } catch (err) {
+        const e = err as Error & { status?: number };
         console.error("[Gateway] /api/db/exec error:", err);
-        res.status(500).json({ error: (err as Error).message });
+        res.status(e.status ?? 500).json({ error: e.message });
       }
     });
     // ─────────────────────────────────────────────────────────────────────────
@@ -672,6 +913,25 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    registerPaprMiniAppSdkRoutes(app);
+    registerJobEventsSseRoutes(app, {
+      hub: getJobEventHub(),
+      pollJobStatus: async (jobId, _req) => {
+        const job = await getJobsService().getJob(jobId);
+        if (!job) {
+          return null;
+        }
+        return {
+          jobId: job.id,
+          name: job.name,
+          status: job.status,
+          completedAt: job.completedAt,
+          error: job.error,
+          lastOutput: job.lastOutput,
+        };
+      },
+    });
+
     // ── Mini-app Job Creation API ─────────────────────────────────────────────
     // Lets mini-apps programmatically create jobs (the same capability agents have
     // via the create_job tool). Intended for dynamic automation workflows where
@@ -738,7 +998,16 @@ async function startGateway(): Promise<void> {
 
         // Create job via JobsService (all validation happens there)
         const jobsService = getJobsService();
-        const job = await jobsService.createJob(input);
+        const createInput: CreateJobInput = {
+          ...input,
+          appIds:
+            input.appIds?.length
+              ? input.appIds
+              : input.appId
+                ? [input.appId]
+                : [],
+        };
+        const job = await jobsService.createJob(createInput);
 
         console.log(
           `[Gateway] /api/jobs/create: App ${appId} created job ${job.id} (${job.name})`,
@@ -758,6 +1027,61 @@ async function startGateway(): Promise<void> {
     });
     // ─────────────────────────────────────────────────────────────────────────
 
+    // ── Brand API (mini-apps) ─────────────────────────────────────────────────
+    //  GET /api/brand?appId=...     → merged brand tokens + cssVariables
+    //  GET /api/brand/assets/:file  → logo/asset from workspace or app brand/
+    // ─────────────────────────────────────────────────────────────────────────
+
+    app.get("/api/brand", async (req, res) => {
+      try {
+        const appId =
+          typeof req.query.appId === "string" ? req.query.appId : undefined;
+        const { getBrandService } = await import("./services/BrandService.js");
+        const brand = await getBrandService().loadMergedBrand(appId);
+        res.json(brand);
+      } catch (err) {
+        console.error("[Gateway] /api/brand error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.get("/api/brand/assets/:filename", async (req, res) => {
+      try {
+        const filename = req.params.filename;
+        const appId =
+          typeof req.query.appId === "string" ? req.query.appId : undefined;
+        const { getBrandService } = await import("./services/BrandService.js");
+        const assetPath = await getBrandService().resolveAssetPath(
+          filename,
+          appId,
+        );
+
+        if (!assetPath) {
+          res.status(404).json({ error: "Brand asset not found" });
+          return;
+        }
+
+        const ext = path.extname(assetPath).toLowerCase();
+        const mimeTypes: Record<string, string> = {
+          ".svg": "image/svg+xml",
+          ".png": "image/png",
+          ".jpg": "image/jpeg",
+          ".jpeg": "image/jpeg",
+          ".webp": "image/webp",
+          ".gif": "image/gif",
+        };
+        res.setHeader(
+          "Content-Type",
+          mimeTypes[ext] ?? "application/octet-stream",
+        );
+        res.sendFile(assetPath);
+      } catch (err) {
+        console.error("[Gateway] /api/brand/assets error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
     // ── Mini-app Bash API ─────────────────────────────────────────────────────
     // Lets mini-apps run quick shell commands (the same capability agents have
     // via the bash tool).  Intended for lightweight backend calls like resetting
@@ -770,6 +1094,423 @@ async function startGateway(): Promise<void> {
     //    body: { command: string, timeoutMs?: number (default 30000) }
     //    returns: { stdout, stderr, exitCode }
     // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Cloud Publish (local handlers — must register before cloud proxy) ───
+    app.get("/api/cloud/publish/:appId", async (req, res) => {
+      try {
+        const config = await getCloudAppPublishService().getPublishConfig(
+          req.params.appId,
+        );
+        const prefs = getAppPublishPrefs(req.params.appId);
+        res.json({ ...config, prefs });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/cloud/publish/:appId", async (req, res) => {
+      try {
+        const body = req.body as {
+          accessMode?: CloudAccessMode;
+          loginAccess?: import("./services/cloudSharingSettings.js").CloudLoginAccess;
+          externalLink?: import("./services/cloudSharingSettings.js").CloudExternalLink;
+          codeAccess?: import("../core/utils/shareAudienceModel.js").CodeAccess;
+          slug?: string;
+          autoPublish?: boolean;
+        };
+        if (body.autoPublish !== undefined) {
+          setAppPublishPrefs(req.params.appId, { autoPublish: body.autoPublish });
+        }
+        if (
+          body.accessMode ||
+          body.loginAccess !== undefined ||
+          body.externalLink !== undefined ||
+          body.codeAccess !== undefined
+        ) {
+          setAppPublishPrefs(req.params.appId, {
+            ...(body.accessMode ? { accessMode: body.accessMode } : {}),
+            ...(body.loginAccess !== undefined
+              ? { loginAccess: body.loginAccess }
+              : {}),
+            ...(body.externalLink !== undefined
+              ? { externalLink: body.externalLink }
+              : {}),
+            ...(body.codeAccess !== undefined
+              ? { codeAccess: body.codeAccess }
+              : {}),
+          });
+        }
+        const config = await getCloudAppPublishService().publishApp(
+          req.params.appId,
+          {
+            accessMode: body.accessMode,
+            loginAccess: body.loginAccess,
+            externalLink: body.externalLink,
+            codeAccess: body.codeAccess,
+            slug: body.slug,
+          },
+        );
+        invalidateCloudLinkSyncReportCache();
+        res.json({ ...config, prefs: getAppPublishPrefs(req.params.appId) });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.delete("/api/cloud/publish/:appId", async (req, res) => {
+      try {
+        await getCloudAppPublishService().unpublishApp(req.params.appId);
+        setAppPublishPrefs(req.params.appId, { autoPublish: false });
+        invalidateCloudLinkSyncReportCache();
+        res.json({ success: true });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.patch("/api/cloud/publish/:appId/prefs", async (req, res) => {
+      try {
+        const body = req.body as {
+          autoPublish?: boolean;
+          accessMode?: CloudAccessMode;
+          loginAccess?: import("./services/cloudSharingSettings.js").CloudLoginAccess;
+          externalLink?: import("./services/cloudSharingSettings.js").CloudExternalLink;
+          codeAccess?: import("../core/utils/shareAudienceModel.js").CodeAccess;
+        };
+        const prefs = setAppPublishPrefs(req.params.appId, body);
+        invalidateCloudLinkSyncReportCache();
+        if (prefsSharingFieldsChanged(body)) {
+          const config = await getCloudAppPublishService().republishIfPublished(
+            req.params.appId,
+          );
+          res.json({ prefs, ...(config ? { config } : {}) });
+          return;
+        }
+        res.json({ prefs });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.get("/api/cloud/lineage", async (_req, res) => {
+      try {
+        const index = await getCloudAppLineageService().buildIndex();
+        res.json(index);
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/cloud/install", async (req, res) => {
+      try {
+        const body = req.body as {
+          namespaceId: string;
+          slug: string;
+          mode?: "fork" | "track";
+          shareToken?: string;
+        };
+        if (!body.namespaceId || !body.slug) {
+          res.status(400).json({ error: "namespaceId and slug are required" });
+          return;
+        }
+        const result = await getCloudAppInstallService().installApp(body);
+        res.json(result);
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.get("/api/cloud/apps/:appId/requirements", async (req, res) => {
+      try {
+        const paprDir = path.join(os.homedir(), "Papr");
+        const requirements = readAppRequirements(paprDir, req.params.appId);
+        res.json({ requirements });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.put("/api/cloud/apps/:appId/requirements", async (req, res) => {
+      try {
+        const body = req.body as { requirements?: unknown };
+        if (!Array.isArray(body.requirements)) {
+          res.status(400).json({ error: "requirements array is required" });
+          return;
+        }
+        const paprDir = path.join(os.homedir(), "Papr");
+        const file = writeAppRequirements(
+          paprDir,
+          req.params.appId,
+          body.requirements as RequiredKeySpec[],
+        );
+        res.json({ requirements: file.requirements, updatedAt: file.updatedAt });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/cloud/track-sync", async (_req, res) => {
+      try {
+        const results = await getCloudAppTrackSyncService().syncAllTrackApps();
+        res.json({ results });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/cloud/track-sync/:appId", async (req, res) => {
+      try {
+        const result = await getCloudAppTrackSyncService().syncTrackApp(
+          req.params.appId,
+        );
+        res.json(result);
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/cloud/apps/changes/:requestId/approve", async (req, res) => {
+      try {
+        const paprApiKey = await getPaprApiKey();
+        if (!paprApiKey) {
+          res.status(401).json({ error: "PAPR_API_KEY not configured. Login with Papr first." });
+          return;
+        }
+
+        const request = await getCloudAppChangeMergeService().getChangeRequest(
+          req.params.requestId,
+        );
+        if (!request) {
+          res.status(404).json({ error: "Change request not found" });
+          return;
+        }
+
+        const memoryServerBase = getMemoryServerBaseUrl();
+        const targetUrl = `${memoryServerBase}/v1/cloud/apps/changes/${encodeURIComponent(req.params.requestId)}/approve`;
+        const upstream = await fetch(targetUrl, {
+          method: "POST",
+          headers: {
+            "X-API-Key": paprApiKey,
+            "Content-Type": "application/json",
+          },
+        });
+        const bodyText = await upstream.text();
+
+        if (!upstream.ok) {
+          res.status(upstream.status);
+          const ct = upstream.headers.get("content-type");
+          if (ct) res.setHeader("Content-Type", ct);
+          res.send(bodyText);
+          return;
+        }
+
+        let mergeResult = null;
+        try {
+          mergeResult = await getCloudAppChangeMergeService().mergeForkIntoSource(
+            request.sourceAppId,
+            request.installedAppId,
+          );
+          mergeResult.requestId = req.params.requestId;
+        } catch (mergeErr) {
+          console.warn(
+            "[Gateway] Change merge after approve:",
+            (mergeErr as Error).message,
+          );
+        }
+
+        const parsed = bodyText
+          ? (JSON.parse(bodyText) as Record<string, unknown>)
+          : {};
+        res.json({ ...parsed, merge: mergeResult });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    // ── Cloud Proxy ──────────────────────────────────────────────────────────
+    // Proxy /api/cloud/* → Memory Server /v1/cloud/*
+    // Attaches user's PAPR_API_KEY from keychain automatically.
+    // ─────────────────────────────────────────────────────────────────────────
+    const cloudProxyHandler: import("express").RequestHandler = async (req, res) => {
+      try {
+        const paprApiKey = await getPaprApiKey();
+        if (!paprApiKey) {
+          res.status(401).json({ error: "PAPR_API_KEY not configured. Login with Papr first." });
+          return;
+        }
+
+        const memoryServerBase = getMemoryServerBaseUrl();
+
+        const cloudPath = req.originalUrl.replace(/^\/api\/cloud/, "/v1/cloud");
+        const targetUrl = `${memoryServerBase}${cloudPath}`;
+
+        console.log(`[Gateway] Cloud proxy: ${req.method} ${cloudPath} → ${memoryServerBase}`);
+
+        const headers: Record<string, string> = {
+          "X-API-Key": paprApiKey,
+          "Content-Type": "application/json",
+        };
+
+        const isVaultSync = cloudPath.includes("/vault/sync");
+        const isReposInit = cloudPath.includes("/repos/init");
+        const proxyTimeoutMs = isVaultSync
+          ? 120_000
+          : isReposInit
+            ? 60_000
+            : 30_000;
+        const proxyController = new AbortController();
+        const proxyTimer = setTimeout(() => proxyController.abort(), proxyTimeoutMs);
+
+        const fetchOpts: RequestInit = {
+          method: req.method,
+          headers,
+          signal: proxyController.signal,
+        };
+        if (req.method !== "GET" && req.method !== "HEAD" && req.body) {
+          fetchOpts.body = JSON.stringify(req.body);
+        }
+
+        const upstream = await fetch(targetUrl, fetchOpts);
+        clearTimeout(proxyTimer);
+        const body = await upstream.text();
+
+        res.status(upstream.status);
+        const ct = upstream.headers.get("content-type");
+        if (ct) res.setHeader("Content-Type", ct);
+        res.send(body);
+      } catch (err) {
+        console.error("[Gateway] Cloud proxy error:", err);
+        res.status(502).json({ error: `Cloud proxy failed: ${(err as Error).message}` });
+      }
+    };
+
+    const cloudPathRegex = /^\/api\/cloud\/(.*)/;
+    app.get(cloudPathRegex, cloudProxyHandler);
+    app.post(cloudPathRegex, cloudProxyHandler);
+    app.put(cloudPathRegex, cloudProxyHandler);
+    app.delete(cloudPathRegex, cloudProxyHandler);
+
+    // ── Cloud Sync Status + Triggers ─────────────────────────────────────
+    app.get("/api/sync/status", (_req, res) => {
+      const sync = getCloudSyncService();
+      if (!sync) {
+        res.json({ enabled: false, reason: "Cloud sync not initialized" });
+        return;
+      }
+      res.json({ enabled: true, ...sync.getState() });
+    });
+
+    app.get("/api/sync/items", async (req, res) => {
+      const sync = getCloudSyncService();
+      if (!sync) {
+        res.json({
+          enabled: false,
+          reason: "Cloud sync not initialized",
+          github: null,
+          turso: null,
+        });
+        return;
+      }
+
+      const forceRefresh = req.query.refresh === "1" || req.query.refresh === "true";
+      const appId =
+        typeof req.query.appId === "string" && req.query.appId.trim().length > 0
+          ? req.query.appId.trim()
+          : undefined;
+
+      try {
+        let appContext: { appId: string; dependentJobIds: string[] } | undefined;
+        if (appId) {
+          const { resolveAppDependentJobIds } = await import(
+            "./services/cloudSync/resolveAppDependentJobs.js"
+          );
+          if (forceRefresh) {
+            await sync.reconcileAppDependentPaths(appId);
+          }
+          appContext = {
+            appId,
+            dependentJobIds: resolveAppDependentJobIds(
+              path.join(os.homedir(), "Papr"),
+              appId,
+            ),
+          };
+        }
+
+        const github = sync.getGitHubSyncItemsReport();
+        const turso = await buildTursoSyncItemsReport(
+          path.join(os.homedir(), "Papr", "apps"),
+          appId,
+        );
+
+        let cloudLinks = null;
+        let fromCache = false;
+        if (!appId) {
+          cloudLinks = !forceRefresh ? getCachedCloudLinkSyncReport() : null;
+          fromCache = cloudLinks !== null;
+          if (!cloudLinks) {
+            cloudLinks = await buildCloudLinkSyncReport();
+            setCachedCloudLinkSyncReport(cloudLinks);
+          }
+        }
+
+        res.json({
+          enabled: true,
+          github,
+          turso,
+          cloudLinks,
+          appContext,
+          cached: fromCache,
+        });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/sync/push", async (req, res) => {
+      const sync = getCloudSyncService();
+      if (!sync) {
+        res.status(503).json({ error: "Cloud sync not initialized" });
+        return;
+      }
+      const appId =
+        typeof req.body?.appId === "string" && req.body.appId.trim().length > 0
+          ? req.body.appId.trim()
+          : undefined;
+      try {
+        if (appId) {
+          await sync.pushAppNow(appId);
+        } else {
+          await sync.pushNow();
+        }
+        res.json({ success: true, ...sync.getState() });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    // ── Vault Sync Status + Triggers ──────────────────────────────────────
+    app.get("/api/vault/status", (_req, res) => {
+      const vault = getVaultSyncService();
+      if (!vault) {
+        res.json({ enabled: false, reason: "Vault sync not initialized" });
+        return;
+      }
+      res.json({ enabled: true, ...vault.getState() });
+    });
+
+    app.post("/api/vault/push", async (_req, res) => {
+      const vault = getVaultSyncService();
+      if (!vault) {
+        res.status(503).json({ error: "Vault sync not initialized" });
+        return;
+      }
+      try {
+        const result = await vault.pushAllKeys();
+        res.json({ success: true, ...vault.getState(), result });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
 
     // Renderer telemetry: same-origin POST → gateway forwards to Papr proxy (no CORS).
     app.post("/api/telemetry/events", async (req, res) => {
@@ -788,77 +1529,123 @@ async function startGateway(): Promise<void> {
       }
     });
 
-    app.post("/api/bash/run", async (req, res) => {
+    app.post("/api/bash/run", async (_req, res) => {
+      const { MINI_APP_BASH_DISABLED_CODE, MINI_APP_BASH_DISABLED_MESSAGE } =
+        await import("./services/appRuntime/miniAppApiPolicy.js");
+      res.status(403).json({
+        error: MINI_APP_BASH_DISABLED_CODE,
+        message: MINI_APP_BASH_DISABLED_MESSAGE,
+      });
+    });
+
+    app.post("/api/credentials/client-keys", async (req, res) => {
       try {
-        const { command, timeoutMs } = req.body as {
-          command?: string;
-          timeoutMs?: number;
+        const body = req.body as { appId?: string; names?: string[] };
+        if (!body.appId?.trim()) {
+          res.status(400).json({ error: "appId is required" });
+          return;
+        }
+        const { resolveDesktopClientKeys } = await import(
+          "./services/ClientKeysService.js"
+        );
+        const result = await resolveDesktopClientKeys({
+          appId: body.appId.trim(),
+          names: body.names,
+        });
+        if (result.status && result.error) {
+          res.status(result.status).json({ error: result.error });
+          return;
+        }
+        res.json({
+          keys: result.keys,
+          missing: result.missing,
+          rejected: result.rejected,
+        });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/app/backend/:action", async (req, res) => {
+      try {
+        const action = req.params.action;
+        if (!action?.trim()) {
+          res.status(400).json({ error: "action name is required" });
+          return;
+        }
+        const body = req.body as {
+          appId?: string;
+          params?: Record<string, string>;
         };
-        if (!command || typeof command !== "string" || !command.trim()) {
-          res.status(400).json({ error: "command is required" });
+        if (!body.appId) {
+          res.status(400).json({ error: "appId is required" });
           return;
         }
 
-        // Substitute custom keys (${KEY_NAME} → actual values)
+        const { AppBackendService } = await import(
+          "./services/appRuntime/AppBackendService.js"
+        );
         const { substituteCustomKeysInCommand } = await import(
           "./utils/keySubstitution.js"
         );
-        const keySubResult = await substituteCustomKeysInCommand(command);
-        const finalCommand = keySubResult.command;
-        const apiKeys = keySubResult.keyValues;
+        const { sanitizeError } = await import("../core/tools/security.js");
 
-        // Log which keys were used (for debugging)
-        if (keySubResult.usedKeyNames.length > 0) {
-          console.log(
-            `[Gateway] /api/bash/run using keys: ${keySubResult.usedKeyNames.join(", ")}`,
-          );
+        const backend = new AppBackendService();
+        const manifestPath = `apps/${body.appId}/backend/manifest.json`;
+        const fs = await import("fs/promises");
+        const path = await import("path");
+        const { getPaprRoot } = await import("../core/utils/paprRoot.js");
+        const { parseAppBackendManifest } = await import(
+          "./services/appRuntime/appBackendManifest.js"
+        );
+        const manifestRaw = JSON.parse(
+          await fs.readFile(
+            path.join(getPaprRoot(), manifestPath),
+            "utf8",
+          ),
+        ) as unknown;
+        const manifest = parseAppBackendManifest(manifestRaw);
+        const spec = manifest.actions[action.trim()];
+        if (!spec) {
+          res.status(404).json({ error: `Unknown backend action: ${action}` });
+          return;
         }
 
-        const timeout = Math.min(timeoutMs ?? 30_000, 120_000); // cap at 2 min
-        const { exec } = await import("child_process");
-        const { getShell } = await import("../core/utils/platform.js");
-        const result = await new Promise<{
-          stdout: string;
-          stderr: string;
-          exitCode: number;
-        }>((resolve) => {
-          const proc = exec(
-            finalCommand,
-            { timeout, env: process.env, shell: getShell() },
-            (error, stdout, stderr) => {
-              resolve({
-                stdout: stdout ?? "",
-                stderr: stderr ?? "",
-                exitCode: error?.code ?? (error ? 1 : 0),
-              });
-            },
-          );
-          // Ensure the child process is killed on timeout
-          setTimeout(() => {
-            try {
-              proc.kill("SIGTERM");
-            } catch {
-              /* already done */
+        const vaultEnv: Record<string, string> = {};
+        const secretValues: string[] = [];
+        if (spec.keys?.length) {
+          for (const keyName of spec.keys) {
+            const sub = await substituteCustomKeysInCommand(`echo \${${keyName}}`);
+            if (sub.usedKeyNames.includes(keyName)) {
+              // Extract actual value from the substituted command
+              const extractedValue = sub.command.replace(/^echo /,"").trim();
+              vaultEnv[keyName] = extractedValue;
+              secretValues.push(...sub.keyValues);
             }
-          }, timeout);
+          }
+        }
+
+        const { resolveDesktopAppBackendDatabaseEnv, collectBackendDatabaseSecrets } =
+          await import("./services/appRuntime/appBackendDatabase.js");
+        const databaseEnv = await resolveDesktopAppBackendDatabaseEnv({
+          appId: body.appId,
+          paprRoot: getPaprRoot(),
         });
+        secretValues.push(...collectBackendDatabaseSecrets(databaseEnv));
 
-        // Sanitize output to remove any leaked API key values
-        const { sanitizeError } = await import("../core/tools/security.js");
-        const sanitizedStdout = sanitizeError(result.stdout, apiKeys);
-        const sanitizedStderr = sanitizeError(result.stderr, apiKeys);
-
-        console.log(
-          `[Gateway] /api/bash/run exit=${result.exitCode} cmd="${command.slice(0, 80)}"`,
-        );
+        const result = await backend.runAction({
+          appId: body.appId,
+          action: action.trim(),
+          params: body.params,
+          vaultEnv,
+        });
 
         res.json({
-          stdout: sanitizedStdout,
-          stderr: sanitizedStderr,
-          exitCode: result.exitCode,
+          ...result,
+          stdout: sanitizeError(result.stdout, secretValues),
+          stderr: sanitizeError(result.stderr, secretValues),
         });
       } catch (err) {
-        console.error("[Gateway] /api/bash/run error:", err);
         res.status(500).json({ error: (err as Error).message });
       }
     });
@@ -948,34 +1735,64 @@ async function startGateway(): Promise<void> {
           return;
         }
 
+        const ext = path.extname(requestedPath).toLowerCase();
+
+        const {
+          getMiniAppContentType,
+          isMiniAppBinaryExtension,
+        } = await import("./utils/miniAppStaticAssets.js");
+
+        if (isMiniAppBinaryExtension(ext)) {
+          const filePath = await appService.resolveAppFilePath(
+            appId,
+            requestedPath,
+          );
+          if (!filePath) {
+            res.status(404).send("Not found");
+            return;
+          }
+          res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+          res.setHeader("Content-Type", getMiniAppContentType(ext));
+          res.sendFile(filePath);
+          return;
+        }
+
+        // For bundled apps: serve dist/ output when requesting the bundled JS/CSS.
+        // The iframe's index.html references dist/app.js and dist/app.css.
+        if (requestedPath.startsWith("dist/")) {
+          const distContent = await appService.readAppFile(appId, requestedPath);
+          if (distContent === null) {
+            res.status(404).send("Not found — run build first");
+            return;
+          }
+          res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+          res.setHeader("Content-Type", getMiniAppContentType(ext));
+          if (ext === ".js" && typeof distContent === "string") {
+            const { appendModuleRanMarker } = await import(
+              "./utils/miniAppBootWatchdog.js"
+            );
+            res.send(appendModuleRanMarker(distContent));
+            return;
+          }
+          res.send(distContent);
+          return;
+        }
+
         let content = await appService.readAppFile(appId, requestedPath);
         if (content === null) {
           res.status(404).send("Not found");
           return;
         }
 
-        const ext = path.extname(requestedPath).toLowerCase();
-
-        // Transpile TypeScript files on-the-fly so agents can write .ts
+        // Legacy per-file TS transpilation (for apps that don't use bundled imports).
+        // Bundled apps serve pre-built dist/app.js instead of transpiling per-request.
         if (ext === ".ts" || ext === ".tsx") {
           try {
-            // Validate: Warn if mini-app imports Node.js built-ins
-            // Mini-apps run in browser iframes - they should use window.paprAPI instead
             const nodeBuiltins = [
-              "fs",
-              "path",
-              "crypto",
-              "child_process",
-              "os",
-              "net",
-              "http",
-              "https",
-              "stream",
-              "buffer",
-              "process",
+              "fs", "path", "crypto", "child_process", "os",
+              "net", "http", "https", "stream", "buffer", "process",
             ];
             
-            // TypeScript narrowing: content is guaranteed non-null here (checked above)
             const contentStr = content as string;
             const hasNodeImports = nodeBuiltins.some(
               (mod) =>
@@ -994,50 +1811,86 @@ async function startGateway(): Promise<void> {
               );
             }
 
-            const esbuild = await import("esbuild");
-            const result = await esbuild.transform(contentStr, {
-              loader: ext === ".tsx" ? "tsx" : "ts",
-              format: "esm",
-              target: "es2020",
-              platform: "browser", // Mini-apps run in iframe (browser context)
-              sourcemap: "inline",
-            });
-            content = result.code;
+            const { transpileMiniAppTypeScript } = await import(
+              "./utils/miniAppTranspile.js"
+            );
+            const transpileResult = await transpileMiniAppTypeScript(
+              contentStr,
+              requestedPath,
+            );
+            if (!transpileResult.success) {
+              const { isEsbuildInfrastructureError } = await import(
+                "./utils/miniAppTranspile.js"
+              );
+              const rawMessage =
+                transpileResult.message ?? "Unknown error";
+              const location =
+                transpileResult.line !== undefined
+                  ? ` at line ${transpileResult.line}`
+                  : "";
+              const prefix = isEsbuildInfrastructureError(rawMessage)
+                ? "esbuild infrastructure error (NOT app code)"
+                : "TypeScript compilation error";
+              const message = `${prefix}${location}: ${rawMessage}`;
+              console.error(
+                `[Gateway] TypeScript transpile error for ${requestedPath}:`,
+                message,
+              );
+              res.status(500).send(message);
+              return;
+            }
+
+            {
+              const { appendModuleRanMarker } = await import(
+                "./utils/miniAppBootWatchdog.js"
+              );
+              content = appendModuleRanMarker(transpileResult.code ?? contentStr);
+            }
           } catch (transpileError) {
+            const { formatEsbuildErrorMessage } = await import(
+              "./utils/miniAppTranspile.js"
+            );
+            const formatted = formatEsbuildErrorMessage(
+              (transpileError as Error).message,
+            );
             console.error(
               `[Gateway] TypeScript transpile error for ${requestedPath}:`,
               transpileError,
             );
-            res
-              .status(500)
-              .send(
-                `TypeScript compilation error:\n${(transpileError as Error).message}`,
-              );
+            res.status(500).send(`TypeScript compilation error:\n${formatted}`);
             return;
           }
         }
 
         if (ext === ".html" && typeof content === "string") {
+          const appDir = await appService.getAppPath(appId);
+          if (appDir && requestedPath === "index.html") {
+            const { preferBundledEntryInHtml } = await import(
+              "./utils/miniAppBuild.js"
+            );
+            content = await preferBundledEntryInHtml(content, appDir);
+          }
+
           const { injectMiniAppBaseStyles } = await import(
             "./utils/miniAppBaseStyles.js"
           );
-          content = injectMiniAppBaseStyles(content);
+          const { getBrandService, buildBrandStyleTag } = await import(
+            "./services/BrandService.js"
+          );
+          const brand = await getBrandService().loadMergedBrand(appId);
+          const brandStyleTag = buildBrandStyleTag(brand.cssVariables);
+          content = injectMiniAppBaseStyles(content, brandStyleTag);
+
+          // Boot watchdog: turns a silent blank iframe into a labeled
+          // diagnostic banner (entry module never ran / threw / rendered nothing).
+          const { injectMiniAppBootWatchdog } = await import(
+            "./utils/miniAppBootWatchdog.js"
+          );
+          content = injectMiniAppBootWatchdog(content);
         }
 
-        const contentTypeByExt: Record<string, string> = {
-          ".html": "text/html; charset=utf-8",
-          ".js": "text/javascript; charset=utf-8",
-          ".ts": "text/javascript; charset=utf-8",
-          ".tsx": "text/javascript; charset=utf-8",
-          ".css": "text/css; charset=utf-8",
-          ".json": "application/json; charset=utf-8",
-          ".svg": "image/svg+xml",
-          ".txt": "text/plain; charset=utf-8",
-        };
-        res.setHeader(
-          "Content-Type",
-          contentTypeByExt[ext] ?? "text/plain; charset=utf-8",
-        );
+        res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+        res.setHeader("Content-Type", getMiniAppContentType(ext));
         res.send(content);
       } catch (error) {
         console.error("[Gateway] Failed to serve app file:", error);
@@ -1045,55 +1898,88 @@ async function startGateway(): Promise<void> {
       }
     });
 
-    // Serve UI assets in production
-    if (process.env.NODE_ENV === "production") {
-      const uiPath = path.join(__dirname, "../ui");
-
-      // Serve static files (CSS, JS, images) with explicit options
-      app.use(express.static(uiPath, {
-        setHeaders: (res, filepath) => {
-          // Set correct MIME types for JavaScript modules
-          if (filepath.endsWith('.js')) {
-            res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-          } else if (filepath.endsWith('.mjs')) {
-            res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-          }
-        }
-      }));
-
-      // Catch-all route to serve index.html for SPA routing (except for assets)
-      // Must be after static files so assets are served first
-      app.use((req, res, next) => {
-        // Don't catch asset requests - let them 404 if not found
-        if (req.path.startsWith('/assets/')) {
-          return next();
-        }
-        res.sendFile(path.join(uiPath, "index.html"));
-      });
-
-      console.log("[Gateway] Serving UI from:", uiPath);
+    // SPA fallback (static assets registered early at startup)
+    if (productionUiPath) {
+      registerProductionUiCatchAll(app);
+      console.log("[Gateway] Serving UI from:", productionUiPath);
     }
 
-    // Start server with error handling
-    await new Promise<void>((resolve, reject) => {
-      server.on("error", (error: NodeJS.ErrnoException) => {
-        if (error.code === "EADDRINUSE") {
-          console.error(`[Gateway] ERROR: Port ${PORT} is already in use!`);
-          console.error(`[Gateway] Another Gateway process may be running.`);
-          console.error(`[Gateway] Run: npm run kill:gateway`);
-          reject(error);
-        } else {
-          console.error("[Gateway] Server error:", error);
-          reject(error);
-        }
-      });
+    gatewayReady = true;
+    console.log("[Gateway] All routes registered — gateway fully ready");
 
-      server.listen(PORT as number, HOST, () => {
-        console.log(`[Gateway] Server listening on http://${HOST}:${PORT}`);
-        console.log(`[Gateway] WebSocket available at ws://${HOST}:${PORT}`);
-        resolve();
-      });
-    });
+    // Cloud services start AFTER the HTTP server is listening.
+    // Staggered to avoid thundering herd on memory.papr.ai at startup.
+    // Skipped in cloud_agent mode (Cloud Run agent gateway is stateless per-run).
+    if (!isCloudAgentGatewayMode() && process.env.CLOUD_SYNC_ENABLED !== "false") {
+      setTimeout(() => {
+        const cloudSync = initializeCloudSyncService();
+        cloudSync.initialize().catch((err) => {
+          console.warn(
+            "[Gateway] Cloud sync init failed (non-fatal):",
+            (err as Error).message,
+          );
+        });
+      }, 1_000);
+
+      setTimeout(() => {
+        initializeVaultSyncService({ gatewayPort: Number(PORT) })
+          .then((vaultSync) => {
+            getCustomKeysService().onKeyChange((keyName) => {
+              if (keyName) {
+                vaultSync.onKeyChanged(keyName).catch((e) =>
+                  console.warn("[Gateway] Vault key push failed:", (e as Error).message),
+                );
+              } else {
+                vaultSync.pushAllKeys().catch((e) =>
+                  console.warn("[Gateway] Vault full push failed:", (e as Error).message),
+                );
+              }
+            });
+          })
+          .catch((err) => {
+            console.warn(
+              "[Gateway] Vault sync init failed (non-fatal):",
+              (err as Error).message,
+            );
+          });
+      }, 3_000);
+
+      setTimeout(() => {
+        const tursoBridge = initializeTursoSyncBridge();
+        if (process.env.TURSO_PULL_ON_STARTUP === "true") {
+          void tursoBridge.pullLinkedSourcesIfNeeded().catch((err) =>
+            console.warn(
+              "[Gateway] Turso startup pull failed (non-fatal):",
+              (err as Error).message.slice(0, 120),
+            ),
+          );
+        }
+        void import("./services/tursoPushScheduler.js")
+          .then(({ pushDirtyLinkedJobsOnStartup }) => pushDirtyLinkedJobsOnStartup())
+          .catch((err) =>
+            console.warn(
+              "[Gateway] Turso startup dirty push failed (non-fatal):",
+              (err as Error).message.slice(0, 120),
+            ),
+          );
+        void import("./services/DatabaseMemorySync.js")
+          .then(({ startDatabaseMemorySync }) => startDatabaseMemorySync())
+          .catch((err) =>
+            console.warn(
+              "[Gateway] Database memory sync start failed (non-fatal):",
+              (err as Error).message.slice(0, 120),
+            ),
+          );
+        void import("./services/TursoLinkedDbWatcher.js")
+          .then(({ startTursoLinkedDbWatcher }) => startTursoLinkedDbWatcher())
+          .catch((err) =>
+            console.warn(
+              "[Gateway] Turso DB watcher failed (non-fatal):",
+              (err as Error).message.slice(0, 120),
+            ),
+          );
+      }, 5_000);
+    }
 
     // Handle shutdown
     const shutdown = async () => {
@@ -1123,6 +2009,31 @@ async function startGateway(): Promise<void> {
         appService.cleanup();
       } catch (error) {
         console.error("[Gateway] Failed to cleanup AppService:", error);
+      }
+
+      // Stop cloud sync watcher
+      try {
+        const sync = getCloudSyncService();
+        if (sync) await sync.stop();
+      } catch (error) {
+        console.error("[Gateway] Failed to stop cloud sync:", error);
+      }
+
+      try {
+        try {
+          const { stopDatabaseMemorySync } = await import(
+            "./services/DatabaseMemorySync.js"
+          );
+          stopDatabaseMemorySync();
+        } catch {
+          /* non-fatal */
+        }
+        const { stopTursoLinkedDbWatcher } = await import(
+          "./services/TursoLinkedDbWatcher.js"
+        );
+        await stopTursoLinkedDbWatcher();
+      } catch (error) {
+        console.error("[Gateway] Failed to stop Turso DB watcher:", error);
       }
 
       getJobsScheduler().stop();
@@ -1163,16 +2074,18 @@ async function startGateway(): Promise<void> {
       }
     });
     
-    getJobsScheduler().start();
+    if (!isCloudAgentGatewayMode()) {
+      getJobsScheduler().start();
+    }
     
     // Start code indexing after a delay (non-blocking)
     console.log('[Gateway] Scheduling code indexing check in 3 seconds...');
     setTimeout(async () => {
       console.log('[Gateway] Code indexing check starting...');
       try {
-        const { getApiKey } = await import('./utils/keyResolver.js');
+        const { getPaprApiKey: resolvePaprKey } = await import('./utils/keyResolver.js');
         console.log('[Gateway] Requesting PAPR_API_KEY...');
-        const paprKey = await getApiKey('PAPR_API_KEY');
+        const paprKey = await resolvePaprKey();
         
         if (paprKey) {
           console.log('[Gateway] PAPR_API_KEY found, starting code indexing...');

@@ -4,6 +4,17 @@ import {
   type ChatContextRow,
   type StoredMessageRow,
 } from "./contextFootprint.js";
+import {
+  adjustCacheForInvalidatedChat,
+  applyFootprintStoredInCache,
+  hasPendingFootprintWork,
+  migrateContextStatsCache,
+  readContextStatsCache,
+  scheduleContextStatsRebuild,
+  type CachedLifetimeProjection,
+} from "./contextStatsCache.js";
+
+export type { CachedLifetimeProjection };
 
 const FOOTPRINT_COLUMNS = [
   { name: "hypothetical_prompt_tokens", sql: "INTEGER" },
@@ -16,6 +27,7 @@ type MessageRowWithMeta = StoredMessageRow & {
   id: string;
   role: string;
   prompt_tokens: number | null;
+  hypothetical_prompt_tokens: number | null;
   timestamp: string;
 };
 
@@ -39,6 +51,8 @@ export function migrateFootprintColumns(db: Database.Database): void {
       AND prompt_tokens > 0
       AND hypothetical_prompt_tokens IS NULL
   `);
+
+  migrateContextStatsCache(db);
 }
 
 function fetchChatContext(
@@ -68,6 +82,8 @@ export function invalidateChatFootprints(
   db: Database.Database,
   chatId: string,
 ): void {
+  adjustCacheForInvalidatedChat(db, chatId);
+
   db.prepare(
     `UPDATE messages
      SET hypothetical_prompt_tokens = NULL,
@@ -87,7 +103,8 @@ export function backfillChatFootprints(
 
   const messages = db
     .prepare(
-      `SELECT id, role, content, thinking, tool_calls, prompt_tokens, timestamp
+      `SELECT id, role, content, thinking, tool_calls, prompt_tokens,
+              hypothetical_prompt_tokens, timestamp
        FROM messages
        WHERE chat_id = ?
        ORDER BY timestamp ASC`,
@@ -111,6 +128,7 @@ export function backfillChatFootprints(
     if (message.role !== "assistant") continue;
     const promptTokens = message.prompt_tokens ?? 0;
     if (promptTokens <= 0) continue;
+    if (message.hypothetical_prompt_tokens != null) continue;
 
     const footprint = computeSingleTurnFootprint(
       chat,
@@ -124,6 +142,11 @@ export function backfillChatFootprints(
       footprint.contextOptimizedTokens,
       computedAt,
       message.id,
+    );
+    applyFootprintStoredInCache(
+      db,
+      promptTokens,
+      footprint.hypotheticalPromptTokens,
     );
     updated += 1;
   }
@@ -172,114 +195,49 @@ export function storeFootprintForNewMessage(
     new Date().toISOString(),
     messageId,
   );
-}
 
-export interface CachedLifetimeProjection {
-  measuredPromptTokens: number;
-  projectedPromptTokens: number;
-  completionTokens: number;
-  totalTokensConsumed: number;
-  computedTurns: number;
-  pendingTurns: number;
-  chatsWithBilling: number;
+  applyFootprintStoredInCache(
+    db,
+    promptTokens,
+    footprint.hypotheticalPromptTokens,
+  );
 }
 
 export function readCachedLifetimeProjection(
   db: Database.Database,
 ): CachedLifetimeProjection {
-  const row = db
-    .prepare(
-      `SELECT
-         COALESCE(SUM(CASE WHEN role = 'assistant' THEN prompt_tokens ELSE 0 END), 0)
-           AS measured_prompt,
-         COALESCE(SUM(CASE WHEN role = 'assistant' THEN completion_tokens ELSE 0 END), 0)
-           AS completion,
-         COALESCE(SUM(CASE WHEN role = 'assistant' THEN total_tokens ELSE 0 END), 0)
-           AS total,
-         COALESCE(SUM(hypothetical_prompt_tokens), 0) AS projected,
-         SUM(
-           CASE
-             WHEN role = 'assistant'
-               AND prompt_tokens > 0
-               AND hypothetical_prompt_tokens IS NOT NULL
-             THEN 1 ELSE 0
-           END
-         ) AS computed_turns,
-         SUM(
-           CASE
-             WHEN role = 'assistant'
-               AND prompt_tokens > 0
-               AND hypothetical_prompt_tokens IS NULL
-             THEN 1 ELSE 0
-           END
-         ) AS pending_turns,
-         COUNT(
-           DISTINCT CASE
-             WHEN role = 'assistant' AND prompt_tokens > 0 THEN chat_id
-           END
-         ) AS chats_with_billing
-       FROM messages`,
-    )
-    .get() as {
-    measured_prompt: number;
-    completion: number;
-    total: number;
-    projected: number;
-    computed_turns: number;
-    pending_turns: number;
-    chats_with_billing: number;
-  };
-
+  const cached = readContextStatsCache(db);
+  if (cached.needsRebuild) {
+    scheduleContextStatsRebuild(db);
+  }
   return {
-    measuredPromptTokens: row.measured_prompt ?? 0,
-    projectedPromptTokens: row.projected ?? 0,
-    completionTokens: row.completion ?? 0,
-    totalTokensConsumed: row.total ?? 0,
-    computedTurns: row.computed_turns ?? 0,
-    pendingTurns: row.pending_turns ?? 0,
-    chatsWithBilling: row.chats_with_billing ?? 0,
+    measuredPromptTokens: cached.measuredPromptTokens,
+    projectedPromptTokens: cached.projectedPromptTokens,
+    completionTokens: cached.completionTokens,
+    totalTokensConsumed: cached.totalTokensConsumed,
+    computedTurns: cached.computedTurns,
+    pendingTurns: cached.pendingTurns,
+    computedPromptTokens: cached.computedPromptTokens,
+    pendingPromptTokens: cached.pendingPromptTokens,
+    chatsWithBilling: cached.chatsWithBilling,
   };
 }
 
 export function estimatePartialProjection(
-  db: Database.Database,
   cached: CachedLifetimeProjection,
 ): number {
-  const computedPromptRow = db
-    .prepare(
-      `SELECT COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens
-       FROM messages
-       WHERE role = 'assistant'
-         AND prompt_tokens > 0
-         AND hypothetical_prompt_tokens IS NOT NULL`,
-    )
-    .get() as { prompt_tokens: number };
-
-  const pendingPromptRow = db
-    .prepare(
-      `SELECT COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens
-       FROM messages
-       WHERE role = 'assistant'
-         AND prompt_tokens > 0
-         AND hypothetical_prompt_tokens IS NULL`,
-    )
-    .get() as { prompt_tokens: number };
-
-  const computedPrompt = computedPromptRow.prompt_tokens ?? 0;
-  const pendingPrompt = pendingPromptRow.prompt_tokens ?? 0;
-
-  if (pendingPrompt <= 0) {
+  if (cached.pendingPromptTokens <= 0) {
     return cached.projectedPromptTokens;
   }
 
   const avgInflation =
-    computedPrompt > 0
-      ? cached.projectedPromptTokens / computedPrompt
+    cached.computedPromptTokens > 0
+      ? cached.projectedPromptTokens / cached.computedPromptTokens
       : 1;
 
   return (
     cached.projectedPromptTokens +
-    Math.round(pendingPrompt * Math.max(1, avgInflation))
+    Math.round(cached.pendingPromptTokens * Math.max(1, avgInflation))
   );
 }
 
@@ -298,13 +256,17 @@ export function scheduleContextFootprintBackfill(
 ): void {
   if (backfillRunning) return;
 
-  const pending = readCachedLifetimeProjection(db).pendingTurns;
-  if (pending === 0) return;
-
-  backfillRunning = true;
-  const chatsPerBatch = options?.chatsPerBatch ?? 5;
-
   setImmediate(() => {
+    if (backfillRunning) return;
+
+    scheduleContextStatsRebuild(db);
+
+    if (!hasPendingFootprintWork(db)) return;
+
+    backfillRunning = true;
+    const chatsPerBatch = options?.chatsPerBatch ?? 5;
+    const pendingStart = readContextStatsCache(db).pendingTurns;
+
     const runBatch = (): void => {
       try {
         const chatIds = db
@@ -329,7 +291,7 @@ export function scheduleContextFootprintBackfill(
           updated += backfillChatFootprints(db, chatId);
         }
 
-        const remaining = readCachedLifetimeProjection(db).pendingTurns;
+        const remaining = readContextStatsCache(db).pendingTurns;
         console.log(
           `[ContextFootprint] Backfill batch: ${updated} turns, ${remaining} pending`,
         );
@@ -348,7 +310,7 @@ export function scheduleContextFootprintBackfill(
     };
 
     console.log(
-      `[ContextFootprint] Starting backfill (${pending} pending turns)`,
+      `[ContextFootprint] Starting backfill (${pendingStart} pending turns)`,
     );
     runBatch();
   });

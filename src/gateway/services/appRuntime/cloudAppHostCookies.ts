@@ -1,0 +1,229 @@
+/**
+ * Signed HttpOnly cookies for Cloud App Host auth (session + PKCE pending + share links).
+ */
+
+import * as crypto from "crypto";
+import { ensurePublishedAppRootTrailingSlash } from "../../../core/utils/cloudAppPath.js";
+
+export const PAPR_SESSION_COOKIE = "papr_session";
+export const PAPR_AUTH_PENDING_COOKIE = "papr_auth_pending";
+export const PAPR_SHARE_TOKEN_COOKIE = "papr_share";
+
+const SESSION_MAX_AGE_SEC = 60 * 60 * 24 * 7;
+const PENDING_MAX_AGE_SEC = 60 * 10;
+const SHARE_MAX_AGE_SEC = 60 * 60 * 24 * 30;
+
+export function getCookieSigningSecret(): string {
+  const secret = process.env.PAPR_CLOUD_APP_HOST_KEY?.trim();
+  if (!secret) {
+    throw new Error("PAPR_CLOUD_APP_HOST_KEY is required for cookie signing");
+  }
+  return secret;
+}
+
+export interface SessionCookieDiagnostics {
+  sessionCookiePresent: boolean;
+  sessionCookieValid: boolean;
+  authPendingPresent: boolean;
+}
+
+/** Safe diagnostics for /auth/status — never exposes token values. */
+export function getSessionCookieDiagnostics(
+  cookieHeader: string | undefined,
+): SessionCookieDiagnostics {
+  const sessionCookiePresent = Boolean(
+    cookieHeader?.split(";").some((part) => part.trim().startsWith(`${PAPR_SESSION_COOKIE}=`)),
+  );
+  const authPendingPresent = Boolean(
+    cookieHeader?.split(";").some((part) => part.trim().startsWith(`${PAPR_AUTH_PENDING_COOKIE}=`)),
+  );
+  return {
+    sessionCookiePresent,
+    sessionCookieValid: Boolean(readSessionTokenFromCookie(cookieHeader)),
+    authPendingPresent,
+  };
+}
+
+function signPayload(payload: string, secret: string): string {
+  const signature = crypto.createHmac("sha256", secret).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+}
+
+function verifySignedPayload(signed: string, secret: string): string | null {
+  const dot = signed.lastIndexOf(".");
+  if (dot <= 0) return null;
+  const payload = signed.slice(0, dot);
+  const signature = signed.slice(dot + 1);
+  const expected = crypto.createHmac("sha256", secret).update(payload).digest("base64url");
+  const sigBuf = Buffer.from(signature);
+  const expectedBuf = Buffer.from(expected);
+  if (sigBuf.length !== expectedBuf.length) return null;
+  if (!crypto.timingSafeEqual(sigBuf, expectedBuf)) return null;
+  return payload;
+}
+
+function encodeSignedJson(value: Record<string, unknown>, secret: string): string {
+  const payload = Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+  return signPayload(payload, secret);
+}
+
+function decodeSignedJson<T extends Record<string, unknown>>(
+  signed: string,
+  secret: string,
+): T | null {
+  const payload = verifySignedPayload(signed, secret);
+  if (!payload) return null;
+  try {
+    const json = Buffer.from(payload, "base64url").toString("utf8");
+    return JSON.parse(json) as T;
+  } catch {
+    return null;
+  }
+}
+
+function cookieSuffix(maxAgeSec: number, secure: boolean, path = "/"): string {
+  return `Path=${path}; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${secure ? "; Secure" : ""}`;
+}
+
+export function buildSessionCookie(sessionToken: string, secure: boolean): string {
+  const secret = getCookieSigningSecret();
+  const value = encodeSignedJson(
+    { sessionToken, exp: Date.now() + SESSION_MAX_AGE_SEC * 1000 },
+    secret,
+  );
+  // Path=/ is required — Path=/auth only sends the cookie to /auth/* (breaks app routes).
+  return `${PAPR_SESSION_COOKIE}=${encodeURIComponent(value)}; ${cookieSuffix(SESSION_MAX_AGE_SEC, secure, "/")}`;
+}
+
+/** Clears session cookies at both / and legacy /auth paths (production had a bad scope). */
+export function clearLegacySessionCookies(secure: boolean): string[] {
+  return [
+    `${PAPR_SESSION_COOKIE}=; ${cookieSuffix(0, secure, "/")}`,
+    `${PAPR_SESSION_COOKIE}=; ${cookieSuffix(0, secure, "/auth")}`,
+  ];
+}
+
+export function readSessionTokenFromCookie(
+  cookieHeader: string | undefined,
+): string | undefined {
+  if (!cookieHeader) return undefined;
+  const secret = getCookieSigningSecret();
+  for (const part of cookieHeader.split(";")) {
+    const trimmed = part.trim();
+    if (!trimmed.startsWith(`${PAPR_SESSION_COOKIE}=`)) continue;
+    const raw = decodeURIComponent(trimmed.slice(PAPR_SESSION_COOKIE.length + 1));
+    const parsed = decodeSignedJson<{ sessionToken?: string; exp?: number }>(raw, secret);
+    if (!parsed?.sessionToken || typeof parsed.exp !== "number") return undefined;
+    if (parsed.exp < Date.now()) return undefined;
+    return parsed.sessionToken;
+  }
+  return undefined;
+}
+
+export function clearSessionCookie(secure: boolean): string {
+  return clearLegacySessionCookies(secure)[0];
+}
+
+export interface AuthPendingPayload extends Record<string, unknown> {
+  state: string;
+  codeVerifier: string;
+  returnTo: string;
+  exp: number;
+}
+
+export function buildAuthPendingCookie(
+  payload: Omit<AuthPendingPayload, "exp">,
+  secure: boolean,
+): string {
+  const secret = getCookieSigningSecret();
+  const value = encodeSignedJson(
+    { ...payload, exp: Date.now() + PENDING_MAX_AGE_SEC * 1000 },
+    secret,
+  );
+  // Path=/ so the pending cookie survives Auth0 redirects and any proxy path quirks.
+  return `${PAPR_AUTH_PENDING_COOKIE}=${encodeURIComponent(value)}; ${cookieSuffix(PENDING_MAX_AGE_SEC, secure, "/")}`;
+}
+
+export function readAuthPendingCookie(
+  cookieHeader: string | undefined,
+): AuthPendingPayload | null {
+  if (!cookieHeader) return null;
+  const secret = getCookieSigningSecret();
+  for (const part of cookieHeader.split(";")) {
+    const trimmed = part.trim();
+    if (!trimmed.startsWith(`${PAPR_AUTH_PENDING_COOKIE}=`)) continue;
+    const raw = decodeURIComponent(trimmed.slice(PAPR_AUTH_PENDING_COOKIE.length + 1));
+    const parsed = decodeSignedJson<AuthPendingPayload>(raw, secret);
+    if (!parsed?.state || !parsed.codeVerifier || !parsed.returnTo) return null;
+    if (typeof parsed.exp !== "number" || parsed.exp < Date.now()) return null;
+    return parsed;
+  }
+  return null;
+}
+
+export function clearAuthPendingCookie(secure: boolean): string {
+  return `${PAPR_AUTH_PENDING_COOKIE}=; ${cookieSuffix(0, secure, "/")}`;
+}
+
+export function buildShareTokenCookie(
+  shareToken: string,
+  namespaceId: string,
+  slug: string,
+  secure: boolean,
+): string {
+  const secret = getCookieSigningSecret();
+  const value = encodeSignedJson(
+    {
+      shareToken,
+      namespaceId,
+      slug,
+      exp: Date.now() + SHARE_MAX_AGE_SEC * 1000,
+    },
+    secret,
+  );
+  // Path=/ so /api/db/* at site root receives the cookie (mini-apps use fetch('/api/...')).
+  return `${PAPR_SHARE_TOKEN_COOKIE}=${encodeURIComponent(value)}; ${cookieSuffix(SHARE_MAX_AGE_SEC, secure, "/")}`;
+}
+
+export function readShareTokenFromCookie(
+  cookieHeader: string | undefined,
+  namespaceId: string,
+  slug: string,
+): string | undefined {
+  if (!cookieHeader) return undefined;
+  const secret = getCookieSigningSecret();
+  for (const part of cookieHeader.split(";")) {
+    const trimmed = part.trim();
+    if (!trimmed.startsWith(`${PAPR_SHARE_TOKEN_COOKIE}=`)) continue;
+    const raw = decodeURIComponent(trimmed.slice(PAPR_SHARE_TOKEN_COOKIE.length + 1));
+    const parsed = decodeSignedJson<{
+      shareToken?: string;
+      namespaceId?: string;
+      slug?: string;
+      exp?: number;
+    }>(raw, secret);
+    if (!parsed?.shareToken) return undefined;
+    if (parsed.namespaceId !== namespaceId || parsed.slug !== slug) return undefined;
+    if (typeof parsed.exp !== "number" || parsed.exp < Date.now()) return undefined;
+    return parsed.shareToken;
+  }
+  return undefined;
+}
+
+export function sanitizeReturnToPath(returnTo: string | undefined): string {
+  if (!returnTo || !returnTo.startsWith("/")) return "/";
+  if (returnTo.startsWith("//")) return "/";
+  if (returnTo.includes("://")) return "/";
+  return returnTo;
+}
+
+export function stripShareTokenFromPath(originalUrl: string): string {
+  const qIndex = originalUrl.indexOf("?");
+  const path = qIndex === -1 ? originalUrl : originalUrl.slice(0, qIndex);
+  const query = qIndex === -1 ? "" : originalUrl.slice(qIndex + 1);
+  const params = new URLSearchParams(query);
+  params.delete("t");
+  const normalizedPath = ensurePublishedAppRootTrailingSlash(path);
+  const nextQuery = params.toString();
+  return nextQuery ? `${normalizedPath}?${nextQuery}` : normalizedPath;
+}

@@ -15,8 +15,17 @@ import { v4 as uuidv4 } from "uuid";
 import { streamText, generateObject, jsonSchema } from "ai";
 import type { LanguageModel, ToolSet, StepResult } from "ai";
 import { ToolRegistry } from "../../core/agents/ToolRegistry.js";
-import { allTools, getApiKeysForSanitization } from "../../core/tools/index.js";
-import { buildSystemPrompt } from "../../core/agents/SystemPrompt.js";
+import {
+  initializeMemorySearchGate,
+  wrapToolsWithMemorySearchFirstGate,
+} from "../../core/utils/memorySearchFirstGate.js";
+import { allTools, getApiKeysForSanitization, legacyToolAliases } from "../../core/tools/index.js";
+import {
+  ACTIVE_PLANS_MESSAGE_PREFIX,
+  buildSystemPrompt,
+  formatActivePlansContext,
+  type ActivePlanContext,
+} from "../../core/agents/SystemPrompt.js";
 import type {
   StreamChunk,
   TextDeltaPayload,
@@ -24,8 +33,13 @@ import type {
   ToolCallPayload,
   ToolResultPayload,
   ErrorPayload,
+  UiAgentFocusContext,
 } from "../../core/types/index.js";
-import type { AgentConfigInternal, Provider } from "../../core/types/agents.js";
+import type {
+  AgentConfigInternal,
+  OpenAIReasoningEffort,
+  Provider,
+} from "../../core/types/agents.js";
 import { StorageManager } from "./StorageManager.js";
 import { ChatSessionManager } from "./ChatSessionManager.js";
 import { TitleGenerationService } from "./TitleGenerationService.js";
@@ -34,9 +48,22 @@ import { ChatExporter } from "./storage/ChatExporter.js";
 import type { StoredMessage } from "./storage/IStorageProvider.js";
 import { generateFallbackTitle } from "./agent/fallbackTitle.js";
 import {
+  compactStaleToolResults,
+  estimateMessagesTokens,
+} from "./agent/compactToolResults.js";
+import {
+  computeHistoryTokenBudget,
+  isContextLengthError,
+  resolveModelContextWindow,
+} from "./agent/contextBudget.js";
+import {
   buildModelMessages,
   extractToolResultText,
 } from "./agent/historyFormatter.js";
+import {
+  computeHistoryTrimBounds,
+  trimOldestHistoryTurns,
+} from "./agent/midTurnContextTrim.js";
 import {
   classifyMemoryBlock,
   getUserMemoryContextService,
@@ -44,17 +71,38 @@ import {
   shouldBootstrapUserMemory,
 } from "./UserMemoryContextService.js";
 import { getPaprUserId } from "../utils/paprUserId.js";
+import { getAgentFocusContextService } from "./AgentFocusContextService.js";
+import { AGENT_FOCUS_CONTEXT_PREFIX } from "./agent/focusContextFormatter.js";
 import {
   type ToolCallEvent,
   type ToolResultEvent,
 } from "./agent/streamChunks.js";
 import { orchestrateModelStream } from "./agent/streamOrchestrator.js";
+import { streamCursorAgentTurn } from "./providers/cursorAgentStream.js";
 import {
   createAssistantStoredMessage,
   createErrorStoredMessage,
 } from "./agent/messagePersistence.js";
 import { getWorkspaceService } from "./WorkspaceService.js";
 import type { WorkspaceContextData } from "../../core/agents/SystemPrompt.js";
+import type { TokenUsageForCost } from "./CostCalculation.js";
+
+type StoredTokenUsage = TokenUsageForCost & { totalTokens: number };
+
+function finalizeTokenUsageForBilling(
+  usage: StoredTokenUsage | undefined,
+  cacheReadTokens: number,
+  cacheWriteTokens: number,
+): StoredTokenUsage | undefined {
+  if (!usage) {
+    return undefined;
+  }
+  return {
+    ...usage,
+    cacheReadTokens: usage.cacheReadTokens ?? cacheReadTokens,
+    cacheWriteTokens: usage.cacheWriteTokens ?? cacheWriteTokens,
+  };
+}
 
 export class AgentService {
   private storageManager: StorageManager;
@@ -126,12 +174,17 @@ export class AgentService {
     console.log("[AgentService] Title service initialized");
 
     console.log("[AgentService] Registering tools...");
-    // Register all available tools
     for (const tool of allTools) {
       const registryTool = tool as unknown as Parameters<
         ToolRegistry["register"]
       >[0];
       this.toolRegistry.register(registryTool);
+    }
+    for (const tool of legacyToolAliases) {
+      const registryTool = tool as unknown as Parameters<
+        ToolRegistry["registerLegacy"]
+      >[0];
+      this.toolRegistry.registerLegacy(registryTool);
     }
     console.log("[AgentService] Tools registered");
 
@@ -141,7 +194,7 @@ export class AgentService {
     this.systemPrompt = buildSystemPrompt({
       userDataPath: this.userDataPath,
       workspacePath: process.cwd(),
-      availableTools: allTools.map((t) => t.id),
+      availableTools: this.toolRegistry.getMainToolIds(),
       customKeys: [], // Will be updated when keys are loaded
       includeExtendedAppPlaybook: false,
     });
@@ -277,10 +330,14 @@ export class AgentService {
     options?: {
       allowedToolIds?: string[];
       maxSteps?: number;
+      /** UI focus: open mini-app tab + optional metadata from renderer */
+      focusContext?: UiAgentFocusContext;
       /** Internal: set true when this is an auto-recovery retry of an empty completion. Prevents infinite loops. */
       _isSilentRetry?: boolean;
       /** Internal: skip re-saving the user message (it's already saved from the original turn). */
       _skipSaveUserMessage?: boolean;
+      /** Internal: retry after context-length failure + forced summarization. */
+      _isContextCompressRetry?: boolean;
     },
   ): AsyncGenerator<StreamChunk & { chatId: string }> {
     if (!this.initialized) {
@@ -295,6 +352,20 @@ export class AgentService {
     // Lazy-load API keys on first message (no keychain popup on startup!)
     await this.ensureKeysLoaded();
     timings.ensureKeys = performance.now() - t;
+
+    if (config.provider === "cursor") {
+      yield* streamCursorAgentTurn(
+        {
+          sessionManager: this.sessionManager,
+          storageManager: this.storageManager,
+        },
+        chatId,
+        userMessage,
+        config,
+        options,
+      );
+      return;
+    }
 
     // Get or create chat session (supports parallel streaming)
     // Note: chatId should already be permanent (created via chat:create before streaming)
@@ -315,35 +386,11 @@ export class AgentService {
     let toolCalls: ToolCallEvent[] = [];
     let toolResults: ToolResultEvent[] = [];
     let sequence: Array<{ type: "text" | "tool" | "thinking"; data: any }> = [];
-    let tokenUsage:
-      | { promptTokens: number; completionTokens: number; totalTokens: number }
-      | undefined;
-
-    // Context pressure monitoring — declared here so catch block can read them
-    // Model-aware thresholds: GPT-5.5 has 1M, GPT-5.4-mini has 272K, Claude Opus 4.7 has 1M, older Claude 200K
-    const getContextAbortThreshold = (): number => {
-      const model = config.model?.toLowerCase() ?? "";
-      
-      // GPT-5.5 (1M context)
-      if (model.startsWith("gpt-5.5")) {
-        return 750000; // 1M - 250K buffer
-      }
-      
-      // GPT-5.4-mini (272K context) - legacy 5.4 variants map to 5.5 now
-      if (model.startsWith("gpt-5.4") || model.startsWith("gpt-5.3") || model.startsWith("gpt-5.2")) {
-        return 750000; // Forward compatibility: treat as 5.5 tier
-      }
-      
-      // Claude Opus 4.7 (1M context)
-      if (model === "claude-opus-4-7" || model === "claude-fable-5") {
-        return 750000; // 1M - 250K buffer
-      }
-      
-      // Older Claude models (200K context)
-      return 120000; // Claude 200K - 80K buffer (conservative)
-    };
-    const CONTEXT_ABORT_THRESHOLD = getContextAbortThreshold();
-    let contextPressureAborted = false;
+    let tokenUsage: StoredTokenUsage | undefined;
+    let piAiContextTokens = 0; // For pi-ai: last step's actual context window size
+    let lastCacheReadTokens = 0;
+    let lastCacheWriteTokens = 0;
+    let cumulativePromptTokens = 0;
 
     try {
       // 1. Save user message
@@ -434,6 +481,40 @@ export class AgentService {
       const historySize = JSON.stringify(history).length;
       const estimatedHistoryTokens = Math.ceil(historySize / 4);
 
+      // Proactive summarization — long chats without a summary load ALL messages
+      // into context. API-reported tokens after stream often miss this (cache reads,
+      // pi-ai paths), so also trigger on message count + estimated history size.
+      const historyStats = await this.storageManager.getChatStats(chatId);
+      if (
+        !historyStats.has_summary &&
+        this.shouldTriggerSummarization({
+          messageCount: historyStats.message_count,
+          estimatedHistoryTokens,
+        })
+      ) {
+        console.log(
+          `[AgentService] 🔄 Pre-stream summarization for ${chatId} ` +
+            `(${historyStats.message_count} msgs, ~${estimatedHistoryTokens} est. history tokens)`,
+        );
+        await this.triggerSummarization(chatId);
+        const reloadedRaw = await this.storageManager.loadMessagesForLLM(chatId);
+        conversationSummary = undefined;
+        history.length = 0;
+        for (const msg of reloadedRaw) {
+          if (typeof msg === "object" && msg !== null && "__summary" in msg) {
+            conversationSummary = (msg as { __summary: string }).__summary;
+            console.log(
+              `[AgentService] ✅ Post-summarize summary loaded (${conversationSummary.length} chars)`,
+            );
+          } else {
+            history.push(msg);
+          }
+        }
+        console.log(
+          `[AgentService] After pre-stream summarize: ${history.length} recent messages in history`,
+        );
+      }
+
       // 3. Gather enabled skills for system prompt context
       t = performance.now();
       let enabledSkills:
@@ -482,14 +563,42 @@ export class AgentService {
         console.warn("[AgentService] Memory bootstrap failed:", error);
       }
 
+      const activePlansContext = await this.loadActivePlansContext(chatId);
+
+      const focusContextMessage =
+        await getAgentFocusContextService().buildFocusMessage(
+          options?.focusContext,
+        );
+
       const messages = buildModelMessages(
         history,
         userMessage,
         systemPrompt,
         conversationSummary,
         memoryContextBlocks,
+        activePlansContext,
+        focusContextMessage,
       );
+
+      const useAnthropicPromptCache =
+        config.provider === "anthropic" && config.authType !== "oauth";
+      if (useAnthropicPromptCache) {
+        const { applyAnthropicPromptCacheControl } = await import(
+          "./agent/promptCacheControl.js"
+        );
+        const cachedMessages = applyAnthropicPromptCacheControl(messages, {
+          provider: config.provider,
+          authType: config.authType,
+        });
+        messages.splice(0, messages.length, ...cachedMessages);
+        console.log(
+          `[AgentService] Anthropic prompt cache breakpoints applied (${messages.length} messages)`,
+        );
+      }
+
       timings.buildMessages = performance.now() - t;
+
+      const historyTrimBounds = computeHistoryTrimBounds(messages);
 
       // DEBUG: Log message structure to debug empty content blocks
       console.log(
@@ -537,7 +646,7 @@ export class AgentService {
       // Prepare provider options for reasoning models
       const providerOptions: {
         openai?: {
-          reasoningEffort: "low" | "medium" | "high" | "xhigh";
+          reasoningEffort: OpenAIReasoningEffort;
           reasoningSummary: "detailed";
         };
         google?: {
@@ -560,8 +669,11 @@ export class AgentService {
 
       // For OpenAI GPT-5.x models with reasoning effort and summary
       if (config.provider === "openai" && config.reasoning?.effort) {
+        const { toOpenAIReasoningEffort } = await import(
+          "../utils/modelNormalizer.js"
+        );
         providerOptions.openai = {
-          reasoningEffort: config.reasoning.effort, // 'low' | 'medium' | 'high' | 'xhigh'
+          reasoningEffort: toOpenAIReasoningEffort(config.reasoning.effort),
           reasoningSummary: "detailed", // Enable detailed reasoning summaries for streaming
         };
       }
@@ -578,6 +690,18 @@ export class AgentService {
             thinkingBudget: config.thinkingBudget, // Token budget for thinking
           },
         };
+      }
+
+      // For Z.ai GLM models (OpenAI-compatible API with thinking + reasoning_effort)
+      if (config.provider === "zai") {
+        const { buildZaiProviderOptions } = await import("../utils/zaiModel.js");
+        Object.assign(providerOptions, buildZaiProviderOptions(config.model, config.reasoning));
+      }
+
+      // For Groq models (OpenAI-compatible — GPT-OSS supports reasoning_effort)
+      if (config.provider === "groq") {
+        const { buildGroqProviderOptions } = await import("../utils/groqModel.js");
+        Object.assign(providerOptions, buildGroqProviderOptions(config.model, config.reasoning));
       }
 
       // For Ollama models (Qwen, Gemma, etc.) — thinking + adaptive context
@@ -602,10 +726,21 @@ export class AgentService {
         };
       }
 
-      // Get registered tools for the model
+      // Get registered tools for the model (soft memory-search reminder when Papr configured)
       t = performance.now();
-      const tools = this.toolRegistry.getToolsForMastra(
-        options?.allowedToolIds,
+      let hasPaprApiKey = false;
+      try {
+        const { getApiKey } = await import("../utils/keyResolver.js");
+        hasPaprApiKey = !!(await getApiKey("PAPR_API_KEY"));
+      } catch {
+        hasPaprApiKey = false;
+      }
+      initializeMemorySearchGate({
+        hasPaprApiKey,
+        allowedToolIds: options?.allowedToolIds,
+      });
+      const tools = wrapToolsWithMemorySearchFirstGate(
+        this.toolRegistry.getToolsForMastra(options?.allowedToolIds),
       );
       timings.getTools = performance.now() - t;
 
@@ -627,9 +762,40 @@ export class AgentService {
         `  Tools: ${Object.keys(tools).length} tools, ~${toolTokens} tokens`,
       );
       console.log(`  Total context: ~${totalEstimatedTokens} tokens`);
+      const modelContextWindow = resolveModelContextWindow(
+        config.provider,
+        config.model,
+      );
+      const effectiveMaxTokens = config.maxTokens ?? 16000;
+      const historyTokenBudget = computeHistoryTokenBudget({
+        provider: config.provider,
+        modelId: config.model,
+        toolTokenEstimate: toolTokens,
+        maxOutputTokens: effectiveMaxTokens,
+      });
+      console.log(
+        `  Model context window: ${modelContextWindow}, history budget: ~${historyTokenBudget} tokens`,
+      );
       console.log(
         `  Config: maxTokens=${config.maxTokens || "NOT SET"}, maxSteps=${options?.maxSteps || 100}`,
       );
+
+      // Pre-flight trim: use model-aware cap (not global 300K) so Groq/Ollama don't overflow.
+      compactStaleToolResults(messages);
+      const preFlightTrim = trimOldestHistoryTurns(messages, {
+        ...historyTrimBounds,
+        maxTokens: historyTokenBudget,
+      });
+      if (preFlightTrim.trimmed) {
+        const postTrimEstimate =
+          estimateMessagesTokens(messages) + toolTokens;
+        console.log(
+          `[AgentService] Pre-flight context trim (${config.model}): ` +
+            `removed ${preFlightTrim.removedTurns} turn(s), ` +
+            `~${Math.round(preFlightTrim.tokensBefore / 1000)}K → ~${Math.round(preFlightTrim.tokensAfter / 1000)}K message tokens ` +
+            `(total est. ~${Math.round(postTrimEstimate / 1000)}K / ${Math.round(modelContextWindow / 1000)}K window)`,
+        );
+      }
       console.log(`[AgentService] ⏱️ Setup Timing:`);
       console.log(`  Ensure keys: ${timings.ensureKeys.toFixed(2)}ms`);
       console.log(`  Get session: ${timings.getSession.toFixed(2)}ms`);
@@ -645,12 +811,10 @@ export class AgentService {
       // Stream from AI SDK directly with abort signal and tools
       t = performance.now();
 
-      // Effective output token cap — prefer per-model config, fall back to 16k
-      const effectiveMaxTokens = config.maxTokens ?? 16000;
       console.log(`[AgentService] Setting maxTokens: ${effectiveMaxTokens}`);
 
       let cumulativeSteps = 0;
-      let cumulativePromptTokens = 0; // Track actual token usage for adaptive truncation
+      cumulativePromptTokens = 0; // Track actual token usage for adaptive truncation
 
       // Build native web search tools configuration
       const nativeSearchTools = await this.buildNativeSearchTools(config.provider);
@@ -684,16 +848,19 @@ export class AgentService {
         // ⚡ NO TIMEOUT - Allow agents to work as long as needed
         // Protection mechanisms:
         // 1. Step limit prevents infinite loops
-        // 2. Context pressure monitoring (onStepFinish) aborts if prompt
-        //    tokens exceed CONTEXT_ABORT_THRESHOLD
-        // 3. User can abort via UI (abortController)
+        // 2. trimOldestHistoryTurns drops oldest stored history at model-aware mid-turn cap
+        // 3. Proactive Papr summarization before/after turns
+        // 4. User can abort via UI (abortController)
         abortSignal: abortController.signal,
-        ...(providerOptions.openai || providerOptions.google || providerOptions.ollama
+        ...(config.provider === "groq" ? { includeRawChunks: true } : {}),
+        ...(providerOptions.openai ||
+        providerOptions.google ||
+        providerOptions.ollama ||
+        config.provider === "zai" ||
+        config.provider === "groq"
           ? { providerOptions }
           : {}),
-        // Compact stale tool results before each model call.
-        // Fresh batch (most recent) stays full; older batches get truncated.
-        // Also handles step-limit warnings.
+        // Before each tool step: drop oldest stored history if mid-turn context exceeds model budget.
         prepareStep: async (stepOptions: {
           messages: any[];
           stepNumber: number;
@@ -701,7 +868,11 @@ export class AgentService {
             usage?: { promptTokens?: number; completionTokens?: number };
           }>;
         }) => {
-          const totalPromptTokens = cumulativePromptTokens;
+          const stepMessageTokens = estimateMessagesTokens(stepOptions.messages);
+          const totalPromptTokens =
+            cumulativePromptTokens > 0
+              ? cumulativePromptTokens
+              : stepMessageTokens + toolTokens;
           console.log(
             `[prepareStep] Step ${stepOptions.stepNumber}: ${Math.round(totalPromptTokens / 1000)}K tokens, ` +
               `${stepOptions.messages.length} messages`,
@@ -721,16 +892,32 @@ export class AgentService {
               content: `[SYSTEM NOTE: You've made ${stepNumber} tool calls out of ${maxSteps} maximum. Please complete your current task and provide a final response soon. Avoid unnecessary tool calls.]`,
             };
             const msgs = [...stepOptions.messages, warningMessage];
-            // Import and compact on the cloned array
-            const { compactStaleToolResults } = await import("./agent/compactToolResults.js");
             compactStaleToolResults(msgs);
+            trimOldestHistoryTurns(msgs, {
+              ...historyTrimBounds,
+              maxTokens: historyTokenBudget,
+            });
             return { messages: msgs };
           }
 
-          // Clone messages and compact stale tool results
           const msgs = [...stepOptions.messages];
-          const { compactStaleToolResults } = await import("./agent/compactToolResults.js");
           compactStaleToolResults(msgs);
+          trimOldestHistoryTurns(msgs, {
+            ...historyTrimBounds,
+            maxTokens: historyTokenBudget,
+          });
+
+          if (useAnthropicPromptCache) {
+            const { applyAnthropicPromptCacheControl } = await import(
+              "./agent/promptCacheControl.js"
+            );
+            const cached = applyAnthropicPromptCacheControl(msgs, {
+              provider: config.provider,
+              authType: config.authType,
+            });
+            msgs.splice(0, msgs.length, ...cached);
+          }
+
           return { messages: msgs };
         },
 
@@ -749,27 +936,31 @@ export class AgentService {
 
           const { inputTokens, outputTokens } = step.usage;
 
-          // Update token tracking for next prepareStep
-          // NOTE: inputTokens is already the TOTAL input to the model (not incremental)
-          // so we replace, not add
+          // Update token tracking for next prepareStep.
+          // NOTE: inputTokens is the uncached portion only when Anthropic prompt cache is on.
+          // Summarization and pressure checks need the full context window:
+          // uncached input + cache read + cache write.
           cumulativePromptTokens = inputTokens;
 
-          console.log(
-            `[AgentService] 📈 Step ${cumulativeSteps} - input: ${inputTokens} tokens, output: ${outputTokens} tokens (current context: ${cumulativePromptTokens})`,
-          );
-
-          if (inputTokens > CONTEXT_ABORT_THRESHOLD) {
-            console.warn(
-              `[AgentService] ⚠️ Context pressure at step ${cumulativeSteps}: ` +
-                `${inputTokens} input tokens > ${CONTEXT_ABORT_THRESHOLD} threshold. ` +
-                `Aborting stream and triggering compression.`,
+          if (useAnthropicPromptCache) {
+            const { extractCacheUsageFromStep } = await import(
+              "./agent/promptCacheControl.js"
             );
-            contextPressureAborted = true;
-            abortController.abort();
-
-            // Note: We'll handle compression after the stream finishes
-            // to avoid blocking the stream processing
+            const cache = extractCacheUsageFromStep(step);
+            lastCacheReadTokens = cache.cacheReadTokens;
+            lastCacheWriteTokens = cache.cacheWriteTokens;
+            cumulativePromptTokens =
+              inputTokens + cache.cacheReadTokens + cache.cacheWriteTokens;
+            if (cache.cacheReadTokens > 0 || cache.cacheWriteTokens > 0) {
+              console.log(
+                `[AgentService] 💾 Anthropic cache — read: ${cache.cacheReadTokens}, write: ${cache.cacheWriteTokens} tokens`,
+              );
+            }
           }
+
+          console.log(
+            `[AgentService] 📈 Step ${cumulativeSteps} - input: ${inputTokens} tokens, output: ${outputTokens} tokens (full context: ${cumulativePromptTokens})`,
+          );
         },
       };
 
@@ -859,12 +1050,50 @@ export class AgentService {
             // Create model object matching pi-ai's Model interface
             // Manual registry entry when pi-ai has not listed the id yet
             const isMini = piModelId === "gpt-5.4-mini";
+            const is56Luna = piModelId === "gpt-5.6-luna";
+            const is56Terra = piModelId === "gpt-5.6-terra";
+            const is56Sol =
+              piModelId === "gpt-5.6-sol" ||
+              piModelId === "gpt-5.6" ||
+              piModelId.startsWith("gpt-5.6-sol");
             const is55 = piModelId.startsWith("gpt-5.5");
             const is55Pro = piModelId === "gpt-5.5-pro";
-            
-            const inputCost = is55Pro ? 30.0 : is55 ? 5.0 : isMini ? 0.75 : 2.5;
-            const outputCost = is55Pro ? 180.0 : is55 ? 30.0 : isMini ? 4.5 : 15.0;
-            const displayName = is55Pro ? "GPT-5.5 Pro" : is55 ? "GPT-5.5" : isMini ? "GPT-5.4 mini" : "GPT-5.4";
+
+            const inputCost = is55Pro
+              ? 30.0
+              : is56Luna
+                ? 1.0
+                : is56Terra
+                  ? 2.5
+                  : is56Sol || is55
+                    ? 5.0
+                    : isMini
+                      ? 0.75
+                      : 2.5;
+            const outputCost = is55Pro
+              ? 180.0
+              : is56Luna
+                ? 6.0
+                : is56Terra
+                  ? 15.0
+                  : is56Sol || is55
+                    ? 30.0
+                    : isMini
+                      ? 4.5
+                      : 15.0;
+            const displayName = is56Luna
+              ? "GPT-5.6 Luna"
+              : is56Terra
+                ? "GPT-5.6 Terra"
+                : is56Sol
+                  ? "GPT-5.6 Sol"
+                  : is55Pro
+                    ? "GPT-5.5 Pro"
+                    : is55
+                      ? "GPT-5.5"
+                      : isMini
+                        ? "GPT-5.4 mini"
+                        : "GPT-5.4";
             
             finalModel = {
               id: piModelId,
@@ -897,14 +1126,21 @@ export class AgentService {
                   outputCost: 50.0,
                   contextWindow: 1000000,
                 }
-              : piModelId.includes("opus-4-7")
+              : piModelId.includes("opus-4-8")
                 ? {
-                    name: "Claude Opus 4.7",
+                    name: "Claude Opus 4.8",
                     inputCost: 5.0,
                     outputCost: 25.0,
                     contextWindow: 1000000,
                   }
-                : piModelId.includes("opus")
+                : piModelId.includes("opus-4-7")
+                  ? {
+                      name: "Claude Opus 4.7",
+                      inputCost: 5.0,
+                      outputCost: 25.0,
+                      contextWindow: 1000000,
+                    }
+                  : piModelId.includes("opus")
                   ? {
                       name: "Claude Opus 4.6",
                       inputCost: 15.0,
@@ -943,7 +1179,10 @@ export class AgentService {
                 cacheWrite: modelInfo.inputCost * 1.25, // 25% markup for write
               },
               contextWindow: modelInfo.contextWindow,
-              maxTokens: piModelId.includes("fable") ? 128000 : 8192,
+              maxTokens:
+                piModelId.includes("fable") || piModelId.includes("opus-4-8")
+                  ? 128000
+                  : 8192,
             };
           }
         }
@@ -1015,6 +1254,13 @@ export class AgentService {
         }
         console.log(`${'='.repeat(100)}\n`);
 
+        const piHistoryTrimBounds = computeHistoryTrimBounds(
+          (piContext.messages ?? []) as Array<{
+            role?: unknown;
+            content?: unknown;
+          }>,
+        );
+
         const reasoningLevel = (config.reasoning?.effort ?? "medium") as
           | "minimal"
           | "low"
@@ -1040,21 +1286,35 @@ export class AgentService {
           );
         }
 
-        const streamOpts = {
+        const baseStreamOpts = {
           apiKey: token,
           sessionId,
           signal: abortController.signal,
           reasoning: reasoningLevel,
+          ...(usePiAiAnthropic ? { cacheRetention: "long" as const } : {}),
         };
+
+        type PiAiStreamOptions =
+          import("./providers/piAiCodexResponsesLite.js").PiAiCodexStreamOptions;
+
+        let streamOpts: PiAiStreamOptions = baseStreamOpts;
+        if (useCodex) {
+          const { augmentPiAiCodexStreamOptions } = await import(
+            "./providers/piAiCodexResponsesLite.js"
+          );
+          streamOpts = augmentPiAiCodexStreamOptions(piModelId, baseStreamOpts);
+        } else {
+          const { augmentPiAiAnthropicStreamOptions } = await import(
+            "./providers/piAiAnthropicAdaptiveThinking.js"
+          );
+          streamOpts = augmentPiAiAnthropicStreamOptions(
+            piModelId,
+            reasoningLevel,
+            baseStreamOpts,
+          );
+        }
         const apiKeys = getApiKeysForSanitization();
         const maxSteps = options?.maxSteps ?? 100;
-
-        // Context pressure callback for pi-ai path (triggers summarization)
-        const onContextPressure = async () => {
-          console.log(`🔄 Pi-ai context pressure detected for chat ${chatId}`);
-          contextPressureAborted = true;
-          abortController.abort();
-        };
 
         fullStream = createPiCodexStreamWithToolLoop(
           streamSimple as any,
@@ -1067,8 +1327,7 @@ export class AgentService {
           >,
           apiKeys,
           maxSteps,
-          onContextPressure, // Pass callback to enable summarization
-          piModelId, // Pass modelId for context threshold determination
+          piHistoryTrimBounds,
         );
         timings.streamTextInit = performance.now() - t;
         console.log(
@@ -1113,7 +1372,14 @@ export class AgentService {
         console.log(`${'='.repeat(80)}\n`);
         
         const result = await streamText(streamTextOptions);
-        fullStream = result.fullStream;
+        if (config.provider === "groq") {
+          const { adaptGroqAISDKFullStream } = await import(
+            "../utils/groqProvider.js"
+          );
+          fullStream = adaptGroqAISDKFullStream(result.fullStream);
+        } else {
+          fullStream = result.fullStream;
+        }
         timings.streamTextInit = performance.now() - t;
         console.log(`  AI SDK init: ${timings.streamTextInit.toFixed(2)}ms`);
       }
@@ -1124,9 +1390,11 @@ export class AgentService {
         fullStream,
         chatId,
         apiKeys,
+        config.provider === "groq" ? { textBufferMin: 1 } : undefined,
       );
 
       let firstChunkReceived = false;
+      let contextLengthErrorMessage: string | null = null;
       while (true) {
         const next = await streamIterator.next();
 
@@ -1171,74 +1439,23 @@ export class AgentService {
           console.log(`  Tool calls: ${toolCalls.length}`);
           console.log(`  Tool results: ${toolResults.length}`);
 
-          // If we aborted due to context pressure, handle compression BEFORE breaking
-          if (contextPressureAborted) {
-            // Yield compression start chunk
-            yield {
-              type: "compression-start",
-              payload: {
-                message:
-                  "Context limit reached. Compressing conversation history...",
-              },
-              timestamp: new Date().toISOString(),
-              chatId,
-            } as StreamChunk & { chatId: string };
-
-            // Perform compression
-            console.log(`🔄 Starting compression for chat ${chatId}`);
-            await this.triggerSummarization(chatId);
-
-            // Yield compression complete chunk
-            yield {
-              type: "compression-complete",
-              payload: { message: "Compression complete. Continuing..." },
-              timestamp: new Date().toISOString(),
-              chatId,
-            } as StreamChunk & { chatId: string };
-
-            console.log(`✓ Compression complete for chat ${chatId}`);
-
-            // Save the partial message first
-            const partialMsg: StoredMessage = createAssistantStoredMessage({
-              chatId,
-              model: config.model,
-              assistantText,
-              thinkingText,
-              toolCalls,
-              toolResults,
-              sequence,
-              usage: tokenUsage, // Pass token usage
-            });
-            await this.storageManager.saveMessage(chatId, partialMsg);
-            console.log(`✓ Saved partial response before retry`);
-
-            // Now automatically retry with compressed context
-            // IMPORTANT: Don't add the user message again - it's already in history!
-            // The agent will see:
-            // 1. [Compressed summary]
-            // 2. User: original request
-            // 3. Assistant: partial work (saved above)
-            // 4. [Continues from here]
-            console.log(`🔄 Automatically retrying with compressed context...`);
-            
-            // Create a continuation message that acknowledges the partial work
-            const continuationPrompt = "Continue from where you left off. You've already made progress on this task.";
-
-            // Recursively call streamAgent with continuation prompt
-            for await (const chunk of this.streamAgent(
-              chatId,
-              continuationPrompt,
-              config,
-              options,
-            )) {
-              yield chunk;
-            }
-
-            // Return after the retry completes (don't save message again)
-            return;
-          }
-
           break;
+        }
+
+        if (next.value.type === "error") {
+          const errorPayload = next.value.payload as ErrorPayload | undefined;
+          const errorText =
+            typeof errorPayload?.error === "string" ? errorPayload.error : "";
+          if (
+            !options?._isContextCompressRetry &&
+            isContextLengthError(errorText)
+          ) {
+            contextLengthErrorMessage = errorText;
+            console.warn(
+              `[AgentService] Context length exceeded for ${config.model} — will compress and retry. chatId=${chatId}`,
+            );
+            break;
+          }
         }
 
         // Extract token usage from done or step-usage chunks
@@ -1249,15 +1466,68 @@ export class AgentService {
               promptTokens: payload.usage.promptTokens || 0,
               completionTokens: payload.usage.completionTokens || 0,
               totalTokens: payload.usage.totalTokens || 0,
+              cacheReadTokens:
+                payload.usage.cacheReadTokens ?? lastCacheReadTokens,
+              cacheWriteTokens:
+                payload.usage.cacheWriteTokens ?? lastCacheWriteTokens,
             };
+            // contextTokens = actual context window size from pi-ai (last step's
+            // input + cacheRead + cacheWrite). Separate from billing totals.
+            if (payload.usage.contextTokens) {
+              piAiContextTokens = payload.usage.contextTokens;
+            }
             console.log(
               `[AgentService] 💰 Token usage: ${tokenUsage.totalTokens} total ` +
-                `(${tokenUsage.promptTokens} prompt + ${tokenUsage.completionTokens} completion)`,
+                `(${tokenUsage.promptTokens} prompt + ${tokenUsage.completionTokens} completion` +
+                (tokenUsage.cacheReadTokens || tokenUsage.cacheWriteTokens
+                  ? `, cache read ${tokenUsage.cacheReadTokens ?? 0} / write ${tokenUsage.cacheWriteTokens ?? 0}`
+                  : "") +
+                (piAiContextTokens
+                  ? `, context window: ${piAiContextTokens}`
+                  : "") +
+                `)`,
             );
           }
         }
 
         yield next.value;
+      }
+
+      if (contextLengthErrorMessage) {
+        yield {
+          type: "compression-start",
+          chatId,
+          payload: {},
+          timestamp: new Date().toISOString(),
+        } as StreamChunk & { chatId: string };
+
+        console.log(
+          `[AgentService] 🔄 Forcing summarization after context overflow for ${chatId}`,
+        );
+        await this.triggerSummarization(chatId, { force: true });
+
+        yield {
+          type: "compression-complete",
+          chatId,
+          payload: {},
+          timestamp: new Date().toISOString(),
+        } as StreamChunk & { chatId: string };
+
+        for await (const chunk of this.streamAgent(
+          chatId,
+          userMessage,
+          config,
+          {
+            ...options,
+            _isContextCompressRetry: true,
+            _skipSaveUserMessage: true,
+          },
+        )) {
+          yield chunk;
+        }
+
+        this.sessionManager.setStreaming(chatId, false);
+        return;
       }
 
       // 4. Empty-completion silent self-heal
@@ -1275,7 +1545,7 @@ export class AgentService {
         toolCalls.length === 0 &&
         !abortController.signal.aborted;
 
-      if (isEmpty && !options?._isSilentRetry) {
+      if (isEmpty && !options?._isSilentRetry && !options?._isContextCompressRetry) {
         console.warn(
           `[AgentService] Empty completion detected (model returned 0 tokens of content). ` +
           `Silently retrying once to self-heal — likely caused by a stale orphaned tool_use ` +
@@ -1327,7 +1597,11 @@ export class AgentService {
         toolCalls,
         toolResults,
         sequence, // Pass V1-style sequence
-        usage: tokenUsage, // Pass token usage
+        usage: finalizeTokenUsageForBilling(
+          tokenUsage,
+          lastCacheReadTokens,
+          lastCacheWriteTokens,
+        ),
       });
       await this.storageManager.saveMessage(chatId, assistantMsg);
 
@@ -1353,9 +1627,13 @@ export class AgentService {
       // Use actual context size (from AI SDK or tokenUsage) not just message tokens
       const stats = await this.storageManager.getChatStats(chatId);
       
-      // For AI SDK path, use cumulativePromptTokens (tracked via onStepFinish)
-      // For pi-ai path, use tokenUsage.promptTokens (extracted from done chunk)
-      const actualContextTokens = cumulativePromptTokens || tokenUsage?.promptTokens || 0;
+      const actualContextTokens = this.resolveActualContextTokens({
+        cumulativePromptTokens,
+        piAiContextTokens,
+        tokenUsage,
+        lastCacheReadTokens,
+        lastCacheWriteTokens,
+      });
       const messageTokens = stats.token_count;
       
       console.log(`[AgentService] 📊 Chat stats after stream:`);
@@ -1364,87 +1642,21 @@ export class AgentService {
       console.log(`  Actual context tokens: ${actualContextTokens}`);
       console.log(`  Context overhead: ${actualContextTokens - messageTokens} tokens (system prompts, tools, attachments, etc.)`);
       
-      // Trigger summarization when actual context exceeds 60K tokens
-      // This accounts for the full context including system prompts, tool definitions,
-      // attached files, git status, etc. - not just message tokens.
-      const SUMMARIZATION_THRESHOLD = 60000;
-      
-      if (actualContextTokens > SUMMARIZATION_THRESHOLD) {
-        console.log(`[AgentService] 🔄 Context size (${actualContextTokens}) > ${SUMMARIZATION_THRESHOLD} threshold - triggering summarization`);
-        // Trigger summarization in background (don't await)
-        this.triggerSummarization(chatId).catch(console.error);
-      } else {
-        console.log(`[AgentService] ℹ️  Context size (${actualContextTokens}) below ${SUMMARIZATION_THRESHOLD} threshold - no summarization needed`);
-      }
+      const estimatedFullContextTokens = Math.ceil(
+        JSON.stringify(messages).length / 4,
+      );
+      const contextSize = Math.max(
+        actualContextTokens || 0,
+        estimatedFullContextTokens,
+      );
+
+      this.scheduleBackgroundSummarization(chatId, {
+        messageCount: stats.message_count,
+        estimatedHistoryTokens: estimatedFullContextTokens,
+        actualContextTokens: contextSize,
+        hasSummary: stats.has_summary,
+      });
     } catch (error) {
-      // If this was a context pressure abort, handle gracefully: compress + retry
-      // This matches the pi-ai path behavior (line ~1183) so both routes get
-      // automatic compression instead of failing.
-      if (contextPressureAborted) {
-        console.log(
-          `[AgentService] ⚡ Context pressure abort caught — compressing and retrying (AI SDK path)`,
-        );
-
-        // Yield compression start chunk
-        yield {
-          type: "compression-start",
-          payload: {
-            message:
-              "Context limit reached. Compressing conversation history...",
-          },
-          timestamp: new Date().toISOString(),
-          chatId,
-        } as StreamChunk & { chatId: string };
-
-        // Perform compression
-        console.log(`🔄 Starting compression for chat ${chatId}`);
-        await this.triggerSummarization(chatId);
-
-        // Yield compression complete chunk
-        yield {
-          type: "compression-complete",
-          payload: { message: "Compression complete. Continuing..." },
-          timestamp: new Date().toISOString(),
-          chatId,
-        } as StreamChunk & { chatId: string };
-
-        console.log(`✓ Compression complete for chat ${chatId}`);
-
-        // Save the partial message first
-        if (assistantText || toolCalls.length > 0) {
-          const partialMsg: StoredMessage = createAssistantStoredMessage({
-            chatId,
-            model: config.model,
-            assistantText,
-            thinkingText,
-            toolCalls,
-            toolResults,
-            sequence,
-            usage: tokenUsage,
-          });
-          await this.storageManager.saveMessage(chatId, partialMsg);
-          console.log(`✓ Saved partial response before retry`);
-        }
-
-        // Automatically retry with compressed context
-        console.log(`🔄 Automatically retrying with compressed context...`);
-        const continuationPrompt =
-          "Continue from where you left off. You've already made progress on this task.";
-
-        for await (const chunk of this.streamAgent(
-          chatId,
-          continuationPrompt,
-          config,
-          options,
-        )) {
-          yield chunk;
-        }
-
-        // Return after the retry completes (don't save message again or throw)
-        return;
-      }
-
-      // Non-context-pressure errors: save error message and re-throw
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
 
@@ -1457,7 +1669,11 @@ export class AgentService {
         toolResults,
         errorMessage,
         sequence,
-        usage: tokenUsage, // Pass token usage even on error
+        usage: finalizeTokenUsageForBilling(
+          tokenUsage,
+          lastCacheReadTokens,
+          lastCacheWriteTokens,
+        ),
       });
 
       try {
@@ -1489,6 +1705,128 @@ export class AgentService {
     await this.sessionManager.abortSession(chatId);
   }
 
+  private static readonly SUMMARIZE_MESSAGE_THRESHOLD = 40;
+  private static readonly SUMMARIZE_HISTORY_TOKEN_THRESHOLD = 40_000;
+  private static readonly SUMMARIZE_CONTEXT_THRESHOLD = 60_000;
+
+  /** Fire-and-forget Papr /compress after a turn when size thresholds are met. */
+  private scheduleBackgroundSummarization(
+    chatId: string,
+    params: {
+      messageCount: number;
+      estimatedHistoryTokens: number;
+      actualContextTokens: number;
+      hasSummary: boolean;
+      force?: boolean;
+    },
+  ): void {
+    if (
+      !this.shouldTriggerSummarization({
+        messageCount: params.messageCount,
+        estimatedHistoryTokens: params.estimatedHistoryTokens,
+        actualContextTokens: params.actualContextTokens,
+      })
+    ) {
+      console.log(
+        `[AgentService] ℹ️  Below summarization thresholds ` +
+          `(context=${params.actualContextTokens}, msgs=${params.messageCount})`,
+      );
+      return;
+    }
+
+    console.log(
+      `[AgentService] 🔄 Post-turn background summarization for ${chatId} ` +
+        `(context=${params.actualContextTokens}, msgs=${params.messageCount}, ` +
+        `has_summary=${params.hasSummary})`,
+    );
+    this.triggerSummarization(chatId, {
+      force: params.force ?? params.hasSummary,
+    }).catch(console.error);
+  }
+
+  /** Whether a chat needs summarization based on size thresholds. */
+  private shouldTriggerSummarization(params: {
+    messageCount: number;
+    estimatedHistoryTokens: number;
+    actualContextTokens?: number;
+  }): boolean {
+    if (params.messageCount >= AgentService.SUMMARIZE_MESSAGE_THRESHOLD) {
+      return true;
+    }
+    if (
+      params.estimatedHistoryTokens >=
+      AgentService.SUMMARIZE_HISTORY_TOKEN_THRESHOLD
+    ) {
+      return true;
+    }
+    if (
+      (params.actualContextTokens ?? 0) >=
+      AgentService.SUMMARIZE_CONTEXT_THRESHOLD
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Full context window for summarization decisions.
+   * pi-ai: contextTokens already includes cache. AI SDK + Anthropic cache:
+   * inputTokens is uncached only — cumulativePromptTokens adds cache read/write.
+   */
+  private resolveActualContextTokens(params: {
+    cumulativePromptTokens: number;
+    piAiContextTokens: number;
+    tokenUsage?: StoredTokenUsage;
+    lastCacheReadTokens: number;
+    lastCacheWriteTokens: number;
+  }): number {
+    if (params.piAiContextTokens > 0) {
+      return params.piAiContextTokens;
+    }
+    if (params.cumulativePromptTokens > 0) {
+      return params.cumulativePromptTokens;
+    }
+    if (!params.tokenUsage) {
+      return 0;
+    }
+    return (
+      (params.tokenUsage.promptTokens || 0) +
+      (params.tokenUsage.cacheReadTokens ||
+        params.lastCacheReadTokens ||
+        0) +
+      (params.tokenUsage.cacheWriteTokens ||
+        params.lastCacheWriteTokens ||
+        0)
+    );
+  }
+
+  /** Manual or slash-command summarization. */
+  async summarizeChat(chatId: string): Promise<{
+    success: boolean;
+    has_summary: boolean;
+    error?: string;
+  }> {
+    try {
+      await this.triggerSummarization(chatId);
+      const stats = await this.storageManager.getChatStats(chatId);
+      if (stats.has_summary) {
+        return { success: true, has_summary: true };
+      }
+      return {
+        success: false,
+        has_summary: false,
+        error:
+          "Summarization did not produce a summary. Check API keys and gateway logs.",
+      };
+    } catch (error) {
+      return {
+        success: false,
+        has_summary: false,
+        error: error instanceof Error ? error.message : "Unknown error",
+      };
+    }
+  }
+
   /**
    * Trigger summarization for a chat (background operation).
    *
@@ -1500,19 +1838,25 @@ export class AgentService {
    *    local SQLite mode but a PAPR_API_KEY is still configured.
    * 4. Fall back to local LLM summarization (generateText with cheapest available model).
    */
-  private async triggerSummarization(chatId: string): Promise<void> {
+  private async triggerSummarization(
+    chatId: string,
+    options?: { force?: boolean },
+  ): Promise<void> {
     try {
       console.log(`🔄 Summarization triggered for chat ${chatId}`);
 
-      // --- Step 0: Dedup — skip if a fresh summary exists ---
-      const existing = await this.storageManager.getSummary(chatId);
-      if (existing?.last_fetched_at) {
-        const ageMs = Date.now() - new Date(existing.last_fetched_at).getTime();
-        if (ageMs < 30 * 60 * 1000) {
-          console.log(
-            `✓ Summary already fresh for ${chatId} (${Math.round(ageMs / 60000)}m old), skipping`,
-          );
-          return;
+      // --- Step 0: Dedup — skip if a fresh summary exists (unless forced refresh) ---
+      if (!options?.force) {
+        const existing = await this.storageManager.getSummary(chatId);
+        if (existing?.last_fetched_at) {
+          const ageMs =
+            Date.now() - new Date(existing.last_fetched_at).getTime();
+          if (ageMs < 30 * 60 * 1000) {
+            console.log(
+              `✓ Summary already fresh for ${chatId} (${Math.round(ageMs / 60000)}m old), skipping`,
+            );
+            return;
+          }
         }
       }
 
@@ -1526,17 +1870,20 @@ export class AgentService {
         return;
       }
 
-      // --- Step 2: Direct Papr /compress call (local mode + PAPR key available) ---
+      // --- Step 2: Direct Papr /compress (local mode only — papr/hybrid already tried in step 1) ---
+      const storageMode = this.storageManager.getMode() ?? "local";
       const { getApiKeys } = await import("../utils/keyResolver.js");
       const keys = await getApiKeys(["PAPR_API_KEY"]);
-      if (keys.PAPR_API_KEY) {
+      if (storageMode === "local" && keys.PAPR_API_KEY) {
         try {
           const PaprModule = await import("@papr/memory");
           const PaprClient = PaprModule.default;
           const papr = new PaprClient({
             xAPIKey: keys.PAPR_API_KEY,
           });
-          const response = await papr.messages.sessions.compress(chatId);
+          const response = await papr.messages.sessions.compress(chatId, {
+            maxRetries: 0,
+          });
           if (response.summaries) {
             const s = response.summaries;
             const { extractEnhancedFields } = await import(
@@ -1629,45 +1976,11 @@ export class AgentService {
         ? conversationText.substring(conversationText.length - MAX_INPUT_CHARS)
         : conversationText;
 
-    // Select cheapest available model
-    const { getApiKeys } = await import("../utils/keyResolver.js");
-    const providerKeys = await getApiKeys([
-      "OPENAI_API_KEY",
-      "ANTHROPIC_API_KEY",
-      "GOOGLE_API_KEY",
-    ]);
+    // Select cheapest available model (OAuth or API key)
+    const { generateCheapSummaryText } = await import(
+      "../utils/cheapSummarizerModel.js"
+    );
 
-    let model: import("ai").LanguageModel | null = null;
-    let selectedProvider = "";
-    if (providerKeys.OPENAI_API_KEY) {
-      process.env.OPENAI_API_KEY = providerKeys.OPENAI_API_KEY;
-      const { openai } = await import("@ai-sdk/openai");
-      model = openai("gpt-4o-mini") as import("ai").LanguageModel;
-      selectedProvider = "openai/gpt-4o-mini";
-    } else if (providerKeys.ANTHROPIC_API_KEY) {
-      process.env.ANTHROPIC_API_KEY = providerKeys.ANTHROPIC_API_KEY;
-      const { anthropic } = await import("@ai-sdk/anthropic");
-      model = anthropic("claude-haiku-4-5") as import("ai").LanguageModel;
-      selectedProvider = "anthropic/claude-haiku-4-5";
-    } else if (providerKeys.GOOGLE_API_KEY) {
-      process.env.GOOGLE_GENERATIVE_AI_API_KEY = providerKeys.GOOGLE_API_KEY;
-      const { google } = await import("@ai-sdk/google");
-      model = google("gemini-2-0-flash") as import("ai").LanguageModel;
-      selectedProvider = "google/gemini-2-0-flash";
-    }
-
-    if (!model) {
-      console.warn(
-        `[AgentService] No API key available for local summarization`,
-      );
-      return;
-    }
-
-    console.log(`[AgentService] Summarizing with ${selectedProvider}`);
-
-    const { generateText } = await import("ai");
-
-    // Generate all three summary levels in a single structured call
     const systemPrompt = `You are a conversation summarizer. Produce a JSON object with exactly these four fields:
 
 {
@@ -1696,13 +2009,18 @@ ${last15.substring(0, 8_000)}`;
 
     let rawText = "";
     try {
-      const result = await generateText({
-        model,
-        system: systemPrompt,
-        prompt: userPrompt,
-        maxOutputTokens: 2000,
-      });
-      rawText = result.text.trim();
+      const result = await generateCheapSummaryText(
+        systemPrompt,
+        userPrompt,
+        2000,
+      );
+      if (!result) {
+        console.warn(
+          `[AgentService] No provider available for local summarization (OAuth or API key required)`,
+        );
+        return;
+      }
+      rawText = result.trim();
     } catch (llmError) {
       console.error(`[AgentService] LLM summarization call failed:`, llmError);
       return;
@@ -1819,7 +2137,11 @@ ${last15.substring(0, 8_000)}`;
    * CRITICAL: This MUST use the exact same logic as streamText() to ensure
    * the context inspector shows exactly what the LLM sees
    */
-  async inspectContext(chatId: string, selectedModel: string) {
+  async inspectContext(
+    chatId: string,
+    selectedModel: string,
+    uiFocus?: UiAgentFocusContext,
+  ) {
     // Match streamAgent: lazy-load keys so hybrid mode + memory bootstrap work in /context
     await this.ensureKeysLoaded();
 
@@ -1949,6 +2271,12 @@ ${last15.substring(0, 8_000)}`;
       }
     }
 
+    const activePlansContext = await this.loadActivePlansContext(chatId);
+    const focusContextMessage =
+      await getAgentFocusContextService().buildFocusMessage(uiFocus);
+    const resolvedFocus =
+      await getAgentFocusContextService().resolveFocusContext(uiFocus);
+
     // Format messages for model (same as actual run)
     const messages = buildModelMessages(
       history,
@@ -1956,6 +2284,8 @@ ${last15.substring(0, 8_000)}`;
       systemPrompt,
       conversationSummary,
       memoryContextBlocks,
+      activePlansContext,
+      focusContextMessage,
     );
 
     // Count tokens (rough estimate: 1 token ≈ 4 chars)
@@ -2036,6 +2366,24 @@ ${last15.substring(0, 8_000)}`;
         continue;
       }
 
+      // Skip active plans block (shown in plans section)
+      if (
+        msg.role === "user" &&
+        typeof msg.content === "string" &&
+        msg.content.startsWith(ACTIVE_PLANS_MESSAGE_PREFIX)
+      ) {
+        continue;
+      }
+
+      // Skip focus context block (shown in focusContext section)
+      if (
+        msg.role === "user" &&
+        typeof msg.content === "string" &&
+        msg.content.startsWith(AGENT_FOCUS_CONTEXT_PREFIX)
+      ) {
+        continue;
+      }
+
       // Skip tool messages - they'll be merged with their associated assistant message
       if (msg.role === "tool") {
         continue;
@@ -2105,10 +2453,15 @@ ${last15.substring(0, 8_000)}`;
     // We don't add them separately to total
     // Just showing them for user visibility
 
+    const focusContextTokens = focusContextMessage
+      ? estimateTokens(focusContextMessage)
+      : 0;
+
     const totalTokens =
       systemPromptTokens +
       conversationSummaryTokens +
       memoryBootstrapTokens +
+      focusContextTokens +
       historyTokens +
       toolTokens;
 
@@ -2185,17 +2538,18 @@ ${last15.substring(0, 8_000)}`;
           note: "Skill references are in system prompt (counted there)",
         },
         plans: {
-          tokens: activePlans.reduce(
-            (sum, p) =>
-              sum +
-              estimateTokens(
-                `${p.title}: ${p.steps.map((s) => s.description).join(", ")}`,
-              ),
-            0,
-          ),
+          tokens: activePlansContext
+            ? estimateTokens(activePlansContext)
+            : 0,
           count: activePlans.length,
           plans: activePlans,
-          note: "Plan references are in system prompt (counted there)",
+          note: "Injected as user message after history (not in cached system prompt)",
+        },
+        focusContext: {
+          tokens: focusContextTokens,
+          content: focusContextMessage ?? "",
+          resolved: resolvedFocus ?? null,
+          note: "Open mini-app / selected job + recent edits — injected as user message (volatile, cache-safe)",
         },
         paprSync: {
           tokens: 0,
@@ -2301,11 +2655,20 @@ ${last15.substring(0, 8_000)}`;
     prompt: string;
     provider?: Provider;
     model?: string;
+    fallbackProvider?: Provider;
+    fallbackModel?: string;
     allowedToolIds?: string[];
     maxTurns?: number;
     appendLog?: (line: string) => Promise<void>;
     /** When set (sub-agent job), broadcast thinking/tool activity to MiniChatCard */
     delegationId?: string;
+    /** Cloud agent gateway: skip IPC/keychain and use vault-resolved credentials */
+    authOverride?: {
+      apiKey: string;
+      authType: "oauth" | "apiKey";
+    };
+    /** Cloud agent gateway: Papr Memory API key for tool calls */
+    paprApiKey?: string;
   }): Promise<{ chatId: string; text: string }> {
     if (!this.initialized) {
       throw new Error("AgentService not initialized");
@@ -2316,6 +2679,17 @@ ${last15.substring(0, 8_000)}`;
     // Resolve default provider and model based on user's available authentication
     let provider = input.provider;
     let model = input.model;
+
+    let apiKey: string | undefined;
+    let authType: "oauth" | "apiKey" | undefined;
+
+    if (input.authOverride?.apiKey) {
+      apiKey = input.authOverride.apiKey;
+      authType = input.authOverride.authType;
+      if (input.paprApiKey) {
+        process.env.PAPR_API_KEY = input.paprApiKey;
+      }
+    }
     
     if (!provider || !model) {
       const { getDefaultProviderAndModel } = await import("../utils/defaultProvider.js");
@@ -2326,59 +2700,108 @@ ${last15.substring(0, 8_000)}`;
     }
 
     const defaultModelByProvider: Record<Provider, string> = {
-      openai: "gpt-5.5",
+      openai: "gpt-5-6-sol",
       "openai-codex": "gpt-5.3-codex",
       anthropic: "claude-sonnet-4-6",
       google: "gemini-3.5-flash",
       ollama: "qwen3.5:latest",
+      cursor: "composer-2.5",
+      zai: "glm-5.2",
+      groq: "openai/gpt-oss-120b",
     };
     model = model ?? defaultModelByProvider[provider];
 
-    // Use getProviderAuth for openai/anthropic (handles OAuth + API key) — same as WebSocket handler
-    let apiKey: string | undefined;
-    let authType: "oauth" | "apiKey" | undefined;
     const { getProviderAuth, getApiKeys } =
       await import("../utils/keyResolver.js");
 
-    // Check if the specified provider is available
     let authCheckFailed = false;
     let originalProvider = provider;
 
-    if (
-      provider === "openai" ||
-      provider === "openai-codex" ||
-      provider === "anthropic"
-    ) {
-      const authProvider = provider === "openai-codex" ? "openai" : provider;
-      const auth = await getProviderAuth(authProvider);
-      if (!auth) {
-        authCheckFailed = true;
-        console.warn(
-          `[AgentService] No authentication found for specified provider (${provider}). Falling back to default provider...`,
-        );
+    if (!input.authOverride) {
+      if (
+        provider === "openai" ||
+        provider === "openai-codex" ||
+        provider === "anthropic"
+      ) {
+        const authProvider = provider === "openai-codex" ? "openai" : provider;
+        const auth = await getProviderAuth(authProvider);
+        if (!auth) {
+          authCheckFailed = true;
+          console.warn(
+            `[AgentService] No authentication found for specified provider (${provider}). Falling back to default provider...`,
+          );
+        } else {
+          apiKey = auth.type === "oauth" ? auth.token : auth.key;
+          authType = auth.type;
+          console.log(
+            `[AgentService] runIsolatedJobSession: provider=${provider} authProvider=${authProvider} ` +
+              `authType=${authType} tokenLength=${apiKey.length}`,
+          );
+        }
       } else {
-        apiKey = auth.type === "oauth" ? auth.token : auth.key;
-        authType = auth.type;
-        console.log(
-          `[AgentService] runIsolatedJobSession: provider=${provider} authProvider=${authProvider} ` +
-            `authType=${authType} tokenLength=${apiKey.length}`,
-        );
-      }
-    } else {
-      const keyName =
-        provider === "google" ? "GOOGLE_API_KEY" : "OPENAI_API_KEY";
-      const keys = await getApiKeys([keyName]);
-      apiKey = keys[keyName];
-      if (!apiKey) {
-        authCheckFailed = true;
-        console.warn(
-          `[AgentService] Missing API key for specified provider (${provider}): ${keyName}. Falling back to default provider...`,
-        );
+        const keyName =
+          provider === "google" ? "GOOGLE_API_KEY" : "OPENAI_API_KEY";
+        const keys = await getApiKeys([keyName]);
+        apiKey = keys[keyName];
+        if (!apiKey) {
+          authCheckFailed = true;
+          console.warn(
+            `[AgentService] Missing API key for specified provider (${provider}): ${keyName}. Falling back to default provider...`,
+          );
+        }
       }
     }
 
-    // If auth check failed, fall back to default provider
-    if (authCheckFailed) {
+    // If auth check failed, try explicit profile fallback, then smart/default fallback
+    if (authCheckFailed && !input.authOverride) {
+      let resolvedExplicitFallback = false;
+
+      if (input.fallbackProvider && input.fallbackModel) {
+        const fbProvider = input.fallbackProvider;
+        const fbModel = input.fallbackModel;
+
+        if (
+          fbProvider === "openai" ||
+          fbProvider === "openai-codex" ||
+          fbProvider === "anthropic"
+        ) {
+          const authProvider =
+            fbProvider === "openai-codex" ? "openai" : fbProvider;
+          const auth = await getProviderAuth(authProvider);
+          if (auth) {
+            provider = fbProvider;
+            model = fbModel;
+            apiKey = auth.type === "oauth" ? auth.token : auth.key;
+            authType = auth.type;
+            resolvedExplicitFallback = true;
+            console.log(
+              `[AgentService] Explicit fallback: ${originalProvider}/${input.model ?? "default"} → ${provider}/${model}`,
+            );
+          }
+        } else if (fbProvider === "google") {
+          const keys = await getApiKeys(["GOOGLE_API_KEY"]);
+          const fbKey = keys.GOOGLE_API_KEY;
+          if (fbKey) {
+            provider = fbProvider;
+            model = fbModel;
+            apiKey = fbKey;
+            resolvedExplicitFallback = true;
+            console.log(
+              `[AgentService] Explicit fallback: ${originalProvider}/${input.model ?? "default"} → ${provider}/${model}`,
+            );
+          }
+        } else if (fbProvider === "ollama") {
+          provider = fbProvider;
+          model = fbModel;
+          apiKey = "";
+          resolvedExplicitFallback = true;
+          console.log(
+            `[AgentService] Explicit fallback: ${originalProvider}/${input.model ?? "default"} → ${provider}/${model}`,
+          );
+        }
+      }
+
+      if (!resolvedExplicitFallback) {
       // Try smart fallback based on original model capabilities
       const { getBestFallbackModel } = await import("../utils/smartFallback.js");
       const { getAvailableProviders } = await import("../utils/defaultProvider.js");
@@ -2432,6 +2855,7 @@ ${last15.substring(0, 8_000)}`;
           `No authentication configuration found for fallback provider: ${provider}`,
         );
       }
+      }
     }
 
     // Ensure apiKey is assigned before proceeding
@@ -2463,25 +2887,6 @@ ${last15.substring(0, 8_000)}`;
           const errMsg =
             (chunk.payload as { error?: string })?.error ?? "Model API error";
 
-          // Context limit errors are handled by streamAgent's compression logic.
-          // Don't throw — let the generator resume so onContextPressure() fires
-          // and streamAgent can compress + retry automatically.
-          if (
-            errMsg.includes("Context limit") ||
-            errMsg.includes("context_length_exceeded")
-          ) {
-            console.log(
-              `[AgentService] Context limit hit in job (${provider}/${model}). ` +
-                `Letting streamAgent handle compression...`,
-            );
-            if (input.appendLog) {
-              await input.appendLog(
-                `⚠️ Context limit approaching — compressing conversation and continuing...`,
-              );
-            }
-            continue;
-          }
-
           // Check if this is an OAuth rate limit error
           if (
             authType === "oauth" &&
@@ -2499,16 +2904,6 @@ ${last15.substring(0, 8_000)}`;
           throw new Error(
             `Agent job model error (${provider}/${model}): ${errMsg}`,
           );
-        }
-
-        // Log compression progress to job logs
-        if (chunk.type === "compression-start" && input.appendLog) {
-          await input.appendLog(`🔄 Compressing conversation history...`);
-          continue;
-        }
-        if (chunk.type === "compression-complete" && input.appendLog) {
-          await input.appendLog(`✅ Compression complete. Continuing with fresh context.`);
-          continue;
         }
 
         // Log structured activity to job logs (thinking, tool calls, results)
@@ -2721,6 +3116,57 @@ ${last15.substring(0, 8_000)}`;
   }
 
   /**
+   * Cloud agent gateway — stream isolated job with vault-resolved auth (no IPC).
+   */
+  async *streamIsolatedJobSessionForCloud(input: {
+    jobId: string;
+    runId: string;
+    prompt: string;
+    provider: Provider;
+    model?: string;
+    allowedToolIds?: string[];
+    maxTurns?: number;
+    authOverride: { apiKey: string; authType: "oauth" | "apiKey" };
+    paprApiKey?: string;
+  }): AsyncGenerator<StreamChunk & { chatId: string }> {
+    if (!this.initialized) {
+      throw new Error("AgentService not initialized");
+    }
+
+    await this.ensureKeysLoaded();
+
+    if (input.paprApiKey) {
+      process.env.PAPR_API_KEY = input.paprApiKey;
+    }
+
+    const defaultModelByProvider: Record<Provider, string> = {
+      openai: "gpt-5-6-sol",
+      "openai-codex": "gpt-5.3-codex",
+      anthropic: "claude-sonnet-4-6",
+      google: "gemini-3.5-flash",
+      ollama: "qwen3.5:latest",
+      cursor: "composer-2.5",
+      zai: "glm-5.2",
+      groq: "openai/gpt-oss-120b",
+    };
+
+    const model = input.model ?? defaultModelByProvider[input.provider];
+    const chatId = `job:${input.jobId}:${input.runId}`;
+    const config: AgentConfigInternal = {
+      provider: input.provider,
+      model,
+      apiKey: input.authOverride.apiKey,
+      authType: input.authOverride.authType,
+      systemPrompt: `${this.systemPrompt}\n\n# Isolated Job Run\n- Session: ${chatId}\n- Keep output concise and actionable.`,
+    };
+
+    yield* this.streamAgent(chatId, input.prompt, config, {
+      allowedToolIds: input.allowedToolIds,
+      maxSteps: input.maxTurns,
+    });
+  }
+
+  /**
    * Run a structured output session using AI SDK's generateObject.
    * Uses model-level constrained decoding (not prompt-based) to guarantee
    * the response matches the provided JSON schema exactly.
@@ -2756,11 +3202,14 @@ ${last15.substring(0, 8_000)}`;
     }
 
     const defaultModelByProvider: Record<Provider, string> = {
-      openai: "gpt-5.5",
+      openai: "gpt-5-6-sol",
       "openai-codex": "gpt-5.3-codex",
       anthropic: "claude-sonnet-4-6",
       google: "gemini-3.5-flash",
       ollama: "qwen3.5:latest",
+      cursor: "composer-2.5",
+      zai: "glm-5.2",
+      groq: "openai/gpt-oss-120b",
     };
     modelId = modelId ?? defaultModelByProvider[provider];
 
@@ -2899,18 +3348,6 @@ ${last15.substring(0, 8_000)}`;
             const errMsg =
               (chunk.payload as { error?: string })?.error ?? "Model API error";
 
-            // Context limit errors are handled by streamAgent's compression logic
-            if (
-              errMsg.includes("Context limit") ||
-              errMsg.includes("context_length_exceeded")
-            ) {
-              console.log(
-                `[AgentService] Context limit hit in structured job (${provider}/${modelId}). ` +
-                  `Letting streamAgent handle compression...`,
-              );
-              continue;
-            }
-
             // Check if this is an OAuth rate limit error
             if (
               errMsg.includes("usage limit") ||
@@ -2927,9 +3364,6 @@ ${last15.substring(0, 8_000)}`;
             throw new Error(
               `Structured job model error (${provider}/${modelId}): ${errMsg}`,
             );
-          }
-          if (chunk.type === "compression-start" || chunk.type === "compression-complete") {
-            continue;
           }
           if (chunk.type === "text-delta") {
             const payload = chunk.payload as { text?: string };
@@ -3127,47 +3561,69 @@ ${last15.substring(0, 8_000)}`;
         const { ollama } = await import("ollama-ai-provider-v2");
         return ollama(modelId) as LanguageModel;
       }
+      case "zai": {
+        const { createOpenAI } = await import("@ai-sdk/openai");
+        const { normalizeZaiModelId } = await import("../utils/zaiModel.js");
+        const zaiApiKey = process.env.ZAI_API_KEY;
+        if (!zaiApiKey) {
+          throw new Error(
+            "Z.ai direct API requires ZAI_API_KEY. Sign in with Papr to use GLM via proxy.",
+          );
+        }
+        const zai = createOpenAI({
+          baseURL: "https://api.z.ai/api/paas/v4",
+          apiKey: zaiApiKey,
+        });
+        return zai.chat(normalizeZaiModelId(modelId)) as LanguageModel;
+      }
+      case "groq": {
+        const { createGroqChatModel } = await import("../utils/groqProvider.js");
+        const groqApiKey = process.env.GROQ_API_KEY;
+        if (!groqApiKey) {
+          throw new Error(
+            "Groq direct API requires GROQ_API_KEY. Sign in with Papr to use Groq models via proxy.",
+          );
+        }
+        const { normalizeGroqModelId } = await import("../utils/groqModel.js");
+        return createGroqChatModel(normalizeGroqModelId(modelId), {
+          apiKey: groqApiKey,
+        });
+      }
       default:
         throw new Error(`Unsupported provider: ${provider}`);
     }
   }
 
-  private async buildContextualSystemPrompt(
+  private async loadActivePlansContext(
     chatId: string,
-    history: unknown[],
-    enabledSkills?: Array<{ id: string; name: string; description: string }>,
-    provider?: Provider,
-  ): Promise<string> {
-    const includeExtendedAppPlaybook = this.hasAppAutomationContext(history);
-
-    // Load active plans for this chat
-    let activePlans:
-      | Array<{
-          planId: string;
-          title: string;
-          steps: Array<{ id: string; description: string; status: string }>;
-          createdAt: string;
-        }>
-      | undefined;
-
+  ): Promise<string | undefined> {
     try {
       const { getPlanService } = await import("./PlanService.js");
       const planService = getPlanService();
       await planService.initialize();
       const plans = await planService.getActivePlansForChat(chatId);
+      if (plans.length === 0) return undefined;
 
-      if (plans.length > 0) {
-        activePlans = plans.map((plan) => ({
-          planId: plan.planId,
-          title: plan.title,
-          steps: plan.steps,
-          createdAt: plan.createdAt,
-        }));
-      }
+      const activePlans: ActivePlanContext[] = plans.map((plan) => ({
+        planId: plan.planId,
+        title: plan.title,
+        steps: plan.steps,
+        createdAt: plan.createdAt,
+      }));
+      return formatActivePlansContext(activePlans);
     } catch (error) {
       console.warn("[AgentService] Failed to load active plans:", error);
-      // Continue without plans context
+      return undefined;
     }
+  }
+
+  private async buildContextualSystemPrompt(
+    _chatId: string,
+    history: unknown[],
+    enabledSkills?: Array<{ id: string; name: string; description: string }>,
+    provider?: Provider,
+  ): Promise<string> {
+    const includeExtendedAppPlaybook = this.hasAppAutomationContext(history);
 
     // Load workspace context (persistent memory, identity, daily logs)
     let workspaceContext: WorkspaceContextData | undefined;
@@ -3190,11 +3646,10 @@ ${last15.substring(0, 8_000)}`;
     return buildSystemPrompt({
       userDataPath: this.userDataPath,
       workspacePath: process.cwd(),
-      availableTools: allTools.map((tool) => tool.id),
+      availableTools: this.toolRegistry.getMainToolIds(),
       customKeys: [],
       includeExtendedAppPlaybook,
       activeSkills: enabledSkills,
-      activePlans,
       workspaceContext,
       provider,
     });
@@ -3498,6 +3953,11 @@ export function getAgentService(): AgentService {
     agentServiceInstance = new AgentService();
   }
   return agentServiceInstance;
+}
+
+/** Reset singleton between unit tests or cloud per-run workspace reload. */
+export function resetAgentServiceSingletonForTests(): void {
+  agentServiceInstance = null;
 }
 
 /**

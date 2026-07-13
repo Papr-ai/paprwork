@@ -1,4 +1,5 @@
 import fs from "fs/promises";
+import { STANDALONE_APP_ID } from "../src/gateway/services/jobs/appIds.js";
 import os from "os";
 import path from "path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
@@ -31,6 +32,7 @@ describe("SubAgentService", () => {
 
     const initial = await service.listAgents();
     expect(initial.length).toBeGreaterThan(0);
+    expect(initial.some((a) => a.id === "product-architect")).toBe(true);
 
     const created = await service.createOrUpdateAgent({
       id: "qa-specialist",
@@ -61,6 +63,7 @@ describe("SubAgentService", () => {
       name: "Delegation: Research Specialist",
       type: "subagent",
       status: "pending",
+      appIds: [STANDALONE_APP_ID],
       command: "Audit retry behavior and summarize improvements.",
       subAgentId: "research-specialist",
       delegatedBy: "main-agent",

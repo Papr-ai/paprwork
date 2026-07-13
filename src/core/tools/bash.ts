@@ -20,6 +20,10 @@ import {
   getApiKeysForSanitization,
 } from "./security.js";
 import { wrapUntrustedContent } from "./contentProvenance.js";
+import {
+  buildSqlitePathWarnings,
+  formatSqlitePathWarningBlock,
+} from "../utils/sqlitePathGuard.js";
 import { getShell, getShellCommand } from "../utils/platform.js";
 
 /** Commands that fetch or produce external content - wrap stdout for prompt injection defense */
@@ -100,72 +104,6 @@ export interface BashOutput {
   exitCode: number;
   command: string;
   duration: number;
-  /** Nudge to use search_agent_memory when PAPR is configured */
-  _memorySearchReminder?: string;
-}
-
-/** Matches ~/Papr/apps/{appId}/{filename} or $HOME/Papr/apps/... or /path/Papr/apps/... */
-const APP_PATH_REGEX =
-  /Papr\/apps\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([^\s"'`;|&<>]+)/gi;
-
-/** Write indicators: redirects, sed -i, tee, cp, mv */
-const WRITE_INDICATORS = [
-  />\s*\S|>>\s*\S/, // > file or >> file
-  /sed\s+-i/, // sed -i (in-place edit)
-  /\btee\b/, // tee
-  /\bcp\s+/, // cp src dest
-  /\bmv\s+/, // mv src dest
-];
-
-/**
- * Detect if a bash command modifies files in ~/Papr/apps/{appId}/.
- * Returns [{ appId, filename }] for each app file that appears to be written.
- */
-function detectAppFileEditsFromBashCommand(
-  command: string,
-): { appId: string; filename: string }[] {
-  const hasWrite = WRITE_INDICATORS.some((re) => re.test(command));
-  if (!hasWrite) return [];
-
-  const matches: { appId: string; filename: string }[] = [];
-  const seen = new Set<string>();
-  let m: RegExpExecArray | null;
-  const re = new RegExp(APP_PATH_REGEX.source, "gi");
-  while ((m = re.exec(command)) !== null) {
-    const appId = m[1];
-    const filename = m[2].replace(/^["']|["']$/g, "").trim();
-    if (!filename) continue;
-    const key = `${appId}/${filename}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      matches.push({ appId, filename });
-    }
-  }
-  return matches;
-}
-
-/**
- * Broadcast app:file-changed for each edited app file (triggers iframe reload).
- * Called when bash modifies files in ~/Papr/apps/.
- */
-async function broadcastAppFileChanges(
-  edits: { appId: string; filename: string }[],
-): Promise<void> {
-  if (edits.length === 0) return;
-  try {
-    const { broadcast } = await import("../../gateway/websocket/index.js");
-    for (const { appId, filename } of edits) {
-      broadcast({
-        type: "app:file-changed",
-        data: { appId, filename, timestamp: Date.now() },
-      });
-      console.log(
-        `[Bash] Broadcasted app file change (bash edit): ${appId}/${filename}`,
-      );
-    }
-  } catch (err) {
-    console.warn("[Bash] Failed to broadcast app file changes:", err);
-  }
 }
 
 /**
@@ -184,17 +122,52 @@ function detectPaprGrepCommand(command: string): { pattern: string; path: string
   const path = match[2].trim();
   
   // Check if path contains PAPR/apps or PAPR/Jobs
-  if (path.includes('Papr/apps') || path.includes('Papr/Jobs')) {
+  if (path.includes('Papr/apps') || path.includes('Papr/jobs')) {
     return { pattern, path };
   }
   
   return null;
 }
 
+const PAPR_PROJECT_ID_REGEX =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+/** Extract mini-app or job UUID from a Papr grep path, if present. */
+export function extractProjectIdFromPaprPath(grepPath: string): string | undefined {
+  const match = grepPath.match(PAPR_PROJECT_ID_REGEX);
+  return match?.[0];
+}
+
 /**
- * Search PAPR Memory for code matching the pattern
+ * Build the semantic query for automatic hybrid grep + code memory search.
+ * Synthesized server-side from grep pattern and path — agent just passes grep.
  */
-async function searchPaprMemoryForCode(pattern: string): Promise<string | null> {
+export function buildHybridMemorySearchQuery(
+  pattern: string,
+  grepPath: string,
+): string {
+  const scope =
+    grepPath.includes("Papr/apps") || grepPath.includes("Papr/Jobs")
+      ? grepPath.includes("Papr/Jobs")
+        ? "jobs"
+        : "mini-apps"
+      : "projects";
+  const projectId = extractProjectIdFromPaprPath(grepPath);
+  const projectClause = projectId ? ` Focus on project ${projectId}.` : "";
+
+  return (
+    `Find Papr ${scope} code related to "${pattern}".${projectClause} ` +
+    "Include modules, handlers, and components that implement or reference this topic."
+  );
+}
+
+/**
+ * Search PAPR Memory for code matching the hybrid query (semantic, not literal grep pattern).
+ */
+async function searchPaprMemoryForCode(
+  query: string,
+  grepPath: string,
+): Promise<string | null> {
   try {
     // Check if PAPR_API_KEY is available
     const { getApiKey } = await import("../../gateway/utils/keyResolver.js");
@@ -211,8 +184,16 @@ async function searchPaprMemoryForCode(pattern: string): Promise<string | null> 
     );
     const client = new Papr({ xAPIKey: paprKey });
 
+    const projectId = extractProjectIdFromPaprPath(grepPath);
+    const customMetadata: Record<string, string> = {
+      source: "code_indexer",
+    };
+    if (projectId) {
+      customMetadata.project_id = projectId;
+    }
+
     const response = await client.memory.search({
-      query: pattern,
+      query,
       max_memories: 10,
       max_nodes: 10,
       enable_agentic_graph: true,
@@ -221,9 +202,7 @@ async function searchPaprMemoryForCode(pattern: string): Promise<string | null> 
       metadata: {
         role: "assistant",
         category: "learning",
-        customMetadata: {
-          source: "code_indexer",
-        },
+        customMetadata,
       },
     });
     
@@ -309,54 +288,6 @@ async function executeBackgroundedCommand(
 
 
 const WRITE_KEYWORDS_RE = /(>|>>|tee\b|sed\s+-i|cat\s+>|patch\b|git\s+(commit|reset|checkout|merge|rebase|cherry-pick|apply|am|stash\s+pop|revert)|cp\b|mv\b|rm\b|mkdir\b|touch\b|npm\s+(install|i|ci|update)|yarn\s+(add|install|upgrade)|pnpm\s+(add|install|update)|pip\s+install|poetry\s+(add|install|update)|cargo\s+(add|install|update)|brew\s+(install|upgrade)|make\b)/i;
-
-/** Commands too trivial to warrant a memory search reminder */
-function isTrivialBashCommand(command: string): boolean {
-  const trimmed = command.trim();
-  if (/^(pwd|whoami|date|clear|true|false)\s*$/.test(trimmed)) {
-    return true;
-  }
-  if (/^echo(\s|$)/.test(trimmed)) {
-    return true;
-  }
-  if (/^cd(\s|$)/.test(trimmed)) {
-    return true;
-  }
-  if (/^ls(\s|$)/.test(trimmed) && !WRITE_KEYWORDS_RE.test(trimmed)) {
-    return true;
-  }
-  if (/^git\s+(status|log|diff|branch)(\s|$)/.test(trimmed)) {
-    return true;
-  }
-  if (/^cat\s+\S+\s*$/.test(trimmed) && !/>/.test(trimmed)) {
-    return true;
-  }
-  return false;
-}
-
-async function buildMemorySearchReminder(
-  command: string,
-  ranHybridMemorySearch: boolean,
-): Promise<string | undefined> {
-  if (ranHybridMemorySearch || isTrivialBashCommand(command)) {
-    return undefined;
-  }
-
-  try {
-    const { getApiKey } = await import("../../gateway/utils/keyResolver.js");
-    const paprKey = await getApiKey("PAPR_API_KEY");
-    if (!paprKey) {
-      return undefined;
-    }
-  } catch {
-    return undefined;
-  }
-
-  return (
-    "Tip: search_agent_memory can recall relevant facts from past conversations " +
-    "if this command relates to user preferences, prior work, or cross-session context."
-  );
-}
 
 /**
  * Probe whether `cwd` is inside a git work tree, and if so capture a quick
@@ -481,9 +412,14 @@ export async function executeBashCommand(
     let memoryPromise: Promise<string | null> | null = null;
     
     if (grepInfo) {
-      // Run memory search in parallel (don't await yet)
-      memoryPromise = searchPaprMemoryForCode(grepInfo.pattern);
-      console.log(`[Bash Tool] Detected grep in Papr folder, running parallel memory search for: "${grepInfo.pattern}"`);
+      const memoryQuery = buildHybridMemorySearchQuery(
+        grepInfo.pattern,
+        grepInfo.path,
+      );
+      memoryPromise = searchPaprMemoryForCode(memoryQuery, grepInfo.path);
+      console.log(
+        `[Bash Tool] Detected grep in Papr folder, running parallel memory search: "${memoryQuery.substring(0, 120)}${memoryQuery.length > 120 ? "..." : ""}"`,
+      );
     }
 
     // Get API keys for sanitization and substitution
@@ -659,13 +595,7 @@ export async function executeBashCommand(
       sanitizedStdout = wrapUntrustedContent(wrapSource, "", sanitizedStdout);
     }
 
-    // If bash modified app files (e.g. sed, cat >, tee), broadcast so iframe reloads
-    const appEdits = detectAppFileEditsFromBashCommand(input.command);
-    if (appEdits.length > 0) {
-      void broadcastAppFileChanges(appEdits);
-    }
-
-    // Tier 4: surface git changes (UI renders as expandable file-changed card).
+    // App file edits are picked up by AppService filesystem watchers (debounced rebuild + reload). (UI renders as expandable file-changed card).
     // Only fires when (1) cwd is a git repo, (2) command looked write-y,
     // (3) status fingerprint changed between before/after.
     try {
@@ -679,10 +609,33 @@ export async function executeBashCommand(
       // best-effort only
     }
 
-    const memorySearchReminder = await buildMemorySearchReminder(
-      command,
-      grepInfo !== null,
-    );
+    const sqliteWarnings = buildSqlitePathWarnings(command, {
+      appDb:
+        typeof env.APP_DB === "string"
+          ? env.APP_DB
+          : process.env.APP_DB,
+      jobDb:
+        typeof env.JOB_DB === "string"
+          ? env.JOB_DB
+          : process.env.JOB_DB,
+    });
+    if (sqliteWarnings.length > 0) {
+      sanitizedStdout += formatSqlitePathWarningBlock(sqliteWarnings);
+    }
+
+    void import("../../gateway/services/toolCapture/ToolCaptureService.js")
+      .then(({ scheduleBashCapture }) =>
+        scheduleBashCapture({
+          originalCommand: input.command,
+          stdout: sanitizedStdout,
+        }),
+      )
+      .catch((error) => {
+        console.warn(
+          "[Bash Tool] Tool capture scheduling failed:",
+          error instanceof Error ? error.message : String(error),
+        );
+      });
 
     return {
       success: true,
@@ -692,8 +645,8 @@ export async function executeBashCommand(
         exitCode: 0,
         command: sanitizeError(command, apiKeys), // Sanitize command too
         duration,
-        ...(memorySearchReminder
-          ? { _memorySearchReminder: memorySearchReminder }
+        ...(sqliteWarnings.length > 0
+          ? { _sqlitePathWarnings: sqliteWarnings }
           : {}),
       },
     };
@@ -902,11 +855,22 @@ export async function executeBashCommandStreaming(
       }
 
       if (exitCode === 0) {
-        // If bash modified app files, broadcast so iframe reloads
-        const appEdits = detectAppFileEditsFromBashCommand(input.command);
-        if (appEdits.length > 0) {
-          void broadcastAppFileChanges(appEdits);
-        }
+        // App file edits: AppService chokidar watcher handles debounced rebuild + reload.
+
+        void import("../../gateway/services/toolCapture/ToolCaptureService.js")
+          .then(({ scheduleBashCapture }) =>
+            scheduleBashCapture({
+              originalCommand: input.command,
+              stdout: sanitizedStdout,
+            }),
+          )
+          .catch((error) => {
+            console.warn(
+              "[Bash Tool] Tool capture scheduling failed:",
+              error instanceof Error ? error.message : String(error),
+            );
+          });
+
         resolve({
           success: true,
           data: {

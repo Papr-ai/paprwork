@@ -36,8 +36,21 @@ data = json.loads(json.load(open(job_json))["lastOutput"])
 ### SQLite Output
 - **Use when:** UI will query/display data
 - **Examples:** Dashboards, reports, monitoring, analytics
-- **How:** Job writes to `$JOB_DB` + `link_app_data_source`
+- **How:** Job writes to `$APP_DB` (UI tables) + `$JOB_DB` (scratch). `create_job` with `appIds` auto-links; or `create_database` + `attach_database` for standalone DBs.
 - **Access:** REST API `/api/db/query` or TableView component
+
+### Live DB change events (SSE)
+
+```typescript
+import { subscribeJobEvents } from "/__papr__/papr-job-events.ts";
+
+subscribeJobEvents({
+  dbIds: ["db-abcdef12"],  // registry dbId from data-sources.json
+  onDbChanged: () => loadData(),
+});
+```
+
+Filter by `jobIds` for job-owned DBs, or `dbIds` for standalone/registry databases. Prefer `onDbChanged` over polling when jobs write to linked tables.
 
 ## Delivery Mechanisms
 
@@ -116,7 +129,7 @@ Creating artifacts?
   → Tool-based (write_file, create_app)
 
 UI needs to query?
-  → SQLite + link_app_data_source
+  → SQLite — `create_job({ appIds })` auto-links, or `attach_database` for standalone DBs
 
 Needs specialization?
   → delegate_task with complete context

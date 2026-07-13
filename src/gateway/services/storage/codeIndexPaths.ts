@@ -1,6 +1,6 @@
 /**
  * Shared path validation for code indexing.
- * Only files inside ~/Papr/apps/{id}/ or ~/Papr/Jobs/{id}/ are indexable.
+ * Only files inside ~/Papr/apps/{id}/ or ~/Papr/jobs/{id}/ are indexable.
  */
 
 import * as fs from 'fs';

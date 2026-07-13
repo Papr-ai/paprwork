@@ -25,6 +25,8 @@ const DEFAULT_SETTINGS: AppSettings = {
     keyboardShortcuts: true,
     telemetryEnabled: false,
     defaultHomeAppId: "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c", // Weekly War Room
+    cloudSyncEnabled: true,
+    cloudAutoPublishEnabled: true,
   },
   telemetry: {},
   compaction: {
@@ -273,17 +275,7 @@ export class SettingsStorage {
   /**
    * Set Papr user profile
    */
-  setPaprProfile(profile: {
-    userId: string;
-    email: string;
-    displayName?: string;
-    profileImage?: string;
-    authenticatedAt: string;
-    sessionToken?: string;
-    organizationId?: string;
-    activeNamespaceId?: string;
-    activeNamespaceName?: string;
-  }): void {
+  setPaprProfile(profile: NonNullable<AppSettings["paprProfile"]>): void {
     // Merge with existing profile to preserve fields not in this update
     const existing = this.store.get("paprProfile");
     this.store.set("paprProfile", { ...existing, ...profile });

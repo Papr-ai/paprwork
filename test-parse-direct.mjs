@@ -1,64 +1,69 @@
 #!/usr/bin/env node
+/**
+ * Ad-hoc Parse Server inspection (internal debugging only).
+ *
+ * Requires in .env.local or env:
+ *   PAPR_API_KEY
+ *   PARSE_MASTER_KEY
+ *   PARSE_APPLICATION_ID
+ *   PARSE_SERVER_URL (optional)
+ *   PAPR_TEST_CHAT_ID (session id)
+ */
 
-import Papr from '@papr/memory';
+import { requireEnv, requirePaprApiKey } from "./scripts/lib/testEnv.mjs";
 
-const PAPR_API_KEY = 'sk-org-Y8D4H7Yp3Z-namespace-onnNQFe3DN-ZKza5sLT03qW8GVdhhj1MzHyjBL21w6I';
-const chatId = '0f7ea575-2590-4f35-9818-9bcdcbdcd311';
+requirePaprApiKey();
 
-const client = new Papr({ xAPIKey: PAPR_API_KEY });
+const chatId = process.env.PAPR_TEST_CHAT_ID;
+const parseServerUrl = process.env.PARSE_SERVER_URL ?? "https://api.papr.ai";
+const parseAppId = requireEnv("PARSE_APPLICATION_ID");
+const parseMasterKey = requireEnv("PARSE_MASTER_KEY");
 
-console.log('\n🔍 Checking assistant messages in Parse Server directly...\n');
-
-// Get the chat to find its objectId
-const chatsResponse = await fetch(
-  `https://api.papr.ai/parse/classes/Chat?where=${encodeURIComponent(JSON.stringify({ sessionId: chatId }))}&limit=1`,
-  {
-    headers: {
-      'X-Parse-Application-Id': 'papr-memory',
-      'X-Parse-Master-Key': 'master-key-papr-memory-2024'
-    }
-  }
-);
-
-const chatsData = await chatsResponse.json();
-if (!chatsData.results || chatsData.results.length === 0) {
-  console.error('Chat not found');
+if (!chatId) {
+  console.error("❌ PAPR_TEST_CHAT_ID required");
   process.exit(1);
 }
 
-const chatObjectId = chatsData.results[0].objectId;
-console.log(`Chat objectId: ${chatObjectId}\n`);
+console.log("\n🔍 Checking assistant messages in Parse Server directly...\n");
 
-// Query PostMessages with NO user filter
-const messagesResponse = await fetch(
-  `https://api.papr.ai/parse/classes/PostMessage?where=${encodeURIComponent(JSON.stringify({
-    chat: {
-      __type: "Pointer",
-      className: "Chat",
-      objectId: chatObjectId
-    }
-  }))}&order=-createdAt&limit=50&keys=objectId,messageRole,createdAt,user`,
+const chatsResponse = await fetch(
+  `${parseServerUrl}/parse/classes/Chat?where=${encodeURIComponent(JSON.stringify({ sessionId: chatId }))}&limit=1`,
   {
     headers: {
-      'X-Parse-Application-Id': 'papr-memory',
-      'X-Parse-Master-Key': 'master-key-papr-memory-2024'
-    }
-  }
+      "X-Parse-Application-Id": parseAppId,
+      "X-Parse-Master-Key": parseMasterKey,
+    },
+  },
+);
+
+const chatsData = await chatsResponse.json();
+if (!chatsData.results?.length) {
+  console.error("Chat not found");
+  process.exit(1);
+}
+
+const chat = chatsData.results[0];
+console.log(`Chat objectId: ${chat.objectId}, messageCount: ${chat.messageCount}`);
+
+const messageQuery = JSON.stringify({
+  chat: { __type: "Pointer", className: "Chat", objectId: chat.objectId },
+});
+
+const messagesResponse = await fetch(
+  `${parseServerUrl}/parse/classes/PostMessage?where=${encodeURIComponent(messageQuery)}&order=-createdAt&limit=100`,
+  {
+    headers: {
+      "X-Parse-Application-Id": parseAppId,
+      "X-Parse-Master-Key": parseMasterKey,
+    },
+  },
 );
 
 const messagesData = await messagesResponse.json();
-console.log(`Total messages found (no user filter): ${messagesData.results.length}\n`);
+console.log(`\nTotal messages: ${messagesData.results?.length ?? 0}`);
 
-// Count by role
-const roleCount = {};
-messagesData.results.forEach(m => {
-  roleCount[m.messageRole] = (roleCount[m.messageRole] || 0) + 1;
-});
-
-console.log('Role distribution:', roleCount);
-console.log('\n📋 Last 20 messages:\n');
-
-messagesData.results.slice(0, 20).forEach((m, i) => {
-  const userInfo = m.user ? `user=${m.user.objectId}` : 'NO USER';
-  console.log(`[${i}] ${m.messageRole} at ${m.createdAt} (${userInfo})`);
-});
+for (const [i, m] of (messagesData.results ?? []).entries()) {
+  console.log(
+    `[${i}] ${m.messageRole?.padEnd(10) ?? "?"} | ${m.createdAt} | ${String(m.message ?? "").substring(0, 80)}`,
+  );
+}

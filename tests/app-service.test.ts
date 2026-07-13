@@ -24,7 +24,7 @@ describe("AppService", () => {
     } else {
       process.env.HOME = originalHome;
     }
-    await fs.rm(testHomeDir, { recursive: true, force: true });
+    await fs.rm(testHomeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   });
 
   test("creates app with files and lists it", async () => {
@@ -40,6 +40,38 @@ describe("AppService", () => {
     expect(ours).toBeDefined();
     expect(ours?.id).toBe(created.id);
     expect(loadedFile).toContain("Dashboard");
+  });
+
+  test("createApp scaffolds backend/manifest.json and ping.py", async () => {
+    const created = await appService.createApp("Backend App", "Desc", [
+      { filename: "index.html", content: "<h1>Hi</h1>" },
+    ]);
+    const appPath = path.join(testHomeDir, "Papr", "apps", created.id);
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(appPath, "backend", "manifest.json"), "utf8"),
+    ) as { version: number; actions: Record<string, { handler: string }> };
+    const pingPy = await fs.readFile(path.join(appPath, "backend", "ping.py"), "utf8");
+
+    expect(manifest.version).toBe(1);
+    expect(manifest.actions.ping?.handler).toBe("ping.py");
+    expect(pingPy).toContain("PAPR_ACTION_PARAMS");
+  });
+
+  test("validateApp errors on /api/bash/run in frontend code", async () => {
+    const created = await appService.createApp("Bash App", "Desc", [
+      { filename: "index.html", content: "<script src='app.ts'></script>" },
+      {
+        filename: "app.ts",
+        content: `fetch('/api/bash/run', { method: 'POST', body: '{}' });`,
+      },
+    ]);
+    await appService.buildApp(created.id);
+    const result = await appService.validateApp(created.id);
+    expect(
+      result.issues.some(
+        (i) => i.rule === "no-mini-app-bash" && i.severity === "error",
+      ),
+    ).toBe(true);
   });
 
   test("updates app metadata and file content", async () => {
@@ -86,7 +118,7 @@ describe("AppService", () => {
     expect(afterDelete).toBeNull();
   });
 
-  test("links app data sources and persists mapping", async () => {
+  test("links app data sources and persists mapping with primary", async () => {
     const app = await appService.createApp("Data App", "Desc", [
       { filename: "index.html", content: "<h1>Data App</h1>" },
     ]);
@@ -98,10 +130,13 @@ describe("AppService", () => {
       alias: "orders",
       dbPath: "/tmp/job-1/data.db",
       tables: ["orders", "order_items"],
+      setPrimary: true,
     });
 
     expect(linked).toHaveLength(1);
     expect(linked[0].jobId).toBe("job-1");
+    const config = await appService.getDataSourcesConfig(app.id);
+    expect(config.primary).toBe("orders");
     const listed = await appService.listAppDataSources(app.id);
     expect(listed[0].alias).toBe("orders");
     const appPath = await appService.getAppPath(app.id);
@@ -109,6 +144,60 @@ describe("AppService", () => {
       path.join(appPath as string, "data-sources.json"),
       "utf8",
     );
-    expect(raw).toContain("orders");
+    expect(raw).toContain('"primary": "orders"');
+    const dbTs = await fs.readFile(
+      path.join(appPath as string, "db.ts"),
+      "utf8",
+    );
+    expect(dbTs).toContain("PRIMARY_SOURCE = 'orders'");
+  });
+
+  test("validateApp blocks /api/db/* when no data source is linked", async () => {
+    const app = await appService.createApp("DB UI", "Desc", [
+      { filename: "index.html", content: "<div id='app'></div>" },
+      {
+        filename: "app.ts",
+        content:
+          "export async function load() { await fetch('/api/db/query', { method: 'POST' }); }",
+      },
+    ]);
+
+    const result = await appService.validateApp(app.id);
+
+    expect(result.valid).toBe(false);
+    expect(
+      result.issues.some(
+        (issue) => issue.rule === "linked-data-source-required",
+      ),
+    ).toBe(true);
+  });
+
+  test("validateApp passes when /api/db/* app has linked data source", async () => {
+    const app = await appService.createApp("Linked DB UI", "Desc", [
+      { filename: "index.html", content: "<div id='app'></div>" },
+      {
+        filename: "app.ts",
+        content:
+          "export async function load() { await fetch('/api/db/query', { method: 'POST' }); }",
+      },
+    ]);
+
+    await appService.linkAppDataSource(app.id, {
+      id: "job-1:data",
+      type: "sqlite",
+      jobId: "job-1",
+      alias: "data",
+      dbPath: "/tmp/job-1/data.db",
+      tables: [],
+      setPrimary: true,
+    });
+
+    const result = await appService.validateApp(app.id);
+
+    expect(
+      result.issues.some(
+        (issue) => issue.rule === "linked-data-source-required",
+      ),
+    ).toBe(false);
   });
 });

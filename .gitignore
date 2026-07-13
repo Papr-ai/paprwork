@@ -63,3 +63,14 @@ certificate.*
 # Local data exports (personal snapshots, not app source)
 batch.json
 data_snapshot.json
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Editor / backup artifacts
+*.bak
+
+# SQLite ad-hoc test artifacts (literal :memory: filenames from failed path expansion)
+/:memory:
+/:memory:-info

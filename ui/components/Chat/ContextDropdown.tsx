@@ -9,10 +9,11 @@ import {
   artifactTypeLabel,
   type Artifact,
 } from "../../stores/artifactsStore";
-import { createFileContextArtifactsFromFiles } from "../../utils/fileContextArtifact";
+import { createArtifactsFromIncomingFiles } from "../../utils/chatAttachmentFiles";
 import "./ContextDropdown.css";
 
 interface ContextDropdownProps {
+  chatId: string;
   isOpen: boolean;
   onClose: () => void;
   onSelectArtifact: (artifact: Artifact) => void;
@@ -20,6 +21,7 @@ interface ContextDropdownProps {
 }
 
 export function ContextDropdown({
+  chatId,
   isOpen,
   onClose,
   onSelectArtifact,
@@ -71,9 +73,11 @@ export function ContextDropdown({
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    for (const fileArtifact of createFileContextArtifactsFromFiles(
+    const artifacts = await createArtifactsFromIncomingFiles(
       Array.from(files),
-    )) {
+      chatId,
+    );
+    for (const fileArtifact of artifacts) {
       onSelectArtifact(fileArtifact);
     }
 
@@ -124,7 +128,7 @@ export function ContextDropdown({
           multiple
           style={{ display: "none" }}
           onChange={handleFileUpload}
-          accept=".txt,.md,.json,.js,.ts,.tsx,.jsx,.py,.java,.c,.cpp,.h,.css,.html,.xml,.yaml,.yml,.sh,.sql,.go,.rs,.rb,.php,.swift,.kt"
+          accept=".txt,.md,.json,.js,.ts,.tsx,.jsx,.py,.java,.c,.cpp,.h,.css,.html,.xml,.yaml,.yml,.sh,.sql,.go,.rs,.rb,.php,.swift,.kt,.pdf,.png,.jpg,.jpeg,.gif,.webp,.svg,.bmp,.tif,.tiff,image/*,application/pdf"
         />
       </div>
 

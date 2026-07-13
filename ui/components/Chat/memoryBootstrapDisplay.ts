@@ -29,6 +29,12 @@ const TIER0_MARKER =
   "**Tier 0 — Priority memories (Papr-ranked; may include goals, OKRs, or conversation summaries):**";
 const TIER1_MARKER = "**Tier 1 — Recent / hot memories:**";
 
+/** Settings cache may store tier body only (no cross-chat intro line). */
+function isTierOnlySyncBody(content: string): boolean {
+  const trimmed = content.trimStart();
+  return trimmed.startsWith(TIER0_MARKER);
+}
+
 function extractSessionId(body: string): string | null {
   const match = body.match(/Session:\s*([^\n]+)/);
   return match?.[1]?.trim() ?? null;
@@ -146,8 +152,9 @@ export function parseMemoryBootstrapBlock(
   kind: "parse_goals" | "parse_usecases" | "sync_tiers" | "related_memory",
 ): ParsedMemoryBlock {
   const truncated = content.includes("[... truncated]");
+  const tierOnlyBody = kind === "sync_tiers" && isTierOnlySyncBody(content);
   const lines = content.split("\n");
-  const intro = lines[0]?.trim() ?? "";
+  const intro = tierOnlyBody ? "" : (lines[0]?.trim() ?? "");
 
   let footer: string | null = null;
   if (content.includes("Align your assistance with these goals")) {
@@ -162,8 +169,13 @@ export function parseMemoryBootstrapBlock(
       "These may be relevant to this request. Call search_agent_memory for deeper recall.";
   }
 
-  const introEnd = content.indexOf("\n\n");
-  let body = introEnd >= 0 ? content.slice(introEnd + 2) : content;
+  let body: string;
+  if (tierOnlyBody) {
+    body = content;
+  } else {
+    const introEnd = content.indexOf("\n\n");
+    body = introEnd >= 0 ? content.slice(introEnd + 2) : content;
+  }
   if (footer) {
     const footerIdx = body.lastIndexOf("\n\n");
     if (footerIdx > 0) {

@@ -9,11 +9,13 @@ import type { WSMessage } from "./index.js";
 import { sendResponse, sendError } from "./index.js";
 import { getAgentService } from "../services/AgentService.js";
 import type { AgentConfig } from "../../core/types/agents.js";
+import type { UiAgentFocusContext } from "../../core/types/agentFocus.js";
 
 interface StreamPayload {
   chatId: string;
   message: string;
   config: AgentConfig;
+  focusContext?: UiAgentFocusContext;
 }
 
 interface StopStreamingPayload {
@@ -24,6 +26,13 @@ interface ChatHistoryPayload {
   chatId: string;
   limit?: number;
   skip?: number;
+}
+
+interface SubscribePayload {
+  chatId: string;
+  requestId: string;
+  /** Skip buffered chunks the client already rendered before disconnect */
+  fromChunkIndex?: number;
 }
 
 interface GenerateTitlePayload {
@@ -45,24 +54,18 @@ export async function setupAgentHandlers(
     switch (message.type) {
       case "agent:stream": {
         const payload = message.payload as StreamPayload;
-        const { chatId, message: userMessage, config } = payload;
+        const { chatId, message: userMessage, config, focusContext } = payload;
 
         if (!chatId || !userMessage) {
           sendError(ws, message.id, "Missing chatId or message");
           return;
         }
 
-        // ⏱️ PERFORMANCE TRACKING: Start timing
-        const perfStart = performance.now();
-        const timings: Record<string, number> = {};
-
         // ✅ OPTIMIZATION: Check if session exists first (reuse cached API key)
-        const t1 = performance.now();
         const sessionManager = agentService.getSessionManager();
         const existingSession = sessionManager
           .getAllActiveSessions()
           .find((s) => s.chatId === chatId);
-        timings.sessionLookup = performance.now() - t1;
 
         let apiKey: string;
         let authType: "oauth" | "apiKey" | undefined;
@@ -79,7 +82,6 @@ export async function setupAgentHandlers(
           console.log(
             `[Agent WS] Reusing cached API key for chat ${chatId} (${config.provider})`,
           );
-          timings.keyFetch = 0; // Cache hit
         } else {
           // Fetch API key via IPC (secure method - never sent over WebSocket)
           // Only happens on first message or when switching providers
@@ -89,6 +91,21 @@ export async function setupAgentHandlers(
             if (config.provider === "ollama") {
               apiKey = ""; // No API key needed for local Ollama
               authType = "apiKey"; // Use apiKey type for consistency
+            }
+            // Composer routes through Papr Cursor delegation (PAPR_API_KEY only)
+            else if (config.provider === "cursor") {
+              const { getApiKeys } = await import("../utils/keyResolver.js");
+              const paprKeys = await getApiKeys(["PAPR_API_KEY"]);
+              if (!paprKeys.PAPR_API_KEY) {
+                sendError(
+                  ws,
+                  message.id,
+                  "Composer requires Papr login. Sign in with Papr to use Cursor Composer.",
+                );
+                return;
+              }
+              apiKey = paprKeys.PAPR_API_KEY;
+              authType = "apiKey";
             }
             // For openai, openai-codex, and anthropic, use getProviderAuth which handles OAuth
             else if (
@@ -163,9 +180,8 @@ export async function setupAgentHandlers(
               }
             }
 
-            timings.keyFetch = performance.now() - t2;
             console.log(
-              `[Agent WS] Fetched API key for chat ${chatId} (${config.provider}) in ${timings.keyFetch.toFixed(2)}ms`,
+              `[Agent WS] Fetched API key for chat ${chatId} (${config.provider}) in ${(performance.now() - t2).toFixed(2)}ms`,
             );
           } catch (keyError) {
             console.error(`[Agent WS] Failed to fetch API key:`, keyError);
@@ -203,122 +219,81 @@ export async function setupAgentHandlers(
           uses_papr_proxy: usePaprProxy,
         });
 
-        // Track time until first chunk
-        const t3 = performance.now();
-        timings.beforeStream = performance.now() - perfStart;
-
-        // Stream response chunks back to client
-        // Each chunk includes chatId for frontend routing
-        // Wrap in runWithToolContext so delegate_task and other tools get chatId via getCurrentChatId()
-        console.log(
-          `[Agent WS] Starting stream for chat ${chatId} (setup took ${timings.beforeStream.toFixed(2)}ms)`,
-        );
-        let chunkCount = 0;
-        let firstChunkTime: number | null = null;
-
-        const { runWithToolContext } = await import(
-          "../../core/tools/context.js"
+        const { getAgentStreamRegistry } = await import(
+          "../services/AgentStreamRegistry.js"
         );
 
-        try {
-          await runWithToolContext(chatId, async () => {
-            for await (const chunk of agentService.streamAgent(
+        getAgentStreamRegistry().startStream({
+          chatId,
+          requestId: message.id,
+          userMessage,
+          config: configInternal,
+          focusContext,
+          ws,
+        });
+        break;
+      }
+
+      case "agent:subscribe": {
+        const { chatId, requestId, fromChunkIndex = 0 } =
+          message.payload as SubscribePayload;
+
+        if (!chatId || !requestId) {
+          sendError(ws, message.id, "Missing chatId or requestId");
+          return;
+        }
+
+        const { getAgentStreamRegistry } = await import(
+          "../services/AgentStreamRegistry.js"
+        );
+        const registry = getAgentStreamRegistry();
+
+        let targetRequestId = requestId;
+        let result = registry.addSubscriber(
+          ws,
+          message.id,
+          chatId,
+          targetRequestId,
+          fromChunkIndex,
+        );
+
+        if (!result.found) {
+          const activeRequestId = registry.getRequestIdForChat(chatId);
+          if (activeRequestId) {
+            targetRequestId = activeRequestId;
+            result = registry.addSubscriber(
+              ws,
+              message.id,
               chatId,
-              userMessage,
-              configInternal,
-            )) {
-              if (firstChunkTime === null) {
-                firstChunkTime = performance.now() - t3;
-                timings.timeToFirstChunk = firstChunkTime;
-                console.log(
-                  `[Agent WS] ⚡ First chunk received in ${firstChunkTime.toFixed(2)}ms (type: ${chunk.type})`,
-                );
-              }
-
-              chunkCount++;
-
-              if (ws.readyState === ws.OPEN) {
-                // Send chunk with chatId for parallel stream routing
-                ws.send(
-                  JSON.stringify({
-                    id: message.id,
-                    type: "agent:chunk",
-                    data: chunk, // chunk already includes chatId from streamAgent
-                  }),
-                );
-              } else {
-                console.warn(`[Agent WS] WebSocket closed for chat ${chatId}`);
-                break;
-              }
-            }
-          });
-
-          timings.totalStreamTime = performance.now() - perfStart;
-
-          getGatewayTelemetry().trackFireAndForget("paprwork_message_received", {
-            chat_id: chatId,
-            response_time_ms: Math.round(timings.totalStreamTime),
-            model: config.model,
-            provider: config.provider,
-            chunk_count: chunkCount,
-          });
-
-          console.log(`[Agent WS] Stream complete for chat ${chatId}.`);
-          console.log(`[Agent WS]   Chunks: ${chunkCount}`);
-          console.log(
-            `[Agent WS]   Session lookup: ${timings.sessionLookup.toFixed(2)}ms`,
-          );
-          console.log(
-            `[Agent WS]   Key fetch: ${timings.keyFetch.toFixed(2)}ms`,
-          );
-          console.log(
-            `[Agent WS]   Time to first chunk: ${timings.timeToFirstChunk?.toFixed(2) || "N/A"}ms`,
-          );
-          console.log(
-            `[Agent WS]   Total time: ${timings.totalStreamTime.toFixed(2)}ms`,
-          );
-
-          // Load the final saved message (includes sequence) and send it
-          const messages = await agentService.getChatHistory(chatId);
-          const finalMessage = messages[messages.length - 1]; // Last message is the assistant response
-
-          // Send completion with final message data (includes sequence)
-          if (ws.readyState === ws.OPEN) {
-            ws.send(
-              JSON.stringify({
-                id: message.id,
-                type: "agent:complete",
-                data: {
-                  chatId,
-                  done: true,
-                  finalMessage, // Include complete message with sequence
-                },
-              }),
-            );
-          }
-        } catch (streamError) {
-          console.error(
-            `[Agent WS] Stream error for chat ${chatId}:`,
-            streamError,
-          );
-
-          // Send error
-          if (ws.readyState === ws.OPEN) {
-            ws.send(
-              JSON.stringify({
-                id: message.id,
-                type: "agent:error",
-                data: {
-                  chatId,
-                  error:
-                    streamError instanceof Error
-                      ? streamError.message
-                      : "Stream error",
-                },
-              }),
+              targetRequestId,
+              fromChunkIndex,
             );
           }
         }
+
+        if (!result.found) {
+          const stillStreaming = agentService.isStreaming(chatId);
+          if (stillStreaming) {
+            sendError(
+              ws,
+              message.id,
+              "Stream is active but not available for replay yet. Retry shortly.",
+            );
+            return;
+          }
+
+          sendError(
+            ws,
+            message.id,
+            "No active stream found for chat. Reload history to sync.",
+          );
+          return;
+        }
+
+        console.log(
+          `[Agent WS] Subscribed to stream ${targetRequestId} for chat ${chatId} ` +
+            `(replayed ${result.replayed}/${result.totalBuffered} chunks from index ${fromChunkIndex})`,
+        );
         break;
       }
 
@@ -331,6 +306,12 @@ export async function setupAgentHandlers(
         }
 
         await agentService.stopStreaming(chatId);
+
+        const { getAgentStreamRegistry } = await import(
+          "../services/AgentStreamRegistry.js"
+        );
+        getAgentStreamRegistry().cancelStream(chatId, "Stopped by user");
+
         console.log(`[Agent WS] Stopped streaming for chat ${chatId}`);
 
         sendResponse(ws, {

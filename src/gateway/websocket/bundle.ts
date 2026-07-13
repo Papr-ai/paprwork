@@ -67,6 +67,18 @@ export async function setupBundleHandlers(
         });
         break;
       }
+      case "bundle:fetch-community-catalog": {
+        const { getCommunityCatalogService } = await import(
+          "../services/CommunityCatalogService.js"
+        );
+        const catalog = await getCommunityCatalogService().fetchCatalog();
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: catalog,
+        });
+        break;
+      }
       case "bundle:import-community": {
         const payload = message.payload as ImportCommunityBundleInput;
         const manifest = await bundleService.importCommunityBundle(payload);

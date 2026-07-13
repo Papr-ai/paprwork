@@ -18,6 +18,15 @@ export function artifactTypeLabel(type: ArtifactType): string {
   }
 }
 
+export interface ArtifactCloudLineage {
+  mode: "fork" | "track";
+  sourceAppId: string;
+  sourceSlug: string;
+  sourceNamespaceId: string;
+  installedAt: string;
+  lastSyncedAt?: string;
+}
+
 export interface Artifact {
   id: string;
   title: string;
@@ -30,11 +39,13 @@ export interface Artifact {
   favorite?: boolean;
   tags?: string[];
   wordCount?: number;
+  description?: string;
+  cloudLineage?: ArtifactCloudLineage;
   metadata?: {
     filePath?: string;
     fileSize?: number;
     fileType?: string;
-    [key: string]: any;
+    [key: string]: unknown;
   };
 }
 

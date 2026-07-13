@@ -12,6 +12,8 @@
  *   IDENTITY.md  - User profile (name, role, tone, goals)
  *   AGENTS.md    - Operating contract (workflow rules, boundaries)
  *   TOOLS.md     - Environment notes (CLIs, APIs, paths)
+ *   BRAND.md     - User/company visual identity (colors, fonts, logo, voice)
+ *   brand.json   - Structured brand tokens for mini-apps (mirrors BRAND.md)
  *   ONBOARD.md   - First-run interview script (deleted after completion)
  *   memory/YYYY-MM-DD.md - Daily working logs (append-only)
  */
@@ -33,6 +35,7 @@ const MAX_TOTAL_CHARS = 80_000;
 /** Workspace files to inject (in order of priority) */
 const WORKSPACE_FILES = [
   "IDENTITY.md",
+  "BRAND.md",
   "MEMORY.md",
   "AGENTS.md",
   "TOOLS.md",
@@ -82,12 +85,15 @@ export class WorkspaceService {
     await fs.mkdir(this.workspaceDir, { recursive: true });
     await fs.mkdir(this.memoryDir, { recursive: true });
     await fs.mkdir(path.join(this.memoryDir, "archive"), { recursive: true });
+    await fs.mkdir(path.join(this.workspaceDir, "brand"), { recursive: true });
 
     // Copy template files if they don't exist yet
     const templatesDir = this.resolveTemplatesDir();
     const templateFiles = [
       "MEMORY.md",
       "IDENTITY.md",
+      "BRAND.md",
+      "brand.json",
       "AGENTS.md",
       "TOOLS.md",
       "ONBOARD.md",
@@ -115,6 +121,11 @@ export class WorkspaceService {
         }
       }
     }
+
+    const { seedIdentityAboutFromProfile } = await import(
+      "./identityAboutSeed.js"
+    );
+    await seedIdentityAboutFromProfile();
 
     this.initialized = true;
     console.log(
@@ -311,6 +322,15 @@ export class WorkspaceService {
   async ensureSleepJob(): Promise<void> {
     const { getSleepCycleService } = await import("./SleepCycleService.js");
     await getSleepCycleService().syncSleepJobs();
+  }
+
+  /**
+   * Ensure the built-in "wiki-writer" agent job exists.
+   * Delegates to WikiWriterService for dedupe, config, and prompt sync.
+   */
+  async ensureWikiWriterJob(): Promise<void> {
+    const { getWikiWriterService } = await import("./WikiWriterService.js");
+    await getWikiWriterService().syncWikiWriterJobs();
   }
 
   /**

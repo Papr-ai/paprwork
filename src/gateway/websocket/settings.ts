@@ -34,6 +34,8 @@ interface CodeIndexingSettings {
 
 interface UIPreferences {
   lastModelId: string | null; // Last selected model
+  /** Model IDs shown in the chat picker; null = curated defaults */
+  enabledPickerModelIds?: string[] | null;
   onboardingDismissed: boolean; // Whether onboarding was dismissed
   onboardingStep1Completed: boolean; // Configure API keys
   onboardingStep2Completed: boolean; // Setup your agents
@@ -42,6 +44,9 @@ interface UIPreferences {
 
 interface PreferencesData {
   defaultHomeAppId: string | null;
+  cloudSyncEnabled: boolean;
+  /** Auto-publish synced mini-apps to apps.papr.ai (default ON). */
+  cloudAutoPublishEnabled: boolean;
 }
 
 interface TelemetryData {
@@ -80,6 +85,7 @@ const DEFAULTS: SettingsData = {
   },
   uiPreferences: {
     lastModelId: null,
+    enabledPickerModelIds: null,
     onboardingDismissed: false,
     onboardingStep1Completed: false,
     onboardingStep2Completed: false,
@@ -87,6 +93,8 @@ const DEFAULTS: SettingsData = {
   },
   preferences: {
     defaultHomeAppId: DEFAULT_HOME_APP_ID,
+    cloudSyncEnabled: true,
+    cloudAutoPublishEnabled: true,
   },
 };
 
@@ -202,6 +210,19 @@ export async function setupSettingsHandlers(
           id: message.id,
           success: true,
           data: settings.uiPreferences,
+        });
+        break;
+      }
+
+      case "settings:save-preferences": {
+        const payload = message.payload as Partial<PreferencesData>;
+        const settings = await loadSettings();
+        settings.preferences = { ...settings.preferences, ...payload };
+        await saveSettings(settings);
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: settings.preferences,
         });
         break;
       }

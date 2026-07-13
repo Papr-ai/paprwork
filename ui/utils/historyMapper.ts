@@ -1,3 +1,7 @@
+import {
+  isInterruptedToolResult,
+  resolveToolCallStatus,
+} from "../../src/core/utils/interruptedToolResult";
 import type { ChatMessage } from "../types/chat";
 
 /** Synthetic user messages injected by SubAgentResponseTrigger - shown only in MiniChatCard, not main chat */
@@ -74,12 +78,21 @@ export function mapHistoryMessages(
                   ? toolCandidate.name
                   : "tool";
 
-            const statusValue =
-              toolCandidate.status === "calling" ||
-              toolCandidate.status === "success" ||
-              toolCandidate.status === "error"
-                ? toolCandidate.status
-                : "success";
+            const rawResult =
+              typeof toolCandidate.result === "string"
+                ? toolCandidate.result
+                : typeof toolCandidate.result === "object" &&
+                    toolCandidate.result !== null
+                  ? toolCandidate.result
+                  : undefined;
+
+            const statusValue = resolveToolCallStatus({
+              explicitStatus:
+                typeof toolCandidate.status === "string"
+                  ? toolCandidate.status
+                  : undefined,
+              result: rawResult,
+            });
 
             return {
               id:
@@ -95,12 +108,13 @@ export function mapHistoryMessages(
                   : {},
               status: statusValue,
               result:
-                typeof toolCandidate.result === "string"
-                  ? toolCandidate.result
-                  : typeof toolCandidate.result === "object" &&
-                      toolCandidate.result !== null
-                    ? JSON.stringify(toolCandidate.result)
-                    : undefined,
+                statusValue === "interrupted" || isInterruptedToolResult(rawResult)
+                  ? undefined
+                  : typeof rawResult === "string"
+                    ? rawResult
+                    : rawResult !== undefined
+                      ? JSON.stringify(rawResult)
+                      : undefined,
               error:
                 typeof toolCandidate.error === "string"
                   ? toolCandidate.error

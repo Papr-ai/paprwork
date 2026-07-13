@@ -25,8 +25,11 @@ export interface ChatSession {
   config: AgentConfigInternal;
   isStreaming: boolean;
   createdAt: string;
+  lastAccessedAt: number;
 }
 
+/** Max idle sessions to keep in memory (LRU eviction) */
+const MAX_SESSIONS = 3;
 export class ChatSessionManager {
   private sessions: Map<string, ChatSession> = new Map();
 
@@ -48,6 +51,7 @@ export class ChatSessionManager {
 
       // Check if config changed (model or provider)
       if (this.isSameConfig(session.config, config)) {
+        session.lastAccessedAt = Date.now();
         return session;
       }
 
@@ -65,9 +69,13 @@ export class ChatSessionManager {
       config,
       isStreaming: false,
       createdAt: new Date().toISOString(),
+      lastAccessedAt: Date.now(),
     };
 
     this.sessions.set(chatId, session);
+
+    // LRU eviction: keep only MAX_SESSIONS idle sessions
+    this.evictStaleSessions(chatId);
     console.log(
       `✓ Created chat session for ${chatId} with ${config.provider}/${config.model}`,
     );
@@ -148,6 +156,26 @@ export class ChatSessionManager {
         break;
       }
 
+      case "zai": {
+        const { createOpenAI } = await import("@ai-sdk/openai");
+        const { normalizeZaiModelId } = await import("../utils/zaiModel.js");
+        const zai = createOpenAI({
+          baseURL: "https://api.z.ai/api/paas/v4",
+          apiKey: config.apiKey,
+        });
+        model = zai.chat(normalizeZaiModelId(config.model));
+        break;
+      }
+
+      case "groq": {
+        const { createGroqChatModel } = await import("../utils/groqProvider.js");
+        const { normalizeGroqModelId } = await import("../utils/groqModel.js");
+        model = await createGroqChatModel(normalizeGroqModelId(config.model), {
+          apiKey: config.apiKey,
+        });
+        break;
+      }
+
       default:
         throw new Error(`Unsupported provider: ${config.provider}`);
     }
@@ -173,6 +201,27 @@ export class ChatSessionManager {
   /**
    * Check if two configs are the same
    */
+  /**
+   * Evict oldest idle sessions when over MAX_SESSIONS.
+   * Never evicts the current session or sessions that are actively streaming.
+   */
+  private evictStaleSessions(currentChatId: string): void {
+    if (this.sessions.size <= MAX_SESSIONS) return;
+
+    const evictable = [...this.sessions.entries()]
+      .filter(([id, s]) => id !== currentChatId && !s.isStreaming)
+      .sort((a, b) => a[1].lastAccessedAt - b[1].lastAccessedAt);
+
+    while (this.sessions.size > MAX_SESSIONS && evictable.length > 0) {
+      const [oldId, oldSession] = evictable.shift()!;
+      if (oldSession.abortController) {
+        oldSession.abortController.abort();
+      }
+      this.sessions.delete(oldId);
+      console.log(`♻️ Evicted stale chat session ${oldId} (LRU, ${this.sessions.size} remaining)`);
+    }
+  }
+
   private isSameConfig(
     config1: AgentConfigInternal,
     config2: AgentConfigInternal,

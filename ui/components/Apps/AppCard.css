@@ -187,6 +187,38 @@
   letter-spacing: -0.01em;
 }
 
+.app-card__title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.app-card__title-row .app-card__title {
+  flex: 1;
+  min-width: 0;
+}
+
+.app-card__cloud-badge {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.app-card__cloud-badge--fork {
+  color: #7c3aed;
+  background: color-mix(in srgb, #7c3aed 14%, transparent);
+}
+
+.app-card__cloud-badge--track {
+  color: #0284c7;
+  background: color-mix(in srgb, #0284c7 14%, transparent);
+}
+
 .app-card__title-input {
   font-size: 15px;
   font-weight: 600;

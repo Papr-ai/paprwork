@@ -12,6 +12,10 @@ import type { IJobExecutor } from "./jobs/executors/IJobExecutor.js";
 import { sanitizeError } from "../../core/tools/security.js";
 import { getGatewayTelemetry } from "./gatewayTelemetry.js";
 import { getJobRunHistory } from "./jobs/JobRunHistory.js";
+import {
+  getPaprDataDir,
+  getPaprJobsRoot,
+} from "../../core/utils/paprRoot.js";
 
 // ESM compatibility: get __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -20,6 +24,11 @@ import {
   classifyError,
   getErrorClassificationReason,
 } from "./jobs/errorClassifier.js";
+import { getJobEventHub } from "./JobEventHub.js";
+import {
+  parseJobProgressLine,
+  toJobProgressData,
+} from "../utils/parseJobProgressLine.js";
 
 /** Short, single-line hint for telemetry (no raw logs; keys avoid "message" substring). */
 function truncateForTelemetryHint(raw: string | undefined, maxLen: number): string {
@@ -43,6 +52,12 @@ import type {
   JobType,
 } from "./jobs/types.js";
 import {
+  assertCreateAppIds,
+  jobBelongsToApp,
+  mergeJobAppIds,
+  STANDALONE_APP_ID,
+} from "./jobs/appIds.js";
+import {
   computeInitialNextRunAt,
   computeMisfireSkipNextRunAt,
 } from "./jobs/scheduleEngine.js";
@@ -65,14 +80,11 @@ export type {
   RecipeEvaluationSummary,
   RecipeEvalCriterion,
 } from "./jobs/types.js";
+export { STANDALONE_APP_ID } from "./jobs/appIds.js";
 
 let jobsServiceInstance: JobsService | null = null;
 
 export class JobsService {
-  private paprRootDir: string;
-  private jobsRootDir: string;
-  private jobsIndexPath: string;
-  private graphPath: string;
   private legacyJobsRootDir: string;
   private legacyJobsIndexPath: string;
   private jobs: Map<string, JobRecord>;
@@ -84,10 +96,6 @@ export class JobsService {
 
   constructor() {
     const homeDir = os.homedir();
-    this.paprRootDir = path.join(homeDir, "Papr");
-    this.jobsRootDir = path.join(this.paprRootDir, "jobs");
-    this.jobsIndexPath = path.join(this.paprRootDir, "data", "jobs.json");
-    this.graphPath = path.join(this.paprRootDir, "data", "job-graph.json");
     this.legacyJobsRootDir = path.join(homeDir, "papr-jobs");
     this.legacyJobsIndexPath = path.join(
       homeDir,
@@ -103,6 +111,24 @@ export class JobsService {
       new AgentJobExecutor(),
     ];
     this.initialized = false;
+  }
+
+  private get jobsRootDir(): string {
+    return getPaprJobsRoot();
+  }
+
+  private get jobsIndexPath(): string {
+    return path.join(getPaprDataDir(), "jobs.json");
+  }
+
+  private get graphPath(): string {
+    return path.join(getPaprDataDir(), "job-graph.json");
+  }
+
+  /** Reload index from disk after PAPR_HOME changes (cloud agent gateway). */
+  async resetForWorkspaceReload(): Promise<void> {
+    this.initialized = false;
+    this.jobs.clear();
   }
 
   private async migrateLegacyIfNeeded(): Promise<void> {
@@ -255,9 +281,11 @@ export class JobsService {
     await fs.mkdir(this.jobsRootDir, { recursive: true });
     await fs.mkdir(path.dirname(this.jobsIndexPath), { recursive: true });
     await this.loadJobs(); // Load existing jobs FIRST
+    await this.backfillJobAppIds();
     await this.rebuildIndexIfCorrupted(); // Safety net: recover jobs on disk but missing from index
     await this.pruneStaleJobEntries(); // Remove index entries whose folders were deleted (e.g. bash rm)
     await this.installDefaultJobs(); // Then install defaults (won't overwrite existing)
+    await this.backfillJobAppIds();
 
     // Initialize run history
     const runHistory = getJobRunHistory();
@@ -272,7 +300,109 @@ export class JobsService {
 
     await this.reconcileScheduleStates();
 
+    void this.rebuildGraph();
+
     this.initialized = true;
+  }
+
+  /**
+   * Infer appIds for legacy jobs missing the field (data-sources + folder title match).
+   * Jobs with no linkage get STANDALONE_APP_ID.
+   */
+  private async backfillJobAppIds(): Promise<void> {
+    let changed = false;
+    const jobIdToAppIds = new Map<string, Set<string>>();
+
+    try {
+      const { getAppService } = await import("./AppService.js");
+      const appService = getAppService();
+      await appService.initialize();
+      const apps = await appService.listApps();
+
+      for (const app of apps) {
+        try {
+          const dataSources = await appService.listAppDataSources(app.id);
+          for (const ds of dataSources) {
+            if (!ds.jobId) {
+              continue;
+            }
+            const set = jobIdToAppIds.get(ds.jobId) ?? new Set<string>();
+            set.add(app.id);
+            jobIdToAppIds.set(ds.jobId, set);
+          }
+        } catch {
+          // app has no data-sources file yet
+        }
+
+        const appTitleLower = app.title.toLowerCase();
+        for (const job of this.jobs.values()) {
+          if (job.folder && job.folder.toLowerCase() === appTitleLower) {
+            const set = jobIdToAppIds.get(job.id) ?? new Set<string>();
+            set.add(app.id);
+            jobIdToAppIds.set(job.id, set);
+          }
+        }
+      }
+    } catch {
+      // AppService unavailable during early startup
+    }
+
+    for (const [jobId, job] of this.jobs.entries()) {
+      if (job.appIds?.length) continue;
+
+      const inferred = jobIdToAppIds.get(jobId);
+      const appIds =
+        inferred && inferred.size > 0
+          ? [...inferred]
+          : [STANDALONE_APP_ID];
+
+      this.jobs.set(jobId, { ...job, appIds });
+      changed = true;
+
+      try {
+        await fs.writeFile(
+          path.join(this.getJobDir(jobId), "job.json"),
+          JSON.stringify({ ...job, appIds }, null, 2),
+          "utf8",
+        );
+      } catch {
+        // job dir may be missing
+      }
+    }
+
+    if (changed) {
+      await this.saveJobs();
+      console.log("[JobsService] Backfilled appIds on legacy jobs");
+    }
+  }
+
+  /** Add an app id to a job if missing (e.g. after link_app_data_source). */
+  async ensureJobLinkedToApp(jobId: string, appId: string): Promise<void> {
+    if (!appId || appId === STANDALONE_APP_ID) return;
+    const job = this.jobs.get(jobId);
+    if (!job) return;
+    if (jobBelongsToApp(job.appIds, appId)) return;
+
+    const appIds = mergeJobAppIds(job.appIds, [appId]);
+    await this.updateJob(jobId, { appIds });
+  }
+
+  private async validateAppIdsExist(appIds: string[]): Promise<void> {
+    const realAppIds = appIds.filter((id) => id !== STANDALONE_APP_ID);
+    if (realAppIds.length === 0) return;
+
+    const { getAppService } = await import("./AppService.js");
+    const appService = getAppService();
+    await appService.initialize();
+
+    for (const appId of realAppIds) {
+      const app = await appService.getApp(appId);
+      if (!app) {
+        throw new Error(
+          `App not found: ${appId}. Use list_apps() to get valid app UUIDs.`,
+        );
+      }
+    }
   }
 
   private async loadJobs(): Promise<void> {
@@ -304,7 +434,7 @@ export class JobsService {
   /**
    * Safety net: detect if jobs.json is missing jobs that exist on disk.
    * Handles corruption from crashes, failed updates, or race conditions.
-   * Scans ~/Papr/Jobs/ for job directories not in the index and re-adds them.
+   * Scans ~/Papr/jobs/ for job directories not in the index and re-adds them.
    */
   private async rebuildIndexIfCorrupted(): Promise<void> {
     try {
@@ -398,6 +528,7 @@ export class JobsService {
           name,
           type,
           status: "idle" as JobStatus,
+          appIds: [],
           command,
           createdAt,
           updatedAt: new Date().toISOString(),
@@ -567,16 +698,7 @@ export class JobsService {
     }
 
     if (filter?.appId) {
-      try {
-        const { getAppService } = await import("./AppService.js");
-        const appService = getAppService();
-        await appService.initialize();
-        const dataSources = await appService.listAppDataSources(filter.appId);
-        const jobIds = new Set(dataSources.map((ds) => ds.jobId));
-        jobs = jobs.filter((j) => jobIds.has(j.id));
-      } catch {
-        jobs = [];
-      }
+      jobs = jobs.filter((j) => jobBelongsToApp(j.appIds, filter.appId!));
     }
 
     return jobs;
@@ -657,37 +779,41 @@ export class JobsService {
         const apps = await appService.listApps();
         for (const app of apps) {
           const linkedJobIds = new Set<string>();
-          
-          // Include jobs explicitly linked via data-sources.json
+
+          for (const job of jobs) {
+            if (jobBelongsToApp(job.appIds, app.id)) {
+              linkedJobIds.add(job.id);
+            }
+          }
+
+          // Legacy fallback: explicit data-sources (also syncs appIds onto jobs)
           try {
             const dataSources = await appService.listAppDataSources(app.id);
             for (const ds of dataSources) {
+              if (!ds.jobId) {
+                continue;
+              }
               linkedJobIds.add(ds.jobId);
+              void this.ensureJobLinkedToApp(ds.jobId, app.id).catch((err) => {
+                console.warn(
+                  `[JobsService] Failed to sync appId onto job ${ds.jobId}:`,
+                  err,
+                );
+              });
             }
           } catch {
             // skip apps with no data sources
           }
-          
-          // Also auto-link jobs whose folder matches the app title (case-insensitive)
-          // This enables app filters and graphs to show all related jobs, even if
-          // data sources aren't explicitly linked yet. The agent still needs to call
-          // link_app_data_source for the app to actually query job databases.
-          const appTitleLower = app.title.toLowerCase();
-          for (const job of jobs) {
-            if (job.folder && job.folder.toLowerCase() === appTitleLower) {
-              linkedJobIds.add(job.id);
-            }
-          }
-          
+
           if (linkedJobIds.size > 0) {
             appLinks[app.id] = { name: app.title, jobIds: [...linkedJobIds] };
           }
-          
-          // Trigger auto-discovery of data sources for this app
-          // This runs asynchronously and won't block graph rebuild
-          void appService.autoDiscoverDataSources(app.id).catch(err => {
-            console.warn(`[JobsService] Auto-discovery failed for app ${app.id}:`, err);
-          });
+
+          if (process.env.PAPR_AUTO_DISCOVER_DATA_SOURCES === "true") {
+            void appService.autoDiscoverDataSources(app.id).catch((err) => {
+              console.warn(`[JobsService] Auto-discovery failed for app ${app.id}:`, err);
+            });
+          }
         }
       } catch {
         // AppService not yet initialized — skip app links this rebuild
@@ -717,6 +843,9 @@ export class JobsService {
   }
 
   async createJob(input: CreateJobInput): Promise<JobRecord> {
+    const appIds = assertCreateAppIds(input.appIds);
+    await this.validateAppIdsExist(appIds);
+
     const now = new Date().toISOString();
     const id = uuidv4();
     const job: JobRecord = {
@@ -724,6 +853,7 @@ export class JobsService {
       name: input.name,
       type: input.type,
       status: "pending",
+      appIds,
       folder: input.folder,
       command: input.command,
       requirements: input.requirements,
@@ -787,6 +917,18 @@ export class JobsService {
     this.jobs.set(id, job);
     await this.saveJobs();
     void this.rebuildGraph();
+
+    const { STANDALONE_APP_ID } = await import("./jobs/appIds.js");
+    if (appIds.some((appId) => appId !== STANDALONE_APP_ID)) {
+      try {
+        const { getAppService } = await import("./AppService.js");
+        const appService = getAppService();
+        await appService.autoLinkJobToApps(id, { allowBaseline: true });
+      } catch (err) {
+        console.warn(`[JobsService] Auto-link on create failed for job ${id}:`, err);
+      }
+    }
+
     if (job.schedule?.enabled) {
       void import("./JobsScheduler.js")
         .then(({ getJobsScheduler }) => {
@@ -828,6 +970,7 @@ export class JobsService {
     const now = new Date().toISOString();
     const job: JobRecord = {
       status: "pending",
+      appIds: jobDef.appIds?.length ? jobDef.appIds : [STANDALONE_APP_ID],
       dependsOn: [],
       retries: { maxAttempts: 1, backoffMs: 1000 },
       retentionDays: 14,
@@ -870,6 +1013,24 @@ export class JobsService {
     await this.saveJobs();
     console.log(`[JobsService] Installed default job: ${job.id} - ${job.name}`);
     return { installed: true, dbPath };
+  }
+
+  /** Run data-contract validation after job completion (warn-only unless contract.enforceOnFailure). */
+  private async runDataContractValidation(
+    job: JobRecord,
+  ): Promise<import("./DataContractService.js").ContractValidationOutcome | null> {
+    try {
+      const { getDataContractService } = await import(
+        "./DataContractService.js"
+      );
+      return await getDataContractService().validateJob(job);
+    } catch (err) {
+      console.warn(
+        `[JobsService] Data contract validation error for ${job.id}:`,
+        err,
+      );
+      return null;
+    }
   }
 
   /** Run recipe evaluation after job completion */
@@ -1066,45 +1227,39 @@ export class JobsService {
 
   /**
    * Broadcast a log line for a running job. Allows chat/UI to stream logs in real time.
+   * Lines starting with PAPR_PROGRESS are also emitted as jobs:progress events.
    */
   private broadcastJobLogLine(jobId: string, line: string): void {
-    import("../websocket/index.js")
-      .then(({ broadcast }) => {
-        broadcast({
-          type: "jobs:log-line",
-          data: { jobId, line },
-        });
-      })
-      .catch(() => {});
+    const hub = getJobEventHub();
+    hub.publish({
+      type: "jobs:log-line",
+      data: { jobId, line },
+    });
+
+    const progress = parseJobProgressLine(line);
+    if (progress) {
+      hub.publish({
+        type: "jobs:progress",
+        data: toJobProgressData(jobId, progress),
+      });
+    }
   }
 
-  /**
-   * Broadcast job status change to all connected clients.
-   * Mini-apps listen for `jobs:status-changed` on their own WebSocket connection
-   * to ws://localhost:18789 and refresh data when their job completes — no polling needed.
-   */
   private broadcastJobStatus(job: JobRecord): void {
-    import("../websocket/index.js")
-      .then(({ broadcast }) => {
-        broadcast({
-          type: "jobs:status-changed",
-          data: {
-            jobId: job.id,
-            name: job.name,
-            status: job.status,
-            completedAt: job.completedAt,
-            error: job.error,
-            lastOutput: job.lastOutput,
-            ...(job.status === "waiting_permission" && job.waitingPermissionKeys
-              ? { waitingPermissionKeys: job.waitingPermissionKeys }
-              : {}),
-          },
-        });
-      })
-      .catch((err: unknown) => {
-        console.warn("[JobsService] Failed to broadcast job status:", err);
-        // Non-fatal — job still ran successfully
-      });
+    getJobEventHub().publish({
+      type: "jobs:status-changed",
+      data: {
+        jobId: job.id,
+        name: job.name,
+        status: job.status,
+        completedAt: job.completedAt,
+        error: job.error,
+        lastOutput: job.lastOutput,
+        ...(job.status === "waiting_permission" && job.waitingPermissionKeys
+          ? { waitingPermissionKeys: job.waitingPermissionKeys }
+          : {}),
+      },
+    });
   }
 
   private async sleep(ms: number): Promise<void> {
@@ -1546,6 +1701,38 @@ export class JobsService {
         );
 
         if (status === "completed") {
+          // ── Data contract validation (warn-only unless enforceOnFailure in contract) ──
+          const contractOutcome = await this.runDataContractValidation(updated);
+          if (contractOutcome && !contractOutcome.result.passed) {
+            const label = contractOutcome.enforceOnFailure ? "FAILED" : "WARNING";
+            await this.appendLog(
+              job.id,
+              `[Contract] ${label}: ${contractOutcome.result.summary}`,
+            );
+            for (const violation of contractOutcome.result.violations) {
+              if (violation.severity === "error") {
+                await this.appendLog(job.id, `[Contract] ${violation.message}`);
+              }
+            }
+            if (contractOutcome.enforceOnFailure) {
+              return await this.setJobStatus(job.id, "failed", {
+                exitCode: 1,
+                error: contractOutcome.result.summary,
+                lastOutput: result.lastOutput,
+                lastExecutionId: runId,
+                currentExecutionId: undefined,
+                currentAttempt: undefined,
+                maxAttempts: undefined,
+              });
+            }
+          }
+          if (contractOutcome?.result.passed) {
+            await this.appendLog(
+              job.id,
+              `[Contract] ${contractOutcome.result.summary}`,
+            );
+          }
+
           getGatewayTelemetry().trackFireAndForget("paprwork_job_completed", {
             job_id: job.id,
             job_type: job.type,
@@ -1573,6 +1760,24 @@ export class JobsService {
             .catch((err) => {
               console.warn(
                 `[JobsService] Job database memory sync failed for ${job.id}:`,
+                err,
+              );
+            });
+
+          void import("./tursoPushScheduler.js")
+            .then(({ pushJobTursoIfEnabled }) => pushJobTursoIfEnabled(job.id))
+            .catch((err) => {
+              console.warn(
+                `[JobsService] Turso push failed for ${job.id}:`,
+                (err as Error).message.slice(0, 120),
+              );
+            });
+
+          void import("./AppService.js")
+            .then(({ getAppService }) => getAppService().autoLinkJobToApps(job.id))
+            .catch((err) => {
+              console.warn(
+                `[JobsService] Auto-link after completion failed for ${job.id}:`,
                 err,
               );
             });
@@ -1683,6 +1888,14 @@ export class JobsService {
     );
   }
 
+  /** Run on Papr Cloud (memory server) while desktop is awake — for testing cloud execution. */
+  async runJobInCloud(jobId: string): Promise<JobRecord> {
+    const { runJobInCloud: executeCloudJobRun } = await import(
+      "./CloudJobRunService.js"
+    );
+    return executeCloudJobRun(this, jobId);
+  }
+
   /**
    * @param dueAtIso - The `scheduleState.nextRunAt` value this tick is firing for (stable idempotency).
    */
@@ -1706,6 +1919,7 @@ export class JobsService {
       Pick<
         import("./jobs/types.js").JobRecord,
         | "name"
+        | "appIds"
         | "folder"
         | "command"
         | "requirements"
@@ -1733,6 +1947,11 @@ export class JobsService {
       throw new Error(
         `Cannot update job ${jobId} while it is running. Stop it first.`,
       );
+    }
+
+    if (updates.appIds !== undefined) {
+      updates.appIds = assertCreateAppIds(updates.appIds);
+      await this.validateAppIdsExist(updates.appIds);
     }
 
     const updated: import("./jobs/types.js").JobRecord = {
@@ -1807,12 +2026,17 @@ export class JobsService {
       this.running.delete(jobId);
     }
 
+    const { preserveJobLinkedDatabasesBeforeDelete } = await import(
+      "./databasePromotion.js"
+    );
+    await preserveJobLinkedDatabasesBeforeDelete(jobId);
+
     // Remove from index
     this.jobs.delete(jobId);
     await this.saveJobs();
     void this.rebuildGraph();
 
-    // Optionally remove the job directory (scripts, logs, db)
+    // Optionally remove the job directory (scripts, logs, scratch db)
     if (deleteFiles) {
       const jobDir = this.getJobDir(jobId);
       try {
@@ -2150,6 +2374,143 @@ export class JobsService {
     }
   }
 
+  async readJobFile(jobId: string, filename: string): Promise<string | null> {
+    const job = this.jobs.get(jobId);
+    if (!job) return null;
+
+    const { resolveJobFilePath } = await import("./appWorkspaceFiles.js");
+    const jobDir = this.getJobDir(jobId);
+    const resolvedPath = resolveJobFilePath(jobDir, filename);
+    if (!resolvedPath) return null;
+
+    try {
+      return await fs.readFile(resolvedPath, "utf8");
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  async previewJobDatabase(
+    jobId: string,
+    dbRelativePath: string,
+    tableName?: string,
+  ): Promise<{
+    dbPath: string;
+    tables: Array<{
+      name: string;
+      columns: Array<{ name: string; type: string; pk: boolean }>;
+      rowCount: number;
+      rows: Record<string, unknown>[];
+    }>;
+    selectedTable: string | null;
+  }> {
+    const job = this.jobs.get(jobId);
+    if (!job) {
+      throw new Error(`Job not found: ${jobId}`);
+    }
+
+    const { resolveJobFilePath } = await import("./appWorkspaceFiles.js");
+    const jobDir = this.getJobDir(jobId);
+    const dbPath = resolveJobFilePath(jobDir, dbRelativePath);
+    if (!dbPath) {
+      throw new Error(`Invalid database path: ${dbRelativePath}`);
+    }
+
+    const { getDbPool } = await import("./DbQueryPool.js");
+    const pool = getDbPool();
+    const schema = await pool.schema(dbPath);
+
+    const hiddenTables = new Set([
+      "schema_migrations",
+      "job_runs",
+      "job_events",
+      "sqlite_sequence",
+    ]);
+
+    const userTables = schema.tables.filter(
+      (table) => !hiddenTables.has(table.table),
+    );
+
+    const quoteTable = (name: string): string =>
+      `"${name.replace(/"/g, '""')}"`;
+
+    const tables = await Promise.all(
+      userTables.map(async (table) => {
+        const countResult = await pool.query(
+          `job-preview:${jobId}`,
+          dbPath,
+          `SELECT COUNT(*) AS cnt FROM ${quoteTable(table.table)}`,
+          [],
+        );
+        const rowCount = Number(countResult.rows[0]?.cnt ?? 0);
+        const preview = await pool.query(
+          `job-preview:${jobId}`,
+          dbPath,
+          `SELECT * FROM ${quoteTable(table.table)} LIMIT 50`,
+          [],
+        );
+        return {
+          name: table.table,
+          columns: table.columns,
+          rowCount,
+          rows: preview.rows,
+        };
+      }),
+    );
+
+    const selectedTable =
+      tableName && tables.some((table) => table.name === tableName)
+        ? tableName
+        : tables[0]?.name ?? null;
+
+    return {
+      dbPath,
+      tables,
+      selectedTable,
+    };
+  }
+
+  async writeJobFile(
+    jobId: string,
+    filename: string,
+    content: string,
+  ): Promise<boolean> {
+    const job = this.jobs.get(jobId);
+    if (!job) return false;
+    if (job.status === "running") {
+      throw new Error(
+        `Job ${jobId} is currently running. Wait for it to finish before editing its files.`,
+      );
+    }
+
+    const { resolveJobFilePath } = await import("./appWorkspaceFiles.js");
+    const jobDir = this.getJobDir(jobId);
+    const resolvedPath = resolveJobFilePath(jobDir, filename);
+    if (!resolvedPath) return false;
+
+    try {
+      const existing = await fs.readFile(resolvedPath, "utf8");
+      const safeFilename = filename.replace(/\//g, "__");
+      const versionsDir = path.join(jobDir, ".versions", safeFilename);
+      await fs.mkdir(versionsDir, { recursive: true });
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      await fs.writeFile(
+        path.join(versionsDir, `${timestamp}_auto`),
+        existing,
+        "utf8",
+      );
+    } catch {
+      /* first write */
+    }
+
+    const dir = path.dirname(resolvedPath);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(resolvedPath, content, { flush: true });
+    return true;
+  }
+
   async restoreJobFileVersion(
     jobId: string,
     filename: string,
@@ -2217,6 +2578,11 @@ export function getJobsService(): JobsService {
     jobsServiceInstance = new JobsService();
   }
   return jobsServiceInstance;
+}
+
+/** Reset singleton between unit tests (avoids stale HOME paths). */
+export function resetJobsServiceSingletonForTests(): void {
+  jobsServiceInstance = null;
 }
 
 export async function initializeJobsService(): Promise<JobsService> {

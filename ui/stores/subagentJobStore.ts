@@ -1,5 +1,5 @@
 /**
- * Subagent Job Store - Maps reportChatId → jobId for running delegations.
+ * Subagent Job Store - Maps reportChatId → running delegation metadata.
  *
  * When delegate_task runs, the UI shows a placeholder (DelegationCard) because
  * we don't have the job ID until the tool returns. AgentJobExecutor broadcasts
@@ -9,25 +9,36 @@
 
 import { create } from "zustand";
 
+export interface SubagentJobInfo {
+  jobId: string;
+  subAgentId?: string;
+  agentName?: string;
+  agentIcon?: string;
+}
+
 interface SubagentJobStore {
-  /** reportChatId -> jobId for currently running sub-agent jobs */
-  jobIdByReportChat: Map<string, string>;
-  setJobForChat: (reportChatId: string, jobId: string) => void;
+  /** reportChatId -> latest running sub-agent job metadata */
+  jobByReportChat: Map<string, SubagentJobInfo>;
+  setJobForChat: (reportChatId: string, info: SubagentJobInfo) => void;
+  getJobForChat: (reportChatId: string) => SubagentJobInfo | undefined;
+  /** @deprecated Use getJobForChat */
   getJobIdForChat: (reportChatId: string) => string | undefined;
 }
 
 export const useSubagentJobStore = create<SubagentJobStore>((set, get) => ({
-  jobIdByReportChat: new Map(),
+  jobByReportChat: new Map(),
 
-  setJobForChat: (reportChatId, jobId) =>
+  setJobForChat: (reportChatId, info) =>
     set((state) => {
-      const next = new Map(state.jobIdByReportChat);
-      next.set(reportChatId, jobId);
-      return { jobIdByReportChat: next };
+      const next = new Map(state.jobByReportChat);
+      next.set(reportChatId, info);
+      return { jobByReportChat: next };
     }),
 
+  getJobForChat: (reportChatId) => get().jobByReportChat.get(reportChatId),
+
   getJobIdForChat: (reportChatId) =>
-    get().jobIdByReportChat.get(reportChatId),
+    get().jobByReportChat.get(reportChatId)?.jobId,
 }));
 
 /**
@@ -38,12 +49,20 @@ export function initSubagentJobStore(): void {
     const ev = e as CustomEvent<{ type: string; data?: unknown }>;
     const detail = ev.detail;
     if (detail?.type !== "subagent-job-started") return;
-    const data = detail.data as { jobId?: string; reportChatId?: string };
+    const data = detail.data as {
+      jobId?: string;
+      reportChatId?: string;
+      subAgentId?: string;
+      agentName?: string;
+      agentIcon?: string;
+    };
     if (data?.jobId && data?.reportChatId) {
-      useSubagentJobStore.getState().setJobForChat(
-        data.reportChatId,
-        data.jobId,
-      );
+      useSubagentJobStore.getState().setJobForChat(data.reportChatId, {
+        jobId: data.jobId,
+        subAgentId: data.subAgentId,
+        agentName: data.agentName,
+        agentIcon: data.agentIcon,
+      });
     }
   };
 

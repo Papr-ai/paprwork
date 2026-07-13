@@ -62,6 +62,7 @@ export class TemplateService {
     const job = await jobsService.createJob({
       name: `${safeSlug}-collector`,
       type: "python",
+      appIds: [app.id],
       command: "python3 code/main.py",
     });
     const jobPath = await jobsService.getJobPath(job.id);

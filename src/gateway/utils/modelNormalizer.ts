@@ -1,42 +1,67 @@
 /**
  * Model ID normalization for OpenAI GPT-5.x
  *
- * The OpenAI API uses dots (gpt-5.4) while some UI/legacy code uses dashes (gpt-5-4).
+ * The OpenAI API uses dots (gpt-5.6-sol) while some UI/legacy code uses dashes (gpt-5-6-sol).
  *
- * Reasoning suffixes (low, medium, high, xhigh) map to base "gpt-5.4";
+ * Reasoning suffixes (low, medium, high, xhigh) map to base tier models;
  * reasoning effort is passed separately via providerOptions.reasoningEffort.
  *
- * Deprecated GPT-5.2 picker IDs map to GPT-5.4 API ids for backward compatibility.
+ * Deprecated GPT-5.5 picker IDs map to GPT-5.6 Sol API ids for backward compatibility.
  */
 
+import type {
+  OpenAIReasoningEffort,
+  ReasoningEffort,
+} from "../../core/types/agents.js";
+
 const REASONING_SUFFIXES = new Set(["low", "medium", "high", "xhigh"]);
+
+/** Map picker effort (incl. Z.ai "max") to OpenAI SDK reasoningEffort */
+export function toOpenAIReasoningEffort(
+  effort: ReasoningEffort,
+): OpenAIReasoningEffort {
+  return effort === "max" ? "xhigh" : effort;
+}
 
 function popSegment(id: string): string | undefined {
   const parts = id.split("-");
   return parts.length >= 1 ? parts[parts.length - 1] : undefined;
 }
 
-/**
- * Normalize OpenAI model ID for API calls.
- * Accepts gpt-5.x-* with dots or dashes (e.g. gpt-5-4-low, gpt-5-5).
- *
- * @returns API model ID (e.g. "gpt-5.5", "gpt-5.5-pro", "gpt-5.4-mini", "gpt-5.3-codex")
- */
-export function normalizeOpenAIModelId(modelId: string): string {
-  let n = modelId
+function normalizeDashFormat(modelId: string): string {
+  return modelId
     .replace(/gpt-5-2/g, "gpt-5.2")
     .replace(/gpt-5-4/g, "gpt-5.4")
-    .replace(/gpt-5-5/g, "gpt-5.5");
+    .replace(/gpt-5-5/g, "gpt-5.5")
+    .replace(/gpt-5-6/g, "gpt-5.6");
+}
 
-  // Legacy GPT-5.2 family → GPT-5.5 successor
+function stripSolReasoningSuffix(n: string): string | null {
+  if (!n.startsWith("gpt-5.6-sol-")) {
+    return null;
+  }
+  const last = popSegment(n);
+  if (last && REASONING_SUFFIXES.has(last)) {
+    return "gpt-5.6-sol";
+  }
+  return null;
+}
+
+/**
+ * Normalize OpenAI model ID for API calls.
+ * Accepts gpt-5.x-* with dots or dashes (e.g. gpt-5-6-sol, gpt-5-6-terra).
+ *
+ * @returns API model ID (e.g. "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.3-codex")
+ */
+export function normalizeOpenAIModelId(modelId: string): string {
+  const n = normalizeDashFormat(modelId);
+
+  // Legacy GPT-5.2 family → GPT-5.6 Sol successor
   if (n === "gpt-5.2-codex") {
     return "gpt-5.3-codex";
   }
-  if (
-    n === "gpt-5.2" ||
-    (n.startsWith("gpt-5.2-") && n !== "gpt-5.2-codex")
-  ) {
-    return "gpt-5.5"; // Map legacy 5.2 to 5.5
+  if (n === "gpt-5.2" || (n.startsWith("gpt-5.2-") && n !== "gpt-5.2-codex")) {
+    return "gpt-5.6-sol";
   }
 
   // Distinct model IDs (no stripping)
@@ -46,34 +71,41 @@ export function normalizeOpenAIModelId(modelId: string): string {
   if (n === "gpt-5.4-mini") {
     return n;
   }
-  
-  // Legacy GPT-5.4 variants → GPT-5.5 (5.4 replaced by 5.5)
-  if (n === "gpt-5.4-pro") {
-    return "gpt-5.5-pro";
+
+  // GPT-5.6 family
+  if (n === "gpt-5.6" || n === "gpt-5.6-sol") {
+    return "gpt-5.6-sol";
   }
-  if (n === "gpt-5.4") {
-    return "gpt-5.5";
+  const solWithReasoning = stripSolReasoningSuffix(n);
+  if (solWithReasoning) {
+    return solWithReasoning;
+  }
+  if (n === "gpt-5.6-terra") {
+    return "gpt-5.6-terra";
+  }
+  if (n === "gpt-5.6-luna") {
+    return "gpt-5.6-luna";
+  }
+
+  // Legacy GPT-5.4 variants → GPT-5.6 Sol
+  if (n === "gpt-5.4-pro" || n === "gpt-5.4") {
+    return "gpt-5.6-sol";
   }
   if (n.startsWith("gpt-5.4-")) {
     const last = popSegment(n);
     if (last && REASONING_SUFFIXES.has(last)) {
-      return "gpt-5.5"; // gpt-5.4-low/high/xhigh → gpt-5.5
+      return "gpt-5.6-sol";
     }
   }
-  
-  // GPT-5.5 variants
-  if (n === "gpt-5.5-pro") {
-    return "gpt-5.5-pro";
-  }
-  if (n === "gpt-5.5") {
-    return "gpt-5.5";
-  }
 
-  // gpt-5.5-<reasoning> → gpt-5.5 (reasoning passed separately via API)
+  // Legacy GPT-5.5 variants → GPT-5.6 Sol
+  if (n === "gpt-5.5-pro" || n === "gpt-5.5") {
+    return "gpt-5.6-sol";
+  }
   if (n.startsWith("gpt-5.5-")) {
     const last = popSegment(n);
     if (last && REASONING_SUFFIXES.has(last)) {
-      return "gpt-5.5";
+      return "gpt-5.6-sol";
     }
   }
 
@@ -118,17 +150,18 @@ const OPENAI_CODEX_MODELS = new Set([
   "gpt-5.4-mini",
   "gpt-5.5",
   "gpt-5.5-pro",
+  "gpt-5.6",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
 ]);
 
 /**
  * Check if model can use pi-ai openai-codex (OAuth path).
- * Variants like gpt-5.4-low or gpt-5.5-high map to base models in pi-ai.
+ * Variants like gpt-5-6-sol-low or gpt-5-5-high map to base models in pi-ai.
  */
 export function isOpenAICodexModel(modelId: string): boolean {
-  const n = modelId
-    .replace(/gpt-5-2/g, "gpt-5.2")
-    .replace(/gpt-5-4/g, "gpt-5.4")
-    .replace(/gpt-5-5/g, "gpt-5.5");
+  const n = normalizeDashFormat(modelId);
 
   const apiId = normalizeOpenAIModelId(modelId);
   if (requiresOpenAIPlatformApiKey(apiId)) {
@@ -138,13 +171,19 @@ export function isOpenAICodexModel(modelId: string): boolean {
     return true;
   }
 
-  // Check GPT-5.5 with reasoning suffix
+  // Check GPT-5.6 Sol with reasoning suffix
+  if (n.startsWith("gpt-5.6-sol-")) {
+    const last = popSegment(n);
+    return last !== undefined && REASONING_SUFFIXES.has(last);
+  }
+
+  // Check GPT-5.5 with reasoning suffix (maps to 5.6 Sol now)
   if (n.startsWith("gpt-5.5-")) {
     const last = popSegment(n);
     return last !== undefined && REASONING_SUFFIXES.has(last);
   }
 
-  // Check GPT-5.4 with reasoning suffix (maps to 5.5 now)
+  // Check GPT-5.4 with reasoning suffix (maps to 5.6 Sol now)
   if (n.startsWith("gpt-5.4-")) {
     const last = popSegment(n);
     return last !== undefined && REASONING_SUFFIXES.has(last);

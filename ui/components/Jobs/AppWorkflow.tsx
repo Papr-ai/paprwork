@@ -314,8 +314,8 @@ export function AppWorkflow({
         </p>
         <p className="wf-empty-desc">
           {isStandalone
-            ? "Jobs appear here when they are not linked to a mini-app via data sources or a matching folder name."
-            : "Link jobs to this app with data sources, or set job folders to match the app name."}
+            ? "Jobs appear here when their appIds is ['__standalone__'] (not linked to any mini-app)."
+            : "Create jobs with appIds including this app's UUID, or link a data source to sync appIds automatically."}
         </p>
       </div>
     );

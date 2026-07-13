@@ -1,4 +1,5 @@
 import { describe, expect, test, beforeAll, afterAll } from "vitest";
+import { STANDALONE_APP_ID } from "../src/gateway/services/jobs/appIds.js";
 import { getJobsService } from "../src/gateway/services/JobsService.js";
 import { getJobsScheduler } from "../src/gateway/services/JobsScheduler.js";
 import { getJobRunHistory } from "../src/gateway/services/jobs/JobRunHistory.js";
@@ -34,6 +35,7 @@ describe("Job Scheduling E2E (Simplified)", () => {
     // Create bash job
     const job = await jobsService.createJob({
       name: "E2E Test Bash Job",
+      appIds: [STANDALONE_APP_ID],
       type: "bash",
       command: 'echo "E2E test successful"',
     });
@@ -72,6 +74,7 @@ describe("Job Scheduling E2E (Simplified)", () => {
     // Create bash job that fails
     const job = await jobsService.createJob({
       name: "E2E Test Failing Bash Job",
+      appIds: [STANDALONE_APP_ID],
       type: "bash",
       command: "exit 1",
       retries: {
@@ -110,6 +113,7 @@ describe("Job Scheduling E2E (Simplified)", () => {
     // Create scheduled job
     const job = await jobsService.createJob({
       name: "E2E Test Scheduled Job",
+      appIds: [STANDALONE_APP_ID],
       type: "bash",
       command: 'echo "scheduled"',
       schedule: {
@@ -142,6 +146,7 @@ describe("Job Scheduling E2E (Simplified)", () => {
     // Create cron job (every hour at minute 0)
     const job = await jobsService.createJob({
       name: "E2E Test Cron Job",
+      appIds: [STANDALONE_APP_ID],
       type: "bash",
       command: 'echo "cron"',
       schedule: {
@@ -172,6 +177,7 @@ describe("Job Scheduling E2E (Simplified)", () => {
     // Create python job
     const job = await jobsService.createJob({
       name: "E2E Test Python Job",
+      appIds: [STANDALONE_APP_ID],
       type: "python",
       command: "print('Python E2E test')",
     });

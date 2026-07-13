@@ -12,7 +12,20 @@ import type { AssistantMessageEvent } from "@mariozechner/pi-ai";
 import {
   sanitizeToolOutput,
 } from "../../../core/tools/index.js";
-import { compactStaleToolResults, estimateMessagesTokens } from "../agent/compactToolResults.js";
+import {
+  MID_TURN_MAX_TOKENS,
+  trimOldestHistoryTurns,
+  type HistoryTrimBounds,
+} from "../agent/midTurnContextTrim.js";
+import { compactStaleToolResults } from "../agent/compactToolResults.js";
+import { truncateToolResultForModelContext } from "../agent/toolResultTruncation.js";
+import {
+  EMPTY_PI_AI_BILLING_USAGE,
+  accumulatePiAiBillingUsage,
+  extractPiAiUsageFromDoneEvent,
+  getPiAiContextTokensFromStep,
+  type PiAiBillingUsage,
+} from "./piAiUsage.js";
 /**
  * Truncate tool call ID to 64 characters (OpenAI's maximum length requirement).
  * IDs from various APIs may exceed this limit, causing validation errors.
@@ -44,7 +57,17 @@ type OurChunk =
       toolName: string;
       result: unknown;
     }
-  | { type: "finish"; finishReason: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } }
+  | {
+      type: "finish";
+      finishReason: string;
+      usage?: {
+        promptTokens: number;
+        completionTokens: number;
+        totalTokens: number;
+        cacheReadTokens?: number;
+        cacheWriteTokens?: number;
+      };
+    }
   | { type: "start-step" }
   | { type: "error"; error: unknown };
 
@@ -199,13 +222,19 @@ function appendToolTurnToContext(
       text = `[Tool ${tr.toolName} returned empty result - possible timeout or crash]`;
     }
 
+    // Cap pathological results before adding to in-flight context.
+    text = truncateToolResultForModelContext(
+      text,
+      tr.toolCallId,
+      tr.toolName,
+    );
+
     const resultObj = tr.result && typeof tr.result === "object" ? tr.result as Record<string, unknown> : null;
     const isError = resultObj
       ? resultObj.success === false || typeof resultObj.error === "string"
       : false;
 
-    // Store full results — compaction happens in compactStaleToolResults
-    // before the next model call, not here.
+    // Cap pathological results; full data remains in SQLite for get_full_tool_result.
     context.messages.push({
       role: "toolResult",
       toolCallId: tr.toolCallId,
@@ -220,7 +249,6 @@ function appendToolTurnToContext(
 
 /**
  * Create a stream that runs multiple pi-ai turns when the model returns tool calls
- * Now includes context pressure monitoring and auto-summarization
  */
 /**
  * Safe JSON serialization that handles circular references and errors
@@ -259,6 +287,15 @@ export async function* createPiCodexStreamWithToolLoop(
     sessionId: string;
     signal?: AbortSignal;
     reasoning?: string;
+    cacheRetention?: "none" | "short" | "long";
+    headers?: Record<string, string>;
+    onPayload?: (
+      params: Record<string, unknown>,
+      model: unknown,
+    ) =>
+      | Record<string, unknown>
+      | undefined
+      | Promise<Record<string, unknown> | undefined>;
   },
   mastraTools: Record<
     string,
@@ -266,8 +303,7 @@ export async function* createPiCodexStreamWithToolLoop(
   >,
   apiKeys: string[],
   maxSteps: number,
-  onContextPressure?: () => Promise<void>, // Callback to trigger summarization
-  modelId?: string, // Add modelId to determine context threshold
+  historyTrimBounds?: HistoryTrimBounds,
 ): AsyncGenerator<OurChunk> {
   const context = {
     ...initialContext,
@@ -277,6 +313,7 @@ export async function* createPiCodexStreamWithToolLoop(
   let step = 0;
   let totalToolCalls = 0; // Track total tool calls across all steps
   let cumulativeTokens = 0; // Track token usage for adaptive truncation
+  let accumulatedBilling: PiAiBillingUsage = { ...EMPTY_PI_AI_BILLING_USAGE };
   
   // CIRCUIT BREAKER 1: Validation error tracking (Issue 65)
   let validationErrorCount = 0;
@@ -290,48 +327,6 @@ export async function* createPiCodexStreamWithToolLoop(
   const recentToolCalls: Array<{ name: string; args: string }> = [];
   const MAX_RECENT_TOOL_CALLS = 10;
   const REPETITION_THRESHOLD = 5; // If same tool called 5+ times recently, warn
-  
-  // Model-aware context thresholds (leave room for output + reasoning)
-  // GPT-5.5: 1M context, but reasoning can be 30-50K → use 750K threshold (250K buffer)
-  // GPT-5.4-mini: 272K context → use 200K threshold (72K buffer)
-  // Claude Opus 4.7: 1M context → use 750K threshold (250K buffer)
-  // Claude Opus 4.6: 200K context → use 120K threshold (conservative)
-  // Default: 120K (conservative)
-  const getContextThreshold = (): number => {
-    if (!modelId) return 120000;
-    
-    // GPT-5.5 models (1M context) - includes legacy 5.4 non-mini variants
-    if (modelId.startsWith('gpt-5.5') || 
-        (modelId.startsWith('gpt-5.4') && modelId !== 'gpt-5.4-mini') ||
-        modelId.startsWith('gpt-5.3') ||
-        modelId.startsWith('gpt-5.2')) {
-      return 750000; // 1M - 250K buffer for output + reasoning
-    }
-    
-    // GPT-5.4-mini (272K context)
-    if (modelId === 'gpt-5.4-mini') {
-      return 200000; // 272K - 72K buffer
-    }
-    
-    // Claude Opus 4.7 / Fable 5 (1M context)
-    if (modelId === 'claude-opus-4-7' || modelId === 'claude-fable-5') {
-      return 750000; // 1M - 250K buffer
-    }
-    
-    // Claude models (200K context for older models)
-    if (modelId.includes('claude')) {
-      return 120000; // 200K - 80K buffer (conservative)
-    }
-    
-    // Default conservative threshold
-    return 120000;
-  };
-  
-  const CONTEXT_ABORT_THRESHOLD = getContextThreshold();
-  
-  console.log(
-    `[PiCodexToolLoop] Model: ${modelId || 'unknown'}, Context threshold: ${CONTEXT_ABORT_THRESHOLD.toLocaleString()} tokens`,
-  );
 
   // Estimate initial context tokens
   const initialContextStr = JSON.stringify(context.messages);
@@ -381,50 +376,20 @@ export async function* createPiCodexStreamWithToolLoop(
       );
     }
     
-    // Estimate the size we'd ACTUALLY send (post-compaction) for the
-    // threshold check. Cheap — just walks the array measuring strings.
-    // Falls back to cumulativeTokens (last known prompt size) if no batches yet.
-    if (step > 0) {
-      const projectedTokens = estimateMessagesTokens(context.messages);
-      if (projectedTokens < cumulativeTokens) {
-        // Will compact; use the smaller projection
-        cumulativeTokens = projectedTokens;
-      }
-    }
-    // Check context pressure before each step
-    if (cumulativeTokens > CONTEXT_ABORT_THRESHOLD) {
-      console.warn(
-        `[PiCodexToolLoop] ⚠️ Context pressure at step ${step}: ` +
-          `${cumulativeTokens} tokens > ${CONTEXT_ABORT_THRESHOLD} threshold. ` +
-          `Aborting stream and triggering compression.`,
-      );
-
-      // Yield error to trigger summarization in parent
-      yield {
-        type: "error",
-        error: {
-          type: "context_length_exceeded",
-          message:
-            "Context limit approaching. Conversation will be summarized automatically.",
-        },
-      };
-
-      // Trigger summarization callback if provided
-      if (onContextPressure) {
-        await onContextPressure();
-      }
-
-      break; // Stop loop - parent will handle retry with compressed context
-    }
-
     if (step > 0) {
       yield { type: "start-step" };
     }
 
-
-    // Compact stale tool results before sending to model.
-    // Fresh batch (most recent) stays full; older batches get truncated.
-    compactStaleToolResults(context.messages);
+    if (historyTrimBounds) {
+      compactStaleToolResults(context.messages as unknown[]);
+      trimOldestHistoryTurns(
+        context.messages as Array<{ role?: unknown; content?: unknown }>,
+        {
+          ...historyTrimBounds,
+          maxTokens: MID_TURN_MAX_TOKENS,
+        },
+      );
+    }
 
     let piStream: AsyncIterable<AssistantMessageEvent>;
     try {
@@ -487,22 +452,54 @@ export async function* createPiCodexStreamWithToolLoop(
             : event.reason === "length"
               ? "length"
               : "stop";
-        finalMessage = event.message as any;
+        finalMessage = event.message;
 
-        // Extract token usage if available
-        const usage = (event as any).usage;
-        if (usage?.input_tokens) {
-          cumulativeTokens = usage.input_tokens;
+        const stepUsage = extractPiAiUsageFromDoneEvent(event);
+        if (step === 1 && event.message?.usage) {
           console.log(
-            `[PiCodexToolLoop] Step ${step}: ${Math.round(cumulativeTokens / 1000)}K tokens used`,
+            `[PiCodexToolLoop] Step 1 raw usage from API:`,
+            JSON.stringify(event.message.usage),
           );
+        }
+        if (stepUsage) {
+          cumulativeTokens = getPiAiContextTokensFromStep(stepUsage);
+          accumulatedBilling = accumulatePiAiBillingUsage(
+            accumulatedBilling,
+            stepUsage,
+          );
+          console.log(
+            `[PiCodexToolLoop] Step ${step}: ~${Math.round(cumulativeTokens / 1000)}K context tokens` +
+              ` (${stepUsage.promptTokens} input + ${stepUsage.completionTokens} output` +
+              (stepUsage.cacheReadTokens || stepUsage.cacheWriteTokens
+                ? `, cache read ${stepUsage.cacheReadTokens} / write ${stepUsage.cacheWriteTokens}`
+                : "") +
+              `)`,
+          );
+          if (stepUsage.cacheReadTokens > 0 || stepUsage.cacheWriteTokens > 0) {
+            console.log(
+              `[PiCodexToolLoop] 💾 Anthropic cache — read: ${stepUsage.cacheReadTokens}, write: ${stepUsage.cacheWriteTokens} tokens`,
+            );
+          }
         }
 
         // Don't yield "finish" when toolUse - we're continuing the loop
         if (event.reason === "toolUse") continue;
+
+        const finishChunk = adaptPiStreamToAISDKEvent(
+          event,
+          accumulatedBilling,
+        );
+        // Attach the actual last-step context window size for summarization decisions.
+        // accumulatedBilling sums across all steps (for cost), but cumulativeTokens
+        // is the last step's input+cacheRead+cacheWrite = real context window usage.
+        if (finishChunk && finishChunk.type === "finish" && finishChunk.usage) {
+          (finishChunk.usage as Record<string, unknown>).contextTokens = cumulativeTokens;
+        }
+        if (finishChunk) yield finishChunk;
+        continue;
       }
 
-      const chunk = adaptPiStreamToAISDKEvent(event, cumulativeTokens);
+      const chunk = adaptPiStreamToAISDKEvent(event);
       if (chunk) yield chunk;
     }
 
@@ -637,8 +634,7 @@ export async function* createPiCodexStreamWithToolLoop(
         }
       }
 
-      // Append full results — compaction happens in compactStaleToolResults
-      // before the next model call (next loop iteration).
+      // Append full tool results for the current turn (never truncated mid-turn).
       appendToolTurnToContext(context, finalMessage, toolResults, cumulativeTokens);
 
       // Do NOT update cumulativeTokens here from raw context size — that
@@ -666,7 +662,7 @@ export async function* createPiCodexStreamWithToolLoop(
  */
 function adaptPiStreamToAISDKEvent(
   event: AssistantMessageEvent,
-  cumulativeTokens?: number,
+  accumulatedBilling?: PiAiBillingUsage,
 ): OurChunk | null {
   switch (event.type) {
     case "text_delta": {
@@ -708,19 +704,29 @@ function adaptPiStreamToAISDKEvent(
             ? "length"
             : "stop";
       
-      // Include token usage if available
-      const usage = (event as any).usage;
-      const promptTokens = usage?.input_tokens || cumulativeTokens || 0;
-      const completionTokens = usage?.output_tokens || 0;
-      
-      return { 
-        type: "finish", 
+      const billing =
+        accumulatedBilling &&
+        (accumulatedBilling.promptTokens > 0 ||
+          accumulatedBilling.completionTokens > 0 ||
+          accumulatedBilling.cacheReadTokens > 0 ||
+          accumulatedBilling.cacheWriteTokens > 0)
+          ? accumulatedBilling
+          : extractPiAiUsageFromDoneEvent(event);
+
+      if (!billing) {
+        return { type: "finish", finishReason };
+      }
+
+      return {
+        type: "finish",
         finishReason,
-        usage: promptTokens > 0 ? {
-          promptTokens,
-          completionTokens,
-          totalTokens: promptTokens + completionTokens,
-        } : undefined,
+        usage: {
+          promptTokens: billing.promptTokens,
+          completionTokens: billing.completionTokens,
+          totalTokens: billing.totalTokens,
+          cacheReadTokens: billing.cacheReadTokens,
+          cacheWriteTokens: billing.cacheWriteTokens,
+        },
       };
     }
     case "error":

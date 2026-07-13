@@ -130,6 +130,11 @@
   font-weight: bold;
 }
 
+.exploring-tool-interrupted {
+  font-size: 13px;
+  line-height: 1;
+}
+
 /* Agent narration text that appears after tool calls */
 .exploring-narration {
   padding: 00px 2px;

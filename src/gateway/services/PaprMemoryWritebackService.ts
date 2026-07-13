@@ -4,7 +4,7 @@
  */
 import Papr from "@papr/memory";
 import { getApiKey } from "../utils/keyResolver.js";
-import { getPaprUserId } from "../utils/paprUserId.js";
+import { paprUserScope } from "../utils/paprUserId.js";
 import type { JobMemoryPolicy } from "./jobs/types.js";
 
 export interface MemoryWritebackInput {
@@ -42,10 +42,9 @@ export async function writeRunMemory(
   });
   
   try {
-    const userId = input.userId ?? getPaprUserId();
     await client.memory.add({
       content: compactContent(input),
-      ...(userId ? { user_id: userId } : {}),
+      ...(input.userId ? { external_user_id: input.userId } : paprUserScope()),
       metadata: {
         category: "learning",
         role: "assistant",

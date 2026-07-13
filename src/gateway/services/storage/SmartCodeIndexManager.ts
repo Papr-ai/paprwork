@@ -12,6 +12,7 @@ import { Papr } from '@papr/memory';
 import { CodeIndexerService } from './CodeIndexerService.js';
 import { CodeIndexTracker } from './CodeIndexTracker.js';
 import { CodeFileWatcher } from './CodeFileWatcher.js';
+import { CodeSummaryIndexPipeline } from './CodeSummaryIndexPipeline.js';
 import {
   getProjectPathInfo,
   isIndexableCodePath,
@@ -34,9 +35,11 @@ export class SmartCodeIndexManager {
   private tracker: CodeIndexTracker;
   private indexer: CodeIndexerService;
   private watcher: CodeFileWatcher;
+  private summaryPipeline: CodeSummaryIndexPipeline;
   
   private debounceTimer: NodeJS.Timeout | null = null;
   private batchTimer: NodeJS.Timeout | null = null;
+  private queueInterval: NodeJS.Timeout | null = null;
   private isIndexing: boolean = false;
   private rateLimitHit: boolean = false;
   
@@ -52,6 +55,16 @@ export class SmartCodeIndexManager {
     this.tracker = new CodeIndexTracker(this.config.dataDir);
     this.indexer = new CodeIndexerService(client, this.config.schemaId, this.config.paprDir);
     this.watcher = new CodeFileWatcher(client, this.config.schemaId, this.config.paprDir);
+    this.summaryPipeline = new CodeSummaryIndexPipeline(
+      client,
+      this.config.schemaId,
+      this.tracker,
+      this.config.paprDir,
+    );
+  }
+
+  getTracker(): CodeIndexTracker {
+    return this.tracker;
   }
   
   /**
@@ -87,6 +100,11 @@ export class SmartCodeIndexManager {
 
     if (this.batchTimer) {
       clearTimeout(this.batchTimer);
+    }
+
+    if (this.queueInterval) {
+      clearInterval(this.queueInterval);
+      this.queueInterval = null;
     }
     
     this.watcher.stop();
@@ -214,9 +232,12 @@ export class SmartCodeIndexManager {
   private startFileWatcher(): void {
     console.log('👀 Starting file watcher for real-time indexing...');
     
-    // Connect watcher to queue changes
     this.watcher.setOnFileChange((filePath) => {
       this.queueFileChange(filePath);
+    });
+
+    this.watcher.setOnFileDelete((filePath) => {
+      void this.summaryPipeline.processDeletedFile(filePath);
     });
     
     // Start watching
@@ -285,6 +306,13 @@ export class SmartCodeIndexManager {
     } catch (error) {
       console.error('❌ Batch processing error:', error);
     } finally {
+      try {
+        await this.summaryPipeline.flushPendingProjectOverviews();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[CodeSummary] Project overview flush failed: ${message}`);
+      }
+
       this.isIndexing = false;
 
       if (!this.rateLimitHit && this.tracker.getQueueSize() > 0) {
@@ -302,9 +330,9 @@ export class SmartCodeIndexManager {
     
     for (const queuedFile of files) {
       try {
-        // Skip if file no longer exists
         if (!fs.existsSync(queuedFile.file_path)) {
           console.log(`   ⚠️  Skipped (deleted): ${queuedFile.file_path}`);
+          await this.summaryPipeline.processDeletedFile(queuedFile.file_path);
           this.tracker.dequeueFile(queuedFile.file_path);
           continue;
         }
@@ -354,12 +382,11 @@ export class SmartCodeIndexManager {
           }
           
           console.error(`   ❌ Failed to index ${queuedFile.file_path}: ${errorMessage}`);
-          console.error('   💡 PAPR Memory service issue (503) or quota exceeded.');
-          console.error('   💡 This may be temporary rate limiting - will retry in 30 seconds.');
-          console.error('   💡 If persistent, upgrade at: https://platform.papr.ai/settings');
-          
-          // Remove from queue on rate limit - don't retry immediately
-          this.tracker.dequeueFile(queuedFile.file_path);
+          console.error('   💡 PAPR Memory returned a transient service error (503/429).');
+          console.error('   💡 File kept in queue — will retry after 30-second cooldown.');
+          console.error('   💡 If persistent, check https://memory.papr.ai/health or platform settings.');
+
+          // Keep file in queue so the cooldown retry can pick it up again
           hitRateLimit = true;
           break; // Stop processing batch entirely
         } else if (isPermanentIndexError(err.message)) {
@@ -378,10 +405,9 @@ export class SmartCodeIndexManager {
       this.rateLimitHit = true;
       const remaining = this.tracker.getQueueSize();
       if (remaining > 0) {
-        console.log(`\n   ⏸️  Indexing paused - PAPR Memory returned 503 errors.`);
-        console.log(`   💡 ${remaining} files remain in queue.`);
-        console.log(`   💡 This may be temporary rate limiting - will retry in 30 seconds.`);
-        console.log(`   💡 If errors persist, check https://platform.papr.ai/settings for quota.\n`);
+        console.log(`\n   ⏸️  Indexing paused - PAPR Memory returned transient errors.`);
+        console.log(`   💡 ${remaining} files remain in queue (including the failed file).`);
+        console.log(`   💡 Retrying in 30 seconds.\n`);
         
         setTimeout(() => {
           console.log('\n🔄 Retrying indexing after 30-second cooldown...');
@@ -404,11 +430,14 @@ export class SmartCodeIndexManager {
       throw new Error('File is not indexable — must be inside apps/{id}/ or Jobs/{id}/');
     }
 
-    if (projectInfo.type === 'job') {
-      await this.indexer.indexSingleJob(projectInfo.projectId);
-    } else {
-      await this.indexer.indexSingleMiniApp(projectInfo.projectId);
+    try {
+      await this.summaryPipeline.processChangedFile(filePath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[CodeSummary] File summary failed for ${path.basename(filePath)}: ${message}`);
     }
+
+    await this.indexer.indexSingleCodeFile(filePath);
     
     // Record in tracker after successful API indexing
     this.tracker.recordIndexedFile({
@@ -447,7 +476,7 @@ export class SmartCodeIndexManager {
       }
     };
 
-    setInterval(checkQueue, 10000);
+    this.queueInterval = setInterval(checkQueue, 10000);
 
     if (this.tracker.getQueueSize() > 0) {
       this.scheduleBatch(0);

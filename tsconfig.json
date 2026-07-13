@@ -4,6 +4,7 @@
     "module": "ESNext",
     "lib": ["ES2020"],
     "moduleResolution": "bundler",
+    "customConditions": ["node"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -21,7 +22,6 @@
       "@renderer/*": ["src/renderer/*"],
       "@gateway/*": ["src/gateway/*"]
     },
-    "types": ["node"],
     "noImplicitAny": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,

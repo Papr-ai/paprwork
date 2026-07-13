@@ -16,6 +16,7 @@ interface CustomKey {
   value: string;
   description?: string;
   permission: "always" | "ask";
+  clientAccess?: "server" | "client";
   createdAt: string;
   updatedAt?: string;
 }
@@ -40,6 +41,8 @@ interface CustomKeysIpcMessage {
 /**
  * Custom Keys Service - Singleton
  */
+type KeyChangeListener = (keyName?: string) => void;
+
 export class CustomKeysService {
   private initialized = false;
   private ipcAvailable = false;
@@ -51,6 +54,7 @@ export class CustomKeysService {
 
   private ipcDispatcherRegistered = false;
   private readonly pendingRequests = new Map<string, PendingIpcRequest>();
+  private readonly changeListeners: KeyChangeListener[] = [];
 
   private listKeysCache: CustomKeyMetadata[] | null = null;
   private listKeysCacheAt = 0;
@@ -211,18 +215,33 @@ export class CustomKeysService {
     });
   }
 
+  /**
+   * Register a callback invoked whenever keys are added, updated, or deleted.
+   * Used by VaultSyncService to push changes to the cloud vault.
+   */
+  onKeyChange(listener: KeyChangeListener): void {
+    this.changeListeners.push(listener);
+  }
+
   invalidateCache(keyName?: string): void {
     if (keyName) {
       this.valueCache.delete(keyName);
       this.valueInFlight.delete(keyName);
-      return;
+    } else {
+      this.listKeysCache = null;
+      this.listKeysCacheAt = 0;
+      this.listKeysInFlight = null;
+      this.valueCache.clear();
+      this.valueInFlight.clear();
     }
 
-    this.listKeysCache = null;
-    this.listKeysCacheAt = 0;
-    this.listKeysInFlight = null;
-    this.valueCache.clear();
-    this.valueInFlight.clear();
+    for (const listener of this.changeListeners) {
+      try {
+        listener(keyName);
+      } catch {
+        /* listeners should not break cache invalidation */
+      }
+    }
   }
 
   private isListCacheFresh(): boolean {

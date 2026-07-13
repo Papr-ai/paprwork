@@ -1,5 +1,5 @@
 /**
- * CommunityAppsView - Browse and import app bundles from the community repo
+ * CommunityAppsView - Browse Papr Cloud + open-source community apps
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -12,16 +12,36 @@ import {
   type WizardResult,
   type HelpRequest,
 } from "./ImportSetupWizard";
-import type { RequirementItem } from "../../../src/core/types/bundles";
+import type { CommunityCatalogEntry } from "../../../src/core/types/communityCatalog";
+import type { RequirementItem, RequiredKeySpec } from "../../../src/core/types/bundles";
 import { normalizeRequirements } from "../../../src/core/types/bundles";
 import { lookupService } from "../../../src/core/data/knownServices";
 import "./CommunityAppsView.css";
 
-/**
- * Registry entries are Zod-validated server-side (parseValidRegistryEntries).
- * Both bare strings and RequiredKeySpec objects are accepted for requirements.
- */
-interface CommunityRegistryEntry {
+const GATEWAY =
+  typeof import.meta !== "undefined" &&
+  import.meta.env?.VITE_GATEWAY_PORT
+    ? `http://${import.meta.env.VITE_GATEWAY_HOST || "localhost"}:${import.meta.env.VITE_GATEWAY_PORT || "18789"}`
+    : "http://localhost:18789";
+
+interface CloudLineageIndex {
+  byAppId: Record<string, { sourceAppId: string; sourceSlug: string; sourceNamespaceId: string }>;
+  bySourceKey: Record<string, string[]>;
+}
+
+type CloudInstallMode = "fork" | "track";
+
+interface CommunityCatalog {
+  schemaVersion: string;
+  entries: CommunityCatalogEntry[];
+  sources: {
+    opensource: number;
+    cloud: number;
+  };
+}
+
+/** Legacy shape for ImportSetupWizard */
+interface OssRegistryEntry {
   bundleId: string;
   name: string;
   description: string;
@@ -35,16 +55,10 @@ interface CommunityRegistryEntry {
   platform?: string[];
 }
 
-/** Sanitize an icon string — strip scripts and event handlers from untrusted HTML */
 function sanitizeIcon(raw: string): string {
   return raw
     .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/on\w+\s*=/gi, "data-blocked=");
-}
-
-interface CommunityRegistry {
-  schemaVersion: string;
-  bundles: CommunityRegistryEntry[];
 }
 
 function detectUserPlatform(): "macos" | "windows" | "linux" {
@@ -54,16 +68,73 @@ function detectUserPlatform(): "macos" | "windows" | "linux" {
   return "linux";
 }
 
+function cloudSourceKey(namespaceId: string, slug: string): string {
+  return `${namespaceId}:${slug}`;
+}
+
+function isCloudEntryInstalled(
+  entry: CommunityCatalogEntry,
+  installedAppIds: Set<string>,
+  lineageIndex: CloudLineageIndex | null,
+): boolean {
+  if (!entry.appId) return false;
+  if (installedAppIds.has(entry.appId)) return true;
+  if (!entry.namespaceId || !entry.slug || !lineageIndex) return false;
+  const key = cloudSourceKey(entry.namespaceId, entry.slug);
+  return (lineageIndex.bySourceKey[key]?.length ?? 0) > 0;
+}
+
+function installedForkCountForEntry(
+  entry: CommunityCatalogEntry,
+  lineageIndex: CloudLineageIndex | null,
+): number {
+  if (!entry.namespaceId || !entry.slug || !lineageIndex) return 0;
+  const key = cloudSourceKey(entry.namespaceId, entry.slug);
+  return lineageIndex.bySourceKey[key]?.length ?? 0;
+}
+
+function userProvidedRequirements(
+  reqs: RequirementItem[] | RequiredKeySpec[] | undefined,
+): RequiredKeySpec[] {
+  if (!reqs?.length) return [];
+  return normalizeRequirements(reqs).filter(
+    (spec) => spec.required !== false && spec.credentialScope !== "owner",
+  );
+}
+
+function toOssEntry(entry: CommunityCatalogEntry): OssRegistryEntry {
+  return {
+    bundleId: entry.bundleId ?? entry.catalogId,
+    name: entry.name,
+    description: entry.description,
+    version: entry.version,
+    author: entry.author,
+    tags: entry.tags,
+    minPaprworkVersion: entry.minPaprworkVersion ?? "2.0.0",
+    path: entry.path ?? "",
+    icon: entry.icon,
+    requirements: entry.requirements,
+    platform: entry.platform,
+  };
+}
+
 export function CommunityAppsView() {
-  const [registry, setRegistry] = useState<CommunityRegistry | null>(null);
+  const [catalog, setCatalog] = useState<CommunityCatalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [showAllPlatforms, setShowAllPlatforms] = useState(false);
-  const [wizardEntry, setWizardEntry] = useState<CommunityRegistryEntry | null>(
-    null,
-  );
-  const { filteredArtifacts } = useArtifacts();
+  const [wizardEntry, setWizardEntry] = useState<OssRegistryEntry | null>(null);
+  const [installingId, setInstallingId] = useState<string | null>(null);
+  const [installToast, setInstallToast] = useState<string | null>(null);
+  const [lineageIndex, setLineageIndex] = useState<CloudLineageIndex | null>(null);
+  const [installModeEntry, setInstallModeEntry] = useState<CommunityCatalogEntry | null>(null);
+  const [cloudInstallWizard, setCloudInstallWizard] = useState<{
+    appId: string;
+    appTitle: string;
+    requirements: RequiredKeySpec[];
+  } | null>(null);
+  const { filteredArtifacts, loadArtifacts } = useArtifacts();
   const { createChat } = useChat();
   const { createTab, switchToTab } = useTabs();
   const userPlatform = detectUserPlatform();
@@ -72,12 +143,12 @@ export function CommunityAppsView() {
     filteredArtifacts.filter((a) => a.type === "app").map((a) => a.id),
   );
 
-  const fetchRegistry = useCallback(async () => {
+  const fetchCatalog = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await gateway.send("bundle:fetch-registry");
-      setRegistry(response.data as CommunityRegistry);
+      const response = await gateway.send("bundle:fetch-community-catalog");
+      setCatalog(response.data as CommunityCatalog);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to load community apps",
@@ -88,30 +159,26 @@ export function CommunityAppsView() {
   }, []);
 
   useEffect(() => {
-    void fetchRegistry();
-  }, [fetchRegistry]);
+    void fetchCatalog();
+  }, [fetchCatalog]);
 
-  const handleImportClick = (entry: CommunityRegistryEntry) => {
-    const reqs = entry.requirements ?? [];
-    if (reqs.length > 0) {
-      setWizardEntry(entry);
-    } else {
-      void startAgentImport(entry, null);
+  const fetchLineage = useCallback(async () => {
+    try {
+      const res = await fetch(`${GATEWAY}/api/cloud/lineage`);
+      if (!res.ok) return;
+      const body = (await res.json()) as CloudLineageIndex;
+      setLineageIndex(body);
+    } catch {
+      /* optional */
     }
-  };
+  }, []);
 
-  const handleWizardComplete = (result: WizardResult) => {
-    if (!wizardEntry) return;
-    setWizardEntry(null);
-    void startAgentImport(wizardEntry, result);
-  };
+  useEffect(() => {
+    void fetchLineage();
+  }, [fetchLineage]);
 
-  /**
-   * Build a structured message for the agent with all wizard context
-   * so it can import the bundle and adapt any substituted services.
-   */
   const startAgentImport = async (
-    entry: CommunityRegistryEntry,
+    entry: OssRegistryEntry,
     wizard: WizardResult | null,
   ) => {
     const chatId = await createChat();
@@ -127,13 +194,11 @@ export function CommunityAppsView() {
       `set up any virtual environments, install dependencies, and verify everything works.`;
 
     if (wizard) {
-      // Describe configured keys
       if (wizard.configured.length > 0) {
         const names = wizard.configured.map((k) => k.keyName);
         message += `\n\nThe following API keys are already configured in Settings: ${names.join(", ")}.`;
       }
 
-      // Describe substitutions
       if (wizard.substituted.length > 0) {
         message += `\n\nIMPORTANT — Service substitutions requested:`;
         for (const sub of wizard.substituted) {
@@ -145,13 +210,11 @@ export function CommunityAppsView() {
         }
       }
 
-      // Describe skipped keys
       if (wizard.skipped.length > 0) {
         const skipped = wizard.skipped.map((k) => `${k.service} (${k.keyName})`);
         message += `\n\nNote: These keys were skipped and are not configured: ${skipped.join(", ")}. The app features that depend on them may not work until the user adds them in Settings.`;
       }
     } else {
-      // No wizard (no requirements) — include raw requirements for completeness
       const reqs = entry.requirements ?? [];
       if (reqs.length > 0) {
         const normalized = normalizeRequirements(reqs);
@@ -167,6 +230,107 @@ export function CommunityAppsView() {
     }, 300);
   };
 
+  useEffect(() => {
+    if (!installToast) return;
+    const timer = setTimeout(() => setInstallToast(null), 4000);
+    return () => clearTimeout(timer);
+  }, [installToast]);
+
+  const installCloudApp = async (
+    entry: CommunityCatalogEntry,
+    mode: CloudInstallMode = "fork",
+  ) => {
+    if (!entry.namespaceId || !entry.slug) {
+      setError("This cloud app is missing namespace or slug metadata");
+      return;
+    }
+
+    setInstallingId(entry.catalogId);
+    setError(null);
+    try {
+      const res = await fetch(`${GATEWAY}/api/cloud/install`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          namespaceId: entry.namespaceId,
+          slug: entry.slug,
+          mode,
+        }),
+      });
+      const body = (await res.json()) as {
+        app?: { id: string; title?: string };
+        requirements?: RequiredKeySpec[];
+        error?: string;
+      };
+      if (!res.ok) {
+        throw new Error(body.error ?? `Install failed (${res.status})`);
+      }
+
+      const title = body.app?.title ?? entry.name;
+      const modeLabel = mode === "track" ? "Linked" : "Forked";
+      setInstallToast(`${modeLabel} "${title}" into Paprwork`);
+      void loadArtifacts();
+      void fetchLineage();
+      if (body.app?.id) {
+        const userReqs = userProvidedRequirements(
+          body.requirements ?? entry.requirements,
+        );
+        if (userReqs.length > 0) {
+          setCloudInstallWizard({
+            appId: body.app.id,
+            appTitle: title,
+            requirements: userReqs,
+          });
+          return;
+        }
+        const tabId = createTab("app", body.app.id, title);
+        switchToTab(tabId);
+      }
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message.slice(0, 160) : "Install failed",
+      );
+    } finally {
+      setInstallingId(null);
+    }
+  };
+
+  const startCloudInstall = (entry: CommunityCatalogEntry) => {
+    if (entry.codeInstallable) {
+      setInstallModeEntry(entry);
+      return;
+    }
+    void installCloudApp(entry);
+  };
+
+  const openLiveApp = async (url: string) => {
+    try {
+      if (window.electronAPI?.system?.invoke) {
+        await window.electronAPI.system.invoke("shell.openExternal", url);
+      } else {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const handleOssImportClick = (entry: CommunityCatalogEntry) => {
+    const ossEntry = toOssEntry(entry);
+    const reqs = entry.requirements ?? [];
+    if (reqs.length > 0) {
+      setWizardEntry(ossEntry);
+    } else {
+      void startAgentImport(ossEntry, null);
+    }
+  };
+
+  const handleWizardComplete = (result: WizardResult) => {
+    if (!wizardEntry) return;
+    setWizardEntry(null);
+    void startAgentImport(wizardEntry, result);
+  };
+
   const handleWizardHelp = async (request: HelpRequest) => {
     const chatId = await createChat();
     if (!chatId) return;
@@ -180,11 +344,9 @@ export function CommunityAppsView() {
     if (request.instructions) {
       message += ` The instructions say: "${request.instructions}"`;
     }
-
     if (request.signupUrl) {
       message += ` The signup page is: ${request.signupUrl}`;
     }
-
     if (request.docsUrl) {
       message += ` Docs: ${request.docsUrl}`;
     }
@@ -200,25 +362,27 @@ export function CommunityAppsView() {
     }, 300);
   };
 
-  const filteredBundles =
-    registry?.bundles.filter((b) => {
-      if (!showAllPlatforms) {
-        const platforms = b.platform ?? ["macos", "windows", "linux"];
+  const filteredEntries =
+    catalog?.entries.filter((entry) => {
+      if (entry.source === "opensource" && !showAllPlatforms) {
+        const platforms = entry.platform ?? ["macos", "windows", "linux"];
         if (!platforms.includes(userPlatform)) return false;
       }
       if (!searchQuery) return true;
       const q = searchQuery.toLowerCase();
       return (
-        b.name.toLowerCase().includes(q) ||
-        b.description.toLowerCase().includes(q) ||
-        b.tags.some((t) => t.toLowerCase().includes(q))
+        entry.name.toLowerCase().includes(q) ||
+        entry.description.toLowerCase().includes(q) ||
+        entry.tags.some((t) => t.toLowerCase().includes(q)) ||
+        entry.author.toLowerCase().includes(q)
       );
     }) ?? [];
 
   const hiddenByPlatform = showAllPlatforms
     ? 0
-    : (registry?.bundles.filter((b) => {
-        const platforms = b.platform ?? ["macos", "windows", "linux"];
+    : (catalog?.entries.filter((entry) => {
+        if (entry.source !== "opensource") return false;
+        const platforms = entry.platform ?? ["macos", "windows", "linux"];
         return !platforms.includes(userPlatform);
       }).length ?? 0);
 
@@ -235,7 +399,7 @@ export function CommunityAppsView() {
     return (
       <div className="community-apps__status">
         <p className="community-apps__error">{error}</p>
-        <button className="community-apps__retry-btn" onClick={fetchRegistry}>
+        <button className="community-apps__retry-btn" onClick={fetchCatalog}>
           Retry
         </button>
       </div>
@@ -252,7 +416,7 @@ export function CommunityAppsView() {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
         />
-        <button className="community-apps__refresh-btn" onClick={fetchRegistry}>
+        <button className="community-apps__refresh-btn" onClick={fetchCatalog}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
             <path
               d="M1 4v6h6M23 20v-6h-6"
@@ -272,6 +436,16 @@ export function CommunityAppsView() {
         </button>
       </div>
 
+      {catalog ? (
+        <p className="community-apps__summary">
+          {catalog.sources.cloud} cloud · {catalog.sources.opensource} open source
+        </p>
+      ) : null}
+
+      {installToast ? (
+        <p className="community-apps__summary">{installToast}</p>
+      ) : null}
+
       {hiddenByPlatform > 0 && (
         <button
           className="community-apps__platform-toggle"
@@ -283,7 +457,7 @@ export function CommunityAppsView() {
         </button>
       )}
 
-      {filteredBundles.length === 0 && (
+      {filteredEntries.length === 0 && (
         <div className="community-apps__status">
           <p className="community-apps__empty-text">
             {searchQuery
@@ -294,19 +468,85 @@ export function CommunityAppsView() {
       )}
 
       <div className="community-apps__grid">
-        {filteredBundles.map((entry) => {
-          const isInstalled = installedAppIds.has(entry.bundleId);
-
-          return (
-            <CommunityAppCard
-              key={entry.bundleId}
-              entry={entry}
-              isInstalled={isInstalled}
-              onImport={() => handleImportClick(entry)}
-            />
-          );
-        })}
+        {filteredEntries.map((entry) => (
+          <CommunityAppCard
+            key={entry.catalogId}
+            entry={entry}
+            isInstalled={
+              entry.source === "cloud"
+                ? isCloudEntryInstalled(entry, installedAppIds, lineageIndex)
+                : Boolean(entry.bundleId && installedAppIds.has(entry.bundleId))
+            }
+            installedForkCount={installedForkCountForEntry(entry, lineageIndex)}
+            onOssImport={() => handleOssImportClick(entry)}
+            onCloudInstall={() => startCloudInstall(entry)}
+            isInstalling={installingId === entry.catalogId}
+            onOpenLive={
+              entry.liveViewable && entry.liveUrl
+                ? () => void openLiveApp(entry.liveUrl!)
+                : undefined
+            }
+          />
+        ))}
       </div>
+
+      {installModeEntry ? (
+        <div
+          className="community-install-modal__backdrop"
+          role="presentation"
+          onClick={() => setInstallModeEntry(null)}
+        >
+          <div
+            className="community-install-modal"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="community-install-modal__title">
+              Install {installModeEntry.name}
+            </h3>
+            <p className="community-install-modal__desc">
+              Choose how this cloud app lands in your Paprwork workspace.
+            </p>
+            <button
+              type="button"
+              className="community-install-modal__option"
+              disabled={installingId === installModeEntry.catalogId}
+              onClick={() => {
+                const target = installModeEntry;
+                setInstallModeEntry(null);
+                void installCloudApp(target, "fork");
+              }}
+            >
+              <strong>Fork</strong>
+              <span>Independent copy — edit freely, send changes back to owner.</span>
+            </button>
+            <button
+              type="button"
+              className="community-install-modal__option"
+              disabled={installingId === installModeEntry.catalogId}
+              onClick={() => {
+                const target = installModeEntry;
+                setInstallModeEntry(null);
+                void installCloudApp(target, "track");
+              }}
+            >
+              <strong>Track upstream</strong>
+              <span>
+                Stay linked to the publisher — pull their updates manually when
+                you want them (Local preview → Pull latest).
+              </span>
+            </button>
+            <button
+              type="button"
+              className="community-install-modal__cancel"
+              onClick={() => setInstallModeEntry(null)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {wizardEntry && (
         <ImportSetupWizard
@@ -319,24 +559,50 @@ export function CommunityAppsView() {
           onRequestHelp={(req) => void handleWizardHelp(req)}
         />
       )}
+
+      {cloudInstallWizard ? (
+        <ImportSetupWizard
+          appName={cloudInstallWizard.appTitle}
+          requirements={cloudInstallWizard.requirements}
+          onComplete={() => {
+            const { appId, appTitle } = cloudInstallWizard;
+            setCloudInstallWizard(null);
+            const tabId = createTab("app", appId, appTitle);
+            switchToTab(tabId);
+          }}
+          onCancel={() => {
+            const { appId, appTitle } = cloudInstallWizard;
+            setCloudInstallWizard(null);
+            const tabId = createTab("app", appId, appTitle);
+            switchToTab(tabId);
+          }}
+          onRequestHelp={(req) => void handleWizardHelp(req)}
+        />
+      ) : null}
     </div>
   );
 }
 
 interface CommunityAppCardProps {
-  entry: CommunityRegistryEntry;
+  entry: CommunityCatalogEntry;
   isInstalled: boolean;
-  onImport: () => void;
+  installedForkCount?: number;
+  isInstalling?: boolean;
+  onOssImport: () => void;
+  onCloudInstall: () => void;
+  onOpenLive?: () => void;
 }
 
 function CommunityAppCard({
   entry,
   isInstalled,
-  onImport,
+  installedForkCount = 0,
+  isInstalling = false,
+  onOssImport,
+  onCloudInstall,
+  onOpenLive,
 }: CommunityAppCardProps) {
   const [showDetails, setShowDetails] = useState(false);
-
-  const buttonLabel = isInstalled ? "Installed" : "Import";
 
   const rawReqs = entry.requirements ?? [];
   const requirements = normalizeRequirements(rawReqs);
@@ -345,6 +611,7 @@ function CommunityAppCard({
   const allPlatforms = ["macos", "windows", "linux"];
   const platforms = entry.platform ?? allPlatforms;
   const isCrossPlatform =
+    entry.source === "opensource" &&
     platforms.length === allPlatforms.length &&
     allPlatforms.every((p) => platforms.includes(p));
 
@@ -365,7 +632,6 @@ function CommunityAppCard({
         />
       );
     }
-    // Default four-square grid icon with Papr blue gradient
     return (
       <svg
         className="community-card__orb-icon"
@@ -388,18 +654,41 @@ function CommunityAppCard({
     );
   };
 
+  const sourceLabel = entry.source === "cloud" ? "Cloud" : "Open source";
+
   return (
     <div className="community-card">
-      <div className="community-card__orb">
-        {renderIcon()}
-      </div>
+      <div className="community-card__orb">{renderIcon()}</div>
 
       <div className="community-card__content">
-        <h3 className="community-card__title">{entry.name}</h3>
+        <div className="community-card__title-row">
+          <h3 className="community-card__title">{entry.name}</h3>
+          {entry.isOwned ? (
+            <span className="community-card__badge community-card__badge--owned">
+              Yours
+            </span>
+          ) : null}
+          {installedForkCount > 0 ? (
+            <span className="community-card__badge community-card__badge--fork">
+              {installedForkCount} fork{installedForkCount === 1 ? "" : "s"}
+            </span>
+          ) : null}
+        </div>
         <p className="community-card__description">{entry.description}</p>
         <div className="community-card__meta">
-          <span className="community-card__version">v{entry.version}</span>
+          <span className="community-card__version">
+            {entry.source === "cloud" ? "Live" : `v${entry.version}`}
+          </span>
           <span className="community-card__author">by {entry.author}</span>
+          <span
+            className={
+              entry.source === "cloud"
+                ? "community-card__source-badge community-card__source-badge--cloud"
+                : "community-card__source-badge community-card__source-badge--opensource"
+            }
+          >
+            {sourceLabel}
+          </span>
           <button
             className="community-card__details-toggle"
             onClick={(e) => {
@@ -416,10 +705,8 @@ function CommunityAppCard({
               {tag}
             </span>
           ))}
-          {!isCrossPlatform && (
-            <span className="community-card__platform-badge">
-              {platformLabel}
-            </span>
+          {entry.source === "opensource" && !isCrossPlatform && (
+            <span className="community-card__platform-badge">{platformLabel}</span>
           )}
         </div>
 
@@ -431,35 +718,85 @@ function CommunityAppCard({
                 className={`community-card__detail-value ${hasNoRequirements ? "community-card__detail-value--good" : "community-card__detail-value--warn"}`}
               >
                 {requirements.length > 0
-                  ? requirements.map((r) => lookupService(r.name)?.service ?? r.name).join(", ")
+                  ? requirements
+                      .map((r) => lookupService(r.name)?.service ?? r.name)
+                      .join(", ")
                   : "No API keys needed"}
               </span>
             </div>
+            {entry.source === "opensource" ? (
+              <div className="community-card__detail-row">
+                <span className="community-card__detail-label">Platform</span>
+                <span
+                  className={`community-card__detail-value ${isCrossPlatform ? "community-card__detail-value--good" : ""}`}
+                >
+                  {platformLabel}
+                </span>
+              </div>
+            ) : null}
             <div className="community-card__detail-row">
-              <span className="community-card__detail-label">Platform</span>
-              <span
-                className={`community-card__detail-value ${isCrossPlatform ? "community-card__detail-value--good" : ""}`}
-              >
-                {platformLabel}
-              </span>
-            </div>
-            <div className="community-card__detail-row">
-              <span className="community-card__detail-label">Min Version</span>
+              <span className="community-card__detail-label">Install</span>
               <span className="community-card__detail-value">
-                Paprwork {entry.minPaprworkVersion}+
+                {entry.source === "cloud"
+                  ? entry.codeInstallable
+                    ? "Fork or track from Papr Cloud"
+                    : "Live app only"
+                  : "GitHub bundle"}
               </span>
             </div>
+            {entry.source === "cloud" && entry.slug ? (
+              <div className="community-card__detail-row">
+                <span className="community-card__detail-label">Slug</span>
+                <span className="community-card__detail-value">{entry.slug}</span>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
 
-      <button
-        className={`community-card__import-btn ${isInstalled ? "community-card__import-btn--disabled community-card__import-btn--success" : ""}`}
-        onClick={onImport}
-        disabled={isInstalled}
-      >
-        {buttonLabel}
-      </button>
+      {entry.source === "cloud" ? (
+        <div className="community-card__actions">
+          <div className="community-card__actions-row">
+            {entry.liveViewable && onOpenLive ? (
+              <button
+                type="button"
+                className="community-card__action-btn"
+                onClick={onOpenLive}
+              >
+                Open live
+              </button>
+            ) : null}
+            {entry.codeInstallable ? (
+              <button
+                type="button"
+                className={
+                  isInstalled
+                    ? "community-card__action-btn community-card__action-btn--primary community-card__import-btn--success"
+                    : "community-card__action-btn community-card__action-btn--primary"
+                }
+                onClick={onCloudInstall}
+                disabled={isInstalled || isInstalling}
+              >
+                {isInstalled
+                  ? installedForkCount > 0
+                    ? "Forked"
+                    : "Installed"
+                  : isInstalling
+                    ? "Installing…"
+                    : "Install"}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : (
+        <button
+          className={`community-card__import-btn ${isInstalled ? "community-card__import-btn--disabled community-card__import-btn--success" : ""}`}
+          onClick={onOssImport}
+          disabled={isInstalled}
+        >
+          {isInstalled ? "Installed" : "Import"}
+        </button>
+      )}
     </div>
   );
 }
