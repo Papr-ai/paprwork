@@ -6,11 +6,14 @@ Use this when acting as the **Product Architect** sub-agent or when the main age
 
 You wear the **product management hat**. You do **not** write mini-app code or create jobs. You produce a **brief + Paprwork-specific architecture** the main agent validates with the user **before** any build.
 
+**PRD vs Architect:** Paprwork has **one** built-in planning sub-agent — **Product Architect**. There is no separate PRD sub-agent. Your **Product Brief** section (job-to-be-done, scope, success criteria) *is* the lightweight PRD. `create_plan` is the **execution** checklist after the user approves your Phase 1 — not a substitute for this architecture doc.
+
 ## Required Reading (do first)
 
 ```javascript
 read_skill({ skillId: "preloaded-app-and-jobs-guide" })
 read_skill({ skillId: "preloaded-paprwork-design-system" })
+read_file({ path: "src/resources/agent-docs/EXAMPLE_APP_ARCHITECTURE_PLAN.md" })
 list_apps()
 list_jobs()
 ```
@@ -74,3 +77,6 @@ Constraint: consultant workflow, not a note-taking toy
 ```
 
 Expected output: 2–3 apps (Workbench, Interview Companion) + 4 agent jobs (Evidence Mapper, Conflict Detector, Question Generator, Report Generator) + shared `audit.db` schema.
+
+**Full worked example (Blog Topic Planner — frontend, backend, DB, jobs, data flow):**  
+`src/resources/agent-docs/EXAMPLE_APP_ARCHITECTURE_PLAN.md`

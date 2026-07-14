@@ -588,6 +588,8 @@ export class JobsService {
   async reloadJobs(): Promise<void> {
     console.log("[JobsService] Reloading jobs from disk...");
     await this.loadJobs();
+    await this.rebuildIndexIfCorrupted();
+    await this.pruneStaleJobEntries();
     console.log(`[JobsService] Reloaded ${this.jobs.size} jobs from disk`);
     
     // Request scheduler to reschedule in case job schedules changed

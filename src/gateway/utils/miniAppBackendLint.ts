@@ -238,3 +238,68 @@ export async function checkBackendManifestIntegrity(
 
   return issues;
 }
+
+const ORPHAN_BACKEND_HANDLER_HINTS: Readonly<Record<string, string>> = {
+  "migrate.py":
+    'Add a "migrate" action to backend/manifest.json and call POST /api/app/backend/migrate after linking the DB, or use POST /api/db/exec with CREATE TABLE IF NOT EXISTS.',
+  "schema.py":
+    "Register schema bootstrap in backend/manifest.json or use POST /api/db/exec from the mini-app.",
+};
+
+/**
+ * Flag backend/*.py files that exist on disk but are not registered in manifest.json.
+ */
+export async function checkOrphanBackendHandlers(
+  appPath: string,
+): Promise<ValidationIssue[]> {
+  const issues: ValidationIssue[] = [];
+  const backendDir = path.join(appPath, BACKEND_FOLDER);
+  const manifestPath = path.join(backendDir, "manifest.json");
+
+  let manifestRaw: string;
+  try {
+    manifestRaw = await fs.readFile(manifestPath, "utf8");
+  } catch {
+    return issues;
+  }
+
+  let registeredHandlers: Set<string>;
+  try {
+    const manifest = parseAppBackendManifest(JSON.parse(manifestRaw) as unknown);
+    registeredHandlers = new Set(
+      Object.values(manifest.actions).map((spec) =>
+        spec.handler.replace(/\\/g, "/"),
+      ),
+    );
+  } catch {
+    return issues;
+  }
+
+  let entries: string[];
+  try {
+    entries = await fs.readdir(backendDir);
+  } catch {
+    return issues;
+  }
+
+  for (const entry of entries) {
+    if (!entry.endsWith(".py") || entry.startsWith("__")) {
+      continue;
+    }
+    const normalized = entry.replace(/\\/g, "/");
+    if (registeredHandlers.has(normalized)) {
+      continue;
+    }
+    const hint = ORPHAN_BACKEND_HANDLER_HINTS[entry] ?? "";
+    issues.push({
+      file: `${BACKEND_FOLDER}/${entry}`,
+      severity: "error",
+      message:
+        `Backend handler "${entry}" exists but is not registered in backend/manifest.json — it will never run via /api/app/backend/:action.` +
+        (hint ? ` ${hint}` : ""),
+      rule: "backend-handler-orphan",
+    });
+  }
+
+  return issues;
+}

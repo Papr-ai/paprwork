@@ -48,7 +48,7 @@ export function formatAgentFocusContext(
 - **Files:**
 ${fileLines}
 
-**Use this app for edits** unless the user names a different app. Skip \`list_apps\` / \`list_app_files\` when the target file is listed above.
+**Use this app for edits** unless the user names a different app. Skip \`list_apps\` / \`list_app_files\` when the target file is listed above. **Do not bulk \`read_app_file\` the whole app** — use edit history + \`postEditSnippet\` in prior edit results, or re-read **only** specific files you need to debug.
 
 **Trivial tweak** (one color, label, class): \`edit_file({ path: "~/Papr/apps/${appId}/<filename>", oldString, newString })\` — auto-runs esbuild + validation; follow \`_verifyReminder\`; no plan for one-line changes.`);
   }
@@ -95,7 +95,7 @@ ${fileLines}
 
 ${lines}
 
-Prefer these paths for follow-up edits. Use \`edit_file({ path, oldString, newString })\` — mini-app paths auto-run esbuild; external repo paths auto-stage in git.`);
+Prefer these paths for follow-up edits. Edit tool results include a \`postEditSnippet\` of the changed region — **skip re-reading** those files unless debugging a specific issue. Re-read **only** files from this list that you must verify, not the entire app. Use \`edit_file({ path, oldString, newString })\` — mini-app paths auto-run esbuild; external repo paths auto-stage in git.`);
   }
 
   return `${AGENT_FOCUS_CONTEXT_PREFIX}

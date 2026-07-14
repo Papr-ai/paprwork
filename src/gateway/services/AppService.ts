@@ -28,10 +28,6 @@ import {
   DEFAULT_BACKEND_PING_HANDLER,
   hasBackendFiles,
 } from "../utils/appBackendScaffold.js";
-import {
-  appFilesUseDatabaseApi,
-  buildMissingDataSourceValidationIssue,
-} from "./appDatabaseEnforcement.js";
 import { writeCloudAppMetadataFile } from "./cloudAppMetadataFile.js";
 import {
   getPaprAppsRoot,
@@ -1495,10 +1491,11 @@ export class AppService {
 
     issues.push(...this.checkMiniAppRuntimePatterns(fileContents));
     try {
-      const { checkMiniAppBashPatterns, checkBackendManifestIntegrity } =
+      const { checkMiniAppBashPatterns, checkBackendManifestIntegrity, checkOrphanBackendHandlers } =
         await import("../utils/miniAppBackendLint.js");
       issues.push(...checkMiniAppBashPatterns(fileContents));
       issues.push(...(await checkBackendManifestIntegrity(appPath)));
+      issues.push(...(await checkOrphanBackendHandlers(appPath)));
     } catch (lintError) {
       console.warn("[AppService] Backend lint failed:", lintError);
     }
@@ -1667,16 +1664,34 @@ export class AppService {
     appId: string,
     fileContents: Map<string, string>,
   ): Promise<ValidationIssue[]> {
+    const {
+      appFilesUseDatabaseApi,
+      buildMissingDataSourceValidationIssue,
+      checkDbQueryWriteAntiPattern,
+      checkMissingTablesOnPrimaryDb,
+    } = await import("./appDatabaseEnforcement.js");
+
+    const issues: ValidationIssue[] = [];
+    issues.push(...checkDbQueryWriteAntiPattern(fileContents));
+
     if (!appFilesUseDatabaseApi(fileContents)) {
-      return [];
+      return issues;
     }
 
     const config = await this.getDataSourcesConfig(appId);
     if (config.sources.length === 0) {
-      return [buildMissingDataSourceValidationIssue(appId)];
+      issues.push(buildMissingDataSourceValidationIssue(appId));
+      return issues;
     }
 
-    return [];
+    const primary = await this.getPrimaryDataSource(appId);
+    if (primary?.dbPath) {
+      issues.push(
+        ...checkMissingTablesOnPrimaryDb(primary.dbPath, fileContents),
+      );
+    }
+
+    return issues;
   }
 
   /**

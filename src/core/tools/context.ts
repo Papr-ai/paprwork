@@ -11,6 +11,8 @@ import { AsyncLocalStorage } from "async_hooks";
 
 interface ToolContext {
   chatId: string;
+  /** Set when a sub-agent job is executing tools (delegate_task job id). */
+  delegationJobId?: string;
 }
 
 const asyncLocalStorage = new AsyncLocalStorage<ToolContext>();
@@ -22,16 +24,26 @@ const asyncLocalStorage = new AsyncLocalStorage<ToolContext>();
 export function runWithToolContext<T>(
   chatId: string,
   fn: () => T | Promise<T>,
+  options?: { delegationJobId?: string },
 ): T | Promise<T> {
-  return asyncLocalStorage.run({ chatId }, fn);
+  return asyncLocalStorage.run(
+    { chatId, delegationJobId: options?.delegationJobId },
+    fn,
+  );
 }
 
 /**
  * Set the current chatId for tool execution context.
  * Prefer runWithToolContext() for new code.
  */
-export function setToolContext(chatId: string): void {
-  asyncLocalStorage.enterWith({ chatId });
+export function setToolContext(
+  chatId: string,
+  options?: { delegationJobId?: string },
+): void {
+  asyncLocalStorage.enterWith({
+    chatId,
+    delegationJobId: options?.delegationJobId,
+  });
 }
 
 /**
@@ -40,6 +52,14 @@ export function setToolContext(chatId: string): void {
 export function getCurrentChatId(): string | null {
   const context = asyncLocalStorage.getStore();
   return context?.chatId ?? null;
+}
+
+/**
+ * Sub-agent delegation job id when tools run inside an isolated subagent job session.
+ */
+export function getCurrentDelegationJobId(): string | null {
+  const context = asyncLocalStorage.getStore();
+  return context?.delegationJobId ?? null;
 }
 
 /**

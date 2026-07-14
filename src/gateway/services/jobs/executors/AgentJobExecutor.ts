@@ -148,11 +148,21 @@ export class AgentJobExecutor implements IJobExecutor {
     await params.appendLog(`Starting isolated agent run: ${params.runId}`);
     await params.appendLog(`Environment: ${envBlock}`);
 
-    // Set tool execution context so tools can access the reportChatId
-    // This ensures nested delegations (sub-agent delegating to another sub-agent) inherit the correct chatId
-    if (params.job.reportChatId) {
+    // Set tool execution context so tools can access reportChatId and delegation job id
+    if (params.job.reportChatId || params.job.type === "subagent") {
       const { setToolContext } = await import("../../../../core/tools/context.js");
-      setToolContext(params.job.reportChatId);
+      const chatId =
+        params.job.reportChatId ??
+        params.job.deliver?.targetId ??
+        (params.job.type === "subagent"
+          ? `delegation:${params.job.id}`
+          : undefined);
+      if (chatId) {
+        setToolContext(chatId, {
+          delegationJobId:
+            params.job.type === "subagent" ? params.job.id : undefined,
+        });
+      }
     }
 
     // Broadcast subagent-job-started so UI can show MiniChatCard during run (receives activity)
@@ -283,7 +293,7 @@ export class AgentJobExecutor implements IJobExecutor {
 
     const output =
       outputText.length > 0
-        ? outputText.slice(0, 5000)
+        ? outputText
         : "Agent job completed successfully.";
 
     // Determine exit code based on execution result

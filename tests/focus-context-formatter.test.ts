@@ -57,6 +57,19 @@ describe("formatAgentFocusContext", () => {
 
     expect(text).toContain("Recently edited files");
     expect(text).toContain("SystemPrompt.ts");
+    expect(text).toContain("postEditSnippet");
+  });
+
+  it("discourages bulk re-reads when active app is set", () => {
+    const text = formatAgentFocusContext({
+      activeApp: {
+        appId: "abc-123",
+        title: "Dashboard",
+        files: ["index.html"],
+      },
+    });
+
+    expect(text).toContain("Do not bulk");
   });
 });
 

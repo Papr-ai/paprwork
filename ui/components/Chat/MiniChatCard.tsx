@@ -199,12 +199,80 @@ export function MiniChatCard({
   const [messages, setMessages] = useState<SubAgentChatMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [liveStatus, setLiveStatus] = useState(status);
+  const [liveResultText, setLiveResultText] = useState(resultText);
+  const [liveError, setLiveError] = useState(error);
   const [activity, setActivity] = useState<{
     thinking: string;
     toolCalls: Array<{ name: string; args?: Record<string, unknown>; result?: unknown; status?: string }>;
   }>({ thinking: "", toolCalls: [] });
   const [isActivityStreaming, setIsActivityStreaming] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setLiveStatus(status);
+    setLiveResultText(resultText);
+    setLiveError(error);
+  }, [status, resultText, error]);
+
+  /** delegate_task runs in background — sync badge + result from job status events */
+  useEffect(() => {
+    const applyJobUpdate = (jobStatus: string, lastOutput?: unknown, jobError?: unknown) => {
+      if (jobStatus === "completed") {
+        setLiveStatus("completed");
+        if (lastOutput !== undefined && lastOutput !== null && String(lastOutput).trim()) {
+          setLiveResultText(String(lastOutput));
+        }
+        return;
+      }
+      if (jobStatus === "failed" || jobStatus === "cancelled") {
+        setLiveStatus("failed");
+        if (jobError !== undefined && jobError !== null) {
+          setLiveError(String(jobError));
+        }
+        return;
+      }
+      if (jobStatus === "running" || jobStatus === "pending") {
+        setLiveStatus("active");
+      }
+    };
+
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail?.type !== "jobs:status-changed" || !detail.data) return;
+      const data = detail.data as {
+        jobId?: string;
+        status?: string;
+        lastOutput?: unknown;
+        error?: unknown;
+      };
+      if (data.jobId !== delegationId || !data.status) return;
+      applyJobUpdate(data.status, data.lastOutput, data.error);
+    };
+
+    window.addEventListener("gateway-broadcast", handler);
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await gateway.send("jobs:get", { jobId: delegationId });
+        const job = response.data as {
+          status?: string;
+          lastOutput?: unknown;
+          error?: unknown;
+        };
+        if (cancelled || !job?.status) return;
+        applyJobUpdate(job.status, job.lastOutput, job.error);
+      } catch {
+        // Job may not exist yet — status-changed broadcast will update when ready
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("gateway-broadcast", handler);
+    };
+  }, [delegationId]);
 
   // Subscribe to sub-agent chat broadcasts
   useEffect(() => {
@@ -301,11 +369,11 @@ export function MiniChatCard({
 
   // Clear activity when status changes from active
   useEffect(() => {
-    if (status !== "active") {
+    if (liveStatus !== "active") {
       setActivity({ thinking: "", toolCalls: [] });
       setIsActivityStreaming(false);
     }
-  }, [status]);
+  }, [liveStatus]);
 
   // Load delegation chat history on mount (and when user joins)
   useEffect(() => {
@@ -420,7 +488,7 @@ export function MiniChatCard({
           </span>
         </div>
         <div className="mini-chat-card__header-right">
-          {!hasJoined && status === "active" && (
+          {!hasJoined && liveStatus === "active" && (
             <button
               type="button"
               className="mini-chat-card__join-btn"
@@ -430,9 +498,9 @@ export function MiniChatCard({
             </button>
           )}
           <span
-            className={`mini-chat-card__badge mini-chat-card__badge--${status}`}
+            className={`mini-chat-card__badge mini-chat-card__badge--${liveStatus}`}
           >
-            {STATUS_LABELS[status]}
+            {STATUS_LABELS[liveStatus]}
           </span>
         </div>
       </div>
@@ -442,7 +510,7 @@ export function MiniChatCard({
           {context && <div className="mini-chat-card__context">{context}</div>}
 
           {/* Sub-agent activity: thinking + tool calls (like main chat) */}
-          {(activity.thinking || activity.toolCalls.length > 0) && status === "active" && (
+          {(activity.thinking || activity.toolCalls.length > 0) && liveStatus === "active" && (
             <div className="mini-chat-card__activity">
               {activity.thinking && (
                 <ThinkingCard
@@ -516,15 +584,15 @@ export function MiniChatCard({
             </div>
           )}
 
-          {error && <div className="mini-chat-card__error">{error}</div>}
+          {liveError && <div className="mini-chat-card__error">{liveError}</div>}
 
-          {resultText && !error && status !== "active" && (
+          {liveResultText && !liveError && liveStatus !== "active" && (
             <div className="mini-chat-card__result">
-              <Markdown>{resultText}</Markdown>
+              <Markdown>{liveResultText}</Markdown>
             </div>
           )}
 
-          {hasJoined && status === "active" && (
+          {hasJoined && liveStatus === "active" && (
             <div className="mini-chat-card__input">
               <input
                 type="text"

@@ -7,6 +7,7 @@ import path from "path";
 import { applyExactStringReplacement } from "../utils/exactStringReplace.js";
 import { autoStageFile } from "../utils/gitAutoStage.js";
 import { withFileEditLock } from "../utils/fileEditLock.js";
+import { buildPostEditSnippet } from "../utils/postEditSnippet.js";
 
 export interface PathEditFileArgs {
   path: string;
@@ -34,6 +35,7 @@ export async function runEditExternalFile(
     occurrencesFound: number;
     occurrenceReplaced: number;
   } | null = null;
+  let postEditContent: string | null = null;
 
   await withFileEditLock(lockKey, async () => {
     let content: string;
@@ -62,6 +64,7 @@ export async function runEditExternalFile(
       occurrenceReplaced: applied.occurrenceReplaced,
     };
 
+    postEditContent = applied.newContent;
     await fs.writeFile(resolvedPath, applied.newContent, "utf8");
   });
 
@@ -76,6 +79,11 @@ export async function runEditExternalFile(
     // Focus tracking is best-effort
   }
 
+  const postEditFields =
+    postEditContent !== null
+      ? buildPostEditSnippet(postEditContent, { focusText: args.newString })
+      : null;
+
   return {
     success: true,
     data: {
@@ -83,6 +91,13 @@ export async function runEditExternalFile(
       occurrencesFound: replaceMeta!.occurrencesFound,
       occurrenceReplaced: replaceMeta!.occurrenceReplaced,
       git_staged: gitResult.staged,
+      ...(postEditFields
+        ? {
+            postEditSnippet: postEditFields.postEditSnippet,
+            totalLines: postEditFields.totalLines,
+            snippetTruncated: postEditFields.snippetTruncated,
+          }
+        : {}),
     },
   };
 }

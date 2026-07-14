@@ -11,6 +11,7 @@ import type { Provider } from "../../core/types/agents.js";
 import { getJobsService, STANDALONE_APP_ID } from "./JobsService.js";
 import type { JobRecord, JobStatus } from "./jobs/types.js";
 import type { StoredMessage } from "./storage/IStorageProvider.js";
+import { DEFAULT_AGENT_MAX_TURNS } from "../../core/constants/agentLimits.js";
 
 /** Chat ID prefix for delegation sub-agent ↔ main-agent conversations */
 export const DELEGATION_CHAT_PREFIX = "delegation:";
@@ -150,7 +151,7 @@ const DEFAULT_SUB_AGENTS: Array<
     ],
     assignedSkills: [],
     outputMode: "natural",
-    maxTurns: 12,
+    maxTurns: DEFAULT_AGENT_MAX_TURNS,
     memoryPolicy: "none",
     icon: "search",
     lastRunAt: undefined,
@@ -172,7 +173,7 @@ const DEFAULT_SUB_AGENTS: Array<
     ],
     assignedSkills: [],
     outputMode: "natural",
-    maxTurns: 12,
+    maxTurns: DEFAULT_AGENT_MAX_TURNS,
     memoryPolicy: "none",
     icon: "code",
     lastRunAt: undefined,
@@ -181,7 +182,7 @@ const DEFAULT_SUB_AGENTS: Array<
     id: "product-architect",
     name: "Product Architect",
     description:
-      "Product brief + Paprwork architecture (apps, jobs, SQLite, design system) before build",
+      "Product brief + Paprwork architecture (lightweight PRD: scope, schema, jobs, UI plan) before build — not a separate PRD agent",
     systemPrompt: `You are the Paprwork Product Architect sub-agent. You do NOT write mini-app code or call create_app/create_job.
 
 Your job: produce a product brief and Paprwork-specific architecture for the main agent to validate with the user BEFORE implementation.
@@ -190,7 +191,8 @@ REQUIRED FIRST STEPS:
 1. read_skill({ skillId: "preloaded-app-and-jobs-guide" })
 2. read_skill({ skillId: "preloaded-paprwork-design-system" })
 3. list_apps() and list_jobs() when relevant
-4. read_file({ path: "src/resources/agent-docs/PRODUCT_ARCHITECT_GUIDE.md" }) if you need the full template
+4. read_file({ path: "src/resources/agent-docs/PRODUCT_ARCHITECT_GUIDE.md" })
+5. read_file({ path: "src/resources/agent-docs/EXAMPLE_APP_ARCHITECTURE_PLAN.md" }) for a full worked example to mirror
 
 OUTPUT (use all sections):
 ## Product Brief — job-to-be-done, scope, success criteria
@@ -207,7 +209,9 @@ RULES:
 - Mini-apps use window.paprAPI (browser context, not Node fs)
 - Never recommend spaghetti (50+ files in one app)
 
-Return the full document as your response text. Do not implement — planning only.`,
+TURN BUDGET: Up to ${DEFAULT_AGENT_MAX_TURNS} tool steps (same as main agent). After investigation, STOP calling tools and deliver the FULL document as your final assistant message — not "let me check..." planning text.
+
+DELIVERY: Your final assistant message text is auto-delivered to the main chat. Include all required sections in that message.`,
     provider: "anthropic",
     model: "claude-opus-4-6",
     fallbackProvider: "openai",
@@ -223,15 +227,53 @@ Return the full document as your response text. Do not implement — planning on
       "get_project_code_overview",
       "list_file_code_summaries",
       "get_file_code_summary",
+      "request_agent_input",
+      "complete_delegation",
     ],
     assignedSkills: ["preloaded-app-and-jobs-guide", "preloaded-paprwork-design-system"],
     outputMode: "natural",
-    maxTurns: 16,
+    maxTurns: DEFAULT_AGENT_MAX_TURNS,
     memoryPolicy: "none",
     icon: "pen",
     lastRunAt: undefined,
   },
 ];
+
+/** Built-in sub-agent ids seeded on gateway startup (always available unless deleted). */
+export const BUILTIN_SUB_AGENT_IDS: readonly string[] = DEFAULT_SUB_AGENTS.map(
+  (profile) => profile.id,
+);
+
+export const BUILTIN_SUB_AGENT_ID_SET = new Set<string>(BUILTIN_SUB_AGENT_IDS);
+
+export interface SubAgentListSummary {
+  id: string;
+  name: string;
+  description: string;
+  icon?: SubAgentProfile["icon"];
+  builtIn: boolean;
+}
+
+/** Compact listing for list_sub_agents — omits systemPrompt to avoid truncation. */
+export function toSubAgentListSummaries(
+  profiles: SubAgentProfile[],
+): SubAgentListSummary[] {
+  const sorted = [...profiles].sort((a, b) => {
+    const aBuiltIn = BUILTIN_SUB_AGENT_ID_SET.has(a.id);
+    const bBuiltIn = BUILTIN_SUB_AGENT_ID_SET.has(b.id);
+    if (aBuiltIn !== bBuiltIn) return aBuiltIn ? -1 : 1;
+    if (a.id === "product-architect") return -1;
+    if (b.id === "product-architect") return 1;
+    return a.name.localeCompare(b.name);
+  });
+  return sorted.map((profile) => ({
+    id: profile.id,
+    name: profile.name,
+    description: profile.description,
+    icon: profile.icon,
+    builtIn: BUILTIN_SUB_AGENT_ID_SET.has(profile.id),
+  }));
+}
 
 export class SubAgentService {
   private profilePath: string;
@@ -354,8 +396,8 @@ export class SubAgentService {
         continue;
       }
 
-      // Keep built-in product-architect in sync (model, prompt, tools)
-      if (base.id === "product-architect") {
+      // Keep all built-in profiles in sync (prompt, tools, maxTurns, models)
+      if (BUILTIN_SUB_AGENT_ID_SET.has(base.id)) {
         const synced: SubAgentProfile = {
           ...existing,
           name: base.name,
@@ -422,7 +464,7 @@ export class SubAgentService {
       assignedSkills: input.assignedSkills ?? existing?.assignedSkills ?? [],
       outputMode: input.outputMode ?? existing?.outputMode ?? "natural",
       outputSchema: input.outputSchema ?? existing?.outputSchema,
-      maxTurns: input.maxTurns ?? existing?.maxTurns ?? 12,
+      maxTurns: input.maxTurns ?? existing?.maxTurns ?? DEFAULT_AGENT_MAX_TURNS,
       memoryPolicy: input.memoryPolicy ?? existing?.memoryPolicy ?? "none",
       icon: input.icon ?? existing?.icon,
       createdAt: existing?.createdAt ?? now,
@@ -596,7 +638,7 @@ export class SubAgentService {
       command: input.task,
       outputMode: input.outputMode ?? selected.outputMode ?? "natural",
       outputSchema: input.outputSchema ?? selected.outputSchema,
-      maxTurns: input.maxTurns ?? selected.maxTurns ?? 12,
+      maxTurns: input.maxTurns ?? selected.maxTurns ?? DEFAULT_AGENT_MAX_TURNS,
       memoryPolicy: input.memoryPolicy ?? selected.memoryPolicy ?? "none",
       reportChatId: input.reportChatId,
       deliver:
@@ -831,17 +873,48 @@ export class SubAgentService {
    * Closes session and returns result
    */
   async completeDelegation(result: string, summary?: string): Promise<void> {
+    const { getCurrentDelegationJobId } =
+      await import("../../core/tools/context.js");
+    const delegationId = getCurrentDelegationJobId();
+    if (!delegationId) {
+      throw new Error(
+        "complete_delegation requires sub-agent delegation context (delegationJobId not set)",
+      );
+    }
+
     console.log(
-      `[SubAgentService] Completing delegation with result (${result.length} chars)`,
+      `[SubAgentService] Completing delegation ${delegationId} (${result.length} chars)`,
     );
 
-    // TODO: Get current delegation context and mark job as completed
-    // For now, this is a placeholder
+    let sourceAgentId: string | undefined;
+    let sourceAgentName: string | undefined;
+    try {
+      const jobsService = getJobsService();
+      const job = await jobsService.getJob(delegationId);
+      if (job?.subAgentId) {
+        const profile = this.profiles.get(job.subAgentId);
+        sourceAgentId = job.subAgentId;
+        sourceAgentName = profile?.name ?? job.subAgentId;
+      }
+    } catch {
+      // Ignore — use defaults below
+    }
+
+    await this.saveToDelegationChat(delegationId, {
+      id: `msg-${uuidv4()}`,
+      role: "assistant",
+      content: summary ? `${summary}\n\n${result}` : result,
+      timestamp: new Date().toISOString(),
+      source_agent_id: sourceAgentId,
+      source_agent_name: sourceAgentName,
+    });
 
     const { broadcast } = await import("../websocket/index.js");
     broadcast({
       type: "subagent-chat:completed",
       data: {
+        delegationId,
+        jobId: delegationId,
         result,
         summary,
         timestamp: new Date().toISOString(),

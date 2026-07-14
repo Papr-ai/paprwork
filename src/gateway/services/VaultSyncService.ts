@@ -85,8 +85,20 @@ export class VaultSyncService {
     }
 
     try {
-      await this.pushAllKeys();
+      const pushed = await this.pushAllKeys();
       await this.pullKeys();
+      if (!pushed) {
+        // Gateway may start before Electron IPC is ready; retry once keys are readable.
+        setTimeout(() => {
+          void this.pushAllKeys().then((retry) => {
+            if (retry) {
+              console.log(
+                `[VaultSync] Delayed push synced ${retry.synced} keys`,
+              );
+            }
+          });
+        }, 15_000);
+      }
       console.log(
         `[VaultSync] Ready — ${this.state.keyCount} keys synced`,
       );

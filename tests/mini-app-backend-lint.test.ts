@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   checkBackendManifestIntegrity,
   checkMiniAppBashPatterns,
+  checkOrphanBackendHandlers,
 } from "../src/gateway/utils/miniAppBackendLint.js";
 
 describe("checkMiniAppBashPatterns", () => {
@@ -151,6 +152,38 @@ describe("checkBackendManifestIntegrity", () => {
     const issues = await checkBackendManifestIntegrity(tempDir);
     expect(
       issues.some((i) => i.rule === "backend-keys-missing-from-requirements"),
+    ).toBe(true);
+  });
+});
+
+describe("checkOrphanBackendHandlers", () => {
+  let tempDir: string;
+
+  afterEach(async () => {
+    if (tempDir) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("errors when migrate.py exists but is not in manifest", async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "papr-orphan-"));
+    const backendDir = join(tempDir, "backend");
+    await mkdir(backendDir);
+    await writeFile(
+      join(backendDir, "manifest.json"),
+      JSON.stringify({
+        version: 1,
+        actions: { ping: { handler: "ping.py", runtime: "python" } },
+      }),
+    );
+    await writeFile(join(backendDir, "ping.py"), "print('ok')");
+    await writeFile(join(backendDir, "migrate.py"), "print('migrate')");
+
+    const issues = await checkOrphanBackendHandlers(tempDir);
+    expect(
+      issues.some(
+        (i) => i.rule === "backend-handler-orphan" && i.message.includes("migrate.py"),
+      ),
     ).toBe(true);
   });
 });

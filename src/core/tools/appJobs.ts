@@ -3,6 +3,9 @@ import { z } from "zod";
 import { RequirementItemSchema } from "../types/bundles.js";
 import { applyExactStringReplacement } from "../utils/exactStringReplace.js";
 import { withFileEditLock } from "../utils/fileEditLock.js";
+import { buildPostEditSnippet } from "../utils/postEditSnippet.js";
+import { coerceAppIdsValue } from "../utils/coerceAppIds.js";
+import { PRODUCT_ARCHITECT_REMINDER } from "../utils/productArchitectGate.js";
 import {
   getCloudAppPublishTool,
   publishCloudAppTool,
@@ -21,17 +24,25 @@ function coerceFilenameAliasInToolArgs(raw: unknown): unknown {
   return raw;
 }
 
-/** Weaker models (e.g. Groq Qwen) sometimes send `jobType` / `workingDirectory` instead of `type`. Map silently — do not add these to the published schema. */
+/** Models sometimes send appIds as a JSON string instead of an array — coerce before Zod parse. */
 function coerceCreateJobAliases(raw: unknown): unknown {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     return raw;
   }
-  const o = { ...raw as Record<string, unknown> };
+  const o = { ...(raw as Record<string, unknown>) };
   if (o.type === undefined && typeof o.jobType === "string") {
     o.type = o.jobType;
   }
   delete o.jobType;
   delete o.workingDirectory;
+
+  if (o.appIds !== undefined) {
+    const coerced = coerceAppIdsValue(o.appIds);
+    if (coerced !== undefined) {
+      o.appIds = coerced;
+    }
+  }
+
   return o;
 }
 
@@ -128,6 +139,9 @@ function buildAppEditToolResult(input: {
   data: Record<string, unknown>;
   postValidation: Awaited<ReturnType<typeof runPostEditAppValidation>>;
   editedFilename?: string;
+  postEditContent?: string;
+  postEditFocusLine?: number;
+  postEditFocusText?: string;
 }): {
   success: boolean;
   data: Record<string, unknown>;
@@ -137,7 +151,7 @@ function buildAppEditToolResult(input: {
   _emojiReminder: string;
   _jobEventsReminder?: string;
 } {
-  const { data, postValidation, editedFilename } = input;
+  const { data, postValidation, editedFilename, postEditContent } = input;
   const backendKeysReminder =
     editedFilename?.startsWith("backend/") ? BACKEND_VAULT_KEYS_REMINDER : undefined;
   const jobEventsReminder = postValidation.issues.some(
@@ -147,12 +161,29 @@ function buildAppEditToolResult(input: {
     ? JOB_EVENTS_REMINDER
     : undefined;
 
+  const postEditFields =
+    postEditContent !== undefined
+      ? buildPostEditSnippet(postEditContent, {
+          focusLine: input.postEditFocusLine,
+          focusText: input.postEditFocusText,
+        })
+      : undefined;
+
+  const enrichedData = postEditFields
+    ? {
+        ...data,
+        postEditSnippet: postEditFields.postEditSnippet,
+        totalLines: postEditFields.totalLines,
+        snippetTruncated: postEditFields.snippetTruncated,
+      }
+    : data;
+
   if (postValidation.buildBlocked) {
     return {
       success: false,
       error: postValidation.errorMessage,
       data: {
-        ...data,
+        ...enrichedData,
         buildBlocked: true,
         validation: {
           valid: false,
@@ -170,7 +201,7 @@ function buildAppEditToolResult(input: {
   return {
     success: true,
     data: {
-      ...data,
+      ...enrichedData,
       buildCheck: {
         valid: postValidation.valid,
         filesChecked: postValidation.filesChecked,
@@ -649,11 +680,6 @@ function resolveAppFiles(
   return files;
 }
 
-const PRODUCT_ARCHITECT_REMINDER =
-  "Complex build check: If this involves app+jobs, pipelines, agent jobs, multi-view UI, or shared SQLite — " +
-  "and you have NOT run product-architect yet — stop and delegate_task({ useAgentId: \"product-architect\", ... }) " +
-  "before create_plan or further builds. Simple single-job / single-tweak work can proceed.";
-
 export const createAppTool = createTool({
   id: "create_app",
   description:
@@ -868,18 +894,63 @@ export const createJobTool = createTool({
             : `⚠️ Job created for app(s) but database not linked yet. Call link_app_data_source({ appId, jobId: "${job.id}", setPrimary: true }) before the app uses /api/db/*.`;
     }
 
+    const appDbJobReminder = buildAppDbJobReminder(args.type, args.command, linkedAppIds);
+
     return {
       success: true,
       data: job,
       _architectReminder: PRODUCT_ARCHITECT_REMINDER,
       ...(keyReminder ? { _keyPatternReminder: keyReminder } : {}),
       ...(agentJobReminder ? { _agentJobReminder: agentJobReminder } : {}),
+      ...(appDbJobReminder ? { _appDbJobReminder: appDbJobReminder } : {}),
       ...(dataSourceLinkSummary
         ? { _dataSourceLinkReminder: dataSourceLinkSummary }
         : {}),
     };
   },
 });
+
+/**
+ * Remind agents that app-linked jobs must write UI tables via $APP_DB, not $JOB_DB.
+ */
+function buildAppDbJobReminder(
+  jobType: string,
+  command: string | undefined,
+  linkedAppIds: readonly string[],
+): string | undefined {
+  if (linkedAppIds.length === 0 || !command) {
+    return undefined;
+  }
+
+  const cmd = command.toUpperCase();
+  const mentionsJobDb = cmd.includes("$JOB_DB") || cmd.includes("JOB_DB");
+  const mentionsAppDb = cmd.includes("$APP_DB") || cmd.includes("APP_DB");
+
+  if (mentionsJobDb && !mentionsAppDb) {
+    return (
+      `⚠️ APP DB REMINDER: Job is linked to mini-app(s) but command references JOB_DB without APP_DB. ` +
+      `UI-facing tables (settings, picks, planner_state, etc.) must be read/written via $APP_DB ` +
+      `(injected env — same file as the app's primary linked DB). JOB_DB is job-local scratch only. ` +
+      `Agent/script jobs: sqlite3 "$APP_DB" "SELECT ..." — not papr_jobs.db (does not exist). ` +
+      `Canonical job index: ~/Papr/data/jobs.json; job data: ~/Papr/Jobs/{jobId}/data/data.db.`
+    );
+  }
+
+  if (
+    (jobType === "agent" || jobType === "subagent") &&
+    !mentionsAppDb &&
+    /\b(INSERT|UPDATE|DELETE|CREATE TABLE|sqlite3)\b/i.test(command)
+  ) {
+    return (
+      `⚠️ APP DB REMINDER: This job writes SQL but does not mention $APP_DB. ` +
+      `For app-linked jobs, UI tables live in APP_DB (primary linked DB). ` +
+      `Call GET /api/db/schema?appId=... or sqlite3 "$APP_DB" ".tables" before writing. ` +
+      `Bootstrap missing tables via POST /api/db/exec or backend migrate action.`
+    );
+  }
+
+  return undefined;
+}
 
 /**
  * Scan job source files for the anti-pattern of using os.environ/process.env
@@ -1079,6 +1150,15 @@ export const runJobTool = createTool({
 
     const existingJob = await jobsService.getJob(args.jobId);
 
+    const appDbJobReminder =
+      existingJob?.appIds && existingJob.appIds.length > 0
+        ? buildAppDbJobReminder(
+            existingJob.type,
+            existingJob.command,
+            existingJob.appIds.filter((id) => id !== "__standalone__"),
+          )
+        : undefined;
+
     // Scan source files for env key anti-patterns before running
     const envKeyWarnings =
       await scanJobSourceForEnvKeyAntiPattern(args.jobId);
@@ -1135,6 +1215,7 @@ export const runJobTool = createTool({
               _agentJobReminder: AGENT_JOB_LLM_REMINDER,
             }
           : {}),
+        ...(appDbJobReminder ? { _appDbJobReminder: appDbJobReminder } : {}),
       },
     };
   },
@@ -1623,6 +1704,7 @@ export async function runEditAppFile(args: EditAppFileArgs): Promise<{
     occurrencesFound: number;
     occurrenceReplaced: number;
   } | null = null;
+  let postEditContent: string | null = null;
 
   const result = await appService.updateAppFile(
     args.appId,
@@ -1640,6 +1722,7 @@ export async function runEditAppFile(args: EditAppFileArgs): Promise<{
         occurrencesFound: applied.occurrencesFound,
         occurrenceReplaced: applied.occurrenceReplaced,
       };
+      postEditContent = applied.newContent;
       return applied.newContent;
     },
   );
@@ -1673,6 +1756,8 @@ export async function runEditAppFile(args: EditAppFileArgs): Promise<{
     },
     postValidation,
     editedFilename: args.filename,
+    postEditContent: postEditContent ?? undefined,
+    postEditFocusText: args.newString,
   });
 }
 
@@ -1736,6 +1821,7 @@ After EVERY edit: validate_app + preview test (see _verifyReminder in result).`,
       linesAdded: number;
       netChange: number;
     } | null = null;
+    let postEditContent: string | null = null;
 
     const result = await appService.updateAppFile(
       args.appId,
@@ -1782,6 +1868,7 @@ After EVERY edit: validate_app + preview test (see _verifyReminder in result).`,
           linesAdded,
           netChange: linesAdded - linesRemoved,
         };
+        postEditContent = newContent;
         return newContent;
       },
     );
@@ -1821,6 +1908,8 @@ After EVERY edit: validate_app + preview test (see _verifyReminder in result).`,
       },
       postValidation,
       editedFilename: args.filename,
+      postEditContent: postEditContent ?? undefined,
+      postEditFocusLine: args.startLine,
     });
   },
 });
@@ -2016,6 +2105,10 @@ export async function runEditJobFile(args: EditJobFileArgs): Promise<{
     // Focus tracking is best-effort
   }
 
+  const postEditFields = buildPostEditSnippet(newContent, {
+    focusText: args.newString,
+  });
+
   return {
     success: true,
     data: {
@@ -2024,7 +2117,9 @@ export async function runEditJobFile(args: EditJobFileArgs): Promise<{
       path: resolvedPath,
       occurrencesFound: replaceMeta!.occurrencesFound,
       occurrenceReplaced: replaceMeta!.occurrenceReplaced,
-      linesAfter: newContent.split("\n").length,
+      linesAfter: postEditFields.totalLines,
+      postEditSnippet: postEditFields.postEditSnippet,
+      snippetTruncated: postEditFields.snippetTruncated,
     },
     _verifyReminder: JOB_VERIFY_AFTER_EDIT_REMINDER,
   };
@@ -3511,15 +3606,17 @@ export const getJobStatsTool = createTool({
 
 export const reloadJobsTool = createTool({
   id: "reload_jobs",
-  description: `Reload jobs from disk after manually editing jobs.json.
+  description: `Reload jobs from disk and reconcile job directories with the index.
 
 Use when:
-- You manually edited jobs.json via bash/jq commands
-- You want to verify changes without restarting the app
+- Job folders exist on disk but list_jobs does not show them (orphaned directories)
+- You used update_job and want to confirm scheduler state
+
+Also runs index rebuild (recovers jobs on disk missing from jobs.json) and prunes stale index entries.
 
 NOT needed for:
 - Stuck jobs → Process-backed jobs auto-recover in 20-60s
-- Agent jobs stuck → Fixed automatically on next app restart
+- Creating jobs → use create_job(), never bash/jq on jobs.json
 - Normal job operations → use update_job(), run_job() instead`,
   inputSchema: z.object({}),
   execute: async () => {

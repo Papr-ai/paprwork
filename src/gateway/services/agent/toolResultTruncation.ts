@@ -93,10 +93,14 @@ const SMALL_CRUD_TOOLS = new Set([
   "list_schemas",
   "list_skills",
   "read_skill",
+  "list_sub_agents",
 ]);
 
-/** Recovery tool — never aggressively truncated; full payload must survive cross-turn. */
-const FULL_RETENTION_TOOLS = new Set(["get_full_tool_result"]);
+/** Recovery + delegation status tools — full payload must survive cross-turn. */
+const FULL_RETENTION_TOOLS = new Set([
+  "get_full_tool_result",
+  "get_delegation_run",
+]);
 
 /**
  * Discovery tools that stay full for RECENT_TURN_RETENTION_COUNT user turns
@@ -109,6 +113,7 @@ const RECENT_TURN_DISCOVERY_TOOLS = new Set([
   "list_app_files",
   "list_directory",
   "search_files",
+  "list_sub_agents",
   "introspect_memory_graph",
   "query_memory_graph",
   "get_wiki_entity",

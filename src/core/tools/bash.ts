@@ -24,6 +24,10 @@ import {
   buildSqlitePathWarnings,
   formatSqlitePathWarningBlock,
 } from "../utils/sqlitePathGuard.js";
+import {
+  isJobsIndexBashWriteBlocked,
+  JOBS_INDEX_BASH_BLOCK_MESSAGE,
+} from "../utils/jobsIndexBashGuard.js";
 import { getShell, getShellCommand } from "../utils/platform.js";
 
 /** Commands that fetch or produce external content - wrap stdout for prompt injection defense */
@@ -406,6 +410,14 @@ export async function executeBashCommand(
         type: "validation_error",
       };
     }
+
+    if (isJobsIndexBashWriteBlocked(command)) {
+      return {
+        success: false,
+        error: JOBS_INDEX_BASH_BLOCK_MESSAGE,
+        type: "validation_error",
+      };
+    }
     
     // Check if this is a grep command in PAPR folders
     const grepInfo = detectPaprGrepCommand(command);
@@ -739,6 +751,22 @@ export async function executeBashCommandStreaming(
   const cwd = input.cwd || "";
   const timeout = input.timeout || 60000;
   const env = input.env || {};
+
+  if (!command || command.trim().length === 0) {
+    return {
+      success: false,
+      error: "Command cannot be empty",
+      type: "validation_error",
+    };
+  }
+
+  if (isJobsIndexBashWriteBlocked(command)) {
+    return {
+      success: false,
+      error: JOBS_INDEX_BASH_BLOCK_MESSAGE,
+      type: "validation_error",
+    };
+  }
 
   // Get API keys for sanitization and substitution
   const apiKeys = getApiKeysForSanitization();
