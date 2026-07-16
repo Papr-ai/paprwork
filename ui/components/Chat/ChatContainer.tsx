@@ -38,6 +38,7 @@ import { artifactsToMessageAttachments } from "../../utils/messageAttachments";
 import { mapHistoryMessages } from "../../utils/historyMapper";
 import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
 import "./ChatContainer.css";
+import { trackEvent } from "../../lib/telemetry";
 
 const DEFAULT_SYSTEM_PROMPT = `You're Pen, an AI assistant running in Paprwork—a cross-platform AI workspace.
 
@@ -522,6 +523,11 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         maxTokens: selectedModel.maxTokens, // Output token limit
       };
 
+      // Track activation: first chat sent
+      if (!localStorage.getItem("papr-activation-first-chat")) {
+        localStorage.setItem("papr-activation-first-chat", new Date().toISOString());
+        trackEvent("paprwork_activation_first_chat_sent", { message_length: message.length } as Record<string, unknown>);
+      }
       // Send message for THIS chat (not activeChat)
       await sendMessage(
         message,

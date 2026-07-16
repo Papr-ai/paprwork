@@ -6,6 +6,11 @@ import { v4 as uuidv4 } from "uuid";
 import { fileURLToPath } from "url";
 import Database from "better-sqlite3";
 import { JobDatabase } from "./jobs/JobDatabase.js";
+import {
+  formatJobArchitectureErrors,
+  type JobArchitectureIssue,
+  validateJobArchitecture,
+} from "./jobs/jobArchitectureValidation.js";
 import { CommandJobExecutor } from "./jobs/executors/CommandJobExecutor.js";
 import { AgentJobExecutor } from "./jobs/executors/AgentJobExecutor.js";
 import type { IJobExecutor } from "./jobs/executors/IJobExecutor.js";
@@ -13,9 +18,17 @@ import { sanitizeError } from "../../core/tools/security.js";
 import { getGatewayTelemetry } from "./gatewayTelemetry.js";
 import { getJobRunHistory } from "./jobs/JobRunHistory.js";
 import {
+  getPaprAppsRoot,
   getPaprDataDir,
   getPaprJobsRoot,
 } from "../../core/utils/paprRoot.js";
+import {
+  resolveJobAppDatabase,
+} from "./jobAppDatabase.js";
+import {
+  type AppDataContract,
+  validateJobAgainstAppDatabase,
+} from "./jobs/jobDatabaseArchitectureValidation.js";
 
 // ESM compatibility: get __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -844,9 +857,89 @@ export class JobsService {
     return this.jobs.get(jobId) ?? null;
   }
 
+  async validateJobArchitecture(jobId: string): Promise<JobArchitectureIssue[]> {
+    const job = this.jobs.get(jobId);
+    if (!job) throw new Error(`Job not found: ${jobId}`);
+    return this.validateJobCandidate(job, job.id);
+  }
+
+  private async loadAppDataContract(appId: string): Promise<AppDataContract | null> {
+    const contractPath = path.join(getPaprAppsRoot(), appId, "data-contract.json");
+    try {
+      return JSON.parse(await fs.readFile(contractPath, "utf8")) as AppDataContract;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw new Error(`Invalid data contract for app ${appId}: ${String(error)}`);
+    }
+  }
+
+  private async validateJobCandidate(
+    job: Pick<JobRecord, "type" | "command" | "appIds" | "recipe">,
+    currentJobId?: string,
+  ): Promise<JobArchitectureIssue[]> {
+    const issues = validateJobArchitecture(job);
+    const linkedAppId = job.appIds?.find((id) => id !== STANDALONE_APP_ID);
+    if (!linkedAppId) return issues;
+
+    const contract = await this.loadAppDataContract(linkedAppId);
+    const appDataIntent = /\$\{?APP_DB\}?|\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP)\b/i.test(
+      job.command ?? "",
+    );
+    const siblingJobs = [...this.jobs.values()].filter(
+      (candidate) =>
+        candidate.id !== currentJobId && candidate.appIds?.includes(linkedAppId),
+    );
+    if (appDataIntent && siblingJobs.length > 0 && !contract) {
+      issues.push({
+        rule: "multi-job-data-contract-required",
+        severity: "error",
+        message: `App ${linkedAppId} has multiple jobs sharing app data but no data-contract.json.`,
+        remediation:
+          "Add a canonical data-contract.json with required tables/columns and writer/reader ownership before adding another data-writing job.",
+      });
+    }
+    let hasRecipe = Boolean(job.recipe?.enabled);
+    if (currentJobId) {
+      const { getRecipeService } = await import("./jobs/RecipeService.js");
+      hasRecipe = hasRecipe && (await getRecipeService().hasRecipe(currentJobId));
+    }
+    if (appDataIntent && !hasRecipe) {
+      issues.push({
+        rule: "job-acceptance-recipe-recommended",
+        severity: "warning",
+        message: "App-linked data job has no active execution recipe with business-outcome assertions.",
+        remediation:
+          "Use write_recipe to verify the expected rows/columns changed; process completion alone is not product success.",
+      });
+    }
+
+    const appDb = await resolveJobAppDatabase(job.appIds);
+    if (appDb) {
+      issues.push(
+        ...validateJobAgainstAppDatabase({
+          command: job.command,
+          databasePath: appDb.appDb,
+          contract,
+        }),
+      );
+    }
+    return issues;
+  }
+
   async createJob(input: CreateJobInput): Promise<JobRecord> {
     const appIds = assertCreateAppIds(input.appIds);
     await this.validateAppIdsExist(appIds);
+
+    const architectureIssues = await this.validateJobCandidate({
+      type: input.type,
+      command: input.command,
+      appIds,
+      recipe: input.recipe,
+    });
+    const architectureErrors = formatJobArchitectureErrors(architectureIssues);
+    if (architectureErrors) {
+      throw new Error(`Job architecture validation failed:\n${architectureErrors}`);
+    }
 
     const now = new Date().toISOString();
     const id = uuidv4();
@@ -1181,6 +1274,23 @@ export class JobsService {
     // Auto-trigger downstream jobs that depend on this job with autoTrigger enabled
     if (status === "completed" || status === "failed") {
       void this.triggerDownstreamJobs(next);
+
+      // Wake main agent when a sub-agent delegation finishes so it can update the user
+      if (next.type === "subagent" && next.reportChatId?.trim()) {
+        void import("./SubAgentResponseTrigger.js")
+          .then(({ triggerMainAgentOnDelegationFinished }) =>
+            triggerMainAgentOnDelegationFinished(
+              jobId,
+              status === "completed" ? "completed" : "failed",
+            ),
+          )
+          .catch((err) => {
+            console.warn(
+              `[JobsService] Delegation-finished trigger failed for ${jobId}:`,
+              err,
+            );
+          });
+      }
     }
 
     return next;
@@ -1594,6 +1704,11 @@ export class JobsService {
     if (stack.has(jobId)) {
       throw new Error(`Dependency cycle detected at job: ${jobId}`);
     }
+    const architectureIssues = await this.validateJobCandidate(job, jobId);
+    const architectureErrors = formatJobArchitectureErrors(architectureIssues);
+    if (architectureErrors) {
+      throw new Error(`Job architecture validation failed before run:\n${architectureErrors}`);
+    }
     stack.add(jobId);
 
     try {
@@ -1956,9 +2071,15 @@ export class JobsService {
       await this.validateAppIdsExist(updates.appIds);
     }
 
+    const candidate = { ...job, ...updates };
+    const architectureIssues = await this.validateJobCandidate(candidate, jobId);
+    const architectureErrors = formatJobArchitectureErrors(architectureIssues);
+    if (architectureErrors) {
+      throw new Error(`Job architecture validation failed:\n${architectureErrors}`);
+    }
+
     const updated: import("./jobs/types.js").JobRecord = {
-      ...job,
-      ...updates,
+      ...candidate,
       updatedAt: new Date().toISOString(),
     };
     if (updates.schedule !== undefined) {

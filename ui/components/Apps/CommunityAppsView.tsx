@@ -17,6 +17,7 @@ import type { RequirementItem, RequiredKeySpec } from "../../../src/core/types/b
 import { normalizeRequirements } from "../../../src/core/types/bundles";
 import { lookupService } from "../../../src/core/data/knownServices";
 import "./CommunityAppsView.css";
+import { trackEvent } from "../../lib/telemetry";
 
 const GATEWAY =
   typeof import.meta !== "undefined" &&
@@ -268,6 +269,7 @@ export function CommunityAppsView() {
 
       const title = body.app?.title ?? entry.name;
       const modeLabel = mode === "track" ? "Linked" : "Forked";
+      trackEvent("paprwork_community_app_installed", { app_name: entry.name, app_id: entry.appId } as Record<string, unknown>);
       setInstallToast(`${modeLabel} "${title}" into Paprwork`);
       void loadArtifacts();
       void fetchLineage();
@@ -303,7 +305,8 @@ export function CommunityAppsView() {
     void installCloudApp(entry);
   };
 
-  const openLiveApp = async (url: string) => {
+  const openLiveApp = async (url: string, appName?: string) => {
+    trackEvent("paprwork_community_app_previewed", { url, app_name: appName } as Record<string, unknown>);
     try {
       if (window.electronAPI?.system?.invoke) {
         await window.electronAPI.system.invoke("shell.openExternal", url);

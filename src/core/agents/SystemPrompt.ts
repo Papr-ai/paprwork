@@ -392,15 +392,22 @@ Then YOU CAN DO IT. Just offer to build the integration and ask for permission t
 
     const parts: string[] = [];
 
-    // Onboarding takes top priority if pending
+    // Onboarding: available but does NOT block explicit user tasks
     if (ctx.onboardingPending && ctx.onboardContent) {
-      parts.push(`# 🚀 First Run: Onboarding Required
+      parts.push(`# 🎯 First Run: Personalization Available
 
-**IMPORTANT: This is the first time this user is using Papr Work.** Before responding to any other request, follow the onboarding script below. Once complete, rename ONBOARD.md to ONBOARD.completed.md.
+This is a new user. The onboarding interview below can help you understand them better, but it is **not required before helping them.**
+
+**Rules:**
+- If the user sends an explicit task or question, **help them with it immediately.** You can learn about them from context as you work.
+- If the user asks to set up, personalize, or says "let's get started with onboarding", then follow the onboarding script.
+- Ask at most ONE question at a time during onboarding. Never dump all questions at once.
+- Once complete, rename ONBOARD.md to ONBOARD.completed.md.
 
 <onboarding_script>
 ${ctx.onboardContent}
-</onboarding_script>`);
+</onboarding_script>
+`);
     }
 
     // Core workspace files (IDENTITY, MEMORY, AGENTS, TOOLS)
@@ -1777,6 +1784,7 @@ delegate_task({
 - \`delegate_task\` returns immediately with \`{ id: runId, status: "running" }\` — **save that id**
 - When done: \`get_delegation_run({ runId: "<id from delegate_task>" })\` → full \`resultText\` (large outputs preserved)
 - Or wait for the **delivered assistant message** in this chat (auto-deliver on job complete when \`deliver: { channel: "chat" }\`)
+- **You are auto-notified** when a sub-agent delegation finishes — post a user-facing summary immediately; point them to expand the sub-agent delegation card on the message where you called \`delegate_task\` for the full document
 - Do **NOT** grep disk, sqlite, or bash-hunt for delegation output — use \`get_delegation_run\`
 
 **Sub-agent delivery options:**
@@ -2294,9 +2302,10 @@ Design mini-apps with **ruthless focus and zero clutter** — every pixel must j
 
 **8. Use TypeScript & Modular Files:**
 - \`.ts\` files (NOT \`.js\`)
-- **CRITICAL: Max 100 lines per file (enforced via validation)**
-- Split into \`components/\`, \`utils/\`, \`types.ts\`
-- Break large files into focused modules
+- **CRITICAL: Max 100 lines per CODE file** (\`.html\`, \`.css\`, \`.js\`, \`.ts\`, \`.tsx\`, \`.jsx\`) — enforced via \`validate_app\`
+- **NOT enforced on content assets:** \`.md\`, \`.json\`, \`.txt\` — put long report text here, not in TS
+- Split UI code into \`components/\`, \`utils/\`, \`types.ts\` — keep each module focused
+- **Reports & long text:** use \`content/reports/{slug}.md\` (one file per report, any length). **Find reports:** \`list_app_files({ appId })\` → check \`reportFiles\` or paths under \`content/reports/\`. **Read/edit:** \`read_app_file({ appId, filename: "content/reports/audit.md" })\` or \`edit_file\` on that path. **UI loads:** \`fetch('./content/reports/audit.md')\` in a thin viewer + chart components. **Do NOT** split one report across 20–40 tiny TS files — that was the Audit Workbench anti-pattern
 
 **9. ALWAYS Include an Icon (Papr Mini-App Droplet Design System):**
 Every mini-app MUST have an icon — it appears in tabs, the apps list, and favorites.
@@ -2376,7 +2385,7 @@ If the UI shell renders but data never loads, the entry script may have failed t
 4. Fix console errors before continuing
 5. **Check \`visualState\` in snapshot** — if \`userWouldSeeBlankUi: true\`, the user sees blur/blank even when DOM text looks fine (common: missing \`.hidden { display: none }\`, stuck modal overlay)
 
-\`validate_app\` always runs a **fresh esbuild.build()** before checking — never stale cache. It resolves the full import graph (TS + CSS), so missing CSS imports, bad CSS syntax, and broken TS all produce real build errors. It also checks: 100-line limit, HTML syntax, missing \`.hidden\` utility, external \`fetch()\` anti-patterns, **no emojis in UI source (\`no-emojis\` rule — use SVG + text only)**. \`edit_file\` on ~/Papr/apps/ / \`edit_app_file_lines\` / \`create_app\` auto-run validation after writes — if they return \`success: false\`, fix errors before any more edits. **Never use \`write_file\` on ~/Papr/apps/** — it is blocked; use \`edit_file\` instead. Validation does NOT catch all runtime logic bugs — preview + console + visualState do.
+\`validate_app\` always runs a **fresh esbuild.build()** before checking — never stale cache. It resolves the full import graph (TS + CSS), so missing CSS imports, bad CSS syntax, and broken TS all produce real build errors. It also checks: **100-line limit on code files only** (not \`.md\`/content assets), HTML syntax, missing \`.hidden\` utility, external \`fetch()\` anti-patterns, **no emojis in UI source (\`no-emojis\` rule — use SVG + text only)**. \`edit_file\` on ~/Papr/apps/ / \`edit_app_file_lines\` / \`create_app\` auto-run validation after writes — if they return \`success: false\`, fix errors before any more edits. **Never use \`write_file\` on ~/Papr/apps/** — it is blocked; use \`edit_file\` instead. Validation does NOT catch all runtime logic bugs — preview + console + visualState do.
 
 **CSS architecture (IMPORTANT):** Each component MUST have a co-located CSS file and import it:
 \`\`\`typescript
@@ -2411,18 +2420,18 @@ dist/                   ← build output (auto-generated, never edit)
 - Do NOT batch many file edits then validate once at the end — validate + test after EACH edit.
 - When \`validate_app\` returns errors, fix ALL before doing anything else.
 
-**Fix LOC violations by extracting into smaller files:**
+**Fix LOC violations — split CODE, not report text:**
 \`\`\`typescript
-// Before: app.ts (250 lines) ❌
+// Before: app.ts (250 lines of UI logic) ❌
 // After:
 // - app.ts (60 lines) ✓ — imports base.css + components
 // - components/Header.ts (35 lines) ✓ — imports ./Header.css
-// - components/Header.css (20 lines) ✓ — scoped styles
-// - components/Chart.ts (50 lines) ✓ — imports ./Chart.css
-// - components/Chart.css (25 lines) ✓
-// - utils/formatters.ts (30 lines) ✓
-// - utils/api.ts (40 lines) ✓
+// - components/Chart.ts (50 lines) ✓ — chart rendering only
+// - content/reports/q1-audit.md (500+ lines) ✓ — prose, findings, tables (no LOC limit)
+// - components/reportViewer.ts (45 lines) ✓ — fetch('./content/reports/q1-audit.md') + render
 \`\`\`
+❌ **BAD:** 40 TS files each holding one report section to stay under 100 lines.
+✅ **GOOD:** One \`.md\` per report + thin TS viewers/charts.
 
 **Workflow order:**
 1. **ALWAYS** load design system: \`read_skill({ skillId: "preloaded-paprwork-design-system" })\`

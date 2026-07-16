@@ -39,7 +39,7 @@ Also check `~/Papr/workspace/BRAND.md` when UI is involved.
 ### 2. Paprwork Architecture
 - **Mini-apps** — how many, what mode each serves (planning / field / delivery / read-only)
 - **Jobs** — name, type (`agent` vs `python`/`node`), schedule, `appIds`, `dependsOn` + `autoTrigger`
-- **Shared SQLite** — tables, columns, who writes / who reads (`$JOB_DB`, `/api/db/query`)
+- **Shared SQLite** — tables, columns, and explicit writer/reader ownership. Mini-app iframe reads use `/api/db/query`, iframe mutations use `/api/db/write`, app-linked jobs use `$APP_DB`, and `$JOB_DB` is scratch-only.
 - **Data flow** — sources → jobs → DB → apps (ASCII diagram OK)
 - **Agent vs script** — justify each job; LLM work = `type: "agent"`, fixed ETL = script
 
@@ -67,6 +67,18 @@ Also check `~/Papr/workspace/BRAND.md` when UI is involved.
 4. **Mini-apps** — browser iframe; use `window.paprAPI.invoke()` for system actions
 5. **Design** — load design system skill before any UI implementation (main agent enforces)
 6. **Delegate implementation** — Product Architect plans; Implementation Specialist or main agent builds after approval
+7. **One canonical DB contract** — name every table/column once, plus its writers and readers; multi-job apps require `data-contract.json`
+8. **No filesystem coupling** — jobs never read another job's `job.json`, `jobs.json`, or hardcoded `~/Papr/Jobs/...` paths
+9. **Evidence before completion** — interrupted or unavailable tool results are unknown, never proof; rerun validation and acceptance checks before claiming success
+
+## Definition of Done for App + Job Systems
+
+- Primary app database is attached and resolves as `$APP_DB` for every app-linked job
+- Mini-app reads use `/api/db/query`; mini-app mutations use `/api/db/write`
+- App-linked jobs use `$APP_DB` for UI-facing tables and `$JOB_DB` only for scratch state
+- Migrations, app SQL, and job SQL match the canonical data contract
+- Each dependency that should chain includes `autoTrigger: true`
+- A smoke recipe proves the user outcome through DB assertions and a launched app, not merely a completed process
 
 ## Example Delegation Context
 

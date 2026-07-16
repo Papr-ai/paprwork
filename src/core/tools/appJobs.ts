@@ -128,7 +128,7 @@ async function runPostEditAppValidation(
       "",
       issueList,
       "",
-      "ACTION REQUIRED: Fix every ❌ error now. Common fixes: rename .ts → .tsx for JSX, close mismatched braces, split files over 100 lines.",
+      "ACTION REQUIRED: Fix every ❌ error now. Common fixes: rename .ts → .tsx for JSX, close mismatched braces, split CODE files over 100 lines (move long report text to content/*.md instead).",
     ].join("\n"),
     issues,
     filesChecked: validation.filesChecked,
@@ -3427,8 +3427,39 @@ Use list_job_file_versions first to find the versionId.`,
   },
 });
 
-// ==================== MINI-APP VALIDATION ====================
+// ==================== JOB ARCHITECTURE VALIDATION ====================
 
+const validateJobSchema = z.object({
+  jobId: z.string().min(1).describe("Job ID to audit against architecture and database rules"),
+});
+
+export const validateJobTool = createTool({
+  id: "validate_job",
+  description: `Audit an existing job before running it. Checks command/prompt portability, APP_DB vs JOB_DB usage, read-only API misuse, primary database tables and columns, multi-job data-contract requirements, and acceptance-recipe coverage. Run this after editing job code or configuration and before claiming an app/job workflow is complete.`,
+  inputSchema: validateJobSchema,
+  execute: async (input) => {
+    const args = (input as { context?: z.infer<typeof validateJobSchema> }).context ?? input;
+    const { getJobsService } = await import("../../gateway/services/JobsService.js");
+    const jobsService = getJobsService();
+    await jobsService.initialize();
+    const issues = await jobsService.validateJobArchitecture(args.jobId);
+    const errors = issues.filter((issue) => issue.severity === "error");
+    return {
+      success: errors.length === 0,
+      ...(errors.length > 0
+        ? { error: `Job architecture validation failed with ${errors.length} error(s).` }
+        : {}),
+      data: {
+        valid: errors.length === 0,
+        jobId: args.jobId,
+        issues,
+        summary: `${errors.length} error(s), ${issues.length - errors.length} warning(s)`,
+      },
+    };
+  },
+});
+
+// ==================== MINI-APP VALIDATION ====================
 const validateAppSchema = z.object({
   appId: z.string().describe("The ID of the mini-app to validate"),
 });
@@ -3442,7 +3473,7 @@ Always runs a fresh esbuild.build() before checking (never uses stale cache).
 Checks:
 - **Job event polling**: Errors if app polls instead of subscribeJobEvents — returns copy-paste fix snippet
 - **TypeScript/TSX build (esbuild)**: Same compiler the iframe uses — catches JSX-in-.ts, syntax errors, etc.
-- **100-line limit per file** (enforced): Files must be ≤100 significant lines. Break large files into components.
+- **100-line limit on code files** (enforced): \`.html\`, \`.css\`, \`.js\`, \`.ts\`, \`.tsx\`, \`.jsx\` must be ≤100 significant lines. **Not enforced on \`.md\`, \`.json\`, \`.txt\`** — put long report prose in \`content/reports/*.md\`, not split across dozens of TS files.
 - **HTML syntax**: Unclosed tags, malformed markup
 - **CSS syntax**: Mismatched braces, double semicolons
 - **JavaScript/TypeScript syntax**: Mismatched delimiters (braces, parens, brackets)
@@ -3483,7 +3514,7 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
           issueList,
           '',
           errorCount > 0
-            ? 'ACTION REQUIRED: Fix all ❌ errors now. For files over the 100-line limit, extract code into smaller component files (components/, utils/, types.ts). Do NOT continue with other work until errors are resolved.'
+            ? 'ACTION REQUIRED: Fix all ❌ errors now. For CODE files over the 100-line limit, extract into smaller components (components/, utils/, types.ts). For long report text, use content/reports/*.md (no line limit) — do NOT split one report into 20+ TS micro-files.'
             : 'Warnings found. Fix if possible before proceeding.',
           jobEventsFix,
         ].join('\n'),
@@ -3672,6 +3703,7 @@ export const appJobsTools = [
   listAppFilesTool,
   listAppsTool,
   validateAppTool,
+  validateJobTool,
   exportAppBundleTool,
   importAppBundleTool,
   listAppBundlesTool,

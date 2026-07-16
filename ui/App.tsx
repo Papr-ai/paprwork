@@ -31,6 +31,7 @@ import {
 import { gateway } from "./src/lib/gateway";
 import "./styles/liquid-glass.css";
 import "./App.css";
+import { shouldShowOnboarding } from "./utils/onboardingState";
 
 type ChatOpenPayload = {
   message?: string;
@@ -137,7 +138,7 @@ export function App() {
   }, []);
 
   const { createChat } = useChat();
-  const { createTab, switchToTab } = useTabs();
+  const { tabs, createTab, switchToTab } = useTabs();
   const { activeRequest, claimedByChat, respond } = usePermissionStore();
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -173,31 +174,22 @@ export function App() {
     }
     
     const checkOnboarding = () => {
-      const dismissed = localStorage.getItem("papr-onboarding-dismissed") === "true";
-      const step1 = localStorage.getItem("papr-onboarding-step1") === "true";
-      const step2 = localStorage.getItem("papr-onboarding-step2") === "true";
-      
-      // Show getting started tab if not dismissed and no steps completed
-      const shouldShow = !dismissed && !step1 && !step2;
-      
-      if (shouldShow) {
-        // Check if getting-started tab already exists (use getState to avoid dependency)
-        const currentTabs = useTabStore.getState().tabs;
-        const gettingStartedTab = currentTabs.find(t => t.type === 'getting-started');
-        if (!gettingStartedTab) {
-          console.log('[App] Creating getting-started tab');
-          createTab('getting-started', 'default', 'Getting Started');
-        }
+      if (!shouldShowOnboarding()) return;
+
+      // Only open getting-started tab if not already open
+      const existingTab = tabs.find((t: any) => t.type === "getting-started");
+      if (!existingTab) {
+        const tabId = createTab('getting-started', 'getting-started', 'Getting Started');
+        switchToTab(tabId);
       }
-      // Do not auto-close Getting Started: users can reopen it from the sidebar
     };
-    
-    // Check on mount
+
     checkOnboarding();
-    
-    // Listen for onboarding state changes
+
+    // Listen for changes from OnboardingView/OnboardingCard
     window.addEventListener('papr-onboarding-changed', checkOnboarding);
     return () => window.removeEventListener('papr-onboarding-changed', checkOnboarding);
+  }, []);
   }, [createTab]); // Removed tabs dependency - use getState() instead
 
   // Initialize Amplitude telemetry (events only, no session replay)

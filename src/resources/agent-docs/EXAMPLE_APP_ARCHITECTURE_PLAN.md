@@ -76,9 +76,10 @@ User goal: *Pull Reddit RSS feeds, pick topics with an agent, enrich with web re
 |----------|------|----------|--------|-----------|-----------|
 | Reddit RSS Fetcher | `python` | every 30m | `[appId]` | — | `$APP_DB`: `blog_posts_raw` |
 | Topic Picker | `agent` | after fetch | `[appId]` | fetch → `autoTrigger: true` | `$APP_DB`: `blog_picks` |
-| Persist Picks | `python` | — (on-demand or chained) | `[appId]` | picker | `$APP_DB`: `blog_picks` |
 | Topic Enricher | `agent` | on-demand (`/api/jobs/run`) | `[appId]` | — | `$APP_DB`: `blog_picks.enriched_*` |
 | Blog Writer | `agent` | on-demand | `[appId]` | — | `$APP_DB`: `blog_drafts` |
+
+The producing job owns its validated final write. Do not add a separate persistence job unless it represents a real deterministic transformation, transaction, or approval boundary.
 
 **Rules applied:**
 - LLM reasoning → `type: "agent"` (not python calling OpenAI manually)

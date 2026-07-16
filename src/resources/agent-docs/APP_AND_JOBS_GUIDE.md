@@ -1537,7 +1537,7 @@ Mini-apps use **TypeScript** + **esbuild bundling**. The build pipeline resolves
 #### Rules
 
 1. **TypeScript required** — use `.ts` files, not `.js`. esbuild bundles them.
-2. **Max 100 lines per file** — if a file exceeds this, split it into smaller components.
+2. **Max 100 lines per code file** — applies to `.html`, `.css`, `.js`, `.ts`, `.tsx`, `.jsx`. Split UI logic into smaller components. **Does NOT apply to `.md`, `.json`, `.txt`** — long report text belongs in `content/reports/{slug}.md` (any length), loaded at runtime with `fetch('./content/reports/...')` and rendered in a thin viewer. Charts/graphs stay in TS components. **Do NOT** split one report into 20–40 tiny TS files.
 3. **CSS imports** — every component MUST `import './component.css'` for its styles. esbuild bundles all CSS into `dist/app.css`. If a CSS file is missing, the build fails with a clear error.
 4. **ES modules** — use `import`/`export` between files. The bundler resolves the import graph.
 5. **No inline JavaScript** — keep `<script>` content in `.ts` files, not inside HTML.
@@ -3068,9 +3068,22 @@ async function createJobWithRetry(jobConfig, maxRetries = 3) {
 
 ---
 
+## Required Validation Before Completion
+
+For every app-linked job:
+
+1. Run `validate_job({ jobId })` after creation and after changing its command, prompt, app linkage, or schema usage.
+2. Fix every error. Never bypass missing `$APP_DB`, schema/column drift, cross-job filesystem coupling, or `$JOB_DB` writes to UI-facing tables.
+3. Add `data-contract.json` before a second job shares app data. Declare required tables/columns plus writer/reader ownership.
+4. Add an execution recipe with business-outcome assertions for data jobs. A successful process exit is not proof that expected rows changed.
+5. Run the job, assert the resulting database state, launch the app, and check console/network output.
+6. If an edit, run, or validation result is interrupted or unavailable, rerun it. Unknown evidence is never a pass.
+
+---
+
 ## Notes
 
-- Guidance is flexible — do not hard-gate progress if the task is simple
+- Guidance is flexible for simple work, but shared-data and portability checks are hard gates
 - Prefer deterministic script jobs for data generation and agent jobs for reasoning/synthesis
 - See `API_KEY_TESTING_PROTOCOL.md` for external API integration protocol
 - See `DECISION_TREE_AGENT_CAPABILITIES.md` for choosing the right execution pattern

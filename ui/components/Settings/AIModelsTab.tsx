@@ -4,6 +4,7 @@
 
 import React, { useState } from "react";
 import { useCustomKeys } from "../../hooks/useCustomKeys";
+import { trackEvent } from "../../lib/telemetry";
 import { OAuthSection } from "./OAuthSection";
 import { PaprLoginSection } from "./PaprLoginSection";
 import { ModelPickerSettings } from "./ModelPickerSettings";
@@ -69,6 +70,11 @@ export function AIModelsTab({ scrollToPickerModels = false }: AIModelsTabProps) 
         await addKey({ name: keyName, value, permission: "always" });
       }
       setApiKeyInputs(prev => ({ ...prev, [keyName]: "" }));
+      // Track activation: model connected
+      if (!localStorage.getItem("papr-activation-model-connected")) {
+        localStorage.setItem("papr-activation-model-connected", "true");
+        trackEvent("paprwork_activation_model_connected", { provider: keyName } as Record<string, unknown>);
+      }
       setExpandedProvider(null);
     } catch (err) {
       console.error("Failed to save key:", err);

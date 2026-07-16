@@ -31,6 +31,21 @@ export async function resolveJobAppDatabase(
   };
 }
 
+export async function requireJobAppDatabase(
+  appIds: readonly string[] | undefined,
+): Promise<JobAppDatabaseContext | null> {
+  const linkedAppIds = (appIds ?? []).filter((id) => id !== STANDALONE_APP_ID);
+  if (linkedAppIds.length === 0) return null;
+
+  const resolved = await resolveJobAppDatabase(linkedAppIds);
+  if (resolved) return resolved;
+
+  throw new Error(
+    `App-linked job cannot start because app ${linkedAppIds[0]} has no primary database. ` +
+      "Attach a primary data source before running the job; do not fall back to JOB_DB or a hardcoded path.",
+  );
+}
+
 export function jobAppDatabaseEnv(
   ctx: JobAppDatabaseContext,
 ): Record<string, string> {

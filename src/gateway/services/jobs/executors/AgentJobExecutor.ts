@@ -19,7 +19,7 @@ import {
 import type { SubAgentIconName } from "../../../../core/types/subagents.js";
 import {
   jobAppDatabasePromptLines,
-  resolveJobAppDatabase,
+  requireJobAppDatabase,
 } from "../../jobAppDatabase.js";
 
 export class AgentJobExecutor implements IJobExecutor {
@@ -333,7 +333,7 @@ export class AgentJobExecutor implements IJobExecutor {
     envLines.push(`JOB_DIR="${params.jobDir}"`);
     if (ownDbPath) envLines.push(`JOB_DB="${ownDbPath}"`);
 
-    const appDb = await resolveJobAppDatabase(params.job.appIds);
+    const appDb = await requireJobAppDatabase(params.job.appIds);
     if (appDb) {
       envLines.push(...jobAppDatabasePromptLines(appDb));
     }

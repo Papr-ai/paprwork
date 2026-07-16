@@ -1260,6 +1260,15 @@ export class CloudAppHostService {
         runtimeAuth.namespaceId,
         runtimeAuth.slug,
       );
+
+      // Auto-inject platform auth guard — intercepts 401/403 from /api/*
+      // and shows a login overlay. Apps don't need to handle auth errors.
+      const authGuardTag = `<script src="/__papr__/papr-auth-guard.js" defer></script>`;
+      if (content.includes("</head>")) {
+        content = content.replace("</head>", `${authGuardTag}\n</head>`);
+      } else {
+        content = authGuardTag + "\n" + content;
+      }
     }
 
     const isDistAsset = requestedPath.startsWith("dist/");

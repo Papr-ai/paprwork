@@ -79,6 +79,21 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
 
   useEffect(() => {
     trackEvent("paprwork_app_opened", { app_id: appId } as Record<string, unknown>);
+    // Track activation: result inspected (first time opening a created app)
+    if (!localStorage.getItem("papr-activation-result-inspected")) {
+      localStorage.setItem("papr-activation-result-inspected", "true");
+      trackEvent("paprwork_activation_result_inspected", { app_id: appId } as Record<string, unknown>);
+    }
+    // Track activation: repeat value (second+ distinct app opened)
+    const inspectedApps = JSON.parse(localStorage.getItem("papr-activation-inspected-apps") || "[]");
+    if (!inspectedApps.includes(appId)) {
+      inspectedApps.push(appId);
+      localStorage.setItem("papr-activation-inspected-apps", JSON.stringify(inspectedApps));
+      if (inspectedApps.length >= 2 && !localStorage.getItem("papr-activation-repeat-value")) {
+        localStorage.setItem("papr-activation-repeat-value", "true");
+        trackEvent("paprwork_activation_repeat_value", { apps_count: inspectedApps.length } as Record<string, unknown>);
+      }
+    }
   }, [appId]);
 
   // Inject paprAPI for local preview only (cloud iframe has no desktop APIs)
