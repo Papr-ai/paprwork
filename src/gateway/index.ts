@@ -308,6 +308,31 @@ async function startGateway(): Promise<void> {
     const server = createServer(app);
     const wss = new WebSocketServer({ server });
 
+    // The desktop renderer runs on a Vite port in development while the
+    // gateway stays on 18789. Allow only loopback renderer origins; never
+    // expose the local gateway to arbitrary websites.
+    app.use((req, res, next) => {
+      const origin = req.headers.origin;
+      if (origin) {
+        try {
+          const url = new URL(origin);
+          if (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]") {
+            res.setHeader("Access-Control-Allow-Origin", origin);
+            res.setHeader("Vary", "Origin");
+            res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+          }
+        } catch {
+          // Invalid Origin headers receive no CORS grant.
+        }
+      }
+      if (req.method === "OPTIONS") {
+        res.sendStatus(204);
+        return;
+      }
+      next();
+    });
+
     app.get("/health", (_req, res) => {
       res.json({
         status: gatewayReady ? "ok" : "starting",

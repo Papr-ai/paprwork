@@ -4,7 +4,9 @@
     "module": "ES2022",
     "outDir": "dist/electron",
     "rootDir": "src",
-    "lib": ["ES2023"]
+    "lib": ["ES2023"],
+    "incremental": true,
+    "tsBuildInfoFile": "./dist/.tsbuildinfo-electron"
   },
   "include": ["src/electron/**/*", "src/core/**/*"],
   "exclude": [

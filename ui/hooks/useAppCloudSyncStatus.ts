@@ -29,6 +29,10 @@ interface GitSyncStatus {
   cloudPublishing?: boolean;
 }
 
+const STATUS_CACHE_MS = 1_500;
+let gitStatusInFlight: Promise<GitSyncStatus> | null = null;
+let cachedGitStatus: { value: GitSyncStatus; at: number } | null = null;
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -68,11 +72,24 @@ function shouldPersistSyncSnapshot(
 }
 
 async function fetchGitSyncStatus(): Promise<GitSyncStatus> {
-  const res = await fetch(`${GATEWAY}/api/sync/status`);
-  if (!res.ok) {
-    throw new Error(`Sync status failed (${res.status})`);
+  if (cachedGitStatus && Date.now() - cachedGitStatus.at < STATUS_CACHE_MS) {
+    return cachedGitStatus.value;
   }
-  return (await res.json()) as GitSyncStatus;
+  if (gitStatusInFlight) return gitStatusInFlight;
+
+  gitStatusInFlight = (async () => {
+    const res = await fetch(`${GATEWAY}/api/sync/status`);
+    if (!res.ok) {
+      throw new Error(`Sync status failed (${res.status})`);
+    }
+    const value = (await res.json()) as GitSyncStatus;
+    cachedGitStatus = { value, at: Date.now() };
+    return value;
+  })().finally(() => {
+    gitStatusInFlight = null;
+  });
+
+  return gitStatusInFlight;
 }
 
 /** Gateway returns enabled:false while CloudSyncService is still starting. */
@@ -136,6 +153,7 @@ export function useAppCloudSyncStatus(
   const [pushing, setPushing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const hasLoadedOnceRef = useRef(initialStatus !== null);
+  const refreshInFlightRef = useRef(false);
 
   const status = useMemo(() => {
     if (syncItems) {
@@ -149,7 +167,8 @@ export function useAppCloudSyncStatus(
 
   const refresh = useCallback(
     async (force = false) => {
-      if (!active) return;
+      if (!active || refreshInFlightRef.current) return;
+      refreshInFlightRef.current = true;
       try {
         setError(null);
         if (hasLoadedOnceRef.current) {
@@ -198,6 +217,7 @@ export function useAppCloudSyncStatus(
       } catch (err) {
         setError((err as Error).message.slice(0, 120));
       } finally {
+        refreshInFlightRef.current = false;
         setLoading(false);
         setRefreshing(false);
       }

@@ -112,6 +112,8 @@ export class CloudSyncService {
   private queueTimer: ReturnType<typeof setTimeout> | null = null;
   private pullTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
+  private pullBackoffUntilMs = 0;
+  private consecutivePullFailures = 0;
   private isSyncing = false;
   /** Serializes git mutations (queue processor vs manual app push). */
   private gitOpChain: Promise<void> = Promise.resolve();
@@ -801,6 +803,7 @@ export class CloudSyncService {
   private startPeriodicPull(): void {
     this.pullTimer = setInterval(async () => {
       if (this.isSyncing || this.state.status === "queuing") return;
+      if (Date.now() < this.pullBackoffUntilMs) return;
       if ((await this.countUnpushedCommits()) > 0) return;
       try { await this.pull(); }
       catch (err) { console.warn("[CloudSync] Periodic pull failed:", (err as Error).message.slice(0, 100)); }
@@ -1253,58 +1256,92 @@ export class CloudSyncService {
       console.log("[CloudSync] Pull:", output.split("\n")[0]);
       this.state.status = "idle";
       this.state.lastSyncAt = new Date().toISOString();
+      this.state.lastError = null;
+      this.consecutivePullFailures = 0;
+      this.pullBackoffUntilMs = 0;
     } catch (err) {
       const msg = (err as Error).message;
-      if (msg.includes("Already up to date")) { this.state.status = "idle"; return; }
+      const normalized = msg.toLowerCase();
+      if (msg.includes("Already up to date")) {
+        this.state.status = "idle";
+        this.consecutivePullFailures = 0;
+        this.pullBackoffUntilMs = 0;
+        return;
+      }
 
-      if (msg.includes("CONFLICT") || msg.includes("not possible to fast-forward")) {
+      const diverged =
+        normalized.includes("conflict") ||
+        normalized.includes("diverging branches") ||
+        normalized.includes("divergent branches") ||
+        normalized.includes("not possible to fast-forward") ||
+        normalized.includes("cannot fast-forward");
+      if (diverged) {
         console.warn("[CloudSync] Pull conflict — using local-wins strategy");
         try {
           await this.resolveConflictsLocalWins();
           this.state.status = "idle";
+          this.state.lastSyncAt = new Date().toISOString();
+          this.state.lastError = null;
+          this.consecutivePullFailures = 0;
+          this.pullBackoffUntilMs = 0;
           return;
         } catch (re) {
           console.error("[CloudSync] Conflict resolution failed:", (re as Error).message.slice(0, 200));
         }
       }
 
-      console.error("[CloudSync] Pull failed:", msg.slice(0, 200));
+      this.consecutivePullFailures += 1;
+      const backoffMs = Math.min(
+        10 * 60_000,
+        30_000 * 2 ** (this.consecutivePullFailures - 1),
+      );
+      this.pullBackoffUntilMs = Date.now() + backoffMs;
+      console.error(
+        `[CloudSync] Pull failed; retrying in ${Math.ceil(backoffMs / 1_000)}s:`,
+        msg.slice(0, 200),
+      );
       this.state.status = "error";
       this.state.lastError = msg.slice(0, 200);
     }
   }
 
   private async resolveConflictsLocalWins(): Promise<void> {
-    try {
-      await this.git(["stash", "push", "-m", "cloud-sync-conflict-resolution"]);
-    } catch {
-      /* nothing to stash */
+    const dirty = (await this.git(["status", "--porcelain"])).trim().length > 0;
+    if (dirty) {
+      await this.git([
+        "stash",
+        "push",
+        "--include-untracked",
+        "-m",
+        "cloud-sync-conflict-resolution",
+      ]);
     }
 
+    await this.git(["fetch", "origin", "main"]);
     try {
-      await this.git(["pull", "--rebase=false", "--ff-only", "origin", "main"]);
-    } catch (pullErr) {
-      if (!(pullErr as Error).message?.includes("Already up to date")) {
+      // Preserve both histories. On an actual content conflict, the desktop's
+      // committed version wins while non-conflicting cloud changes are kept.
+      await this.git(["merge", "--no-edit", "-X", "ours", "origin/main"]);
+    } catch (mergeErr) {
+      try { await this.git(["merge", "--abort"]); } catch { /* best effort */ }
+      throw mergeErr;
+    }
+
+    if (dirty) {
+      try {
+        await this.git(["stash", "pop"]);
+      } catch (stashErr) {
         try {
-          await this.git(["reset", "--hard", "origin/main"]);
+          // During stash application, "theirs" is the pre-merge local work.
+          await this.git(["checkout", "--theirs", "."]);
+          await this.git(["stash", "drop"]);
         } catch {
-          /* best effort */
+          throw stashErr;
         }
       }
     }
 
-    try {
-      await this.git(["stash", "pop"]);
-    } catch {
-      try {
-        await this.git(["checkout", "--theirs", "."]);
-        await this.git(["stash", "drop"]);
-      } catch {
-        /* stash was empty or already resolved */
-      }
-    }
-
-    console.log("[CloudSync] Conflict resolved (local-wins)");
+    console.log("[CloudSync] Diverged histories merged (local wins conflicts)");
   }
 
   // ── File watcher (small dirs only) ────────────────────────────────

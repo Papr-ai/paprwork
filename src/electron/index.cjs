@@ -59,33 +59,63 @@ async function checkPythonInstallation() {
   }
 }
 
+/**
+ * Dynamic import with retry for transient macOS EINTR errors.
+ * Coffee-shop / high-load machines often interrupt fs reads during module load;
+ * a single retry almost always succeeds.
+ */
+async function importWithRetry(specifier, attempts = 3) {
+  let lastError;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      return await import(specifier);
+    } catch (error) {
+      lastError = error;
+      const code = error && error.code;
+      const message = error instanceof Error ? error.message : String(error);
+      const isEintr =
+        code === "EINTR" ||
+        message.includes("EINTR") ||
+        message.includes("interrupted system call");
+      if (!isEintr || i === attempts) {
+        throw error;
+      }
+      console.warn(
+        `[Electron] Transient ${code || "EINTR"} loading ${specifier} (attempt ${i}/${attempts}), retrying…`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50 * i));
+    }
+  }
+  throw lastError;
+}
+
 async function loadESMModules() {
   // Import from compiled dist directory
-  const storageModule = await import("../../dist/core/storage/index.js");
+  const storageModule = await importWithRetry("../../dist/core/storage/index.js");
   CustomKeysStorage = storageModule.CustomKeysStorage;
   KeyPermissionsStorage = storageModule.KeyPermissionsStorage;
   SettingsStorage = storageModule.SettingsStorage;
 
   const customKeysIpcModule =
-    await import("../../dist/electron/electron/ipc/customKeys.js");
+    await importWithRetry("../../dist/electron/electron/ipc/customKeys.js");
   initializeCustomKeysIPC = customKeysIpcModule.initializeCustomKeysIPC;
   setGatewayProcess = customKeysIpcModule.setGatewayProcess;
 
   const permissionsIpcModule =
-    await import("../../dist/electron/electron/ipc/permissions.js");
+    await importWithRetry("../../dist/electron/electron/ipc/permissions.js");
   initializePermissionsIPC = permissionsIpcModule.initializePermissionsIPC;
   requestPermissionFromGateway =
     permissionsIpcModule.requestPermissionFromGateway;
 
   // Import OAuth IPC module
   const oauthIpcModule =
-    await import("../../dist/electron/electron/ipc/oauth.js");
+    await importWithRetry("../../dist/electron/electron/ipc/oauth.js");
   initializeOAuthIPC = oauthIpcModule.initializeOAuthIPC;
   cleanupOAuthServers = oauthIpcModule.cleanupOAuthServers;
 
   // Import Papr Login IPC module
   const paprLoginIpcModule =
-    await import("../../dist/electron/electron/ipc/paprLogin.js");
+    await importWithRetry("../../dist/electron/electron/ipc/paprLogin.js");
   initializePaprLoginIPC = paprLoginIpcModule.initializePaprLoginIPC;
   cleanupPaprLogin = paprLoginIpcModule.cleanupPaprLogin;
   handlePaprAuthCallback = paprLoginIpcModule.handlePaprAuthCallback;
@@ -93,26 +123,26 @@ async function loadESMModules() {
 
   // Import Ollama IPC module
   const ollamaIpcModule =
-    await import("../../dist/electron/electron/electron/ipc/ollama.js");
+    await importWithRetry("../../dist/electron/electron/electron/ipc/ollama.js");
   initializeOllamaIPC = ollamaIpcModule.initializeOllamaIPC;
 
   // Import Ollama Manager for cleanup
   const ollamaManagerModule =
-    await import("../../dist/electron/electron/electron/services/OllamaManager.js");
+    await importWithRetry("../../dist/electron/electron/electron/services/OllamaManager.js");
   const ollamaManager = ollamaManagerModule.getOllamaManager();
   cleanupOllama = () => ollamaManager.cleanup();
 
-  const telemetryIpcModule = await import(
+  const telemetryIpcModule = await importWithRetry(
     "../../dist/electron/electron/ipc/telemetry.js"
   );
   initializeTelemetryIPC = telemetryIpcModule.initializeTelemetryIPC;
 
-  const chatAttachmentsIpcModule = await import(
+  const chatAttachmentsIpcModule = await importWithRetry(
     "../../dist/electron/electron/ipc/chatAttachments.js"
   );
   initializeChatAttachmentsIPC = chatAttachmentsIpcModule.initializeChatAttachmentsIPC;
 
-  const telemetryClientModule = await import(
+  const telemetryClientModule = await importWithRetry(
     "../../dist/electron/core/telemetry/index.js"
   );
   TelemetryClientClass = telemetryClientModule.TelemetryClient;
@@ -2026,6 +2056,15 @@ app.whenReady().then(async () => {
       mainWindow.webContents.send('system:unlock-screen', { timestamp: Date.now() });
     }
   });
+}).catch((error) => {
+  // Without this, EINTR / module-load failures become UnhandledPromiseRejectionWarning
+  // and leave Electron half-started with no Gateway (blank UI / disconnected).
+  console.error("[Electron] Fatal startup failure:", error);
+  dialog.showErrorBox(
+    "Papr Work failed to start",
+    error instanceof Error ? error.message : String(error),
+  );
+  app.quit();
 });
 
 app.on("window-all-closed", () => {

@@ -2,7 +2,7 @@
  * CloudSyncTab — Papr cloud sync, publishing, and status
  */
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
 import { CloudSyncDetails, type SyncItemsResponse } from "./CloudSyncDetails";
 import {
@@ -30,6 +30,11 @@ interface VaultSyncStatus {
   lastError?: string | null;
   keyCount?: number;
 }
+
+const GATEWAY =
+  typeof import.meta !== "undefined" && import.meta.env?.VITE_GATEWAY_PORT
+    ? `http://${import.meta.env.VITE_GATEWAY_HOST || "localhost"}:${import.meta.env.VITE_GATEWAY_PORT || "18789"}`
+    : "http://localhost:18789";
 
 function formatRelativeTime(isoStr: string): string {
   const diff = Date.now() - new Date(isoStr).getTime();
@@ -67,18 +72,21 @@ export function CloudSyncTab() {
   const [syncItems, setSyncItems] = useState<SyncItemsResponse | null>(
     cached?.syncItems ?? null,
   );
+  const fetchInFlightRef = useRef(false);
 
   const fetchStatus = useCallback(async (forceRefresh = false) => {
+    if (fetchInFlightRef.current) return;
+    fetchInFlightRef.current = true;
     if (forceRefresh) {
       setRefreshing(true);
     }
     try {
       const itemsUrl = forceRefresh
-        ? "http://localhost:18789/api/sync/items?refresh=1"
-        : "http://localhost:18789/api/sync/items";
+        ? `${GATEWAY}/api/sync/items?refresh=1`
+        : `${GATEWAY}/api/sync/items`;
       const [gitRes, vaultRes, itemsRes] = await Promise.all([
-        fetch("http://localhost:18789/api/sync/status"),
-        fetch("http://localhost:18789/api/vault/status"),
+        fetch(`${GATEWAY}/api/sync/status`),
+        fetch(`${GATEWAY}/api/vault/status`),
         fetch(itemsUrl),
       ]);
       const nextGit = (await gitRes.json()) as GitSyncStatus;
@@ -95,6 +103,7 @@ export function CloudSyncTab() {
     } catch {
       /* gateway unavailable */
     } finally {
+      fetchInFlightRef.current = false;
       setRefreshing(false);
     }
   }, []);
@@ -152,7 +161,7 @@ export function CloudSyncTab() {
   useEffect(() => {
     if (!cloudSyncEnabled || !loaded) return;
     void fetchStatus();
-    const interval = setInterval(() => void fetchStatus(), 5_000);
+    const interval = setInterval(() => void fetchStatus(), 15_000);
     return () => clearInterval(interval);
   }, [cloudSyncEnabled, loaded, fetchStatus]);
 
