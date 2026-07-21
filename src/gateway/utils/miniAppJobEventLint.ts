@@ -4,10 +4,24 @@
 
 import type { ValidationIssue } from "../services/AppService.js";
 
-function usesJobEvents(content: string): boolean {
-  return /papr-job-events|subscribeJobEvents|runJobAndWaitForComplete|onDbChanged/.test(
-    content,
+/** Runtime import — declare function does NOT count (erased at compile, ReferenceError at runtime). */
+function hasJobEventsSdkImport(content: string): boolean {
+  return (
+    /import\s*\{[^}]*\bsubscribeJobEvents\b[^}]*\}\s*from\s*['"`][^'"`]*papr-job-events/.test(
+      content,
+    ) ||
+    /import\s*\{[^}]*\brunJobAndWaitForComplete\b[^}]*\}\s*from\s*['"`][^'"`]*papr-job-events/.test(
+      content,
+    )
   );
+}
+
+function callsSubscribeJobEvents(content: string): boolean {
+  return /\bsubscribeJobEvents\s*\(/.test(content);
+}
+
+function usesJobEvents(content: string): boolean {
+  return hasJobEventsSdkImport(content);
 }
 
 const SET_INTERVAL = /setInterval\s*\(/;
@@ -76,6 +90,26 @@ export function checkMiniAppJobEventPatterns(
   );
 
   for (const [filename, content] of allJsTs) {
+    if (callsSubscribeJobEvents(content) && !hasJobEventsSdkImport(content)) {
+      const declareOnly = /\bdeclare\s+function\s+subscribeJobEvents\b/.test(
+        content,
+      );
+      issues.push({
+        file: filename,
+        line: lineNumber(
+          content,
+          content.search(/\bsubscribeJobEvents\s*\(/),
+        ),
+        severity: "error",
+        message: declareOnly
+          ? 'subscribeJobEvents is declared but never imported — "declare function" is compile-time only and causes ReferenceError at runtime. ' +
+            "Replace with: import { subscribeJobEvents } from '/__papr__/papr-job-events.ts';"
+          : "subscribeJobEvents() is called without importing the SDK — causes ReferenceError at runtime. " +
+            "Add: import { subscribeJobEvents } from '/__papr__/papr-job-events.ts';",
+        rule: "missing-job-events-import",
+      });
+    }
+
     if (usesJobEvents(content)) {
       continue;
     }

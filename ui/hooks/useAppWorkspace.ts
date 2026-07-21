@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { gateway } from "../src/lib/gateway";
+import { isTransientGatewayError } from "../utils/gatewayRetry";
 
 export type AppWorkspaceMode = "preview" | "files";
 
@@ -72,6 +73,29 @@ function isEditable(target: WorkspaceFileTarget): boolean {
     return false;
   }
   return !target.readOnly;
+}
+
+const BINARY_EXTENSIONS = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "ico",
+  "woff",
+  "woff2",
+  "ttf",
+  "eot",
+  "pyc",
+]);
+
+export function isBinaryWorkspaceFile(path: string): boolean {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  return BINARY_EXTENSIONS.has(ext);
+}
+
+export function isGeneratedReadOnlyPath(path: string): boolean {
+  return path === "dist" || path.startsWith("dist/");
 }
 
 export function useAppWorkspace(appId: string) {
@@ -157,13 +181,13 @@ export function useAppWorkspace(appId: string) {
         return;
       }
 
-      if (!isEditable(target) && target.kind !== "log") {
+      if (isBinaryWorkspaceFile(target.path)) {
         setSelected(target);
         setDbPreview(null);
         setContent("");
         setSavedContent("");
         setExternalChange(null);
-        setError("This file is read-only.");
+        setError("Binary files cannot be previewed in the editor.");
         return;
       }
 
@@ -251,6 +275,28 @@ export function useAppWorkspace(appId: string) {
   useEffect(() => {
     void refreshTree();
   }, [refreshTree]);
+
+  useEffect(() => {
+    return gateway.onConnectionChange((connected) => {
+      if (!connected) return;
+
+      setError((prev) =>
+        prev && isTransientGatewayError({ message: prev }) ? null : prev,
+      );
+
+      void refreshTree();
+
+      const current = selectedRef.current;
+      if (
+        current &&
+        current.kind !== "database" &&
+        current.kind !== "sqlite-internal" &&
+        !isBinaryWorkspaceFile(current.path)
+      ) {
+        void openTarget(current);
+      }
+    });
+  }, [openTarget, refreshTree]);
 
   useEffect(() => {
     const handler = (event: Event) => {

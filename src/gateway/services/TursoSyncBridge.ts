@@ -23,7 +23,9 @@ import { jobTursoDatabaseName } from "./tursoDatabaseNaming.js";
 import {
   createRemoteClient,
   isTursoDatabaseLimitError,
+  isTursoLocalDatabaseCorruptError,
   isTursoProvisioningRateLimitError,
+  isTursoSqliteBindTypeError,
   pullTursoToLocalDb,
   pushLocalDbToTurso,
   remoteAheadOfLocal,
@@ -32,6 +34,7 @@ import {
   type PushResult,
   type TursoCredentials,
 } from "./tursoSyncBridgeCore.js";
+import { recordTursoPushQuarantine } from "./tursoSyncState.js";
 import { remoteSyncLogExists } from "./tursoSyncLog.js";
 import {
   isJobDbDirty,
@@ -580,6 +583,19 @@ export class TursoSyncBridge {
         if (isTursoProvisioningRateLimitError(message)) {
           this.invalidateCredentialsCache();
           break;
+        }
+        if (
+          isTursoLocalDatabaseCorruptError(message) ||
+          isTursoSqliteBindTypeError(message)
+        ) {
+          const linked = findLinkedSourceForJob(
+            await this.listLinkedSources(),
+            jobId,
+          );
+          if (linked) {
+            recordTursoPushQuarantine(jobId, linked.dbPath, message);
+          }
+          continue;
         }
         console.warn(
           `[TursoSyncBridge] ${mode} failed for linked job ${jobId}:`,

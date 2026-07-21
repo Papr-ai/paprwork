@@ -9,6 +9,7 @@ import { useTabStore } from "../stores/tabStore";
 import { gateway } from "../src/lib/gateway";
 import { mapHistoryMessages } from "../utils/historyMapper";
 import { fetchChatHistory } from "../utils/chatHistoryApi";
+import { chatHasActiveStreamUi, mergeHistoryWithLocal } from "../lib/agentStreamRecovery";
 
 let hasLoadedChatsOnce = false;
 let loadChatsPromise: Promise<void> | null = null;
@@ -85,6 +86,13 @@ export function useChat() {
   // Load messages for a chat (loads only recent messages)
   const loadMessages = useCallback(
     async (chatId: string, limit: number = 30) => {
+      if (chatHasActiveStreamUi(chatId)) {
+        console.log(
+          `[useChat] Skipping loadMessages for ${chatId} — active or recovering stream`,
+        );
+        return;
+      }
+
       try {
         setLoading(true);
         useChatStore.setState((state) => {
@@ -101,19 +109,40 @@ export function useChat() {
 
         const history = await fetchChatHistory(chatId, { limit });
 
-        const messages = mapHistoryMessages(history);
+        const serverMessages = mapHistoryMessages(history);
 
         // Store messages in the specific chat's state using set() with updater function
         useChatStore.setState((state) => {
           const existingState = state.chatStates.get(chatId) || {
             ...defaultChatState,
           };
+
+          // A stream may have started while history was loading — never wipe live UI.
+          if (
+            existingState.isSending ||
+            existingState.isStreaming ||
+            existingState.messages.some((m) => m.isStreaming) ||
+            chatHasActiveStreamUi(chatId)
+          ) {
+            const newChatStates = new Map(state.chatStates);
+            newChatStates.set(chatId, {
+              ...existingState,
+              isLoading: false,
+            });
+            return { chatStates: newChatStates };
+          }
+
+          const messages =
+            existingState.messages.length > 0
+              ? mergeHistoryWithLocal(existingState.messages, serverMessages)
+              : serverMessages;
+
           const newChatStates = new Map(state.chatStates);
           newChatStates.set(chatId, {
             ...existingState,
             messages,
             isLoading: false,
-            hasMoreMessages: messages.length === limit, // If we got exactly 'limit' messages, there might be more
+            hasMoreMessages: serverMessages.length === limit,
           });
           return { chatStates: newChatStates };
         });

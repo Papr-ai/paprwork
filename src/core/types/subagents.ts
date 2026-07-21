@@ -67,6 +67,9 @@ export interface DelegateTaskInput {
   outputSchema?: Record<string, unknown>;
   maxTurns?: number;
   memoryPolicy?: "none" | "summary" | "full";
+  /** Mini-app ids for app-scoped tool context (embedded app agent chat). */
+  appIds?: string[];
+  delegatedBy?: "main-agent" | "app-user";
 }
 
 /**

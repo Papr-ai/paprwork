@@ -51,7 +51,8 @@ export function requiresPiAiAdaptiveThinkingOverride(modelId: string): boolean {
   return (
     modelId.includes("fable") ||
     modelId.includes("opus-4-8") ||
-    modelId.includes("opus-4.8")
+    modelId.includes("opus-4.8") ||
+    modelId.includes("sonnet-5")
   );
 }
 

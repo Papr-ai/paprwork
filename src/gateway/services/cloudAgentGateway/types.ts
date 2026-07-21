@@ -1,3 +1,5 @@
+import type { Provider } from "../../../core/types/agents.js";
+
 export interface CloudLinkedSource {
   alias: string;
   dbPath: string;
@@ -25,7 +27,10 @@ export interface CloudAgentRunRequest {
   runId: string;
   provider: string;
   model?: string;
-  prompt: string;
+  /** Per-run parameters from memory / mini-app (merged into prompt via AgentJobExecutor). */
+  runtimeParams?: Record<string, string>;
+  /** @deprecated Gateway builds prompt from cloned job via AgentJobExecutor — do not send from memory. */
+  prompt?: string;
   paprApiKey: string;
   allowedToolIds?: string[];
   maxTurns?: number;
@@ -53,6 +58,13 @@ export interface CloudAgentRunRequest {
   };
   /** User vault keys from GCP Secret Manager (memory server) — injected into process.env for bash/run_job */
   vaultKeys?: Record<string, string>;
+  /**
+   * Stable id for workspace reuse (app-agent chat session).
+   * When set, disk path uses /tmp/papr-cloud-session/{id}/ instead of per-runId.
+   */
+  workspaceSessionId?: string;
+  /** After stream completes, keep cloned workspace on disk for follow-up turns. */
+  keepWorkspaceWarm?: boolean;
 }
 
 export interface CloudAgentRunResponse {
@@ -63,7 +75,19 @@ export interface CloudAgentRunResponse {
 }
 
 export interface CloudProviderAuthResolution {
-  provider: string;
+  provider: Provider;
   authType: "oauth" | "apiKey";
   token: string;
 }
+
+export interface CloudAgentSessionBeginResponse {
+  status: "ready" | "warming";
+  sessionId: string;
+  expiresAt: string;
+}
+
+/** Idle TTL for warm gateway workspaces (matches AppAgentChatWarmCoordinator). */
+export const CLOUD_AGENT_SESSION_TTL_MS = 15 * 60 * 1000;
+
+/** Max warm sessions kept per gateway instance before LRU eviction. */
+export const CLOUD_AGENT_SESSION_MAX_ENTRIES = 50;

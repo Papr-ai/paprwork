@@ -4,21 +4,39 @@
  * Keeps the system prompt static (prompt-cache friendly). All shaping happens
  * when formatting stored messages for the model in historyFormatter.
  *
- * File reads stay full up to ABSOLUTE_TOOL_RESULT_MAX_CHARS in history (prompt-cache
- * friendly below the cap). Context pressure beyond that uses get_full_tool_result.
+ * File reads stay full up to the absolute cap in history (prompt-cache friendly
+ * below the cap). Limits are user-configurable in Settings → AI Models → Agent Context.
  */
 
-/** Hard ceiling per tool result in model context (~10K tokens at ~4 chars/token). */
+import {
+  getToolResultTruncationSettings,
+  isToolResultTruncationDisabled,
+} from "./toolResultTruncationSettings.js";
+
+/** Default hard ceiling (~10K tokens at ~4 chars/token). Overridable in settings. */
 export const ABSOLUTE_TOOL_RESULT_MAX_CHARS = 40_000;
 
 /** Default cross-turn limit for noisy / low-reuse tools (bash, lists, etc.) */
 export const HISTORY_TOOL_RESULT_MAX_CHARS = 400;
 
-/** Moderate limit for small structured results (code summaries, schema list) */
+/** Default moderate limit for small structured results (code summaries, schema list) */
 export const HISTORY_TOOL_RESULT_MODERATE_CHARS = 2000;
 
-/** Bash/API results in the last N user turns stay full before aggressive truncation */
+/** Default user turns before bash/discovery results truncate aggressively */
 export const RECENT_TURN_RETENTION_COUNT = 4;
+
+function effectiveAbsoluteMaxChars(): number | null {
+  const { disableAllTruncation, absoluteMaxChars } =
+    getToolResultTruncationSettings();
+  if (disableAllTruncation) {
+    return null;
+  }
+  return absoluteMaxChars;
+}
+
+function effectiveRecentTurnRetentionCount(): number {
+  return getToolResultTruncationSettings().recentTurnRetentionCount;
+}
 
 /** @deprecated File reads are kept full; reserved for footprint estimates / future caps */
 export const ACTIVE_FILE_READ_MAX_CHARS = 15_000;
@@ -96,11 +114,15 @@ const SMALL_CRUD_TOOLS = new Set([
   "list_sub_agents",
 ]);
 
-/** Recovery + delegation status tools — full payload must survive cross-turn. */
-const FULL_RETENTION_TOOLS = new Set([
+/** Recovery + delegation status tools — never truncate (full payload must survive). */
+export const FULL_RETENTION_TOOLS = new Set([
   "get_full_tool_result",
   "get_delegation_run",
 ]);
+
+export function isFullRetentionTool(toolName: string): boolean {
+  return FULL_RETENTION_TOOLS.has(toolName);
+}
 
 /**
  * Discovery tools that stay full for RECENT_TURN_RETENTION_COUNT user turns
@@ -151,10 +173,13 @@ export function categorizeTool(toolName: string): ToolResultCategory {
   return "bash";
 }
 
-/** `null` = keep full result (file reads, edits, orphan markers). */
-export function getDefaultHistoryCharLimit(
+/** Category limits from settings (ignores disableAllTruncation). */
+function getConfiguredCategoryCharLimit(
   category: ToolResultCategory,
 ): number | null {
+  const { aggressiveMaxChars, moderateMaxChars, memorySearchMaxChars } =
+    getToolResultTruncationSettings();
+
   switch (category) {
     case "file_read":
     case "file_edit":
@@ -162,16 +187,27 @@ export function getDefaultHistoryCharLimit(
       return null;
     case "code_cache":
     case "small_crud":
-      return HISTORY_TOOL_RESULT_MODERATE_CHARS;
+      return moderateMaxChars;
     case "memory_search":
-      return 800;
+      return memorySearchMaxChars;
     case "bash":
     case "directory_list":
     case "validation_preview":
     case "job_run":
     default:
-      return HISTORY_TOOL_RESULT_MAX_CHARS;
+      return aggressiveMaxChars;
   }
+}
+
+/** `null` = keep full result (file reads, edits, orphan markers). */
+export function getDefaultHistoryCharLimit(
+  category: ToolResultCategory,
+): number | null {
+  if (isToolResultTruncationDisabled()) {
+    return null;
+  }
+
+  return getConfiguredCategoryCharLimit(category);
 }
 
 function buildTruncationSuffix(
@@ -241,7 +277,7 @@ function isRecentTurnDiscoveryRetentionEligible(
   toolName: string,
   category: ToolResultCategory,
 ): boolean {
-  if (FULL_RETENTION_TOOLS.has(toolName)) {
+  if (isFullRetentionTool(toolName)) {
     return false;
   }
   if (RECENT_TURN_DISCOVERY_TOOLS.has(toolName)) {
@@ -256,14 +292,19 @@ function isRecentTurnDiscoveryRetentionEligible(
 export function resolveHistoryToolResultCharLimit(
   input: TruncateHistoryToolResultInput,
 ): number | null {
+  if (isToolResultTruncationDisabled()) {
+    return null;
+  }
+
   if (input.isOrphan) {
     return null;
   }
 
-  if (FULL_RETENTION_TOOLS.has(input.toolName)) {
-    return ABSOLUTE_TOOL_RESULT_MAX_CHARS;
+  if (isFullRetentionTool(input.toolName)) {
+    return null;
   }
 
+  const absoluteMax = effectiveAbsoluteMaxChars();
   const category = categorizeTool(input.toolName);
   const defaultLimit = getDefaultHistoryCharLimit(category);
 
@@ -271,27 +312,34 @@ export function resolveHistoryToolResultCharLimit(
     defaultLimit !== null &&
     isRecentTurnDiscoveryRetentionEligible(input.toolName, category) &&
     countUserTurnsAfter(input.history, input.messageIndex) <
-      RECENT_TURN_RETENTION_COUNT
+      effectiveRecentTurnRetentionCount()
   ) {
-    return ABSOLUTE_TOOL_RESULT_MAX_CHARS;
+    return absoluteMax;
   }
 
   if (defaultLimit === null) {
-    return ABSOLUTE_TOOL_RESULT_MAX_CHARS;
+    return absoluteMax;
   }
 
-  return Math.min(defaultLimit, ABSOLUTE_TOOL_RESULT_MAX_CHARS);
+  if (absoluteMax === null) {
+    return defaultLimit;
+  }
+
+  return Math.min(defaultLimit, absoluteMax);
 }
 
-/** Mid-turn / in-flight context: always cap at absolute max with recovery hint. */
+/** Mid-turn / in-flight context: cap unless tool is full-retention (recovery/delegation). */
 export function truncateToolResultForModelContext(
   resultStr: string,
   toolCallId: string,
   toolName: string,
 ): string {
+  if (isToolResultTruncationDisabled() || isFullRetentionTool(toolName)) {
+    return resultStr;
+  }
   return truncateToCharLimit(
     resultStr,
-    ABSOLUTE_TOOL_RESULT_MAX_CHARS,
+    effectiveAbsoluteMaxChars(),
     toolCallId,
     toolName,
   );
@@ -307,4 +355,28 @@ export function truncateHistoryToolResult(
     input.toolCallId,
     input.toolName,
   );
+}
+
+/**
+ * Mid-turn compaction: effective char limit for one tool result in a batch.
+ * File reads/edits use the absolute cap; category limits apply otherwise.
+ */
+export function resolveMidTurnToolResultCharLimit(
+  toolName: string | undefined,
+  batchCeiling: number,
+): number {
+  if (toolName && isFullRetentionTool(toolName)) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  const absoluteMax = effectiveAbsoluteMaxChars();
+  const category = toolName ? categorizeTool(toolName) : "bash";
+  const historyLimit = getConfiguredCategoryCharLimit(category);
+
+  if (historyLimit === null) {
+    return absoluteMax ?? Number.MAX_SAFE_INTEGER;
+  }
+
+  const cappedBatch = absoluteMax === null ? batchCeiling : Math.min(batchCeiling, absoluteMax);
+  return Math.min(cappedBatch, historyLimit);
 }

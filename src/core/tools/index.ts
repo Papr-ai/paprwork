@@ -25,6 +25,7 @@ import { connectorsTools } from "./connectors.js";
 import { codeIndexTools } from "./codeIndex.js";
 import { cloudPublishTools } from "./cloudPublish.js";
 import { cloudInstallTools } from "./cloudInstall.js";
+import { appAgentChatTools } from "./appAgentChat.js";
 import { editFileTool } from "./editFile.js";
 import { editAppFileTool, editJobFileTool } from "./appJobs.js";
 import {
@@ -67,6 +68,7 @@ export const allTools = [
   ...codeIndexTools,
   ...cloudPublishTools,
   ...cloudInstallTools,
+  ...appAgentChatTools,
 ];
 
 /**
@@ -86,7 +88,7 @@ export const toolsByCategory = {
   papr: [...paprMemoryTools, ...paprDocumentMemoryTools, ...wikiGraphTools],
   documents: documentTools,
   skills: skillsTools,
-  automation: [...appJobsTools, ...databaseTools],
+  automation: [...appJobsTools, ...databaseTools, ...appAgentChatTools],
   delegation: delegationTools,
   planning: planningTools,
   keyManagement: keyManagementTools,
@@ -200,6 +202,8 @@ export {
   listCloudAppChangesTool,
   resolveCloudAppChangeTool,
 } from "./cloudInstall.js";
+
+export { appAgentChatTools, enableAppAgentChatTool } from "./appAgentChat.js";
 
 export {
   jobFolderTools,

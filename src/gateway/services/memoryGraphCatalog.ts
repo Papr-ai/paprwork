@@ -15,7 +15,8 @@ import { getPaprUserId } from "../utils/paprUserId.js";
 export const MAX_CATALOG_TIER0 = 20;
 export const MAX_CATALOG_TIER1 = 25;
 export const MAX_CATALOG_SEARCH_MEMORIES = 10;
-export const CATALOG_SYNC_TIERS_TIMEOUT_MS = 60_000;
+/** Papr sync.getTiers is slow (often 20–40s; can exceed 60s under load). */
+export const CATALOG_SYNC_TIERS_TIMEOUT_MS = 120_000;
 
 /** Injected synchronously on chat-start turn 1 (local entity files). */
 export const WIKI_GRAPH_CATALOG_PREFIX =

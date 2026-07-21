@@ -7,7 +7,9 @@ import { gateway } from "../src/lib/gateway";
 import {
   PICKER_DEFAULT_MODEL_IDS,
   getPickerModels,
-  resolveEnabledPickerModelIds,
+  migrateEnabledPickerModelIds,
+  migratePickerModelId,
+  isChatPickerModelId,
 } from "../constants/modelPicker";
 
 interface UiPreferencesPayload {
@@ -28,7 +30,7 @@ export function useModelPickerSettings(): {
   const [loaded, setLoaded] = useState(false);
 
   const applyFromSettings = useCallback((raw: string[] | null | undefined) => {
-    setEnabledIds(resolveEnabledPickerModelIds(raw));
+    setEnabledIds(migrateEnabledPickerModelIds(raw));
   }, []);
 
   const reload = useCallback(async () => {
@@ -37,7 +39,24 @@ export function useModelPickerSettings(): {
       if (response.success && response.data) {
         const prefs = (response.data as { uiPreferences?: UiPreferencesPayload })
           .uiPreferences;
-        applyFromSettings(prefs?.enabledPickerModelIds);
+        const raw = prefs?.enabledPickerModelIds;
+        const migrated = migrateEnabledPickerModelIds(raw);
+        setEnabledIds(migrated);
+
+        if (raw && raw.length > 0) {
+          const normalizedRaw = [
+            ...new Set(
+              raw.map(migratePickerModelId).filter(isChatPickerModelId),
+            ),
+          ];
+          const needsPersist =
+            JSON.stringify(normalizedRaw) !== JSON.stringify(migrated);
+          if (needsPersist) {
+            await gateway.send("settings:save-ui-preferences", {
+              enabledPickerModelIds: migrated,
+            });
+          }
+        }
       }
     } catch {
       applyFromSettings(null);
@@ -67,7 +86,7 @@ export function useModelPickerSettings(): {
   }, [applyFromSettings, reload]);
 
   const saveEnabledIds = useCallback(async (ids: string[]) => {
-    const normalized = resolveEnabledPickerModelIds(ids);
+    const normalized = migrateEnabledPickerModelIds(ids);
     await gateway.send("settings:save-ui-preferences", {
       enabledPickerModelIds: normalized,
     });

@@ -1275,6 +1275,14 @@ export class JobsService {
     if (status === "completed" || status === "failed") {
       void this.triggerDownstreamJobs(next);
 
+      // Keep stored delegate_task tool result in sync (main agent reads chat history)
+      if (next.type === "subagent" && next.reportChatId?.trim()) {
+        void import("./delegationCompletionSync.js").then(
+          ({ patchStoredDelegateTaskResult }) =>
+            patchStoredDelegateTaskResult(next),
+        );
+      }
+
       // Wake main agent when a sub-agent delegation finishes so it can update the user
       if (next.type === "subagent" && next.reportChatId?.trim()) {
         void import("./SubAgentResponseTrigger.js")
@@ -1369,6 +1377,9 @@ export class JobsService {
         lastOutput: job.lastOutput,
         ...(job.status === "waiting_permission" && job.waitingPermissionKeys
           ? { waitingPermissionKeys: job.waitingPermissionKeys }
+          : {}),
+        ...(job.status === "waiting_permission" && job.waitingScheduleRisk
+          ? { waitingScheduleRisk: job.waitingScheduleRisk }
           : {}),
       },
     });
@@ -2027,7 +2038,86 @@ export class JobsService {
     if (!existing.schedule?.enabled) {
       return this.runJob(jobId);
     }
+
+    const { assessAgentJobSchedule, requiresScheduleRiskAcknowledgment } =
+      await import("./jobs/agentScheduleGuard.js");
+    if (requiresScheduleRiskAcknowledgment(existing.type, existing.schedule)) {
+      const assessment = assessAgentJobSchedule(existing.type, existing.schedule);
+      await this.setJobStatus(jobId, "waiting_permission", {
+        waitingScheduleRisk: {
+          intervalMinutes: assessment.intervalMinutes ?? 15,
+          runsPerDay: assessment.runsPerDay ?? 96,
+          message:
+            assessment.message ??
+            "High-frequency agent schedule requires your approval before running.",
+        },
+        scheduleState: {
+          ...existing.scheduleState,
+          pendingDueAtForApproval: dueAtIso,
+        },
+      });
+      return (await this.getJob(jobId)) as JobRecord;
+    }
+
     return this.runJob(jobId, undefined, dueAtIso);
+  }
+
+  async acknowledgeScheduleRisk(
+    jobId: string,
+    approved: boolean,
+  ): Promise<JobRecord> {
+    const job = await this.getJob(jobId);
+    if (!job) {
+      throw new Error(`Job not found: ${jobId}`);
+    }
+    if (job.status !== "waiting_permission" || !job.waitingScheduleRisk) {
+      throw new Error(`Job ${jobId} is not waiting for schedule approval`);
+    }
+
+    const pendingDueAt = job.scheduleState?.pendingDueAtForApproval;
+
+    if (!approved) {
+      const updated = await this.setJobStatus(jobId, "pending", {
+        waitingScheduleRisk: undefined,
+        schedule: job.schedule
+          ? { ...job.schedule, enabled: false }
+          : job.schedule,
+        scheduleState: {
+          ...job.scheduleState,
+          pendingDueAtForApproval: undefined,
+        },
+      });
+      await this.appendLog(
+        jobId,
+        "High-frequency agent schedule denied by user — schedule disabled.",
+      );
+      return updated;
+    }
+
+    const now = new Date().toISOString();
+    await this.setJobStatus(jobId, "pending", {
+      waitingScheduleRisk: undefined,
+      schedule: job.schedule
+        ? {
+            ...job.schedule,
+            highFrequencyAcknowledgedAt: now,
+          }
+        : job.schedule,
+      scheduleState: {
+        ...job.scheduleState,
+        pendingDueAtForApproval: undefined,
+      },
+    });
+
+    await this.appendLog(
+      jobId,
+      "High-frequency agent schedule approved by user — running due slot.",
+    );
+
+    if (pendingDueAt) {
+      return this.runJob(jobId, undefined, pendingDueAt);
+    }
+    return this.runJob(jobId);
   }
 
   async updateJob(
@@ -2076,6 +2166,19 @@ export class JobsService {
     const architectureErrors = formatJobArchitectureErrors(architectureIssues);
     if (architectureErrors) {
       throw new Error(`Job architecture validation failed:\n${architectureErrors}`);
+    }
+
+    if (updates.schedule !== undefined) {
+      const { assessAgentJobSchedule } = await import(
+        "./jobs/agentScheduleGuard.js"
+      );
+      const assessment = assessAgentJobSchedule(candidate.type, candidate.schedule);
+      if (assessment.level !== "ok" && candidate.schedule) {
+        candidate.schedule = {
+          ...candidate.schedule,
+          highFrequencyAcknowledgedAt: undefined,
+        };
+      }
     }
 
     const updated: import("./jobs/types.js").JobRecord = {

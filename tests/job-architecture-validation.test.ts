@@ -29,6 +29,15 @@ describe("validateJobArchitecture", () => {
     );
   });
 
+  it("allows portable Papr job paths via PAPR_HOME", () => {
+    const issues = validate(
+      'sqlite3 "$PAPR_HOME/Jobs/abc/data/data.db" "SELECT 1"',
+    );
+    expect(
+      issues.some((issue) => issue.rule === "job-hardcoded-user-path"),
+    ).toBe(false);
+  });
+
   it("blocks machine-specific Papr job paths", () => {
     const issues = validate(
       "sqlite3 /Users/alice/Papr/Jobs/abc/data/data.db 'SELECT 1'",

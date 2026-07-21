@@ -15,7 +15,8 @@ function isSyntheticSubAgentMessage(msg: unknown): boolean {
   if (role !== "user") return false;
   return (
     content.startsWith("[Sub-agent question for delegation ") ||
-    content.startsWith("[User message in sub-agent chat for delegation ")
+    content.startsWith("[User message in sub-agent chat for delegation ") ||
+    content.startsWith("[Sub-agent delegation finished for ")
   );
 }
 

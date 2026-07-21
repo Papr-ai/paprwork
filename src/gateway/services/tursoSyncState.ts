@@ -26,6 +26,9 @@ export interface TursoJobPushState {
   lastPushedLogId?: number;
   /** Highest remote _papr_sync_log id applied in last successful pull. */
   lastPulledLogId?: number;
+  /** When set, Turso push/pull is skipped until the local DB is repaired. */
+  quarantinedAt?: string;
+  quarantineReason?: string;
 }
 
 export interface TursoSyncStateFile {
@@ -85,6 +88,10 @@ export function isJobDbDirty(
   dbPath: string,
   state: TursoSyncStateFile,
 ): boolean {
+  if (isJobDbQuarantined(jobId, state)) {
+    return false;
+  }
+
   const normalizedPath = path.normalize(dbPath);
   if (!fs.existsSync(normalizedPath)) {
     return false;
@@ -113,6 +120,37 @@ export function isJobDbDirty(
     return false;
   }
   return prev.dbMtimeMs === undefined || mtimeMs > prev.dbMtimeMs;
+}
+
+export function isJobDbQuarantined(
+  jobId: string,
+  state: TursoSyncStateFile,
+): boolean {
+  return Boolean(state.jobs[jobId]?.quarantinedAt);
+}
+
+export function recordTursoPushQuarantine(
+  jobId: string,
+  dbPath: string,
+  reason: string,
+  paprDir?: string,
+): void {
+  const normalizedPath = path.normalize(dbPath);
+  const state = loadTursoSyncState(paprDir);
+  const existing = state.jobs[jobId];
+  state.jobs[jobId] = {
+    dbPath: normalizedPath,
+    lastPushAt: existing?.lastPushAt ?? new Date().toISOString(),
+    quarantinedAt: new Date().toISOString(),
+    quarantineReason: reason.slice(0, 500),
+    ...(existing?.tableFingerprints
+      ? { tableFingerprints: existing.tableFingerprints }
+      : {}),
+  };
+  saveTursoSyncState(state, paprDir);
+  console.warn(
+    `[TursoSync] Quarantined job ${jobId} (Turso sync paused): ${reason.slice(0, 120)}`,
+  );
 }
 
 export function localDbHasSyncableData(dbPath: string): boolean {
@@ -159,6 +197,75 @@ export function clearTursoPushState(jobId: string, paprDir?: string): void {
   }
   delete state.jobs[jobId];
   saveTursoSyncState(state, paprDir);
+}
+
+export function clearTursoQuarantine(jobId: string, paprDir?: string): void {
+  const state = loadTursoSyncState(paprDir);
+  const entry = state.jobs[jobId];
+  if (!entry?.quarantinedAt) {
+    return;
+  }
+  delete entry.quarantinedAt;
+  delete entry.quarantineReason;
+  saveTursoSyncState(state, paprDir);
+}
+
+export interface TursoJobDatabaseRepairResult {
+  success: boolean;
+  backedUpTo: string | null;
+  message: string;
+}
+
+/**
+ * Backup corrupt local job SQLite, remove it, and clear Turso quarantine so the
+ * job can rebuild data on next run.
+ */
+export function repairTursoJobDatabase(
+  jobId: string,
+  dbPath: string,
+  paprDir?: string,
+): TursoJobDatabaseRepairResult {
+  const normalizedPath = path.normalize(dbPath);
+  const dataDir = path.dirname(normalizedPath);
+
+  if (!fs.existsSync(normalizedPath)) {
+    clearTursoQuarantine(jobId, paprDir);
+    clearTursoPushState(jobId, paprDir);
+    return {
+      success: true,
+      backedUpTo: null,
+      message:
+        "Database file not found — quarantine cleared. Re-run the job to create a fresh database.",
+    };
+  }
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backupBase = path.join(dataDir, `data.db.corrupt-backup-${timestamp}`);
+  fs.copyFileSync(normalizedPath, backupBase);
+  for (const suffix of ["-wal", "-shm"] as const) {
+    const sidecar = normalizedPath + suffix;
+    if (fs.existsSync(sidecar)) {
+      fs.copyFileSync(sidecar, backupBase + suffix);
+    }
+  }
+
+  fs.unlinkSync(normalizedPath);
+  for (const suffix of ["-wal", "-shm"] as const) {
+    const sidecar = normalizedPath + suffix;
+    if (fs.existsSync(sidecar)) {
+      fs.unlinkSync(sidecar);
+    }
+  }
+
+  clearTursoQuarantine(jobId, paprDir);
+  clearTursoPushState(jobId, paprDir);
+
+  return {
+    success: true,
+    backedUpTo: backupBase,
+    message:
+      "Corrupt database backed up and removed. Re-run the job to rebuild local data, then sync again.",
+  };
 }
 
 /**

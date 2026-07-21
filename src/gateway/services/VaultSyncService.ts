@@ -12,6 +12,7 @@
  */
 
 import { getCustomKeysService } from "./CustomKeysService.js";
+import { resolveVaultKeySource } from "./cloudAgentGateway/resolveCloudProviderAuth.js";
 import { getPaprApiKey } from "../utils/keyResolver.js";
 
 const GATEWAY_PORT = parseInt(process.env.GATEWAY_PORT ?? "18789", 10);
@@ -28,16 +29,6 @@ interface VaultSyncResponse {
   created: string[];
   updated: string[];
   deleted: string[];
-}
-
-function inferVaultKeySource(name: string, value: string): string {
-  if (value.startsWith("sk-ant-oat") || value.startsWith("sk-oat")) {
-    return "oauth";
-  }
-  if (name.toLowerCase().includes("oauth")) {
-    return "oauth";
-  }
-  return "manual";
 }
 
 interface VaultListKeysResponse {
@@ -128,6 +119,7 @@ export class VaultSyncService {
       name: string;
       value: string;
       clientAccess: "server" | "client";
+      source: string;
     }> = [];
     for (const meta of keyList) {
       try {
@@ -137,6 +129,16 @@ export class VaultSyncService {
             name: meta.name,
             value,
             clientAccess: meta.clientAccess ?? "server",
+            source: resolveVaultKeySource(
+              {
+                name: meta.name,
+                source: meta.source,
+                managedBy: meta.managedBy,
+                oauthProvider: meta.oauthProvider,
+                description: meta.description,
+              },
+              value,
+            ),
           });
         }
       } catch (err) {
@@ -165,10 +167,10 @@ export class VaultSyncService {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             scope: "user",
-            keys: keyPairs.map(({ name, value, clientAccess }) => ({
+            keys: keyPairs.map(({ name, value, clientAccess, source }) => ({
               name,
               value,
-              source: inferVaultKeySource(name, value),
+              source,
               clientAccess,
             })),
           }),

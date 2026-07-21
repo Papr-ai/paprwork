@@ -5,12 +5,15 @@
 import React, { useEffect, useMemo } from "react";
 import {
   detectWorkspaceLanguage,
+  isBinaryWorkspaceFile,
+  isGeneratedReadOnlyPath,
   useAppWorkspace,
 } from "../../hooks/useAppWorkspace";
 import { WorkspaceCodeEditor } from "./WorkspaceCodeEditor";
 import { WorkspaceDbPreview } from "./WorkspaceDbPreview";
 import { WorkspaceFileTree } from "./WorkspaceFileTree";
 import { MiniAppDataSourcesPanel } from "./MiniAppDataSourcesPanel";
+import { MiniAppCodeSearch } from "./MiniAppCodeSearch";
 import "./MiniAppFilesView.css";
 import "./WorkspaceCodeEditor.css";
 import "./WorkspaceDbPreview.css";
@@ -110,6 +113,12 @@ export function MiniAppFilesView({ appId }: MiniAppFilesViewProps) {
             {workspace.loadingTree ? "Refreshing…" : "Refresh"}
           </button>
         </div>
+
+        <MiniAppCodeSearch
+          appId={appId}
+          jobs={jobGroups}
+          onOpenHit={(target) => void workspace.openTarget(target)}
+        />
 
         <div className="mini-app-files__tree">
           <MiniAppDataSourcesPanel appId={appId} />
@@ -252,24 +261,26 @@ export function MiniAppFilesView({ appId }: MiniAppFilesViewProps) {
 
             {workspace.viewMode === "code" &&
             workspace.selected.kind !== "sqlite-internal" ? (
-              workspace.selected.readOnly && workspace.selected.kind === "log" ? (
-                <WorkspaceCodeEditor
-                  value={workspace.content}
-                  language={language}
-                  readOnly
-                  onChange={workspace.setContent}
-                />
-              ) : workspace.selected.readOnly ? (
+              isBinaryWorkspaceFile(workspace.selected.path) ? (
                 <div className="mini-app-files__readonly-note">
-                  Generated or binary files cannot be edited here.
+                  Binary files cannot be previewed in the editor.
                 </div>
               ) : (
-                <WorkspaceCodeEditor
-                  value={workspace.content}
-                  language={language}
-                  readOnly={workspace.loadingFile}
-                  onChange={workspace.setContent}
-                />
+                <>
+                  {workspace.selected.readOnly ? (
+                    <div className="mini-app-files__readonly-note">
+                      {isGeneratedReadOnlyPath(workspace.selected.path)
+                        ? "Generated output (read-only). Edit the source files instead."
+                        : "Read-only — you can view but not save changes."}
+                    </div>
+                  ) : null}
+                  <WorkspaceCodeEditor
+                    value={workspace.content}
+                    language={language}
+                    readOnly={workspace.selected.readOnly || workspace.loadingFile}
+                    onChange={workspace.setContent}
+                  />
+                </>
               )
             ) : null}
           </>

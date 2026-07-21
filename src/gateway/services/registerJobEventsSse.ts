@@ -99,6 +99,12 @@ export function registerJobEventsSseRoutes(
               continue;
             }
             const prev = lastPolledStatus.get(jobId);
+            if (prev === undefined) {
+              // Seed baseline without emitting — avoids replaying a stale terminal
+              // status (e.g. previous run "failed") when the user starts a new run.
+              lastPolledStatus.set(jobId, snapshot.status);
+              continue;
+            }
             if (prev === snapshot.status) {
               continue;
             }

@@ -254,6 +254,14 @@ const { lastInsertRowid } = await fetch('/api/db/write', {
 
 ## Mini-App System Integration (window.paprAPI)
 
+**Sandbox ≠ no chat:** Iframe sandbox blocks `window.open()` and native clipboard — **not** `window.paprAPI`. Mini-apps **can** open main Paprwork chat on desktop via `chat.open`. Do **not** tell users there is no iframe API for chat.
+
+| Button goal | Pattern |
+|-------------|---------|
+| Conversational ("Ask Agent", "Discover X") | `paprAPI.invoke('chat.open', { message: '…' })` (desktop only) |
+| Background AI, user stays in app | `POST /api/jobs/run` |
+| Sidebar MiniChat | ❌ App cannot call `delegate_task` — main agent only |
+
 Mini-apps run in sandboxed iframes where native browser APIs for system actions are blocked. Use `window.paprAPI.invoke()` instead:
 
 ### Common Patterns
@@ -315,6 +323,20 @@ Mini-apps run in sandboxed iframes with restricted permissions:
 - `new Notification()` - Blocked by iframe permissions
 
 `window.paprAPI` bridges to Electron's native APIs via secure IPC to the main process.
+
+---
+
+## Bash tool vs create_job (agent work)
+
+**Default: `bash` for one-offs. `create_job` only when reusable.**
+
+| `bash` tool | `create_job` |
+|-------------|--------------|
+| One-time curl/API probe, sqlite peek, package install | App button, schedule, or named rerun |
+| Explore data before schema design | Writes to `$APP_DB` for linked mini-app |
+| Quick fix "run this once now" | Pipeline with `dependsOn`, retries, delivery |
+
+❌ **Don't** create orphan `type: "python"` jobs for a single curl or query. ✅ **Do** bash first, then promote to a job when the user needs it again or the app wires to it.
 
 ---
 

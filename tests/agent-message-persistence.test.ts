@@ -3,6 +3,8 @@ import {
   createAssistantStoredMessage,
   createErrorStoredMessage,
   formatToolResultForStorage,
+  createPartialAssistantStoredMessage,
+  hasPersistableAssistantContent,
 } from "../src/gateway/services/agent/messagePersistence.js";
 
 describe("agent message persistence", () => {
@@ -140,5 +142,59 @@ describe("agent message persistence", () => {
     expect(message.content).toBe(
       "❌ An error occurred while generating the response\n\n---\n❌ **Error**: unknown failure",
     );
+  });
+
+  test("detects persistable partial assistant content", () => {
+    expect(
+      hasPersistableAssistantContent({
+        assistantText: "",
+        thinkingText: "",
+        toolCalls: [],
+        sequence: [],
+      }),
+    ).toBe(false);
+
+    expect(
+      hasPersistableAssistantContent({
+        assistantText: "",
+        thinkingText: "",
+        toolCalls: [
+          {
+            toolCallId: "call-1",
+            toolName: "bash",
+            args: { command: "pwd" },
+          },
+        ],
+        toolResults: [],
+      }),
+    ).toBe(true);
+  });
+
+  test("builds partial assistant message without error banner", () => {
+    const message = createPartialAssistantStoredMessage({
+      chatId: "chat-5",
+      model: "gpt-5",
+      assistantText: "",
+      thinkingText: "",
+      toolCalls: [
+        {
+          toolCallId: "call-1",
+          toolName: "run_job",
+          args: { jobId: "job-1" },
+        },
+      ],
+      toolResults: [
+        {
+          toolCallId: "call-1",
+          toolName: "run_job",
+          result: '{"success": true}',
+        },
+      ],
+    });
+
+    expect(message.incomplete).toBe(true);
+    expect(message.content).toBe("");
+    expect(message.toolCalls?.[0]?.result).toBe('{"success": true}');
+    expect(message.error).toBeUndefined();
   });
 });

@@ -41,7 +41,26 @@ User wants to build something?
 +-- "Help me with something RIGHT NOW"
     +-- delegate_task (sub-agent for immediate help)
         Examples: review code, write blog post, analyze document, summarize research
+|
++-- "Run this once" (probe API, peek sqlite, quick script, no rerun)
+    +-- bash tool — NOT create_job
+        Examples: curl an endpoint, inspect JSON shape, test auth, one sqlite query
+        Promote to create_job ONLY when: schedule, app button, named rerun, or pipeline
 ```
+
+---
+
+## Bash Tool vs create_job
+
+| Use `bash` | Use `create_job` |
+|------------|------------------|
+| One-time probe or fix in this chat | User/app will trigger again |
+| Explore before committing schema | Schedule (cron / interval) |
+| Completes in <60s, no history needed | Linked to mini-app (`appIds`) |
+| | Multi-step `dependsOn` pipeline |
+
+**Wrong:** `create_job({ type: "python", command: "curl …" })` for a single API check you'll never rerun.
+**Right:** `bash({ command: "curl …" })` first; create a job when reuse justifies it.
 
 ---
 

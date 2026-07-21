@@ -684,19 +684,16 @@ async function createMainWindow() {
       ...(selectionText ? [{
         label: 'Copy',
         role: 'copy',
-        accelerator: 'CmdOrCtrl+C'
       }] : []),
       ...(isEditable ? [
         {
           label: 'Cut',
           role: 'cut',
-          accelerator: 'CmdOrCtrl+X',
           enabled: !!selectionText
         },
         {
           label: 'Paste',
           role: 'paste',
-          accelerator: 'CmdOrCtrl+V'
         }
       ] : []),
       ...(isEditable && selectionText ? [
@@ -704,12 +701,11 @@ async function createMainWindow() {
         {
           label: 'Select All',
           role: 'selectAll',
-          accelerator: 'CmdOrCtrl+A'
         }
       ] : [])
     ]);
     
-    menu.popup();
+    menu.popup({ window: mainWindow });
   });
 
 
@@ -863,6 +859,7 @@ class GatewayProcessSupervisor {
     this.healthCheckTimer = null;
     this.healthFailures = 0;
     this.hasEverBeenHealthy = false;
+    this.gatewayReadyNotified = false;
     this.backoffTimer = null;
     this.isStopping = false;
 
@@ -892,10 +889,13 @@ class GatewayProcessSupervisor {
 
   async start() {
     this.isStopping = false;
+    this.gatewayReadyNotified = false;
     this._transitionTo("starting");
+    this._sendStatusToRenderer("starting", "Gateway is starting...");
     this._killOrphans();
     this._spawnProcess();
     await this._waitForReady();
+    if (this.isStopping) return;
     this._transitionTo("running");
     this._startHealthCheck();
   }
@@ -1020,6 +1020,8 @@ class GatewayProcessSupervisor {
 
     this.hasEverBeenHealthy = false;
     this.healthFailures = 0;
+    this.gatewayReadyNotified = false;
+    this._sendStatusToRenderer("starting", "Gateway is starting...");
 
     // Update module-level reference for backward compatibility
     gatewayProcess = this.process;
@@ -1243,7 +1245,9 @@ class GatewayProcessSupervisor {
   }
 
   async _performRestart() {
+    this.gatewayReadyNotified = false;
     this._transitionTo("starting");
+    this._sendStatusToRenderer("restarting", "Gateway is restarting...");
     this._killOrphans();
     this._spawnProcess();
     await this._waitForReady();
@@ -1252,7 +1256,8 @@ class GatewayProcessSupervisor {
     this.restartCount = 0; // Reset on successful start
     this._startHealthCheck();
 
-    // Notify UI that gateway is back
+    // Notify UI that gateway is fully ready (legacy "running" kept for compat)
+    this._sendStatusToRenderer("ready", "Gateway is ready");
     this._sendStatusToRenderer("running", "Gateway reconnected");
   }
 
@@ -1288,6 +1293,10 @@ class GatewayProcessSupervisor {
   _onHealthCheckResult(health) {
     if (health.ready) {
       this.hasEverBeenHealthy = true;
+      if (!this.gatewayReadyNotified) {
+        this.gatewayReadyNotified = true;
+        this._sendStatusToRenderer("ready", "Gateway is ready");
+      }
     }
 
     const result = shouldKillUnhealthyGateway(
@@ -1367,6 +1376,7 @@ class GatewayProcessSupervisor {
     return new Promise((resolve) => {
       let attempts = 0;
       let resolved = false;
+      let startingNotified = false;
 
       const check = setInterval(() => {
         if (this.isStopping) {
@@ -1381,19 +1391,35 @@ class GatewayProcessSupervisor {
           res.on("end", () => {
             if (resolved) return;
             const health = parseHealthResponse(body);
-            if (health.alive) {
+            if (health.alive && !health.ready && !startingNotified) {
+              startingNotified = true;
+              this._sendStatusToRenderer("starting", "Gateway is starting...");
+            }
+            if (health.ready) {
               resolved = true;
               clearInterval(check);
-              console.log(
-                `[Supervisor] Gateway is ${health.ready ? "ready" : "starting"} (health probe)`,
-              );
+              this.gatewayReadyNotified = true;
+              this._sendStatusToRenderer("ready", "Gateway is ready");
+              console.log("[Supervisor] Gateway is ready (health probe)");
               resolve();
             } else if (attempts >= maxAttempts) {
               resolved = true;
               clearInterval(check);
-              console.error(`[Supervisor] Gateway failed to respond after ${maxAttempts} attempts`);
+              console.error(
+                `[Supervisor] Gateway failed to become ready after ${maxAttempts} attempts (alive=${health.alive}, ready=${health.ready})`,
+              );
+              if (health.alive) {
+                this._sendStatusToRenderer(
+                  "starting",
+                  "Gateway is still starting (slow load)...",
+                );
+              }
               resolve();
-            } else {
+            } else if (health.alive && attempts % 10 === 0) {
+              console.log(
+                `[Supervisor] Waiting for Gateway ready... (${attempts}/${maxAttempts})`,
+              );
+            } else if (!health.alive) {
               console.log(`[Supervisor] Waiting for Gateway... (${attempts}/${maxAttempts})`);
             }
           });
@@ -1661,12 +1687,15 @@ function initializeSystemInvokeHandler(mainWindow) {
     },
     
     'chat.open': async (options) => {
-      // Send message to renderer to open a new chat tab
+      // Send message to renderer to open a new chat tab or embedded app agent
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('chat:open', {
           message: options?.message || '',
           model: options?.model || null,
           provider: options?.provider || null,
+          mode: options?.mode || (options?.subAgentId ? 'app-agent' : 'main'),
+          appId: options?.appId || null,
+          subAgentId: options?.subAgentId || null,
         });
         return { success: true };
       }

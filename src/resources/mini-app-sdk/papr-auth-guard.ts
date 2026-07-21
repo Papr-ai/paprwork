@@ -1,15 +1,16 @@
 /**
- * Platform-level auth guard for mini-apps on cloud (apps.papr.ai).
+ * Platform guard for mini-apps on cloud (apps.papr.ai).
  *
- * Auto-injected into every published app's index.html. Intercepts fetch()
- * calls to /api/* endpoints and shows a platform-native login overlay when
- * the server returns 401 (not signed in) or 403 (no access).
+ * 1. Pre-flight: blocks POST /api/jobs/run for agent jobs when visitor has no session.
+ * 2. Reactive: shows login overlay on 401/403 from /api/* routes.
  *
- * Apps don't need to handle auth errors — this module does it for all of them.
+ * Works for any app that calls fetch('/api/jobs/run', …) — no button attributes needed.
  */
 
 const API_PREFIX = "/api/";
 const OVERLAY_ID = "__papr_auth_overlay__";
+const AGENT_JOB_TYPES = new Set(["agent", "subagent"]);
+const JOB_RUN_PATH = "/api/jobs/run";
 
 interface AuthErrorBody {
   error?: string;
@@ -19,7 +20,25 @@ interface AuthErrorBody {
   authenticated?: boolean;
 }
 
+interface AuthStatusBody {
+  loggedIn?: boolean;
+}
+
+interface JobSummary {
+  id: string;
+  type?: string;
+}
+
 type AuthErrorKind = "sign_in" | "no_access" | "key_missing";
+
+let loggedIn = false;
+let agentJobIds = new Set<string>();
+let jobsCatalogLoaded = false;
+
+function loginUrl(returnTo?: string): string {
+  const path = returnTo ?? window.location.pathname;
+  return `/auth/login?returnTo=${encodeURIComponent(path)}&start=1`;
+}
 
 function classifyAuthError(
   status: number,
@@ -28,7 +47,7 @@ function classifyAuthError(
   if (status === 401 || body.error === "authentication_required") {
     return {
       kind: "sign_in",
-      loginUrl: body.loginUrl ?? `/auth/login?returnTo=${encodeURIComponent(window.location.pathname)}&start=1`,
+      loginUrl: body.loginUrl ?? loginUrl(),
       message: body.message ?? "Sign in to Papr to use this app.",
     };
   }
@@ -36,8 +55,11 @@ function classifyAuthError(
     if (body.code === "job_run_sign_in_required") {
       return {
         kind: "sign_in",
-        loginUrl: body.loginUrl ?? `/auth/login?returnTo=${encodeURIComponent(window.location.pathname)}&start=1`,
-        message: body.message ?? "Sign in to Papr to run this action.",
+        loginUrl: body.loginUrl ?? loginUrl(),
+        message:
+          body.error ??
+          body.message ??
+          "Sign in to Papr to run AI agent jobs from this app.",
       };
     }
     if (body.authenticated) {
@@ -52,13 +74,13 @@ function classifyAuthError(
     ) {
       return {
         kind: "key_missing",
-        message: "This app requires an API key that hasn't been configured yet. Contact the app owner.",
+        message:
+          "This app requires an API key that hasn't been configured yet. Contact the app owner.",
       };
     }
-    // Generic 403 without body hints — likely unauthenticated
     return {
       kind: "sign_in",
-      loginUrl: `/auth/login?returnTo=${encodeURIComponent(window.location.pathname)}&start=1`,
+      loginUrl: body.loginUrl ?? loginUrl(),
       message: "Sign in to Papr to use this app.",
     };
   }
@@ -66,7 +88,7 @@ function classifyAuthError(
 }
 
 function showOverlay(info: { kind: AuthErrorKind; loginUrl?: string; message: string }): void {
-  if (document.getElementById(OVERLAY_ID)) return; // already showing
+  if (document.getElementById(OVERLAY_ID)) return;
 
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
@@ -110,7 +132,6 @@ function showOverlay(info: { kind: AuthErrorKind; loginUrl?: string; message: st
     card.appendChild(btn);
   }
 
-  // Dismiss button (bottom)
   const dismiss = document.createElement("button");
   dismiss.textContent = "Dismiss";
   dismiss.style.cssText = `
@@ -125,38 +146,118 @@ function showOverlay(info: { kind: AuthErrorKind; loginUrl?: string; message: st
   document.body.appendChild(overlay);
 }
 
-// Monkey-patch fetch to intercept auth errors on /api/* routes
+function showAgentJobSignInOverlay(): void {
+  showOverlay({
+    kind: "sign_in",
+    loginUrl: loginUrl(),
+    message:
+      "Sign in to Papr to run AI agent jobs. Invite links can browse and edit data, but agent jobs require a Papr account.",
+  });
+}
+
+function jobRunSignInResponse(): Response {
+  const body: AuthErrorBody = {
+    error:
+      "Sign in to Papr to run agent jobs from this app. Invite links can use the app UI and backend actions, but AI jobs require a Papr account.",
+    code: "job_run_sign_in_required",
+    loginUrl: loginUrl(),
+  };
+  return new Response(JSON.stringify(body), {
+    status: 403,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function requiresSignInForJob(jobId: string): boolean {
+  if (loggedIn) return false;
+  if (!jobsCatalogLoaded) return true;
+  return agentJobIds.has(jobId);
+}
+
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.pathname;
+  return (input as Request).url;
+}
+
+function parseJobRunBody(init?: RequestInit): string | null {
+  if (!init?.body || typeof init.body !== "string") return null;
+  try {
+    const parsed = JSON.parse(init.body) as { jobId?: string };
+    return typeof parsed.jobId === "string" && parsed.jobId.length > 0
+      ? parsed.jobId
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isJobRunRequest(url: string, init?: RequestInit): boolean {
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (method !== "POST") return false;
+  const path = url.includes("://") ? new URL(url, window.location.origin).pathname : url;
+  return path.includes(JOB_RUN_PATH);
+}
+
 const _originalFetch = window.fetch;
 
-window.fetch = async function paprAuthGuardFetch(
+async function refreshPlatformAuthState(): Promise<void> {
+  try {
+    const [statusRes, jobsRes] = await Promise.all([
+      _originalFetch("/auth/status"),
+      _originalFetch("/api/jobs/list"),
+    ]);
+    if (statusRes.ok) {
+      const status = (await statusRes.json()) as AuthStatusBody;
+      loggedIn = Boolean(status.loggedIn);
+    }
+    if (jobsRes.ok) {
+      const data = (await jobsRes.json()) as { jobs?: JobSummary[] };
+      agentJobIds = new Set(
+        (data.jobs ?? [])
+          .filter((job) => job.type && AGENT_JOB_TYPES.has(job.type))
+          .map((job) => job.id),
+      );
+      jobsCatalogLoaded = true;
+    }
+  } catch {
+    /* non-fatal — pre-flight stays conservative when catalog missing */
+  }
+}
+
+window.fetch = async function paprPlatformGuardFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
+  const url = requestUrl(input);
+
+  if (url.includes(API_PREFIX) && isJobRunRequest(url, init)) {
+    const jobId = parseJobRunBody(init);
+    if (jobId && requiresSignInForJob(jobId)) {
+      showAgentJobSignInOverlay();
+      return jobRunSignInResponse();
+    }
+  }
+
   const response = await _originalFetch.call(window, input, init);
 
-  // Only intercept /api/* calls
-  const url = typeof input === "string" ? input : input instanceof URL ? input.pathname : (input as Request).url;
   if (!url.includes(API_PREFIX)) return response;
-
-  // Only intercept 401/403
   if (response.status !== 401 && response.status !== 403) return response;
 
-  // Clone so the app can still read the response if it wants to handle it
   const clone = response.clone();
   try {
     const body = (await clone.json()) as AuthErrorBody;
     const info = classifyAuthError(response.status, body);
-    if (info) {
-      showOverlay(info);
-    }
+    if (info) showOverlay(info);
   } catch {
-    // Non-JSON 401/403 — show generic sign-in
     showOverlay({
       kind: "sign_in",
-      loginUrl: `/auth/login?returnTo=${encodeURIComponent(window.location.pathname)}&start=1`,
+      loginUrl: loginUrl(),
       message: "Sign in to Papr to use this app.",
     });
   }
 
   return response;
 };
+
+void refreshPlatformAuthState();

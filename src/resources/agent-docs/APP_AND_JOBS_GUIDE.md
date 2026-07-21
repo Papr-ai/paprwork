@@ -19,6 +19,32 @@ If the task is tiny and explicit, merge steps. Always explain tradeoffs when ski
 
 ---
 
+## Bash tool vs create_job (agent work)
+
+**Do not create python/bash jobs for quick one-offs.** The bash tool is the right default for exploration and single-run tasks.
+
+| Use `bash` tool | Use `create_job` |
+|-----------------|------------------|
+| One-time API probe (`curl`, test auth, inspect response) | Mini-app button triggers it (`/api/jobs/run`) |
+| Peek at sqlite / file structure before designing schema | Scheduled (cron / interval) |
+| Install a package, git op, quick transform (<60s) | User will rerun by name ("run the sync job") |
+| "Try this now" during the current chat | Writes to `$APP_DB` for a linked app |
+| | Multi-step pipeline with `dependsOn` |
+| | Needs run history, retries, or delivery |
+
+**Examples:**
+```javascript
+// ✅ One-time Reddit API check — bash, NOT a job
+bash({ command: "curl -s -H 'Authorization: Bearer ${REDDIT_TOKEN}' 'https://oauth.reddit.com/api/v1/me'" })
+
+// ✅ Daily sync the app depends on — job
+create_job({ name: "Reddit Sync", type: "python", appIds: [appId], command: "python3 code/sync.py", schedule: { enabled: true, intervalMs: 3600000 } })
+```
+
+**Common mistake:** Creating `type: "python"` jobs for a single curl or sqlite query you'll never run again. Use bash first; promote to a job only when reuse, scheduling, or app wiring justifies it.
+
+---
+
 ## Database linking (job-owned vs standalone)
 
 **Not every mini-app needs a database.** Content-only apps (no `/api/db/*`) skip linking entirely.
@@ -130,8 +156,12 @@ Publish access and per-user DB isolation are **independent**. A team-visible app
 | `/api/jobs/list` | GET | List all jobs (id, name, type, status) |
 | `/api/jobs/status/:jobId` | GET | Poll job status |
 | `/api/jobs/run` | POST | Trigger a job (fire-and-forget or wait) |
+
+> **`/api/jobs/run` defaults to fire-and-forget** on desktop **and** cloud (`apps.papr.ai`): returns `{ jobId, status: "running" }` immediately. Use `subscribeJobEvents()` / `/api/jobs/events` SSE for progress — **never block** on agent jobs (they can run many minutes). Pass `wait: true` only for short script jobs that finish in seconds.
 | `/api/app/backend/:action` | POST | Run an app-defined backend handler (see **App backend** below) |
 | `/api/jobs/create` | POST | **Desktop-only:** Create jobs programmatically (same as `create_job` tool) |
+
+> **There is no `/api/memory/*` for mini-apps.** Use `/api/app/backend/:action` handlers that call `POST /v1/memory` / `/v1/memory/search` on the memory server with `PAPR_API_KEY`, or use agent tools (`add_agent_memory`, `search_agent_memory`) from chat/jobs.
 
 > **When a button in a mini-app needs backend work** — use the right layer:
 > - **Fast server handler** (API call, small script): `POST /api/app/backend/:action` with handlers in `apps/{appId}/backend/`
@@ -173,6 +203,27 @@ Build with relative `/api/...` paths — never hardcode `localhost:18789`.
 | `/api/bash/run` | ❌ **Disabled for mini-apps** | ❌ **Disabled for mini-apps** |
 | `/api/jobs/create` | ✅ | ❌ **Desktop-only** — create jobs locally; they sync via git |
 | `window.paprAPI` (`chat.open`, `shell`, etc.) | ✅ Electron iframe | ❌ **Desktop-only** — not injected on cloud URLs |
+
+### Open chat from a mini-app button (desktop)
+
+When the user wants **"Ask Agent"**, **"Get Help"**, or a conversational flow from an app button:
+
+| Goal | Pattern |
+|------|---------|
+| Open main Paprwork chat (new tab, optional composer draft) | `await window.paprAPI.invoke('chat.open', { message: '…' })` |
+| Silent background AI (no chat UI) | `POST /api/jobs/run` → agent job |
+| Sidebar MiniChat sub-agent | ❌ **Not from app code** — `delegate_task` is main-agent-only |
+
+**Common agent mistake:** Saying "mini-apps can't open chat because they're sandboxed." **Wrong.** Sandbox blocks `window.open()` and native clipboard — **not** `window.paprAPI`. Use `chat.open` for conversational buttons; use `/api/jobs/run` when the user should not leave the app.
+
+```javascript
+// "Discover segments" / "Ask agent" button — desktop Paprwork only
+document.getElementById('discover-btn').addEventListener('click', () => {
+  window.paprAPI.invoke('chat.open', {
+    message: 'Help me discover ICP segments for my business. Ask about my product, market, and goals.',
+  });
+});
+```
 
 ### App backend (`apps/{appId}/backend/`)
 
@@ -225,16 +276,55 @@ Handlers receive `PAPR_ACTION_PARAMS` (JSON) and vault keys as env vars. Print J
 
 **Publishable browser keys:** `POST /api/credentials/client-keys` + `clientAccess: "client"` in requirements.json — not manifest `keys`.
 
-**Backend vs jobs (wire buttons correctly):**
+**Backend vs jobs vs chat (wire buttons correctly):**
 
 | Need | Use | Do NOT |
 |------|-----|--------|
 | Fast API call, small script, vault secret | `POST /api/app/backend/:action` | LLM/agent loops in backend |
-| AI analysis, summarization, multi-step reasoning | `POST /api/jobs/run` → **agent job** | OpenAI/Anthropic in `backend/` handler |
+| User should **talk to the agent** ("Ask Agent", discovery wizard) | `window.paprAPI.invoke('chat.open', { message })` (desktop) | Say "no iframe API"; `delegate_task` from app code |
+| AI analysis in background, user stays in app | `POST /api/jobs/run` → **agent job** | OpenAI/Anthropic in `backend/` handler |
 | Heavy ETL, long scripts, schedules | `POST /api/jobs/run` → python/node/bash job | Backend (600s cap, edge subprocess) |
 | Publishable/public API key (browser-safe) | `POST /api/credentials/client-keys` then `fetch(thirdPartyUrl)` | `/api/bash/run` (always disabled); hardcoding vault values |
 
 **Rule:** Backend = one-shot handler (<2 min, no LLM). Jobs = agent work, schedules, sandbox/heavy work. App buttons calling agent jobs via `/api/jobs/run` is **normal** and works on share links.
+
+### Papr Memory from mini-apps (no `/api/memory/*`)
+
+Mini-apps **cannot** call `memory.papr.ai` from the browser (API keys must stay server-side). There is **no** `/api/memory/add`, `/api/memory/search`, or `/api/memory/graph` gateway route — those URLs will 404.
+
+| Who | How to access Papr Memory |
+|-----|---------------------------|
+| **Agent (chat/tools)** | `add_agent_memory`, `search_agent_memory`, `query_memory_graph` — gateway uses owner `PAPR_API_KEY` from keychain |
+| **Mini-app browser** | ❌ Never `fetch('https://memory.papr.ai/...')` or `/api/memory/*` |
+| **Mini-app backend** | ✅ `POST /api/app/backend/:action` — handler calls **`POST /v1/memory`**, **`POST /v1/memory/search`**, or **`POST /v1/graphql`** with `PAPR_API_KEY` in manifest `keys` |
+| **Agent jobs** | ✅ `type: "agent"` jobs with memory tools, or jobs with `memoryPolicy` |
+
+**Example backend handler (`backend/papr_memory.py`):**
+```python
+# manifest.json keys: ["PAPR_API_KEY"]
+# Calls POST https://memory.papr.ai/v1/memory with X-API-Key header
+```
+
+**Example frontend:**
+```javascript
+await fetch('/api/app/backend/save-to-memory', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    appId,
+    params: {
+      content: summary,
+      category: 'context',
+      role: 'assistant',
+      customMetadata: JSON.stringify({ audit_id: '123' }),
+    },
+  }),
+});
+```
+
+**Requirements:** Add `PAPR_API_KEY` to `requirements.json` (`credentialScope: "owner"`, `clientAccess: "server"`) and republish after adding backend keys. Owner must be logged in with Papr (Settings → Papr login).
+
+**`/api/cloud/*`** proxies to memory server **`/v1/cloud/*`** only (repos, vault, publish) — **not** memory CRUD. Do not use it for add/search.
 
 ### Mini-app ↔ job communication (cloud-safe — REQUIRED for published apps)
 
@@ -1537,7 +1627,7 @@ Mini-apps use **TypeScript** + **esbuild bundling**. The build pipeline resolves
 #### Rules
 
 1. **TypeScript required** — use `.ts` files, not `.js`. esbuild bundles them.
-2. **Max 100 lines per code file** — applies to `.html`, `.css`, `.js`, `.ts`, `.tsx`, `.jsx`. Split UI logic into smaller components. **Does NOT apply to `.md`, `.json`, `.txt`** — long report text belongs in `content/reports/{slug}.md` (any length), loaded at runtime with `fetch('./content/reports/...')` and rendered in a thin viewer. Charts/graphs stay in TS components. **Do NOT** split one report into 20–40 tiny TS files.
+2. **Max 100 lines per code file** — applies to `.html`, `.css`, `.js`, `.ts`, `.tsx`, `.jsx`. Split UI logic into smaller components. **Does NOT apply to `.md`, `.json`, `.txt`** — long report text belongs in `content/reports/{slug}.md` (any length). **Discover reports:** `list_app_files({ appId })` → `reportFiles` or paths under `content/reports/`. **Read/edit:** `read_app_file({ appId, filename: "content/reports/..." })`. **UI loads:** `fetch('./content/reports/...')` in a thin viewer. Charts/graphs stay in TS components. **Do NOT** split one report into 20–40 tiny TS files.
 3. **CSS imports** — every component MUST `import './component.css'` for its styles. esbuild bundles all CSS into `dist/app.css`. If a CSS file is missing, the build fails with a clear error.
 4. **ES modules** — use `import`/`export` between files. The bundler resolves the import graph.
 5. **No inline JavaScript** — keep `<script>` content in `.ts` files, not inside HTML.

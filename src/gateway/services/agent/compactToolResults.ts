@@ -1,9 +1,9 @@
 import {
   ABSOLUTE_TOOL_RESULT_MAX_CHARS,
-  categorizeTool,
-  getDefaultHistoryCharLimit,
+  resolveMidTurnToolResultCharLimit,
   truncateToCharLimit,
 } from "./toolResultTruncation.js";
+import { getToolResultTruncationSettings } from "./toolResultTruncationSettings.js";
 
 /**
  * Compact Stale Tool Results
@@ -121,12 +121,7 @@ function writeToolResultString(part: ToolResultPart, value: string): void {
 }
 
 function resolveEffectiveMaxLen(toolName: string | undefined, maxLen: number): number {
-  const category = toolName ? categorizeTool(toolName) : "bash";
-  const historyLimit = getDefaultHistoryCharLimit(category);
-  if (historyLimit === null) {
-    return ABSOLUTE_TOOL_RESULT_MAX_CHARS;
-  }
-  return Math.min(maxLen, historyLimit);
+  return resolveMidTurnToolResultCharLimit(toolName, maxLen);
 }
 
 /**
@@ -275,10 +270,7 @@ export function compactStaleToolResults(
   messages: any[],
   opts: CompactOpts = {},
 ): CompactStats {
-  const o = { ...DEFAULTS, ...opts };
-
-  // Find all assistant messages that contain tool calls.
-  // Each marks the start of a batch.
+  const truncationSettings = getToolResultTruncationSettings();
   const bytesBefore = approxBytes(messages);
   const batchStarts = findToolBatchBoundaries(messages);
   const stats: CompactStats = {
@@ -290,6 +282,17 @@ export function compactStaleToolResults(
     bytesBefore,
     bytesAfter: bytesBefore,
   };
+
+  if (!truncationSettings.midTurnCompactionEnabled) {
+    console.log(`[compactToolResults] skipped (mid-turn compaction off)`);
+    return stats;
+  }
+
+  const o = { ...DEFAULTS, ...opts };
+  const freshCeiling =
+    truncationSettings.absoluteMaxChars ?? ABSOLUTE_TOOL_RESULT_MAX_CHARS;
+  o.maxFreshLength = freshCeiling;
+  o.maxStaleLength = Math.min(o.maxStaleLength, truncationSettings.moderateMaxChars);
   if (batchStarts.length === 0) {
     console.log(`[compactToolResults] no tool batches in context — skipped`);
     return stats;

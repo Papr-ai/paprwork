@@ -9,6 +9,11 @@ import type { WebSocket } from "ws";
 import type { AgentConfigInternal } from "../../core/types/agents.js";
 import type { UiAgentFocusContext } from "../../core/types/agentFocus.js";
 import type { StreamChunk } from "../../core/types/streaming.js";
+import {
+  isExpectedStreamCancellation,
+  STREAM_REPLACED_REASON,
+  STREAM_STOPPED_REASON,
+} from "../../core/constants/streamCancellation.js";
 
 const STREAM_TTL_MS = 10 * 60 * 1000;
 
@@ -131,10 +136,14 @@ export class AgentStreamRegistry {
   }
 
   /**
-   * Cancel an in-flight stream for a chat and notify all subscribers.
-   * Called on agent:stop and before starting a replacement stream.
+   * Cancel an in-flight stream for a chat and optionally notify subscribers.
+   * Silent cancel is used for user stop / replacement — not an error condition.
    */
-  cancelStream(chatId: string, reason = "Stream stopped"): void {
+  cancelStream(
+    chatId: string,
+    reason = STREAM_STOPPED_REASON,
+    options?: { silent?: boolean },
+  ): void {
     const requestId = this.requestIdByChatId.get(chatId);
     if (!requestId) return;
 
@@ -146,11 +155,16 @@ export class AgentStreamRegistry {
 
     if (entry.status === "running") {
       entry.cancelled = true;
-      entry.status = "error";
-      entry.errorData = { chatId, error: reason };
-      this.broadcastError(entry);
+      const silent =
+        options?.silent === true || isExpectedStreamCancellation(reason);
+      if (!silent) {
+        entry.status = "error";
+        entry.errorData = { chatId, error: reason };
+        this.broadcastError(entry);
+      }
       console.log(
-        `[AgentStreamRegistry] Cancelled stream ${requestId} for chat ${chatId}: ${reason}`,
+        `[AgentStreamRegistry] Cancelled stream ${requestId} for chat ${chatId}: ${reason}` +
+          (silent ? " (silent)" : ""),
       );
     }
 
@@ -180,7 +194,10 @@ export class AgentStreamRegistry {
         console.warn(
           `[AgentStreamRegistry] Chat ${chatId} already streaming (${existingRequestId}), cancelling before new stream`,
         );
-        this.cancelStream(chatId, "Replaced by new message");
+        void import("./AgentService.js").then(({ getAgentService }) =>
+          getAgentService().stopStreaming(chatId),
+        );
+        this.cancelStream(chatId, STREAM_REPLACED_REASON);
       }
     }
 
@@ -231,6 +248,24 @@ export class AgentStreamRegistry {
         console.log(
           `[AgentStreamRegistry] Stream ${requestId} aborted for chat ${chatId}`,
         );
+        try {
+          const messages = await agentService.getChatHistory(chatId);
+          const finalMessage = messages[messages.length - 1];
+          if (finalMessage?.role === "assistant") {
+            entry.status = "complete";
+            entry.completeData = {
+              chatId,
+              done: true,
+              finalMessage,
+            };
+            this.broadcastComplete(entry);
+          }
+        } catch (historyError) {
+          console.warn(
+            `[AgentStreamRegistry] Failed to load history after cancel for ${chatId}:`,
+            historyError,
+          );
+        }
         return;
       }
 

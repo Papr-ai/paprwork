@@ -4,6 +4,7 @@ import type {
   IJobExecutor,
 } from "./IJobExecutor.js";
 import type { JobType } from "../types.js";
+import type { Provider } from "../../../../core/types/agents.js";
 import { getAgentService } from "../../AgentService.js";
 import { getJobsService } from "../../JobsService.js";
 import { v4 as uuidv4 } from "uuid";
@@ -22,65 +23,60 @@ import {
   requireJobAppDatabase,
 } from "../../jobAppDatabase.js";
 
+/** Shared agent job session inputs — used by desktop launch() and cloud gateway streaming. */
+export interface AgentJobSessionInput {
+  jobId: string;
+  runId: string;
+  prompt: string;
+  envBlock: string;
+  provider?: Provider;
+  model?: string;
+  fallbackProvider?: Provider;
+  fallbackModel?: string;
+  allowedToolIds?: string[];
+  maxTurns?: number;
+  delegationId?: string;
+  sourceAgentId: string;
+  sourceAgentName: string;
+  subAgentName?: string;
+  subAgentIcon?: SubAgentIconName;
+}
+
 export class AgentJobExecutor implements IJobExecutor {
   canExecute(type: JobType): boolean {
     return type === "agent" || type === "subagent";
   }
 
-  async launch(params: ExecutorLaunchParams): Promise<ExecutorLaunchResult> {
+  /**
+   * Build prompt, env block, and provider settings from job record + runtimeParams.
+   * Single source of truth for desktop and cloud agent job runs.
+   */
+  async buildSessionInput(
+    params: ExecutorLaunchParams,
+  ): Promise<AgentJobSessionInput> {
     if (params.job.type !== "agent" && params.job.type !== "subagent") {
       throw new Error("AgentJobExecutor can only execute agent/subagent jobs");
     }
 
-    const agentService = getAgentService();
     let prompt =
       params.job.command?.trim() ||
       `Execute agent job "${params.job.name}" and return key outcomes.`;
 
-    let provider:
-      | "anthropic"
-      | "openai"
-      | "openai-codex"
-      | "google"
-      | "ollama"
-      | "cursor"
-      | "zai"
-      | "groq"
-      | undefined;
+    let provider: Provider | undefined;
     let model: string | undefined;
     let allowedToolIds: string[] | undefined;
-    let fallbackProvider:
-      | "anthropic"
-      | "openai"
-      | "openai-codex"
-      | "google"
-      | "ollama"
-      | "cursor"
-      | "zai"
-      | "groq"
-      | undefined;
+    let fallbackProvider: Provider | undefined;
     let fallbackModel: string | undefined;
     let sourceAgentId = "main-agent";
     let sourceAgentName = "Main Agent";
 
-    // ── Read provider/model from job record (applies to both agent and subagent jobs) ─
     if (params.job.provider) {
-      provider = params.job.provider as
-        | "anthropic"
-        | "openai"
-        | "openai-codex"
-        | "google"
-        | "ollama"
-        | "cursor"
-        | "zai"
-        | "groq";
+      provider = params.job.provider as Provider;
     }
     if (params.job.model) {
       model = params.job.model;
     }
-    // ─────────────────────────────────────────────────────────────────────────────────
 
-    // ── Resolve sub-agent profile (may override provider/model) ───────────────────────
     let subAgentSystemPrompt: string | undefined;
     let subAgentName: string | undefined;
     let subAgentIcon: SubAgentIconName | undefined;
@@ -97,7 +93,6 @@ export class AgentJobExecutor implements IJobExecutor {
       }
       sourceAgentId = profile.id;
       sourceAgentName = profile.name;
-      // Subagent profile provider/model takes precedence over job record
       if (profile.provider) provider = profile.provider;
       if (profile.model) model = profile.model;
       if (profile.fallbackProvider) fallbackProvider = profile.fallbackProvider;
@@ -107,13 +102,13 @@ export class AgentJobExecutor implements IJobExecutor {
       subAgentSystemPrompt = profile.systemPrompt;
       subAgentIcon = profile.icon;
     }
-    // ─────────────────────────────────────────────────────────────────────────────────
 
-    // ── Auto-inject environment paths (own + dependencies) ───────────────────
     const envBlock = await this.buildEnvironmentBlock(params);
-    // ─────────────────────────────────────────────────────────────────────────
 
-    // ── Build final prompt ────────────────────────────────────────────────────
+    let taskBody = params.job.delegationTask ?? prompt;
+    if (params.runtimeParams?.prompt?.trim()) {
+      taskBody = params.runtimeParams.prompt.trim();
+    }
     if (params.job.type === "subagent") {
       const delegationIdBlock = `\n[Delegation ID: ${params.job.id}]\nWhen using request_agent_input, always pass delegationId: "${params.job.id}" so your question appears in the correct chat.`;
       prompt = [
@@ -124,26 +119,51 @@ export class AgentJobExecutor implements IJobExecutor {
         params.job.delegationContext
           ? `\nContext:\n${params.job.delegationContext}`
           : "",
-        `\nTask:\n${params.job.delegationTask ?? prompt}`,
+        `\nTask:\n${taskBody}`,
       ]
         .filter(Boolean)
         .join("\n");
+    } else if (isSleepCycleJobName(params.job.name)) {
+      const preflight = await getSleepCycleService().buildPreflightContext(
+        params.job.id,
+      );
+      prompt = [envBlock, preflight, taskBody].filter(Boolean).join("\n\n");
+    } else if (isWikiWriterJobName(params.job.name)) {
+      const preflight = await getWikiWriterService().buildPreflightContext(
+        params.job.id,
+      );
+      prompt = [envBlock, preflight, taskBody].filter(Boolean).join("\n\n");
     } else {
-      if (isSleepCycleJobName(params.job.name)) {
-        const preflight = await getSleepCycleService().buildPreflightContext(
-          params.job.id,
-        );
-        prompt = [envBlock, preflight, prompt].filter(Boolean).join("\n\n");
-      } else if (isWikiWriterJobName(params.job.name)) {
-        const preflight = await getWikiWriterService().buildPreflightContext(
-          params.job.id,
-        );
-        prompt = [envBlock, preflight, prompt].filter(Boolean).join("\n\n");
-      } else {
-        prompt = [envBlock, prompt].filter(Boolean).join("\n");
-      }
+      prompt = [envBlock, taskBody].filter(Boolean).join("\n");
     }
-    // ─────────────────────────────────────────────────────────────────────────
+
+    return {
+      jobId: params.job.id,
+      runId: params.runId,
+      prompt,
+      envBlock,
+      provider,
+      model,
+      fallbackProvider,
+      fallbackModel,
+      allowedToolIds,
+      maxTurns: params.job.maxTurns,
+      delegationId: params.job.type === "subagent" ? params.job.id : undefined,
+      sourceAgentId,
+      sourceAgentName,
+      subAgentName,
+      subAgentIcon,
+    };
+  }
+
+  async launch(params: ExecutorLaunchParams): Promise<ExecutorLaunchResult> {
+    if (params.job.type !== "agent" && params.job.type !== "subagent") {
+      throw new Error("AgentJobExecutor can only execute agent/subagent jobs");
+    }
+
+    const agentService = getAgentService();
+    const session = await this.buildSessionInput(params);
+    const { envBlock, subAgentName, subAgentIcon } = session;
 
     await params.appendLog(`Starting isolated agent run: ${params.runId}`);
     await params.appendLog(`Environment: ${envBlock}`);
@@ -198,14 +218,14 @@ export class AgentJobExecutor implements IJobExecutor {
         );
 
         const structuredResult = await agentService.runStructuredJobSession({
-          jobId: params.job.id,
-          runId: params.runId,
-          prompt,
+          jobId: session.jobId,
+          runId: session.runId,
+          prompt: session.prompt,
           outputSchema: params.job.outputSchema,
           schemaName: params.job.name.replace(/[^a-zA-Z0-9_-]/g, "_"),
           schemaDescription: `Structured output for job: ${params.job.name}`,
-          provider,
-          model,
+          provider: session.provider,
+          model: session.model,
         });
 
         outputText = JSON.stringify(structuredResult.object, null, 2);
@@ -215,18 +235,17 @@ export class AgentJobExecutor implements IJobExecutor {
       } else {
         // Free-form text output via streamText (existing path)
         const response = await agentService.runIsolatedJobSession({
-          jobId: params.job.id,
-          runId: params.runId,
-          prompt,
-          provider,
-          model,
-          fallbackProvider,
-          fallbackModel,
-          allowedToolIds,
-          maxTurns: params.job.maxTurns,
+          jobId: session.jobId,
+          runId: session.runId,
+          prompt: session.prompt,
+          provider: session.provider,
+          model: session.model,
+          fallbackProvider: session.fallbackProvider,
+          fallbackModel: session.fallbackModel,
+          allowedToolIds: session.allowedToolIds,
+          maxTurns: session.maxTurns,
           appendLog: params.appendLog,
-          delegationId:
-            params.job.type === "subagent" ? params.job.id : undefined,
+          delegationId: session.delegationId,
         });
         outputText = response.text;
       }
@@ -272,16 +291,16 @@ export class AgentJobExecutor implements IJobExecutor {
     await writeRunMemory({
       content: outputText,
       policy: params.job.memoryPolicy ?? "none",
-      sourceAgentId,
-      sourceAgentName,
+      sourceAgentId: session.sourceAgentId,
+      sourceAgentName: session.sourceAgentName,
       runId: params.runId,
       jobId: params.job.id,
       chatId: params.job.reportChatId ?? params.job.deliver?.targetId,
     });
 
     const modelInfo =
-      provider && model
-        ? ` (${provider}/${model})`
+      session.provider && session.model
+        ? ` (${session.provider}/${session.model})`
         : " (default openai/gpt-5-6-sol)";
 
     if (outputText.length === 0) {
@@ -328,6 +347,9 @@ export class AgentJobExecutor implements IJobExecutor {
     await jobsService.initialize();
 
     const envLines: string[] = [];
+
+    const { getPaprRoot } = await import("../../../../core/utils/paprRoot.js");
+    envLines.push(`PAPR_HOME="${getPaprRoot()}"`);
 
     const ownDbPath = await jobsService.getJobDatabasePath(params.job.id);
     envLines.push(`JOB_DIR="${params.jobDir}"`);

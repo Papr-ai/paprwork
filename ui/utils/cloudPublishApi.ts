@@ -4,6 +4,7 @@
 
 import type { CloudExternalLink, CloudLoginAccess } from "./cloudShareLink";
 import type { CodeAccess } from "../../src/core/utils/shareAudienceModel";
+import type { CloudCompatibilityReport } from "../../src/core/types/cloudAppCompatibility";
 
 const GATEWAY =
   typeof import.meta !== "undefined" &&
@@ -32,6 +33,17 @@ export interface CloudPublishState {
   publishedAt: string | null;
   lastError?: string | null;
   prefs?: CloudPublishPrefs;
+  compatibility?: CloudCompatibilityReport;
+}
+
+export class CloudPublishBlockedError extends Error {
+  compatibility: CloudCompatibilityReport;
+
+  constructor(message: string, compatibility: CloudCompatibilityReport) {
+    super(message);
+    this.name = "CloudPublishBlockedError";
+    this.compatibility = compatibility;
+  }
 }
 
 export async function fetchCloudPublishState(
@@ -48,6 +60,19 @@ export async function fetchCloudPublishState(
   return (await res.json()) as CloudPublishState;
 }
 
+export async function fetchCloudCompatibility(
+  appId: string,
+): Promise<CloudCompatibilityReport> {
+  const res = await fetch(
+    `${GATEWAY}/api/cloud/publish/${encodeURIComponent(appId)}/compatibility`,
+  );
+  if (!res.ok) {
+    const body = (await res.json()) as { error?: string };
+    throw new Error(body.error ?? `Compatibility scan failed (${res.status})`);
+  }
+  return (await res.json()) as CloudCompatibilityReport;
+}
+
 export async function publishCloudApp(
   appId: string,
   input: {
@@ -55,6 +80,7 @@ export async function publishCloudApp(
     externalLink?: CloudExternalLink;
     codeAccess?: CodeAccess;
     autoPublish?: boolean;
+    acknowledgeDesktopOnly?: boolean;
   },
 ): Promise<CloudPublishState> {
   const res = await fetch(
@@ -62,10 +88,22 @@ export async function publishCloudApp(
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...input, autoPublish: input.autoPublish ?? true }),
+      body: JSON.stringify({
+        ...input,
+        autoPublish: input.autoPublish ?? true,
+      }),
     },
   );
-  const body = (await res.json()) as CloudPublishState & { error?: string };
+  const body = (await res.json()) as CloudPublishState & {
+    error?: string;
+    compatibility?: CloudCompatibilityReport;
+  };
+  if (res.status === 409 && body.compatibility) {
+    throw new CloudPublishBlockedError(
+      body.error ?? "Desktop-only app requires confirmation",
+      body.compatibility,
+    );
+  }
   if (!res.ok) {
     throw new Error(body.error ?? `Publish failed (${res.status})`);
   }

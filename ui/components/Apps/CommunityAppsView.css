@@ -8,6 +8,21 @@
   gap: 16px;
 }
 
+.community-apps__section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.community-apps__section-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
 .community-apps__toolbar {
   display: flex;
   align-items: center;

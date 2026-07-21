@@ -109,6 +109,9 @@ When cloud sync is enabled (default):
 |----------------|--------------|
 | `/api/db/schema`, `/api/db/query`, `/api/db/batch`, `/api/db/write`, `/api/db/exec` | `window.paprAPI` (chat.open, shell, etc.) |
 | `/api/jobs/list`, `/api/jobs/status`, `/api/jobs/run`, `/api/jobs/events` (SSE) | `/api/jobs/create` |
+| `/api/app/backend/:action` (vault keys, memory add/search via `/v1/memory`) | `/api/memory/*` (does not exist — use backend handlers) |
+
+**"Ask Agent" buttons (desktop):** Use `window.paprAPI.invoke('chat.open', { message })` — sandbox does **not** block this. Do **not** claim mini-apps cannot open chat. App code cannot call `delegate_task`; use `chat.open` for conversational flows or `/api/jobs/run` for silent background work.
 
 If an app needs job triggers or paprAPI on cloud later, tell the user those features require Paprwork desktop open, or redesign around `/api/db/*` for cloud-first flows.
 

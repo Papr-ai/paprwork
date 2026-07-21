@@ -2,12 +2,18 @@
  * metadata.json in each synced mini-app folder (title, description, icon for cloud previews).
  */
 
+import type { PublicAppAgentChatConfig } from "../types/appAgentChat.js";
+
 export interface CloudAppMetadataFile {
   appId: string;
   title: string;
   description: string;
   icon?: string;
   updatedAt: string;
+  /** Embedded sub-agent chat (public fields only). */
+  agentChat?: PublicAppAgentChatConfig;
+  /** Hidden subagent job for cloud app-agent SSE turns. */
+  agentChatJobId?: string;
 }
 
 export const DEFAULT_CLOUD_APP_DESCRIPTION =
@@ -38,6 +44,8 @@ export function parseCloudAppMetadataFile(raw: string): CloudAppMetadataFile | n
         parsed.description?.trim() ||
         buildDefaultCloudAppDescription(parsed.title.trim()),
       ...(parsed.icon ? { icon: parsed.icon } : {}),
+      ...(parsed.agentChat ? { agentChat: parsed.agentChat } : {}),
+      ...(parsed.agentChatJobId ? { agentChatJobId: parsed.agentChatJobId } : {}),
       updatedAt: parsed.updatedAt ?? new Date().toISOString(),
     };
   } catch {

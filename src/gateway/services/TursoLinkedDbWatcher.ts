@@ -15,9 +15,11 @@ import { getTursoSyncBridge } from "./TursoSyncBridge.js";
 import {
   ensureLocalDbChangeLogReady,
   isSqliteBusyError,
+  isTursoLocalDatabaseCorruptError,
 } from "./tursoSyncBridgeCore.js";
 import { scheduleTursoPushForJob } from "./tursoPushScheduler.js";
 import { publishDbChanged } from "../utils/publishJobRunEvents.js";
+import { recordTursoPushQuarantine } from "./tursoSyncState.js";
 
 let watcher: FSWatcher | null = null;
 
@@ -81,16 +83,20 @@ function handleDbChange(changedPath: string): void {
   try {
     ensureLocalDbChangeLogReady(watched.dbPath);
   } catch (error) {
+    const message = (error as Error).message;
     if (isSqliteBusyError(error)) {
       console.warn(
         `[TursoLinkedDbWatcher] DB busy, deferring changelog setup for ${watched.syncKey}`,
       );
+    } else if (isTursoLocalDatabaseCorruptError(message)) {
+      recordTursoPushQuarantine(watched.syncKey, watched.dbPath, message);
     } else {
       console.warn(
         `[TursoLinkedDbWatcher] Changelog setup failed for ${watched.syncKey}:`,
-        (error as Error).message,
+        message,
       );
     }
+    return;
   }
 
   scheduleTursoPushForJob(watched.syncKey);

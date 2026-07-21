@@ -19,6 +19,9 @@ interface CustomKey {
   clientAccess?: "server" | "client";
   createdAt: string;
   updatedAt?: string;
+  source?: "manual" | "oauth";
+  managedBy?: "oauth";
+  oauthProvider?: "openai" | "anthropic";
 }
 
 type CustomKeyMetadata = Omit<CustomKey, "value">;

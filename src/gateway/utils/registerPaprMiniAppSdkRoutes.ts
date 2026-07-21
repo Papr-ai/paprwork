@@ -43,4 +43,10 @@ export function registerPaprMiniAppSdkRoutes(app: Express): void {
   app.get("/__papr__/papr-auth-guard.js", (req, res) =>
     serveSdkFile("papr-auth-guard.ts", req, res),
   );
+  app.get("/__papr__/papr-app-refresh.js", (req, res) =>
+    serveSdkFile("papr-app-refresh.ts", req, res),
+  );
+  app.get("/__papr__/papr-agent-chat.js", (req, res) =>
+    serveSdkFile("papr-agent-chat.ts", req, res),
+  );
 }

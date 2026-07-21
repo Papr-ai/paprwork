@@ -8,7 +8,7 @@
  * 
  * - welcome:       User sees the onboarding view for the first time
  * - connect_model:  User needs to connect ChatGPT/Claude (prerequisite for good experience)
- * - choose_intent:  User picks what they want to do (finish work, build tool, automate, personalize)
+ * - choose_intent:  User picks what they want to do (finish work, build app, personalize, explore)
  * - first_value:    User's first real task is in progress (chat sent, waiting for result)
  * - activated:      A durable result was created (app, document, job, etc.)
  * - completed:      Onboarding dismissed
@@ -23,11 +23,10 @@ export type OnboardingPhase =
   | "completed";
 
 export type OnboardingIntent =
-  | "finish_work"
-  | "build_tool"
-  | "automate"
-  | "personalize"
   | "explore"
+  | "finish_work"
+  | "build_app"
+  | "personalize"
   | null;
 
 export interface OnboardingState {
@@ -170,4 +169,18 @@ export function markFirstResultCreated(): OnboardingState {
 /** Dismiss onboarding (user can always skip). */
 export function dismissOnboarding(): OnboardingState {
   return transitionTo("completed");
+}
+
+/** Reset onboarding to initial state (for testing / re-onboarding). */
+export function resetOnboarding(): OnboardingState {
+  // Clear v1 flags
+  localStorage.removeItem("papr-onboarding-dismissed");
+  localStorage.removeItem("papr-onboarding-step1");
+  localStorage.removeItem("papr-onboarding-step2");
+  // Clear v2 state
+  localStorage.removeItem(STORAGE_KEY);
+  // Notify listeners so the Getting Started tab re-opens
+  const fresh = { ...DEFAULT_STATE };
+  saveOnboardingState(fresh);
+  return fresh;
 }

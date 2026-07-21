@@ -147,8 +147,8 @@ export class CloudSyncService {
     pushDebounceMs?: number;
     queueIntervalMs?: number;
   }) {
-    this.pushDebounceMs = opts?.pushDebounceMs ?? 10_000;
-    this.queueIntervalMs = opts?.queueIntervalMs ?? 3_000;
+    this.pushDebounceMs = opts?.pushDebounceMs ?? 15_000;
+    this.queueIntervalMs = opts?.queueIntervalMs ?? 5_000;
   }
 
   getState(): SyncState {
@@ -165,7 +165,26 @@ export class CloudSyncService {
       syncedItems: this.stateManager.data.syncedItems,
       queuedPaths: this.syncQueue.map((item) => item.relativePath),
       hasItemChanged: (relativePath) => this.stateManager.hasItemChanged(relativePath),
+      deadLetter: this.stateManager.data.deadLetter,
     });
+  }
+
+  /** Clear dead-letter and queue one folder for retry (Settings UI). */
+  async retryDeadLetterItem(relativePath: string): Promise<boolean> {
+    if (!this.stateManager.retryDeadLetter(relativePath)) {
+      return false;
+    }
+    const fullPath = path.join(PAPR_DIR, relativePath);
+    if (!fs.existsSync(fullPath)) {
+      return true;
+    }
+    this.syncQueue.push({ relativePath, failures: 0 });
+    this.queueTotal = Math.max(this.queueTotal, this.syncQueue.length);
+    if (this.state.status !== "queuing") {
+      this.state.status = "queuing";
+    }
+    this.startQueueProcessor();
+    return true;
   }
 
   /**
@@ -384,7 +403,7 @@ export class CloudSyncService {
       await this.commitAndPushPaths(instantPaths, "cloud sync: workspace and data");
     }
 
-    this.enqueueSubDirs();
+    await this.enqueueSubDirs();
     if (this.syncQueue.length === 0) {
       await this.finishQueueProcessing();
     } else {
@@ -417,7 +436,7 @@ export class CloudSyncService {
         await this.commitAndPushPaths(instantPaths, "manual push: workspace and data");
       }
 
-      this.enqueueSubDirs();
+      await this.enqueueSubDirs();
       while (this.syncQueue.length > 0) {
         const item = this.syncQueue.shift()!;
         if (!fs.existsSync(path.join(PAPR_DIR, item.relativePath))) {
@@ -641,8 +660,33 @@ export class CloudSyncService {
 
   // ── Phase 2: queued sub-dirs ──────────────────────────────────────
 
-  private enqueueSubDirs(): void {
+  private async isGitCleanUnderQueuedRoots(): Promise<boolean> {
+    try {
+      const porcelain = await this.git(["status", "--porcelain", "--", "apps/", "Jobs/"]);
+      return porcelain.trim().length === 0;
+    } catch {
+      return false;
+    }
+  }
+
+  private async enqueueSubDirs(): Promise<void> {
     let skipped = 0;
+    let deadLetterSkipped = 0;
+    let reconciled = 0;
+
+    const hasPriorFullSync = Boolean(this.stateManager.data.lastFullSyncAt);
+    const gitClean =
+      hasPriorFullSync && Object.keys(this.stateManager.data.syncedItems).length > 0
+        ? await this.isGitCleanUnderQueuedRoots()
+        : false;
+
+    if (gitClean) {
+      const knownPaths = Object.keys(this.stateManager.data.syncedItems).filter(
+        (relativePath) =>
+          relativePath.startsWith("apps/") || relativePath.startsWith("Jobs/"),
+      );
+      reconciled = (await this.reconcilePathsIfGitClean(knownPaths)).length;
+    }
 
     for (const parent of QUEUED_DIRS) {
       const parentPath = path.join(PAPR_DIR, parent);
@@ -650,6 +694,10 @@ export class CloudSyncService {
 
       for (const entry of fs.readdirSync(parentPath, { withFileTypes: true })) {
         const relativePath = path.join(parent, entry.name);
+        if (this.stateManager.isDeadLetter(relativePath)) {
+          deadLetterSkipped++;
+          continue;
+        }
         if (!this.stateManager.hasItemChanged(relativePath)) {
           skipped++;
           continue;
@@ -659,8 +707,18 @@ export class CloudSyncService {
     }
 
     this.queueTotal = this.syncQueue.length;
-    if (this.queueTotal > 0 || skipped > 0) {
-      console.log(`[CloudSync] Phase 2: queued ${this.queueTotal} changed, skipped ${skipped} unchanged`);
+    if (this.queueTotal > 0 || skipped > 0 || deadLetterSkipped > 0) {
+      const parts = [`queued ${this.queueTotal} changed`, `skipped ${skipped} unchanged`];
+      if (deadLetterSkipped > 0) {
+        parts.push(`${deadLetterSkipped} failed (dead-letter)`);
+      }
+      if (gitClean && this.queueTotal === 0) {
+        parts.unshift("git clean");
+      }
+      if (reconciled > 0) {
+        parts.push(`reconciled ${reconciled}`);
+      }
+      console.log(`[CloudSync] Phase 2: ${parts.join(", ")}`);
     }
   }
 
@@ -739,7 +797,12 @@ export class CloudSyncService {
 
           if (queueItem.failures >= MAX_RETRY_FAILURES) {
             console.error(
-              `[CloudSync] Giving up on ${queueItem.relativePath} after ${MAX_RETRY_FAILURES} failures: ${msg.slice(0, 120)}`,
+              `[CloudSync] Dead-letter ${queueItem.relativePath} after ${MAX_RETRY_FAILURES} failures: ${msg.slice(0, 120)}`,
+            );
+            this.stateManager.recordDeadLetter(
+              queueItem.relativePath,
+              msg,
+              queueItem.failures,
             );
             this.state.lastError = msg.slice(0, 200);
           } else {
@@ -1136,6 +1199,15 @@ export class CloudSyncService {
     } finally {
       this.state = { ...this.state, cloudPublishing: false };
     }
+
+    void import("./cloudSync/notifySyncedAppRevisions.js")
+      .then(({ notifySyncedAppRevisions }) => notifySyncedAppRevisions(syncedAppIds))
+      .catch((err: Error) => {
+        console.warn(
+          "[CloudSync] App revision notify skipped:",
+          err.message.slice(0, 120),
+        );
+      });
   }
 
   private async hasStagedChanges(): Promise<boolean> {

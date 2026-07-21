@@ -343,3 +343,106 @@ export async function runRuntimeBash(
     exitCode: json.exitCode ?? 1,
   };
 }
+
+import { parseRuntimeSseStream } from "../appAgentChat/parseRuntimeSseStream.js";
+import type { GatewayStreamRawEvent } from "../appAgentChat/mapGatewayStreamToAppAgentEvents.js";
+
+export type RuntimeAppAgentWarmResult =
+  | { status: "ready" | "warming"; expiresAt?: string }
+  | "unavailable";
+
+/** Pre-warm gateway sandbox for embedded app chat (bubble-open intent). */
+export async function warmRuntimeAppAgentChat(
+  auth: AppRuntimeRouteAuth,
+  input: {
+    sessionId: string;
+    appId: string;
+    subAgentId: string;
+    jobId: string;
+  },
+): Promise<RuntimeAppAgentWarmResult> {
+  const res = await fetch(
+    `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/app-agent/warm`,
+    {
+      method: "POST",
+      headers: runtimeHeaders(auth),
+      body: JSON.stringify({
+        namespaceId: auth.namespaceId,
+        slug: auth.slug,
+        paprApiKey: auth.paprApiKey,
+        shareToken: auth.shareToken,
+        sessionId: input.sessionId,
+        appId: input.appId,
+        subAgentId: input.subAgentId,
+        jobId: input.jobId,
+      }),
+    },
+  );
+  if (res.status === 404) {
+    return "unavailable";
+  }
+  if (!res.ok) {
+    throw new Error(
+      `Runtime app-agent warm failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    );
+  }
+  const json = (await res.json()) as { status?: string; expiresAt?: string };
+  const status = json.status === "ready" ? "ready" : "warming";
+  return {
+    status,
+    ...(json.expiresAt ? { expiresAt: json.expiresAt } : {}),
+  };
+}
+
+/**
+ * Memory-server SSE for app-agent chat.
+ * Memory prepares a Cloud Agent Gateway run and proxies POST /internal/agent/stream.
+ */
+export async function streamRuntimeAppAgentChat(
+  auth: AppRuntimeRouteAuth,
+  input: {
+    sessionId: string;
+    appId: string;
+    subAgentId: string;
+    userMessage: string;
+    prompt: string;
+    jobId: string;
+    history?: Array<{ role: "user" | "assistant"; content: string }>;
+  },
+): Promise<AsyncIterable<GatewayStreamRawEvent>> {
+  const res = await fetch(
+    `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/app-agent/stream`,
+    {
+      method: "POST",
+      headers: runtimeHeaders(auth),
+      body: JSON.stringify({
+        namespaceId: auth.namespaceId,
+        slug: auth.slug,
+        paprApiKey: auth.paprApiKey,
+        shareToken: auth.shareToken,
+        sessionId: input.sessionId,
+        appId: input.appId,
+        subAgentId: input.subAgentId,
+        userMessage: input.userMessage,
+        prompt: input.prompt,
+        jobId: input.jobId,
+        history: input.history,
+      }),
+    },
+  );
+  if (res.status === 404) {
+    throw new Error(
+      "Cloud app assistant streaming is not available on this Papr server. " +
+        "Deploy memory-server with /v1/cloud/apps/runtime/app-agent/stream (Cloud Agent Gateway proxy).",
+    );
+  }
+  if (!res.ok) {
+    throw new Error(
+      `Runtime app-agent stream failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    );
+  }
+  if (!res.body) {
+    throw new Error("Runtime app-agent stream returned empty body");
+  }
+  return parseRuntimeSseStream(res.body);
+}

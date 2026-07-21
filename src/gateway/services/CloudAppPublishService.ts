@@ -27,6 +27,11 @@ import {
   resolveShareTokenForConfig,
   slugifyPublishTitle,
 } from "./cloudPublishDrift.js";
+import {
+  publishSlugRetryCandidates,
+  resolveUniquePublishSlug,
+  type PublishSlugCatalogEntry,
+} from "../utils/uniqueAppNaming.js";
 import { writeCloudAppMetadataFile } from "./cloudAppMetadataFile.js";
 import { buildMiniApp } from "../utils/miniAppBuild.js";
 import {
@@ -61,14 +66,14 @@ function defaultAppsHost(): string {
 
 function loadAppCatalogMeta(paprDir: string): Map<
   string,
-  { title: string; description: string; icon?: string }
+  { title: string; description: string; icon?: string; createdAt?: string }
 > {
-  const meta = new Map<string, { title: string; description: string; icon?: string }>();
+  const meta = new Map<string, { title: string; description: string; icon?: string; createdAt?: string }>();
   try {
     const raw = fs.readFileSync(path.join(paprDir, "data", "apps.json"), "utf8");
     const parsed = JSON.parse(raw) as
-      | Array<{ id: string; title?: string; description?: string; icon?: string }>
-      | Record<string, { id: string; title?: string; description?: string; icon?: string }>;
+      | Array<{ id: string; title?: string; description?: string; icon?: string; createdAt?: string }>
+      | Record<string, { id: string; title?: string; description?: string; icon?: string; createdAt?: string }>;
     const list = Array.isArray(parsed) ? parsed : Object.values(parsed);
     for (const app of list) {
       if (app.id) {
@@ -76,6 +81,7 @@ function loadAppCatalogMeta(paprDir: string): Map<
           title: app.title?.trim() || app.id.slice(0, 8),
           description: app.description?.trim() || "",
           icon: app.icon,
+          createdAt: app.createdAt,
         });
       }
     }
@@ -83,6 +89,59 @@ function loadAppCatalogMeta(paprDir: string): Map<
     /* optional */
   }
   return meta;
+}
+
+async function buildPublishSlugCatalogForApp(
+  appId: string,
+  paprDir: string,
+  fetchMemoryPublish: (targetAppId: string) => Promise<PublishApiResponse | null>,
+): Promise<PublishSlugCatalogEntry[]> {
+  const catalogMeta = loadAppCatalogMeta(paprDir);
+  const appMeta = catalogMeta.get(appId);
+  const baseSlug = slugifyPublishTitle(appMeta?.title ?? appId.slice(0, 8));
+
+  const entries: PublishSlugCatalogEntry[] = [];
+  for (const [candidateId, candidateMeta] of catalogMeta) {
+    if (
+      candidateId !== appId &&
+      slugifyPublishTitle(candidateMeta.title) !== baseSlug
+    ) {
+      continue;
+    }
+
+    let memorySlug: string | null = null;
+    try {
+      const memory = await fetchMemoryPublish(candidateId);
+      memorySlug = memory?.slug ?? null;
+    } catch {
+      /* ignore per-app fetch errors */
+    }
+
+    entries.push({
+      appId: candidateId,
+      title: candidateMeta.title,
+      createdAt: candidateMeta.createdAt,
+      memorySlug,
+    });
+  }
+
+  if (!entries.some((entry) => entry.appId === appId)) {
+    let memorySlug: string | null = null;
+    try {
+      const memory = await fetchMemoryPublish(appId);
+      memorySlug = memory?.slug ?? null;
+    } catch {
+      /* ignore */
+    }
+    entries.push({
+      appId,
+      title: appMeta?.title ?? appId.slice(0, 8),
+      createdAt: appMeta?.createdAt,
+      memorySlug,
+    });
+  }
+
+  return entries;
 }
 
 function slugifyTitle(title: string): string {
@@ -235,9 +294,17 @@ export class CloudAppPublishService {
     const prefs = getAppPublishPrefs(appId, this.paprDir);
     const catalogMeta = loadAppCatalogMeta(this.paprDir);
     const appMeta = catalogMeta.get(appId);
-    const slug =
+    const slugCatalog = await buildPublishSlugCatalogForApp(
+      appId,
+      this.paprDir,
+      (targetAppId) => this.fetchMemoryPublishResponse(targetAppId),
+    );
+    const resolvedSlug =
       options?.slug ??
-      expectedSlugForApp(appId, catalogMeta);
+      resolveUniquePublishSlug(appId, slugCatalog);
+    const slugCandidates = options?.slug
+      ? [options.slug]
+      : publishSlugRetryCandidates(resolvedSlug);
 
     const sharing = resolveSharingSettings({
       loginAccess: options?.loginAccess ?? prefs.loginAccess,
@@ -299,32 +366,55 @@ export class CloudAppPublishService {
 
     await writeCloudAppMetadataFile(this.paprDir, appId);
 
-    const response = await cloudApiFetch("/v1/cloud/apps/publish", {
-      method: "POST",
-      body: {
-        appId,
-        slug,
-        visibility: publishFields.visibility,
-        linkPermission: publishFields.linkPermission,
-        shareLinkEnabled: publishFields.shareLinkEnabled,
-        codeAccess,
-        ...(credentialRequirements.length > 0
-          ? {
-              catalogRequirements: catalogRequirementsForPublish(
-                credentialRequirements,
-              ),
-            }
-          : {}),
-        ...(appMeta?.title ? { catalogTitle: appMeta.title } : {}),
-        ...(appMeta?.description ? { catalogDescription: appMeta.description } : {}),
-        ...(appMeta?.icon ? { catalogIcon: appMeta.icon } : {}),
-      },
-    });
+    let response: Response | null = null;
+    let lastBody = "";
+    for (const slug of slugCandidates) {
+      response = await cloudApiFetch("/v1/cloud/apps/publish", {
+        method: "POST",
+        body: {
+          appId,
+          slug,
+          visibility: publishFields.visibility,
+          linkPermission: publishFields.linkPermission,
+          shareLinkEnabled: publishFields.shareLinkEnabled,
+          codeAccess,
+          ...(credentialRequirements.length > 0
+            ? {
+                catalogRequirements: catalogRequirementsForPublish(
+                  credentialRequirements,
+                ),
+              }
+            : {}),
+          ...(appMeta?.title ? { catalogTitle: appMeta.title } : {}),
+          ...(appMeta?.description ? { catalogDescription: appMeta.description } : {}),
+          ...(appMeta?.icon ? { catalogIcon: appMeta.icon } : {}),
+        },
+      });
 
-    if (!response.ok) {
-      const body = await response.text();
+      if (response.ok) {
+        if (slug !== resolvedSlug) {
+          console.log(
+            `[CloudPublish] Used fallback slug ${slug} for ${appId} (resolved ${resolvedSlug})`,
+          );
+        }
+        break;
+      }
+
+      lastBody = await response.text();
+      const isNameCollision =
+        response.status === 409 &&
+        lastBody.includes("already published in this namespace");
+      if (!isNameCollision || slug === slugCandidates.at(-1)) {
+        break;
+      }
+      console.warn(
+        `[CloudPublish] Slug ${slug} taken for ${appId}, retrying with next candidate`,
+      );
+    }
+
+    if (!response?.ok) {
       throw new Error(
-        `Cloud publish failed (${response.status}): ${body.slice(0, 200)}`,
+        `Cloud publish failed (${response?.status ?? 0}): ${lastBody.slice(0, 200)}`,
       );
     }
 

@@ -57,6 +57,7 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   // Anthropic Claude 4 Series
   "claude-haiku-4-5": { input: 0.8, output: 4.0 },
   "claude-sonnet-4-6": { input: 3.0, output: 15.0 },
+  "claude-sonnet-5": { input: 3.0, output: 15.0 },
   "claude-opus-4-6": { input: 15.0, output: 75.0 },
   "claude-opus-4-5-thinking": { input: 15.0, output: 75.0 },
   "claude-opus-4-7": { input: 5.0, output: 25.0 },
@@ -98,6 +99,10 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   // Groq (via Papr proxy — https://groq.com/pricing, uncached input rates)
   "qwen/qwen3-32b": { input: 0.29, output: 0.59 },
   "openai/gpt-oss-120b": { input: 0.15, output: 0.6 },
+
+  // Moonshot Kimi K3 (via Papr proxy — cache-miss input / output per 1M tokens)
+  "kimi-k3": { input: 3.0, output: 15.0 },
+  "kimi-3": { input: 3.0, output: 15.0 },
 };
 
 /** Normalize model ID for cost lookup (legacy dash format -> dot format) */

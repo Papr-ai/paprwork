@@ -19,6 +19,11 @@ export interface JobStatusChangedData {
   error?: string;
   lastOutput?: string;
   waitingPermissionKeys?: string[];
+  waitingScheduleRisk?: {
+    intervalMinutes: number;
+    runsPerDay: number;
+    message: string;
+  };
 }
 
 export interface JobProgressData {

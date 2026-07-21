@@ -29,33 +29,31 @@ import {
 import "./OnboardingView.css";
 
 const INTENT_ICONS: Record<string, React.ReactNode> = {
+  explore: (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M16.24 7.76l-2.12 6.36-6.36 2.12 2.12-6.36 6.36-2.12z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
   finish_work: (
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
       <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
-  build_tool: (
+  build_app: (
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
       <rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
       <rect x="14" y="3" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
       <rect x="3" y="14" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
-      <rect x="14" y="14" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
-    </svg>
-  ),
-  automate: (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-      <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M17.5 14v7M14 17.5h7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   ),
   personalize: (
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-      <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  ),
-  explore: (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" />
-      <path d="M16.24 7.76l-2.12 6.36-6.36 2.12 2.12-6.36 6.36-2.12z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12 2a4 4 0 014 4v1a4 4 0 01-8 0V6a4 4 0 014-4z" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M3.5 21c0-4.42 3.58-8 8.5-8s8.5 3.58 8.5 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <circle cx="18" cy="5" r="3" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M18 4v2M17 5h2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   ),
 };
@@ -213,12 +211,9 @@ export function OnboardingView() {
         {state.phase === "welcome" && (
           <>
             <div className="onboarding-view-header">
-              <span className="onboarding-view-icon">
-                <img className="onboarding-view-logo" src="/papr-logo.svg" alt="" width={56} height={66} />
-              </span>
-              <h1 className="onboarding-view-title">Welcome to Paprwork!</h1>
+              <h1 className="onboarding-view-title">Welcome to Paprwork</h1>
               <p className="onboarding-view-subtitle">
-                Pen is your personal AI agent — it builds apps, automates work, writes documents, and remembers everything.
+                Your AI workspace that builds apps, automates workflows, and gets smarter the more you use it.
               </p>
             </div>
             <div className="onboarding-view-actions">
@@ -243,7 +238,7 @@ export function OnboardingView() {
               </span>
               <h1 className="onboarding-view-title">Connect Your AI</h1>
               <p className="onboarding-view-subtitle">
-                Connect your ChatGPT or Claude account so Pen can use the best AI models. This takes about 30 seconds.
+                Connect your ChatGPT or Claude account to power Papr with the best AI models. This takes about 30 seconds.
               </p>
             </div>
 
@@ -281,12 +276,9 @@ export function OnboardingView() {
         {(state.phase === "choose_intent" || state.phase === "first_value") && (
           <>
             <div className="onboarding-view-header">
-              <span className="onboarding-view-icon">
-                <img className="onboarding-view-logo" src="/papr-logo.svg" alt="" width={56} height={66} />
-              </span>
               <h1 className="onboarding-view-title">What would you like to do?</h1>
               <p className="onboarding-view-subtitle">
-                Pick one — Pen will get started on real work right away.
+                Pick one to get started with real work right away.
               </p>
             </div>
 
@@ -305,6 +297,13 @@ export function OnboardingView() {
                     <div className="onboarding-intent-card__text">
                       <div className="onboarding-intent-card__title">{label.title}</div>
                       <div className="onboarding-intent-card__desc">{label.description}</div>
+                      {"examples" in label && (
+                        <div className="onboarding-intent-card__examples">
+                          {(label as any).examples.map((ex: string) => (
+                            <span key={ex} className="onboarding-intent-card__example-pill">{ex}</span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </button>
                 );

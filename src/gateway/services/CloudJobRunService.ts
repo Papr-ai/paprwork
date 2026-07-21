@@ -9,6 +9,7 @@ import { cloudApiFetch } from "../utils/cloudApiClient.js";
 import { getCloudSyncService } from "./CloudSyncService.js";
 import type { JobRecord } from "./jobs/types.js";
 import type { JobsService } from "./JobsService.js";
+import { CLOUD_AGENT_JOB_TIMEOUT_MS } from "../../core/constants/cloudAgentLimits.js";
 
 export type JobRunRuntime = "local" | "cloud";
 
@@ -32,7 +33,7 @@ function jobLogPath(jobId: string): string {
 
 function cloudRunTimeoutMs(job: JobRecord): number {
   if (job.type === "agent" || job.type === "subagent") {
-    return 900_000;
+    return CLOUD_AGENT_JOB_TIMEOUT_MS;
   }
   return 600_000;
 }

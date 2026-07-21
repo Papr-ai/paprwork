@@ -6,7 +6,7 @@
  * Listens for subagent-chat:message, subagent-chat:question, subagent-chat:activity broadcasts.
  */
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from "react";
 import { Markdown } from "../common/Markdown";
 import { gateway } from "../../src/lib/gateway";
 import { ThinkingCard } from "./ThinkingCard";
@@ -37,6 +37,8 @@ export interface MiniChatCardProps {
   error?: string;
   /** Optional SVG icon name for sub-agent (e.g. "robot", "search", "code") */
   subAgentIcon?: string;
+  /** Start expanded (default: collapsed one-line row; user expands for full report) */
+  defaultExpanded?: boolean;
 }
 
 const STATUS_LABELS: Record<MiniChatCardProps["status"], string> = {
@@ -193,8 +195,9 @@ export function MiniChatCard({
   resultText,
   error,
   subAgentIcon,
+  defaultExpanded = false,
 }: MiniChatCardProps) {
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(!defaultExpanded);
   const [hasJoined, setHasJoined] = useState(false);
   const [messages, setMessages] = useState<SubAgentChatMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
@@ -207,7 +210,22 @@ export function MiniChatCard({
     toolCalls: Array<{ name: string; args?: Record<string, unknown>; result?: unknown; status?: string }>;
   }>({ thinking: "", toolCalls: [] });
   const [isActivityStreaming, setIsActivityStreaming] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const followMessagesRef = useRef(true);
+
+  const fullReportText = useMemo(() => {
+    let longest = liveResultText?.trim() ?? "";
+    for (const msg of messages) {
+      if (msg.author === "sub-agent" && msg.content.length > longest.length) {
+        longest = msg.content;
+      }
+    }
+    return longest;
+  }, [messages, liveResultText]);
+
+  const hasDistinctFullReport =
+    fullReportText.length >= 800 &&
+    fullReportText.length > (liveResultText?.trim().length ?? 0) + 300;
 
   useEffect(() => {
     setLiveStatus(status);
@@ -308,6 +326,26 @@ export function MiniChatCard({
               timestamp: detail.data.timestamp || new Date().toISOString(),
             },
           ]);
+        }
+      } else if (detail.type === "subagent-chat:completed") {
+        setLiveStatus("completed");
+        const completedResult = detail.data.result as string | undefined;
+        if (completedResult?.trim()) {
+          setMessages((prev) => {
+            const exists = prev.some((m) => m.content === completedResult);
+            if (exists) return prev;
+            return [
+              ...prev,
+              {
+                role: "assistant" as const,
+                author: "sub-agent" as const,
+                content: completedResult,
+                timestamp:
+                  (detail.data.timestamp as string) ??
+                  new Date().toISOString(),
+              },
+            ];
+          });
         }
       } else if (detail.type === "subagent-chat:activity") {
         const chunk = detail.data.chunk as SubAgentActivityChunk;
@@ -413,12 +451,44 @@ export function MiniChatCard({
     };
   }, [delegationId, hasJoined]);
 
-  // Auto-scroll to latest message
+  // Track whether user is reading older content inside the card (don't hijack scroll)
   useEffect(() => {
-    if (messages.length > 0) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const body = bodyRef.current;
+    if (!body) return;
+
+    const handleBodyScroll = () => {
+      const distanceFromBottom =
+        body.scrollHeight - body.scrollTop - body.clientHeight;
+      followMessagesRef.current = distanceFromBottom < 48;
+    };
+
+    body.addEventListener("scroll", handleBodyScroll, { passive: true });
+    return () => body.removeEventListener("scroll", handleBodyScroll);
+  }, [isCollapsed]);
+
+  // Scroll inside the card only — never scrollIntoView on the main chat (pulls user off latest messages)
+  useLayoutEffect(() => {
+    const body = bodyRef.current;
+    if (!body || isCollapsed) return;
+
+    if (liveStatus === "active") {
+      body.scrollTop = body.scrollHeight;
+      followMessagesRef.current = true;
+      return;
     }
-  }, [messages.length]);
+
+    if (!followMessagesRef.current) return;
+    body.scrollTop = body.scrollHeight;
+  }, [
+    messages.length,
+    liveResultText,
+    liveError,
+    liveStatus,
+    isCollapsed,
+    activity.thinking,
+    activity.toolCalls.length,
+    hasDistinctFullReport,
+  ]);
 
   const handleJoin = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -455,7 +525,10 @@ export function MiniChatCard({
     messages.length > 0 || !!resultText || !!error || !!context;
 
   return (
-    <div className="mini-chat-card" data-testid="mini-chat-card">
+    <div
+      className={`mini-chat-card${isCollapsed ? " mini-chat-card--collapsed" : ""}`}
+      data-testid="mini-chat-card"
+    >
       <div
         className="mini-chat-card__header"
         onClick={() => hasDetails && setIsCollapsed((c) => !c)}
@@ -506,7 +579,7 @@ export function MiniChatCard({
       </div>
 
       {!isCollapsed && (
-        <div className="mini-chat-card__body">
+        <div className="mini-chat-card__body" ref={bodyRef}>
           {context && <div className="mini-chat-card__context">{context}</div>}
 
           {/* Sub-agent activity: thinking + tool calls (like main chat) */}
@@ -579,17 +652,32 @@ export function MiniChatCard({
                     </div>
                   </div>
                 ))}
-                <div ref={messagesEndRef} />
               </div>
             </div>
           )}
 
           {liveError && <div className="mini-chat-card__error">{liveError}</div>}
 
-          {liveResultText && !liveError && liveStatus !== "active" && (
+          {hasDistinctFullReport && liveStatus !== "active" && (
+            <div className="mini-chat-card__full-report">
+              <div className="mini-chat-card__full-report-label">Full report</div>
+              <Markdown>{fullReportText}</Markdown>
+            </div>
+          )}
+
+          {liveResultText &&
+            !liveError &&
+            liveStatus !== "active" &&
+            !hasDistinctFullReport && (
             <div className="mini-chat-card__result">
               <Markdown>{liveResultText}</Markdown>
             </div>
+          )}
+
+          {hasDistinctFullReport && liveStatus !== "active" && (
+            <p className="mini-chat-card__summary-note">
+              A shorter summary may also appear in the main chat above.
+            </p>
           )}
 
           {hasJoined && liveStatus === "active" && (

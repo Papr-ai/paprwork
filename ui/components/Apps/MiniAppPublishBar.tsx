@@ -2,9 +2,14 @@
  * MiniAppPublishBar — publish, share, preview mode controls.
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { useCloudPublish } from "../../hooks/useCloudPublish";
+import { useAppCloudSyncStatus } from "../../hooks/useAppCloudSyncStatus";
+import {
+  formatWebSyncStatusTooltip,
+  webSyncVisualState,
+} from "../../utils/appCloudSyncStatus";
 import {
   isCodePermission,
   isPermissionAvailable,
@@ -24,9 +29,18 @@ import {
 import { CloudChangeRequestsPanel } from "./CloudChangeRequestsPanel";
 import { CloudContributeBackPanel } from "./CloudContributeBackPanel";
 import { CloudAppCredentialsPanel } from "./CloudAppCredentialsPanel";
-import { AppCloudSyncChip } from "./AppCloudSyncChip";
 import { AppWorkspaceMenu } from "./AppWorkspaceMenu";
+import { WebSyncPopover, WebSyncStatusDot } from "./WebSyncPopover";
 import type { AppWorkspaceMode } from "../../hooks/useAppWorkspace";
+import {
+  CloudCompatibilityBadge,
+  CloudCompatibilityPanel,
+} from "./CloudCompatibilityPanel";
+import {
+  CloudPublishBlockedError,
+  fetchCloudCompatibility,
+} from "../../utils/cloudPublishApi";
+import type { CloudCompatibilityReport } from "../../src/core/types/cloudAppCompatibility";
 import "./MiniAppPublishBar.css";
 import "./AppWorkspaceMenu.css";
 
@@ -179,6 +193,34 @@ export function MiniAppPublishBar({
   const [lastSyncedAt, setLastSyncedAt] = useState<string | undefined>(
     cloudLineage?.lastSyncedAt,
   );
+  const [webSyncPopoverOpen, setWebSyncPopoverOpen] = useState(false);
+  const webSyncAnchorRef = useRef<HTMLDivElement>(null);
+  const [compatReport, setCompatReport] = useState<CloudCompatibilityReport | null>(
+    cloud.compatibility,
+  );
+  const [compatLoading, setCompatLoading] = useState(false);
+  const [needsDesktopAck, setNeedsDesktopAck] = useState(false);
+
+  const { status: webSyncStatus, loading: webSyncLoading, refreshing: webSyncRefreshing, pushing: webSyncPushing, error: webSyncError, pushNow: webSyncPushNow } =
+    useAppCloudSyncStatus(appId, { enabled: workspaceMode === "preview" });
+
+  useEffect(() => {
+    setCompatReport(cloud.compatibility);
+  }, [cloud.compatibility]);
+
+  useEffect(() => {
+    if (!shareOpen) {
+      setNeedsDesktopAck(false);
+      return;
+    }
+    setCompatLoading(true);
+    void fetchCloudCompatibility(appId)
+      .then(setCompatReport)
+      .catch(() => {
+        if (cloud.compatibility) setCompatReport(cloud.compatibility);
+      })
+      .finally(() => setCompatLoading(false));
+  }, [shareOpen, appId, cloud.compatibility]);
 
   useEffect(() => {
     setLastSyncedAt(cloudLineage?.lastSyncedAt);
@@ -203,6 +245,30 @@ export function MiniAppPublishBar({
     window.addEventListener("keydown", onEscape);
     return () => window.removeEventListener("keydown", onEscape);
   }, [shareOpen]);
+
+  useEffect(() => {
+    if (!webSyncPopoverOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (!webSyncAnchorRef.current?.contains(event.target as Node)) {
+        setWebSyncPopoverOpen(false);
+      }
+    };
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setWebSyncPopoverOpen(false);
+    };
+    window.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("keydown", onEscape);
+    return () => {
+      window.removeEventListener("mousedown", onPointerDown);
+      window.removeEventListener("keydown", onEscape);
+    };
+  }, [webSyncPopoverOpen]);
+
+  useEffect(() => {
+    if (workspaceMode !== "preview") {
+      setWebSyncPopoverOpen(false);
+    }
+  }, [workspaceMode]);
 
   const applySharing = (nextAudience: ShareAudience, nextPermission: SharePermission) => {
     setAudience(nextAudience);
@@ -311,6 +377,62 @@ export function MiniAppPublishBar({
       ? "mini-app-publish-bar__dot mini-app-publish-bar__dot--pending"
       : "mini-app-publish-bar__dot";
 
+  const canOpenWebPreview = cloud.live && !!publishedUrl;
+  const webSyncLoadingState = webSyncLoading || webSyncRefreshing;
+  const webSyncTooltip = formatWebSyncStatusTooltip(webSyncStatus, {
+    loading: webSyncLoadingState,
+    error: webSyncError,
+  });
+  const webSyncState = webSyncVisualState(webSyncStatus, {
+    loading: webSyncLoadingState,
+    error: webSyncError,
+    pushing: webSyncPushing,
+    refreshing: webSyncRefreshing,
+  });
+  const webSyncActionNeeded =
+    webSyncStatus != null &&
+    webSyncStatus.overall !== "synced" &&
+    webSyncStatus.overall !== "disabled";
+  const webSyncSpinning = webSyncPushing || webSyncState === "syncing";
+
+  const handleWebPreviewClick = () => {
+    setWebSyncPopoverOpen(false);
+    if (canOpenWebPreview) {
+      onViewModeChange("published");
+    }
+  };
+
+  const handleWebSyncDotClick = () => {
+    if (canOpenWebPreview) {
+      onViewModeChange("published");
+    }
+    setWebSyncPopoverOpen(true);
+  };
+
+  const handlePublishClick = async () => {
+    try {
+      await cloud.publish();
+      setNeedsDesktopAck(false);
+    } catch (err) {
+      if (err instanceof CloudPublishBlockedError) {
+        setCompatReport(err.compatibility);
+        setNeedsDesktopAck(true);
+      }
+    }
+  };
+
+  const handleConfirmDesktopPublish = () => {
+    void cloud
+      .publish({ acknowledgeDesktopOnly: true })
+      .then(() => setNeedsDesktopAck(false))
+      .catch((err: unknown) => {
+        if (err instanceof CloudPublishBlockedError) {
+          setCompatReport(err.compatibility);
+          setNeedsDesktopAck(true);
+        }
+      });
+  };
+
   return (
     <>
       <div className="mini-app-publish-bar">
@@ -327,10 +449,19 @@ export function MiniAppPublishBar({
                 ? ` · Tracking ${cloudLineage.sourceSlug}`
                 : null}
             </span>
+            <CloudCompatibilityBadge
+              report={compatReport ?? cloud.compatibility}
+              loading={compatLoading && !compatReport && !cloud.compatibility}
+            />
           </div>
 
           {workspaceMode === "preview" ? (
-            <div className="mini-app-publish-bar__segment" role="group" aria-label="Preview mode">
+            <div
+              ref={webSyncAnchorRef}
+              className="mini-app-publish-bar__segment mini-app-publish-bar__segment--with-sync"
+              role="group"
+              aria-label="Preview mode"
+            >
               <button
                 type="button"
                 className={
@@ -338,26 +469,52 @@ export function MiniAppPublishBar({
                     ? "mini-app-publish-bar__segment-btn mini-app-publish-bar__segment-btn--active"
                     : "mini-app-publish-bar__segment-btn"
                 }
-                onClick={() => onViewModeChange("local")}
+                onClick={() => {
+                  setWebSyncPopoverOpen(false);
+                  onViewModeChange("local");
+                }}
               >
                 Local
               </button>
-              <button
-                type="button"
+              <div
                 className={
                   viewMode === "published"
-                    ? "mini-app-publish-bar__segment-btn mini-app-publish-bar__segment-btn--active"
-                    : "mini-app-publish-bar__segment-btn"
+                    ? "mini-app-publish-bar__web-option mini-app-publish-bar__web-option--active"
+                    : "mini-app-publish-bar__web-option"
                 }
-                disabled={!cloud.live || !publishedUrl}
-                onClick={() => onViewModeChange("published")}
               >
-                Web
-              </button>
+                <button
+                  type="button"
+                  className="mini-app-publish-bar__segment-btn"
+                  disabled={!canOpenWebPreview}
+                  title={
+                    canOpenWebPreview
+                      ? "Preview the live web version"
+                      : "Publish to the web first"
+                  }
+                  onClick={handleWebPreviewClick}
+                >
+                  Web
+                </button>
+                <WebSyncStatusDot
+                  state={webSyncState}
+                  spinning={webSyncSpinning}
+                  tooltip={webSyncTooltip}
+                  popoverOpen={webSyncPopoverOpen}
+                  onClick={handleWebSyncDotClick}
+                />
+              </div>
+              {webSyncPopoverOpen && webSyncStatus ? (
+                <WebSyncPopover
+                  status={webSyncStatus}
+                  error={webSyncError}
+                  pushing={webSyncPushing}
+                  syncActionNeeded={webSyncActionNeeded}
+                  onPushNow={() => void webSyncPushNow()}
+                />
+              ) : null}
             </div>
           ) : null}
-
-          <AppCloudSyncChip appId={appId} />
 
           {showTrackPullBar ? (
             <div className="mini-app-publish-bar__track-pull">
@@ -443,6 +600,14 @@ export function MiniAppPublishBar({
 
       {shareOpen ? (
         <ShareSheet title={`Share “${appTitle}”`} onClose={() => setShareOpen(false)}>
+          <CloudCompatibilityPanel
+            report={compatReport ?? cloud.compatibility}
+            loading={compatLoading}
+            showConfirm={needsDesktopAck}
+            confirmBusy={cloud.busy}
+            onConfirmPublish={handleConfirmDesktopPublish}
+          />
+
           <div className="share-sheet__panel">
             <fieldset className="share-sheet__fieldset" disabled={cloud.busy}>
               <legend className="share-sheet__legend">Who can access</legend>
@@ -533,7 +698,7 @@ export function MiniAppPublishBar({
                       type="button"
                       className="share-sheet__primary-btn"
                       disabled={cloud.busy || cloud.loading}
-                      onClick={() => void cloud.publish()}
+                      onClick={() => void handlePublishClick()}
                     >
                       Put on web
                     </button>
@@ -572,7 +737,7 @@ export function MiniAppPublishBar({
                       type="button"
                       className="share-sheet__secondary-btn"
                       disabled={cloud.busy}
-                      onClick={() => void cloud.publish()}
+                      onClick={() => void handlePublishClick()}
                     >
                       Update web version
                     </button>
@@ -597,7 +762,7 @@ export function MiniAppPublishBar({
                       type="button"
                       className="share-sheet__primary-btn"
                       disabled={cloud.busy || cloud.loading}
-                      onClick={() => void cloud.publish()}
+                      onClick={() => void handlePublishClick()}
                     >
                       Put on web
                     </button>

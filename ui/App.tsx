@@ -29,6 +29,9 @@ import {
   setTelemetryPaprUserId,
 } from "./lib/telemetry";
 import { gateway } from "./src/lib/gateway";
+import { ensureGatewayRecoveryRegistered } from "./lib/agentStreamRecovery";
+import { AppAgentChatOverlay } from "./components/Apps/AppAgentChatOverlay";
+import type { AppAgentChatConfig } from "../src/core/types/appAgentChat";
 import "./styles/liquid-glass.css";
 import "./App.css";
 import { shouldShowOnboarding } from "./utils/onboardingState";
@@ -37,6 +40,18 @@ type ChatOpenPayload = {
   message?: string;
   model?: string | null;
   provider?: string | null;
+  mode?: "main" | "app-agent";
+  appId?: string;
+  subAgentId?: string;
+};
+
+type AppAgentChatSession = {
+  appId: string;
+  appTitle: string;
+  config: AppAgentChatConfig;
+  subAgentName: string;
+  subAgentIcon?: string;
+  initialMessage?: string;
 };
 
 // Check if Papr authentication is required (commercial build vs open source)
@@ -53,6 +68,8 @@ export function App() {
   // Check this FIRST before loading anything else
   const [isAuthenticated, setIsAuthenticated] = useState(!REQUIRE_PAPR_AUTH);
   const [authChecked, setAuthChecked] = useState(false);
+  const [appAgentChatSession, setAppAgentChatSession] =
+    useState<AppAgentChatSession | null>(null);
   
   // Check authentication immediately (before loading preferences/SQLite)
   useEffect(() => {
@@ -120,6 +137,10 @@ export function App() {
     loadUIPreferences();
   }, []);
 
+  useEffect(() => {
+    ensureGatewayRecoveryRegistered();
+  }, []);
+
   // Listen for SQLite load completion
   useEffect(() => {
     const handleSqliteLoaded = () => {
@@ -138,7 +159,7 @@ export function App() {
   }, []);
 
   const { createChat } = useChat();
-  const { tabs, createTab, switchToTab } = useTabs();
+  const { createTab, switchToTab } = useTabs();
   const { activeRequest, claimedByChat, respond } = usePermissionStore();
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -176,21 +197,22 @@ export function App() {
     const checkOnboarding = () => {
       if (!shouldShowOnboarding()) return;
 
-      // Only open getting-started tab if not already open
-      const existingTab = tabs.find((t: any) => t.type === "getting-started");
+      const { tabs: currentTabs, createTab: openTab, switchToTab: activateTab } =
+        useTabStore.getState();
+      const existingTab = currentTabs.find((t) => t.type === "getting-started");
       if (!existingTab) {
-        const tabId = createTab('getting-started', 'getting-started', 'Getting Started');
-        switchToTab(tabId);
+        const tabId = openTab("getting-started", "getting-started", "Getting Started");
+        activateTab(tabId);
       }
     };
 
     checkOnboarding();
 
     // Listen for changes from OnboardingView/OnboardingCard
-    window.addEventListener('papr-onboarding-changed', checkOnboarding);
-    return () => window.removeEventListener('papr-onboarding-changed', checkOnboarding);
+    window.addEventListener("papr-onboarding-changed", checkOnboarding);
+    return () =>
+      window.removeEventListener("papr-onboarding-changed", checkOnboarding);
   }, []);
-  }, [createTab]); // Removed tabs dependency - use getState() instead
 
   // Initialize Amplitude telemetry (events only, no session replay)
   useEffect(() => {
@@ -337,6 +359,46 @@ export function App() {
       console.log("[App] chat:open from mini-app:", detail);
 
       void (async () => {
+        const isAppAgent =
+          detail.mode === "app-agent" ||
+          (Boolean(detail.subAgentId) && Boolean(detail.appId));
+
+        if (isAppAgent && detail.appId && detail.subAgentId) {
+          try {
+            const appResp = await gateway.send("app:get", { appId: detail.appId });
+            const appData = appResp.data as {
+              title?: string;
+              agentChat?: AppAgentChatConfig;
+            };
+            const config =
+              appData.agentChat ??
+              ({
+                enabled: true,
+                subAgentId: detail.subAgentId,
+              } satisfies AppAgentChatConfig);
+
+            const agentResp = await gateway.send("subagent:get", {
+              agentId: detail.subAgentId,
+            });
+            const agent = agentResp.data as {
+              name?: string;
+              icon?: string;
+            };
+
+            setAppAgentChatSession({
+              appId: detail.appId,
+              appTitle: appData.title?.trim() || "Mini-app",
+              config,
+              subAgentName: agent.name ?? detail.subAgentId,
+              subAgentIcon: agent.icon,
+              initialMessage: detail.message?.trim(),
+            });
+          } catch (err) {
+            console.error("[App] Failed to open app agent chat:", err);
+          }
+          return;
+        }
+
         const chatId = await createChat();
         if (!chatId) return;
         const tabId = createTab("chat", chatId, "New Chat");
@@ -389,6 +451,17 @@ export function App() {
         onClose={() => setCommandPaletteOpen(false)}
       />
       <UpdateBanner />
+      {appAgentChatSession && (
+        <AppAgentChatOverlay
+          appId={appAgentChatSession.appId}
+          appTitle={appAgentChatSession.appTitle}
+          config={appAgentChatSession.config}
+          subAgentName={appAgentChatSession.subAgentName}
+          subAgentIcon={appAgentChatSession.subAgentIcon}
+          initialMessage={appAgentChatSession.initialMessage}
+          onClose={() => setAppAgentChatSession(null)}
+        />
+      )}
     </>
   );
 }

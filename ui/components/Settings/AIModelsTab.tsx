@@ -8,6 +8,7 @@ import { trackEvent } from "../../lib/telemetry";
 import { OAuthSection } from "./OAuthSection";
 import { PaprLoginSection } from "./PaprLoginSection";
 import { ModelPickerSettings } from "./ModelPickerSettings";
+import { ToolTruncationSettings } from "./ToolTruncationSettings";
 
 interface AIModelsTabProps {
   scrollToPickerModels?: boolean;
@@ -227,6 +228,8 @@ export function AIModelsTab({ scrollToPickerModels = false }: AIModelsTabProps) 
       </div>
 
       <ModelPickerSettings scrollIntoView={scrollToPickerModels} />
+
+      <ToolTruncationSettings />
     </div>
   );
 }

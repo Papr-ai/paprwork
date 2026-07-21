@@ -10,6 +10,7 @@ import { usePermissionStore } from "../../stores/permissionStore";
 import { useChatStore } from "../../stores/chatStore";
 import type { ChatMessage } from "../../stores/chatStore";
 import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
+import { isHiddenContinueUserMessage } from "../../lib/agentStreamRecovery";
 import "./MessageList.css";
 
 interface MessageListProps {
@@ -48,10 +49,14 @@ export const MessageList: React.FC<MessageListProps> = ({
   // Filter out sub-agent trigger messages from main chat (they appear in MiniChatCard)
   const filteredMessages = messages.filter((msg) => {
     // Hide synthetic sub-agent user messages
+    if (msg.role === "user" && isHiddenContinueUserMessage(msg.content)) {
+      return false;
+    }
     if (
       msg.role === "user" &&
       (msg.content.startsWith("[Sub-agent question for delegation ") ||
-        msg.content.startsWith("[User message in sub-agent chat for delegation "))
+        msg.content.startsWith("[User message in sub-agent chat for delegation ") ||
+        msg.content.startsWith("[Sub-agent delegation finished for "))
     ) {
       return false;
     }

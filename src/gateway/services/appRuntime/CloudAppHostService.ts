@@ -15,6 +15,8 @@ import { TursoDbAdapter } from "./TursoDbAdapter.js";
 import { getJobEventHub } from "../JobEventHub.js";
 import { publishDbChanged } from "../../utils/publishJobRunEvents.js";
 import { registerJobEventsSseRoutes } from "../registerJobEventsSse.js";
+import { registerAppAgentChatRoutes } from "../appAgentChat/registerAppAgentChatRoutes.js";
+import { getMemoryAppAgentChatSessionStore } from "../appAgentChat/AppAgentChatSessionStore.js";
 import { registerPaprMiniAppSdkRoutes } from "../../utils/registerPaprMiniAppSdkRoutes.js";
 import {
   publishJobOutputProgress,
@@ -42,6 +44,7 @@ import {
   cacheControlForAppAsset,
   fetchCachedRuntimeRepoFile,
   getCachedTranspiledTypeScript,
+  invalidateRepoCacheForPublishedApp,
   validateCachedAccess,
 } from "./cloudAppHostCache.js";
 import { shouldBypassRepoFileCache } from "./cloudAppHostRequestCache.js";
@@ -88,6 +91,17 @@ import {
   resolveCloudAppPreviewMeta,
   resolvePreviewIconSvg,
 } from "./CloudAppPreviewService.js";
+import {
+  formatPublishedAppRevision,
+  injectPaprAppRevisionMeta,
+  resolvePublishedAppRevision,
+} from "./publishedAppRevision.js";
+import {
+  CLOUD_REPO_HEAD_RELATIVE_PATH,
+  parseCloudRepoHeadContent,
+} from "../cloudSync/cloudRepoHeadMarker.js";
+import { getAppRevisionHub } from "./AppRevisionHub.js";
+import { registerAppRevisionSseRoutes } from "./registerAppRevisionSse.js";
 
 export interface CloudAppHostDeps {
   tursoCredentials: TursoCredentialsProvider;
@@ -196,6 +210,15 @@ export class CloudAppHostService {
     this.credentials.registerRoutes(app);
 
     registerPaprMiniAppSdkRoutes(app);
+    registerAppRevisionSseRoutes(app, getAppRevisionHub());
+    registerAppAgentChatRoutes(app, {
+      mode: "cloud",
+      sessionStore: getMemoryAppAgentChatSessionStore(),
+      buildRuntimeAuth: (req) => this.buildRuntimeAuth(req),
+      jobRunRequiresSignIn: (auth) => this.jobRunRequiresSignIn(auth),
+      respondJobRunSignInRequired: (req, res) =>
+        this.respondJobRunSignInRequired(req, res),
+    });
     registerJobEventsSseRoutes(app, {
       hub: getJobEventHub(),
       pollJobStatus: async (jobId, req) => {
@@ -225,6 +248,10 @@ export class CloudAppHostService {
       res.json({ status: "ok", service: "cloud-app-host" });
     });
 
+    app.post("/internal/app-revision-updated", (req, res) =>
+      void this.handleInternalAppRevisionUpdated(req, res),
+    );
+
     app.get("/api/db/schema", (req, res) => this.handleSchema(req, res));
     app.post("/api/db/query", (req, res) => this.handleQuery(req, res));
     app.post("/api/db/batch", (req, res) => this.handleBatchQuery(req, res));
@@ -242,6 +269,15 @@ export class CloudAppHostService {
     app.post("/api/credentials/client-keys", (req, res) =>
       void this.handleClientKeys(req, res),
     );
+
+    app.get("/:namespaceId/:slug/__papr__/app-revision.json", (req, res) => {
+      if (isReservedCloudPathSegment(req.params.namespaceId)) {
+        res.status(404).send("Not found");
+        return;
+      }
+      this.setCloudContextCookies(req, res);
+      void this.handleAppRevision(req, res);
+    });
 
     app.get("/:namespaceId/:slug", (req, res) => {
       if (isReservedCloudPathSegment(req.params.namespaceId)) {
@@ -987,6 +1023,81 @@ export class CloudAppHostService {
     }
   }
 
+  private publishRuntimeJobResult(result: {
+    jobId: string;
+    name?: string;
+    status: string;
+    error?: string | null;
+    lastOutput?: string;
+    stdout?: string;
+  }): void {
+    publishJobStatusChanged({
+      jobId: result.jobId,
+      name: result.name,
+      status: result.status,
+      error: result.error ?? undefined,
+      lastOutput: result.lastOutput,
+    });
+    publishJobOutputProgress(result.jobId, result.stdout);
+  }
+
+  /** Memory server rejects job-run when only a share token is present (no Papr session). */
+  private jobRunRequiresSignIn(runtimeAuth: AppRuntimeRouteAuth): boolean {
+    return Boolean(
+      runtimeAuth.shareToken &&
+        !runtimeAuth.sessionToken &&
+        !runtimeAuth.paprApiKey,
+    );
+  }
+
+  private respondJobRunSignInRequired(req: Request, res: Response): void {
+    const returnTo = sanitizeReturnToPath(
+      req.originalUrl.split("?")[0] ?? req.originalUrl,
+    );
+    res.status(403).json({
+      error:
+        "Sign in to Papr to run agent jobs from this app. Invite links can use the app UI and backend actions, but AI jobs require a Papr account.",
+      code: "job_run_sign_in_required",
+      loginUrl: `/auth/login?returnTo=${encodeURIComponent(returnTo)}&start=1`,
+    });
+  }
+
+  private runRuntimeJobInBackground(
+    runtimeAuth: AppRuntimeRouteAuth,
+    input: {
+      jobId: string;
+      params?: Record<string, string>;
+      timeoutMs?: number;
+    },
+  ): void {
+    void runRuntimeJob(runtimeAuth, {
+      jobId: input.jobId,
+      params: input.params,
+      timeoutMs: input.timeoutMs,
+      tier: "sandbox",
+    })
+      .then((result) => {
+        this.publishRuntimeJobResult(result);
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(
+          `[CloudAppHost] /api/jobs/run background error for ${input.jobId}:`,
+          message,
+        );
+        const needsSignIn =
+          message.includes("Sign in required") ||
+          message.includes("not available on share links");
+        publishJobStatusChanged({
+          jobId: input.jobId,
+          status: "failed",
+          error: needsSignIn
+            ? "Sign in to Papr to run agent jobs from this app."
+            : message,
+        });
+      });
+  }
+
   private async handleJobRun(req: Request, res: Response): Promise<void> {
     try {
       const body = req.body as {
@@ -1021,21 +1132,33 @@ export class CloudAppHostService {
         return;
       }
 
-      const result = await runRuntimeJob(runtimeAuth, {
+      const jobInput = {
         jobId: body.jobId,
         params: body.params,
         timeoutMs: body.timeoutMs,
+      };
+
+      // Fail synchronously so papr-auth-guard can show login (fire-and-forget
+      // would return 200 before memory server rejects share-link-only callers).
+      if (this.jobRunRequiresSignIn(runtimeAuth)) {
+        this.respondJobRunSignInRequired(req, res);
+        return;
+      }
+
+      // Default: fire-and-forget (matches desktop gateway). Agent jobs can run
+      // many minutes — Cloud Run request timeout is 60s, so blocking here 504s.
+      if (body.wait !== true) {
+        this.runRuntimeJobInBackground(runtimeAuth, jobInput);
+        res.json({ jobId: body.jobId, status: "running" });
+        return;
+      }
+
+      const result = await runRuntimeJob(runtimeAuth, {
+        ...jobInput,
         tier: "sandbox",
       });
 
-      publishJobStatusChanged({
-        jobId: result.jobId,
-        name: result.name,
-        status: result.status,
-        error: result.error ?? undefined,
-        lastOutput: result.lastOutput,
-      });
-      publishJobOutputProgress(result.jobId, result.stdout);
+      this.publishRuntimeJobResult(result);
 
       res.json({
         jobId: result.jobId,
@@ -1057,13 +1180,7 @@ export class CloudAppHostService {
           message.includes("Sign in required") ||
           message.includes("not available on share links");
         if (needsSignInForJobs) {
-          const returnTo = sanitizeReturnToPath(req.originalUrl.split("?")[0] ?? req.originalUrl);
-          res.status(403).json({
-            error:
-              "Sign in to Papr to run agent jobs from this app. Invite links can use the app UI and backend actions, but AI jobs require a Papr account.",
-            code: "job_run_sign_in_required",
-            loginUrl: `/auth/login?returnTo=${encodeURIComponent(returnTo)}&start=1`,
-          });
+          this.respondJobRunSignInRequired(req, res);
           return;
         }
         res.status(403).json({ error: message });
@@ -1074,6 +1191,72 @@ export class CloudAppHostService {
         return;
       }
       res.status(500).json({ error: message });
+    }
+  }
+
+  private async handleInternalAppRevisionUpdated(
+    req: Request,
+    res: Response,
+  ): Promise<void> {
+    const configuredKey = process.env.PAPR_CLOUD_APP_HOST_KEY?.trim();
+    const providedKey = String(req.headers["x-cloud-app-host-key"] ?? "").trim();
+    if (!configuredKey || providedKey !== configuredKey) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const body = req.body as { namespaceId?: string; slug?: string };
+    const namespaceId = body.namespaceId?.trim();
+    const slug = body.slug?.trim();
+    if (!namespaceId || !slug) {
+      res.status(400).json({ error: "namespaceId and slug are required" });
+      return;
+    }
+
+    try {
+      invalidateRepoCacheForPublishedApp(namespaceId, slug);
+
+      const runtimeAuth: AppRuntimeRouteAuth = { namespaceId, slug };
+      const revision = await resolvePublishedAppRevision(runtimeAuth, {
+        bypassFresh: true,
+      });
+      if (revision) {
+        getAppRevisionHub().publish({ namespaceId, slug, revision });
+      }
+
+      res.json({ ok: true, revision: revision ?? null });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  }
+
+  private async handleAppRevision(req: Request, res: Response): Promise<void> {
+    try {
+      const runtimeAuth = this.buildRuntimeAuth(req);
+      if (!runtimeAuth) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      const access = await this.resolveAccess(req);
+      if (!access?.canRead) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      const bypassFresh = shouldBypassRepoFileCache(req.headers);
+      const revision = await resolvePublishedAppRevision(runtimeAuth, {
+        bypassFresh,
+      });
+      if (!revision) {
+        res.status(404).json({ error: "Revision unavailable" });
+        return;
+      }
+
+      res.setHeader("Cache-Control", "no-cache, must-revalidate");
+      res.json({ revision });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
     }
   }
 
@@ -1229,11 +1412,12 @@ export class CloudAppHostService {
         content = rewriteHtmlForBundledDist(content, {
           hasDistCss: distCss !== null,
         });
+        const appJsHash = createHash("sha256")
+          .update(distBundle.content)
+          .digest("hex")
+          .slice(0, 16);
         content = appendDistAssetCacheBusters(content, {
-          appJs: createHash("sha256")
-            .update(distBundle.content)
-            .digest("hex")
-            .slice(0, 16),
+          appJs: appJsHash,
           ...(distCss
             ? {
                 appCss: createHash("sha256")
@@ -1243,6 +1427,19 @@ export class CloudAppHostService {
               }
             : {}),
         });
+
+        const repoHeadFile = await fetchCachedRuntimeRepoFile(
+          runtimeAuth,
+          CLOUD_REPO_HEAD_RELATIVE_PATH,
+          { bypassFresh },
+        );
+        const repoHead = repoHeadFile
+          ? parseCloudRepoHeadContent(repoHeadFile.content)
+          : "0";
+        const revision = formatPublishedAppRevision(repoHead, distBundle.content);
+        if (revision) {
+          content = injectPaprAppRevisionMeta(content, revision);
+        }
       }
 
       const publicBaseUrl = getCloudAppPublicBaseUrl(req);
@@ -1261,13 +1458,15 @@ export class CloudAppHostService {
         runtimeAuth.slug,
       );
 
-      // Auto-inject platform auth guard — intercepts 401/403 from /api/*
-      // and shows a login overlay. Apps don't need to handle auth errors.
-      const authGuardTag = `<script src="/__papr__/papr-auth-guard.js" defer></script>`;
+      // Platform scripts: auth guard + auto-reload when synced bundle changes.
+      const platformScripts = [
+        `<script src="/__papr__/papr-auth-guard.js" defer></script>`,
+        `<script src="/__papr__/papr-app-refresh.js" defer></script>`,
+      ].join("\n");
       if (content.includes("</head>")) {
-        content = content.replace("</head>", `${authGuardTag}\n</head>`);
+        content = content.replace("</head>", `${platformScripts}\n</head>`);
       } else {
-        content = authGuardTag + "\n" + content;
+        content = platformScripts + "\n" + content;
       }
     }
 

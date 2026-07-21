@@ -51,6 +51,8 @@ export interface ChatState {
   isStreaming: boolean;
   /** True when gateway disconnected mid-stream — Working card shows reconnecting */
   connectionPaused?: boolean;
+  /** Auto-resume failed — user can tap Continue to retry stream recovery */
+  needsStreamRecovery?: boolean;
   hasUnread: boolean;
   draftMessage?: string; // Persisted draft message for this chat
   lastSelectedModelId?: string; // Last model user chose for this chat

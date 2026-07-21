@@ -1,24 +1,27 @@
 /**
- * ConnectionIndicator - Shows Gateway WebSocket connection status
- * Displays: Connected (green), Reconnecting (yellow), Disconnected (red)
+ * ConnectionIndicator - Shows Gateway WebSocket + supervisor status
  */
 
 import React, { useEffect, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
+import { useGatewaySupervisorStatus } from "../../hooks/useGatewaySupervisorStatus";
 import "./ConnectionIndicator.css";
 
 export function ConnectionIndicator() {
   const [connectionState, setConnectionState] = useState<
     "connected" | "reconnecting" | "disconnected"
   >(gateway.getConnectionState());
+  const {
+    isStarting: gatewaySupervisorStarting,
+    isRestarting: gatewaySupervisorRestarting,
+    message: gatewaySupervisorMessage,
+  } = useGatewaySupervisorStatus();
 
   useEffect(() => {
-    // Update state when connection changes
-    const unsubscribe = gateway.onConnectionChange((connected) => {
+    const unsubscribe = gateway.onConnectionChange(() => {
       setConnectionState(gateway.getConnectionState());
     });
 
-    // Also check state periodically (for reconnecting → disconnected transition)
     const interval = setInterval(() => {
       setConnectionState(gateway.getConnectionState());
     }, 1000);
@@ -29,7 +32,20 @@ export function ConnectionIndicator() {
     };
   }, []);
 
-  // Don't show indicator when connected (clean UI)
+  if (gatewaySupervisorStarting) {
+    return (
+      <div className="connection-indicator connection-indicator--reconnecting">
+        <div className="connection-indicator__dot" />
+        <span className="connection-indicator__text">
+          {gatewaySupervisorMessage ??
+            (gatewaySupervisorRestarting
+              ? "Gateway restarting..."
+              : "Gateway starting...")}
+        </span>
+      </div>
+    );
+  }
+
   if (connectionState === "connected") {
     return null;
   }

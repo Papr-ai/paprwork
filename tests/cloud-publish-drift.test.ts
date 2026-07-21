@@ -186,6 +186,46 @@ describe("cloudPublishDrift", () => {
     expect(reasons).toEqual([]);
   });
 
+  it("treats null catalogRequirements from memory as omitted (no throw)", () => {
+    expect(() =>
+      detectCatalogRequirementsDrift(
+        [],
+        { enabled: true, catalogRequirements: null as unknown as [] },
+        [],
+      ),
+    ).not.toThrow();
+    expect(
+      detectCatalogRequirementsDrift(
+        [],
+        { enabled: true, catalogRequirements: null as unknown as [] },
+        [],
+      ),
+    ).toEqual([]);
+  });
+
+  it("detectPublishDrift does not throw when memory catalogRequirements is null", () => {
+    expect(() =>
+      detectPublishDrift({
+        memory: {
+          enabled: true,
+          visibility: "private",
+          slug: "icp-map",
+          linkPermission: "read",
+          catalogRequirements: null as unknown as [],
+        },
+        prefs: {
+          autoPublish: true,
+          accessMode: "private",
+          loginAccess: "private",
+          externalLink: "off",
+          credentialRequirements: [],
+        },
+        expectedSlug: "icp-map",
+        localCatalogRequirements: [],
+      }),
+    ).not.toThrow();
+  });
+
   it("detectPublishDrift includes catalog key drift", () => {
     const reasons = detectPublishDrift({
       memory: {

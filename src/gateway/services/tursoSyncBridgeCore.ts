@@ -193,6 +193,23 @@ export function isTursoProvisioningRateLimitError(message: string): boolean {
   );
 }
 
+/** Local job SQLite is corrupt or unreadable — skip Turso sync until repaired. */
+export function isTursoLocalDatabaseCorruptError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("database disk image is malformed") ||
+    lower.includes("file is not a database") ||
+    lower.includes("sqlite_corrupt") ||
+    lower.includes("database corruption")
+  );
+}
+
+/** Type mismatch during bind (often corrupt schema / bad row data). */
+export function isTursoSqliteBindTypeError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return lower.includes("sqlite3 can only bind numbers");
+}
+
 export function quoteIdent(identifier: string): string {
   return `"${identifier.replace(/"/g, "\"\"")}"`;
 }

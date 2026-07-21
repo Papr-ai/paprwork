@@ -9,12 +9,17 @@ import {
   serializeCloudAppMetadataFile,
   type CloudAppMetadataFile,
 } from "../../core/utils/cloudAppMetadata.js";
+import {
+  toPublicAppAgentChatConfig,
+  type AppAgentChatConfig,
+} from "../../core/types/appAgentChat.js";
 
 export interface CloudAppRegistryEntry {
   id: string;
   title?: string;
   description?: string;
   icon?: string;
+  agentChat?: AppAgentChatConfig;
 }
 
 export function loadCloudAppRegistryEntries(
@@ -58,6 +63,14 @@ export async function writeCloudAppMetadataFile(
       entry.description?.trim() || buildDefaultCloudAppDescription(title),
     updatedAt: new Date().toISOString(),
     ...(entry.icon ? { icon: entry.icon } : {}),
+    ...(entry.agentChat?.enabled
+      ? {
+          agentChat: toPublicAppAgentChatConfig(entry.agentChat),
+          ...(entry.agentChat.cloudJobId
+            ? { agentChatJobId: entry.agentChat.cloudJobId }
+            : {}),
+        }
+      : {}),
   };
 
   const appDir = path.join(paprDir, "apps", appId);

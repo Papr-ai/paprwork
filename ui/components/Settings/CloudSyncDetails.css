@@ -125,6 +125,61 @@
   color: #ff3b30;
 }
 
+.cloud-sync-details__section--issues {
+  border-color: rgba(255, 59, 48, 0.25);
+}
+
+.cloud-sync-details__issue-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.cloud-sync-details__row--issue {
+  align-items: flex-start;
+}
+
+.cloud-sync-details__label-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cloud-sync-details__detail {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.cloud-sync-details__row-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.cloud-sync-details__action-btn {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary, rgba(255, 255, 255, 0.06));
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cloud-sync-details__action-btn:hover {
+  border-color: rgba(var(--accent-rgb), 0.4);
+}
+
 .cloud-sync-details__hint {
   margin-bottom: 12px;
   font-size: 12px;

@@ -26,10 +26,21 @@ import {
   getPiAiContextTokensFromStep,
   type PiAiBillingUsage,
 } from "./piAiUsage.js";
+import {
+  MAX_PROVIDER_RATE_LIMIT_RETRIES,
+  computeRateLimitBackoffMs,
+  createRateLimitExhaustedError,
+  isRetryableProviderCapacityError,
+  sleepMs,
+} from "../../utils/providerRateLimitRetry.js";
 /**
  * Truncate tool call ID to 64 characters (OpenAI's maximum length requirement).
  * IDs from various APIs may exceed this limit, causing validation errors.
  */
+function yieldRateLimitExhausted(): { type: "error"; error: ReturnType<typeof createRateLimitExhaustedError> } {
+  return { type: "error", error: createRateLimitExhaustedError() };
+}
+
 function truncateToolCallId(id: string): string {
   return id.length > 64 ? id.substring(0, 64) : id;
 }
@@ -336,7 +347,7 @@ export async function* createPiCodexStreamWithToolLoop(
     `[PiCodexToolLoop] Starting with ~${Math.round(cumulativeTokens / 1000)}K tokens`,
   );
 
-  while (step < maxSteps) {
+  stepLoop: while (step < maxSteps) {
     // CIRCUIT BREAKER 1: Check validation error count (Issue 65)
     if (validationErrorCount >= MAX_VALIDATION_ERRORS) {
       console.error(
@@ -391,40 +402,6 @@ export async function* createPiCodexStreamWithToolLoop(
       );
     }
 
-    let piStream: AsyncIterable<AssistantMessageEvent>;
-    try {
-      piStream = streamSimple(piModel, context, streamOptions);
-    } catch (err) {
-      // Check if this is a validation error
-      if (err && typeof err === 'object' && 'errors' in err) {
-        validationErrorCount++;
-        console.error(
-          `[PiCodexToolLoop] ❌ Validation error #${validationErrorCount}: ${safeStringify(err)}`
-        );
-        
-        // Check if we should abort
-        if (validationErrorCount >= MAX_VALIDATION_ERRORS) {
-          console.error(
-            `[PiCodexToolLoop] 🚨 CRITICAL: Reached ${MAX_VALIDATION_ERRORS} validation errors. Aborting.`
-          );
-          yield {
-            type: "error",
-            error: {
-              type: "validation_loop",
-              message: `Too many validation errors. This usually indicates a schema mismatch. Please refresh and try again.`,
-            },
-          };
-          break;
-        }
-        
-        // Try to continue with next step
-        continue;
-      }
-      
-      // Non-validation error, rethrow
-      throw err;
-    }
-    
     const toolCallsThisTurn: ToolCallAccum[] = [];
     let lastFinishReason: string | null = null;
     let finalMessage: {
@@ -437,70 +414,182 @@ export async function* createPiCodexStreamWithToolLoop(
       timestamp: number;
     } | null = null;
 
-    for await (const event of piStream) {
-      if (event.type === "toolcall_end" && event.toolCall) {
-        toolCallsThisTurn.push({
-          toolCallId: truncateToolCallId(event.toolCall.id),
-          toolName: event.toolCall.name,
-          args: event.toolCall.arguments ?? {},
-        });
-      }
-      if (event.type === "done") {
-        lastFinishReason =
-          event.reason === "toolUse"
-            ? "tool-calls"
-            : event.reason === "length"
-              ? "length"
-              : "stop";
-        finalMessage = event.message;
+    let stepStreamCompleted = false;
+    let rateLimitAttempt = 0;
 
-        const stepUsage = extractPiAiUsageFromDoneEvent(event);
-        if (step === 1 && event.message?.usage) {
-          console.log(
-            `[PiCodexToolLoop] Step 1 raw usage from API:`,
-            JSON.stringify(event.message.usage),
-          );
-        }
-        if (stepUsage) {
-          cumulativeTokens = getPiAiContextTokensFromStep(stepUsage);
-          accumulatedBilling = accumulatePiAiBillingUsage(
-            accumulatedBilling,
-            stepUsage,
-          );
-          console.log(
-            `[PiCodexToolLoop] Step ${step}: ~${Math.round(cumulativeTokens / 1000)}K context tokens` +
-              ` (${stepUsage.promptTokens} input + ${stepUsage.completionTokens} output` +
-              (stepUsage.cacheReadTokens || stepUsage.cacheWriteTokens
-                ? `, cache read ${stepUsage.cacheReadTokens} / write ${stepUsage.cacheWriteTokens}`
-                : "") +
-              `)`,
-          );
-          if (stepUsage.cacheReadTokens > 0 || stepUsage.cacheWriteTokens > 0) {
-            console.log(
-              `[PiCodexToolLoop] 💾 Anthropic cache — read: ${stepUsage.cacheReadTokens}, write: ${stepUsage.cacheWriteTokens} tokens`,
+    while (!stepStreamCompleted) {
+      toolCallsThisTurn.length = 0;
+      lastFinishReason = null;
+      finalMessage = null;
+
+      let capacityError: unknown | null = null;
+      let shouldRetryCapacity = false;
+
+      try {
+        let piStream: AsyncIterable<AssistantMessageEvent>;
+        try {
+          piStream = streamSimple(piModel, context, streamOptions);
+        } catch (err) {
+          if (isRetryableProviderCapacityError(err)) {
+            if (rateLimitAttempt < MAX_PROVIDER_RATE_LIMIT_RETRIES) {
+              capacityError = err;
+              shouldRetryCapacity = true;
+            } else {
+              yield yieldRateLimitExhausted();
+              return;
+            }
+          } else if (err && typeof err === "object" && "errors" in err) {
+            validationErrorCount++;
+            console.error(
+              `[PiCodexToolLoop] ❌ Validation error #${validationErrorCount}: ${safeStringify(err)}`,
             );
+
+            if (validationErrorCount >= MAX_VALIDATION_ERRORS) {
+              console.error(
+                `[PiCodexToolLoop] 🚨 CRITICAL: Reached ${MAX_VALIDATION_ERRORS} validation errors. Aborting.`,
+              );
+              yield {
+                type: "error",
+                error: {
+                  type: "validation_loop",
+                  message:
+                    "Too many validation errors. This usually indicates a schema mismatch. Please refresh and try again.",
+                },
+              };
+              return;
+            }
+
+            stepStreamCompleted = true;
+            continue stepLoop;
+          } else {
+            throw err;
           }
         }
 
-        // Don't yield "finish" when toolUse - we're continuing the loop
-        if (event.reason === "toolUse") continue;
+        if (!shouldRetryCapacity) {
+          for await (const event of piStream!) {
+            if (event.type === "error") {
+              const apiError =
+                (event as { error?: unknown }).error ?? event;
+              if (isRetryableProviderCapacityError(apiError)) {
+                if (rateLimitAttempt < MAX_PROVIDER_RATE_LIMIT_RETRIES) {
+                  capacityError = apiError;
+                  shouldRetryCapacity = true;
+                  break;
+                }
+                yield yieldRateLimitExhausted();
+                return;
+              }
+            }
 
-        const finishChunk = adaptPiStreamToAISDKEvent(
-          event,
-          accumulatedBilling,
-        );
-        // Attach the actual last-step context window size for summarization decisions.
-        // accumulatedBilling sums across all steps (for cost), but cumulativeTokens
-        // is the last step's input+cacheRead+cacheWrite = real context window usage.
-        if (finishChunk && finishChunk.type === "finish" && finishChunk.usage) {
-          (finishChunk.usage as Record<string, unknown>).contextTokens = cumulativeTokens;
+            if (event.type === "toolcall_end" && event.toolCall) {
+              toolCallsThisTurn.push({
+                toolCallId: truncateToolCallId(event.toolCall.id),
+                toolName: event.toolCall.name,
+                args: event.toolCall.arguments ?? {},
+              });
+            }
+            if (event.type === "done") {
+              lastFinishReason =
+                event.reason === "toolUse"
+                  ? "tool-calls"
+                  : event.reason === "length"
+                    ? "length"
+                    : "stop";
+              finalMessage = event.message;
+
+              const stepUsage = extractPiAiUsageFromDoneEvent(event);
+              if (step === 1 && event.message?.usage) {
+                console.log(
+                  `[PiCodexToolLoop] Step 1 raw usage from API:`,
+                  JSON.stringify(event.message.usage),
+                );
+              }
+              if (stepUsage) {
+                cumulativeTokens = getPiAiContextTokensFromStep(stepUsage);
+                accumulatedBilling = accumulatePiAiBillingUsage(
+                  accumulatedBilling,
+                  stepUsage,
+                );
+                console.log(
+                  `[PiCodexToolLoop] Step ${step}: ~${Math.round(cumulativeTokens / 1000)}K context tokens` +
+                    ` (${stepUsage.promptTokens} input + ${stepUsage.completionTokens} output` +
+                    (stepUsage.cacheReadTokens || stepUsage.cacheWriteTokens
+                      ? `, cache read ${stepUsage.cacheReadTokens} / write ${stepUsage.cacheWriteTokens}`
+                      : "") +
+                    `)`,
+                );
+                if (
+                  stepUsage.cacheReadTokens > 0 ||
+                  stepUsage.cacheWriteTokens > 0
+                ) {
+                  console.log(
+                    `[PiCodexToolLoop] 💾 Anthropic cache — read: ${stepUsage.cacheReadTokens}, write: ${stepUsage.cacheWriteTokens} tokens`,
+                  );
+                }
+              }
+
+              if (event.reason === "toolUse") continue;
+
+              const finishChunk = adaptPiStreamToAISDKEvent(
+                event,
+                accumulatedBilling,
+              );
+              if (
+                finishChunk &&
+                finishChunk.type === "finish" &&
+                finishChunk.usage
+              ) {
+                (finishChunk.usage as Record<string, unknown>).contextTokens =
+                  cumulativeTokens;
+              }
+              if (finishChunk) yield finishChunk;
+              continue;
+            }
+
+            const chunk = adaptPiStreamToAISDKEvent(event);
+            if (chunk?.type === "error") {
+              if (isRetryableProviderCapacityError(chunk.error)) {
+                if (rateLimitAttempt < MAX_PROVIDER_RATE_LIMIT_RETRIES) {
+                  capacityError = chunk.error;
+                  shouldRetryCapacity = true;
+                  break;
+                }
+                yield yieldRateLimitExhausted();
+                return;
+              }
+            }
+            if (chunk) yield chunk;
+          }
         }
-        if (finishChunk) yield finishChunk;
+      } catch (err) {
+        if (isRetryableProviderCapacityError(err)) {
+          if (rateLimitAttempt < MAX_PROVIDER_RATE_LIMIT_RETRIES) {
+            capacityError = err;
+            shouldRetryCapacity = true;
+          } else {
+            yield yieldRateLimitExhausted();
+            return;
+          }
+        } else {
+          throw err;
+        }
+      }
+
+      if (shouldRetryCapacity && capacityError) {
+        const waitMs = computeRateLimitBackoffMs(
+          rateLimitAttempt,
+          capacityError,
+        );
+        console.warn(
+          `[PiCodexToolLoop] Provider capacity limit (attempt ${rateLimitAttempt + 1}/${MAX_PROVIDER_RATE_LIMIT_RETRIES + 1}). Waiting ${waitMs}ms silently…`,
+        );
+        await sleepMs(waitMs);
+        rateLimitAttempt += 1;
         continue;
       }
 
-      const chunk = adaptPiStreamToAISDKEvent(event);
-      if (chunk) yield chunk;
+      stepStreamCompleted = true;
     }
 
     if (

@@ -1,18 +1,20 @@
 /**
- * Job Permission Store - Tracks jobs waiting for API key approval.
- *
- * When a job needs permission (key with "ask" setting), the Gateway broadcasts
- * jobs:status-changed with status=waiting_permission. This store surfaces that
- * in the chat so users see "Job X needs your approval" even if the modal
- * is behind another window.
+ * Job Permission Store - Tracks jobs waiting for API key or schedule approval.
  */
 
 import { create } from "zustand";
 
+export interface JobScheduleRiskPending {
+  intervalMinutes: number;
+  runsPerDay: number;
+  message: string;
+}
+
 export interface PendingJobPermission {
   jobId: string;
   jobName: string;
-  keys: string[];
+  keys?: string[];
+  scheduleRisk?: JobScheduleRiskPending;
 }
 
 interface JobPermissionState {
@@ -42,11 +44,16 @@ export function initJobPermissionListener(): void {
 
     if (status === "waiting_permission") {
       const keys = (data.waitingPermissionKeys as string[]) ?? [];
-      if (keys.length > 0) {
+      const scheduleRisk = data.waitingScheduleRisk as
+        | JobScheduleRiskPending
+        | undefined;
+
+      if (keys.length > 0 || scheduleRisk) {
         useJobPermissionStore.getState().setPending({
           jobId,
           jobName: (data.name as string) ?? jobId,
-          keys,
+          ...(keys.length > 0 ? { keys } : {}),
+          ...(scheduleRisk ? { scheduleRisk } : {}),
         });
       }
     } else if (

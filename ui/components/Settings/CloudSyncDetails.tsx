@@ -8,15 +8,17 @@ import {
 } from "../../utils/cloudShareLink";
 import "./CloudSyncDetails.css";
 
-type ItemStatus = "synced" | "pending" | "outdated" | "empty" | "unavailable";
+type ItemStatus = "synced" | "pending" | "outdated" | "empty" | "unavailable" | "failed" | "quarantined";
 
 interface GitHubSyncItem {
   id: string;
   kind: "app" | "job" | "folder";
   label: string;
   relativePath: string;
-  status: "synced" | "pending" | "outdated";
+  status: "synced" | "pending" | "outdated" | "failed";
   lastSyncAt: string | null;
+  lastError?: string | null;
+  failedAt?: string | null;
 }
 
 interface GitHubSyncItemsReport {
@@ -28,6 +30,7 @@ interface GitHubSyncItemsReport {
     synced: number;
     pending: number;
     outdated: number;
+    failed: number;
     total: number;
   };
 }
@@ -38,9 +41,12 @@ interface TursoSourceSyncItem {
   alias: string;
   role: string;
   tursoDatabase?: string;
-  status: "synced" | "pending" | "empty" | "unavailable";
+  dbPath?: string;
+  status: "synced" | "pending" | "empty" | "unavailable" | "quarantined";
   localTableCount: number;
   remoteTableCount: number;
+  quarantinedAt?: string | null;
+  quarantineReason?: string | null;
 }
 
 interface TursoSyncItemsReport {
@@ -54,6 +60,7 @@ interface TursoSyncItemsReport {
     pending: number;
     empty: number;
     unavailable: number;
+    quarantined: number;
     total: number;
   };
 }
@@ -156,6 +163,10 @@ function statusMeta(status: ItemStatus): { color: string; label: string } {
       return { color: "#8e8e93", label: "Empty" };
     case "unavailable":
       return { color: "#8e8e93", label: "No DB" };
+    case "failed":
+      return { color: "#ff3b30", label: "Failed" };
+    case "quarantined":
+      return { color: "#ff3b30", label: "Needs repair" };
     default:
       return { color: "#8e8e93", label: "Unknown" };
   }
@@ -191,24 +202,38 @@ function SyncItemRow({
   label,
   status,
   meta,
+  detail,
+  action,
 }: {
   label: string;
   status: ItemStatus;
   meta?: string;
+  detail?: string;
+  action?: React.ReactNode;
 }) {
   const dot = statusMeta(status);
   return (
-    <div className="cloud-sync-details__row">
+    <div className="cloud-sync-details__row cloud-sync-details__row--issue">
       <div className="cloud-sync-details__label">
         <span className="cloud-sync-details__dot" style={{ background: dot.color }} />
-        <span className="cloud-sync-details__name" title={label}>
-          {label}
-        </span>
+        <div className="cloud-sync-details__label-text">
+          <span className="cloud-sync-details__name" title={label}>
+            {label}
+          </span>
+          {detail ? (
+            <span className="cloud-sync-details__detail" title={detail}>
+              {detail}
+            </span>
+          ) : null}
+        </div>
       </div>
-      <span className="cloud-sync-details__meta">
-        {dot.label}
-        {meta ? ` · ${meta}` : ""}
-      </span>
+      <div className="cloud-sync-details__row-actions">
+        <span className="cloud-sync-details__meta">
+          {dot.label}
+          {meta ? ` · ${meta}` : ""}
+        </span>
+        {action}
+      </div>
     </div>
   );
 }
@@ -681,6 +706,65 @@ export const CloudSyncDetails: React.FC<{
   const liveItems = items.filter((item) => item.status === "live");
   const otherItems = items.filter((item) => item.status !== "live");
 
+  const failedGitHubItems = [
+    ...github.workspace,
+    ...github.apps,
+    ...github.jobs,
+  ].filter((item) => item.status === "failed");
+  const quarantinedTursoSources =
+    turso?.sources.filter((item) => item.status === "quarantined") ?? [];
+  const hasSyncIssues =
+    failedGitHubItems.length > 0 || quarantinedTursoSources.length > 0;
+
+  const retryGitHubItem = async (relativePath: string) => {
+    try {
+      const res = await fetch("http://localhost:18789/api/sync/retry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ relativePath }),
+      });
+      const body = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        throw new Error(body.error ?? `Retry failed (${res.status})`);
+      }
+      handleMessage({ type: "success", text: "Queued for sync retry." });
+      refresh();
+    } catch (err) {
+      handleMessage({
+        type: "error",
+        text: (err as Error).message.slice(0, 160),
+      });
+    }
+  };
+
+  const repairTursoSource = async (source: TursoSourceSyncItem) => {
+    if (!source.dbPath) {
+      handleMessage({ type: "error", text: "Database path unavailable." });
+      return;
+    }
+    try {
+      const res = await fetch("http://localhost:18789/api/sync/turso/repair", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: source.jobId, dbPath: source.dbPath }),
+      });
+      const body = (await res.json()) as { error?: string; message?: string };
+      if (!res.ok) {
+        throw new Error(body.error ?? `Repair failed (${res.status})`);
+      }
+      handleMessage({
+        type: "success",
+        text: body.message ?? "Database repaired. Re-run the job to rebuild data.",
+      });
+      refresh();
+    } catch (err) {
+      handleMessage({
+        type: "error",
+        text: (err as Error).message.slice(0, 160),
+      });
+    }
+  };
+
   return (
     <div className="cloud-sync-details">
       {message ? (
@@ -761,9 +845,80 @@ export const CloudSyncDetails: React.FC<{
         )}
       </section>
 
+      {hasSyncIssues ? (
+        <section className="cloud-sync-details__section cloud-sync-details__section--issues">
+          <div className="cloud-sync-details__heading">
+            <span>Sync issues</span>
+            <span className="cloud-sync-details__summary">
+              {failedGitHubItems.length + quarantinedTursoSources.length} need attention
+            </span>
+          </div>
+          <p className="cloud-sync-details__hint">
+            These items failed to sync. Fix them here — they are not shown elsewhere in the app.
+          </p>
+          {failedGitHubItems.length > 0 ? (
+            <div className="cloud-sync-details__issue-group">
+              <h4 className="cloud-sync-details__group-title">GitHub sync failures</h4>
+              <div className="cloud-sync-details__list">
+                {failedGitHubItems.map((item) => (
+                  <SyncItemRow
+                    key={item.relativePath}
+                    label={item.label}
+                    status="failed"
+                    meta={formatRelativeTime(item.failedAt ?? null)}
+                    detail={item.lastError?.slice(0, 120) ?? undefined}
+                    action={
+                      <button
+                        type="button"
+                        className="cloud-sync-details__action-btn"
+                        onClick={() => void retryGitHubItem(item.relativePath)}
+                      >
+                        Retry
+                      </button>
+                    }
+                  />
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {quarantinedTursoSources.length > 0 ? (
+            <div className="cloud-sync-details__issue-group">
+              <h4 className="cloud-sync-details__group-title">Corrupt linked databases</h4>
+              <div className="cloud-sync-details__list">
+                {quarantinedTursoSources.map((item) => (
+                  <SyncItemRow
+                    key={`${item.appId}:${item.jobId}:${item.alias}`}
+                    label={item.alias}
+                    status="quarantined"
+                    meta={formatRelativeTime(item.quarantinedAt ?? null)}
+                    detail={
+                      item.quarantineReason?.slice(0, 120) ??
+                      "Local SQLite is corrupt — Turso sync paused."
+                    }
+                    action={
+                      <button
+                        type="button"
+                        className="cloud-sync-details__action-btn"
+                        onClick={() => void repairTursoSource(item)}
+                      >
+                        Repair
+                      </button>
+                    }
+                  />
+                ))}
+              </div>
+              <p className="cloud-sync-details__hint">
+                Repair backs up the corrupt file, removes it, and clears the quarantine.
+                Re-run the job to rebuild local data, then sync again.
+              </p>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
       <CollapsibleSection
         title="GitHub sync inventory"
-        summary={`${github.summary.synced}/${github.summary.total} synced`}
+        summary={`${github.summary.synced}/${github.summary.total} synced${github.summary.failed > 0 ? ` · ${github.summary.failed} failed` : ""}`}
       >
         <ItemList
           emptyMessage="No workspace folders."
@@ -807,7 +962,7 @@ export const CloudSyncDetails: React.FC<{
         title="Linked databases (Turso)"
         summary={
           turso
-            ? `${turso.summary.synced}/${turso.summary.total} synced`
+            ? `${turso.summary.synced}/${turso.summary.total} synced${turso.summary.quarantined > 0 ? ` · ${turso.summary.quarantined} need repair` : ""}`
             : "Checking…"
         }
       >
@@ -823,11 +978,29 @@ export const CloudSyncDetails: React.FC<{
               label={item.alias}
               status={item.status}
               meta={
-                item.status === "synced"
-                  ? `${item.remoteTableCount} tables`
-                  : item.localTableCount > 0
-                    ? `${item.localTableCount} local`
-                    : item.role
+                item.status === "quarantined"
+                  ? "Paused"
+                  : item.status === "synced"
+                    ? `${item.remoteTableCount} tables`
+                    : item.localTableCount > 0
+                      ? `${item.localTableCount} local`
+                      : item.role
+              }
+              detail={
+                item.status === "quarantined"
+                  ? item.quarantineReason?.slice(0, 120) ?? undefined
+                  : undefined
+              }
+              action={
+                item.status === "quarantined" ? (
+                  <button
+                    type="button"
+                    className="cloud-sync-details__action-btn"
+                    onClick={() => void repairTursoSource(item)}
+                  >
+                    Repair
+                  </button>
+                ) : undefined
               }
             />
           )}

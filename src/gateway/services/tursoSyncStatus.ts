@@ -21,7 +21,12 @@ import {
   getDatabaseRegistryService,
 } from "./DatabaseRegistryService.js";
 
-export type TursoSourceSyncState = "synced" | "pending" | "empty" | "unavailable";
+export type TursoSourceSyncState =
+  | "synced"
+  | "pending"
+  | "empty"
+  | "unavailable"
+  | "quarantined";
 
 export interface TursoSourceSyncItem {
   appId: string;
@@ -33,6 +38,8 @@ export interface TursoSourceSyncItem {
   status: TursoSourceSyncState;
   localTableCount: number;
   remoteTableCount: number;
+  quarantinedAt?: string | null;
+  quarantineReason?: string | null;
 }
 
 export interface TursoSyncItemsReport {
@@ -46,6 +53,7 @@ export interface TursoSyncItemsReport {
     pending: number;
     empty: number;
     unavailable: number;
+    quarantined: number;
     total: number;
   };
 }
@@ -76,7 +84,11 @@ export function resolveTursoSourceStatus(
   remoteTableCount: number,
   dbExists: boolean,
   dirty: boolean,
+  quarantined = false,
 ): TursoSourceSyncState {
+  if (quarantined) {
+    return "quarantined";
+  }
   if (!dbExists) {
     return "unavailable";
   }
@@ -97,13 +109,15 @@ function summarize(items: TursoSourceSyncItem[]): TursoSyncItemsReport["summary"
   let pending = 0;
   let empty = 0;
   let unavailable = 0;
+  let quarantined = 0;
   for (const item of items) {
     if (item.status === "synced") synced += 1;
     else if (item.status === "pending") pending += 1;
     else if (item.status === "empty") empty += 1;
+    else if (item.status === "quarantined") quarantined += 1;
     else unavailable += 1;
   }
-  return { synced, pending, empty, unavailable, total: items.length };
+  return { synced, pending, empty, unavailable, quarantined, total: items.length };
 }
 
 function resolveTursoDatabaseLabel(source: TursoLinkedSource): string {
@@ -129,9 +143,12 @@ function sourceItem(
   localTableCount: number,
   remoteTableCount: number,
   dirty: boolean,
+  pushState: ReturnType<typeof loadTursoSyncState>,
 ): TursoSourceSyncItem {
   const dbExists = fs.existsSync(source.dbPath);
   const syncKey = linkedSourceSyncKey(source);
+  const jobState = pushState.jobs[syncKey];
+  const quarantined = Boolean(jobState?.quarantinedAt);
   return {
     appId: source.appId,
     jobId: syncKey,
@@ -139,9 +156,17 @@ function sourceItem(
     role: source.role ?? "linked",
     dbPath: source.dbPath,
     tursoDatabase: resolveTursoDatabaseLabel(source),
-    status: resolveTursoSourceStatus(localTableCount, remoteTableCount, dbExists, dirty),
+    status: resolveTursoSourceStatus(
+      localTableCount,
+      remoteTableCount,
+      dbExists,
+      dirty,
+      quarantined,
+    ),
     localTableCount,
     remoteTableCount,
+    quarantinedAt: jobState?.quarantinedAt ?? null,
+    quarantineReason: jobState?.quarantineReason ?? null,
   };
 }
 
@@ -180,7 +205,7 @@ export async function buildTursoSyncItemsReport(
     lastCheckedAt: new Date().toISOString(),
     error,
     sources: [],
-    summary: { synced: 0, pending: 0, empty: 0, unavailable: 0, total: 0 },
+    summary: { synced: 0, pending: 0, empty: 0, unavailable: 0, quarantined: 0, total: 0 },
   });
 
   const bridge = getTursoSyncBridge();
@@ -198,7 +223,7 @@ export async function buildTursoSyncItemsReport(
       lastCheckedAt: new Date().toISOString(),
       error: null,
       sources: [],
-      summary: { synced: 0, pending: 0, empty: 0, unavailable: 0, total: 0 },
+      summary: { synced: 0, pending: 0, empty: 0, unavailable: 0, quarantined: 0, total: 0 },
     };
   }
 
@@ -218,7 +243,7 @@ export async function buildTursoSyncItemsReport(
     } catch (err) {
       reportError = (err as Error).message.slice(0, 200);
     }
-    items.push(sourceItem(source, localTableCount, remoteTableCount, dirty));
+    items.push(sourceItem(source, localTableCount, remoteTableCount, dirty, pushState));
   }
 
   items.sort((a, b) => a.alias.localeCompare(b.alias));

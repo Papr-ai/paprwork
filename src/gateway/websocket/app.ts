@@ -8,6 +8,11 @@ import { getAppService } from "../services/AppService.js";
 import { getCloudAppLineageService } from "../services/CloudAppLineageService.js";
 import type { AppFile } from "../services/AppService.js";
 import { getAppStateStorage, type TabMetadata, type AppState } from "../services/storage/AppStateStorage.js";
+import {
+  getAppRuntimeLogService,
+  type AppRuntimeLogEntry,
+  type AppRuntimeLogLevel,
+} from "../services/AppRuntimeLogService.js";
 
 const appStateStorage = getAppStateStorage();
 
@@ -93,6 +98,34 @@ interface ValidateAppPayload {
 
 interface ListAppFilesPayload {
   appId: string;
+}
+
+interface AppRuntimeLogPayload {
+  appId: string;
+  entry: {
+    level: AppRuntimeLogLevel;
+    message: string;
+    source?: string;
+    line?: number;
+    column?: number;
+    timestamp?: string;
+    origin?: "iframe" | "preview";
+  };
+}
+
+interface GetAppRuntimeLogsPayload {
+  appId: string;
+  limit?: number;
+  sinceMs?: number;
+}
+
+interface SearchAppCodePayload {
+  appId: string;
+  query: string;
+  jobIds?: string[];
+  scope?: "all" | "app" | "jobs";
+  jobFilter?: string[];
+  limit?: number;
 }
 
 export async function setupAppHandlers(
@@ -426,6 +459,103 @@ export async function setupAppHandlers(
             type: "app:list-files:response",
             success: true,
             data: files,
+          }),
+        );
+        break;
+      }
+
+      case "app:runtime-log": {
+        const payload = message.payload as AppRuntimeLogPayload;
+        if (!payload.appId || !payload.entry?.message) {
+          ws.send(
+            JSON.stringify({
+              id: message.id,
+              type: "app:runtime-log:response",
+              success: false,
+              error: "appId and entry.message required",
+            }),
+          );
+          break;
+        }
+        const entry: AppRuntimeLogEntry = {
+          level: payload.entry.level ?? "log",
+          message: payload.entry.message,
+          source: payload.entry.source,
+          line: payload.entry.line,
+          column: payload.entry.column,
+          timestamp: payload.entry.timestamp ?? new Date().toISOString(),
+          origin: payload.entry.origin ?? "iframe",
+        };
+        getAppRuntimeLogService().append(payload.appId, entry);
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:runtime-log:response",
+            success: true,
+            data: { stored: true },
+          }),
+        );
+        break;
+      }
+
+      case "app:runtime-logs": {
+        const payload = message.payload as GetAppRuntimeLogsPayload;
+        if (!payload.appId) {
+          ws.send(
+            JSON.stringify({
+              id: message.id,
+              type: "app:runtime-logs:response",
+              success: false,
+              error: "appId required",
+            }),
+          );
+          break;
+        }
+        const logs = getAppRuntimeLogService().getLogs(payload.appId, {
+          limit: payload.limit ?? 100,
+          sinceMs: payload.sinceMs,
+        });
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:runtime-logs:response",
+            success: true,
+            data: { logs },
+          }),
+        );
+        break;
+      }
+
+      case "app:search-code": {
+        const payload = message.payload as SearchAppCodePayload;
+        if (!payload.appId || !payload.query?.trim()) {
+          ws.send(
+            JSON.stringify({
+              id: message.id,
+              type: "app:search-code:response",
+              success: false,
+              error: "appId and query required",
+            }),
+          );
+          break;
+        }
+        const { searchAppCodeInMemory } = await import(
+          "../services/AppCodeSearchService.js"
+        );
+        const data = await searchAppCodeInMemory({
+          appId: payload.appId,
+          query: payload.query,
+          jobIds: payload.jobIds,
+          scope: payload.scope,
+          jobFilter: payload.jobFilter,
+          limit: payload.limit,
+        });
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:search-code:response",
+            success: true,
+            data,
           }),
         );
         break;

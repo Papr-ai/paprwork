@@ -59,7 +59,14 @@
   flex-shrink: 0;
 }
 
+.mini-app-publish-bar__segment--with-sync {
+  position: relative;
+}
+
 .mini-app-publish-bar__segment-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 11px;
   font-weight: 600;
   padding: 4px 10px;
@@ -68,6 +75,7 @@
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .mini-app-publish-bar__segment-btn:disabled {
@@ -78,6 +86,68 @@
 .mini-app-publish-bar__segment-btn--active {
   background: var(--accent);
   color: #fff;
+}
+
+.mini-app-publish-bar__web-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 2px;
+  border-radius: 999px;
+}
+
+.mini-app-publish-bar__web-option--active .mini-app-publish-bar__segment-btn {
+  background: var(--accent);
+  color: #fff;
+}
+
+.mini-app-publish-bar__web-sync-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.mini-app-publish-bar__web-sync-dot::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.mini-app-publish-bar__web-sync-dot--synced {
+  color: #34c759;
+}
+
+.mini-app-publish-bar__web-sync-dot--syncing,
+.mini-app-publish-bar__web-sync-dot--warn {
+  color: #ff9500;
+}
+
+.mini-app-publish-bar__web-sync-dot--loading,
+.mini-app-publish-bar__web-sync-dot--neutral {
+  color: var(--text-tertiary);
+}
+
+.mini-app-publish-bar__web-sync-dot--spinning::before {
+  display: none;
+}
+
+.mini-app-publish-bar__web-sync-dot--spinning .mini-app-publish-bar__sync-chip-spinner {
+  width: 10px;
+  height: 10px;
+}
+
+.mini-app-publish-bar__web-sync-dot:hover {
+  background: color-mix(in srgb, currentColor 12%, transparent);
 }
 
 .mini-app-publish-bar__url-row {
@@ -969,4 +1039,108 @@
   border: 1px solid var(--border-color);
   background: var(--bg-primary);
   font-size: 12px;
+}
+
+.cloud-compat-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  border: 1px solid var(--border-color);
+}
+
+.cloud-compat-badge--loading {
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+}
+
+.cloud-compat-badge--cloud-ready {
+  color: #047857;
+  border-color: color-mix(in srgb, #10b981 40%, var(--border-color));
+  background: color-mix(in srgb, #10b981 12%, var(--bg-secondary));
+}
+
+.cloud-compat-badge--hybrid {
+  color: #b45309;
+  border-color: color-mix(in srgb, #f59e0b 40%, var(--border-color));
+  background: color-mix(in srgb, #f59e0b 12%, var(--bg-secondary));
+}
+
+.cloud-compat-badge--desktop-only {
+  color: #b91c1c;
+  border-color: color-mix(in srgb, #ef4444 40%, var(--border-color));
+  background: color-mix(in srgb, #ef4444 10%, var(--bg-secondary));
+}
+
+.share-sheet__notice--warn {
+  border-color: color-mix(in srgb, #f59e0b 35%, var(--border-color));
+  background: color-mix(in srgb, #f59e0b 10%, var(--bg-secondary));
+}
+
+.cloud-compat-panel__list-block {
+  margin-top: 10px;
+}
+
+.cloud-compat-panel__list-title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.cloud-compat-panel__list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.cloud-compat-panel__list li + li {
+  margin-top: 4px;
+}
+
+.cloud-compat-panel__details {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.cloud-compat-panel__details summary {
+  cursor: pointer;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.cloud-compat-panel__findings {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.cloud-compat-panel__findings li {
+  margin-bottom: 6px;
+}
+
+.cloud-compat-panel__finding-file {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.cloud-compat-panel__confirm {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.cloud-compat-panel__confirm p {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--text-primary);
 }

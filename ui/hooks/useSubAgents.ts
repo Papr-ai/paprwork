@@ -80,6 +80,8 @@ interface DelegateTaskInput {
   useAgentId?: string;
   reportChatId?: string;
   background?: boolean;
+  appIds?: string[];
+  delegatedBy?: "main-agent" | "app-user";
 }
 
 export function useSubAgents() {

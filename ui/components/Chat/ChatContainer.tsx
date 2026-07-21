@@ -39,6 +39,8 @@ import { mapHistoryMessages } from "../../utils/historyMapper";
 import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
 import "./ChatContainer.css";
 import { trackEvent } from "../../lib/telemetry";
+import { chatHasActiveStreamUi, lastUserTurnNeedsContinue } from "../../lib/agentStreamRecovery";
+import { useGatewaySupervisorStatus } from "../../hooks/useGatewaySupervisorStatus";
 
 const DEFAULT_SYSTEM_PROMPT = `You're Pen, an AI assistant running in Paprwork—a cross-platform AI workspace.
 
@@ -146,21 +148,30 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   const messages = chatState?.messages ?? EMPTY_MESSAGES;
   const chatIsLoading = chatState?.isLoading ?? false;
   const isSending = chatState?.isSending ?? false;
+  const connectionPaused = chatState?.connectionPaused ?? false;
+  const needsStreamRecovery = chatState?.needsStreamRecovery ?? false;
 
   const error = useChatStore((state) => state.error);
 
-  const { sendMessage, interruptActiveStream } = useAgent();
+  const { sendMessage, interruptActiveStream, retryStreamRecovery } = useAgent();
   const { loadMessages, loadOlderMessages } = useChat();
   const inputBarRef = useRef<InputBarRef>(null);
   const { isModelAvailable, status: authStatus } = useAuthStatus();
   const { ensureModel, progress, installing } = useOllama();
   const { pickerModels } = useModelPickerSettings();
   const fallbackModel =
-    CHAT_MODELS.find((m) => m.id === "claude-sonnet-4-6") || CHAT_MODELS[0];
+    CHAT_MODELS.find((m) => m.id === "claude-sonnet-5") || CHAT_MODELS[0];
 
   const [selectedModel, setSelectedModel] = useState<AIModel>(fallbackModel);
   const [contextInfo, setContextInfo] = useState<ContextInfo | null>(null);
-  const [gatewayStatus, setGatewayStatus] = useState<{ status: string; message?: string } | null>(null);
+  const {
+    message: gatewaySupervisorMessage,
+    isReady: gatewaySupervisorReady,
+    isStarting: gatewaySupervisorStarting,
+    isRestarting: gatewaySupervisorRestarting,
+  } = useGatewaySupervisorStatus();
+  const prevGatewaySupervisorReadyRef = useRef(gatewaySupervisorReady);
+  const [isResumingStream, setIsResumingStream] = useState(false);
   const [isFileDragOver, setIsFileDragOver] = useState(false);
   const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
   const isProcessingQueue = useRef(false);
@@ -171,26 +182,39 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     [messageQueue, chatId]
   );
 
-  // Listen for gateway supervisor status changes (restart notifications)
+  // Reload history when Gateway becomes ready after a restart (user message with no reply).
   useEffect(() => {
-    const api = (window as unknown as { electronAPI?: { gateway?: { onStatusChange?: (cb: (data: { status: string; message?: string }) => void) => void; removeStatusListener?: () => void } } }).electronAPI;
-    if (api?.gateway?.onStatusChange) {
-      api.gateway.onStatusChange((data) => {
-        setGatewayStatus(data.status === "restarting" ? data : null);
-      });
-      return () => {
-        api.gateway?.removeStatusListener?.();
-      };
-    }
-    return undefined;
-  }, []);
+    const wasReady = prevGatewaySupervisorReadyRef.current;
+    prevGatewaySupervisorReadyRef.current = gatewaySupervisorReady;
 
-  // Only block THIS chat if it's waiting for an Ollama model that's currently being installed
-  // Don't block on initial load - only block when actively installing/starting
+    if (!gatewaySupervisorReady || wasReady) {
+      return;
+    }
+
+    const chatMessages = useChatStore.getState().chatStates.get(chatId)?.messages ?? [];
+    if (
+      lastUserTurnNeedsContinue(chatMessages) &&
+      !chatHasActiveStreamUi(chatId) &&
+      !isSending
+    ) {
+      void loadMessages(chatId);
+    }
+  }, [gatewaySupervisorReady, chatId, loadMessages, isSending]);
+
+  const gatewayBanner = gatewaySupervisorStarting
+    ? {
+        message:
+          gatewaySupervisorMessage ??
+          (gatewaySupervisorRestarting
+            ? "Reconnecting to Gateway..."
+            : "Gateway is starting..."),
+      }
+    : null;
+
   const isWaitingForModel = selectedModel.provider === 'ollama' && installing === selectedModel.id;
 
   // When chatId or auth status changes: pick best default
-  // Priority: last selected (persisted in localStorage) > default order (sonnet-4-6 → gpt-5-6-sol → gemini-3-flash) > first available
+  // Priority: last selected (persisted in localStorage) > default order (sonnet-5 → gpt-5-6-sol → gemini-3-flash) > first available
   useEffect(() => {
     setSelectedModel((prev) => {
       const lastId = useChatStore.getState().getLastSelectedModel(chatId);
@@ -199,8 +223,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         const lastModel = getModelById(migratedId);
         if (lastModel && isModelAvailable(lastModel)) return lastModel;
       }
+      const pickerIds = new Set(pickerModels.map((model) => model.id));
       const defaultAvailable = DEFAULT_MODEL_IDS.map(getModelById).find(
-        (m) => m && isModelAvailable(m),
+        (m) => m && isModelAvailable(m) && pickerIds.has(m.id),
       );
       if (defaultAvailable) return defaultAvailable;
       const pickerAvailable = pickerModels.find((m) => isModelAvailable(m));
@@ -225,8 +250,12 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   // Uses pagination-aware loadMessages() that loads only recent 30 messages
   useEffect(() => {
     const existingState = useChatStore.getState().chatStates.get(chatId);
-    // Only load if chat has no messages yet
-    if ((existingState?.messages.length || 0) === 0) {
+    // Only load if chat has no messages yet and no in-flight stream to preserve
+    if (
+      (existingState?.messages.length || 0) === 0 &&
+      !existingState?.isSending &&
+      !chatHasActiveStreamUi(chatId)
+    ) {
       loadMessages(chatId);
     }
   }, [chatId, loadMessages]);
@@ -647,6 +676,32 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     inputBarRef.current?.attachFiles(files);
   }, []);
 
+  const handleResumeStream = useCallback(async () => {
+    if (isResumingStream) return;
+    setIsResumingStream(true);
+    try {
+      const mergedArtifact = findMergedArtifact(chatId);
+      const idKey =
+        mergedArtifact?.type === "document" ? "documentId" : "appId";
+      const mergedContext = mergedArtifact
+        ? `\n\n## Active Context\nThe user has merged this chat with a ${mergedArtifact.type} titled "${mergedArtifact.title}" (${idKey}: "${mergedArtifact.id}"). They are viewing and working on this ${mergedArtifact.type} alongside this conversation. Reference it directly when relevant.`
+        : "";
+
+      const config = {
+        provider: selectedModel.provider,
+        model: selectedModel.id,
+        systemPrompt: DEFAULT_SYSTEM_PROMPT + mergedContext,
+        reasoning: selectedModel.reasoning,
+        thinkingBudget: selectedModel.defaultThinkingBudget,
+        maxTokens: selectedModel.maxTokens,
+      };
+
+      await retryStreamRecovery(chatId, config);
+    } finally {
+      setIsResumingStream(false);
+    }
+  }, [chatId, isResumingStream, retryStreamRecovery, selectedModel]);
+
   const handleChatDrop = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault();
@@ -675,10 +730,17 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         </div>
       )}
 
-      {gatewayStatus && (
+      {gatewayBanner && (
         <div className="reconnecting-banner">
           <span className="reconnecting-icon">↻</span>
-          <span className="reconnecting-message">{gatewayStatus.message || "Reconnecting to Gateway..."}</span>
+          <span className="reconnecting-message">{gatewayBanner.message}</span>
+        </div>
+      )}
+
+      {connectionPaused && !gatewayBanner && !needsStreamRecovery && (
+        <div className="reconnecting-banner">
+          <span className="reconnecting-icon">↻</span>
+          <span className="reconnecting-message">Reconnecting to agent stream…</span>
         </div>
       )}
 
@@ -735,6 +797,22 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         onSendNow={handleSendQueuedNow}
         onRemove={handleRemoveQueued}
       />
+
+      {needsStreamRecovery && (
+        <div className="stream-recovery-banner">
+          <span className="stream-recovery-banner__message">
+            Connection restored, but the agent response may be incomplete.
+          </span>
+          <button
+            type="button"
+            className="stream-recovery-banner__btn"
+            disabled={isResumingStream}
+            onClick={() => void handleResumeStream()}
+          >
+            {isResumingStream ? "Resuming…" : "Resume"}
+          </button>
+        </div>
+      )}
 
       <InputBar
         ref={inputBarRef}

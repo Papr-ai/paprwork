@@ -13,6 +13,7 @@ import {
   resolveWorkflowTarget,
 } from "../../utils/jobGraph";
 import { openJobDiagnosisChat } from "../../utils/jobDiagnosis";
+import { JobPermissionBanner } from "../Chat/JobPermissionBanner";
 import { AppWorkflow } from "./AppWorkflow";
 import { renderAppIcon } from "../../utils/renderAppIcon";
 import "./JobsView.css";
@@ -668,6 +669,7 @@ export function JobsView() {
 
   return (
     <div className={`jv2 ${isWorkflow ? "jv2--workflow" : ""}`}>
+      <JobPermissionBanner />
       <div className="jv2-header">
         <div className="jv2-header-left">
           <h1 className="jv2-title">Jobs</h1>

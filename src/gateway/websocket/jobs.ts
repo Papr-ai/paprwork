@@ -63,6 +63,11 @@ interface JobIdPayload {
   jobId: string;
 }
 
+interface AcknowledgeScheduleRiskPayload {
+  jobId: string;
+  approved: boolean;
+}
+
 interface ListJobsPayload {
   folder?: string;
   appId?: string;
@@ -211,6 +216,15 @@ export async function setupJobsHandlers(
         const payload = message.payload as UpdateJobPayload;
         const { jobId, ...updates } = payload;
         const job = await jobsService.updateJob(jobId, updates);
+        sendResponse(ws, { id: message.id, success: true, data: job });
+        break;
+      }
+      case "jobs:acknowledge-schedule-risk": {
+        const payload = message.payload as AcknowledgeScheduleRiskPayload;
+        const job = await jobsService.acknowledgeScheduleRisk(
+          payload.jobId,
+          payload.approved,
+        );
         sendResponse(ws, { id: message.id, success: true, data: job });
         break;
       }

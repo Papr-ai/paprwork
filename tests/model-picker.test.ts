@@ -19,16 +19,18 @@ describe("modelPicker", () => {
     ]);
   });
 
-  test("default list includes Opus 4.8 and nine cloud models", () => {
-    expect(PICKER_DEFAULT_MODEL_IDS).toHaveLength(9);
-    expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-opus-4-8");
+  test("default list includes Sonnet 5 and eight cloud models", () => {
+    expect(PICKER_DEFAULT_MODEL_IDS).toHaveLength(8);
+    expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-sonnet-5");
+    expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-sonnet-4-6");
+    expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-opus-4-8");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("gpt-5-6-sol");
   });
 
   test("getPickerModels resolves known model metadata", () => {
-    const models = getPickerModels(["claude-sonnet-4-6", "gpt-5-6-sol"]);
+    const models = getPickerModels(["claude-sonnet-5", "gpt-5-6-sol"]);
     expect(models).toHaveLength(2);
-    expect(models[0]?.id).toBe("claude-sonnet-4-6");
+    expect(models[0]?.id).toBe("claude-sonnet-5");
     expect(models[1]?.name).toBe("GPT-5.6 Sol");
   });
 
@@ -38,7 +40,39 @@ describe("modelPicker", () => {
       "gpt-5.5",
       "not-a-real-model",
     ]);
-    expect(ids).toEqual(["claude-sonnet-4-6", "gpt-5-6-sol"]);
+    expect(ids).toEqual(["claude-sonnet-5", "gpt-5-6-sol"]);
+  });
+
+  test("upgrades exact legacy default picker list to Sonnet 5 defaults", () => {
+    expect(
+      resolveEnabledPickerModelIds([
+        "claude-sonnet-4-6",
+        "claude-opus-4-6",
+        "claude-opus-4-8",
+        "gpt-5-6-sol",
+        "glm-5.2-max",
+        "qwen/qwen3-32b",
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-3.1-pro-preview",
+      ]),
+    ).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
+  });
+
+  test("swaps Sonnet 4.6 for Sonnet 5 in customized picker lists", () => {
+    expect(
+      resolveEnabledPickerModelIds([
+        "claude-sonnet-4-6",
+        "claude-opus-4-6",
+        "gpt-5-6-sol",
+        "gpt-5-6-luna",
+      ]),
+    ).toEqual([
+      "claude-sonnet-5",
+      "claude-opus-4-6",
+      "gpt-5-6-sol",
+      "gpt-5-6-luna",
+    ]);
   });
 
   test("migrates legacy gpt-5.5 picker ids to gpt-5-6-sol", () => {
@@ -47,7 +81,13 @@ describe("modelPicker", () => {
     ]);
   });
 
-  test("isPickerDefaultModelId marks curated defaults", () => {
+  test("legacy Sonnet 4.6 and Opus 4.8 remain available in settings catalog", () => {
+    const toggleIds = getAllPickerToggleModelIds();
+    expect(toggleIds).toContain("claude-sonnet-4-6");
+    expect(toggleIds).toContain("claude-opus-4-8");
+    expect(isPickerDefaultModelId("claude-sonnet-4-6")).toBe(false);
+    expect(isPickerDefaultModelId("claude-opus-4-8")).toBe(false);
+    expect(isPickerDefaultModelId("claude-sonnet-5")).toBe(true);
     expect(isPickerDefaultModelId("glm-5.2-max")).toBe(true);
     expect(isPickerDefaultModelId("claude-haiku-4-5")).toBe(false);
   });

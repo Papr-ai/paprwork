@@ -1,5 +1,5 @@
 /**
- * Smoke test for Z.ai + Groq models via Papr AI proxy.
+ * Smoke test for Z.ai, Groq, and Moonshot Kimi models via Papr AI proxy.
  *
  * Usage:
  *   npx tsx tests/ai-proxy-new-models.ts
@@ -12,6 +12,7 @@ import {
   buildZaiProviderOptions,
   normalizeZaiModelId,
 } from "../src/gateway/utils/zaiModel.js";
+import { createMoonshotChatModel } from "../src/gateway/utils/moonshotProvider.js";
 
 const PROXY_BASE =
   process.env.PROXY_BASE ??
@@ -29,6 +30,14 @@ function makeProxy(path: "zai" | "groq") {
     baseURL: `${PROXY_BASE}/${path}`,
     apiKey: "papr-proxy",
     headers: { "X-API-Key": PAPR_KEY },
+  });
+}
+
+async function makeMoonshotModel() {
+  return createMoonshotChatModel("kimi-k3", {
+    apiKey: "papr-proxy",
+    baseURL: `${PROXY_BASE}/moonshot`,
+    headers: { "X-API-Key": PAPR_KEY! },
   });
 }
 
@@ -100,6 +109,21 @@ const cases: Case[] = [
         prompt: "Reply with exactly: gpt-oss ok",
         maxOutputTokens: 100,
         providerOptions: { openai: { reasoning_effort: "medium" } },
+      });
+      if (!r.text?.trim()) {
+        return { status: "fail", detail: "Empty response" };
+      }
+      return { status: "pass", detail: r.text.trim().slice(0, 80) };
+    },
+  },
+  {
+    name: "Moonshot kimi-k3",
+    run: async () => {
+      const model = await makeMoonshotModel();
+      const r = await generateText({
+        model,
+        prompt: "Reply with exactly: kimi ok",
+        maxOutputTokens: 100,
       });
       if (!r.text?.trim()) {
         return { status: "fail", detail: "Empty response" };

@@ -42,6 +42,18 @@ describe("AppService", () => {
     expect(loadedFile).toContain("Dashboard");
   });
 
+  test("createApp auto-suffixes duplicate titles", async () => {
+    const first = await appService.createApp("Mem0 Stargazers", "First", [
+      { filename: "index.html", content: "<h1>1</h1>" },
+    ]);
+    const second = await appService.createApp("mem0 stargazers", "Second", [
+      { filename: "index.html", content: "<h1>2</h1>" },
+    ]);
+
+    expect(first.title).toBe("Mem0 Stargazers");
+    expect(second.title).toBe("mem0 stargazers_1");
+  });
+
   test("createApp scaffolds backend/manifest.json and ping.py", async () => {
     const created = await appService.createApp("Backend App", "Desc", [
       { filename: "index.html", content: "<h1>Hi</h1>" },
@@ -199,5 +211,66 @@ describe("AppService", () => {
         (issue) => issue.rule === "linked-data-source-required",
       ),
     ).toBe(false);
+  });
+
+  test("validateApp does not enforce line limit on markdown report files", async () => {
+    const longMd = Array.from(
+      { length: 150 },
+      (_, i) => `## Section ${i + 1}\n\nReport finding paragraph ${i + 1}.`,
+    ).join("\n\n");
+    const app = await appService.createApp("Report App", "Desc", [
+      {
+        filename: "index.html",
+        content:
+          '<!DOCTYPE html><html><body><div id="app"></div><script type="module" src="dist/app.js"></script></body></html>',
+      },
+      { filename: "app.ts", content: "console.log('ok');" },
+      { filename: "content/reports/audit.md", content: longMd },
+    ]);
+    await appService.buildApp(app.id);
+    const result = await appService.validateApp(app.id);
+
+    expect(
+      result.issues.filter(
+        (issue) => issue.rule === "max-lines" && issue.file.endsWith(".md"),
+      ),
+    ).toHaveLength(0);
+  });
+
+  test("listAppFiles returns nested paths including content/reports", async () => {
+    const app = await appService.createApp("Nested Files App", "Desc", [
+      { filename: "index.html", content: "<h1>Hi</h1>" },
+      { filename: "content/reports/audit.md", content: "# Audit\n\nFindings here." },
+      { filename: "components/chart.ts", content: "export {};" },
+    ]);
+
+    const files = await appService.listAppFiles(app.id);
+
+    expect(files).toContain("content/reports/audit.md");
+    expect(files).toContain("components/chart.ts");
+    expect(files).toContain("index.html");
+  });
+
+  test("validateApp enforces line limit on TypeScript source files", async () => {
+    const longTs = Array.from(
+      { length: 120 },
+      (_, i) => `export const value${i} = ${i};`,
+    ).join("\n");
+    const app = await appService.createApp("Long TS App", "Desc", [
+      {
+        filename: "index.html",
+        content:
+          '<!DOCTYPE html><html><body><div id="app"></div><script type="module" src="dist/app.js"></script></body></html>',
+      },
+      { filename: "app.ts", content: longTs },
+    ]);
+    await appService.buildApp(app.id);
+    const result = await appService.validateApp(app.id);
+
+    expect(
+      result.issues.some(
+        (issue) => issue.rule === "max-lines" && issue.file === "app.ts",
+      ),
+    ).toBe(true);
   });
 });

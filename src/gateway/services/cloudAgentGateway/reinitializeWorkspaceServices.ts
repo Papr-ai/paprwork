@@ -14,6 +14,7 @@ import {
   initializeAgentService,
   resetAgentServiceSingletonForTests,
 } from "../AgentService.js";
+import { refreshToolResultTruncationSettings } from "../agent/toolResultTruncationSettings.js";
 
 export async function reinitializeWorkspaceServicesForCloudRun(input: {
   paprApiKey: string;
@@ -29,4 +30,10 @@ export async function reinitializeWorkspaceServicesForCloudRun(input: {
     paprApiKey: input.paprApiKey,
     openaiApiKey: undefined,
   });
+
+  const truncationSettings = await refreshToolResultTruncationSettings();
+  console.log(
+    `[CloudAgentGateway] Tool truncation settings loaded from ${process.env.PAPR_HOME ?? "Papr"}/data/settings.json` +
+      (truncationSettings.disableAllTruncation ? " (truncation disabled)" : ""),
+  );
 }

@@ -51,7 +51,6 @@ function parseCloudAgentRunRequest(
     "orgId",
     "userId",
     "jobId",
-    "prompt",
     "paprApiKey",
     "repoCloneUrl",
     "repoToken",
@@ -77,7 +76,8 @@ function parseCloudAgentRunRequest(
     runId,
     provider: body.llmAuth.provider,
     model: body.model,
-    prompt: body.prompt as string,
+    runtimeParams: body.runtimeParams,
+    prompt: body.prompt,
     paprApiKey: body.paprApiKey as string,
     allowedToolIds: body.allowedToolIds,
     maxTurns: body.maxTurns,
@@ -90,6 +90,62 @@ function parseCloudAgentRunRequest(
     turso: body.turso,
     llmAuth: body.llmAuth,
     vaultKeys: body.vaultKeys,
+    workspaceSessionId: body.workspaceSessionId,
+    keepWorkspaceWarm: body.keepWorkspaceWarm,
+  };
+}
+
+function parseCloudAgentSessionBeginRequest(
+  body: Partial<CloudAgentRunRequest>,
+): CloudAgentRunRequest | { error: string } {
+  const required = [
+    "orgId",
+    "userId",
+    "jobId",
+    "paprApiKey",
+    "repoCloneUrl",
+    "repoToken",
+    "workspaceSessionId",
+  ] as const;
+
+  for (const field of required) {
+    if (!body[field]) {
+      return { error: `Missing required field: ${field}` };
+    }
+  }
+
+  const sessionId = body.workspaceSessionId as string;
+  const runId = body.runId ?? sessionId;
+  const llmAuth = body.llmAuth ?? {
+    provider: body.provider ?? "openai",
+    authType: "apiKey" as const,
+    token: "unused-for-warm",
+  };
+
+  return {
+    orgId: body.orgId as string,
+    namespaceId: body.namespaceId,
+    userId: body.userId as string,
+    jobId: body.jobId as string,
+    runId,
+    provider: llmAuth.provider,
+    model: body.model,
+    runtimeParams: body.runtimeParams,
+    prompt: body.prompt ?? "",
+    paprApiKey: body.paprApiKey as string,
+    allowedToolIds: body.allowedToolIds,
+    maxTurns: body.maxTurns,
+    repoCloneUrl: body.repoCloneUrl as string,
+    repoToken: body.repoToken as string,
+    repoBranch: body.repoBranch,
+    linkedSources: body.linkedSources,
+    primaryTursoShortName: body.primaryTursoShortName,
+    tursoSources: body.tursoSources,
+    turso: body.turso,
+    llmAuth,
+    vaultKeys: body.vaultKeys,
+    workspaceSessionId: sessionId,
+    keepWorkspaceWarm: true,
   };
 }
 
@@ -137,6 +193,35 @@ async function main(): Promise<void> {
       res.write(`data: ${JSON.stringify({ type: "done", exitCode: 1 })}\n\n`);
     }
     res.end();
+  });
+
+  app.post("/internal/agent/session/begin", requireGatewayAuth, async (req, res) => {
+    const parsed = parseCloudAgentSessionBeginRequest(
+      req.body as Partial<CloudAgentRunRequest>,
+    );
+    if ("error" in parsed) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+
+    const service = getCloudAgentGatewayService();
+    try {
+      const result = await service.beginAgentSession(parsed);
+      res.status(result.status === "ready" ? 200 : 202).json(result);
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  app.delete("/internal/agent/session/:sessionId", requireGatewayAuth, async (req, res) => {
+    const sessionId = typeof req.params.sessionId === "string" ? req.params.sessionId : "";
+    if (!sessionId) {
+      res.status(400).json({ error: "sessionId required" });
+      return;
+    }
+    const service = getCloudAgentGatewayService();
+    await service.endAgentSession(sessionId);
+    res.json({ ok: true, sessionId });
   });
 
   app.listen(PORT, "0.0.0.0", () => {

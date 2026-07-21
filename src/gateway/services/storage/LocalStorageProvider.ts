@@ -432,6 +432,106 @@ export class LocalStorageProvider implements IStorageProvider {
     console.log(`[LocalStorage] 📊 Chat stats after save: message_count=${updatedChat?.message_count || 0} (changes=${updateResult.changes})`);
   }
 
+  /**
+   * Update the stored delegate_task tool result when a background delegation finishes.
+   * Keeps chat history in sync with live job status (UI already uses WebSocket updates).
+   */
+  patchDelegateTaskToolResult(
+    chatId: string,
+    delegationRunId: string,
+    update: {
+      status: "completed" | "failed";
+      resultText?: string;
+      error?: string;
+      completedAt?: string;
+    },
+  ): boolean {
+    interface ToolCallRow {
+      id: string;
+      name?: string;
+      toolName?: string;
+      result?: string;
+      args?: Record<string, unknown>;
+      status?: string;
+    }
+
+    const rows = this.db
+      .prepare(
+        `SELECT id, tool_calls FROM messages
+         WHERE chat_id = ? AND role = 'assistant'
+           AND tool_calls IS NOT NULL AND tool_calls != ''
+         ORDER BY timestamp DESC`,
+      )
+      .all(chatId) as Array<{ id: string; tool_calls: string }>;
+
+    for (const row of rows) {
+      let toolCalls: ToolCallRow[];
+      try {
+        toolCalls = JSON.parse(row.tool_calls) as ToolCallRow[];
+      } catch {
+        continue;
+      }
+
+      let patched = false;
+      for (const tc of toolCalls) {
+        const toolName = tc.name ?? tc.toolName;
+        if (toolName !== "delegate_task") continue;
+
+        let parsed: Record<string, unknown>;
+        try {
+          parsed =
+            typeof tc.result === "string"
+              ? (JSON.parse(tc.result) as Record<string, unknown>)
+              : ((tc.result as Record<string, unknown> | undefined) ?? {});
+        } catch {
+          continue;
+        }
+
+        const data =
+          (parsed.data as Record<string, unknown> | undefined) ?? parsed;
+        const runId =
+          (data.id as string | undefined) ??
+          (data.jobId as string | undefined) ??
+          (data.delegationId as string | undefined);
+        if (runId !== delegationRunId) continue;
+
+        const updatedData: Record<string, unknown> = {
+          ...data,
+          status: update.status,
+          completedAt: update.completedAt ?? new Date().toISOString(),
+        };
+        if (update.resultText !== undefined) {
+          updatedData.resultText = update.resultText;
+        }
+        if (update.error !== undefined) {
+          updatedData.error = update.error;
+        }
+
+        const updatedResult =
+          parsed.data !== undefined
+            ? { ...parsed, data: updatedData }
+            : updatedData;
+
+        tc.result = JSON.stringify(updatedResult);
+        tc.status = update.status === "failed" ? "error" : "success";
+        patched = true;
+        break;
+      }
+
+      if (patched) {
+        this.db
+          .prepare(`UPDATE messages SET tool_calls = ? WHERE id = ?`)
+          .run(JSON.stringify(toolCalls), row.id);
+        console.log(
+          `[LocalStorage] Patched delegate_task result for run ${delegationRunId} in chat ${chatId}`,
+        );
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   async loadMessages(
     chatId: string,
     limit?: number,
