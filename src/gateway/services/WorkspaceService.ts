@@ -12,6 +12,8 @@
  *   IDENTITY.md  - User profile (name, role, tone, goals)
  *   AGENTS.md    - Operating contract (workflow rules, boundaries)
  *   TOOLS.md     - Environment notes (CLIs, APIs, paths)
+ *   BRAND.md     - User/company visual identity (colors, fonts, logo, voice)
+ *   brand.json   - Structured brand tokens for mini-apps (mirrors BRAND.md)
  *   ONBOARD.md   - First-run interview script (deleted after completion)
  *   memory/YYYY-MM-DD.md - Daily working logs (append-only)
  */
@@ -33,6 +35,7 @@ const MAX_TOTAL_CHARS = 80_000;
 /** Workspace files to inject (in order of priority) */
 const WORKSPACE_FILES = [
   "IDENTITY.md",
+  "BRAND.md",
   "MEMORY.md",
   "AGENTS.md",
   "TOOLS.md",
@@ -82,12 +85,15 @@ export class WorkspaceService {
     await fs.mkdir(this.workspaceDir, { recursive: true });
     await fs.mkdir(this.memoryDir, { recursive: true });
     await fs.mkdir(path.join(this.memoryDir, "archive"), { recursive: true });
+    await fs.mkdir(path.join(this.workspaceDir, "brand"), { recursive: true });
 
     // Copy template files if they don't exist yet
     const templatesDir = this.resolveTemplatesDir();
     const templateFiles = [
       "MEMORY.md",
       "IDENTITY.md",
+      "BRAND.md",
+      "brand.json",
       "AGENTS.md",
       "TOOLS.md",
       "ONBOARD.md",
@@ -115,6 +121,11 @@ export class WorkspaceService {
         }
       }
     }
+
+    const { seedIdentityAboutFromProfile } = await import(
+      "./identityAboutSeed.js"
+    );
+    await seedIdentityAboutFromProfile();
 
     this.initialized = true;
     console.log(
@@ -151,6 +162,9 @@ export class WorkspaceService {
     for (const log of dailyLogs) {
       totalChars += log.content.length;
     }
+
+    // If sleep cycle or chat already populated IDENTITY, close stale ONBOARD.md
+    await this.autoCompleteOnboardingIfReady();
 
     // Check onboarding status
     const onboardPath = path.join(this.workspaceDir, "ONBOARD.md");
@@ -197,6 +211,45 @@ export class WorkspaceService {
 
     // Complete if: ONBOARD.md doesn't exist, OR ONBOARD.completed.md exists
     return !onboardExists || completedExists;
+  }
+
+  /**
+   * Rename ONBOARD.md when IDENTITY is already populated (e.g. sleep cycle wrote profile
+   * but the first-run chat never ran the completion mv step).
+   */
+  async autoCompleteOnboardingIfReady(): Promise<boolean> {
+    const onboardPath = path.join(this.workspaceDir, "ONBOARD.md");
+    const onboardCompletedPath = path.join(
+      this.workspaceDir,
+      "ONBOARD.completed.md",
+    );
+
+    if (
+      !(await this.fileExists(onboardPath)) ||
+      (await this.fileExists(onboardCompletedPath))
+    ) {
+      return false;
+    }
+
+    const { getWorkspaceFileHealth } = await import("./identityAboutSeed.js");
+    const health = await getWorkspaceFileHealth();
+    if (!health.identityAboutComplete) {
+      return false;
+    }
+
+    try {
+      await fs.rename(onboardPath, onboardCompletedPath);
+      console.log(
+        "[WorkspaceService] Auto-completed onboarding — IDENTITY.md already populated",
+      );
+      return true;
+    } catch (error) {
+      console.warn(
+        "[WorkspaceService] Failed to auto-complete onboarding:",
+        (error as Error).message,
+      );
+      return false;
+    }
   }
 
   // ——— Private helpers ———
@@ -311,6 +364,15 @@ export class WorkspaceService {
   async ensureSleepJob(): Promise<void> {
     const { getSleepCycleService } = await import("./SleepCycleService.js");
     await getSleepCycleService().syncSleepJobs();
+  }
+
+  /**
+   * Ensure the built-in "wiki-writer" agent job exists.
+   * Delegates to WikiWriterService for dedupe, config, and prompt sync.
+   */
+  async ensureWikiWriterJob(): Promise<void> {
+    const { getWikiWriterService } = await import("./WikiWriterService.js");
+    await getWikiWriterService().syncWikiWriterJobs();
   }
 
   /**

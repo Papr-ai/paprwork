@@ -2,8 +2,12 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "module": "ES2022",
+    "moduleResolution": "bundler",
+    "customConditions": ["node"],
     "outDir": "dist",
-    "lib": ["ES2023"]
+    "lib": ["ES2023"],
+    "incremental": true,
+    "tsBuildInfoFile": "./dist/.tsbuildinfo-gateway"
   },
   "include": ["src/gateway/**/*", "src/core/**/*", "src/types/**/*"],
   "exclude": ["node_modules", "dist", "ui", "src/electron", "src/gateway/websocket-old"]

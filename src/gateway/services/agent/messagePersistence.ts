@@ -1,7 +1,22 @@
 import { v4 as uuidv4 } from "uuid";
+import { resolveToolCallStatus } from "../../../core/utils/interruptedToolResult.js";
 import type { StoredMessage } from "../storage/IStorageProvider.js";
 import type { ToolCallEvent, ToolResultEvent } from "./streamChunks.js";
-import { calculateCost } from "../CostCalculation.js";
+import { calculateCostWithCache, type TokenUsageForCost } from "../CostCalculation.js";
+
+function getPersistedToolCallStatus(
+  toolCallId: string,
+  toolResults: ToolResultEvent[],
+): "success" | "error" | "interrupted" {
+  const matchedResult = toolResults.find(
+    (toolResult) => toolResult.toolCallId === toolCallId,
+  )?.result;
+  const status = resolveToolCallStatus({ result: matchedResult });
+
+  if (status === "interrupted") return "interrupted";
+  if (status === "error") return "error";
+  return "success";
+}
 
 export function formatToolResultForStorage(
   result: unknown,
@@ -19,6 +34,36 @@ export function formatToolResultForStorage(
   }
 }
 
+export function hasPersistableAssistantContent(args: {
+  assistantText: string;
+  thinkingText: string;
+  toolCalls: ToolCallEvent[];
+  sequence?: Array<{ type: string; data: unknown }>;
+}): boolean {
+  return (
+    args.assistantText.trim().length > 0 ||
+    args.thinkingText.trim().length > 0 ||
+    args.toolCalls.length > 0 ||
+    (args.sequence?.length ?? 0) > 0
+  );
+}
+
+export function createPartialAssistantStoredMessage(args: {
+  chatId: string;
+  model: string;
+  assistantText: string;
+  thinkingText: string;
+  toolCalls: ToolCallEvent[];
+  toolResults: ToolResultEvent[];
+  sequence?: Array<{ type: "text" | "tool" | "thinking"; data: any }>;
+  usage?: TokenUsageForCost & { totalTokens?: number };
+}): StoredMessage {
+  return {
+    ...createAssistantStoredMessage(args),
+    incomplete: true,
+  };
+}
+
 export function createAssistantStoredMessage(args: {
   chatId: string;
   model: string;
@@ -27,19 +72,15 @@ export function createAssistantStoredMessage(args: {
   toolCalls: ToolCallEvent[];
   toolResults: ToolResultEvent[];
   sequence?: Array<{ type: "text" | "tool" | "thinking"; data: any }>; // V1-style sequence
-  usage?: {
-    promptTokens: number;
-    completionTokens: number;
-    totalTokens: number;
-  };
+  usage?: TokenUsageForCost & { totalTokens?: number };
 }): StoredMessage {
-  // Calculate cost if usage data available
   const cost = args.usage
-    ? calculateCost(
-        args.model,
-        args.usage.promptTokens,
-        args.usage.completionTokens,
-      )
+    ? calculateCostWithCache(args.model, {
+        promptTokens: args.usage.promptTokens,
+        completionTokens: args.usage.completionTokens,
+        cacheReadTokens: args.usage.cacheReadTokens,
+        cacheWriteTokens: args.usage.cacheWriteTokens,
+      })
     : undefined;
 
   return {
@@ -68,7 +109,10 @@ export function createAssistantStoredMessage(args: {
                   (toolResult) => toolResult.toolCallId === toolCall.toolCallId,
                 )?.result,
               ),
-              status: "success" as const,
+              status: getPersistedToolCallStatus(
+                toolCall.toolCallId,
+                args.toolResults,
+              ),
             };
           })
         : undefined,
@@ -78,6 +122,8 @@ export function createAssistantStoredMessage(args: {
     prompt_tokens: args.usage?.promptTokens,
     completion_tokens: args.usage?.completionTokens,
     total_tokens: args.usage?.totalTokens,
+    cache_read_tokens: args.usage?.cacheReadTokens,
+    cache_write_tokens: args.usage?.cacheWriteTokens,
     cost,
     sync_status: "local",
   };
@@ -108,19 +154,15 @@ export function createErrorStoredMessage(args: {
   toolResults: ToolResultEvent[];
   errorMessage: string;
   sequence?: Array<{ type: "text" | "tool" | "thinking"; data: any }>;
-  usage?: {
-    promptTokens: number;
-    completionTokens: number;
-    totalTokens: number;
-  };
+  usage?: TokenUsageForCost & { totalTokens?: number };
 }): StoredMessage {
-  // Calculate cost if usage data available (even for errors)
   const cost = args.usage
-    ? calculateCost(
-        args.model,
-        args.usage.promptTokens,
-        args.usage.completionTokens,
-      )
+    ? calculateCostWithCache(args.model, {
+        promptTokens: args.usage.promptTokens,
+        completionTokens: args.usage.completionTokens,
+        cacheReadTokens: args.usage.cacheReadTokens,
+        cacheWriteTokens: args.usage.cacheWriteTokens,
+      })
     : undefined;
 
   return {
@@ -135,17 +177,20 @@ export function createErrorStoredMessage(args: {
     thinking: args.thinkingText || undefined,
     toolCalls:
       args.toolCalls.length > 0
-        ? args.toolCalls.map((toolCall) => ({
-            id: toolCall.toolCallId,
-            name: toolCall.toolName,
-            args: toolCall.args,
-            result: formatToolResultForStorage(
-              args.toolResults.find(
-                (toolResult) => toolResult.toolCallId === toolCall.toolCallId,
-              )?.result,
-            ),
-            status: "error" as const,
-          }))
+        ? args.toolCalls.map((toolCall) => {
+            const matchedResult = args.toolResults.find(
+              (toolResult) => toolResult.toolCallId === toolCall.toolCallId,
+            )?.result;
+            const status = resolveToolCallStatus({ result: matchedResult });
+
+            return {
+              id: toolCall.toolCallId,
+              name: toolCall.toolName,
+              args: toolCall.args,
+              result: formatToolResultForStorage(matchedResult),
+              status: status === "interrupted" ? "interrupted" : "error",
+            };
+          })
         : undefined,
     sequence: args.sequence,
     error: args.errorMessage,
@@ -155,6 +200,8 @@ export function createErrorStoredMessage(args: {
     prompt_tokens: args.usage?.promptTokens,
     completion_tokens: args.usage?.completionTokens,
     total_tokens: args.usage?.totalTokens,
+    cache_read_tokens: args.usage?.cacheReadTokens,
+    cache_write_tokens: args.usage?.cacheWriteTokens,
     cost,
     sync_status: "local",
   };

@@ -7,6 +7,19 @@
  */
 
 import type { WebSocket } from "ws";
+import {
+  mergeToolResultTruncationSettings,
+  type ToolResultTruncationSettings,
+} from "../../core/types/toolResultTruncationSettings.js";
+import {
+  loadSettings,
+  saveSettings,
+  type CodeIndexingSettings,
+  type PermissionData,
+  type PreferencesData,
+  type ProfileData,
+  type UIPreferences,
+} from "../services/settingsStore.js";
 import type { WSMessage } from "./index.js";
 import { sendResponse, sendError } from "./index.js";
 import { createReadStream, promises as fs } from "fs";
@@ -15,126 +28,16 @@ import os from "os";
 import readline from "readline";
 import { v4 as uuidv4 } from "uuid";
 
-interface ProfileData {
-  name: string;
-  email: string;
-  imageUrl: string;
-}
+export { loadSettings } from "../services/settingsStore.js";
+export type { SettingsData } from "../services/settingsStore.js";
 
-interface PermissionData {
-  fileSystem: boolean;
-  network: boolean;
-  calendar: boolean;
-}
-
-interface CodeIndexingSettings {
-  enabled: boolean;
-  excludedFolders: string[]; // Folders to exclude from indexing (e.g., "papr_repo")
-}
-
-interface UIPreferences {
-  lastModelId: string | null; // Last selected model
-  onboardingDismissed: boolean; // Whether onboarding was dismissed
-  onboardingStep1Completed: boolean; // Configure API keys
-  onboardingStep2Completed: boolean; // Setup your agents
-  onboardingStep3Completed: boolean; // Complete first task
-}
-
-interface PreferencesData {
-  defaultHomeAppId: string | null;
-}
-
-interface TelemetryData {
-  installId: string;
-  enabled: boolean;
-}
-
-interface SettingsData {
-  profile: ProfileData;
-  permissions: PermissionData;
-  codeIndexing: CodeIndexingSettings;
-  uiPreferences: UIPreferences;
-  preferences: PreferencesData;
-  telemetry?: TelemetryData;
-}
-
-const DEFAULT_HOME_APP_ID = "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c";
-
-const DEFAULTS: SettingsData = {
-  profile: { name: "", email: "", imageUrl: "" },
-  permissions: { fileSystem: true, network: true, calendar: false },
-  codeIndexing: {
-    enabled: true,
-    excludedFolders: [
-      "papr_repo",      // Cloned repositories
-      "node_modules",   // NPM dependencies
-      ".venv",          // Python virtual environments
-      "venv",
-      ".git",           // Git history
-      "dist",           // Build outputs
-      "build",
-      "__pycache__",    // Python cache
-      ".next",          // Next.js build
-      ".nuxt",          // Nuxt build
-    ],
-  },
-  uiPreferences: {
-    lastModelId: null,
-    onboardingDismissed: false,
-    onboardingStep1Completed: false,
-    onboardingStep2Completed: false,
-    onboardingStep3Completed: false,
-  },
-  preferences: {
-    defaultHomeAppId: DEFAULT_HOME_APP_ID,
-  },
-};
-
-const SETTINGS_PATH = path.join(os.homedir(), "Papr", "data", "settings.json");
-
-export async function loadSettings(): Promise<SettingsData> {
-  try {
-    const raw = await fs.readFile(SETTINGS_PATH, "utf-8");
-    const saved = JSON.parse(raw) as Partial<SettingsData>;
-    const settings = {
-      ...DEFAULTS,
-      ...saved,
-      preferences: { ...DEFAULTS.preferences, ...saved.preferences },
-    };
-    
-    // Add telemetry data from environment variables (set by main process)
-    // This ensures consistency with the main process's electron-store
-    const installId = process.env.PAPRWORK_TELEMETRY_ANONYMOUS_ID?.trim() || "";
-    const enabled = process.env.PAPRWORK_TELEMETRY_ENABLED === "true";
-    
-    if (installId) {
-      settings.telemetry = {
-        installId,
-        enabled,
-      };
-    }
-    
-    return settings;
-  } catch {
-    // For defaults, also include telemetry from env vars
-    const installId = process.env.PAPRWORK_TELEMETRY_ANONYMOUS_ID?.trim() || "";
-    const enabled = process.env.PAPRWORK_TELEMETRY_ENABLED === "true";
-    
-    const settings = { ...DEFAULTS };
-    if (installId) {
-      settings.telemetry = {
-        installId,
-        enabled,
-      };
-    }
-    
-    return settings;
-  }
-}
-
-async function saveSettings(data: SettingsData): Promise<void> {
-  await fs.mkdir(path.dirname(SETTINGS_PATH), { recursive: true });
-  await fs.writeFile(SETTINGS_PATH, JSON.stringify(data, null, 2), "utf-8");
+async function syncToolResultTruncationCache(
+  settings: ToolResultTruncationSettings,
+): Promise<void> {
+  const { setToolResultTruncationSettings } = await import(
+    "../services/agent/toolResultTruncationSettings.js"
+  );
+  setToolResultTruncationSettings(settings);
 }
 
 export async function setupSettingsHandlers(
@@ -180,10 +83,7 @@ export async function setupSettingsHandlers(
         const settings = await loadSettings();
         settings.codeIndexing = { ...settings.codeIndexing, ...payload };
         await saveSettings(settings);
-        
-        // If indexing was toggled or excluded folders changed, notify CodeIndexingService
-        // TODO: Add hot reload for code indexing config
-        
+
         sendResponse(ws, {
           id: message.id,
           success: true,
@@ -197,11 +97,41 @@ export async function setupSettingsHandlers(
         const settings = await loadSettings();
         settings.uiPreferences = { ...settings.uiPreferences, ...payload };
         await saveSettings(settings);
-        
+
         sendResponse(ws, {
           id: message.id,
           success: true,
           data: settings.uiPreferences,
+        });
+        break;
+      }
+
+      case "settings:save-preferences": {
+        const payload = message.payload as Partial<PreferencesData>;
+        const settings = await loadSettings();
+        settings.preferences = { ...settings.preferences, ...payload };
+        await saveSettings(settings);
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: settings.preferences,
+        });
+        break;
+      }
+
+      case "settings:save-tool-truncation": {
+        const payload = message.payload as Partial<ToolResultTruncationSettings>;
+        const settings = await loadSettings();
+        settings.toolResultTruncation = mergeToolResultTruncationSettings({
+          ...settings.toolResultTruncation,
+          ...payload,
+        });
+        await saveSettings(settings);
+        await syncToolResultTruncationCache(settings.toolResultTruncation);
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: settings.toolResultTruncation,
         });
         break;
       }
@@ -273,7 +203,6 @@ async function runV1Migration(
     apps: { migrated: 0 },
   };
 
-  // --- 1. Migrate chats ---
   const chatIndexPath = path.join(v1Root, "chats", "index.json");
   try {
     const raw = await fs.readFile(chatIndexPath, "utf-8");
@@ -296,11 +225,9 @@ async function runV1Migration(
         continue;
       }
 
-      // Create V2 chat directory
       const chatDir = path.join(v2ChatsDir, chatId);
       await fs.mkdir(chatDir, { recursive: true });
 
-      // Write meta
       await fs.writeFile(
         path.join(chatDir, "meta.json"),
         JSON.stringify(
@@ -310,7 +237,6 @@ async function runV1Migration(
         ),
       );
 
-      // Copy messages
       const stream = createReadStream(sourceFile, { encoding: "utf8" });
       const rl = readline.createInterface({
         input: stream,
@@ -362,7 +288,6 @@ async function runV1Migration(
     );
   }
 
-  // --- 2. Migrate documents ---
   const docsJsonPath = path.join(v1Root, "data", "documents.json");
   try {
     const raw = await fs.readFile(docsJsonPath, "utf-8");
@@ -375,14 +300,12 @@ async function runV1Migration(
       const docDir = path.join(v2DocsDir, doc.id);
       await fs.mkdir(docDir, { recursive: true });
 
-      // Write content.md
       await fs.writeFile(
         path.join(docDir, "content.md"),
         doc.content ?? "",
         "utf-8",
       );
 
-      // Write meta.json
       const meta = {
         title: doc.title ?? "Untitled",
         tags: doc.tags ?? [],
@@ -396,7 +319,6 @@ async function runV1Migration(
         "utf-8",
       );
 
-      // Create versions dir
       await fs.mkdir(path.join(docDir, "versions"), { recursive: true });
 
       result.documents.migrated += 1;
@@ -408,7 +330,6 @@ async function runV1Migration(
     );
   }
 
-  // --- 3. Migrate apps ---
   const appsJsonPath = path.join(v1Root, "data", "apps.json");
   try {
     const raw = await fs.readFile(appsJsonPath, "utf-8");
@@ -421,7 +342,6 @@ async function runV1Migration(
       const appDir = path.join(v2AppsDir, app.id);
       await fs.mkdir(appDir, { recursive: true });
 
-      // Write index.json
       const appMeta = {
         id: app.id,
         name: app.name ?? "Untitled App",
@@ -434,7 +354,6 @@ async function runV1Migration(
         "utf-8",
       );
 
-      // Copy app files from V1 if they exist
       const v1AppDir = path.join(v1Root, "apps", app.id);
       try {
         const entries = await fs.readdir(v1AppDir, { withFileTypes: true });

@@ -7,12 +7,14 @@ import { useEffect, useState, useRef } from "react";
 import type { UpdateStatus } from "../../types/electron";
 import "./UpdateBanner.css";
 
-type BannerState = "hidden" | "downloading" | "ready";
+type BannerState = "hidden" | "downloading" | "ready" | "error";
 
 export function UpdateBanner() {
   const [state, setState] = useState<BannerState>("hidden");
   const [version, setVersion] = useState<string>("");
   const [percent, setPercent] = useState(0);
+  const [errorMessage, setErrorMessage] = useState<string>("");
+  const [recoveryHint, setRecoveryHint] = useState<string>("");
   const [dismissed, setDismissed] = useState(false);
   const handlerRef = useRef<((data: UpdateStatus) => void) | undefined>(undefined);
 
@@ -35,6 +37,11 @@ export function UpdateBanner() {
         setDismissed(false);
         break;
       case "error":
+        setState("error");
+        setErrorMessage(data.error || "Update failed");
+        setRecoveryHint(data.recoveryHint || "");
+        setDismissed(false);
+        break;
       case "not-available":
         setState("hidden");
         break;
@@ -89,6 +96,15 @@ export function UpdateBanner() {
             <button className="update-banner__action" onClick={handleInstall}>
               Restart to update
             </button>
+          </>
+        )}
+        {state === "error" && (
+          <>
+            <span className="update-banner__icon">!</span>
+            <span className="update-banner__text">{errorMessage}</span>
+            {recoveryHint && (
+              <span className="update-banner__hint">{recoveryHint}</span>
+            )}
           </>
         )}
       </div>

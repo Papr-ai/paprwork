@@ -67,6 +67,30 @@ export async function setupBundleHandlers(
         });
         break;
       }
+      case "bundle:fetch-community-catalog": {
+        const { getCommunityCatalogService } = await import(
+          "../services/CommunityCatalogService.js"
+        );
+        const payload = message.payload as
+          | {
+              scope?: "global" | "namespace";
+              namespaceId?: string;
+              userId?: string;
+            }
+          | undefined;
+        const scope = payload?.scope ?? "global";
+        const catalog = await getCommunityCatalogService().fetchScopedCatalog({
+          scope,
+          namespaceId: payload?.namespaceId,
+          userId: payload?.userId,
+        });
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: catalog,
+        });
+        break;
+      }
       case "bundle:import-community": {
         const payload = message.payload as ImportCommunityBundleInput;
         const manifest = await bundleService.importCommunityBundle(payload);

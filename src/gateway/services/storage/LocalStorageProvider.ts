@@ -34,6 +34,16 @@ import {
   storeFootprintForNewMessage,
 } from "./contextFootprintStore.js";
 import {
+  recordMessageTokensInCache,
+  scheduleContextStatsRebuild,
+} from "./contextStatsCache.js";
+import {
+  computeRecentMessageLimit,
+  expandRecentMessageLimit,
+  RECENT_MESSAGES_WITHOUT_SUMMARY,
+  resolveSummaryBaseMessageCount,
+} from "./recentMessageWindow.js";
+import {
   getToolCountsByAgent,
   getToolCountsForAgent,
   getTotalToolInvocationsForAgent,
@@ -100,6 +110,7 @@ export class LocalStorageProvider implements IStorageProvider {
     await this.exporter.initialize();
     console.log("[LocalStorageProvider] Chat exporter initialized");
 
+    scheduleContextStatsRebuild(this.db);
     scheduleContextFootprintBackfill(this.db, {
       onBatchComplete: () => {
         this.contextEfficiencyCache = null;
@@ -239,6 +250,24 @@ export class LocalStorageProvider implements IStorageProvider {
       this.db.exec("ALTER TABLE messages ADD COLUMN cost REAL DEFAULT 0");
     }
 
+    if (!columnNames.includes("cache_read_tokens")) {
+      console.log(
+        '[LocalStorage] Adding "cache_read_tokens" column to messages table...',
+      );
+      this.db.exec(
+        "ALTER TABLE messages ADD COLUMN cache_read_tokens INTEGER DEFAULT 0",
+      );
+    }
+
+    if (!columnNames.includes("cache_write_tokens")) {
+      console.log(
+        '[LocalStorage] Adding "cache_write_tokens" column to messages table...',
+      );
+      this.db.exec(
+        "ALTER TABLE messages ADD COLUMN cache_write_tokens INTEGER DEFAULT 0",
+      );
+    }
+
     // Add sequence column if missing (V1-style interleaved text/tool sequence)
     if (!columnNames.includes("sequence")) {
       console.log(
@@ -256,6 +285,21 @@ export class LocalStorageProvider implements IStorageProvider {
         '[LocalStorage] Adding "summary_enhanced" column to chats table...',
       );
       this.db.exec("ALTER TABLE chats ADD COLUMN summary_enhanced TEXT");
+    }
+
+    if (!chatColumnNames.includes("summary_base_message_count")) {
+      console.log(
+        '[LocalStorage] Adding "summary_base_message_count" column to chats table...',
+      );
+      this.db.exec(
+        "ALTER TABLE chats ADD COLUMN summary_base_message_count INTEGER",
+      );
+      this.db.exec(
+        `UPDATE chats
+         SET summary_base_message_count = message_count
+         WHERE summary_long IS NOT NULL
+           AND summary_base_message_count IS NULL`,
+      );
     }
 
     migrateFootprintColumns(this.db);
@@ -317,10 +361,11 @@ export class LocalStorageProvider implements IStorageProvider {
         id, chat_id, role, content, timestamp,
         thinking, tool_calls, error, incomplete,
         model, prompt_tokens, completion_tokens, total_tokens, cost,
+        cache_read_tokens, cache_write_tokens,
         sync_status, papr_message_id,
         source_agent_id, source_agent_name,
         sequence
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
       .run(
         messageId,
@@ -337,6 +382,8 @@ export class LocalStorageProvider implements IStorageProvider {
         completionTokens,
         totalTokens,
         message.cost || 0,
+        message.cache_read_tokens || 0,
+        message.cache_write_tokens || 0,
         message.sync_status || "local",
         message.papr_message_id || null,
         message.source_agent_id || "main-agent",
@@ -360,12 +407,129 @@ export class LocalStorageProvider implements IStorageProvider {
       .get(chatId) as { id: string; message_count: number } | undefined;
     
     if (message.role === "assistant" && promptTokens > 0) {
+      recordMessageTokensInCache(
+        this.db,
+        chatId,
+        message.role,
+        promptTokens,
+        completionTokens,
+        totalTokens,
+      );
       storeFootprintForNewMessage(this.db, chatId, messageId, promptTokens);
       this.contextEfficiencyCache = null;
+    } else if (totalTokens > 0) {
+      recordMessageTokensInCache(
+        this.db,
+        chatId,
+        message.role,
+        promptTokens,
+        completionTokens,
+        totalTokens,
+      );
     }
 
     console.log(`[LocalStorage] ✅ Message saved successfully`);
     console.log(`[LocalStorage] 📊 Chat stats after save: message_count=${updatedChat?.message_count || 0} (changes=${updateResult.changes})`);
+  }
+
+  /**
+   * Update the stored delegate_task tool result when a background delegation finishes.
+   * Keeps chat history in sync with live job status (UI already uses WebSocket updates).
+   */
+  patchDelegateTaskToolResult(
+    chatId: string,
+    delegationRunId: string,
+    update: {
+      status: "completed" | "failed";
+      resultText?: string;
+      error?: string;
+      completedAt?: string;
+    },
+  ): boolean {
+    interface ToolCallRow {
+      id: string;
+      name?: string;
+      toolName?: string;
+      result?: string;
+      args?: Record<string, unknown>;
+      status?: string;
+    }
+
+    const rows = this.db
+      .prepare(
+        `SELECT id, tool_calls FROM messages
+         WHERE chat_id = ? AND role = 'assistant'
+           AND tool_calls IS NOT NULL AND tool_calls != ''
+         ORDER BY timestamp DESC`,
+      )
+      .all(chatId) as Array<{ id: string; tool_calls: string }>;
+
+    for (const row of rows) {
+      let toolCalls: ToolCallRow[];
+      try {
+        toolCalls = JSON.parse(row.tool_calls) as ToolCallRow[];
+      } catch {
+        continue;
+      }
+
+      let patched = false;
+      for (const tc of toolCalls) {
+        const toolName = tc.name ?? tc.toolName;
+        if (toolName !== "delegate_task") continue;
+
+        let parsed: Record<string, unknown>;
+        try {
+          parsed =
+            typeof tc.result === "string"
+              ? (JSON.parse(tc.result) as Record<string, unknown>)
+              : ((tc.result as Record<string, unknown> | undefined) ?? {});
+        } catch {
+          continue;
+        }
+
+        const data =
+          (parsed.data as Record<string, unknown> | undefined) ?? parsed;
+        const runId =
+          (data.id as string | undefined) ??
+          (data.jobId as string | undefined) ??
+          (data.delegationId as string | undefined);
+        if (runId !== delegationRunId) continue;
+
+        const updatedData: Record<string, unknown> = {
+          ...data,
+          status: update.status,
+          completedAt: update.completedAt ?? new Date().toISOString(),
+        };
+        if (update.resultText !== undefined) {
+          updatedData.resultText = update.resultText;
+        }
+        if (update.error !== undefined) {
+          updatedData.error = update.error;
+        }
+
+        const updatedResult =
+          parsed.data !== undefined
+            ? { ...parsed, data: updatedData }
+            : updatedData;
+
+        tc.result = JSON.stringify(updatedResult);
+        tc.status = update.status === "failed" ? "error" : "success";
+        patched = true;
+        break;
+      }
+
+      if (patched) {
+        this.db
+          .prepare(`UPDATE messages SET tool_calls = ? WHERE id = ?`)
+          .run(JSON.stringify(toolCalls), row.id);
+        console.log(
+          `[LocalStorage] Patched delegate_task result for run ${delegationRunId} in chat ${chatId}`,
+        );
+        return true;
+      }
+    }
+
+    return false;
   }
 
   async loadMessages(
@@ -424,6 +588,8 @@ export class LocalStorageProvider implements IStorageProvider {
       prompt_tokens: row.prompt_tokens,
       completion_tokens: row.completion_tokens,
       total_tokens: row.total_tokens,
+      cache_read_tokens: row.cache_read_tokens ?? undefined,
+      cache_write_tokens: row.cache_write_tokens ?? undefined,
       cost: row.cost,
       sync_status: row.sync_status as any,
       papr_message_id: row.papr_message_id,
@@ -440,7 +606,7 @@ export class LocalStorageProvider implements IStorageProvider {
       .prepare(`
       SELECT id, title, message_count, 
              summary_short, summary_medium, summary_long, summary_topics,
-             summary_enhanced
+             summary_enhanced, summary_base_message_count
       FROM chats 
       WHERE id = ?
     `)
@@ -470,6 +636,7 @@ export class LocalStorageProvider implements IStorageProvider {
       return messages.map((message) => ({
         role: message.role,
         content: message.content,
+        thinking: message.thinking,
         toolCalls: message.toolCalls,
         timestamp: message.timestamp, // Preserve timestamp for debugging/ordering verification
       }));
@@ -477,15 +644,20 @@ export class LocalStorageProvider implements IStorageProvider {
 
     console.log(`[LocalStorage] 🔀 Taking WITH SUMMARY path`);
 
-    // Get recent messages AFTER summary
-    // When we have a summary, we only need the most recent messages (~6)
-    // because the summary covers all earlier context
-    // Without summary, load more messages (50) for full context
-    const recentMessageLimit = chat.summary_long ? 6 : 50;
+    // Get recent messages AFTER summary (chunked 20→40 window for cache-friendly growth)
+    const summaryBase = resolveSummaryBaseMessageCount(
+      chat.message_count,
+      chat.summary_base_message_count as number | null,
+    );
+    let recentMessageLimit = chat.summary_long
+      ? computeRecentMessageLimit(chat.message_count, summaryBase)
+      : RECENT_MESSAGES_WITHOUT_SUMMARY;
 
-    console.log(`[LocalStorage] 🔎 Summary exists - querying for ${recentMessageLimit} most recent messages...`);
+    console.log(
+      `[LocalStorage] 🔎 Summary exists - querying for ${recentMessageLimit} most recent messages (base=${summaryBase})...`,
+    );
 
-    const recentMessages = this.db
+    let recentMessages = this.db
       .prepare(`
       SELECT role, content, thinking, tool_calls, timestamp
       FROM messages 
@@ -495,18 +667,38 @@ export class LocalStorageProvider implements IStorageProvider {
     `)
       .all(chatId, recentMessageLimit) as any[];
 
-    // Log what we actually got BEFORE reversing
-    console.log(`[LocalStorage] 🔍 Query returned ${recentMessages.length} messages (DESC order):`);
+    // Reverse to chronological order before checking oldest role
+    recentMessages.reverse();
+
+    const expandedLimit = expandRecentMessageLimit(
+      chat.message_count,
+      recentMessageLimit,
+      recentMessages[0]?.role,
+    );
+    if (expandedLimit > recentMessageLimit) {
+      console.log(
+        `[LocalStorage] ↗ Expanded recent window ${recentMessageLimit}→${expandedLimit} (avoid mid-turn cut)`,
+      );
+      recentMessageLimit = expandedLimit;
+      recentMessages = this.db
+        .prepare(`
+        SELECT role, content, thinking, tool_calls, timestamp
+        FROM messages 
+        WHERE chat_id = ? 
+        ORDER BY timestamp DESC 
+        LIMIT ?
+      `)
+        .all(chatId, recentMessageLimit) as any[];
+      recentMessages.reverse();
+    }
+    // Log what we actually got
+    console.log(`[LocalStorage] 🔍 Query returned ${recentMessages.length} messages (chronological):`);
     recentMessages.forEach((msg, i) => {
       const preview = typeof msg.content === 'string' ? msg.content.substring(0, 50) : '';
       console.log(`  ${i}. [${msg.timestamp}] ${msg.role}: "${preview}..."`);
     });
 
-    // Reverse to chronological order
-    recentMessages.reverse();
-
     const archivedCount = chat.message_count - recentMessages.length;
-    const topics = chat.summary_topics ? JSON.parse(chat.summary_topics) : [];
     const enhanced = deserializeEnhancedFields(chat.summary_enhanced);
 
     console.log(`[LocalStorage] Loading LLM context for chat ${chatId}:`);
@@ -516,7 +708,7 @@ export class LocalStorageProvider implements IStorageProvider {
     console.log(`  Summary exists: ${!!chat.summary_long}`);
     console.log(`  Recent message limit: ${recentMessageLimit}`);
 
-    // Export chat to file and get path
+    const topics = chat.summary_topics ? JSON.parse(chat.summary_topics) : [];
     const messages = await this.loadMessages(chatId);
     const chatFilePath = await this.exporter.exportChat(
       chatId,
@@ -534,8 +726,6 @@ export class LocalStorageProvider implements IStorageProvider {
         last_updated: chat.summary_last_updated ?? new Date().toISOString(),
       },
       enhanced,
-      totalCount: chat.message_count,
-      recentCount: recentMessages.length,
       chatFilePath,
     });
 
@@ -549,6 +739,8 @@ export class LocalStorageProvider implements IStorageProvider {
       return {
         role: typeof message.role === "string" ? message.role : "assistant",
         content: typeof message.content === "string" ? message.content : "",
+        thinking:
+          typeof message.thinking === "string" ? message.thinking : undefined,
         toolCalls: parsedToolCalls,
         timestamp: message.timestamp, // Preserve timestamp for debugging/ordering verification
       };
@@ -603,6 +795,32 @@ export class LocalStorageProvider implements IStorageProvider {
   }
 
   async saveSummary(chatId: string, summary: StoredSummary): Promise<void> {
+    const chatRow = this.db
+      .prepare(
+        "SELECT message_count, summary_long, summary_base_message_count FROM chats WHERE id = ?",
+      )
+      .get(chatId) as
+      | {
+          message_count: number;
+          summary_long: string | null;
+          summary_base_message_count: number | null;
+        }
+      | undefined;
+    const messageCount = chatRow?.message_count ?? 0;
+    const hadSummary = Boolean(chatRow?.summary_long);
+    const existingBase = chatRow?.summary_base_message_count ?? null;
+
+    // First summary: anchor at current count (window starts at MIN).
+    // Re-summarize: preserve current window depth so we don't snap to MIN and drop recent turns.
+    let summaryBaseMessageCount = messageCount;
+    if (hadSummary && existingBase != null) {
+      const preservedWindow = computeRecentMessageLimit(
+        messageCount,
+        existingBase,
+      );
+      summaryBaseMessageCount = Math.max(0, messageCount - preservedWindow);
+    }
+
     this.db
       .prepare(`
       UPDATE chats 
@@ -613,7 +831,8 @@ export class LocalStorageProvider implements IStorageProvider {
           summary_last_updated = ?,
           summary_fetched_from_papr = ?,
           summary_last_fetched_at = ?,
-          summary_enhanced = ?
+          summary_enhanced = ?,
+          summary_base_message_count = ?
       WHERE id = ?
     `)
       .run(
@@ -625,6 +844,7 @@ export class LocalStorageProvider implements IStorageProvider {
         summary.fetched_from_papr ? 1 : 0,
         summary.last_fetched_at || null,
         serializeEnhancedFields(summary.enhanced),
+        summaryBaseMessageCount,
         chatId,
       );
 

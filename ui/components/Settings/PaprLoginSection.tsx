@@ -30,6 +30,17 @@ interface SchemaInfo {
   relationshipTypeNames: string[];
 }
 
+interface WorkspaceMember {
+  objectId: string;
+  user: {
+    objectId: string;
+    email: string;
+    displayName: string;
+    profileImageUrl?: string;
+    role: string;
+  };
+}
+
 interface PaprLoginSectionProps {
   onApiKeyReceived?: (apiKey: string) => void;
 }
@@ -54,6 +65,14 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
   const [schemasLoading, setSchemasLoading] = useState(false);
   const [expandedSchema, setExpandedSchema] = useState<string | null>(null);
 
+  const [workspaceName, setWorkspaceName] = useState<string | null>(null);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [workspaceMembers, setWorkspaceMembers] = useState<WorkspaceMember[]>([]);
+  const [workspaceMembersLoading, setWorkspaceMembersLoading] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const [inviteMessage, setInviteMessage] = useState<string | null>(null);
+
   useEffect(() => {
     checkLoginStatus();
   }, []);
@@ -75,6 +94,56 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
       loadSchemas();
     }
   }, [isLoggedIn, activeNamespaceId]);
+
+  useEffect(() => {
+    if (isLoggedIn) {
+      void loadWorkspaceMembers();
+    }
+  }, [isLoggedIn, activeOrganizationId]);
+
+  const loadWorkspaceMembers = useCallback(async () => {
+    setWorkspaceMembersLoading(true);
+    setInviteMessage(null);
+    try {
+      const result = await window.electronAPI.papr.listWorkspaceMembers();
+      if (result.success) {
+        setWorkspaceId(result.workspaceId || null);
+        setWorkspaceName(result.workspaceName || null);
+        setWorkspaceMembers(result.members || []);
+      } else {
+        setWorkspaceMembers([]);
+        setInviteMessage(result.error || "Could not load team members");
+      }
+    } catch (err) {
+      console.error("Failed to load workspace members:", err);
+      setInviteMessage("Could not load team members");
+    } finally {
+      setWorkspaceMembersLoading(false);
+    }
+  }, []);
+
+  const handleInviteMember = async () => {
+    const email = inviteEmail.trim();
+    if (!email) return;
+
+    setInviteLoading(true);
+    setInviteMessage(null);
+    setError(null);
+    try {
+      const result = await window.electronAPI.papr.inviteWorkspaceMember(email);
+      if (result.success) {
+        setInviteEmail("");
+        setInviteMessage(`Invite sent to ${result.email}`);
+        await loadWorkspaceMembers();
+      } else {
+        setInviteMessage(result.error || "Failed to send invite");
+      }
+    } catch (err) {
+      setInviteMessage(err instanceof Error ? err.message : "Failed to send invite");
+    } finally {
+      setInviteLoading(false);
+    }
+  };
 
   const checkLoginStatus = async () => {
     try {
@@ -144,6 +213,11 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
         setNamespaces([]);
         setNamespacesLoaded(false);
         setSchemas([]);
+        setWorkspaceMembers([]);
+        setWorkspaceId(null);
+        setWorkspaceName(null);
+        setInviteEmail("");
+        setInviteMessage(null);
       } else {
         setError(result.error || "Failed to switch organization");
       }
@@ -181,7 +255,7 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
     setIsLoading(true);
     setError(null);
     try {
-      const result = await window.electronAPI.papr.startLogin(mode);
+      const result = await window.electronAPI.papr.startLogin(mode, "settings");
       if (!result.success) {
         throw new Error(result.error || "Failed to start login flow");
       }
@@ -201,6 +275,11 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
         setActiveNamespaceId(null);
         setNamespacesLoaded(false);
         setSchemas([]);
+        setWorkspaceMembers([]);
+        setWorkspaceId(null);
+        setWorkspaceName(null);
+        setInviteEmail("");
+        setInviteMessage(null);
       }
     } catch (err) {
       console.error("Failed to logout:", err);
@@ -376,6 +455,21 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
           </div>
         )}
 
+        {/* Team members — needed for My team cloud app access */}
+        <WorkspaceTeamSection
+          workspaceName={workspaceName || undefined}
+          workspaceId={workspaceId || undefined}
+          members={workspaceMembers}
+          loading={workspaceMembersLoading}
+          inviteEmail={inviteEmail}
+          inviteLoading={inviteLoading}
+          inviteMessage={inviteMessage}
+          onInviteEmailChange={setInviteEmail}
+          onInvite={handleInviteMember}
+          onRefresh={() => void loadWorkspaceMembers()}
+          onOpenDashboard={() => void window.electronAPI.papr.openWorkspaceTeam()}
+        />
+
         {/* Schemas section */}
         <SchemasSection
           schemas={schemas}
@@ -457,6 +551,141 @@ function Spinner() {
       <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" opacity="0.25"/>
       <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
     </svg>
+  );
+}
+
+function WorkspaceTeamSection({
+  workspaceName,
+  workspaceId,
+  members,
+  loading,
+  inviteEmail,
+  inviteLoading,
+  inviteMessage,
+  onInviteEmailChange,
+  onInvite,
+  onRefresh,
+  onOpenDashboard,
+}: {
+  workspaceName?: string;
+  workspaceId?: string;
+  members: WorkspaceMember[];
+  loading: boolean;
+  inviteEmail: string;
+  inviteLoading: boolean;
+  inviteMessage: string | null;
+  onInviteEmailChange: (value: string) => void;
+  onInvite: () => void;
+  onRefresh: () => void;
+  onOpenDashboard: () => void;
+}) {
+  const [isCollapsed, setIsCollapsed] = useState(false);
+
+  return (
+    <div className="papr-team">
+      <div className="papr-team__header">
+        <button
+          className="papr-team__toggle"
+          onClick={() => setIsCollapsed(!isCollapsed)}
+          type="button"
+        >
+          <svg
+            className={`papr-team__chevron ${!isCollapsed ? "papr-team__chevron--open" : ""}`}
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
+          <span>Team</span>
+          <span className="papr-team__count">{members.length}</span>
+        </button>
+        <button
+          type="button"
+          className="papr-team__refresh"
+          onClick={onRefresh}
+          disabled={loading}
+          title="Refresh team"
+        >
+          {loading ? <Spinner /> : "Refresh"}
+        </button>
+      </div>
+
+      {!isCollapsed && (
+        <div className="papr-team__body">
+          <p className="papr-team__hint">
+            People here can open cloud apps shared as <strong>My team</strong> on apps.papr.ai.
+            Namespace members are not the same as seeing a namespace in dashboard — team membership controls cloud access.
+          </p>
+
+          {workspaceName && (
+            <div className="papr-team__meta">
+              <span>{workspaceName}</span>
+              {workspaceId && <code className="papr-team__id">{workspaceId}</code>}
+            </div>
+          )}
+
+          <div className="papr-team__invite">
+            <input
+              type="email"
+              className="papr-team__input"
+              placeholder="colleague@company.com"
+              value={inviteEmail}
+              onChange={(e) => onInviteEmailChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onInvite();
+              }}
+              disabled={inviteLoading}
+            />
+            <button
+              type="button"
+              className="papr-team__invite-btn"
+              onClick={onInvite}
+              disabled={inviteLoading || !inviteEmail.trim()}
+            >
+              {inviteLoading ? <Spinner /> : "Invite"}
+            </button>
+          </div>
+
+          {inviteMessage && (
+            <p className="papr-team__message">{inviteMessage}</p>
+          )}
+
+          <ul className="papr-team__list">
+            {members.map((member) => (
+              <li key={member.objectId} className="papr-team__member">
+                <div className="papr-team__avatar">
+                  {member.user.profileImageUrl ? (
+                    <img src={member.user.profileImageUrl} alt="" />
+                  ) : (
+                    <span>{member.user.displayName.charAt(0).toUpperCase()}</span>
+                  )}
+                </div>
+                <div className="papr-team__member-info">
+                  <span className="papr-team__member-name">{member.user.displayName}</span>
+                  <span className="papr-team__member-email">{member.user.email}</span>
+                </div>
+                <span className="papr-team__role">{member.user.role}</span>
+              </li>
+            ))}
+            {!loading && members.length === 0 && (
+              <li className="papr-team__empty">No team members loaded yet.</li>
+            )}
+          </ul>
+
+          <button
+            type="button"
+            className="papr-team__dashboard-link"
+            onClick={onOpenDashboard}
+          >
+            Manage roles in dashboard
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

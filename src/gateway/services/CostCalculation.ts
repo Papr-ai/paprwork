@@ -28,7 +28,15 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "gpt-5-mini": { input: 0.1, output: 0.4 }, // legacy id; normalizer maps to gpt-5.4-mini
   "gpt-5.4-mini": { input: 0.75, output: 4.5 },
   "gpt-5.3-codex": { input: 15.0, output: 45.0 },
-  // GPT-5.5 Series (released April 2026) - replaced GPT-5.4 reasoning variants
+  // GPT-5.6 Series (released July 2026)
+  "gpt-5.6-luna": { input: 1.0, output: 6.0 },
+  "gpt-5.6-terra": { input: 2.5, output: 15.0 },
+  "gpt-5.6-sol": { input: 5.0, output: 30.0 },
+  "gpt-5.6-sol-low": { input: 5.0, output: 30.0 },
+  "gpt-5.6-sol-high": { input: 5.0, output: 30.0 },
+  "gpt-5.6-sol-xhigh": { input: 5.0, output: 30.0 },
+  "gpt-5.6": { input: 5.0, output: 30.0 },
+  // GPT-5.5 Series (deprecated picker IDs — treated as GPT-5.6 Sol tier)
   "gpt-5.5-low": { input: 5.0, output: 30.0 },
   "gpt-5.5": { input: 5.0, output: 30.0 },
   "gpt-5.5-high": { input: 5.0, output: 30.0 },
@@ -49,9 +57,11 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   // Anthropic Claude 4 Series
   "claude-haiku-4-5": { input: 0.8, output: 4.0 },
   "claude-sonnet-4-6": { input: 3.0, output: 15.0 },
+  "claude-sonnet-5": { input: 3.0, output: 15.0 },
   "claude-opus-4-6": { input: 15.0, output: 75.0 },
   "claude-opus-4-5-thinking": { input: 15.0, output: 75.0 },
   "claude-opus-4-7": { input: 5.0, output: 25.0 },
+  "claude-opus-4-8": { input: 5.0, output: 25.0 },
   "claude-fable-5": { input: 10.0, output: 50.0 },
 
   // Google Gemini Series (API format uses dots: gemini-2.5)
@@ -81,6 +91,18 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "gemma3:latest": { input: 0, output: 0 },
   "gemma3:12b": { input: 0, output: 0 },
   "gemma3:27b": { input: 0, output: 0 },
+
+  // Z.ai GLM (via Papr proxy — upstream API rates)
+  "glm-5.2": { input: 1.4, output: 4.4 },
+  "glm-5.2-max": { input: 1.4, output: 4.4 },
+
+  // Groq (via Papr proxy — https://groq.com/pricing, uncached input rates)
+  "qwen/qwen3-32b": { input: 0.29, output: 0.59 },
+  "openai/gpt-oss-120b": { input: 0.15, output: 0.6 },
+
+  // Moonshot Kimi K3 (via Papr proxy — cache-miss input / output per 1M tokens)
+  "kimi-k3": { input: 3.0, output: 15.0 },
+  "kimi-3": { input: 3.0, output: 15.0 },
 };
 
 /** Normalize model ID for cost lookup (legacy dash format -> dot format) */
@@ -88,16 +110,32 @@ function normalizeModelForPricing(model: string): string {
   return model
     .replace(/gpt-5-2/g, "gpt-5.2")
     .replace(/gpt-5-4/g, "gpt-5.4")
+    .replace(/gpt-5-5/g, "gpt-5.5")
+    .replace(/gpt-5-6/g, "gpt-5.6")
     .replace(/gemini-2-5/g, "gemini-2.5");
 }
 
+export interface TokenUsageForCost {
+  promptTokens: number;
+  completionTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+}
+
+/** Anthropic/OpenAI prompt cache: read ≈ 0.1× input, write ≈ 1.25× input */
+export const CACHE_READ_COST_MULTIPLIER = 0.1;
+export const CACHE_WRITE_COST_MULTIPLIER = 1.25;
+
 /**
- * Calculate cost for a single model response
+ * Calculate USD cost with prompt-cache token breakdown.
+ *
+ * `promptTokens` is regular (non-cache) input from the provider.
+ * Cache read/write are billed at discounted/premium rates on top.
+ * When cache tokens are 0, equivalent to {@link calculateCost}.
  */
-export function calculateCost(
+export function calculateCostWithCache(
   model: string,
-  promptTokens: number,
-  completionTokens: number,
+  usage: TokenUsageForCost,
 ): number {
   const normalized = normalizeModelForPricing(model);
   const pricing = MODEL_PRICING[normalized] ?? MODEL_PRICING[model];
@@ -108,10 +146,29 @@ export function calculateCost(
     return 0;
   }
 
-  const inputCost = (promptTokens / 1_000_000) * pricing.input;
+  const cacheRead = Math.max(0, usage.cacheReadTokens ?? 0);
+  const cacheWrite = Math.max(0, usage.cacheWriteTokens ?? 0);
+  const promptTokens = Math.max(0, usage.promptTokens);
+  const completionTokens = Math.max(0, usage.completionTokens);
+
+  const inputCost =
+    (promptTokens / 1_000_000) * pricing.input +
+    (cacheRead / 1_000_000) * pricing.input * CACHE_READ_COST_MULTIPLIER +
+    (cacheWrite / 1_000_000) * pricing.input * CACHE_WRITE_COST_MULTIPLIER;
   const outputCost = (completionTokens / 1_000_000) * pricing.output;
 
   return inputCost + outputCost;
+}
+
+/**
+ * Calculate cost for a single model response
+ */
+export function calculateCost(
+  model: string,
+  promptTokens: number,
+  completionTokens: number,
+): number {
+  return calculateCostWithCache(model, { promptTokens, completionTokens });
 }
 
 /**
@@ -121,10 +178,19 @@ export function calculateCostBreakdown(
   model: string,
   promptTokens: number,
   completionTokens: number,
+  cacheReadTokens = 0,
+  cacheWriteTokens = 0,
 ): CostBreakdown {
   const normalized = normalizeModelForPricing(model);
   const pricing = MODEL_PRICING[normalized] ?? MODEL_PRICING[model];
-  const inputCost = pricing ? (promptTokens / 1_000_000) * pricing.input : 0;
+  const inputCost = pricing
+    ? calculateCostWithCache(model, {
+        promptTokens,
+        completionTokens: 0,
+        cacheReadTokens,
+        cacheWriteTokens,
+      })
+    : 0;
   const outputCost = pricing
     ? (completionTokens / 1_000_000) * pricing.output
     : 0;

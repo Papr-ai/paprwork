@@ -7,7 +7,26 @@ import type { AnthropicProvider } from "@ai-sdk/anthropic";
 import type { OpenAIProvider } from "@ai-sdk/openai";
 import type { GoogleGenerativeAIProvider } from "@ai-sdk/google";
 
-export type Provider = "anthropic" | "openai" | "openai-codex" | "google" | "ollama";
+export type Provider =
+  | "anthropic"
+  | "openai"
+  | "openai-codex"
+  | "google"
+  | "ollama"
+  | "cursor"
+  | "zai"
+  | "groq"
+  | "moonshot";
+
+/** OpenAI AI SDK `providerOptions.openai.reasoningEffort` */
+export type OpenAIReasoningEffort = "low" | "medium" | "high" | "xhigh";
+
+/** Model picker reasoning levels (OpenAI + provider-specific e.g. Z.ai "max") */
+export type ReasoningEffort = OpenAIReasoningEffort | "max";
+
+export type ModelReasoning = {
+  effort?: ReasoningEffort;
+};
 
 /**
  * Typed model IDs extracted directly from the AI SDK provider types.
@@ -43,9 +62,7 @@ export interface AgentConfig {
   maxSteps?: number;
   maxTokens?: number; // Output token limit
   thinkingBudget?: number;
-  reasoning?: {
-    effort?: "low" | "medium" | "high" | "xhigh";
-  };
+  reasoning?: ModelReasoning;
 }
 
 /**

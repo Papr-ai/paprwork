@@ -17,7 +17,13 @@
 import { ipcMain, BrowserWindow, shell } from "electron";
 import { CustomKeysStorage, SettingsStorage } from "../../core/storage/index.js";
 import { invalidateKeyCache } from "./customKeys.js";
+import {
+  fetchWorkspaceMembers,
+  sendWorkspaceInvite,
+} from "./paprWorkspaceTeam.js";
 import * as crypto from "crypto";
+import os from "node:os";
+import path from "node:path";
 
 /**
  * Sync Papr profile fields to gateway settings file so the gateway process
@@ -26,6 +32,9 @@ import * as crypto from "crypto";
 export async function syncProfileToGatewaySettings(
   email: string,
   userId: string,
+  displayName?: string,
+  imageUrl?: string,
+  organization?: string,
 ): Promise<void> {
   try {
     const fsP = await import("fs/promises");
@@ -46,6 +55,15 @@ export async function syncProfileToGatewaySettings(
     const profile = settings.profile as Record<string, string>;
     profile.email = email;
     profile.paprUserId = userId;
+    if (displayName?.trim()) {
+      profile.name = displayName.trim();
+    }
+    if (imageUrl?.trim()) {
+      profile.imageUrl = imageUrl.trim();
+    }
+    if (organization?.trim()) {
+      profile.organization = organization.trim();
+    }
     await fsP.mkdir(pathM.dirname(settingsPath), { recursive: true });
     await fsP.writeFile(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
     invalidatePaprUserIdCache();
@@ -103,13 +121,143 @@ const PARSE_GRAPHQL_URL = process.env.PARSE_GRAPHQL_URL || "https://server.papr.
 const PARSE_APP_ID = process.env.PARSE_APP_ID || "671e705a-f735-4ec0-8474-15899a475440";
 
 export type PaprAuthMode = "login" | "signup";
+export type PaprLoginSource = "auth_wall" | "settings" | "unknown";
 
 interface PaprLoginState {
   pendingState?: string;
   codeVerifier?: string;
+  mode?: PaprAuthMode;
+  source?: PaprLoginSource;
+}
+
+interface PersistedPkceState {
+  pendingState: string;
+  codeVerifier: string;
+  mode?: PaprAuthMode;
+  source?: PaprLoginSource;
+  createdAt: string;
 }
 
 const loginState: PaprLoginState = {};
+const PKCE_TTL_MS = 10 * 60 * 1000;
+
+type LoginTelemetryTracker = (
+  eventName: string,
+  properties?: Record<string, unknown>,
+) => void;
+
+let trackLoginEvent: LoginTelemetryTracker | undefined;
+
+function getPkceStatePath(): string {
+  return path.join(os.homedir(), "Papr", "data", "papr-auth-pkce.json");
+}
+
+async function persistPkceState(state: PersistedPkceState): Promise<void> {
+  const fs = await import("fs/promises");
+  const filePath = getPkceStatePath();
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(state, null, 2), "utf-8");
+}
+
+async function loadPersistedPkceState(): Promise<PersistedPkceState | null> {
+  const fs = await import("fs/promises");
+  const filePath = getPkceStatePath();
+  try {
+    const raw = await fs.readFile(filePath, "utf-8");
+    const parsed = JSON.parse(raw) as PersistedPkceState;
+    if (
+      !parsed.pendingState ||
+      !parsed.codeVerifier ||
+      !parsed.createdAt ||
+      Date.now() - new Date(parsed.createdAt).getTime() > PKCE_TTL_MS
+    ) {
+      await clearPersistedPkceState();
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function clearPersistedPkceState(): Promise<void> {
+  const fs = await import("fs/promises");
+  const filePath = getPkceStatePath();
+  try {
+    await fs.unlink(filePath);
+  } catch {
+    // File may not exist
+  }
+}
+
+function clearInMemoryPkceState(): void {
+  loginState.pendingState = undefined;
+  loginState.codeVerifier = undefined;
+  loginState.mode = undefined;
+  loginState.source = undefined;
+}
+
+async function restorePkceFromDisk(): Promise<void> {
+  const persisted = await loadPersistedPkceState();
+  if (!persisted) {
+    return;
+  }
+  loginState.pendingState = persisted.pendingState;
+  loginState.codeVerifier = persisted.codeVerifier;
+  loginState.mode = persisted.mode;
+  loginState.source = persisted.source;
+}
+
+async function hydratePkceForCallback(state: string | null): Promise<void> {
+  if (
+    loginState.codeVerifier &&
+    loginState.pendingState &&
+    (!state || loginState.pendingState === state)
+  ) {
+    return;
+  }
+
+  const persisted = await loadPersistedPkceState();
+  if (!persisted) {
+    return;
+  }
+
+  if (state && persisted.pendingState !== state) {
+    return;
+  }
+
+  loginState.pendingState = persisted.pendingState;
+  loginState.codeVerifier = persisted.codeVerifier;
+  loginState.mode = persisted.mode;
+  loginState.source = persisted.source;
+}
+
+function trackLoginStarted(mode: PaprAuthMode, source: PaprLoginSource): void {
+  trackLoginEvent?.("paprwork_papr_login_started", { mode, source });
+}
+
+function trackLoginCompleted(mode: PaprAuthMode | undefined, source: PaprLoginSource | undefined): void {
+  trackLoginEvent?.("paprwork_papr_login_completed", {
+    ...(mode ? { mode } : {}),
+    ...(source ? { source } : {}),
+  });
+}
+
+function trackLoginFailed(
+  error: string,
+  options?: {
+    mode?: PaprAuthMode;
+    source?: PaprLoginSource;
+    stage?: "start" | "callback";
+  },
+): void {
+  trackLoginEvent?.("paprwork_papr_login_failed", {
+    error,
+    ...(options?.mode ? { mode: options.mode } : {}),
+    ...(options?.source ? { source: options.source } : {}),
+    ...(options?.stage ? { stage: options.stage } : {}),
+  });
+}
 
 /** Build Auth0 authorize URL. Use screen_hint=signup so new users see registration, not login. */
 export function buildAuth0AuthorizeUrl(params: {
@@ -180,6 +328,11 @@ export function formatAuth0CallbackError(
 }
 
 function notifyLoginError(win: BrowserWindow | undefined, message: string): void {
+  trackLoginFailed(message, {
+    mode: loginState.mode,
+    source: loginState.source,
+    stage: "callback",
+  });
   if (!win) return;
   win.webContents.send("papr:login-error", { error: message });
 }
@@ -670,10 +823,8 @@ async function getSelectedWorkspaceId(
   sessionToken: string,
   userId: string,
 ): Promise<string | undefined> {
-  const userData = await parseGraphQL(sessionToken, GET_USER_WORKSPACE, { userId });
-  return userData.user?.isSelectedWorkspaceFollower?.workspace?.objectId as
-    | string
-    | undefined;
+  const info = await getSelectedWorkspaceInfo(sessionToken, userId);
+  return info.workspaceId;
 }
 
 async function updateNamespaceACL(
@@ -962,11 +1113,44 @@ const GET_USER_WORKSPACE = `
       isSelectedWorkspaceFollower {
         workspace {
           objectId
+          workspace_name
+          organization {
+            objectId
+            name
+          }
         }
       }
     }
   }
 `;
+
+interface SelectedWorkspaceInfo {
+  workspaceId?: string;
+  workspaceName?: string;
+  organizationId?: string;
+  organizationName?: string;
+}
+
+async function getSelectedWorkspaceInfo(
+  sessionToken: string,
+  userId: string,
+): Promise<SelectedWorkspaceInfo> {
+  const userData = await parseGraphQL(sessionToken, GET_USER_WORKSPACE, { userId });
+  const workspace = userData.user?.isSelectedWorkspaceFollower?.workspace as
+    | {
+        objectId?: string;
+        workspace_name?: string;
+        organization?: { objectId?: string; name?: string };
+      }
+    | undefined;
+
+  return {
+    workspaceId: workspace?.objectId,
+    workspaceName: workspace?.workspace_name,
+    organizationId: workspace?.organization?.objectId,
+    organizationName: workspace?.organization?.name,
+  };
+}
 
 // ─── IPC Handlers ──────────────────────────────────────────────
 
@@ -981,6 +1165,11 @@ async function completePaprAuthCallback(
   name: string;
   userId: string;
 }> {
+  await hydratePkceForCallback(state);
+
+  const completedMode = loginState.mode;
+  const completedSource = loginState.source;
+
   if (!code) throw new Error("No authorization code received");
   if (!state || state !== loginState.pendingState) {
     throw new Error("Invalid state parameter — possible CSRF attack");
@@ -992,8 +1181,8 @@ async function completePaprAuthCallback(
   console.log("[PaprLogin] Exchanging authorization code for tokens...");
   const tokens = await exchangeCodeForTokens(code, loginState.codeVerifier);
 
-  loginState.pendingState = undefined;
-  loginState.codeVerifier = undefined;
+  clearInMemoryPkceState();
+  await clearPersistedPkceState();
 
   if (!tokens.id_token) {
     throw new Error("No ID token received from Auth0");
@@ -1005,6 +1194,8 @@ async function completePaprAuthCallback(
   const displayName =
     claims["https://papr.scope.com/displayName"] || claims.nickname || claims.name;
   const email = claims.email;
+  const profileImage =
+    typeof claims.picture === "string" ? claims.picture : undefined;
 
   if (!parseSessionToken || !objectId) {
     throw new Error(
@@ -1014,21 +1205,18 @@ async function completePaprAuthCallback(
 
   console.log(`[PaprLogin] Authenticated user: ${email} (${objectId})`);
 
-  let workspaceId: string | undefined;
+  let workspaceInfo: SelectedWorkspaceInfo = {};
   try {
-    const userData = await parseGraphQL(parseSessionToken, GET_USER_WORKSPACE, {
-      userId: objectId,
-    });
-    workspaceId = userData.user?.isSelectedWorkspaceFollower?.workspace?.objectId;
+    workspaceInfo = await getSelectedWorkspaceInfo(parseSessionToken, objectId);
   } catch (e) {
-    console.warn("[PaprLogin] Could not fetch workspace ID:", e);
+    console.warn("[PaprLogin] Could not fetch workspace info:", e);
   }
 
   const provision = await provisionOrGetApiKey(
     parseSessionToken,
     objectId,
     email || "user",
-    workspaceId,
+    workspaceInfo.workspaceId,
   );
 
   await customKeysStorage.addKey({
@@ -1058,10 +1246,19 @@ async function completePaprAuthCallback(
     organizationId: provision.organizationId,
     activeNamespaceId: provision.namespaceId,
     activeNamespaceName: provision.namespaceName,
+    workspaceId: workspaceInfo.workspaceId,
+    workspaceName: workspaceInfo.workspaceName,
   });
 
-  await syncProfileToGatewaySettings(email || "", objectId);
+  await syncProfileToGatewaySettings(
+    email || "",
+    objectId,
+    displayName || "",
+    profileImage,
+    provision.namespaceName,
+  );
   console.log("[PaprLogin] Login complete. API key stored as PAPR_API_KEY.");
+  trackLoginCompleted(completedMode, completedSource);
 
   const win = BrowserWindow.getAllWindows()[0];
   if (win) {
@@ -1083,7 +1280,12 @@ async function completePaprAuthCallback(
 export function initializePaprLoginIPC(
   customKeysStorage: CustomKeysStorage,
   settingsStorage: SettingsStorage,
+  options?: {
+    trackLoginEvent?: LoginTelemetryTracker;
+  },
 ) {
+  trackLoginEvent = options?.trackLoginEvent;
+  void restorePkceFromDisk();
   // Check if user is already logged in
   ipcMain.handle("papr:check-login-status", async () => {
     try {
@@ -1113,7 +1315,17 @@ export function initializePaprLoginIPC(
       }
 
       const { sessionToken: _sessionToken, ...safeProfile } = profile;
-      return { success: true, profile: safeProfile };
+      return {
+        success: true,
+        profile: {
+          ...safeProfile,
+          workspaceId: profile.workspaceId,
+          workspaceName: profile.workspaceName,
+          organizationId: profile.organizationId,
+          activeNamespaceId: profile.activeNamespaceId,
+          activeNamespaceName: profile.activeNamespaceName,
+        },
+      };
     } catch (error) {
       return {
         success: false,
@@ -1123,15 +1335,29 @@ export function initializePaprLoginIPC(
   });
 
   // Start PKCE login flow (mode: signup shows Auth0 registration, login shows sign-in)
-  ipcMain.handle("papr:start-login", async (_event, mode?: PaprAuthMode) => {
+  ipcMain.handle(
+    "papr:start-login",
+    async (_event, mode?: PaprAuthMode, source?: PaprLoginSource) => {
     try {
       const authMode: PaprAuthMode = mode === "signup" ? "signup" : "login";
+      const loginSource: PaprLoginSource =
+        source === "auth_wall" || source === "settings" ? source : "unknown";
       const codeVerifier = generateCodeVerifier();
       const codeChallenge = generateCodeChallenge(codeVerifier);
       const state = generateState();
 
       loginState.pendingState = state;
       loginState.codeVerifier = codeVerifier;
+      loginState.mode = authMode;
+      loginState.source = loginSource;
+
+      await persistPkceState({
+        pendingState: state,
+        codeVerifier,
+        mode: authMode,
+        source: loginSource,
+        createdAt: new Date().toISOString(),
+      });
 
       const authUrl = buildAuth0AuthorizeUrl({
         state,
@@ -1140,18 +1366,27 @@ export function initializePaprLoginIPC(
       });
 
       console.log(`[PaprLogin] Starting Auth0 flow (mode=${authMode})`);
+      trackLoginStarted(authMode, loginSource);
       await shell.openExternal(authUrl.toString());
 
       return { success: true };
     } catch (error) {
-      loginState.pendingState = undefined;
-      loginState.codeVerifier = undefined;
+      clearInMemoryPkceState();
+      await clearPersistedPkceState();
+      const message = error instanceof Error ? error.message : "Failed to start login";
+      trackLoginFailed(message, {
+        mode: mode === "signup" ? "signup" : "login",
+        source:
+          source === "auth_wall" || source === "settings" ? source : "unknown",
+        stage: "start",
+      });
       return {
         success: false,
-        error: error instanceof Error ? error.message : "Failed to start login",
+        error: message,
       };
     }
-  });
+  },
+  );
 
   // Handle the deep link callback
   ipcMain.handle("papr:handle-callback", async (_event, callbackUrl: string) => {
@@ -1174,12 +1409,12 @@ export function initializePaprLoginIPC(
         settingsStorage,
       );
     } catch (error) {
-      loginState.pendingState = undefined;
-      loginState.codeVerifier = undefined;
       console.error("[PaprLogin] Login failed:", error);
 
       const message = error instanceof Error ? error.message : "Login failed";
       notifyLoginError(BrowserWindow.getAllWindows()[0], message);
+      clearInMemoryPkceState();
+      await clearPersistedPkceState();
 
       return {
         success: false,
@@ -1203,11 +1438,19 @@ export function initializePaprLoginIPC(
       invalidateKeyCache("PAPR_API_KEY");
 
       // Clear PKCE state
-      loginState.codeVerifier = undefined;
-      loginState.pendingState = undefined;
+      clearInMemoryPkceState();
+      await clearPersistedPkceState();
 
       settingsStorage.clearPaprProfile();
       await clearPaprUserIdFromGatewaySettings();
+      try {
+        const { clearMemoryPreviewCache } = await import(
+          "../../gateway/services/MemoryPreviewCache.js"
+        );
+        await clearMemoryPreviewCache();
+      } catch {
+        // Non-fatal
+      }
       console.log("[PaprLogin] Logged out, all tokens cleared.");
 
       // Notify renderer about logout success
@@ -1415,6 +1658,132 @@ export function initializePaprLoginIPC(
       };
     }
   });
+
+  ipcMain.handle("papr:list-workspace-members", async () => {
+    try {
+      const profile = settingsStorage.getPaprProfile();
+      if (!profile?.sessionToken) {
+        return { success: false, error: "Not logged in" };
+      }
+
+      let workspaceId = profile.workspaceId;
+      let workspaceName = profile.workspaceName;
+      if (!workspaceId && profile.userId) {
+        const workspaceInfo = await getSelectedWorkspaceInfo(
+          profile.sessionToken,
+          profile.userId,
+        );
+        workspaceId = workspaceInfo.workspaceId;
+        workspaceName = workspaceInfo.workspaceName;
+        if (workspaceId) {
+          settingsStorage.setPaprProfile({
+            ...profile,
+            workspaceId,
+            workspaceName,
+          });
+        }
+      }
+
+      if (!workspaceId) {
+        return { success: false, error: "No workspace found for your Papr account" };
+      }
+
+      const members = await fetchWorkspaceMembers(profile.sessionToken, workspaceId);
+      return {
+        success: true,
+        workspaceId,
+        workspaceName: workspaceName || "Workspace",
+        members,
+      };
+    } catch (error) {
+      console.error("[PaprLogin] Failed to list workspace members:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to load team members",
+      };
+    }
+  });
+
+  ipcMain.handle("papr:invite-workspace-member", async (_event, email: string) => {
+    try {
+      const profile = settingsStorage.getPaprProfile();
+      if (!profile?.sessionToken || !profile.userId) {
+        return { success: false, error: "Not logged in" };
+      }
+
+      const workspaceInfo = await getSelectedWorkspaceInfo(
+        profile.sessionToken,
+        profile.userId,
+      );
+
+      if (!workspaceInfo.workspaceId) {
+        return { success: false, error: "No workspace found for your Papr account" };
+      }
+
+      if (
+        workspaceInfo.workspaceId !== profile.workspaceId ||
+        workspaceInfo.workspaceName !== profile.workspaceName
+      ) {
+        settingsStorage.setPaprProfile({
+          ...profile,
+          workspaceId: workspaceInfo.workspaceId,
+          workspaceName: workspaceInfo.workspaceName,
+        });
+      }
+
+      const members = await fetchWorkspaceMembers(
+        profile.sessionToken,
+        workspaceInfo.workspaceId,
+      );
+      const existingEmails = new Set(
+        members.map((member) => member.user.email.toLowerCase()),
+      );
+
+      const result = await sendWorkspaceInvite(
+        {
+          sessionToken: profile.sessionToken,
+          workspaceId: workspaceInfo.workspaceId,
+          organizationId:
+            workspaceInfo.organizationId || profile.organizationId || workspaceInfo.workspaceId,
+          organizationName:
+            workspaceInfo.organizationName ||
+            workspaceInfo.workspaceName ||
+            "Papr",
+          workspaceName: workspaceInfo.workspaceName || "Workspace",
+          inviterId: profile.userId,
+          inviterName: profile.displayName || profile.email,
+          inviterImageUrl: profile.profileImage,
+          email,
+        },
+        existingEmails,
+      );
+
+      if (result.alreadyMember) {
+        return {
+          success: false,
+          error: `${result.email} is already on your team`,
+        };
+      }
+
+      return {
+        success: true,
+        email: result.email,
+        inviteLink: result.inviteLink,
+      };
+    } catch (error) {
+      console.error("[PaprLogin] Failed to invite workspace member:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to send invite",
+      };
+    }
+  });
+
+  ipcMain.handle("papr:open-workspace-team", async () => {
+    const platformUrl = process.env.PAPR_PLATFORM_URL || "https://dashboard.papr.ai";
+    await shell.openExternal(`${platformUrl.replace(/\/$/, "")}/people`);
+    return { success: true };
+  });
 }
 
 /**
@@ -1442,12 +1811,12 @@ export async function handlePaprAuthCallback(
 
     await completePaprAuthCallback(code, state, customKeysStorage, settingsStorage);
   } catch (err) {
-    loginState.pendingState = undefined;
-    loginState.codeVerifier = undefined;
     console.error("[PaprLogin] Callback failed:", err);
 
     const message = err instanceof Error ? err.message : "Login failed";
     notifyLoginError(BrowserWindow.getAllWindows()[0], message);
+    clearInMemoryPkceState();
+    await clearPersistedPkceState();
   }
 }
 
@@ -1455,7 +1824,7 @@ export async function handlePaprAuthCallback(
  * Cleanup function called on app shutdown.
  */
 export function cleanupPaprLogin(): void {
-  loginState.pendingState = undefined;
-  loginState.codeVerifier = undefined;
+  clearInMemoryPkceState();
+  trackLoginEvent = undefined;
   console.log("[PaprLogin] Cleaned up login state.");
 }

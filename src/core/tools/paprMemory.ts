@@ -1,4 +1,6 @@
 import Papr from "@papr/memory";
+import type { FeedbackSubmitParams } from "@papr/memory/resources/feedback.js";
+import type { SearchResponse } from "@papr/memory/resources/memory.js";
 import type { MemoryObject } from "@papr/memory/resources/shared.js";
 import type { SchemaListResponse, UserGraphSchemaOutput as Schema, SchemaCreateParams, SchemaUpdateParams } from "@papr/memory/resources/schemas.js";
 import {
@@ -11,6 +13,7 @@ import {
   CURRENT_CHAT_SCOPE,
   resolveConversationId,
 } from "./chatScope.js";
+import { getPaprClient, handlePaprToolError, isPaprNotFoundError } from "./paprClient.js";
 
 const addMemorySchema = z
   .object({
@@ -58,35 +61,103 @@ const addMemorySchema = z
     },
   );
 
-const searchMemorySchema = z.object({
+const customMetadataFilterValueSchema = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.array(z.string()),
+]);
+
+const searchMemorySchema = z
+  .object({
+  memoryId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Fetch one memory by ID (full content). Use when you have an ID from document upload " +
+        "or a prior search — omit query when using this.",
+    ),
   query: z
     .string()
     .min(1)
+    .optional()
     .describe(
-      "Detailed search query describing what you're looking for. For best results, write 2-3 sentences " +
-      "that include specific details, context, and time frame. Use specific nouns over vague ones " +
+      "Detailed search query describing what you're looking for. MUST be 2-3 sentences " +
+      "with specific details, context, and time frame. Use specific nouns over vague ones " +
       "(e.g. 'graph-aware embedding architecture' beats 'how it works'). " +
       "Examples: " +
       "'Find recurring customer complaints about API performance from the last month, focusing on timeout errors.' " +
-      "'What are the main blockers in my current projects? Focus on technical challenges and timeline impacts.' " +
+      "'What decisions were made about the Audit Workbench scoring system? Include the 1-4 maturity scale and which database is canonical.' " +
       "'Papr architecture: graph-aware embeddings, predictive memory layer, technical design decisions.'",
+    ),
+  customMetadataFilters: z
+    .record(z.string(), customMetadataFilterValueSchema)
+    .optional()
+    .describe(
+      "Exact-match filters on memory customMetadata. Examples: " +
+      '{ "content_type": "document_summary", "upload_id": "abc-123" }, ' +
+      '{ "file_name": "report.pdf" }, { "chat_id": "uuid" }, { "source": "code_indexer" }. ' +
+      "Combined with code filters (projectId, fileName, etc.) when both are set.",
     ),
   maxMemories: z
     .number()
     .int()
-    .min(1)
+    .min(10)
     .max(30)
     .optional()
     .describe(
-      "Number of memories to return (max 30). Default 20. " +
-      "Use 25-30 for architecture/concept queries where breadth and reranking matter most. " +
+      "Number of memories to return (min 10, max 30). Default 20. " +
+      "Use 25-30 for architecture/concept queries where breadth matters. " +
       "Use 10-15 for narrow lookups where you know exactly what you want.",
     ),
   category: z
-    .enum(["agent_memory", "code"])
+    .enum([
+      "preference", "task", "goal", "fact", "context",
+      "skills", "learning", "code",
+    ])
     .optional()
     .describe(
-      "Filter by memory category. 'agent_memory' for conversation memories, 'code' for code files and projects.",
+      "Filter by memory category (maps to Papr metadata.category). " +
+      "User role: 'preference' (likes/dislikes), 'task', 'goal', 'fact', 'context'. " +
+      "Assistant role: 'skills', 'learning', 'task', 'goal', 'fact', 'context'. " +
+      "'preference' is user-only. 'skills'/'learning' are assistant-only. " +
+      "'task'/'goal'/'fact'/'context' can be either role. " +
+      "'code' — shortcut that sets category='learning' + source='code_indexer' for indexed code files.",
+    ),
+  role: z
+    .enum(["user", "assistant"])
+    .optional()
+    .describe(
+      "Filter by who generated the memory. 'user' = user-authored memories (preferences, tasks, goals). " +
+      "'assistant' = agent-authored (learnings, skills, code index). " +
+      "Omit to search both.",
+    ),
+  rerankingProvider: z
+    .enum(["none", "cohere", "openai", "papr_enhanced", "papr_max"])
+    .optional()
+    .describe(
+      "Reranking provider for result quality. " +
+      "'none' — cosine similarity only (fastest, no reranking). " +
+      "'cohere' — Cohere rerank-v3.5 cross-encoder (default if omitted). " +
+      "'openai' — OpenAI reranking (gpt-5-nano or gpt-5-mini). " +
+      "'papr_enhanced' — Papr graph rerank (uses knowledge graph structure). " +
+      "'papr_max' — Papr graph rerank + cross-encoder + EGR (highest accuracy, slower). " +
+      "Default is 'cohere' when omitted.",
+    ),
+  rerankingModel: z
+    .string()
+    .optional()
+    .describe(
+      "Model for cohere/openai providers. Cohere: 'rerank-v3.5' (default). " +
+      "OpenAI: 'gpt-5-nano', 'gpt-5-mini'. Only relevant when rerankingProvider is 'cohere' or 'openai'.",
+    ),
+  rerankingDomainId: z
+    .string()
+    .optional()
+    .describe(
+      "Signal domain for papr_enhanced/papr_max providers (e.g. 'general', 'code', 'cosqa'). " +
+      "Defaults to 'general'. Only relevant for Papr reranking providers.",
     ),
   projectId: z
     .string()
@@ -117,7 +188,7 @@ const searchMemorySchema = z.object({
     .describe(
       `Scope search to one conversation session. Use "${CURRENT_CHAT_SCOPE}" for the active chat, ` +
       "or pass an explicit chat UUID. Omit to search across all chats. " +
-      "Use when the in-context summary + recent messages are not enough detail from THIS chat.",
+      "ALWAYS use this when recalling decisions/architecture from the current conversation.",
     ),
   vectorPolicy: z
     .object({
@@ -145,7 +216,133 @@ const searchMemorySchema = z.object({
     .describe(
       "Optional vector search policy. Omit for standard search; use category='code' for code search defaults.",
     ),
-});
+})
+  .refine((data) => Boolean(data.memoryId) || Boolean(data.query), {
+    message: "Provide memoryId (direct fetch) OR query (semantic search), not neither",
+    path: ["query"],
+  });
+
+function formatMemoryByIdResponse(
+  memoryId: string,
+  response: unknown,
+): { success: true; data: Record<string, unknown> } {
+  const data = response as {
+    data?: {
+      memories?: Array<{
+        id?: string;
+        content?: string;
+        customMetadata?: Record<string, unknown> | null;
+      }>;
+    };
+    memories?: Array<{
+      id?: string;
+      content?: string;
+      customMetadata?: Record<string, unknown> | null;
+    }>;
+  };
+
+  const memories = data.data?.memories ?? data.memories ?? [];
+  const formatted = memories
+    .filter((m) => typeof m.content === "string" && m.content.length > 0)
+    .map((m) => ({
+      memoryId: m.id ?? memoryId,
+      content: m.content ?? "",
+      customMetadata: (m.customMetadata as Record<string, unknown> | null) ?? {},
+    }));
+
+  if (formatted.length === 0) {
+    return {
+      success: true,
+      data: {
+        memoryId,
+        found: false,
+        message:
+          "No memory content yet — may still be processing. Try get_document_upload_status.",
+        raw: response,
+      },
+    };
+  }
+
+  return {
+    success: true,
+    data: {
+      memoryId,
+      found: true,
+      memories: formatted,
+      totalLength: formatted.reduce((sum, m) => sum + m.content.length, 0),
+    },
+  };
+}
+
+export interface SearchAgentMemoryToolResult {
+  success: true;
+  searchId: string | null;
+  memoryCount: number;
+  nodeCount: number;
+  data: SearchResponse;
+  /** Agent-visible reminder — include literal searchId for submit_memory_feedback */
+  _memoryFeedbackReminder: string;
+}
+
+function buildMemoryFeedbackReminder(
+  searchId: string | null,
+  memoryCount: number,
+): string {
+  if (searchId === null) {
+    return "No searchId returned — skip submit_memory_feedback for this search.";
+  }
+
+  if (memoryCount === 0) {
+    return (
+      `searchId="${searchId}" — search returned 0 memories; low-relevance feedback was auto-submitted. ` +
+      `Call submit_memory_feedback only if you disagree.`
+    );
+  }
+
+  return (
+    `After evaluating these results, if retrieval was clearly helpful or clearly irrelevant, call:\n` +
+    `submit_memory_feedback({ searchId: "${searchId}", feedbackType: "thumbs_up" | "thumbs_down" | "memory_relevance", citedMemoryIds: ["<memory-id-from-results>"] })\n` +
+    `Skip feedback when results were mediocre or mixed. Wrong memory content → delete_memory or add_agent_memory.`
+  );
+}
+
+export function formatSearchMemoryResponse(
+  response: SearchResponse,
+): SearchAgentMemoryToolResult {
+  const memoryCount = response.data?.memories?.length ?? 0;
+  const nodeCount = response.data?.nodes?.length ?? 0;
+  const searchId = response.search_id ?? null;
+
+  return {
+    success: true,
+    searchId,
+    memoryCount,
+    nodeCount,
+    data: response,
+    _memoryFeedbackReminder: buildMemoryFeedbackReminder(searchId, memoryCount),
+  };
+}
+
+export async function submitEmptySearchFeedback(
+  client: Papr,
+  searchId: string,
+): Promise<void> {
+  const { paprUserScope } = await import("../../gateway/utils/paprUserId.js");
+  try {
+    await client.feedback.submit({
+      search_id: searchId,
+      ...paprUserScope(),
+      feedbackData: {
+        feedbackSource: "inline",
+        feedbackType: "memory_relevance",
+        feedbackText: "Search returned zero memories for the query.",
+        feedbackScore: 1,
+      },
+    });
+  } catch (error) {
+    console.warn("[search_agent_memory] Empty-search feedback failed:", error);
+  }
+}
 
 // Property definition for node/relationship properties
 const propertyDefinitionSchema = z.object({
@@ -223,19 +420,6 @@ const updateSchemaSchema = z.object({
   scope: z.enum(['personal', 'workspace', 'namespace', 'organization']).optional(),
 });
 
-async function getPaprClient(): Promise<Papr> {
-  const { getApiKey } = await import("../../gateway/utils/keyResolver.js");
-  const apiKey = await getApiKey("PAPR_API_KEY");
-  if (!apiKey) {
-    throw new Error("PAPR_API_KEY is not configured");
-  }
-  return new Papr({
-    xAPIKey: apiKey,
-    maxRetries: 2,
-    timeout: 30000,
-  });
-}
-
 export const addAgentMemoryTool = createTool({
   id: "add_agent_memory",
   description:
@@ -244,8 +428,7 @@ export const addAgentMemoryTool = createTool({
   execute: async (args) => {
     try {
       const client = await getPaprClient();
-      const { getPaprUserId } = await import("../../gateway/utils/paprUserId.js");
-      const userId = getPaprUserId();
+      const { paprUserScope } = await import("../../gateway/utils/paprUserId.js");
 
       // Build customMetadata for fields not in the MemoryMetadata spec
       const customMetadata: Record<string, string> = {};
@@ -263,7 +446,7 @@ export const addAgentMemoryTool = createTool({
 
       const response = await client.memory.add({
         content: args.content,
-        ...(userId ? { user_id: userId } : {}),
+        ...paprUserScope(),
         ...(addPolicy ? { policy: addPolicy } : {}),
         metadata: {
           role: args.role,
@@ -273,16 +456,7 @@ export const addAgentMemoryTool = createTool({
       });
       return { success: true, data: response };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "Papr Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid Papr API key. Please check your Settings and ensure your API key is correct."
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });
@@ -290,18 +464,26 @@ export const addAgentMemoryTool = createTool({
 export const searchAgentMemoryTool = createTool({
   id: "search_agent_memory",
   description:
-    "Semantic search over Papr memories (extracted from synced chats, facts, code index). " +
-    "Use 2-3 sentence queries. For THIS chat when context only has a summary + ~6 recent messages, " +
-    `pass chatId: "${CURRENT_CHAT_SCOPE}". For code: category='code' + projectId/projectType/language/fileName filters.`,
+    "Search or fetch Papr memories. Pass memoryId to get full content of one memory by ID " +
+    "(from document upload or prior results). Pass query for semantic search (2-3 sentences). " +
+    "Use customMetadataFilters for exact filters (upload_id, content_type, file_name, chat_id, etc.). " +
+    `For THIS chat: chatId "${CURRENT_CHAT_SCOPE}". For code: category='code' + projectId/projectType/language/fileName.`,
   inputSchema: searchMemorySchema,
   execute: async (args) => {
     try {
       const client = await getPaprClient();
-      const { getPaprUserId } = await import("../../gateway/utils/paprUserId.js");
-      const userId = getPaprUserId();
 
-      // Build customMetadata filters from code search params
-      const customMetadata: Record<string, string | number | boolean> = {};
+      if (args.memoryId) {
+        const response = await client.memory.get(args.memoryId);
+        return formatMemoryByIdResponse(args.memoryId, response);
+      }
+
+      const { paprUserScope } = await import("../../gateway/utils/paprUserId.js");
+
+      // Build customMetadata filters from code search params + explicit filters
+      const customMetadata: Record<string, string | number | boolean | string[]> = {
+        ...(args.customMetadataFilters ?? {}),
+      };
       if (args.projectId) customMetadata.project_id = args.projectId;
       if (args.projectType) customMetadata.project_type = args.projectType;
       if (args.language) customMetadata.language = args.language;
@@ -321,19 +503,27 @@ export const searchAgentMemoryTool = createTool({
         }
       }
 
+      const isCodeSearch = args.category === "code";
+
+      // Build metadata filters matching SDK's MemoryMetadata shape
       const searchMetadata: {
-        category?: "learning";
-        role?: "assistant";
+        category?: "preference" | "task" | "goal" | "fact" | "context" | "skills" | "learning";
+        role?: "user" | "assistant";
         conversationId?: string;
-        customMetadata?: Record<string, string | number | boolean>;
+        customMetadata?: Record<string, string | number | boolean | string[]>;
       } = {};
 
       if (conversationId) {
         searchMetadata.conversationId = conversationId;
       }
-      if (args.category === "code") {
+      if (isCodeSearch) {
         searchMetadata.category = "learning";
         searchMetadata.role = "assistant";
+      } else if (args.category && args.category !== "code") {
+        searchMetadata.category = args.category;
+      }
+      if (args.role && !isCodeSearch) {
+        searchMetadata.role = args.role;
       }
       if (hasMetadataFilters) {
         searchMetadata.customMetadata = customMetadata;
@@ -341,22 +531,24 @@ export const searchAgentMemoryTool = createTool({
 
       const searchPolicy = buildSearchPolicy({
         vectorPolicy: args.vectorPolicy,
-        defaultDomain: args.category === "code" ? "code" : undefined,
+        defaultDomain: isCodeSearch ? "code" : undefined,
       });
 
+      // Pass reranking config directly from agent's chosen provider/model
+      const chosenProvider = args.rerankingProvider ?? "cohere";
+      const chosenModel = args.rerankingModel ?? (chosenProvider === "cohere" ? "rerank-v3.5" : undefined);
+
       const response = await client.memory.search({
-        query: args.query,
-        ...(userId ? { user_id: userId } : {}),
+        query: args.query!,
+        ...paprUserScope(),
         max_memories: args.maxMemories ?? 20,
-        max_nodes: 15,
+        max_nodes: 20,
         enable_agentic_graph: true,
-        // Migrated from deprecated rank_results: true to reranking_config.
-        // Cohere rerank-v3.5 is a purpose-built cross-encoder: faster than LLM
-        // reranking and SOTA on retrieval benchmarks. Production-ready on Papr backend.
         reranking_config: {
-          reranking_enabled: true,
-          reranking_provider: "cohere",
-          reranking_model: "rerank-v3.5",
+          reranking_enabled: chosenProvider !== "none",
+          reranking_provider: chosenProvider,
+          ...(chosenModel ? { reranking_model: chosenModel } : {}),
+          ...(args.rerankingDomainId ? { domain_id: args.rerankingDomainId } : {}),
         },
         response_format: "toon",
         ...(searchPolicy ? { policy: searchPolicy } : {}),
@@ -364,18 +556,16 @@ export const searchAgentMemoryTool = createTool({
           ? { metadata: searchMetadata }
           : {}),
       });
-      return { success: true, data: response };
-    } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "Papr Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid Papr API key. Please check your Settings and ensure your API key is correct."
-        );
+      const formatted = formatSearchMemoryResponse(response);
+      if (formatted.searchId !== null && formatted.memoryCount === 0) {
+        void submitEmptySearchFeedback(client, formatted.searchId);
       }
-      throw error;
+      return formatted;
+    } catch (error) {
+      if (isPaprNotFoundError(error)) {
+        return { success: true, data: { memories: [], nodes: [], message: "No relevant items found for this query." } };
+      }
+      handlePaprToolError(error);
     }
   },
 });
@@ -729,6 +919,53 @@ const deleteMemorySchema = z.object({
   memoryId: z.string().min(1).describe("The memory ID to delete"),
 });
 
+const submitMemoryFeedbackSchema = z.object({
+  searchId: z
+    .string()
+    .min(1)
+    .describe(
+      "searchId from a prior search_agent_memory response. Required to link feedback to that retrieval.",
+    ),
+  feedbackType: z
+    .enum([
+      "thumbs_up",
+      "thumbs_down",
+      "rating",
+      "correction",
+      "report",
+      "copy_action",
+      "save_action",
+      "create_document",
+      "memory_relevance",
+      "answer_quality",
+    ])
+    .describe(
+      "Type of feedback. Use thumbs_up/thumbs_down or memory_relevance for retrieval quality; correction when memories were wrong.",
+    ),
+  feedbackSource: z
+    .enum(["inline", "post_query", "session_end", "memory_citation", "answer_panel"])
+    .optional()
+    .describe("Where feedback originated. Default: inline (agent after search)."),
+  citedMemoryIds: z
+    .array(z.string())
+    .optional()
+    .describe("Memory IDs that were useful or irrelevant from the search results."),
+  citedNodeIds: z
+    .array(z.string())
+    .optional()
+    .describe("Graph node IDs cited in the feedback, if any."),
+  feedbackText: z
+    .string()
+    .optional()
+    .describe("Optional explanation — especially for correction or report feedback."),
+  feedbackScore: z
+    .number()
+    .min(1)
+    .max(5)
+    .optional()
+    .describe("Optional 1-5 score when feedbackType is rating or memory_relevance."),
+});
+
 // Delete schema schema
 const deleteSchemaSchema = z.object({
   schemaId: z.string().min(1).describe("The schema ID to delete (soft delete - marks as archived)"),
@@ -809,8 +1046,8 @@ export const deleteMemoryTool = createTool({
     try {
       const client = await getPaprClient();
       const response = await client.memory.delete(args.memoryId);
-      return { 
-        success: true, 
+      return {
+        success: true,
         data: response,
         message: `Memory ${args.memoryId} deleted successfully`
       };
@@ -825,6 +1062,45 @@ export const deleteMemoryTool = createTool({
         );
       }
       throw error;
+    }
+  },
+});
+
+export const submitMemoryFeedbackTool = createTool({
+  id: "submit_memory_feedback",
+  description:
+    "Submit retrieval-quality feedback to Papr Memory after evaluating search_agent_memory results. " +
+    "Use the searchId from that search response. Only submit when results were clearly helpful or clearly irrelevant — not on every search. " +
+    "For wrong memory content, prefer delete_memory or add_agent_memory instead of correction feedback alone.",
+  inputSchema: submitMemoryFeedbackSchema,
+  execute: async (args) => {
+    try {
+      const client = await getPaprClient();
+      const { paprUserScope } = await import("../../gateway/utils/paprUserId.js");
+
+      const feedbackData: FeedbackSubmitParams.FeedbackData = {
+        feedbackSource: args.feedbackSource ?? "inline",
+        feedbackType: args.feedbackType,
+        ...(args.citedMemoryIds ? { citedMemoryIds: args.citedMemoryIds } : {}),
+        ...(args.citedNodeIds ? { citedNodeIds: args.citedNodeIds } : {}),
+        ...(args.feedbackText ? { feedbackText: args.feedbackText } : {}),
+        ...(args.feedbackScore !== undefined ? { feedbackScore: args.feedbackScore } : {}),
+      };
+
+      const response = await client.feedback.submit({
+        search_id: args.searchId,
+        ...paprUserScope(),
+        feedbackData,
+      });
+
+      return {
+        success: true,
+        feedbackId: response.feedback_id ?? null,
+        message: response.message ?? "Feedback submitted",
+        data: response,
+      };
+    } catch (error) {
+      handlePaprToolError(error);
     }
   },
 });
@@ -869,8 +1145,7 @@ export const createEntitiesAndRelationshipsTool = createTool({
   execute: async (args) => {
     try {
       const client = await getPaprClient();
-      const { getPaprUserId } = await import("../../gateway/utils/paprUserId.js");
-      const userId = getPaprUserId();
+      const { paprUserScope } = await import("../../gateway/utils/paprUserId.js");
       
       // Build manual graph generation structure
       const manualGeneration = {
@@ -898,7 +1173,7 @@ export const createEntitiesAndRelationshipsTool = createTool({
 
       const response = await client.memory.add({
         content: args.content,
-        ...(userId ? { user_id: userId } : {}),
+        ...paprUserScope(),
         ...(manualPolicy ? { policy: manualPolicy } : {}),
       });
       
@@ -975,6 +1250,7 @@ export const listSignalDomainsTool = createTool({
 export const paprMemoryTools = [
   addAgentMemoryTool,
   searchAgentMemoryTool,
+  submitMemoryFeedbackTool,
   registerSchemaTool,
   updateSchemaTool,
   listSchemasTool,

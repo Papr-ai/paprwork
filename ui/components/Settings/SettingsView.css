@@ -595,6 +595,35 @@
   line-height: 1.4;
 }
 
+.tool-truncation-settings__hero {
+  margin: var(--space-4) 0;
+}
+
+.tool-truncation-settings__subtitle {
+  font-size: 15px;
+  font-weight: 600;
+  margin: var(--space-5) 0 var(--space-2);
+}
+
+.tool-truncation-settings__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+}
+
+.tool-truncation-settings__advanced--disabled {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.tool-truncation-settings__saved {
+  font-size: 13px;
+  color: var(--accent-green, #34c759);
+  align-self: center;
+  margin-left: var(--space-2);
+}
+
 /* Key permission cards - same pattern as Agent Permissions */
 .key-permission-selector {
   display: flex;
@@ -2166,6 +2195,13 @@
 
 .update-error-notice p:last-child {
   margin-bottom: 0;
+}
+
+.update-recovery-hint {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary, #636366);
 }
 
 .dev-mode-hint {

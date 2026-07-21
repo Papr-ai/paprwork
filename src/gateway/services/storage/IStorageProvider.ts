@@ -22,7 +22,7 @@ export interface StoredMessage {
     name: string;
     args: Record<string, any>;
     result?: string;
-    status?: "pending" | "success" | "error";
+    status?: "pending" | "success" | "error" | "interrupted";
   }>;
 
   // Sequence tracking (V1 compatibility for interleaved text/tool calls)
@@ -36,6 +36,8 @@ export interface StoredMessage {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
   cost?: number; // USD cost of this response
 
   // Error tracking

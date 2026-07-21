@@ -35,6 +35,12 @@
   font-weight: 600;
 }
 
+/* Emphasis/italic */
+.markdown-em {
+  font-family: inherit;
+  font-style: italic;
+}
+
 /* Links */
 .markdown-link {
   color: var(--primary-color);

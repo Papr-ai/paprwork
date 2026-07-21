@@ -6,7 +6,7 @@ import { useCallback, useEffect } from "react";
 import { useArtifactsStore, type Artifact } from "../stores/artifactsStore";
 import { gateway } from "../src/lib/gateway";
 
-export function useArtifacts() {
+export function useArtifacts(scope: "all" | "apps" = "all") {
   const {
     artifacts,
     loading,
@@ -25,31 +25,41 @@ export function useArtifacts() {
     getFilteredArtifacts,
   } = useArtifactsStore();
 
-  // Load all artifacts (documents + apps)
+  // Apps use a fast stale-while-refresh path; other views load both kinds.
   const loadArtifacts = useCallback(async () => {
-    setLoading(true);
+    const cached = useArtifactsStore.getState().artifacts;
+    const hasCachedApps = cached.some((item) => item.type === "app");
+    const blockForLoad = scope === "all" || !hasCachedApps;
+    if (blockForLoad) setLoading(true);
     setError(null);
 
     try {
-      const [docsResponse, appsResponse] = await Promise.all([
-        gateway.send("document:list"),
-        gateway.send("app:list"),
-      ]);
-
-      const documents = (docsResponse.data as Artifact[]) || [];
-      const apps = (appsResponse.data as Artifact[]) || [];
-      const combined = [...documents, ...apps];
-
-      setArtifacts(combined);
+      if (scope === "apps") {
+        const response = await gateway.send("app:list");
+        const apps = (response.data as Artifact[]) || [];
+        const current = useArtifactsStore.getState().artifacts;
+        setArtifacts([
+          ...current.filter((item) => item.type !== "app"),
+          ...apps,
+        ]);
+      } else {
+        const [docsResponse, appsResponse] = await Promise.all([
+          gateway.send("document:list"),
+          gateway.send("app:list"),
+        ]);
+        const documents = (docsResponse.data as Artifact[]) || [];
+        const apps = (appsResponse.data as Artifact[]) || [];
+        setArtifacts([...documents, ...apps]);
+      }
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Failed to load artifacts";
-      setError(message);
+      if (blockForLoad) setError(message);
       console.error("[useArtifacts] Load error:", err);
     } finally {
-      setLoading(false);
+      if (blockForLoad) setLoading(false);
     }
-  }, [setArtifacts, setLoading, setError]);
+  }, [scope, setArtifacts, setLoading, setError]);
 
   // Create document
   const createDocument = useCallback(
@@ -184,7 +194,9 @@ export function useArtifacts() {
   // Agent/bash can change apps on disk; gateway prunes stale entries and broadcasts
   useEffect(() => {
     const handler = (event: Event) => {
-      const detail = (event as CustomEvent).detail as { type?: string } | undefined;
+      const detail = (event as CustomEvent).detail as
+        | { type?: string }
+        | undefined;
       if (detail?.type === "app:list-updated") {
         void loadArtifacts();
       }

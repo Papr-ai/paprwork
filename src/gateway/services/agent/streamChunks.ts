@@ -22,6 +22,10 @@ type ChatStreamChunkPayload =
         promptTokens: number;
         completionTokens: number;
         totalTokens: number;
+        cacheReadTokens?: number;
+        cacheWriteTokens?: number;
+        /** pi-ai: last step's full context window (input + cacheRead + cacheWrite) */
+        contextTokens?: number;
       };
     }; // Done payload
 

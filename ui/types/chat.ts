@@ -24,10 +24,21 @@ export interface SequenceItem {
   data: string | Record<string, any>;
 }
 
+/** File/context attached to a user message (shown in chat history). */
+export interface MessageAttachment {
+  id: string;
+  name: string;
+  kind: "file" | "document" | "app";
+  mimeType?: string;
+  filePath?: string;
+}
+
 export interface ChatMessage extends CoreMessage {
   id: string;
   isStreaming?: boolean;
   streamingContent?: string;
+  /** Context files/docs attached when the user sent this message */
+  attachments?: MessageAttachment[];
 
   // V1-style sequence for interleaving text and tool calls
   sequence?: SequenceItem[];
@@ -38,6 +49,10 @@ export interface ChatState {
   isLoading: boolean;
   isSending: boolean;
   isStreaming: boolean;
+  /** True when gateway disconnected mid-stream — Working card shows reconnecting */
+  connectionPaused?: boolean;
+  /** Auto-resume failed — user can tap Continue to retry stream recovery */
+  needsStreamRecovery?: boolean;
   hasUnread: boolean;
   draftMessage?: string; // Persisted draft message for this chat
   lastSelectedModelId?: string; // Last model user chose for this chat

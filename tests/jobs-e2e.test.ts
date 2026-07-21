@@ -1,4 +1,5 @@
 import { describe, expect, test, beforeAll, afterAll, vi } from "vitest";
+import { STANDALONE_APP_ID } from "../src/gateway/services/jobs/appIds.js";
 import { getJobsService, JobsService } from "../src/gateway/services/JobsService.js";
 import { getJobsScheduler } from "../src/gateway/services/JobsScheduler.js";
 import { getJobRunHistory } from "../src/gateway/services/jobs/JobRunHistory.js";
@@ -39,7 +40,8 @@ describe("End-to-End Job Scheduling Tests", () => {
       // Create a bash job with 5-second interval
       const job = await jobsService.createJob({
         name: "Test Bash Job",
-        type: "bash",
+        appIds: [STANDALONE_APP_ID],
+      type: "bash",
         command: 'echo "Hello from scheduled bash job"',
         schedule: {
           enabled: true,
@@ -84,7 +86,8 @@ describe("End-to-End Job Scheduling Tests", () => {
       // Create a bash job that fails with transient error
       const job = await jobsService.createJob({
         name: "Test Transient Error Job",
-        type: "bash",
+        appIds: [STANDALONE_APP_ID],
+      type: "bash",
         command: 'exit 1', // Simulates failure
         retries: {
           maxAttempts: 3,
@@ -122,7 +125,8 @@ describe("End-to-End Job Scheduling Tests", () => {
       // Create a python job
       const job = await jobsService.createJob({
         name: "Test Python Job",
-        type: "python",
+        appIds: [STANDALONE_APP_ID],
+      type: "python",
         command: "print('Python job executed')",
       });
 
@@ -152,7 +156,8 @@ describe("End-to-End Job Scheduling Tests", () => {
       // Create an agent job
       const job = await jobsService.createJob({
         name: "Test Agent Job",
-        type: "agent",
+        appIds: [STANDALONE_APP_ID],
+      type: "agent",
         command: "Say 'Hello from agent job' and nothing else.",
         schedule: {
           enabled: true,
@@ -190,7 +195,8 @@ describe("End-to-End Job Scheduling Tests", () => {
       // Create an agent job that will produce no output (mock empty response)
       const job = await jobsService.createJob({
         name: "Test Empty Agent Job",
-        type: "agent",
+        appIds: [STANDALONE_APP_ID],
+      type: "agent",
         command: "This should produce no output (mock test).",
       });
 
@@ -229,7 +235,8 @@ describe("End-to-End Job Scheduling Tests", () => {
       // Create an agent job
       const job = await jobsService.createJob({
         name: "Test Agent Exception Job",
-        type: "agent",
+        appIds: [STANDALONE_APP_ID],
+      type: "agent",
         command: "This will throw an exception (mock test).",
         retries: {
           maxAttempts: 2,
@@ -283,7 +290,8 @@ describe("End-to-End Job Scheduling Tests", () => {
       // Create an agent job
       const job = await jobsService.createJob({
         name: "Test Agent Permanent Error Job",
-        type: "agent",
+        appIds: [STANDALONE_APP_ID],
+      type: "agent",
         command: "This will fail with permanent error (mock test).",
         retries: {
           maxAttempts: 3,
@@ -340,7 +348,8 @@ describe("End-to-End Job Scheduling Tests", () => {
       // Create two jobs: one due, one not due
       const dueJob = await jobsService.createJob({
         name: "Due Job",
-        type: "bash",
+        appIds: [STANDALONE_APP_ID],
+      type: "bash",
         command: 'echo "due"',
         schedule: {
           enabled: true,
@@ -350,7 +359,8 @@ describe("End-to-End Job Scheduling Tests", () => {
 
       const notDueJob = await jobsService.createJob({
         name: "Not Due Job",
-        type: "bash",
+        appIds: [STANDALONE_APP_ID],
+      type: "bash",
         command: 'echo "not due"',
         schedule: {
           enabled: true,
@@ -402,7 +412,8 @@ describe("End-to-End Job Scheduling Tests", () => {
       // Create a long-running job
       const job = await jobsService.createJob({
         name: "Long Running Job",
-        type: "bash",
+        appIds: [STANDALONE_APP_ID],
+      type: "bash",
         command: 'sleep 5 && echo "done"',
         schedule: {
           enabled: true,
@@ -449,7 +460,8 @@ describe("End-to-End Job Scheduling Tests", () => {
       // Create a cron job (every 5 minutes)
       const job = await jobsService.createJob({
         name: "Test Cron Job",
-        type: "bash",
+        appIds: [STANDALONE_APP_ID],
+      type: "bash",
         command: 'echo "cron test"',
         schedule: {
           enabled: true,
@@ -486,7 +498,8 @@ describe("End-to-End Job Scheduling Tests", () => {
       // Create a one-shot agent job
       const job = await jobsService.createJob({
         name: "One-Shot Agent Job",
-        type: "agent",
+        appIds: [STANDALONE_APP_ID],
+      type: "agent",
         command: "Test permanent error",
         retries: {
           maxAttempts: 3,
@@ -533,7 +546,8 @@ describe("End-to-End Job Scheduling Tests", () => {
       // Create a bash job that always fails
       const job = await jobsService.createJob({
         name: "Always Fail Job",
-        type: "bash",
+        appIds: [STANDALONE_APP_ID],
+      type: "bash",
         command: 'echo "Connection timeout" && exit 1',
         retries: {
           maxAttempts: 3,
@@ -567,7 +581,8 @@ describe("End-to-End Job Scheduling Tests", () => {
       // Create a simple bash job
       const job = await jobsService.createJob({
         name: "Multi-Run Test Job",
-        type: "bash",
+        appIds: [STANDALONE_APP_ID],
+      type: "bash",
         command: 'echo "run $RANDOM"',
       });
 
@@ -603,7 +618,8 @@ describe("End-to-End Job Scheduling Tests", () => {
       // Create a job
       const job = await jobsService.createJob({
         name: "Pruning Test Job",
-        type: "bash",
+        appIds: [STANDALONE_APP_ID],
+      type: "bash",
         command: 'echo "test"',
       });
 
@@ -632,7 +648,8 @@ describe("End-to-End Job Scheduling Tests", () => {
       // Create a job that generates lots of logs
       const job = await jobsService.createJob({
         name: "Log Generation Test",
-        type: "bash",
+        appIds: [STANDALONE_APP_ID],
+      type: "bash",
         command: 'for i in {1..100}; do echo "Log line $i with some padding to increase size XXXXXXXXXXXXXXXXXX"; done',
       });
 

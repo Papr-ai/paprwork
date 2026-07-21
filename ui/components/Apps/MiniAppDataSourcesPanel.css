@@ -1,0 +1,113 @@
+.mini-app-data-sources {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+}
+
+.mini-app-data-sources__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.mini-app-data-sources__head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mini-app-data-sources__head button {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.mini-app-data-sources__hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.mini-app-data-sources__error {
+  margin: 0;
+  font-size: 12px;
+  color: #ff3b30;
+}
+
+.mini-app-data-sources__list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mini-app-data-sources__list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.mini-app-data-sources__primary {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(1, 97, 224, 0.12);
+  color: #0161e0;
+}
+
+.mini-app-data-sources__path {
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.mini-app-data-sources__id {
+  font-size: 11px;
+}
+
+.mini-app-data-sources__link {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.mini-app-data-sources__link select {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.mini-app-data-sources__link button {
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: none;
+  background: #0161e0;
+  color: #fff;
+  cursor: pointer;
+}
+
+.mini-app-data-sources__link button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}

@@ -130,16 +130,16 @@ export function buildSearchPolicy(input: {
   return { vector };
 }
 
-/** Source code indexing: programming domain + knowledge-graph schema. */
-export function buildCodeIndexAddPolicy(schemaId: string): MemoryAddPolicy {
+/** Source code indexing: programming domain, vector-only (no graph extraction).
+ *  Code entities (CodeFile, API, Dependency) were graph noise — vector search
+ *  with the 'code' signal domain is sufficient for code retrieval.
+ *  schemaId parameter kept for backward compatibility but unused. */
+export function buildCodeIndexAddPolicy(_schemaId: string): MemoryAddPolicy {
   return {
     transform_embedding: {
       mode: "auto",
       domain_id: "code",
     },
-    graph: {
-      mode: "auto",
-      schema_id: schemaId,
-    },
+    // graph extraction disabled — vector-only for code memories
   };
 }

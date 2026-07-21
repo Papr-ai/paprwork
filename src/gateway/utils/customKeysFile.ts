@@ -2,13 +2,20 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import type { KeyClientAccess } from "../../core/types/customKeys.js";
+import { normalizeKeyClientAccess } from "../../core/types/customKeys.js";
+
 export interface CustomKeyFileMetadata {
   id: string;
   name: string;
   description?: string;
   permission: "always" | "ask";
+  clientAccess?: KeyClientAccess;
   createdAt: string;
   updatedAt?: string;
+  source?: "manual" | "oauth";
+  managedBy?: "oauth";
+  oauthProvider?: "openai" | "anthropic";
 }
 
 interface StoredCustomKeyRecord {
@@ -16,8 +23,12 @@ interface StoredCustomKeyRecord {
   name: string;
   description?: string;
   permission?: "always" | "ask";
+  clientAccess?: KeyClientAccess;
   createdAt: string;
   updatedAt?: string;
+  source?: "manual" | "oauth";
+  managedBy?: "oauth";
+  oauthProvider?: "openai" | "anthropic";
 }
 
 /** Papr Work userData path (matches Electron app.setName("Papr Work")). */
@@ -54,8 +65,12 @@ export async function loadCustomKeysMetadataFromFile(): Promise<
       name: key.name,
       description: key.description,
       permission: key.permission ?? "ask",
+      clientAccess: normalizeKeyClientAccess(key.clientAccess),
       createdAt: key.createdAt,
       updatedAt: key.updatedAt,
+      source: key.source,
+      managedBy: key.managedBy,
+      oauthProvider: key.oauthProvider,
     }));
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;

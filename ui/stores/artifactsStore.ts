@@ -18,6 +18,15 @@ export function artifactTypeLabel(type: ArtifactType): string {
   }
 }
 
+export interface ArtifactCloudLineage {
+  mode: "fork" | "track";
+  sourceAppId: string;
+  sourceSlug: string;
+  sourceNamespaceId: string;
+  installedAt: string;
+  lastSyncedAt?: string;
+}
+
 export interface Artifact {
   id: string;
   title: string;
@@ -28,13 +37,21 @@ export interface Artifact {
   preview?: string;
   icon?: string;
   favorite?: boolean;
+  /** Lifecycle status (apps only). Undefined = "active". */
+  status?: "draft" | "active" | "archived";
+  /** ISO timestamp of the last time the user opened this app. */
+  lastOpenedAt?: string;
+  /** Total number of times the user has opened this app. */
+  openCount?: number;
   tags?: string[];
   wordCount?: number;
+  description?: string;
+  cloudLineage?: ArtifactCloudLineage;
   metadata?: {
     filePath?: string;
     fileSize?: number;
     fileType?: string;
-    [key: string]: any;
+    [key: string]: unknown;
   };
 }
 
@@ -117,7 +134,14 @@ export const useArtifactsStore = create<ArtifactsState>((set, get) => ({
       filtered = filtered.filter(
         (a) =>
           a.title.toLowerCase().includes(query) ||
-          a.tags?.some((tag) => tag.toLowerCase().includes(query)),
+          a.id.toLowerCase().includes(query) ||
+          a.description?.toLowerCase().includes(query) ||
+          a.tags?.some((tag) => tag.toLowerCase().includes(query)) ||
+          a.cloudLineage?.sourceSlug.toLowerCase().includes(query) ||
+          Object.values(a.metadata ?? {}).some(
+            (value) =>
+              typeof value === "string" && value.toLowerCase().includes(query),
+          ),
       );
     }
 

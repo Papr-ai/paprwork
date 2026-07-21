@@ -3,7 +3,13 @@ import path from "path";
 import { promises as fs } from "fs";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { JobsService } from "../src/gateway/services/JobsService.js";
+import { STANDALONE_APP_ID } from "../src/gateway/services/jobs/appIds.js";
 import { getAgentService } from "../src/gateway/services/AgentService.js";
+import {
+  getAppService,
+  resetAppServiceSingletonForTests,
+} from "../src/gateway/services/AppService.js";
+import { resetJobsServiceSingletonForTests } from "../src/gateway/services/JobsService.js";
 
 const tmpRoots: string[] = [];
 
@@ -19,6 +25,8 @@ async function setupService(): Promise<JobsService> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "papr-jobs-test-"));
   tmpRoots.push(root);
   process.env.HOME = root;
+  resetAppServiceSingletonForTests();
+  resetJobsServiceSingletonForTests();
   const service = new JobsService();
   await service.initialize();
   return service;
@@ -27,7 +35,7 @@ async function setupService(): Promise<JobsService> {
 describe("JobsService", () => {
   test("creates and lists jobs", async () => {
     const service = await setupService();
-    await service.createJob({ name: "Build docs", type: "shell", command: "echo hi" });
+    await service.createJob({ name: "Build docs", appIds: [STANDALONE_APP_ID], type: "shell", command: "echo hi" });
     const jobs = await service.listJobs();
     expect(jobs).toHaveLength(1);
     expect(jobs[0].name).toBe("Build docs");
@@ -37,7 +45,7 @@ describe("JobsService", () => {
     const service = await setupService();
     const job = await service.createJob({
       name: "Simple job",
-      type: "shell",
+      appIds: [STANDALONE_APP_ID], type: "shell",
       command: "echo hello",
     });
     await service.runJob(job.id);
@@ -55,12 +63,33 @@ describe("JobsService", () => {
     const service = await setupService();
     const job = await service.createJob({
       name: "DB Job",
-      type: "python",
+      appIds: [STANDALONE_APP_ID], type: "python",
     });
     const dbPath = await service.getJobDatabasePath(job.id);
     expect(dbPath).toBeTruthy();
     const dbStat = await fs.stat(dbPath as string);
     expect(dbStat.isFile()).toBe(true);
+  });
+
+  test("createJob auto-links database to linked mini-app", async () => {
+    const service = await setupService();
+    const appService = getAppService();
+    await appService.initialize();
+    const app = await appService.createApp("Sync Dashboard", "Desc", [
+      { filename: "index.html", content: "<div>Dashboard</div>" },
+    ]);
+
+    await service.createJob({
+      name: "Data Sync",
+      appIds: [app.id],
+      type: "python",
+      command: "print('sync')",
+    });
+
+    const sources = await appService.listAppDataSources(app.id);
+    expect(sources).toHaveLength(1);
+    expect(sources[0]?.alias).toBe("Data Sync");
+    expect(sources[0]?.role).toBe("primary");
   });
 
   test("runs agent jobs via executor immediate path", async () => {
@@ -74,7 +103,7 @@ describe("JobsService", () => {
       });
     const job = await service.createJob({
       name: "Agent Job",
-      type: "agent",
+      appIds: [STANDALONE_APP_ID], type: "agent",
     });
     await service.runJob(job.id);
     const refreshed = await service.getJob(job.id);
@@ -88,7 +117,7 @@ describe("JobsService", () => {
     const service = await setupService();
     const job = await service.createJob({
       name: "Retry Job",
-      type: "shell",
+      appIds: [STANDALONE_APP_ID], type: "shell",
       command:
         "if [ ! -f ./data/first_try.flag ]; then touch ./data/first_try.flag; echo first-fail; exit 1; fi; echo recovered",
       retries: { maxAttempts: 2, backoffMs: 5 },
@@ -106,12 +135,12 @@ describe("JobsService", () => {
     const service = await setupService();
     const baseJob = await service.createJob({
       name: "Base Job",
-      type: "shell",
+      appIds: [STANDALONE_APP_ID], type: "shell",
       command: "echo base-done",
     });
     const dependentJob = await service.createJob({
       name: "Dependent Job",
-      type: "shell",
+      appIds: [STANDALONE_APP_ID], type: "shell",
       command: "echo dependent-done",
       dependsOn: [{ jobId: baseJob.id, onStatus: "completed" }],
     });
@@ -127,7 +156,7 @@ describe("JobsService", () => {
     const service = await setupService();
     const job = await service.createJob({
       name: "Migration Job",
-      type: "shell",
+      appIds: [STANDALONE_APP_ID], type: "shell",
       command: "echo migration-run",
     });
     const jobPath = await service.getJobPath(job.id);
@@ -149,17 +178,17 @@ describe("JobsService index corruption recovery", () => {
     const service = await setupService();
     const job1 = await service.createJob({
       name: "LinkedIn Scraper",
-      type: "python",
+      appIds: [STANDALONE_APP_ID], type: "python",
       command: "python3 scrape.py",
     });
     const job2 = await service.createJob({
       name: "Weekly Newsletter",
-      type: "agent",
+      appIds: [STANDALONE_APP_ID], type: "agent",
       command: "Write the weekly newsletter",
     });
     const job3 = await service.createJob({
       name: "Deploy Script",
-      type: "shell",
+      appIds: [STANDALONE_APP_ID], type: "shell",
       command: "echo deploy",
     });
 
@@ -218,7 +247,7 @@ describe("JobsService index corruption recovery", () => {
     const service = await setupService();
     const created = await service.createJob({
       name: "Nightly Backup",
-      type: "bash",
+      appIds: [STANDALONE_APP_ID], type: "bash",
       command: "tar czf backup.tgz .",
     });
 
@@ -244,7 +273,7 @@ describe("JobsService index corruption recovery", () => {
     const service = await setupService();
     const created = await service.createJob({
       name: "Data Pipeline",
-      type: "python",
+      appIds: [STANDALONE_APP_ID], type: "python",
       command: "python3 pipeline.py",
     });
 

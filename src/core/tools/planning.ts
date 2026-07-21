@@ -12,6 +12,7 @@
 
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
+import { PRODUCT_ARCHITECT_PLAN_REMINDER } from "../utils/productArchitectGate.js";
 
 const planStepSchema = z.object({
   id: z.string().min(1).describe("Unique step identifier (e.g., 'load_docs', 'create_ui')"),
@@ -122,7 +123,10 @@ export interface Plan {
 export const createPlanTool = createTool({
   id: "create_plan",
   description:
-    "REQUIRED for any multi-step task, especially app/job creation or updates. Create a step-by-step plan shown to the user as a progress card. Plans are persisted and associated with the chat. Use BEFORE starting any mini-app or job work (creating OR updating). **ENFORCED: Only ONE active plan per chat** - if an active plan exists, this tool will return it instead of creating a duplicate. To start a new plan, first complete or delete the existing one using update_plan (mark all steps completed) or delete_plan. Example usage: create_plan({ title: 'Build Dashboard', steps: [{ id: 'design', description: 'Design UI layout' }, { id: 'build', description: 'Build components' }] })",
+    "REQUIRED for any multi-step task, especially app/job creation or updates. Create a step-by-step plan shown to the user as a progress card. Plans are persisted and associated with the chat. Use BEFORE starting any mini-app or job work (creating OR updating). " +
+    "**Recommendation (not required):** If you have not run product-architect yet, consider delegating for a brief + architecture before building — then align this plan with approved Phase 1. " +
+    "**ENFORCED: Only ONE active plan per chat** - if an active plan exists, this tool will return it instead of creating a duplicate. To start a new plan, first complete or delete the existing one using update_plan (mark all steps completed) or delete_plan. " +
+    "Example: create_plan({ title: 'Build Dashboard', steps: [{ id: 'design', description: 'Design UI layout' }, { id: 'build', description: 'Build components' }] })",
   inputSchema: createPlanSchema,
   execute: async (input) => {
     const args = (input as { context?: CreatePlanArgs }).context ?? input;
@@ -181,12 +185,14 @@ export const createPlanTool = createTool({
 
     // Return formatted message for LLM + data for UI
     // The message is shown to the agent, data is parsed by PlanCard
-    const message = `✓ Plan created: "${args.title}" with ${steps.length} steps\nPlan ID: ${planId}\n\nNext: Start working on the first step, then call update_plan after completing each step.`;
-    
+    const message =
+      `✓ Plan created: "${args.title}" with ${steps.length} steps\nPlan ID: ${planId}\n\nNext: Start working on the first step, then call update_plan after completing each step.\n\n${PRODUCT_ARCHITECT_PLAN_REMINDER}`;
+
     return JSON.stringify({
       success: true,
       message,
       data: plan,
+      _architectReminder: PRODUCT_ARCHITECT_PLAN_REMINDER,
     });
   },
 });

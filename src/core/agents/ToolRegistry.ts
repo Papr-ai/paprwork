@@ -20,16 +20,28 @@ export type AnyTool = Tool<any, any, any, any, any, any, any>;
 
 export class ToolRegistry {
   private tools: Map<string, AnyTool>;
+  /** Legacy alias tools — available only when explicitly allowlisted (sub-agent profiles). */
+  private legacyToolIds: Set<string>;
 
   constructor() {
     this.tools = new Map();
+    this.legacyToolIds = new Set();
   }
 
   /**
-   * Register a tool
+   * Register a primary tool (visible to the main agent by default).
    */
   register(tool: AnyTool): void {
     this.tools.set(tool.id, tool);
+  }
+
+  /**
+   * Register a legacy alias (e.g. edit_app_file → same backend as edit_file).
+   * Hidden from the main agent unless explicitly allowlisted.
+   */
+  registerLegacy(tool: AnyTool): void {
+    this.tools.set(tool.id, tool);
+    this.legacyToolIds.add(tool.id);
   }
 
   /**
@@ -47,11 +59,13 @@ export class ToolRegistry {
   }
 
   /**
-   * Get all tools as object for Mastra Agent
+   * Get all tools as object for Mastra Agent (excludes legacy aliases by default).
    */
-  getTools(): Record<string, AnyTool> {
+  getTools(options?: { includeLegacy?: boolean }): Record<string, AnyTool> {
+    const includeLegacy = options?.includeLegacy ?? false;
     const toolsObject: Record<string, AnyTool> = {};
     for (const [id, tool] of this.tools) {
+      if (!includeLegacy && this.legacyToolIds.has(id)) continue;
       toolsObject[id] = tool;
     }
     return toolsObject;
@@ -73,6 +87,17 @@ export class ToolRegistry {
       }
     }
     return toolsObject;
+  }
+
+  /** Primary tool IDs (excludes legacy aliases). */
+  getMainToolIds(): string[] {
+    return Array.from(this.tools.keys()).filter(
+      (id) => !this.legacyToolIds.has(id),
+    );
+  }
+
+  isLegacyTool(toolId: string): boolean {
+    return this.legacyToolIds.has(toolId);
   }
 
   /**

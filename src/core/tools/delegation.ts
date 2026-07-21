@@ -3,6 +3,11 @@ import { z } from "zod";
 
 /** Valid model IDs for sub-agents — prevents agent from typing name/id in model field */
 const SUBAGENT_MODEL_IDS = [
+  "gpt-5-6-luna",
+  "gpt-5-6-terra",
+  "gpt-5-6-sol-low",
+  "gpt-5-6-sol",
+  "gpt-5-6-sol-high",
   "gpt-5.4-mini",
   "gpt-5.5-low",
   "gpt-5.5",
@@ -10,8 +15,10 @@ const SUBAGENT_MODEL_IDS = [
   "gpt-5.3-codex",
   "claude-haiku-4-5",
   "claude-sonnet-4-6",
+  "claude-sonnet-5",
   "claude-sonnet-4-5",
   "claude-opus-4-6",
+  "claude-opus-4-8",
   "claude-fable-5",
   "gemini-2.5-flash",
   "gemini-2.5-flash-lite",
@@ -52,7 +59,12 @@ const deleteSubAgentSchema = z.object({
 const delegateTaskSchema = z.object({
   task: z.string().min(1),
   context: z.string().optional(),
-  useAgentId: z.string().min(1).optional(),
+  useAgentId: z
+    .string()
+    .min(1)
+    .describe(
+      "REQUIRED. Exact sub-agent id from list_sub_agents() or create_sub_agent() — e.g. 'research-specialist' or 'agent-uuid'. Never omit; omitting previously routed to the wrong agent.",
+    ),
   reportChatId: z
     .string()
     .min(1)
@@ -83,15 +95,30 @@ type ListDelegationRunsArgs = z.infer<typeof listDelegationRunsSchema>;
 
 export const listSubAgentsTool = createTool({
   id: "list_sub_agents",
-  description: "List available sub-agent profiles and their capabilities",
+  description:
+    "List available sub-agent profiles. For app+job automation, product-architect (brief + architecture) is recommended before heavy build work.",
   // OpenAI function tools require parameters schema to always be an object.
   inputSchema: z.object({}),
   execute: async () => {
-    const { getSubAgentService } =
+    const { getSubAgentService, toSubAgentListSummaries } =
       await import("../../gateway/services/SubAgentService.js");
     const service = getSubAgentService();
     const agents = await service.listAgents();
-    return { success: true, data: { agents } };
+    const summaries = toSubAgentListSummaries(agents);
+    const builtIn = summaries.filter((agent) => agent.builtIn);
+    return {
+      success: true,
+      data: {
+        count: summaries.length,
+        /** Always use exact id — built-ins are seeded even if custom agents dominate the list */
+        recommendedForAppBuild: "product-architect",
+        builtInAgents: builtIn,
+        agents: summaries,
+        hint:
+          'delegate_task({ useAgentId: "product-architect", task: "...", context: "..." }) ' +
+          "for brief + architecture before complex app+job work. Full profiles: create_sub_agent / get agent by id.",
+      },
+    };
   },
 });
 
@@ -117,7 +144,11 @@ export const createSubAgentTool = createTool({
     };
 
     const agent = await service.createOrUpdateAgent(argsWithDefaults);
-    return { success: true, data: agent };
+    return {
+      success: true,
+      data: agent,
+      _delegationHint: `To delegate to this agent: delegate_task({ useAgentId: "${agent.id}", task: "...", context: "..." })`,
+    };
   },
 });
 
@@ -138,7 +169,7 @@ export const deleteSubAgentTool = createTool({
 export const delegateTaskTool = createTool({
   id: "delegate_task",
   description:
-    "Delegate a task to a sub-agent, optionally in background with chat report-back",
+    "Delegate a task to a specific sub-agent (background job with MiniChat). REQUIRED: call list_sub_agents() first, then pass useAgentId with the exact id field from the agent list — not the display name unless it uniquely matches.",
   inputSchema: delegateTaskSchema,
   execute: async (input) => {
     const args = (input as { context?: DelegateTaskArgs }).context ?? input;
@@ -242,13 +273,17 @@ export const requestAgentInputTool = createTool({
       (input as { context?: RequestAgentInputArgs }).context ?? input;
     const { getSubAgentService } =
       await import("../../gateway/services/SubAgentService.js");
+    const { getCurrentDelegationJobId } = await import("./context.js");
     const service = getSubAgentService();
 
-    if (args.delegationId) {
+    const delegationId =
+      args.delegationId ?? getCurrentDelegationJobId() ?? undefined;
+
+    if (delegationId) {
       // Block until main agent responds; return response so sub-agent can continue
       try {
         const response = await service.sendQuestionAndWaitForResponse(
-          args.delegationId,
+          delegationId,
           args.question,
           args.urgency || "medium",
         );
@@ -278,7 +313,7 @@ export const requestAgentInputTool = createTool({
     await service.sendQuestionToMainAgent(
       args.question,
       args.urgency || "medium",
-      args.delegationId,
+      delegationId,
     );
     return {
       success: true,

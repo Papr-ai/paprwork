@@ -11,10 +11,14 @@
  *
  * CONTEXT MANAGEMENT:
  * - Tool results in storage can be up to 100KB each (MAX_TOOL_RESULT_LENGTH)
- * - When loading history into LLM context, tool results are truncated to 2000 chars max
+ * - When loading history into LLM context, tool results use category-based limits
+ *   (see toolResultTruncation.ts and docs/TOOL_RESULT_TRUNCATION_STRATEGY.md)
+ * - Bash/API results in the last 4 user turns stay full (see toolResultTruncation.ts)
  * - Full results remain in storage for UI display and debugging
  * - This prevents context length exceeded errors during long tool-heavy conversations
  */
+
+import { truncateHistoryToolResult } from "./toolResultTruncation.js";
 
 // ---------------------------------------------------------------------------
 // AI SDK compatible content part types
@@ -174,6 +178,22 @@ function extractContent(message: HistoryMessageLike): string | null {
   return null;
 }
 
+const THINKING_FALLBACK_MAX_CHARS = 4000;
+
+function extractThinkingText(message: HistoryMessageLike): string | null {
+  if (typeof message.thinking === "string" && message.thinking.trim()) {
+    const trimmed = message.thinking.trim();
+    if (trimmed.length <= THINKING_FALLBACK_MAX_CHARS) {
+      return trimmed;
+    }
+    return (
+      trimmed.substring(0, THINKING_FALLBACK_MAX_CHARS) +
+      `\n[... ${trimmed.length - THINKING_FALLBACK_MAX_CHARS} chars of thinking truncated]`
+    );
+  }
+  return null;
+}
+
 function extractToolCalls(message: HistoryMessageLike): ToolCallLike[] {
   const candidate = message.toolCalls ?? message.tool_calls;
   if (Array.isArray(candidate)) {
@@ -253,8 +273,13 @@ export function formatHistoryMessagesForModel(
   history: unknown[],
 ): AIModelMessage[] {
   const messages: AIModelMessage[] = [];
+  const historyLike = history.filter(
+    (entry): entry is HistoryMessageLike =>
+      typeof entry === "object" && entry !== null,
+  );
 
-  for (const entry of history) {
+  for (let entryIndex = 0; entryIndex < history.length; entryIndex += 1) {
+    const entry = history[entryIndex];
     if (typeof entry !== "object" || entry === null) {
       continue;
     }
@@ -274,10 +299,12 @@ export function formatHistoryMessagesForModel(
         // Build structured assistant message with tool call content parts
         const contentParts: AssistantContent = [];
 
-        // Add text content if present AND non-empty
+        // Add text content if present AND non-empty (fall back to thinking when text empty)
         const trimmedContent = content.trim();
-        if (trimmedContent) {
-          contentParts.push({ type: "text", text: trimmedContent });
+        const thinkingText = extractThinkingText(candidate);
+        const assistantText = trimmedContent || thinkingText;
+        if (assistantText) {
+          contentParts.push({ type: "text", text: assistantText });
         }
 
         // Add tool call parts and collect results
@@ -331,23 +358,15 @@ export function formatHistoryMessagesForModel(
               ? resultValue
               : JSON.stringify(resultValue);
 
-          // AGGRESSIVE truncation for history: 100 tokens max (~400 chars)
-          // This is much more aggressive than prepareStep's recency-based approach
-          // Rationale: Historical tool results are less important than recent ones
-          const HISTORY_MAX_TOKENS = 100;
-          const HISTORY_MAX_CHARS = HISTORY_MAX_TOKENS * 4; // ~400 chars
-
-          let truncatedResult: string;
-          if (resultStr.length > HISTORY_MAX_CHARS) {
-            const omitted = resultStr.length - HISTORY_MAX_CHARS;
-            truncatedResult =
-              resultStr.substring(0, HISTORY_MAX_CHARS) +
-              `\n[... ${omitted} chars truncated. ` +
-              `Tool: get_full_tool_result({ toolCallId: "${toolCallId}", toolName: "${toolName}" }) ` +
-              `OR query: ~/.paprwork-v2/chats.db → messages.parts (JSONL)]`;
-          } else {
-            truncatedResult = resultStr;
-          }
+          const truncatedResult = truncateHistoryToolResult({
+            toolName,
+            toolCallId,
+            args: tc.args ?? {},
+            resultStr,
+            history: historyLike,
+            messageIndex: entryIndex,
+            isOrphan,
+          });
 
           toolResultParts.push({
             type: "tool-result",
@@ -367,10 +386,12 @@ export function formatHistoryMessagesForModel(
           messages.push({ role: "tool", content: toolResultParts });
         }
       } else {
-        // Simple text-only assistant message
-        // Skip if content is empty
-        if (content.trim()) {
-          messages.push({ role: "assistant", content });
+        // Simple text-only assistant message (use thinking when visible text empty)
+        const trimmedContent = content.trim();
+        const thinkingText = extractThinkingText(candidate);
+        const assistantText = trimmedContent || thinkingText;
+        if (assistantText) {
+          messages.push({ role: "assistant", content: assistantText });
         }
       }
     } else if (role === "user") {
@@ -397,6 +418,8 @@ export function buildModelMessages(
   systemPrompt: string,
   conversationSummary?: string,
   memoryContextBlocks?: string[],
+  activePlansContext?: string,
+  focusContext?: string,
 ): AIModelMessage[] {
   const messages = formatHistoryMessagesForModel(history);
 
@@ -411,8 +434,18 @@ export function buildModelMessages(
   let contextInsertIndex = messages.findIndex((m) => m.role === "system");
   contextInsertIndex = contextInsertIndex >= 0 ? contextInsertIndex + 1 : 0;
 
-  // If we have a compressed summary, inject it as a user message AFTER system prompt but BEFORE recent history
-  // This gives the model context about what happened earlier in the conversation
+  // Memory bootstrap first (stable for the session inject turn) — before summary
+  if (memoryContextBlocks && memoryContextBlocks.length > 0) {
+    for (const block of memoryContextBlocks) {
+      messages.splice(contextInsertIndex, 0, {
+        role: "user",
+        content: block,
+      });
+      contextInsertIndex += 1;
+    }
+  }
+
+  // Compressed summary after bootstrap, before recent history
   if (conversationSummary) {
     messages.splice(contextInsertIndex, 0, {
       role: "user",
@@ -425,25 +458,31 @@ ${conversationSummary}
     contextInsertIndex += 1;
   }
 
-  // Cross-chat memory bootstrap (sync tiers + message search) — after summary, before history
-  if (memoryContextBlocks && memoryContextBlocks.length > 0) {
-    for (const block of memoryContextBlocks) {
-      messages.splice(contextInsertIndex, 0, {
-        role: "user",
-        content: block,
-      });
-      contextInsertIndex += 1;
-    }
+  // Active plans after history, before the current user turn (volatile — keeps system/summary cache stable)
+  const lastMessage = messages[messages.length - 1];
+  const isDuplicate =
+    lastMessage &&
+    lastMessage.role === "user" &&
+    lastMessage.content === userMessage;
+
+  if (activePlansContext) {
+    const insertAt = isDuplicate ? messages.length - 1 : messages.length;
+    messages.splice(insertAt, 0, {
+      role: "user",
+      content: activePlansContext,
+    });
+  }
+
+  // UI focus + recent edits — volatile, after plans, before current user turn
+  if (focusContext) {
+    const insertAt = isDuplicate ? messages.length - 1 : messages.length;
+    messages.splice(insertAt, 0, {
+      role: "user",
+      content: focusContext,
+    });
   }
 
   // Add the current user message at the end (only if not already present)
-  // Check if the last message is already this user message (it was saved to storage first, then loaded)
-  const lastMessage = messages[messages.length - 1];
-  const isDuplicate = 
-    lastMessage && 
-    lastMessage.role === "user" && 
-    lastMessage.content === userMessage;
-  
   if (isDuplicate) {
     console.log(`[historyFormatter] Skipping duplicate user message (already in history)`);
   } else {

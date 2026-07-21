@@ -13,13 +13,43 @@
 
 import { streamText, generateText, tool } from "ai";
 import { z } from "zod";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 
+function loadEnvLocal(): void {
+  try {
+    const raw = readFileSync(join(process.cwd(), ".env.local"), "utf8");
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq <= 0) continue;
+      const key = trimmed.slice(0, eq).trim();
+      const value = trimmed.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
+      if (!process.env[key]) process.env[key] = value;
+    }
+  } catch {
+    /* optional */
+  }
+}
+
+function requirePaprApiKey(): string {
+  loadEnvLocal();
+  const key = process.env.PAPR_API_KEY?.trim();
+  if (!key) {
+    console.error("❌ PAPR_API_KEY required");
+    console.error('   Set in .env.local or: export PAPR_API_KEY="your-key-here"');
+    process.exit(1);
+  }
+  return key;
+}
+
 // ── Config ──────────────────────────────────────────────────
 const PROXY_BASE = process.env.PROXY_BASE ?? "https://memoryserver-development-223473570766.us-west1.run.app/v1/ai";
-const PAPR_KEY = process.env.PAPR_API_KEY ?? "sk-org-wVPc17GuOO-namespace-sZCTT5QCea-6bTRICQOueQr5TsJ20loOikwR8io1rYn";
+const PAPR_KEY = requirePaprApiKey();
 
 // ── Provider setup (mirrors AgentService.createLanguageModel) ──
 
@@ -42,6 +72,20 @@ const anthropic = createAnthropic({
 // So we need explicit headers like OpenAI
 const google = createGoogleGenerativeAI({
   baseURL: `${PROXY_BASE}/google`,
+  apiKey: "papr-proxy",
+  headers: { "X-API-Key": PAPR_KEY },
+});
+
+// Z.ai GLM — OpenAI-compatible via Papr proxy
+const zai = createOpenAI({
+  baseURL: `${PROXY_BASE}/zai`,
+  apiKey: "papr-proxy",
+  headers: { "X-API-Key": PAPR_KEY },
+});
+
+// Groq — OpenAI-compatible via Papr proxy
+const groq = createOpenAI({
+  baseURL: `${PROXY_BASE}/groq`,
   apiKey: "papr-proxy",
   headers: { "X-API-Key": PAPR_KEY },
 });
@@ -225,6 +269,94 @@ async function main() {
     });
     if (!result.text) throw new Error("Empty response");
     return `"${result.text.slice(0, 50)}"`;
+  });
+
+  // ── Z.ai (GLM) Tests ──────────────────────────────────────
+
+  console.log("\n── Z.ai (via Papr proxy) ──");
+
+  await runTest("Z.ai glm-5.2 (non-stream)", async () => {
+    const result = await generateText({
+      model: zai.chat("glm-5.2"),
+      prompt: "Say 'glm works' and nothing else.",
+      maxOutputTokens: 30,
+      providerOptions: {
+        openai: {
+          thinking: { type: "enabled" },
+          reasoning_effort: "high",
+        },
+      },
+    });
+    if (!result.text) throw new Error("Empty response");
+    return `"${result.text.slice(0, 80)}"`;
+  });
+
+  await runTest("Z.ai glm-5.2 (streaming)", async () => {
+    const result = streamText({
+      model: zai.chat("glm-5.2"),
+      prompt: "Count from 1 to 3, one number per line.",
+      maxOutputTokens: 40,
+      providerOptions: {
+        openai: {
+          thinking: { type: "enabled" },
+          reasoning_effort: "high",
+        },
+      },
+    });
+    let text = "";
+    let chunks = 0;
+    for await (const chunk of result.textStream) {
+      text += chunk;
+      chunks++;
+    }
+    if (!text) throw new Error("Empty stream");
+    return `${chunks} chunks, "${text.slice(0, 50)}"`;
+  });
+
+  // ── Groq Tests ────────────────────────────────────────────
+
+  console.log("\n── Groq (via Papr proxy) ──");
+
+  await runTest("Groq qwen/qwen3-32b (non-stream)", async () => {
+    const result = await generateText({
+      model: groq.chat("qwen/qwen3-32b"),
+      prompt: "Say 'qwen works' and nothing else.",
+      maxOutputTokens: 30,
+    });
+    if (!result.text) throw new Error("Empty response");
+    return `"${result.text.slice(0, 80)}"`;
+  });
+
+  await runTest("Groq openai/gpt-oss-120b (non-stream)", async () => {
+    const result = await generateText({
+      model: groq.chat("openai/gpt-oss-120b"),
+      prompt: "Say 'gpt-oss works' and nothing else.",
+      maxOutputTokens: 30,
+      providerOptions: {
+        openai: { reasoning_effort: "medium" },
+      },
+    });
+    if (!result.text) throw new Error("Empty response");
+    return `"${result.text.slice(0, 80)}"`;
+  });
+
+  await runTest("Groq openai/gpt-oss-120b (streaming)", async () => {
+    const result = streamText({
+      model: groq.chat("openai/gpt-oss-120b"),
+      prompt: "Count from 1 to 3.",
+      maxOutputTokens: 40,
+      providerOptions: {
+        openai: { reasoning_effort: "medium" },
+      },
+    });
+    let text = "";
+    let chunks = 0;
+    for await (const chunk of result.textStream) {
+      text += chunk;
+      chunks++;
+    }
+    if (!text) throw new Error("Empty stream");
+    return `${chunks} chunks, "${text.slice(0, 50)}"`;
   });
 
   // ── Tool Calls ────────────────────────────────────────────

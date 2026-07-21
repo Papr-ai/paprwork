@@ -10,7 +10,7 @@ export interface ToolCall {
   id: string;
   toolName: string;
   args?: Record<string, unknown>;
-  status: "calling" | "success" | "error";
+  status: "calling" | "success" | "error" | "interrupted";
   result?: string;
   error?: string;
 }
@@ -27,22 +27,18 @@ export interface CoreMessage {
   toolCalls?: ToolCall[];
 }
 
-// Agent types
-export type Provider = "anthropic" | "openai" | "google" | "ollama" | "openai-codex";
+// Agent types — re-export shared types from core (single source of truth)
+export type {
+  Provider,
+  ReasoningEffort,
+  ModelReasoning,
+} from "../../src/core/types/agents";
 
-/**
- * Agent configuration (public interface)
- * Note: apiKey is NOT included - Gateway fetches it via IPC
- */
-export interface AgentConfig {
-  provider: Provider;
+import type { AgentConfig as CoreAgentConfig } from "../../src/core/types/agents";
+
+/** UI agent config (model id is string — picker ids include Groq slashes) */
+export interface AgentConfig extends Omit<CoreAgentConfig, "model"> {
   model: string;
-  systemPrompt: string;
-  maxSteps?: number;
-  thinkingBudget?: number;
-  reasoning?: {
-    effort?: "low" | "medium" | "high" | "xhigh";
-  };
 }
 
 // Streaming types

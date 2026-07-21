@@ -36,6 +36,19 @@
   gap: 8px;
   flex: 1;
   min-width: 0;
+  flex-wrap: wrap;
+}
+
+.update-banner[data-state="error"] {
+  max-width: 420px;
+}
+
+.update-banner__hint {
+  flex-basis: 100%;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary, #636366);
+  white-space: normal;
 }
 
 .update-banner__icon {
@@ -47,6 +60,10 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.update-banner[data-state="error"] .update-banner__text {
+  white-space: normal;
 }
 
 .update-banner__progress {

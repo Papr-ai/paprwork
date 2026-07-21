@@ -33,6 +33,11 @@ interface ListRunsPayload {
   limit?: number;
 }
 
+interface ListRunsForChatPayload {
+  reportChatId: string;
+  limit?: number;
+}
+
 interface GetRunPayload {
   runId: string;
 }
@@ -102,6 +107,19 @@ export async function setupSubAgentHandlers(
         const payload = (message.payload ?? {}) as ListRunsPayload;
         const runs = await service.listRuns(payload.limit ?? 50);
         sendResponse(ws, { id: message.id, success: true, data: runs });
+        break;
+      }
+      case "subagent:list-runs-for-chat": {
+        const payload = message.payload as ListRunsForChatPayload;
+        if (!payload?.reportChatId?.trim()) {
+          sendError(ws, message.id, "reportChatId is required");
+          return;
+        }
+        const runs = await service.listRunsForChat(
+          payload.reportChatId,
+          payload.limit ?? 20,
+        );
+        sendResponse(ws, { id: message.id, success: true, data: { runs } });
         break;
       }
       case "subagent:dashboard": {

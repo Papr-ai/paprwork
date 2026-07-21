@@ -8,15 +8,103 @@ import type {
   SubAgentProfile,
 } from "../../core/types/subagents.js";
 import type { Provider } from "../../core/types/agents.js";
-import { getJobsService } from "./JobsService.js";
+import { getJobsService, STANDALONE_APP_ID } from "./JobsService.js";
 import type { JobRecord, JobStatus } from "./jobs/types.js";
 import type { StoredMessage } from "./storage/IStorageProvider.js";
+import { DEFAULT_AGENT_MAX_TURNS } from "../../core/constants/agentLimits.js";
 
 /** Chat ID prefix for delegation sub-agent ↔ main-agent conversations */
 export const DELEGATION_CHAT_PREFIX = "delegation:";
 
 /** Max time to wait for main-agent response (ms) */
 const RESPONSE_WAIT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+export interface ResolveSubAgentResult {
+  profile: SubAgentProfile | null;
+  error?: string;
+}
+
+function formatAgentList(profiles: SubAgentProfile[]): string {
+  return profiles.map((p) => `${p.id} (${p.name})`).join(", ");
+}
+
+/**
+ * Resolve a sub-agent profile by id, name, or normalized slug.
+ * Never falls back to the first agent — useAgentId must be explicit.
+ */
+export function resolveSubAgentProfile(
+  profiles: SubAgentProfile[],
+  useAgentId: string | undefined,
+): ResolveSubAgentResult {
+  if (profiles.length === 0) {
+    return { profile: null, error: "No sub-agents available" };
+  }
+
+  if (!useAgentId?.trim()) {
+    return {
+      profile: null,
+      error:
+        "useAgentId is required. Call list_sub_agents() first, then pass the exact id field " +
+        `(not the display name). Available: ${formatAgentList(profiles)}`,
+    };
+  }
+
+  const query = useAgentId.trim();
+
+  const byId = profiles.find((p) => p.id === query);
+  if (byId) return { profile: byId };
+
+  const byExactName = profiles.filter(
+    (p) => p.name.toLowerCase() === query.toLowerCase(),
+  );
+  if (byExactName.length === 1) return { profile: byExactName[0] };
+  if (byExactName.length > 1) {
+    return {
+      profile: null,
+      error: `Ambiguous name "${query}". Use exact id: ${byExactName.map((p) => p.id).join(", ")}`,
+    };
+  }
+
+  const normalized = query.toLowerCase().replace(/\s+/g, "-");
+  const byNormalized = profiles.filter((p) => p.id.toLowerCase() === normalized);
+  if (byNormalized.length === 1) return { profile: byNormalized[0] };
+
+  if (query.length >= 8) {
+    const fragment = query.toLowerCase();
+    const byFragment = profiles.filter((p) =>
+      p.id.toLowerCase().includes(fragment),
+    );
+    if (byFragment.length === 1) return { profile: byFragment[0] };
+    if (byFragment.length > 1) {
+      return {
+        profile: null,
+        error:
+          `Ambiguous id fragment "${query}". Use full id from list_sub_agents(): ` +
+          byFragment.map((p) => `${p.id} (${p.name})`).join("; "),
+      };
+    }
+  }
+
+  const queryLower = query.toLowerCase();
+  const byPartialName = profiles.filter((p) => {
+    const nameLower = p.name.toLowerCase();
+    return nameLower.includes(queryLower) || queryLower.includes(nameLower);
+  });
+  if (byPartialName.length === 1) return { profile: byPartialName[0] };
+  if (byPartialName.length > 1) {
+    return {
+      profile: null,
+      error:
+        `Ambiguous agent "${query}". Use exact id from list_sub_agents(): ` +
+        byPartialName.map((p) => `${p.id} (${p.name})`).join("; "),
+    };
+  }
+
+  return {
+    profile: null,
+    error: `Sub-agent not found: "${query}". Available: ${formatAgentList(profiles)}`,
+  };
+}
 
 interface PendingQuestion {
   resolve: (response: string) => void;
@@ -31,6 +119,8 @@ interface CreateSubAgentInput {
   systemPrompt: string;
   provider?: Provider;
   model?: string;
+  fallbackProvider?: Provider;
+  fallbackModel?: string;
   allowedToolIds?: string[];
   assignedSkills?: string[];
   outputMode?: "natural" | "structured";
@@ -61,7 +151,7 @@ const DEFAULT_SUB_AGENTS: Array<
     ],
     assignedSkills: [],
     outputMode: "natural",
-    maxTurns: 12,
+    maxTurns: DEFAULT_AGENT_MAX_TURNS,
     memoryPolicy: "none",
     icon: "search",
     lastRunAt: undefined,
@@ -83,12 +173,112 @@ const DEFAULT_SUB_AGENTS: Array<
     ],
     assignedSkills: [],
     outputMode: "natural",
-    maxTurns: 12,
+    maxTurns: DEFAULT_AGENT_MAX_TURNS,
     memoryPolicy: "none",
     icon: "code",
     lastRunAt: undefined,
   },
+  {
+    id: "product-architect",
+    name: "Product Architect",
+    description:
+      "Product brief + Paprwork architecture (lightweight PRD: scope, schema, jobs, UI plan) before build — not a separate PRD agent",
+    systemPrompt: `You are the Paprwork Product Architect sub-agent. You do NOT write mini-app code or call create_app/create_job.
+
+Your job: produce a product brief and Paprwork-specific architecture for the main agent to validate with the user BEFORE implementation.
+
+REQUIRED FIRST STEPS:
+1. read_skill({ skillId: "preloaded-app-and-jobs-guide" })
+2. read_skill({ skillId: "preloaded-paprwork-design-system" })
+3. list_apps() and list_jobs() when relevant
+4. read_file({ path: "src/resources/agent-docs/PRODUCT_ARCHITECT_GUIDE.md" })
+5. read_file({ path: "src/resources/agent-docs/EXAMPLE_APP_ARCHITECTURE_PLAN.md" }) for a full worked example to mirror
+
+OUTPUT (use all sections):
+## Product Brief — job-to-be-done, scope, success criteria
+## Paprwork Architecture — mini-apps (modes), backend handlers, jobs (types, schedules, appIds, dependsOn), shared SQLite schema, data flow
+### Backend Handlers (REQUIRED subsection)
+List each POST /api/app/backend/:action or explicitly justify skipping ("read-only dashboard with 1-2 SELECTs, no secrets, no external APIs").
+Backend handlers are needed for: 3+ DB operations (CRUD), vault/API keys, external API calls, server-side validation, file operations, multi-table transactions — NOT just SQL.
+If the app calls ANY external API with secrets, those calls MUST go through backend handlers (never fetch() with API keys from the browser).
+## Design System — screens (2-3 sections max), ONE primary action per screen, Liquid Glass + brand
+## Phased Plan — Phase 1 MVP, later phases
+## Risks & Open Questions
+## Recommendation — proceed / simplify / defer
+
+RULES:
+- Prefer 2-3 focused apps over one monolith
+- Agent jobs for LLM work; python/node for fixed pipelines only
+- Every job needs appIds; custom keys via \${KEY_NAME} in command strings only
+- Mini-apps use window.paprAPI (browser context, not Node fs)
+- Never recommend spaghetti (50+ files in one app)
+- Backend handlers for ANY server-side logic: DB CRUD, external APIs, vault secrets, auth, file ops — not just SQL
+
+TURN BUDGET: Up to ${DEFAULT_AGENT_MAX_TURNS} tool steps (same as main agent). After investigation, STOP calling tools and deliver the FULL document as your final assistant message — not "let me check..." planning text.
+
+DELIVERY: Your final assistant message text is auto-delivered to the main chat. Include all required sections in that message.`,
+    provider: "anthropic",
+    model: "claude-opus-4-6",
+    fallbackProvider: "openai",
+    fallbackModel: "gpt-5-6-sol",
+    allowedToolIds: [
+      "bash",
+      "read_file",
+      "search_files",
+      "search_agent_memory",
+      "list_apps",
+      "list_jobs",
+      "read_skill",
+      "get_project_code_overview",
+      "list_file_code_summaries",
+      "get_file_code_summary",
+      "request_agent_input",
+      "complete_delegation",
+    ],
+    assignedSkills: ["preloaded-app-and-jobs-guide", "preloaded-paprwork-design-system"],
+    outputMode: "natural",
+    maxTurns: DEFAULT_AGENT_MAX_TURNS,
+    memoryPolicy: "none",
+    icon: "pen",
+    lastRunAt: undefined,
+  },
 ];
+
+/** Built-in sub-agent ids seeded on gateway startup (always available unless deleted). */
+export const BUILTIN_SUB_AGENT_IDS: readonly string[] = DEFAULT_SUB_AGENTS.map(
+  (profile) => profile.id,
+);
+
+export const BUILTIN_SUB_AGENT_ID_SET = new Set<string>(BUILTIN_SUB_AGENT_IDS);
+
+export interface SubAgentListSummary {
+  id: string;
+  name: string;
+  description: string;
+  icon?: SubAgentProfile["icon"];
+  builtIn: boolean;
+}
+
+/** Compact listing for list_sub_agents — omits systemPrompt to avoid truncation. */
+export function toSubAgentListSummaries(
+  profiles: SubAgentProfile[],
+): SubAgentListSummary[] {
+  const sorted = [...profiles].sort((a, b) => {
+    const aBuiltIn = BUILTIN_SUB_AGENT_ID_SET.has(a.id);
+    const bBuiltIn = BUILTIN_SUB_AGENT_ID_SET.has(b.id);
+    if (aBuiltIn !== bBuiltIn) return aBuiltIn ? -1 : 1;
+    if (a.id === "product-architect") return -1;
+    if (b.id === "product-architect") return 1;
+    return a.name.localeCompare(b.name);
+  });
+  return sorted.map((profile) => ({
+    id: profile.id,
+    name: profile.name,
+    description: profile.description,
+    icon: profile.icon,
+    builtIn: BUILTIN_SUB_AGENT_ID_SET.has(profile.id),
+  }));
+}
 
 export class SubAgentService {
   private profilePath: string;
@@ -142,6 +332,7 @@ export class SubAgentService {
         name: `Migrated delegation ${legacy.agentId}`,
         type: "subagent",
         status,
+        appIds: [STANDALONE_APP_ID],
         command: legacy.task,
         subAgentId: legacy.agentId,
         delegationTask: legacy.task,
@@ -198,14 +389,42 @@ export class SubAgentService {
     const now = new Date().toISOString();
     let changed = false;
     for (const base of DEFAULT_SUB_AGENTS) {
-      if (this.profiles.has(base.id)) continue;
-      this.profiles.set(base.id, {
-        ...base,
-        createdAt: now,
-        updatedAt: now,
-        runCount: 0,
-      });
-      changed = true;
+      const existing = this.profiles.get(base.id);
+      if (!existing) {
+        this.profiles.set(base.id, {
+          ...base,
+          createdAt: now,
+          updatedAt: now,
+          runCount: 0,
+        });
+        changed = true;
+        continue;
+      }
+
+      // Keep all built-in profiles in sync (prompt, tools, maxTurns, models)
+      if (BUILTIN_SUB_AGENT_ID_SET.has(base.id)) {
+        const synced: SubAgentProfile = {
+          ...existing,
+          name: base.name,
+          description: base.description,
+          systemPrompt: base.systemPrompt,
+          provider: base.provider,
+          model: base.model,
+          fallbackProvider: base.fallbackProvider,
+          fallbackModel: base.fallbackModel,
+          allowedToolIds: base.allowedToolIds,
+          assignedSkills: base.assignedSkills,
+          outputMode: base.outputMode,
+          maxTurns: base.maxTurns,
+          memoryPolicy: base.memoryPolicy,
+          icon: base.icon,
+          updatedAt: now,
+        };
+        if (JSON.stringify(synced) !== JSON.stringify(existing)) {
+          this.profiles.set(base.id, synced);
+          changed = true;
+        }
+      }
     }
     if (changed) {
       await this.saveProfiles();
@@ -221,7 +440,13 @@ export class SubAgentService {
 
   async getAgent(agentId: string): Promise<SubAgentProfile | null> {
     await this.initialize();
-    return this.profiles.get(agentId) ?? null;
+    const direct = this.profiles.get(agentId);
+    if (direct) return direct;
+    const { profile } = resolveSubAgentProfile(
+      Array.from(this.profiles.values()),
+      agentId,
+    );
+    return profile;
   }
 
   async createOrUpdateAgent(
@@ -238,11 +463,13 @@ export class SubAgentService {
       systemPrompt: input.systemPrompt.trim(),
       provider: input.provider,
       model: input.model,
+      fallbackProvider: input.fallbackProvider ?? existing?.fallbackProvider,
+      fallbackModel: input.fallbackModel ?? existing?.fallbackModel,
       allowedToolIds: input.allowedToolIds,
       assignedSkills: input.assignedSkills ?? existing?.assignedSkills ?? [],
       outputMode: input.outputMode ?? existing?.outputMode ?? "natural",
       outputSchema: input.outputSchema ?? existing?.outputSchema,
-      maxTurns: input.maxTurns ?? existing?.maxTurns ?? 12,
+      maxTurns: input.maxTurns ?? existing?.maxTurns ?? DEFAULT_AGENT_MAX_TURNS,
       memoryPolicy: input.memoryPolicy ?? existing?.memoryPolicy ?? "none",
       icon: input.icon ?? existing?.icon,
       createdAt: existing?.createdAt ?? now,
@@ -281,6 +508,19 @@ export class SubAgentService {
         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
     );
     return [...delegated, ...legacy].slice(0, limit);
+  }
+
+  /** Delegations initiated from a specific main chat (for pinned report cards in UI). */
+  async listRunsForChat(
+    reportChatId: string,
+    limit = 20,
+  ): Promise<DelegationRunRecord[]> {
+    const trimmed = reportChatId.trim();
+    if (!trimmed) return [];
+    const runs = await this.listRuns(200);
+    return runs
+      .filter((run) => run.reportChatId === trimmed)
+      .slice(0, limit);
   }
 
   async getDashboard(limit = 100): Promise<{
@@ -392,45 +632,15 @@ export class SubAgentService {
     };
   }
 
-  /**
-   * Resolve sub-agent by id or by name (case-insensitive).
-   * Handles agent passing display name (e.g. "Strategic Question Agent") instead of id.
-   */
-  private resolveSubAgent(
-    profiles: SubAgentProfile[],
-    useAgentId: string | undefined,
-  ): SubAgentProfile | null {
-    if (!useAgentId?.trim()) return profiles[0] ?? null;
-    const id = useAgentId.trim();
-    // Exact id match
-    const byId = profiles.find((p) => p.id === id);
-    if (byId) return byId;
-    // Case-insensitive name match (handles "Strategic Question Agent" vs "Strategic Question Agent")
-    const byName = profiles.find(
-      (p) => p.name.toLowerCase() === id.toLowerCase(),
-    );
-    if (byName) return byName;
-    // Normalized id match: "strategic question agent" -> "strategic-question-agent"
-    const normalized = id.toLowerCase().replace(/\s+/g, "-");
-    const byNormalized = profiles.find(
-      (p) => p.id.toLowerCase() === normalized,
-    );
-    if (byNormalized) return byNormalized;
-    return null;
-  }
-
   async delegateTask(input: DelegateTaskInput): Promise<DelegationRunRecord> {
     await this.initialize();
     const profiles = await this.listAgents();
-    if (profiles.length === 0) {
-      throw new Error("No sub-agents available");
-    }
-    const selected = this.resolveSubAgent(profiles, input.useAgentId);
+    const { profile: selected, error } = resolveSubAgentProfile(
+      profiles,
+      input.useAgentId,
+    );
     if (!selected) {
-      throw new Error(
-        `Sub-agent not found: ${input.useAgentId ?? "(none)"}. ` +
-          `Available: ${profiles.map((p) => `${p.id} (${p.name})`).join(", ")}`,
-      );
+      throw new Error(error ?? "Sub-agent not found");
     }
 
     const jobsService = getJobsService();
@@ -438,14 +648,18 @@ export class SubAgentService {
     const job = await jobsService.createJob({
       name: `Delegation: ${selected.name}`,
       type: "subagent",
+      appIds:
+        input.appIds && input.appIds.length > 0
+          ? input.appIds
+          : [STANDALONE_APP_ID],
       subAgentId: selected.id,
-      delegatedBy: "main-agent",
+      delegatedBy: input.delegatedBy ?? "main-agent",
       delegationTask: input.task,
       delegationContext: input.context,
       command: input.task,
       outputMode: input.outputMode ?? selected.outputMode ?? "natural",
       outputSchema: input.outputSchema ?? selected.outputSchema,
-      maxTurns: input.maxTurns ?? selected.maxTurns ?? 12,
+      maxTurns: input.maxTurns ?? selected.maxTurns ?? DEFAULT_AGENT_MAX_TURNS,
       memoryPolicy: input.memoryPolicy ?? selected.memoryPolicy ?? "none",
       reportChatId: input.reportChatId,
       deliver:
@@ -680,20 +894,64 @@ export class SubAgentService {
    * Closes session and returns result
    */
   async completeDelegation(result: string, summary?: string): Promise<void> {
+    const { getCurrentDelegationJobId } =
+      await import("../../core/tools/context.js");
+    const delegationId = getCurrentDelegationJobId();
+    if (!delegationId) {
+      throw new Error(
+        "complete_delegation requires sub-agent delegation context (delegationJobId not set)",
+      );
+    }
+
     console.log(
-      `[SubAgentService] Completing delegation with result (${result.length} chars)`,
+      `[SubAgentService] Completing delegation ${delegationId} (${result.length} chars)`,
     );
 
-    // TODO: Get current delegation context and mark job as completed
-    // For now, this is a placeholder
+    let sourceAgentId: string | undefined;
+    let sourceAgentName: string | undefined;
+    try {
+      const jobsService = getJobsService();
+      const job = await jobsService.getJob(delegationId);
+      if (job?.subAgentId) {
+        const profile = this.profiles.get(job.subAgentId);
+        sourceAgentId = job.subAgentId;
+        sourceAgentName = profile?.name ?? job.subAgentId;
+      }
+    } catch {
+      // Ignore — use defaults below
+    }
+
+    const timestamp = new Date().toISOString();
+    const content = summary ? `${summary}\n\n${result}` : result;
+    const chatMessage = {
+      role: "assistant" as const,
+      author: "sub-agent" as const,
+      content,
+      timestamp,
+    };
+
+    await this.saveToDelegationChat(delegationId, {
+      id: `msg-${uuidv4()}`,
+      role: "assistant",
+      content,
+      timestamp,
+      source_agent_id: sourceAgentId,
+      source_agent_name: sourceAgentName,
+    });
 
     const { broadcast } = await import("../websocket/index.js");
     broadcast({
+      type: "subagent-chat:message",
+      data: { delegationId, message: chatMessage },
+    });
+    broadcast({
       type: "subagent-chat:completed",
       data: {
+        delegationId,
+        jobId: delegationId,
         result,
         summary,
-        timestamp: new Date().toISOString(),
+        timestamp,
       },
     });
   }

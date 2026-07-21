@@ -5,6 +5,8 @@
  * Replaces Electron IPC communication
  */
 
+import { isExpectedStreamCancellation } from "../../../src/core/constants/streamCancellation.js";
+
 export interface GatewayMessage {
   id: string;
   type: string;
@@ -21,6 +23,8 @@ export interface GatewayResponse {
 
 type MessageHandler = (response: GatewayResponse) => void;
 type ConnectionStatusHandler = (connected: boolean) => void;
+
+export const GATEWAY_DISCONNECTED_ERROR = "Gateway disconnected";
 
 class GatewayClient {
   private ws: WebSocket | null = null;
@@ -134,6 +138,7 @@ class GatewayClient {
       this.ws.onclose = () => {
         console.log("[Gateway] Disconnected");
         this.stopHeartbeat();
+        this.rejectActiveStreamHandlers();
         this.notifyConnectionStatus(false);
         this.attemptReconnect();
       };
@@ -194,6 +199,26 @@ class GatewayClient {
   }
 
   /**
+   * Reject in-flight stream handlers when the socket drops so callers can
+   * pause UI state and re-subscribe after reconnect.
+   */
+  private rejectActiveStreamHandlers(): void {
+    for (const [id, handler] of this.handlers) {
+      try {
+        handler({
+          id,
+          success: false,
+          type: "agent:disconnect",
+          error: GATEWAY_DISCONNECTED_ERROR,
+        });
+      } catch (error) {
+        console.error("[Gateway] Error rejecting stream handler:", error);
+      }
+      this.handlers.delete(id);
+    }
+  }
+
+  /**
    * Attempt to reconnect to Gateway with exponential backoff + jitter
    */
   private attemptReconnect(): void {
@@ -247,9 +272,15 @@ class GatewayClient {
    * Send message to Gateway.
    * Automatically waits for connection if not yet open.
    */
-  async send(type: string, payload?: unknown): Promise<GatewayResponse> {
+  async send(
+    type: string,
+    payload?: unknown,
+    options?: { timeoutMs?: number },
+  ): Promise<GatewayResponse> {
     // Wait up to 10 s for the WebSocket to connect
     await this.waitForConnection();
+
+    const timeoutMs = options?.timeoutMs ?? 30_000;
 
     return new Promise((resolve, reject) => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -277,13 +308,12 @@ class GatewayClient {
       // Send message
       this.ws.send(JSON.stringify(message));
 
-      // Timeout after 30 seconds
       setTimeout(() => {
         if (this.handlers.has(id)) {
           this.handlers.delete(id);
           reject(new Error("Request timeout"));
         }
-      }, 30000);
+      }, timeoutMs);
     });
   }
 
@@ -313,32 +343,50 @@ class GatewayClient {
       console.log("[Gateway.stream] Generated ID:", id);
       const message: GatewayMessage = { id, type, payload };
       onRegistered?.(id);
+      let receivedDoneChunk = false;
 
       // Register handler for chunks
       this.handlers.set(id, (response) => {
+        if (response.type === "agent:disconnect") {
+          this.handlers.delete(id);
+          reject(new Error(GATEWAY_DISCONNECTED_ERROR));
+          return;
+        }
+
         if (response.type === "agent:chunk") {
           // Handle chunk
           const payloadData =
             typeof response.data === "object" && response.data !== null
               ? { ...(response.data as Record<string, unknown>), requestId: id }
               : { payload: response.data, requestId: id };
+          if (
+            typeof payloadData === "object" &&
+            payloadData !== null &&
+            (payloadData as { type?: string }).type === "done"
+          ) {
+            receivedDoneChunk = true;
+          }
           onChunk(payloadData);
         } else if (response.type === "agent:complete" || response.success) {
           // Stream completed successfully
-          // Send final "done" chunk with finalMessage so UI can show sequence/reasoning/toolCalls
-          // even when streaming chunks were missed (e.g. Codex provider)
           const completeData =
             typeof response.data === "object" && response.data !== null
               ? (response.data as Record<string, unknown>)
               : {};
-          onChunk({
-            type: "done",
-            chatId: completeData.chatId,
-            requestId: id,
-            payload: {
-              finalMessage: completeData.finalMessage,
-            },
-          });
+          if (!receivedDoneChunk) {
+            // Codex / missed chunks — synthesize done from persisted message
+            onChunk({
+              type: "done",
+              chatId: completeData.chatId,
+              requestId: id,
+              payload: {
+                finalMessage: completeData.finalMessage,
+              },
+            });
+          }
+          this.handlers.delete(id);
+          resolve();
+        } else if (response.type === "agent:cancelled") {
           this.handlers.delete(id);
           resolve();
         } else if (response.type === "agent:error") {
@@ -388,6 +436,149 @@ class GatewayClient {
       // 2. User can abort via UI anytime
       // 3. Backend monitors progress and can warn if needed
       // Let agents work as long as they need to complete their task!
+    });
+  }
+
+  /**
+   * Cancel an in-flight stream request without surfacing an error for intentional stops.
+   */
+  cancelRequest(requestId: string, reason = "aborted"): void {
+    const handler = this.handlers.get(requestId);
+    if (!handler) return;
+
+    if (isExpectedStreamCancellation(reason)) {
+      this.handlers.delete(requestId);
+      handler({
+        id: requestId,
+        type: "agent:cancelled",
+        success: true,
+      });
+      return;
+    }
+
+    handler({
+      id: requestId,
+      type: "agent:error",
+      success: false,
+      error: reason,
+      data: { error: reason },
+    });
+    this.handlers.delete(requestId);
+  }
+
+  /**
+   * Re-attach to an in-flight agent stream after reconnect.
+   * Replays buffered chunks and continues receiving live updates.
+   */
+  async subscribeStream(
+    chatId: string,
+    streamRequestId: string,
+    fromChunkIndex: number,
+    onChunk: (chunk: unknown) => void,
+    onRegistered?: (subscribeRequestId: string) => void,
+  ): Promise<void> {
+    await this.waitForConnection();
+
+    return new Promise((resolve, reject) => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        reject(new Error("Gateway not connected"));
+        return;
+      }
+
+      const id = Math.random().toString(36).substring(2, 15);
+      onRegistered?.(id);
+      let receivedDoneChunk = false;
+
+      this.handlers.set(id, (response) => {
+        if (response.type === "agent:disconnect") {
+          this.handlers.delete(id);
+          reject(new Error(GATEWAY_DISCONNECTED_ERROR));
+          return;
+        }
+
+        if (response.type === "agent:chunk") {
+          const payloadData =
+            typeof response.data === "object" && response.data !== null
+              ? {
+                  ...(response.data as Record<string, unknown>),
+                  requestId: streamRequestId,
+                }
+              : { payload: response.data, requestId: streamRequestId };
+          if (
+            typeof payloadData === "object" &&
+            payloadData !== null &&
+            (payloadData as { type?: string }).type === "done"
+          ) {
+            receivedDoneChunk = true;
+          }
+          onChunk(payloadData);
+          return;
+        }
+
+        if (response.type === "agent:complete" || response.success) {
+          const completeData =
+            typeof response.data === "object" && response.data !== null
+              ? (response.data as Record<string, unknown>)
+              : {};
+          if (!receivedDoneChunk) {
+            onChunk({
+              type: "done",
+              chatId: completeData.chatId,
+              requestId: streamRequestId,
+              payload: {
+                finalMessage: completeData.finalMessage,
+              },
+            });
+          }
+          this.handlers.delete(id);
+          resolve();
+          return;
+        }
+
+        if (response.type === "agent:error") {
+          const errorData =
+            typeof response.data === "object" && response.data !== null
+              ? (response.data as Record<string, unknown>)
+              : {};
+          onChunk({
+            type: "error",
+            payload: {
+              error:
+                typeof errorData.error === "string"
+                  ? errorData.error
+                  : "Stream error",
+            },
+            chatId: errorData.chatId,
+            requestId: streamRequestId,
+          });
+          this.handlers.delete(id);
+          reject(
+            new Error(
+              typeof errorData.error === "string"
+                ? errorData.error
+                : "Stream error",
+            ),
+          );
+          return;
+        }
+
+        if (response.error) {
+          this.handlers.delete(id);
+          reject(new Error(response.error || "Unknown error"));
+        }
+      });
+
+      this.ws.send(
+        JSON.stringify({
+          id,
+          type: "agent:subscribe",
+          payload: {
+            chatId,
+            requestId: streamRequestId,
+            fromChunkIndex,
+          },
+        }),
+      );
     });
   }
 

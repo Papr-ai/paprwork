@@ -18,11 +18,16 @@ import {
 } from "../../core/types/bundles.js";
 import { AppService, getAppService, type MiniApp } from "./AppService.js";
 import {
+  parseDataSourcesFile,
+  serializeDataSourcesFile,
+} from "./appDataSources.js";
+import {
   JobsService,
   getJobsService,
   type JobRecord,
   type JobType,
 } from "./JobsService.js";
+import { STANDALONE_APP_ID } from "./jobs/appIds.js";
 
 export interface ExportBundleInput {
   appId: string;
@@ -834,6 +839,7 @@ export class BundleService {
       name: job.name,
       type: mapJobTypeToRuntime(job.type),
       command,
+      appIds: job.appIds ?? [],
       dependsOn: (job.dependsOn ?? []).map((dep) => ({
         jobId: dep.jobId,
         onStatus: [dep.onStatus],
@@ -845,6 +851,7 @@ export class BundleService {
     };
 
     if (job.folder) spec.folder = job.folder;
+    if (job.appIds?.length) spec.appIds = job.appIds;
     if (job.provider) spec.provider = job.provider;
     if (job.model) spec.model = job.model;
     if (job.schedule) spec.schedule = job.schedule;
@@ -984,17 +991,61 @@ export class BundleService {
     const dataSourcesFile = path.join(appDest, "data-sources.json");
     try {
       const dsRaw = await fs.readFile(dataSourcesFile, "utf8");
-      const dataSources = JSON.parse(dsRaw) as Array<Record<string, unknown>>;
-      if (Array.isArray(dataSources)) {
-        const cleaned = dataSources.map((ds) => ({ ...ds, dbPath: "" }));
+      const config = parseDataSourcesFile(dsRaw);
+      if (config.sources.length > 0) {
+        const cleaned = {
+          ...config,
+          sources: config.sources.map((ds) => ({
+            ...ds,
+            dbPath: "",
+            // Preserve dbId for standalone registry DBs (resolved at import)
+          })),
+        };
         await fs.writeFile(
           dataSourcesFile,
-          JSON.stringify(cleaned, null, 2),
+          serializeDataSourcesFile(cleaned),
           "utf8",
         );
       }
     } catch {
       // No data-sources.json or parse error — fine, skip
+    }
+
+    const registryDatabases: Array<{
+      dbId: string;
+      bundlePath: string;
+      label?: string;
+      isolation?: "shared" | "per-user";
+    }> = [];
+
+    try {
+      const primary = await this.appService.getPrimaryDataSource(input.appId);
+      if (primary?.dbId && primary.dbPath) {
+        const bundleDbRel = path.posix.join(
+          "databases",
+          primary.dbId,
+          "data.db",
+        );
+        const bundleDbAbs = path.join(destinationPath, "databases", primary.dbId, "data.db");
+        await fs.mkdir(path.dirname(bundleDbAbs), { recursive: true });
+        await fs.copyFile(primary.dbPath, bundleDbAbs);
+        const { initializeDatabaseRegistry } = await import(
+          "./DatabaseRegistryService.js"
+        );
+        const registry = await initializeDatabaseRegistry();
+        const record = registry.getById(primary.dbId);
+        registryDatabases.push({
+          dbId: primary.dbId,
+          bundlePath: bundleDbRel,
+          label: primary.alias,
+          ...(record?.isolation ? { isolation: record.isolation } : {}),
+        });
+      }
+    } catch (dbBundleErr) {
+      console.warn(
+        `[BundleService] Could not bundle primary database for app ${input.appId}:`,
+        dbBundleErr,
+      );
     }
 
     // Scan app source for job IDs referenced directly in code
@@ -1101,6 +1152,7 @@ export class BundleService {
       },
       jobs: jobSpecs,
       sqlite: input.sqlite ?? [],
+      registryDatabases,
       deploymentProfiles: [
         {
           id: "local-default",
@@ -1201,6 +1253,8 @@ export class BundleService {
       name: jobSpec.name,
       type: mapRuntimeToJobType(jobSpec.type),
       status: "pending",
+      appIds:
+        jobSpec.appIds.length > 0 ? jobSpec.appIds : [STANDALONE_APP_ID],
       command: jobSpec.command,
       createdAt,
       updatedAt: now,
@@ -1375,6 +1429,36 @@ export class BundleService {
     };
     await this.appService.upsertApp(appMetadata, appSource);
 
+    for (const dbSpec of manifest.registryDatabases ?? []) {
+      const sourceDbPath = path.join(destination, dbSpec.bundlePath);
+      try {
+        await fs.access(sourceDbPath);
+      } catch {
+        continue;
+      }
+      const { getPaprDataDir } = await import("../../core/utils/paprRoot.js");
+      const { initializeDatabaseRegistry } = await import(
+        "./DatabaseRegistryService.js"
+      );
+      const { dbTursoDatabaseName } = await import("./tursoDatabaseNaming.js");
+      const registry = await initializeDatabaseRegistry();
+      const existing = registry.getById(dbSpec.dbId);
+      const targetPath =
+        existing?.localPath ??
+        path.join(getPaprDataDir(), "databases", dbSpec.dbId, "data.db");
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.copyFile(sourceDbPath, targetPath);
+      if (!existing) {
+        await registry.register({
+          dbId: dbSpec.dbId,
+          localPath: targetPath,
+          label: dbSpec.label,
+          tursoShortName: dbTursoDatabaseName(dbSpec.dbId),
+          isolation: dbSpec.isolation ?? "shared",
+        });
+      }
+    }
+
     for (const jobSpec of manifest.jobs) {
       const sourceJobPath = path.join(destination, "jobs", jobSpec.id);
       const jobRecord = this.buildJobRecordFromSpec(
@@ -1392,16 +1476,31 @@ export class BundleService {
     );
     try {
       const dsRaw = await fs.readFile(importedDataSourcesFile, "utf8");
-      const dataSources = JSON.parse(dsRaw) as Array<Record<string, unknown>>;
-      if (Array.isArray(dataSources)) {
-        const fixed = await Promise.all(
-          dataSources.map(async (ds) => {
-            const jobId = ds.jobId as string | undefined;
+      const config = parseDataSourcesFile(dsRaw);
+      if (config.sources.length > 0) {
+        const fixedSources = await Promise.all(
+          config.sources.map(async (ds) => {
+            if (ds.dbId && !ds.jobId) {
+              const { initializeDatabaseRegistry } = await import(
+                "./DatabaseRegistryService.js"
+              );
+              const registry = await initializeDatabaseRegistry();
+              const record = registry.getById(ds.dbId);
+              if (record) {
+                return { ...ds, dbPath: record.localPath };
+              }
+            }
+            const jobId = ds.jobId;
             if (jobId) {
               const resolvedPath =
                 await this.jobsService.getJobDatabasePath(jobId);
               if (resolvedPath) {
-                return { ...ds, dbPath: resolvedPath };
+                const enriched = { ...ds, dbPath: resolvedPath };
+                const { initializeDatabaseRegistry } = await import(
+                  "./DatabaseRegistryService.js"
+                );
+                const registry = await initializeDatabaseRegistry();
+                return registry.enrichSource(enriched);
               }
             }
             return ds;
@@ -1409,7 +1508,10 @@ export class BundleService {
         );
         await fs.writeFile(
           importedDataSourcesFile,
-          JSON.stringify(fixed, null, 2),
+          serializeDataSourcesFile({
+            primary: config.primary,
+            sources: fixedSources,
+          }),
           "utf8",
         );
       }

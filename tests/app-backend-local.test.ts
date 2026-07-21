@@ -1,0 +1,206 @@
+import { mkdtemp, rm, writeFile, mkdir } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
+import { afterEach, describe, expect, it } from "vitest";
+import { AppBackendService } from "../src/gateway/services/appRuntime/AppBackendService.js";
+import {
+  DEFAULT_BACKEND_MANIFEST,
+  DEFAULT_BACKEND_PING_HANDLER,
+  DEFAULT_BACKEND_PING_HANDLER_JS,
+  DEFAULT_BACKEND_PING_HANDLER_TS,
+} from "../src/gateway/utils/appBackendScaffold.js";
+
+describe("AppBackendService (local)", () => {
+  let tempRoot: string;
+
+  afterEach(async () => {
+    if (tempRoot) {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("runs scaffolded ping action", async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), "papr-backend-"));
+    const appId = "test-app-id";
+    const backendDir = join(tempRoot, "apps", appId, "backend");
+    await mkdir(backendDir, { recursive: true });
+    await writeFile(
+      join(backendDir, "manifest.json"),
+      JSON.stringify(DEFAULT_BACKEND_MANIFEST, null, 2),
+    );
+    await writeFile(join(backendDir, "ping.py"), DEFAULT_BACKEND_PING_HANDLER);
+
+    const service = new AppBackendService(tempRoot);
+    const result = await service.runAction({
+      appId,
+      action: "ping",
+      params: { hello: "world" },
+    });
+
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      ok: boolean;
+      action: string;
+      params: { hello: string };
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.action).toBe("ping");
+    expect(payload.params.hello).toBe("world");
+  });
+
+  it("runs node ping action", async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), "papr-backend-"));
+    const appId = "test-app-node";
+    const backendDir = join(tempRoot, "apps", appId, "backend");
+    await mkdir(backendDir, { recursive: true });
+    await writeFile(
+      join(backendDir, "manifest.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          actions: {
+            ping: {
+              handler: "ping.mjs",
+              runtime: "node",
+              timeoutMs: 10_000,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(join(backendDir, "ping.mjs"), DEFAULT_BACKEND_PING_HANDLER_JS);
+
+    const service = new AppBackendService(tempRoot);
+    const result = await service.runAction({
+      appId,
+      action: "ping",
+      params: { mode: "node" },
+    });
+
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      ok: boolean;
+      params: { mode: string };
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.params.mode).toBe("node");
+  });
+
+  it("runs typescript ping action when esbuild is available", async () => {
+    let esbuildAvailable = false;
+    try {
+      const esbuild = await import("esbuild");
+      await esbuild.transform("const x = 1", {
+        loader: "ts",
+        platform: "node",
+        format: "esm",
+      });
+      esbuildAvailable = true;
+    } catch {
+      esbuildAvailable = false;
+    }
+    if (!esbuildAvailable) {
+      return;
+    }
+
+    tempRoot = await mkdtemp(join(tmpdir(), "papr-backend-"));
+    const appId = "test-app-ts";
+    const backendDir = join(tempRoot, "apps", appId, "backend");
+    await mkdir(backendDir, { recursive: true });
+    await writeFile(
+      join(backendDir, "manifest.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          actions: {
+            ping: {
+              handler: "ping.ts",
+              runtime: "typescript",
+              timeoutMs: 10_000,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(join(backendDir, "ping.ts"), DEFAULT_BACKEND_PING_HANDLER_TS);
+
+    const service = new AppBackendService(tempRoot);
+    const result = await service.runAction({
+      appId,
+      action: "ping",
+      params: { mode: "ts" },
+    });
+
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      ok: boolean;
+      params: { mode: string };
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.params.mode).toBe("ts");
+  });
+
+  it("injects APP_DB when data-sources.json links primary sqlite", async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), "papr-backend-"));
+    const appId = "test-app-db";
+    const dbPath = join(tempRoot, "linked.db");
+    await writeFile(dbPath, "sqlite-placeholder");
+
+    const backendDir = join(tempRoot, "apps", appId, "backend");
+    await mkdir(backendDir, { recursive: true });
+    await writeFile(
+      join(tempRoot, "apps", appId, "data-sources.json"),
+      JSON.stringify(
+        {
+          primary: "main",
+          sources: [
+            {
+              id: "j:main",
+              type: "sqlite",
+              jobId: "33333333-3333-3333-3333-333333333333",
+              alias: "main",
+              role: "primary",
+              dbPath,
+              tables: [],
+              linkedAt: new Date().toISOString(),
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(
+      join(backendDir, "manifest.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          actions: {
+            ping: { handler: "ping.py", runtime: "python", timeoutMs: 10_000 },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    const pingDbHandler = `#!/usr/bin/env python3
+import json, os, sys
+json.dump({"dbMode": os.environ.get("PAPR_DB_MODE"), "appDb": os.environ.get("APP_DB")}, sys.stdout)
+`;
+    await writeFile(join(backendDir, "ping.py"), pingDbHandler);
+
+    const service = new AppBackendService(tempRoot);
+    const result = await service.runAction({ appId, action: "ping" });
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      dbMode: string;
+      appDb: string;
+    };
+    expect(payload.dbMode).toBe("local");
+    expect(payload.appDb).toBe(dbPath);
+  });
+});

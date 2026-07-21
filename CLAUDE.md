@@ -4445,4 +4445,98 @@ source ~/.zshrc  # or source ~/.bashrc
 
 ---
 
+### Enhancement 51: Category-Based Tool Result Truncation + Active Working Set ✅ IMPLEMENTED
+**Added:** 2026-06-12
+**Problem:** Uniform ~400 char truncation prevented context overflow but caused re-read loops — agent lost file contents between turns and re-called `read_app_file`, paying full reads again.
+**Solution:** Category-based cross-turn truncation in history loading (NOT system prompt — preserves prompt cache). Active working set keeps file reads at full fidelity (15KB cap) from the **previous turn** when those paths were **edited in that same turn**. One turn without edits → truncate normally.
+**Implementation:**
+1. `toolResultTruncation.ts` — Tool categories, limits, turn splitting, active file key detection
+2. `historyFormatter.ts` — Applies `truncateHistoryToolResult()` per tool call when loading history
+3. Derived from message history — no DB column, no system prompt injection
+**Category limits:** bash/lists 400 chars, code summaries/CRUD 2KB, edits full, active file reads 15KB cap
+**Files Created:**
+- `src/gateway/services/agent/toolResultTruncation.ts`
+- `docs/TOOL_RESULT_TRUNCATION_STRATEGY.md`
+- `tests/tool-result-truncation.test.ts`
+**Files Changed:**
+- `src/gateway/services/agent/historyFormatter.ts`
+- `src/gateway/services/storage/contextFootprint.ts` — imports constants from toolResultTruncation
+- `src/core/agents/SystemPrompt.ts` — updated truncation guidance
+**See:** `docs/TOOL_RESULT_TRUNCATION_STRATEGY.md`
+
+---
+
+### Enhancement 52: Cloud Publish Drift Detection + Share Token Hygiene ✅ IMPLEMENTED
+**Added:** 2026-07-05
+**Problem:** Desktop publish prefs could drift from memory server (visibility, slug, share token). E2E tests publishing real apps with `e2e-*` slugs, auto-publish skipping already-published apps, and stale cached `shareToken` in `cloud-publish-prefs.json` caused broken share links and empty cloud app data.
+**Solution:**
+1. **Drift detection** (`cloudPublishDrift.ts`) — Compare memory `visibility`, `slug`, `codeAccess`, `linkPermission` vs local prefs; republish when drift detected
+2. **Auto-publish re-sync** — `tryAutoPublishSyncedApps` republishes drifting apps, not only first-time publishes
+3. **Share token hygiene** — Use cached `prefs.shareToken` only when cloud config matches local prefs; never serve stale token after visibility/slug drift; republish when link mode needs token but none cached
+4. **PATCH prefs → republish** — Changing `accessMode` / `loginAccess` / `externalLink` / `codeAccess` via PATCH triggers `republishIfPublished()` (autoPublish-only PATCH unchanged)
+5. **GET publish config** — `getPublishConfig()` auto-republishes on drift so publish UI always reflects cloud truth
+**Cloud App Host E2E — run safely (do NOT pollute production apps):**
+```bash
+# REQUIRED: pass a dedicated throwaway app id — never rely on default (first app in apps.json)
+npm run test:cloud-app-host -- --app-id=<throwaway-uuid> --host=https://apps.papr.ai
+
+# Or against local host:
+npm run start:cloud-app-host   # separate terminal
+npm run test:cloud-app-host -- --app-id=<throwaway-uuid> --host=http://localhost:8787
+
+# Rules for agents running this test:
+# 1. NEVER run without --app-id (default picks first real app from ~/Papr/data/apps.json)
+# 2. Use a disposable test app, NOT production apps like Audit Workbench
+# 3. Test publishes visibility:team + slug e2e-* — will overwrite memory publish config
+# 4. After testing, unpublish throwaway app or republish production app from Paprwork UI
+# 5. Production deploy: node scripts/deploy-cloud-app-host.mjs --project=... --cloud-build
+```
+**Files Created:**
+- `src/gateway/services/cloudPublishDrift.ts` — Drift detection + token resolution
+- `tests/cloud-publish-drift.test.ts` — Unit tests
+**Files Changed:**
+- `src/gateway/services/CloudAppPublishService.ts` — Drift-aware get/auto-publish/republish
+- `src/gateway/index.ts` — PATCH prefs triggers republish
+**Impact:**
+- **Before:** Local `link_read_write` + memory `team` + stale token → share links broken silently
+- **After:** Sync or cloud sync tick auto-heals drift; publish panel refreshes token; PATCH sharing updates cloud immediately ✅
+
+---
+
+### Issue 53: Turso "Synced" False Positive — Stale Cloud Data ✅ FIXED
+**Added:** 2026-07-05
+**Problem:** After editing local job SQLite data, cloud web app showed stale rows but sync chip said "Synced — code and linked databases are up to date."
+**Root Cause:** `tursoSyncStatus.ts` marked a database `synced` whenever Turso had **any tables** (`remoteTableCount > 0`), without checking fingerprint-based dirty state (`isJobDbDirty`). Turso push also debounced 60s after git sync, so "Sync now" only pushed git immediately.
+**Solution:**
+1. **Fingerprint-aware status** — `pending` when `isJobDbDirty()` even if remote already has tables
+2. **Clearer UI copy** — "Local changes not pushed to Turso yet" when remote exists but local changed
+3. **Immediate Turso on manual sync** — `pushNow()` calls `bridge.pushDirtyLinkedSources()` after git queue completes
+**Files Changed:**
+- `src/gateway/services/tursoSyncStatus.ts` — dirty detection in status report
+- `src/gateway/services/CloudSyncService.ts` — immediate Turso push on manual sync
+- `ui/utils/appCloudSyncStatus.ts` — pending detail message
+- `tests/turso-sync-status.test.ts` — unit tests
+**Impact:**
+- **Before:** Chip green while Turso data stale; user trusted misleading "up to date" message
+- **After:** Chip shows Syncing until fingerprints match; Sync now pushes DB changes immediately ✅
+
+---
+
+### Enhancement 54: Turso Changelog CDC (Row-Level Delta Sync) ✅ IMPLEMENTED
+**Added:** 2026-07-09
+**Problem:** Turso boundary sync rewrote entire tables (>2K rows) on every change. A 1M-row scrape job updating one row triggered full DROP + INSERT of all rows on Turso and full local table reads.
+**Solution:** SQLite trigger-based changelog (`_papr_sync_log`) with delta push/pull by primary key. Bootstrap once on empty remote; subsequent syncs move only changed rows.
+**Implementation:**
+1. `tursoSyncLog.ts` — triggers, mute guard, log read/prune
+2. `tursoDeltaSync.ts` — `pushDeltaToRemote`, `applyRemoteSyncLogToLocal`
+3. `tursoSyncBridgeCore.ts` — bootstrap / delta / snapshot_fallback / full modes
+4. `tursoSyncState.ts` — `lastPushedLogId` / `lastPulledLogId` cursors
+5. `TursoDbAdapter.ts` — remote triggers on first cloud write
+**Testing:**
+- `tests/turso-sync-log.test.ts` — 5 unit tests (run via Electron for better-sqlite3)
+- `npm run test:turso-delta-sync` — local CDC verification + optional live Turso E2E
+**See:** `docs/TURSO_CHANGELOG_CDC_SYNC.md`
+
+---
+
 **This file is living documentation. Update it as we learn and make decisions.**

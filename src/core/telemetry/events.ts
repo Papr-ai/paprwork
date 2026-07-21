@@ -21,8 +21,19 @@ export const AmplitudeEvents = {
   ONBOARDING_STEP_VIEWED: "paprwork_onboarding_step_viewed",
   ONBOARDING_STEP_COMPLETED: "paprwork_onboarding_step_completed",
   ONBOARDING_COMPLETED: "paprwork_onboarding_completed",
+  ONBOARDING_SKIPPED: "paprwork_onboarding_skipped",
+  ONBOARDING_INTENT_SELECTED: "paprwork_onboarding_intent_selected",
+  ONBOARDING_OPEN_MODELS: "paprwork_onboarding_open_models",
+
+  // Activation Events (PLG funnel)
+  ACTIVATION_MODEL_CONNECTED: "paprwork_activation_model_connected",
+  ACTIVATION_FIRST_CHAT_SENT: "paprwork_activation_first_chat_sent",
+  ACTIVATION_FIRST_RESULT_CREATED: "paprwork_activation_first_result_created",
+  ACTIVATION_RESULT_INSPECTED: "paprwork_activation_result_inspected",
+  ACTIVATION_REPEAT_VALUE: "paprwork_activation_repeat_value",
   PAPR_LOGIN_STARTED: "paprwork_papr_login_started",
   PAPR_LOGIN_COMPLETED: "paprwork_papr_login_completed",
+  PAPR_LOGIN_FAILED: "paprwork_papr_login_failed",
 
   // Chat Events
   CHAT_CREATED: "paprwork_chat_created",
@@ -69,6 +80,10 @@ export const AmplitudeEvents = {
   THEME_CHANGED: "paprwork_theme_changed",
   DEFAULT_MODEL_CHANGED: "paprwork_default_model_changed",
 
+  // Community App Events
+  COMMUNITY_APP_PREVIEWED: "paprwork_community_app_previewed",
+  COMMUNITY_APP_INSTALLED: "paprwork_community_app_installed",
+
   // Error Events
   ERROR_OCCURRED: "paprwork_error_occurred",
   API_ERROR: "paprwork_api_error",
@@ -106,6 +121,23 @@ export interface OnboardingStepProperties extends BaseEventProperties {
 export interface OnboardingCompletedProperties extends BaseEventProperties {
   time_spent_seconds: number;
   steps_completed: number;
+}
+
+export interface PaprLoginStartedProperties extends BaseEventProperties {
+  mode: "login" | "signup";
+  source?: "auth_wall" | "settings" | "unknown";
+}
+
+export interface PaprLoginCompletedProperties extends BaseEventProperties {
+  mode?: "login" | "signup";
+  source?: "auth_wall" | "settings" | "unknown";
+}
+
+export interface PaprLoginFailedProperties extends BaseEventProperties {
+  error: string;
+  mode?: "login" | "signup";
+  source?: "auth_wall" | "settings" | "unknown";
+  stage?: "start" | "callback";
 }
 
 export interface MessageSentProperties extends BaseEventProperties {

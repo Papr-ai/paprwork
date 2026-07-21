@@ -15,6 +15,7 @@ export class CodeFileWatcher {
   private watcher: FSWatcher | null = null;
   private paprDir: string;
   private onFileChange?: (filePath: string) => void;
+  private onFileDelete?: (filePath: string) => void;
   
   constructor(
     _client: Papr,
@@ -32,6 +33,10 @@ export class CodeFileWatcher {
    */
   setOnFileChange(callback: (filePath: string) => void): void {
     this.onFileChange = callback;
+  }
+
+  setOnFileDelete(callback: (filePath: string) => void): void {
+    this.onFileDelete = callback;
   }
   
   /**
@@ -119,7 +124,15 @@ export class CodeFileWatcher {
    */
   private async handleDelete(filePath: string): Promise<void> {
     console.log(`🗑️  File deleted: ${path.relative(this.paprDir, filePath)}`);
-    console.log('   💡 Note: Deleted files remain in memory (historical record)');
+
+    if (!isIndexableCodePath(filePath, this.paprDir)) {
+      return;
+    }
+
+    if (this.onFileDelete) {
+      this.onFileDelete(filePath);
+      console.log('   🔄 Summary cache updated for deleted file');
+    }
   }
   
 }

@@ -11,6 +11,7 @@ import { browserTools } from "./browser.js";
 import { pageWaitTools } from "./pageWait.js";
 import { documentTools } from "./documents.js";
 import { paprMemoryTools } from "./paprMemory.js";
+import { paprDocumentMemoryTools } from "./paprDocumentMemory.js";
 import { skillsTools } from "./skills.js";
 import { appJobsTools } from "./appJobs.js";
 import { jobFolderTools } from "./jobFolders.js";
@@ -21,6 +22,24 @@ import { recipeTools } from "./recipes.js";
 import { keyManagementTools } from "./keyManagement.js";
 import { chatHistoryTools } from "./chatHistory.js";
 import { connectorsTools } from "./connectors.js";
+import { codeIndexTools } from "./codeIndex.js";
+import { cloudPublishTools } from "./cloudPublish.js";
+import { cloudInstallTools } from "./cloudInstall.js";
+import { appAgentChatTools } from "./appAgentChat.js";
+import { editFileTool } from "./editFile.js";
+import { editAppFileTool, editJobFileTool } from "./appJobs.js";
+import {
+  createDatabaseTool,
+  attachDatabaseTool,
+  deleteDatabaseTool,
+} from "./databases.js";
+import { wikiGraphTools } from "./wikiGraph.js";
+
+export const databaseTools = [
+  createDatabaseTool,
+  attachDatabaseTool,
+  deleteDatabaseTool,
+];
 
 /**
  * All available tools
@@ -28,12 +47,16 @@ import { connectorsTools } from "./connectors.js";
 export const allTools = [
   bashTool,
   ...filesystemTools,
+  editFileTool,
   ...browserTools,
   ...pageWaitTools,
   ...documentTools,
   ...paprMemoryTools,
+  ...paprDocumentMemoryTools,
+  ...wikiGraphTools,
   ...skillsTools,
   ...appJobsTools,
+  ...databaseTools,
   ...jobFolderTools,
   ...webviewTools,
   ...delegationTools,
@@ -42,26 +65,39 @@ export const allTools = [
   ...recipeTools,
   ...chatHistoryTools,
   ...connectorsTools,
+  ...codeIndexTools,
+  ...cloudPublishTools,
+  ...cloudInstallTools,
+  ...appAgentChatTools,
 ];
+
+/**
+ * Legacy tool aliases — same backends as edit_file, old schemas (appId/filename).
+ * Registered separately; hidden from main agent, available for saved sub-agent profiles.
+ */
+export const legacyToolAliases = [editAppFileTool, editJobFileTool];
 
 /**
  * Tool categories for organization
  */
 export const toolsByCategory = {
   system: [bashTool],
-  filesystem: filesystemTools,
+  filesystem: [...filesystemTools, editFileTool],
   browser: browserTools,
   webview: webviewTools,
-  papr: paprMemoryTools,
+  papr: [...paprMemoryTools, ...paprDocumentMemoryTools, ...wikiGraphTools],
   documents: documentTools,
   skills: skillsTools,
-  automation: appJobsTools,
+  automation: [...appJobsTools, ...databaseTools, ...appAgentChatTools],
   delegation: delegationTools,
   planning: planningTools,
   keyManagement: keyManagementTools,
   recipes: recipeTools,
   chatHistory: chatHistoryTools,
   connectors: connectorsTools,
+  codeIndex: codeIndexTools,
+  cloudPublish: cloudPublishTools,
+  cloudInstall: cloudInstallTools,
 } as const;
 
 /**
@@ -94,6 +130,7 @@ export {
   searchFilesTool,
   filesystemTools,
 } from "./filesystem.js";
+export { editFileTool } from "./editFile.js";
 export { browserTools } from "./browser.js";
 export { webviewTools } from "./webview.js";
 export {
@@ -110,6 +147,7 @@ export {
   paprMemoryTools,
   addAgentMemoryTool,
   searchAgentMemoryTool,
+  submitMemoryFeedbackTool,
   registerSchemaTool,
   updateSchemaTool,
   listSchemasTool,
@@ -121,6 +159,12 @@ export {
   deleteSchemaTool,
   createEntitiesAndRelationshipsTool,
 } from "./paprMemory.js";
+export {
+  paprDocumentMemoryTools,
+  uploadDocumentToMemoryTool,
+  getDocumentUploadStatusTool,
+  parsePdfTool,
+} from "./paprDocumentMemory.js";
 export { skillsTools } from "./skills.js";
 export {
   appJobsTools,
@@ -139,6 +183,8 @@ export {
   getJobStatsTool,
   linkAppDataSourceTool,
   readAppDataSourcesTool,
+  readAppDataHealthTool,
+  normalizeAppDatabasesTool,
   readAppFileTool,
   editAppFileTool,
   editAppFileLinesTool,
@@ -149,6 +195,15 @@ export {
   listAppBundlesTool,
   getAppBundleInfoTool,
 } from "./appJobs.js";
+export {
+  cloudInstallTools,
+  installCloudAppTool,
+  submitCloudAppChangeTool,
+  listCloudAppChangesTool,
+  resolveCloudAppChangeTool,
+} from "./cloudInstall.js";
+
+export { appAgentChatTools, enableAppAgentChatTool } from "./appAgentChat.js";
 
 export {
   jobFolderTools,
@@ -161,6 +216,12 @@ export { planningTools, createPlanTool, updatePlanTool, deletePlanTool } from ".
 export { writeRecipeTool, readRecipeTool, evaluateRunTool, listEvaluationsTool } from "./recipes.js";
 export { chatHistoryTools, getFullToolResultTool } from "./chatHistory.js";
 export { connectorsTools, provisionServiceTool } from "./connectors.js";
+export {
+  codeIndexTools,
+  getProjectCodeOverviewTool,
+  getFileCodeSummaryTool,
+  listFileCodeSummariesTool,
+} from "./codeIndex.js";
 
 export {
   keyManagementTools,

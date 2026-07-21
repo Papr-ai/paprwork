@@ -17,6 +17,7 @@ import {
   normalizeOpenAIModelId,
   normalizeGoogleModelId,
 } from "./modelNormalizer.js";
+import { normalizeZaiModelId } from "./zaiModel.js";
 
 const PAPR_PROXY_BASE =
   process.env.PAPR_AI_PROXY_BASE_URL || "https://memory.papr.ai/v1/ai";
@@ -65,6 +66,36 @@ export async function createProxyModel(
         headers,
       });
       return proxy(normalizeGoogleModelId(modelId)) as LanguageModel;
+    }
+
+    case "zai": {
+      const { createOpenAI } = await import("@ai-sdk/openai");
+      const proxy = createOpenAI({
+        baseURL: `${PAPR_PROXY_BASE}/zai`,
+        apiKey: "papr-proxy",
+        headers,
+      });
+      return proxy.chat(normalizeZaiModelId(modelId)) as LanguageModel;
+    }
+
+    case "groq": {
+      const { createGroqChatModel } = await import("./groqProvider.js");
+      const { normalizeGroqModelId } = await import("./groqModel.js");
+      return createGroqChatModel(normalizeGroqModelId(modelId), {
+        apiKey: "papr-proxy",
+        baseURL: `${PAPR_PROXY_BASE}/groq`,
+        headers,
+      });
+    }
+
+    case "moonshot": {
+      const { createMoonshotChatModel } = await import("./moonshotProvider.js");
+      const { normalizeMoonshotModelId } = await import("./moonshotModel.js");
+      return createMoonshotChatModel(normalizeMoonshotModelId(modelId), {
+        apiKey: "papr-proxy",
+        baseURL: `${PAPR_PROXY_BASE}/moonshot`,
+        headers,
+      });
     }
 
     default:

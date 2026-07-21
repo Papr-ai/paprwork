@@ -286,8 +286,8 @@ export const TOOL_DESCRIPTIONS: Record<
   // Apps
   create_app: { running: "Creating app", complete: "App created" },
   list_apps: { running: "Listing apps", complete: "Apps listed" },
+  edit_file: { running: "Editing file", complete: "File edited" },
   read_app_file: { running: "Reading app file", complete: "App file read" },
-  edit_app_file: { running: "Editing app file", complete: "App file edited" },
   list_app_files: {
     running: "Listing app files",
     complete: "App files listed",

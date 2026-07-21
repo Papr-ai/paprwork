@@ -1,7 +1,15 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
+import { RequirementItemSchema } from "../types/bundles.js";
 import { applyExactStringReplacement } from "../utils/exactStringReplace.js";
 import { withFileEditLock } from "../utils/fileEditLock.js";
+import { buildPostEditSnippet } from "../utils/postEditSnippet.js";
+import { coerceAppIdsValue } from "../utils/coerceAppIds.js";
+import { PRODUCT_ARCHITECT_REMINDER } from "../utils/productArchitectGate.js";
+import {
+  getCloudAppPublishTool,
+  publishCloudAppTool,
+} from "./cloudPublish.js";
 import { getApiKeysForSanitization, sanitizeError } from "./security.js";
 
 /** Models often send `fileName`; our schemas use `filename`. Normalize before parse to avoid wasted tool calls. */
@@ -16,20 +24,298 @@ function coerceFilenameAliasInToolArgs(raw: unknown): unknown {
   return raw;
 }
 
+/** Models sometimes send appIds as a JSON string instead of an array — coerce before Zod parse. */
+function coerceCreateJobAliases(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+  const o = { ...(raw as Record<string, unknown>) };
+  if (o.type === undefined && typeof o.jobType === "string") {
+    o.type = o.jobType;
+  }
+  delete o.jobType;
+  delete o.workingDirectory;
+
+  if (o.appIds !== undefined) {
+    const coerced = coerceAppIdsValue(o.appIds);
+    if (coerced !== undefined) {
+      o.appIds = coerced;
+    }
+  }
+
+  return o;
+}
+
 function toolSchemaWithFilenameAlias<T extends z.ZodType>(schema: T) {
   return z.preprocess(coerceFilenameAliasInToolArgs, schema);
 }
 
+function toolSchemaWithCreateJobAliases<T extends z.ZodType>(schema: T) {
+  return z.preprocess(coerceCreateJobAliases, schema);
+}
+
+const NO_EMOJI_UI_REMINDER =
+  "⚠️ NO EMOJIS in mini-app UI — validate_app errors on emoji in .html/.ts/.tsx/.css/.js. " +
+  "Use SVG icons and plain text labels only. Tab icons: inline SVG or PNG data URI (never emoji).";
+
 const APP_VERIFY_AFTER_EDIT_REMINDER =
   "REQUIRED after every app file edit (before more edits): " +
-  "validate_app({ appId }) → fix all errors → webview_launch_app → " +
-  "page_wait_for({ target: 'mini_app', time: 2 }) → webview_get_console → webview_snapshot. " +
+  "validate_app({ appId }) — includes esbuild + auto runtime preview + iframe console errors. " +
+  "If validate_app passes, optionally webview_snapshot for visual checks. " +
   "Do not edit other files until validate_app passes.";
+
+const APP_BUILD_FAILED_REMINDER =
+  "BUILD FAILED. Fix all errors above before editing any other files. " +
+  "Re-run validate_app after each fix until it passes.";
+
+const JOB_EVENTS_REMINDER =
+  "⚠️ LIVE UPDATES (REQUIRED): import subscribeJobEvents from /__papr__/papr-job-events.ts. " +
+  "Job writes $APP_DB → onDbChanged: () => loadData(). Job returns lastOutput only → onStatusChanged. " +
+  "NEVER poll. validate_app returns a copy-paste snippet when polling errors occur.";
+
+const CHAT_OPEN_REMINDER =
+  "⚠️ ASK-AGENT BUTTONS (desktop): window.paprAPI.invoke('chat.open', { message: '…' }) opens main chat — " +
+  "sandbox does NOT block this. Never say mini-apps cannot open chat. " +
+  "App code cannot call delegate_task; use chat.open for conversational flows or /api/jobs/run for background AI.";
+
+const BASH_FIRST_REMINDER =
+  "⚠️ ONE-OFF WORK: This looks like a quick one-time task with no schedule, no app wiring, and no pipeline. " +
+  "Prefer bash({ command: '…' }) for probes and single runs — only keep this job if the user will rerun it, " +
+  "needs a schedule, or a mini-app button depends on it.";
+
+type AppValidationIssue = {
+  file: string;
+  line?: number;
+  severity: "error" | "warning";
+  message: string;
+  rule?: string;
+};
+
+async function runPostEditAppValidation(
+  appId: string,
+): Promise<{
+  valid: boolean;
+  buildBlocked: boolean;
+  errorMessage?: string;
+  issues: AppValidationIssue[];
+  filesChecked: number;
+}> {
+  const { getAppService } = await import("../../gateway/services/AppService.js");
+  const appService = getAppService();
+  const validation = await appService.validateApp(appId);
+
+  const issues: AppValidationIssue[] = validation.issues.map((issue) => ({
+    file: issue.file,
+    line: issue.line,
+    severity: issue.severity,
+    message: issue.message,
+    rule: issue.rule,
+  }));
+
+  if (validation.valid) {
+    return {
+      valid: true,
+      buildBlocked: false,
+      issues,
+      filesChecked: validation.filesChecked,
+    };
+  }
+
+  const errorCount = issues.filter((issue) => issue.severity === "error").length;
+  const warningCount = issues.filter((issue) => issue.severity === "warning").length;
+  const issueList = issues
+    .map(
+      (issue) =>
+        `- ${issue.severity === "error" ? "❌" : "⚠️"} ${issue.file}${issue.line ? `:${issue.line}` : ""}: ${issue.message}`,
+    )
+    .join("\n");
+
+  return {
+    valid: false,
+    buildBlocked: errorCount > 0,
+    errorMessage: [
+      `⛔ BUILD FAILED — ${errorCount} error(s), ${warningCount} warning(s). Fix ALL errors before more edits.`,
+      "",
+      issueList,
+      "",
+      "ACTION REQUIRED: Fix every ❌ error now. Common fixes: rename .ts → .tsx for JSX, close mismatched braces, split CODE files over 100 lines (move long report text to content/*.md instead).",
+    ].join("\n"),
+    issues,
+    filesChecked: validation.filesChecked,
+  };
+}
+
+function buildAppEditToolResult(input: {
+  data: Record<string, unknown>;
+  postValidation: Awaited<ReturnType<typeof runPostEditAppValidation>>;
+  editedFilename?: string;
+  postEditContent?: string;
+  postEditFocusLine?: number;
+  postEditFocusText?: string;
+}): {
+  success: boolean;
+  data: Record<string, unknown>;
+  error?: string;
+  _verifyReminder: string;
+  _backendKeysReminder?: string;
+  _emojiReminder: string;
+  _jobEventsReminder?: string;
+} {
+  const { data, postValidation, editedFilename, postEditContent } = input;
+  const backendKeysReminder =
+    editedFilename?.startsWith("backend/") ? BACKEND_VAULT_KEYS_REMINDER : undefined;
+  const jobEventsReminder = postValidation.issues.some(
+    (issue) =>
+      issue.rule === "no-db-polling" || issue.rule === "prefer-job-events",
+  )
+    ? JOB_EVENTS_REMINDER
+    : undefined;
+
+  const postEditFields =
+    postEditContent !== undefined
+      ? buildPostEditSnippet(postEditContent, {
+          focusLine: input.postEditFocusLine,
+          focusText: input.postEditFocusText,
+        })
+      : undefined;
+
+  const enrichedData = postEditFields
+    ? {
+        ...data,
+        postEditSnippet: postEditFields.postEditSnippet,
+        totalLines: postEditFields.totalLines,
+        snippetTruncated: postEditFields.snippetTruncated,
+      }
+    : data;
+
+  if (postValidation.buildBlocked) {
+    return {
+      success: false,
+      error: postValidation.errorMessage,
+      data: {
+        ...enrichedData,
+        buildBlocked: true,
+        validation: {
+          valid: false,
+          filesChecked: postValidation.filesChecked,
+          issues: postValidation.issues,
+        },
+      },
+      _verifyReminder: APP_BUILD_FAILED_REMINDER,
+      _emojiReminder: NO_EMOJI_UI_REMINDER,
+      ...(backendKeysReminder ? { _backendKeysReminder: backendKeysReminder } : {}),
+      ...(jobEventsReminder ? { _jobEventsReminder: jobEventsReminder } : {}),
+    };
+  }
+
+  return {
+    success: true,
+    data: {
+      ...enrichedData,
+      buildCheck: {
+        valid: postValidation.valid,
+        filesChecked: postValidation.filesChecked,
+        message: postValidation.valid
+          ? `✓ Build check passed (${postValidation.filesChecked} files)`
+          : `✓ Edit saved with ${postValidation.issues.filter((i) => i.severity === "warning").length} warning(s) — fix before shipping`,
+        issues:
+          postValidation.issues.length > 0 ? postValidation.issues : undefined,
+      },
+    },
+    _verifyReminder: APP_VERIFY_AFTER_EDIT_REMINDER,
+    _emojiReminder: NO_EMOJI_UI_REMINDER,
+    ...(backendKeysReminder ? { _backendKeysReminder: backendKeysReminder } : {}),
+    ...(jobEventsReminder ? { _jobEventsReminder: jobEventsReminder } : {}),
+  };
+}
+
+const BACKEND_VAULT_KEYS_REMINDER =
+  "Backend vault keys: add `\"keys\": [\"YOUR_KEY_NAME\"]` to the action in backend/manifest.json. " +
+  "The gateway injects Settings → Integration Keys as environment variables — read with " +
+  "os.environ['YOUR_KEY_NAME'] (Python) or process.env.YOUR_KEY_NAME (Node/TS). " +
+  "Do NOT grep keychain, query custom-keys.json, call get_key, or invent /api/keys endpoints. " +
+  "Linked DB: gateway injects APP_DB (local) or PAPR_DB_URL+PAPR_DB_AUTH_TOKEN (cloud Turso). " +
+  "Python: from papr_db import connect, execute. Requires link_app_data_source first. " +
+  "Cloud vault keys: declare in backend/manifest.json action keys AND requirements.json (auto-synced on publish). " +
+  "Frontend call: fetch('/api/app/backend/:action', { body: JSON.stringify({ appId, params: { ... } }) }). " +
+  "Publishable browser-safe keys (Maps embed, etc.): POST /api/credentials/client-keys — not the manifest keys array.";
 
 const JOB_VERIFY_AFTER_EDIT_REMINDER =
   "REQUIRED after every job file edit (before more edits): " +
   "run_job({ jobId }) → read_job_logs({ jobId }). " +
   "For Python scripts: bash({ command: 'python3 -m py_compile <file>' }) for quick syntax check.";
+
+const SCRIPT_JOB_TYPES = new Set([
+  "python",
+  "node",
+  "bash",
+  "shell",
+  "swift",
+]);
+
+const LLM_SDK_PACKAGES = new Set([
+  "anthropic",
+  "openai",
+  "google-generativeai",
+  "google-genai",
+  "litellm",
+  "langchain",
+  "langchain-openai",
+  "langchain-anthropic",
+  "langchain-google-genai",
+  "instructor",
+  "ollama",
+]);
+
+const AGENT_JOB_LLM_REMINDER =
+  "⚠️ LLM IN SCRIPT JOB: This job appears to call OpenAI/Anthropic/Gemini directly. " +
+  "Prefer type: \"agent\" — built-in OAuth/API routing, full tool access (bash, files, browser), " +
+  "delivery, recipes, and no LLM SDK boilerplate. " +
+  "Script jobs with LLM SDKs are ONLY for fixed pipelines: read known data → single LLM call → write SQLite (no tools/exploration). " +
+  "Example: create_job({ type: \"agent\", command: \"Analyze leads and save top 5 to $JOB_DB\", provider: \"anthropic\" }) " +
+  "Read: read_skill({ skillId: \"preloaded-agent-job-output-guide\" })";
+
+function isScriptJobType(type: string): boolean {
+  return SCRIPT_JOB_TYPES.has(type);
+}
+
+function requirementLooksLikeLlmSdk(requirement: string): boolean {
+  const normalized = requirement.toLowerCase().trim();
+  if (LLM_SDK_PACKAGES.has(normalized)) {
+    return true;
+  }
+  return (
+    normalized.startsWith("langchain") ||
+    normalized.startsWith("openai-") ||
+    normalized === "@anthropic-ai/sdk"
+  );
+}
+
+function detectLlmSignalsInJobConfig(
+  type: string,
+  command: string | undefined,
+  requirements: string[] | undefined,
+): boolean {
+  if (!isScriptJobType(type)) {
+    return false;
+  }
+
+  if ((requirements ?? []).some(requirementLooksLikeLlmSdk)) {
+    return true;
+  }
+
+  const cmd = command ?? "";
+  if (/\$\{(?:OPENAI|ANTHROPIC|GOOGLE)_API_KEY\}/.test(cmd)) {
+    return true;
+  }
+
+  const lowerCmd = cmd.toLowerCase();
+  return (
+    lowerCmd.includes("api.openai.com") ||
+    lowerCmd.includes("api.anthropic.com") ||
+    lowerCmd.includes("generativelanguage.googleapis.com")
+  );
+}
 
 const appFileSchema = toolSchemaWithFilenameAlias(
   z.object({
@@ -47,14 +333,14 @@ const createAppSchema = z.object({
       (val) => {
         const trimmed = val.trim();
         const startsWithSvg = trimmed.startsWith("<");
-        const isEmoji = trimmed.length <= 4 && /[\p{Emoji}]/u.test(trimmed);
         const isDataImage = trimmed.startsWith("data:image/");
         const isHttpImage = /^https?:\/\//i.test(trimmed);
-        return startsWithSvg || isEmoji || isDataImage || isHttpImage;
+        return startsWithSvg || isDataImage || isHttpImage;
       },
       {
         message:
-          'Icon must be: (1) PNG/JPEG as data:image/...;base64,... or https URL, (2) inline SVG, or (3) a valid emoji. Plain text like "chart" is not allowed. ' +
+          'Icon must be: (1) PNG/JPEG as data:image/...;base64,... or https URL, or (2) inline SVG. ' +
+          'Emojis are not allowed. Plain text like "chart" is not allowed. ' +
           'See docs/design/papr-mini-app-droplet.png for the Papr droplet brand standard.',
       },
     )
@@ -64,8 +350,8 @@ const createAppSchema = z.object({
         "Master prompt: `Create a minimalist premium icon on a pure white background. Show one perfect transparent water droplet sphere, centered, with soft glass-like edges, subtle reflections, delicate refraction, and a polished Apple-keynote aesthetic. Inside the droplet, place [SUBJECT]. No text, no extra objects, no multiple droplets, no clutter. Lots of whitespace.` " +
         "Append: pure white background; one droplet only; one subject only; centered; no text; minimal soft shadow only. " +
         "Output 512×512 PNG as `data:image/png;base64,...`. " +
-        "Fallbacks: compact SVG with stroke=currentColor (renders inside the in-app glass orb) or emoji. " +
-        "Anti-patterns: flat blue gradient orbs, busy scenes, gray backgrounds, multiple bubbles.",
+        "Fallback: compact SVG with stroke=currentColor (renders inside the in-app glass orb). " +
+        "Never use emoji icons. Anti-patterns: flat blue gradient orbs, busy scenes, gray backgrounds, multiple bubbles.",
     ),
   files: z.array(appFileSchema).optional(),
   html: z.string().optional(),
@@ -103,7 +389,9 @@ const scheduleSchema = z.object({
   intervalMs: z.number().int().min(1000).optional(),
   atTime: z.string().min(1).optional(),
   catchUpMissed: z.boolean().optional(),
-});
+}).describe(
+  "Schedule for automatic runs. Agent jobs every 15–30 min require user approval before running (token-heavy).",
+);
 
 const recipeConfigSchema = z.object({
   enabled: z.boolean().default(true),
@@ -117,17 +405,32 @@ const recipeConfigSchema = z.object({
   evaluatorModel: z.string().optional(),
 });
 
-const createJobSchema = z.object({
+const jobRuntimeTypeSchema = z.enum([
+  "shell",
+  "bash",
+  "node",
+  "python",
+  "swift",
+  "agent",
+  "subagent",
+]);
+
+// passthrough(): Groq validates tool args against JSON Schema (additionalProperties: false by default).
+// We coerce common wrong keys in preprocess, then accept extras at the API layer without listing them in properties.
+const createJobSchemaCore = z
+  .object({
   name: z.string().min(1),
-  type: z.enum([
-    "shell",
-    "bash",
-    "node",
-    "python",
-    "swift",
-    "agent",
-    "subagent",
-  ]),
+  type: jobRuntimeTypeSchema.describe(
+    "REQUIRED. Job runtime: shell, bash, node, python, swift, agent, or subagent. Use this field name exactly — not jobType.",
+  ),
+  appIds: z
+    .array(z.string().min(1))
+    .min(1)
+    .describe(
+      "REQUIRED. Mini-app UUID(s) this job belongs to (from list_apps). " +
+        "Pass multiple IDs when one job serves several apps. " +
+        "Use ['__standalone__'] only for jobs not tied to any mini-app.",
+    ),
   folder: z
     .string()
     .optional()
@@ -185,9 +488,16 @@ const createJobSchema = z.object({
       // Anthropic
       "claude-haiku-4-5",
       "claude-sonnet-4-6",
+      "claude-sonnet-5",
       "claude-opus-4-6",
+      "claude-opus-4-8",
       "claude-fable-5",
       // OpenAI
+      "gpt-5-6-luna",
+      "gpt-5-6-terra",
+      "gpt-5-6-sol-low",
+      "gpt-5-6-sol",
+      "gpt-5-6-sol-high",
       "gpt-5.4-mini",
       "gpt-5.5-low",
       "gpt-5.5",
@@ -222,29 +532,67 @@ const createJobSchema = z.object({
     ])
     .optional()
     .describe(
-      "Model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-4-6', 'gpt-5.5', 'gemini-3.5-flash', 'qwen3.5:latest'",
+      "Model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-5', 'gpt-5-6-sol', 'gemini-3.5-flash', 'qwen3.5:latest'",
     ),
   recipe: recipeConfigSchema.optional().describe(
     "Execution recipe configuration. When enabled, an agent evaluates each run against the recipe's quality rubric. " +
     "Use write_recipe to set the actual recipe content (markdown with intent, criteria, rubric, anti-patterns, edge cases)."
   ),
-});
+})
+  .passthrough();
+
+const createJobSchema = toolSchemaWithCreateJobAliases(createJobSchemaCore);
 
 const runJobSchema = z.object({
   jobId: z.string().min(1),
   logBytes: z.number().int().min(200).max(200000).optional(),
+  runtime: z
+    .enum(["local", "cloud"])
+    .optional()
+    .describe(
+      "Where to execute: local (default) = desktop gateway; cloud = Papr Cloud runtime (syncs git first, then POST /v1/cloud/runtime/job-run). Use cloud to test jobs while the Mac is awake.",
+    ),
 });
 
-const linkAppDataSourceSchema = z.object({
-  appId: z.string().min(1),
-  jobId: z.string().min(1),
-  alias: z.string().min(1).optional(),
-  tables: z.array(z.string().min(1)).optional(),
-  dbPath: z.string().min(1).optional(),
-});
+const linkAppDataSourceSchema = z
+  .object({
+    appId: z.string().min(1),
+    jobId: z.string().min(1).optional(),
+    dbId: z.string().min(1).optional(),
+    alias: z.string().min(1).optional(),
+    tables: z.array(z.string().min(1)).optional(),
+    dbPath: z.string().min(1).optional(),
+    role: z
+      .enum(["primary", "readonly", "scratch"])
+      .optional()
+      .describe(
+        "primary = mini-app default + APP_DB for jobs; readonly = query only; scratch = job-local only (usually omit linking)",
+      ),
+    setPrimary: z
+      .boolean()
+      .optional()
+      .describe("Mark this source as the app's primary database"),
+  })
+  .refine((val) => Boolean(val.jobId) || Boolean(val.dbId), {
+    message: "Provide jobId or dbId",
+  });
 
 const readAppDataSourcesSchema = z.object({
   appId: z.string().min(1),
+});
+
+const readAppDataHealthSchema = z.object({
+  appId: z.string().min(1).describe("App UUID to inspect database health for"),
+});
+
+const normalizeAppDatabasesSchema = z.object({
+  appId: z.string().min(1).describe("App UUID"),
+  apply: z
+    .boolean()
+    .optional()
+    .describe(
+      "When true, delete empty stray DB files and migrate data to primary when safe. Default is dry-run preview only.",
+    ),
 });
 
 const readJobLogsSchema = z.object({
@@ -257,6 +605,8 @@ type CreateJobArgs = z.infer<typeof createJobSchema>;
 type RunJobArgs = z.infer<typeof runJobSchema>;
 type LinkAppDataSourceArgs = z.infer<typeof linkAppDataSourceSchema>;
 type ReadAppDataSourcesArgs = z.infer<typeof readAppDataSourcesSchema>;
+type ReadAppDataHealthArgs = z.infer<typeof readAppDataHealthSchema>;
+type NormalizeAppDatabasesArgs = z.infer<typeof normalizeAppDatabasesSchema>;
 type ReadJobLogsArgs = z.infer<typeof readJobLogsSchema>;
 
 let liquidGlassBaseCache: string | null = null;
@@ -314,6 +664,12 @@ body { font-family: var(--font-sans); font-size: var(--text-md); color: var(--te
 `;
 }
 
+const BUNDLED_INDEX_HTML =
+  '<!doctype html>\n<html>\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <link rel="stylesheet" href="dist/app.css">\n</head>\n<body>\n  <div id="app"></div>\n  <script type="module" src="dist/app.js"></script>\n</body>\n</html>';
+
+const BUNDLED_APP_TS =
+  "import './base.css';\n\nconst app = document.getElementById('app');\nif (app) {\n  app.textContent = 'App initialized';\n}\n";
+
 function resolveAppFiles(
   args: CreateAppArgs,
 ): Array<{ filename: string; content: string }> {
@@ -321,13 +677,9 @@ function resolveAppFiles(
     return args.files;
   }
 
-  const html =
-    args.html ??
-    '<!doctype html>\n<html>\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <div id="app"></div>\n  <script type="module" src="app.ts"></script>\n</body>\n</html>';
-  const css = args.css ?? null; // Will be resolved async in the tool execute
-  const javascript =
-    args.javascript ??
-    "const app = document.getElementById('app');\nif (app) {\n  app.textContent = 'App initialized';\n}\n";
+  const html = args.html ?? BUNDLED_INDEX_HTML;
+  const css = args.css ?? null;
+  const javascript = args.javascript ?? BUNDLED_APP_TS;
 
   const files = [
     { filename: "index.html", content: html },
@@ -335,7 +687,7 @@ function resolveAppFiles(
   ];
 
   if (css !== null) {
-    files.push({ filename: "style.css", content: css });
+    files.push({ filename: "base.css", content: css });
   }
 
   return files;
@@ -344,7 +696,8 @@ function resolveAppFiles(
 export const createAppTool = createTool({
   id: "create_app",
   description:
-    "Create a mini-app artifact with one or more files. Uses TypeScript (.ts) and Liquid Glass design system by default.",
+    "Create a mini-app artifact with one or more files. Uses TypeScript (.ts) and Liquid Glass design system by default. " +
+    "Apps that trigger jobs MUST use subscribeJobEvents (onDbChanged for $APP_DB writes, onStatusChanged for lastOutput) — never poll.",
   inputSchema: createAppSchema,
   execute: async (input) => {
     const args = (input as { context?: CreateAppArgs }).context ?? input;
@@ -355,11 +708,13 @@ export const createAppTool = createTool({
 
     const files = resolveAppFiles(args);
 
-    // Auto-inject Liquid Glass base CSS if no style.css was provided
-    const hasStylesheet = files.some((f) => f.filename === "style.css");
+    // Auto-inject Liquid Glass base CSS if no stylesheet was provided
+    const hasStylesheet = files.some(
+      (f) => f.filename === "base.css" || f.filename === "style.css",
+    );
     if (!hasStylesheet) {
       const baseCss = await loadLiquidGlassBase();
-      files.push({ filename: "style.css", content: baseCss });
+      files.push({ filename: "base.css", content: baseCss });
     }
 
     const app = await appService.createApp(
@@ -368,16 +723,72 @@ export const createAppTool = createTool({
       files,
       args.icon,
     );
+
+    // Run esbuild bundle — catches missing CSS imports, TS errors, the same
+    // way an IDE + bundler would. validateApp rebuilds before checking.
+    const postValidation = await runPostEditAppValidation(app.id);
+    if (postValidation.buildBlocked) {
+      return {
+        success: false,
+        error: postValidation.errorMessage,
+        data: {
+          ...app,
+          buildBlocked: true,
+          validation: {
+            valid: false,
+            filesChecked: postValidation.filesChecked,
+            issues: postValidation.issues,
+          },
+        },
+        _designReminder:
+          `⚠️ DESIGN REQUIREMENT: You MUST load the design system skill BEFORE writing any UI code: ` +
+          `read_skill({ skillId: "preloaded-paprwork-design-system" }). ` +
+          `Also check ~/Papr/workspace/BRAND.md and brand.json for user brand colors/fonts/logo — use them when set. ` +
+          `Mini-apps: fetch('/api/brand?appId=...') or CSS vars (--brand-primary, etc.). ` +
+          `Design target: Steve Jobs meets Elon Musk — obsessively clean, premium, zero clutter. ` +
+          `2-3 focused sections max, ONE primary action per screen, generous whitespace. ` +
+          `Follow user brand when set; otherwise follow the design system.`,
+        _architectReminder: PRODUCT_ARCHITECT_REMINDER,
+        _verifyReminder: APP_BUILD_FAILED_REMINDER,
+        _jobEventsReminder: JOB_EVENTS_REMINDER,
+        _emojiReminder: NO_EMOJI_UI_REMINDER,
+        _chatOpenReminder: CHAT_OPEN_REMINDER,
+        _backendReminder:
+          `Server-side code: apps/{appId}/backend/ + manifest.json → POST /api/app/backend/:action. ` +
+          `Declare "keys": ["KEY_NAME"] per action — gateway injects Settings keys as env vars (os.environ/process.env). ` +
+          `Cloud: requirements.json catalog too (auto-synced on publish_cloud_app). Never grep keychain or call get_key. ` +
+          `Conversational buttons: paprAPI.invoke('chat.open', { message }) (desktop). Background AI: POST /api/jobs/run. Never /api/bash/run from mini-apps.`,
+      };
+    }
+
     return {
       success: true,
-      data: app,
+      data: {
+        ...app,
+        buildCheck: {
+          valid: true,
+          filesChecked: postValidation.filesChecked,
+          message: `✓ Build check passed (${postValidation.filesChecked} files)`,
+        },
+      },
       _designReminder:
         `⚠️ DESIGN REQUIREMENT: You MUST load the design system skill BEFORE writing any UI code: ` +
         `read_skill({ skillId: "preloaded-paprwork-design-system" }). ` +
+        `Also check ~/Papr/workspace/BRAND.md and brand.json for brand colors/fonts/logo — use them when set. ` +
+        `Mini-apps: fetch('/api/brand?appId=...') or CSS vars (--brand-primary, etc.). ` +
         `Design target: Steve Jobs meets Elon Musk — obsessively clean, premium, zero clutter. ` +
         `2-3 focused sections max, ONE primary action per screen, generous whitespace. ` +
-        `Follow these principles unless the user has explicitly provided different design guidelines.`,
+        `Follow user brand when set; otherwise follow the design system.`,
+      _architectReminder: PRODUCT_ARCHITECT_REMINDER,
       _verifyReminder: APP_VERIFY_AFTER_EDIT_REMINDER,
+      _jobEventsReminder: JOB_EVENTS_REMINDER,
+      _emojiReminder: NO_EMOJI_UI_REMINDER,
+      _chatOpenReminder: CHAT_OPEN_REMINDER,
+      _backendReminder:
+        `Server-side code: apps/{appId}/backend/ + manifest.json → POST /api/app/backend/:action. ` +
+        `Declare "keys": ["KEY_NAME"] per action — gateway injects Settings keys as env vars. ` +
+        `Cloud: requirements.json catalog too (auto-synced on publish_cloud_app). Never grep keychain or call get_key. ` +
+        `Conversational buttons: paprAPI.invoke('chat.open', { message }) (desktop). Background AI: POST /api/jobs/run. Never /api/bash/run from mini-apps.`,
     };
   },
 });
@@ -385,9 +796,17 @@ export const createAppTool = createTool({
 export const createJobTool = createTool({
   id: "create_job",
   description:
-    "Create a job with optional DAG dependencies, retries, and delivery. " +
+    "Create a persistent, rerunnable job — NOT for one-time probes. Use the bash tool for quick one-offs (curl, sqlite peek, test script once). " +
+    "Create a job when: mini-app button (/api/jobs/run), schedule, appIds linkage, dependsOn pipeline, or user will rerun by name. " +
+    "REQUIRED fields: name, type (exact field name — python|node|agent|bash|shell|swift|subagent), appIds. " +
+    "Do NOT use jobType or workingDirectory — those are not valid parameters. " +
+    "REQUIRED: appIds — pass one or more mini-app UUIDs from list_apps (use ['__standalone__'] only for orphan jobs). " +
+    "When appIds includes real app UUIDs, the job's data.db is AUTO-LINKED to each app (data-sources.json) — usually no separate link_app_data_source call. " +
+    "Use folder for pipeline stage grouping (ingestion, processing), not app linkage. " +
     "For pipelines that should run automatically when a parent job finishes, each dependsOn entry MUST include autoTrigger: true (same for subagent→subagent as python→subagent). " +
     "Without autoTrigger, dependencies only order runs when you start the job another way. " +
+    "\n\nLLM tasks: Prefer type: 'agent' for any job that needs AI reasoning, tools, or exploration. " +
+    "Do NOT create python/node jobs with anthropic/openai SDK packages unless it is a fixed pipeline (read data → single LLM call → write SQLite). " +
     "\n\nAgent job model selection: " +
     "Use 'provider' and 'model' fields for direct override (type: 'agent', same behavior, just different model). " +
     "Use subagent (type: 'subagent' with subAgentId) when you need custom system prompt or restricted tools. " +
@@ -402,6 +821,7 @@ export const createJobTool = createTool({
     const job = await jobsService.createJob({
       name: args.name,
       type: args.type,
+      appIds: args.appIds,
       folder: args.folder,
       command: args.command,
       requirements: args.requirements,
@@ -454,13 +874,155 @@ export const createJobTool = createTool({
           `Load the guide: read_skill({ skillId: "preloaded-api-key-testing" })`
         : undefined;
 
+    const agentJobReminder = detectLlmSignalsInJobConfig(
+      args.type,
+      args.command,
+      args.requirements,
+    )
+      ? AGENT_JOB_LLM_REMINDER
+      : undefined;
+
+    const linkedAppIds = (args.appIds ?? []).filter(
+      (appId) => appId !== "__standalone__",
+    );
+    let dataSourceLinkSummary: string | undefined;
+    if (linkedAppIds.length > 0) {
+      const { getAppService } =
+        await import("../../gateway/services/AppService.js");
+      const appService = getAppService();
+      const linkedAliases: string[] = [];
+      let usesExistingPrimary = false;
+      for (const appId of linkedAppIds) {
+        const sources = await appService.listAppDataSources(appId);
+        const forJob = sources.filter((source) => source.jobId === job.id);
+        for (const source of forJob) {
+          linkedAliases.push(`${source.alias} → app ${appId.slice(0, 8)}`);
+        }
+        if (forJob.length === 0 && sources.length > 0) {
+          usesExistingPrimary = true;
+        }
+      }
+      dataSourceLinkSummary =
+        linkedAliases.length > 0
+          ? `✓ Job database promoted & linked: ${linkedAliases.join("; ")}. Apps use this as the single primary DB; additional jobs write to $APP_DB.`
+          : usesExistingPrimary
+            ? `✓ Job created for app(s) — uses existing primary $APP_DB (no second database linked). Write UI tables via $APP_DB, scratch via $JOB_DB.`
+            : `⚠️ Job created for app(s) but database not linked yet. Call link_app_data_source({ appId, jobId: "${job.id}", setPrimary: true }) before the app uses /api/db/*.`;
+    }
+
+    const appDbJobReminder = buildAppDbJobReminder(args.type, args.command, linkedAppIds);
+    const bashFirstReminder = shouldSuggestBashInstead(args)
+      ? BASH_FIRST_REMINDER
+      : undefined;
+
+    const { assessAgentJobSchedule } = await import(
+      "../../gateway/services/jobs/agentScheduleGuard.js"
+    );
+    const scheduleAssessment = assessAgentJobSchedule(args.type, args.schedule);
+    const scheduleRiskWarning =
+      scheduleAssessment.level !== "ok" ? scheduleAssessment.message : undefined;
+    const scheduleApprovalNote =
+      scheduleAssessment.level === "approval_required"
+        ? "User must approve this schedule in the app before it runs automatically (approval card will appear)."
+        : undefined;
+
     return {
       success: true,
       data: job,
+      _architectReminder: PRODUCT_ARCHITECT_REMINDER,
       ...(keyReminder ? { _keyPatternReminder: keyReminder } : {}),
+      ...(agentJobReminder ? { _agentJobReminder: agentJobReminder } : {}),
+      ...(appDbJobReminder ? { _appDbJobReminder: appDbJobReminder } : {}),
+      ...(bashFirstReminder ? { _bashFirstReminder: bashFirstReminder } : {}),
+      ...(scheduleRiskWarning ? { _scheduleRiskWarning: scheduleRiskWarning } : {}),
+      ...(scheduleApprovalNote
+        ? { _scheduleApprovalNote: scheduleApprovalNote }
+        : {}),
+      ...(dataSourceLinkSummary
+        ? { _dataSourceLinkReminder: dataSourceLinkSummary }
+        : {}),
     };
   },
 });
+
+/**
+ * Remind agents that app-linked jobs must write UI tables via $APP_DB, not $JOB_DB.
+ */
+function buildAppDbJobReminder(
+  jobType: string,
+  command: string | undefined,
+  linkedAppIds: readonly string[],
+): string | undefined {
+  if (linkedAppIds.length === 0 || !command) {
+    return undefined;
+  }
+
+  const cmd = command.toUpperCase();
+  const mentionsJobDb = cmd.includes("$JOB_DB") || cmd.includes("JOB_DB");
+  const mentionsAppDb = cmd.includes("$APP_DB") || cmd.includes("APP_DB");
+
+  if (mentionsJobDb && !mentionsAppDb) {
+    return (
+      `⚠️ APP DB REMINDER: Job is linked to mini-app(s) but command references JOB_DB without APP_DB. ` +
+      `UI-facing tables (settings, picks, planner_state, etc.) must be read/written via $APP_DB ` +
+      `(injected env — same file as the app's primary linked DB). JOB_DB is job-local scratch only. ` +
+      `Agent/script jobs: sqlite3 "$APP_DB" "SELECT ..." — not papr_jobs.db (does not exist). ` +
+      `Canonical job index: ~/Papr/data/jobs.json; job data: ~/Papr/Jobs/{jobId}/data/data.db.`
+    );
+  }
+
+  if (
+    (jobType === "agent" || jobType === "subagent") &&
+    !mentionsAppDb &&
+    /\b(INSERT|UPDATE|DELETE|CREATE TABLE|sqlite3)\b/i.test(command)
+  ) {
+    return (
+      `⚠️ APP DB REMINDER: This job writes SQL but does not mention $APP_DB. ` +
+      `For app-linked jobs, UI tables live in APP_DB (primary linked DB). ` +
+      `Call GET /api/db/schema?appId=... or sqlite3 "$APP_DB" ".tables" before writing. ` +
+      `Bootstrap missing tables via POST /api/db/exec or backend migrate action.`
+    );
+  }
+
+  return undefined;
+}
+
+/** Warn when create_job is used for work that should stay a one-off bash call. */
+function shouldSuggestBashInstead(args: CreateJobArgs): boolean {
+  const scriptTypes = new Set(["python", "node", "bash", "shell"]);
+  if (!scriptTypes.has(args.type)) {
+    return false;
+  }
+  if (args.schedule?.enabled) {
+    return false;
+  }
+  if (args.dependsOn && args.dependsOn.length > 0) {
+    return false;
+  }
+  if (args.deliver) {
+    return false;
+  }
+  const linkedAppIds = (args.appIds ?? []).filter(
+    (appId) => appId !== "__standalone__",
+  );
+  if (linkedAppIds.length > 0) {
+    return false;
+  }
+  const cmd = (args.command ?? "").trim();
+  if (!cmd || cmd.length > 400) {
+    return false;
+  }
+  if (cmd.includes("\n") && cmd.split("\n").length > 8) {
+    return false;
+  }
+  const oneShotPrefix =
+    /^(curl|wget|git|jq|sqlite3|pip3?|npm|npx|ls|cat|head|grep|find|echo|python3?\s+-c|node\s+-e)\b/i;
+  if (oneShotPrefix.test(cmd)) {
+    return true;
+  }
+  const segments = cmd.split("&&").map((segment) => segment.trim());
+  return segments.length <= 2 && cmd.length <= 200;
+}
 
 /**
  * Scan job source files for the anti-pattern of using os.environ/process.env
@@ -564,9 +1126,92 @@ async function scanJobSourceForEnvKeyAntiPattern(
   return warnings;
 }
 
+/**
+ * Scan job source files for direct LLM API usage (OpenAI, Anthropic, Gemini).
+ * Script jobs that call LLM SDKs should usually be agent jobs instead.
+ */
+async function scanJobSourceForLlmApiCalls(jobId: string): Promise<string[]> {
+  const { promises: fsP } = await import("fs");
+  const pathMod = await import("path");
+  const warnings: string[] = [];
+  const jobDir = await getJobDir(jobId);
+
+  const scanDir = async (dir: string, prefix: string): Promise<void> => {
+    try {
+      const entries = await fsP.readdir(dir);
+      for (const entry of entries) {
+        if (
+          entry.startsWith(".") ||
+          ["node_modules", "__pycache__", "data", ".venv", "venv"].includes(
+            entry,
+          )
+        ) {
+          continue;
+        }
+        const fullPath = pathMod.default.join(dir, entry);
+        const stat = await fsP.stat(fullPath);
+
+        if (stat.isDirectory()) {
+          await scanDir(fullPath, prefix ? `${prefix}/${entry}` : entry);
+          continue;
+        }
+
+        if (!/\.(py|js|ts|mjs)$/.test(entry)) continue;
+        if (stat.size > 100_000) continue;
+
+        const content = await fsP.readFile(fullPath, "utf-8");
+        const relPath = prefix ? `${prefix}/${entry}` : entry;
+
+        const patterns: Array<{ regex: RegExp; label: string }> = [
+          { regex: /from\s+anthropic\s+import/g, label: "anthropic SDK" },
+          { regex: /import\s+anthropic\b/g, label: "anthropic SDK" },
+          { regex: /Anthropic\s*\(/g, label: "Anthropic() client" },
+          { regex: /from\s+openai\s+import/g, label: "openai SDK" },
+          { regex: /import\s+openai\b/g, label: "openai SDK" },
+          { regex: /OpenAI\s*\(/g, label: "OpenAI() client" },
+          {
+            regex: /openai\.chat\.completions/g,
+            label: "openai.chat.completions",
+          },
+          {
+            regex: /\.messages\.create\s*\(/g,
+            label: "messages.create() LLM call",
+          },
+          {
+            regex: /google\.generativeai/g,
+            label: "google.generativeai SDK",
+          },
+          {
+            regex: /https:\/\/api\.openai\.com/g,
+            label: "OpenAI REST API",
+          },
+          {
+            regex: /https:\/\/api\.anthropic\.com/g,
+            label: "Anthropic REST API",
+          },
+        ];
+
+        for (const { regex, label } of patterns) {
+          if (regex.test(content)) {
+            warnings.push(`${relPath}: detected ${label}`);
+            break;
+          }
+        }
+      }
+    } catch {
+      // directory doesn't exist or can't be read
+    }
+  };
+
+  await scanDir(jobDir, "");
+  return warnings;
+}
+
 export const runJobTool = createTool({
   id: "run_job",
-  description: "Run a job by id and return status/logs/database info",
+  description:
+    "Run a job by id and return status/logs/database info. " +
+    "Set runtime='cloud' to execute on Papr Cloud while the desktop is awake (pushes git, runs via memory server, pulls results back).",
   inputSchema: runJobSchema,
   execute: async (input) => {
     const args = (input as { context?: RunJobArgs }).context ?? input;
@@ -575,11 +1220,36 @@ export const runJobTool = createTool({
     const jobsService = getJobsService();
     await jobsService.initialize();
 
+    const existingJob = await jobsService.getJob(args.jobId);
+
+    const appDbJobReminder =
+      existingJob?.appIds && existingJob.appIds.length > 0
+        ? buildAppDbJobReminder(
+            existingJob.type,
+            existingJob.command,
+            existingJob.appIds.filter((id) => id !== "__standalone__"),
+          )
+        : undefined;
+
     // Scan source files for env key anti-patterns before running
     const envKeyWarnings =
       await scanJobSourceForEnvKeyAntiPattern(args.jobId);
+    const llmApiWarnings =
+      existingJob && isScriptJobType(existingJob.type)
+        ? await scanJobSourceForLlmApiCalls(args.jobId)
+        : [];
+    const configLlmSignals =
+      existingJob &&
+      detectLlmSignalsInJobConfig(
+        existingJob.type,
+        existingJob.command,
+        existingJob.requirements,
+      );
 
-    const job = await jobsService.runJob(args.jobId);
+    const job =
+      args.runtime === "cloud"
+        ? await jobsService.runJobInCloud(args.jobId)
+        : await jobsService.runJob(args.jobId);
     const apiKeys = getApiKeysForSanitization();
     const logs = sanitizeError(
       await jobsService.getLogs(args.jobId, args.logBytes ?? 12000),
@@ -611,6 +1281,13 @@ export const runJobTool = createTool({
                 `Read: read_skill({ skillId: "preloaded-api-key-testing" })`,
             }
           : {}),
+        ...(llmApiWarnings.length > 0 || configLlmSignals
+          ? {
+              _llmApiWarnings: llmApiWarnings,
+              _agentJobReminder: AGENT_JOB_LLM_REMINDER,
+            }
+          : {}),
+        ...(appDbJobReminder ? { _appDbJobReminder: appDbJobReminder } : {}),
       },
     };
   },
@@ -647,7 +1324,11 @@ export const readJobLogsTool = createTool({
 
 export const linkAppDataSourceTool = createTool({
   id: "link_app_data_source",
-  description: "Link a mini-app to a job SQLite database data source",
+  description:
+    "Link a mini-app to a SQLite database (manual fallback). " +
+    "Prefer create_job({ appIds }) for job-owned DBs — auto-links without this tool. " +
+    "Use this for registry dbId, re-linking, or when auto-link failed. " +
+    "Provide jobId (job-owned data.db) OR dbId (standalone registry DB from create_database). Use setPrimary: true for the app's default /api/db/* target.",
   inputSchema: linkAppDataSourceSchema,
   execute: async (input) => {
     const args =
@@ -665,31 +1346,63 @@ export const linkAppDataSourceTool = createTool({
     if (!app) {
       throw new Error(`App not found: ${args.appId}`);
     }
-    const job = await jobsService.getJob(args.jobId);
-    if (!job) {
-      throw new Error(`Job not found: ${args.jobId}`);
-    }
-    const dbPath =
-      args.dbPath ?? (await jobsService.getJobDatabasePath(args.jobId));
-    if (!dbPath) {
-      throw new Error(`Database path not found for job: ${args.jobId}`);
+
+    let dbPath = args.dbPath;
+    let jobId = args.jobId;
+    let dbId = args.dbId;
+
+    if (dbId && !dbPath) {
+      const { initializeDatabaseRegistry } = await import(
+        "../../gateway/services/DatabaseRegistryService.js"
+      );
+      const registry = await initializeDatabaseRegistry();
+      const record = registry.getById(dbId);
+      if (!record) {
+        throw new Error(`Database not found in registry: ${dbId}`);
+      }
+      dbPath = record.localPath;
     }
 
-    const alias = args.alias ?? `${job.name} (${job.id.slice(0, 8)})`;
+    if (jobId) {
+      const job = await jobsService.getJob(jobId);
+      if (!job) {
+        throw new Error(`Job not found: ${jobId}`);
+      }
+      dbPath = dbPath ?? (await jobsService.getJobDatabasePath(jobId)) ?? undefined;
+      if (!dbPath) {
+        throw new Error(`Database path not found for job: ${jobId}`);
+      }
+    } else if (!dbPath || !dbId) {
+      throw new Error("dbId or jobId with resolvable dbPath is required");
+    }
+
+    const alias =
+      args.alias ??
+      (jobId
+        ? `${(await jobsService.getJob(jobId))!.name} (${jobId.slice(0, 8)})`
+        : dbId!);
     const tables = args.tables ?? [];
+    const sourceId = jobId ? `${jobId}:${alias}` : `${dbId}:${alias}`;
     const dataSources = await appService.linkAppDataSource(args.appId, {
-      id: `${args.jobId}:${alias}`,
+      id: sourceId,
       type: "sqlite",
-      jobId: args.jobId,
+      ...(jobId ? { jobId } : {}),
+      ...(dbId ? { dbId } : {}),
       alias,
-      dbPath,
+      dbPath: dbPath!,
       tables,
+      ...(args.role ? { role: args.role } : {}),
+      ...(args.setPrimary ? { setPrimary: args.setPrimary } : {}),
     });
+    if (jobId) {
+      await jobsService.ensureJobLinkedToApp(jobId, args.appId);
+    }
     return {
       success: true,
       data: {
         appId: args.appId,
-        jobId: args.jobId,
+        ...(jobId ? { jobId } : {}),
+        ...(dbId ? { dbId } : {}),
         dataSources,
       },
     };
@@ -722,6 +1435,44 @@ export const readAppDataSourcesTool = createTool({
   },
 });
 
+export const readAppDataHealthTool = createTool({
+  id: "read_app_data_health",
+  description:
+    "Inspect mini-app database health: primary DB path, table row counts, data-contract validation, linked sources, stray/orphan DB files",
+  inputSchema: readAppDataHealthSchema,
+  execute: async (input) => {
+    const args =
+      (input as { context?: ReadAppDataHealthArgs }).context ?? input;
+    const { getDataContractService } =
+      await import("../../gateway/services/DataContractService.js");
+    const report = await getDataContractService().getDataHealth(args.appId);
+    return {
+      success: true,
+      data: report,
+    };
+  },
+});
+
+export const normalizeAppDatabasesTool = createTool({
+  id: "normalize_app_databases",
+  description:
+    "Preview or clean stray SQLite files (empty stubs in app folder, non-canonical job paths). NEVER runs automatically. Default is dry-run preview only; set apply=true to delete empty/baseline-only strays. Does not delete databases with user data.",
+  inputSchema: normalizeAppDatabasesSchema,
+  execute: async (input) => {
+    const args =
+      (input as { context?: NormalizeAppDatabasesArgs }).context ?? input;
+    const { normalizeAppDatabases } =
+      await import("../../gateway/services/dbPathNormalization.js");
+    const report = await normalizeAppDatabases(args.appId, {
+      dryRun: args.apply !== true,
+    });
+    return {
+      success: true,
+      data: report,
+    };
+  },
+});
+
 // ===== App file editing tools =====
 
 const readAppFileSchema = toolSchemaWithFilenameAlias(
@@ -730,7 +1481,9 @@ const readAppFileSchema = toolSchemaWithFilenameAlias(
     filename: z
       .string()
       .min(1)
-      .describe("Filename to read (e.g. index.html, style.css, app.js)"),
+      .describe(
+        "Relative path to read (e.g. index.html, components/chart.ts, content/reports/audit.md)",
+      ),
   }),
 );
 
@@ -796,6 +1549,13 @@ const updateJobSchema = z.object({
     .min(1)
     .describe("ID of the job to update (get it from list_jobs)"),
   name: z.string().min(1).optional().describe("New display name for the job"),
+  appIds: z
+    .array(z.string().min(1))
+    .min(1)
+    .optional()
+    .describe(
+      "Replace the mini-app UUID list this job belongs to. Pass multiple IDs for shared jobs.",
+    ),
   folder: z
     .string()
     .optional()
@@ -864,9 +1624,16 @@ const updateJobSchema = z.object({
       // Anthropic
       "claude-haiku-4-5",
       "claude-sonnet-4-6",
+      "claude-sonnet-5",
       "claude-opus-4-6",
+      "claude-opus-4-8",
       "claude-fable-5",
       // OpenAI
+      "gpt-5-6-luna",
+      "gpt-5-6-terra",
+      "gpt-5-6-sol-low",
+      "gpt-5-6-sol",
+      "gpt-5-6-sol-high",
       "gpt-5.4-mini",
       "gpt-5.5-low",
       "gpt-5.5",
@@ -901,7 +1668,7 @@ const updateJobSchema = z.object({
     ])
     .optional()
     .describe(
-      "Update model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-4-6', 'gpt-5.5', 'gemini-3.5-flash', 'qwen3.5:latest'",
+      "Update model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-5', 'gpt-5.5', 'gemini-3.5-flash', 'qwen3.5:latest'",
     ),
 });
 
@@ -994,9 +1761,85 @@ type EditAppFileArgs = z.infer<typeof editAppFileSchema>;
 type EditAppFileLinesArgs = z.infer<typeof editAppFileLinesSchema>;
 type ListAppFilesArgs = z.infer<typeof listAppFilesSchema>;
 
+/** Shared by edit_app_file and unified edit_file (mini-app route). */
+export async function runEditAppFile(args: EditAppFileArgs): Promise<{
+  success: boolean;
+  data: Record<string, unknown>;
+  error?: string;
+  _verifyReminder: string;
+  _backendKeysReminder?: string;
+  _emojiReminder: string;
+  _jobEventsReminder?: string;
+}> {
+  const { getAppService } = await import("../../gateway/services/AppService.js");
+  const appService = getAppService();
+  await appService.initialize();
+
+  let replaceMeta: {
+    occurrencesFound: number;
+    occurrenceReplaced: number;
+  } | null = null;
+  let postEditContent: string | null = null;
+
+  const result = await appService.updateAppFile(
+    args.appId,
+    args.filename,
+    (content) => {
+      const applied = applyExactStringReplacement({
+        content,
+        filename: args.filename,
+        oldString: args.oldString,
+        newString: args.newString,
+        occurrence: args.occurrence,
+        linesToolName: "edit_app_file_lines",
+      });
+      replaceMeta = {
+        occurrencesFound: applied.occurrencesFound,
+        occurrenceReplaced: applied.occurrenceReplaced,
+      };
+      postEditContent = applied.newContent;
+      return applied.newContent;
+    },
+  );
+
+  if (result === null) {
+    throw new Error(`File not found: ${args.filename} in app ${args.appId}`);
+  }
+  if (!result.written) {
+    throw new Error(
+      `No changes made to ${args.filename}. oldString may already be replaced.`,
+    );
+  }
+
+  const postValidation = await runPostEditAppValidation(args.appId);
+
+  try {
+    const { getAgentFocusContextService } = await import(
+      "../../gateway/services/AgentFocusContextService.js"
+    );
+    getAgentFocusContextService().recordMiniAppEdit(args.appId, args.filename);
+  } catch {
+    // Focus tracking is best-effort
+  }
+
+  return buildAppEditToolResult({
+    data: {
+      filename: args.filename,
+      updated: true,
+      occurrencesFound: replaceMeta!.occurrencesFound,
+      occurrenceReplaced: replaceMeta!.occurrenceReplaced,
+    },
+    postValidation,
+    editedFilename: args.filename,
+    postEditContent: postEditContent ?? undefined,
+    postEditFocusText: args.newString,
+  });
+}
+
 export const readAppFileTool = createTool({
   id: "read_app_file",
-  description: "Read a specific file from a mini-app by filename",
+  description:
+    "Read a file from a mini-app (code or content). Supports nested paths like content/reports/q1-audit.md for long report text. Use list_app_files first to discover paths.",
   inputSchema: readAppFileSchema,
   execute: async (input) => {
     const args = (input as { context?: ReadAppFileArgs }).context ?? input;
@@ -1006,71 +1849,30 @@ export const readAppFileTool = createTool({
     await appService.initialize();
     const content = await appService.readAppFile(args.appId, args.filename);
     if (content === null) {
-      throw new Error(`File not found: ${args.filename} in app ${args.appId}`);
+      throw new Error(
+        `File not found: ${args.filename} in app ${args.appId}. Call list_app_files to see all paths.`,
+      );
     }
-    return { success: true, data: { filename: args.filename, content } };
+    return {
+      success: true,
+      data: {
+        filename: args.filename,
+        content,
+        lines: content.split("\n").length,
+      },
+    };
   },
 });
 
 export const editAppFileTool = createTool({
   id: "edit_app_file",
   description:
-    "Edit a mini-app file by replacing an exact string with a new string. " +
-    "PREFER edit_app_file_lines for HTML/JS/CSS blocks — it avoids ambiguous matches. " +
-    "If oldString appears more than once, pass occurrence or use edit_app_file_lines. " +
-    "After EVERY edit: validate_app + preview test (see _verifyReminder in result).",
+    "Deprecated — use edit_file({ path, oldString, newString }). " +
+    "Kept for backward compatibility with saved sub-agent profiles.",
   inputSchema: editAppFileSchema,
   execute: async (input) => {
     const args = (input as { context?: EditAppFileArgs }).context ?? input;
-    const { getAppService } =
-      await import("../../gateway/services/AppService.js");
-    const appService = getAppService();
-    await appService.initialize();
-
-    let replaceMeta: {
-      occurrencesFound: number;
-      occurrenceReplaced: number;
-    } | null = null;
-
-    const result = await appService.updateAppFile(
-      args.appId,
-      args.filename,
-      (content) => {
-        const applied = applyExactStringReplacement({
-          content,
-          filename: args.filename,
-          oldString: args.oldString,
-          newString: args.newString,
-          occurrence: args.occurrence,
-          linesToolName: "edit_app_file_lines",
-        });
-        replaceMeta = {
-          occurrencesFound: applied.occurrencesFound,
-          occurrenceReplaced: applied.occurrenceReplaced,
-        };
-        return applied.newContent;
-      },
-    );
-
-    if (result === null) {
-      throw new Error(`File not found: ${args.filename} in app ${args.appId}`);
-    }
-    if (!result.written) {
-      throw new Error(
-        `No changes made to ${args.filename}. oldString may already be replaced.`,
-      );
-    }
-
-    return {
-      success: true,
-      data: {
-        filename: args.filename,
-        updated: true,
-        occurrencesFound: replaceMeta!.occurrencesFound,
-        occurrenceReplaced: replaceMeta!.occurrenceReplaced,
-      },
-      _verifyReminder: APP_VERIFY_AFTER_EDIT_REMINDER,
-    };
+    return runEditAppFile(args);
   },
 });
 
@@ -1104,6 +1906,7 @@ After EVERY edit: validate_app + preview test (see _verifyReminder in result).`,
       linesAdded: number;
       netChange: number;
     } | null = null;
+    let postEditContent: string | null = null;
 
     const result = await appService.updateAppFile(
       args.appId,
@@ -1150,6 +1953,7 @@ After EVERY edit: validate_app + preview test (see _verifyReminder in result).`,
           linesAdded,
           netChange: linesAdded - linesRemoved,
         };
+        postEditContent = newContent;
         return newContent;
       },
     );
@@ -1162,8 +1966,18 @@ After EVERY edit: validate_app + preview test (see _verifyReminder in result).`,
     }
 
     const stats = lineStats!;
-    return {
-      success: true,
+    const postValidation = await runPostEditAppValidation(args.appId);
+
+    try {
+      const { getAgentFocusContextService } = await import(
+        "../../gateway/services/AgentFocusContextService.js"
+      );
+      getAgentFocusContextService().recordMiniAppEdit(args.appId, args.filename);
+    } catch {
+      // Focus tracking is best-effort
+    }
+
+    return buildAppEditToolResult({
       data: {
         filename: args.filename,
         updated: true,
@@ -1177,14 +1991,18 @@ After EVERY edit: validate_app + preview test (see _verifyReminder in result).`,
             ? `File now has ${stats.newLines} lines (${stats.netChange > 0 ? "+" : ""}${stats.netChange}). Line numbers after ${args.startLine} have shifted.`
             : `File still has ${stats.newLines} lines. Line numbers unchanged.`,
       },
-      _verifyReminder: APP_VERIFY_AFTER_EDIT_REMINDER,
-    };
+      postValidation,
+      editedFilename: args.filename,
+      postEditContent: postEditContent ?? undefined,
+      postEditFocusLine: args.startLine,
+    });
   },
 });
 
 export const listAppFilesTool = createTool({
   id: "list_app_files",
-  description: "List all files in a mini-app",
+  description:
+    "List all source files in a mini-app (recursive). Includes content/reports/*.md for report text. Use before read_app_file to confirm paths.",
   inputSchema: listAppFilesSchema,
   execute: async (input) => {
     const args = (input as { context?: ListAppFilesArgs }).context ?? input;
@@ -1196,21 +2014,20 @@ export const listAppFilesTool = createTool({
     if (!app) {
       throw new Error(`App not found: ${args.appId}`);
     }
-    // Read app directory to list files
-    const { promises: fsPromises } = await import("fs");
-    const pathModule = await import("path");
-    const osModule = await import("os");
-    const appDir = pathModule.default.join(
-      osModule.default.homedir(),
-      "Papr",
-      "apps",
-      args.appId,
+    const files = await appService.listAppFiles(args.appId);
+    const reportFiles = files.filter((file) =>
+      file.startsWith("content/reports/") && file.endsWith(".md"),
     );
-    const entries = await fsPromises.readdir(appDir);
-    const files = entries.filter(
-      (e) => !e.startsWith(".") && e !== "data-sources.json" && e !== ".versions",
-    );
-    return { success: true, data: { appId: args.appId, files } };
+    return {
+      success: true,
+      data: {
+        appId: args.appId,
+        files,
+        reportFiles: reportFiles.length > 0 ? reportFiles : undefined,
+        tip:
+          "Use read_app_file({ appId, filename }) to view any file. Report prose lives in content/reports/*.md (no line limit). Charts/UI stay in components/*.ts.",
+      },
+    };
   },
 });
 
@@ -1292,13 +2109,114 @@ type ListJobFilesArgs = z.infer<typeof listJobFilesSchema>;
 type ReadJobFileArgs = z.infer<typeof readJobFileSchema>;
 type EditJobFileArgs = z.infer<typeof editJobFileSchema>;
 
+/** Shared by edit_job_file and unified edit_file (job route). */
+export async function runEditJobFile(args: EditJobFileArgs): Promise<{
+  success: boolean;
+  data: Record<string, unknown>;
+  _verifyReminder: string;
+}> {
+  const { getJobsService } = await import("../../gateway/services/JobsService.js");
+  const jobsService = getJobsService();
+  await jobsService.initialize();
+
+  const job = await jobsService.getJob(args.jobId);
+  if (!job) {
+    throw new Error(`Job not found: ${args.jobId}`);
+  }
+  if (job.status === "running") {
+    throw new Error(
+      `Job ${args.jobId} is currently running. Wait for it to finish before editing its files.`,
+    );
+  }
+
+  const { promises: fsPromises } = await import("fs");
+  const pathModule = await import("path");
+  const jobDir = await getJobDir(args.jobId);
+  const filePath = pathModule.default.join(jobDir, args.filename);
+
+  const resolvedPath = pathModule.default.resolve(filePath);
+  const resolvedDir = pathModule.default.resolve(jobDir);
+  if (
+    !resolvedPath.startsWith(resolvedDir + pathModule.default.sep) &&
+    resolvedPath !== resolvedDir
+  ) {
+    throw new Error(`Path traversal rejected: ${args.filename}`);
+  }
+
+  const lockKey = `job:${args.jobId}:${args.filename}`;
+  let replaceMeta: {
+    occurrencesFound: number;
+    occurrenceReplaced: number;
+  } | null = null;
+
+  const newContent = await withFileEditLock(lockKey, async () => {
+    let content: string;
+    try {
+      content = await fsPromises.readFile(resolvedPath, "utf8");
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      if (e.code === "ENOENT") {
+        throw new Error(
+          `File not found: ${args.filename} in job ${args.jobId}. Call list_job_files to see what exists.`,
+        );
+      }
+      throw err;
+    }
+
+    const applied = applyExactStringReplacement({
+      content,
+      filename: args.filename,
+      oldString: args.oldString,
+      newString: args.newString,
+      occurrence: args.occurrence,
+      linesToolName: "edit_file with more surrounding context in oldString",
+    });
+    replaceMeta = {
+      occurrencesFound: applied.occurrencesFound,
+      occurrenceReplaced: applied.occurrenceReplaced,
+    };
+
+    await saveJobFileVersion(args.jobId, args.filename, content, "before-edit");
+    await fsPromises.writeFile(resolvedPath, applied.newContent, "utf8");
+    return applied.newContent;
+  });
+
+  try {
+    const { getAgentFocusContextService } = await import(
+      "../../gateway/services/AgentFocusContextService.js"
+    );
+    getAgentFocusContextService().recordJobEdit(args.jobId, args.filename);
+  } catch {
+    // Focus tracking is best-effort
+  }
+
+  const postEditFields = buildPostEditSnippet(newContent, {
+    focusText: args.newString,
+  });
+
+  return {
+    success: true,
+    data: {
+      jobId: args.jobId,
+      filename: args.filename,
+      path: resolvedPath,
+      occurrencesFound: replaceMeta!.occurrencesFound,
+      occurrenceReplaced: replaceMeta!.occurrenceReplaced,
+      linesAfter: postEditFields.totalLines,
+      postEditSnippet: postEditFields.postEditSnippet,
+      snippetTruncated: postEditFields.snippetTruncated,
+    },
+    _verifyReminder: JOB_VERIFY_AFTER_EDIT_REMINDER,
+  };
+}
+
 export const updateJobTool = createTool({
   id: "update_job",
   description: `Update an existing job's configuration. Only the fields you provide are changed — everything else stays the same.
 Cannot update a currently running job (stop it first with bash or wait for it to finish).
 Common use cases:
 - Fix a buggy command: { jobId, command: "python3 fixed_script.py" }
-- Add missing requirements: { jobId, requirements: ["anthropic", "requests"] }
+- Add missing requirements: { jobId, requirements: ["requests", "beautifulsoup4"] }
 - Change a dependency: { jobId, dependsOn: [{ jobId: "...", onStatus: "completed", autoTrigger: true }] } — include autoTrigger: true whenever the job should start automatically when the parent completes; omitting it removes auto-chaining
 - Enable/change a schedule: { jobId, schedule: { enabled: true, cron: "0 9 * * *" } }
 - Disable a schedule: { jobId, schedule: { enabled: false } } — job still exists but won't run automatically
@@ -1343,7 +2261,20 @@ Common use cases:
           }
         : {}),
     });
-    return { success: true, data: job };
+
+    const agentJobReminder = detectLlmSignalsInJobConfig(
+      job.type,
+      job.command,
+      job.requirements,
+    )
+      ? AGENT_JOB_LLM_REMINDER
+      : undefined;
+
+    return {
+      success: true,
+      data: job,
+      ...(agentJobReminder ? { _agentJobReminder: agentJobReminder } : {}),
+    };
   },
 });
 
@@ -1438,7 +2369,7 @@ async function saveJobFileVersion(
 export const listJobFilesTool = createTool({
   id: "list_job_files",
   description:
-    "List all files in a job's directory — scripts, logs, requirements.txt, etc. Use this before read_job_file or edit_job_file to confirm filenames.",
+    "List all files in a job's directory — scripts, logs, requirements.txt, etc. Use this before read_job_file or edit_file to confirm filenames.",
   inputSchema: listJobFilesSchema,
   execute: async (input) => {
     const args = (input as { context?: ListJobFilesArgs }).context ?? input;
@@ -1493,7 +2424,7 @@ export const listJobFilesTool = createTool({
         name: job.name,
         dir: jobDir,
         files,
-        tip: "Use read_job_file({ jobId, filename }) to view a file, edit_job_file to patch it, or read_job_logs to see the last run output.",
+        tip: "Use read_job_file({ jobId, filename }) to view a file, edit_file({ path: '~/Papr/Jobs/{jobId}/...', oldString, newString }) to patch it, or read_job_logs to see the last run output.",
       },
     };
   },
@@ -1564,100 +2495,13 @@ export const readJobFileTool = createTool({
 
 export const editJobFileTool = createTool({
   id: "edit_job_file",
-  description: `Edit a job's source file by replacing an exact string with a new string — same pattern as edit_app_file.
-After EVERY edit: run_job + read_job_logs (see _verifyReminder in result).
-Always read_job_file first to get the exact current content before editing.
-Use this to fix bugs in scripts, update SQL queries, change API endpoints, add logging, etc.
-After editing, run_job to test the changes, then read_job_logs to verify.`,
+  description:
+    "Deprecated — use edit_file({ path, oldString, newString }). " +
+    "Kept for backward compatibility with saved sub-agent profiles.",
   inputSchema: editJobFileSchema,
   execute: async (input) => {
     const args = (input as { context?: EditJobFileArgs }).context ?? input;
-    const { getJobsService } =
-      await import("../../gateway/services/JobsService.js");
-    const jobsService = getJobsService();
-    await jobsService.initialize();
-
-    const job = await jobsService.getJob(args.jobId);
-    if (!job) {
-      throw new Error(`Job not found: ${args.jobId}`);
-    }
-    if (job.status === "running") {
-      throw new Error(
-        `Job ${args.jobId} is currently running. Wait for it to finish before editing its files.`,
-      );
-    }
-
-    const { promises: fsPromises } = await import("fs");
-    const pathModule = await import("path");
-    const jobDir = await getJobDir(args.jobId);
-    const filePath = pathModule.default.join(jobDir, args.filename);
-
-    // Safety: path traversal guard
-    const resolvedPath = pathModule.default.resolve(filePath);
-    const resolvedDir = pathModule.default.resolve(jobDir);
-    if (
-      !resolvedPath.startsWith(resolvedDir + pathModule.default.sep) &&
-      resolvedPath !== resolvedDir
-    ) {
-      throw new Error(`Path traversal rejected: ${args.filename}`);
-    }
-
-    console.log(`[edit_job_file] Editing ${resolvedPath}`);
-
-    const lockKey = `job:${args.jobId}:${args.filename}`;
-    let replaceMeta: {
-      occurrencesFound: number;
-      occurrenceReplaced: number;
-    } | null = null;
-
-    const newContent = await withFileEditLock(lockKey, async () => {
-      let content: string;
-      try {
-        content = await fsPromises.readFile(resolvedPath, "utf8");
-      } catch (err) {
-        const e = err as NodeJS.ErrnoException;
-        if (e.code === "ENOENT") {
-          throw new Error(
-            `File not found: ${args.filename} in job ${args.jobId}. Call list_job_files to see what exists.`,
-          );
-        }
-        throw err;
-      }
-
-      const applied = applyExactStringReplacement({
-        content,
-        filename: args.filename,
-        oldString: args.oldString,
-        newString: args.newString,
-        occurrence: args.occurrence,
-        linesToolName: "read_job_file + a more specific oldString",
-      });
-      replaceMeta = {
-        occurrencesFound: applied.occurrencesFound,
-        occurrenceReplaced: applied.occurrenceReplaced,
-      };
-
-      await saveJobFileVersion(args.jobId, args.filename, content, "before-edit");
-      await fsPromises.writeFile(resolvedPath, applied.newContent, "utf8");
-      return applied.newContent;
-    });
-
-    console.log(
-      `[edit_job_file] Successfully patched ${args.filename} (occurrence ${replaceMeta!.occurrenceReplaced} of ${replaceMeta!.occurrencesFound})`,
-    );
-
-    return {
-      success: true,
-      data: {
-        jobId: args.jobId,
-        filename: args.filename,
-        path: resolvedPath,
-        occurrencesFound: replaceMeta!.occurrencesFound,
-        occurrenceReplaced: replaceMeta!.occurrenceReplaced,
-        linesAfter: newContent.split("\n").length,
-      },
-      _verifyReminder: JOB_VERIFY_AFTER_EDIT_REMINDER,
-    };
+    return runEditJobFile(args);
   },
 });
 
@@ -1714,6 +2558,7 @@ IMPORTANT: Jobs with schedule.enabled: false are NOT deleted or broken — they 
       waitingPermissionKeys:
         j.status === "waiting_permission" ? j.waitingPermissionKeys : undefined,
       folder: j.folder,
+      appIds: j.appIds,
       command: j.command,
       requirements: j.requirements?.length ? j.requirements : undefined,
       dependsOn: j.dependsOn?.length
@@ -1791,37 +2636,12 @@ const exportAppBundleSchema = z.object({
       "Target platforms for the bundle. Auto-detected from job types and source files if omitted. Override when you know the app is platform-specific.",
     ),
   requirements: z
-    .array(
-      z.union([
-        z.string().min(1),
-        z.object({
-          name: z
-            .string()
-            .min(1)
-            .describe("Key name as used in job commands, e.g. POSTHOG_PERSONAL_API_KEY"),
-          service: z.string().min(1).describe("Human-readable service name, e.g. PostHog"),
-          category: z
-            .enum([
-              "analytics", "database", "crm", "email", "payments", "storage",
-              "messaging", "search", "monitoring", "auth", "ai", "notifications",
-              "google", "github", "other",
-            ])
-            .describe("Service category — enables 'I use a different service' substitution in the import wizard"),
-          description: z.string().default("").describe("Short description of what the key is used for"),
-          required: z.boolean().default(true).describe("If false, the app works without this key but with reduced functionality"),
-          signupUrl: z.string().optional().describe("URL where users can sign up and get an API key"),
-          docsUrl: z.string().optional().describe("URL to the service's API key documentation"),
-          instructions: z.string().optional().describe("Step-by-step instructions for obtaining the key"),
-          freeTier: z.boolean().optional().describe("Whether the service has a free tier"),
-          freeTierNote: z.string().optional().describe("Details about the free tier, e.g. '1M events/month free'"),
-        }),
-      ]),
-    )
+    .array(RequirementItemSchema)
     .optional()
     .describe(
       "API keys this app needs. Provide rich specs so the import wizard can show setup instructions, " +
-      "free-tier info, and alternative services. If omitted, keys are auto-detected from job source files " +
-      "as bare strings (no wizard metadata).",
+        "free-tier info, and alternative services. Include credentialScope: owner (you provide) or user (each visitor/installer provides). " +
+        "If omitted, keys are auto-detected from job source files as bare strings (no wizard metadata).",
     ),
 });
 
@@ -1892,11 +2712,9 @@ This makes the app available in Papr Work's "Community Apps" tab for all users.`
       await bundleService.initialize();
       await appService.initialize();
 
-      let bundleName = args.name;
-      if (!bundleName) {
-        const app = await appService.getApp(args.appId);
-        bundleName = app?.title || `App ${args.appId.slice(0, 8)}`;
-      }
+      const app = args.name ? null : await appService.getApp(args.appId);
+      const bundleName =
+        args.name ?? app?.title ?? `App ${args.appId.slice(0, 8)}`;
 
       const bundleId = args.bundleId || bundleName
         .toLowerCase()
@@ -1907,7 +2725,9 @@ This makes the app available in Papr Work's "Community Apps" tab for all users.`
       let jobIds = args.jobIds || [];
       if (!jobIds.length) {
         const dataSources = await appService.listAppDataSources(args.appId);
-        jobIds = dataSources.map((ds: { jobId: string }) => ds.jobId);
+        jobIds = dataSources
+          .map((ds) => ds.jobId)
+          .filter((id): id is string => typeof id === "string" && id.length > 0);
       }
 
       const {
@@ -2692,8 +3512,39 @@ Use list_job_file_versions first to find the versionId.`,
   },
 });
 
-// ==================== MINI-APP VALIDATION ====================
+// ==================== JOB ARCHITECTURE VALIDATION ====================
 
+const validateJobSchema = z.object({
+  jobId: z.string().min(1).describe("Job ID to audit against architecture and database rules"),
+});
+
+export const validateJobTool = createTool({
+  id: "validate_job",
+  description: `Audit an existing job before running it. Checks command/prompt portability, APP_DB vs JOB_DB usage, read-only API misuse, primary database tables and columns, multi-job data-contract requirements, and acceptance-recipe coverage. Run this after editing job code or configuration and before claiming an app/job workflow is complete.`,
+  inputSchema: validateJobSchema,
+  execute: async (input) => {
+    const args = (input as { context?: z.infer<typeof validateJobSchema> }).context ?? input;
+    const { getJobsService } = await import("../../gateway/services/JobsService.js");
+    const jobsService = getJobsService();
+    await jobsService.initialize();
+    const issues = await jobsService.validateJobArchitecture(args.jobId);
+    const errors = issues.filter((issue) => issue.severity === "error");
+    return {
+      success: errors.length === 0,
+      ...(errors.length > 0
+        ? { error: `Job architecture validation failed with ${errors.length} error(s).` }
+        : {}),
+      data: {
+        valid: errors.length === 0,
+        jobId: args.jobId,
+        issues,
+        summary: `${errors.length} error(s), ${issues.length - errors.length} warning(s)`,
+      },
+    };
+  },
+});
+
+// ==================== MINI-APP VALIDATION ====================
 const validateAppSchema = z.object({
   appId: z.string().describe("The ID of the mini-app to validate"),
 });
@@ -2703,12 +3554,17 @@ type ValidateAppArgs = z.infer<typeof validateAppSchema>;
 export const validateAppTool = createTool({
   id: "validate_app",
   description: `Validate a mini-app for code quality issues and enforcement rules.
+Always runs a fresh esbuild.build() before checking (never uses stale cache).
 Checks:
-- **100-line limit per file** (enforced): Files must be ≤100 significant lines. Break large files into components.
+- **Job events SDK import**: Errors if subscribeJobEvents is called without import from /__papr__/papr-job-events.ts (declare function does NOT work at runtime)
+- **Job event polling**: Errors if app polls instead of subscribeJobEvents — returns copy-paste fix snippet
+- **TypeScript/TSX build (esbuild)**: Same compiler the iframe uses — catches JSX-in-.ts, syntax errors, etc.
+- **100-line limit on code files** (enforced): \`.html\`, \`.css\`, \`.js\`, \`.ts\`, \`.tsx\`, \`.jsx\` must be ≤100 significant lines. **Not enforced on \`.md\`, \`.json\`, \`.txt\`** — put long report prose in \`content/reports/*.md\`, not split across dozens of TS files.
 - **HTML syntax**: Unclosed tags, malformed markup
 - **CSS syntax**: Mismatched braces, double semicolons
 - **JavaScript/TypeScript syntax**: Mismatched delimiters (braces, parens, brackets)
 - **Code quality**: console.log statements (should be removed)
+- **Runtime preview (automatic)**: Launches hidden preview, reads console errors, merges errors forwarded from the user's app iframe
 
 Returns validation result with list of issues (errors and warnings).
 IMPORTANT: Run this after creating/editing app files to catch issues early!`,
@@ -2730,6 +3586,13 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
         `- ${issue.severity === 'error' ? '❌' : '⚠️'} ${issue.file}: ${issue.message}`
       ).join('\n');
 
+      const { formatJobEventsFixGuidance, hasJobEventsPollingIssues } =
+        await import("../../gateway/utils/miniAppJobEventGuidance.js");
+      const jobEventsFix =
+        hasJobEventsPollingIssues(result.issues)
+          ? `\n\n${formatJobEventsFixGuidance()}`
+          : "";
+
       return {
         success: false,
         error: [
@@ -2738,8 +3601,9 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
           issueList,
           '',
           errorCount > 0
-            ? 'ACTION REQUIRED: Fix all ❌ errors now. For files over the 100-line limit, extract code into smaller component files (components/, utils/, types.ts). Do NOT continue with other work until errors are resolved.'
+            ? 'ACTION REQUIRED: Fix all ❌ errors now. For CODE files over the 100-line limit, extract into smaller components (components/, utils/, types.ts). For long report text, use content/reports/*.md (no line limit) — do NOT split one report into 20+ TS micro-files.'
             : 'Warnings found. Fix if possible before proceeding.',
+          jobEventsFix,
         ].join('\n'),
         data: {
           valid: false,
@@ -2755,15 +3619,59 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
         },
       };
     }
-    
+
+    const { runPostValidationRuntimeCheck } = await import(
+      "../../gateway/utils/miniAppRuntimePreview.js"
+    );
+    const runtimeCheck = await runPostValidationRuntimeCheck(args.appId);
+
+    if (runtimeCheck.allErrors.length > 0) {
+      const errorList = runtimeCheck.allErrors
+        .map((line) => `- ❌ ${line}`)
+        .join("\n");
+      return {
+        success: false,
+        error: [
+          `⛔ RUNTIME ERRORS — ${runtimeCheck.allErrors.length} console error(s) detected after build passed.`,
+          "",
+          errorList,
+          "",
+          "Fix runtime JS errors before proceeding. Sources: auto preview webview + errors forwarded from the app iframe while the user tests.",
+          runtimeCheck.preview.skippedReason
+            ? `(Preview note: ${runtimeCheck.preview.skippedReason})`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        data: {
+          valid: false,
+          filesChecked: result.filesChecked,
+          runtimeCheck: {
+            previewAvailable: runtimeCheck.preview.available,
+            previewSkippedReason: runtimeCheck.preview.skippedReason,
+            previewErrorCount: runtimeCheck.preview.previewErrors.length,
+            iframeErrorCount: runtimeCheck.iframeErrors.length,
+            errors: runtimeCheck.allErrors,
+          },
+        },
+      };
+    }
+
     return {
       success: true,
       data: {
         valid: true,
         filesChecked: result.filesChecked,
-        message: `✓ All ${result.filesChecked} files passed validation`,
+        message: `✓ All ${result.filesChecked} files passed validation + runtime preview (no console errors)`,
+        runtimeCheck: {
+          previewAvailable: runtimeCheck.preview.available,
+          previewSkippedReason: runtimeCheck.preview.skippedReason,
+          consoleLogCount: runtimeCheck.preview.consoleLogs.length,
+        },
         nextStep:
-          "webview_launch_app → page_wait_for({ target: 'mini_app', time: 2 }) → webview_get_console → webview_snapshot (text-only, not vision)",
+          "Optional: webview_snapshot for visual layout. API/DB: bash+curl localhost:18789.",
+        _testingGuide:
+          "Runtime console is checked automatically. API/DB/job verification: bash+curl — NOT webview_execute.",
       },
     };
   },
@@ -2860,15 +3768,17 @@ export const getJobStatsTool = createTool({
 
 export const reloadJobsTool = createTool({
   id: "reload_jobs",
-  description: `Reload jobs from disk after manually editing jobs.json.
+  description: `Reload jobs from disk and reconcile job directories with the index.
 
 Use when:
-- You manually edited jobs.json via bash/jq commands
-- You want to verify changes without restarting the app
+- Job folders exist on disk but list_jobs does not show them (orphaned directories)
+- You used update_job and want to confirm scheduler state
+
+Also runs index rebuild (recovers jobs on disk missing from jobs.json) and prunes stale index entries.
 
 NOT needed for:
 - Stuck jobs → Process-backed jobs auto-recover in 20-60s
-- Agent jobs stuck → Fixed automatically on next app restart
+- Creating jobs → use create_job(), never bash/jq on jobs.json
 - Normal job operations → use update_job(), run_job() instead`,
   inputSchema: z.object({}),
   execute: async () => {
@@ -2910,7 +3820,6 @@ export const appJobsTools = [
   listJobsTool,
   listJobFilesTool,
   readJobFileTool,
-  editJobFileTool,
   updateJobTool,
   deleteJobTool,
   getJobHistoryTool,
@@ -2918,16 +3827,20 @@ export const appJobsTools = [
   reloadJobsTool,
   linkAppDataSourceTool,
   readAppDataSourcesTool,
+  readAppDataHealthTool,
+  normalizeAppDatabasesTool,
   readAppFileTool,
-  editAppFileTool,
   editAppFileLinesTool,
   listAppFilesTool,
   listAppsTool,
   validateAppTool,
+  validateJobTool,
   exportAppBundleTool,
   importAppBundleTool,
   listAppBundlesTool,
   getAppBundleInfoTool,
+  getCloudAppPublishTool,
+  publishCloudAppTool,
   listAppFileVersionsTool,
   getAppFileVersionTool,
   restoreAppFileVersionTool,

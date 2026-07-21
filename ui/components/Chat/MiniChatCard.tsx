@@ -6,7 +6,7 @@
  * Listens for subagent-chat:message, subagent-chat:question, subagent-chat:activity broadcasts.
  */
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from "react";
 import { Markdown } from "../common/Markdown";
 import { gateway } from "../../src/lib/gateway";
 import { ThinkingCard } from "./ThinkingCard";
@@ -37,6 +37,8 @@ export interface MiniChatCardProps {
   error?: string;
   /** Optional SVG icon name for sub-agent (e.g. "robot", "search", "code") */
   subAgentIcon?: string;
+  /** Start expanded (default: collapsed one-line row; user expands for full report) */
+  defaultExpanded?: boolean;
 }
 
 const STATUS_LABELS: Record<MiniChatCardProps["status"], string> = {
@@ -193,18 +195,102 @@ export function MiniChatCard({
   resultText,
   error,
   subAgentIcon,
+  defaultExpanded = false,
 }: MiniChatCardProps) {
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(!defaultExpanded);
   const [hasJoined, setHasJoined] = useState(false);
   const [messages, setMessages] = useState<SubAgentChatMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [liveStatus, setLiveStatus] = useState(status);
+  const [liveResultText, setLiveResultText] = useState(resultText);
+  const [liveError, setLiveError] = useState(error);
   const [activity, setActivity] = useState<{
     thinking: string;
     toolCalls: Array<{ name: string; args?: Record<string, unknown>; result?: unknown; status?: string }>;
   }>({ thinking: "", toolCalls: [] });
   const [isActivityStreaming, setIsActivityStreaming] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const followMessagesRef = useRef(true);
+
+  const fullReportText = useMemo(() => {
+    let longest = liveResultText?.trim() ?? "";
+    for (const msg of messages) {
+      if (msg.author === "sub-agent" && msg.content.length > longest.length) {
+        longest = msg.content;
+      }
+    }
+    return longest;
+  }, [messages, liveResultText]);
+
+  const hasDistinctFullReport =
+    fullReportText.length >= 800 &&
+    fullReportText.length > (liveResultText?.trim().length ?? 0) + 300;
+
+  useEffect(() => {
+    setLiveStatus(status);
+    setLiveResultText(resultText);
+    setLiveError(error);
+  }, [status, resultText, error]);
+
+  /** delegate_task runs in background — sync badge + result from job status events */
+  useEffect(() => {
+    const applyJobUpdate = (jobStatus: string, lastOutput?: unknown, jobError?: unknown) => {
+      if (jobStatus === "completed") {
+        setLiveStatus("completed");
+        if (lastOutput !== undefined && lastOutput !== null && String(lastOutput).trim()) {
+          setLiveResultText(String(lastOutput));
+        }
+        return;
+      }
+      if (jobStatus === "failed" || jobStatus === "cancelled") {
+        setLiveStatus("failed");
+        if (jobError !== undefined && jobError !== null) {
+          setLiveError(String(jobError));
+        }
+        return;
+      }
+      if (jobStatus === "running" || jobStatus === "pending") {
+        setLiveStatus("active");
+      }
+    };
+
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail?.type !== "jobs:status-changed" || !detail.data) return;
+      const data = detail.data as {
+        jobId?: string;
+        status?: string;
+        lastOutput?: unknown;
+        error?: unknown;
+      };
+      if (data.jobId !== delegationId || !data.status) return;
+      applyJobUpdate(data.status, data.lastOutput, data.error);
+    };
+
+    window.addEventListener("gateway-broadcast", handler);
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await gateway.send("jobs:get", { jobId: delegationId });
+        const job = response.data as {
+          status?: string;
+          lastOutput?: unknown;
+          error?: unknown;
+        };
+        if (cancelled || !job?.status) return;
+        applyJobUpdate(job.status, job.lastOutput, job.error);
+      } catch {
+        // Job may not exist yet — status-changed broadcast will update when ready
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("gateway-broadcast", handler);
+    };
+  }, [delegationId]);
 
   // Subscribe to sub-agent chat broadcasts
   useEffect(() => {
@@ -240,6 +326,26 @@ export function MiniChatCard({
               timestamp: detail.data.timestamp || new Date().toISOString(),
             },
           ]);
+        }
+      } else if (detail.type === "subagent-chat:completed") {
+        setLiveStatus("completed");
+        const completedResult = detail.data.result as string | undefined;
+        if (completedResult?.trim()) {
+          setMessages((prev) => {
+            const exists = prev.some((m) => m.content === completedResult);
+            if (exists) return prev;
+            return [
+              ...prev,
+              {
+                role: "assistant" as const,
+                author: "sub-agent" as const,
+                content: completedResult,
+                timestamp:
+                  (detail.data.timestamp as string) ??
+                  new Date().toISOString(),
+              },
+            ];
+          });
         }
       } else if (detail.type === "subagent-chat:activity") {
         const chunk = detail.data.chunk as SubAgentActivityChunk;
@@ -301,11 +407,11 @@ export function MiniChatCard({
 
   // Clear activity when status changes from active
   useEffect(() => {
-    if (status !== "active") {
+    if (liveStatus !== "active") {
       setActivity({ thinking: "", toolCalls: [] });
       setIsActivityStreaming(false);
     }
-  }, [status]);
+  }, [liveStatus]);
 
   // Load delegation chat history on mount (and when user joins)
   useEffect(() => {
@@ -345,12 +451,44 @@ export function MiniChatCard({
     };
   }, [delegationId, hasJoined]);
 
-  // Auto-scroll to latest message
+  // Track whether user is reading older content inside the card (don't hijack scroll)
   useEffect(() => {
-    if (messages.length > 0) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const body = bodyRef.current;
+    if (!body) return;
+
+    const handleBodyScroll = () => {
+      const distanceFromBottom =
+        body.scrollHeight - body.scrollTop - body.clientHeight;
+      followMessagesRef.current = distanceFromBottom < 48;
+    };
+
+    body.addEventListener("scroll", handleBodyScroll, { passive: true });
+    return () => body.removeEventListener("scroll", handleBodyScroll);
+  }, [isCollapsed]);
+
+  // Scroll inside the card only — never scrollIntoView on the main chat (pulls user off latest messages)
+  useLayoutEffect(() => {
+    const body = bodyRef.current;
+    if (!body || isCollapsed) return;
+
+    if (liveStatus === "active") {
+      body.scrollTop = body.scrollHeight;
+      followMessagesRef.current = true;
+      return;
     }
-  }, [messages.length]);
+
+    if (!followMessagesRef.current) return;
+    body.scrollTop = body.scrollHeight;
+  }, [
+    messages.length,
+    liveResultText,
+    liveError,
+    liveStatus,
+    isCollapsed,
+    activity.thinking,
+    activity.toolCalls.length,
+    hasDistinctFullReport,
+  ]);
 
   const handleJoin = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -387,7 +525,10 @@ export function MiniChatCard({
     messages.length > 0 || !!resultText || !!error || !!context;
 
   return (
-    <div className="mini-chat-card" data-testid="mini-chat-card">
+    <div
+      className={`mini-chat-card${isCollapsed ? " mini-chat-card--collapsed" : ""}`}
+      data-testid="mini-chat-card"
+    >
       <div
         className="mini-chat-card__header"
         onClick={() => hasDetails && setIsCollapsed((c) => !c)}
@@ -420,7 +561,7 @@ export function MiniChatCard({
           </span>
         </div>
         <div className="mini-chat-card__header-right">
-          {!hasJoined && status === "active" && (
+          {!hasJoined && liveStatus === "active" && (
             <button
               type="button"
               className="mini-chat-card__join-btn"
@@ -430,19 +571,19 @@ export function MiniChatCard({
             </button>
           )}
           <span
-            className={`mini-chat-card__badge mini-chat-card__badge--${status}`}
+            className={`mini-chat-card__badge mini-chat-card__badge--${liveStatus}`}
           >
-            {STATUS_LABELS[status]}
+            {STATUS_LABELS[liveStatus]}
           </span>
         </div>
       </div>
 
       {!isCollapsed && (
-        <div className="mini-chat-card__body">
+        <div className="mini-chat-card__body" ref={bodyRef}>
           {context && <div className="mini-chat-card__context">{context}</div>}
 
           {/* Sub-agent activity: thinking + tool calls (like main chat) */}
-          {(activity.thinking || activity.toolCalls.length > 0) && status === "active" && (
+          {(activity.thinking || activity.toolCalls.length > 0) && liveStatus === "active" && (
             <div className="mini-chat-card__activity">
               {activity.thinking && (
                 <ThinkingCard
@@ -511,20 +652,35 @@ export function MiniChatCard({
                     </div>
                   </div>
                 ))}
-                <div ref={messagesEndRef} />
               </div>
             </div>
           )}
 
-          {error && <div className="mini-chat-card__error">{error}</div>}
+          {liveError && <div className="mini-chat-card__error">{liveError}</div>}
 
-          {resultText && !error && status !== "active" && (
-            <div className="mini-chat-card__result">
-              <Markdown>{resultText}</Markdown>
+          {hasDistinctFullReport && liveStatus !== "active" && (
+            <div className="mini-chat-card__full-report">
+              <div className="mini-chat-card__full-report-label">Full report</div>
+              <Markdown>{fullReportText}</Markdown>
             </div>
           )}
 
-          {hasJoined && status === "active" && (
+          {liveResultText &&
+            !liveError &&
+            liveStatus !== "active" &&
+            !hasDistinctFullReport && (
+            <div className="mini-chat-card__result">
+              <Markdown>{liveResultText}</Markdown>
+            </div>
+          )}
+
+          {hasDistinctFullReport && liveStatus !== "active" && (
+            <p className="mini-chat-card__summary-note">
+              A shorter summary may also appear in the main chat above.
+            </p>
+          )}
+
+          {hasJoined && liveStatus === "active" && (
             <div className="mini-chat-card__input">
               <input
                 type="text"

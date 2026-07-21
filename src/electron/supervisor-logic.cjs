@@ -30,6 +30,45 @@ function shouldKillProcess(consecutiveFailures, isSuccess, threshold = 3) {
   return { newCount, shouldKill: newCount >= threshold };
 }
 
+/** Parse /health JSON body. Gateway returns { status: "ok" | "starting" }. */
+function parseHealthResponse(body) {
+  try {
+    const parsed = JSON.parse(body);
+    if (parsed.status === "ok") {
+      return { alive: true, ready: true };
+    }
+    if (parsed.status === "starting") {
+      return { alive: true, ready: false };
+    }
+    return { alive: false, ready: false };
+  } catch {
+    return { alive: false, ready: false };
+  }
+}
+
+/**
+ * During cold start the gateway may respond with status "starting" for 60s+
+ * while loading a large chats.db. Never SIGKILL until we've seen status "ok".
+ */
+function shouldKillUnhealthyGateway(
+  consecutiveFailures,
+  health,
+  hasEverBeenHealthy,
+  threshold = 5,
+) {
+  if (health.ready) {
+    return { newCount: 0, shouldKill: false };
+  }
+  if (health.alive && !health.ready) {
+    return { newCount: 0, shouldKill: false };
+  }
+  if (!hasEverBeenHealthy) {
+    return { newCount: consecutiveFailures, shouldKill: false };
+  }
+  const newCount = consecutiveFailures + 1;
+  return { newCount, shouldKill: newCount >= threshold };
+}
+
 const VALID_STATE_TRANSITIONS = {
   stopped: ["starting"],
   starting: ["running", "backoff", "stopped"],
@@ -48,6 +87,8 @@ module.exports = {
   pruneTimestamps,
   getNotificationType,
   shouldKillProcess,
+  parseHealthResponse,
+  shouldKillUnhealthyGateway,
   isValidTransition,
   VALID_STATE_TRANSITIONS,
 };

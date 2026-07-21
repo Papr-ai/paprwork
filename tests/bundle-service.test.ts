@@ -1,4 +1,5 @@
 import os from "os";
+import { STANDALONE_APP_ID } from "../src/gateway/services/jobs/appIds.js";
 import path from "path";
 import { promises as fs } from "fs";
 import { afterEach, describe, expect, test } from "vitest";
@@ -40,6 +41,7 @@ describe("BundleService", () => {
     ]);
     const job = await jobsService.createJob({
       name: "Collector",
+      appIds: [STANDALONE_APP_ID],
       type: "python",
       command: "python3 -c \"print('ok')\"",
     });
@@ -65,6 +67,7 @@ describe("BundleService", () => {
     ]);
     const job = await source.jobsService.createJob({
       name: "Source Job",
+      appIds: [STANDALONE_APP_ID],
       type: "bash",
       command: "echo source",
     });

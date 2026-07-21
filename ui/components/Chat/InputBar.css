@@ -114,6 +114,17 @@
   position: relative; /* For absolute positioned dropdown */
 }
 
+.input-bar__cloud-runtime {
+  flex: 1;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .model-controls {
   display: flex;
   align-items: center;
@@ -426,3 +437,56 @@
       inset 0 0.5px 0 rgba(255, 255, 255, 0.10);
   }
 }
+
+/* Simplified flat picker */
+.model-picker-dropdown--simple {
+  min-width: 220px;
+  max-width: 280px;
+  max-height: 360px;
+}
+
+.model-picker-item--compact .model-picker-item-name {
+  font-size: 13px;
+}
+
+.model-picker-divider {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border-color, rgba(0, 0, 0, 0.08));
+}
+
+.model-picker-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s var(--ease);
+}
+
+.model-picker-action:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.model-picker-action-chevron {
+  transition: transform 0.15s ease;
+}
+
+.model-picker-action-chevron--open {
+  transform: rotate(180deg);
+}
+
+.model-picker-submenu {
+  max-height: 220px;
+  overflow-y: auto;
+  padding-bottom: 2px;
+}
+

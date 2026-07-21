@@ -67,7 +67,44 @@
   font-style: normal;
   line-height: normal;
   color: var(--text-secondary);
-  margin: 0 0 48px;
+  margin: 0 0 32px;
+}
+
+.auth-wall-actions {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  margin-bottom: 20px;
+}
+
+.auth-wall-action-button {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px 20px;
+  font-size: 16px;
+  font-weight: 600;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.auth-wall-action-button--primary {
+  color: white;
+  background: #0080FF;
+  border: none;
+  box-shadow: 0 2px 8px rgba(0, 128, 255, 0.2);
+}
+
+.auth-wall-action-button--primary:hover {
+  background: #0070E0;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 128, 255, 0.3);
+}
+
+.auth-wall-action-button--primary:active {
+  transform: translateY(0);
 }
 
 .auth-wall-login-button {
@@ -117,9 +154,9 @@
 .auth-wall-hint {
   font-size: 14px;
   color: var(--text-secondary);
-  margin: 0 0 16px;
+  margin: 0;
   text-align: center;
-  max-width: 280px;
+  max-width: 320px;
   line-height: 1.5;
 }
 
@@ -157,14 +194,25 @@
 }
 
 .auth-wall-error {
-  margin-top: 16px;
+  margin: 0 0 24px;
   padding: 16px 20px;
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  border-radius: 10px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  border-radius: 12px;
   color: #dc2626;
   font-size: 14px;
   line-height: 1.5;
+  text-align: left;
+}
+
+.auth-wall-error strong {
+  display: block;
+  font-size: 15px;
+  margin-bottom: 6px;
+}
+
+.auth-wall-error p {
+  margin: 0;
 }
 
 .auth-wall-footer {
@@ -334,6 +382,15 @@
 @media (max-width: 480px) {
   .auth-wall-title {
     font-size: 32px;
+  }
+
+  .auth-wall-actions {
+    flex-direction: column;
+  }
+
+  .auth-wall-action-button {
+    padding: 14px 20px;
+    font-size: 15px;
   }
 
   .auth-wall-login-button {

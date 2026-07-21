@@ -6,6 +6,7 @@
 
 import React, { useEffect } from "react";
 import type { ChatMessage } from "../../stores/chatStore";
+import { useChatStore } from "../../stores/chatStore";
 import { useProfileStore } from "../../stores/profileStore";
 import { ThinkingCard } from "./ThinkingCard";
 import { ExploringCard } from "./ExploringCard";
@@ -24,10 +25,30 @@ import {
 } from "./KeyRequestCard";
 import { MiniChatCard } from "./MiniChatCard";
 import { Markdown } from "../common/Markdown";
+import { MessageAttachments } from "./MessageAttachments";
+import "./MessageAttachments.css";
+import { resolveToolCallStatus } from "../../../src/core/utils/interruptedToolResult";
 import { getToolDisplayLabel } from "../../utils/toolDisplay";
 import { useJobLiveLogsStore } from "../../stores/jobLiveLogsStore";
-import { useSubagentJobStore } from "../../stores/subagentJobStore";
+import { useSubagentJobStore, type SubagentJobInfo } from "../../stores/subagentJobStore";
+
+function resolveDelegationAgentDisplay(
+  requestedAgentId: string | undefined,
+  subagentJob: SubagentJobInfo | undefined,
+  getAgentName: (agentId: string) => string,
+): { agentId: string; agentName: string } {
+  const trimmedId = requestedAgentId?.trim();
+  const agentId = trimmedId || subagentJob?.subAgentId || "unknown";
+  const agentName =
+    subagentJob?.agentName ||
+    (trimmedId ? getAgentName(trimmedId) : undefined) ||
+    trimmedId ||
+    "Sub-agent";
+  return { agentId, agentName };
+}
 import { useSubAgentNameStore } from "../../stores/subAgentNameStore";
+import { MessageCopyButton } from "./MessageCopyButton";
+import { getAssistantCopyText } from "../../utils/getAssistantCopyText";
 import "./MessageItem.css";
 
 interface MessageItemProps {
@@ -46,9 +67,10 @@ function renderSequence(
   sequence: Array<{ type: string; data: unknown }>,
   message: ChatMessage,
   chatId: string,
-  subagentJobIdForChat: string | undefined,
+  subagentJobForChat: SubagentJobInfo | undefined,
   getJobName: (jobId: string) => string | undefined,
   getAgentName: (agentId: string) => string,
+  connectionPaused = false,
 ): React.ReactNode {
 
 
@@ -175,13 +197,24 @@ function renderSequence(
           );
         }
       } else if (item.type === "tool") {
-        const toolData = item.data as any;
+        const toolData = item.data as {
+          name?: string;
+          input?: Record<string, unknown>;
+          output?: unknown;
+          status?: string;
+          error?: string;
+        };
+        const toolStatus = resolveToolCallStatus({
+          explicitStatus:
+            typeof toolData.status === "string" ? toolData.status : undefined,
+          result: toolData.output,
+        });
         const toolCall = {
           id: `tool-${index}`,
           toolName: toolData.name || "tool",
           args: toolData.input || {},
-          status: toolData.status || "success",
-          result: toolData.output,
+          status: toolStatus,
+          result: toolStatus === "interrupted" ? undefined : toolData.output,
           error: toolData.error,
         };
 
@@ -267,14 +300,21 @@ function renderSequence(
           } else {
             // Delegation is running – use MiniChatCard if we have jobId from subagent-job-started broadcast.
             const task = (toolCall.args?.task as string) || "Delegated task";
-            const agentId = (toolCall.args?.useAgentId as string) || "default";
-            const jobIdFromStore = subagentJobIdForChat;
+            const requestedAgentId = toolCall.args?.useAgentId as
+              | string
+              | undefined;
+            const { agentId, agentName } = resolveDelegationAgentDisplay(
+              requestedAgentId,
+              subagentJobForChat,
+              getAgentName,
+            );
+            const jobIdFromStore = subagentJobForChat?.jobId;
             const placeholderId =
               jobIdFromStore || toolCall.id || `delegation-${index}`;
             delegationData = {
               id: placeholderId,
               agentId,
-              agentName: getAgentName(agentId),
+              agentName,
               task,
               context: (toolCall.args?.context as string) || undefined,
               status: "running",
@@ -297,6 +337,14 @@ function renderSequence(
               </span>
               {toolCall.status === "success" && (
                 <span className="exploring-tool-success">✓</span>
+              )}
+              {toolCall.status === "interrupted" && (
+                <span
+                  className="exploring-tool-interrupted"
+                  title="Interrupted before this tool finished"
+                >
+                  ⚠️
+                </span>
               )}
               {toolCall.status === "error" && (
                 <span className="exploring-tool-error">✗</span>
@@ -337,7 +385,7 @@ function renderSequence(
             const hasRealJobId =
               hasResult ||
               !!delegationData.reportChatId ||
-              !!subagentJobIdForChat;
+              !!subagentJobForChat?.jobId;
             const useMiniChat = hasRealJobId;
             const miniStatus =
               delegationData.status === "pending" ||
@@ -392,12 +440,10 @@ function renderSequence(
 
     // Job status cards are rendered INLINE inside exploring card (after run_job tool)
 
-    // Render delegation cards (OUTSIDE working card, always visible and interactive)
+    // Delegation cards — inline on this message, collapsed by default (expand for full report)
     if (delegationCardMap.size > 0) {
       delegationCardMap.forEach((delegationData, delegationId) => {
-        // Check if it's MiniChatCard props or DelegationCard data
         if ("delegationId" in delegationData) {
-          // MiniChatCard props
           elements.push(
             <MiniChatCard
               key={`delegation-${delegationId}`}
@@ -409,10 +455,10 @@ function renderSequence(
               resultText={delegationData.resultText}
               error={delegationData.error}
               subAgentIcon={delegationData.subAgentIcon}
+              defaultExpanded={false}
             />,
           );
         } else {
-          // DelegationCard data
           elements.push(
             <DelegationCard
               key={`delegation-${delegationId}`}
@@ -478,6 +524,7 @@ function renderSequence(
           isExploring={isExploring}
           lastActivity={lastActivity}
           wasStopped={wasStopped}
+          connectionPaused={connectionPaused}
         >
           {exploringItems}
         </WorkingCard>,
@@ -526,13 +573,18 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ chatId, message }) => {
   // Get job name lookup from store
   const getJobName = useJobLiveLogsStore((state) => state.getJobName);
 
-  // Subscribe to subagent job ID so we re-render when subagent-job-started arrives (show MiniChatCard during run)
-  const subagentJobIdForChat = useSubagentJobStore((s) =>
-    s.getJobIdForChat(chatId),
+  // Subscribe to subagent job metadata so we re-render when subagent-job-started arrives
+  const subagentJobForChat = useSubagentJobStore((s) =>
+    s.getJobForChat(chatId),
   );
 
   // Resolve sub-agent name for delegation cards (shared store — single IPC subscription)
   const getAgentName = useSubAgentNameStore((s) => s.getAgentName);
+  const connectionPaused =
+    useChatStore((s) => s.chatStates.get(chatId)?.connectionPaused) ?? false;
+
+  const copyText = !isUser && !message.isStreaming ? getAssistantCopyText(message) : "";
+  const showCopyButton = copyText.length > 0;
 
   // Check if message has V1-style sequence
   const hasSequence = message.sequence && message.sequence.length > 0;
@@ -596,20 +648,28 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ chatId, message }) => {
       </div>
 
       {/* Message content */}
-      <div className="message-content">
+      <div
+        className={`message-content${!isUser ? " message-content--assistant" : ""}`}
+      >
         {/* Name label */}
         <span className="message-sender-name">
           {isUser ? (userName || "You") : "Pen"}
         </span>
+
+        {isUser && message.attachments && message.attachments.length > 0 && (
+          <MessageAttachments attachments={message.attachments} />
+        )}
+
         {/* V1-STYLE SEQUENCE RENDERING */}
         {hasSequence && !isUser ? (
           renderSequence(
             message.sequence!,
             message,
             chatId,
-            subagentJobIdForChat,
+            subagentJobForChat,
             getJobName,
             getAgentName,
+            connectionPaused && !!message.isStreaming,
           )
         ) : (
           /* FALLBACK: OLD FORMAT (no sequence) */
@@ -735,19 +795,15 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ chatId, message }) => {
                   }
                   return null;
                 })}
-                {/* DelegationCard / MiniChatCard for delegate_task (fallback when no sequence) */}
                 {message.toolCalls.map((tc) => {
                   if (tc.toolName !== "delegate_task") return null;
 
-                  // Show card with result if available
                   if (tc.result) {
                     const delegationData = parseDelegationFromToolResult(
                       tc.toolName,
                       tc.result,
                     );
                     if (!delegationData) return null;
-                    // Show MiniChatCard for all delegations with job ID so user sees sub-agent conversation
-                    const useMiniChat = !!delegationData.id;
                     const miniStatus =
                       delegationData.status === "pending" ||
                       delegationData.status === "running"
@@ -755,7 +811,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ chatId, message }) => {
                         : delegationData.status === "completed"
                           ? "completed"
                           : "failed";
-                    return useMiniChat ? (
+                    return (
                       <MiniChatCard
                         key={`delegation-fallback-${delegationData.id}`}
                         delegationId={delegationData.id}
@@ -768,54 +824,34 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ chatId, message }) => {
                         resultText={delegationData.resultText}
                         error={delegationData.error}
                         subAgentIcon={delegationData.agentIcon}
-                      />
-                    ) : (
-                      <DelegationCard
-                        key={`delegation-fallback-${delegationData.id}`}
-                        data={delegationData}
+                        defaultExpanded={false}
                       />
                     );
                   }
 
-                  // Show placeholder – use MiniChatCard if we have jobId from subagent-job-started
                   if (tc.status === "calling") {
                     const task = (tc.args?.task as string) || "Delegated task";
-                    const agentId =
-                      (tc.args?.useAgentId as string) || "default";
-                    const jobIdFromStore = subagentJobIdForChat;
+                    const requestedAgentId = tc.args?.useAgentId as
+                      | string
+                      | undefined;
+                    const { agentId, agentName } = resolveDelegationAgentDisplay(
+                      requestedAgentId,
+                      subagentJobForChat,
+                      getAgentName,
+                    );
+                    const jobIdFromStore = subagentJobForChat?.jobId;
                     const placeholderId =
                       jobIdFromStore || tc.id || `delegation-${Date.now()}`;
-                    // Show MiniChatCard if we have reportChatId (always set for running delegations) or jobId from store
-                    const useMiniChat = !!chatId || !!jobIdFromStore;
-                    const data = {
-                      id: placeholderId,
-                      agentId,
-                      agentName: getAgentName(agentId),
-                      task,
-                      context: (tc.args?.context as string) || undefined,
-                      status: "running" as "running" | "completed" | "failed" | "pending",
-                      reportChatId: chatId, // Always set - this is the chat where delegation was initiated
-                    };
-                    const miniStatus =
-                      data.status === "pending" || data.status === "running"
-                        ? "active"
-                        : data.status === "completed"
-                          ? "completed"
-                          : "failed";
-                    return useMiniChat ? (
+                    if (!chatId && !jobIdFromStore) return null;
+                    return (
                       <MiniChatCard
                         key={`delegation-fallback-${placeholderId}`}
                         delegationId={placeholderId}
-                        subAgentName={data.agentName ?? data.agentId}
-                        task={data.task}
-                        status={miniStatus}
-                        context={data.context}
-                        subAgentIcon={undefined}
-                      />
-                    ) : (
-                      <DelegationCard
-                        key={`delegation-fallback-${tc.id || "calling"}`}
-                        data={data}
+                        subAgentName={agentName ?? agentId}
+                        task={task}
+                        status="active"
+                        context={(tc.args?.context as string) || undefined}
+                        defaultExpanded={false}
                       />
                     );
                   }
@@ -825,9 +861,9 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ chatId, message }) => {
               </>
             )}
 
-            {/* Main message text - only show if there are NO tool calls */}
+            {/* Main message text */}
             {content &&
-              (!message.toolCalls || message.toolCalls.length === 0) && (
+              (isUser || !message.toolCalls || message.toolCalls.length === 0) && (
                 <div className="message-text">
                   <Markdown>{content}</Markdown>
                   {message.isStreaming && !message.streamingReasoning && (
@@ -837,6 +873,8 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ chatId, message }) => {
               )}
           </>
         )}
+
+        {showCopyButton && <MessageCopyButton text={copyText} />}
       </div>
     </div>
   );
@@ -851,6 +889,7 @@ export const MessageItem = React.memo(MessageItemInner, (prev, next) => {
   if (prev.message.streamingReasoning !== next.message.streamingReasoning) return false;
   if (prev.message.reasoning !== next.message.reasoning) return false;
   if (prev.message.isStreaming !== next.message.isStreaming) return false;
+  if (prev.message.attachments !== next.message.attachments) return false;
   if (prev.message.sequence !== next.message.sequence) return false;
   if (prev.chatId !== next.chatId) return false;
   return true;

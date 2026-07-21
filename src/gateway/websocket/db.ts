@@ -9,66 +9,44 @@ import type { WebSocket } from "ws";
 import type { WSMessage } from "./index.js";
 import { sendResponse, sendError } from "./index.js";
 import { getAppService } from "../services/AppService.js";
-import type { AppDataSource } from "../services/AppService.js";
+import type { AppDataSource } from "../services/appDataSources.js";
+import { resolveAppDataSource } from "../services/appDataSources.js";
 import { getDbPool } from "../services/DbQueryPool.js";
+import { getDbRouter } from "../services/appRuntime/DbRouter.js";
+import path from "path";
 
-function extractPrimaryTable(sql: string): string | null {
-  const s = sql.trim();
-  let m = s.match(/\bINSERT\s+INTO\s+["'`]?(\w+)/i);
-  if (m) return m[1];
-  m = s.match(/\bUPDATE\s+["'`]?(\w+)/i);
-  if (m) return m[1];
-  m = s.match(/\bDELETE\s+FROM\s+["'`]?(\w+)/i);
-  if (m) return m[1];
-  m = s.match(/\bFROM\s+["'`]?(\w+)/i);
-  if (m) return m[1];
-  return null;
-}
-
-async function resolveDataSource(
-  sources: AppDataSource[],
-  sourceId?: string,
-  sql?: string,
+async function resolveLinkedSource(
+  appId: string,
+  sourceId: string | undefined,
+  sql: string | undefined,
+  operation: "read" | "write",
 ): Promise<AppDataSource> {
-  if (sourceId) {
-    const found = sources.find(
-      (s) => s.id === sourceId || s.alias === sourceId,
+  const appService = getAppService();
+  const config = await appService.getDataSourcesConfig(appId);
+  if (!config.sources.length) {
+    throw Object.assign(
+      new Error(
+        `No data sources linked to app ${appId}. Use link_app_data_source first.`,
+      ),
+      { status: 404 },
     );
-    if (!found) {
-      const available = sources.map((s) => s.alias ?? s.id).join(", ");
-      throw Object.assign(
-        new Error(
-          `Data source "${sourceId}" not found. Available: ${available}`,
-        ),
-        { status: 404 },
+  }
+  const pool = getDbPool();
+  const router = getDbRouter();
+  return resolveAppDataSource(config, {
+    sourceId,
+    sql,
+    operation,
+    tableExists: (dbPath, table) => {
+      const source = config.sources.find(
+        (entry) => path.normalize(entry.dbPath) === path.normalize(dbPath),
       );
-    }
-    return found;
-  }
-  if (sources.length === 1) return sources[0];
-  const tableName = sql ? extractPrimaryTable(sql) : null;
-  if (tableName) {
-    const pool = getDbPool();
-    for (const source of sources) {
-      try {
-        if (await pool.tableExists(source.dbPath, tableName)) {
-          return source;
-        }
-      } catch {
-        /* skip unreadable source */
+      if (!source) {
+        return pool.tableExists(dbPath, table);
       }
-    }
-  }
-  const aliases = sources.map((s) => `"${s.alias ?? s.id}"`).join(", ");
-  const tableHint = tableName
-    ? ` Table "${tableName}" was not found in any linked source.`
-    : "";
-  throw Object.assign(
-    new Error(
-      `Multiple data sources are linked (${aliases}) and the target could not be determined automatically.${tableHint} Pass sourceId to specify which source to use.`,
-    ),
-    { status: 400 },
-  );
+      return router.tableExists(dbPath, table, source);
+    },
+  });
 }
 
 interface DbSchemaPayload {
@@ -101,7 +79,7 @@ export async function setupDbHandlers(
   try {
     switch (message.type) {
       case "db:list-all-views": {
-        const pool = getDbPool();
+        const router = getDbRouter();
         const apps = await appService.listApps();
         const result: AppViewEntry[] = [];
 
@@ -122,21 +100,20 @@ export async function setupDbHandlers(
 
           for (const source of sources) {
             try {
-              const schema = await pool.schema(source.dbPath);
+              const schema = await router.schema(source.dbPath, source);
               appEntry.sources.push({
                 sourceId: source.id,
                 alias: source.alias,
                 tables: schema.tables.map((t) => ({ table: t.table })),
               });
             } catch {
-              appEntry.sources.push({
-                sourceId: source.id,
-                alias: source.alias,
-                tables: [],
-              });
+              // skip unreadable source
             }
           }
-          result.push(appEntry);
+
+          if (appEntry.sources.length > 0) {
+            result.push(appEntry);
+          }
         }
 
         sendResponse(ws, {
@@ -148,30 +125,24 @@ export async function setupDbHandlers(
       }
 
       case "db:schema": {
-        const schemaPool = getDbPool();
         const payload = message.payload as DbSchemaPayload;
-        const appId = payload?.appId;
+        const { appId } = payload;
         if (!appId) {
-          sendError(ws, message.id, "appId is required");
+          sendError(ws, message.id, "appId required");
           return;
         }
+
+        const router = getDbRouter();
         const sources = await appService.listAppDataSources(appId);
-        if (!sources.length) {
-          sendResponse(ws, {
-            id: message.id,
-            success: true,
-            data: { sources: [] },
-          });
-          return;
-        }
-        const schemaResult = await Promise.all(
+        const result = await Promise.all(
           sources.map(async (source) => {
             try {
-              const schema = await schemaPool.schema(source.dbPath);
+              const schema = await router.schema(source.dbPath, source);
               return {
                 sourceId: source.id,
                 alias: source.alias,
                 dbPath: source.dbPath,
+                role: source.role,
                 tables: schema.tables,
               };
             } catch (err) {
@@ -179,27 +150,33 @@ export async function setupDbHandlers(
                 sourceId: source.id,
                 alias: source.alias,
                 dbPath: source.dbPath,
+                role: source.role,
                 error: (err as Error).message,
               };
             }
           }),
         );
+
+        const config = await appService.getDataSourcesConfig(appId);
         sendResponse(ws, {
           id: message.id,
           success: true,
-          data: { sources: schemaResult },
+          data: {
+            primary: config.primary,
+            sources: result,
+          },
         });
         break;
       }
 
       case "db:query": {
-        const queryPool = getDbPool();
         const payload = message.payload as DbQueryPayload;
-        const { appId, sql, params, sourceId } = payload ?? {};
+        const { appId, sql, params, sourceId } = payload;
         if (!appId || !sql) {
-          sendError(ws, message.id, "appId and sql are required");
+          sendError(ws, message.id, "appId and sql required");
           return;
         }
+
         const trimmed = sql.trim().toLowerCase();
         if (!trimmed.startsWith("select") && !trimmed.startsWith("with")) {
           sendError(
@@ -209,26 +186,22 @@ export async function setupDbHandlers(
           );
           return;
         }
-        const sources = await appService.listAppDataSources(appId);
-        if (!sources.length) {
-          sendError(
-            ws,
-            message.id,
-            `No data sources linked to app ${appId}. Use link_app_data_source first.`,
-          );
+
+        let source: AppDataSource;
+        try {
+          source = await resolveLinkedSource(appId, sourceId, sql, "read");
+        } catch (err) {
+          const e = err as Error & { status?: number };
+          sendError(ws, message.id, e.message);
           return;
         }
-        const source = await resolveDataSource(sources, sourceId, sql);
-        const queryResult = await queryPool.query(
-          appId,
-          source.dbPath,
-          sql,
-          Array.isArray(params) ? params : undefined,
-        );
+
+        const router = getDbRouter();
+        const result = await router.query(appId, source, sql, params);
         sendResponse(ws, {
           id: message.id,
           success: true,
-          data: { ...queryResult, source: source.alias },
+          data: { ...result, source: source.alias },
         });
         break;
       }
@@ -237,8 +210,6 @@ export async function setupDbHandlers(
         sendError(ws, message.id, `Unknown db message type: ${message.type}`);
     }
   } catch (error) {
-    console.error("[Db WS] Error:", error);
-    const err = error as Error & { status?: number };
-    sendError(ws, message.id, err.message || "Database operation failed");
+    sendError(ws, message.id, (error as Error).message);
   }
 }

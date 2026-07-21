@@ -17,17 +17,126 @@ export interface StreamOrchestratorResult {
   sequence: Array<{ type: "text" | "tool" | "thinking"; data: any }>; // V1-style sequence for interleaving
 }
 
+const NETWORK_ERROR_CODES = new Set([
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+]);
+
+const NETWORK_ERROR_NAMES = new Set([
+  "ConnectTimeoutError",
+  "HeadersTimeoutError",
+  "BodyTimeoutError",
+  "AbortError",
+  "APIConnectionTimeoutError",
+]);
+
+function walkErrorChain(error: unknown, depth = 0): unknown[] {
+  if (depth > 6 || error == null) return [];
+  const chain: unknown[] = [error];
+  if (typeof error !== "object") return chain;
+
+  const record = error as Record<string, unknown>;
+  if (record.cause !== undefined) {
+    chain.push(...walkErrorChain(record.cause, depth + 1));
+  }
+  if (record.lastError !== undefined) {
+    chain.push(...walkErrorChain(record.lastError, depth + 1));
+  }
+  if (Array.isArray(record.errors)) {
+    for (const nested of record.errors) {
+      chain.push(...walkErrorChain(nested, depth + 1));
+    }
+  }
+  return chain;
+}
+
+function extractRequestUrl(error: unknown): string | undefined {
+  for (const node of walkErrorChain(error)) {
+    if (typeof node !== "object" || node === null) continue;
+    const url = (node as Record<string, unknown>).url;
+    if (typeof url === "string" && url.startsWith("http")) {
+      return url;
+    }
+  }
+  return undefined;
+}
+
+function describeNetworkTarget(url: string | undefined): string {
+  if (!url) return "the AI provider";
+  try {
+    const host = new URL(url).hostname;
+    if (host === "memory.papr.ai") {
+      return "Papr's AI service (memory.papr.ai)";
+    }
+    return host;
+  } catch {
+    return "the AI provider";
+  }
+}
+
+function isNetworkConnectivityError(error: unknown): boolean {
+  for (const node of walkErrorChain(error)) {
+    if (typeof node !== "object" || node === null) continue;
+    const record = node as Record<string, unknown>;
+    const code = record.code;
+    const name = record.name;
+    const message =
+      typeof record.message === "string" ? record.message.toLowerCase() : "";
+
+    if (typeof code === "string" && NETWORK_ERROR_CODES.has(code)) {
+      return true;
+    }
+    if (typeof name === "string" && NETWORK_ERROR_NAMES.has(name)) {
+      return true;
+    }
+    if (
+      message.includes("connect timeout") ||
+      message.includes("connection timed out") ||
+      message.includes("fetch failed") ||
+      message.includes("request timed out") ||
+      message.includes("api connection timeout") ||
+      message.includes("network error")
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function formatNetworkConnectivityMessage(error: unknown): string {
+  const target = describeNetworkTarget(extractRequestUrl(error));
+  return (
+    `Could not connect to ${target}. The request timed out after several retries. ` +
+    "Check your internet connection, VPN, or firewall, then try again. " +
+    "If the problem persists, switch to a different model or try again in a few minutes."
+  );
+}
+
 /**
  * Extract the underlying error from an AI SDK RetryError.
  * RetryError wraps an array of APICallError instances from each retry attempt.
  * We extract the last (most relevant) error's status code and message.
  */
 function extractFromRetryError(error: Record<string, unknown>): string | null {
+  if (isNetworkConnectivityError(error)) {
+    return formatNetworkConnectivityMessage(error);
+  }
+
   const errors = error.errors as Array<unknown> | undefined;
   const lastError = error.lastError as Record<string, unknown> | undefined;
   
   const underlying = lastError ?? (Array.isArray(errors) ? errors[errors.length - 1] : undefined);
   if (!underlying || typeof underlying !== "object") return null;
+
+  if (isNetworkConnectivityError(underlying)) {
+    return formatNetworkConnectivityMessage(error);
+  }
   
   const err = underlying as Record<string, unknown>;
   const statusCode = err.statusCode as number | undefined;
@@ -76,6 +185,27 @@ function extractFromRetryError(error: Record<string, unknown>): string | null {
 }
 
 /**
+ * Extract a machine-readable error code when present (e.g. rate_limit_exhausted).
+ */
+function extractErrorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const errorObj = error as Record<string, unknown>;
+
+  if (typeof errorObj.code === "string") {
+    return errorObj.code;
+  }
+
+  if (typeof errorObj.error === "object" && errorObj.error !== null) {
+    const nested = errorObj.error as Record<string, unknown>;
+    if (typeof nested.code === "string") {
+      return nested.code;
+    }
+  }
+
+  return undefined;
+}
+
+/**
  * Extract a user-friendly error message from API errors.
  * Handles AI SDK RetryError (with nested APICallError), plain Error objects,
  * and common API error response shapes.
@@ -85,8 +215,19 @@ function extractErrorMessage(error: unknown): string {
     return error;
   }
 
+  if (isNetworkConnectivityError(error)) {
+    return formatNetworkConnectivityMessage(error);
+  }
+
   if (typeof error === "object" && error !== null) {
     const errorObj = error as Record<string, unknown>;
+
+    if (
+      errorObj.type === "stream_pause" &&
+      typeof errorObj.message === "string"
+    ) {
+      return errorObj.message;
+    }
 
     // AI SDK RetryError: has `reason` and `errors` array with underlying APICallErrors
     if (
@@ -97,6 +238,19 @@ function extractErrorMessage(error: unknown): string {
     ) {
       const extracted = extractFromRetryError(errorObj);
       if (extracted) return extracted;
+      if (errorObj.reason === "maxRetriesExceeded") {
+        return (
+          "The AI request failed after several retries. " +
+          "Please wait a moment and try again, or switch to a different model."
+        );
+      }
+    }
+
+    // AI SDK APICallError without HTTP status (often network-level failures)
+    if (typeof errorObj.url === "string" && typeof errorObj.statusCode !== "number") {
+      if (isNetworkConnectivityError(errorObj)) {
+        return formatNetworkConnectivityMessage(errorObj);
+      }
     }
 
     // AI SDK APICallError: has statusCode and url
@@ -132,9 +286,13 @@ function extractErrorMessage(error: unknown): string {
           return "🔄 The AI provider encountered an internal server error. This is a temporary issue on their side. Please try again in a moment, or switch to a different model.";
         }
         
-        // Handle other overloaded errors
+        // Handle overloaded errors
         if (errorType === "overloaded_error" || errorMessage.includes("overloaded")) {
           return "The AI servers are temporarily overloaded. Please wait a moment and try again, or switch to a different model.";
+        }
+
+        if (errorType === "rate_limit_error" || errorMessage.toLowerCase().includes("rate limited")) {
+          return "Rate limit exceeded. Please wait a moment and try again.";
         }
         
         // Return the error message with type if available
@@ -171,6 +329,13 @@ function extractErrorMessage(error: unknown): string {
       }
     }
 
+    if (errorObj.name === "AI_RetryError" || errorObj.name === "RetryError") {
+      return (
+        "The AI request failed after several retries. " +
+        "Please wait a moment and try again, or switch to a different model."
+      );
+    }
+
     try {
       return JSON.stringify(errorObj);
     } catch {
@@ -190,8 +355,9 @@ export async function* orchestrateModelStream(
   fullStream: AsyncIterable<unknown>,
   chatId: string,
   apiKeys: string[],
+  streamOptions?: { textBufferMin?: number },
 ): AsyncGenerator<ChatStreamChunk, StreamOrchestratorResult> {
-  const TEXT_BUFFER_MIN = 50;
+  const TEXT_BUFFER_MIN = streamOptions?.textBufferMin ?? 50;
   const REASONING_BUFFER_MIN = 1; // Stream reasoning in real-time (no batching)
   let textBuffer = "";
   let reasoningBuffer = "";
@@ -533,7 +699,15 @@ export async function* orchestrateModelStream(
       case "error": {
         const sanitizedError = sanitizeToolOutput(chunk.error, apiKeys);
         const errorMessage = extractErrorMessage(sanitizedError);
-        yield createChatStreamChunk("error", { error: errorMessage }, chatId);
+        const errorCode = extractErrorCode(sanitizedError);
+        console.error(
+          `[StreamOrchestrator] Model error for chat ${chatId}: ${errorMessage}`,
+        );
+        yield createChatStreamChunk(
+          "error",
+          { error: errorMessage, ...(errorCode ? { code: errorCode } : {}) },
+          chatId,
+        );
         break;
       }
 
@@ -571,16 +745,39 @@ export async function* orchestrateModelStream(
             inputTokens?: number;
             outputTokens?: number;
             totalTokens?: number;
+            inputTokenDetails?: {
+              cacheReadTokens?: number;
+              cacheWriteTokens?: number;
+            };
+            cachedInputTokens?: number;
+          };
+          providerMetadata?: {
+            anthropic?: {
+              cacheCreationInputTokens?: number;
+              cacheReadInputTokens?: number;
+            };
           };
           finishReason?: string;
         };
 
         if (finishStepChunk.usage) {
           const usage = finishStepChunk.usage;
+          const { extractCacheUsageFromUsage } = await import(
+            "./promptCacheControl.js"
+          );
+          const cache = extractCacheUsageFromUsage({
+            inputTokenDetails: usage.inputTokenDetails,
+            cachedInputTokens: usage.cachedInputTokens,
+            providerMetadata: finishStepChunk.providerMetadata,
+          });
           console.log(
             `[StreamOrchestrator] 💰 Usage from finish-step: ` +
               `${usage.totalTokens || 0} total ` +
-              `(${usage.inputTokens || 0} input + ${usage.outputTokens || 0} output)`,
+              `(${usage.inputTokens || 0} input + ${usage.outputTokens || 0} output` +
+              (cache.cacheReadTokens || cache.cacheWriteTokens
+                ? `, cache read ${cache.cacheReadTokens} / write ${cache.cacheWriteTokens}`
+                : "") +
+              `)`,
           );
 
           // Yield a step-usage chunk (NOT "done") for AgentService to capture
@@ -592,6 +789,8 @@ export async function* orchestrateModelStream(
                 promptTokens: usage.inputTokens || 0,
                 completionTokens: usage.outputTokens || 0,
                 totalTokens: usage.totalTokens || 0,
+                cacheReadTokens: cache.cacheReadTokens,
+                cacheWriteTokens: cache.cacheWriteTokens,
               },
             },
             chatId,
@@ -618,14 +817,30 @@ export async function* orchestrateModelStream(
         
         // If we have token usage from the model, yield it as a step-usage chunk
         // so AgentService can use it for summarization decisions
-        if (usage?.promptTokens) {
+        if (usage?.promptTokens || usage?.contextTokens) {
           console.log(
             `[StreamOrchestrator] 💰 Token usage from model: ${usage.totalTokens || 0} total ` +
-            `(${usage.promptTokens} prompt + ${usage.completionTokens || 0} completion)`,
+              `(${usage.promptTokens} prompt + ${usage.completionTokens || 0} completion` +
+              (usage.cacheReadTokens || usage.cacheWriteTokens
+                ? `, cache read ${usage.cacheReadTokens ?? 0} / write ${usage.cacheWriteTokens ?? 0}`
+                : "") +
+              (usage.contextTokens
+                ? `, context window: ${usage.contextTokens}`
+                : "") +
+              `)`,
           );
           yield createChatStreamChunk(
             "step-usage",
-            { usage },
+            {
+              usage: {
+                promptTokens: usage.promptTokens,
+                completionTokens: usage.completionTokens ?? 0,
+                totalTokens: usage.totalTokens ?? 0,
+                cacheReadTokens: usage.cacheReadTokens,
+                cacheWriteTokens: usage.cacheWriteTokens,
+                contextTokens: usage.contextTokens,
+              },
+            },
             chatId,
           );
         }
@@ -684,7 +899,7 @@ export async function* orchestrateModelStream(
           name: tc.toolName,
           input: tc.args,
           output: recoveryMarker,
-          status: "orphaned",
+          status: "interrupted",
           toolCallId: tc.toolCallId,
         };
       }

@@ -10,6 +10,12 @@
     "output": "release",
     "buildResources": "build"
   },
+  "protocols": [
+    {
+      "name": "Papr Auth",
+      "schemes": ["papr"]
+    }
+  ],
   "files": [
     "dist/**/*",
     "src/electron/main.cjs",

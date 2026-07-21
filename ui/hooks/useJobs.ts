@@ -22,6 +22,7 @@ export interface JobRecord {
   name: string;
   type: JobType;
   status: JobStatus;
+  appIds: string[];
   folder?: string;
   command?: string;
   dependsOn?: Array<{ jobId: string; onStatus: "completed" | "failed" }>;
@@ -100,7 +101,7 @@ export function useJobs() {
   const [logsByJobId, setLogsByJobId] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [defaultModel, setDefaultModel] = useState<string>("gpt-5.5");
+  const [defaultModel, setDefaultModel] = useState<string>("gpt-5-6-sol");
   const fingerprintRef = useRef("");
   const initialLoadDone = useRef(false);
 
@@ -192,22 +193,6 @@ export function useJobs() {
     [loadGraph],
   );
 
-  const runJob = useCallback(async (jobId: string) => {
-    setError(null);
-    const response = await gateway.send("jobs:run", { jobId });
-    const updated = response.data as JobRecord;
-    setJobs((prev) => prev.map((job) => (job.id === jobId ? updated : job)));
-    return updated;
-  }, []);
-
-  const stopJob = useCallback(async (jobId: string) => {
-    setError(null);
-    const response = await gateway.send("jobs:stop", { jobId });
-    const updated = response.data as JobRecord;
-    setJobs((prev) => prev.map((job) => (job.id === jobId ? updated : job)));
-    return updated;
-  }, []);
-
   const loadLogs = useCallback(async (jobId: string) => {
     setSelectedJobId(jobId);
     const response = await gateway.send("jobs:logs", {
@@ -219,6 +204,26 @@ export function useJobs() {
       ...prev,
       [jobId]: payload.logs ?? "",
     }));
+  }, []);
+
+  const runJob = useCallback(
+    async (jobId: string, runtime: "local" | "cloud" = "local") => {
+      setError(null);
+      const response = await gateway.send("jobs:run", { jobId, runtime });
+      const updated = response.data as JobRecord;
+      setJobs((prev) => prev.map((job) => (job.id === jobId ? updated : job)));
+      void loadLogs(jobId);
+      return updated;
+    },
+    [loadLogs],
+  );
+
+  const stopJob = useCallback(async (jobId: string) => {
+    setError(null);
+    const response = await gateway.send("jobs:stop", { jobId });
+    const updated = response.data as JobRecord;
+    setJobs((prev) => prev.map((job) => (job.id === jobId ? updated : job)));
+    return updated;
   }, []);
 
   useEffect(() => {

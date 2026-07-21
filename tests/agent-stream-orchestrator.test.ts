@@ -99,4 +99,51 @@ describe("agent stream orchestrator", () => {
       "sk-xyz12345678901234567890",
     );
   });
+
+  test("formats Papr proxy connect timeout errors clearly", async () => {
+    const connectTimeoutError = {
+      name: "AI_RetryError",
+      reason: "maxRetriesExceeded",
+      errors: [
+        {
+          name: "AI_APICallError",
+          cause: {
+            name: "ConnectTimeoutError",
+            code: "UND_ERR_CONNECT_TIMEOUT",
+          },
+          url: "https://memory.papr.ai/v1/ai/zai/chat/completions",
+        },
+      ],
+      lastError: {
+        name: "AI_APICallError",
+        cause: {
+          name: "ConnectTimeoutError",
+          code: "UND_ERR_CONNECT_TIMEOUT",
+        },
+        url: "https://memory.papr.ai/v1/ai/zai/chat/completions",
+      },
+    };
+
+    const iterator = orchestrateModelStream(
+      chunkStream([{ type: "error", error: connectTimeoutError }]),
+      "chat-3",
+      [],
+    );
+    const emitted: Array<{ type: string; payload: unknown }> = [];
+
+    while (true) {
+      const next = await iterator.next();
+      if (next.done) break;
+      emitted.push({ type: next.value.type, payload: next.value.payload });
+    }
+
+    const streamError = emitted.find((entry) => entry.type === "error");
+    expect(streamError).toBeDefined();
+
+    const payload = streamError?.payload as { error?: string };
+    expect(payload.error).toContain("Could not connect to Papr's AI service");
+    expect(payload.error).toContain("timed out after several retries");
+    expect(payload.error).not.toContain("requestBodyValues");
+    expect(payload.error).not.toContain("AI_RetryError");
+  });
 });

@@ -18,14 +18,35 @@ import {
   extractEnhancedFields,
   formatSummaryForLLM,
 } from "./summaryFormatting.js";
-import { getPaprUserId } from "../../utils/paprUserId.js";
+import { paprUserScope } from "../../utils/paprUserId.js";
+import { RECENT_MESSAGES_MAX } from "./recentMessageWindow.js";
 
 export interface PaprConfig {
   apiKey: string; // X-API-Key from macOS Keychain
 }
 
+const PAPR_COMPRESS_BACKOFF_MS = 10 * 60 * 1000;
+
+function formatPaprCompressError(error: unknown): string {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "status" in error &&
+    typeof (error as { status: unknown }).status === "number"
+  ) {
+    const apiError = error as { status: number; headers?: Headers };
+    const requestId = apiError.headers?.get("x-request-id");
+    return requestId
+      ? `${apiError.status} (request-id: ${requestId})`
+      : `${apiError.status}`;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
 export class PaprMemoryProvider implements IStorageProvider {
   private client: Papr;
+  /** Skip repeated /compress calls after a server error (shared across chats). */
+  private static compressBackoffUntil = 0;
   // Expose client for testing
   public get _client() {
     return this.client;
@@ -119,14 +140,10 @@ export class PaprMemoryProvider implements IStorageProvider {
         contentForPapr = contentBlocks;
       }
 
-      const userId = getPaprUserId();
-
       // POST to PAPR /v1/messages using SDK.
-      // user_id is a top-level MessageRequest field on the memory server (not yet in
-      // MessageStoreParams as of @papr/memory 2.7). Include whenever we have the Parse
-      // _User.objectId from login/profile sync.
+      // external_user_id = Parse _User.objectId from login (app user id).
       type MessageStoreBody = Parameters<Papr["messages"]["store"]>[0] & {
-        user_id?: string;
+        external_user_id?: string;
       };
 
       const storeBody: MessageStoreBody = {
@@ -142,11 +159,8 @@ export class PaprMemoryProvider implements IStorageProvider {
           // Custom fields in their proper container
           customMetadata,
         },
+        ...paprUserScope(),
       };
-
-      if (userId) {
-        storeBody.user_id = userId;
-      }
 
       const response = await this.client.messages.store(storeBody);
 
@@ -278,9 +292,10 @@ export class PaprMemoryProvider implements IStorageProvider {
       if (response.context_for_llm) {
         // PAPR provides pre-formatted context
         const summary = response.summaries;
-        // PAPR returns newest first (-createdAt), limit=50 applied server-side
-        // slice(0, 50) is a safety cap, reverse() puts in chronological order for LLM
-        const recentMessages = response.messages.slice(0, 50).reverse();
+        // PAPR returns newest first; cap at MAX (local hybrid uses chunked window)
+        const recentMessages = response.messages
+          .slice(0, RECENT_MESSAGES_MAX)
+          .reverse();
         
         console.log(`[PaprMemoryProvider] 📤 Returning ${recentMessages.length} recent messages`);
         
@@ -302,8 +317,6 @@ export class PaprMemoryProvider implements IStorageProvider {
                 summary.last_updated ?? new Date().toISOString(),
             },
             enhanced,
-            totalCount: response.total_count,
-            recentCount: recentMessages.length,
             chatFilePath: `~/Papr/Chats/${chatId}.txt`,
           });
 
@@ -335,11 +348,42 @@ export class PaprMemoryProvider implements IStorageProvider {
   // ===== Summary Operations =====
 
   async fetchAndCacheSummary(chatId: string): Promise<StoredSummary | null> {
+    if (Date.now() < PaprMemoryProvider.compressBackoffUntil) {
+      return null;
+    }
+
     try {
-      // Call PAPR compress endpoint using SDK
-      const response = await this.client.messages.sessions.compress(chatId);
+      // Prefer cached summaries from retrieveHistory before on-demand /compress.
+      // PAPR auto-generates summaries every ~15 messages; /compress is heavier
+      // and can 500 on very large tool-heavy sessions.
+      const history = await this.client.messages.sessions.retrieveHistory(
+        chatId,
+        { limit: 1 },
+        { maxRetries: 0 },
+      );
+
+      if (history.summaries?.long_term) {
+        PaprMemoryProvider.compressBackoffUntil = 0;
+        const s = history.summaries;
+        return {
+          short_term: s.short_term || "",
+          medium_term: s.medium_term || "",
+          long_term: s.long_term || "",
+          topics: s.topics || [],
+          last_updated: s.last_updated || new Date().toISOString(),
+          enhanced: extractEnhancedFields(history),
+          fetched_from_papr: true,
+          last_fetched_at: new Date().toISOString(),
+        };
+      }
+
+      // On-demand compress when no cached summary exists
+      const response = await this.client.messages.sessions.compress(chatId, {
+        maxRetries: 0,
+      });
 
       if (response.summaries) {
+        PaprMemoryProvider.compressBackoffUntil = 0;
         const s = response.summaries;
         return {
           short_term: s.short_term || "",
@@ -355,7 +399,25 @@ export class PaprMemoryProvider implements IStorageProvider {
 
       return null;
     } catch (error) {
-      console.error("Failed to fetch summary from PAPR:", error);
+      const status =
+        typeof error === "object" &&
+        error !== null &&
+        "status" in error &&
+        typeof (error as { status: unknown }).status === "number"
+          ? (error as { status: number }).status
+          : 0;
+
+      if (status >= 500 || status === 429) {
+        PaprMemoryProvider.compressBackoffUntil =
+          Date.now() + PAPR_COMPRESS_BACKOFF_MS;
+      }
+
+      console.warn(
+        `[PaprMemory] /compress failed for ${chatId}: ${formatPaprCompressError(error)}` +
+          (status >= 500 || status === 429
+            ? ` — backing off ${PAPR_COMPRESS_BACKOFF_MS / 60000}m`
+            : ""),
+      );
       return null;
     }
   }

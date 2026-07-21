@@ -119,3 +119,17 @@ export async function substituteCustomKeysInCommand(
 export function commandUsesCustomKeys(command: string): boolean {
   return /\$\{[A-Z_][A-Z0-9_]*\}/i.test(command);
 }
+
+/** Extract ${KEY_NAME} placeholders from a bash command (deduped, order preserved). */
+export function extractCustomKeyNames(command: string): string[] {
+  const names: string[] = [];
+  const pattern = /\$\{([A-Z_][A-Z0-9_]*)\}/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(command)) !== null) {
+    const name = match[1];
+    if (name && !names.includes(name)) {
+      names.push(name);
+    }
+  }
+  return names;
+}

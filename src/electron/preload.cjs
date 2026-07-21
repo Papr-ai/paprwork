@@ -92,7 +92,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
     return {
       checkLoginStatus: () => ipcRenderer.invoke("papr:check-login-status"),
-      startLogin: (mode) => ipcRenderer.invoke("papr:start-login", mode),
+      startLogin: (mode, source) => ipcRenderer.invoke("papr:start-login", mode, source),
       logout: () => ipcRenderer.invoke("papr:logout"),
       getProfile: () => ipcRenderer.invoke("papr:get-profile"),
       
@@ -182,6 +182,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
           organizationChangedListenerMap.delete(callback);
         }
       },
+
+      listWorkspaceMembers: () => ipcRenderer.invoke("papr:list-workspace-members"),
+      inviteWorkspaceMember: (email) =>
+        ipcRenderer.invoke("papr:invite-workspace-member", email),
+      openWorkspaceTeam: () => ipcRenderer.invoke("papr:open-workspace-team"),
     };
   })(),
 
@@ -254,6 +259,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     getEnabled: () => ipcRenderer.invoke("telemetry:get-enabled"),
     setEnabled: (enabled) =>
       ipcRenderer.invoke("telemetry:set-enabled", enabled),
+  },
+
+  chatAttachments: {
+    save: (input) => ipcRenderer.invoke("chat:save-attachment", input),
   },
 
   // App metadata

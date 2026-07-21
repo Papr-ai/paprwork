@@ -36,6 +36,26 @@ export interface QueuedFile {
   priority: number; // 0=normal, 1=high (new file)
 }
 
+export interface FileSummaryRecord {
+  file_path: string;
+  project_id: string;
+  file_name: string;
+  summary_text: string;
+  content_hash: string;
+  memory_id?: string;
+  language: string;
+  updated_at: Date;
+}
+
+export interface ProjectOverviewRecord {
+  project_id: string;
+  project_type: 'mini_app' | 'job';
+  overview_text: string;
+  memory_id?: string;
+  file_count: number;
+  updated_at: Date;
+}
+
 export class CodeIndexTracker {
   private db: Database.Database;
   private dbPath: string;
@@ -90,6 +110,28 @@ export class CodeIndexTracker {
       );
       
       CREATE INDEX IF NOT EXISTS idx_queue_priority ON index_queue(priority DESC, queued_at ASC);
+
+      CREATE TABLE IF NOT EXISTS file_summaries (
+        file_path TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        summary_text TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        memory_id TEXT,
+        language TEXT NOT NULL,
+        updated_at DATETIME NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS project_overviews (
+        project_id TEXT PRIMARY KEY,
+        project_type TEXT NOT NULL,
+        overview_text TEXT NOT NULL,
+        memory_id TEXT,
+        file_count INTEGER NOT NULL,
+        updated_at DATETIME NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_file_summaries_project ON file_summaries(project_id);
     `);
   }
   
@@ -267,6 +309,157 @@ export class CodeIndexTracker {
     };
   }
   
+  /**
+   * Check if file summary needs regeneration (missing or stale hash)
+   */
+  needsSummaryUpdate(filePath: string, currentHash: string): boolean {
+    const row = this.db.prepare(
+      'SELECT content_hash FROM file_summaries WHERE file_path = ?'
+    ).get(filePath) as { content_hash: string } | undefined;
+
+    if (!row) {
+      return true;
+    }
+
+    return row.content_hash !== currentHash;
+  }
+
+  saveFileSummary(summary: FileSummaryRecord): void {
+    this.db.prepare(`
+      INSERT OR REPLACE INTO file_summaries
+      (file_path, project_id, file_name, summary_text, content_hash, memory_id, language, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      summary.file_path,
+      summary.project_id,
+      summary.file_name,
+      summary.summary_text,
+      summary.content_hash,
+      summary.memory_id ?? null,
+      summary.language,
+      summary.updated_at.toISOString(),
+    );
+  }
+
+  getFileSummary(filePath: string): FileSummaryRecord | null {
+    const row = this.db.prepare(
+      'SELECT * FROM file_summaries WHERE file_path = ?'
+    ).get(filePath) as {
+      file_path: string;
+      project_id: string;
+      file_name: string;
+      summary_text: string;
+      content_hash: string;
+      memory_id?: string;
+      language: string;
+      updated_at: string;
+    } | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      file_path: row.file_path,
+      project_id: row.project_id,
+      file_name: row.file_name,
+      summary_text: row.summary_text,
+      content_hash: row.content_hash,
+      memory_id: row.memory_id,
+      language: row.language,
+      updated_at: new Date(row.updated_at),
+    };
+  }
+
+  getFileSummariesForProject(projectId: string): FileSummaryRecord[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM file_summaries WHERE project_id = ? ORDER BY file_name ASC'
+    ).all(projectId) as Array<{
+      file_path: string;
+      project_id: string;
+      file_name: string;
+      summary_text: string;
+      content_hash: string;
+      memory_id?: string;
+      language: string;
+      updated_at: string;
+    }>;
+
+    return rows.map((row) => ({
+      file_path: row.file_path,
+      project_id: row.project_id,
+      file_name: row.file_name,
+      summary_text: row.summary_text,
+      content_hash: row.content_hash,
+      memory_id: row.memory_id,
+      language: row.language,
+      updated_at: new Date(row.updated_at),
+    }));
+  }
+
+  deleteFileSummary(filePath: string): void {
+    this.db.prepare('DELETE FROM file_summaries WHERE file_path = ?').run(filePath);
+  }
+
+  saveProjectOverview(overview: ProjectOverviewRecord): void {
+    this.db.prepare(`
+      INSERT OR REPLACE INTO project_overviews
+      (project_id, project_type, overview_text, memory_id, file_count, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      overview.project_id,
+      overview.project_type,
+      overview.overview_text,
+      overview.memory_id ?? null,
+      overview.file_count,
+      overview.updated_at.toISOString(),
+    );
+  }
+
+  getProjectOverview(projectId: string): ProjectOverviewRecord | null {
+    const row = this.db.prepare(
+      'SELECT * FROM project_overviews WHERE project_id = ?'
+    ).get(projectId) as {
+      project_id: string;
+      project_type: string;
+      overview_text: string;
+      memory_id?: string;
+      file_count: number;
+      updated_at: string;
+    } | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      project_id: row.project_id,
+      project_type: row.project_type as 'mini_app' | 'job',
+      overview_text: row.overview_text,
+      memory_id: row.memory_id,
+      file_count: row.file_count,
+      updated_at: new Date(row.updated_at),
+    };
+  }
+
+  getFileSummaryMemoryId(filePath: string): string | undefined {
+    const row = this.db.prepare(
+      'SELECT memory_id FROM file_summaries WHERE file_path = ?'
+    ).get(filePath) as { memory_id?: string } | undefined;
+    return row?.memory_id;
+  }
+
+  getProjectOverviewMemoryId(projectId: string): string | undefined {
+    const row = this.db.prepare(
+      'SELECT memory_id FROM project_overviews WHERE project_id = ?'
+    ).get(projectId) as { memory_id?: string } | undefined;
+    return row?.memory_id;
+  }
+
+  removeIndexedFile(filePath: string): void {
+    this.db.prepare('DELETE FROM indexed_files WHERE file_path = ?').run(filePath);
+  }
+
   /**
    * Close database connection
    */

@@ -1,0 +1,27 @@
+.app-workspace-menu {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.app-workspace-menu__toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.app-workspace-menu__toggle-btn:hover {
+  color: var(--text-primary);
+  background: var(--hover);
+}
+
+.app-workspace-menu__toggle-btn svg {
+  flex-shrink: 0;
+}

@@ -8,6 +8,7 @@ import { MessageList } from "./MessageList";
 import { InputBar, InputBarRef } from "./InputBar";
 import { QueuedMessages, type QueuedMessage } from "./QueuedMessages";
 import { useAgent } from "../../hooks/useAgent";
+import { resolveAgentFocusContext } from "../../utils/agentFocusContext";
 import { useAuthStatus } from "../../hooks/useAuthStatus";
 import { useOllama } from "../../hooks/useOllama";
 import { useChat } from "../../hooks/useChat";
@@ -20,6 +21,8 @@ import {
   DEFAULT_MODEL_IDS,
 } from "../../constants/models";
 import type { AIModel } from "../../constants/models";
+import { migratePickerModelId } from "../../constants/modelPicker";
+import { useModelPickerSettings } from "../../hooks/useModelPickerSettings";
 import { gateway } from "../../src/lib/gateway";
 import { JobPermissionBanner } from "./JobPermissionBanner";
 import {
@@ -31,8 +34,13 @@ import {
   artifactTypeLabel,
   type Artifact,
 } from "../../stores/artifactsStore";
+import { artifactsToMessageAttachments } from "../../utils/messageAttachments";
 import { mapHistoryMessages } from "../../utils/historyMapper";
+import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
 import "./ChatContainer.css";
+import { trackEvent } from "../../lib/telemetry";
+import { chatHasActiveStreamUi, lastUserTurnNeedsContinue } from "../../lib/agentStreamRecovery";
+import { useGatewaySupervisorStatus } from "../../hooks/useGatewaySupervisorStatus";
 
 const DEFAULT_SYSTEM_PROMPT = `You're Pen, an AI assistant running in Paprwork—a cross-platform AI workspace.
 
@@ -140,20 +148,30 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   const messages = chatState?.messages ?? EMPTY_MESSAGES;
   const chatIsLoading = chatState?.isLoading ?? false;
   const isSending = chatState?.isSending ?? false;
+  const connectionPaused = chatState?.connectionPaused ?? false;
+  const needsStreamRecovery = chatState?.needsStreamRecovery ?? false;
 
   const error = useChatStore((state) => state.error);
 
-  const { sendMessage } = useAgent();
+  const { sendMessage, interruptActiveStream, retryStreamRecovery } = useAgent();
   const { loadMessages, loadOlderMessages } = useChat();
   const inputBarRef = useRef<InputBarRef>(null);
   const { isModelAvailable, status: authStatus } = useAuthStatus();
   const { ensureModel, progress, installing } = useOllama();
+  const { pickerModels } = useModelPickerSettings();
   const fallbackModel =
-    CHAT_MODELS.find((m) => m.id === "claude-sonnet-4-6") || CHAT_MODELS[0];
+    CHAT_MODELS.find((m) => m.id === "claude-sonnet-5") || CHAT_MODELS[0];
 
   const [selectedModel, setSelectedModel] = useState<AIModel>(fallbackModel);
   const [contextInfo, setContextInfo] = useState<ContextInfo | null>(null);
-  const [gatewayStatus, setGatewayStatus] = useState<{ status: string; message?: string } | null>(null);
+  const {
+    message: gatewaySupervisorMessage,
+    isReady: gatewaySupervisorReady,
+    isStarting: gatewaySupervisorStarting,
+    isRestarting: gatewaySupervisorRestarting,
+  } = useGatewaySupervisorStatus();
+  const prevGatewaySupervisorReadyRef = useRef(gatewaySupervisorReady);
+  const [isResumingStream, setIsResumingStream] = useState(false);
   const [isFileDragOver, setIsFileDragOver] = useState(false);
   const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
   const isProcessingQueue = useRef(false);
@@ -164,43 +182,60 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     [messageQueue, chatId]
   );
 
-  // Listen for gateway supervisor status changes (restart notifications)
+  // Reload history when Gateway becomes ready after a restart (user message with no reply).
   useEffect(() => {
-    const api = (window as unknown as { electronAPI?: { gateway?: { onStatusChange?: (cb: (data: { status: string; message?: string }) => void) => void; removeStatusListener?: () => void } } }).electronAPI;
-    if (api?.gateway?.onStatusChange) {
-      api.gateway.onStatusChange((data) => {
-        setGatewayStatus(data.status === "restarting" ? data : null);
-      });
-      return () => {
-        api.gateway?.removeStatusListener?.();
-      };
-    }
-    return undefined;
-  }, []);
+    const wasReady = prevGatewaySupervisorReadyRef.current;
+    prevGatewaySupervisorReadyRef.current = gatewaySupervisorReady;
 
-  // Only block THIS chat if it's waiting for an Ollama model that's currently being installed
-  // Don't block on initial load - only block when actively installing/starting
+    if (!gatewaySupervisorReady || wasReady) {
+      return;
+    }
+
+    const chatMessages = useChatStore.getState().chatStates.get(chatId)?.messages ?? [];
+    if (
+      lastUserTurnNeedsContinue(chatMessages) &&
+      !chatHasActiveStreamUi(chatId) &&
+      !isSending
+    ) {
+      void loadMessages(chatId);
+    }
+  }, [gatewaySupervisorReady, chatId, loadMessages, isSending]);
+
+  const gatewayBanner = gatewaySupervisorStarting
+    ? {
+        message:
+          gatewaySupervisorMessage ??
+          (gatewaySupervisorRestarting
+            ? "Reconnecting to Gateway..."
+            : "Gateway is starting..."),
+      }
+    : null;
+
   const isWaitingForModel = selectedModel.provider === 'ollama' && installing === selectedModel.id;
 
   // When chatId or auth status changes: pick best default
-  // Priority: last selected (persisted in localStorage) > default order (sonnet-4-6 → gpt-5.4 → gemini-3-flash) > first available
+  // Priority: last selected (persisted in localStorage) > default order (sonnet-5 → gpt-5-6-sol → gemini-3-flash) > first available
   useEffect(() => {
     setSelectedModel((prev) => {
       const lastId = useChatStore.getState().getLastSelectedModel(chatId);
       if (lastId) {
-        const lastModel = getModelById(lastId);
+        const migratedId = migratePickerModelId(lastId);
+        const lastModel = getModelById(migratedId);
         if (lastModel && isModelAvailable(lastModel)) return lastModel;
       }
+      const pickerIds = new Set(pickerModels.map((model) => model.id));
       const defaultAvailable = DEFAULT_MODEL_IDS.map(getModelById).find(
-        (m) => m && isModelAvailable(m),
+        (m) => m && isModelAvailable(m) && pickerIds.has(m.id),
       );
       if (defaultAvailable) return defaultAvailable;
+      const pickerAvailable = pickerModels.find((m) => isModelAvailable(m));
+      if (pickerAvailable) return pickerAvailable;
       const firstAvailable = CHAT_MODELS.find((m) => isModelAvailable(m));
       if (firstAvailable) return firstAvailable;
       if (!isModelAvailable(prev)) return fallbackModel;
       return prev;
     });
-  }, [chatId, authStatus]);
+  }, [chatId, authStatus, pickerModels]);
 
   // Focus input when this chat's container mounts
   useEffect(() => {
@@ -215,8 +250,12 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   // Uses pagination-aware loadMessages() that loads only recent 30 messages
   useEffect(() => {
     const existingState = useChatStore.getState().chatStates.get(chatId);
-    // Only load if chat has no messages yet
-    if ((existingState?.messages.length || 0) === 0) {
+    // Only load if chat has no messages yet and no in-flight stream to preserve
+    if (
+      (existingState?.messages.length || 0) === 0 &&
+      !existingState?.isSending &&
+      !chatHasActiveStreamUi(chatId)
+    ) {
       loadMessages(chatId);
     }
   }, [chatId, loadMessages]);
@@ -303,11 +342,27 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         }
         case "summarize": {
           try {
-            await gateway.send("chat:stats", { chatId });
-            // The summarize action is primarily for fetching/displaying a summary
-            // For now, trigger a stats update
+            const response = await gateway.send("chat:summarize", { chatId });
+            const data = response.data as {
+              success?: boolean;
+              has_summary?: boolean;
+              error?: string;
+            };
+            if (data?.has_summary) {
+              alert(
+                "Conversation summarized. Run /context to see the summary in your context breakdown.",
+              );
+            } else {
+              alert(
+                data?.error ??
+                  "Summarization did not produce a summary. Check gateway logs.",
+              );
+            }
           } catch (err) {
             console.error("[ChatContainer] Summarize error:", err);
+            const message =
+              err instanceof Error ? err.message : "Unknown error";
+            alert(`Failed to summarize conversation: ${message}`);
           }
           break;
         }
@@ -316,6 +371,10 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
             const response = await gateway.send("chat:inspect-context", {
               chatId,
               model: selectedModel.id,
+              ...(() => {
+                const focusContext = resolveAgentFocusContext(chatId);
+                return focusContext ? { focusContext } : {};
+              })(),
             });
             if (isContextInfo(response.data)) {
               setContextInfo(response.data);
@@ -377,6 +436,17 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     createTab("settings", "settings", "Settings");
   }, []);
 
+  const handleOpenSettingsModels = useCallback(() => {
+    const { createTab, switchToTab } = useTabStore.getState();
+    const tabId = createTab("settings", "settings", "Settings");
+    switchToTab(tabId);
+    window.dispatchEvent(
+      new CustomEvent("papr:open-settings", {
+        detail: { tab: "models", section: "picker-models" },
+      }),
+    );
+  }, []);
+
   const handleSendMessage = useCallback(
     async (message: string, contextArtifacts?: Artifact[]) => {
       const mergedArtifact = findMergedArtifact(chatId);
@@ -398,12 +468,58 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
           artifactsContext += `Type: ${isAttachedFile ? "File" : artifactTypeLabel(artifact.type)}\n`;
 
           if (isAttachedFile && artifact.metadata?.filePath) {
-            artifactsContext += `File Path: ${artifact.metadata.filePath}\n`;
-            if (artifact.metadata.fileType) {
-              artifactsContext += `File Type: ${artifact.metadata.fileType}\n`;
+            const filePath = artifact.metadata.filePath as string;
+            const fileType = (artifact.metadata.fileType as string) || "";
+            artifactsContext += `File Path: ${filePath}\n`;
+            if (fileType) {
+              artifactsContext += `File Type: ${fileType}\n`;
             }
-            artifactsContext +=
-              "\nThe user attached this file from disk. Read it with the read_file tool using the path above (use encoding: \"base64\" for binary files).\n";
+
+            const isPdfOrImage =
+              fileType === "application/pdf" ||
+              fileType.startsWith("image/") ||
+              /\.(pdf|png|jpe?g|gif|webp|bmp|tiff?)$/i.test(filePath);
+
+            if (isPdfOrImage) {
+              try {
+                const uploadResponse = await gateway.send("memory:upload-attachment", {
+                  filePath,
+                  chatId,
+                  fileName: artifact.title,
+                  mimeType: fileType,
+                });
+                const uploadData =
+                  uploadResponse.success
+                    ? (uploadResponse.data as {
+                        skipped?: boolean;
+                        uploadId?: string | null;
+                        memoryIds?: string[];
+                        status?: string;
+                        progress?: number;
+                      } | null)
+                    : null;
+
+                if (uploadData && !uploadData.skipped && uploadData.uploadId) {
+                  artifactsContext += `Upload ID: ${uploadData.uploadId}\n`;
+                  if (uploadData.memoryIds?.length) {
+                    artifactsContext += `Memory IDs: ${uploadData.memoryIds.join(", ")}\n`;
+                  }
+                  artifactsContext += `Papr Memory Status: ${uploadData.status ?? "processing"} (${Math.round((uploadData.progress ?? 0) * 100)}%)\n`;
+                  artifactsContext +=
+                    "\nThis PDF/image was auto-uploaded to Papr Memory. Poll get_document_upload_status({ uploadId }) until completed, then search_agent_memory({ memoryId }) for extracted text. Use parse_pdf({ filePath }) if you need text before processing finishes.\n";
+                } else {
+                  artifactsContext +=
+                    "\nPoll upload_document_to_memory({ filePath, chatId }) if PAPR_API_KEY is configured, or parse_pdf({ filePath }) for quick local extraction.\n";
+                }
+              } catch (uploadError) {
+                console.warn("[ChatContainer] Attachment memory upload failed:", uploadError);
+                artifactsContext +=
+                  "\nUse upload_document_to_memory({ filePath, chatId }) or parse_pdf({ filePath }) for PDF/image content.\n";
+              }
+            } else {
+              artifactsContext +=
+                "\nThe user attached this text file from disk. Read it with read_file using the path above. Use import_document + add_agent_memory if the user wants it indexed for future recall.\n";
+            }
           } else if (artifact.content) {
             artifactsContext += `\n${artifact.content}\n`;
           }
@@ -436,81 +552,32 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         maxTokens: selectedModel.maxTokens, // Output token limit
       };
 
+      // Track activation: first chat sent
+      if (!localStorage.getItem("papr-activation-first-chat")) {
+        localStorage.setItem("papr-activation-first-chat", new Date().toISOString());
+        trackEvent("paprwork_activation_first_chat_sent", { message_length: message.length } as Record<string, unknown>);
+      }
       // Send message for THIS chat (not activeChat)
-      await sendMessage(message, config, chatId);
+      await sendMessage(
+        message,
+        config,
+        chatId,
+        contextArtifacts && contextArtifacts.length > 0
+          ? artifactsToMessageAttachments(contextArtifacts)
+          : undefined,
+      );
     },
     [selectedModel, sendMessage, chatId, ensureModel],
   );
 
   const handleStopAgent = useCallback(async () => {
     try {
-      await gateway.send("agent:stop", { chatId });
+      await interruptActiveStream(chatId);
       console.log(`[ChatContainer] Stopped agent for chat ${chatId}`);
     } catch (error) {
       console.error("[ChatContainer] Failed to stop agent:", error);
-    } finally {
-      // Optimistically reset UI immediately so Stop icon returns to Send
-      useChatStore.getState().setSending(chatId, false);
-      useChatStore.getState().setChatStreaming(chatId, false);
-      useTabStore.getState().setTabStreaming(`chat-${chatId}`, false);
-      
-      // Finalize any streaming message to update its status from "Working" to "Finished Working"
-      const chatState = useChatStore.getState().chatStates.get(chatId);
-      if (chatState?.messages) {
-        const streamingMessage = chatState.messages.find(msg => msg.isStreaming);
-        if (streamingMessage) {
-          // Update sequence to mark any "calling" tools as stopped
-          const updatedSequence = streamingMessage.sequence?.map(item => {
-            if (item.type === "tool" && (item.data as any)?.status === "calling") {
-              return {
-                ...item,
-                data: {
-                  ...(item.data as any),
-                  status: "stopped",
-                  error: "Stopped by user"
-                }
-              };
-            }
-            return item;
-          });
-          
-          // Update toolCalls to mark any calling tools as stopped
-          const updatedToolCalls = streamingMessage.toolCalls?.map(tc => {
-            if (tc.status === "calling") {
-              return {
-                ...tc,
-                status: "error" as const,
-                error: "Stopped by user"
-              };
-            }
-            return tc;
-          });
-          
-          // Update the message in the store with the modified sequence and toolCalls
-          const updatedMessages = chatState.messages.map(msg => 
-            msg.id === streamingMessage.id 
-              ? { 
-                  ...msg, 
-                  sequence: updatedSequence,
-                  toolCalls: updatedToolCalls 
-                }
-              : msg
-          );
-          
-          const newChatStates = new Map(useChatStore.getState().chatStates);
-          newChatStates.set(chatId, {
-            ...chatState,
-            messages: updatedMessages
-          });
-          
-          useChatStore.setState({ chatStates: newChatStates });
-          
-          // Now finalize the streaming message
-          useChatStore.getState().finalizeStreamingMessage(streamingMessage.id, chatId);
-        }
-      }
     }
-  }, [chatId]);
+  }, [chatId, interruptActiveStream]);
 
   // Queue management handlers
   const handleQueueMessage = useCallback((message: string, _context?: Artifact[]) => {
@@ -528,18 +595,16 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     const queued = messageQueue.find(q => q.id === messageId && q.chatId === chatId);
     if (!queued) return;
 
-    // Remove from queue
+    // Remove from queue — sendMessage handles interrupting any active stream
     setMessageQueue(prev => prev.filter(q => q.id !== messageId));
 
-    // Only stop the agent if it's actually streaming — avoids sending a spurious
-    // agent:stop that could race with a newly-started stream.
-    if (isSending) {
-      await handleStopAgent();
+    isProcessingQueue.current = true;
+    try {
+      await handleSendMessage(queued.text);
+    } finally {
+      isProcessingQueue.current = false;
     }
-
-    // Send the queued message
-    await handleSendMessage(queued.text);
-  }, [messageQueue, isSending, handleStopAgent, handleSendMessage, chatId]);
+  }, [messageQueue, handleSendMessage, chatId]);
 
   const handleRemoveQueued = useCallback((messageId: string) => {
     setMessageQueue(prev => prev.filter(q => q.id !== messageId));
@@ -567,7 +632,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
 
   // Auto-send next queued message when agent finishes responding
   useEffect(() => {
-    if (!isSending && currentChatQueue.length > 0) {
+    if (!isSending && currentChatQueue.length > 0 && !isProcessingQueue.current) {
       processNextQueued();
     }
   }, [isSending, currentChatQueue.length, processNextQueued]);
@@ -611,13 +676,40 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     inputBarRef.current?.attachFiles(files);
   }, []);
 
+  const handleResumeStream = useCallback(async () => {
+    if (isResumingStream) return;
+    setIsResumingStream(true);
+    try {
+      const mergedArtifact = findMergedArtifact(chatId);
+      const idKey =
+        mergedArtifact?.type === "document" ? "documentId" : "appId";
+      const mergedContext = mergedArtifact
+        ? `\n\n## Active Context\nThe user has merged this chat with a ${mergedArtifact.type} titled "${mergedArtifact.title}" (${idKey}: "${mergedArtifact.id}"). They are viewing and working on this ${mergedArtifact.type} alongside this conversation. Reference it directly when relevant.`
+        : "";
+
+      const config = {
+        provider: selectedModel.provider,
+        model: selectedModel.id,
+        systemPrompt: DEFAULT_SYSTEM_PROMPT + mergedContext,
+        reasoning: selectedModel.reasoning,
+        thinkingBudget: selectedModel.defaultThinkingBudget,
+        maxTokens: selectedModel.maxTokens,
+      };
+
+      await retryStreamRecovery(chatId, config);
+    } finally {
+      setIsResumingStream(false);
+    }
+  }, [chatId, isResumingStream, retryStreamRecovery, selectedModel]);
+
   const handleChatDrop = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault();
       e.stopPropagation();
-      const { files } = e.dataTransfer;
-      if (!files?.length) return;
-      handleFilesDroppedToChat(Array.from(files));
+      setIsFileDragOver(false);
+      const files = extractFilesFromDataTransfer(e.dataTransfer);
+      if (files.length === 0) return;
+      handleFilesDroppedToChat(files);
     },
     [handleFilesDroppedToChat],
   );
@@ -638,10 +730,17 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         </div>
       )}
 
-      {gatewayStatus && (
+      {gatewayBanner && (
         <div className="reconnecting-banner">
           <span className="reconnecting-icon">↻</span>
-          <span className="reconnecting-message">{gatewayStatus.message || "Reconnecting to Gateway..."}</span>
+          <span className="reconnecting-message">{gatewayBanner.message}</span>
+        </div>
+      )}
+
+      {connectionPaused && !gatewayBanner && !needsStreamRecovery && (
+        <div className="reconnecting-banner">
+          <span className="reconnecting-icon">↻</span>
+          <span className="reconnecting-message">Reconnecting to agent stream…</span>
         </div>
       )}
 
@@ -699,6 +798,22 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         onRemove={handleRemoveQueued}
       />
 
+      {needsStreamRecovery && (
+        <div className="stream-recovery-banner">
+          <span className="stream-recovery-banner__message">
+            Connection restored, but the agent response may be incomplete.
+          </span>
+          <button
+            type="button"
+            className="stream-recovery-banner__btn"
+            disabled={isResumingStream}
+            onClick={() => void handleResumeStream()}
+          >
+            {isResumingStream ? "Resuming…" : "Resume"}
+          </button>
+        </div>
+      )}
+
       <InputBar
         ref={inputBarRef}
         chatId={chatId}
@@ -720,6 +835,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         onModelChange={handleModelChange}
         isModelAvailable={isModelAvailable}
         onOpenSettings={handleOpenSettings}
+        onOpenSettingsModels={handleOpenSettingsModels}
+        pickerModels={pickerModels}
       />
 
       {contextInfo !== null ? (

@@ -9,7 +9,7 @@
   border-radius: 4px;
   font-family: "SF Mono", "Monaco", "Cascadia Code", "Roboto Mono", "Courier New", monospace;
   font-size: 0.875em;
-  color: var(--text-primary);
+  color: var(--text-primary, #e8eaed);
 }
 
 /* Block code wrapper */

@@ -28,11 +28,12 @@ When testing with your API key, we're getting:
 - **500 "Failed to create chat session"** - for Messages API
 
 ### API Key Format
-Your key: `sk-org-wVPc17GuOO-namespace-sZCTT5QCea-6bTRICQOueQr5TsJ20loOikwR8io1rYn`
+Example (placeholder — never commit real keys):
+`sk-org-xxxxxxxx-namespace-xxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxx`
 
 This format suggests:
-- Organization-scoped key: `org-wVPc17GuOO`
-- Namespace-scoped key: `namespace-sZCTT5QCea`
+- Organization-scoped key: `org-xxxxxxxx`
+- Namespace-scoped key: `namespace-xxxxxxxx`
 
 ### Possible Causes
 

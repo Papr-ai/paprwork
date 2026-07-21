@@ -86,6 +86,21 @@ export function useAuthStatus() {
         return true;
       }
 
+      // GLM requires Papr login (proxied through memory server)
+      if (model.provider === "zai") {
+        return status.paprProxy;
+      }
+
+      // Groq models require Papr login (proxied through memory server)
+      if (model.provider === "groq") {
+        return status.paprProxy;
+      }
+
+      // Moonshot Kimi models require Papr login (proxied through memory server)
+      if (model.provider === "moonshot") {
+        return status.paprProxy;
+      }
+
       // gpt-5.3-codex retired on ChatGPT OAuth — requires Platform API key
       if (model.id === "gpt-5.3-codex") {
         return status.openai.apiKey;

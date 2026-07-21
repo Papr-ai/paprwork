@@ -226,7 +226,7 @@ sk-org-{organizationId}-namespace-{namespaceId}-{32-random-chars}
 
 Example:
 ```
-sk-org-wVPc17GuOO-namespace-sZCTT5QCea-6bTRICQOueQr5TsJ20loOikwR8io1rYn
+sk-org-xxxxxxxx-namespace-xxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
 ## Edge Cases

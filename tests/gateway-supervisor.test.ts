@@ -18,6 +18,8 @@ const {
   pruneTimestamps,
   getNotificationType,
   shouldKillProcess,
+  parseHealthResponse,
+  shouldKillUnhealthyGateway,
   isValidTransition,
   VALID_STATE_TRANSITIONS,
 } = require("../src/electron/supervisor-logic.cjs");
@@ -276,6 +278,60 @@ describe("shouldKillProcess", () => {
   test("custom threshold of 5", () => {
     expect(shouldKillProcess(3, false, 5).shouldKill).toBe(false);
     expect(shouldKillProcess(4, false, 5).shouldKill).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Health Response Parsing
+// ---------------------------------------------------------------------------
+describe("parseHealthResponse", () => {
+  test('status "ok" is alive and ready', () => {
+    const health = parseHealthResponse(JSON.stringify({ status: "ok" }));
+    expect(health).toEqual({ alive: true, ready: true });
+  });
+
+  test('status "starting" is alive but not ready', () => {
+    const health = parseHealthResponse(JSON.stringify({ status: "starting" }));
+    expect(health).toEqual({ alive: true, ready: false });
+  });
+
+  test("invalid JSON is not alive", () => {
+    expect(parseHealthResponse("not-json")).toEqual({
+      alive: false,
+      ready: false,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Startup Grace (do not kill gateway while still starting)
+// ---------------------------------------------------------------------------
+describe("shouldKillUnhealthyGateway", () => {
+  test("starting status never triggers kill before first ok", () => {
+    const health = { alive: true, ready: false };
+    expect(
+      shouldKillUnhealthyGateway(10, health, false, 5).shouldKill,
+    ).toBe(false);
+  });
+
+  test("ok status resets failures", () => {
+    const health = { alive: true, ready: true };
+    expect(
+      shouldKillUnhealthyGateway(4, health, true, 5).shouldKill,
+    ).toBe(false);
+    expect(
+      shouldKillUnhealthyGateway(4, health, true, 5).newCount,
+    ).toBe(0);
+  });
+
+  test("kill only after gateway was healthy and failures accumulate", () => {
+    const dead = { alive: false, ready: false };
+    expect(
+      shouldKillUnhealthyGateway(4, dead, true, 5).shouldKill,
+    ).toBe(true);
+    expect(
+      shouldKillUnhealthyGateway(4, dead, false, 5).shouldKill,
+    ).toBe(false);
   });
 });
 

@@ -3,6 +3,11 @@
  *
  * Job logs and agent prose are poor memory candidates. Structured rows in
  * ~/Papr/jobs/{id}/data/data.db are the durable output worth indexing.
+ *
+ * Produces TWO memory items per sync:
+ * 1. Raw snapshot (content_type: "job_database_snapshot") — sample rows as JSON
+ * 2. Human summary (content_type: "job_database_summary") — row counts, key
+ *    records, column highlights. Searchable by the sleep agent for entity enrichment.
  */
 
 import Database from "better-sqlite3";
@@ -10,7 +15,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import Papr from "@papr/memory";
 import { getApiKey } from "../utils/keyResolver.js";
-import { getPaprUserId } from "../utils/paprUserId.js";
+import { paprUserScope } from "../utils/paprUserId.js";
 import type { JobRecord } from "./jobs/types.js";
 import { isSleepCycleJobName } from "./SleepCycleService.js";
 
@@ -35,12 +40,14 @@ export interface JobDatabaseSnapshotInput {
 export interface JobDatabaseSnapshotResult {
   synced: boolean;
   tableCount: number;
+  summarySynced?: boolean;
   reason?: string;
 }
 
-interface TableSnapshot {
+export interface TableSnapshot {
   table: string;
   rowCount: number;
+  columns: string[];
   sampleRows: Record<string, unknown>[];
 }
 
@@ -82,6 +89,9 @@ function snapshotTable(
     .prepare(`SELECT * FROM ${quoted} LIMIT ?`)
     .all(MAX_ROWS_PER_TABLE) as Record<string, unknown>[];
 
+  const columns =
+    rawRows.length > 0 ? Object.keys(rawRows[0]) : [];
+
   const sampleRows = rawRows.map((row) => {
     const trimmed: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(row)) {
@@ -90,7 +100,7 @@ function snapshotTable(
     return trimmed;
   });
 
-  return { table: tableName, rowCount, sampleRows };
+  return { table: tableName, rowCount, columns, sampleRows };
 }
 
 export function buildJobDatabaseSnapshotContent(
@@ -126,6 +136,60 @@ export function buildJobDatabaseSnapshotContent(
     return content;
   }
   return `${content.slice(0, MAX_TOTAL_CHARS)}\n\n[... truncated for memory limits ...]`;
+}
+
+/**
+ * Build a human-readable summary of database tables.
+ *
+ * Example output:
+ *   Meeting Summarizer — Database Summary (2026-06-18)
+ *   - meetings: 65 rows, 8 columns (title, attendees, summary, date, ...).
+ *     Recent: "Revenue Reimagined Q3 Planning" (2026-06-17), "Papr Product Review" (2026-06-16).
+ *   - calendar_events: 292 rows, 6 columns (title, start, end, ...).
+ */
+export function buildTableSummary(
+  job: JobRecord,
+  snapshots: TableSnapshot[],
+): string {
+  const today = new Date().toISOString().split("T")[0];
+  const lines: string[] = [
+    `${job.name} — Database Summary (${today})`,
+    "",
+  ];
+
+  for (const snap of snapshots) {
+    const colPreview = snap.columns.slice(0, 6).join(", ");
+    const colSuffix = snap.columns.length > 6 ? ", ..." : "";
+    let line = `- **${snap.table}**: ${snap.rowCount} rows, ${snap.columns.length} columns (${colPreview}${colSuffix}).`;
+
+    // Add a "Recent:" preview from sample rows — pick a name/title column
+    const titleCol = snap.columns.find((c) =>
+      /^(title|name|subject|label|company|email|display_name)$/i.test(c),
+    );
+    const dateCol = snap.columns.find((c) =>
+      /^(date|created_at|updated_at|timestamp|start|start_date|created|sync_date)$/i.test(c),
+    );
+
+    if (titleCol && snap.sampleRows.length > 0) {
+      const previews = snap.sampleRows
+        .slice(0, 3)
+        .map((row) => {
+          const t = String(row[titleCol] ?? "").slice(0, 80);
+          const d = dateCol && row[dateCol] ? ` (${String(row[dateCol]).slice(0, 10)})` : "";
+          return `"${t}"${d}`;
+        })
+        .join(", ");
+      line += `\n  Recent: ${previews}.`;
+    }
+
+    lines.push(line);
+  }
+
+  return lines.join("\n");
+}
+
+function todayISO(): string {
+  return new Date().toISOString().split("T")[0];
 }
 
 export function extractJobDatabaseSnapshots(
@@ -174,6 +238,16 @@ export async function syncJobDatabaseToMemory(
     return { synced: false, tableCount: 0, reason: "no_user_data" };
   }
 
+  // Shared content-hash gate (also used by event-driven DatabaseMemorySync):
+  // skip when the database content hasn't changed since the last memory sync.
+  const { shouldSyncDatabaseToMemory, recordDatabaseMemorySynced } = await import(
+    "./DatabaseMemorySync.js"
+  );
+  const contentGate = shouldSyncDatabaseToMemory(dbPath);
+  if (!contentGate.changed) {
+    return { synced: false, tableCount: snapshots.length, reason: "content_unchanged" };
+  }
+
   const apiKey = await getApiKey("PAPR_API_KEY");
   if (!apiKey) {
     return { synced: false, tableCount: snapshots.length, reason: "no_api_key" };
@@ -185,42 +259,90 @@ export async function syncJobDatabaseToMemory(
     snapshots,
   );
 
+  const syncDate = todayISO();
+  const tableNames = snapshots.map((s) => s.table).join(",");
+
   const client = new Papr({
     xAPIKey: apiKey,
     maxRetries: 2,
     timeout: 30000,
   });
 
-  const userId = getPaprUserId();
+  let snapshotSynced = false;
+  let summarySynced = false;
 
+  // 1. Store raw snapshot (existing behavior + new metadata)
   try {
     await client.memory.add({
       content,
-      ...(userId ? { user_id: userId } : {}),
+      ...paprUserScope(),
       metadata: {
         role: "assistant",
         category: "fact",
         customMetadata: {
           source: "job_database_snapshot",
+          content_type: "job_database_snapshot",
+          sync_date: syncDate,
           jobId: input.job.id,
           jobName: input.job.name,
           jobType: input.job.type,
           runId: input.runId,
-          tables: snapshots.map((s) => s.table).join(","),
+          tables: tableNames,
           tableCount: String(snapshots.length),
         },
       },
     });
-    return { synced: true, tableCount: snapshots.length };
+    snapshotSynced = true;
   } catch (error) {
     console.warn(
-      `[JobDatabaseMemorySync] Failed to sync job ${input.job.id}:`,
+      `[JobDatabaseMemorySync] Failed to sync snapshot for job ${input.job.id}:`,
       error,
     );
+  }
+
+  // 2. Store human-readable table summary (new — searchable by sleep agent)
+  try {
+    const summary = buildTableSummary(input.job, snapshots);
+    await client.memory.add({
+      content: summary,
+      ...paprUserScope(),
+      metadata: {
+        role: "assistant",
+        category: "fact",
+        customMetadata: {
+          source: "job_database_summary",
+          content_type: "job_database_summary",
+          sync_date: syncDate,
+          jobId: input.job.id,
+          jobName: input.job.name,
+          jobType: input.job.type,
+          tables: tableNames,
+          tableCount: String(snapshots.length),
+        },
+      },
+    });
+    summarySynced = true;
+  } catch (error) {
+    console.warn(
+      `[JobDatabaseMemorySync] Failed to sync summary for job ${input.job.id}:`,
+      error,
+    );
+  }
+
+  if (!snapshotSynced && !summarySynced) {
     return {
       synced: false,
       tableCount: snapshots.length,
-      reason: error instanceof Error ? error.message : "sync_failed",
+      summarySynced: false,
+      reason: "sync_failed",
     };
   }
+
+  recordDatabaseMemorySynced(dbPath, contentGate.hash);
+
+  return {
+    synced: snapshotSynced,
+    tableCount: snapshots.length,
+    summarySynced,
+  };
 }

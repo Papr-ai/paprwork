@@ -1,10 +1,11 @@
 import fs from "fs/promises";
+import { STANDALONE_APP_ID } from "../src/gateway/services/jobs/appIds.js";
 import os from "os";
 import path from "path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { getJobsService } from "../src/gateway/services/JobsService.js";
 import type { JobRecord } from "../src/gateway/services/JobsService.js";
-import { SubAgentService } from "../src/gateway/services/SubAgentService.js";
+import { SubAgentService, toSubAgentListSummaries } from "../src/gateway/services/SubAgentService.js";
 
 describe("SubAgentService", () => {
   const root = path.join(os.tmpdir(), `paprwork-v2-subagents-${Date.now()}`);
@@ -31,6 +32,15 @@ describe("SubAgentService", () => {
 
     const initial = await service.listAgents();
     expect(initial.length).toBeGreaterThan(0);
+    expect(initial.some((a) => a.id === "product-architect")).toBe(true);
+
+    const summaries = toSubAgentListSummaries(initial);
+    expect(summaries.some((a) => a.id === "product-architect")).toBe(true);
+    expect(summaries[0]?.builtIn).toBe(true);
+    expect(JSON.stringify(summaries).length).toBeLessThan(20_000);
+    for (const summary of summaries) {
+      expect(summary).not.toHaveProperty("systemPrompt");
+    }
 
     const created = await service.createOrUpdateAgent({
       id: "qa-specialist",
@@ -61,6 +71,7 @@ describe("SubAgentService", () => {
       name: "Delegation: Research Specialist",
       type: "subagent",
       status: "pending",
+      appIds: [STANDALONE_APP_ID],
       command: "Audit retry behavior and summarize improvements.",
       subAgentId: "research-specialist",
       delegatedBy: "main-agent",

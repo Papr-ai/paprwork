@@ -13,6 +13,7 @@ describe("JobsScheduler", () => {
       name: "Scheduled Job",
       type: "shell",
       status: "pending",
+      appIds: ["__standalone__"],
       command: "echo hi",
       schedule: {
         enabled: true,
@@ -78,6 +79,7 @@ describe("JobsScheduler", () => {
       name: "Cron Job",
       type: "shell",
       status: "pending",
+      appIds: ["__standalone__"],
       command: "echo cron",
       schedule: {
         enabled: true,

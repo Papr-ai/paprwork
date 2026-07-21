@@ -16,6 +16,7 @@ import { z } from "zod";
 import { createTool } from "@mastra/core/tools";
 import type { ToolResult } from "../types/tools.js";
 import { autoStageFile } from "../utils/gitAutoStage.js";
+import { getMiniAppWriteBlockReason } from "../utils/paprRoot.js";
 
 /** Expand a leading `~` to the user's home directory. */
 function expandPath(filePath: string): string {
@@ -114,39 +115,10 @@ async function readFile(
       content = (content + metadata) as any;
     }
 
-    // Check result size and provide helpful feedback if too large
-    // This helps the agent make better decisions without breaking the UI
     const contentStr = content.toString();
-    const estimatedTokens = Math.ceil(contentStr.length / 4);
-    const WARN_THRESHOLD_TOKENS = 2000; // ~8KB
 
-    if (estimatedTokens > WARN_THRESHOLD_TOKENS && !offset && !limit) {
-      const totalLines = contentStr.split("\n").length;
-      const fileName = path.basename(filePath);
-
-      // Return helpful error to agent (NOT a hard failure)
-      // Agent will see this and can try a better approach
-      return {
-        success: false,
-        error:
-          `File "${fileName}" is ${estimatedTokens} tokens (~${Math.round(contentStr.length / 1024)}KB, ${totalLines} lines).\n\n` +
-          `This exceeds context limits and will be heavily truncated, losing important content.\n\n` +
-          `✅ Better approaches:\n\n` +
-          `1. Read incrementally:\n` +
-          `   read_file({ path: "${rawPath}", offset: 1, limit: 100 })\n` +
-          `   Then read more sections as needed\n\n` +
-          `2. Search for specific content:\n` +
-          `   bash({ command: "grep -A 10 'function_name' ${fileName}" })\n` +
-          `   bash({ command: "grep -A 5 'class MyClass' ${fileName}" })\n\n` +
-          `3. Use search tool:\n` +
-          `   search_files({ path: "${path.dirname(filePath)}", pattern: "pattern", filePattern: "*.ts" })\n\n` +
-          `4. Get file structure:\n` +
-          `   bash({ command: "grep -E '^(export )?(class|function|interface|type) ' ${fileName}" })\n\n` +
-          `Choose the approach that best fits what you need to find.`,
-        type: "size_warning",
-      };
-    }
-
+    // Return content — cross-turn history keeps file reads full (toolResultTruncation.ts).
+    // maxSize already caps disk reads; do not block here or the model never sees content.
     return {
       success: true,
       data: {
@@ -173,9 +145,9 @@ async function readFile(
 const WriteFileSchema = z.object({
   path: z.string().describe("Path to file to write"),
   content: z.string().describe("Content to write"),
-  encoding: z.enum(["utf8", "base64"]).describe("File encoding"),
-  backup: z.boolean().describe("Create backup if file exists"),
-  createDirs: z.boolean().describe("Create parent directories"),
+  encoding: z.enum(["utf8", "base64"]).default("utf8").describe("File encoding"),
+  backup: z.boolean().default(false).describe("Create backup if file exists"),
+  createDirs: z.boolean().default(true).describe("Create parent directories"),
 });
 
 export type WriteFileInput = z.infer<typeof WriteFileSchema>;
@@ -195,6 +167,15 @@ async function writeFile(
   try {
     const { path: rawPath, content, encoding, backup, createDirs } = input;
     const filePath = expandPath(rawPath);
+
+    const miniAppBlock = getMiniAppWriteBlockReason(filePath);
+    if (miniAppBlock) {
+      return {
+        success: false,
+        error: miniAppBlock,
+        type: "mini_app_edit_guard",
+      };
+    }
 
     // Create parent directories if needed
     if (createDirs) {
@@ -226,6 +207,15 @@ async function writeFile(
 
     // Auto-stage file in git if in a repo
     const gitResult = await autoStageFile(filePath);
+
+    try {
+      const { getAgentFocusContextService } = await import(
+        "../../gateway/services/AgentFocusContextService.js"
+      );
+      getAgentFocusContextService().recordAbsolutePathEdit(filePath);
+    } catch {
+      // Focus tracking is best-effort
+    }
 
     return {
       success: true,
@@ -505,6 +495,7 @@ export const writeFileTool = createTool({
   description:
     "Write content to a file. OVERWRITES existing files in place — you do NOT need to delete a file before recreating it. " +
     "Creates parent directories if needed. Creates backup if specified. " +
+    "BLOCKED for ~/Papr/apps/* — use edit_file instead (runs esbuild + validation). " +
     "ANTI-PATTERN: Never run `rm <file>` followed by `write_file({ path: <file> })` in the same turn — if the stream is interrupted between the two, the file is lost. Just call write_file directly; it overwrites.",
   inputSchema: WriteFileSchema,
   execute: writeFile,

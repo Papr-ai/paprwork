@@ -4,10 +4,17 @@
 
 import React, { useState } from "react";
 import { useCustomKeys } from "../../hooks/useCustomKeys";
+import { trackEvent } from "../../lib/telemetry";
 import { OAuthSection } from "./OAuthSection";
 import { PaprLoginSection } from "./PaprLoginSection";
+import { ModelPickerSettings } from "./ModelPickerSettings";
+import { ToolTruncationSettings } from "./ToolTruncationSettings";
 
-export function AIModelsTab() {
+interface AIModelsTabProps {
+  scrollToPickerModels?: boolean;
+}
+
+export function AIModelsTab({ scrollToPickerModels = false }: AIModelsTabProps) {
   const { keys, loading, addKey, updateKey, deleteKey, getKeyValue, loadKeys } = useCustomKeys();
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [apiKeyInputs, setApiKeyInputs] = useState<Record<string, string>>({});
@@ -64,6 +71,11 @@ export function AIModelsTab() {
         await addKey({ name: keyName, value, permission: "always" });
       }
       setApiKeyInputs(prev => ({ ...prev, [keyName]: "" }));
+      // Track activation: model connected
+      if (!localStorage.getItem("papr-activation-model-connected")) {
+        localStorage.setItem("papr-activation-model-connected", "true");
+        trackEvent("paprwork_activation_model_connected", { provider: keyName } as Record<string, unknown>);
+      }
       setExpandedProvider(null);
     } catch (err) {
       console.error("Failed to save key:", err);
@@ -214,6 +226,10 @@ export function AIModelsTab() {
           );
         })}
       </div>
+
+      <ModelPickerSettings scrollIntoView={scrollToPickerModels} />
+
+      <ToolTruncationSettings />
     </div>
   );
 }

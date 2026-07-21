@@ -7,6 +7,7 @@ import {
   estimatePartialProjection,
   readCachedLifetimeProjection,
 } from "./contextFootprintStore.js";
+import { isContextStatsCacheReady } from "./contextStatsCache.js";
 import { computeModelAwareCostSavings } from "./contextCostSavings.js";
 import { computeMemorySearchSavings } from "./memorySearchSavings.js";
 
@@ -89,6 +90,14 @@ export const EMPTY_CONTEXT_EFFICIENCY_STATS: ContextEfficiencyStats = {
 export function computeContextEfficiencyStats(
   db: Database.Database,
 ): ContextEfficiencyStats {
+  if (!isContextStatsCacheReady(db)) {
+    return {
+      ...EMPTY_CONTEXT_EFFICIENCY_STATS,
+      dataSource: "partial",
+      pendingFootprintTurns: readCachedLifetimeProjection(db).pendingTurns,
+    };
+  }
+
   const turnFootprint = computeTurnFootprintsFast(db);
   const memory = computeMemorySearchSavings(db);
   const cached = readCachedLifetimeProjection(db);
@@ -111,7 +120,7 @@ export function computeContextEfficiencyStats(
     dataSource = "cached";
   } else if (cached.computedTurns > 0 && cached.pendingTurns > 0) {
     dataSource = "partial";
-    projectedPromptTokens = estimatePartialProjection(db, cached);
+    projectedPromptTokens = estimatePartialProjection(cached);
   } else {
     dataSource = "live";
     const cumulative = computeCumulativeContextProjection(db);

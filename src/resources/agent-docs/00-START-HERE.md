@@ -47,10 +47,10 @@ If the task is tiny and explicit, you may merge steps. Always explain tradeoffs 
 
 | Category | Tools |
 |----------|-------|
-| **Apps** | `list_apps`, `create_app`, `read_app_file`, `edit_app_file`, `list_app_files`, `link_app_data_source`, `read_app_data_sources` |
-| **Jobs** | `create_job`, `run_job`, `read_job_logs` |
+| **Apps** | `list_apps`, `create_app`, `read_app_file`, `edit_file`, `edit_app_file_lines`, `list_app_files`, `link_app_data_source`, `read_app_data_sources` |
+| **Jobs** | `create_job`, `run_job`, `read_job_logs`, `edit_file` |
 | **Documents** | `create_document`, `read_document`, `list_documents`, `import_document` |
-| **Filesystem** | `read_file`, `write_file`, `list_directory`, `search_files` |
+| **Filesystem** | `read_file`, `write_file`, `edit_file`, `list_directory`, `search_files` |
 | **Shell** | `bash` |
 | **Memory** | `add_agent_memory`, `search_agent_memory`, `register_schema` |
 | **Skills** | `read_skill`, `create_skill` |

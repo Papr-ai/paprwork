@@ -2,10 +2,24 @@ import {
   deserializeEnhancedFields,
   formatSummaryForLLM,
 } from "./summaryFormatting.js";
+import { computeRecentMessageLimit } from "./recentMessageWindow.js";
 
-/** Matches historyFormatter.ts — tool results in loaded history */
-export const HISTORY_TOOL_RESULT_MAX_CHARS = 400;
-export const RECENT_MESSAGES_WITH_SUMMARY = 6;
+import {
+  ACTIVE_FILE_READ_MAX_CHARS,
+  HISTORY_TOOL_RESULT_MAX_CHARS,
+  HISTORY_TOOL_RESULT_MODERATE_CHARS,
+} from "../agent/toolResultTruncation.js";
+
+export {
+  ACTIVE_FILE_READ_MAX_CHARS,
+  HISTORY_TOOL_RESULT_MAX_CHARS,
+  HISTORY_TOOL_RESULT_MODERATE_CHARS,
+};
+export {
+  RECENT_MESSAGES_MIN,
+  RECENT_MESSAGES_MAX,
+  RECENT_MESSAGES_WITH_SUMMARY,
+} from "./recentMessageWindow.js";
 /** Cap per-turn inflation so lifetime projections stay realistic. */
 export const MAX_CONTEXT_INFLATION_RATIO = 15;
 const CHARS_PER_TOKEN = 4;
@@ -31,6 +45,7 @@ export interface ChatContextRow {
   summary_topics: string | null;
   summary_enhanced: string | null;
   summary_last_updated: string | null;
+  summary_base_message_count: number | null;
 }
 
 interface ToolCallRecord {
@@ -133,10 +148,7 @@ function estimateMessagesChars(
   );
 }
 
-function buildSummaryText(
-  chat: ChatContextRow,
-  recentCount: number,
-): string | null {
+function buildSummaryText(chat: ChatContextRow): string | null {
   if (!chat.summary_long) return null;
 
   let topics: string[] = [];
@@ -160,8 +172,6 @@ function buildSummaryText(
       last_updated: chat.summary_last_updated ?? new Date().toISOString(),
     },
     enhanced: deserializeEnhancedFields(chat.summary_enhanced),
-    totalCount: chat.message_count,
-    recentCount,
     chatFilePath: `~/Papr/Chats/${chat.id}.txt`,
   });
 }
@@ -196,7 +206,7 @@ export function computeChatTurnFootprint(
       recentMessages,
       HISTORY_TOOL_RESULT_MAX_CHARS,
     );
-    const summaryText = buildSummaryText(chat, recentMessages.length);
+    const summaryText = buildSummaryText(chat);
     const summaryChars = summaryText?.length ?? 0;
     const truncationCharsSaved =
       recentFullChars - agentMessagesChars;
@@ -264,7 +274,10 @@ export function computeChatTurnFootprint(
   }
 
   const recentLimit = hasSummary
-    ? RECENT_MESSAGES_WITH_SUMMARY
+    ? computeRecentMessageLimit(
+        chat.message_count,
+        chat.summary_base_message_count,
+      )
     : allMessages.length;
   const agentMessages = hasSummary
     ? allMessages.slice(-recentLimit)
@@ -278,7 +291,7 @@ export function computeChatTurnFootprint(
     agentMessages,
     HISTORY_TOOL_RESULT_MAX_CHARS,
   );
-  const summaryText = buildSummaryText(chat, agentMessages.length);
+  const summaryText = buildSummaryText(chat);
   const summaryChars = summaryText?.length ?? 0;
 
   const truncationCharsSaved =
@@ -330,8 +343,12 @@ export function estimateOptimizedContextChars(
 ): number {
   const hasSummary = Boolean(chat.summary_long);
   if (hasSummary && history.length > 0) {
-    const recent = history.slice(-RECENT_MESSAGES_WITH_SUMMARY);
-    const summaryText = buildSummaryText(chat, recent.length);
+    const recentLimit = computeRecentMessageLimit(
+      chat.message_count,
+      chat.summary_base_message_count,
+    );
+    const recent = history.slice(-recentLimit);
+    const summaryText = buildSummaryText(chat);
     const summaryChars = summaryText?.length ?? 0;
     const recentChars = estimateMessagesChars(
       recent,

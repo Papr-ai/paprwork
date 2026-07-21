@@ -187,6 +187,63 @@
   letter-spacing: -0.01em;
 }
 
+.app-card__title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.app-card__title-row .app-card__title {
+  flex: 1;
+  min-width: 0;
+}
+
+.app-card__cloud-badge {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.app-card__cloud-badge--fork {
+  color: #7c3aed;
+  background: color-mix(in srgb, #7c3aed 14%, transparent);
+}
+
+.app-card__cloud-badge--track {
+  background: color-mix(in srgb, #0284c7 14%, transparent);
+  color: #0284c7;
+}
+
+.app-card__status-badge {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.app-card__status-badge--published {
+  color: #059669;
+  background: color-mix(in srgb, #059669 14%, transparent);
+}
+
+.app-card__status-badge--draft {
+  background: color-mix(in srgb, #d97706 14%, transparent);
+  color: #d97706;
+}
+
+.app-card__status-badge--archived {
+  color: #6b7280;
+  background: color-mix(in srgb, #6b7280 14%, transparent);
+}
+
 .app-card__title-input {
   font-size: 15px;
   font-weight: 600;
@@ -218,50 +275,114 @@
   margin-top: 4px;
 }
 
-/* Hover actions */
-.app-card__actions {
+.app-card__screenshot {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top center;
+}
+
+.app-card--compact {
+  min-width: 220px;
+  flex-direction: row;
+  border-radius: 14px;
+}
+
+.app-card--compact .app-card__preview {
+  width: 84px;
+  min-width: 84px;
+  height: 96px;
+}
+
+.app-card--compact .app-card__orb {
+  width: 68px;
+  height: 68px;
+}
+
+.app-card--compact .app-card__orb-icon {
+  transform: scale(0.7);
+}
+
+.app-card--compact .app-card__content {
+  min-width: 0;
+  padding: 16px 36px 14px 12px;
+  justify-content: center;
+}
+
+.app-card--compact .app-card__description {
+  display: none;
+}
+
+.app-card__menu-wrap {
   position: absolute;
   top: 12px;
   right: 12px;
-  display: flex;
-  gap: 4px;
-  opacity: 0;
-  transition: opacity 150ms ease;
+  z-index: 5;
 }
 
-.app-card__actions--visible {
+.app-card__menu-trigger {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--glass-border, var(--border));
+  border-radius: 9px;
+  background: var(--glass-bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-weight: 700;
+  letter-spacing: 1px;
+  opacity: 0;
+  transition: opacity 150ms ease, background 150ms ease;
+}
+
+.app-card:hover .app-card__menu-trigger,
+.app-card__menu-trigger:focus-visible,
+.app-card__menu-trigger[aria-expanded="true"] {
   opacity: 1;
 }
 
-.app-card__action {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--glass-bg);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border: 1px solid var(--glass-border, var(--border));
-  border-radius: 8px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all 150ms ease;
-}
-
-.app-card__action:hover {
+.app-card__menu-trigger:hover {
   background: var(--glass-bg-hover);
   color: var(--text-primary);
 }
 
-.app-card__action--favorited {
-  color: #FFD700;
+.app-card__menu {
+  position: absolute;
+  top: 36px;
+  right: 0;
+  width: 184px;
+  padding: 6px;
+  border: 1px solid var(--glass-border, var(--border));
+  border-radius: 12px;
+  background: var(--popover-bg, rgba(255, 255, 255, 0.96));
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(24px);
 }
 
-.app-card__action--delete:hover {
-  background: var(--error);
-  border-color: var(--error);
-  color: white;
+.app-card__menu button {
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.app-card__menu button:hover {
+  background: var(--hover);
+}
+
+.app-card__menu-separator {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--border);
+}
+
+.app-card__menu .app-card__menu-danger {
+  color: var(--error);
 }
 
 /* Drag state */
@@ -291,6 +412,10 @@
 
   .app-card--featured {
     background: rgba(20, 22, 28, 0.45);
+  }
+
+  .app-card__menu {
+    background: var(--popover-bg, rgba(24, 26, 32, 0.97));
   }
 
   .app-card__orb {

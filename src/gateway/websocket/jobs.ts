@@ -18,6 +18,7 @@ import {
 interface CreateJobPayload {
   name: string;
   type: JobType;
+  appIds: string[];
   folder?: string;
   command?: string;
   dependsOn?: JobDependency[];
@@ -36,8 +37,35 @@ interface CreateJobPayload {
   reportChatId?: string;
 }
 
+interface RunJobPayload {
+  jobId: string;
+  runtime?: "local" | "cloud";
+}
+
+interface JobFilePayload {
+  jobId: string;
+  filename: string;
+}
+
+interface WriteJobFilePayload {
+  jobId: string;
+  filename: string;
+  content: string;
+}
+
+interface JobDbPreviewPayload {
+  jobId: string;
+  filename: string;
+  tableName?: string;
+}
+
 interface JobIdPayload {
   jobId: string;
+}
+
+interface AcknowledgeScheduleRiskPayload {
+  jobId: string;
+  approved: boolean;
 }
 
 interface ListJobsPayload {
@@ -58,6 +86,7 @@ interface DeleteJobPayload {
 interface UpdateJobPayload {
   jobId: string;
   name?: string;
+  appIds?: string[];
   folder?: string;
   command?: string;
   requirements?: string[];
@@ -147,6 +176,7 @@ export async function setupJobsHandlers(
         const job = await jobsService.createJob({
           name: payload.name,
           type: payload.type,
+          appIds: payload.appIds,
           folder: payload.folder,
           command: payload.command,
           dependsOn: payload.dependsOn,
@@ -168,8 +198,11 @@ export async function setupJobsHandlers(
         break;
       }
       case "jobs:run": {
-        const payload = message.payload as JobIdPayload;
-        const job = await jobsService.runJob(payload.jobId);
+        const payload = message.payload as RunJobPayload;
+        const job =
+          payload.runtime === "cloud"
+            ? await jobsService.runJobInCloud(payload.jobId)
+            : await jobsService.runJob(payload.jobId);
         sendResponse(ws, { id: message.id, success: true, data: job });
         break;
       }
@@ -183,6 +216,15 @@ export async function setupJobsHandlers(
         const payload = message.payload as UpdateJobPayload;
         const { jobId, ...updates } = payload;
         const job = await jobsService.updateJob(jobId, updates);
+        sendResponse(ws, { id: message.id, success: true, data: job });
+        break;
+      }
+      case "jobs:acknowledge-schedule-risk": {
+        const payload = message.payload as AcknowledgeScheduleRiskPayload;
+        const job = await jobsService.acknowledgeScheduleRisk(
+          payload.jobId,
+          payload.approved,
+        );
         sendResponse(ws, { id: message.id, success: true, data: job });
         break;
       }
@@ -264,6 +306,58 @@ export async function setupJobsHandlers(
           id: message.id,
           success: true,
           data: { restored },
+        });
+        break;
+      }
+
+      case "jobs:read-file": {
+        const payload = message.payload as JobFilePayload;
+        const content = await jobsService.readJobFile(
+          payload.jobId,
+          payload.filename,
+        );
+        if (content === null) {
+          sendError(
+            ws,
+            message.id,
+            `File not found: ${payload.filename} in job ${payload.jobId}`,
+          );
+          return;
+        }
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: { content },
+        });
+        break;
+      }
+
+      case "jobs:write-file": {
+        const payload = message.payload as WriteJobFilePayload;
+        const success = await jobsService.writeJobFile(
+          payload.jobId,
+          payload.filename,
+          payload.content,
+        );
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: { success },
+        });
+        break;
+      }
+
+      case "jobs:db-preview": {
+        const payload = message.payload as JobDbPreviewPayload;
+        const preview = await jobsService.previewJobDatabase(
+          payload.jobId,
+          payload.filename,
+          payload.tableName,
+        );
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: preview,
         });
         break;
       }

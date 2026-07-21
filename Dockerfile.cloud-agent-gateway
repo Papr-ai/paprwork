@@ -1,0 +1,56 @@
+# Cloud Agent Gateway — deploy to Cloud Run (shared AgentService stack)
+# Build: docker build -f Dockerfile.cloud-agent-gateway -t cloud-agent-gateway .
+# Deploy: node scripts/deploy-cloud-agent-gateway.mjs --project=YOUR_PROJECT
+#
+# Runtime includes Playwright Chromium for browser_* agent tools in cloud jobs.
+
+FROM node:24-alpine AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN node -e "\
+  const fs=require('fs');\
+  const drop=(o)=>{ if(!o) return; delete o['@esbuild/darwin-arm64']; delete o['@esbuild/darwin-x64']; };\
+  const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));\
+  drop(pkg.dependencies); drop(pkg.devDependencies);\
+  delete pkg.scripts?.postinstall;\
+  fs.writeFileSync('package.json', JSON.stringify(pkg,null,2));\
+  const lock=JSON.parse(fs.readFileSync('package-lock.json','utf8'));\
+  drop(lock.packages?.['']?.dependencies); drop(lock.packages?.['']?.devDependencies);\
+  fs.writeFileSync('package-lock.json', JSON.stringify(lock,null,2));\
+" && npm install --omit=optional --no-audit --no-fund
+COPY tsconfig.gateway.json tsconfig.json ./
+COPY src ./src
+RUN npm run build:gateway
+
+# Debian slim — Playwright Chromium needs glibc + install-deps (Alpine unsupported)
+FROM node:24-bookworm-slim
+WORKDIR /app
+ENV NODE_ENV=production
+ENV GATEWAY_MODE=cloud_agent
+ENV CLOUD_SYNC_ENABLED=false
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV PLAYWRIGHT_DOCKER=1
+
+COPY package.json package-lock.json ./
+RUN node -e "\
+  const fs=require('fs');\
+  const drop=(o)=>{ if(!o) return; delete o['@esbuild/darwin-arm64']; delete o['@esbuild/darwin-x64']; };\
+  const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));\
+  drop(pkg.dependencies); drop(pkg.devDependencies);\
+  delete pkg.scripts?.postinstall;\
+  delete pkg.devDependencies;\
+  delete pkg.workspaces;\
+  fs.writeFileSync('package.json', JSON.stringify(pkg,null,2));\
+  const lock=JSON.parse(fs.readFileSync('package-lock.json','utf8'));\
+  drop(lock.packages?.['']?.dependencies); drop(lock.packages?.['']?.devDependencies);\
+  fs.writeFileSync('package-lock.json', JSON.stringify(lock,null,2));\
+" && npm install --omit=dev --no-audit --no-fund \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends git ca-certificates python3 python3-pip sqlite3 \
+  && npx playwright install-deps chromium \
+  && ./node_modules/.bin/playwright install chromium \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /app/dist ./dist
+EXPOSE 8080
+CMD ["node", "dist/gateway/cloud-agent-gateway.js"]

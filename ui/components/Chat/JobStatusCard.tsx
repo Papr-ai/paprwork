@@ -42,11 +42,13 @@ export function JobStatusCard({ data }: Props) {
   const logs = data.status === "running" ? liveLogs : (data.logs ?? []);
   const logLines = logs.filter((line: string) => line.trim());
 
-  const logsEndRef = useRef<HTMLDivElement>(null);
+  // Auto-scroll logs inside the card only (scrollIntoView would pull the whole chat)
+  const logsContainerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (data.status === "running" && logLines.length > 0) {
-      logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
+    if (data.status !== "running" || logLines.length === 0) return;
+    const container = logsContainerRef.current;
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
   }, [data.status, logLines.length]);
 
   const statusIcon = {
@@ -207,7 +209,10 @@ export function JobStatusCard({ data }: Props) {
 
           {logLines.length > 0 || data.status === "running" ? (
             <div className="job-status-card__logs">
-              <div className="job-status-card__logs-content">
+              <div
+                ref={logsContainerRef}
+                className="job-status-card__logs-content"
+              >
                 {logLines.length > 0 ? (
                   <>
                     {(logLines ?? []).slice(-24).map((log, i) => (
@@ -215,7 +220,6 @@ export function JobStatusCard({ data }: Props) {
                         {log}
                       </div>
                     ))}
-                    <div ref={logsEndRef} />
                   </>
                 ) : (
                   <div className="job-status-card__logs-placeholder">

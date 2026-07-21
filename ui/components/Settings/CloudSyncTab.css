@@ -1,0 +1,124 @@
+.cloud-sync-tab {
+  max-width: 820px;
+}
+
+.cloud-sync-tab__intro {
+  margin: 0 0 var(--space-6);
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.cloud-sync-tab__overview {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: var(--space-6);
+}
+
+@media (max-width: 720px) {
+  .cloud-sync-tab__overview {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cloud-sync-tab__stat {
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.04));
+}
+
+.cloud-sync-tab__stat-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.cloud-sync-tab__stat-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.cloud-sync-tab__stat-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.cloud-sync-tab__panel {
+  padding: 18px 20px;
+  border-radius: 14px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.04));
+  margin-bottom: var(--space-5);
+}
+
+.cloud-sync-tab__panel-title {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.cloud-sync-tab__panel-desc {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.cloud-sync-tab__toggle {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 0;
+  border-top: 1px solid var(--border-color);
+}
+
+.cloud-sync-tab__toggle:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+.cloud-sync-tab__toggle input {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+.cloud-sync-tab__toggle h4 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.cloud-sync-tab__toggle p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.cloud-sync-tab__error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(255, 59, 48, 0.08);
+  color: #ff3b30;
+  font-size: 12px;
+}
+
+.cloud-sync-tab__disabled-note {
+  padding: 20px;
+  border-radius: 12px;
+  border: 1px dashed var(--border-color);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}

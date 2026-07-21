@@ -5,20 +5,37 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { useProfileStore } from "../../stores/profileStore";
-import { useCodeIndexing } from "../../hooks/useCodeIndexing";
 import { useAppUpdater } from "../../hooks/useAppUpdater";
 import { gateway } from "../../src/lib/gateway";
 import { trackEvent } from "../../lib/telemetry";
 import type { SettingsTab } from "../../types/settings";
 import { AIModelsTab } from "./AIModelsTab";
 import { IntegrationKeysTab } from "./IntegrationKeysTab";
+import { CloudSyncTab } from "./CloudSyncTab";
+import { DatabasesTab } from "./DatabasesTab";
 import "./SettingsView.css";
 
 export function SettingsView() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("models");
+  const [scrollToPickerModels, setScrollToPickerModels] = useState(false);
 
   useEffect(() => {
     trackEvent("paprwork_settings_opened", { section: "models" } as Record<string, unknown>);
+  }, []);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ tab?: SettingsTab; section?: string }>)
+        .detail;
+      if (detail?.tab) {
+        setActiveTab(detail.tab);
+      }
+      if (detail?.section === "picker-models") {
+        setScrollToPickerModels(true);
+      }
+    };
+    window.addEventListener("papr:open-settings", handler);
+    return () => window.removeEventListener("papr:open-settings", handler);
   }, []);
 
   return (
@@ -31,7 +48,10 @@ export function SettingsView() {
       <div className="settings-view__tabs">
         <button
           className={`settings-tab ${activeTab === "models" ? "settings-tab--active" : ""}`}
-          onClick={() => setActiveTab("models")}
+          onClick={() => {
+            setActiveTab("models");
+            setScrollToPickerModels(false);
+          }}
         >
           <svg
             width="16"
@@ -61,6 +81,40 @@ export function SettingsView() {
             <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
           </svg>
           Integration Keys
+        </button>
+        <button
+          className={`settings-tab ${activeTab === "cloud" ? "settings-tab--active" : ""}`}
+          onClick={() => setActiveTab("cloud")}
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
+          </svg>
+          Cloud Sync
+        </button>
+        <button
+          className={`settings-tab ${activeTab === "databases" ? "settings-tab--active" : ""}`}
+          onClick={() => setActiveTab("databases")}
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <ellipse cx="12" cy="5" rx="9" ry="3" />
+            <path d="M3 5v6c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+            <path d="M3 11v6c0 1.66 4 3 9 3s9-1.34 9-3v-6" />
+          </svg>
+          Databases
         </button>
         <button
           className={`settings-tab ${activeTab === "profile" ? "settings-tab--active" : ""}`}
@@ -115,24 +169,6 @@ export function SettingsView() {
           Privacy
         </button>
         <button
-          className={`settings-tab ${activeTab === "memory" ? "settings-tab--active" : ""}`}
-          onClick={() => setActiveTab("memory")}
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-            <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-            <line x1="12" y1="22.08" x2="12" y2="12" />
-          </svg>
-          Memory
-        </button>
-        <button
           className={`settings-tab ${activeTab === "about" ? "settings-tab--active" : ""}`}
           onClick={() => setActiveTab("about")}
         >
@@ -154,12 +190,15 @@ export function SettingsView() {
 
       {/* Content */}
       <div className="settings-view__content">
-        {activeTab === "models" && <AIModelsTab />}
+        {activeTab === "models" && (
+          <AIModelsTab scrollToPickerModels={scrollToPickerModels} />
+        )}
         {activeTab === "keys" && <IntegrationKeysTab />}
+        {activeTab === "cloud" && <CloudSyncTab />}
+        {activeTab === "databases" && <DatabasesTab />}
         {activeTab === "profile" && <ProfileTab />}
         {activeTab === "permissions" && <PermissionsTab />}
         {activeTab === "privacy" && <PrivacyTab />}
-        {activeTab === "memory" && <MemoryTab />}
         {activeTab === "about" && <AboutTab />}
       </div>
     </div>
@@ -485,17 +524,16 @@ function PrivacyTab() {
   const telemetryApi = window.electronAPI?.telemetry;
 
   useEffect(() => {
-    if (!telemetryApi) {
+    const loadAll = async () => {
+      try {
+        if (telemetryApi) {
+          const r = await telemetryApi.getEnabled();
+          setTelemetryEnabled(r.enabled);
+        }
+      } catch { /* use defaults */ }
       setLoaded(true);
-      return;
-    }
-    void telemetryApi
-      .getEnabled()
-      .then((r) => {
-        setTelemetryEnabled(r.enabled);
-        setLoaded(true);
-      })
-      .catch(() => setLoaded(true));
+    };
+    void loadAll();
   }, [telemetryApi]);
 
   const handleTelemetryChange = async (next: boolean) => {
@@ -756,329 +794,6 @@ function PermissionsTab() {
   );
 }
 
-// ===== Memory Tab =====
-
-function MemoryTab() {
-  const { status, loading, error } = useCodeIndexing();
-  const [workspaceFiles, setWorkspaceFiles] = useState<string[]>([]);
-
-  // Load workspace files on mount
-  useEffect(() => {
-    loadWorkspaceFiles();
-  }, []);
-
-  const loadWorkspaceFiles = async () => {
-    try {
-      const response = await gateway.send("memory:list-workspace-files", {});
-      if (response.success && response.data) {
-        setWorkspaceFiles((response.data as { files: string[] }).files);
-      }
-    } catch (err) {
-      console.error("Failed to load workspace files:", err);
-    }
-  };
-
-  const openFolder = async (folderPath: string) => {
-    try {
-      await gateway.send("memory:open-folder", { folderPath });
-    } catch (err) {
-      console.error("Failed to open folder:", err);
-      alert(`Failed to open folder: ${folderPath}`);
-    }
-  };
-
-  return (
-    <div className="settings-content settings-content--full-width">
-      <div className="settings-section">
-        <h2 className="settings-section__title">Memory</h2>
-
-        {/* Top Grid: Workspace Context (left) + PAPR Folder (right) */}
-        <div className="memory-grid-top">
-          {/* Workspace Context */}
-          <div className="data-card">
-            <div className="data-card__header">
-              <svg
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                <polyline points="14 2 14 8 20 8" />
-                <line x1="16" y1="13" x2="8" y2="13" />
-                <line x1="16" y1="17" x2="8" y2="17" />
-                <polyline points="10 9 9 9 8 9" />
-              </svg>
-              <div className="data-card__title-group">
-                <h3>Workspace Context</h3>
-                <p>Context files for AI agents</p>
-              </div>
-              <button
-                className="settings-btn settings-btn--primary"
-                onClick={() => openFolder("~/Papr/workspace/")}
-              >
-                Open Folder
-              </button>
-            </div>
-
-            <div className="workspace-files">
-              {workspaceFiles.length > 0 ? (
-                workspaceFiles.map((file) => (
-                  <div key={file} className="workspace-file-item">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                      <polyline points="14 2 14 8 20 8" />
-                    </svg>
-                    <span>{file}</span>
-                  </div>
-                ))
-              ) : (
-                <div className="workspace-file-item">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                    <polyline points="14 2 14 8 20 8" />
-                  </svg>
-                  <span>No files yet</span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* PAPR Folder */}
-          <div className="data-card">
-            <div className="data-card__header">
-              <svg
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-              </svg>
-              <div className="data-card__title-group">
-                <h3>PAPR Folder</h3>
-                <p>
-                  <code>~/Papr/</code> - chats, apps, jobs, workspace
-                </p>
-              </div>
-              <button
-                className="settings-btn settings-btn--primary"
-                onClick={() => openFolder("~/Papr/")}
-              >
-                Open Folder
-              </button>
-            </div>
-
-            <div className="folder-structure">
-              <div className="folder-item">
-                <span className="folder-icon">📁</span>
-                <span className="folder-name">apps/</span>
-                <span className="folder-desc">Mini-apps</span>
-              </div>
-              <div className="folder-item">
-                <span className="folder-icon">📁</span>
-                <span className="folder-name">Jobs/</span>
-                <span className="folder-desc">Automated jobs</span>
-              </div>
-              <div className="folder-item">
-                <span className="folder-icon">📁</span>
-                <span className="folder-name">workspace/</span>
-                <span className="folder-desc">Context files</span>
-              </div>
-              <div className="folder-item">
-                <span className="folder-icon">📄</span>
-                <span className="folder-name">chats.db</span>
-                <span className="folder-desc">Chat history</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Memory Indexing - Wide card with 3 columns */}
-        <div className="data-card">
-          <div className="data-card__header">
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-              <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-              <line x1="12" y1="22.08" x2="12" y2="12" />
-            </svg>
-            <div>
-              <h3>Memory Indexing</h3>
-              <p>
-                Automatic indexing to PAPR Memory Cloud for semantic search
-              </p>
-            </div>
-            {status && (
-              <div className="memory-status-badge">
-                {status.enabled ? (
-                  <span className="status-badge status-badge--active">
-                    ✓ Active
-                  </span>
-                ) : (
-                  <span className="status-badge status-badge--inactive">
-                    Inactive
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-
-          {loading && (
-            <div className="memory-loading">Loading status...</div>
-          )}
-
-          {error && (
-            <div className="memory-error">Failed to load status: {error}</div>
-          )}
-
-          {status && (
-            <div className="memory-grid-categories">
-              {/* Chat Memories */}
-              <div className="memory-category">
-                <div className="memory-category-header">
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                  </svg>
-                  <h4>Chat</h4>
-                </div>
-                <div className="memory-stats">
-                  <div className="stat-item">
-                    <span className="stat-label">Conversations</span>
-                    <span className="stat-value">
-                      {status.chat_stats?.total_chats ?? 0}
-                    </span>
-                  </div>
-                  <div className="stat-item">
-                    <span className="stat-label">Messages</span>
-                    <span className="stat-value">
-                      {status.chat_stats?.total_messages ?? 0}
-                    </span>
-                  </div>
-                  <div className="stat-item stat-item--full">
-                    <span className="stat-label">Last Indexed</span>
-                    <span className="stat-value">
-                      {status.chat_stats?.last_indexed
-                        ? new Date(status.chat_stats.last_indexed).toLocaleString()
-                        : 'Not available'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Code Memories */}
-              <div className="memory-category">
-                <div className="memory-category-header">
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <polyline points="16 18 22 12 16 6" />
-                    <polyline points="8 6 2 12 8 18" />
-                  </svg>
-                  <h4>Code</h4>
-                  {status.status?.is_indexing && (
-                    <div className="indexing-indicator">
-                      <div className="spinner" />
-                      <span>Indexing...</span>
-                    </div>
-                  )}
-                </div>
-                <div className="memory-stats">
-                  <div className="stat-item">
-                    <span className="stat-label">Mini-apps</span>
-                    <span className="stat-value">
-                      {Math.floor((status.status?.stats.total_projects ?? 0) / 2)} apps
-                    </span>
-                  </div>
-                  <div className="stat-item">
-                    <span className="stat-label">Jobs</span>
-                    <span className="stat-value">
-                      {Math.ceil((status.status?.stats.total_projects ?? 0) / 2)} jobs
-                    </span>
-                  </div>
-                  <div className="stat-item">
-                    <span className="stat-label">Total Files</span>
-                    <span className="stat-value">
-                      {status.status?.stats.total_files ?? 0}
-                    </span>
-                  </div>
-                  <div className="stat-item">
-                    <span className="stat-label">Queue</span>
-                    <span className="stat-value">
-                      {status.status?.stats.queue_size ?? 0}
-                    </span>
-                  </div>
-                  {status.status?.stats.last_indexed_at && (
-                    <div className="stat-item stat-item--full">
-                      <span className="stat-label">Last Indexed</span>
-                      <span className="stat-value">
-                        {new Date(
-                          status.status.stats.last_indexed_at
-                        ).toLocaleString()}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Document Memories */}
-              <div className="memory-category memory-category--disabled">
-                <div className="memory-category-header">
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                    <polyline points="14 2 14 8 20 8" />
-                    <line x1="16" y1="13" x2="8" y2="13" />
-                    <line x1="16" y1="17" x2="8" y2="17" />
-                    <polyline points="10 9 9 9 8 9" />
-                  </svg>
-                  <h4>Documents</h4>
-                  <span className="coming-soon-badge">Coming soon</span>
-                </div>
-                <div className="memory-stats">
-                  <div className="stat-item stat-item--full">
-                    <span className="stat-value coming-soon-text">
-                      Document indexing available in a future update
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ===== About Tab =====
 
 function AboutTab() {
@@ -1260,6 +975,9 @@ function AboutTab() {
               <div>
                 <strong>Update Check Failed</strong>
                 <p>{updateStatus.error}</p>
+                {updateStatus.recoveryHint && (
+                  <p className="update-recovery-hint">{updateStatus.recoveryHint}</p>
+                )}
                 {updateStatus.error.includes("not packaged") && (
                   <p className="dev-mode-hint">
                     💡 Tip: Auto-updates only work in production builds. To test updates, 
@@ -1303,7 +1021,7 @@ function AboutTab() {
 
           <p className="about-update-note">
             Paprwork automatically checks for updates on startup and every 4
-            hours
+            hours. Updates install only when you click Restart to update.
           </p>
         </div>
 
@@ -1318,7 +1036,6 @@ function AboutTab() {
             © 2024-2026 Papr, Inc. All rights reserved.
           </p>
         </div>
-        \
       </div>
     </div>
   );

@@ -61,13 +61,13 @@ describe("summaryFormatting", () => {
         session_intent: "Redesign sidebar",
         next_steps: ["Replace emojis with SVG icons"],
       },
-      totalCount: 40,
-      recentCount: 6,
       chatFilePath: "~/Papr/Chats/chat-1.txt",
     });
 
     expect(prompt).toContain("SESSION INTENT: Redesign sidebar");
     expect(prompt).toContain("NEXT STEPS:");
     expect(prompt).toContain("Replace emojis with SVG icons");
+    expect(prompt).not.toContain("messages total");
+    expect(prompt).not.toContain("older messages archived");
   });
 });

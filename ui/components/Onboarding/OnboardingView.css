@@ -1,5 +1,5 @@
 /**
- * OnboardingView - Full-screen onboarding styles
+ * OnboardingView - PLG onboarding styles
  * Accent colors match public/papr-logo.svg gradient
  */
 
@@ -29,7 +29,7 @@
 
 .onboarding-view-header {
   text-align: center;
-  margin-bottom: 48px;
+  margin-bottom: 40px;
 }
 
 .onboarding-view-icon {
@@ -47,6 +47,10 @@
   border-radius: 22px;
   margin-bottom: 24px;
   border: 1px solid rgba(0, 96, 224, 0.15);
+}
+
+.onboarding-view-icon--key {
+  color: var(--papr-onboard-cyan);
 }
 
 .onboarding-view-logo {
@@ -67,195 +71,198 @@
 }
 
 .onboarding-view-subtitle {
-  font-size: 18px;
+  font-size: 17px;
   color: var(--text-secondary);
   margin: 0;
+  line-height: 1.6;
+  max-width: 520px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
-.onboarding-view-steps {
+/* ---- Primary / Skip buttons ---- */
+.onboarding-view-actions {
+  text-align: center;
+  margin-top: 32px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  margin-bottom: 32px;
+  align-items: center;
+  gap: 12px;
 }
 
-/* Step cards */
-.onboarding-view-step {
+.onboarding-primary-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 40px;
+  font-size: 16px;
+  font-weight: 600;
+  color: white;
+  background: var(--papr-onboard-gradient);
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: var(--font-body);
+}
+
+.onboarding-primary-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 96, 224, 0.3);
+}
+
+.onboarding-skip-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-family: var(--font-body);
+  cursor: pointer;
+  padding: 8px 16px;
+  border-radius: 8px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.onboarding-skip-btn:hover {
+  color: var(--text-color);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* ---- Model connection cards ---- */
+.onboarding-model-cards {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.onboarding-model-card {
   display: flex;
-  align-items: flex-start;
-  gap: 20px;
+  flex-direction: column;
+  gap: 8px;
   padding: 24px;
   background: var(--card-background, rgba(255, 255, 255, 0.04));
+  border: 2px solid transparent;
   border-radius: 16px;
   cursor: pointer;
   transition: all 0.2s;
-  border: 2px solid transparent;
+  text-align: left;
+  font-family: var(--font-body);
 }
 
-.onboarding-view-step:hover:not(.locked):not(.completed) {
+.onboarding-model-card:hover {
   background: var(--card-background-hover, rgba(255, 255, 255, 0.08));
   border-color: rgba(0, 96, 224, 0.45);
   transform: translateY(-4px);
   box-shadow: 0 8px 24px rgba(0, 96, 224, 0.15);
 }
 
-/* Step 1 stays actionable after “done”; show hover like active */
-/* Step states */
-.onboarding-view-step.completed {
-  opacity: 0.6;
-  background: rgba(16, 185, 129, 0.1);
-  border-color: rgba(16, 185, 129, 0.3);
-}
-
-.onboarding-view-step.active {
-  background: rgba(0, 96, 224, 0.1);
-  border-color: rgba(0, 96, 224, 0.45);
-  box-shadow: 0 0 0 4px rgba(0, 96, 224, 0.08);
-}
-
-.onboarding-view-step.locked {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.step-number-view {
-  width: 40px;
-  height: 40px;
-  background: var(--sidebar-bg, var(--card-background));
-  border: 2px solid var(--border-color, rgba(255, 255, 255, 0.2));
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  font-weight: 700;
+.onboarding-model-card__name {
+  font-size: 17px;
+  font-weight: 600;
   color: var(--text-color);
-  flex-shrink: 0;
 }
 
-.onboarding-view-step.completed .step-number-view {
-  background: #10b981;
-  color: white;
-  border-color: #10b981;
-  font-size: 0;
-}
-
-.onboarding-view-step.completed .step-number-view::after {
-  content: '\2713';
-  font-size: 20px;
-  font-weight: 700;
-}
-
-.onboarding-view-step.active .step-number-view {
-  background: var(--papr-onboard-blue);
-  color: white;
-  border-color: var(--papr-onboard-cyan);
-  animation: onboarding-papr-pulse 2s ease-in-out infinite;
-}
-
-@keyframes onboarding-papr-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(0, 96, 224, 0.45);
-  }
-  50% {
-    box-shadow: 0 0 0 10px rgba(0, 96, 224, 0);
-  }
-}
-
-.step-content-view {
-  flex: 1;
-  display: flex;
-  gap: 16px;
-  align-items: flex-start;
-}
-
-.step-icon-view {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.onboarding-model-card__hint {
+  font-size: 13px;
   color: var(--text-secondary);
-  flex-shrink: 0;
+}
+
+.onboarding-model-card__action {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--papr-onboard-cyan);
   margin-top: 4px;
 }
 
-.onboarding-view-step.completed .step-icon-view {
-  color: #10b981;
-}
-
-.onboarding-view-step.active .step-icon-view {
-  color: var(--papr-onboard-blue);
-}
-
-.step-text-view {
-  flex: 1;
-}
-
-.step-title-view {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text-color);
-  margin: 0 0 6px;
-}
-
-.onboarding-view-step.completed .step-title-view {
-  text-decoration: line-through;
-}
-
-.step-description-view {
+.onboarding-model-hint {
   font-size: 14px;
   color: var(--text-secondary);
   margin: 0;
-  line-height: 1.6;
+  line-height: 1.5;
 }
 
-.onboarding-view-footer {
-  padding-top: 32px;
-  border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
-  text-align: center;
+/* ---- Intent cards ---- */
+.onboarding-intent-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.onboarding-view-hint {
-  font-size: 15px;
-  color: var(--text-secondary);
-  margin: 0;
+.onboarding-intent-card {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 20px 24px;
+  background: var(--card-background, rgba(255, 255, 255, 0.04));
+  border: 2px solid transparent;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: left;
+  font-family: var(--font-body);
 }
 
-.onboarding-view-hint strong {
-  color: var(--text-color);
+.onboarding-intent-card:hover {
+  background: var(--card-background-hover, rgba(255, 255, 255, 0.08));
+  border-color: rgba(0, 96, 224, 0.45);
+  transform: translateX(4px);
+  box-shadow: 0 4px 16px rgba(0, 96, 224, 0.12);
+}
+
+.onboarding-intent-card__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  background: rgba(0, 96, 224, 0.1);
+  border-radius: 12px;
+  color: var(--papr-onboard-cyan);
+  flex-shrink: 0;
+}
+
+.onboarding-intent-card__text {
+  flex: 1;
+}
+
+.onboarding-intent-card__title {
+  font-size: 16px;
   font-weight: 600;
+  color: var(--text-color);
+  margin-bottom: 4px;
 }
 
-/* Responsive design */
+.onboarding-intent-card__desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+/* ---- Responsive ---- */
 @media (max-width: 768px) {
-  .onboarding-view {
-    padding: 24px;
-  }
+  .onboarding-view { padding: 24px; }
+  .onboarding-view-title { font-size: 28px; }
+  .onboarding-view-subtitle { font-size: 15px; }
+  .onboarding-model-cards { grid-template-columns: 1fr; }
+  .onboarding-intent-card { padding: 16px 20px; gap: 16px; }
+  .onboarding-intent-card__icon { width: 40px; height: 40px; }
+}
 
-  .onboarding-view-title {
-    font-size: 28px;
-  }
+.onboarding-intent-card__examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
 
-  .onboarding-view-subtitle {
-    font-size: 16px;
-  }
-
-  .onboarding-view-step {
-    padding: 20px;
-    gap: 16px;
-  }
-
-  .step-number-view {
-    width: 36px;
-    height: 36px;
-    font-size: 16px;
-  }
-
-  .step-title-view {
-    font-size: 16px;
-  }
-
-  .step-description-view {
-    font-size: 13px;
-  }
+.onboarding-intent-card__example-pill {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--papr-onboard-cyan);
+  background: rgba(0, 172, 250, 0.08);
+  border: 1px solid rgba(0, 172, 250, 0.15);
+  border-radius: 6px;
+  padding: 2px 8px;
+  white-space: nowrap;
 }

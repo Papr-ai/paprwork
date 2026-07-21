@@ -121,8 +121,8 @@ export const FileWritePreview: React.FC<FileWritePreviewProps> = ({
 
   const path = (args?.path ?? args?.filePath ?? args?.file ?? "") as string;
   const content = asString(args?.content);
-  const oldStr = asString(args?.oldStr ?? args?.old);
-  const newStr = asString(args?.newStr ?? args?.new ?? args?.newContent);
+  const oldStr = asString(args?.oldString ?? args?.oldStr ?? args?.old);
+  const newStr = asString(args?.newString ?? args?.newStr ?? args?.new ?? args?.newContent);
   const startLine = args?.startLine as number | undefined;
   const endLine = args?.endLine as number | undefined;
 
@@ -148,7 +148,11 @@ export const FileWritePreview: React.FC<FileWritePreviewProps> = ({
     );
   }
 
-  if (toolName === "edit_app_file" || toolName === "edit_job_file") {
+  if (
+    toolName === "edit_file" ||
+    toolName === "edit_app_file" ||
+    toolName === "edit_job_file"
+  ) {
     if (!oldStr && !newStr) return null;
     const filename = (args?.filename ?? args?.path ?? "") as string;
     return (
@@ -264,9 +268,12 @@ export function hasFilePreview(
     case "restore_app_file_version":
     case "restore_job_file_version":
       return Boolean(args?.content || args?.path);
+    case "edit_file":
     case "edit_app_file":
     case "edit_job_file":
-      return Boolean(args?.oldStr || args?.newStr);
+      return Boolean(
+        args?.oldString || args?.newString || args?.oldStr || args?.newStr,
+      );
     case "edit_app_file_lines":
     case "edit_job_file_lines":
       return Boolean(args?.newContent || args?.content || args?.newStr);

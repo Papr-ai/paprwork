@@ -7,6 +7,7 @@ export interface CustomKey {
   name: string;
   description?: string;
   permission: "always" | "ask";
+  clientAccess?: "server" | "client";
   createdAt: string;
   updatedAt: string;
   source?: "manual" | "oauth";
@@ -19,6 +20,7 @@ export interface CustomKeyInput {
   value: string;
   description?: string;
   permission?: "always" | "ask";
+  clientAccess?: "server" | "client";
 }
 
 export interface ProviderConfig {
@@ -45,10 +47,11 @@ export type PermissionLevel = "open" | "moderate" | "strict";
 export type SettingsTab =
   | "models"
   | "keys"
+  | "cloud"
+  | "databases"
   | "profile"
   | "permissions"
   | "privacy"
-  | "memory"
   | "about";
 
 export interface CodeIndexingStatus {

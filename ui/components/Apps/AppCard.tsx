@@ -2,32 +2,51 @@
  * AppCard - Wabi-inspired app card with Liquid Glass orb icon
  */
 
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback, useEffect } from "react";
 import type { Artifact } from "../../stores/artifactsStore";
 import "./AppCard.css";
+
+type AppStatus = "draft" | "active" | "archived";
 
 interface AppCardProps {
   artifact: Artifact;
   featured?: boolean;
+  compact?: boolean;
   onDelete: () => void;
   onToggleFavorite: () => void;
   onOpen: () => void;
   onRename?: (newTitle: string) => void;
+  onSetStatus?: (status: AppStatus) => void;
+  /** App is live on apps.papr.ai (from cloud publish snapshot). */
+  isPublished?: boolean;
 }
-
 
 export function AppCard({
   artifact,
   featured = false,
+  compact = false,
   onDelete,
   onToggleFavorite,
   onOpen,
   onRename,
+  onSetStatus,
+  isPublished = false,
 }: AppCardProps) {
-  const [isHovered, setIsHovered] = useState(false);
+  const status: AppStatus = artifact.status ?? "active";
+  const [menuOpen, setMenuOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(artifact.title);
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeMenu = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", closeMenu);
+    return () => document.removeEventListener("mousedown", closeMenu);
+  }, [menuOpen]);
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -120,18 +139,21 @@ export function AppCard({
 
       // Check if it's a valid emoji (Unicode character, not plain ASCII text)
       // Emojis are typically > 1 byte when encoded
-      const isEmoji = trimmedIcon.length <= 4 && /[\p{Emoji}]/u.test(trimmedIcon);
-      
+      const isEmoji =
+        trimmedIcon.length <= 4 && /[\p{Emoji}]/u.test(trimmedIcon);
+
       if (isEmoji) {
         return (
-          <span className="app-card__orb-icon" style={{ fontSize: '28px' }}>
+          <span className="app-card__orb-icon" style={{ fontSize: "28px" }}>
             {artifact.icon}
           </span>
         );
       }
-      
+
       // Plain text strings like "chart", "shield" - treat as missing icon
-      console.warn(`App "${artifact.title}" has invalid icon: "${artifact.icon}". Expected SVG markup or emoji.`);
+      console.warn(
+        `App "${artifact.title}" has invalid icon: "${artifact.icon}". Expected SVG markup or emoji.`,
+      );
     }
 
     // Default four-square grid icon for apps without custom icons or invalid icons
@@ -144,33 +166,78 @@ export function AppCard({
         fill="none"
       >
         <defs>
-          <linearGradient id="papr-blue-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+          <linearGradient
+            id="papr-blue-gradient"
+            x1="0%"
+            y1="0%"
+            x2="100%"
+            y2="100%"
+          >
             <stop offset="0%" stopColor="#00D4FF" />
             <stop offset="100%" stopColor="#0066FF" />
           </linearGradient>
         </defs>
-        <rect x="3" y="3" width="7" height="7" rx="2" stroke="url(#papr-blue-gradient)" strokeWidth="1.5" />
-        <rect x="14" y="3" width="7" height="7" rx="2" stroke="url(#papr-blue-gradient)" strokeWidth="1.5" />
-        <rect x="3" y="14" width="7" height="7" rx="2" stroke="url(#papr-blue-gradient)" strokeWidth="1.5" />
-        <rect x="14" y="14" width="7" height="7" rx="2" stroke="url(#papr-blue-gradient)" strokeWidth="1.5" />
+        <rect
+          x="3"
+          y="3"
+          width="7"
+          height="7"
+          rx="2"
+          stroke="url(#papr-blue-gradient)"
+          strokeWidth="1.5"
+        />
+        <rect
+          x="14"
+          y="3"
+          width="7"
+          height="7"
+          rx="2"
+          stroke="url(#papr-blue-gradient)"
+          strokeWidth="1.5"
+        />
+        <rect
+          x="3"
+          y="14"
+          width="7"
+          height="7"
+          rx="2"
+          stroke="url(#papr-blue-gradient)"
+          strokeWidth="1.5"
+        />
+        <rect
+          x="14"
+          y="14"
+          width="7"
+          height="7"
+          rx="2"
+          stroke="url(#papr-blue-gradient)"
+          strokeWidth="1.5"
+        />
       </svg>
     );
   };
 
   return (
     <div
-      className={`app-card ${featured ? "app-card--featured" : ""}`}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
+      className={`app-card ${featured ? "app-card--featured" : ""} ${compact ? "app-card--compact" : ""}`}
       onClick={onOpen}
       draggable
       onDragStart={handleDragStart}
     >
-      {/* Glass orb preview */}
       <div className="app-card__preview">
-        <div className="app-card__orb">
-          <div className="app-card__orb-inner">{renderIcon()}</div>
-        </div>
+        {artifact.preview &&
+        /^(data:image\/|https?:\/\/)/.test(artifact.preview) ? (
+          <img
+            className="app-card__screenshot"
+            src={artifact.preview}
+            alt={`${artifact.title} preview`}
+            draggable={false}
+          />
+        ) : (
+          <div className="app-card__orb">
+            <div className="app-card__orb-inner">{renderIcon()}</div>
+          </div>
+        )}
       </div>
 
       {/* Content */}
@@ -187,65 +254,145 @@ export function AppCard({
             autoFocus
           />
         ) : (
-          <h3
-            className="app-card__title"
-            onDoubleClick={startRename}
-            title="Double-click to rename"
-          >
-            {artifact.title}
-          </h3>
+          <div className="app-card__title-row">
+            <h3
+              className="app-card__title"
+              onDoubleClick={startRename}
+              title="Double-click to rename"
+            >
+              {artifact.title}
+            </h3>
+            {artifact.cloudLineage ? (
+              <span
+                className={
+                  artifact.cloudLineage.mode === "track"
+                    ? "app-card__cloud-badge app-card__cloud-badge--track"
+                    : "app-card__cloud-badge app-card__cloud-badge--fork"
+                }
+                title={`From cloud: ${artifact.cloudLineage.sourceSlug}`}
+              >
+                {artifact.cloudLineage.mode === "track" ? "Track" : "Fork"}
+              </span>
+            ) : null}
+            {isPublished && (
+              <span
+                className="app-card__status-badge app-card__status-badge--published"
+                title="Live on apps.papr.ai"
+              >
+                Live
+              </span>
+            )}
+            {status !== "active" && !(isPublished && status === "draft") && (
+              <span
+                className={`app-card__status-badge app-card__status-badge--${status}`}
+                title={status === "draft" ? "Draft app" : "Archived app"}
+              >
+                {status === "draft" ? "Draft" : "Archived"}
+              </span>
+            )}
+          </div>
         )}
         {artifact.description && (
           <p className="app-card__description">{artifact.description}</p>
         )}
-        <span className="app-card__date">{formatDate(artifact.updatedAt)}</span>
+        <span className="app-card__date">
+          {artifact.lastOpenedAt
+            ? `Opened ${formatDate(artifact.lastOpenedAt).toLowerCase()}`
+            : formatDate(artifact.updatedAt)}
+        </span>
       </div>
 
-      {/* Actions */}
-      <div
-        className={`app-card__actions ${isHovered ? "app-card__actions--visible" : ""}`}
-      >
+      <div className="app-card__menu-wrap" ref={menuRef}>
         <button
-          className={`app-card__action ${artifact.favorite ? "app-card__action--favorited" : ""}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleFavorite();
+          className="app-card__menu-trigger"
+          aria-label={`Actions for ${artifact.title}`}
+          aria-expanded={menuOpen}
+          onClick={(event) => {
+            event.stopPropagation();
+            setMenuOpen((open) => !open);
           }}
-          aria-label="Toggle favorite"
         >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill={artifact.favorite ? "currentColor" : "none"}
+          <span>•••</span>
+        </button>
+        {menuOpen && (
+          <div
+            className="app-card__menu"
+            role="menu"
+            onClick={(e) => e.stopPropagation()}
           >
-            <path
-              d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
-        <button
-          className="app-card__action app-card__action--delete"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          aria-label="Delete"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenuOpen(false);
+                onOpen();
+              }}
+            >
+              Open
+            </button>
+            <button
+              role="menuitem"
+              onClick={(e) => {
+                setMenuOpen(false);
+                startRename(e);
+              }}
+            >
+              Rename
+            </button>
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenuOpen(false);
+                onToggleFavorite();
+              }}
+            >
+              {artifact.favorite ? "Remove from favorites" : "Add to favorites"}
+            </button>
+            {onSetStatus && status !== "draft" && !isPublished && (
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onSetStatus("draft");
+                }}
+              >
+                Mark as draft
+              </button>
+            )}
+            {onSetStatus && status !== "active" && (
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onSetStatus("active");
+                }}
+              >
+                Mark as active
+              </button>
+            )}
+            {onSetStatus && status !== "archived" && (
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onSetStatus("archived");
+                }}
+              >
+                Archive
+              </button>
+            )}
+            <div className="app-card__menu-separator" />
+            <button
+              className="app-card__menu-danger"
+              role="menuitem"
+              onClick={() => {
+                setMenuOpen(false);
+                onDelete();
+              }}
+            >
+              Delete app
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
