@@ -5,6 +5,19 @@
 import { getAppService } from "./AppService.js";
 import { STANDALONE_APP_ID } from "./jobs/appIds.js";
 
+/** Apps created before this instant are legacy (no primary required at job launch). */
+export const LEGACY_APP_PRIMARY_CUTOFF_ISO = "2026-07-16T00:00:00.000Z";
+
+const LEGACY_APP_PRIMARY_CUTOFF_MS = Date.parse(LEGACY_APP_PRIMARY_CUTOFF_ISO);
+
+export function isLegacyApp(createdAt: string): boolean {
+  const createdMs = Date.parse(createdAt);
+  if (Number.isNaN(createdMs)) {
+    return false;
+  }
+  return createdMs < LEGACY_APP_PRIMARY_CUTOFF_MS;
+}
+
 export interface JobAppDatabaseContext {
   appId: string;
   appDb: string;
@@ -29,6 +42,34 @@ export async function resolveJobAppDatabase(
     appDb: primary.dbPath,
     appDbAlias: primary.alias,
   };
+}
+
+export async function requireJobAppDatabase(
+  appIds: readonly string[] | undefined,
+): Promise<JobAppDatabaseContext | null> {
+  const linkedAppIds = (appIds ?? []).filter((id) => id !== STANDALONE_APP_ID);
+  if (linkedAppIds.length === 0) return null;
+
+  const resolved = await resolveJobAppDatabase(linkedAppIds);
+  if (resolved) return resolved;
+
+  const appId = linkedAppIds[0];
+  const appService = getAppService();
+  await appService.initialize();
+  const app = await appService.getApp(appId);
+
+  if (app && isLegacyApp(app.createdAt)) {
+    console.warn(
+      `[jobAppDatabase] Legacy app ${appId} (${app.title}) has no primary database; ` +
+        "skipping APP_DB injection. Set primary via link_app_data_source({ setPrimary: true }) for new jobs.",
+    );
+    return null;
+  }
+
+  throw new Error(
+    `App-linked job cannot start because app ${appId} has no primary database. ` +
+      "Attach a primary data source before running the job; do not fall back to JOB_DB or a hardcoded path.",
+  );
 }
 
 export function jobAppDatabaseEnv(

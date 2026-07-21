@@ -27,7 +27,7 @@ function sampleItems(appId: string): SyncItemsResponse {
       ],
       jobs: [],
       queuedPaths: [],
-      summary: { synced: 1, pending: 0, outdated: 0, total: 1 },
+      summary: { synced: 1, pending: 0, outdated: 0, failed: 0, total: 1 },
     },
     turso: {
       enabled: true,

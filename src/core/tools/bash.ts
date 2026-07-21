@@ -977,11 +977,14 @@ export const bashTool = createTool({
 WHEN TO USE BASH TOOL:
 ✓ Short commands that complete in <60 seconds
 ✓ Commands with output <100MB
-✓ One-off operations: file operations, git commands, package installs, quick scripts
+✓ One-off operations: file operations, git commands, package installs, quick scripts, API probes (curl), sqlite peeks
 ✓ Commands where you need to see the full output immediately
+✓ Exploring data shape BEFORE committing to create_job — bash first, job only when reusable/scheduled/app-wired
 
-WHEN TO USE JOB SYSTEM INSTEAD:
-✗ Long-running processes (servers, training jobs, CI/CD pipelines)
+WHEN TO USE JOB SYSTEM INSTEAD (create_job — not bash):
+✓ User or mini-app will rerun this by name (button, schedule, pipeline)
+✓ Linked to mini-app (appIds) and writes to $APP_DB
+✓ Long-running processes (servers, training jobs, CI/CD pipelines)
 ✗ Commands that need monitoring or checkpointing
 ✗ Commands producing >100MB output or running >60 seconds
 ✗ Workflows requiring multiple coordinated long-running steps

@@ -65,6 +65,8 @@ export interface JobRecord {
   lastOutput?: string;
   /** When status is waiting_permission, lists the API key names awaiting user approval. */
   waitingPermissionKeys?: string[];
+  /** When status is waiting_permission, high-frequency agent schedule awaiting user approval. */
+  waitingScheduleRisk?: JobScheduleRiskPending;
   /** Latest recipe evaluation result (summary — full results in evaluations/ dir) */
   lastEvaluation?: RecipeEvaluationSummary;
 }
@@ -157,6 +159,8 @@ export interface JobSchedule {
   intervalMs?: number;
   atTime?: string;
   catchUpMissed?: boolean;
+  /** Set when user approves a high-frequency agent schedule (≤30 min). */
+  highFrequencyAcknowledgedAt?: string;
 }
 
 export interface JobScheduleState {
@@ -166,6 +170,14 @@ export interface JobScheduleState {
   // Idempotency tracking for scheduled runs
   currentIdempotencyKey?: string;
   lastIdempotencyKey?: string;
+  /** Scheduled slot waiting for user to approve high-frequency agent schedule. */
+  pendingDueAtForApproval?: string;
+}
+
+export interface JobScheduleRiskPending {
+  intervalMinutes: number;
+  runsPerDay: number;
+  message: string;
 }
 
 // ─── Execution Recipes ───────────────────────────────────────────────────────

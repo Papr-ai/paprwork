@@ -10,6 +10,7 @@ import { ClaudeOAuthService } from "../../core/services/ClaudeOAuthService.js";
 import { ClaudeSetupTokenService } from "../../core/services/ClaudeSetupTokenService.js";
 import { OAuthCallbackServer } from "../../core/services/OAuthCallbackServer.js";
 import { invalidateKeyCache } from "./customKeys.js";
+import { sanitizeOAuthAccessToken } from "../../core/utils/oauthTokenSanitize.js";
 
 let oauthTokenStorage: OAuthTokenStorage | null = null;
 let customKeysStorage: CustomKeysStorage | null = null;
@@ -60,12 +61,7 @@ async function syncOAuthTokenToApiKeys(
     return;
   }
 
-  // Aggressively strip: ANSI codes, whitespace, zero-width chars, non-token chars
-  const cleanToken = accessToken
-    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
-    .replace(/\x1b\][^\x07]*\x07/g, "")
-    .replace(/[\s\u00A0\u200B\u200C\u200D\uFEFF]/g, "")
-    .replace(/[^a-zA-Z0-9_-]/g, "");
+  const cleanToken = sanitizeOAuthAccessToken(provider, accessToken);
 
   const keyName =
     provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
@@ -560,12 +556,7 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
         };
       }
 
-      // Aggressively strip: ANSI codes, all whitespace, zero-width chars, non-token chars
-      const cleanedToken = token
-        .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
-        .replace(/\x1b\][^\x07]*\x07/g, "")
-        .replace(/[\s\u00A0\u200B\u200C\u200D\uFEFF]/g, "")
-        .replace(/[^a-zA-Z0-9_-]/g, "");
+      const cleanedToken = sanitizeOAuthAccessToken("anthropic", token);
 
       if (!cleanedToken.startsWith("sk-ant-oat")) {
         return {

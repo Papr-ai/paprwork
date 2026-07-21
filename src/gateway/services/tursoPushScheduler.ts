@@ -9,11 +9,14 @@ import { getTursoSyncBridge, type TursoSyncBridge } from "./TursoSyncBridge.js";
 import {
   isJobDbDirty,
   loadTursoSyncState,
+  recordTursoPushQuarantine,
   recordTursoPushSuccess,
 } from "./tursoSyncState.js";
 import {
   isTursoDatabaseLimitError,
+  isTursoLocalDatabaseCorruptError,
   isTursoProvisioningRateLimitError,
+  isTursoSqliteBindTypeError,
 } from "./tursoSyncBridgeCore.js";
 
 /** Default debounce for file-watcher / API write triggers. */
@@ -90,38 +93,52 @@ async function executePushForJob(
     return;
   }
 
-  const result = await bridge.pushJob(jobId);
-  if (result.status === "pushed") {
-    recordTursoPushSuccess(
-      jobId,
-      linked.dbPath,
-      undefined,
-      result.tableFingerprints,
-    );
-    const skipped =
-      result.skippedTables && result.skippedTables.length > 0
-        ? `, skipped ${result.skippedTables.length} unchanged table(s)`
-        : "";
-    console.log(
-      `[TursoPushScheduler] Pushed job ${jobId} (${result.tables.length} table(s)${skipped})`,
-    );
-    return;
-  }
+  try {
+    const result = await bridge.pushJob(jobId);
+    if (result.status === "pushed") {
+      recordTursoPushSuccess(
+        jobId,
+        linked.dbPath,
+        undefined,
+        result.tableFingerprints,
+      );
+      const skipped =
+        result.skippedTables && result.skippedTables.length > 0
+          ? `, skipped ${result.skippedTables.length} unchanged table(s)`
+          : "";
+      console.log(
+        `[TursoPushScheduler] Pushed job ${jobId} (${result.tables.length} table(s)${skipped})`,
+      );
+      return;
+    }
 
-  if (result.reason === "all_tables_unchanged" && result.tableFingerprints) {
-    recordTursoPushSuccess(
-      jobId,
-      linked.dbPath,
-      undefined,
-      result.tableFingerprints,
-    );
+    if (result.reason === "all_tables_unchanged" && result.tableFingerprints) {
+      recordTursoPushSuccess(
+        jobId,
+        linked.dbPath,
+        undefined,
+        result.tableFingerprints,
+      );
+    }
+  } catch (error) {
+    const message = (error as Error).message;
+    if (
+      isTursoLocalDatabaseCorruptError(message) ||
+      isTursoSqliteBindTypeError(message)
+    ) {
+      recordTursoPushQuarantine(jobId, linked.dbPath, message);
+      return;
+    }
+    throw error;
   }
 }
 
 function logPushFailure(jobId: string, message: string): void {
   if (
     isTursoDatabaseLimitError(message) ||
-    isTursoProvisioningRateLimitError(message)
+    isTursoProvisioningRateLimitError(message) ||
+    isTursoLocalDatabaseCorruptError(message) ||
+    isTursoSqliteBindTypeError(message)
   ) {
     return;
   }
@@ -176,6 +193,17 @@ async function processTursoPushQueue(): Promise<void> {
         rateLimitBackoffMs = DEFAULT_RATE_LIMIT_BACKOFF_MS;
       } catch (error) {
         const message = (error as Error).message;
+        if (
+          isTursoLocalDatabaseCorruptError(message) ||
+          isTursoSqliteBindTypeError(message)
+        ) {
+          const sources = await bridge.listLinkedSources(true);
+          const linked = sources.find((s) => s.jobId === jobId);
+          if (linked) {
+            recordTursoPushQuarantine(jobId, linked.dbPath, message);
+          }
+          continue;
+        }
         if (isTursoDatabaseLimitError(message)) {
           break;
         }

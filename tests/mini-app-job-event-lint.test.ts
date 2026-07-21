@@ -77,4 +77,44 @@ async function trigger() {
     const issues = checkMiniAppJobEventPatterns(files);
     expect(issues).toHaveLength(0);
   });
+
+  test("errors on declare-only subscribeJobEvents without SDK import", () => {
+    const files = new Map<string, string>([
+      [
+        "app.ts",
+        `
+declare function subscribeJobEvents(cfg: { onDbChanged?: () => void }): () => void;
+async function init() {
+  subscribeJobEvents({ onDbChanged: () => refresh() });
+  await fetch('/api/jobs/run', { method: 'POST', body: '{}' });
+}
+`,
+      ],
+    ]);
+    const issues = checkMiniAppJobEventPatterns(files);
+    expect(
+      issues.some(
+        (i) => i.rule === "missing-job-events-import" && i.severity === "error",
+      ),
+    ).toBe(true);
+  });
+
+  test("errors when subscribeJobEvents called without any import", () => {
+    const files = new Map<string, string>([
+      [
+        "app.ts",
+        `
+async function init() {
+  subscribeJobEvents({ onStatusChanged: () => {} });
+}
+`,
+      ],
+    ]);
+    const issues = checkMiniAppJobEventPatterns(files);
+    expect(
+      issues.some(
+        (i) => i.rule === "missing-job-events-import" && i.severity === "error",
+      ),
+    ).toBe(true);
+  });
 });

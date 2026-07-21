@@ -39,10 +39,13 @@ interface ChatStore {
     chatId?: string,
   ) => void;
   finalizeStreamingMessage: (messageId: string, chatId?: string) => void;
+  /** Move chat state from a temp id to a permanent id (first message in new chat). */
+  migrateChatId: (oldChatId: string, newChatId: string) => void;
   setChats: (chats: ChatMetadata[]) => void;
   setLoading: (loading: boolean) => void;
   setSending: (chatId: string, sending: boolean) => void;
   setConnectionPaused: (chatId: string, paused: boolean) => void;
+  setNeedsStreamRecovery: (chatId: string, needs: boolean) => void;
   setError: (error: string | null) => void;
 
   // Parallel chat state management
@@ -270,6 +273,39 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       };
     }),
 
+  migrateChatId: (oldChatId, newChatId) =>
+    set((state) => {
+      if (oldChatId === newChatId) return state;
+
+      const oldState = state.chatStates.get(oldChatId);
+      const newChatStates = new Map(state.chatStates);
+      const existingNew = newChatStates.get(newChatId);
+
+      if (oldState) {
+        newChatStates.set(newChatId, {
+          ...(existingNew ?? defaultChatState),
+          ...oldState,
+          messages:
+            existingNew && existingNew.messages.length > 0
+              ? existingNew.messages
+              : [...oldState.messages],
+        });
+        newChatStates.delete(oldChatId);
+      }
+
+      const newStreamingState = new Map(state.streamingState);
+      const oldStreaming = state.streamingState.get(oldChatId);
+      if (oldStreaming && !newStreamingState.has(newChatId)) {
+        newStreamingState.set(newChatId, oldStreaming);
+        newStreamingState.delete(oldChatId);
+      }
+
+      return {
+        chatStates: newChatStates,
+        streamingState: newStreamingState,
+      };
+    }),
+
   setChats: (chats) =>
     set(() => ({
       chats,
@@ -279,11 +315,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   setSending: (chatId, sending) =>
     set((state) => {
-      const chatState = state.chatStates.get(chatId);
-      if (!chatState) {
-        console.warn(`[chatStore] setSending: No chat state for ${chatId}`);
-        return state;
-      }
+      const chatState = state.chatStates.get(chatId) ?? {
+        ...defaultChatState,
+      };
 
       const newChatStates = new Map(state.chatStates);
       newChatStates.set(chatId, {
@@ -303,6 +337,22 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       newChatStates.set(chatId, {
         ...chatState,
         connectionPaused: paused,
+        ...(paused ? {} : { needsStreamRecovery: false }),
+      });
+
+      return { chatStates: newChatStates };
+    }),
+
+  setNeedsStreamRecovery: (chatId, needs) =>
+    set((state) => {
+      const chatState = state.chatStates.get(chatId);
+      if (!chatState) return state;
+
+      const newChatStates = new Map(state.chatStates);
+      newChatStates.set(chatId, {
+        ...chatState,
+        needsStreamRecovery: needs,
+        ...(needs ? { connectionPaused: false } : {}),
       });
 
       return { chatStates: newChatStates };

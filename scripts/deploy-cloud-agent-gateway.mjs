@@ -178,14 +178,14 @@ const deployCmd = [
   "--platform=managed",
   "--no-allow-unauthenticated",
   "--port=8080",
-  "--memory=2Gi",
+  "--memory=4Gi",
   "--cpu=2",
   "--min-instances=0",
   "--max-instances=10",
-  "--timeout=900",
+  "--timeout=1800",
   "--concurrency=1",
   `--set-secrets=PAPR_CLOUD_AGENT_GATEWAY_KEY=${secretName}:latest`,
-  `--set-env-vars=GATEWAY_MODE=cloud_agent,CLOUD_SYNC_ENABLED=false,PAPR_MEMORY_SERVER_URL=${memoryUrl},TURSO_SYNC_ENABLED=false,NODE_ENV=production`,
+  `--set-env-vars=GATEWAY_MODE=cloud_agent,CLOUD_SYNC_ENABLED=false,PAPR_MEMORY_SERVER_URL=${memoryUrl},TURSO_SYNC_ENABLED=false,NODE_ENV=production,CLOUD_AGENT_GATEWAY_TIMEOUT_SEC=1800`,
 ].join(" ");
 
 run(deployCmd);

@@ -37,6 +37,14 @@ const AVAILABLE_MODELS: Record<Provider, ModelInfo[]> = {
       supportsVision: true,
     },
     {
+      id: "claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      provider: "anthropic",
+      contextWindow: 1000000,
+      supportsThinking: true,
+      supportsVision: true,
+    },
+    {
       id: "claude-opus-4-6",
       name: "Claude Opus 4.6",
       provider: "anthropic",
@@ -191,6 +199,16 @@ const AVAILABLE_MODELS: Record<Provider, ModelInfo[]> = {
       contextWindow: 131072,
       supportsThinking: true,
       supportsVision: false,
+    },
+  ],
+  moonshot: [
+    {
+      id: "kimi-k3",
+      name: "Kimi K3",
+      provider: "moonshot",
+      contextWindow: 1048576,
+      supportsThinking: true,
+      supportsVision: true,
     },
   ],
   ollama: [

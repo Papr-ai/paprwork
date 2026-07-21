@@ -24,6 +24,7 @@ import {
   createPaprClientForCatalog,
   fetchLocalWikiHome,
   fetchMessageRelatedMemories,
+  CATALOG_SYNC_TIERS_TIMEOUT_MS,
   fetchPaprCatalogSnapshot,
   isMemoryGraphCatalogBlock,
   isPaprMemoryCatalogBlock,
@@ -37,8 +38,8 @@ export const MAX_TIER1 = 25;
 /** Smaller limits for Settings preview — faster Papr sync.getTiers response */
 export const SETTINGS_MAX_TIER0 = 10;
 export const SETTINGS_MAX_TIER1 = 10;
-/** Papr sync.getTiers often takes 12–20s; SDK default 15s client timeout is too low */
-export const SYNC_TIERS_SDK_TIMEOUT_MS = 60_000;
+/** Re-export for settings preview / tests — same as catalog bootstrap timeout. */
+export const SYNC_TIERS_SDK_TIMEOUT_MS = CATALOG_SYNC_TIERS_TIMEOUT_MS;
 /** Papr API requires max_memories >= 10 */
 export const MAX_SEARCH_MEMORIES = 10;
 export const MAX_MEMORY_CHAR_PER_ITEM = 400;

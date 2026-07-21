@@ -55,6 +55,8 @@ import {
   computeHistoryTokenBudget,
   isContextLengthError,
   resolveModelContextWindow,
+  resolveSummarizeHistoryTokenThreshold,
+  shouldForceGeminiResummarize,
 } from "./agent/contextBudget.js";
 import {
   buildModelMessages,
@@ -78,10 +80,13 @@ import {
   type ToolResultEvent,
 } from "./agent/streamChunks.js";
 import { orchestrateModelStream } from "./agent/streamOrchestrator.js";
+import { RATE_LIMIT_EXHAUSTED_ERROR_CODE } from "../utils/providerRateLimitRetry.js";
 import { streamCursorAgentTurn } from "./providers/cursorAgentStream.js";
 import {
   createAssistantStoredMessage,
   createErrorStoredMessage,
+  createPartialAssistantStoredMessage,
+  hasPersistableAssistantContent,
 } from "./agent/messagePersistence.js";
 import { getWorkspaceService } from "./WorkspaceService.js";
 import type { WorkspaceContextData } from "../../core/agents/SystemPrompt.js";
@@ -93,6 +98,7 @@ function finalizeTokenUsageForBilling(
   usage: StoredTokenUsage | undefined,
   cacheReadTokens: number,
   cacheWriteTokens: number,
+  contextTokensForStats?: number,
 ): StoredTokenUsage | undefined {
   if (!usage) {
     return undefined;
@@ -101,6 +107,11 @@ function finalizeTokenUsageForBilling(
     ...usage,
     cacheReadTokens: usage.cacheReadTokens ?? cacheReadTokens,
     cacheWriteTokens: usage.cacheWriteTokens ?? cacheWriteTokens,
+    // pi-ai multi-step runs accumulate billing across steps; stats need last context size.
+    totalTokens:
+      contextTokensForStats && contextTokensForStats > 0
+        ? contextTokensForStats
+        : usage.totalTokens,
   };
 }
 
@@ -338,6 +349,8 @@ export class AgentService {
       _skipSaveUserMessage?: boolean;
       /** Internal: retry after context-length failure + forced summarization. */
       _isContextCompressRetry?: boolean;
+      /** Internal: synthetic turn from SubAgentResponseTrigger — skip delegation flush recursion. */
+      isSubAgentTrigger?: boolean;
     },
   ): AsyncGenerator<StreamChunk & { chatId: string }> {
     if (!this.initialized) {
@@ -391,6 +404,67 @@ export class AgentService {
     let lastCacheReadTokens = 0;
     let lastCacheWriteTokens = 0;
     let cumulativePromptTokens = 0;
+    let assistantMessageSaved = false;
+
+    const persistIncompleteAssistant = async (params: {
+      asAbort: boolean;
+      errorMessage?: string;
+    }): Promise<void> => {
+      if (assistantMessageSaved) return;
+      if (
+        !hasPersistableAssistantContent({
+          assistantText,
+          thinkingText,
+          toolCalls,
+          sequence,
+        })
+      ) {
+        return;
+      }
+
+      const usage = finalizeTokenUsageForBilling(
+        tokenUsage,
+        lastCacheReadTokens,
+        lastCacheWriteTokens,
+        piAiContextTokens,
+      );
+
+      try {
+        const message = params.asAbort
+          ? createPartialAssistantStoredMessage({
+              chatId,
+              model: config.model,
+              assistantText,
+              thinkingText,
+              toolCalls,
+              toolResults,
+              sequence,
+              usage,
+            })
+          : createErrorStoredMessage({
+              chatId,
+              model: config.model,
+              assistantText,
+              thinkingText,
+              toolCalls,
+              toolResults,
+              errorMessage: params.errorMessage ?? "Unknown error",
+              sequence,
+              usage,
+            });
+
+        await this.storageManager.saveMessage(chatId, message);
+        assistantMessageSaved = true;
+        console.log(
+          `[AgentService] Saved ${params.asAbort ? "partial" : "error"} assistant for chat ${chatId}`,
+        );
+      } catch (saveError) {
+        console.error(
+          `[AgentService] Failed to save incomplete assistant for chat ${chatId}:`,
+          saveError,
+        );
+      }
+    };
 
     try {
       // 1. Save user message
@@ -485,18 +559,26 @@ export class AgentService {
       // into context. API-reported tokens after stream often miss this (cache reads,
       // pi-ai paths), so also trigger on message count + estimated history size.
       const historyStats = await this.storageManager.getChatStats(chatId);
-      if (
+      const geminiResummarize = shouldForceGeminiResummarize(
+        config.provider,
+        estimatedHistoryTokens,
+      );
+      const needsInitialSummarize =
         !historyStats.has_summary &&
         this.shouldTriggerSummarization({
           messageCount: historyStats.message_count,
           estimatedHistoryTokens,
-        })
-      ) {
+          provider: config.provider,
+        });
+      if (needsInitialSummarize || geminiResummarize) {
         console.log(
           `[AgentService] 🔄 Pre-stream summarization for ${chatId} ` +
-            `(${historyStats.message_count} msgs, ~${estimatedHistoryTokens} est. history tokens)`,
+            `(${historyStats.message_count} msgs, ~${estimatedHistoryTokens} est. history tokens` +
+            `${geminiResummarize ? ", Gemini history cap exceeded" : ""})`,
         );
-        await this.triggerSummarization(chatId);
+        await this.triggerSummarization(chatId, {
+          force: geminiResummarize || historyStats.has_summary,
+        });
         const reloadedRaw = await this.storageManager.loadMessagesForLLM(chatId);
         conversationSummary = undefined;
         history.length = 0;
@@ -704,6 +786,15 @@ export class AgentService {
         Object.assign(providerOptions, buildGroqProviderOptions(config.model, config.reasoning));
       }
 
+      // For Moonshot Kimi K3 (OpenAI-compatible — reasoning_effort=max always)
+      if (config.provider === "moonshot") {
+        const { buildMoonshotProviderOptions } = await import("../utils/moonshotModel.js");
+        Object.assign(
+          providerOptions,
+          buildMoonshotProviderOptions(config.model, config.reasoning),
+        );
+      }
+
       // For Ollama models (Qwen, Gemma, etc.) — thinking + adaptive context
       if (config.provider === "ollama") {
         // Adaptive context sizing based on available RAM
@@ -852,12 +943,15 @@ export class AgentService {
         // 3. Proactive Papr summarization before/after turns
         // 4. User can abort via UI (abortController)
         abortSignal: abortController.signal,
-        ...(config.provider === "groq" ? { includeRawChunks: true } : {}),
+        ...(config.provider === "groq" || config.provider === "moonshot"
+          ? { includeRawChunks: true }
+          : {}),
         ...(providerOptions.openai ||
         providerOptions.google ||
         providerOptions.ollama ||
         config.provider === "zai" ||
-        config.provider === "groq"
+        config.provider === "groq" ||
+        config.provider === "moonshot"
           ? { providerOptions }
           : {}),
         // Before each tool step: drop oldest stored history if mid-turn context exceeds model budget.
@@ -1030,8 +1124,14 @@ export class AgentService {
         }
         
         // Set token in environment for pi-ai (it reads from process.env)
-        process.env[envKey] = token;
-        console.log(`[AgentService] Set ${envKey} in process.env (length: ${token.length})`);
+        const piToken =
+          useCodex && config.authType === "oauth"
+            ? (
+                await import("../utils/resolveJobProviderModel.js")
+              ).normalizeChatGptOAuthToken(token)
+            : token;
+        process.env[envKey] = piToken;
+        console.log(`[AgentService] Set ${envKey} in process.env (length: ${piToken.length})`);
 
         const piModel = (getModel as (p: string, m: string) => unknown)(
           piProvider,
@@ -1147,6 +1247,13 @@ export class AgentService {
                       outputCost: 75.0,
                       contextWindow: 200000,
                     }
+                : piModelId.includes("sonnet-5")
+                  ? {
+                      name: "Claude Sonnet 5",
+                      inputCost: 3.0,
+                      outputCost: 15.0,
+                      contextWindow: 1000000,
+                    }
                   : piModelId.includes("sonnet")
                     ? {
                         name: "Claude Sonnet 4.6",
@@ -1180,7 +1287,9 @@ export class AgentService {
               },
               contextWindow: modelInfo.contextWindow,
               maxTokens:
-                piModelId.includes("fable") || piModelId.includes("opus-4-8")
+                piModelId.includes("fable") ||
+                piModelId.includes("opus-4-8") ||
+                piModelId.includes("sonnet-5")
                   ? 128000
                   : 8192,
             };
@@ -1377,6 +1486,11 @@ export class AgentService {
             "../utils/groqProvider.js"
           );
           fullStream = adaptGroqAISDKFullStream(result.fullStream);
+        } else if (config.provider === "moonshot") {
+          const { adaptMoonshotAISDKFullStream } = await import(
+            "../utils/moonshotProvider.js"
+          );
+          fullStream = adaptMoonshotAISDKFullStream(result.fullStream);
         } else {
           fullStream = result.fullStream;
         }
@@ -1390,11 +1504,14 @@ export class AgentService {
         fullStream,
         chatId,
         apiKeys,
-        config.provider === "groq" ? { textBufferMin: 1 } : undefined,
+        config.provider === "groq" || config.provider === "moonshot"
+          ? { textBufferMin: 1 }
+          : undefined,
       );
 
       let firstChunkReceived = false;
       let contextLengthErrorMessage: string | null = null;
+      let rateLimitExhausted = false;
       while (true) {
         const next = await streamIterator.next();
 
@@ -1446,6 +1563,14 @@ export class AgentService {
           const errorPayload = next.value.payload as ErrorPayload | undefined;
           const errorText =
             typeof errorPayload?.error === "string" ? errorPayload.error : "";
+          if (errorPayload?.code === RATE_LIMIT_EXHAUSTED_ERROR_CODE) {
+            rateLimitExhausted = true;
+            yield next.value;
+            console.warn(
+              `[AgentService] Rate limit retries exhausted for ${chatId} — leaving turn resumable`,
+            );
+            break;
+          }
           if (
             !options?._isContextCompressRetry &&
             isContextLengthError(errorText)
@@ -1530,6 +1655,11 @@ export class AgentService {
         return;
       }
 
+      if (rateLimitExhausted) {
+        this.sessionManager.setStreaming(chatId, false);
+        return;
+      }
+
       // 4. Empty-completion silent self-heal
       // If the model returned literally nothing (no text, no thinking, no tool
       // calls), and this isn't an aborted/cancelled run, transparently retry
@@ -1601,16 +1731,20 @@ export class AgentService {
           tokenUsage,
           lastCacheReadTokens,
           lastCacheWriteTokens,
+          piAiContextTokens,
         ),
       });
       await this.storageManager.saveMessage(chatId, assistantMsg);
+      assistantMessageSaved = true;
 
       // 4.5. Yield done chunk to signal stream completion to frontend
-      // This ensures isSending is cleared even if last item was a tool call
+      // Include finalMessage so the UI finalizes with the server-assigned id.
+      // agent:complete also delivers finalMessage — duplicate done is suppressed
+      // in gateway.ts and useAgent.ts.
       yield {
         type: "done",
         chatId,
-        payload: {},
+        payload: { finalMessage: assistantMsg },
         timestamp: new Date().toISOString(),
       } as StreamChunk & { chatId: string };
 
@@ -1655,46 +1789,44 @@ export class AgentService {
         estimatedHistoryTokens: estimatedFullContextTokens,
         actualContextTokens: contextSize,
         hasSummary: stats.has_summary,
+        provider: config.provider,
       });
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
+      const isAbort =
+        abortController.signal.aborted ||
+        errorMessage.toLowerCase().includes("abort") ||
+        errorMessage.includes("aborted");
 
-      const errorMsg: StoredMessage = createErrorStoredMessage({
-        chatId,
-        model: config.model,
-        assistantText,
-        thinkingText,
-        toolCalls,
-        toolResults,
-        errorMessage,
-        sequence,
-        usage: finalizeTokenUsageForBilling(
-          tokenUsage,
-          lastCacheReadTokens,
-          lastCacheWriteTokens,
-        ),
+      await persistIncompleteAssistant({
+        asAbort: isAbort,
+        errorMessage: isAbort ? undefined : errorMessage,
       });
 
-      try {
-        await this.storageManager.saveMessage(chatId, errorMsg);
-        console.log(
-          `[AgentService] Saved partial response with error for chat ${chatId}`,
-        );
-      } catch (saveError) {
-        console.error(
-          `[AgentService] Failed to save error message:`,
-          saveError,
-        );
+      if (!isAbort) {
+        throw error;
       }
-
-      // Re-throw to propagate to WebSocket handler
-      throw error;
     } finally {
+      await persistIncompleteAssistant({ asAbort: true });
+
       // Only clear session state if this stream still owns the abort controller.
       // If a new stream started (e.g. from the auto-send queue) it will have replaced
       // the controller already — don't clobber its state.
       this.sessionManager.clearStreamingStateIfOwner(chatId, abortController);
+
+      if (!options?.isSubAgentTrigger) {
+        void import("./SubAgentResponseTrigger.js")
+          .then(({ flushPendingDelegationNotifications }) =>
+            flushPendingDelegationNotifications(chatId),
+          )
+          .catch((err) => {
+            console.warn(
+              `[AgentService] Failed to flush delegation notifications for ${chatId}:`,
+              err,
+            );
+          });
+      }
     }
   }
 
@@ -1717,6 +1849,7 @@ export class AgentService {
       estimatedHistoryTokens: number;
       actualContextTokens: number;
       hasSummary: boolean;
+      provider?: Provider;
       force?: boolean;
     },
   ): void {
@@ -1725,6 +1858,7 @@ export class AgentService {
         messageCount: params.messageCount,
         estimatedHistoryTokens: params.estimatedHistoryTokens,
         actualContextTokens: params.actualContextTokens,
+        provider: params.provider,
       })
     ) {
       console.log(
@@ -1749,14 +1883,15 @@ export class AgentService {
     messageCount: number;
     estimatedHistoryTokens: number;
     actualContextTokens?: number;
+    provider?: Provider;
   }): boolean {
     if (params.messageCount >= AgentService.SUMMARIZE_MESSAGE_THRESHOLD) {
       return true;
     }
-    if (
-      params.estimatedHistoryTokens >=
-      AgentService.SUMMARIZE_HISTORY_TOKEN_THRESHOLD
-    ) {
+    const historyThreshold = params.provider
+      ? resolveSummarizeHistoryTokenThreshold(params.provider)
+      : AgentService.SUMMARIZE_HISTORY_TOKEN_THRESHOLD;
+    if (params.estimatedHistoryTokens >= historyThreshold) {
       return true;
     }
     if (
@@ -2683,33 +2818,47 @@ ${last15.substring(0, 8_000)}`;
     let apiKey: string | undefined;
     let authType: "oauth" | "apiKey" | undefined;
 
+    const isCloudGateway = process.env.GATEWAY_MODE === "cloud_agent";
+
     if (input.authOverride?.apiKey) {
-      apiKey = input.authOverride.apiKey;
-      authType = input.authOverride.authType;
       if (input.paprApiKey) {
         process.env.PAPR_API_KEY = input.paprApiKey;
       }
-    }
-    
-    if (!provider || !model) {
-      const { getDefaultProviderAndModel } = await import("../utils/defaultProvider.js");
-      const defaults = await getDefaultProviderAndModel();
-      provider = provider ?? defaults.provider;
-      model = model ?? defaults.model;
-      console.log(`[AgentService] Using default provider/model: ${provider}/${model}`);
+
+      if (isCloudGateway) {
+        const cloudSession = await (
+          await import("../utils/resolveJobProviderModel.js")
+        ).resolveCloudAgentJobSession({
+          provider: input.provider,
+          model: input.model,
+        });
+        provider = cloudSession.provider;
+        model = cloudSession.model;
+        apiKey = cloudSession.token;
+        authType = cloudSession.authType;
+      } else {
+        apiKey = input.authOverride.apiKey;
+        authType = input.authOverride.authType;
+      }
     }
 
-    const defaultModelByProvider: Record<Provider, string> = {
-      openai: "gpt-5-6-sol",
-      "openai-codex": "gpt-5.3-codex",
-      anthropic: "claude-sonnet-4-6",
-      google: "gemini-3.5-flash",
-      ollama: "qwen3.5:latest",
-      cursor: "composer-2.5",
-      zai: "glm-5.2",
-      groq: "openai/gpt-oss-120b",
-    };
-    model = model ?? defaultModelByProvider[provider];
+    if (!isCloudGateway || !input.authOverride?.apiKey) {
+      const resolved = await (
+        await import("../utils/resolveJobProviderModel.js")
+      ).resolveJobProviderModel({ provider, model });
+      provider = resolved.provider;
+      model = resolved.model;
+    }
+
+    if (!provider || !model) {
+      throw new Error(
+        "[AgentService] Failed to resolve provider/model for job session",
+      );
+    }
+
+    console.log(
+      `[AgentService] Resolved job provider/model: ${provider}/${model}`,
+    );
 
     const { getProviderAuth, getApiKeys } =
       await import("../utils/keyResolver.js");
@@ -3139,24 +3288,46 @@ ${last15.substring(0, 8_000)}`;
       process.env.PAPR_API_KEY = input.paprApiKey;
     }
 
-    const defaultModelByProvider: Record<Provider, string> = {
-      openai: "gpt-5-6-sol",
-      "openai-codex": "gpt-5.3-codex",
-      anthropic: "claude-sonnet-4-6",
-      google: "gemini-3.5-flash",
-      ollama: "qwen3.5:latest",
-      cursor: "composer-2.5",
-      zai: "glm-5.2",
-      groq: "openai/gpt-oss-120b",
-    };
+    const isCloudGateway = process.env.GATEWAY_MODE === "cloud_agent";
+    let provider: Provider;
+    let model: string;
+    let apiKey: string;
+    let authType: "oauth" | "apiKey";
 
-    const model = input.model ?? defaultModelByProvider[input.provider];
+    if (isCloudGateway && input.authOverride?.apiKey) {
+      const cloudSession = await (
+        await import("../utils/resolveJobProviderModel.js")
+      ).resolveCloudAgentJobSession({
+        provider: input.provider,
+        model: input.model,
+      });
+      provider = cloudSession.provider;
+      model = cloudSession.model;
+      apiKey = cloudSession.token;
+      authType = cloudSession.authType;
+    } else {
+      const resolved = await (
+        await import("../utils/resolveJobProviderModel.js")
+      ).resolveJobProviderModel({
+        provider: input.provider,
+        model: input.model,
+      });
+      provider = resolved.provider;
+      model = resolved.model;
+      apiKey = input.authOverride?.apiKey ?? "";
+      authType = input.authOverride?.authType ?? "apiKey";
+    }
+
+    console.log(
+      `[AgentService] Resolved job provider/model: ${provider}/${model}`,
+    );
+
     const chatId = `job:${input.jobId}:${input.runId}`;
     const config: AgentConfigInternal = {
-      provider: input.provider,
+      provider,
       model,
-      apiKey: input.authOverride.apiKey,
-      authType: input.authOverride.authType,
+      apiKey,
+      authType,
       systemPrompt: `${this.systemPrompt}\n\n# Isolated Job Run\n- Session: ${chatId}\n- Keep output concise and actionable.`,
     };
 
@@ -3204,12 +3375,13 @@ ${last15.substring(0, 8_000)}`;
     const defaultModelByProvider: Record<Provider, string> = {
       openai: "gpt-5-6-sol",
       "openai-codex": "gpt-5.3-codex",
-      anthropic: "claude-sonnet-4-6",
+      anthropic: "claude-sonnet-5",
       google: "gemini-3.5-flash",
       ollama: "qwen3.5:latest",
       cursor: "composer-2.5",
       zai: "glm-5.2",
       groq: "openai/gpt-oss-120b",
+      moonshot: "kimi-k3",
     };
     modelId = modelId ?? defaultModelByProvider[provider];
 
@@ -3587,6 +3759,19 @@ ${last15.substring(0, 8_000)}`;
         const { normalizeGroqModelId } = await import("../utils/groqModel.js");
         return createGroqChatModel(normalizeGroqModelId(modelId), {
           apiKey: groqApiKey,
+        });
+      }
+      case "moonshot": {
+        const { createMoonshotChatModel } = await import("../utils/moonshotProvider.js");
+        const moonshotApiKey = process.env.MOONSHOT_API_KEY;
+        if (!moonshotApiKey) {
+          throw new Error(
+            "Moonshot direct API requires MOONSHOT_API_KEY. Sign in with Papr to use Kimi via proxy.",
+          );
+        }
+        const { normalizeMoonshotModelId } = await import("../utils/moonshotModel.js");
+        return createMoonshotChatModel(normalizeMoonshotModelId(modelId), {
+          apiKey: moonshotApiKey,
         });
       }
       default:

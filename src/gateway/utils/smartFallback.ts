@@ -99,6 +99,13 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     cost: "medium",
     specialties: ["reasoning", "writing", "analysis"],
   },
+  "claude-sonnet-5": {
+    reasoningLevel: "advanced",
+    contextWindow: 1000000,
+    speed: "medium",
+    cost: "medium",
+    specialties: ["reasoning", "agentic", "coding", "tool-use"],
+  },
   "claude-fable-5": {
     reasoningLevel: "advanced",
     contextWindow: 1000000,
@@ -211,15 +218,14 @@ export async function getBestFallbackModel(
   const defaultModelByProvider: Record<Provider, string> = {
     openai: "gpt-5-6-sol",
     "openai-codex": "gpt-5.3-codex",
-    anthropic: "claude-sonnet-4-6",
+    anthropic: "claude-sonnet-5",
     google: "gemini-3.5-flash",
     ollama: "qwen3.5:latest",
     cursor: "composer-2.5",
     zai: "glm-5.2",
     groq: "openai/gpt-oss-120b",
+    moonshot: "kimi-k3",
   };
-
-  // If we don't know the original model's capabilities, use default provider
   if (!originalCapabilities) {
     const firstAvailable = available[0];
     return {
@@ -324,8 +330,8 @@ export function getUpgradeModelForTask(
     anthropic: {
       reasoning: "claude-fable-5",
       coding: "claude-fable-5",
-      writing: "claude-sonnet-4-6",
-      general: "claude-sonnet-4-6",
+      writing: "claude-sonnet-5",
+      general: "claude-sonnet-5",
     },
     google: {
       reasoning: "gemini-3.1-pro-preview",
@@ -356,6 +362,12 @@ export function getUpgradeModelForTask(
       coding: "qwen/qwen3-32b",
       writing: "qwen/qwen3-32b",
       general: "openai/gpt-oss-120b",
+    },
+    moonshot: {
+      reasoning: "kimi-k3",
+      coding: "kimi-k3",
+      writing: "kimi-k3",
+      general: "kimi-k3",
     },
   };
 

@@ -4,6 +4,10 @@ import { deriveAppCloudSyncStatus } from "../ui/utils/appCloudSyncStatus";
 import type { SyncItemsResponse } from "../ui/components/Settings/CloudSyncDetails";
 
 describe("resolveTursoSourceStatus", () => {
+  it("reports quarantined when local DB is corrupt", () => {
+    expect(resolveTursoSourceStatus(10, 10, true, false, true)).toBe("quarantined");
+  });
+
   it("reports pending when remote has tables but local is dirty", () => {
     expect(resolveTursoSourceStatus(30, 30, true, true)).toBe("pending");
   });
@@ -35,7 +39,7 @@ describe("deriveAppCloudSyncStatus database detail", () => {
         ],
         jobs: [],
         queuedPaths: [],
-        summary: { synced: 1, pending: 0, outdated: 0, total: 1 },
+        summary: { synced: 1, pending: 0, outdated: 0, failed: 0, total: 1 },
       },
       turso: {
         enabled: true,
@@ -52,7 +56,7 @@ describe("deriveAppCloudSyncStatus database detail", () => {
             remoteTableCount: 30,
           },
         ],
-        summary: { synced: 0, pending: 1, empty: 0, unavailable: 0, total: 1 },
+        summary: { synced: 0, pending: 1, empty: 0, unavailable: 0, quarantined: 0, total: 1 },
       },
     };
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");

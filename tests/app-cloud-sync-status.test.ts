@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { deriveAppCloudSyncStatus } from "../ui/utils/appCloudSyncStatus";
+import {
+  deriveAppCloudSyncStatus,
+  formatWebSyncStatusTooltip,
+} from "../ui/utils/appCloudSyncStatus";
 import type { SyncItemsResponse } from "../ui/components/Settings/CloudSyncDetails";
 
 function baseItems(
@@ -32,7 +35,7 @@ function baseItems(
       ],
       jobs: [],
       queuedPaths: [],
-      summary: { synced: 1, pending: 0, outdated: 0, total: 1 },
+      summary: { synced: 1, pending: 0, outdated: 0, failed: 0, total: 1 },
     },
     turso: {
       enabled: true,
@@ -209,5 +212,28 @@ describe("deriveAppCloudSyncStatus", () => {
     });
     expect(status.overall).toBe("uploading");
     expect(status.chipLabel).toBe("Uploading 0/1…");
+  });
+
+  it("formats web sync status tooltip for the status dot", () => {
+    const synced = deriveAppCloudSyncStatus(
+      "app-1",
+      baseItems({ appId: "app-1" }),
+      "idle",
+    );
+    expect(formatWebSyncStatusTooltip(synced)).toBe(synced.summaryLine);
+
+    const pending = deriveAppCloudSyncStatus(
+      "app-1",
+      baseItems({ appId: "app-1", codeStatus: "pending" }),
+      "idle",
+    );
+    expect(formatWebSyncStatusTooltip(pending)).toContain("not on web yet");
+
+    expect(formatWebSyncStatusTooltip(null, { loading: true })).toBe(
+      "Checking web sync status…",
+    );
+    expect(formatWebSyncStatusTooltip(null, { error: "offline" })).toBe(
+      "Web sync unavailable",
+    );
   });
 });

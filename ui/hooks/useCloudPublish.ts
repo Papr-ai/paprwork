@@ -23,6 +23,7 @@ import {
   unpublishCloudApp,
   type CloudPublishState,
 } from "../utils/cloudPublishApi";
+import type { CloudCompatibilityReport } from "../../src/core/types/cloudAppCompatibility";
 import {
   readCachedCloudPublishState,
   writeCachedCloudPublishState,
@@ -48,6 +49,7 @@ export interface CloudPublishViewModel {
   slug: string | null;
   statusLabel: string;
   appsHost: string;
+  compatibility: CloudCompatibilityReport | null;
 }
 
 function resolveSharing(state: CloudPublishState | null): {
@@ -138,6 +140,7 @@ function buildViewModel(
     statusLabel:
       statusParts.length > 0 ? statusParts.join(" · ") : "Not shared",
     appsHost: "apps.papr.ai",
+    compatibility: state?.compatibility ?? null,
   };
 }
 
@@ -197,7 +200,10 @@ export function useCloudPublish(appId: string, appTitle?: string) {
   }, [toast]);
 
   const updateSharing = useCallback(
-    async (model: ShareAudienceModel) => {
+    async (
+      model: ShareAudienceModel,
+      options?: { acknowledgeDesktopOnly?: boolean },
+    ) => {
       setBusy(true);
       setError(null);
       try {
@@ -209,6 +215,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
           const result = await publishCloudApp(appId, {
             ...sharing,
             codeAccess,
+            acknowledgeDesktopOnly: options?.acknowledgeDesktopOnly,
           });
           applyPublishState(result);
         } else {
@@ -224,6 +231,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
           });
         }
         setToast(`${appTitle ?? "App"} sharing updated`);
+        window.dispatchEvent(new CustomEvent("papr-community-catalog-refresh"));
       } catch (err) {
         setError((err as Error).message.slice(0, 160));
       } finally {
@@ -233,20 +241,28 @@ export function useCloudPublish(appId: string, appTitle?: string) {
     [appId, appTitle, applyPublishState],
   );
 
-  const publish = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const sharing = resolveSharing(state);
-      const result = await publishCloudApp(appId, sharing);
-      applyPublishState(result);
-      setToast(`${appTitle ?? "App"} published to ${result.shareUrl ?? "cloud"}`);
-    } catch (err) {
-      setError((err as Error).message.slice(0, 160));
-    } finally {
-      setBusy(false);
-    }
-  }, [appId, appTitle, state, applyPublishState]);
+  const publish = useCallback(
+    async (options?: { acknowledgeDesktopOnly?: boolean }) => {
+      setBusy(true);
+      setError(null);
+      try {
+        const sharing = resolveSharing(state);
+        const result = await publishCloudApp(appId, {
+          ...sharing,
+          acknowledgeDesktopOnly: options?.acknowledgeDesktopOnly,
+        });
+        applyPublishState(result);
+        setToast(`${appTitle ?? "App"} published to ${result.shareUrl ?? "cloud"}`);
+        window.dispatchEvent(new CustomEvent("papr-community-catalog-refresh"));
+      } catch (err) {
+        setError((err as Error).message.slice(0, 160));
+        throw err;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [appId, appTitle, state, applyPublishState],
+  );
 
   const unpublish = useCallback(async () => {
     setBusy(true);
@@ -255,6 +271,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
       await unpublishCloudApp(appId);
       applyPublishState(null);
       setToast(`${appTitle ?? "App"} unpublished`);
+      window.dispatchEvent(new CustomEvent("papr-community-catalog-refresh"));
     } catch (err) {
       setError((err as Error).message.slice(0, 160));
     } finally {

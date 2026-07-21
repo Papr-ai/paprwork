@@ -12,11 +12,13 @@ import {
   type WizardResult,
   type HelpRequest,
 } from "./ImportSetupWizard";
-import type { CommunityCatalogEntry } from "../../../src/core/types/communityCatalog";
+import type { CommunityCatalogEntry, CommunityCatalogScope } from "../../../src/core/types/communityCatalog";
+import { isTeamSharedVisibility } from "../../../src/core/types/communityCatalog";
 import type { RequirementItem, RequiredKeySpec } from "../../../src/core/types/bundles";
 import { normalizeRequirements } from "../../../src/core/types/bundles";
 import { lookupService } from "../../../src/core/data/knownServices";
 import "./CommunityAppsView.css";
+import { trackEvent } from "../../lib/telemetry";
 
 const GATEWAY =
   typeof import.meta !== "undefined" &&
@@ -33,11 +35,53 @@ type CloudInstallMode = "fork" | "track";
 
 interface CommunityCatalog {
   schemaVersion: string;
+  scope: CommunityCatalogScope;
   entries: CommunityCatalogEntry[];
   sources: {
     opensource: number;
     cloud: number;
   };
+  fallbackUsed?: boolean;
+  namespaceId?: string;
+}
+
+export interface CommunityAppsViewProps {
+  scope?: CommunityCatalogScope;
+  namespaceId?: string | null;
+  namespaceName?: string | null;
+  /** Papr user id — excludes own publishes from Shared with me */
+  userId?: string | null;
+}
+
+function emptyMessage(
+  scope: CommunityCatalogScope,
+  searchQuery: string,
+  namespaceName: string | null | undefined,
+): string {
+  if (searchQuery) return "No apps match your search.";
+  if (scope === "namespace") {
+    const label = namespaceName?.trim() || "your workspace";
+    return `No team or public apps in ${label} yet. Teammates can share with My team or Anyone on the web from an app's share settings.`;
+  }
+  return "No community apps available yet.";
+}
+
+function namespaceSummary(
+  entries: CommunityCatalogEntry[],
+  namespaceName: string | null | undefined,
+): string {
+  const label = namespaceName?.trim() || "workspace";
+  const teamCount = entries.filter((entry) => isTeamSharedVisibility(entry.visibility)).length;
+  const publicCount = entries.length - teamCount;
+  const parts: string[] = [];
+  if (teamCount > 0) {
+    parts.push(`${teamCount} team-shared`);
+  }
+  if (publicCount > 0) {
+    parts.push(`${publicCount} public`);
+  }
+  if (parts.length === 0) return `Nothing in ${label} yet`;
+  return `${parts.join(" · ")} in ${label}`;
 }
 
 /** Legacy shape for ImportSetupWizard */
@@ -118,7 +162,12 @@ function toOssEntry(entry: CommunityCatalogEntry): OssRegistryEntry {
   };
 }
 
-export function CommunityAppsView() {
+export function CommunityAppsView({
+  scope = "global",
+  namespaceId = null,
+  namespaceName = null,
+  userId = null,
+}: CommunityAppsViewProps) {
   const [catalog, setCatalog] = useState<CommunityCatalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -147,7 +196,11 @@ export function CommunityAppsView() {
     setLoading(true);
     setError(null);
     try {
-      const response = await gateway.send("bundle:fetch-community-catalog");
+      const response = await gateway.send("bundle:fetch-community-catalog", {
+        scope,
+        ...(namespaceId ? { namespaceId } : {}),
+        ...(userId ? { userId } : {}),
+      });
       setCatalog(response.data as CommunityCatalog);
     } catch (err) {
       setError(
@@ -156,10 +209,18 @@ export function CommunityAppsView() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [scope, namespaceId, userId]);
 
   useEffect(() => {
     void fetchCatalog();
+  }, [fetchCatalog]);
+
+  useEffect(() => {
+    const onRefresh = (): void => {
+      void fetchCatalog();
+    };
+    window.addEventListener("papr-community-catalog-refresh", onRefresh);
+    return () => window.removeEventListener("papr-community-catalog-refresh", onRefresh);
   }, [fetchCatalog]);
 
   const fetchLineage = useCallback(async () => {
@@ -268,6 +329,7 @@ export function CommunityAppsView() {
 
       const title = body.app?.title ?? entry.name;
       const modeLabel = mode === "track" ? "Linked" : "Forked";
+      trackEvent("paprwork_community_app_installed", { app_name: entry.name, app_id: entry.appId } as Record<string, unknown>);
       setInstallToast(`${modeLabel} "${title}" into Paprwork`);
       void loadArtifacts();
       void fetchLineage();
@@ -303,7 +365,8 @@ export function CommunityAppsView() {
     void installCloudApp(entry);
   };
 
-  const openLiveApp = async (url: string) => {
+  const openLiveApp = async (url: string, appName?: string) => {
+    trackEvent("paprwork_community_app_previewed", { url, app_name: appName } as Record<string, unknown>);
     try {
       if (window.electronAPI?.system?.invoke) {
         await window.electronAPI.system.invoke("shell.openExternal", url);
@@ -364,6 +427,9 @@ export function CommunityAppsView() {
 
   const filteredEntries =
     catalog?.entries.filter((entry) => {
+      if (scope !== "global" && entry.source === "opensource") {
+        return false;
+      }
       if (entry.source === "opensource" && !showAllPlatforms) {
         const platforms = entry.platform ?? ["macos", "windows", "linux"];
         if (!platforms.includes(userPlatform)) return false;
@@ -378,13 +444,50 @@ export function CommunityAppsView() {
       );
     }) ?? [];
 
-  const hiddenByPlatform = showAllPlatforms
-    ? 0
-    : (catalog?.entries.filter((entry) => {
-        if (entry.source !== "opensource") return false;
-        const platforms = entry.platform ?? ["macos", "windows", "linux"];
-        return !platforms.includes(userPlatform);
-      }).length ?? 0);
+  const teamEntries =
+    scope === "namespace"
+      ? filteredEntries.filter((entry) => isTeamSharedVisibility(entry.visibility))
+      : [];
+  const publicWorkspaceEntries =
+    scope === "namespace"
+      ? filteredEntries.filter((entry) => !isTeamSharedVisibility(entry.visibility))
+      : filteredEntries;
+
+  const renderCatalogGrid = (entries: CommunityCatalogEntry[]) => (
+    <div className="community-apps__grid">
+      {entries.map((entry) => (
+        <CommunityAppCard
+          key={entry.catalogId}
+          entry={entry}
+          isInstalled={
+            entry.source === "cloud"
+              ? isCloudEntryInstalled(entry, installedAppIds, lineageIndex)
+              : Boolean(entry.bundleId && installedAppIds.has(entry.bundleId))
+          }
+          installedForkCount={installedForkCountForEntry(entry, lineageIndex)}
+          onOssImport={() => handleOssImportClick(entry)}
+          onCloudInstall={() => startCloudInstall(entry)}
+          isInstalling={installingId === entry.catalogId}
+          onOpenLive={
+            entry.liveViewable && entry.liveUrl
+              ? () => void openLiveApp(entry.liveUrl!)
+              : undefined
+          }
+        />
+      ))}
+    </div>
+  );
+
+  const hiddenByPlatform =
+    scope === "global"
+      ? showAllPlatforms
+        ? 0
+        : (catalog?.entries.filter((entry) => {
+            if (entry.source !== "opensource") return false;
+            const platforms = entry.platform ?? ["macos", "windows", "linux"];
+            return !platforms.includes(userPlatform);
+          }).length ?? 0)
+      : 0;
 
   if (loading) {
     return (
@@ -412,7 +515,11 @@ export function CommunityAppsView() {
         <input
           type="text"
           className="community-apps__search"
-          placeholder="Search community apps..."
+          placeholder={
+            scope === "namespace"
+              ? "Search workspace apps..."
+              : "Search community apps..."
+          }
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
         />
@@ -438,7 +545,12 @@ export function CommunityAppsView() {
 
       {catalog ? (
         <p className="community-apps__summary">
-          {catalog.sources.cloud} cloud · {catalog.sources.opensource} open source
+          {scope === "namespace"
+            ? namespaceSummary(catalog.entries, namespaceName)
+            : `${catalog.sources.cloud} cloud · ${catalog.sources.opensource} open source`}
+          {catalog.fallbackUsed && scope === "namespace"
+            ? " · some results from global catalog"
+            : null}
         </p>
       ) : null}
 
@@ -460,35 +572,29 @@ export function CommunityAppsView() {
       {filteredEntries.length === 0 && (
         <div className="community-apps__status">
           <p className="community-apps__empty-text">
-            {searchQuery
-              ? "No apps match your search."
-              : "No community apps available yet."}
+            {emptyMessage(scope, searchQuery, namespaceName)}
           </p>
         </div>
       )}
 
-      <div className="community-apps__grid">
-        {filteredEntries.map((entry) => (
-          <CommunityAppCard
-            key={entry.catalogId}
-            entry={entry}
-            isInstalled={
-              entry.source === "cloud"
-                ? isCloudEntryInstalled(entry, installedAppIds, lineageIndex)
-                : Boolean(entry.bundleId && installedAppIds.has(entry.bundleId))
-            }
-            installedForkCount={installedForkCountForEntry(entry, lineageIndex)}
-            onOssImport={() => handleOssImportClick(entry)}
-            onCloudInstall={() => startCloudInstall(entry)}
-            isInstalling={installingId === entry.catalogId}
-            onOpenLive={
-              entry.liveViewable && entry.liveUrl
-                ? () => void openLiveApp(entry.liveUrl!)
-                : undefined
-            }
-          />
-        ))}
-      </div>
+      {scope === "namespace" ? (
+        <>
+          {teamEntries.length > 0 ? (
+            <section className="community-apps__section">
+              <h3 className="community-apps__section-title">Shared with team</h3>
+              {renderCatalogGrid(teamEntries)}
+            </section>
+          ) : null}
+          {publicWorkspaceEntries.length > 0 ? (
+            <section className="community-apps__section">
+              <h3 className="community-apps__section-title">Public in workspace</h3>
+              {renderCatalogGrid(publicWorkspaceEntries)}
+            </section>
+          ) : null}
+        </>
+      ) : (
+        renderCatalogGrid(publicWorkspaceEntries)
+      )}
 
       {installModeEntry ? (
         <div
@@ -654,7 +760,12 @@ function CommunityAppCard({
     );
   };
 
-  const sourceLabel = entry.source === "cloud" ? "Cloud" : "Open source";
+  const sourceLabel =
+    entry.source === "cloud"
+      ? isTeamSharedVisibility(entry.visibility)
+        ? "Team shared"
+        : "Public"
+      : "Open source";
 
   return (
     <div className="community-card">

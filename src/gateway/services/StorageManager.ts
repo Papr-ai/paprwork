@@ -131,6 +131,37 @@ export class StorageManager {
   }
 
   /**
+   * Update stored delegate_task tool result when a sub-agent job finishes.
+   */
+  patchDelegateTaskToolResult(
+    chatId: string,
+    delegationRunId: string,
+    update: {
+      status: "completed" | "failed";
+      resultText?: string;
+      error?: string;
+      completedAt?: string;
+    },
+  ): boolean {
+    const provider = this.ensureInitialized();
+    if (provider instanceof LocalStorageProvider) {
+      return provider.patchDelegateTaskToolResult(
+        chatId,
+        delegationRunId,
+        update,
+      );
+    }
+    if (provider instanceof HybridStorageProvider) {
+      return provider.patchDelegateTaskToolResult(
+        chatId,
+        delegationRunId,
+        update,
+      );
+    }
+    return false;
+  }
+
+  /**
    * Load messages formatted for LLM consumption
    * Returns summary + recent messages when appropriate
    */

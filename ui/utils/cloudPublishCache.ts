@@ -26,18 +26,27 @@ function writeSnapshot(byAppId: Record<string, CloudPublishState>): void {
   try {
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ byAppId, savedAt: Date.now() } satisfies CloudPublishSnapshot),
+      JSON.stringify({
+        byAppId,
+        savedAt: Date.now(),
+      } satisfies CloudPublishSnapshot),
     );
   } catch {
     /* quota / private mode */
   }
 }
 
+export function readCachedCloudPublishStates(): Record<
+  string,
+  CloudPublishState
+> {
+  return readSnapshot()?.byAppId ?? {};
+}
+
 export function readCachedCloudPublishState(
   appId: string,
 ): CloudPublishState | null {
-  const snapshot = readSnapshot();
-  return snapshot?.byAppId[appId] ?? null;
+  return readCachedCloudPublishStates()[appId] ?? null;
 }
 
 export function writeCachedCloudPublishState(

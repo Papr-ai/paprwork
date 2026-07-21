@@ -13,6 +13,9 @@ export interface CustomKeyFileMetadata {
   clientAccess?: KeyClientAccess;
   createdAt: string;
   updatedAt?: string;
+  source?: "manual" | "oauth";
+  managedBy?: "oauth";
+  oauthProvider?: "openai" | "anthropic";
 }
 
 interface StoredCustomKeyRecord {
@@ -23,6 +26,9 @@ interface StoredCustomKeyRecord {
   clientAccess?: KeyClientAccess;
   createdAt: string;
   updatedAt?: string;
+  source?: "manual" | "oauth";
+  managedBy?: "oauth";
+  oauthProvider?: "openai" | "anthropic";
 }
 
 /** Papr Work userData path (matches Electron app.setName("Papr Work")). */
@@ -62,6 +68,9 @@ export async function loadCustomKeysMetadataFromFile(): Promise<
       clientAccess: normalizeKeyClientAccess(key.clientAccess),
       createdAt: key.createdAt,
       updatedAt: key.updatedAt,
+      source: key.source,
+      managedBy: key.managedBy,
+      oauthProvider: key.oauthProvider,
     }));
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;

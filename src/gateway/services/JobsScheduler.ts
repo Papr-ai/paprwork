@@ -212,6 +212,23 @@ export class JobsScheduler {
             );
             const err =
               error instanceof Error ? error : new Error(String(error));
+            const isArchitectureValidationFailure = err.message.includes(
+              "Job architecture validation failed",
+            );
+            if (isArchitectureValidationFailure) {
+              const latest = await jobsService.getJob(job.id);
+              if (latest?.schedule?.enabled && latest.schedule) {
+                await this.patchNextRun(
+                  latest,
+                  latest.schedule,
+                  dueAt,
+                  triggeredAt,
+                );
+              }
+              console.warn(
+                `[JobsScheduler] Advanced next run for ${job.id} after architecture validation failure`,
+              );
+            }
             getGatewayTelemetry().trackFireAndForget(
               "paprwork_scheduler_job_failed",
               {

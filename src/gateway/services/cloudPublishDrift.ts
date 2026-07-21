@@ -55,8 +55,11 @@ function catalogDriftFingerprint(requirements: RequiredKeySpec[]): string {
 }
 
 function memoryCatalogToRequiredKeySpecs(
-  items: MemoryCatalogRequirementFields[],
+  items: MemoryCatalogRequirementFields[] | null | undefined,
 ): RequiredKeySpec[] {
+  if (!Array.isArray(items)) {
+    return [];
+  }
   return items.map((item) => ({
     name: item.name,
     service: item.service,
@@ -84,11 +87,11 @@ export function detectCatalogRequirementsDrift(
   }
 
   let publishedRequirements: RequiredKeySpec[];
-  if (memory.catalogRequirements !== undefined) {
+  if (Array.isArray(memory.catalogRequirements)) {
     publishedRequirements = memoryCatalogToRequiredKeySpecs(
       memory.catalogRequirements,
     );
-  } else if (cachedFromLastPublish !== undefined) {
+  } else if (Array.isArray(cachedFromLastPublish)) {
     publishedRequirements = cachedFromLastPublish;
   } else if (localRequirements.length > 0) {
     return [

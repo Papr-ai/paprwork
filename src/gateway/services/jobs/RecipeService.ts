@@ -1,6 +1,6 @@
 import { promises as fs } from "fs";
 import path from "path";
-import os from "os";
+import { getPaprJobsRoot } from "../../../core/utils/paprRoot.js";
 import type {
   RecipeEvaluation,
   RecipeEvaluationSummary,
@@ -22,7 +22,7 @@ export class RecipeService {
   private jobsRootDir: string;
 
   constructor() {
-    this.jobsRootDir = path.join(os.homedir(), "Papr", "jobs");
+    this.jobsRootDir = getPaprJobsRoot();
   }
 
   private getJobDir(jobId: string): string {

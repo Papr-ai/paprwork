@@ -15,14 +15,40 @@ import {
   pushLinkedSourceToCloud,
   type TursoBookendTarget,
 } from "./syncJobTursoBookends.js";
+import { reconcileCloudProviderAuth } from "./resolveCloudProviderAuth.js";
 import type { CloudAgentRunRequest, CloudTursoSource } from "./types.js";
+import { getJobsService } from "../JobsService.js";
+import {
+  AgentJobExecutor,
+  type AgentJobSessionInput,
+} from "../jobs/executors/AgentJobExecutor.js";
+import type { JobType } from "../jobs/types.js";
 
-interface CloudRunHandle {
+export interface CloudRunHandle {
   runRoot: string;
-  finish: () => Promise<void>;
+  paprHome: string;
+  tursoTargets: TursoBookendTarget[];
+  finish: (options?: { deleteWorkspace?: boolean }) => Promise<void>;
 }
 
-function resolveTursoBookendTargets(
+interface CloudRunEnvSnapshot {
+  previousPaprHome?: string;
+  previousHome?: string;
+  previousJobDir?: string;
+  previousJobDb?: string;
+  previousAppId?: string;
+  previousAppDb?: string;
+  previousAppDbAlias?: string;
+  previousVaultEnv: Map<string, string | undefined>;
+}
+
+export function resolveCloudRunRoot(request: CloudAgentRunRequest): string {
+  const key = request.workspaceSessionId ?? request.runId;
+  const baseDir = request.workspaceSessionId ? "papr-cloud-session" : "papr-cloud-run";
+  return path.join(os.tmpdir(), baseDir, key);
+}
+
+export function resolveTursoBookendTargets(
   request: CloudAgentRunRequest,
   paprHome: string,
 ): TursoBookendTarget[] {
@@ -59,39 +85,56 @@ function resolveTursoBookendTargets(
   return [...byKey.values()];
 }
 
-export async function beginCloudAgentRun(
+function captureCloudRunEnv(): CloudRunEnvSnapshot {
+  return {
+    previousPaprHome: process.env.PAPR_HOME,
+    previousHome: process.env.HOME,
+    previousJobDir: process.env.JOB_DIR,
+    previousJobDb: process.env.JOB_DB,
+    previousAppId: process.env.APP_ID,
+    previousAppDb: process.env.APP_DB,
+    previousAppDbAlias: process.env.APP_DB_ALIAS,
+    previousVaultEnv: new Map(),
+  };
+}
+
+function applyVaultKeys(
   request: CloudAgentRunRequest,
-): Promise<CloudRunHandle> {
-  const runRoot = path.join(os.tmpdir(), "papr-cloud-run", request.runId);
-  const paprHome = path.join(runRoot, "Papr");
-  const previousPaprHome = process.env.PAPR_HOME;
-  const previousHome = process.env.HOME;
-  const previousJobDir = process.env.JOB_DIR;
-  const previousJobDb = process.env.JOB_DB;
-  const previousAppId = process.env.APP_ID;
-  const previousAppDb = process.env.APP_DB;
-  const previousAppDbAlias = process.env.APP_DB_ALIAS;
-  const previousVaultEnv = new Map<string, string | undefined>();
-
-  await cloneUserRepoToPaprHome({
-    targetPaprHome: paprHome,
-    cloneUrl: request.repoCloneUrl,
-    token: request.repoToken,
-    branch: request.repoBranch,
-  });
-
-  process.env.PAPR_HOME = paprHome;
-  process.env.HOME = runRoot;
-
-  if (request.vaultKeys) {
-    for (const [keyName, value] of Object.entries(request.vaultKeys)) {
-      if (!value) continue;
-      previousVaultEnv.set(keyName, process.env[keyName]);
-      process.env[keyName] = value;
-    }
+  snapshot: CloudRunEnvSnapshot,
+): void {
+  if (!request.vaultKeys) {
+    return;
   }
+  for (const [keyName, value] of Object.entries(request.vaultKeys)) {
+    if (!value) continue;
+    snapshot.previousVaultEnv.set(keyName, process.env[keyName]);
+    process.env[keyName] = value;
+  }
+}
 
-  const tursoTargets = resolveTursoBookendTargets(request, paprHome);
+async function restoreCloudRunEnv(snapshot: CloudRunEnvSnapshot): Promise<void> {
+  if (snapshot.previousPaprHome === undefined) delete process.env.PAPR_HOME;
+  else process.env.PAPR_HOME = snapshot.previousPaprHome;
+  if (snapshot.previousHome === undefined) delete process.env.HOME;
+  else process.env.HOME = snapshot.previousHome;
+  if (snapshot.previousJobDir === undefined) delete process.env.JOB_DIR;
+  else process.env.JOB_DIR = snapshot.previousJobDir;
+  if (snapshot.previousJobDb === undefined) delete process.env.JOB_DB;
+  else process.env.JOB_DB = snapshot.previousJobDb;
+  if (snapshot.previousAppId === undefined) delete process.env.APP_ID;
+  else process.env.APP_ID = snapshot.previousAppId;
+  if (snapshot.previousAppDb === undefined) delete process.env.APP_DB;
+  else process.env.APP_DB = snapshot.previousAppDb;
+  if (snapshot.previousAppDbAlias === undefined) delete process.env.APP_DB_ALIAS;
+  else process.env.APP_DB_ALIAS = snapshot.previousAppDbAlias;
+
+  for (const [keyName, previousValue] of snapshot.previousVaultEnv.entries()) {
+    if (previousValue === undefined) delete process.env[keyName];
+    else process.env[keyName] = previousValue;
+  }
+}
+
+async function ensureTursoLocalFiles(tursoTargets: TursoBookendTarget[]): Promise<void> {
   for (const target of tursoTargets) {
     try {
       await fs.access(target.dbPath);
@@ -99,9 +142,60 @@ export async function beginCloudAgentRun(
       await fs.mkdir(path.dirname(target.dbPath), { recursive: true });
       await fs.writeFile(target.dbPath, "");
     }
+  }
+}
+
+async function pullTursoTargets(tursoTargets: TursoBookendTarget[]): Promise<void> {
+  await ensureTursoLocalFiles(tursoTargets);
+  for (const target of tursoTargets) {
     await pullLinkedSourceFromCloud(target);
   }
+}
 
+async function pushTursoTargets(tursoTargets: TursoBookendTarget[]): Promise<void> {
+  for (const target of tursoTargets) {
+    await pushLinkedSourceToCloud(target);
+  }
+}
+
+export interface BeginCloudAgentRunOptions {
+  /** Skip git clone when workspace directory already exists (session reuse). */
+  skipClone?: boolean;
+  runRoot?: string;
+}
+
+export async function beginCloudAgentRun(
+  request: CloudAgentRunRequest,
+  options: BeginCloudAgentRunOptions = {},
+): Promise<CloudRunHandle> {
+  const runRoot = options.runRoot ?? resolveCloudRunRoot(request);
+  const paprHome = path.join(runRoot, "Papr");
+  const envSnapshot = captureCloudRunEnv();
+  const tursoTargets = resolveTursoBookendTargets(request, paprHome);
+
+  const skipClone = options.skipClone === true;
+  if (!skipClone) {
+    await cloneUserRepoToPaprHome({
+      targetPaprHome: paprHome,
+      cloneUrl: request.repoCloneUrl,
+      token: request.repoToken,
+      branch: request.repoBranch,
+    });
+  } else {
+    try {
+      await fs.access(paprHome);
+    } catch {
+      throw new Error(
+        `Warm workspace missing on disk for session ${request.workspaceSessionId ?? request.runId}`,
+      );
+    }
+  }
+
+  process.env.PAPR_HOME = paprHome;
+  process.env.HOME = runRoot;
+  applyVaultKeys(request, envSnapshot);
+
+  await pullTursoTargets(tursoTargets);
   await reinitializeWorkspaceServicesForCloudRun({
     paprApiKey: request.paprApiKey,
   });
@@ -109,32 +203,16 @@ export async function beginCloudAgentRun(
 
   return {
     runRoot,
-    finish: async () => {
-      for (const target of tursoTargets) {
-        await pushLinkedSourceToCloud(target);
+    paprHome,
+    tursoTargets,
+    finish: async (finishOptions?: { deleteWorkspace?: boolean }) => {
+      await pushTursoTargets(tursoTargets);
+      await restoreCloudRunEnv(envSnapshot);
+
+      const deleteWorkspace = finishOptions?.deleteWorkspace ?? true;
+      if (deleteWorkspace) {
+        await fs.rm(runRoot, { recursive: true, force: true }).catch(() => undefined);
       }
-
-      if (previousPaprHome === undefined) delete process.env.PAPR_HOME;
-      else process.env.PAPR_HOME = previousPaprHome;
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      if (previousJobDir === undefined) delete process.env.JOB_DIR;
-      else process.env.JOB_DIR = previousJobDir;
-      if (previousJobDb === undefined) delete process.env.JOB_DB;
-      else process.env.JOB_DB = previousJobDb;
-      if (previousAppId === undefined) delete process.env.APP_ID;
-      else process.env.APP_ID = previousAppId;
-      if (previousAppDb === undefined) delete process.env.APP_DB;
-      else process.env.APP_DB = previousAppDb;
-      if (previousAppDbAlias === undefined) delete process.env.APP_DB_ALIAS;
-      else process.env.APP_DB_ALIAS = previousAppDbAlias;
-
-      for (const [keyName, previousValue] of previousVaultEnv.entries()) {
-        if (previousValue === undefined) delete process.env[keyName];
-        else process.env[keyName] = previousValue;
-      }
-
-      await fs.rm(runRoot, { recursive: true, force: true }).catch(() => undefined);
     },
   };
 }
@@ -151,6 +229,99 @@ export async function withCloudAgentRunContext<T>(
   }
 }
 
+const UNUSED_DEFAULT_COMMANDS: Record<
+  Exclude<JobType, "agent" | "subagent">,
+  string
+> = {
+  shell: "",
+  bash: "",
+  node: "",
+  python: "",
+  swift: "",
+};
+
+function applyRuntimeParamsToProcessEnv(
+  runtimeParams: Record<string, string> | undefined,
+): void {
+  if (!runtimeParams) return;
+  for (const [key, value] of Object.entries(runtimeParams)) {
+    if (key === "prompt") continue;
+    process.env[key] = value;
+  }
+}
+
+/**
+ * Resolve cloud agent stream input using the same AgentJobExecutor assembly as desktop.
+ * Must run after beginCloudAgentRun (cloned PAPR_HOME + prepareCloudJobEnvironment).
+ */
+export async function resolveCloudAgentJobStreamInput(
+  request: CloudAgentRunRequest,
+): Promise<{
+  jobId: string;
+  runId: string;
+  prompt: string;
+  provider: Provider;
+  model?: string;
+  allowedToolIds?: string[];
+  maxTurns?: number;
+  authOverride: { apiKey: string; authType: "oauth" | "apiKey" };
+  paprApiKey?: string;
+  session: AgentJobSessionInput;
+}> {
+  applyRuntimeParamsToProcessEnv(request.runtimeParams);
+
+  const jobsService = getJobsService();
+  await jobsService.initialize();
+  const job = await jobsService.getJob(request.jobId);
+  if (!job) {
+    throw new Error(`Job not found in cloned workspace: ${request.jobId}`);
+  }
+  if (job.type !== "agent" && job.type !== "subagent") {
+    throw new Error(`Job ${request.jobId} is not an agent job (type=${job.type})`);
+  }
+
+  const jobDir = await jobsService.getJobPath(request.jobId);
+  if (!jobDir) {
+    throw new Error(`Job directory not found for ${request.jobId}`);
+  }
+
+  const executor = new AgentJobExecutor();
+  const session = await executor.buildSessionInput({
+    runId: request.runId,
+    job,
+    jobDir,
+    defaultCommandByType: UNUSED_DEFAULT_COMMANDS,
+    appendLog: async () => undefined,
+    runtimeParams: request.runtimeParams,
+  });
+
+  const llmAuth = reconcileCloudProviderAuth({
+    provider: request.llmAuth.provider as Provider,
+    token: request.llmAuth.token,
+    authType: request.llmAuth.authType,
+  });
+
+  const provider = session.provider ?? llmAuth.provider;
+  const model = session.model ?? request.model;
+
+  return {
+    jobId: session.jobId,
+    runId: session.runId,
+    prompt: session.prompt,
+    provider,
+    model,
+    allowedToolIds: session.allowedToolIds ?? request.allowedToolIds,
+    maxTurns: session.maxTurns ?? request.maxTurns,
+    authOverride: {
+      apiKey: llmAuth.token,
+      authType: llmAuth.authType,
+    },
+    paprApiKey: request.paprApiKey,
+    session,
+  };
+}
+
+/** @deprecated Use resolveCloudAgentJobStreamInput for agent jobs. */
 export function cloudAgentStreamInput(request: CloudAgentRunRequest): {
   jobId: string;
   runId: string;
@@ -162,17 +333,23 @@ export function cloudAgentStreamInput(request: CloudAgentRunRequest): {
   authOverride: { apiKey: string; authType: "oauth" | "apiKey" };
   paprApiKey?: string;
 } {
+  const llmAuth = reconcileCloudProviderAuth({
+    provider: request.llmAuth.provider as Provider,
+    token: request.llmAuth.token,
+    authType: request.llmAuth.authType,
+  });
+
   return {
     jobId: request.jobId,
     runId: request.runId,
-    prompt: request.prompt,
-    provider: request.llmAuth.provider as Provider,
+    prompt: request.prompt ?? "",
+    provider: llmAuth.provider,
     model: request.model,
     allowedToolIds: request.allowedToolIds,
     maxTurns: request.maxTurns,
     authOverride: {
-      apiKey: request.llmAuth.token,
-      authType: request.llmAuth.authType,
+      apiKey: llmAuth.token,
+      authType: llmAuth.authType,
     },
     paprApiKey: request.paprApiKey,
   };

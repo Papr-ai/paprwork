@@ -36,11 +36,23 @@ export const CHAT_MODELS: AIModel[] = [
     id: "claude-sonnet-4-6",
     name: "Claude Sonnet 4.6",
     provider: "anthropic",
-    description: "Best balance of speed and intelligence",
+    description: "Previous Sonnet — balanced speed and intelligence",
     group: "Anthropic",
     supportsThinking: true,
     defaultThinkingBudget: 10000,
     maxTokens: 16000,
+    requiresApiKey: "ANTHROPIC_API_KEY",
+  },
+  {
+    id: "claude-sonnet-5",
+    name: "Claude Sonnet 5",
+    provider: "anthropic",
+    description:
+      "Latest Sonnet — agentic coding, tool use, browser/terminal work (recommended)",
+    group: "Anthropic",
+    supportsThinking: true,
+    defaultThinkingBudget: 0,
+    maxTokens: 128000,
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
   {
@@ -122,6 +134,20 @@ export const CHAT_MODELS: AIModel[] = [
     description:
       "GLM-5.2 with maximum reasoning effort for complex multi-step coding",
     group: "Z.ai (via Papr)",
+    supportsThinking: true,
+    reasoning: { effort: "max" },
+    maxTokens: 131072,
+    requiresApiKey: "PAPR_API_KEY",
+  },
+
+  // Moonshot Kimi — via Papr proxy (OpenAI-compatible API)
+  {
+    id: "kimi-k3",
+    name: "Kimi K3",
+    provider: "moonshot",
+    description:
+      "Moonshot's 2.8T flagship — 1M context, native vision, deep reasoning",
+    group: "Moonshot (via Papr)",
     supportsThinking: true,
     reasoning: { effort: "max" },
     maxTokens: 131072,
@@ -528,7 +554,8 @@ export const getModelById = (id: string): AIModel | undefined => {
 
 /** Mid-tier model IDs per provider, in preference order for default selection */
 export const MID_TIER_MODEL_IDS = [
-  "claude-sonnet-4-6", // Anthropic mid
+  "claude-sonnet-5", // Anthropic mid (latest)
+  "claude-sonnet-4-6", // Anthropic mid (legacy)
   "gpt-5-6-sol", // OpenAI flagship
   "gpt-5-6-terra", // OpenAI balanced
   "gpt-5.4-mini", // OpenAI mini
@@ -538,7 +565,8 @@ export const MID_TIER_MODEL_IDS = [
 
 /** Default model IDs when no saved preference - first available wins */
 export const DEFAULT_MODEL_IDS = [
-  "claude-sonnet-4-6", // Anthropic
+  "claude-sonnet-5", // Anthropic
+  "claude-sonnet-4-6", // Anthropic legacy
   "gpt-5-6-sol", // OpenAI latest
   "gemini-3.5-flash", // Google
 ];

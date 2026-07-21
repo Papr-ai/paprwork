@@ -76,9 +76,10 @@ User goal: *Pull Reddit RSS feeds, pick topics with an agent, enrich with web re
 |----------|------|----------|--------|-----------|-----------|
 | Reddit RSS Fetcher | `python` | every 30m | `[appId]` | — | `$APP_DB`: `blog_posts_raw` |
 | Topic Picker | `agent` | after fetch | `[appId]` | fetch → `autoTrigger: true` | `$APP_DB`: `blog_picks` |
-| Persist Picks | `python` | — (on-demand or chained) | `[appId]` | picker | `$APP_DB`: `blog_picks` |
 | Topic Enricher | `agent` | on-demand (`/api/jobs/run`) | `[appId]` | — | `$APP_DB`: `blog_picks.enriched_*` |
 | Blog Writer | `agent` | on-demand | `[appId]` | — | `$APP_DB`: `blog_drafts` |
+
+The producing job owns its validated final write. Do not add a separate persistence job unless it represents a real deterministic transformation, transaction, or approval boundary.
 
 **Rules applied:**
 - LLM reasoning → `type: "agent"` (not python calling OpenAI manually)
@@ -202,6 +203,137 @@ Anti-patterns to avoid: 6 metric cards + 3 tables on one page; multiple blue pri
 
 ---
 
+## Anti-pattern: Frontend SQL soup (DO NOT BUILD THIS)
+
+When an agent skips the backend layer, you get a `db.ts` file with 10+ raw SQL wrapper functions all running from the browser. This is the **#1 mini-app architecture mistake**.
+
+**BAD — all SQL in frontend `db.ts`:**
+```typescript
+// db.ts — 15 functions doing fetch('/api/db/query') with raw SQL
+export async function getStudents(classId: number) {
+  const r = await fetch('/api/db/query', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sql: 'SELECT * FROM students WHERE class_id = ?', params: [classId] })
+  });
+  return (await r.json()).rows;
+}
+export async function updateStudent(id: number, name: string, level: string) { /* ... */ }
+export async function getReports(classId: number, termId: number) { /* ... */ }
+// ... 12 more functions like this — all raw SQL in the browser
+```
+
+**Problems:** SQL logic exposed in browser, no server-side validation, no transaction support, impossible to add vault keys later, `validate_app` flags `suggest-backend-handlers` warning.
+
+**GOOD — backend handler + thin frontend:**
+```python
+# backend/students.py — server-side handler registered in manifest.json
+import json, os, sys, sqlite3
+
+def main():
+    params = json.loads(os.environ.get("PAPR_ACTION_PARAMS", "{}"))
+    db_path = os.environ.get("APP_DB")
+    conn = sqlite3.connect(db_path)
+    action = params.get("action", "list")
+    if action == "list":
+        rows = conn.execute("SELECT * FROM students WHERE class_id = ?",
+                            [params["classId"]]).fetchall()
+        json.dump({"rows": rows}, sys.stdout)
+    elif action == "update":
+        conn.execute("UPDATE students SET name=?, level=? WHERE id=?",
+                     [params["name"], params["level"], params["id"]])
+        conn.commit()
+        json.dump({"ok": True}, sys.stdout)
+
+if __name__ == "__main__":
+    main()
+```
+
+```typescript
+// Frontend: one clean call per resource
+const res = await fetch('/api/app/backend/students', {
+  method: 'POST',
+  body: JSON.stringify({ action: 'list', classId: 1 })
+});
+```
+
+**Detection:** `validate_app` counts `/api/db/query` and `/api/db/write` calls across frontend `.ts` files. If count > 4 with no `backend/` directory → warning. If count > 8 → error. Also flags frontend code with auth headers (`Authorization`, `x-api-key`) calling external APIs — those MUST go through backend handlers.
+
+---
+
+## Anti-pattern: External API calls from frontend (DO NOT BUILD THIS)
+
+Backend handlers are NOT just for SQL. Any external API call that requires a secret key MUST go through a backend handler — never from browser `fetch()`.
+
+**BAD — API key exposed in frontend:**
+```typescript
+// app.ts — calling external API directly from browser
+const res = await fetch('https://api.openai.com/v1/chat/completions', {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer sk-...',  // SECRET KEY IN BROWSER CODE!
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({ model: 'gpt-4', messages: [...] })
+});
+```
+
+**Problems:** API key visible in browser DevTools, can be stolen by any user, impossible to rotate without redeploying frontend, violates every security best practice.
+
+**GOOD — backend handler proxies the call:**
+```json
+// backend/manifest.json
+{
+  "version": 1,
+  "actions": {
+    "generate-summary": {
+      "handler": "generate_summary.py",
+      "runtime": "python",
+      "description": "Call OpenAI to generate a summary",
+      "keys": ["OPENAI_API_KEY"],
+      "timeoutMs": 30000
+    }
+  }
+}
+```
+
+```python
+# backend/generate_summary.py — server-side, key injected as env var
+import json, os, sys, urllib.request
+
+def main():
+    params = json.loads(os.environ.get("PAPR_ACTION_PARAMS", "{}"))
+    api_key = os.environ["OPENAI_API_KEY"]  # Injected from vault — never in browser
+    
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=json.dumps({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": params.get("prompt", "")}]
+        }).encode(),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req) as resp:
+        result = json.loads(resp.read())
+    json.dump({"summary": result["choices"][0]["message"]["content"]}, sys.stdout)
+
+if __name__ == "__main__":
+    main()
+```
+
+```typescript
+// Frontend: clean call, no secrets
+const res = await fetch('/api/app/backend/generate-summary', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ prompt: 'Summarize this article...' })
+});
+const { summary } = await res.json();
+```
+
+**Rule:** If your app needs API keys, OAuth tokens, or any secrets → backend handler. No exceptions.
+
+---
+
 ## Blank template (copy for new projects)
 
 ```markdown
@@ -213,7 +345,7 @@ Anti-patterns to avoid: 6 metric cards + 3 tables on one page; multiple blue pri
 ## 2. Paprwork Architecture
 ### Layers
 - Frontend (apps/{id}/): screens, /api/db/*, /api/jobs/run, subscribeJobEvents
-- Backend (backend/manifest.json): actions, vault keys
+- Backend (backend/manifest.json): actions, vault keys — list each action OR explicitly justify skipping ("read-only dashboard, 1-2 SELECTs only")
 - Jobs (~/Papr/Jobs/): types, schedules, appIds, dependsOn+autoTrigger
 ### SQLite (APP_DB primary)
 | Table | Columns | Writer | Reader |

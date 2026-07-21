@@ -69,20 +69,28 @@ export const getFullToolResultTool = createTool({
           const message = messages[i];
           if (!message.toolCalls) continue;
 
-          // Find matching tool call
           interface ToolCallItem {
-            id: string;
-            name: string;
+            id?: string;
+            toolCallId?: string;
+            name?: string;
+            toolName?: string;
             result?: string | unknown;
           }
-          const toolCall = message.toolCalls.find((tc: ToolCallItem) => 
-            tc.id === args.toolCallId && 
-            (!args.toolName || tc.name === args.toolName)
-          );
+
+          const toolCall = message.toolCalls.find((tc: ToolCallItem) => {
+            const storedId = tc.id ?? tc.toolCallId;
+            const storedName = tc.name ?? tc.toolName;
+            return (
+              storedId === args.toolCallId &&
+              (!args.toolName || storedName === args.toolName)
+            );
+          });
 
           if (toolCall) {
+            const tc = toolCall as ToolCallItem;
+            const storedName = tc.name ?? tc.toolName ?? args.toolName ?? "unknown";
             // Found it! Get the full result
-            const fullResult = toolCall.result ?? "";
+            const fullResult = tc.result ?? "";
             const resultStr = typeof fullResult === "string" 
               ? fullResult 
               : JSON.stringify(fullResult, null, 2);
@@ -96,7 +104,7 @@ export const getFullToolResultTool = createTool({
               return {
                 success: true,
                 data: {
-                  toolName: toolCall.name,
+                  toolName: storedName,
                   toolCallId: args.toolCallId,
                   messageId: message.id,
                   chatId: chatId,
@@ -115,7 +123,7 @@ export const getFullToolResultTool = createTool({
             return {
               success: true,
               data: {
-                toolName: toolCall.name,
+                toolName: storedName,
                 toolCallId: args.toolCallId,
                 messageId: message.id,
                 chatId: chatId,

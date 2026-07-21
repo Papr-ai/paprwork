@@ -4,7 +4,7 @@
 
 import {
   jobAppDatabaseEnv,
-  resolveJobAppDatabase,
+  requireJobAppDatabase,
 } from "../jobAppDatabase.js";
 import { getJobsService, initializeJobsService } from "../JobsService.js";
 
@@ -25,7 +25,7 @@ export async function prepareCloudJobEnvironment(jobId: string): Promise<void> {
     }
   }
 
-  const appDb = await resolveJobAppDatabase(job.appIds);
+  const appDb = await requireJobAppDatabase(job.appIds);
   if (appDb) {
     Object.assign(process.env, jobAppDatabaseEnv(appDb));
   }

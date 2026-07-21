@@ -10,7 +10,7 @@ import type {
 import { getShellCommand, wrapCommandWithVenv, getVenvPaths } from "../../../../core/utils/platform.js";
 import {
   jobAppDatabaseEnv,
-  resolveJobAppDatabase,
+  requireJobAppDatabase,
 } from "../../jobAppDatabase.js";
 
 export class CommandJobExecutor implements IJobExecutor {
@@ -67,7 +67,7 @@ export class CommandJobExecutor implements IJobExecutor {
     const jobDbPath = path.join(params.jobDir, "data", "data.db");
     const [shellPath, shellArgs] = getShellCommand(finalCommand);
 
-    const appDbContext = await resolveJobAppDatabase(params.job.appIds);
+    const appDbContext = await requireJobAppDatabase(params.job.appIds);
 
     // Ensure we use the correct Node version (nvm's Node v24, not system Node)
     // This prevents native module version mismatches with better-sqlite3

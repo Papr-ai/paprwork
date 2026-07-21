@@ -6,6 +6,19 @@ import type { RequirementItem } from "./bundles.js";
 
 export type CommunityCatalogSource = "opensource" | "cloud";
 
+/** Which Apps tab catalog scope to load. */
+export type CommunityCatalogScope = "global" | "namespace";
+
+export function isTeamSharedVisibility(visibility: string | undefined): boolean {
+  if (!visibility) return false;
+  return visibility === "team" || visibility.startsWith("team_");
+}
+
+/** Only `public_read` apps belong in the global Community catalog. */
+export function isPublicCommunityVisibility(visibility: string | undefined): boolean {
+  return visibility === "public_read";
+}
+
 export interface CommunityCatalogEntry {
   /** Stable key for React lists */
   catalogId: string;
@@ -35,13 +48,21 @@ export interface CommunityCatalogEntry {
   isOwned?: boolean;
   /** Number of local fork/track copies installed from this catalog entry */
   installedForkCount?: number;
+  /** Cloud publish visibility (team, public_read, …) when known */
+  visibility?: string;
+  /** Publisher Papr user id — used to hide own apps from Shared with me */
+  publisherUserId?: string;
 }
 
 export interface CommunityCatalog {
   schemaVersion: string;
+  scope: CommunityCatalogScope;
   entries: CommunityCatalogEntry[];
   sources: {
     opensource: number;
     cloud: number;
   };
+  /** When namespace workspace catalog used client-side fallback (no dedicated memory route) */
+  fallbackUsed?: boolean;
+  namespaceId?: string;
 }

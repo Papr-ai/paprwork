@@ -57,6 +57,8 @@ import { setupWebSocketHandlers, broadcast } from "./websocket/index.js";
 import { getJobEventHub } from "./services/JobEventHub.js";
 import { registerJobEventsSseRoutes } from "./services/registerJobEventsSse.js";
 import { registerPaprMiniAppSdkRoutes } from "./utils/registerPaprMiniAppSdkRoutes.js";
+import { registerAppAgentChatRoutes } from "./services/appAgentChat/registerAppAgentChatRoutes.js";
+import { getFileAppAgentChatSessionStore } from "./services/appAgentChat/AppAgentChatSessionStore.js";
 import {
   initializePermissionBridge,
   requestPermissionFromMain,
@@ -126,6 +128,11 @@ async function initializeServices(): Promise<void> {
   console.log("[Gateway] Initializing services...");
 
   try {
+    const { refreshToolResultTruncationSettings } = await import(
+      "./services/agent/toolResultTruncationSettings.js"
+    );
+    await refreshToolResultTruncationSettings();
+    console.log("[Gateway] Tool truncation settings loaded");
     // DON'T request keys on startup!
     // AgentService will lazy-load them when first message is sent
     // This ensures ZERO keychain popups on app startup (matches V1 behavior)
@@ -476,6 +483,62 @@ async function startGateway(): Promise<void> {
         }
         console.error("[Gateway] /api/apps/data-health error:", err);
         res.status(500).json({ error: message });
+      }
+    });
+
+    /** Public embedded sub-agent chat config for mini-app SDK */
+    app.get("/api/apps/:appId/agent-chat", async (req, res) => {
+      try {
+        const appId = req.params.appId;
+        if (!appId) {
+          res.status(400).json({ error: "appId required" });
+          return;
+        }
+        const { getAppService } = await import("./services/AppService.js");
+        const { toPublicAppAgentChatConfig } = await import(
+          "../core/types/appAgentChat.js"
+        );
+        const appService = getAppService();
+        await appService.initialize();
+        const miniApp = await appService.getApp(appId);
+        if (!miniApp) {
+          res.status(404).json({ error: "App not found" });
+          return;
+        }
+        const agentChat = miniApp.agentChat
+          ? toPublicAppAgentChatConfig(miniApp.agentChat)
+          : null;
+        res.json({ appId, agentChat });
+      } catch (err) {
+        console.error("[Gateway] /api/apps/agent-chat error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.get("/api/apps/:appId/runtime-logs", async (req, res) => {
+      try {
+        const appId = req.params.appId;
+        if (!appId) {
+          res.status(400).json({ error: "appId required" });
+          return;
+        }
+        const limitRaw = req.query.limit;
+        const sinceRaw = req.query.sinceMs;
+        const limit =
+          typeof limitRaw === "string" ? Number.parseInt(limitRaw, 10) : 100;
+        const sinceMs =
+          typeof sinceRaw === "string" ? Number.parseInt(sinceRaw, 10) : undefined;
+        const { getAppRuntimeLogService } = await import(
+          "./services/AppRuntimeLogService.js"
+        );
+        const logs = getAppRuntimeLogService().getLogs(appId, {
+          limit: Number.isFinite(limit) ? limit : 100,
+          sinceMs: Number.isFinite(sinceMs) ? sinceMs : undefined,
+        });
+        res.json({ appId, logs });
+      } catch (err) {
+        console.error("[Gateway] /api/apps/runtime-logs error:", err);
+        res.status(500).json({ error: (err as Error).message });
       }
     });
 
@@ -939,6 +1002,17 @@ async function startGateway(): Promise<void> {
     });
 
     registerPaprMiniAppSdkRoutes(app);
+
+    registerAppAgentChatRoutes(app, {
+      mode: "desktop",
+      sessionStore: getFileAppAgentChatSessionStore(),
+      getDesktopApp: async (appId) => {
+        const appService = getAppService();
+        await appService.initialize();
+        return appService.getApp(appId);
+      },
+    });
+
     registerJobEventsSseRoutes(app, {
       hub: getJobEventHub(),
       pollJobStatus: async (jobId, _req) => {
@@ -1127,7 +1201,23 @@ async function startGateway(): Promise<void> {
           req.params.appId,
         );
         const prefs = getAppPublishPrefs(req.params.appId);
-        res.json({ ...config, prefs });
+        const { scanAppCloudCompatibility } = await import(
+          "./services/cloudAppCompatibility.js"
+        );
+        const compatibility = await scanAppCloudCompatibility(req.params.appId);
+        res.json({ ...config, prefs, compatibility });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.get("/api/cloud/publish/:appId/compatibility", async (req, res) => {
+      try {
+        const { scanAppCloudCompatibility } = await import(
+          "./services/cloudAppCompatibility.js"
+        );
+        const compatibility = await scanAppCloudCompatibility(req.params.appId);
+        res.json(compatibility);
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }
@@ -1142,7 +1232,23 @@ async function startGateway(): Promise<void> {
           codeAccess?: import("../core/utils/shareAudienceModel.js").CodeAccess;
           slug?: string;
           autoPublish?: boolean;
+          acknowledgeDesktopOnly?: boolean;
         };
+        const { scanAppCloudCompatibility } = await import(
+          "./services/cloudAppCompatibility.js"
+        );
+        const compatibility = await scanAppCloudCompatibility(req.params.appId);
+        if (
+          compatibility.requiresAcknowledgement &&
+          body.acknowledgeDesktopOnly !== true
+        ) {
+          res.status(409).json({
+            error:
+              "This app uses desktop-only features (paprAPI, local Chrome, or localhost gateway). Confirm to publish anyway.",
+            compatibility,
+          });
+          return;
+        }
         if (body.autoPublish !== undefined) {
           setAppPublishPrefs(req.params.appId, { autoPublish: body.autoPublish });
         }
@@ -1176,7 +1282,11 @@ async function startGateway(): Promise<void> {
           },
         );
         invalidateCloudLinkSyncReportCache();
-        res.json({ ...config, prefs: getAppPublishPrefs(req.params.appId) });
+        res.json({
+          ...config,
+          prefs: getAppPublishPrefs(req.params.appId),
+          compatibility,
+        });
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }
@@ -1378,11 +1488,14 @@ async function startGateway(): Promise<void> {
 
         const isVaultSync = cloudPath.includes("/vault/sync");
         const isReposInit = cloudPath.includes("/repos/init");
+        const isRuntimeJobRun = cloudPath.includes("/runtime/job-run");
         const proxyTimeoutMs = isVaultSync
           ? 120_000
-          : isReposInit
-            ? 60_000
-            : 30_000;
+          : isRuntimeJobRun
+            ? 930_000
+            : isReposInit
+              ? 60_000
+              : 30_000;
         const proxyController = new AbortController();
         const proxyTimer = setTimeout(() => proxyController.abort(), proxyTimeoutMs);
 
@@ -1508,6 +1621,48 @@ async function startGateway(): Promise<void> {
           await sync.pushNow();
         }
         res.json({ success: true, ...sync.getState() });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/sync/retry", async (req, res) => {
+      const sync = getCloudSyncService();
+      if (!sync) {
+        res.status(503).json({ error: "Cloud sync not initialized" });
+        return;
+      }
+      const relativePath =
+        typeof req.body?.relativePath === "string" ? req.body.relativePath.trim() : "";
+      if (!relativePath) {
+        res.status(400).json({ error: "relativePath is required" });
+        return;
+      }
+      try {
+        const retried = await sync.retryDeadLetterItem(relativePath);
+        if (!retried) {
+          res.status(404).json({ error: "Item is not in dead-letter state" });
+          return;
+        }
+        res.json({ success: true, relativePath });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/sync/turso/repair", async (req, res) => {
+      const jobId =
+        typeof req.body?.jobId === "string" ? req.body.jobId.trim() : "";
+      const dbPath =
+        typeof req.body?.dbPath === "string" ? req.body.dbPath.trim() : "";
+      if (!jobId || !dbPath) {
+        res.status(400).json({ error: "jobId and dbPath are required" });
+        return;
+      }
+      try {
+        const { repairTursoJobDatabase } = await import("./services/tursoSyncState.js");
+        const result = repairTursoJobDatabase(jobId, dbPath);
+        res.json(result);
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }
@@ -1936,6 +2091,9 @@ async function startGateway(): Promise<void> {
     // Staggered to avoid thundering herd on memory.papr.ai at startup.
     // Skipped in cloud_agent mode (Cloud Run agent gateway is stateless per-run).
     if (!isCloudAgentGatewayMode() && process.env.CLOUD_SYNC_ENABLED !== "false") {
+      const cloudSyncStartupDelayMs = Number(
+        process.env.CLOUD_SYNC_STARTUP_DELAY_MS ?? "30000",
+      );
       setTimeout(() => {
         const cloudSync = initializeCloudSyncService();
         cloudSync.initialize().catch((err) => {
@@ -1944,7 +2102,7 @@ async function startGateway(): Promise<void> {
             (err as Error).message,
           );
         });
-      }, 1_000);
+      }, cloudSyncStartupDelayMs);
 
       setTimeout(() => {
         initializeVaultSyncService({ gatewayPort: Number(PORT) })
@@ -1967,8 +2125,11 @@ async function startGateway(): Promise<void> {
               (err as Error).message,
             );
           });
-      }, 3_000);
+      }, 45_000);
 
+      const tursoStartupDelayMs = Number(
+        process.env.TURSO_STARTUP_DELAY_MS ?? "90000",
+      );
       setTimeout(() => {
         const tursoBridge = initializeTursoSyncBridge();
         if (process.env.TURSO_PULL_ON_STARTUP === "true") {
@@ -2003,7 +2164,7 @@ async function startGateway(): Promise<void> {
               (err as Error).message.slice(0, 120),
             ),
           );
-      }, 5_000);
+      }, tursoStartupDelayMs);
     }
 
     // Handle shutdown
@@ -2069,6 +2230,18 @@ async function startGateway(): Promise<void> {
 
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
+
+    // Exit when Electron main dies (SIGSEGV / force quit) so we don't orphan port 18789.
+    if (typeof process.send === "function") {
+      process.on("disconnect", () => {
+        console.warn(
+          "[Gateway] Parent IPC disconnected — shutting down to avoid orphan process",
+        );
+        void shutdown().finally(() => {
+          process.exit(0);
+        });
+      });
+    }
     
     // Handle system power state changes from Electron main process
     process.on("message", async (message: unknown) => {

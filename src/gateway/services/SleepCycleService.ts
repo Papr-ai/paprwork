@@ -11,17 +11,22 @@ import os from "os";
 import { fileURLToPath } from "url";
 import type { JobRecord } from "./jobs/types.js";
 import { STANDALONE_APP_ID } from "./jobs/appIds.js";
+import {
+  formatJobArchitectureErrors,
+  validateJobArchitecture,
+} from "./jobs/jobArchitectureValidation.js";
+import { normalizePortableJobPrompt } from "./jobs/normalizePortableJobPrompt.js";
 import type { ChatSummarySnapshot } from "./storage/IStorageProvider.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const SLEEP_JOB_NAMES = ["Papr Sleep Cycle", "papr-sleep"] as const;
-export const SLEEP_PROMPT_VERSION = 10;
+export const SLEEP_PROMPT_VERSION = 11;
 
 export const SLEEP_JOB_DEFAULTS = {
   provider: "anthropic" as const,
-  model: "claude-sonnet-4-6",
+  model: "claude-sonnet-5",
   maxTurns: 100,
   memoryPolicy: "none" as const,
   schedule: {
@@ -78,7 +83,7 @@ async function readSleepPrompt(): Promise<string> {
   const workspaceExists = await fileExists(workspacePath);
   if (!workspaceExists && templateContent) {
     await fs.writeFile(workspacePath, templateContent, "utf8");
-    return templateContent;
+    return normalizePortableJobPrompt(templateContent);
   }
 
   if (workspaceExists) {
@@ -93,14 +98,16 @@ async function readSleepPrompt(): Promise<string> {
       console.log(
         `[SleepCycleService] Upgraded SLEEP.md v${wsVersion} → v${tplVersion}`,
       );
-      return templateContent;
+      return normalizePortableJobPrompt(templateContent);
     }
-    return workspaceContent;
+    return normalizePortableJobPrompt(workspaceContent);
   }
 
   return (
-    templateContent ||
-    "Review recent chats and jobs, distill learnings into ~/Papr/workspace/*.md"
+    normalizePortableJobPrompt(
+      templateContent ||
+        "Review recent chats and jobs, distill learnings into ~/Papr/workspace/*.md",
+    )
   );
 }
 
@@ -164,6 +171,11 @@ function formatRecentJobs(jobs: JobRecord[], sleepJobId: string): string {
     .join("\n");
 }
 
+function jobHasArchitectureErrors(job: Pick<JobRecord, "type" | "command" | "appIds">): boolean {
+  const issues = validateJobArchitecture(job);
+  return Boolean(formatJobArchitectureErrors(issues));
+}
+
 export class SleepCycleService {
   /**
    * Ensure one sleep job, dedupe extras, refresh prompt + defaults.
@@ -211,9 +223,15 @@ export class SleepCycleService {
         keeper.model !== SLEEP_JOB_DEFAULTS.model ||
         keeper.maxTurns !== SLEEP_JOB_DEFAULTS.maxTurns ||
         keeper.command !== sleepPrompt ||
-        keeper.retries?.maxAttempts !== SLEEP_JOB_DEFAULTS.retries.maxAttempts;
+        keeper.retries?.maxAttempts !== SLEEP_JOB_DEFAULTS.retries.maxAttempts ||
+        jobHasArchitectureErrors(keeper);
 
       if (needsUpdate) {
+        if (jobHasArchitectureErrors(keeper) && keeper.command !== sleepPrompt) {
+          console.warn(
+            `[SleepCycleService] Repairing sleep job ${keeper.id} — architecture validation failed (stale prompt)`,
+          );
+        }
         await jobsService.updateJob(keeper.id, {
           command: sleepPrompt,
           provider: SLEEP_JOB_DEFAULTS.provider,

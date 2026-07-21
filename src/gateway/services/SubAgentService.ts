@@ -196,7 +196,11 @@ REQUIRED FIRST STEPS:
 
 OUTPUT (use all sections):
 ## Product Brief — job-to-be-done, scope, success criteria
-## Paprwork Architecture — mini-apps (modes), jobs (types, schedules, appIds, dependsOn), shared SQLite schema, data flow
+## Paprwork Architecture — mini-apps (modes), backend handlers, jobs (types, schedules, appIds, dependsOn), shared SQLite schema, data flow
+### Backend Handlers (REQUIRED subsection)
+List each POST /api/app/backend/:action or explicitly justify skipping ("read-only dashboard with 1-2 SELECTs, no secrets, no external APIs").
+Backend handlers are needed for: 3+ DB operations (CRUD), vault/API keys, external API calls, server-side validation, file operations, multi-table transactions — NOT just SQL.
+If the app calls ANY external API with secrets, those calls MUST go through backend handlers (never fetch() with API keys from the browser).
 ## Design System — screens (2-3 sections max), ONE primary action per screen, Liquid Glass + brand
 ## Phased Plan — Phase 1 MVP, later phases
 ## Risks & Open Questions
@@ -208,6 +212,7 @@ RULES:
 - Every job needs appIds; custom keys via \${KEY_NAME} in command strings only
 - Mini-apps use window.paprAPI (browser context, not Node fs)
 - Never recommend spaghetti (50+ files in one app)
+- Backend handlers for ANY server-side logic: DB CRUD, external APIs, vault secrets, auth, file ops — not just SQL
 
 TURN BUDGET: Up to ${DEFAULT_AGENT_MAX_TURNS} tool steps (same as main agent). After investigation, STOP calling tools and deliver the FULL document as your final assistant message — not "let me check..." planning text.
 
@@ -505,6 +510,19 @@ export class SubAgentService {
     return [...delegated, ...legacy].slice(0, limit);
   }
 
+  /** Delegations initiated from a specific main chat (for pinned report cards in UI). */
+  async listRunsForChat(
+    reportChatId: string,
+    limit = 20,
+  ): Promise<DelegationRunRecord[]> {
+    const trimmed = reportChatId.trim();
+    if (!trimmed) return [];
+    const runs = await this.listRuns(200);
+    return runs
+      .filter((run) => run.reportChatId === trimmed)
+      .slice(0, limit);
+  }
+
   async getDashboard(limit = 100): Promise<{
     totalAgents: number;
     totalRuns: number;
@@ -630,9 +648,12 @@ export class SubAgentService {
     const job = await jobsService.createJob({
       name: `Delegation: ${selected.name}`,
       type: "subagent",
-      appIds: [STANDALONE_APP_ID],
+      appIds:
+        input.appIds && input.appIds.length > 0
+          ? input.appIds
+          : [STANDALONE_APP_ID],
       subAgentId: selected.id,
-      delegatedBy: "main-agent",
+      delegatedBy: input.delegatedBy ?? "main-agent",
       delegationTask: input.task,
       delegationContext: input.context,
       command: input.task,
@@ -900,16 +921,29 @@ export class SubAgentService {
       // Ignore — use defaults below
     }
 
+    const timestamp = new Date().toISOString();
+    const content = summary ? `${summary}\n\n${result}` : result;
+    const chatMessage = {
+      role: "assistant" as const,
+      author: "sub-agent" as const,
+      content,
+      timestamp,
+    };
+
     await this.saveToDelegationChat(delegationId, {
       id: `msg-${uuidv4()}`,
       role: "assistant",
-      content: summary ? `${summary}\n\n${result}` : result,
-      timestamp: new Date().toISOString(),
+      content,
+      timestamp,
       source_agent_id: sourceAgentId,
       source_agent_name: sourceAgentName,
     });
 
     const { broadcast } = await import("../websocket/index.js");
+    broadcast({
+      type: "subagent-chat:message",
+      data: { delegationId, message: chatMessage },
+    });
     broadcast({
       type: "subagent-chat:completed",
       data: {
@@ -917,7 +951,7 @@ export class SubAgentService {
         jobId: delegationId,
         result,
         summary,
-        timestamp: new Date().toISOString(),
+        timestamp,
       },
     });
   }

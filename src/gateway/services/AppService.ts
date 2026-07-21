@@ -50,6 +50,8 @@ export interface MiniAppCloudLineage {
   lastSyncedAt?: string;
 }
 
+import type { AppAgentChatConfig } from "../../core/types/appAgentChat.js";
+
 export interface MiniApp {
   id: string;
   title: string;
@@ -60,10 +62,18 @@ export interface MiniApp {
   icon?: string;
   favorite?: boolean;
   preview?: string;
+  /** Lifecycle status for Apps tab filtering. Undefined = "active". */
+  status?: "draft" | "active" | "archived";
+  /** ISO timestamp of the last time the user opened this app. */
+  lastOpenedAt?: string;
+  /** Total number of times the user has opened this app. */
+  openCount?: number;
   createdByAgentId?: string;
   createdByAgentName?: string;
   /** Set when app was installed from Papr Cloud (fork or track). */
   cloudLineage?: MiniAppCloudLineage;
+  /** Embedded sub-agent chat bubble (desktop + published web). */
+  agentChat?: AppAgentChatConfig;
 }
 
 export interface AppFile {
@@ -118,6 +128,24 @@ export class AppService {
   private static readonly FILE_CHANGE_DEBOUNCE_MS = 800;
   /** Wait for edit bursts to settle after build before telling UI to reload. */
   private static readonly RELOAD_BROADCAST_DEBOUNCE_MS = 1500;
+
+  /** Mini-app source files subject to the 100-line limit. */
+  private static readonly MINI_APP_LOC_CHECK_EXTENSIONS = new Set([
+    ".html",
+    ".css",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+  ]);
+
+  /** Long-form content assets — served by the gateway but not LOC-checked. */
+  private static readonly MINI_APP_CONTENT_EXTENSIONS = new Set([
+    ".md",
+    ".markdown",
+    ".json",
+    ".txt",
+  ]);
 
   constructor() {
     const homeDir = os.homedir();
@@ -776,6 +804,16 @@ export class AppService {
     createdByAgentName?: string,
   ): Promise<MiniApp> {
     const now = new Date().toISOString();
+    const { ensureUniqueAppTitle } = await import("../utils/uniqueAppNaming.js");
+    const uniqueTitle = ensureUniqueAppTitle(
+      title,
+      [...this.apps.values()].map((existing) => existing.title),
+    );
+    if (uniqueTitle !== title.trim()) {
+      console.log(
+        `[AppService] Renamed duplicate app title ${JSON.stringify(title)} → ${JSON.stringify(uniqueTitle)}`,
+      );
+    }
 
     // Resolve icon: explicit icon wins, then auto-extract from index.html favicon
     let resolvedIcon = icon ?? null;
@@ -788,7 +826,7 @@ export class AppService {
 
     const app: MiniApp = {
       id: uuidv4(),
-      title,
+      title: uniqueTitle,
       description,
       type: "app",
       createdAt: now,
@@ -854,14 +892,14 @@ export class AppService {
     import("./gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
       getGatewayTelemetry().trackFireAndForget("paprwork_app_created", {
         app_id: app.id,
-        app_name: title.length > 80 ? `${title.slice(0, 79)}…` : title,
+        app_name: uniqueTitle.length > 80 ? `${uniqueTitle.slice(0, 79)}…` : uniqueTitle,
         has_icon: !!app.icon,
         file_count: files.length,
       });
     }).catch(() => {});
 
     console.log(
-      `[AppService] Created app: ${app.id} - ${title} (verified files on disk)`,
+      `[AppService] Created app: ${app.id} - ${uniqueTitle} (verified files on disk)`,
     );
 
     void (process.env.PAPR_AUTO_DISCOVER_DATA_SOURCES === "true"
@@ -933,9 +971,25 @@ export class AppService {
     const app = this.apps.get(id);
     if (!app) return null;
 
+    let nextUpdates = updates;
+    if (updates.title !== undefined) {
+      const { ensureUniqueAppTitle } = await import("../utils/uniqueAppNaming.js");
+      const uniqueTitle = ensureUniqueAppTitle(
+        updates.title,
+        [...this.apps.values()].map((existing) => existing.title),
+        { excludeTitle: app.title },
+      );
+      if (uniqueTitle !== updates.title.trim()) {
+        console.log(
+          `[AppService] Renamed duplicate app title ${JSON.stringify(updates.title)} → ${JSON.stringify(uniqueTitle)}`,
+        );
+      }
+      nextUpdates = { ...updates, title: uniqueTitle };
+    }
+
     const updatedApp: MiniApp = {
       ...app,
-      ...updates,
+      ...nextUpdates,
       updatedAt: new Date().toISOString(),
     };
 
@@ -1080,6 +1134,18 @@ export class AppService {
       console.error(`[AppService] Failed to read file: ${filename}`, error);
       return null;
     }
+  }
+
+  /** Recursive source file listing (excludes dist/, backend/, node_modules). */
+  async listAppFiles(appId: string): Promise<string[]> {
+    const app = this.apps.get(appId);
+    if (!app) return [];
+
+    const appPath = path.join(this.appsDir, appId);
+    const absoluteFiles = await this.getAllAppFiles(appPath);
+    return absoluteFiles
+      .map((file) => path.relative(appPath, file))
+      .sort((a, b) => a.localeCompare(b));
   }
 
   /**
@@ -1442,8 +1508,11 @@ export class AppService {
       const relativePath = path.relative(appPath, file);
       const ext = path.extname(file).toLowerCase();
 
-      // Skip non-source files and build output
-      if (!['.html', '.css', '.js', '.ts', '.tsx', '.jsx'].includes(ext)) {
+      // Skip content assets (.md reports, .json data, etc.) and build output
+      if (AppService.MINI_APP_CONTENT_EXTENSIONS.has(ext)) {
+        continue;
+      }
+      if (!AppService.MINI_APP_LOC_CHECK_EXTENSIONS.has(ext)) {
         continue;
       }
       if (relativePath.startsWith("dist/") || relativePath.startsWith("dist\\")) {
@@ -1454,7 +1523,7 @@ export class AppService {
         const content = await fs.readFile(file, 'utf-8');
         fileContents.set(relativePath, content);
 
-        // LOC check (100 lines max for mini-apps)
+        // LOC check (100 lines max for code — not .md/.json content assets)
         const locIssues = this.checkLineLimit(content, relativePath, 100);
         issues.push(...locIssues);
 
@@ -1514,6 +1583,36 @@ export class AppService {
       issues.push(...checkMiniAppEmojiPatterns(fileContents));
     } catch (lintError) {
       console.warn("[AppService] Emoji lint failed:", lintError);
+    }
+    try {
+      const { checkFrontendSqlOveruse } = await import(
+        "../utils/miniAppFrontendSqlLint.js"
+      );
+      issues.push(...checkFrontendSqlOveruse(fileContents));
+    } catch (lintError) {
+      console.warn("[AppService] Frontend SQL lint failed:", lintError);
+    }
+    try {
+      const {
+        scanMiniAppCloudCompatibility,
+        buildCloudCompatibilityReport,
+      } = await import("../utils/miniAppCloudCompatibility.js");
+      const dataSourcesRaw = fileContents.get("data-sources.json");
+      const cloudReport = buildCloudCompatibilityReport(
+        scanMiniAppCloudCompatibility(fileContents, dataSourcesRaw),
+      );
+      for (const finding of cloudReport.findings) {
+        if (finding.severity === "info") continue;
+        issues.push({
+          file: finding.file,
+          line: finding.line,
+          severity: "warning",
+          message: `[Cloud ${cloudReport.level}] ${finding.message}`,
+          rule: `cloud-compatibility-${finding.category}`,
+        });
+      }
+    } catch (lintError) {
+      console.warn("[AppService] Cloud compatibility lint failed:", lintError);
     }
     issues.push(...(await this.checkLinkedDataSources(appId, fileContents)));
 

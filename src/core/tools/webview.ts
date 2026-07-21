@@ -19,7 +19,12 @@ const snapshotSchema = z.object({
 
 const executeSchema = z.object({
   webviewId: z.string().optional(),
-  script: z.string().min(1),
+  script: z
+    .string()
+    .min(1)
+    .describe(
+      "One-shot JS that RETURNS a value. For API/DB/job verification use bash+curl instead — NOT webview_execute.",
+    ),
 });
 
 const logsSchema = z.object({
@@ -58,7 +63,8 @@ async function request(
 export const webviewLaunchAppTool = createTool({
   id: "webview_launch_app",
   description:
-    "Launch a mini-app preview. Then use page_wait_for({ target: 'mini_app', time: 2 }) or webview_snapshot.",
+    "Launch a mini-app preview window. Then: page_wait_for({ target: 'mini_app', time: 2 }) → webview_get_console (runtime errors) → webview_snapshot (visual). " +
+    "For API/DB/job verification use bash+curl to localhost:18789 — NOT webview_execute.",
   inputSchema: launchSchema,
   execute: async (input) => {
     const args =
@@ -124,7 +130,10 @@ export const webviewSnapshotTool = createTool({
 
 export const webviewExecuteTool = createTool({
   id: "webview_execute",
-  description: "Execute JavaScript in active webview test context",
+  description:
+    "One-shot DOM read in mini-app preview. Script MUST return a value (e.g. return document.querySelectorAll('.row').length). " +
+    "DO NOT use for: API testing, DB verification, job output, button-click flows, or fetch() calls — use bash+curl to localhost:18789 instead. " +
+    "DO use for: window.__paprBoot, element counts, getElementById innerText. If result is undefined, script did not return.",
   inputSchema: executeSchema,
   execute: async (input) => {
     const args =
@@ -133,13 +142,23 @@ export const webviewExecuteTool = createTool({
       webviewId: args.webviewId,
       script: args.script,
     });
-    return { success: true, data };
+    const result =
+      data && typeof data === "object" && "result" in data
+        ? (data as { result: unknown }).result
+        : undefined;
+    const hint =
+      result === undefined
+        ? "Script returned undefined — add an explicit return value. For API/DB/job checks use bash+curl, not webview_execute."
+        : undefined;
+    return { success: true, data, ...(hint ? { _hint: hint } : {}) };
   },
 });
 
 export const webviewGetConsoleTool = createTool({
   id: "webview_get_console",
-  description: "Read captured webview console logs",
+  description:
+    "Read captured webview console logs — PRIMARY tool for runtime errors (ReferenceError, fetch failures). " +
+    "Run after webview_launch_app before webview_execute or declaring preview broken.",
   inputSchema: logsSchema,
   execute: async (input) => {
     const args =

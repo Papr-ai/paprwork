@@ -347,3 +347,33 @@ export function deriveAppCloudSyncStatus(
     cloudPublishing,
   };
 }
+
+export type WebSyncVisualState = "loading" | "synced" | "syncing" | "warn" | "neutral";
+
+/** Hover tooltip for the web sync status dot. */
+export function formatWebSyncStatusTooltip(
+  status: AppCloudSyncStatus | null,
+  options: { loading?: boolean; error?: string | null } = {},
+): string {
+  if (options.error) return "Web sync unavailable";
+  if (options.loading || !status) return "Checking web sync status…";
+  if (status.overall === "disabled") return "Cloud sync is off";
+  return status.summaryLine || status.chipLabel;
+}
+
+export function webSyncVisualState(
+  status: AppCloudSyncStatus | null,
+  options: {
+    loading?: boolean;
+    error?: string | null;
+    pushing?: boolean;
+    refreshing?: boolean;
+  } = {},
+): WebSyncVisualState {
+  if (options.error || options.loading || !status) return "loading";
+  if (status.overall === "disabled") return "neutral";
+  if (options.pushing || status.overall === "uploading") return "syncing";
+  if (status.overall === "synced") return "synced";
+  if (status.overall === "needs_sync") return "warn";
+  return "neutral";
+}

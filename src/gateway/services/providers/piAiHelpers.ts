@@ -4,6 +4,44 @@
 
 import type { Message } from "@mariozechner/pi-ai";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { extractToolResultText } from "../agent/historyFormatter.js";
+
+const ORPHAN_TOOL_RESULT_MARKER =
+  "[Tool result not persisted — stream likely interrupted before this tool finished. Treat as unknown; re-invoke if needed.]";
+
+function resolveToolResultErrorFlag(
+  part: {
+    result?: unknown;
+    output?: { type: string; value: unknown };
+  },
+  resultText: string,
+): boolean {
+  if (part.result && typeof part.result === "object" && !Array.isArray(part.result)) {
+    const resultObj = part.result as Record<string, unknown>;
+    return resultObj.success === false || typeof resultObj.error === "string";
+  }
+
+  if (
+    part.output?.type === "json" &&
+    part.output.value &&
+    typeof part.output.value === "object" &&
+    !Array.isArray(part.output.value)
+  ) {
+    const valueObj = part.output.value as Record<string, unknown>;
+    return valueObj.success === false || typeof valueObj.error === "string";
+  }
+
+  if (!resultText) {
+    return false;
+  }
+
+  try {
+    const parsed = JSON.parse(resultText) as Record<string, unknown>;
+    return parsed.success === false || typeof parsed.error === "string";
+  } catch {
+    return false;
+  }
+}
 
 export interface PiContextInput {
   messages: unknown[];
@@ -52,14 +90,24 @@ export function buildPiContext(input: PiContextInput): {
         for (const part of msg.content as any[]) {
           if (part.type === "text")
             content.push({ type: "text", text: part.text ?? "" });
-          else if (part.type === "tool-call")
+          else if (part.type === "tool-call") {
+            const rawArgs =
+              part.input !== undefined
+                ? part.input
+                : part.args !== undefined
+                  ? part.args
+                  : {};
             content.push({
               type: "toolCall",
               id: part.toolCallId ?? "",
               // Tool names are already sanitized in historyFormatter, just pass through
               name: part.toolName ?? "",
-              arguments: typeof part.args === "object" ? part.args : {},
+              arguments:
+                typeof rawArgs === "object" && rawArgs !== null
+                  ? (rawArgs as Record<string, unknown>)
+                  : {},
             });
+          }
         }
       }
       piMessages.push({
@@ -85,22 +133,19 @@ export function buildPiContext(input: PiContextInput): {
     if (msg.role === "tool") {
       const results = Array.isArray(msg.content) ? msg.content : [];
       for (const r of results as any[]) {
-        // Accept three shapes:
-        //  - AI-SDK tool-result: { result: <any> }
-        //  - already pi-ai shape (round-tripped from storage): { text: "..." } / { type: "text", text: "..." }
-        //  - missing result (interrupted stream): emit explicit marker, never a silent empty string
+        // Accept:
+        //  - AI SDK 6 tool-result: { output: { type, value } } (from historyFormatter)
+        //  - Legacy AI-SDK tool-result: { result: <any> }
+        //  - Pi-ai round-trip: { text: "..." }
+        //  - Missing result (interrupted stream): explicit marker, never silent empty string
         const directText =
           typeof (r as any).text === "string" ? (r as any).text : undefined;
-        const hasResult = r.result !== undefined && r.result !== null;
-        const text = hasResult
-          ? (typeof r.result === "string" ? r.result : JSON.stringify(r.result))
-          : directText !== undefined
-            ? directText
-            : "[Tool result not persisted — stream likely interrupted before this tool finished. Treat as unknown; re-invoke if needed.]";
-        const resultObj = r.result && typeof r.result === "object" ? r.result as Record<string, unknown> : null;
-        const hasError = resultObj
-          ? resultObj.success === false || typeof resultObj.error === "string"
-          : false;
+        const extractedText = extractToolResultText(r);
+        const text =
+          extractedText ||
+          directText ||
+          ORPHAN_TOOL_RESULT_MARKER;
+        const hasError = resolveToolResultErrorFlag(r, extractedText);
         piMessages.push({
           role: "toolResult",
           toolCallId: r.toolCallId ?? "",

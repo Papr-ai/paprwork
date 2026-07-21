@@ -2,7 +2,7 @@
  * Gate cloud publish/install tools — prefer cloud path, clear fallback to export.
  */
 
-import { loadSettings } from "../websocket/settings.js";
+import { loadSettings } from "../services/settingsStore.js";
 import { getPaprApiKey } from "./keyResolver.js";
 
 export interface CloudPublishUnavailable {

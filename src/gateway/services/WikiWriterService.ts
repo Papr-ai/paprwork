@@ -13,6 +13,11 @@ import os from "os";
 import { fileURLToPath } from "url";
 import type { JobRecord } from "./jobs/types.js";
 import { STANDALONE_APP_ID } from "./jobs/appIds.js";
+import {
+  formatJobArchitectureErrors,
+  validateJobArchitecture,
+} from "./jobs/jobArchitectureValidation.js";
+import { normalizePortableJobPrompt } from "./jobs/normalizePortableJobPrompt.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,11 +26,11 @@ export const WIKI_WRITER_JOB_NAMES = [
   "Wiki Writer",
   "wiki-writer",
 ] as const;
-export const WIKI_WRITER_PROMPT_VERSION = 2;
+export const WIKI_WRITER_PROMPT_VERSION = 3;
 
 export const WIKI_WRITER_JOB_DEFAULTS = {
   provider: "anthropic" as const,
-  model: "claude-sonnet-4-6",
+  model: "claude-sonnet-5",
   maxTurns: 80,
   memoryPolicy: "none" as const,
   schedule: {
@@ -82,7 +87,7 @@ async function readWikiWriterPrompt(): Promise<string> {
   const workspaceExists = await fileExists(workspacePath);
   if (!workspaceExists && templateContent) {
     await fs.writeFile(workspacePath, templateContent, "utf8");
-    return templateContent;
+    return normalizePortableJobPrompt(templateContent);
   }
 
   if (workspaceExists) {
@@ -97,15 +102,20 @@ async function readWikiWriterPrompt(): Promise<string> {
       console.log(
         `[WikiWriterService] Upgraded WIKI_WRITER.md v${wsVersion} → v${tplVersion}`,
       );
-      return templateContent;
+      return normalizePortableJobPrompt(templateContent);
     }
-    return workspaceContent;
+    return normalizePortableJobPrompt(workspaceContent);
   }
 
-  return (
+  return normalizePortableJobPrompt(
     templateContent ||
-    "Maintain entity wiki pages in ~/Papr/workspace/entities/ based on daily logs and graph changes."
+      "Maintain entity wiki pages in ~/Papr/workspace/entities/ based on daily logs and graph changes.",
   );
+}
+
+function jobHasArchitectureErrors(job: Pick<JobRecord, "type" | "command" | "appIds">): boolean {
+  const issues = validateJobArchitecture(job);
+  return Boolean(formatJobArchitectureErrors(issues));
 }
 
 function pickKeeperJob(jobs: JobRecord[]): JobRecord {
@@ -176,9 +186,15 @@ export class WikiWriterService {
         keeper.provider !== WIKI_WRITER_JOB_DEFAULTS.provider ||
         keeper.model !== WIKI_WRITER_JOB_DEFAULTS.model ||
         keeper.maxTurns !== WIKI_WRITER_JOB_DEFAULTS.maxTurns ||
-        keeper.command !== wikiPrompt;
+        keeper.command !== wikiPrompt ||
+        jobHasArchitectureErrors(keeper);
 
       if (needsUpdate) {
+        if (jobHasArchitectureErrors(keeper) && keeper.command !== wikiPrompt) {
+          console.warn(
+            `[WikiWriterService] Repairing wiki writer job ${keeper.id} — architecture validation failed (stale prompt)`,
+          );
+        }
         await jobsService.updateJob(keeper.id, {
           provider: WIKI_WRITER_JOB_DEFAULTS.provider,
           model: WIKI_WRITER_JOB_DEFAULTS.model,

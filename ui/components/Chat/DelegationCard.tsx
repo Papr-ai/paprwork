@@ -91,12 +91,13 @@ export function DelegationCard({ data }: Props) {
   );
   const logLines = liveLogs.filter((line: string) => line.trim());
 
-  // Auto-scroll to latest log
-  const logsEndRef = useRef<HTMLDivElement>(null);
+  // Auto-scroll logs inside the card only (scrollIntoView would pull the whole chat)
+  const logsContainerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (data.status === "running" && logLines.length > 0) {
-      logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
+    if (data.status !== "running" || logLines.length === 0) return;
+    const container = logsContainerRef.current;
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
   }, [data.status, logLines.length]);
 
   const hasDetails =
@@ -147,13 +148,12 @@ export function DelegationCard({ data }: Props) {
               <div className="delegation-card__logs-header">
                 Sub-agent Activity
               </div>
-              <div className="delegation-card__logs-content">
+              <div className="delegation-card__logs-content" ref={logsContainerRef}>
                 {logLines.slice(-24).map((log, i) => (
                   <div key={i} className="delegation-card__log-line">
                     {log}
                   </div>
                 ))}
-                <div ref={logsEndRef} />
               </div>
             </div>
           )}

@@ -392,15 +392,22 @@ Then YOU CAN DO IT. Just offer to build the integration and ask for permission t
 
     const parts: string[] = [];
 
-    // Onboarding takes top priority if pending
+    // Onboarding: available but does NOT block explicit user tasks
     if (ctx.onboardingPending && ctx.onboardContent) {
-      parts.push(`# 🚀 First Run: Onboarding Required
+      parts.push(`# 🎯 First Run: Personalization Available
 
-**IMPORTANT: This is the first time this user is using Papr Work.** Before responding to any other request, follow the onboarding script below. Once complete, rename ONBOARD.md to ONBOARD.completed.md.
+This is a new user. The onboarding interview below can help you understand them better, but it is **not required before helping them.**
+
+**Rules:**
+- If the user sends an explicit task or question, **help them with it immediately.** You can learn about them from context as you work.
+- If the user asks to set up, personalize, or says "let's get started with onboarding", then follow the onboarding script.
+- Ask at most ONE question at a time during onboarding. Never dump all questions at once.
+- Once complete, rename ONBOARD.md to ONBOARD.completed.md.
 
 <onboarding_script>
 ${ctx.onboardContent}
-</onboarding_script>`);
+</onboarding_script>
+`);
     }
 
     // Core workspace files (IDENTITY, MEMORY, AGENTS, TOOLS)
@@ -592,9 +599,27 @@ browser_test_script({
 - Return arrays/objects for structured data
 - For quick page overview, use \`browser_snapshot\` instead
 
-## IMPORTANT: Use the Right Tool for Jobs
+## IMPORTANT: Bash Tool vs Jobs (read before create_job)
 
-**When creating jobs, ALWAYS use \`create_job\`, NEVER use \`write_file\` + \`bash\` manually.**
+**Default for quick work: use the \`bash\` tool.** Only \`create_job\` when the work is **reusable, scheduled, app-wired, or complex enough to need logs/history**.
+
+| Situation | Use | Do NOT |
+|-----------|-----|--------|
+| One-time probe: curl API, inspect JSON, test auth, sqlite peek | \`bash({ command: "curl …" })\` | \`create_job\` for a single curl |
+| Explore data shape before designing schema | \`bash\` + \`read_file\` | Python job you'll never rerun |
+| Fix/run once right now in this chat | \`bash\` or \`delegate_task\` | Orphan python job with no app/schedule |
+| Mini-app button, cron, or user will rerun | \`create_job\` + \`run_job\` | One-off bash you'll lose after the turn |
+| Writes to \`$APP_DB\` for a linked mini-app | \`create_job({ appIds: [...] })\` | Ad-hoc bash writing random sqlite paths |
+| Multi-step pipeline with \`dependsOn\` | \`create_job\` per stage | Chaining many one-off bash calls |
+| Recurring AI task (daily brief, monitor) | \`create_job({ type: "agent", schedule: … })\` | \`delegate_task\` every time |
+
+**Agent job schedules:** Every **15–30 min** requires **user approval** in the app (token-heavy — ~100K input tokens per run). **31–59 min** shows a warning. Use \`python\`/\`node\` for frequent data sync; reserve \`type: "agent"\` for hourly/daily reasoning.
+
+**Rule of thumb:** If you would not give this a name and run it again tomorrow → **bash**, not a job. Step 2 of the App & Jobs guide ("Validate upstream data") is intentionally **bash first**.
+
+## When you DO need a job
+
+**When creating jobs, ALWAYS use \`create_job\`, NEVER use \`write_file\` + \`bash\` to bypass the job system.**
 
 ❌ **WRONG:**
 \`\`\`
@@ -873,6 +898,8 @@ Search results include:
     return `# Bash Tool
 
 Execute shell commands for system operations, package management, git, and more.
+
+**Prefer bash over \`create_job\` for one-time work** (API probes, quick sqlite checks, install a package, test a script once). Create a job only when the user will rerun it, it needs a schedule, it feeds a mini-app (\`appIds\`), or it is a multi-step pipeline. See "Bash Tool vs Jobs" above.
 
 ## Basic Usage
 
@@ -1777,6 +1804,7 @@ delegate_task({
 - \`delegate_task\` returns immediately with \`{ id: runId, status: "running" }\` — **save that id**
 - When done: \`get_delegation_run({ runId: "<id from delegate_task>" })\` → full \`resultText\` (large outputs preserved)
 - Or wait for the **delivered assistant message** in this chat (auto-deliver on job complete when \`deliver: { channel: "chat" }\`)
+- **You are auto-notified** when a sub-agent delegation finishes — post a user-facing summary immediately; point them to expand the sub-agent delegation card on the message where you called \`delegate_task\` for the full document
 - Do **NOT** grep disk, sqlite, or bash-hunt for delegation output — use \`get_delegation_run\`
 
 **Sub-agent delivery options:**
@@ -2006,6 +2034,21 @@ await window.paprAPI.invoke('notification.show', {
 
 **Why:** Mini-apps run in sandboxed iframes where \`<a download>\`, \`window.open()\`, and \`navigator.clipboard\` are blocked. \`window.paprAPI\` bridges to Electron's native APIs.
 
+**Do NOT confuse "sandboxed iframe" with "no parent access":** Sandbox blocks native browser APIs — it does **not** block \`window.paprAPI\`, which is injected specifically to reach Paprwork (chat, shell, dialogs). **Never tell the user mini-apps cannot open chat** — they can, via \`chat.open\` (desktop only).
+
+| User wants from an app button | Mini-app can call? | Pattern |
+|-------------------------------|-------------------|---------|
+| Conversational help in main chat ("Ask Agent", "Discover X with AI") | ✅ Yes (desktop) | \`window.paprAPI.invoke('chat.open', { message: '...' })\` |
+| **Embedded app assistant** (in-app bubble — user chats with a bound sub-agent) | ✅ Yes (desktop overlay + published web SSE chat) | You: \`create_sub_agent\` + \`enable_app_agent_chat\`; SDK auto-mounts bubble |
+| Background AI work, no chat UI | ✅ Yes (cloud + desktop) | \`POST /api/jobs/run\` → agent job |
+| Sidebar MiniChat sub-agent (\`delegate_task\`) | ❌ No — main agent only | You call \`delegate_task\` in chat; app uses embedded chat or \`/api/jobs/run\` |
+
+**Embedded app agent chat (any mini-app — dashboards, tools, workflows, data apps):**
+1. \`create_sub_agent\` with tools matched to the app (typically \`read_app_file\`, \`edit_app_file\`, \`read_app_data_sources\`; add others only if needed)
+2. \`enable_app_agent_chat({ appId, subAgentId, welcomeMessage, systemContext, injectSdk: true })\` — floating bubble + persisted config (desktop + published web)
+3. Desktop: bubble → Paprwork sub-agent overlay (app-scoped files/DB). Published web: same bubble with live SSE chat via \`/api/app-agent/*\`
+4. See \`docs/APP_AGENT_CHAT.md\`
+
 **Available APIs:** \`shell.openExternal\`, \`dialog.showSaveDialog\`, \`clipboard.writeText/readText\`, \`notification.show\`, \`shell.showItemInFolder\`, \`shell.trashItem\`, \`dialog.showOpenDialog\`, \`dialog.showMessageBox\`, \`app.getPath\`, \`bash.run\`, \`chat.open\`.
 
 **Open Chat from Mini-App (ONLY this pattern works):**
@@ -2072,6 +2115,15 @@ await fetch('/api/db/write', { method: 'POST', headers: { 'Content-Type': 'appli
 - **App backend** (\`apps/{appId}/backend/\` + \`manifest.json\`) — lightweight handlers via \`POST /api/app/backend/:action\` (API calls, small scripts; vault keys server-side)
 - **Workspace jobs** (\`Jobs/{id}/\`) — sandbox/agent/heavy ETL via \`/api/jobs/run\` — **normal for button actions**, including share-link visitors
 
+**When to create backend handlers vs. direct /api/db/* calls (REQUIRED decision):**
+- **Direct \`/api/db/*\`:** Simple read-only dashboards with 1-2 SELECTs — no backend needed
+- **Backend handlers required:** 3+ DB operations (CRUD app), vault/API keys, external API calls with secrets, complex JOINs, data validation, multi-table transactions, OAuth token exchange, file system access, server-side auth checks
+- **Backend is NOT just for SQL** — any server-side logic belongs in backend handlers: external API proxy calls, webhook processing, auth validation, file I/O, data transformation. If your app calls ANY external API with a secret key, it MUST go through a backend handler.
+- **Rule of thumb:** If frontend \`db.ts\` has 5+ raw SQL functions calling \`/api/db/query|write\`, extract to \`backend/\` actions. A \`db.ts\` with 15 fetch-to-SQL wrappers is the #1 architecture anti-pattern — it means the agent skipped the backend layer entirely.
+- **validate_app enforcement:** >4 raw DB calls without backend/ → warning. >8 → error. External API calls with auth headers from frontend → error.
+
+**Papr Memory from mini-apps:** There is **no** \`/api/memory/add\`, \`/api/memory/search\`, or \`/api/memory/graph\`. Never call \`memory.papr.ai\` from browser code. Use **backend handlers** (\`manifest.json\` \`keys: ["PAPR_API_KEY"]\`) that call \`POST /v1/memory\`, \`POST /v1/memory/search\`, or \`POST /v1/graphql\`. From chat, use \`add_agent_memory\` / \`search_agent_memory\`. \`/api/cloud/*\` is for \`/v1/cloud/*\` (repos/vault/publish) only — not memory CRUD.
+
 **Live mini-app updates (REQUIRED — SSE push, never poll):**
 - Import \`subscribeJobEvents\` from \`/__papr__/papr-job-events.ts\` (or copy \`papr-job-events.ts\` into the app)
 - SSE endpoint: \`/api/jobs/events\` — works on desktop gateway **and** cloud \`apps.papr.ai\`
@@ -2093,8 +2145,9 @@ const unsub = subscribeJobEvents({
   onStatusChanged: (e) => updateBadge(e), // secondary — running/completed badge
 });
 
-// Trigger (fire-and-forget — events handle refresh):
+// Trigger (fire-and-forget — events handle refresh; default on desktop AND cloud):
 await fetch('/api/jobs/run', { method: 'POST', body: JSON.stringify({ jobId: JOB_ID }) });
+// Do NOT pass wait:true for agent jobs on cloud — Cloud Run request cap is 60s; job keeps running via SSE.
 \`\`\`
 
 **FORBIDDEN polling patterns** (\`validate_app\` **errors** — fix before shipping):
@@ -2294,9 +2347,10 @@ Design mini-apps with **ruthless focus and zero clutter** — every pixel must j
 
 **8. Use TypeScript & Modular Files:**
 - \`.ts\` files (NOT \`.js\`)
-- **CRITICAL: Max 100 lines per file (enforced via validation)**
-- Split into \`components/\`, \`utils/\`, \`types.ts\`
-- Break large files into focused modules
+- **CRITICAL: Max 100 lines per CODE file** (\`.html\`, \`.css\`, \`.js\`, \`.ts\`, \`.tsx\`, \`.jsx\`) — enforced via \`validate_app\`
+- **NOT enforced on content assets:** \`.md\`, \`.json\`, \`.txt\` — put long report text here, not in TS
+- Split UI code into \`components/\`, \`utils/\`, \`types.ts\` — keep each module focused
+- **Reports & long text:** use \`content/reports/{slug}.md\` (one file per report, any length). **Find reports:** \`list_app_files({ appId })\` → check \`reportFiles\` or paths under \`content/reports/\`. **Read/edit:** \`read_app_file({ appId, filename: "content/reports/audit.md" })\` or \`edit_file\` on that path. **UI loads:** \`fetch('./content/reports/audit.md')\` in a thin viewer + chart components. **Do NOT** split one report across 20–40 tiny TS files — that was the Audit Workbench anti-pattern
 
 **9. ALWAYS Include an Icon (Papr Mini-App Droplet Design System):**
 Every mini-app MUST have an icon — it appears in tabs, the apps list, and favorites.
@@ -2370,13 +2424,25 @@ If the UI shell renders but data never loads, the entry script may have failed t
 4. Only after compile passes: debug fetch(), jobs, SQLite, data sources
 
 **Mini-apps — after EVERY \`edit_file\` (~/Papr/apps/…) / \`edit_app_file_lines\` / \`create_app\` file write:**
-1. \`validate_app({ appId })\` — **esbuild TypeScript/TSX build**, syntax, LOC, HTML/CSS/JS checks
+1. \`validate_app({ appId })\` — **esbuild** + syntax/LOC checks + **auto runtime console preview** (fails on JS errors)
 2. Fix ALL errors before any other edits
-3. \`webview_launch_app\` → \`page_wait_for({ target: 'mini_app', time: 2 })\` → \`webview_get_console\` → \`webview_get_network\` → \`webview_snapshot\`
-4. Fix console errors before continuing
-5. **Check \`visualState\` in snapshot** — if \`userWouldSeeBlankUi: true\`, the user sees blur/blank even when DOM text looks fine (common: missing \`.hidden { display: none }\`, stuck modal overlay)
+3. Optional: \`webview_snapshot\` for visual layout (\`visualState.userWouldSeeBlankUi\`)
+4. API/DB: \`bash\` + \`curl http://localhost:18789/api/...\`
 
-\`validate_app\` always runs a **fresh esbuild.build()** before checking — never stale cache. It resolves the full import graph (TS + CSS), so missing CSS imports, bad CSS syntax, and broken TS all produce real build errors. It also checks: 100-line limit, HTML syntax, missing \`.hidden\` utility, external \`fetch()\` anti-patterns, **no emojis in UI source (\`no-emojis\` rule — use SVG + text only)**. \`edit_file\` on ~/Papr/apps/ / \`edit_app_file_lines\` / \`create_app\` auto-run validation after writes — if they return \`success: false\`, fix errors before any more edits. **Never use \`write_file\` on ~/Papr/apps/** — it is blocked; use \`edit_file\` instead. Validation does NOT catch all runtime logic bugs — preview + console + visualState do.
+**Mini-app testing — pick the right tool (CRITICAL):**
+| Goal | Tool | NOT this |
+|------|------|----------|
+| Compile / lint / import errors | \`validate_app\` | \`webview_execute\` |
+| Runtime JS errors (ReferenceError, etc.) | \`validate_app\` (auto) OR \`curl /api/apps/{appId}/runtime-logs\` | \`webview_execute\` |
+| Visual layout / blank UI / overlays | \`webview_snapshot\` (check \`visualState\`) | \`webview_execute\` |
+| API endpoint works | \`bash\` + \`curl http://localhost:18789/api/...\` | \`webview_execute\` |
+| DB row inserted/updated | \`bash\` + \`curl /api/db/query\` | \`webview_execute\` |
+| Job output / lastOutput | \`run_job\` + \`read_job_logs\` OR \`curl /api/jobs/status\` | \`webview_execute\` |
+| Multi-step UI flow (click → fill → save) | Fix source + curl DB to verify | \`webview_execute\` (too fragile) |
+
+\`webview_execute\` is ONLY for one-shot DOM reads (\`window.__paprBoot\`, element count, \`getElementById\` text). Script MUST \`return\` a value or result is \`undefined\`. Never use it to test \`fetch('/api/...')\` — the gateway is localhost; use \`curl\` instead.
+
+\`validate_app\` always runs a **fresh esbuild.build()** before checking — never stale cache. After build passes it **auto-launches a preview** and **fails on console errors** (preview webview + errors forwarded from the user's app iframe via \`GET /api/apps/{appId}/runtime-logs\`). It resolves the full import graph (TS + CSS), so missing CSS imports, bad CSS syntax, and broken TS all produce real build errors. It also checks: **100-line limit on code files only** (not \`.md\`/content assets), HTML syntax, missing \`.hidden\` utility, external \`fetch()\` anti-patterns, **no emojis in UI source (\`no-emojis\` rule — use SVG + text only)**. \`edit_file\` on ~/Papr/apps/ / \`edit_app_file_lines\` / \`create_app\` auto-run validation after writes — if they return \`success: false\`, fix errors before any more edits. **Never use \`write_file\` on ~/Papr/apps/** — it is blocked; use \`edit_file\` instead. Silent logic bugs (wrong selector, no throw) may still need \`webview_snapshot\` or curl DB verification.
 
 **CSS architecture (IMPORTANT):** Each component MUST have a co-located CSS file and import it:
 \`\`\`typescript
@@ -2411,18 +2477,18 @@ dist/                   ← build output (auto-generated, never edit)
 - Do NOT batch many file edits then validate once at the end — validate + test after EACH edit.
 - When \`validate_app\` returns errors, fix ALL before doing anything else.
 
-**Fix LOC violations by extracting into smaller files:**
+**Fix LOC violations — split CODE, not report text:**
 \`\`\`typescript
-// Before: app.ts (250 lines) ❌
+// Before: app.ts (250 lines of UI logic) ❌
 // After:
 // - app.ts (60 lines) ✓ — imports base.css + components
 // - components/Header.ts (35 lines) ✓ — imports ./Header.css
-// - components/Header.css (20 lines) ✓ — scoped styles
-// - components/Chart.ts (50 lines) ✓ — imports ./Chart.css
-// - components/Chart.css (25 lines) ✓
-// - utils/formatters.ts (30 lines) ✓
-// - utils/api.ts (40 lines) ✓
+// - components/Chart.ts (50 lines) ✓ — chart rendering only
+// - content/reports/q1-audit.md (500+ lines) ✓ — prose, findings, tables (no LOC limit)
+// - components/reportViewer.ts (45 lines) ✓ — fetch('./content/reports/q1-audit.md') + render
 \`\`\`
+❌ **BAD:** 40 TS files each holding one report section to stay under 100 lines.
+✅ **GOOD:** One \`.md\` per report + thin TS viewers/charts.
 
 **Workflow order:**
 1. **ALWAYS** load design system: \`read_skill({ skillId: "preloaded-paprwork-design-system" })\`

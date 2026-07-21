@@ -4,9 +4,9 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import type { PersistedSyncState } from "./syncState.js";
+import type { DeadLetterItem, PersistedSyncState } from "./syncState.js";
 
-export type GitHubItemSyncState = "synced" | "pending" | "outdated";
+export type GitHubItemSyncState = "synced" | "pending" | "outdated" | "failed";
 
 export interface GitHubSyncItem {
   id: string;
@@ -15,6 +15,8 @@ export interface GitHubSyncItem {
   relativePath: string;
   status: GitHubItemSyncState;
   lastSyncAt: string | null;
+  lastError?: string | null;
+  failedAt?: string | null;
 }
 
 export interface GitHubSyncItemsReport {
@@ -27,6 +29,7 @@ export interface GitHubSyncItemsReport {
     synced: number;
     pending: number;
     outdated: number;
+    failed: number;
     total: number;
   };
 }
@@ -46,12 +49,14 @@ export function resolveGitHubItemSyncStatus(
   syncedItems: PersistedSyncState["syncedItems"],
   queuedPaths: readonly string[],
   hasItemChanged: (relativePath: string) => boolean,
+  deadLetter?: Readonly<Record<string, DeadLetterItem>>,
 ): GitHubItemSyncState {
   return resolveItemStatus(
     relativePath,
     syncedItems,
     new Set(queuedPaths),
     hasItemChanged,
+    deadLetter,
   );
 }
 
@@ -60,7 +65,11 @@ function resolveItemStatus(
   syncedItems: PersistedSyncState["syncedItems"],
   queuedPaths: ReadonlySet<string>,
   hasItemChanged: (relativePath: string) => boolean,
+  deadLetter?: Readonly<Record<string, DeadLetterItem>>,
 ): GitHubItemSyncState {
+  if (deadLetter?.[relativePath]) {
+    return "failed";
+  }
   const prev = syncedItems[relativePath];
   if (prev && !hasItemChanged(relativePath)) {
     // Already on GitHub — stale background queue entries must not show as pending.
@@ -126,15 +135,27 @@ function buildFolderItems(
   syncedItems: PersistedSyncState["syncedItems"],
   queuedPaths: ReadonlySet<string>,
   hasItemChanged: (relativePath: string) => boolean,
+  deadLetter?: Readonly<Record<string, DeadLetterItem>>,
 ): GitHubSyncItem[] {
-  return folders.map((relativePath) => ({
-    id: relativePath.replace("/", "-"),
-    kind: "folder" as const,
-    label: relativePath === "workspace" ? "Workspace" : "Settings & data",
-    relativePath,
-    status: resolveItemStatus(relativePath, syncedItems, queuedPaths, hasItemChanged),
-    lastSyncAt: syncedItems[relativePath]?.lastSyncAt ?? null,
-  }));
+  return folders.map((relativePath) => {
+    const dead = deadLetter?.[relativePath];
+    return {
+      id: relativePath.replace("/", "-"),
+      kind: "folder" as const,
+      label: relativePath === "workspace" ? "Workspace" : "Settings & data",
+      relativePath,
+      status: resolveItemStatus(
+        relativePath,
+        syncedItems,
+        queuedPaths,
+        hasItemChanged,
+        deadLetter,
+      ),
+      lastSyncAt: syncedItems[relativePath]?.lastSyncAt ?? null,
+      lastError: dead?.lastError ?? null,
+      failedAt: dead?.lastFailedAt ?? null,
+    };
+  });
 }
 
 function buildAppItems(
@@ -142,18 +163,28 @@ function buildAppItems(
   syncedItems: PersistedSyncState["syncedItems"],
   queuedPaths: ReadonlySet<string>,
   hasItemChanged: (relativePath: string) => boolean,
+  deadLetter?: Readonly<Record<string, DeadLetterItem>>,
 ): GitHubSyncItem[] {
   const titles = loadAppTitles(paprDir);
   return listChildDirs(paprDir, "apps")
     .map((relativePath) => {
       const id = path.basename(relativePath);
+      const dead = deadLetter?.[relativePath];
       return {
         id,
         kind: "app" as const,
         label: titles.get(id) ?? id.slice(0, 8),
         relativePath,
-        status: resolveItemStatus(relativePath, syncedItems, queuedPaths, hasItemChanged),
+        status: resolveItemStatus(
+          relativePath,
+          syncedItems,
+          queuedPaths,
+          hasItemChanged,
+          deadLetter,
+        ),
         lastSyncAt: syncedItems[relativePath]?.lastSyncAt ?? null,
+        lastError: dead?.lastError ?? null,
+        failedAt: dead?.lastFailedAt ?? null,
       };
     })
     .sort((a, b) => a.label.localeCompare(b.label));
@@ -174,18 +205,28 @@ function buildJobItems(
   syncedItems: PersistedSyncState["syncedItems"],
   queuedPaths: ReadonlySet<string>,
   hasItemChanged: (relativePath: string) => boolean,
+  deadLetter?: Readonly<Record<string, DeadLetterItem>>,
 ): GitHubSyncItem[] {
   const names = loadJobNames(paprDir);
   return listJobIds(paprDir)
     .map((id) => {
       const relativePath = path.join("Jobs", id);
+      const dead = deadLetter?.[relativePath];
       return {
         id,
         kind: "job" as const,
         label: names.get(id) ?? id.slice(0, 8),
         relativePath,
-        status: resolveItemStatus(relativePath, syncedItems, queuedPaths, hasItemChanged),
+        status: resolveItemStatus(
+          relativePath,
+          syncedItems,
+          queuedPaths,
+          hasItemChanged,
+          deadLetter,
+        ),
         lastSyncAt: syncedItems[relativePath]?.lastSyncAt ?? null,
+        lastError: dead?.lastError ?? null,
+        failedAt: dead?.lastFailedAt ?? null,
       };
     })
     .sort((a, b) => a.label.localeCompare(b.label));
@@ -195,12 +236,14 @@ function summarize(items: GitHubSyncItem[]): GitHubSyncItemsReport["summary"] {
   let synced = 0;
   let pending = 0;
   let outdated = 0;
+  let failed = 0;
   for (const item of items) {
     if (item.status === "synced") synced += 1;
     else if (item.status === "outdated") outdated += 1;
+    else if (item.status === "failed") failed += 1;
     else pending += 1;
   }
-  return { synced, pending, outdated, total: items.length };
+  return { synced, pending, outdated, failed, total: items.length };
 }
 
 export function buildGitHubSyncItemsReport(opts: {
@@ -208,17 +251,32 @@ export function buildGitHubSyncItemsReport(opts: {
   syncedItems: PersistedSyncState["syncedItems"];
   queuedPaths: readonly string[];
   hasItemChanged: (relativePath: string) => boolean;
+  deadLetter?: Readonly<Record<string, DeadLetterItem>>;
 }): GitHubSyncItemsReport {
   const queuedSet = new Set(opts.queuedPaths);
+  const deadLetter = opts.deadLetter ?? {};
   const workspace = buildFolderItems(
     opts.paprDir,
     ["workspace", "data"],
     opts.syncedItems,
     queuedSet,
     opts.hasItemChanged,
+    deadLetter,
   );
-  const apps = buildAppItems(opts.paprDir, opts.syncedItems, queuedSet, opts.hasItemChanged);
-  const jobs = buildJobItems(opts.paprDir, opts.syncedItems, queuedSet, opts.hasItemChanged);
+  const apps = buildAppItems(
+    opts.paprDir,
+    opts.syncedItems,
+    queuedSet,
+    opts.hasItemChanged,
+    deadLetter,
+  );
+  const jobs = buildJobItems(
+    opts.paprDir,
+    opts.syncedItems,
+    queuedSet,
+    opts.hasItemChanged,
+    deadLetter,
+  );
   const all = [...workspace, ...apps, ...jobs];
   return {
     workspace,

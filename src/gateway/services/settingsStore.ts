@@ -1,0 +1,150 @@
+/**
+ * Gateway settings file store (no WebSocket imports — safe for unit tests).
+ */
+
+import { promises as fs } from "fs";
+import path from "path";
+import { getPaprDataDir } from "../../core/utils/paprRoot.js";
+import {
+  DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS,
+  mergeToolResultTruncationSettings,
+  type ToolResultTruncationSettings,
+} from "../../core/types/toolResultTruncationSettings.js";
+
+export interface ProfileData {
+  name: string;
+  email: string;
+  imageUrl: string;
+}
+
+export interface PermissionData {
+  fileSystem: boolean;
+  network: boolean;
+  calendar: boolean;
+}
+
+export interface CodeIndexingSettings {
+  enabled: boolean;
+  excludedFolders: string[];
+}
+
+export interface UIPreferences {
+  lastModelId: string | null;
+  enabledPickerModelIds?: string[] | null;
+  onboardingDismissed: boolean;
+  onboardingStep1Completed: boolean;
+  onboardingStep2Completed: boolean;
+  onboardingStep3Completed: boolean;
+}
+
+export interface PreferencesData {
+  defaultHomeAppId: string | null;
+  cloudSyncEnabled: boolean;
+  cloudAutoPublishEnabled: boolean;
+}
+
+export interface TelemetryData {
+  installId: string;
+  enabled: boolean;
+}
+
+export interface SettingsData {
+  profile: ProfileData;
+  permissions: PermissionData;
+  codeIndexing: CodeIndexingSettings;
+  uiPreferences: UIPreferences;
+  preferences: PreferencesData;
+  toolResultTruncation: ToolResultTruncationSettings;
+  telemetry?: TelemetryData;
+}
+
+const DEFAULT_HOME_APP_ID = "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c";
+
+export const DEFAULT_SETTINGS: SettingsData = {
+  profile: { name: "", email: "", imageUrl: "" },
+  permissions: { fileSystem: true, network: true, calendar: false },
+  codeIndexing: {
+    enabled: true,
+    excludedFolders: [
+      "papr_repo",
+      "node_modules",
+      ".venv",
+      "venv",
+      ".git",
+      "dist",
+      "build",
+      "__pycache__",
+      ".next",
+      ".nuxt",
+    ],
+  },
+  uiPreferences: {
+    lastModelId: null,
+    enabledPickerModelIds: null,
+    onboardingDismissed: false,
+    onboardingStep1Completed: false,
+    onboardingStep2Completed: false,
+    onboardingStep3Completed: false,
+  },
+  preferences: {
+    defaultHomeAppId: DEFAULT_HOME_APP_ID,
+    cloudSyncEnabled: true,
+    cloudAutoPublishEnabled: true,
+  },
+  toolResultTruncation: { ...DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS },
+};
+
+/** Resolved at call time so per-run PAPR_HOME clones (cloud agent) pick up settings.json. */
+export function getSettingsPath(): string {
+  const override = process.env.PAPR_TRUNCATION_SETTINGS_PATH?.trim();
+  if (override) {
+    return override;
+  }
+  return path.join(getPaprDataDir(), "settings.json");
+}
+
+async function syncToolResultTruncationCache(
+  settings: ToolResultTruncationSettings,
+): Promise<void> {
+  const { setToolResultTruncationSettings } = await import(
+    "./agent/toolResultTruncationSettings.js"
+  );
+  setToolResultTruncationSettings(settings);
+}
+
+function attachTelemetry(settings: SettingsData): SettingsData {
+  const installId = process.env.PAPRWORK_TELEMETRY_ANONYMOUS_ID?.trim() || "";
+  const enabled = process.env.PAPRWORK_TELEMETRY_ENABLED === "true";
+  if (installId) {
+    settings.telemetry = { installId, enabled };
+  }
+  return settings;
+}
+
+export async function loadSettings(): Promise<SettingsData> {
+  try {
+    const raw = await fs.readFile(getSettingsPath(), "utf-8");
+    const saved = JSON.parse(raw) as Partial<SettingsData>;
+    const settings = attachTelemetry({
+      ...DEFAULT_SETTINGS,
+      ...saved,
+      preferences: { ...DEFAULT_SETTINGS.preferences, ...saved.preferences },
+      toolResultTruncation: mergeToolResultTruncationSettings(
+        saved.toolResultTruncation,
+      ),
+    });
+
+    await syncToolResultTruncationCache(settings.toolResultTruncation);
+    return settings;
+  } catch {
+    const settings = attachTelemetry({ ...DEFAULT_SETTINGS });
+    await syncToolResultTruncationCache(settings.toolResultTruncation);
+    return settings;
+  }
+}
+
+export async function saveSettings(data: SettingsData): Promise<void> {
+  const settingsPath = getSettingsPath();
+  await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+  await fs.writeFile(settingsPath, JSON.stringify(data, null, 2), "utf-8");
+}

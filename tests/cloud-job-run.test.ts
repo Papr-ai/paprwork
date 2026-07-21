@@ -131,7 +131,7 @@ describe("runJobInCloud", () => {
     expect(cloudApiFetch).toHaveBeenCalledWith(
       "/v1/cloud/runtime/job-run",
       expect.objectContaining({
-        body: expect.objectContaining({ timeoutMs: 900_000 }),
+        body: expect.objectContaining({ timeoutMs: 1_800_000 }),
       }),
     );
   });

@@ -60,8 +60,8 @@ const NO_EMOJI_UI_REMINDER =
 
 const APP_VERIFY_AFTER_EDIT_REMINDER =
   "REQUIRED after every app file edit (before more edits): " +
-  "validate_app({ appId }) → fix all errors → webview_launch_app → " +
-  "page_wait_for({ target: 'mini_app', time: 2 }) → webview_get_console → webview_snapshot. " +
+  "validate_app({ appId }) — includes esbuild + auto runtime preview + iframe console errors. " +
+  "If validate_app passes, optionally webview_snapshot for visual checks. " +
   "Do not edit other files until validate_app passes.";
 
 const APP_BUILD_FAILED_REMINDER =
@@ -72,6 +72,16 @@ const JOB_EVENTS_REMINDER =
   "⚠️ LIVE UPDATES (REQUIRED): import subscribeJobEvents from /__papr__/papr-job-events.ts. " +
   "Job writes $APP_DB → onDbChanged: () => loadData(). Job returns lastOutput only → onStatusChanged. " +
   "NEVER poll. validate_app returns a copy-paste snippet when polling errors occur.";
+
+const CHAT_OPEN_REMINDER =
+  "⚠️ ASK-AGENT BUTTONS (desktop): window.paprAPI.invoke('chat.open', { message: '…' }) opens main chat — " +
+  "sandbox does NOT block this. Never say mini-apps cannot open chat. " +
+  "App code cannot call delegate_task; use chat.open for conversational flows or /api/jobs/run for background AI.";
+
+const BASH_FIRST_REMINDER =
+  "⚠️ ONE-OFF WORK: This looks like a quick one-time task with no schedule, no app wiring, and no pipeline. " +
+  "Prefer bash({ command: '…' }) for probes and single runs — only keep this job if the user will rerun it, " +
+  "needs a schedule, or a mini-app button depends on it.";
 
 type AppValidationIssue = {
   file: string;
@@ -128,7 +138,7 @@ async function runPostEditAppValidation(
       "",
       issueList,
       "",
-      "ACTION REQUIRED: Fix every ❌ error now. Common fixes: rename .ts → .tsx for JSX, close mismatched braces, split files over 100 lines.",
+      "ACTION REQUIRED: Fix every ❌ error now. Common fixes: rename .ts → .tsx for JSX, close mismatched braces, split CODE files over 100 lines (move long report text to content/*.md instead).",
     ].join("\n"),
     issues,
     filesChecked: validation.filesChecked,
@@ -379,7 +389,9 @@ const scheduleSchema = z.object({
   intervalMs: z.number().int().min(1000).optional(),
   atTime: z.string().min(1).optional(),
   catchUpMissed: z.boolean().optional(),
-});
+}).describe(
+  "Schedule for automatic runs. Agent jobs every 15–30 min require user approval before running (token-heavy).",
+);
 
 const recipeConfigSchema = z.object({
   enabled: z.boolean().default(true),
@@ -476,6 +488,7 @@ const createJobSchemaCore = z
       // Anthropic
       "claude-haiku-4-5",
       "claude-sonnet-4-6",
+      "claude-sonnet-5",
       "claude-opus-4-6",
       "claude-opus-4-8",
       "claude-fable-5",
@@ -519,7 +532,7 @@ const createJobSchemaCore = z
     ])
     .optional()
     .describe(
-      "Model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-4-6', 'gpt-5-6-sol', 'gemini-3.5-flash', 'qwen3.5:latest'",
+      "Model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-5', 'gpt-5-6-sol', 'gemini-3.5-flash', 'qwen3.5:latest'",
     ),
   recipe: recipeConfigSchema.optional().describe(
     "Execution recipe configuration. When enabled, an agent evaluates each run against the recipe's quality rubric. " +
@@ -739,11 +752,12 @@ export const createAppTool = createTool({
         _verifyReminder: APP_BUILD_FAILED_REMINDER,
         _jobEventsReminder: JOB_EVENTS_REMINDER,
         _emojiReminder: NO_EMOJI_UI_REMINDER,
+        _chatOpenReminder: CHAT_OPEN_REMINDER,
         _backendReminder:
           `Server-side code: apps/{appId}/backend/ + manifest.json → POST /api/app/backend/:action. ` +
           `Declare "keys": ["KEY_NAME"] per action — gateway injects Settings keys as env vars (os.environ/process.env). ` +
           `Cloud: requirements.json catalog too (auto-synced on publish_cloud_app). Never grep keychain or call get_key. ` +
-          `Agent/LLM button actions: POST /api/jobs/run (type:"agent" job). Never /api/bash/run from mini-apps.`,
+          `Conversational buttons: paprAPI.invoke('chat.open', { message }) (desktop). Background AI: POST /api/jobs/run. Never /api/bash/run from mini-apps.`,
       };
     }
 
@@ -769,11 +783,12 @@ export const createAppTool = createTool({
       _verifyReminder: APP_VERIFY_AFTER_EDIT_REMINDER,
       _jobEventsReminder: JOB_EVENTS_REMINDER,
       _emojiReminder: NO_EMOJI_UI_REMINDER,
+      _chatOpenReminder: CHAT_OPEN_REMINDER,
       _backendReminder:
         `Server-side code: apps/{appId}/backend/ + manifest.json → POST /api/app/backend/:action. ` +
         `Declare "keys": ["KEY_NAME"] per action — gateway injects Settings keys as env vars. ` +
         `Cloud: requirements.json catalog too (auto-synced on publish_cloud_app). Never grep keychain or call get_key. ` +
-        `Agent/LLM button actions: POST /api/jobs/run (type:"agent" job). Never /api/bash/run from mini-apps.`,
+        `Conversational buttons: paprAPI.invoke('chat.open', { message }) (desktop). Background AI: POST /api/jobs/run. Never /api/bash/run from mini-apps.`,
     };
   },
 });
@@ -781,7 +796,8 @@ export const createAppTool = createTool({
 export const createJobTool = createTool({
   id: "create_job",
   description:
-    "Create a job with optional DAG dependencies, retries, and delivery. " +
+    "Create a persistent, rerunnable job — NOT for one-time probes. Use the bash tool for quick one-offs (curl, sqlite peek, test script once). " +
+    "Create a job when: mini-app button (/api/jobs/run), schedule, appIds linkage, dependsOn pipeline, or user will rerun by name. " +
     "REQUIRED fields: name, type (exact field name — python|node|agent|bash|shell|swift|subagent), appIds. " +
     "Do NOT use jobType or workingDirectory — those are not valid parameters. " +
     "REQUIRED: appIds — pass one or more mini-app UUIDs from list_apps (use ['__standalone__'] only for orphan jobs). " +
@@ -895,6 +911,20 @@ export const createJobTool = createTool({
     }
 
     const appDbJobReminder = buildAppDbJobReminder(args.type, args.command, linkedAppIds);
+    const bashFirstReminder = shouldSuggestBashInstead(args)
+      ? BASH_FIRST_REMINDER
+      : undefined;
+
+    const { assessAgentJobSchedule } = await import(
+      "../../gateway/services/jobs/agentScheduleGuard.js"
+    );
+    const scheduleAssessment = assessAgentJobSchedule(args.type, args.schedule);
+    const scheduleRiskWarning =
+      scheduleAssessment.level !== "ok" ? scheduleAssessment.message : undefined;
+    const scheduleApprovalNote =
+      scheduleAssessment.level === "approval_required"
+        ? "User must approve this schedule in the app before it runs automatically (approval card will appear)."
+        : undefined;
 
     return {
       success: true,
@@ -903,6 +933,11 @@ export const createJobTool = createTool({
       ...(keyReminder ? { _keyPatternReminder: keyReminder } : {}),
       ...(agentJobReminder ? { _agentJobReminder: agentJobReminder } : {}),
       ...(appDbJobReminder ? { _appDbJobReminder: appDbJobReminder } : {}),
+      ...(bashFirstReminder ? { _bashFirstReminder: bashFirstReminder } : {}),
+      ...(scheduleRiskWarning ? { _scheduleRiskWarning: scheduleRiskWarning } : {}),
+      ...(scheduleApprovalNote
+        ? { _scheduleApprovalNote: scheduleApprovalNote }
+        : {}),
       ...(dataSourceLinkSummary
         ? { _dataSourceLinkReminder: dataSourceLinkSummary }
         : {}),
@@ -950,6 +985,43 @@ function buildAppDbJobReminder(
   }
 
   return undefined;
+}
+
+/** Warn when create_job is used for work that should stay a one-off bash call. */
+function shouldSuggestBashInstead(args: CreateJobArgs): boolean {
+  const scriptTypes = new Set(["python", "node", "bash", "shell"]);
+  if (!scriptTypes.has(args.type)) {
+    return false;
+  }
+  if (args.schedule?.enabled) {
+    return false;
+  }
+  if (args.dependsOn && args.dependsOn.length > 0) {
+    return false;
+  }
+  if (args.deliver) {
+    return false;
+  }
+  const linkedAppIds = (args.appIds ?? []).filter(
+    (appId) => appId !== "__standalone__",
+  );
+  if (linkedAppIds.length > 0) {
+    return false;
+  }
+  const cmd = (args.command ?? "").trim();
+  if (!cmd || cmd.length > 400) {
+    return false;
+  }
+  if (cmd.includes("\n") && cmd.split("\n").length > 8) {
+    return false;
+  }
+  const oneShotPrefix =
+    /^(curl|wget|git|jq|sqlite3|pip3?|npm|npx|ls|cat|head|grep|find|echo|python3?\s+-c|node\s+-e)\b/i;
+  if (oneShotPrefix.test(cmd)) {
+    return true;
+  }
+  const segments = cmd.split("&&").map((segment) => segment.trim());
+  return segments.length <= 2 && cmd.length <= 200;
 }
 
 /**
@@ -1409,7 +1481,9 @@ const readAppFileSchema = toolSchemaWithFilenameAlias(
     filename: z
       .string()
       .min(1)
-      .describe("Filename to read (e.g. index.html, style.css, app.js)"),
+      .describe(
+        "Relative path to read (e.g. index.html, components/chart.ts, content/reports/audit.md)",
+      ),
   }),
 );
 
@@ -1550,6 +1624,7 @@ const updateJobSchema = z.object({
       // Anthropic
       "claude-haiku-4-5",
       "claude-sonnet-4-6",
+      "claude-sonnet-5",
       "claude-opus-4-6",
       "claude-opus-4-8",
       "claude-fable-5",
@@ -1593,7 +1668,7 @@ const updateJobSchema = z.object({
     ])
     .optional()
     .describe(
-      "Update model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-4-6', 'gpt-5.5', 'gemini-3.5-flash', 'qwen3.5:latest'",
+      "Update model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-5', 'gpt-5.5', 'gemini-3.5-flash', 'qwen3.5:latest'",
     ),
 });
 
@@ -1763,7 +1838,8 @@ export async function runEditAppFile(args: EditAppFileArgs): Promise<{
 
 export const readAppFileTool = createTool({
   id: "read_app_file",
-  description: "Read a specific file from a mini-app by filename",
+  description:
+    "Read a file from a mini-app (code or content). Supports nested paths like content/reports/q1-audit.md for long report text. Use list_app_files first to discover paths.",
   inputSchema: readAppFileSchema,
   execute: async (input) => {
     const args = (input as { context?: ReadAppFileArgs }).context ?? input;
@@ -1773,9 +1849,18 @@ export const readAppFileTool = createTool({
     await appService.initialize();
     const content = await appService.readAppFile(args.appId, args.filename);
     if (content === null) {
-      throw new Error(`File not found: ${args.filename} in app ${args.appId}`);
+      throw new Error(
+        `File not found: ${args.filename} in app ${args.appId}. Call list_app_files to see all paths.`,
+      );
     }
-    return { success: true, data: { filename: args.filename, content } };
+    return {
+      success: true,
+      data: {
+        filename: args.filename,
+        content,
+        lines: content.split("\n").length,
+      },
+    };
   },
 });
 
@@ -1916,7 +2001,8 @@ After EVERY edit: validate_app + preview test (see _verifyReminder in result).`,
 
 export const listAppFilesTool = createTool({
   id: "list_app_files",
-  description: "List all files in a mini-app",
+  description:
+    "List all source files in a mini-app (recursive). Includes content/reports/*.md for report text. Use before read_app_file to confirm paths.",
   inputSchema: listAppFilesSchema,
   execute: async (input) => {
     const args = (input as { context?: ListAppFilesArgs }).context ?? input;
@@ -1928,21 +2014,20 @@ export const listAppFilesTool = createTool({
     if (!app) {
       throw new Error(`App not found: ${args.appId}`);
     }
-    // Read app directory to list files
-    const { promises: fsPromises } = await import("fs");
-    const pathModule = await import("path");
-    const osModule = await import("os");
-    const appDir = pathModule.default.join(
-      osModule.default.homedir(),
-      "Papr",
-      "apps",
-      args.appId,
+    const files = await appService.listAppFiles(args.appId);
+    const reportFiles = files.filter((file) =>
+      file.startsWith("content/reports/") && file.endsWith(".md"),
     );
-    const entries = await fsPromises.readdir(appDir);
-    const files = entries.filter(
-      (e) => !e.startsWith(".") && e !== "data-sources.json" && e !== ".versions",
-    );
-    return { success: true, data: { appId: args.appId, files } };
+    return {
+      success: true,
+      data: {
+        appId: args.appId,
+        files,
+        reportFiles: reportFiles.length > 0 ? reportFiles : undefined,
+        tip:
+          "Use read_app_file({ appId, filename }) to view any file. Report prose lives in content/reports/*.md (no line limit). Charts/UI stay in components/*.ts.",
+      },
+    };
   },
 });
 
@@ -3427,8 +3512,39 @@ Use list_job_file_versions first to find the versionId.`,
   },
 });
 
-// ==================== MINI-APP VALIDATION ====================
+// ==================== JOB ARCHITECTURE VALIDATION ====================
 
+const validateJobSchema = z.object({
+  jobId: z.string().min(1).describe("Job ID to audit against architecture and database rules"),
+});
+
+export const validateJobTool = createTool({
+  id: "validate_job",
+  description: `Audit an existing job before running it. Checks command/prompt portability, APP_DB vs JOB_DB usage, read-only API misuse, primary database tables and columns, multi-job data-contract requirements, and acceptance-recipe coverage. Run this after editing job code or configuration and before claiming an app/job workflow is complete.`,
+  inputSchema: validateJobSchema,
+  execute: async (input) => {
+    const args = (input as { context?: z.infer<typeof validateJobSchema> }).context ?? input;
+    const { getJobsService } = await import("../../gateway/services/JobsService.js");
+    const jobsService = getJobsService();
+    await jobsService.initialize();
+    const issues = await jobsService.validateJobArchitecture(args.jobId);
+    const errors = issues.filter((issue) => issue.severity === "error");
+    return {
+      success: errors.length === 0,
+      ...(errors.length > 0
+        ? { error: `Job architecture validation failed with ${errors.length} error(s).` }
+        : {}),
+      data: {
+        valid: errors.length === 0,
+        jobId: args.jobId,
+        issues,
+        summary: `${errors.length} error(s), ${issues.length - errors.length} warning(s)`,
+      },
+    };
+  },
+});
+
+// ==================== MINI-APP VALIDATION ====================
 const validateAppSchema = z.object({
   appId: z.string().describe("The ID of the mini-app to validate"),
 });
@@ -3440,13 +3556,15 @@ export const validateAppTool = createTool({
   description: `Validate a mini-app for code quality issues and enforcement rules.
 Always runs a fresh esbuild.build() before checking (never uses stale cache).
 Checks:
+- **Job events SDK import**: Errors if subscribeJobEvents is called without import from /__papr__/papr-job-events.ts (declare function does NOT work at runtime)
 - **Job event polling**: Errors if app polls instead of subscribeJobEvents — returns copy-paste fix snippet
 - **TypeScript/TSX build (esbuild)**: Same compiler the iframe uses — catches JSX-in-.ts, syntax errors, etc.
-- **100-line limit per file** (enforced): Files must be ≤100 significant lines. Break large files into components.
+- **100-line limit on code files** (enforced): \`.html\`, \`.css\`, \`.js\`, \`.ts\`, \`.tsx\`, \`.jsx\` must be ≤100 significant lines. **Not enforced on \`.md\`, \`.json\`, \`.txt\`** — put long report prose in \`content/reports/*.md\`, not split across dozens of TS files.
 - **HTML syntax**: Unclosed tags, malformed markup
 - **CSS syntax**: Mismatched braces, double semicolons
 - **JavaScript/TypeScript syntax**: Mismatched delimiters (braces, parens, brackets)
 - **Code quality**: console.log statements (should be removed)
+- **Runtime preview (automatic)**: Launches hidden preview, reads console errors, merges errors forwarded from the user's app iframe
 
 Returns validation result with list of issues (errors and warnings).
 IMPORTANT: Run this after creating/editing app files to catch issues early!`,
@@ -3483,7 +3601,7 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
           issueList,
           '',
           errorCount > 0
-            ? 'ACTION REQUIRED: Fix all ❌ errors now. For files over the 100-line limit, extract code into smaller component files (components/, utils/, types.ts). Do NOT continue with other work until errors are resolved.'
+            ? 'ACTION REQUIRED: Fix all ❌ errors now. For CODE files over the 100-line limit, extract into smaller components (components/, utils/, types.ts). For long report text, use content/reports/*.md (no line limit) — do NOT split one report into 20+ TS micro-files.'
             : 'Warnings found. Fix if possible before proceeding.',
           jobEventsFix,
         ].join('\n'),
@@ -3501,15 +3619,59 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
         },
       };
     }
-    
+
+    const { runPostValidationRuntimeCheck } = await import(
+      "../../gateway/utils/miniAppRuntimePreview.js"
+    );
+    const runtimeCheck = await runPostValidationRuntimeCheck(args.appId);
+
+    if (runtimeCheck.allErrors.length > 0) {
+      const errorList = runtimeCheck.allErrors
+        .map((line) => `- ❌ ${line}`)
+        .join("\n");
+      return {
+        success: false,
+        error: [
+          `⛔ RUNTIME ERRORS — ${runtimeCheck.allErrors.length} console error(s) detected after build passed.`,
+          "",
+          errorList,
+          "",
+          "Fix runtime JS errors before proceeding. Sources: auto preview webview + errors forwarded from the app iframe while the user tests.",
+          runtimeCheck.preview.skippedReason
+            ? `(Preview note: ${runtimeCheck.preview.skippedReason})`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        data: {
+          valid: false,
+          filesChecked: result.filesChecked,
+          runtimeCheck: {
+            previewAvailable: runtimeCheck.preview.available,
+            previewSkippedReason: runtimeCheck.preview.skippedReason,
+            previewErrorCount: runtimeCheck.preview.previewErrors.length,
+            iframeErrorCount: runtimeCheck.iframeErrors.length,
+            errors: runtimeCheck.allErrors,
+          },
+        },
+      };
+    }
+
     return {
       success: true,
       data: {
         valid: true,
         filesChecked: result.filesChecked,
-        message: `✓ All ${result.filesChecked} files passed validation`,
+        message: `✓ All ${result.filesChecked} files passed validation + runtime preview (no console errors)`,
+        runtimeCheck: {
+          previewAvailable: runtimeCheck.preview.available,
+          previewSkippedReason: runtimeCheck.preview.skippedReason,
+          consoleLogCount: runtimeCheck.preview.consoleLogs.length,
+        },
         nextStep:
-          "webview_launch_app → page_wait_for({ target: 'mini_app', time: 2 }) → webview_get_console → webview_snapshot (text-only, not vision)",
+          "Optional: webview_snapshot for visual layout. API/DB: bash+curl localhost:18789.",
+        _testingGuide:
+          "Runtime console is checked automatically. API/DB/job verification: bash+curl — NOT webview_execute.",
       },
     };
   },
@@ -3672,6 +3834,7 @@ export const appJobsTools = [
   listAppFilesTool,
   listAppsTool,
   validateAppTool,
+  validateJobTool,
   exportAppBundleTool,
   importAppBundleTool,
   listAppBundlesTool,

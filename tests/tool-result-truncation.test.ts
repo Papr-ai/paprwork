@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, afterEach } from "vitest";
 import {
   ABSOLUTE_TOOL_RESULT_MAX_CHARS,
   categorizeTool,
@@ -11,6 +11,13 @@ import {
   truncateToolResultForModelContext,
 } from "../src/gateway/services/agent/toolResultTruncation.js";
 import { formatHistoryMessagesForModel } from "../src/gateway/services/agent/historyFormatter.js";
+import { setToolResultTruncationSettings } from "../src/gateway/services/agent/toolResultTruncationSettings.js";
+import { DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS } from "../src/core/types/toolResultTruncationSettings.js";
+import { compactStaleToolResults } from "../src/gateway/services/agent/compactToolResults.js";
+
+afterEach(() => {
+  setToolResultTruncationSettings({ ...DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS });
+});
 
 const longContent = "x".repeat(20_000);
 const hugeContent = "x".repeat(50_000);
@@ -384,7 +391,7 @@ describe("toolResultTruncation", () => {
       isOrphan: false,
     });
 
-    expect(limit).toBe(ABSOLUTE_TOOL_RESULT_MAX_CHARS);
+    expect(limit).toBeNull();
 
     const truncated = truncateHistoryToolResult({
       toolName: "get_full_tool_result",
@@ -397,6 +404,97 @@ describe("toolResultTruncation", () => {
     });
 
     expect(truncated).toBe(longContent);
+  });
+
+  test("disableAllTruncation keeps bash results full cross-turn", () => {
+    setToolResultTruncationSettings({
+      ...DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS,
+      disableAllTruncation: true,
+    });
+
+    const history = [
+      { role: "user", content: "fetch" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ name: "bash", args: { command: "curl api" }, result: longContent }],
+      },
+      { role: "user", content: "t2" },
+      { role: "assistant", content: "ok" },
+      { role: "user", content: "t3" },
+      { role: "assistant", content: "ok" },
+      { role: "user", content: "t4" },
+      { role: "assistant", content: "ok" },
+      { role: "user", content: "t5" },
+      { role: "assistant", content: "ok" },
+      { role: "user", content: "current" },
+    ];
+
+    const truncated = truncateHistoryToolResult({
+      toolName: "bash",
+      toolCallId: "call-no-trunc",
+      args: { command: "curl api" },
+      resultStr: longContent,
+      history,
+      messageIndex: 1,
+      isOrphan: false,
+    });
+
+    expect(truncated).toBe(longContent);
+  });
+});
+
+describe("truncation settings", () => {
+  test("disableAllTruncation does not skip mid-turn compaction when enabled", () => {
+    setToolResultTruncationSettings({
+      ...DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS,
+      disableAllTruncation: true,
+      midTurnCompactionEnabled: true,
+    });
+
+    const bashOutput = "x".repeat(5000);
+    const messages = [
+      { role: "user", content: "grep" },
+      {
+        role: "assistant",
+        content: [{ type: "tool-call", toolCallId: "bash-1", toolName: "bash", input: {} }],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "bash-1",
+            toolName: "bash",
+            output: { type: "text", value: bashOutput },
+          },
+        ],
+      },
+      { role: "assistant", content: "ok" },
+      { role: "user", content: "more" },
+      {
+        role: "assistant",
+        content: [{ type: "tool-call", toolCallId: "bash-2", toolName: "bash", input: {} }],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "bash-2",
+            toolName: "bash",
+            output: { type: "text", value: "y".repeat(100) },
+          },
+        ],
+      },
+    ];
+
+    compactStaleToolResults(messages);
+
+    const firstBash = (messages[2] as { content: Array<{ output?: { value: string } }> })
+      .content[0]!.output?.value;
+    expect(firstBash).toBeDefined();
+    expect(firstBash!.length).toBeLessThan(bashOutput.length);
   });
 });
 

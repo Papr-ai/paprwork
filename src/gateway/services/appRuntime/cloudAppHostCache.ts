@@ -291,3 +291,21 @@ export function resetCloudAppHostCachesForTests(): void {
   accessCache.clear();
   transpileCache.clear();
 }
+
+/** Drop cached repo files after desktop sync so the next fetch sees the new head. */
+export function invalidateRepoCacheForPublishedApp(
+  namespaceId: string,
+  slug: string,
+): void {
+  const prefix = `${namespaceId}:${slug}:`;
+  for (const key of repoFileCache.keys()) {
+    if (key.startsWith(prefix)) {
+      repoFileCache.delete(key);
+    }
+  }
+  for (const key of repoRevisionCache.keys()) {
+    if (key.startsWith(prefix)) {
+      repoRevisionCache.delete(key);
+    }
+  }
+}

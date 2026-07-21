@@ -32,6 +32,28 @@ export class HybridStorageProvider implements IStorageProvider {
     // PAPR doesn't need initialization
   }
 
+  /** Local SQLite provider (tool-call patches, direct reads). */
+  getLocalProvider(): LocalStorageProvider {
+    return this.local;
+  }
+
+  patchDelegateTaskToolResult(
+    chatId: string,
+    delegationRunId: string,
+    update: {
+      status: "completed" | "failed";
+      resultText?: string;
+      error?: string;
+      completedAt?: string;
+    },
+  ): boolean {
+    return this.local.patchDelegateTaskToolResult(
+      chatId,
+      delegationRunId,
+      update,
+    );
+  }
+
   // ===== Message Operations =====
 
   async saveMessage(chatId: string, message: StoredMessage): Promise<void> {

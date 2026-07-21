@@ -176,6 +176,15 @@ export class ChatSessionManager {
         break;
       }
 
+      case "moonshot": {
+        const { createMoonshotChatModel } = await import("../utils/moonshotProvider.js");
+        const { normalizeMoonshotModelId } = await import("../utils/moonshotModel.js");
+        model = await createMoonshotChatModel(normalizeMoonshotModelId(config.model), {
+          apiKey: config.apiKey,
+        });
+        break;
+      }
+
       default:
         throw new Error(`Unsupported provider: ${config.provider}`);
     }

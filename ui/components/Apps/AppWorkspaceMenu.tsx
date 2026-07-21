@@ -1,8 +1,7 @@
 /**
- * AppWorkspaceMenu — preview icon with dropdown to switch Preview / Files view.
+ * AppWorkspaceMenu — single toggle between Preview and Files.
  */
 
-import React, { useEffect, useRef, useState } from "react";
 import type { AppWorkspaceMode } from "../../hooks/useAppWorkspace";
 import "./AppWorkspaceMenu.css";
 
@@ -47,41 +46,13 @@ function FolderIcon() {
   );
 }
 
-function CheckIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path
-        d="M5 12l4 4L19 6"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-export function AppWorkspaceMenu({ mode, onModeChange, align = "left" }: AppWorkspaceMenuProps) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [open]);
-
-  const pick = (next: AppWorkspaceMode) => {
-    onModeChange(next);
-    setOpen(false);
-  };
-
-  const toggleTarget: AppWorkspaceMode = mode === "preview" ? "files" : "preview";
+export function AppWorkspaceMenu({
+  mode,
+  onModeChange,
+  align = "left",
+}: AppWorkspaceMenuProps) {
+  const isPreview = mode === "preview";
+  const nextMode = isPreview ? "files" : "preview";
 
   return (
     <div
@@ -90,78 +61,17 @@ export function AppWorkspaceMenu({ mode, onModeChange, align = "left" }: AppWork
           ? "app-workspace-menu app-workspace-menu--align-right"
           : "app-workspace-menu"
       }
-      ref={rootRef}
     >
       <button
         type="button"
-        className="app-workspace-menu__trigger"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title={
-          toggleTarget === "files"
-            ? "Switch to Files"
-            : "Switch to Preview"
-        }
-        onClick={() => setOpen((value) => !value)}
+        className="app-workspace-menu__toggle-btn"
+        title={isPreview ? "Browse and edit source code" : "Run the live app"}
+        aria-label={isPreview ? "Switch to Files" : "Switch to Preview"}
+        onClick={() => onModeChange(nextMode)}
       >
-        {toggleTarget === "files" ? <FolderIcon /> : <PreviewIcon />}
-        <span className="app-workspace-menu__label">
-          {toggleTarget === "files" ? "Files" : "Preview"}
-        </span>
+        {isPreview ? <FolderIcon /> : <PreviewIcon />}
+        <span>{isPreview ? "Files" : "Preview"}</span>
       </button>
-
-      {open ? (
-        <div className="app-workspace-menu__dropdown" role="menu">
-          <button
-            type="button"
-            role="menuitemradio"
-            aria-checked={mode === "preview"}
-            className={
-              mode === "preview"
-                ? "app-workspace-menu__item app-workspace-menu__item--active"
-                : "app-workspace-menu__item"
-            }
-            onClick={() => pick("preview")}
-          >
-            <PreviewIcon />
-            <span className="app-workspace-menu__item-text">
-              <span className="app-workspace-menu__item-label">Preview</span>
-              <span className="app-workspace-menu__item-desc">
-                Run the live app
-              </span>
-            </span>
-            {mode === "preview" ? (
-              <span className="app-workspace-menu__check">
-                <CheckIcon />
-              </span>
-            ) : null}
-          </button>
-          <button
-            type="button"
-            role="menuitemradio"
-            aria-checked={mode === "files"}
-            className={
-              mode === "files"
-                ? "app-workspace-menu__item app-workspace-menu__item--active"
-                : "app-workspace-menu__item"
-            }
-            onClick={() => pick("files")}
-          >
-            <FolderIcon />
-            <span className="app-workspace-menu__item-text">
-              <span className="app-workspace-menu__item-label">Files</span>
-              <span className="app-workspace-menu__item-desc">
-                Browse and edit source code
-              </span>
-            </span>
-            {mode === "files" ? (
-              <span className="app-workspace-menu__check">
-                <CheckIcon />
-              </span>
-            ) : null}
-          </button>
-        </div>
-      ) : null}
     </div>
   );
 }

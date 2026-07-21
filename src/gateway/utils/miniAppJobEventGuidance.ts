@@ -34,7 +34,9 @@ export function hasJobEventsPollingIssues(
 ): boolean {
   return issues.some(
     (issue) =>
-      issue.rule === "no-db-polling" || issue.rule === "prefer-job-events",
+      issue.rule === "no-db-polling" ||
+      issue.rule === "prefer-job-events" ||
+      issue.rule === "missing-job-events-import",
   );
 }
 

@@ -34,6 +34,36 @@ export function formatToolResultForStorage(
   }
 }
 
+export function hasPersistableAssistantContent(args: {
+  assistantText: string;
+  thinkingText: string;
+  toolCalls: ToolCallEvent[];
+  sequence?: Array<{ type: string; data: unknown }>;
+}): boolean {
+  return (
+    args.assistantText.trim().length > 0 ||
+    args.thinkingText.trim().length > 0 ||
+    args.toolCalls.length > 0 ||
+    (args.sequence?.length ?? 0) > 0
+  );
+}
+
+export function createPartialAssistantStoredMessage(args: {
+  chatId: string;
+  model: string;
+  assistantText: string;
+  thinkingText: string;
+  toolCalls: ToolCallEvent[];
+  toolResults: ToolResultEvent[];
+  sequence?: Array<{ type: "text" | "tool" | "thinking"; data: any }>;
+  usage?: TokenUsageForCost & { totalTokens?: number };
+}): StoredMessage {
+  return {
+    ...createAssistantStoredMessage(args),
+    incomplete: true,
+  };
+}
+
 export function createAssistantStoredMessage(args: {
   chatId: string;
   model: string;

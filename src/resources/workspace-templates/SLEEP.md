@@ -1,4 +1,4 @@
-<!-- sleep-prompt-version: 10 -->
+<!-- sleep-prompt-version: 11 -->
 
 # Sleep Cycle
 
@@ -128,7 +128,7 @@ Include:
   1. **Scan all job databases** for mentions (generic — works for any app/job):
   ```bash
   # List all job databases
-  for db in ~/Papr/jobs/*/data/data.db; do
+  for db in $PAPR_HOME/Jobs/*/data/data.db; do
     job_dir=$(dirname $(dirname "$db"))
     job_id=$(basename "$job_dir")
     for table in $(sqlite3 "$db" ".tables" 2>/dev/null); do

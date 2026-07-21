@@ -38,6 +38,18 @@ export function migratePickerModelId(modelId: string): string {
 
 /** Flat default list shown to new users (cloud models only). */
 export const PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
+  "claude-sonnet-5",
+  "claude-opus-4-6",
+  "gpt-5-6-sol",
+  "glm-5.2-max",
+  "qwen/qwen3-32b",
+  "gemini-3.1-flash-lite",
+  "gemini-3.5-flash",
+  "gemini-3.1-pro-preview",
+];
+
+/** Pre-Sonnet-5 curated defaults — used to upgrade saved picker preferences. */
+export const LEGACY_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
   "claude-sonnet-4-6",
   "claude-opus-4-6",
   "claude-opus-4-8",
@@ -49,6 +61,50 @@ export const PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
   "gemini-3.1-pro-preview",
 ];
 
+function sameModelIdSet(
+  a: readonly string[],
+  b: readonly string[],
+): boolean {
+  if (a.length !== b.length) return false;
+  const setA = new Set(a);
+  return b.every((id) => setA.has(id));
+}
+
+/** Upgrade saved picker lists after Sonnet 5 launch. */
+export function migrateEnabledPickerModelIds(
+  enabledIds: string[] | null | undefined,
+): string[] {
+  if (!enabledIds || enabledIds.length === 0) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  const migrated = [
+    ...new Set(
+      enabledIds.map(migratePickerModelId).filter(isChatPickerModelId),
+    ),
+  ];
+
+  if (migrated.length === 0) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  if (sameModelIdSet(migrated, LEGACY_PICKER_DEFAULT_MODEL_IDS)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  // Swap the default Sonnet slot when users still have 4.6 enabled without 5.
+  if (
+    migrated.includes("claude-sonnet-4-6") &&
+    !migrated.includes("claude-sonnet-5")
+  ) {
+    return migrated.map((id) =>
+      id === "claude-sonnet-4-6" ? "claude-sonnet-5" : id,
+    );
+  }
+
+  return migrated;
+}
+
 export function isPickerDefaultModelId(modelId: string): boolean {
   return PICKER_DEFAULT_MODEL_IDS.includes(modelId);
 }
@@ -57,15 +113,7 @@ export function isPickerDefaultModelId(modelId: string): boolean {
 export function resolveEnabledPickerModelIds(
   enabledIds: string[] | null | undefined,
 ): string[] {
-  const source =
-    enabledIds && enabledIds.length > 0
-      ? [
-          ...new Set(
-            enabledIds.map(migratePickerModelId).filter(isChatPickerModelId),
-          ),
-        ]
-      : [...PICKER_DEFAULT_MODEL_IDS];
-  return source.length > 0 ? source : [...PICKER_DEFAULT_MODEL_IDS];
+  return migrateEnabledPickerModelIds(enabledIds);
 }
 
 /** Models pinned to the main chat picker (cloud + any enabled Ollama). */

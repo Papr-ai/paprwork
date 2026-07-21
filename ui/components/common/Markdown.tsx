@@ -8,6 +8,8 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
+import { escapeNumericEmphasis } from "../../lib/markdown/escapeNumericEmphasis";
+import { remarkMathGate } from "../../lib/markdown/remarkMathGate";
 import { CodeBlock } from "./CodeBlock";
 import "katex/dist/katex.min.css";
 import "./Markdown.css";
@@ -35,6 +37,9 @@ const components: Partial<Components> = {
   strong: ({ children }) => (
     <strong className="markdown-strong">{children}</strong>
   ),
+
+  // Emphasis/italic — inherit body font so accidental mid-number emphasis stays readable
+  em: ({ children }) => <em className="markdown-em">{children}</em>,
 
   // Links
   a: ({ href, children }) => (
@@ -67,12 +72,12 @@ const components: Partial<Components> = {
 
 export const Markdown: React.FC<MarkdownProps> = memo(
   ({ children, className }) => {
-    const cleanedContent = children?.trim() || "";
+    const cleanedContent = escapeNumericEmphasis(children?.trim() || "");
 
     return (
       <div className={`markdown-content ${className || ""}`}>
         <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath]}
+          remarkPlugins={[remarkGfm, remarkMath, remarkMathGate]}
           rehypePlugins={[
             [
               rehypeKatex,

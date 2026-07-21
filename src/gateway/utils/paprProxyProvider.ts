@@ -88,6 +88,16 @@ export async function createProxyModel(
       });
     }
 
+    case "moonshot": {
+      const { createMoonshotChatModel } = await import("./moonshotProvider.js");
+      const { normalizeMoonshotModelId } = await import("./moonshotModel.js");
+      return createMoonshotChatModel(normalizeMoonshotModelId(modelId), {
+        apiKey: "papr-proxy",
+        baseURL: `${PAPR_PROXY_BASE}/moonshot`,
+        headers,
+      });
+    }
+
     default:
       throw new Error(`Papr proxy does not support provider: ${provider}`);
   }

@@ -36,6 +36,8 @@ File: `src/gateway/services/cloudSync/prepareAppsForCloud.ts`
 
 User refreshes the browser tab (normal F5). Cloud app host serves fresh repo content and versioned `dist/app.js`.
 
+**Open tabs without refresh:** After Sync now, desktop gateway notifies `apps.papr.ai`, which invalidates server caches and pushes a revision event over SSE. Injected `papr-app-refresh.js` reloads the tab when the revision changes — no polling, no Cmd+Shift+R. Tab focus also re-checks once as a fallback.
+
 ## Agent guidance
 
 - After backend or API-key changes: **Sync now** on the app — do not ask users to republish manually.
@@ -49,6 +51,10 @@ User refreshes the browser tab (normal F5). Cloud app host serves fresh repo con
 - `CloudAppPublishService.ts` — `tryAutoPublishSyncedApps({ syncedAppIds })`
 - `cloudPublishDrift.ts` — catalog + sharing drift
 - `cloudRepoHeadMarker.ts` — cache invalidation marker
+- `notifyCloudAppRevision.ts` / `notifySyncedAppRevisions.ts` — desktop → cloud push on sync
+- `publishedAppRevision.ts` — revision meta + `__papr__/app-revision.json` endpoint
+- `AppRevisionHub.ts` / `registerAppRevisionSse.ts` — SSE push to open tabs
+- `papr-app-refresh.ts` — client SSE listener + tab-focus fallback
 - `cloudAppHostCache.ts` / `cloudAppHostRequestCache.ts` — host-side cache (deploy separately)
 
 ## Deploy notes
