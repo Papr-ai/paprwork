@@ -119,6 +119,19 @@ export class StorageManager {
   }
 
   /**
+   * Update an existing message in-place (no message_count increment).
+   * Used for streaming checkpoint persistence.
+   */
+  async updateMessage(
+    chatId: string,
+    messageId: string,
+    message: StoredMessage,
+  ): Promise<void> {
+    const provider = this.ensureInitialized();
+    await provider.updateMessage(chatId, messageId, message);
+  }
+
+  /**
    * Load all messages for a chat
    */
   async loadMessages(

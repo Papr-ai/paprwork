@@ -58,20 +58,26 @@ Keeping reads full lets later turns hit **prompt cache** on the same bytes inste
 | **Directory / search** | `list_directory`, `list_app_files`, `search_files`, … | 400 chars |
 | **Memory search** | `search_agent_memory`, `query_memory_graph`, … | 800 chars |
 | **Recovery** | `get_full_tool_result` | **Full** (always) |
-| **Validation / preview** | `validate_app`, `browser_*`, `webview_*` | 400 chars |
+| **Validation / preview** | `validate_app` | **2KB** (actionable error list) |
+| **Validation / preview** | `browser_*`, `webview_*` | 400 chars |
 | **Job run** | `run_job`, `get_job_logs`, … | 400 chars |
 | **Small CRUD** | `create_plan`, `create_app`, `list_schemas`, … | 2KB |
 | **Orphan / interrupted** | Missing tool results | **Full** (marker text) |
 
 ## Truncation Notices
 
-Truncated results append an actionable notice:
+Truncated results append an actionable notice. Aggressive limits (≤2KB) use **head+tail** truncation (deterministic, cache-stable) so stderr/errors at the end of bash output are preserved:
 
 ```
-[... 14000 chars truncated. Tool: get_full_tool_result({ toolCallId: "...", toolName: "read_app_file" }) OR query: ~/.paprwork-v2/chats.db → messages.parts (JSONL)]
+HEAD...[... omitted ...]...TAIL
+[... N chars truncated. Tool: get_full_tool_result({ toolCallId: "...", toolName: "bash" }) ...]
 ```
 
 Agent should prefer `get_full_tool_result` over re-reading unchanged files when a **non-file** result was truncated (bash, snapshots, etc.).
+
+## Source-Level Caps (2026-07-22)
+
+`edit_app_file*` / `validate_app` BUILD FAILED output is capped at **8 issues** in the tool `error` string (errors first). Full lists remain in `data.issues` on `validate_app`. Smaller stable payloads improve prompt-cache write cost without mutating cross-turn history.
 
 ## Recommended Agent Workflow
 

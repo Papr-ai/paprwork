@@ -56,15 +56,44 @@ export class HybridStorageProvider implements IStorageProvider {
 
   // ===== Message Operations =====
 
+  async updateMessage(
+    chatId: string,
+    messageId: string,
+    message: StoredMessage,
+  ): Promise<void> {
+    const isIncomplete = message.incomplete === true;
+
+    // Checkpoints (incomplete) are local-only — no cloud traffic during
+    // streaming. The FINAL update (incomplete=false, same row) syncs to
+    // PAPR exactly once, same as a fresh saveMessage would.
+    await this.local.updateMessage(chatId, messageId, {
+      ...message,
+      sync_status: isIncomplete ? "local" : "sync_pending",
+    });
+
+    if (this.syncEnabled && !isIncomplete) {
+      this.syncMessageToPapr(chatId, message).catch((err) => {
+        console.error(`Failed to sync message ${message.id} to PAPR:`, err);
+        this.local.markSyncFailed(message.id, err.message);
+      });
+    }
+  }
+
   async saveMessage(chatId: string, message: StoredMessage): Promise<void> {
+    // Incomplete messages (interrupted-turn checkpoints/partials) stay
+    // local-only: don't pollute PAPR memory with half-finished turns.
+    // If the turn later completes, the final save (complete message,
+    // same stable ID lineage) syncs normally.
+    const isIncomplete = message.incomplete === true;
+
     // 1. ALWAYS save locally first (fast, reliable)
     await this.local.saveMessage(chatId, {
       ...message,
-      sync_status: "sync_pending",
+      sync_status: isIncomplete ? "local" : "sync_pending",
     });
 
     // 2. Sync to PAPR in background (non-blocking)
-    if (this.syncEnabled) {
+    if (this.syncEnabled && !isIncomplete) {
       this.syncMessageToPapr(chatId, message).catch((err) => {
         console.error(`Failed to sync message ${message.id} to PAPR:`, err);
         this.local.markSyncFailed(message.id, err.message);

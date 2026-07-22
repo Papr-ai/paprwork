@@ -1608,12 +1608,14 @@ export function useAgent() {
           const newChatStates = new Map(useChatStore.getState().chatStates);
           newChatStates.set(chatId, {
             ...chatState,
-            isStreaming: true,
+            isStreaming: false, // Don't keep Working indicator on a failed sync
             isSending: false,
             connectionPaused: false,
             needsStreamRecovery: true,
+            messages: finalizeStreamingMessages(chatState.messages),
           });
           useChatStore.setState({ chatStates: newChatStates });
+          clearStreamingState(chatId);
         }
         return { needsContinue: false };
       } finally {

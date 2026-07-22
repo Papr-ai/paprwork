@@ -45,11 +45,24 @@ export const HASH_IGNORED_RELATIVE_SUFFIXES = [
   "data/cloud-repo-head.txt",
 ] as const;
 
+/**
+ * SQLite sidecars — synced via Turso, gitignored in CloudSyncService.
+ * Exclude from hash so job DB activity does not re-queue git sync on every startup.
+ */
+const SQLITE_HASH_IGNORED_SUFFIXES = [".db-shm", ".db-wal", ".db"] as const;
+
 export function shouldExcludePathFromContentHash(relativePath: string): boolean {
   const normalized = relativePath.replace(/\\/g, "/");
-  return HASH_IGNORED_RELATIVE_SUFFIXES.some(
-    (suffix) => normalized === suffix || normalized.endsWith(`/${suffix}`),
-  );
+  if (
+    HASH_IGNORED_RELATIVE_SUFFIXES.some(
+      (suffix) => normalized === suffix || normalized.endsWith(`/${suffix}`),
+    )
+  ) {
+    return true;
+  }
+
+  const baseName = path.basename(normalized);
+  return SQLITE_HASH_IGNORED_SUFFIXES.some((suffix) => baseName.endsWith(suffix));
 }
 
 export class SyncStateManager {

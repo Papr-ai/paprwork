@@ -1,15 +1,15 @@
 /**
  * Recent message window after summarization — cache-friendly chunked growth.
  *
- * Grow from MIN to MAX (20→40) as new messages arrive, then snap back to MIN
- * (drop oldest 20) so prefix cache breaks every ~21 messages instead of every turn.
+ * Grow from MIN to MAX (10→20) as new messages arrive, then snap back to MIN
+ * (drop oldest 10) so prefix cache breaks every ~11 messages instead of every turn.
  */
 
-export const RECENT_MESSAGES_MIN = 20;
-export const RECENT_MESSAGES_MAX = 40;
+export const RECENT_MESSAGES_MIN = 10;
+export const RECENT_MESSAGES_MAX = 20;
 /** Growth steps per cycle before snapping back to MIN. */
-export const RECENT_MESSAGES_CHUNK = 20;
-export const RECENT_MESSAGES_WITHOUT_SUMMARY = 50;
+export const RECENT_MESSAGES_CHUNK = 10;
+export const RECENT_MESSAGES_WITHOUT_SUMMARY = 20;
 
 const CYCLE_LENGTH = RECENT_MESSAGES_CHUNK + 1;
 
