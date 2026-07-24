@@ -3,6 +3,9 @@
  * Initializes React app and mounts to DOM
  */
 
+// Web-demo mode: install mock Electron bridges before anything else loads
+import "./src/lib/demoBoot";
+
 // Set up global error handlers to catch any errors that might not show in console
 window.addEventListener("error", (event) => {
   console.error("[Global Error Handler]", event.error);

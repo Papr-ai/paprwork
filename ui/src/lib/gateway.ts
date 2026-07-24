@@ -630,5 +630,9 @@ class GatewayClient {
   }
 }
 
-// Export singleton instance
-export const gateway = new GatewayClient();
+// Export singleton instance (demo build swaps in the local mock backend)
+import { demoGateway } from "./demoGateway";
+export const gateway =
+  import.meta.env.VITE_DEMO_MODE === "1"
+    ? (demoGateway as unknown as GatewayClient)
+    : new GatewayClient();
