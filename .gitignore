@@ -74,3 +74,4 @@ __pycache__/
 # SQLite ad-hoc test artifacts (literal :memory: filenames from failed path expansion)
 /:memory:
 /:memory:-info
+ui/dist-demo/
