@@ -50,11 +50,35 @@ function bodyPreview(body: string, maxLen = 140): string {
 
 /* ── Cards ────────────────────────────────────────── */
 
+const IC = `fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"`;
+
+/** Big centered icon for context .md cards, keyed by file name. */
+function fileGlyphSvg(name: string): string {
+  const n = name.toLowerCase();
+  if (n.includes("identity") || n.includes("brand"))
+    return `<svg viewBox="0 0 24 24" ${IC}><circle cx="12" cy="8" r="3.2"/><path d="M5.5 19c.6-3.2 3.2-5 6.5-5s5.9 1.8 6.5 5"/></svg>`;
+  if (n.includes("icp") || n.includes("customer") || n.includes("audience"))
+    return `<svg viewBox="0 0 24 24" ${IC}><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4.4"/><circle cx="12" cy="12" r="1"/></svg>`;
+  if (n.includes("playbook") || n.includes("play") || n.includes("guide"))
+    return `<svg viewBox="0 0 24 24" ${IC}><path d="M4 5.5A2 2 0 0 1 6 4h5v15H6a2 2 0 0 0-2 1.5z"/><path d="M20 5.5A2 2 0 0 0 18 4h-5v15h5a2 2 0 0 1 2 1.5z"/></svg>`;
+  return `<svg viewBox="0 0 24 24" ${IC}><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>`;
+}
+
+/** SVG glyph for entity types with no cover image (goal, insight). */
+function typeGlyphSvg(type: string): string | null {
+  if (type === "goal")
+    return `<svg viewBox="0 0 24 24" ${IC}><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4.4"/><circle cx="12" cy="12" r="1"/></svg>`;
+  if (type === "insight")
+    return `<svg viewBox="0 0 24 24" ${IC}><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.6.5 1 1.2 1.1 2h5c.1-.8.5-1.5 1.1-2A6 6 0 0 0 12 3z"/></svg>`;
+  return null;
+}
+
 function PosterCard({ node, onClick }: { node: WikiNode; onClick: () => void }) {
   const meta = wikiTypeMeta(node.type);
   const props = node.props ?? {};
   const status = props.status ? String(props.status) : null;
   const image = props.image ? String(props.image) : null;
+  const glyphSvg = image ? null : typeGlyphSvg(node.type);
   return (
     <article className="wiki-card poster" onClick={onClick}>
       <div className="wiki-card__art">
@@ -66,7 +90,11 @@ function PosterCard({ node, onClick }: { node: WikiNode; onClick: () => void }) 
         )}
         <span className="wiki-card__type-chip">{meta.label}</span>
         {status ? <span className="wiki-card__status"><span className="wiki-card__status-dot" />{status}</span> : null}
-        {image ? null : <span className="wiki-card__glyph">{meta.glyph}</span>}
+        {glyphSvg ? (
+          <span className="wiki-card__art-icon" dangerouslySetInnerHTML={{ __html: glyphSvg }} />
+        ) : image ? null : (
+          <span className="wiki-card__glyph">{meta.glyph}</span>
+        )}
       </div>
       <div className="wiki-card__body">
         <h4 className="wiki-card__title">{node.label}</h4>
@@ -111,7 +139,8 @@ function ContextFileCard({ file, onOpen }: { file: WorkspaceFilePreview; onOpen:
       <div className="wiki-card__art wiki-card__art--context">
         <div className="wiki-card__gradient wiki-card__gradient--context" />
         <span className="wiki-card__type-chip">{chipLabel}</span>
-        <span className="wiki-card__glyph">md</span>
+        <span className="wiki-card__art-icon wiki-card__art-icon--context"
+          dangerouslySetInnerHTML={{ __html: fileGlyphSvg(file.name) }} />
       </div>
       <div className="wiki-card__body">
         <h4 className="wiki-card__title">{fileLabel(file.name)}</h4>

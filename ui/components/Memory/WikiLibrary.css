@@ -1480,8 +1480,8 @@
 
 .wiki-card__gradient--context {
   background:
-    radial-gradient(circle at 20% 20%, color-mix(in srgb, var(--accent) 36%, transparent), transparent 34%),
-    linear-gradient(135deg, var(--bg-panel-2), var(--bg-panel));
+    radial-gradient(circle at 78% 18%, rgba(255, 255, 255, 0.22), transparent 42%),
+    linear-gradient(135deg, #0080FF, #0a2a8c 55%, #06165a);
 }
 
 .wiki-card--context .wiki-card__glyph {
@@ -1574,4 +1574,25 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+/* ── Branded centered glyph icons (context files, goals, insights) ── */
+.wiki-card__art-icon {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 46px;
+  height: 46px;
+  color: rgba(255, 255, 255, 0.92);
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.28));
+}
+.wiki-card__art-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.wiki-card__art-icon--context {
+  width: 42px;
+  height: 42px;
 }
