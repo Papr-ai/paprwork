@@ -15,6 +15,8 @@ interface WeatherData {
 }
 
 export function WeatherWidget() {
+  // Demo build: hide the weather widget (no geolocation / external fetch)
+  if (import.meta.env.VITE_DEMO_MODE === "1") return null;
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [date, setDate] = useState<Date>(new Date());
 
