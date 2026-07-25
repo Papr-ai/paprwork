@@ -27,6 +27,10 @@ window.addEventListener("unhandledrejection", (event) => {
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+// Web-demo only: seed a default Chat tab so we don't show "No tab selected"
+import { seedDemoTabs } from "./src/lib/demoSeedTabs";
+
+seedDemoTabs();
 
 console.log('[React] Entry point reached - starting React initialization');
 const reactStartTime = performance.now();
