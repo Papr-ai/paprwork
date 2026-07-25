@@ -33,6 +33,10 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
   const prevGatewaySupervisorReadyRef = useRef(gatewaySupervisorReady);
 
   const localSrc = useMemo(() => {
+    // Web demo: apps are served from the same static origin as the demo build.
+    if (import.meta.env.VITE_DEMO_MODE === "1") {
+      return `${window.location.origin}/apps/${appId}/index.html`;
+    }
     const host = import.meta.env.VITE_GATEWAY_HOST || "localhost";
     const port = import.meta.env.VITE_GATEWAY_PORT || "18789";
     return `http://${host}:${port}/apps/${appId}/index.html`;

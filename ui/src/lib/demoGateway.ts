@@ -14,6 +14,10 @@ import {
   readContextFile,
   demoDocuments,
 } from "./demoMemory";
+import { MEETINGS_ICON, MEETINGS_DESC } from "./demoMeetingIcon";
+
+/** Real community app embedded in the demo (served from /apps/{id}/). */
+const MEETINGS_APP_ID = "6e432b37-6cf2-45f1-9ad8-ec70a56d4a3c";
 
 type Chunk = { type: string; payload: unknown; timestamp: string };
 const now = () => new Date().toISOString();
@@ -25,23 +29,37 @@ const ok = (data: unknown): GatewayResponse => ({
 
 /* ---------------- fixtures ---------------- */
 
-const DEMO_APPS = [
-  { name: "Account Research", desc: "Enrich target accounts before you reach out" },
-  { name: "Pipeline Signals", desc: "Spot the deals heating up this week" },
-  { name: "Outreach", desc: "Draft personalized follow-ups overnight" },
-  { name: "Meeting Notes", desc: "Summaries and action items, auto-filed" },
-  { name: "CRM Updater", desc: "Keep records fresh without the busywork" },
-  { name: "Win Reports", desc: "Your weekly revenue recap, written for you" },
-].map((a, i) => ({
-  id: `demo-app-${i + 1}`,
+const MEETINGS_APP = {
+  id: MEETINGS_APP_ID,
   type: "app",
-  title: a.name,
-  name: a.name,
-  description: a.desc,
+  title: "Meetings Manager",
+  name: "Meetings Manager",
+  description: MEETINGS_DESC,
+  icon: MEETINGS_ICON,
   status: "active",
   createdAt: now(),
   updatedAt: now(),
-}));
+};
+
+const DEMO_APPS = [
+  MEETINGS_APP,
+  ...[
+    { name: "Account Research", desc: "Enrich target accounts before you reach out" },
+    { name: "Pipeline Signals", desc: "Spot the deals heating up this week" },
+    { name: "Outreach", desc: "Draft personalized follow-ups overnight" },
+    { name: "CRM Updater", desc: "Keep records fresh without the busywork" },
+    { name: "Win Reports", desc: "Your weekly revenue recap, written for you" },
+  ].map((a, i) => ({
+    id: `demo-app-${i + 1}`,
+    type: "app",
+    title: a.name,
+    name: a.name,
+    description: a.desc,
+    status: "active",
+    createdAt: now(),
+    updatedAt: now(),
+  })),
+];
 
 const DEMO_REPLY =
   "Here's what I'd focus on today. Northwind and Acme Logistics both opened " +
@@ -56,7 +74,8 @@ const handlers: Record<string, (payload: any) => unknown> = {
   "settings:get": () => ({}),
   "settings:save-ui-preferences": () => ({}),
   "app:list": () => DEMO_APPS,
-  "app:get": (p) => DEMO_APPS.find((a) => a.id === p?.id) ?? DEMO_APPS[0],
+  "app:get": (p) =>
+    DEMO_APPS.find((a) => a.id === (p?.id ?? p?.appId)) ?? DEMO_APPS[0],
   "document:list": () => demoDocuments(),
   "document:get": (p) => demoDocuments().find((d) => d.id === p?.documentId) ?? null,
   "chat:list": () => [],
