@@ -31,6 +31,7 @@ const PROJECTS: WikiNode[] = [
     description:
       "Land 6 enterprise logos and $1.2M new ARR by end of Q1 by focusing the team on the 24 highest-intent accounts.",
     props: {
+      image: "/demo-media/proj-q1.jpg",
       status: "On track",
       owner: "You",
       quarter: "Q1 2025",
@@ -75,6 +76,7 @@ const PROJECTS: WikiNode[] = [
     description:
       "Ship Papr Work to general availability in March: desktop app, mini-apps marketplace, and memory.",
     props: {
+      image: "/demo-media/proj-ga.jpg",
       status: "In progress",
       owner: "You",
       launchDate: "Mar 18, 2025",
@@ -109,6 +111,7 @@ const COMPANIES: WikiNode[] = [
     description:
       "Mid-market logistics distributor (1,200 employees). Evaluating Papr Work for their revenue team after a warm intro from Dana.",
     props: {
+      image: "/demo-media/co-northwind.jpg",
       industry: "Logistics",
       employees: "1,200",
       stage: "Proposal sent",
@@ -140,6 +143,7 @@ const COMPANIES: WikiNode[] = [
     description:
       "National freight carrier (3,400 employees). In procurement; CFO wants a hard ROI case before signing.",
     props: {
+      image: "/demo-media/co-acme.jpg",
       industry: "Freight",
       employees: "3,400",
       stage: "Negotiation",
@@ -165,6 +169,7 @@ const COMPANIES: WikiNode[] = [
     description:
       "Industrial supply company (600 employees). Just raised a Series A — budget opening up for tooling.",
     props: {
+      image: "/demo-media/co-klein.jpg",
       industry: "Industrial supply",
       employees: "600",
       stage: "Discovery",
@@ -183,6 +188,7 @@ const PEOPLE: WikiNode[] = [
     description:
       "Your champion at Northwind. Former ops lead who values time saved over feature lists. Highly engaged this week.",
     props: {
+      image: "/demo-media/dana.jpg",
       role: "VP Operations",
       company: "Northwind Traders",
       relationship: "Champion",
@@ -212,6 +218,7 @@ const PEOPLE: WikiNode[] = [
     description:
       "CFO and economic buyer at Acme Logistics. Numbers-first; will not move without a clear ROI model.",
     props: {
+      image: "/demo-media/marcus.jpg",
       role: "CFO",
       company: "Acme Logistics",
       relationship: "Economic buyer",
@@ -225,6 +232,7 @@ const PEOPLE: WikiNode[] = [
     description:
       "Head of Growth on your team. Runs the Q1 expansion and the GA launch. Your go-to for pipeline strategy.",
     props: {
+      image: "/demo-media/priya.jpg",
       role: "Head of Growth",
       company: "Your team",
       relationship: "Teammate",
@@ -241,6 +249,7 @@ const PEOPLE: WikiNode[] = [
     description:
       "Account Executive carrying the Northwind and Acme deals. Strong closer, currently over-loaded.",
     props: {
+      image: "/demo-media/sam.jpg",
       role: "Account Executive",
       company: "Your team",
       relationship: "Teammate",

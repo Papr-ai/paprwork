@@ -1552,3 +1552,26 @@
   min-width: 0;
   max-width: none;
 }
+
+/* ── Demo: real images on cards + entity hero ── */
+.wiki-card__avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+  display: block;
+}
+.wiki-card__art-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.wiki-entity__hero-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}

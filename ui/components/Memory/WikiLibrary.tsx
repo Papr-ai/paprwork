@@ -54,14 +54,19 @@ function PosterCard({ node, onClick }: { node: WikiNode; onClick: () => void }) 
   const meta = wikiTypeMeta(node.type);
   const props = node.props ?? {};
   const status = props.status ? String(props.status) : null;
+  const image = props.image ? String(props.image) : null;
   return (
     <article className="wiki-card poster" onClick={onClick}>
       <div className="wiki-card__art">
-        <div className="wiki-card__gradient"
-          style={{ background: `linear-gradient(135deg, ${meta.color}, color-mix(in srgb, ${meta.color} 70%, #000))` }} />
+        {image ? (
+          <img className="wiki-card__art-img" src={image} alt={node.label} />
+        ) : (
+          <div className="wiki-card__gradient"
+            style={{ background: `linear-gradient(135deg, ${meta.color}, color-mix(in srgb, ${meta.color} 70%, #000))` }} />
+        )}
         <span className="wiki-card__type-chip">{meta.label}</span>
         {status ? <span className="wiki-card__status"><span className="wiki-card__status-dot" />{status}</span> : null}
-        <span className="wiki-card__glyph">{meta.glyph}</span>
+        {image ? null : <span className="wiki-card__glyph">{meta.glyph}</span>}
       </div>
       <div className="wiki-card__body">
         <h4 className="wiki-card__title">{node.label}</h4>
@@ -75,9 +80,12 @@ function PersonCard({ node, onClick }: { node: WikiNode; onClick: () => void }) 
   const label = node.label ?? node.id;
   const initials = label.split(/\s+/).map((s) => s[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
   const props = node.props ?? {};
+  const image = props.image ? String(props.image) : null;
   return (
     <article className="wiki-card person" onClick={onClick}>
-      <div className="wiki-card__avatar">{initials || "?"}</div>
+      <div className="wiki-card__avatar">
+        {image ? <img className="wiki-card__avatar-img" src={image} alt={label} /> : (initials || "?")}
+      </div>
       <div className="wiki-card__name">{label}</div>
       {props.role ? <div className="wiki-card__role">{String(props.role)}</div> : null}
     </article>
@@ -749,8 +757,12 @@ function WikiEntityPage({ node, rails, relatedMemories, allNodes, loading, error
         {/* Hero */}
         <div className="wiki-entity__hero">
           <button type="button" className="wiki-entity__back" onClick={onBack}>← Library</button>
-          <div className="wiki-entity__hero-bg"
-            style={{ background: `linear-gradient(135deg, ${meta.color}, color-mix(in srgb, ${meta.color} 55%, #111))` }} />
+          {props.image ? (
+            <img className="wiki-entity__hero-img" src={String(props.image)} alt={node.label} />
+          ) : (
+            <div className="wiki-entity__hero-bg"
+              style={{ background: `linear-gradient(135deg, ${meta.color}, color-mix(in srgb, ${meta.color} 55%, #111))` }} />
+          )}
           <div className="wiki-entity__hero-inner">
             <div className="wiki-entity__eyebrow">
               <span>{meta.label}</span><span>·</span>
@@ -758,7 +770,7 @@ function WikiEntityPage({ node, rails, relatedMemories, allNodes, loading, error
             </div>
             <h1>{node.label}</h1>
             <div className="wiki-entity__meta-row">
-              {Object.entries(props).map(([key, value]) => (
+              {Object.entries(props).filter(([key]) => key !== "image").map(([key, value]) => (
                 <span key={key} className="wiki-entity__pill">{key}: {String(value)}</span>
               ))}
             </div>
