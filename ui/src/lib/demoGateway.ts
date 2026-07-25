@@ -6,6 +6,13 @@
  * locally with fixture data. Active only when VITE_DEMO_MODE === "1".
  */
 import type { GatewayResponse } from "./gateway";
+import {
+  wikiHome,
+  wikiEntity,
+  wikiSearch,
+  contextPreview,
+  readContextFile,
+} from "./demoMemory";
 
 type Chunk = { type: string; payload: unknown; timestamp: string };
 const now = () => new Date().toISOString();
@@ -60,6 +67,14 @@ const handlers: Record<string, (payload: any) => unknown> = {
   "agent:get-agent-stats": () => ({ totalRuns: 0, totalTokens: 0 }),
   "agent:get-cost-stats": () => ({ totalCostUsd: 0 }),
   "agent:stop": () => ({}),
+  // Memory (Wiki Library) — fixture knowledge graph
+  "memory:wiki-home": () => wikiHome(),
+  "memory:wiki-entity": (p) => wikiEntity(p ?? {}),
+  "memory:wiki-search": (p) => wikiSearch(p?.query ?? ""),
+  "memory:get-context-preview": () => contextPreview(),
+  "memory:read-context-file": (p) => readContextFile(p?.fileName ?? ""),
+  "memory:wiki-add-type": () => ({ ok: true }),
+  "memory:wiki-create-entity": () => ({ ok: true }),
 };
 
 function defaultFor(type: string): unknown {
