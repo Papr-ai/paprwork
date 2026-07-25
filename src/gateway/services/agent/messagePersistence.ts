@@ -57,6 +57,8 @@ export function createPartialAssistantStoredMessage(args: {
   toolResults: ToolResultEvent[];
   sequence?: Array<{ type: "text" | "tool" | "thinking"; data: any }>;
   usage?: TokenUsageForCost & { totalTokens?: number };
+  /** Optional pre-generated stable ID for checkpoint persistence */
+  stableId?: string;
 }): StoredMessage {
   return {
     ...createAssistantStoredMessage(args),
@@ -73,6 +75,8 @@ export function createAssistantStoredMessage(args: {
   toolResults: ToolResultEvent[];
   sequence?: Array<{ type: "text" | "tool" | "thinking"; data: any }>; // V1-style sequence
   usage?: TokenUsageForCost & { totalTokens?: number };
+  /** Optional pre-generated stable ID for checkpoint persistence */
+  stableId?: string;
 }): StoredMessage {
   const cost = args.usage
     ? calculateCostWithCache(args.model, {
@@ -84,7 +88,7 @@ export function createAssistantStoredMessage(args: {
     : undefined;
 
   return {
-    id: `msg-${uuidv4()}`,
+    id: args.stableId ?? `msg-${uuidv4()}`,
     chat_id: args.chatId,
     role: "assistant",
     content: args.assistantText,
@@ -155,6 +159,8 @@ export function createErrorStoredMessage(args: {
   errorMessage: string;
   sequence?: Array<{ type: "text" | "tool" | "thinking"; data: any }>;
   usage?: TokenUsageForCost & { totalTokens?: number };
+  /** Optional pre-generated stable ID for checkpoint persistence */
+  stableId?: string;
 }): StoredMessage {
   const cost = args.usage
     ? calculateCostWithCache(args.model, {
@@ -166,7 +172,7 @@ export function createErrorStoredMessage(args: {
     : undefined;
 
   return {
-    id: `msg-${uuidv4()}`,
+    id: args.stableId ?? `msg-${uuidv4()}`,
     chat_id: args.chatId,
     role: "assistant",
     content: createErrorContent({

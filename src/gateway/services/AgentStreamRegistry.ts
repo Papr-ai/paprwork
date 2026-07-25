@@ -17,6 +17,38 @@ import {
 
 const STREAM_TTL_MS = 10 * 60 * 1000;
 
+// ── Memory safety caps for the live replay buffer ──────────────────────
+// Without these, a heavy multi-tool turn can buffer 50MB+ of chunks per
+// stream (tool results are stored full-size), and 3-4 parallel chats can
+// push the gateway process into memory pressure / OOM.
+/** Max bytes of buffered chunks per stream before oldest are evicted */
+const MAX_BUFFER_BYTES = 25 * 1024 * 1024; // 25MB
+/** Max number of buffered chunks per stream */
+const MAX_BUFFER_CHUNKS = 2000;
+
+/** Cheap byte-size estimate for a chunk (avoids full JSON.stringify cost) */
+function estimateChunkBytes(chunk: StreamChunk & { chatId: string }): number {
+  const payload = (chunk as { payload?: unknown }).payload;
+  if (payload == null) return 200; // envelope overhead
+  if (typeof payload === "string") return payload.length + 200;
+  const p = payload as Record<string, unknown>;
+  // text-delta / reasoning-delta: dominant field is .text
+  if (typeof p.text === "string") return p.text.length + 200;
+  // tool-result: dominant field is .result
+  if (p.result !== undefined) {
+    try {
+      return JSON.stringify(p.result).length + 300;
+    } catch {
+      return 1000;
+    }
+  }
+  try {
+    return JSON.stringify(payload).length + 200;
+  } catch {
+    return 1000;
+  }
+}
+
 interface StreamSubscriber {
   ws: WebSocket;
   responseId: string;
@@ -26,6 +58,10 @@ interface ActiveStream {
   chatId: string;
   requestId: string;
   chunks: Array<StreamChunk & { chatId: string }>;
+  /** Global index of chunks[0] — increments when old chunks are evicted */
+  firstChunkIndex: number;
+  /** Running estimate of buffered bytes across chunks[] */
+  bufferedBytes: number;
   subscribers: Map<WebSocket, StreamSubscriber>;
   status: "running" | "complete" | "error";
   cancelled?: boolean;
@@ -109,8 +145,23 @@ export class AgentStreamRegistry {
 
     entry.subscribers.set(ws, { ws, responseId });
 
-    const startIndex = Math.max(0, Math.min(fromChunkIndex, entry.chunks.length));
-    for (let i = startIndex; i < entry.chunks.length; i++) {
+    // fromChunkIndex is a GLOBAL index (client counts every chunk it saw).
+    // chunks[] may have been evicted at the front — translate to local index.
+    const globalTotal = entry.firstChunkIndex + entry.chunks.length;
+    const localStart = Math.max(
+      0,
+      Math.min(fromChunkIndex - entry.firstChunkIndex, entry.chunks.length),
+    );
+    if (fromChunkIndex < entry.firstChunkIndex) {
+      // Gap: client missed evicted chunks. Replay what we still have — the
+      // final message (agent:complete / checkpoint history) fills the rest.
+      console.warn(
+        `[AgentStreamRegistry] Replay gap for chat ${chatId}: client at ` +
+          `${fromChunkIndex}, buffer starts at ${entry.firstChunkIndex} ` +
+          `(${entry.firstChunkIndex - fromChunkIndex} chunks evicted)`,
+      );
+    }
+    for (let i = localStart; i < entry.chunks.length; i++) {
       sendChunk(ws, responseId, entry.chunks[i]);
     }
 
@@ -124,8 +175,8 @@ export class AgentStreamRegistry {
 
     return {
       found: true,
-      replayed: entry.chunks.length - startIndex,
-      totalBuffered: entry.chunks.length,
+      replayed: entry.chunks.length - localStart,
+      totalBuffered: globalTotal,
     };
   }
 
@@ -205,6 +256,8 @@ export class AgentStreamRegistry {
       chatId,
       requestId,
       chunks: [],
+      firstChunkIndex: 0,
+      bufferedBytes: 0,
       subscribers: new Map(),
       status: "running",
     };
@@ -239,7 +292,7 @@ export class AgentStreamRegistry {
           { focusContext },
         )) {
           if (entry.cancelled) break;
-          entry.chunks.push(chunk);
+          this.bufferChunk(entry, chunk);
           this.broadcastChunk(entry, chunk);
         }
       });
@@ -300,8 +353,69 @@ export class AgentStreamRegistry {
 
       this.broadcastError(entry);
     } finally {
+      // Stream reached a terminal state (complete/cancelled/error) — free
+      // the replay buffer NOW instead of holding it for the 10-min TTL.
+      // Late reconnects get agent:complete (finalMessage) or load history.
+      this.releaseChunks(entry);
       this.scheduleCleanup(requestId);
     }
+  }
+
+  /**
+   * Buffer a chunk for replay, enforcing byte + count caps.
+   * When over budget, evict oldest chunks (firstChunkIndex tracks the
+   * global offset so reconnecting clients translate indices correctly).
+   */
+  private bufferChunk(
+    entry: ActiveStream,
+    chunk: StreamChunk & { chatId: string },
+  ): void {
+    entry.chunks.push(chunk);
+    entry.bufferedBytes += estimateChunkBytes(chunk);
+
+    if (
+      entry.bufferedBytes > MAX_BUFFER_BYTES ||
+      entry.chunks.length > MAX_BUFFER_CHUNKS
+    ) {
+      let evicted = 0;
+      while (
+        entry.chunks.length > 1 &&
+        (entry.bufferedBytes > MAX_BUFFER_BYTES ||
+          entry.chunks.length > MAX_BUFFER_CHUNKS)
+      ) {
+        const removed = entry.chunks.shift()!;
+        entry.bufferedBytes -= estimateChunkBytes(removed);
+        entry.firstChunkIndex++;
+        evicted++;
+      }
+      if (evicted > 0) {
+        console.warn(
+          `[AgentStreamRegistry] Buffer cap hit for chat ${entry.chatId} — ` +
+            `evicted ${evicted} oldest chunks (` +
+            `${(entry.bufferedBytes / 1024 / 1024).toFixed(1)}MB / ` +
+            `${entry.chunks.length} chunks retained). ` +
+            `Reconnecting clients recover missed content from history.`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Free the replay buffer once the stream reaches a terminal state.
+   * After completion, completeData.finalMessage (and the persisted
+   * checkpoint/history row) is the source of truth — late reconnects get
+   * agent:complete + history instead of a chunk replay. This releases
+   * potentially tens of MB per stream that used to sit for the full TTL.
+   */
+  private releaseChunks(entry: ActiveStream): void {
+    if (entry.chunks.length === 0) return;
+    const mb = (entry.bufferedBytes / 1024 / 1024).toFixed(1);
+    entry.firstChunkIndex += entry.chunks.length;
+    entry.chunks.length = 0;
+    entry.bufferedBytes = 0;
+    console.log(
+      `[AgentStreamRegistry] Released ~${mb}MB replay buffer for chat ${entry.chatId} (stream ${entry.status})`,
+    );
   }
 
   private broadcastChunk(

@@ -406,6 +406,99 @@ export class AgentService {
     let cumulativePromptTokens = 0;
     let assistantMessageSaved = false;
 
+    // ── Incremental checkpoint persistence ─────────────────────────────
+    // Pre-generate a stable message ID so checkpoint INSERTs and the
+    // final save all target the same SQLite row.
+    const assistantMessageId = `msg-${uuidv4()}`;
+    let checkpointInserted = false; // true after the first INSERT
+    let checkpointTimer: ReturnType<typeof setTimeout> | null = null;
+    // Running estimate of checkpoint payload size (text + tool results).
+    // Beyond the cap we skip periodic checkpoints: each persist re-serializes
+    // the WHOLE message (multi-MB JSON.stringify on the gateway thread every
+    // 5s late in a heavy turn). The abort/error/final save still runs once.
+    let checkpointBytesEstimate = 0;
+    const CHECKPOINT_MAX_BYTES = 5 * 1024 * 1024; // 5MB
+    let checkpointCapLogged = false;
+
+    const persistCheckpoint = async (): Promise<void> => {
+      if (assistantMessageSaved) return;
+      if (checkpointBytesEstimate > CHECKPOINT_MAX_BYTES) {
+        if (!checkpointCapLogged) {
+          checkpointCapLogged = true;
+          console.warn(
+            `[AgentService] Checkpoint size cap (${CHECKPOINT_MAX_BYTES / 1024 / 1024}MB) ` +
+              `reached for ${chatId} — skipping periodic checkpoints. ` +
+              `Final/abort save will still persist the full message.`,
+          );
+        }
+        return;
+      }
+      if (
+        !hasPersistableAssistantContent({
+          assistantText,
+          thinkingText,
+          toolCalls,
+          sequence,
+        })
+      ) {
+        return;
+      }
+
+      const usage = finalizeTokenUsageForBilling(
+        tokenUsage,
+        lastCacheReadTokens,
+        lastCacheWriteTokens,
+        piAiContextTokens,
+      );
+
+      const partialMsg = createPartialAssistantStoredMessage({
+        chatId,
+        model: config.model,
+        assistantText,
+        thinkingText,
+        toolCalls,
+        toolResults,
+        sequence,
+        usage,
+        stableId: assistantMessageId,
+      });
+
+      try {
+        if (!checkpointInserted) {
+          await this.storageManager.saveMessage(chatId, partialMsg);
+          checkpointInserted = true;
+          console.log(
+            `[AgentService] 📌 First streaming checkpoint for ${chatId} (${assistantMessageId})`,
+          );
+        } else {
+          await this.storageManager.updateMessage(
+            chatId,
+            assistantMessageId,
+            partialMsg,
+          );
+        }
+      } catch (err) {
+        console.warn(
+          `[AgentService] Checkpoint persist failed for ${chatId}:`,
+          err,
+        );
+      }
+    };
+
+    /** Debounced checkpoint — avoids hammering SQLite during rapid tool calls */
+    const scheduleCheckpoint = (): void => {
+      if (checkpointTimer) clearTimeout(checkpointTimer);
+      checkpointTimer = setTimeout(() => {
+        void persistCheckpoint();
+      }, 5_000); // 5s debounce
+    };
+
+    /** Immediate checkpoint (first tool result, or before long-running tool) */
+    const immediateCheckpoint = (): void => {
+      if (checkpointTimer) clearTimeout(checkpointTimer);
+      void persistCheckpoint();
+    };
+
     const persistIncompleteAssistant = async (params: {
       asAbort: boolean;
       errorMessage?: string;
@@ -420,6 +513,12 @@ export class AgentService {
         })
       ) {
         return;
+      }
+
+      // Cancel any pending checkpoint timer — we're about to do a final persist
+      if (checkpointTimer) {
+        clearTimeout(checkpointTimer);
+        checkpointTimer = null;
       }
 
       const usage = finalizeTokenUsageForBilling(
@@ -440,6 +539,7 @@ export class AgentService {
               toolResults,
               sequence,
               usage,
+              stableId: assistantMessageId,
             })
           : createErrorStoredMessage({
               chatId,
@@ -451,9 +551,16 @@ export class AgentService {
               errorMessage: params.errorMessage ?? "Unknown error",
               sequence,
               usage,
+              stableId: assistantMessageId,
             });
 
-        await this.storageManager.saveMessage(chatId, message);
+        if (checkpointInserted) {
+          // Row already exists from a checkpoint — UPDATE in place
+          await this.storageManager.updateMessage(chatId, assistantMessageId, message);
+        } else {
+          await this.storageManager.saveMessage(chatId, message);
+          checkpointInserted = true;
+        }
         assistantMessageSaved = true;
         console.log(
           `[AgentService] Saved ${params.asAbort ? "partial" : "error"} assistant for chat ${chatId}`,
@@ -1615,7 +1722,75 @@ export class AgentService {
           }
         }
 
+        // ── Incremental checkpoint: track streaming state & persist ──
+        // Accumulate state from pass-through chunks so checkpoints have
+        // up-to-date content even though the orchestrator holds the
+        // authoritative copy until it returns (next.done).
+        const chunkType = next.value.type;
+        if (chunkType === "text-delta") {
+          const textPayload = next.value.payload as { text?: string } | undefined;
+          if (textPayload?.text) {
+            assistantText += textPayload.text;
+            checkpointBytesEstimate += textPayload.text.length;
+          }
+        } else if (chunkType === "reasoning-delta") {
+          const reasonPayload = next.value.payload as { text?: string } | undefined;
+          if (reasonPayload?.text) {
+            thinkingText += reasonPayload.text;
+            checkpointBytesEstimate += reasonPayload.text.length;
+          }
+        } else if (chunkType === "tool-call") {
+          const tcPayload = next.value.payload as {
+            toolCallId?: string;
+            toolName?: string;
+            args?: Record<string, unknown>;
+          } | undefined;
+          if (tcPayload?.toolCallId) {
+            toolCalls.push({
+              toolCallId: tcPayload.toolCallId,
+              toolName: tcPayload.toolName ?? "unknown",
+              args: (tcPayload.args ?? {}) as Record<string, any>,
+            });
+          }
+          // First tool call in this turn → immediate checkpoint
+          if (toolCalls.length === 1) {
+            immediateCheckpoint();
+          }
+        } else if (chunkType === "tool-result") {
+          const trPayload = next.value.payload as {
+            toolCallId?: string;
+            toolName?: string;
+            result?: unknown;
+          } | undefined;
+          if (trPayload?.toolCallId) {
+            toolResults.push({
+              toolCallId: trPayload.toolCallId,
+              toolName: trPayload.toolName ?? "unknown",
+              result: trPayload.result,
+            });
+            // Track result size toward checkpoint cap (cheap estimate)
+            const r = trPayload.result;
+            if (typeof r === "string") {
+              checkpointBytesEstimate += r.length;
+            } else if (r != null) {
+              try {
+                checkpointBytesEstimate += JSON.stringify(r).length;
+              } catch {
+                checkpointBytesEstimate += 1000;
+              }
+            }
+          }
+          // After each tool result, schedule a debounced checkpoint
+          scheduleCheckpoint();
+        }
+
         yield next.value;
+      }
+
+      // Cancel any pending checkpoint timer — the stream completed normally
+      if (checkpointTimer) {
+        clearTimeout(checkpointTimer);
+        checkpointTimer = null;
       }
 
       if (contextLengthErrorMessage) {
@@ -1727,6 +1902,7 @@ export class AgentService {
         toolCalls,
         toolResults,
         sequence, // Pass V1-style sequence
+        stableId: assistantMessageId, // Reuse the same ID from checkpoints
         usage: finalizeTokenUsageForBilling(
           tokenUsage,
           lastCacheReadTokens,
@@ -1734,7 +1910,12 @@ export class AgentService {
           piAiContextTokens,
         ),
       });
-      await this.storageManager.saveMessage(chatId, assistantMsg);
+      if (checkpointInserted) {
+        // Checkpoint row already exists — UPDATE to final (complete) state
+        await this.storageManager.updateMessage(chatId, assistantMessageId, assistantMsg);
+      } else {
+        await this.storageManager.saveMessage(chatId, assistantMsg);
+      }
       assistantMessageSaved = true;
 
       // 4.5. Yield done chunk to signal stream completion to frontend
@@ -1808,6 +1989,11 @@ export class AgentService {
         throw error;
       }
     } finally {
+      // Clean up pending checkpoint timer before final persist
+      if (checkpointTimer) {
+        clearTimeout(checkpointTimer);
+        checkpointTimer = null;
+      }
       await persistIncompleteAssistant({ asAbort: true });
 
       // Only clear session state if this stream still owns the abort controller.

@@ -106,6 +106,20 @@ export interface IStorageProvider {
   saveMessage(chatId: string, message: StoredMessage): Promise<void>;
 
   /**
+   * Update an existing message in-place (no message_count increment).
+   * Used for incremental streaming checkpoints — the message was already
+   * inserted via saveMessage, this just refreshes its content/toolCalls/etc.
+   * @param chatId - Chat session ID
+   * @param messageId - The stable message ID to update
+   * @param message - Full message payload (overwrites all fields)
+   */
+  updateMessage(
+    chatId: string,
+    messageId: string,
+    message: StoredMessage,
+  ): Promise<void>;
+
+  /**
    * Load all messages for a chat
    * @param chatId - Chat session ID
    * @param limit - Optional limit

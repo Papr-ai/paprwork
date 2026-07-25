@@ -4,10 +4,12 @@ import {
   categorizeTool,
   countUserTurnsAfter,
   getDefaultHistoryCharLimit,
+  HEAD_TAIL_TRUNCATION_MAX_CHARS,
   HISTORY_TOOL_RESULT_MAX_CHARS,
   RECENT_TURN_RETENTION_COUNT,
   resolveHistoryToolResultCharLimit,
   truncateHistoryToolResult,
+  truncateToCharLimit,
   truncateToolResultForModelContext,
 } from "../src/gateway/services/agent/toolResultTruncation.js";
 import { formatHistoryMessagesForModel } from "../src/gateway/services/agent/historyFormatter.js";
@@ -260,6 +262,85 @@ describe("toolResultTruncation", () => {
 
   test("code cache tools use moderate default limit", () => {
     expect(getDefaultHistoryCharLimit("code_cache")).toBe(2000);
+  });
+
+  test("validate_app uses moderate limit (2KB) for actionable errors", () => {
+    expect(getDefaultHistoryCharLimit("validation_preview", "validate_app")).toBe(
+      2000,
+    );
+
+    const history = [
+      { role: "user", content: "validate" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ name: "validate_app", args: { appId: "a" }, result: longContent }],
+      },
+      { role: "user", content: "t2" },
+      { role: "assistant", content: "ok" },
+      { role: "user", content: "t3" },
+      { role: "assistant", content: "ok" },
+      { role: "user", content: "t4" },
+      { role: "assistant", content: "ok" },
+      { role: "user", content: "t5" },
+      { role: "assistant", content: "ok" },
+      { role: "user", content: "current" },
+    ];
+
+    const limit = resolveHistoryToolResultCharLimit({
+      toolName: "validate_app",
+      toolCallId: "val-1",
+      args: { appId: "a" },
+      resultStr: longContent,
+      history,
+      messageIndex: 1,
+      isOrphan: false,
+    });
+
+    expect(limit).toBe(2000);
+  });
+
+  test("aggressive truncation uses deterministic head+tail", () => {
+    const content = `${"H".repeat(300)}MIDDLE${"T".repeat(300)}`;
+    const truncated = truncateToCharLimit(
+      content,
+      HISTORY_TOOL_RESULT_MAX_CHARS,
+      "bash-1",
+      "bash",
+    );
+
+    expect(truncated.length).toBeLessThanOrEqual(
+      HISTORY_TOOL_RESULT_MAX_CHARS + 50,
+    );
+    expect(truncated.startsWith("HHH")).toBe(true);
+    expect(truncated).toContain("TTT");
+    expect(truncated).toContain("[... omitted ...]");
+    expect(truncated).toContain("get_full_tool_result");
+
+    const again = truncateToCharLimit(
+      content,
+      HISTORY_TOOL_RESULT_MAX_CHARS,
+      "bash-1",
+      "bash",
+    );
+    expect(again).toBe(truncated);
+  });
+
+  test("large limits use head-only truncation", () => {
+    const content = "A".repeat(50_000);
+    const truncated = truncateToCharLimit(
+      content,
+      ABSOLUTE_TOOL_RESULT_MAX_CHARS,
+      "read-1",
+      "read_app_file",
+    );
+
+    expect(truncated.startsWith("AAA")).toBe(true);
+    expect(truncated).not.toContain("[... omitted ...]");
+    expect(truncated.length).toBeLessThan(content.length);
+    expect(HEAD_TAIL_TRUNCATION_MAX_CHARS).toBeLessThan(
+      ABSOLUTE_TOOL_RESULT_MAX_CHARS,
+    );
   });
 
   test("list_job_files stays full within recent-turn discovery window", () => {

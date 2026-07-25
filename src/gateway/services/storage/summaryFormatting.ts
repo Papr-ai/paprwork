@@ -265,7 +265,8 @@ Earlier messages in this chat have been compressed into the summary below.
 Recent messages follow after this block in the conversation history.
 
 Full conversation export: ${chatFilePath}
-You can use bash/grep/read tools to search the full history if needed.
+For details not in the summary, search this chat: search_agent_memory({ query: "...", chatId: "current_chat" }).
+You can also grep/read the export file above.
 
 ───────────────────────────────────────────────────────────
 

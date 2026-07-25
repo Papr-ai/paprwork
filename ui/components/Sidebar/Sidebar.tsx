@@ -12,7 +12,7 @@ import { NavButton } from "./NavButton";
 import { FavoritesList } from "./FavoritesList";
 import { NewChatButton } from "./NewChatButton";
 import { OnboardingCard } from "./OnboardingCard";
-import { ConnectionIndicator } from "../ConnectionIndicator/ConnectionIndicator";
+import { ProfileFooter } from "./ProfileFooter";
 import { SidebarToggleButton } from "./SidebarToggleButton";
 import { MemoryIcon } from "../Memory/MemoryIcon";
 import "./Sidebar.css";
@@ -78,6 +78,16 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
   const handleOpenSettings = useCallback(() => {
     const settingsId = createTab("settings", "settings", "Settings");
     switchToTab(settingsId);
+  }, [createTab, switchToTab]);
+
+  const handleOpenProfile = useCallback(() => {
+    const settingsId = createTab("settings", "settings", "Settings");
+    switchToTab(settingsId);
+    window.setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent("papr:open-settings", { detail: { tab: "profile" } }),
+      );
+    }, 60);
   }, [createTab, switchToTab]);
 
   const handleOpenGettingStarted = useCallback(() => {
@@ -272,34 +282,10 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
           onOpenGettingStarted={handleOpenGettingStarted}
           onSendMessage={handleOnboardingSendMessage}
         />
-        <div className="sidebar__footer-buttons">
-          <ConnectionIndicator />
-          <button
-            className="sidebar__settings-btn"
-            aria-label="Settings"
-            onClick={handleOpenSettings}
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-              <path
-                d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <circle
-                cx="12"
-                cy="12"
-                r="3"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            <span>Settings</span>
-          </button>
-        </div>
+        <ProfileFooter
+          onOpenProfile={handleOpenProfile}
+          onOpenSettings={handleOpenSettings}
+        />
       </div>
     </div>
   );

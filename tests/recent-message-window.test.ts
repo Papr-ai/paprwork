@@ -13,22 +13,22 @@ describe("computeRecentMessageLimit", () => {
   });
 
   it("grows by one per new message up to MAX", () => {
-    expect(computeRecentMessageLimit(81, 80)).toBe(21);
-    expect(computeRecentMessageLimit(90, 80)).toBe(30);
-    expect(computeRecentMessageLimit(100, 80)).toBe(RECENT_MESSAGES_MAX);
+    expect(computeRecentMessageLimit(81, 80)).toBe(11);
+    expect(computeRecentMessageLimit(90, 80)).toBe(20);
+    expect(computeRecentMessageLimit(100, 80)).toBe(19);
   });
 
-  it("snaps back to MIN after 21 new messages then grows again", () => {
-    expect(computeRecentMessageLimit(101, 80)).toBe(RECENT_MESSAGES_MIN);
-    expect(computeRecentMessageLimit(102, 80)).toBe(21);
-    expect(computeRecentMessageLimit(121, 80)).toBe(RECENT_MESSAGES_MAX);
-    expect(computeRecentMessageLimit(122, 80)).toBe(RECENT_MESSAGES_MIN);
+  it("snaps back to MIN after 11 new messages then grows again", () => {
+    expect(computeRecentMessageLimit(91, 80)).toBe(RECENT_MESSAGES_MIN);
+    expect(computeRecentMessageLimit(92, 80)).toBe(11);
+    expect(computeRecentMessageLimit(101, 80)).toBe(RECENT_MESSAGES_MAX);
+    expect(computeRecentMessageLimit(102, 80)).toBe(RECENT_MESSAGES_MIN);
   });
 
   it("infers base from message count when summary base is missing", () => {
-    // 100 messages, null base → inferred anchor at 80 → delta 20 → MAX window
+    // 100 messages, null base → inferred anchor at 90 → delta 10 → MAX window
     expect(computeRecentMessageLimit(100, null)).toBe(RECENT_MESSAGES_MAX);
-    expect(computeRecentMessageLimit(10, null)).toBe(30);
+    expect(computeRecentMessageLimit(10, null)).toBe(20);
   });
 });
 
@@ -38,7 +38,7 @@ describe("resolveSummaryBaseMessageCount", () => {
   });
 
   it("falls back to message count minus MIN when base is null", () => {
-    expect(resolveSummaryBaseMessageCount(100, null)).toBe(80);
+    expect(resolveSummaryBaseMessageCount(100, null)).toBe(90);
     expect(resolveSummaryBaseMessageCount(5, null)).toBe(0);
   });
 });

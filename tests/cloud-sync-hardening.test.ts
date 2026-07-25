@@ -140,6 +140,39 @@ describe("SyncStateManager", () => {
   });
 
   describe("ignored directories", () => {
+    it("skips SQLite files in content hash (Turso sync, not git)", () => {
+      const itemDir = path.join(tmpDir, "Jobs", "job1");
+      const dataDir = path.join(itemDir, "data");
+      fs.mkdirSync(dataDir, { recursive: true });
+      fs.writeFileSync(path.join(itemDir, "run.py"), "print('hi')");
+      fs.writeFileSync(path.join(dataDir, "data.db"), "small");
+
+      mgr.load();
+      mgr.markSynced("Jobs/job1");
+      const hash1 = mgr.data.syncedItems["Jobs/job1"].contentHash;
+
+      fs.writeFileSync(path.join(dataDir, "data.db"), "much larger sqlite payload");
+      fs.writeFileSync(path.join(dataDir, "data.db-wal"), "wal");
+
+      expect(mgr.hasItemChanged("Jobs/job1")).toBe(false);
+      mgr.markSynced("Jobs/job1");
+      expect(mgr.data.syncedItems["Jobs/job1"].contentHash).toBe(hash1);
+    });
+
+    it("still detects job script changes when SQLite is excluded", () => {
+      const itemDir = path.join(tmpDir, "Jobs", "job2");
+      const dataDir = path.join(itemDir, "data");
+      fs.mkdirSync(dataDir, { recursive: true });
+      fs.writeFileSync(path.join(itemDir, "run.py"), "print('v1')");
+      fs.writeFileSync(path.join(dataDir, "data.db"), "db");
+
+      mgr.load();
+      mgr.markSynced("Jobs/job2");
+
+      fs.writeFileSync(path.join(itemDir, "run.py"), "print('v2')");
+      expect(mgr.hasItemChanged("Jobs/job2")).toBe(true);
+    });
+
     it("skips venv directories in content hash", () => {
       const itemDir = path.join(tmpDir, "Jobs", "job1");
       fs.mkdirSync(itemDir, { recursive: true });

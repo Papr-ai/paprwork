@@ -432,6 +432,76 @@ export class LocalStorageProvider implements IStorageProvider {
     console.log(`[LocalStorage] 📊 Chat stats after save: message_count=${updatedChat?.message_count || 0} (changes=${updateResult.changes})`);
   }
 
+  async updateMessage(
+    chatId: string,
+    messageId: string,
+    message: StoredMessage,
+  ): Promise<void> {
+    const timestamp = message.timestamp || new Date().toISOString();
+
+    let totalTokens = message.total_tokens || 0;
+    let promptTokens = message.prompt_tokens || 0;
+    let completionTokens = message.completion_tokens || 0;
+
+    if (message.role === "user" && totalTokens === 0) {
+      const estimatedTokens = Math.ceil((message.content?.length || 0) / 4);
+      totalTokens = estimatedTokens;
+      promptTokens = estimatedTokens;
+    }
+
+    this.db
+      .prepare(`
+      UPDATE messages SET
+        role = ?,
+        content = ?,
+        timestamp = ?,
+        thinking = ?,
+        tool_calls = ?,
+        error = ?,
+        incomplete = ?,
+        model = ?,
+        prompt_tokens = ?,
+        completion_tokens = ?,
+        total_tokens = ?,
+        cost = ?,
+        cache_read_tokens = ?,
+        cache_write_tokens = ?,
+        sync_status = ?,
+        papr_message_id = ?,
+        source_agent_id = ?,
+        source_agent_name = ?,
+        sequence = ?
+      WHERE id = ? AND chat_id = ?
+    `)
+      .run(
+        message.role,
+        message.content,
+        timestamp,
+        message.thinking || null,
+        message.toolCalls ? JSON.stringify(message.toolCalls) : null,
+        message.error || null,
+        message.incomplete ? 1 : 0,
+        message.model || null,
+        promptTokens,
+        completionTokens,
+        totalTokens,
+        message.cost || 0,
+        message.cache_read_tokens || 0,
+        message.cache_write_tokens || 0,
+        message.sync_status || "local",
+        message.papr_message_id || null,
+        message.source_agent_id || "main-agent",
+        message.source_agent_name || "Paprwork Assistant",
+        message.sequence ? JSON.stringify(message.sequence) : null,
+        messageId,
+        chatId,
+      );
+
+    this.db
+      .prepare(`UPDATE chats SET updated_at = ? WHERE id = ?`)
+      .run(new Date().toISOString(), chatId);
+  }
+
   /**
    * Update the stored delegate_task tool result when a background delegation finishes.
    * Keeps chat history in sync with live job status (UI already uses WebSocket updates).

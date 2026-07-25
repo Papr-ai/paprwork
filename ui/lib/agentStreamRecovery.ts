@@ -307,12 +307,45 @@ function pauseChatsOnDisconnect(): void {
 async function clearStaleConnectionPaused(): Promise<void> {
   const store = useChatStore.getState();
   for (const [chatId, state] of store.chatStates.entries()) {
-    if (!state.connectionPaused) continue;
-    if (resumingStreams.has(chatId)) continue;
-    if (activeStreamRequests.has(chatId)) continue;
-    store.setConnectionPaused(chatId, false);
-    if (state.isSending) {
+    const isStale =
+      !resumingStreams.has(chatId) && !activeStreamRequests.has(chatId);
+
+    // Clear connectionPaused on stale chats
+    if (state.connectionPaused && isStale) {
+      store.setConnectionPaused(chatId, false);
+    }
+
+    // Clear isSending on stale chats
+    if (state.isSending && isStale) {
       store.setSending(chatId, false);
+    }
+
+    // Clear orphaned isStreaming state — if no active stream exists on
+    // the client, the chat shouldn't show "Working". Also finalize any
+    // in-memory streaming messages so the user sees what was accumulated.
+    if (state.isStreaming && isStale) {
+      store.setChatStreaming(chatId, false);
+      store.clearStreamingState(chatId);
+
+      // Finalize any messages still marked isStreaming
+      const hasStreamingMsg = state.messages.some((m) => m.isStreaming);
+      if (hasStreamingMsg) {
+        const newChatStates = new Map(useChatStore.getState().chatStates);
+        const current = newChatStates.get(chatId);
+        if (current) {
+          newChatStates.set(chatId, {
+            ...current,
+            isStreaming: false,
+            messages: finalizeStreamingMessages(current.messages),
+          });
+          useChatStore.setState({ chatStates: newChatStates });
+        }
+      }
+    }
+
+    // Clear needsStreamRecovery if nothing to recover
+    if (state.needsStreamRecovery && isStale) {
+      store.setNeedsStreamRecovery(chatId, false);
     }
   }
 }

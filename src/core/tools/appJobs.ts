@@ -11,6 +11,10 @@ import {
   publishCloudAppTool,
 } from "./cloudPublish.js";
 import { getApiKeysForSanitization, sanitizeError } from "./security.js";
+import {
+  buildCappedRuntimeErrorList,
+  buildCappedValidationIssueList,
+} from "../utils/capValidationIssues.js";
 
 /** Models often send `fileName`; our schemas use `filename`. Normalize before parse to avoid wasted tool calls. */
 function coerceFilenameAliasInToolArgs(raw: unknown): unknown {
@@ -123,12 +127,7 @@ async function runPostEditAppValidation(
 
   const errorCount = issues.filter((issue) => issue.severity === "error").length;
   const warningCount = issues.filter((issue) => issue.severity === "warning").length;
-  const issueList = issues
-    .map(
-      (issue) =>
-        `- ${issue.severity === "error" ? "❌" : "⚠️"} ${issue.file}${issue.line ? `:${issue.line}` : ""}: ${issue.message}`,
-    )
-    .join("\n");
+  const issueList = buildCappedValidationIssueList(issues);
 
   return {
     valid: false,
@@ -3582,9 +3581,15 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
       const errorCount = result.issues.filter(i => i.severity === 'error').length;
       const warningCount = result.issues.filter(i => i.severity === 'warning').length;
       
-      const issueList = result.issues.map(issue => 
-        `- ${issue.severity === 'error' ? '❌' : '⚠️'} ${issue.file}: ${issue.message}`
-      ).join('\n');
+      const issueList = buildCappedValidationIssueList(
+        result.issues.map((issue) => ({
+          file: issue.file,
+          line: issue.line,
+          severity: issue.severity,
+          message: issue.message,
+        })),
+        { includeLine: false },
+      );
 
       const { formatJobEventsFixGuidance, hasJobEventsPollingIssues } =
         await import("../../gateway/utils/miniAppJobEventGuidance.js");
@@ -3626,9 +3631,7 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
     const runtimeCheck = await runPostValidationRuntimeCheck(args.appId);
 
     if (runtimeCheck.allErrors.length > 0) {
-      const errorList = runtimeCheck.allErrors
-        .map((line) => `- ❌ ${line}`)
-        .join("\n");
+      const errorList = buildCappedRuntimeErrorList(runtimeCheck.allErrors);
       return {
         success: false,
         error: [

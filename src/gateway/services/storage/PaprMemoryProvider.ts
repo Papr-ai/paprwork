@@ -20,6 +20,10 @@ import {
 } from "./summaryFormatting.js";
 import { paprUserScope } from "../../utils/paprUserId.js";
 import { RECENT_MESSAGES_MAX } from "./recentMessageWindow.js";
+import {
+  buildPaprSyncStoreBody,
+  type PaprMessageStoreBody,
+} from "./paprSyncPayload.js";
 
 export interface PaprConfig {
   apiKey: string; // X-API-Key from macOS Keychain
@@ -66,103 +70,30 @@ export class PaprMemoryProvider implements IStorageProvider {
 
   // ===== Message Operations =====
 
+  async updateMessage(
+    _chatId: string,
+    _messageId: string,
+    _message: StoredMessage,
+  ): Promise<void> {
+    // No-op for PAPR cloud — checkpoints are local-only.
+    // The final saveMessage call will push the complete message.
+  }
+
   async saveMessage(chatId: string, message: StoredMessage): Promise<void> {
     try {
-      // Build customMetadata: only string | number | boolean | Array<string> allowed
-      // This goes in metadata.customMetadata per the MemoryMetadata SDK type
-      const customMetadata: Record<
-        string,
-        string | number | boolean | Array<string>
-      > = {
-        sourceAgentId: message.source_agent_id || "main-agent",
-        sourceAgentName: message.source_agent_name || "Paprwork Assistant",
-        model: message.model || "unknown",
-      };
+      const userScope = paprUserScope();
+      const storeBody: PaprMessageStoreBody = buildPaprSyncStoreBody({
+        chatId,
+        message,
+        externalUserId:
+          "external_user_id" in userScope
+            ? userScope.external_user_id
+            : undefined,
+      });
 
-      if (message.toolCalls && message.toolCalls.length > 0) {
-        // Array<string> is allowed
-        customMetadata.toolsUsed = message.toolCalls.map((tc) => tc.name);
-        customMetadata.toolCallsCount = message.toolCalls.length;
-      }
-
-      if (message.thinking) {
-        customMetadata.hasThinking = true;
-        customMetadata.thinkingLength = message.thinking.length;
-      }
-
-      if (message.prompt_tokens) {
-        customMetadata.promptTokens = message.prompt_tokens;
-        customMetadata.completionTokens = message.completion_tokens ?? 0;
-        customMetadata.totalTokens = message.total_tokens ?? 0;
-      }
-
-      if (message.error) {
-        customMetadata.hasError = true;
-      }
-
-      if (message.incomplete) {
-        customMetadata.incomplete = true;
-      }
-
-      // Build structured content blocks (List[Dict]) for PAPR sync.
-      // This is the API's native format — avoids server-side parsing of custom JSON strings.
-      // Strip sequence (redundant) and limit tool results to keep payloads manageable.
-      const toolCalls = message.toolCalls ?? [];
-      let contentForPapr: string | Array<Record<string, any>> = message.content;
-
-      if (message.role === "assistant" && toolCalls.length > 0) {
-        const contentBlocks: Array<Record<string, any>> = [];
-
-        if (message.content) {
-          contentBlocks.push({ type: "text", text: message.content });
-        }
-
-        if (message.thinking) {
-          contentBlocks.push({ type: "thinking", thinking: message.thinking });
-        }
-
-        for (const tc of toolCalls) {
-          contentBlocks.push({
-            type: "tool_use",
-            id: tc.id,
-            name: tc.name,
-            input: tc.args ?? {},
-          });
-          if (tc.result != null) {
-            contentBlocks.push({
-              type: "tool_result",
-              tool_use_id: tc.id,
-              content: String(tc.result).substring(0, 500),
-            });
-          }
-        }
-
-        contentForPapr = contentBlocks;
-      }
-
-      // POST to PAPR /v1/messages using SDK.
-      // external_user_id = Parse _User.objectId from login (app user id).
-      type MessageStoreBody = Parameters<Papr["messages"]["store"]>[0] & {
-        external_user_id?: string;
-      };
-
-      const storeBody: MessageStoreBody = {
-        content: contentForPapr,
-        role: message.role,
-        sessionId: chatId,
-        process_messages: true, // Let PAPR do batch analysis & auto-summarize
-        metadata: {
-          // Typed MemoryMetadata fields
-          conversationId: chatId,
-          createdAt: message.timestamp,
-          role: message.role,
-          // Custom fields in their proper container
-          customMetadata,
-        },
-        ...paprUserScope(),
-      };
-
-      const response = await this.client.messages.store(storeBody);
+      const response = await this.client.messages.store(
+        storeBody as Parameters<Papr["messages"]["store"]>[0],
+      );
 
       // Store the PAPR objectId in the message
       message.papr_message_id = response.objectId;

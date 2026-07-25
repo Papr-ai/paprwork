@@ -19,6 +19,11 @@ export const ABSOLUTE_TOOL_RESULT_MAX_CHARS = 40_000;
 /** Default cross-turn limit for noisy / low-reuse tools (bash, lists, etc.) */
 export const HISTORY_TOOL_RESULT_MAX_CHARS = 400;
 
+/** Limits at or below this use deterministic head+tail truncation (cache-stable). */
+export const HEAD_TAIL_TRUNCATION_MAX_CHARS = 2000;
+
+const HEAD_TAIL_OMITTED_MARKER = "\n[... omitted ...]\n";
+
 /** Default moderate limit for small structured results (code summaries, schema list) */
 export const HISTORY_TOOL_RESULT_MODERATE_CHARS = 2000;
 
@@ -176,9 +181,14 @@ export function categorizeTool(toolName: string): ToolResultCategory {
 /** Category limits from settings (ignores disableAllTruncation). */
 function getConfiguredCategoryCharLimit(
   category: ToolResultCategory,
+  toolName?: string,
 ): number | null {
   const { aggressiveMaxChars, moderateMaxChars, memorySearchMaxChars } =
     getToolResultTruncationSettings();
+
+  if (toolName === "validate_app") {
+    return moderateMaxChars;
+  }
 
   switch (category) {
     case "file_read":
@@ -202,12 +212,13 @@ function getConfiguredCategoryCharLimit(
 /** `null` = keep full result (file reads, edits, orphan markers). */
 export function getDefaultHistoryCharLimit(
   category: ToolResultCategory,
+  toolName?: string,
 ): number | null {
   if (isToolResultTruncationDisabled()) {
     return null;
   }
 
-  return getConfiguredCategoryCharLimit(category);
+  return getConfiguredCategoryCharLimit(category, toolName);
 }
 
 function buildTruncationSuffix(
@@ -222,6 +233,65 @@ function buildTruncationSuffix(
   );
 }
 
+function truncateHeadOnly(
+  resultStr: string,
+  maxChars: number,
+  toolCallId: string,
+  toolName: string,
+): string {
+  const omittedEstimate = Math.max(0, resultStr.length - maxChars);
+  const suffix = buildTruncationSuffix(omittedEstimate, toolCallId, toolName);
+  const contentMax = maxChars - suffix.length;
+  if (contentMax <= 0) {
+    return resultStr.substring(0, maxChars);
+  }
+  const content = resultStr.substring(0, contentMax);
+  const omitted = resultStr.length - content.length;
+  return content + buildTruncationSuffix(omitted, toolCallId, toolName);
+}
+
+function truncateHeadTail(
+  resultStr: string,
+  maxChars: number,
+  toolCallId: string,
+  toolName: string,
+): string {
+  let suffix = buildTruncationSuffix(resultStr.length, toolCallId, toolName);
+  let budget = maxChars - suffix.length - HEAD_TAIL_OMITTED_MARKER.length;
+  if (budget < 40) {
+    return truncateHeadOnly(resultStr, maxChars, toolCallId, toolName);
+  }
+
+  let headLen = Math.ceil(budget * 0.6);
+  let tailLen = budget - headLen;
+
+  const build = (head: number, tail: number): string => {
+    const omitted = resultStr.length - head - tail;
+    const recoverySuffix = buildTruncationSuffix(omitted, toolCallId, toolName);
+    return (
+      resultStr.substring(0, head) +
+      HEAD_TAIL_OMITTED_MARKER +
+      resultStr.substring(resultStr.length - tail) +
+      recoverySuffix
+    );
+  };
+
+  let combined = build(headLen, tailLen);
+  if (combined.length <= maxChars) {
+    return combined;
+  }
+
+  const overflow = combined.length - maxChars;
+  headLen = Math.max(10, headLen - Math.ceil(overflow * 0.6));
+  tailLen = Math.max(10, tailLen - Math.floor(overflow * 0.4));
+  combined = build(headLen, tailLen);
+  if (combined.length <= maxChars) {
+    return combined;
+  }
+
+  return truncateHeadOnly(resultStr, maxChars, toolCallId, toolName);
+}
+
 export function truncateToCharLimit(
   resultStr: string,
   maxChars: number | null,
@@ -232,11 +302,11 @@ export function truncateToCharLimit(
     return resultStr;
   }
 
-  const omitted = resultStr.length - maxChars;
-  return (
-    resultStr.substring(0, maxChars) +
-    buildTruncationSuffix(omitted, toolCallId, toolName)
-  );
+  if (maxChars <= HEAD_TAIL_TRUNCATION_MAX_CHARS) {
+    return truncateHeadTail(resultStr, maxChars, toolCallId, toolName);
+  }
+
+  return truncateHeadOnly(resultStr, maxChars, toolCallId, toolName);
 }
 
 export interface TruncateHistoryToolResultInput {
@@ -306,7 +376,7 @@ export function resolveHistoryToolResultCharLimit(
 
   const absoluteMax = effectiveAbsoluteMaxChars();
   const category = categorizeTool(input.toolName);
-  const defaultLimit = getDefaultHistoryCharLimit(category);
+  const defaultLimit = getDefaultHistoryCharLimit(category, input.toolName);
 
   if (
     defaultLimit !== null &&
@@ -371,7 +441,7 @@ export function resolveMidTurnToolResultCharLimit(
 
   const absoluteMax = effectiveAbsoluteMaxChars();
   const category = toolName ? categorizeTool(toolName) : "bash";
-  const historyLimit = getConfiguredCategoryCharLimit(category);
+  const historyLimit = getConfiguredCategoryCharLimit(category, toolName);
 
   if (historyLimit === null) {
     return absoluteMax ?? Number.MAX_SAFE_INTEGER;
