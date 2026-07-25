@@ -422,3 +422,79 @@ export function contextPreview(): { workspaceFiles: typeof CONTEXT_FILES; onboar
 export function readContextFile(name: string) {
   return CONTEXT_FILES.find((f) => f.name === name) ?? null;
 }
+
+/* ---------------- Artifacts: demo documents ---------------- */
+
+const DOC_ROI =
+  "# Enterprise ROI One-Pager — Acme Logistics\n\n" +
+  "Prepared for **Marcus Lee, CFO**. Framed on hours saved per rep per week.\n\n" +
+  "## The problem\n" +
+  "Acme's 42 reps each lose ~6 hours/week reconciling account notes across " +
+  "the CRM, spreadsheets, and email. That's **252 rep-hours/week** — roughly " +
+  "6.5 FTEs of pure administrative drag.\n\n" +
+  "## With Papr Work\n" +
+  "- Memory keeps every account's context in one place, updated automatically.\n" +
+  "- Mini-apps draft follow-ups and update the CRM overnight.\n" +
+  "- Reps reclaim ~4 of those 6 hours.\n\n" +
+  "## The math\n" +
+  "| Metric | Today | With Papr Work |\n" +
+  "|---|---|---|\n" +
+  "| Admin hours/rep/week | 6 | 2 |\n" +
+  "| Hours reclaimed (team) | — | 168/week |\n" +
+  "| Annual value @ $65/hr | — | ~$567K |\n\n" +
+  "**Payback: under one quarter.** Well inside Marcus's two-quarter bar.\n";
+
+const DOC_WIN =
+  "# Northwind Traders — Win Story (draft)\n\n" +
+  "*Status: draft — hold until close is signed.*\n\n" +
+  "## Summary\n" +
+  "Northwind (1,200-person logistics distributor) chose Papr Work for their " +
+  "revenue team after a two-week evaluation. Champion **Dana Whitfield (VP Ops)** " +
+  "drove the internal case; deal size **$180K ARR**.\n\n" +
+  "## What worked\n" +
+  "- **Outcome-first framing.** We led with hours saved, not features.\n" +
+  "- **Armed the champion.** A short Loom + a one-page ROI doc let Dana sell the CFO.\n" +
+  "- **Proactive security.** Sending the questionnaire early removed the procurement stall.\n\n" +
+  "## Quote\n" +
+  "> \"It's the first tool where my reps actually stopped complaining about busywork.\" — Dana Whitfield\n\n" +
+  "## Reusable play\n" +
+  "Package this as the template for the other 5 Q1 enterprise targets.\n";
+
+function docWords(s: string): number {
+  return s.trim().split(/\s+/).filter(Boolean).length;
+}
+
+function docPreview(s: string): string {
+  return s.replace(/[#*_`>|[\]-]/g, "").replace(/\n+/g, " ").trim().slice(0, 160);
+}
+
+const DEMO_DOCUMENTS = [
+  {
+    id: "doc-roi-onepager",
+    type: "document",
+    title: "Enterprise ROI One-Pager",
+    content: DOC_ROI,
+    preview: docPreview(DOC_ROI),
+    wordCount: docWords(DOC_ROI),
+    favorite: true,
+    tags: ["Acme", "ROI", "CFO"],
+    createdAt: "2025-01-19T15:00:00Z",
+    updatedAt: "2025-01-21T09:30:00Z",
+  },
+  {
+    id: "doc-northwind-win",
+    type: "document",
+    title: "Northwind Traders — Win Story",
+    content: DOC_WIN,
+    preview: docPreview(DOC_WIN),
+    wordCount: docWords(DOC_WIN),
+    favorite: false,
+    tags: ["Northwind", "Win report", "Draft"],
+    createdAt: "2025-01-22T11:00:00Z",
+    updatedAt: "2025-01-23T16:45:00Z",
+  },
+];
+
+export function demoDocuments() {
+  return DEMO_DOCUMENTS;
+}

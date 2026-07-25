@@ -12,6 +12,7 @@ import {
   wikiSearch,
   contextPreview,
   readContextFile,
+  demoDocuments,
 } from "./demoMemory";
 
 type Chunk = { type: string; payload: unknown; timestamp: string };
@@ -56,6 +57,8 @@ const handlers: Record<string, (payload: any) => unknown> = {
   "settings:save-ui-preferences": () => ({}),
   "app:list": () => DEMO_APPS,
   "app:get": (p) => DEMO_APPS.find((a) => a.id === p?.id) ?? DEMO_APPS[0],
+  "document:list": () => demoDocuments(),
+  "document:get": (p) => demoDocuments().find((d) => d.id === p?.documentId) ?? null,
   "chat:list": () => [],
   "chat:get-messages": () => [],
   "chat:create": () => ({ chatId: `demo-chat-${Date.now()}` }),
