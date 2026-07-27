@@ -4,7 +4,6 @@
  */
 
 import React from "react";
-import { SidebarToggleButton } from "../Sidebar/SidebarToggleButton";
 import "./AppLayout.css";
 
 interface AppLayoutProps {
@@ -12,7 +11,6 @@ interface AppLayoutProps {
   topBar: React.ReactNode;
   content: React.ReactNode;
   sidebarCollapsed?: boolean;
-  onToggleSidebar?: () => void;
 }
 
 export function AppLayout({
@@ -20,20 +18,11 @@ export function AppLayout({
   topBar,
   content,
   sidebarCollapsed = false,
-  onToggleSidebar,
 }: AppLayoutProps) {
   return (
     <div
       className={`app-layout${sidebarCollapsed ? " app-layout--sidebar-collapsed" : ""}`}
     >
-      {onToggleSidebar && sidebarCollapsed && (
-        <div className="app-layout__sidebar-toggle">
-          <SidebarToggleButton
-            onClick={onToggleSidebar}
-            ariaLabel="Show sidebar"
-          />
-        </div>
-      )}
       <aside
         className="app-layout__sidebar"
         aria-hidden={sidebarCollapsed}

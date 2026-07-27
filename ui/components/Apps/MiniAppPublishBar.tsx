@@ -72,18 +72,13 @@ const ACCESS_OPTIONS: {
   },
   {
     value: "team",
-    label: "My team",
-    description: "People in your Papr workspace — sign in required (needed for agent jobs)",
-  },
-  {
-    value: "public",
-    label: "Anyone on the web",
-    description: "Public page on apps.papr.ai",
+    label: "Anyone in my workspace",
+    description: "People in your Papr workspace — sign in required",
   },
   {
     value: "link",
-    label: "People with invite link",
-    description: "Secret link — no Papr account needed",
+    label: "Anyone with the link",
+    description: "Anyone with the link can sign in to open it",
   },
 ];
 
@@ -93,19 +88,14 @@ const PERMISSION_OPTIONS: {
   description: string;
 }[] = [
   {
-    value: "read",
-    label: "View only",
-    description: "Open your live app and read data — no edits",
-  },
-  {
     value: "write",
-    label: "Use the app",
-    description: "Fill forms and use edit buttons in your live app",
+    label: "Can view and interact",
+    description: "Open the app, read data, and use interactive features",
   },
   {
     value: "edit",
-    label: "Edit the code",
-    description: "Install into Paprwork — fork, customize, or send changes back",
+    label: "Can edit code",
+    description: "Install into Paprwork to customize and send changes back",
   },
 ];
 
@@ -186,7 +176,8 @@ export function MiniAppPublishBar({
 }: MiniAppPublishBarProps) {
   const [shareOpen, setShareOpen] = useState(false);
   const [audience, setAudience] = useState<ShareAudience>("private");
-  const [permission, setPermission] = useState<SharePermission>("read");
+  const [permission, setPermission] = useState<SharePermission>("write");
+  const [requireSignIn, setRequireSignIn] = useState(true);
   const [trackPulling, setTrackPulling] = useState(false);
   const [trackPullNotice, setTrackPullNotice] = useState<string | null>(null);
   const [trackPullError, setTrackPullError] = useState<string | null>(null);
@@ -235,6 +226,7 @@ export function MiniAppPublishBar({
     );
     setAudience(model.audience);
     setPermission(model.permission);
+    setRequireSignIn(model.requireSignIn !== false);
   }, [shareOpen, cloud.loginAccess, cloud.externalLink, cloud.codeAccess]);
 
   useEffect(() => {
@@ -270,12 +262,20 @@ export function MiniAppPublishBar({
     }
   }, [workspaceMode]);
 
-  const applySharing = (nextAudience: ShareAudience, nextPermission: SharePermission) => {
+  const applySharing = (
+    nextAudience: ShareAudience,
+    nextPermission: SharePermission,
+    nextRequireSignIn = requireSignIn,
+  ) => {
     setAudience(nextAudience);
     setPermission(nextPermission);
+    if (nextAudience === "link") {
+      setRequireSignIn(nextRequireSignIn);
+    }
     const model: ShareAudienceModel = {
       audience: nextAudience,
       permission: nextPermission,
+      requireSignIn: nextAudience === "link" ? nextRequireSignIn : undefined,
     };
     if (!isPermissionAvailable(nextAudience, nextPermission)) return;
     void cloud.updateSharing(model);
@@ -284,9 +284,10 @@ export function MiniAppPublishBar({
   const pickAudience = (nextAudience: ShareAudience) => {
     let nextPermission = permission;
     if (!isPermissionAvailable(nextAudience, nextPermission)) {
-      nextPermission = "read";
+      nextPermission = "write";
     }
-    applySharing(nextAudience, nextPermission);
+    const nextRequireSignIn = nextAudience === "link" ? true : requireSignIn;
+    applySharing(nextAudience, nextPermission, nextRequireSignIn);
   };
 
   const pickPermission = (nextPermission: SharePermission) => {
@@ -600,15 +601,40 @@ export function MiniAppPublishBar({
 
       {shareOpen ? (
         <ShareSheet title={`Share “${appTitle}”`} onClose={() => setShareOpen(false)}>
-          <CloudCompatibilityPanel
-            report={compatReport ?? cloud.compatibility}
-            loading={compatLoading}
-            showConfirm={needsDesktopAck}
-            confirmBusy={cloud.busy}
-            onConfirmPublish={handleConfirmDesktopPublish}
-          />
 
           <div className="share-sheet__panel">
+            {/* Share link at the top - most prominent */}
+            {cloud.live && (copyUrl || publishedUrl) ? (
+              <div className="share-sheet__link-section">
+                <div className="share-sheet__url-field">
+                  <input
+                    className="share-sheet__url-input"
+                    readOnly
+                    value={copyUrl ?? publishedUrl ?? ""}
+                    aria-label="Share link"
+                  />
+                  <button
+                    type="button"
+                    className="share-sheet__icon-btn"
+                    title="Copy link"
+                    aria-label="Copy link"
+                    onClick={() => void cloud.copyLink(copyUrl ?? publishedUrl)}
+                  >
+                    <CopyIcon />
+                  </button>
+                  <button
+                    type="button"
+                    className="share-sheet__icon-btn"
+                    title="Open in browser"
+                    aria-label="Open in browser"
+                    onClick={() => void cloud.openInBrowser(publishedUrl)}
+                  >
+                    <OpenExternalIcon />
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
             <fieldset className="share-sheet__fieldset" disabled={cloud.busy}>
               <legend className="share-sheet__legend">Who can access</legend>
               <ul className="share-sheet__list">
@@ -629,210 +655,139 @@ export function MiniAppPublishBar({
                   </li>
                 ))}
               </ul>
+              
+              {/* Sign-in toggle for link sharing */}
+              {audience === "link" ? (
+                <div className="share-sheet__toggle-row">
+                  <label className="share-sheet__toggle-label">
+                    <input
+                      type="checkbox"
+                      checked={requireSignIn}
+                      disabled={cloud.busy}
+                      onChange={(event) => {
+                        applySharing(audience, permission, event.target.checked);
+                      }}
+                    />
+                    <span>Require Papr sign-in</span>
+                  </label>
+                  <p className="share-sheet__toggle-hint">
+                    {requireSignIn 
+                      ? "Viewers must sign in with a Papr account"
+                      : "Anyone with the link can open it without an account"}
+                  </p>
+                </div>
+              ) : null}
             </fieldset>
 
-            <fieldset className="share-sheet__fieldset" disabled={cloud.busy}>
-              <legend className="share-sheet__legend">What can they do</legend>
-              <ul className="share-sheet__list">
-                {PERMISSION_OPTIONS.map((option) => {
-                  const available = isPermissionAvailable(audience, option.value);
-                  return (
-                    <li key={option.value}>
-                      <label
-                        className={
-                          available
-                            ? "share-sheet__row"
-                            : "share-sheet__row share-sheet__row--disabled"
-                        }
-                      >
-                        <input
-                          type="radio"
-                          name={`permission-${appId}`}
-                          checked={permission === option.value}
-                          disabled={!available}
-                          onChange={() => pickPermission(option.value)}
-                        />
-                        <span className="share-sheet__row-text">
-                          <span className="share-sheet__row-label">{option.label}</span>
-                          <span className="share-sheet__row-desc">
-                            {option.description}
-                            {!available && option.value === "write"
-                              ? " — not available for public pages"
-                              : null}
-                            {!available && option.value === "edit"
-                              ? " — choose team, public, or invite link"
-                              : null}
+            {audience !== "private" ? (
+              <fieldset className="share-sheet__fieldset" disabled={cloud.busy}>
+                <legend className="share-sheet__legend">What can they do</legend>
+                <ul className="share-sheet__list">
+                  {PERMISSION_OPTIONS.map((option) => {
+                    const available = isPermissionAvailable(audience, option.value);
+                    return (
+                      <li key={option.value}>
+                        <label
+                          className={
+                            available
+                              ? "share-sheet__row"
+                              : "share-sheet__row share-sheet__row--disabled"
+                          }
+                        >
+                          <input
+                            type="radio"
+                            name={`permission-${appId}`}
+                            checked={permission === option.value}
+                            disabled={!available}
+                            onChange={() => pickPermission(option.value)}
+                          />
+                          <span className="share-sheet__row-text">
+                            <span className="share-sheet__row-label">{option.label}</span>
+                            <span className="share-sheet__row-desc">
+                              {option.description}
+                            </span>
                           </span>
-                        </span>
-                      </label>
-                    </li>
-                  );
-                })}
-              </ul>
-            </fieldset>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </fieldset>
+            ) : null}
 
-            {audience === "link" ? (
+            {/* Publish button if not live */}
+            {!cloud.live ? (
               <div className="share-sheet__notice share-sheet__notice--info">
-                <p>
-                  Invite links open without a Papr account. Buttons that run{" "}
-                  <strong>agent jobs</strong> (AI tasks) still require Papr sign-in — use{" "}
-                  <strong>My team</strong> or <strong>Only me</strong> instead, or ask visitors
-                  to sign in at{" "}
-                  <code>{cloud.appsHost}/auth/login</code> before using those features.
-                </p>
+                <p>Put your app on the web first to get a shareable link.</p>
+                <button
+                  type="button"
+                  className="share-sheet__primary-btn"
+                  disabled={cloud.busy || cloud.loading}
+                  onClick={() => void handlePublishClick()}
+                >
+                  Put on web
+                </button>
               </div>
             ) : null}
 
-            {showWebPanel ? (
+            {/* API Credentials - simplified */}
+            {cloud.live && !isFork ? (
+              <CloudAppCredentialsPanel
+                appId={appId}
+                appTitle={appTitle}
+                busy={cloud.busy}
+              />
+            ) : null}
+
+            {/* Code access - simplified */}
+            {showCodePanel && cloud.live ? (
               <div className="share-sheet__section">
-                <p className="share-sheet__section-title">Live web link</p>
+                <p className="share-sheet__section-title">Code access</p>
                 <p className="share-sheet__section-desc">
-                  Opens your app on <strong>{cloud.appsHost}</strong>. Changes they make
-                  stay in your cloud data — not a separate copy.
+                  Others can install this app's source into their Paprwork to customize or contribute changes back.
                 </p>
 
-                {!cloud.live ? (
-                  <div className="share-sheet__notice share-sheet__notice--info">
-                    <p>Put your app on the web first, then copy the link.</p>
-                    <button
-                      type="button"
-                      className="share-sheet__primary-btn"
-                      disabled={cloud.busy || cloud.loading}
-                      onClick={() => void handlePublishClick()}
-                    >
-                      Put on web
-                    </button>
-                  </div>
-                ) : (
+                {listsInCommunity ? (
                   <>
-                    <div className="share-sheet__url-field">
-                      <input
-                        className="share-sheet__url-input"
-                        readOnly
-                        value={copyUrl ?? publishedUrl ?? ""}
-                        aria-label="Web link"
-                      />
-                      <button
-                        type="button"
-                        className="share-sheet__icon-btn"
-                        title="Copy link"
-                        aria-label="Copy link"
-                        disabled={!copyUrl && !publishedUrl}
-                        onClick={() => void cloud.copyLink(copyUrl ?? publishedUrl)}
-                      >
-                        <CopyIcon />
-                      </button>
-                      <button
-                        type="button"
-                        className="share-sheet__icon-btn"
-                        title="Open in browser"
-                        aria-label="Open in browser"
-                        disabled={!publishedUrl}
-                        onClick={() => void cloud.openInBrowser(publishedUrl)}
-                      >
-                        <OpenExternalIcon />
-                      </button>
-                    </div>
+                    <p className="share-sheet__notice share-sheet__notice--success">
+                      Listed in <strong>Community Apps</strong> — others can discover and install
+                    </p>
                     <button
                       type="button"
                       className="share-sheet__secondary-btn"
                       disabled={cloud.busy}
-                      onClick={() => void handlePublishClick()}
+                      onClick={removeFromCommunity}
                     >
-                      Update web version
+                      Remove from Community
                     </button>
                   </>
-                )}
+                ) : null}
+
+                {showOwnerChangeRequests ? (
+                  <CloudChangeRequestsPanel sourceAppId={appId} busy={cloud.busy} />
+                ) : null}
               </div>
             ) : null}
 
-            {showCodePanel ? (
+            {/* Unpublish */}
+            {cloud.live && !isFork ? (
               <div className="share-sheet__section">
-                <p className="share-sheet__section-title">Install in Paprwork</p>
+                <p className="share-sheet__section-title">Take off the web</p>
                 <p className="share-sheet__section-desc">
-                  Source stays in your private <strong>papr-work</strong> repo. Others
-                  install into their Paprwork — they can fork their own copy or send
-                  changes back for your approval.
+                  Unpublish completely — removes the live URL and Community listing.
                 </p>
-
-                {!cloud.live ? (
-                  <div className="share-sheet__notice share-sheet__notice--info">
-                    <p>Publish to the web first so Papr can serve install access.</p>
-                    <button
-                      type="button"
-                      className="share-sheet__primary-btn"
-                      disabled={cloud.busy || cloud.loading}
-                      onClick={() => void handlePublishClick()}
-                    >
-                      Put on web
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    {listsInCommunity ? (
-                      <>
-                        <p className="share-sheet__notice share-sheet__notice--success">
-                          This app appears in <strong>Community Apps</strong> for discovery.
-                          Code stays private on papr-work — users install through Papr.
-                        </p>
-                        <button
-                          type="button"
-                          className="share-sheet__danger-btn"
-                          disabled={cloud.busy}
-                          onClick={removeFromCommunity}
-                        >
-                          Remove from Community
-                        </button>
-                        <p className="share-sheet__footnote">
-                          Sets access to <strong>Only me</strong> — still on the web for you, hidden
-                          from the Community catalog.
-                        </p>
-                      </>
-                    ) : null}
-
-                    {showOwnerChangeRequests ? (
-                      <CloudChangeRequestsPanel
-                        sourceAppId={appId}
-                        busy={cloud.busy}
-                      />
-                    ) : null}
-
-                    <div className="share-sheet__community-actions">
-                      <button
-                        type="button"
-                        className="share-sheet__secondary-btn"
-                        onClick={openCloudInstallHelp}
-                      >
-                        How install works
-                      </button>
-                      <button
-                        type="button"
-                        className="share-sheet__link-btn"
-                        onClick={openCommunityApps}
-                      >
-                        Browse Community Apps →
-                      </button>
-                    </div>
-
-                    <div className="share-sheet__community">
-                      <p className="share-sheet__community-title">Open-source template (optional)</p>
-                      <p className="share-sheet__community-desc">
-                        For users without Papr Cloud, submit a bundle to the public{" "}
-                        <strong>paprwork-community-apps</strong> repo on GitHub.
-                      </p>
-                      <button
-                        type="button"
-                        className="share-sheet__secondary-btn"
-                        onClick={openOssTemplateExport}
-                      >
-                        Prepare GitHub template
-                      </button>
-                    </div>
-                  </>
-                )}
+                <button
+                  type="button"
+                  className="share-sheet__danger-btn"
+                  disabled={cloud.busy}
+                  onClick={takeOffWeb}
+                >
+                  Unpublish
+                </button>
               </div>
             ) : null}
 
+            {/* Fork/contribute panel */}
             {isFork && cloudLineage ? (
               <CloudContributeBackPanel
                 appTitle={appTitle}
@@ -852,43 +807,15 @@ export function MiniAppPublishBar({
               />
             ) : null}
 
-            {cloud.live && !isFork ? (
-              <div className="share-sheet__section">
-                <p className="share-sheet__section-title">Take off the web</p>
-                <p className="share-sheet__section-desc">
-                  Unpublish completely — removes the live URL and Community listing.
-                </p>
-                <button
-                  type="button"
-                  className="share-sheet__danger-btn"
-                  disabled={cloud.busy}
-                  onClick={takeOffWeb}
-                >
-                  Unpublish from Papr Cloud
-                </button>
-              </div>
-            ) : null}
-
-            {cloud.live && !isFork ? (
-              <CloudAppCredentialsPanel
-                appId={appId}
-                appTitle={appTitle}
-                busy={cloud.busy}
+            {/* Cloud compatibility info - only show if blocking publish */}
+            {needsDesktopAck ? (
+              <CloudCompatibilityPanel
+                report={compatReport ?? cloud.compatibility}
+                loading={compatLoading}
+                showConfirm={needsDesktopAck}
+                confirmBusy={cloud.busy}
+                onConfirmPublish={handleConfirmDesktopPublish}
               />
-            ) : null}
-
-            {showWebPanel && !showCodePanel ? (
-              <p className="share-sheet__footnote">
-                Want them to install and customize source? Choose{" "}
-                <button
-                  type="button"
-                  className="share-sheet__inline-link"
-                  onClick={() => pickPermission("edit")}
-                >
-                  Edit the code
-                </button>
-                .
-              </p>
             ) : null}
           </div>
         </ShareSheet>

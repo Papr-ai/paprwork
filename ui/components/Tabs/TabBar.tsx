@@ -8,6 +8,7 @@ import { useTabs } from "../../hooks/useTabs";
 import { useChat } from "../../hooks/useChat";
 import { useChatStore } from "../../stores/chatStore";
 import { Tab } from "./Tab";
+import { SidebarToggleButton } from "../Sidebar/SidebarToggleButton";
 import { gateway } from "../../src/lib/gateway";
 import "./TabBar.css";
 
@@ -15,7 +16,13 @@ import "./TabBar.css";
 const isMac = navigator.platform.toUpperCase().includes("MAC");
 const modKey = isMac ? "⌘" : "Ctrl+";
 
-export function TabBar() {
+export function TabBar({
+  sidebarCollapsed = false,
+  onToggleSidebar,
+}: {
+  sidebarCollapsed?: boolean;
+  onToggleSidebar?: () => void;
+}) {
   const {
     tabs,
     getVisibleTabs,
@@ -229,6 +236,13 @@ export function TabBar() {
     <div className="tab-bar">
       {/* Navigation controls */}
       <div className="tab-bar__nav">
+        {sidebarCollapsed && onToggleSidebar && (
+          <SidebarToggleButton
+            onClick={onToggleSidebar}
+            ariaLabel="Show sidebar"
+            className="tab-bar__sidebar-toggle"
+          />
+        )}
         <button
           className="tab-bar__nav-btn"
           onClick={handleBack}

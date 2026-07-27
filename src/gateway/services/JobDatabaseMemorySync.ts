@@ -15,7 +15,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import Papr from "@papr/memory";
 import { getApiKey } from "../utils/keyResolver.js";
-import { paprUserScope } from "../utils/paprUserId.js";
+import { paprMemoryScopeSpread } from "../utils/memoryScopeResolver.js";
 import type { JobRecord } from "./jobs/types.js";
 import { isSleepCycleJobName } from "./SleepCycleService.js";
 
@@ -270,12 +270,13 @@ export async function syncJobDatabaseToMemory(
 
   let snapshotSynced = false;
   let summarySynced = false;
+  const memoryScope = await paprMemoryScopeSpread();
 
   // 1. Store raw snapshot (existing behavior + new metadata)
   try {
     await client.memory.add({
       content,
-      ...paprUserScope(),
+      ...memoryScope,
       metadata: {
         role: "assistant",
         category: "fact",
@@ -305,7 +306,7 @@ export async function syncJobDatabaseToMemory(
     const summary = buildTableSummary(input.job, snapshots);
     await client.memory.add({
       content: summary,
-      ...paprUserScope(),
+      ...memoryScope,
       metadata: {
         role: "assistant",
         category: "fact",

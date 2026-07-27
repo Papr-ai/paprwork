@@ -62,3 +62,12 @@ export function writeCachedCloudPublishState(
   }
   writeSnapshot(byAppId);
 }
+
+/** Clear all cached publish state (e.g. after org/namespace switch). */
+export function clearCloudPublishCache(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    /* quota / private mode */
+  }
+}

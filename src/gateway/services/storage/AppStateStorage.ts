@@ -9,11 +9,12 @@
 
 import Database from 'better-sqlite3';
 import * as path from 'path';
-import * as os from 'os';
 import * as fs from 'fs';
+import { resolvePaprUserDataPath } from '../../../core/utils/paprWorkspace.js';
 
-const APP_STATE_DIR = path.join(os.homedir(), '.paprwork-v2');
-const APP_STATE_DB = path.join(APP_STATE_DIR, 'app-state.db');
+function getAppStateDbPath(): string {
+  return path.join(resolvePaprUserDataPath(), 'app-state.db');
+}
 
 export interface TabMetadata {
   id: string;
@@ -43,15 +44,17 @@ export interface AppState {
 
 export class AppStateStorage {
   private db: Database.Database;
+  private readonly dbPath: string;
+  private closed = false;
 
-  constructor() {
-    // Ensure directory exists
-    if (!fs.existsSync(APP_STATE_DIR)) {
-      fs.mkdirSync(APP_STATE_DIR, { recursive: true });
+  constructor(dbPath: string = getAppStateDbPath()) {
+    this.dbPath = dbPath;
+    const appStateDir = path.dirname(dbPath);
+    if (!fs.existsSync(appStateDir)) {
+      fs.mkdirSync(appStateDir, { recursive: true });
     }
 
-    // Open database with performance optimizations
-    this.db = new Database(APP_STATE_DB);
+    this.db = new Database(this.dbPath);
     
     // Performance optimizations
     this.db.pragma('journal_mode = WAL');
@@ -97,6 +100,7 @@ export class AppStateStorage {
   saveTabs(tabs: TabMetadata[]): void {
     // Run on next event loop tick to avoid blocking
     setImmediate(() => {
+      if (this.closed) return;
       const transaction = this.db.transaction((tabsToSave: TabMetadata[]) => {
         // Clear existing tabs
         this.db.prepare('DELETE FROM tabs').run();
@@ -133,6 +137,7 @@ export class AppStateStorage {
    * Load all tabs
    */
   loadTabs(): TabMetadata[] {
+    if (this.closed) return [];
     const rows = this.db.prepare(`
       SELECT * FROM tabs ORDER BY position ASC
     `).all() as any[];
@@ -158,6 +163,7 @@ export class AppStateStorage {
   saveAppState(state: Partial<AppState>): void {
     // Run on next event loop tick to avoid blocking
     setImmediate(() => {
+      if (this.closed) return;
       const stmt = this.db.prepare(`
         INSERT OR REPLACE INTO app_state (key, value, updated_at)
         VALUES (?, ?, ?)
@@ -199,6 +205,7 @@ export class AppStateStorage {
    * Load app state
    */
   loadAppState(): AppState | null {
+    if (this.closed) return null;
     const rows = this.db.prepare(`
       SELECT key, value FROM app_state
     `).all() as { key: string; value: string }[];
@@ -225,6 +232,7 @@ export class AppStateStorage {
    * Toggle favorite status for a tab
    */
   toggleFavorite(tabId: string): void {
+    if (this.closed) return;
     this.db.prepare(`
       UPDATE tabs
       SET is_favorite = CASE WHEN is_favorite = 1 THEN 0 ELSE 1 END
@@ -247,6 +255,7 @@ export class AppStateStorage {
    * Get favorites only
    */
   getFavorites(): TabMetadata[] {
+    if (this.closed) return [];
     const rows = this.db.prepare(`
       SELECT * FROM tabs
       WHERE is_favorite = 1
@@ -271,12 +280,21 @@ export class AppStateStorage {
    * Close database connection
    */
   close(): void {
+    if (this.closed) return;
+    this.closed = true;
     this.db.close();
   }
 }
 
 // Singleton instance
 let instance: AppStateStorage | null = null;
+
+export function resetAppStateStorageSingleton(): void {
+  if (instance) {
+    instance.close();
+    instance = null;
+  }
+}
 
 export function getAppStateStorage(): AppStateStorage {
   if (!instance) {

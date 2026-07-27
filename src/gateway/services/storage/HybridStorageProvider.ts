@@ -280,7 +280,7 @@ export class HybridStorageProvider implements IStorageProvider {
 
   async updateChat(
     chatId: string,
-    updates: Partial<{ title: string }>,
+    updates: Partial<{ title: string; memory_scope: import("./IStorageProvider.js").ChatMemoryScope }>,
   ): Promise<void> {
     // Update locally
     await this.local.updateChat(chatId, updates);

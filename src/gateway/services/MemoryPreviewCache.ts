@@ -7,8 +7,8 @@
  */
 
 import { promises as fs } from "fs";
+import { getPaprDataDir } from "../../core/utils/paprRoot.js";
 import path from "path";
-import os from "os";
 
 export const MEMORY_PREVIEW_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -40,7 +40,7 @@ interface MemoryPreviewCacheFile {
 }
 
 function cachePath(): string {
-  return path.join(os.homedir(), "Papr", "data", "memory-preview-cache.json");
+  return path.join(getPaprDataDir(), "memory-preview-cache.json");
 }
 
 function isFresh(fetchedAt: string, ttlMs: number): boolean {

@@ -24,7 +24,7 @@ export function isChatPickerModelId(modelId: string): boolean {
   );
 }
 
-/** Map retired picker ids to their GPT-5.6 successors. */
+/** Map retired picker ids to their successors. */
 export function migratePickerModelId(modelId: string): string {
   if (
     modelId === "gpt-5.5-low" ||
@@ -32,6 +32,9 @@ export function migratePickerModelId(modelId: string): string {
     modelId === "gpt-5.5-high"
   ) {
     return "gpt-5-6-sol";
+  }
+  if (modelId === "claude-opus-4-8") {
+    return "claude-opus-5";
   }
   return modelId;
 }
@@ -52,7 +55,7 @@ export const PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
 export const LEGACY_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
   "claude-sonnet-4-6",
   "claude-opus-4-6",
-  "claude-opus-4-8",
+  "claude-opus-5",
   "gpt-5-6-sol",
   "glm-5.2-max",
   "qwen/qwen3-32b",

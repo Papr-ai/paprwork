@@ -70,6 +70,8 @@ export interface StoredSummary {
   last_fetched_at?: string;
 }
 
+export type ChatMemoryScope = "user" | "namespace" | "org";
+
 export interface ChatMetadata {
   id: string;
   title: string;
@@ -77,6 +79,8 @@ export interface ChatMetadata {
   created_at: string;
   updated_at: string;
   last_synced_at?: string;
+  /** Who can read derived memories from this chat (not the raw transcript). */
+  memory_scope?: ChatMemoryScope;
 }
 
 /** Lightweight chat summary row for sleep cycle / cross-chat review */
@@ -177,7 +181,7 @@ export interface IStorageProvider {
    */
   updateChat(
     chatId: string,
-    updates: Partial<{ title: string }>,
+    updates: Partial<{ title: string; memory_scope: ChatMemoryScope }>,
   ): Promise<void>;
 
   /**

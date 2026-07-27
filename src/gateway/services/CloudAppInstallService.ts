@@ -3,6 +3,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
@@ -274,7 +275,7 @@ export class CloudAppInstallService {
         : {}),
     };
 
-    const paprDir = path.join(os.homedir(), "Papr");
+    const paprDir = getPaprRoot();
     const lineagePath = path.join(paprDir, "apps", app.id, "papr-cloud-lineage.json");
     await fs.writeFile(
       lineagePath,

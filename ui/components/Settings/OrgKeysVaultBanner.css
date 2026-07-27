@@ -1,0 +1,29 @@
+.org-keys-vault-banner {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(120, 120, 128, 0.12);
+  border: 1px solid rgba(120, 120, 128, 0.18);
+}
+
+.org-keys-vault-banner p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary, rgba(60, 60, 67, 0.78));
+}
+
+.org-keys-vault-banner code {
+  font-size: 12px;
+}
+
+.org-keys-vault-banner--local {
+  background: rgba(255, 149, 0, 0.1);
+  border-color: rgba(255, 149, 0, 0.25);
+}
+
+@media (prefers-color-scheme: dark) {
+  .org-keys-vault-banner p {
+    color: rgba(235, 235, 245, 0.72);
+  }
+}

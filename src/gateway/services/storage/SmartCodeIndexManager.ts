@@ -9,6 +9,7 @@
  */
 
 import { Papr } from '@papr/memory';
+import { getPaprRoot } from "../../../core/utils/paprRoot.js";
 import { CodeIndexerService } from './CodeIndexerService.js';
 import { CodeIndexTracker } from './CodeIndexTracker.js';
 import { CodeFileWatcher } from './CodeFileWatcher.js';
@@ -19,8 +20,8 @@ import {
   isPermanentIndexError,
 } from './codeIndexPaths.js';
 import * as path from 'path';
-import * as os from 'os';
 import * as fs from 'fs';
+import { resolvePaprUserDataPath } from '../../../core/utils/paprWorkspace.js';
 
 export interface IndexManagerConfig {
   paprDir?: string;
@@ -42,11 +43,12 @@ export class SmartCodeIndexManager {
   private queueInterval: NodeJS.Timeout | null = null;
   private isIndexing: boolean = false;
   private rateLimitHit: boolean = false;
+  private stopped = false;
   
   constructor(client: Papr, config: IndexManagerConfig) {
     this.config = {
-      paprDir: config.paprDir || path.join(os.homedir(), 'Papr'),
-      dataDir: config.dataDir || path.join(os.homedir(), '.paprwork-v2'),
+      paprDir: config.paprDir || getPaprRoot(),
+      dataDir: config.dataDir || resolvePaprUserDataPath(),
       schemaId: config.schemaId,
       debounceMs: config.debounceMs || 5000, // 5 seconds
       batchSize: config.batchSize || 50
@@ -92,14 +94,25 @@ export class SmartCodeIndexManager {
    * Stop the index manager
    */
   stop(): void {
+    void this.stopAsync();
+  }
+
+  async stopAsync(): Promise<void> {
+    if (this.stopped) {
+      return;
+    }
+
     console.log('🛑 Stopping Smart Code Index Manager...');
+    this.stopped = true;
     
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
     }
 
     if (this.batchTimer) {
       clearTimeout(this.batchTimer);
+      this.batchTimer = null;
     }
 
     if (this.queueInterval) {
@@ -108,7 +121,19 @@ export class SmartCodeIndexManager {
     }
     
     this.watcher.stop();
-    this.tracker.close();
+
+    // Wait for in-flight batch before closing the tracker DB (bounded wait)
+    const deadline = Date.now() + 5000;
+    while (this.isIndexing && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (this.isIndexing) {
+      console.warn("[SmartCodeIndexManager] Batch still running after 5s — closing tracker anyway");
+    }
+
+    if (!this.tracker.isClosed()) {
+      this.tracker.close();
+    }
     
     console.log('✅ Smart Code Index Manager stopped');
   }
@@ -250,6 +275,10 @@ export class SmartCodeIndexManager {
    * Queue a file change (called by file watcher)
    */
   queueFileChange(filePath: string): void {
+    if (this.stopped) {
+      return;
+    }
+
     if (!isIndexableCodePath(filePath, this.config.paprDir)) {
       console.log(`   ⚠️  Skipped unindexable path: ${path.relative(this.config.paprDir, filePath)}`);
       return;
@@ -270,6 +299,10 @@ export class SmartCodeIndexManager {
    * Schedule a single batch run. Only one timer is active at a time.
    */
   private scheduleBatch(delayMs: number): void {
+    if (this.stopped) {
+      return;
+    }
+
     if (this.batchTimer) {
       return;
     }
@@ -284,7 +317,7 @@ export class SmartCodeIndexManager {
    * Run batch indexing
    */
   private async runBatch(): Promise<void> {
-    if (this.rateLimitHit) {
+    if (this.stopped || this.rateLimitHit) {
       return;
     }
 
@@ -306,16 +339,18 @@ export class SmartCodeIndexManager {
     } catch (error) {
       console.error('❌ Batch processing error:', error);
     } finally {
-      try {
-        await this.summaryPipeline.flushPendingProjectOverviews();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.warn(`[CodeSummary] Project overview flush failed: ${message}`);
+      if (!this.stopped) {
+        try {
+          await this.summaryPipeline.flushPendingProjectOverviews();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`[CodeSummary] Project overview flush failed: ${message}`);
+        }
       }
 
       this.isIndexing = false;
 
-      if (!this.rateLimitHit && this.tracker.getQueueSize() > 0) {
+      if (!this.stopped && !this.rateLimitHit && this.tracker.getQueueSize() > 0) {
         this.scheduleBatch(1000);
       }
     }
@@ -329,6 +364,10 @@ export class SmartCodeIndexManager {
     let hitRateLimit = false;
     
     for (const queuedFile of files) {
+      if (this.stopped) {
+        return;
+      }
+
       try {
         if (!fs.existsSync(queuedFile.file_path)) {
           console.log(`   ⚠️  Skipped (deleted): ${queuedFile.file_path}`);
@@ -471,6 +510,9 @@ export class SmartCodeIndexManager {
   private startQueueProcessor(): void {
     // Check queue every 10 seconds
     const checkQueue = () => {
+      if (this.stopped) {
+        return;
+      }
       if (this.tracker.getQueueSize() > 0) {
         this.scheduleBatch(0);
       }

@@ -27,6 +27,11 @@
   width: 100%;
 }
 
+.onboarding-view-content--loading {
+  text-align: center;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+}
+
 .onboarding-view-header {
   text-align: center;
   margin-bottom: 40px;

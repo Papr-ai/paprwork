@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
+import { resolvePaprUserDataPath } from "../../../core/utils/paprWorkspace.js";
 
 const CHARS_PER_TOKEN = 4;
 /** Rough chars/line when we only have lines_of_code from index metadata */
@@ -222,7 +222,7 @@ function savingsFromHits(hits: MemorySearchHit[]): number {
 }
 
 function openCodeIndexDb(): Database.Database | null {
-  const dbPath = path.join(os.homedir(), ".paprwork-v2", "code-index.db");
+  const dbPath = path.join(resolvePaprUserDataPath(), "code-index.db");
   if (!fs.existsSync(dbPath)) return null;
   return new Database(dbPath, { readonly: true });
 }

@@ -147,11 +147,12 @@ describe("Gateway wiring", () => {
   });
 
   it("vault sync is inside CLOUD_SYNC_ENABLED check", () => {
-    const cloudSyncBlock = indexContent.slice(
-      indexContent.indexOf('CLOUD_SYNC_ENABLED !== "false"'),
-      indexContent.indexOf("} catch (error) {"),
+    const cloudSyncIdx = indexContent.indexOf(
+      'process.env.CLOUD_SYNC_ENABLED !== "false"',
     );
-    expect(cloudSyncBlock).toContain("initializeVaultSyncService");
+    expect(cloudSyncIdx).toBeGreaterThan(-1);
+    const block = indexContent.slice(cloudSyncIdx, cloudSyncIdx + 2500);
+    expect(block).toContain("initializeVaultSyncService");
   });
 });
 
@@ -161,9 +162,11 @@ describe("Vault API models alignment", () => {
     "utf-8",
   );
 
-  it("sends scope: user in push request", () => {
-    expect(vaultContent).toContain('"user"');
-    expect(vaultContent).toContain("scope");
+  it("groups keys by vault audience scope when pushing", () => {
+    expect(vaultContent).toContain("normalizeIntegrationKeyVaultAudience");
+    expect(vaultContent).toContain("buildCloudVaultRequestBody");
+    expect(vaultContent).toContain("keyPairsByScope");
+    expect(vaultContent).toContain("cloudScope");
   });
 
   it("sends keys array with name and value", () => {

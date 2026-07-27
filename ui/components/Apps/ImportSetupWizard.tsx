@@ -192,7 +192,7 @@ export function ImportSetupWizard({
     let keys: Array<{ name: string }> = [];
     try {
       if (window.electronAPI?.customKeys) {
-        keys = (await window.electronAPI.customKeys.list()) as Array<{ name: string }>;
+        keys = (await window.electronAPI.customKeys.list({ orgOnly: true })) as Array<{ name: string }>;
       }
     } catch {
       // May not be in Electron context

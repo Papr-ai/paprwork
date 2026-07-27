@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { getPaprClient, handlePaprToolError } from "./paprClient.js";
+import { resolveConversationId } from "./chatScope.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -114,7 +115,9 @@ export async function tryLoadPdfFromMemory(
 
   try {
     const client = await getPaprClient();
-    const { paprUserScope } = await import("../../gateway/utils/paprUserId.js");
+    const { paprMemorySearchScopeSpread } = await import(
+      "../../gateway/utils/memoryScopeResolver.js"
+    );
 
     const attempts: Array<{
       query: string;
@@ -132,10 +135,12 @@ export async function tryLoadPdfFromMemory(
       },
     ];
 
+    const searchScope = await paprMemorySearchScopeSpread();
+
     for (const attempt of attempts) {
       const response = await client.memory.search({
         query: attempt.query,
-        ...paprUserScope(),
+        ...searchScope,
         max_memories: 8,
         ...(attempt.customMetadata
           ? { metadata: { customMetadata: attempt.customMetadata } }
@@ -184,7 +189,15 @@ export const uploadDocumentToMemoryTool = createTool({
 
       const fileName = args.fileName ?? path.basename(resolvedPath);
       const client = await getPaprClient();
-      const { paprUserScope } = await import("../../gateway/utils/paprUserId.js");
+      const { paprMemoryScopeSpread } = await import(
+        "../../gateway/utils/memoryScopeResolver.js"
+      );
+      const resolvedChatId = args.chatId
+        ? resolveConversationId(args.chatId)
+        : undefined;
+      const memoryScope = await paprMemoryScopeSpread({
+        chatId: resolvedChatId,
+      });
 
       const metadataPayload: Record<string, unknown> = {
         customMetadata: {
@@ -196,7 +209,15 @@ export const uploadDocumentToMemoryTool = createTool({
 
       const response = await client.document.upload({
         file: createReadStream(resolvedPath),
-        ...paprUserScope(),
+        ...(memoryScope.external_user_id
+          ? { external_user_id: memoryScope.external_user_id }
+          : {}),
+        ...(memoryScope.namespace_id
+          ? { namespace_id: memoryScope.namespace_id }
+          : {}),
+        ...(memoryScope.policy
+          ? { policy: JSON.stringify(memoryScope.policy) }
+          : {}),
         metadata: JSON.stringify(metadataPayload),
       });
 

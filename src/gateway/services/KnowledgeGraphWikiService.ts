@@ -6,13 +6,13 @@
  */
 
 import type Papr from "@papr/memory";
+import { getPaprWorkspaceDir } from "../../core/utils/paprRoot.js";
 import { getPaprClient } from "../../core/tools/paprClient.js";
-import { paprUserScope } from "../utils/paprUserId.js";
+import { paprMemorySearchScopeSpread } from "../utils/memoryScopeResolver.js";
 import * as fs from "fs";
 import * as path from "path";
-import * as os from "os";
 
-const ENTITIES_DIR = path.join(os.homedir(), "Papr", "workspace", "entities");
+function getEntitiesDir(): string { return path.join(getPaprWorkspaceDir(), "entities"); }
 
 const ENTITY_DIR_CONFIG: Record<string, { railTitle: string; singular: string }> = {
   projects:    { railTitle: "Projects",    singular: "project" },
@@ -125,12 +125,12 @@ export interface EntityFileNode extends WikiNode {
 function readEntityFilesSync(): { nodes: EntityFileNode[]; rails: WikiRail[]; typeCounts: Record<string, number> } {
   const nodes: EntityFileNode[] = [];
   const typeCounts: Record<string, number> = {};
-  if (!fs.existsSync(ENTITIES_DIR)) return { nodes, rails: [], typeCounts };
+  if (!fs.existsSync(getEntitiesDir())) return { nodes, rails: [], typeCounts };
 
-  for (const typeDir of fs.readdirSync(ENTITIES_DIR)) {
+  for (const typeDir of fs.readdirSync(getEntitiesDir())) {
     const cfg = ENTITY_DIR_CONFIG[typeDir];
     if (!cfg) continue;
-    const dirPath = path.join(ENTITIES_DIR, typeDir);
+    const dirPath = path.join(getEntitiesDir(), typeDir);
     if (!fs.statSync(dirPath).isDirectory()) continue;
     for (const file of fs.readdirSync(dirPath)) {
       if (!file.endsWith(".md")) continue;
@@ -741,6 +741,7 @@ async function fetchWikiHomeFromSearch(client: Papr): Promise<{
 }> {
   const grouped = new Map<string, WikiNode[]>();
   const seen = new Set<string>();
+  const searchScope = await paprMemorySearchScopeSpread();
 
   const addNode = (raw: Record<string, unknown>, wikiType: string) => {
     const record = coerceSearchRecord(raw);
@@ -759,7 +760,7 @@ async function fetchWikiHomeFromSearch(client: Papr): Promise<{
       try {
         const response = await client.memory.search({
           query,
-          ...paprUserScope(),
+          ...searchScope,
           max_memories: MIN_SEARCH_MEMORIES,
           max_nodes: 12,
           enable_agentic_graph: true,
@@ -789,7 +790,7 @@ async function fetchWikiHomeFromSearch(client: Papr): Promise<{
     try {
       const response = await client.memory.search({
         query: "knowledge graph entities projects goals people",
-        ...paprUserScope(),
+        ...searchScope,
         max_memories: 20,
         max_nodes: 40,
         enable_agentic_graph: true,
@@ -1014,10 +1015,11 @@ async function _fetchWikiEntityBase(wikiType: string, id: string, label?: string
   }
 
   const searchQuery = label?.trim() || id;
+  const searchScope = await paprMemorySearchScopeSpread();
   try {
     const response = await client.memory.search({
       query: searchQuery,
-      ...paprUserScope(),
+      ...searchScope,
       max_memories: MIN_SEARCH_MEMORIES,
       max_nodes: 20,
       enable_agentic_graph: true,
@@ -1083,9 +1085,10 @@ async function _fetchRelatedMemories(node: WikiNode): Promise<any[]> {
     const client = await getPaprClient();
     const query = [node.label, node.description].filter(Boolean).join(" ");
     if (!query) return [];
+    const searchScope = await paprMemorySearchScopeSpread();
     const response = await client.memory.search({
       query,
-      ...paprUserScope(),
+      ...searchScope,
       max_memories: 20,
       enable_agentic_graph: false,
     });
@@ -1225,9 +1228,10 @@ export async function searchWiki(query: string): Promise<WikiSearchResult> {
   }
 
   try {
+    const searchScope = await paprMemorySearchScopeSpread();
     const response = await client.memory.search({
       query: trimmed,
-      ...paprUserScope(),
+      ...searchScope,
       max_memories: MIN_SEARCH_MEMORIES,
       max_nodes: 12,
       enable_agentic_graph: true,
@@ -1272,7 +1276,7 @@ export async function createWikiEntity(
   name: string,
   description: string,
 ): Promise<{ id: string; filePath: string }> {
-  const entitiesDir = path.join(os.homedir(), "Papr", "workspace", "entities");
+  const entitiesDir = path.join(getPaprWorkspaceDir(), "entities");
   const typeDir = path.join(entitiesDir, type);
   if (!fs.existsSync(typeDir)) fs.mkdirSync(typeDir, { recursive: true });
 
@@ -1349,13 +1353,13 @@ export async function addWikiType(
   icon: string,
   description: string,
 ): Promise<{ typeName: string; dirCreated: boolean; configUpdated: boolean }> {
-  const entitiesDir = path.join(os.homedir(), "Papr", "workspace", "entities");
+  const entitiesDir = path.join(getPaprWorkspaceDir(), "entities");
   const typeDir = path.join(entitiesDir, typeName);
   const dirCreated = !fs.existsSync(typeDir);
   if (dirCreated) fs.mkdirSync(typeDir, { recursive: true });
 
   // Update wiki-config.yaml if it exists
-  const configPath = path.join(os.homedir(), "Papr", "workspace", "wiki-config.yaml");
+  const configPath = path.join(getPaprWorkspaceDir(), "wiki-config.yaml");
   let configUpdated = false;
   if (fs.existsSync(configPath)) {
     const config = fs.readFileSync(configPath, "utf-8");

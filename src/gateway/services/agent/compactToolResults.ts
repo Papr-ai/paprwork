@@ -266,6 +266,97 @@ export function estimateMessagesTokens(messages: any[]): number {
   return Math.ceil(approxBytes(messages) / 4);
 }
 
+const STALE_REASONING_OMITTED = "[Prior reasoning omitted to save memory]";
+
+type PiAssistantContentPart = {
+  type?: unknown;
+  text?: unknown;
+  thinking?: unknown;
+};
+
+function isAssistantMessage(msg: unknown): msg is Record<string, unknown> {
+  return (
+    typeof msg === "object" &&
+    msg !== null &&
+    (msg as { role?: unknown }).role === "assistant"
+  );
+}
+
+/**
+ * Remove or shrink reasoning/thinking blocks from assistant messages the model
+ * has already acted on (same batch boundary as compactStaleToolResults).
+ */
+export function compactStaleAssistantReasoning(
+  messages: unknown[],
+  opts: CompactOpts = {},
+): { strippedMessages: number; removedParts: number } {
+  const o = { ...DEFAULTS, ...opts };
+  const batchStarts = findToolBatchBoundaries(messages);
+  if (batchStarts.length === 0) {
+    return { strippedMessages: 0, removedParts: 0 };
+  }
+
+  const freshCutoffIdx =
+    batchStarts.length > o.keepLastBatches
+      ? batchStarts[batchStarts.length - o.keepLastBatches]
+      : -1;
+
+  if (freshCutoffIdx < 0) {
+    return { strippedMessages: 0, removedParts: 0 };
+  }
+
+  let strippedMessages = 0;
+  let removedParts = 0;
+
+  for (let i = 0; i < freshCutoffIdx; i += 1) {
+    const msg = messages[i];
+    if (!isAssistantMessage(msg)) {
+      continue;
+    }
+
+    let messageChanged = false;
+
+    if (typeof msg.thinking === "string" && msg.thinking.length > 0) {
+      msg.thinking = STALE_REASONING_OMITTED;
+      messageChanged = true;
+      removedParts += 1;
+    }
+
+    if (Array.isArray(msg.content)) {
+      const nextContent: PiAssistantContentPart[] = [];
+      for (const part of msg.content as PiAssistantContentPart[]) {
+        const partType = part?.type;
+        if (
+          partType === "thinking" ||
+          partType === "reasoning" ||
+          partType === "thinking_delta"
+        ) {
+          messageChanged = true;
+          removedParts += 1;
+          continue;
+        }
+        nextContent.push(part);
+      }
+      if (messageChanged) {
+        msg.content = nextContent;
+      }
+    }
+
+    if (messageChanged) {
+      strippedMessages += 1;
+    }
+  }
+
+  if (strippedMessages > 0) {
+    console.log(
+      `[compactStaleAssistantReasoning] Stripped reasoning from ${strippedMessages} stale assistant message(s) ` +
+        `(${removedParts} part(s) removed)`,
+    );
+  }
+
+  return { strippedMessages, removedParts };
+}
+
 export function compactStaleToolResults(
   messages: any[],
   opts: CompactOpts = {},

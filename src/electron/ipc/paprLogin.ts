@@ -18,12 +18,24 @@ import { ipcMain, BrowserWindow, shell } from "electron";
 import { CustomKeysStorage, SettingsStorage } from "../../core/storage/index.js";
 import { invalidateKeyCache } from "./customKeys.js";
 import {
+  notifyGatewayWorkspaceSwitch,
+} from "./paprWorkspace.js";
+import {
+  cacheNamespacesForOrg,
+  getCachedNamespaces,
+  readPaprWorkspaceCache,
+  writePaprWorkspaceCache,
+  type CachedWorkspace,
+} from "./paprWorkspaceCache.js";
+import {
   fetchWorkspaceMembers,
   sendWorkspaceInvite,
 } from "./paprWorkspaceTeam.js";
 import * as crypto from "crypto";
-import os from "node:os";
 import path from "node:path";
+import { getPaprDataDir } from "../../core/utils/paprRoot.js";
+import { getPaprBaseDir } from "../../core/utils/paprWorkspace.js";
+import { paprApiKeyMatchesNamespace } from "../../core/utils/paprApiKey.js";
 
 /**
  * Sync Papr profile fields to gateway settings file so the gateway process
@@ -39,11 +51,10 @@ export async function syncProfileToGatewaySettings(
   try {
     const fsP = await import("fs/promises");
     const pathM = await import("path");
-    const osM = await import("os");
     const { invalidatePaprUserIdCache } = await import(
       "../../gateway/utils/paprUserId.js"
     );
-    const settingsPath = pathM.join(osM.homedir(), "Papr", "data", "settings.json");
+    const settingsPath = path.join(getPaprDataDir(), "settings.json");
     let settings: Record<string, unknown> = {};
     try {
       const raw = await fsP.readFile(settingsPath, "utf-8");
@@ -77,12 +88,10 @@ export async function syncProfileToGatewaySettings(
 export async function clearPaprUserIdFromGatewaySettings(): Promise<void> {
   try {
     const fsP = await import("fs/promises");
-    const pathM = await import("path");
-    const osM = await import("os");
     const { invalidatePaprUserIdCache } = await import(
       "../../gateway/utils/paprUserId.js"
     );
-    const settingsPath = pathM.join(osM.homedir(), "Papr", "data", "settings.json");
+    const settingsPath = path.join(getPaprDataDir(), "settings.json");
     let settings: Record<string, unknown> = {};
     try {
       const raw = await fsP.readFile(settingsPath, "utf-8");
@@ -149,7 +158,7 @@ type LoginTelemetryTracker = (
 let trackLoginEvent: LoginTelemetryTracker | undefined;
 
 function getPkceStatePath(): string {
-  return path.join(os.homedir(), "Papr", "data", "papr-auth-pkce.json");
+  return path.join(getPaprBaseDir(), "data", "papr-auth-pkce.json");
 }
 
 async function persistPkceState(state: PersistedPkceState): Promise<void> {
@@ -494,15 +503,14 @@ async function refreshSessionToken(
 async function parseGraphQLWithRefresh(
   sessionToken: string,
   query: string,
-  variables: Record<string, any>,
+  variables: Record<string, unknown>,
   customKeysStorage: CustomKeysStorage,
   settingsStorage: SettingsStorage,
-): Promise<any> {
+): Promise<ParseGraphQLJson> {
   try {
     return await parseGraphQL(sessionToken, query, variables);
-  } catch (error: any) {
-    const msg = error?.message || "";
-    // Detect session expiry — Parse returns "Invalid session token" or HTTP 209
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : "";
     if (
       msg.includes("Invalid session") ||
       msg.includes("209") ||
@@ -517,34 +525,73 @@ async function parseGraphQLWithRefresh(
   }
 }
 
+/** Loose JSON shape returned by Parse GraphQL (nested fields accessed throughout this module). */
+type ParseGraphQLJson = {
+  [key: string]: ParseGraphQLJson | ParseGraphQLJson[] | string | number | boolean | null | undefined;
+};
+
+function isTransientParseError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  const cause = error instanceof Error && "cause" in error ? String(error.cause) : "";
+  const combined = `${msg} ${cause}`;
+  return (
+    combined.includes("Invalid server state") ||
+    combined.includes("ECONNRESET") ||
+    combined.includes("fetch failed") ||
+    combined.includes("ETIMEDOUT") ||
+    combined.includes("503") ||
+    combined.includes("502") ||
+    /Parse GraphQL error: 5\d\d/.test(combined)
+  );
+}
+
 // ─── Parse GraphQL Client ──────────────────────────────────────
 
 async function parseGraphQL(
   sessionToken: string,
   query: string,
-  variables: Record<string, any>,
-): Promise<any> {
-  const response = await fetch(PARSE_GRAPHQL_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Parse-Application-Id": PARSE_APP_ID,
-      "X-Parse-Session-Token": sessionToken,
-    },
-    body: JSON.stringify({ query, variables }),
-  });
+  variables: Record<string, unknown>,
+): Promise<ParseGraphQLJson> {
+  let lastError: unknown;
+  const maxAttempts = 4;
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Parse GraphQL error: ${response.status} ${text}`);
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await fetch(PARSE_GRAPHQL_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Parse-Application-Id": PARSE_APP_ID,
+          "X-Parse-Session-Token": sessionToken,
+        },
+        body: JSON.stringify({ query, variables }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Parse GraphQL error: ${response.status} ${text}`);
+      }
+
+      const result = (await response.json()) as { data?: Record<string, unknown>; errors?: unknown[] };
+      if (result.errors) {
+        throw new Error(`GraphQL errors: ${JSON.stringify(result.errors)}`);
+      }
+
+      return (result.data ?? {}) as ParseGraphQLJson;
+    } catch (error) {
+      lastError = error;
+      if (!isTransientParseError(error) || attempt === maxAttempts) {
+        throw error;
+      }
+      const delayMs = 300 * 2 ** (attempt - 1);
+      console.warn(
+        `[PaprLogin] Transient Parse error (attempt ${attempt}/${maxAttempts}), retrying in ${delayMs}ms...`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
   }
 
-  const result = (await response.json()) as { data?: any; errors?: any[] };
-  if (result.errors) {
-    throw new Error(`GraphQL errors: ${JSON.stringify(result.errors)}`);
-  }
-
-  return result.data;
+  throw lastError;
 }
 
 // ─── GraphQL Mutations (matching papr-dev-platform) ────────────
@@ -707,20 +754,16 @@ const GET_NAMESPACE_API_KEYS = `
 
 // ─── API Key Generation ────────────────────────────────────────
 
-// Query to get ALL organizations user has access to
-// Gets organizations from:
-// 1. Owned organizations (user is owner)
-// 2. Workspace memberships (user is member via workspace_follower → workspace → organization)
-const GET_USER_ORGANIZATIONS_VIA_WORKSPACES = `
-  query GetUserOrganizationsViaWorkspaces($userId: ID!) {
-    workspace_followers(where: { 
-      user: { have: { objectId: { equalTo: $userId } } }
-      archive: { equalTo: false }
-      isMember: { equalTo: true }
-    }) {
+// Query to list workspaces the user belongs to (matches papr-dev-platform dashboard).
+const GET_USER_WORKSPACES = `
+  query GetUserWorkspaces($input: Workspace_followerWhereInput!) {
+    workspace_followers(where: $input) {
       edges {
         node {
           objectId
+          archive
+          isMember
+          isSelected
           workspace {
             objectId
             workspace_name
@@ -728,9 +771,55 @@ const GET_USER_ORGANIZATIONS_VIA_WORKSPACES = `
               objectId
               name
               logoUrl
+              default_namespace {
+                objectId
+                name
+              }
             }
           }
         }
+      }
+    }
+  }
+`;
+
+/** Organizations the user owns directly (Parse class Organization → organizations). */
+const GET_USER_OWNED_ORGANIZATIONS = `
+  query GetUserOwnedOrganizations($userId: ID!) {
+    organizations(
+      where: {
+        owner: { have: { objectId: { equalTo: $userId } } }
+      }
+      order: createdAt_DESC
+    ) {
+      edges {
+        node {
+          objectId
+          name
+          logoUrl
+          default_namespace {
+            objectId
+            name
+          }
+          workspace {
+            objectId
+            workspace_name
+          }
+        }
+      }
+    }
+  }
+`;
+
+// Query to get organization default namespace
+const GET_ORG_DEFAULT_NAMESPACE = `
+  query GetOrgDefaultNamespace($orgId: ID!) {
+    organization(id: $orgId) {
+      objectId
+      name
+      default_namespace {
+        objectId
+        name
       }
     }
   }
@@ -751,6 +840,396 @@ const GET_ORG_NAMESPACES = `
     }
   }
 `;
+
+const UPDATE_WORKSPACE_FOLLOWER_SELECTION = `
+  mutation UpdateWorkspaceFollowerSelection($input: UpdateWorkspace_followerInput!) {
+    updateWorkspace_follower(input: $input) {
+      workspace_follower {
+        id
+        isSelected
+      }
+    }
+  }
+`;
+
+const UPDATE_USER_SELECTED_WORKSPACE = `
+  mutation UpdateUserSelectedWorkspace($input: UpdateUserInput!) {
+    updateUser(input: $input) {
+      user {
+        objectId
+        isSelectedWorkspaceFollower {
+          objectId
+        }
+      }
+    }
+  }
+`;
+
+function workspaceDisplayName(input: {
+  organizationName?: string;
+  workspaceName?: string;
+}): string {
+  // Dashboard shows workspace_name (Papr, a12, Myadvice); org.name is often auto-provisioned.
+  return input.workspaceName?.trim() || input.organizationName?.trim() || "Workspace";
+}
+
+type GraphQLExecutor = (
+  query: string,
+  variables: Record<string, unknown>,
+) => Promise<ParseGraphQLJson>;
+
+interface UserWorkspaceOption {
+  followerId: string;
+  workspaceId: string;
+  workspaceName: string;
+  organizationId: string;
+  organizationName: string;
+  isSelected: boolean;
+  role: string;
+  defaultNamespaceId?: string;
+}
+
+interface OwnedOrgInfo {
+  organizationId: string;
+  organizationName: string;
+  defaultNamespaceId?: string;
+}
+
+/** Which Parse org holds namespaces for a workspace (matches login provisioning). */
+export function resolveNamespaceOrganizationId(input: {
+  followerOrgId: string;
+  ownedOrg?: OwnedOrgInfo;
+  developerOrgId?: string;
+}): string {
+  const { followerOrgId, ownedOrg, developerOrgId } = input;
+
+  if (ownedOrg) {
+    // Team workspace: follower org and owned org agree (e.g. Myadvice).
+    if (followerOrgId === ownedOrg.organizationId) {
+      return ownedOrg.organizationId;
+    }
+    // Personal workspace: thin owned org shell — real namespaces live in developer org.
+    if (developerOrgId) {
+      return developerOrgId;
+    }
+    return ownedOrg.organizationId;
+  }
+
+  return followerOrgId;
+}
+
+async function fetchUserWorkspaces(
+  userId: string,
+  graphql: GraphQLExecutor,
+): Promise<UserWorkspaceOption[]> {
+  const ownedOrgIds = new Set<string>();
+  const ownedOrgById = new Map<string, OwnedOrgInfo>();
+  const ownedOrgByWorkspaceId = new Map<string, OwnedOrgInfo>();
+
+  let developerOrgId: string | undefined;
+  try {
+    const devData = (await graphql(GET_USER_DEVELOPER_ORG, { userId })) as {
+      user?: { organization_id?: string };
+    };
+    developerOrgId = devData.user?.organization_id?.trim() || undefined;
+  } catch (devError) {
+    console.warn("[PaprLogin] Developer org lookup failed:", devError);
+  }
+
+  try {
+    const ownedData = (await graphql(GET_USER_OWNED_ORGANIZATIONS, { userId })) as {
+      organizations?: {
+        edges?: Array<{
+          node?: {
+            objectId?: string;
+            name?: string;
+            default_namespace?: { objectId?: string };
+            workspace?: { objectId?: string };
+          };
+        }>;
+      };
+    };
+    for (const edge of ownedData.organizations?.edges ?? []) {
+      const node = edge.node;
+      const orgId = node?.objectId as string | undefined;
+      const orgName = node?.name?.trim();
+      const workspaceId = node?.workspace?.objectId;
+      if (orgId) {
+        ownedOrgIds.add(orgId);
+      }
+      if (orgId && orgName) {
+        const info: OwnedOrgInfo = {
+          organizationId: orgId,
+          organizationName: orgName,
+          defaultNamespaceId: node?.default_namespace?.objectId,
+        };
+        ownedOrgById.set(orgId, info);
+        if (workspaceId) {
+          ownedOrgByWorkspaceId.set(workspaceId, info);
+        }
+      }
+    }
+  } catch (ownedError) {
+    console.warn("[PaprLogin] Owned organizations lookup failed:", ownedError);
+  }
+
+  const data = (await graphql(GET_USER_WORKSPACES, {
+    input: {
+      user: { have: { objectId: { equalTo: userId } } },
+      isMember: { equalTo: true },
+    },
+  })) as {
+    workspace_followers?: {
+      edges?: Array<{
+        node?: {
+          objectId?: string;
+          isSelected?: boolean;
+          workspace?: {
+            objectId?: string;
+            workspace_name?: string;
+            organization?: {
+              objectId?: string;
+              name?: string;
+              default_namespace?: { objectId?: string; name?: string };
+            };
+          };
+        };
+      }>;
+    };
+  };
+
+  const workspaces: UserWorkspaceOption[] = [];
+  for (const edge of data.workspace_followers?.edges ?? []) {
+    const node = edge.node;
+
+    const workspace = node?.workspace;
+    const organization = workspace?.organization;
+    if (!node?.objectId || !workspace?.objectId || !organization?.objectId || !organization.name) {
+      continue;
+    }
+
+    const followerOrgId = organization.objectId;
+    const ownedOrg = ownedOrgByWorkspaceId.get(workspace.objectId);
+    const namespaceOrgId = resolveNamespaceOrganizationId({
+      followerOrgId,
+      ownedOrg,
+      developerOrgId,
+    });
+    const namespaceOrgInfo =
+      ownedOrgById.get(namespaceOrgId) ??
+      (ownedOrg?.organizationId === namespaceOrgId ? ownedOrg : undefined);
+    const namespaceOrgName = namespaceOrgInfo?.organizationName ?? organization.name;
+    const defaultNamespaceId =
+      namespaceOrgInfo?.defaultNamespaceId ?? organization.default_namespace?.objectId;
+
+    if (ownedOrg && namespaceOrgId !== ownedOrg.organizationId) {
+      console.log(
+        `[PaprLogin] Workspace ${workspace.workspace_name ?? workspace.objectId}: ` +
+          `using developer org ${namespaceOrgId} for namespaces ` +
+          `(follower org ${followerOrgId}, owned org ${ownedOrg.organizationId})`,
+      );
+    }
+
+    workspaces.push({
+      followerId: node.objectId,
+      workspaceId: workspace.objectId,
+      workspaceName: workspace.workspace_name?.trim() || organization.name,
+      organizationId: namespaceOrgId,
+      organizationName: namespaceOrgName,
+      isSelected: node.isSelected === true,
+      role: ownedOrgIds.has(namespaceOrgId) ? "owner" : "member",
+      defaultNamespaceId,
+    });
+  }
+
+  workspaces.sort((a, b) =>
+    workspaceDisplayName(a).localeCompare(workspaceDisplayName(b)),
+  );
+
+  return workspaces;
+}
+
+/** Keep profile.organizationId aligned with the active workspace's namespace org. */
+async function syncActiveWorkspaceOrganization(
+  profile: PaprProfile,
+  workspaces: UserWorkspaceOption[],
+  settingsStorage: SettingsStorage,
+  customKeysStorage: CustomKeysStorage,
+): Promise<UserWorkspaceOption | undefined> {
+  const activeWorkspaceId =
+    profile.workspaceId ||
+    workspaces.find((workspace) => workspace.isSelected)?.workspaceId ||
+    workspaces[0]?.workspaceId;
+  if (!activeWorkspaceId) {
+    return undefined;
+  }
+
+  const active = workspaces.find((workspace) => workspace.workspaceId === activeWorkspaceId);
+  const namespaceOrgId = active?.organizationId;
+  if (!active || !namespaceOrgId) {
+    return undefined;
+  }
+
+  const orgChanged = namespaceOrgId !== profile.organizationId;
+  const workspaceMetadataChanged =
+    active.workspaceId !== profile.workspaceId ||
+    active.workspaceName !== profile.workspaceName;
+
+  if (!orgChanged && !workspaceMetadataChanged) {
+    return active;
+  }
+
+  settingsStorage.setPaprProfile({
+    ...profile,
+    workspaceId: active.workspaceId,
+    workspaceName: active.workspaceName,
+    organizationId: namespaceOrgId,
+  });
+
+  if (orgChanged) {
+    console.log(
+      `[PaprLogin] Synced profile to workspace ${active.workspaceName} namespace org ${namespaceOrgId}`,
+    );
+    const updatedProfile = settingsStorage.getPaprProfile()!;
+    await syncNamespaceApiKeyIfNeeded({
+      profile: updatedProfile,
+      organizationId: namespaceOrgId,
+      preferredNamespaceId: active.defaultNamespaceId ?? profile.activeNamespaceId,
+      customKeysStorage,
+      settingsStorage,
+    });
+  } else {
+    invalidateKeyCache();
+    console.log(
+      `[PaprLogin] Synced profile workspace metadata for ${active.workspaceName}`,
+    );
+  }
+
+  return active;
+}
+
+async function fetchUserWorkspacesWithRefresh(
+  profile: PaprProfile,
+  customKeysStorage: CustomKeysStorage,
+  settingsStorage: SettingsStorage,
+): Promise<UserWorkspaceOption[]> {
+  const graphql: GraphQLExecutor = (query, variables) =>
+    parseGraphQLWithRefresh(
+      profile.sessionToken!,
+      query,
+      variables,
+      customKeysStorage,
+      settingsStorage,
+    );
+
+  return fetchUserWorkspaces(profile.userId!, graphql);
+}
+
+type PaprProfile = NonNullable<ReturnType<SettingsStorage["getPaprProfile"]>>;
+
+// User's developer org (user.organization_id) — fallback only when no workspace is selected
+const GET_USER_DEVELOPER_ORG = `
+  query GetUserDeveloperOrg($userId: ID!) {
+    user(id: $userId) {
+      organization_id
+    }
+  }
+`;
+
+async function fetchUserDeveloperOrganizationId(
+  sessionToken: string,
+  userId: string,
+): Promise<string | undefined> {
+  const data = (await parseGraphQL(sessionToken, GET_USER_DEVELOPER_ORG, { userId })) as {
+    user?: { organization_id?: string };
+  };
+  const orgId = data.user?.organization_id as string | undefined;
+  return orgId?.trim() || undefined;
+}
+
+async function resolveOrganizationIdForProfile(
+  profile: PaprProfile,
+): Promise<string | undefined> {
+  if (profile.sessionToken && profile.userId) {
+    try {
+      const graphql: GraphQLExecutor = (query, variables) =>
+        parseGraphQL(profile.sessionToken!, query, variables);
+      const workspaces = await fetchUserWorkspaces(profile.userId, graphql);
+      if (profile.workspaceId) {
+        const active = workspaces.find(
+          (workspace) => workspace.workspaceId === profile.workspaceId,
+        );
+        if (active?.organizationId) {
+          return active.organizationId;
+        }
+      }
+      const selected = workspaces.find((workspace) => workspace.isSelected);
+      if (selected?.organizationId) {
+        return selected.organizationId;
+      }
+    } catch (error) {
+      console.warn("[PaprLogin] Could not resolve namespace org from workspaces:", error);
+    }
+  }
+
+  if (profile.organizationId) {
+    return profile.organizationId;
+  }
+
+  if (profile.sessionToken && profile.userId) {
+    try {
+      const developerOrgId = await fetchUserDeveloperOrganizationId(
+        profile.sessionToken,
+        profile.userId,
+      );
+      if (developerOrgId) {
+        return developerOrgId;
+      }
+    } catch (error) {
+      console.warn("[PaprLogin] Could not resolve user.organization_id:", error);
+    }
+  }
+
+  return undefined;
+}
+
+async function switchSelectedWorkspaceOnServer(input: {
+  sessionToken: string;
+  userId: string;
+  targetFollowerId: string;
+  previousFollowerId?: string;
+}): Promise<void> {
+  if (input.previousFollowerId && input.previousFollowerId !== input.targetFollowerId) {
+    await parseGraphQL(input.sessionToken, UPDATE_WORKSPACE_FOLLOWER_SELECTION, {
+      input: {
+        id: input.previousFollowerId,
+        fields: {
+          isSelected: false,
+          user: { link: input.userId },
+        },
+      },
+    });
+  }
+
+  await parseGraphQL(input.sessionToken, UPDATE_WORKSPACE_FOLLOWER_SELECTION, {
+    input: {
+      id: input.targetFollowerId,
+      fields: {
+        isSelected: true,
+        user: { link: input.userId },
+      },
+    },
+  });
+
+  await parseGraphQL(input.sessionToken, UPDATE_USER_SELECTED_WORKSPACE, {
+    input: {
+      id: input.userId,
+      fields: {
+        isSelectedWorkspaceFollower: { link: input.targetFollowerId },
+      },
+    },
+  });
+}
 
 function generateApiKey(organizationId: string, namespaceId: string): string {
   const randomKey = crypto.randomBytes(32).toString("base64url").slice(0, 32);
@@ -868,7 +1347,7 @@ async function provisionOrGetApiKey(
   userEmail: string,
   workspaceId?: string,
 ): Promise<ProvisionResult> {
-  console.log("[PaprLogin] Provisioning org/namespace (workspace-scoped)...");
+  console.log("[PaprLogin] Provisioning org/namespace...");
 
   const orgName = deriveOrgName(userEmail);
 
@@ -881,19 +1360,50 @@ async function provisionOrGetApiKey(
     }
   }
 
-  // 1. Workspace-scoped: only use org/namespace linked to the user's selected workspace
+  // 1. Prefer user.organization_id (developer dashboard org with real namespaces)
+  try {
+    const developerOrgId = await fetchUserDeveloperOrganizationId(sessionToken, userId);
+    if (developerOrgId) {
+      console.log(`[PaprLogin] User developer org: ${developerOrgId}`);
+      const defaultNs = await resolveDefaultNamespaceForOrg(sessionToken, developerOrgId);
+      if (defaultNs) {
+        return await resolveOrgApiKey(
+          sessionToken,
+          userId,
+          developerOrgId,
+          defaultNs.namespaceId,
+          defaultNs.namespaceName,
+          workspaceId ?? "",
+        );
+      }
+      console.log("[PaprLogin] Developer org has no default namespace — creating one");
+      return await createNamespaceAndKey(
+        sessionToken,
+        userId,
+        developerOrgId,
+        orgName,
+        workspaceId ?? "",
+      );
+    }
+  } catch (devOrgErr) {
+    console.warn("[PaprLogin] Developer org lookup failed:", devOrgErr);
+  }
+
+  // 2. Workspace-scoped org (legacy / new users without organization_id)
   if (workspaceId) {
     try {
-      const wsData = await parseGraphQL(sessionToken, GET_WORKSPACE_ORG, {
+      const wsData = (await parseGraphQL(sessionToken, GET_WORKSPACE_ORG, {
         workspaceId,
-      });
-      const wsOrg = wsData.workSpace?.organization as
-        | {
+      })) as {
+        workSpace?: {
+          organization?: {
             objectId: string;
             name: string;
             default_namespace?: { objectId: string; name?: string };
-          }
-        | undefined;
+          };
+        };
+      };
+      const wsOrg = wsData.workSpace?.organization;
 
       if (wsOrg?.objectId) {
         console.log(
@@ -928,7 +1438,7 @@ async function provisionOrGetApiKey(
     }
   }
 
-  // 2. No org on workspace — full provisioning (new org + namespace + key)
+  // 3. No org on workspace — full provisioning (new org + namespace + key)
   return await provisionNewOrgNamespace(sessionToken, userId, orgName, workspaceId);
 }
 
@@ -943,7 +1453,7 @@ async function provisionNewOrgNamespace(
   if (!workspaceId) {
     try {
       console.log("[PaprLogin] No workspace found, calling createWorkspace cloud function...");
-      const wsResult = await parseGraphQL(sessionToken, `
+      const wsResult = (await parseGraphQL(sessionToken, `
         mutation CreateWorkspaceCloud($input: CloudCodeFunctionInput!) {
           callCloudCode(input: $input) {
             result
@@ -962,7 +1472,9 @@ async function provisionNewOrgNamespace(
             },
           },
         },
-      });
+      })) as {
+        callCloudCode?: { result?: { workspace?: { objectId?: string } } };
+      };
 
       const cloudResult = wsResult.callCloudCode?.result;
       if (cloudResult?.workspace?.objectId) {
@@ -974,7 +1486,7 @@ async function provisionNewOrgNamespace(
     }
   }
 
-  const createOrgData = await parseGraphQL(sessionToken, CREATE_ORGANIZATION, {
+  const createOrgData = (await parseGraphQL(sessionToken, CREATE_ORGANIZATION, {
     name: orgName,
     ownerId: userId,
     workspaceId: workspaceId || undefined,
@@ -985,7 +1497,7 @@ async function provisionNewOrgNamespace(
       max_active_memories: 2500,
       rate_limit_per_minute: 10,
     },
-  });
+  })) as { createOrganization: { organization: { objectId: string } } };
 
   const orgId = createOrgData.createOrganization.organization.objectId as string;
   console.log(`[PaprLogin] Created organization: ${orgId}`);
@@ -1019,13 +1531,13 @@ async function createNamespaceAndKey(
   const nsName = `${orgName}-dev`;
   console.log(`[PaprLogin] Creating namespace "${nsName}" under org ${orgId}...`);
 
-  const createNsData = await parseGraphQL(sessionToken, CREATE_NAMESPACE, {
+  const createNsData = (await parseGraphQL(sessionToken, CREATE_NAMESPACE, {
     name: nsName,
     organizationId: orgId,
     organizationIdString: orgId,
     environmentType: "development",
     isActive: true,
-  });
+  })) as { createNamespace: { namespace: { objectId: string } } };
 
   const nsId = createNsData.createNamespace.namespace.objectId as string;
   console.log(`[PaprLogin] Created namespace: ${nsId}`);
@@ -1063,9 +1575,11 @@ async function resolveOrgApiKey(
   namespaceName: string,
   workspaceId: string,
 ): Promise<ProvisionResult> {
-  const keyData = await parseGraphQL(sessionToken, GET_NAMESPACE_API_KEYS, {
+  const keyData = (await parseGraphQL(sessionToken, GET_NAMESPACE_API_KEYS, {
     namespaceId,
-  });
+  })) as {
+    aPIKeys?: { edges?: Array<{ node?: { key?: string } }> };
+  };
   const existingKey = keyData.aPIKeys?.edges?.[0]?.node;
   if (existingKey?.key) {
     console.log("[PaprLogin] Reusing existing API key for namespace");
@@ -1075,6 +1589,316 @@ async function resolveOrgApiKey(
   console.log("[PaprLogin] No API key for namespace, creating one...");
   const newKey = await createApiKey(sessionToken, userId, orgId, namespaceId, workspaceId);
   return { apiKey: newKey, organizationId: orgId, namespaceId, namespaceName };
+}
+
+interface OrgNamespaceChoice {
+  namespaceId: string;
+  namespaceName: string;
+}
+
+/** Resolve org default namespace, falling back to first namespace in the org. */
+async function resolveDefaultNamespaceForOrg(
+  sessionToken: string,
+  organizationId: string,
+): Promise<OrgNamespaceChoice | null> {
+  try {
+    const data = (await parseGraphQL(sessionToken, GET_ORG_DEFAULT_NAMESPACE, {
+      orgId: organizationId,
+    })) as {
+      organization?: { default_namespace?: { objectId: string; name?: string } };
+    };
+    const defaultNs = data.organization?.default_namespace as
+      | { objectId: string; name?: string }
+      | undefined;
+    if (defaultNs?.objectId) {
+      return {
+        namespaceId: defaultNs.objectId,
+        namespaceName: defaultNs.name || "default",
+      };
+    }
+  } catch (err) {
+    console.warn("[PaprLogin] Default namespace lookup failed:", err);
+  }
+
+  try {
+    const data = (await parseGraphQL(sessionToken, GET_ORG_NAMESPACES, {
+      orgId: organizationId,
+    })) as {
+      namespaces?: { edges?: Array<{ node?: { objectId: string; name?: string } }> };
+    };
+    const first = data.namespaces?.edges?.[0]?.node as
+      | { objectId: string; name?: string }
+      | undefined;
+    if (first?.objectId) {
+      return {
+        namespaceId: first.objectId,
+        namespaceName: first.name || "default",
+      };
+    }
+  } catch (err) {
+    console.warn("[PaprLogin] Namespace list fallback failed:", err);
+  }
+
+  return null;
+}
+
+interface OrgNamespaceListItem {
+  id: string;
+  name: string;
+  environmentType?: string;
+}
+
+async function fetchOrgNamespaces(
+  sessionToken: string,
+  organizationId: string,
+  customKeysStorage: CustomKeysStorage,
+  settingsStorage: SettingsStorage,
+): Promise<OrgNamespaceListItem[]> {
+  const data = (await parseGraphQLWithRefresh(
+    sessionToken,
+    GET_ORG_NAMESPACES,
+    { orgId: organizationId },
+    customKeysStorage,
+    settingsStorage,
+  )) as {
+    namespaces?: {
+      edges?: Array<{
+        node: {
+          objectId: string;
+          name: string;
+          environment_type?: string;
+        };
+      }>;
+    };
+  };
+
+  const namespaces = (data.namespaces?.edges || []).map(
+    (edge: {
+      node: {
+        objectId: string;
+        name: string;
+        environment_type?: string;
+      };
+    }) => ({
+      id: edge.node.objectId,
+      name: edge.node.name,
+      environmentType: edge.node.environment_type,
+    }),
+  );
+
+  cacheNamespacesForOrg(
+    organizationId,
+    namespaces.map((ns: OrgNamespaceListItem) => ({
+      id: ns.id,
+      name: ns.name,
+      environmentType: ns.environmentType,
+    })),
+  );
+
+  return namespaces;
+}
+
+async function resolveNamespaceForWorkspaceSwitch(input: {
+  sessionToken: string;
+  organizationId: string;
+  preferredNamespaceId?: string;
+  customKeysStorage: CustomKeysStorage;
+  settingsStorage: SettingsStorage;
+}): Promise<{ namespaces: OrgNamespaceListItem[]; choice: OrgNamespaceChoice | null }> {
+  const namespaces = await fetchOrgNamespaces(
+    input.sessionToken,
+    input.organizationId,
+    input.customKeysStorage,
+    input.settingsStorage,
+  );
+
+  if (input.preferredNamespaceId) {
+    const preferred = namespaces.find((ns) => ns.id === input.preferredNamespaceId);
+    if (preferred) {
+      return {
+        namespaces,
+        choice: { namespaceId: preferred.id, namespaceName: preferred.name },
+      };
+    }
+  }
+
+  try {
+    const data = (await parseGraphQL(input.sessionToken, GET_ORG_DEFAULT_NAMESPACE, {
+      orgId: input.organizationId,
+    })) as {
+      organization?: { default_namespace?: { objectId: string; name?: string } };
+    };
+    const defaultNs = data.organization?.default_namespace as
+      | { objectId: string; name?: string }
+      | undefined;
+    if (defaultNs?.objectId) {
+      return {
+        namespaces,
+        choice: {
+          namespaceId: defaultNs.objectId,
+          namespaceName: defaultNs.name || "default",
+        },
+      };
+    }
+  } catch (err) {
+    console.warn("[PaprLogin] Default namespace lookup failed:", err);
+  }
+
+  const first = namespaces[0];
+  if (first) {
+    return {
+      namespaces,
+      choice: { namespaceId: first.id, namespaceName: first.name },
+    };
+  }
+
+  return { namespaces, choice: null };
+}
+
+/** Switch API key, profile, gateway workspace, and notify renderer. */
+async function applyActiveNamespaceSwitch(input: {
+  profile: PaprProfile;
+  organizationId: string;
+  namespaceId: string;
+  namespaceName: string;
+  customKeysStorage: CustomKeysStorage;
+  settingsStorage: SettingsStorage;
+}): Promise<{ apiKey: string }> {
+  await input.customKeysStorage.setActiveOrganization(input.organizationId);
+
+  const workspaceId =
+    input.profile.workspaceId ||
+    (await getSelectedWorkspaceId(input.profile.sessionToken!, input.profile.userId!)) ||
+    "";
+
+  const resolved = await resolveOrgApiKey(
+    input.profile.sessionToken!,
+    input.profile.userId!,
+    input.organizationId,
+    input.namespaceId,
+    input.namespaceName,
+    workspaceId,
+  );
+  const apiKey = resolved.apiKey;
+
+  await input.customKeysStorage.addKey({
+    name: "PAPR_API_KEY",
+    value: apiKey,
+  });
+  invalidateKeyCache("PAPR_API_KEY");
+
+  input.settingsStorage.setPaprProfile({
+    ...input.profile,
+    organizationId: input.organizationId,
+    activeNamespaceId: input.namespaceId,
+    activeNamespaceName: input.namespaceName,
+  });
+
+  const workspaceResult = await notifyGatewayWorkspaceSwitch({
+    organizationId: input.organizationId,
+    namespaceId: input.namespaceId,
+    namespaceName: input.namespaceName,
+    paprApiKey: apiKey,
+  });
+  if (!workspaceResult.success) {
+    console.warn(
+      "[PaprLogin] Namespace workspace switch warning:",
+      workspaceResult.error ?? "unknown error",
+    );
+  }
+
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win) {
+    win.webContents.send("papr:namespace-changed", {
+      namespaceId: input.namespaceId,
+      namespaceName: input.namespaceName,
+    });
+  }
+
+  return { apiKey };
+}
+
+/**
+ * Resolve and store the namespace API key when org/namespace context changes.
+ * Skips network + gateway work when the stored key already matches.
+ */
+async function syncNamespaceApiKeyIfNeeded(input: {
+  profile: PaprProfile;
+  organizationId: string;
+  preferredNamespaceId?: string;
+  customKeysStorage: CustomKeysStorage;
+  settingsStorage: SettingsStorage;
+  force?: boolean;
+}): Promise<void> {
+  if (!input.profile.sessionToken || !input.profile.userId) {
+    invalidateKeyCache("PAPR_API_KEY");
+    return;
+  }
+
+  await input.customKeysStorage.setActiveOrganization(input.organizationId);
+
+  const { choice } = await resolveNamespaceForWorkspaceSwitch({
+    sessionToken: input.profile.sessionToken,
+    organizationId: input.organizationId,
+    preferredNamespaceId: input.preferredNamespaceId,
+    customKeysStorage: input.customKeysStorage,
+    settingsStorage: input.settingsStorage,
+  });
+
+  if (!choice) {
+    invalidateKeyCache("PAPR_API_KEY");
+    input.settingsStorage.setPaprProfile({
+      ...input.settingsStorage.getPaprProfile()!,
+      activeNamespaceId: undefined,
+      activeNamespaceName: undefined,
+    });
+    return;
+  }
+
+  if (!input.force) {
+    const storedKey = await input.customKeysStorage.getKeyByName("PAPR_API_KEY");
+    const currentProfile = input.settingsStorage.getPaprProfile();
+    if (
+      storedKey &&
+      paprApiKeyMatchesNamespace(
+        storedKey,
+        input.organizationId,
+        choice.namespaceId,
+      ) &&
+      currentProfile?.activeNamespaceId === choice.namespaceId &&
+      currentProfile.organizationId === input.organizationId
+    ) {
+      return;
+    }
+  }
+
+  await applyActiveNamespaceSwitch({
+    profile: { ...input.profile, organizationId: input.organizationId },
+    organizationId: input.organizationId,
+    namespaceId: choice.namespaceId,
+    namespaceName: choice.namespaceName,
+    customKeysStorage: input.customKeysStorage,
+    settingsStorage: input.settingsStorage,
+  });
+}
+
+/** Ensure startup uses the API key for the profile's active org + namespace. */
+export async function ensureActiveNamespaceApiKey(
+  customKeysStorage: CustomKeysStorage,
+  settingsStorage: SettingsStorage,
+): Promise<void> {
+  const profile = settingsStorage.getPaprProfile();
+  if (!profile?.sessionToken || !profile.userId || !profile.organizationId) {
+    return;
+  }
+
+  await syncNamespaceApiKeyIfNeeded({
+    profile,
+    organizationId: profile.organizationId,
+    preferredNamespaceId: profile.activeNamespaceId,
+    customKeysStorage,
+    settingsStorage,
+  });
 }
 
 async function createApiKey(
@@ -1087,7 +1911,7 @@ async function createApiKey(
   const apiKeyValue = generateApiKey(orgId, nsId);
   const roleName = memberRoleName(workspaceId);
 
-  const keyData = await parseGraphQL(sessionToken, CREATE_API_KEY, {
+  const keyData = (await parseGraphQL(sessionToken, CREATE_API_KEY, {
     key: apiKeyValue,
     name: `Development API Key - ${new Date().toISOString().split("T")[0]}`,
     organizationId: orgId,
@@ -1098,7 +1922,7 @@ async function createApiKey(
     isActive: true,
     userId,
     workspaceId: roleName,
-  });
+  })) as { createAPIKey: { aPIKey: { key: string } } };
 
   const createdKey = keyData.createAPIKey.aPIKey.key;
   console.log(`[PaprLogin] Created API key for namespace ${nsId}`);
@@ -1135,14 +1959,18 @@ async function getSelectedWorkspaceInfo(
   sessionToken: string,
   userId: string,
 ): Promise<SelectedWorkspaceInfo> {
-  const userData = await parseGraphQL(sessionToken, GET_USER_WORKSPACE, { userId });
-  const workspace = userData.user?.isSelectedWorkspaceFollower?.workspace as
-    | {
-        objectId?: string;
-        workspace_name?: string;
-        organization?: { objectId?: string; name?: string };
-      }
-    | undefined;
+  const userData = (await parseGraphQL(sessionToken, GET_USER_WORKSPACE, { userId })) as {
+    user?: {
+      isSelectedWorkspaceFollower?: {
+        workspace?: {
+          objectId?: string;
+          workspace_name?: string;
+          organization?: { objectId?: string; name?: string };
+        };
+      };
+    };
+  };
+  const workspace = userData.user?.isSelectedWorkspaceFollower?.workspace;
 
   return {
     workspaceId: workspace?.objectId,
@@ -1219,6 +2047,15 @@ async function completePaprAuthCallback(
     workspaceInfo.workspaceId,
   );
 
+  const developerOrgId = await fetchUserDeveloperOrganizationId(parseSessionToken, objectId);
+  const activeOrganizationId =
+    developerOrgId || provision.organizationId || workspaceInfo.organizationId;
+  if (!activeOrganizationId) {
+    throw new Error("Could not resolve organization for Papr login");
+  }
+
+  await customKeysStorage.setActiveOrganization(activeOrganizationId);
+
   await customKeysStorage.addKey({
     name: "PAPR_API_KEY",
     value: provision.apiKey,
@@ -1243,12 +2080,25 @@ async function completePaprAuthCallback(
     displayName: displayName || "",
     authenticatedAt: new Date().toISOString(),
     sessionToken: parseSessionToken,
-    organizationId: provision.organizationId,
+    organizationId: activeOrganizationId,
     activeNamespaceId: provision.namespaceId,
     activeNamespaceName: provision.namespaceName,
     workspaceId: workspaceInfo.workspaceId,
     workspaceName: workspaceInfo.workspaceName,
   });
+
+  const workspaceResult = await notifyGatewayWorkspaceSwitch({
+    organizationId: activeOrganizationId,
+    namespaceId: provision.namespaceId,
+    namespaceName: provision.namespaceName,
+    paprApiKey: provision.apiKey,
+  });
+  if (!workspaceResult.success) {
+    console.warn(
+      "[PaprLogin] Workspace activation warning:",
+      workspaceResult.error ?? "unknown error",
+    );
+  }
 
   await syncProfileToGatewaySettings(
     email || "",
@@ -1257,6 +2107,7 @@ async function completePaprAuthCallback(
     profileImage,
     provision.namespaceName,
   );
+
   console.log("[PaprLogin] Login complete. API key stored as PAPR_API_KEY.");
   trackLoginCompleted(completedMode, completedSource);
 
@@ -1472,40 +2323,86 @@ export function initializePaprLoginIPC(
     }
   });
 
-  // List all namespaces for the user's organization
-  ipcMain.handle("papr:list-namespaces", async () => {
-    try {
-      const profile = settingsStorage.getPaprProfile();
-      if (!profile?.sessionToken || !profile?.organizationId) {
-        return { success: false, error: "Not logged in or missing org info" };
+  // List namespaces for a workspace's organization (explicit org id avoids profile timing races)
+  ipcMain.handle(
+    "papr:list-namespaces",
+    async (
+      _event,
+      options?: { organizationId?: string; forceRefresh?: boolean },
+    ) => {
+      try {
+        const profile = settingsStorage.getPaprProfile();
+        if (!profile?.sessionToken) {
+          return { success: false, error: "Not logged in" };
+        }
+
+        const organizationId =
+          options?.organizationId?.trim() ||
+          (await resolveOrganizationIdForProfile(profile));
+        if (!organizationId) {
+          return { success: false, error: "Missing organization info" };
+        }
+
+        if (organizationId !== profile.organizationId) {
+          settingsStorage.setPaprProfile({ ...profile, organizationId });
+          await syncNamespaceApiKeyIfNeeded({
+            profile: { ...profile, organizationId },
+            organizationId,
+            preferredNamespaceId: profile.activeNamespaceId,
+            customKeysStorage,
+            settingsStorage,
+          });
+        }
+
+        const forceRefresh = options?.forceRefresh === true;
+        const cached = forceRefresh ? null : getCachedNamespaces(organizationId);
+        if (cached) {
+          void fetchOrgNamespaces(
+            profile.sessionToken,
+            organizationId,
+            customKeysStorage,
+            settingsStorage,
+          ).catch((error) => {
+            console.warn("[PaprLogin] Background namespace refresh failed:", error);
+          });
+
+          return {
+            success: true,
+            namespaces: cached,
+            activeNamespaceId: profile.activeNamespaceId,
+            parseOrganizationId: organizationId,
+            fromCache: true,
+          };
+        }
+
+        const namespaces = await fetchOrgNamespaces(
+          profile.sessionToken,
+          organizationId,
+          customKeysStorage,
+          settingsStorage,
+        );
+
+        console.log(
+          `[PaprLogin] Listed ${namespaces.length} namespaces for org ${organizationId}`,
+        );
+
+        return {
+          success: true,
+          namespaces,
+          activeNamespaceId: profile.activeNamespaceId,
+          parseOrganizationId: organizationId,
+        };
+      } catch (error) {
+        console.error("[PaprLogin] Failed to list namespaces:", error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Failed to list namespaces",
+        };
       }
+    },
+  );
 
-      const data = await parseGraphQLWithRefresh(profile.sessionToken, GET_ORG_NAMESPACES, {
-        orgId: profile.organizationId,
-      }, customKeysStorage, settingsStorage);
-
-      const namespaces = (data.namespaces?.edges || []).map((edge: any) => ({
-        id: edge.node.objectId,
-        name: edge.node.name,
-        environmentType: edge.node.environment_type,
-        isActive: edge.node.is_active,
-      }));
-
-      return {
-        success: true,
-        namespaces,
-        activeNamespaceId: profile.activeNamespaceId,
-      };
-    } catch (error) {
-      console.error("[PaprLogin] Failed to list namespaces:", error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Failed to list namespaces",
-      };
-    }
-  });
-
-  // List all organizations user has access to (via workspace membership)
+  // List workspaces (dashboard uses workspace_follower → organization name for display)
   ipcMain.handle("papr:list-organizations", async () => {
     try {
       const profile = settingsStorage.getPaprProfile();
@@ -1513,85 +2410,281 @@ export function initializePaprLoginIPC(
         return { success: false, error: "Not logged in" };
       }
 
-      const data = await parseGraphQLWithRefresh(
-        profile.sessionToken, 
-        GET_USER_ORGANIZATIONS_VIA_WORKSPACES, 
-        { userId: profile.userId },
-        customKeysStorage, 
-        settingsStorage
+      const diskCache = readPaprWorkspaceCache();
+      const cachedWorkspaces = diskCache?.workspaces ?? [];
+
+      const buildResponse = (
+        workspaces: UserWorkspaceOption[],
+        fromCache: boolean,
+      ) => {
+        const organizations = workspaces.map((workspace) => ({
+          id: workspace.workspaceId,
+          name: workspaceDisplayName(workspace),
+          role: workspace.role,
+          organizationId: workspace.organizationId,
+          organizationName: workspace.organizationName,
+          workspaceName: workspace.workspaceName,
+          defaultNamespaceId: workspace.defaultNamespaceId,
+        }));
+
+        const selected = workspaces.find((workspace) => workspace.isSelected);
+        const activeWorkspaceId =
+          profile.workspaceId || selected?.workspaceId || workspaces[0]?.workspaceId;
+
+        return {
+          success: true as const,
+          organizations,
+          activeOrganizationId: activeWorkspaceId,
+          fromCache,
+        };
+      };
+
+      if (cachedWorkspaces.length > 0) {
+        void fetchUserWorkspacesWithRefresh(profile, customKeysStorage, settingsStorage)
+          .then(async (workspaces) => {
+            writePaprWorkspaceCache({
+              workspaces: workspaces.map(
+                (workspace): CachedWorkspace => ({
+                  id: workspace.workspaceId,
+                  name: workspaceDisplayName(workspace),
+                  role: workspace.role,
+                  organizationId: workspace.organizationId,
+                  organizationName: workspace.organizationName,
+                  workspaceName: workspace.workspaceName,
+                  defaultNamespaceId: workspace.defaultNamespaceId,
+                }),
+              ),
+            });
+
+            const active = await syncActiveWorkspaceOrganization(
+              profile,
+              workspaces,
+              settingsStorage,
+              customKeysStorage,
+            );
+            if (active?.organizationId && profile.sessionToken) {
+              try {
+                const namespaces = await fetchOrgNamespaces(
+                  profile.sessionToken,
+                  active.organizationId,
+                  customKeysStorage,
+                  settingsStorage,
+                );
+                console.log(
+                  `[PaprLogin] Prefetched ${namespaces.length} namespaces for org ${active.organizationId}`,
+                );
+              } catch (error) {
+                console.warn("[PaprLogin] Background namespace prefetch failed:", error);
+              }
+            }
+          })
+          .catch((error) => {
+            console.warn("[PaprLogin] Background workspace refresh failed:", error);
+          });
+
+        const workspacesFromCache: UserWorkspaceOption[] = cachedWorkspaces.map(
+          (workspace) => ({
+            followerId: "",
+            workspaceId: workspace.id,
+            workspaceName: workspace.workspaceName ?? workspace.name,
+            organizationId: workspace.organizationId ?? "",
+            organizationName: workspace.organizationName ?? workspace.name,
+            isSelected: workspace.id === profile.workspaceId,
+            role: workspace.role ?? "member",
+            defaultNamespaceId: workspace.defaultNamespaceId,
+          }),
+        );
+
+        await syncActiveWorkspaceOrganization(
+          profile,
+          workspacesFromCache,
+          settingsStorage,
+          customKeysStorage,
+        );
+
+        return buildResponse(workspacesFromCache, true);
+      }
+
+      const workspaces = await fetchUserWorkspacesWithRefresh(
+        profile,
+        customKeysStorage,
+        settingsStorage,
       );
 
-      // Extract unique organizations from workspace_followers
-      const orgMap = new Map<string, { id: string; name: string; role: string }>();
-
-      (data.workspace_followers?.edges || []).forEach((edge: any) => {
-        const org = edge.node?.workspace?.organization;
-        if (org?.objectId && org?.name) {
-          if (!orgMap.has(org.objectId)) {
-            orgMap.set(org.objectId, {
-              id: org.objectId,
-              name: org.name,
-              role: "member",
-            });
-          }
-        }
+      writePaprWorkspaceCache({
+        workspaces: workspaces.map(
+          (workspace): CachedWorkspace => ({
+            id: workspace.workspaceId,
+            name: workspaceDisplayName(workspace),
+            role: workspace.role,
+            organizationId: workspace.organizationId,
+            organizationName: workspace.organizationName,
+            workspaceName: workspace.workspaceName,
+            defaultNamespaceId: workspace.defaultNamespaceId,
+          }),
+        ),
       });
 
-      // Discover orgs only via workspace membership (no global namespace scan)
-      const organizations = Array.from(orgMap.values());
-      console.log(`[PaprLogin] Found ${organizations.length} organizations via workspace membership`);
+      const selected = workspaces.find((workspace) => workspace.isSelected);
+      const activeWorkspaceId =
+        profile.workspaceId || selected?.workspaceId || workspaces[0]?.workspaceId;
 
-      return {
-        success: true,
-        organizations,
-        activeOrganizationId: profile.organizationId,
-      };
+      if (activeWorkspaceId) {
+        await syncActiveWorkspaceOrganization(
+          profile,
+          workspaces,
+          settingsStorage,
+          customKeysStorage,
+        );
+      }
+
+      console.log(
+        `[PaprLogin] Found ${workspaces.length} workspaces:`,
+        workspaces
+          .map(
+            (workspace) =>
+              `${workspace.workspaceName ?? workspace.organizationName} (org: ${workspace.organizationName})`,
+          )
+          .join(", "),
+      );
+
+      return buildResponse(workspaces, false);
     } catch (error) {
       console.error("[PaprLogin] Failed to list organizations:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : "Failed to list organizations",
+        error: error instanceof Error ? error.message : "Failed to list workspaces",
       };
     }
   });
 
-  // Switch to a different organization
-  ipcMain.handle("papr:switch-organization", async (_event, organizationId: string, organizationName: string) => {
+  // Switch workspace (updates Parse selection, then default namespace for that org)
+  ipcMain.handle("papr:switch-organization", async (_event, workspaceId: string, displayName: string) => {
     try {
       const profile = settingsStorage.getPaprProfile();
-      if (!profile?.sessionToken) {
+      if (!profile?.sessionToken || !profile?.userId) {
         return { success: false, error: "Not logged in" };
       }
 
-      // Update profile with new active organization (clears namespace)
-      settingsStorage.setPaprProfile({
-        ...profile,
-        organizationId,
-        activeNamespaceId: undefined,
-        activeNamespaceName: undefined,
+      const workspaces = await fetchUserWorkspacesWithRefresh(
+        profile,
+        customKeysStorage,
+        settingsStorage,
+      );
+      const target = workspaces.find((workspace) => workspace.workspaceId === workspaceId);
+      if (!target) {
+        return { success: false, error: "Workspace not found" };
+      }
+
+      const previous =
+        workspaces.find((workspace) => workspace.isSelected) ??
+        workspaces.find((workspace) => workspace.workspaceId === profile.workspaceId);
+
+      await switchSelectedWorkspaceOnServer({
+        sessionToken: profile.sessionToken,
+        userId: profile.userId,
+        targetFollowerId: target.followerId,
+        previousFollowerId: previous?.followerId,
       });
 
-      console.log(`[PaprLogin] Switched to organization: ${organizationName} (${organizationId})`);
+      const updatedProfile = {
+        ...profile,
+        workspaceId: target.workspaceId,
+        workspaceName: target.workspaceName,
+      };
+      settingsStorage.setPaprProfile(updatedProfile);
 
-      // Notify renderer to reload namespaces
+      const namespaceOrgId = target.organizationId;
+      if (!namespaceOrgId) {
+        return { success: false, error: "Could not resolve organization for namespaces" };
+      }
+
+      settingsStorage.setPaprProfile({
+        ...updatedProfile,
+        organizationId: namespaceOrgId,
+      });
+
+      await customKeysStorage.setActiveOrganization(namespaceOrgId);
+      invalidateKeyCache();
+
+      console.log(
+        `[PaprLogin] Switched to workspace: ${displayName} (workspace ${target.workspaceId}, namespace org ${namespaceOrgId}, workspace org ${target.organizationId})`,
+      );
+
+      const { namespaces, choice: defaultNs } = await resolveNamespaceForWorkspaceSwitch({
+        sessionToken: profile.sessionToken,
+        organizationId: namespaceOrgId,
+        preferredNamespaceId: target.defaultNamespaceId,
+        customKeysStorage,
+        settingsStorage,
+      });
+
       const win = BrowserWindow.getAllWindows()[0];
+
+      if (!defaultNs) {
+        settingsStorage.setPaprProfile({
+          ...settingsStorage.getPaprProfile()!,
+          activeNamespaceId: undefined,
+          activeNamespaceName: undefined,
+        });
+
+        if (win) {
+          win.webContents.send("papr:organization-changed", {
+            organizationId: target.workspaceId,
+            parseOrganizationId: namespaceOrgId,
+            organizationName: displayName,
+            namespaces,
+          });
+        }
+
+        return {
+          success: true,
+          organizationId: target.workspaceId,
+          parseOrganizationId: namespaceOrgId,
+          organizationName: displayName,
+          namespaces,
+        };
+      }
+
+      const { apiKey } = await applyActiveNamespaceSwitch({
+        profile: { ...updatedProfile, organizationId: namespaceOrgId },
+        organizationId: namespaceOrgId,
+        namespaceId: defaultNs.namespaceId,
+        namespaceName: defaultNs.namespaceName,
+        customKeysStorage,
+        settingsStorage,
+      });
+
+      console.log(
+        `[PaprLogin] Auto-selected default namespace: ${defaultNs.namespaceName} (${defaultNs.namespaceId})`,
+      );
+
       if (win) {
         win.webContents.send("papr:organization-changed", {
-          organizationId,
-          organizationName,
+          organizationId: target.workspaceId,
+          parseOrganizationId: namespaceOrgId,
+          organizationName: displayName,
+          namespaceId: defaultNs.namespaceId,
+          namespaceName: defaultNs.namespaceName,
+          namespaces,
         });
       }
 
       return {
         success: true,
-        organizationId,
-        organizationName,
+        organizationId: target.workspaceId,
+        parseOrganizationId: namespaceOrgId,
+        organizationName: displayName,
+        namespaces,
+        activeNamespaceId: defaultNs.namespaceId,
+        activeNamespaceName: defaultNs.namespaceName,
+        apiKey,
       };
     } catch (error) {
       console.error("[PaprLogin] Failed to switch organization:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : "Failed to switch organization",
+        error: error instanceof Error ? error.message : "Failed to switch workspace",
       };
     }
   });
@@ -1600,49 +2693,25 @@ export function initializePaprLoginIPC(
   ipcMain.handle("papr:switch-namespace", async (_event, namespaceId: string, namespaceName: string) => {
     try {
       const profile = settingsStorage.getPaprProfile();
-      if (!profile?.sessionToken || !profile?.organizationId || !profile?.userId) {
+      if (!profile?.sessionToken || !profile?.userId) {
         return { success: false, error: "Not logged in or missing org info" };
       }
 
-      const workspaceId =
-        (await getSelectedWorkspaceId(profile.sessionToken, profile.userId)) || "";
+      const organizationId = await resolveOrganizationIdForProfile(profile);
+      if (!organizationId) {
+        return { success: false, error: "Missing organization info" };
+      }
 
-      const resolved = await resolveOrgApiKey(
-        profile.sessionToken,
-        profile.userId,
-        profile.organizationId,
+      const { apiKey } = await applyActiveNamespaceSwitch({
+        profile,
+        organizationId,
         namespaceId,
         namespaceName,
-        workspaceId,
-      );
-      const apiKey = resolved.apiKey;
-
-      // Update stored PAPR_API_KEY
-      await customKeysStorage.addKey({
-        name: "PAPR_API_KEY",
-        value: apiKey,
-      });
-
-      // Invalidate Gateway's cached PAPR_API_KEY so it picks up the new namespace's key
-      invalidateKeyCache("PAPR_API_KEY");
-
-      // Update profile with new active namespace
-      settingsStorage.setPaprProfile({
-        ...profile,
-        activeNamespaceId: namespaceId,
-        activeNamespaceName: namespaceName,
+        customKeysStorage,
+        settingsStorage,
       });
 
       console.log(`[PaprLogin] Switched to namespace: ${namespaceName} (${namespaceId})`);
-
-      // Notify renderer
-      const win = BrowserWindow.getAllWindows()[0];
-      if (win) {
-        win.webContents.send("papr:namespace-changed", {
-          namespaceId,
-          namespaceName,
-        });
-      }
 
       return {
         success: true,
@@ -1783,6 +2852,10 @@ export function initializePaprLoginIPC(
     const platformUrl = process.env.PAPR_PLATFORM_URL || "https://dashboard.papr.ai";
     await shell.openExternal(`${platformUrl.replace(/\/$/, "")}/people`);
     return { success: true };
+  });
+
+  void ensureActiveNamespaceApiKey(customKeysStorage, settingsStorage).catch((error) => {
+    console.warn("[PaprLogin] Startup namespace API key sync failed:", error);
   });
 }
 

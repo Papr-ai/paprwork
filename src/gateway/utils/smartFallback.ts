@@ -85,7 +85,7 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     cost: "expensive",
     specialties: ["reasoning", "architecture", "planning", "analysis"],
   },
-  "claude-opus-4-8": {
+  "claude-opus-5": {
     reasoningLevel: "advanced",
     contextWindow: 1000000,
     speed: "slow",

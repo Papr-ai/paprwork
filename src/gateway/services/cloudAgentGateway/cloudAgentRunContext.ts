@@ -169,7 +169,17 @@ export async function beginCloudAgentRun(
   options: BeginCloudAgentRunOptions = {},
 ): Promise<CloudRunHandle> {
   const runRoot = options.runRoot ?? resolveCloudRunRoot(request);
-  const paprHome = path.join(runRoot, "Papr");
+  const paprHome =
+    request.namespaceId && request.orgId
+      ? path.join(
+          runRoot,
+          "Papr",
+          "orgs",
+          request.orgId,
+          "namespaces",
+          request.namespaceId,
+        )
+      : path.join(runRoot, "Papr");
   const envSnapshot = captureCloudRunEnv();
   const tursoTargets = resolveTursoBookendTargets(request, paprHome);
 
@@ -192,6 +202,12 @@ export async function beginCloudAgentRun(
   }
 
   process.env.PAPR_HOME = paprHome;
+  if (request.orgId) {
+    process.env.PAPR_ORG_ID = request.orgId;
+  }
+  if (request.namespaceId) {
+    process.env.PAPR_NAMESPACE_ID = request.namespaceId;
+  }
   process.env.HOME = runRoot;
   applyVaultKeys(request, envSnapshot);
 

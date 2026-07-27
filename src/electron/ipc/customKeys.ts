@@ -11,6 +11,15 @@ import type { ChildProcess } from "child_process";
 
 let customKeysStorage: CustomKeysStorage;
 let gatewayProcess: ChildProcess | null = null;
+let getActiveOrganizationId: (() => string | undefined) | null = null;
+
+async function syncCustomKeysVaultForActiveWorkspace(): Promise<void> {
+  const organizationId = getActiveOrganizationId?.()?.trim();
+  if (!organizationId || !customKeysStorage) {
+    return;
+  }
+  await customKeysStorage.ensureOrganizationVault(organizationId);
+}
 
 /**
  * Set the Gateway process reference for cache invalidation
@@ -37,15 +46,32 @@ export function invalidateKeyCache(keyName?: string): void {
 
 export function initializeCustomKeysIPC(
   storage: CustomKeysStorage,
+  options?: {
+    getActiveOrganizationId?: () => string | undefined;
+  },
 ) {
   customKeysStorage = storage;
+  getActiveOrganizationId = options?.getActiveOrganizationId ?? null;
 
-  // List all custom keys (metadata only, no values)
-  ipcMain.handle("custom-keys:list", async () => {
+  // List custom keys (metadata only). Pass orgOnly=true for Settings UI vault.
+  ipcMain.handle(
+    "custom-keys:list",
+    async (_event, options?: { orgOnly?: boolean }) => {
+      try {
+        await syncCustomKeysVaultForActiveWorkspace();
+        return await customKeysStorage.listKeys(options);
+      } catch (error) {
+        console.error("[IPC] custom-keys:list error:", error);
+        throw error;
+      }
+    },
+  );
+
+  ipcMain.handle("custom-keys:get-vault-context", async () => {
     try {
-      return await customKeysStorage.listKeys();
+      return customKeysStorage.getVaultContext();
     } catch (error) {
-      console.error("[IPC] custom-keys:list error:", error);
+      console.error("[IPC] custom-keys:get-vault-context error:", error);
       throw error;
     }
   });
@@ -53,6 +79,7 @@ export function initializeCustomKeysIPC(
   // Get key value by ID (decrypted)
   ipcMain.handle("custom-keys:get", async (_, keyId: string) => {
     try {
+      await syncCustomKeysVaultForActiveWorkspace();
       return await customKeysStorage.getKey(keyId);
     } catch (error) {
       console.error("[IPC] custom-keys:get error:", error);
@@ -63,6 +90,7 @@ export function initializeCustomKeysIPC(
   // Get key value by name (decrypted)
   ipcMain.handle("custom-keys:get-by-name", async (_, name: string) => {
     try {
+      await syncCustomKeysVaultForActiveWorkspace();
       return await customKeysStorage.getKeyByName(name);
     } catch (error) {
       console.error("[IPC] custom-keys:get-by-name error:", error);
@@ -132,6 +160,7 @@ export function initializeCustomKeysIPC(
     "custom-keys:resolve",
     async (_, text: string, allowedKeys?: string[]) => {
       try {
+        await syncCustomKeysVaultForActiveWorkspace();
         return await customKeysStorage.resolvePlaceholders(text, allowedKeys);
       } catch (error) {
         console.error("[IPC] custom-keys:resolve error:", error);

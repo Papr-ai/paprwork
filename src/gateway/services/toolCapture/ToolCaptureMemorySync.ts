@@ -1,6 +1,6 @@
 import Papr from "@papr/memory";
 import { getApiKey } from "../../utils/keyResolver.js";
-import { paprUserScope } from "../../utils/paprUserId.js";
+import { paprMemoryScopeSpread } from "../../utils/memoryScopeResolver.js";
 import {
   CAPTURE_CONTENT_TYPE,
   CAPTURE_SOURCE,
@@ -77,9 +77,10 @@ export async function syncToolCaptureToMemory(row: ToolCaptureRow): Promise<void
   });
 
   try {
+    const memoryScope = await paprMemoryScopeSpread({ chatId: row.chat_id });
     const response = await client.memory.add({
       content,
-      ...paprUserScope(),
+      ...memoryScope,
       metadata: {
         role: "assistant",
         category: "fact",

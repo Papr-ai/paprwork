@@ -474,3 +474,8 @@ export async function initializeDatabaseRegistry(): Promise<DatabaseRegistryServ
   await service.initialize();
   return service;
 }
+
+/** Reset singleton after org/namespace workspace switch. */
+export function resetDatabaseRegistryForWorkspaceSwitch(): void {
+  registryInstance = null;
+}

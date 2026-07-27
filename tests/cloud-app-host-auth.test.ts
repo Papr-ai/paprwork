@@ -88,10 +88,17 @@ describe("cloudAppHostCookies", () => {
   it("stores share token at site root for /api/db access", () => {
     const cookie = buildShareTokenCookie("share_tok", "ns1", "my-app", false);
     expect(cookie).toContain("Path=/");
+    expect(cookie).toContain("SameSite=Lax");
     const cookiePair = cookie.split(";")[0];
     const header = `${cookiePair}; other=1`;
     expect(readShareTokenFromCookie(header, "ns1", "my-app")).toBe("share_tok");
     expect(readShareTokenFromCookie(header, "ns1", "other-app")).toBeUndefined();
+  });
+
+  it("uses SameSite=None for secure share token cookies (iframe embeds)", () => {
+    const cookie = buildShareTokenCookie("share_tok", "ns1", "my-app", true);
+    expect(cookie).toContain("SameSite=None");
+    expect(cookie).toContain("Secure");
   });
 
   it("round-trips auth pending cookie at site root", () => {

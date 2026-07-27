@@ -7,36 +7,65 @@ import { useState, useEffect } from "react";
 import type { CustomKey, CustomKeyInput } from "../types/settings";
 import { trackEvent } from "../lib/telemetry";
 
+export interface CustomKeysVaultContext {
+  organizationId: string | null;
+  isLocalVault: boolean;
+  workspaceName?: string | null;
+  namespaceName?: string | null;
+}
+
 // Re-export types for backward compatibility
 export type { CustomKey, CustomKeyInput };
 
 export function useCustomKeys() {
   const [keys, setKeys] = useState<CustomKey[]>([]);
+  const [vaultContext, setVaultContext] = useState<CustomKeysVaultContext | null>(
+    null,
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Load keys on mount
+  // Load keys on mount and when Papr org workspace changes
   useEffect(() => {
-    loadKeys();
+    void loadKeys();
+
+    const onOrgChanged = () => {
+      void loadKeys();
+    };
+    window.addEventListener("papr-organization-changed", onOrgChanged);
+    window.addEventListener("papr-namespace-changed", onOrgChanged);
+    return () => {
+      window.removeEventListener("papr-organization-changed", onOrgChanged);
+      window.removeEventListener("papr-namespace-changed", onOrgChanged);
+    };
   }, []);
 
-  /**
-   * Load all custom keys
-   */
   const loadKeys = async () => {
     setLoading(true);
     setError(null);
 
     try {
-      // Check if electronAPI is available
-      if (!window.electronAPI || !window.electronAPI.customKeys) {
+      if (!window.electronAPI?.customKeys) {
         throw new Error(
           "Electron API not available. Make sure the app is running in Electron.",
         );
       }
 
-      const result = await window.electronAPI.customKeys.list();
+      const [result, context, profileResult] = await Promise.all([
+        window.electronAPI.customKeys.list({ orgOnly: true }),
+        window.electronAPI.customKeys.getVaultContext(),
+        window.electronAPI.papr?.getProfile?.() ?? Promise.resolve(null),
+      ]);
+
       setKeys(result as CustomKey[]);
+      setVaultContext({
+        organizationId: context.organizationId,
+        isLocalVault: context.isLocalVault,
+        workspaceName: profileResult?.success ? profileResult.profile?.workspaceName : null,
+        namespaceName: profileResult?.success
+          ? profileResult.profile?.activeNamespaceName
+          : null,
+      });
     } catch (err) {
       console.error("[useCustomKeys] Load error:", err);
       setError(err instanceof Error ? err.message : "Failed to load keys");
@@ -45,9 +74,6 @@ export function useCustomKeys() {
     }
   };
 
-  /**
-   * Add new custom key
-   */
   const addKey = async (input: CustomKeyInput): Promise<boolean> => {
     try {
       await window.electronAPI.customKeys.add(input);
@@ -64,9 +90,6 @@ export function useCustomKeys() {
     }
   };
 
-  /**
-   * Update existing custom key
-   */
   const updateKey = async (
     keyId: string,
     updates: Partial<CustomKeyInput>,
@@ -82,9 +105,6 @@ export function useCustomKeys() {
     }
   };
 
-  /**
-   * Delete custom key
-   */
   const deleteKey = async (keyId: string): Promise<boolean> => {
     try {
       await window.electronAPI.customKeys.delete(keyId);
@@ -97,9 +117,6 @@ export function useCustomKeys() {
     }
   };
 
-  /**
-   * Get key value by ID (for editing - shows masked, then reveal with eye)
-   */
   const getKeyValue = async (keyId: string): Promise<string | null> => {
     try {
       if (!window.electronAPI?.customKeys?.get) return null;
@@ -112,6 +129,7 @@ export function useCustomKeys() {
 
   return {
     keys,
+    vaultContext,
     loading,
     error,
     loadKeys,

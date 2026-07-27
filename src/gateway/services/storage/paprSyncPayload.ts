@@ -6,6 +6,7 @@
  * Full fidelity stays in local SQLite — sync is for backup and summarization.
  */
 
+import type { MemoryAddPolicy } from "@papr/memory/resources/shared.js";
 import type { StoredMessage } from "./IStorageProvider.js";
 
 /** Client budget — leave headroom for memory server → Parse wrapper. */
@@ -36,6 +37,8 @@ export interface PaprMessageStoreBody {
     customMetadata: PaprSyncCustomMetadata;
   };
   external_user_id?: string;
+  namespace_id?: string;
+  policy?: MemoryAddPolicy;
 }
 
 interface PaprSyncBudget {
@@ -234,7 +237,11 @@ function assembleStoreBody(
   message: StoredMessage,
   content: string | PaprContentBlock[],
   customMetadata: PaprSyncCustomMetadata,
-  externalUserId?: string,
+  scope?: {
+    externalUserId?: string;
+    namespaceId?: string;
+    policy?: MemoryAddPolicy;
+  },
 ): PaprMessageStoreBody {
   const body: PaprMessageStoreBody = {
     content,
@@ -249,8 +256,14 @@ function assembleStoreBody(
     },
   };
 
-  if (externalUserId) {
-    body.external_user_id = externalUserId;
+  if (scope?.externalUserId) {
+    body.external_user_id = scope.externalUserId;
+  }
+  if (scope?.namespaceId) {
+    body.namespace_id = scope.namespaceId;
+  }
+  if (scope?.policy) {
+    body.policy = scope.policy;
   }
 
   return body;
@@ -260,11 +273,17 @@ export function buildPaprSyncStoreBody(input: {
   chatId: string;
   message: StoredMessage;
   externalUserId?: string;
+  namespaceId?: string;
+  policy?: MemoryAddPolicy;
   maxBytes?: number;
 }): PaprMessageStoreBody {
   const maxBytes = input.maxBytes ?? PAPR_SYNC_MAX_BYTES;
   const customMetadata = buildPaprSyncCustomMetadata(input.message);
-  const externalUserId = input.externalUserId;
+  const scope = {
+    externalUserId: input.externalUserId,
+    namespaceId: input.namespaceId,
+    policy: input.policy,
+  };
 
   for (let i = 0; i < REDUCTION_STEPS.length; i++) {
     const budget = REDUCTION_STEPS[i]!;
@@ -274,7 +293,7 @@ export function buildPaprSyncStoreBody(input: {
       input.message,
       content,
       customMetadata,
-      externalUserId,
+      scope,
     );
 
     if (measurePaprStoreBodyBytes(body) <= maxBytes) {
@@ -291,6 +310,6 @@ export function buildPaprSyncStoreBody(input: {
     input.message,
     buildPaprSyncSummaryFallback(input.message),
     customMetadata,
-    externalUserId,
+    scope,
   );
 }

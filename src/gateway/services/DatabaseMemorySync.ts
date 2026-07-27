@@ -13,13 +13,12 @@
 
 import { createHash } from "crypto";
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import Papr from "@papr/memory";
 import type { DbChangedData, JobEvent } from "../../core/types/jobEvents.js";
-import { getPaprJobsRoot } from "../../core/utils/paprRoot.js";
+import { getPaprDataDir, getPaprJobsRoot } from "../../core/utils/paprRoot.js";
 import { getApiKey } from "../utils/keyResolver.js";
-import { paprUserScope } from "../utils/paprUserId.js";
+import { paprMemoryScopeSpread } from "../utils/memoryScopeResolver.js";
 import { getJobEventHub } from "./JobEventHub.js";
 import {
   extractJobDatabaseSnapshots,
@@ -37,7 +36,7 @@ interface MemorySyncStateFile {
 }
 
 function statePath(): string {
-  return path.join(os.homedir(), "Papr", "data", STATE_FILENAME);
+  return path.join(getPaprDataDir(), STATE_FILENAME);
 }
 
 function loadState(): MemorySyncStateFile {
@@ -207,9 +206,11 @@ async function syncTargetToMemory(target: SyncTarget): Promise<boolean> {
       tableCount: String(snapshots.length),
     };
 
+    const memoryScope = await paprMemoryScopeSpread();
+
     await client.memory.add({
       content: buildSnapshotContent(target, snapshots),
-      ...paprUserScope(),
+      ...memoryScope,
       metadata: {
         role: "assistant",
         category: "fact",
@@ -222,7 +223,7 @@ async function syncTargetToMemory(target: SyncTarget): Promise<boolean> {
     });
     await client.memory.add({
       content: buildSummaryContent(target, snapshots),
-      ...paprUserScope(),
+      ...memoryScope,
       metadata: {
         role: "assistant",
         category: "fact",

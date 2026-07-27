@@ -16,10 +16,17 @@ describe("shareAudienceModel", () => {
     expect(sharingToAudienceModel("none", "read")).toEqual({
       audience: "link",
       permission: "read",
+      requireSignIn: false,
     });
     expect(sharingToAudienceModel("none", "read_write")).toEqual({
       audience: "link",
       permission: "write",
+      requireSignIn: false,
+    });
+    expect(sharingToAudienceModel("public", "read")).toEqual({
+      audience: "link",
+      permission: "read",
+      requireSignIn: true,
     });
   });
 
@@ -63,6 +70,13 @@ describe("shareAudienceModel", () => {
     ).toEqual({ loginAccess: "team", externalLink: "off" });
     expect(
       audienceModelToSharing({ audience: "link", permission: "edit" }),
+    ).toEqual({ loginAccess: "public", externalLink: "read_write" });
+    expect(
+      audienceModelToSharing({
+        audience: "link",
+        permission: "edit",
+        requireSignIn: false,
+      }),
     ).toEqual({ loginAccess: "none", externalLink: "read_write" });
   });
 
@@ -73,9 +87,8 @@ describe("shareAudienceModel", () => {
   });
 
   it("gates permissions by audience", () => {
-    expect(isPermissionAvailable("public", "write")).toBe(false);
     expect(isPermissionAvailable("link", "write")).toBe(true);
-    expect(isPermissionAvailable("public", "edit")).toBe(true);
+    expect(isPermissionAvailable("team", "edit")).toBe(true);
     expect(isPermissionAvailable("private", "edit")).toBe(false);
   });
 

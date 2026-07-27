@@ -428,7 +428,9 @@ export const addAgentMemoryTool = createTool({
   execute: async (args) => {
     try {
       const client = await getPaprClient();
-      const { paprUserScope } = await import("../../gateway/utils/paprUserId.js");
+      const { buildPaprMemoryWriteScope } = await import(
+        "../../gateway/utils/memoryScopeResolver.js"
+      );
 
       // Build customMetadata for fields not in the MemoryMetadata spec
       const customMetadata: Record<string, string> = {};
@@ -444,10 +446,23 @@ export const addAgentMemoryTool = createTool({
         signalDomain: args.signalDomain,
       });
 
+      const resolvedChatId = args.chatId
+        ? resolveConversationId(args.chatId)
+        : undefined;
+      const memoryScope = await buildPaprMemoryWriteScope({
+        chatId: resolvedChatId,
+        addPolicy,
+      });
+
       const response = await client.memory.add({
         content: args.content,
-        ...paprUserScope(),
-        ...(addPolicy ? { policy: addPolicy } : {}),
+        ...(memoryScope.external_user_id
+          ? { external_user_id: memoryScope.external_user_id }
+          : {}),
+        ...(memoryScope.namespace_id
+          ? { namespace_id: memoryScope.namespace_id }
+          : {}),
+        ...(memoryScope.policy ? { policy: memoryScope.policy } : {}),
         metadata: {
           role: args.role,
           category: args.category,
@@ -478,9 +493,9 @@ export const searchAgentMemoryTool = createTool({
         return formatMemoryByIdResponse(args.memoryId, response);
       }
 
-      const { paprUserScope } = await import("../../gateway/utils/paprUserId.js");
-
-      // Build customMetadata filters from code search params + explicit filters
+      const { buildPaprMemorySearchScope } = await import(
+        "../../gateway/utils/memoryScopeResolver.js"
+      );
       const customMetadata: Record<string, string | number | boolean | string[]> = {
         ...(args.customMetadataFilters ?? {}),
       };
@@ -534,13 +549,22 @@ export const searchAgentMemoryTool = createTool({
         defaultDomain: isCodeSearch ? "code" : undefined,
       });
 
+      const memorySearchScope = await buildPaprMemorySearchScope({
+        chatId: conversationId,
+      });
+
       // Pass reranking config directly from agent's chosen provider/model
       const chosenProvider = args.rerankingProvider ?? "cohere";
       const chosenModel = args.rerankingModel ?? (chosenProvider === "cohere" ? "rerank-v3.5" : undefined);
 
       const response = await client.memory.search({
         query: args.query!,
-        ...paprUserScope(),
+        ...(memorySearchScope.external_user_id
+          ? { external_user_id: memorySearchScope.external_user_id }
+          : {}),
+        ...(memorySearchScope.search_acl
+          ? { search_acl: memorySearchScope.search_acl }
+          : {}),
         max_memories: args.maxMemories ?? 20,
         max_nodes: 20,
         enable_agentic_graph: true,
@@ -1145,7 +1169,9 @@ export const createEntitiesAndRelationshipsTool = createTool({
   execute: async (args) => {
     try {
       const client = await getPaprClient();
-      const { paprUserScope } = await import("../../gateway/utils/paprUserId.js");
+      const { buildPaprMemoryWriteScope } = await import(
+        "../../gateway/utils/memoryScopeResolver.js"
+      );
       
       // Build manual graph generation structure
       const manualGeneration = {
@@ -1171,10 +1197,19 @@ export const createEntitiesAndRelationshipsTool = createTool({
         manualRelationships: manualGeneration.relationships,
       });
 
+      const memoryScope = await buildPaprMemoryWriteScope({
+        addPolicy: manualPolicy,
+      });
+
       const response = await client.memory.add({
         content: args.content,
-        ...paprUserScope(),
-        ...(manualPolicy ? { policy: manualPolicy } : {}),
+        ...(memoryScope.external_user_id
+          ? { external_user_id: memoryScope.external_user_id }
+          : {}),
+        ...(memoryScope.namespace_id
+          ? { namespace_id: memoryScope.namespace_id }
+          : {}),
+        ...(memoryScope.policy ? { policy: memoryScope.policy } : {}),
       });
       
       return { 

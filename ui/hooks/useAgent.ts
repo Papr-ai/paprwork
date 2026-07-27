@@ -1936,6 +1936,21 @@ export function useAgent() {
 
           useChatStore.getState().migrateChatId(chatId, newChatId);
 
+          const memoryScope = useChatStore.getState().getChatMemoryScope(chatId);
+          if (memoryScope !== "user") {
+            try {
+              await gateway.send("chat:update", {
+                chatId: newChatId,
+                memoryScope,
+              });
+            } catch (scopeError) {
+              console.warn(
+                "[useAgent] Failed to persist memory scope on new chat:",
+                scopeError,
+              );
+            }
+          }
+
           // Update tab ID synchronously (like V1)
           updateTabId(tabId, `chat-${newChatId}`);
           console.log(`[useAgent] Updated tab: ${tabId} → chat-${newChatId}`);

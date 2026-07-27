@@ -9,13 +9,15 @@ import { OAuthSection } from "./OAuthSection";
 import { PaprLoginSection } from "./PaprLoginSection";
 import { ModelPickerSettings } from "./ModelPickerSettings";
 import { ToolTruncationSettings } from "./ToolTruncationSettings";
+import { OrgKeysVaultBanner } from "./OrgKeysVaultBanner";
 
 interface AIModelsTabProps {
   scrollToPickerModels?: boolean;
 }
 
 export function AIModelsTab({ scrollToPickerModels = false }: AIModelsTabProps) {
-  const { keys, loading, addKey, updateKey, deleteKey, getKeyValue, loadKeys } = useCustomKeys();
+  const { keys, vaultContext, loading, addKey, updateKey, deleteKey, getKeyValue, loadKeys } =
+    useCustomKeys();
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [apiKeyInputs, setApiKeyInputs] = useState<Record<string, string>>({});
   const [showKeyValue, setShowKeyValue] = useState<Record<string, boolean>>({});
@@ -108,6 +110,11 @@ export function AIModelsTab({ scrollToPickerModels = false }: AIModelsTabProps) 
       {/* Papr Account */}
       <div className="settings-section">
         <PaprLoginSection onApiKeyReceived={() => loadKeys()} />
+        <OrgKeysVaultBanner
+          vaultContext={vaultContext}
+          workspaceName={vaultContext?.workspaceName}
+          namespaceName={vaultContext?.namespaceName}
+        />
       </div>
 
       {/* Divider */}

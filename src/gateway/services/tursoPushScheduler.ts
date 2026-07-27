@@ -2,8 +2,7 @@
  * Debounced Turso push — serial queue avoids provisioning rate limits on startup.
  */
 
-import * as os from "os";
-import * as path from "path";
+import { getPaprAppsRoot } from "../../core/utils/paprRoot.js";
 import { discoverTursoLinkedSources, linkedSourceSyncKey } from "./tursoLinkedSources.js";
 import { getTursoSyncBridge, type TursoSyncBridge } from "./TursoSyncBridge.js";
 import {
@@ -67,7 +66,7 @@ function pushIntervalMs(): number {
 }
 
 function defaultAppsRoot(): string {
-  return path.join(os.homedir(), "Papr", "apps");
+  return getPaprAppsRoot();
 }
 
 function sleep(ms: number): Promise<void> {

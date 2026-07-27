@@ -46,7 +46,8 @@ export async function uploadAttachmentToMemory(
   }
 
   const client = await getPaprClient();
-  const { paprUserScope } = await import("../utils/paprUserId.js");
+  const { paprMemoryScopeSpread } = await import("../utils/memoryScopeResolver.js");
+  const memoryScope = await paprMemoryScopeSpread({ chatId });
 
   const metadataPayload = {
     customMetadata: {
@@ -58,7 +59,13 @@ export async function uploadAttachmentToMemory(
 
   const response = await client.document.upload({
     file: createReadStream(resolvedPath),
-    ...paprUserScope(),
+    ...(memoryScope.external_user_id
+      ? { external_user_id: memoryScope.external_user_id }
+      : {}),
+    ...(memoryScope.namespace_id ? { namespace_id: memoryScope.namespace_id } : {}),
+    ...(memoryScope.policy
+      ? { policy: JSON.stringify(memoryScope.policy) }
+      : {}),
     metadata: JSON.stringify(metadataPayload),
   });
 

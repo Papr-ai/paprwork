@@ -489,7 +489,7 @@ const createJobSchemaCore = z
       "claude-sonnet-4-6",
       "claude-sonnet-5",
       "claude-opus-4-6",
-      "claude-opus-4-8",
+      "claude-opus-5",
       "claude-fable-5",
       // OpenAI
       "gpt-5-6-luna",
@@ -1625,7 +1625,7 @@ const updateJobSchema = z.object({
       "claude-sonnet-4-6",
       "claude-sonnet-5",
       "claude-opus-4-6",
-      "claude-opus-4-8",
+      "claude-opus-5",
       "claude-fable-5",
       // OpenAI
       "gpt-5-6-luna",

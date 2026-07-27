@@ -30,11 +30,15 @@ if (!globalThis.crypto) {
 import express from "express";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
-import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import { initializeAgentService } from "./services/AgentService.js";
-import { isCloudAgentGatewayMode } from "../core/utils/paprRoot.js";
+import { getPaprAppsRoot, getPaprRoot, isCloudAgentGatewayMode } from "../core/utils/paprRoot.js";
+import {
+  applyActiveWorkspaceEnv,
+  readActiveWorkspacePointer,
+} from "../core/utils/paprWorkspace.js";
+import { switchActiveWorkspace } from "./services/workspaceSwitchService.js";
 import { initializeChatService } from "./services/ChatService.js";
 import { initializeDocumentService } from "./services/DocumentService.js";
 import { initializeAppService, getAppService } from "./services/AppService.js";
@@ -290,6 +294,14 @@ async function startGateway(): Promise<void> {
   console.log("[Gateway] Paprwork V2 Gateway starting...");
   console.log("[Gateway] Platform:", process.platform);
   console.log("[Gateway] Node:", process.version);
+
+  const activeWorkspace = readActiveWorkspacePointer();
+  if (activeWorkspace) {
+    applyActiveWorkspaceEnv(activeWorkspace);
+    console.log(
+      `[Gateway] Active workspace: org=${activeWorkspace.organizationId} ns=${activeWorkspace.namespaceId}`,
+    );
+  }
 
   try {
     // Initialize permission system
@@ -1357,7 +1369,7 @@ async function startGateway(): Promise<void> {
 
     app.get("/api/cloud/apps/:appId/requirements", async (req, res) => {
       try {
-        const paprDir = path.join(os.homedir(), "Papr");
+        const paprDir = getPaprRoot();
         const requirements = readAppRequirements(paprDir, req.params.appId);
         res.json({ requirements });
       } catch (err) {
@@ -1372,7 +1384,7 @@ async function startGateway(): Promise<void> {
           res.status(400).json({ error: "requirements array is required" });
           return;
         }
-        const paprDir = path.join(os.homedir(), "Papr");
+        const paprDir = getPaprRoot();
         const file = writeAppRequirements(
           paprDir,
           req.params.appId,
@@ -1538,6 +1550,58 @@ async function startGateway(): Promise<void> {
       res.json({ enabled: true, ...sync.getState() });
     });
 
+    app.post("/api/workspace/switch", async (req, res) => {
+      try {
+        const organizationId =
+          typeof req.body?.organizationId === "string"
+            ? req.body.organizationId.trim()
+            : "";
+        const namespaceId =
+          typeof req.body?.namespaceId === "string"
+            ? req.body.namespaceId.trim()
+            : "";
+        if (!organizationId || !namespaceId) {
+          res.status(400).json({
+            success: false,
+            error: "organizationId and namespaceId are required",
+          });
+          return;
+        }
+
+        const result = await switchActiveWorkspace({
+          organizationId,
+          namespaceId,
+          organizationName:
+            typeof req.body?.organizationName === "string"
+              ? req.body.organizationName
+              : undefined,
+          namespaceName:
+            typeof req.body?.namespaceName === "string"
+              ? req.body.namespaceName
+              : undefined,
+          paprApiKey:
+            typeof req.body?.paprApiKey === "string"
+              ? req.body.paprApiKey
+              : undefined,
+        });
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({
+          success: false,
+          error: error instanceof Error ? error.message : "Workspace switch failed",
+        });
+      }
+    });
+
+    app.get("/api/workspace/active", (_req, res) => {
+      const pointer = readActiveWorkspacePointer();
+      if (!pointer) {
+        res.json({ active: false });
+        return;
+      }
+      res.json({ active: true, pointer });
+    });
+
     app.get("/api/sync/items", async (req, res) => {
       const sync = getCloudSyncService();
       if (!sync) {
@@ -1568,7 +1632,7 @@ async function startGateway(): Promise<void> {
           appContext = {
             appId,
             dependentJobIds: resolveAppDependentJobIds(
-              path.join(os.homedir(), "Papr"),
+              getPaprRoot(),
               appId,
             ),
           };
@@ -1576,7 +1640,7 @@ async function startGateway(): Promise<void> {
 
         const github = sync.getGitHubSyncItemsReport();
         const turso = await buildTursoSyncItemsReport(
-          path.join(os.homedir(), "Papr", "apps"),
+          getPaprAppsRoot(),
           appId,
         );
 
@@ -2176,7 +2240,7 @@ async function startGateway(): Promise<void> {
         const { stopCodeIndexing } = await import(
           "./services/CodeIndexingService.js"
         );
-        stopCodeIndexing();
+        await stopCodeIndexing();
       } catch (error) {
         console.error("[Gateway] Failed to stop code indexing:", error);
       }

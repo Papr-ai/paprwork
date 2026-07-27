@@ -17,6 +17,19 @@ describe("normalizePortableJobPrompt", () => {
     expect(normalized).toContain("$PAPR_HOME/Jobs/");
     expect(normalized).not.toContain("~/Papr/jobs/");
   });
+
+  it("rewrites workspace, chats, and user-data paths to env vars", () => {
+    const normalized = normalizePortableJobPrompt(`
+find ~/Papr/workspace/memory -name '*.md'
+sqlite3 ~/.paprwork-v2/chats.db "SELECT 1"
+grep foo ~/Papr/Chats/*.txt
+    `);
+    expect(normalized).toContain('$PAPR_HOME/workspace/memory');
+    expect(normalized).toContain('$PAPR_USER_DATA/chats.db');
+    expect(normalized).toContain('$PAPR_HOME/Chats/*.txt');
+    expect(normalized).not.toContain("~/Papr/workspace");
+    expect(normalized).not.toContain("~/.paprwork-v2");
+  });
 });
 
 describe("providerRateLimitRetry", () => {

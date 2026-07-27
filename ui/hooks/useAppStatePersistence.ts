@@ -6,6 +6,7 @@
 import { useEffect, useCallback } from 'react';
 import { useTabStore } from '../stores/tabStore';
 import { gateway } from '../src/lib/gateway';
+import { loadPersistedAppStateFromGateway } from '../lib/persistedAppState';
 
 export function useAppStatePersistence() {
   const tabs = useTabStore((state) => state.tabs);
@@ -19,115 +20,26 @@ export function useAppStatePersistence() {
   useEffect(() => {
     console.log('[Persistence] Loading tabs from SQLite...');
     const loadStartTime = performance.now();
-    
-    // Load tabs first
-    gateway.send('app:load_tabs', {}).then((response: any) => {
-      if (response.success && response.data && Array.isArray(response.data) && response.data.length > 0) {
-        console.log(`[Persistence] Loaded ${response.data.length} tabs in ${(performance.now() - loadStartTime).toFixed(2)}ms`);
-        
-        // Convert from SQLite format to Tab format
-        const restoredTabs = response.data.map((tab: any) => ({
-          id: tab.id,
-          type: tab.type,
-          entityId: tab.entityId,
-          title: tab.title,
-          displayMode: tab.displayMode,
-          parentTabId: tab.parentTabId,
-          childTabIds: [], // Will be populated below
-          isFavorite: tab.isFavorite,
-          hasUnread: false,
-          isStreaming: false,
-        }));
-        
-        // Build parent-child relationships
-        const tabMap = new Map(restoredTabs.map((t: any) => [t.id, t]));
-        for (const tab of restoredTabs) {
-          if (tab.parentTabId) {
-            // Prevent self-referencing (data corruption guard)
-            if (tab.parentTabId === tab.id) {
-              console.warn(`[Persistence] Detected self-referencing tab: ${tab.id}, clearing parentTabId`);
-              tab.parentTabId = null;
-              continue;
-            }
-            
-            const parent = tabMap.get(tab.parentTabId);
-            if (parent && !parent.childTabIds.includes(tab.id)) {
-              parent.childTabIds.push(tab.id);
-            }
-          }
-        }
-        
-        console.log('[Persistence] Restored tab relationships:', 
-          restoredTabs.map((t: any) => ({ 
-            id: t.id, 
-            title: t.title, 
-            parentTabId: t.parentTabId, 
-            childTabIds: t.childTabIds 
-          }))
+
+    try {
+      localStorage.removeItem('paprwork-tab-storage');
+    } catch {
+      /* legacy global tab cache */
+    }
+
+    void loadPersistedAppStateFromGateway()
+      .then(() => {
+        console.log(
+          `[Persistence] Loaded workspace tabs in ${(performance.now() - loadStartTime).toFixed(2)}ms`,
         );
-        
-        // Restore tabs to Zustand
-        useTabStore.setState({
-          tabs: restoredTabs,
-        });
-      } else {
-        console.log('[Persistence] No tabs found in SQLite, starting fresh');
-      }
-      
-      // ALWAYS load app state (even if no tabs)
-      return gateway.send('app:load_state', {});
-    }).then((response: any) => {
-      console.log('[Persistence] app:load_state response:', {
-        hasResponse: !!response,
-        success: response?.success,
-        hasData: !!response?.data,
-        data: response?.data
+      })
+      .catch((error: Error) => {
+        console.error('[Persistence] Failed to load tabs/state:', error);
+      })
+      .finally(() => {
+        (window as any).__paprSqliteLoaded = true;
+        window.dispatchEvent(new CustomEvent('papr-sqlite-loaded'));
       });
-      
-      if (response && response.success && response.data) {
-        console.log('[Persistence] Loaded app state:', response.data);
-        const state = response.data;
-        
-        // Restore ALL app state to Zustand store
-        useTabStore.setState({
-          activeTabId: state.activeTabId || null,
-          splitRatio: state.splitRatio || 0.5,
-          splitRatios: state.splitRatios || {},
-          history: state.history || [],
-          historyIndex: state.historyIndex ?? -1,
-        });
-        
-        // Also restore onboarding state to localStorage for OnboardingCard
-        const step1Value = state.onboardingStep1Completed ? 'true' : 'false';
-        const step2Value = state.onboardingStep2Completed ? 'true' : 'false';
-        const dismissedValue = state.onboardingDismissed ? 'true' : 'false';
-        
-        localStorage.setItem('papr-onboarding-step1', step1Value);
-        localStorage.setItem('papr-onboarding-step2', step2Value);
-        localStorage.setItem('papr-onboarding-dismissed', dismissedValue);
-        
-        // Switch to the restored active tab if it exists
-        if (state.activeTabId) {
-          const { switchToTab, getTab } = useTabStore.getState();
-          const tab = getTab(state.activeTabId);
-          if (tab) {
-            console.log(`[Persistence] Switching to restored active tab: ${state.activeTabId}`);
-            switchToTab(state.activeTabId, true); // Skip history recording
-          }
-        }
-      } else {
-        console.log('[Persistence] No app state found in SQLite, using defaults');
-      }
-      
-      // ALWAYS notify that SQLite load is complete (even if no data)
-      (window as any).__paprSqliteLoaded = true;
-      window.dispatchEvent(new CustomEvent('papr-sqlite-loaded'));
-    }).catch((error: Error) => {
-      console.error('[Persistence] Failed to load tabs/state:', error);
-      // Mark as loaded even on error so app doesn't hang
-      (window as any).__paprSqliteLoaded = true;
-      window.dispatchEvent(new CustomEvent('papr-sqlite-loaded'));
-    });
   }, []); // Only run once on mount
 
   // Save tabs to SQLite (debounced)

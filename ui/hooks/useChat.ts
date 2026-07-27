@@ -14,6 +14,12 @@ import { chatHasActiveStreamUi, mergeHistoryWithLocal } from "../lib/agentStream
 let hasLoadedChatsOnce = false;
 let loadChatsPromise: Promise<void> | null = null;
 
+/** Reset module cache so the next loadChats(true) hits the gateway again. */
+export function resetChatListCache(): void {
+  hasLoadedChatsOnce = false;
+  loadChatsPromise = null;
+}
+
 export function useChat() {
   // V1 APPROACH: Get active chat from tabStore (single source of truth)
   const { activeLeftTab, activeTabId, getTab } = useTabStore();
@@ -63,10 +69,21 @@ export function useChat() {
             title: string;
             createdAt: string;
             updatedAt: string;
+            messageCount?: number;
+            memoryScope?: "user" | "namespace" | "org";
           }>;
 
           if (chatsList) {
-            setChats(chatsList);
+            setChats(
+              chatsList.map((chat) => ({
+                id: chat.id,
+                title: chat.title,
+                createdAt: chat.createdAt,
+                updatedAt: chat.updatedAt,
+                messageCount: chat.messageCount ?? 0,
+                memoryScope: chat.memoryScope ?? "user",
+              })),
+            );
             hasLoadedChatsOnce = true;
             // Note: No setActiveChat - tabStore manages active state
           }

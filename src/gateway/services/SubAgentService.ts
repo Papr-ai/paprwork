@@ -1,5 +1,5 @@
 import { promises as fs } from "fs";
-import os from "os";
+import { getPaprDataDir } from "../../core/utils/paprRoot.js";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
 import type {
@@ -289,7 +289,7 @@ export class SubAgentService {
   private readonly pendingQuestions = new Map<string, PendingQuestion>();
 
   constructor() {
-    const root = path.join(os.homedir(), "Papr", "data");
+    const root = getPaprDataDir();
     this.profilePath = path.join(root, "subagents.json");
     this.legacyRunsPath = path.join(root, "subagent-runs.json");
     this.profiles = new Map();
@@ -968,4 +968,9 @@ export async function initializeSubAgentService(): Promise<SubAgentService> {
   const service = getSubAgentService();
   await service.initialize();
   return service;
+}
+
+/** Reset singleton after org/namespace workspace switch. */
+export function resetSubAgentServiceForWorkspaceSwitch(): void {
+  subAgentServiceInstance = null;
 }

@@ -3,7 +3,7 @@
  */
 
 import * as fs from "fs";
-import * as os from "os";
+import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import * as path from "path";
 
 import {
@@ -306,7 +306,7 @@ export class CommunityCatalogService {
   private readonly paprDir: string;
 
   constructor(paprDir?: string) {
-    this.paprDir = paprDir ?? path.join(os.homedir(), "Papr");
+    this.paprDir = paprDir ?? getPaprRoot();
   }
 
   private ownedLocalAppIds(): Set<string> {

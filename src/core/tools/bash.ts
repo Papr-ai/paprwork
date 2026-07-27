@@ -45,6 +45,11 @@ let customKeysCache: Record<string, string> | null = null;
 let customKeysCacheTime = 0;
 const CACHE_TTL = 60000; // 60 seconds
 
+export function invalidateCustomKeysCache(): void {
+  customKeysCache = null;
+  customKeysCacheTime = 0;
+}
+
 async function getCustomKeys(): Promise<Record<string, string>> {
   const now = Date.now();
   

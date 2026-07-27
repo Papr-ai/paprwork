@@ -72,6 +72,7 @@ interface ArtifactsState {
   setFilter: (filter: ArtifactType | "all") => void;
   setSearchQuery: (query: string) => void;
   toggleFavorite: (id: string) => void;
+  resetForWorkspaceSwitch: () => void;
 
   // Computed
   getFilteredArtifacts: () => Artifact[];
@@ -147,4 +148,13 @@ export const useArtifactsStore = create<ArtifactsState>((set, get) => ({
 
     return filtered;
   },
+
+  resetForWorkspaceSwitch: () =>
+    set({
+      artifacts: [],
+      loading: false,
+      error: null,
+      filter: "all",
+      searchQuery: "",
+    }),
 }));

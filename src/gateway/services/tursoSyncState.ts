@@ -4,7 +4,7 @@
  */
 
 import * as fs from "fs";
-import * as os from "os";
+import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import * as path from "path";
 import {
   computeSyncableTableFingerprintsForPath,
@@ -40,7 +40,7 @@ function defaultState(): TursoSyncStateFile {
 }
 
 export function resolveTursoSyncStatePath(paprDir?: string): string {
-  const root = paprDir ?? path.join(os.homedir(), "Papr");
+  const root = paprDir ?? getPaprRoot();
   return path.join(root, "data", TURSO_SYNC_STATE_FILENAME);
 }
 

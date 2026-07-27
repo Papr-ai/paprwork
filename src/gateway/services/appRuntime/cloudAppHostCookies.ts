@@ -181,8 +181,11 @@ export function buildShareTokenCookie(
     },
     secret,
   );
+  // SameSite=None so invite links work in embedded previews (Paprwork Web tab iframe).
   // Path=/ so /api/db/* at site root receives the cookie (mini-apps use fetch('/api/...')).
-  return `${PAPR_SHARE_TOKEN_COOKIE}=${encodeURIComponent(value)}; ${cookieSuffix(SHARE_MAX_AGE_SEC, secure, "/")}`;
+  const sameSite = secure ? "None" : "Lax";
+  const flags = `Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${SHARE_MAX_AGE_SEC}${secure ? "; Secure" : ""}`;
+  return `${PAPR_SHARE_TOKEN_COOKIE}=${encodeURIComponent(value)}; ${flags}`;
 }
 
 export function readShareTokenFromCookie(

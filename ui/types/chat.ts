@@ -12,6 +12,8 @@ export interface ChatMetadata {
   messageCount: number;
   isStreaming?: boolean; // Track if this chat is actively streaming
   hasUnread?: boolean; // Track if chat has unread messages
+  /** Who can read derived memories from this chat */
+  memoryScope?: "user" | "namespace" | "org";
 }
 
 /**

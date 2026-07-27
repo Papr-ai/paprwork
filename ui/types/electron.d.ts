@@ -17,8 +17,18 @@ interface CustomKeyMetadata {
   name: string;
   description?: string;
   permission: "always" | "ask";
+  clientAccess?: "server" | "client";
   createdAt: string;
   updatedAt: string;
+  scope?: "global" | "shared" | "org";
+  orgScope?: "organization" | "all" | "global";
+  organizationId?: string;
+  vaultAudience?: "user" | "namespace" | "org";
+}
+
+interface CustomKeysVaultContext {
+  organizationId: string | null;
+  isLocalVault: boolean;
 }
 
 interface CustomKeyInput {
@@ -26,6 +36,10 @@ interface CustomKeyInput {
   value: string;
   description?: string;
   permission?: "always" | "ask";
+  clientAccess?: "server" | "client";
+  orgScope?: "organization" | "all";
+  organizationId?: string;
+  vaultAudience?: "user" | "namespace" | "org";
 }
 
 export interface UpdateStatus {
@@ -40,7 +54,8 @@ export interface UpdateStatus {
 export interface ElectronAPI {
   // Custom Keys API (secure storage via system keychain)
   customKeys: {
-    list: () => Promise<CustomKeyMetadata[]>;
+    list: (options?: { orgOnly?: boolean }) => Promise<CustomKeyMetadata[]>;
+    getVaultContext: () => Promise<CustomKeysVaultContext>;
     get: (keyId: string) => Promise<string | null>;
     getByName: (name: string) => Promise<string | null>;
     add: (input: CustomKeyInput) => Promise<CustomKeyMetadata>;
@@ -152,10 +167,12 @@ export interface ElectronAPI {
     removeLoginErrorListener: (callback: (data: { error: string }) => void) => void;
     onLogoutSuccess: (callback: () => void) => void;
     removeLogoutSuccessListener: (callback: () => void) => void;
-    listNamespaces: () => Promise<{
+    listNamespaces: (options?: { organizationId?: string; forceRefresh?: boolean }) => Promise<{
       success: boolean;
       namespaces?: Array<{ id: string; name: string; environmentType?: string }>;
       activeNamespaceId?: string;
+      parseOrganizationId?: string;
+      fromCache?: boolean;
       error?: string;
     }>;
     switchNamespace: (namespaceId: string, namespaceName: string) => Promise<{
@@ -167,18 +184,47 @@ export interface ElectronAPI {
     removeNamespaceChangedListener: (callback: (data: { namespaceId: string; namespaceName: string }) => void) => void;
     listOrganizations: () => Promise<{
       success: boolean;
-      organizations?: Array<{ id: string; name: string; role?: string }>;
+      organizations?: Array<{
+        id: string;
+        name: string;
+        role?: string;
+        organizationId?: string;
+        organizationName?: string;
+        workspaceName?: string;
+        defaultNamespaceId?: string;
+      }>;
       activeOrganizationId?: string;
       error?: string;
     }>;
     switchOrganization: (organizationId: string, organizationName: string) => Promise<{
       success: boolean;
       organizationId?: string;
+      parseOrganizationId?: string;
       organizationName?: string;
+      namespaces?: Array<{ id: string; name: string; environmentType?: string }>;
+      activeNamespaceId?: string;
+      activeNamespaceName?: string;
+      apiKey?: string;
       error?: string;
     }>;
-    onOrganizationChanged: (callback: (data: { organizationId: string; organizationName: string }) => void) => void;
-    removeOrganizationChangedListener: (callback: (data: { organizationId: string; organizationName: string }) => void) => void;
+    onOrganizationChanged: (callback: (data: {
+      organizationId: string;
+      parseOrganizationId?: string;
+      organizationName: string;
+      namespaceId?: string;
+      namespaceName?: string;
+      namespaces?: Array<{ id: string; name: string; environmentType?: string }>;
+    }) => void) => void;
+    removeOrganizationChangedListener: (callback: (data: {
+      organizationId: string;
+      parseOrganizationId?: string;
+      organizationName: string;
+      namespaceId?: string;
+      namespaceName?: string;
+      namespaces?: Array<{ id: string; name: string; environmentType?: string }>;
+    }) => void) => void;
+    onWorkspaceCacheUpdated: (callback: () => void) => void;
+    removeWorkspaceCacheUpdatedListener: (callback: () => void) => void;
     listWorkspaceMembers: () => Promise<{
       success: boolean;
       workspaceId?: string;

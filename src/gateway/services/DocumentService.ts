@@ -10,6 +10,7 @@
  */
 
 import { promises as fs } from "fs";
+import { getPaprDocumentsDir } from "../../core/utils/paprRoot.js";
 import { watch, type FSWatcher } from "fs";
 import path from "path";
 import os from "os";
@@ -64,7 +65,7 @@ export class DocumentService {
 
   constructor() {
     const homeDir = os.homedir();
-    this.docsRoot = path.join(homeDir, "Papr", "documents");
+    this.docsRoot = getPaprDocumentsDir();
     this.legacyJsonPath = path.join(
       homeDir,
       ".paprwork",
@@ -812,4 +813,12 @@ export async function initializeDocumentService(): Promise<DocumentService> {
   const service = getDocumentService();
   await service.initialize();
   return service;
+}
+
+/** Reset singleton after org/namespace workspace switch. */
+export function resetDocumentServiceForWorkspaceSwitch(): void {
+  if (documentServiceInstance) {
+    documentServiceInstance.close();
+    documentServiceInstance = null;
+  }
 }

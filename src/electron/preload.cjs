@@ -15,10 +15,11 @@ console.log("[Preload] Script loaded");
 contextBridge.exposeInMainWorld("electronAPI", {
   // Custom Keys API
   customKeys: {
-    list: () => {
+    list: (options) => {
       console.log("[Preload] customKeys.list called");
-      return ipcRenderer.invoke("custom-keys:list");
+      return ipcRenderer.invoke("custom-keys:list", options);
     },
+    getVaultContext: () => ipcRenderer.invoke("custom-keys:get-vault-context"),
     get: (keyId) => ipcRenderer.invoke("custom-keys:get", keyId),
     getByName: (name) => ipcRenderer.invoke("custom-keys:get-by-name", name),
     add: (input) => ipcRenderer.invoke("custom-keys:add", input),
@@ -89,6 +90,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     const logoutSuccessListenerMap = new WeakMap();
     const namespaceChangedListenerMap = new WeakMap();
     const organizationChangedListenerMap = new WeakMap();
+    const workspaceCacheUpdatedListenerMap = new WeakMap();
 
     return {
       checkLoginStatus: () => ipcRenderer.invoke("papr:check-login-status"),
@@ -147,7 +149,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
         }
       },
       
-      listNamespaces: () => ipcRenderer.invoke("papr:list-namespaces"),
+      listNamespaces: (options) => ipcRenderer.invoke("papr:list-namespaces", options),
       switchNamespace: (namespaceId, namespaceName) => ipcRenderer.invoke("papr:switch-namespace", namespaceId, namespaceName),
       onNamespaceChanged: (callback) => {
         const wrapper = (_event, data) => {
@@ -180,6 +182,21 @@ contextBridge.exposeInMainWorld("electronAPI", {
         if (wrapper) {
           ipcRenderer.removeListener("papr:organization-changed", wrapper);
           organizationChangedListenerMap.delete(callback);
+        }
+      },
+
+      onWorkspaceCacheUpdated: (callback) => {
+        const wrapper = () => {
+          callback();
+        };
+        workspaceCacheUpdatedListenerMap.set(callback, wrapper);
+        ipcRenderer.on("papr:workspace-cache-updated", wrapper);
+      },
+      removeWorkspaceCacheUpdatedListener: (callback) => {
+        const wrapper = workspaceCacheUpdatedListenerMap.get(callback);
+        if (wrapper) {
+          ipcRenderer.removeListener("papr:workspace-cache-updated", wrapper);
+          workspaceCacheUpdatedListenerMap.delete(callback);
         }
       },
 

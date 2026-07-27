@@ -11,6 +11,9 @@
  * on the memory server, attaching the user's PAPR_API_KEY automatically.
  */
 
+import { buildCloudVaultRequestBody } from "../../core/utils/cloudReposScope.js";
+import type { CloudRepoScope } from "../../core/utils/cloudReposScope.js";
+import { normalizeIntegrationKeyVaultAudience } from "../../core/storage/customKeysVault.js";
 import { getCustomKeysService } from "./CustomKeysService.js";
 import { resolveVaultKeySource } from "./cloudAgentGateway/resolveCloudProviderAuth.js";
 import { getPaprApiKey } from "../utils/keyResolver.js";
@@ -115,32 +118,44 @@ export class VaultSyncService {
       return null;
     }
 
-    const keyPairs: Array<{
-      name: string;
-      value: string;
-      clientAccess: "server" | "client";
-      source: string;
-    }> = [];
+    const keyPairsByScope = new Map<
+      CloudRepoScope,
+      Array<{
+        name: string;
+        value: string;
+        clientAccess: "server" | "client";
+        source: string;
+      }>
+    >();
+
     for (const meta of keyList) {
+      if (meta.scope === "global") {
+        continue;
+      }
       try {
         const value = await customKeys.getKeyByName(meta.name);
-        if (value) {
-          keyPairs.push({
-            name: meta.name,
-            value,
-            clientAccess: meta.clientAccess ?? "server",
-            source: resolveVaultKeySource(
-              {
-                name: meta.name,
-                source: meta.source,
-                managedBy: meta.managedBy,
-                oauthProvider: meta.oauthProvider,
-                description: meta.description,
-              },
-              value,
-            ),
-          });
+        if (!value) {
+          continue;
         }
+        const cloudScope = normalizeIntegrationKeyVaultAudience(meta.vaultAudience);
+        const pair = {
+          name: meta.name,
+          value,
+          clientAccess: meta.clientAccess ?? "server",
+          source: resolveVaultKeySource(
+            {
+              name: meta.name,
+              source: meta.source,
+              managedBy: meta.managedBy,
+              oauthProvider: meta.oauthProvider,
+              description: meta.description,
+            },
+            value,
+          ),
+        };
+        const bucket = keyPairsByScope.get(cloudScope) ?? [];
+        bucket.push(pair);
+        keyPairsByScope.set(cloudScope, bucket);
       } catch (err) {
         console.warn(
           `[VaultSync] Could not read key "${meta.name}":`,
@@ -149,46 +164,76 @@ export class VaultSyncService {
       }
     }
 
-    if (keyPairs.length === 0) {
+    const totalKeys = [...keyPairsByScope.values()].reduce(
+      (sum, bucket) => sum + bucket.length,
+      0,
+    );
+
+    if (totalKeys === 0) {
       console.log("[VaultSync] No readable key values to push");
       return null;
     }
 
     this.state.status = "syncing";
-    console.log(`[VaultSync] Pushing ${keyPairs.length} keys to vault...`);
+    console.log(
+      `[VaultSync] Pushing ${totalKeys} keys to vault (${keyPairsByScope.size} scope bucket(s))...`,
+    );
 
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), PUSH_TIMEOUT_MS);
-      const resp = await fetch(
-        `http://localhost:${this.gatewayPort}/api/cloud/vault/sync`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            scope: "user",
-            keys: keyPairs.map(({ name, value, clientAccess, source }) => ({
-              name,
-              value,
-              source,
-              clientAccess,
-            })),
-          }),
-          signal: controller.signal,
-        },
-      );
-      clearTimeout(timer);
+      let syncedTotal = 0;
+      const created: string[] = [];
+      const updated: string[] = [];
+      const deleted: string[] = [];
 
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(`Vault sync failed (${resp.status}): ${text}`);
+      for (const [cloudScope, keyPairs] of keyPairsByScope) {
+        const resp = await fetch(
+          `http://localhost:${this.gatewayPort}/api/cloud/vault/sync`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(
+              buildCloudVaultRequestBody(
+                keyPairs.map(({ name, value, clientAccess, source }) => ({
+                  name,
+                  value,
+                  source,
+                  clientAccess,
+                })),
+                cloudScope,
+              ),
+            ),
+            signal: controller.signal,
+          },
+        );
+
+        if (!resp.ok) {
+          const text = await resp.text();
+          throw new Error(
+            `Vault sync failed for scope ${cloudScope} (${resp.status}): ${text}`,
+          );
+        }
+
+        const result = (await resp.json()) as VaultSyncResponse;
+        syncedTotal += result.synced;
+        created.push(...result.created);
+        updated.push(...result.updated);
+        deleted.push(...result.deleted);
       }
 
-      const result = (await resp.json()) as VaultSyncResponse;
+      clearTimeout(timer);
+
+      const result: VaultSyncResponse = {
+        synced: syncedTotal,
+        created,
+        updated,
+        deleted,
+      };
       this.state.status = "idle";
       this.state.lastSyncAt = new Date().toISOString();
       this.state.lastError = null;
-      this.state.keyCount = keyPairs.length;
+      this.state.keyCount = totalKeys;
 
       console.log(
         `[VaultSync] Pushed ${result.synced} keys (${result.created.length} created, ${result.updated.length} updated)`,

@@ -17,6 +17,7 @@ import { CHAT_MODELS } from "../../constants/models";
 import type { AIModel } from "../../constants/models";
 import { ModelPickerDropdown } from "./ModelPickerDropdown";
 import { ChatHistoryDropdown } from "./ChatHistoryDropdown";
+import { ChatMemoryScopeSelector } from "./ChatMemoryScopeSelector";
 import { ContextDropdown } from "./ContextDropdown";
 import { ContextPills } from "./ContextPills";
 import { SlashCommandMenu } from "./SlashCommandMenu";
@@ -493,22 +494,24 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                   />
                 )}
               </div>
-              <button
-                className={`send-button ${isSending ? "send-button-stop" : message.trim() || selectedArtifacts.length > 0 ? "send-button-active" : ""}`}
-                data-testid={isSending ? "stop-button" : "send-button"}
-                onClick={isSending ? handleStop : handleSend}
-                disabled={
-                  isSavingAttachments ||
-                  (!isSending && !message.trim() && selectedArtifacts.length === 0)
-                }
-                type="button"
-                aria-label={isSending ? "Stop agent" : "Send message"}
-                title={
-                  isSending
-                    ? "Stop agent (or press Enter to stop & send new message)"
-                    : "Send message"
-                }
-              >
+              <div className="input-footer__actions">
+                <ChatMemoryScopeSelector chatId={chatId} compact />
+                <button
+                  className={`send-button ${isSending ? "send-button-stop" : message.trim() || selectedArtifacts.length > 0 ? "send-button-active" : ""}`}
+                  data-testid={isSending ? "stop-button" : "send-button"}
+                  onClick={isSending ? handleStop : handleSend}
+                  disabled={
+                    isSavingAttachments ||
+                    (!isSending && !message.trim() && selectedArtifacts.length === 0)
+                  }
+                  type="button"
+                  aria-label={isSending ? "Stop agent" : "Send message"}
+                  title={
+                    isSending
+                      ? "Stop agent (or press Enter to stop & send new message)"
+                      : "Send message"
+                  }
+                >
                 {isSending ? (
                   // Stop icon (square)
                   <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
@@ -533,7 +536,8 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                     />
                   </svg>
                 )}
-              </button>
+                </button>
+              </div>
             </div>
           )}
         </div>

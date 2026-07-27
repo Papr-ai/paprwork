@@ -7,10 +7,10 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
+import { getPaprRoot } from '../../../core/utils/paprRoot.js';
 import { Papr } from '@papr/memory';
 import { buildCodeIndexAddPolicy } from '../../utils/paprMemoryPolicy.js';
-import { paprUserScope } from '../../utils/paprUserId.js';
+import { paprMemoryScopeSpread } from '../../utils/memoryScopeResolver.js';
 import { getProjectPathInfo } from './codeIndexPaths.js';
 
 export interface CodeFileMetadata {
@@ -73,7 +73,7 @@ export class CodeIndexerService {
     schemaId: string,
     paprDir?: string
   ) {
-    this.paprDir = paprDir || path.join(os.homedir(), 'Papr');
+    this.paprDir = paprDir || getPaprRoot();
     this.schemaId = schemaId;
   }
 
@@ -466,15 +466,18 @@ export class CodeIndexerService {
     if (metadata.created_at) paprMetadata.created_at = metadata.created_at.toISOString();
     if (metadata.updated_at) paprMetadata.updated_at = metadata.updated_at.toISOString();
     
+    const memoryScope = await paprMemoryScopeSpread({
+      addPolicy: buildCodeIndexAddPolicy(this.schemaId),
+    });
+
     await this.client.memory.add({
       content: `Project: ${metadata.name}\nType: ${metadata.type}\nID: ${metadata.project_id}`,
-      ...paprUserScope(),
+      ...memoryScope,
       metadata: {
         role: 'assistant',
         category: 'learning',
         customMetadata: paprMetadata
       },
-      policy: buildCodeIndexAddPolicy(this.schemaId),
     });
   }
   
@@ -512,15 +515,18 @@ export class CodeIndexerService {
       paprMetadata.data_source_path = fileMetadata.data_source_path;
     }
     
+    const fileMemoryScope = await paprMemoryScopeSpread({
+      addPolicy: buildCodeIndexAddPolicy(this.schemaId),
+    });
+
     await this.client.memory.add({
       content: truncatedContent,
-      ...paprUserScope(),
+      ...fileMemoryScope,
       metadata: {
         role: 'assistant',
         category: 'learning',
         customMetadata: paprMetadata
       },
-      policy: buildCodeIndexAddPolicy(this.schemaId),
     }).catch((error: unknown) => {
       const err = error as {
         statusCode?: number;
