@@ -91,7 +91,7 @@ import {
 } from "./services/CloudAppPublishService.js";
 import { getCloudAppInstallService } from "./services/CloudAppInstallService.js";
 import {
-  readAppRequirements,
+  discoverAppRequirements,
   writeAppRequirements,
 } from "./services/cloudAppRequirements.js";
 import type { RequiredKeySpec } from "../core/types/bundles.js";
@@ -1370,8 +1370,8 @@ async function startGateway(): Promise<void> {
     app.get("/api/cloud/apps/:appId/requirements", async (req, res) => {
       try {
         const paprDir = getPaprRoot();
-        const requirements = readAppRequirements(paprDir, req.params.appId);
-        res.json({ requirements });
+        const discovery = await discoverAppRequirements(paprDir, req.params.appId);
+        res.json(discovery);
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }

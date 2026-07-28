@@ -2125,8 +2125,10 @@ await fetch('/api/db/write', { method: 'POST', headers: { 'Content-Type': 'appli
 **Papr Memory from mini-apps:** There is **no** \`/api/memory/add\`, \`/api/memory/search\`, or \`/api/memory/graph\`. Never call \`memory.papr.ai\` from browser code. Use **backend handlers** (\`manifest.json\` \`keys: ["PAPR_API_KEY"]\`) that call \`POST /v1/memory\`, \`POST /v1/memory/search\`, or \`POST /v1/graphql\`. From chat, use \`add_agent_memory\` / \`search_agent_memory\`. \`/api/cloud/*\` is for \`/v1/cloud/*\` (repos/vault/publish) only — not memory CRUD.
 
 **Live mini-app updates (REQUIRED — SSE push, never poll):**
-- Import \`subscribeJobEvents\` from \`/__papr__/papr-job-events.ts\` (or copy \`papr-job-events.ts\` into the app)
+- Import \`subscribeJobEvents\` from \`/__papr__/papr-job-events.ts\` only — **never** copy or shim locally; esbuild leaves it external, gateway/cloud serves it at runtime
 - SSE endpoint: \`/api/jobs/events\` — works on desktop gateway **and** cloud \`apps.papr.ai\`
+- **Initial load:** call \`loadData()\` once on page load, then \`onDbChanged\` for live refresh after job writes
+- **Turso (cloud data):** Linked job DBs auto-sync to Turso when \`create_job({ appIds })\` links them — file watcher + debounced push + Sync now. Web apps read the same \`/api/db/query\` against Turso; no agent action needed for sync
 
 **Decision tree — pick the right callback (never poll):**
 | Job output model | Subscribe callback | App refresh |
@@ -2139,11 +2141,12 @@ await fetch('/api/db/write', { method: 'POST', headers: { 'Content-Type': 'appli
 import { subscribeJobEvents } from '/__papr__/papr-job-events.ts';
 
 // DB-backed app (preferred for dashboards):
-const unsub = subscribeJobEvents({
+subscribeJobEvents({
   jobIds: [JOB_ID],
-  onDbChanged: () => loadData(),           // PRIMARY — refresh when job writes $APP_DB
-  onStatusChanged: (e) => updateBadge(e), // secondary — running/completed badge
+  onDbChanged: () => loadData(),           // refresh after job writes $APP_DB
+  onStatusChanged: (e) => updateBadge(e), // running/completed badge
 });
+loadData(); // initial query — still required on page load
 
 // Trigger (fire-and-forget — events handle refresh; default on desktop AND cloud):
 await fetch('/api/jobs/run', { method: 'POST', body: JSON.stringify({ jobId: JOB_ID }) });

@@ -21,6 +21,10 @@ import {
 } from "./security.js";
 import { wrapUntrustedContent } from "./contentProvenance.js";
 import {
+  buildAppDbBashGuidance,
+  formatAppDbGuidanceBlock,
+} from "../utils/appDbGuidance.js";
+import {
   buildSqlitePathWarnings,
   formatSqlitePathWarningBlock,
 } from "../utils/sqlitePathGuard.js";
@@ -638,6 +642,11 @@ export async function executeBashCommand(
     });
     if (sqliteWarnings.length > 0) {
       sanitizedStdout += formatSqlitePathWarningBlock(sqliteWarnings);
+    }
+
+    const appDbGuidance = buildAppDbBashGuidance(command);
+    if (appDbGuidance) {
+      sanitizedStdout += formatAppDbGuidanceBlock(appDbGuidance);
     }
 
     void import("../../gateway/services/toolCapture/ToolCaptureService.js")

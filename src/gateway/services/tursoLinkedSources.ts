@@ -97,6 +97,19 @@ export function linkedSourceSyncKey(source: TursoLinkedSource): string {
   return source.dbId ?? source.jobId ?? path.normalize(source.dbPath);
 }
 
+/** Other sync-state keys for the same linked DB (registry dbId vs job UUID). */
+export function linkedSourceAlternateKeys(source: TursoLinkedSource): string[] {
+  const syncKey = linkedSourceSyncKey(source);
+  const keys: string[] = [];
+  if (source.jobId && source.jobId !== syncKey) {
+    keys.push(source.jobId);
+  }
+  if (source.dbId && source.dbId !== syncKey) {
+    keys.push(source.dbId);
+  }
+  return keys;
+}
+
 export function findLinkedSourceForJob(
   sources: readonly TursoLinkedSource[],
   syncKey: string,

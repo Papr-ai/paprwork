@@ -49,17 +49,55 @@ export function AppsView() {
   const { createTab, switchToTab } = useTabs();
   const papr = usePaprNamespace();
 
-  const namespaceCommunityLabel = papr.namespaceName?.trim()
-    ? `${papr.namespaceName} Community`
-    : "Workspace Community";
-
   const showNamespaceTabs = papr.isLoggedIn && Boolean(papr.namespaceId);
+
+  const teamAppsTabTitle = papr.namespaceName?.trim()
+    ? `Team and public apps in ${papr.namespaceName}`
+    : "Team and public apps in your workspace";
+
+  const renderLibraryFilters = () => (
+    <>
+      <select
+        className="apps-view__inline-select"
+        aria-label="Filter apps"
+        value={statusFilter}
+        onChange={(event) =>
+          setStatusFilter(event.target.value as StatusFilter)
+        }
+      >
+        <option value="all">Current apps</option>
+        <option value="favorites">Favorites</option>
+        <option value="published">
+          Published
+          {statusCounts.published ? ` (${statusCounts.published})` : ""}
+        </option>
+        <option value="draft">
+          Drafts{statusCounts.draft ? ` (${statusCounts.draft})` : ""}
+        </option>
+        <option value="archived">
+          Archived
+          {statusCounts.archived ? ` (${statusCounts.archived})` : ""}
+        </option>
+      </select>
+      <select
+        className="apps-view__inline-select"
+        aria-label="Sort apps"
+        value={sortBy}
+        onChange={(event) => setSortBy(event.target.value as SortOption)}
+      >
+        <option value="recent">Recently opened</option>
+        <option value="name">Name A–Z</option>
+      </select>
+    </>
+  );
 
   const [viewTab, setViewTab] = useState<ViewTab>("my-apps");
   const [sortBy, setSortBy] = useState<SortOption>("recent");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [publishRevision, setPublishRevision] = useState(0);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [catalogSearchQuery, setCatalogSearchQuery] = useState("");
+  const [catalogRefreshToken, setCatalogRefreshToken] = useState(0);
 
   useEffect(() => {
     const onWorkspaceChanged = () => {
@@ -91,6 +129,10 @@ export function AppsView() {
       setViewTab("my-apps");
     }
   }, [showNamespaceTabs, viewTab]);
+
+  useEffect(() => {
+    setCatalogSearchQuery("");
+  }, [viewTab]);
 
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchQuery(e.target.value);
@@ -255,12 +297,14 @@ export function AppsView() {
 
   return (
     <div className="apps-view">
-      {/* Header */}
-      <div className="apps-view__header">
-        <h2 className="apps-view__title">Apps</h2>
+      <header className="apps-view__topbar">
+        <h2 className="apps-view__brand">Apps</h2>
 
-        <div className="apps-view__tabs">
+        <div className="apps-view__tabs" role="tablist" aria-label="Apps library">
           <button
+            type="button"
+            role="tab"
+            aria-selected={viewTab === "my-apps"}
             className={`apps-view__tab ${viewTab === "my-apps" ? "apps-view__tab--active" : ""}`}
             onClick={() => setViewTab("my-apps")}
           >
@@ -268,25 +312,86 @@ export function AppsView() {
           </button>
           {showNamespaceTabs ? (
             <button
+              type="button"
+              role="tab"
+              aria-selected={viewTab === "namespace-community"}
               className={`apps-view__tab ${viewTab === "namespace-community" ? "apps-view__tab--active" : ""}`}
               onClick={() => setViewTab("namespace-community")}
-              title={`Team and public apps in ${papr.namespaceName ?? "your workspace"}`}
+              title={teamAppsTabTitle}
             >
-              {namespaceCommunityLabel}
+              Team Apps
             </button>
           ) : null}
           <button
+            type="button"
+            role="tab"
+            aria-selected={viewTab === "community"}
             className={`apps-view__tab ${viewTab === "community" ? "apps-view__tab--active" : ""}`}
             onClick={() => setViewTab("community")}
           >
-            Community
+            Community Apps
           </button>
         </div>
-      </div>
+
+        <div className="apps-view__topbar-grow" />
+
+        {viewTab === "my-apps" ? (
+          <>
+            <input
+              type="search"
+              className="apps-view__topbar-search"
+              placeholder="Search apps…"
+              value={searchQuery}
+              onChange={handleSearch}
+              aria-label="Search apps"
+            />
+            <button
+              type="button"
+              onClick={() => setShowCreateModal(true)}
+              className="apps-view__create-btn"
+            >
+              + Create
+            </button>
+          </>
+        ) : (
+          <>
+            <input
+              type="search"
+              className="apps-view__topbar-search"
+              placeholder={
+                viewTab === "namespace-community"
+                  ? "Search team apps…"
+                  : "Search community apps…"
+              }
+              value={catalogSearchQuery}
+              onChange={(event) => setCatalogSearchQuery(event.target.value)}
+              aria-label={
+                viewTab === "namespace-community"
+                  ? "Search team apps"
+                  : "Search community apps"
+              }
+            />
+            <button
+              type="button"
+              className="apps-view__topbar-refresh"
+              aria-label="Refresh catalog"
+              onClick={() => setCatalogRefreshToken((token) => token + 1)}
+            >
+              ↻
+            </button>
+          </>
+        )}
+      </header>
 
       {viewTab === "community" ? (
         <div className="apps-view__content">
-          <CommunityAppsView scope="global" />
+          <CommunityAppsView
+            scope="global"
+            searchQuery={catalogSearchQuery}
+            onSearchQueryChange={setCatalogSearchQuery}
+            hideToolbar
+            refreshToken={catalogRefreshToken}
+          />
         </div>
       ) : viewTab === "namespace-community" ? (
         <div className="apps-view__content">
@@ -294,82 +399,25 @@ export function AppsView() {
             scope="namespace"
             namespaceId={papr.namespaceId}
             namespaceName={papr.namespaceName}
-            userId={papr.userId}
+            searchQuery={catalogSearchQuery}
+            onSearchQueryChange={setCatalogSearchQuery}
+            hideToolbar
+            refreshToken={catalogRefreshToken}
           />
         </div>
       ) : (
         <>
-          {/* Controls: search left, sort center, create right */}
-          <div className="apps-view__controls">
-            <div className="apps-view__controls-left">
-              <input
-                type="text"
-                className="apps-view__search"
-                placeholder="Search by name, purpose, tag, or cloud app…"
-                value={searchQuery}
-                onChange={handleSearch}
-              />
-              <label className="apps-view__control-field">
-                <span>Filter</span>
-                <select
-                  value={statusFilter}
-                  onChange={(event) =>
-                    setStatusFilter(event.target.value as StatusFilter)
-                  }
-                >
-                  <option value="all">Current apps</option>
-                  <option value="favorites">Favorites</option>
-                  <option value="published">
-                    Published
-                    {statusCounts.published
-                      ? ` (${statusCounts.published})`
-                      : ""}
-                  </option>
-                  <option value="draft">
-                    Drafts{statusCounts.draft ? ` (${statusCounts.draft})` : ""}
-                  </option>
-                  <option value="archived">
-                    Archived
-                    {statusCounts.archived ? ` (${statusCounts.archived})` : ""}
-                  </option>
-                </select>
-              </label>
-              <label className="apps-view__control-field">
-                <span>Sort by</span>
-                <select
-                  value={sortBy}
-                  onChange={(event) =>
-                    setSortBy(event.target.value as SortOption)
-                  }
-                >
-                  <option value="recent">Recently opened</option>
-                  <option value="name">Name A–Z</option>
-                </select>
-              </label>
-            </div>
-
-            <button
-              onClick={() => setShowCreateModal(true)}
-              className="apps-view__create-btn"
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-              >
-                <line x1="12" y1="5" x2="12" y2="19" />
-                <line x1="5" y1="12" x2="19" y2="12" />
-              </svg>
-              Create App
-            </button>
-          </div>
-
-          {/* Content */}
           <div className="apps-view__content">
+            {!loading ? (
+              <div className="apps-view__library-toolbar">
+                <span className="apps-view__section-label">App library</span>
+                <div className="apps-view__library-toolbar-actions">
+                  {renderLibraryFilters()}
+                  <span className="apps-view__library-count">{apps.length} apps</span>
+                </div>
+              </div>
+            ) : null}
+
             {loading && (
               <div className="apps-view__empty">
                 <p>Loading apps...</p>
@@ -505,12 +553,6 @@ export function AppsView() {
                 )}
 
                 <section className="apps-view__section">
-                  <div className="apps-view__section-heading">
-                    <span className="apps-view__section-label">
-                      App library
-                    </span>
-                    <span>{apps.length} apps</span>
-                  </div>
                   <div className="apps-view__grid">
                     {apps.map((app) => (
                       <AppCard

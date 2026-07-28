@@ -7,6 +7,7 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { getPaprClient, handlePaprToolError } from "./paprClient.js";
 import { resolveConversationId } from "./chatScope.js";
+import { getCurrentChatId } from "./context.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -192,9 +193,9 @@ export const uploadDocumentToMemoryTool = createTool({
       const { paprMemoryScopeSpread } = await import(
         "../../gateway/utils/memoryScopeResolver.js"
       );
-      const resolvedChatId = args.chatId
-        ? resolveConversationId(args.chatId)
-        : undefined;
+      const resolvedChatId = resolveConversationId(
+        args.chatId ?? getCurrentChatId() ?? undefined,
+      );
       const memoryScope = await paprMemoryScopeSpread({
         chatId: resolvedChatId,
       });
@@ -203,7 +204,7 @@ export const uploadDocumentToMemoryTool = createTool({
         customMetadata: {
           file_name: fileName,
           source: "paprwork_attachment",
-          ...(args.chatId ? { chat_id: args.chatId } : {}),
+          ...(resolvedChatId ? { chat_id: resolvedChatId } : {}),
         },
       };
 

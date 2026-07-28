@@ -12,6 +12,11 @@ import {
   type MemoryScopeContext,
 } from "../../core/utils/memoryScope.js";
 import type { MemoryAddPolicy } from "@papr/memory/resources/shared.js";
+import {
+  applyExplicitReadAclToPolicy,
+  hasExplicitMemoryReadAcl,
+  type ExplicitMemoryReadAclInput,
+} from "../../core/utils/memoryAcl.js";
 import { loadSettings } from "../services/settingsStore.js";
 import { getPaprUserId } from "./paprUserId.js";
 
@@ -53,19 +58,38 @@ export async function buildPaprMemoryWriteScope(input?: {
   chatId?: string;
   explicitAudience?: MemoryAudience;
   addPolicy?: MemoryAddPolicy;
+  /** When set, replaces chat/settings read ACL (writer still gets write ACL). */
+  explicitReadAcl?: ExplicitMemoryReadAclInput;
 }): Promise<{
   external_user_id?: string;
   namespace_id?: string;
   policy?: MemoryAddPolicy;
 }> {
+  const ctx = getMemoryScopeContext();
   const audience =
     input?.explicitAudience ??
     (await resolveMemoryAudienceForChat(input?.chatId));
-  const fields = buildMemoryScopeFields(audience, getMemoryScopeContext());
+
+  const useExplicitRead =
+    input?.explicitReadAcl &&
+    hasExplicitMemoryReadAcl(input.explicitReadAcl);
+
+  const scopeAudience = useExplicitRead ? "user" : audience;
+  const fields = buildMemoryScopeFields(scopeAudience, ctx);
+
+  let policy = mergeMemoryAddPolicy(input?.addPolicy, fields.policy);
+
+  if (useExplicitRead && input.explicitReadAcl && ctx.userId) {
+    policy = applyExplicitReadAclToPolicy(policy, {
+      writerExternalUserId: ctx.userId,
+      explicitRead: input.explicitReadAcl,
+    });
+  }
+
   return {
     external_user_id: fields.external_user_id,
     namespace_id: fields.namespace_id,
-    policy: mergeMemoryAddPolicy(input?.addPolicy, fields.policy),
+    policy,
   };
 }
 

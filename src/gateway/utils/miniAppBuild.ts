@@ -17,6 +17,37 @@ export interface MiniAppBuildResult {
   legacy: boolean;
 }
 
+/** esbuild plugin: /__papr__/ SDK imports are runtime-served, never bundled. */
+export function createPaprSdkExternalPlugin(): import("esbuild").Plugin {
+  return {
+    name: "papr-sdk-external",
+    setup(build) {
+      build.onResolve({ filter: /^\/__papr__\// }, (args) => ({
+        path: args.path,
+        external: true,
+      }));
+    },
+  };
+}
+
+/** Clarify /__papr__/ resolve failures — valid import, platform must externalize it. */
+export function formatMiniAppBuildErrorMessage(raw: string): string {
+  const trimmed = raw.trim();
+  if (
+    /\/__papr__\//.test(trimmed) &&
+    (/could not resolve/i.test(trimmed) || /can't resolve/i.test(trimmed))
+  ) {
+    return (
+      `${trimmed}\n\n` +
+      `This /__papr__/ import is correct — the Papr mini-app bundler must mark it external ` +
+      `(served at runtime by gateway/cloud host, not bundled into dist/app.js). ` +
+      `Do NOT add local shim files or copy papr-job-events.ts into the app. ` +
+      `If you see this after a Paprwork upgrade, restart the gateway (npm start).`
+    );
+  }
+  return trimmed;
+}
+
 /**
  * Detect whether an app uses the bundled architecture (single app.ts entry with imports)
  * vs legacy multi-<script> pattern. Only bundled apps go through esbuild.build().
@@ -77,6 +108,7 @@ export async function buildMiniApp(appDir: string): Promise<MiniAppBuildResult> 
         ".tsx": "tsx",
         ".css": "css",
       },
+      plugins: [createPaprSdkExternalPlugin()],
       // Emit CSS as a separate file (not inlined into JS)
       // esbuild automatically extracts `import './foo.css'` into dist/app.css
     });
@@ -116,10 +148,12 @@ export async function buildMiniApp(appDir: string): Promise<MiniAppBuildResult> 
       );
       errors.push({
         file: entryFile,
-        message: formatEsbuildErrorMessage(
-          buildError instanceof Error
-            ? buildError.message
-            : String(buildError),
+        message: formatMiniAppBuildErrorMessage(
+          formatEsbuildErrorMessage(
+            buildError instanceof Error
+              ? buildError.message
+              : String(buildError),
+          ),
         ),
         severity: "error",
       });
@@ -153,7 +187,7 @@ function formatEsbuildMessage(
     file,
     line: msg.location?.line,
     column: msg.location?.column,
-    message: msg.text,
+    message: formatMiniAppBuildErrorMessage(msg.text),
     severity,
   };
 }

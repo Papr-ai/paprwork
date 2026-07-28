@@ -59,6 +59,8 @@ import { resetCodeIndexingForWorkspaceSwitch } from "./CodeIndexingService.js";
 import { resetToolCaptureLedgerForWorkspaceSwitch } from "./toolCapture/ToolCaptureLedger.js";
 import { broadcast } from "../websocket/index.js";
 import { getCustomKeysService } from "./CustomKeysService.js";
+import { getTursoSyncBridge } from "./TursoSyncBridge.js";
+import { getVaultSyncService } from "./VaultSyncService.js";
 
 export interface SwitchWorkspaceInput {
   organizationId: string;
@@ -169,6 +171,50 @@ async function restartCloudSyncIfEnabled(): Promise<void> {
   await cloudSync.initialize();
 }
 
+async function refreshTursoForWorkspaceSwitch(): Promise<void> {
+  if (process.env.TURSO_SYNC_ENABLED === "false") {
+    return;
+  }
+
+  const bridge = getTursoSyncBridge();
+  if (!bridge) {
+    return;
+  }
+
+  bridge.invalidateCredentialsCache();
+  bridge.invalidateLinkedSourcesCache();
+
+  try {
+    const { refreshTursoLinkedDbWatcher } = await import(
+      "./TursoLinkedDbWatcher.js"
+    );
+    await refreshTursoLinkedDbWatcher();
+    console.log("[WorkspaceSwitch] Turso linked-db watcher refreshed");
+  } catch (err) {
+    console.warn(
+      "[WorkspaceSwitch] Turso watcher refresh failed:",
+      (err as Error).message.slice(0, 120),
+    );
+  }
+}
+
+async function refreshVaultForWorkspaceSwitch(): Promise<void> {
+  const vault = getVaultSyncService();
+  if (!vault) {
+    return;
+  }
+
+  try {
+    await vault.syncForWorkspaceSwitch();
+    console.log("[WorkspaceSwitch] Vault re-synced for active workspace");
+  } catch (err) {
+    console.warn(
+      "[WorkspaceSwitch] Vault re-sync failed:",
+      (err as Error).message.slice(0, 120),
+    );
+  }
+}
+
 export async function switchActiveWorkspace(
   input: SwitchWorkspaceInput,
 ): Promise<SwitchWorkspaceResult> {
@@ -176,11 +222,15 @@ export async function switchActiveWorkspace(
   await reinitializeWorkspaceServices({ paprApiKey: input.paprApiKey });
   getCustomKeysService().invalidateCache();
   void restartCloudSyncIfEnabled();
+  void refreshTursoForWorkspaceSwitch();
+  void refreshVaultForWorkspaceSwitch();
 
   const runningSync = getCloudSyncService();
   console.log(
     `[WorkspaceSwitch] Active workspace: org=${pointer.organizationId} ns=${pointer.namespaceId} home=${pointer.paprHome}` +
-      (runningSync ? " (cloud sync restarted)" : ""),
+      (runningSync ? " (cloud sync restarted)" : "") +
+      (getTursoSyncBridge() ? " (turso refreshed)" : "") +
+      (getVaultSyncService() ? " (vault re-sync scheduled)" : ""),
   );
 
   broadcast({ type: "app:list-updated" });

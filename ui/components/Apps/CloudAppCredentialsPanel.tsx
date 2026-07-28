@@ -51,6 +51,7 @@ export function CloudAppCredentialsPanel({
   onSaved,
 }: CloudAppCredentialsPanelProps) {
   const [rows, setRows] = useState<DraftRow[]>([]);
+  const [detectedKeyNames, setDetectedKeyNames] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,8 +61,9 @@ export function CloudAppCredentialsPanel({
     setLoading(true);
     setError(null);
     try {
-      const requirements = await fetchAppRequirements(appId);
-      setRows(requirements.map(toDraft));
+      const discovery = await fetchAppRequirements(appId);
+      setRows(discovery.requirements.map(toDraft));
+      setDetectedKeyNames(discovery.detectedKeyNames ?? []);
     } catch (err) {
       setError((err as Error).message.slice(0, 160));
     } finally {
@@ -112,6 +114,7 @@ export function CloudAppCredentialsPanel({
     setMessage(null);
     try {
       await saveAppRequirements(appId, normalized);
+      setDetectedKeyNames([]);
       setMessage("Saved. Republish to update the live app catalog.");
       onSaved?.();
     } catch (err) {
@@ -138,8 +141,18 @@ export function CloudAppCredentialsPanel({
         <>
           {rows.length === 0 ? (
             <p className="share-sheet__footnote">
-              No keys configured. Add keys your app uses via{" "}
-              <code>${"{KEY_NAME}"}</code> in jobs or bash.
+              No keys detected yet. Declare keys in{" "}
+              <code>backend/manifest.json</code> action <code>keys</code> arrays,
+              linked job commands (<code>${"{KEY_NAME}"}</code>), or add them
+              manually below.
+            </p>
+          ) : null}
+
+          {detectedKeyNames.length > 0 ? (
+            <p className="share-sheet__footnote">
+              Detected from app backend and linked jobs:{" "}
+              <strong>{detectedKeyNames.join(", ")}</strong>. Save credentials
+              to include them in the published catalog.
             </p>
           ) : null}
 

@@ -88,6 +88,26 @@ describe("VaultSyncService", () => {
     expect(content).toContain('"disabled"');
     expect(content).toContain("No PAPR_API_KEY");
   });
+
+  it("pulls vault keys for user, namespace, and org scopes", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    expect(content).toContain("vaultPullScopes");
+    expect(content).toContain('scopes.push("namespace")');
+    expect(content).toContain('scopes.push("org")');
+    expect(content).toContain("fetchVaultKeyNamesForScope");
+  });
+
+  it("has syncForWorkspaceSwitch for org/namespace changes", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    expect(content).toContain("async syncForWorkspaceSwitch()");
+    expect(content).toContain("Re-syncing vault for workspace switch");
+  });
 });
 
 describe("CustomKeysService change listener", () => {
@@ -184,5 +204,19 @@ describe("Vault API models alignment", () => {
   it("VaultKeyInfo matches server model", () => {
     expect(vaultContent).toContain("name: string");
     expect(vaultContent).toContain("syncedAt: string");
+  });
+});
+
+describe("Workspace switch cloud hooks", () => {
+  it("refreshes Turso and vault on workspace switch", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/workspaceSwitchService.ts"),
+      "utf-8",
+    );
+    expect(content).toContain("refreshTursoForWorkspaceSwitch");
+    expect(content).toContain("refreshVaultForWorkspaceSwitch");
+    expect(content).toContain("invalidateCredentialsCache");
+    expect(content).toContain("refreshTursoLinkedDbWatcher");
+    expect(content).toContain("syncForWorkspaceSwitch");
   });
 });

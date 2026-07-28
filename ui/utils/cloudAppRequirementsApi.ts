@@ -10,15 +10,25 @@ const GATEWAY =
     ? `http://${import.meta.env.VITE_GATEWAY_HOST || "localhost"}:${import.meta.env.VITE_GATEWAY_PORT || "18789"}`
     : "http://localhost:18789";
 
+export interface AppRequirementsDiscovery {
+  requirements: RequiredKeySpec[];
+  savedRequirements?: RequiredKeySpec[];
+  detectedKeyNames?: string[];
+}
+
 export async function fetchAppRequirements(
   appId: string,
-): Promise<RequiredKeySpec[]> {
+): Promise<AppRequirementsDiscovery> {
   const res = await fetch(`${GATEWAY}/api/cloud/apps/${appId}/requirements`);
   if (!res.ok) {
     throw new Error(`Failed to load requirements (${res.status})`);
   }
-  const body = (await res.json()) as { requirements?: RequiredKeySpec[] };
-  return body.requirements ?? [];
+  const body = (await res.json()) as AppRequirementsDiscovery;
+  return {
+    requirements: body.requirements ?? [],
+    savedRequirements: body.savedRequirements ?? [],
+    detectedKeyNames: body.detectedKeyNames ?? [],
+  };
 }
 
 export async function saveAppRequirements(

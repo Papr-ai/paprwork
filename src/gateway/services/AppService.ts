@@ -540,6 +540,7 @@ export class AppService {
       "./DatabaseRegistryService.js"
     );
     await initializeDatabaseRegistry();
+    await this.repairDataSourceDbIds();
     await this.startWatchingApps();
     this.initialized = true;
     console.log(`[AppService] Initialized with ${this.apps.size} apps`);
@@ -2353,6 +2354,39 @@ export class AppService {
     await fs.writeFile(dbTsPath, buildAppDbTsContent(appId, alias), "utf8");
   }
 
+  /**
+   * Fix data-sources.json entries whose dbId drifted from the registry (path hash).
+   * Prevents cloud "No registry record for dbId" after promotion or manual edits.
+   */
+  private async repairDataSourceDbIds(): Promise<void> {
+    const { getDatabaseRegistryService } = await import(
+      "./DatabaseRegistryService.js"
+    );
+    const registry = getDatabaseRegistryService();
+
+    for (const appId of this.apps.keys()) {
+      const config = await this.getDataSourcesConfig(appId);
+      let changed = false;
+      const sources = config.sources.map((source) => {
+        if (!source.dbPath) {
+          return source;
+        }
+        const repaired = registry.enrichSource(source);
+        if (repaired.dbId !== source.dbId) {
+          changed = true;
+        }
+        return repaired;
+      });
+
+      if (changed) {
+        await this.writeDataSourcesConfig(appId, { ...config, sources });
+        console.log(
+          `[AppService] Repaired data-sources dbId for app ${appId}`,
+        );
+      }
+    }
+  }
+
   async linkAppDataSource(
     appId: string,
     source: Omit<AppDataSource, "linkedAt"> & {
@@ -2385,7 +2419,6 @@ export class AppService {
     }
 
     let dbPath = sourceFields.dbPath;
-    let dbId = sourceFields.dbId;
     let jobDirForScratch: string | undefined;
 
     if (sourceFields.jobId) {
@@ -2412,7 +2445,6 @@ export class AppService {
           jobDirForScratchReset: jobDirForScratch,
         });
         dbPath = promoted.dbPath;
-        dbId = promoted.dbId;
         console.log(
           `[AppService] Promoted job database → ${dbPath} (${promoted.dbId})`,
         );
@@ -2425,12 +2457,13 @@ export class AppService {
     const registry = await initializeDatabaseRegistry();
     const record = await registry.ensureForPath(dbPath, {
       label: sourceFields.alias,
+      ownerJobId: sourceFields.jobId,
     });
 
     const linked: AppDataSource = {
       ...sourceFields,
       dbPath,
-      dbId: dbId ?? record.dbId,
+      dbId: record.dbId,
       ...(role ? { role } : {}),
       linkedAt: new Date().toISOString(),
     };

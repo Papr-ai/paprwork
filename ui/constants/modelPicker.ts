@@ -123,9 +123,10 @@ export function resolveEnabledPickerModelIds(
 export function getPickerModels(
   enabledIds: string[] | null | undefined,
 ): AIModel[] {
-  return resolveEnabledPickerModelIds(enabledIds)
-    .map((id) => getModelById(id))
-    .filter((model): model is AIModel => model !== undefined);
+  const enabledSet = new Set(resolveEnabledPickerModelIds(enabledIds));
+  return CHAT_MODELS.filter(
+    (model) => enabledSet.has(model.id) && isChatPickerModelId(model.id),
+  );
 }
 
 /** Full catalog grouped by provider — for Settings toggles. */

@@ -47,12 +47,17 @@ export async function syncProfileToGatewaySettings(
   displayName?: string,
   imageUrl?: string,
   organization?: string,
+  workspaceId?: string,
+  workspaceName?: string,
 ): Promise<void> {
   try {
     const fsP = await import("fs/promises");
     const pathM = await import("path");
     const { invalidatePaprUserIdCache } = await import(
       "../../gateway/utils/paprUserId.js"
+    );
+    const { invalidateGatewayPaprProfileCache } = await import(
+      "../../gateway/utils/paprGatewayProfile.js"
     );
     const settingsPath = path.join(getPaprDataDir(), "settings.json");
     let settings: Record<string, unknown> = {};
@@ -75,9 +80,16 @@ export async function syncProfileToGatewaySettings(
     if (organization?.trim()) {
       profile.organization = organization.trim();
     }
+    if (workspaceId?.trim()) {
+      profile.paprWorkspaceId = workspaceId.trim();
+    }
+    if (workspaceName?.trim()) {
+      profile.paprWorkspaceName = workspaceName.trim();
+    }
     await fsP.mkdir(pathM.dirname(settingsPath), { recursive: true });
     await fsP.writeFile(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
     invalidatePaprUserIdCache();
+    invalidateGatewayPaprProfileCache();
     console.log(`[PaprLogin] Synced profile to gateway settings: ${email} (${userId})`);
   } catch (e) {
     console.warn("[PaprLogin] Failed to sync profile to gateway settings:", e);
@@ -90,6 +102,9 @@ export async function clearPaprUserIdFromGatewaySettings(): Promise<void> {
     const fsP = await import("fs/promises");
     const { invalidatePaprUserIdCache } = await import(
       "../../gateway/utils/paprUserId.js"
+    );
+    const { invalidateGatewayPaprProfileCache } = await import(
+      "../../gateway/utils/paprGatewayProfile.js"
     );
     const settingsPath = path.join(getPaprDataDir(), "settings.json");
     let settings: Record<string, unknown> = {};
@@ -104,8 +119,11 @@ export async function clearPaprUserIdFromGatewaySettings(): Promise<void> {
     }
     const profile = settings.profile as Record<string, string>;
     delete profile.paprUserId;
+    delete profile.paprWorkspaceId;
+    delete profile.paprWorkspaceName;
     await fsP.writeFile(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
     invalidatePaprUserIdCache();
+    invalidateGatewayPaprProfileCache();
     console.log("[PaprLogin] Cleared paprUserId from gateway settings");
   } catch (e) {
     console.warn("[PaprLogin] Failed to clear paprUserId from gateway settings:", e);
@@ -2106,6 +2124,8 @@ async function completePaprAuthCallback(
     displayName || "",
     profileImage,
     provision.namespaceName,
+    workspaceInfo.workspaceId,
+    workspaceInfo.workspaceName,
   );
 
   console.log("[PaprLogin] Login complete. API key stored as PAPR_API_KEY.");

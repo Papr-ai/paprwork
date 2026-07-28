@@ -209,8 +209,8 @@ function markOwnedEntries(
 }
 
 /**
- * Public community listings must be public_read. For apps this user owns locally,
- * local share prefs win over a stale memory-server community index.
+ * Workspace / community catalog inclusion rules.
+ * When allowTeam is set, team-shared apps (including ones you published) belong in Team Apps.
  */
 function shouldIncludeInPublicCommunity(
   entry: CommunityCatalogEntry,
@@ -222,12 +222,15 @@ function shouldIncludeInPublicCommunity(
     return true;
   }
 
-  if (!options?.allowTeam && isTeamSharedVisibility(entry.visibility)) {
-    return false;
+  if (isTeamSharedVisibility(entry.visibility)) {
+    return options?.allowTeam === true;
   }
 
   if (entry.appId && ownedAppIds.has(entry.appId)) {
     const sharing = resolveSharingSettings(getAppPublishPrefs(entry.appId, paprDir));
+    if (options?.allowTeam && sharing.loginAccess === "team") {
+      return true;
+    }
     return sharing.loginAccess === "public";
   }
 
@@ -245,8 +248,12 @@ function filterPublicCommunityEntries(
   );
 }
 
-async function buildLocalPublicCloudEntries(
+async function buildLocalCloudEntriesForSharing(
   paprDir: string,
+  options: {
+    loginAccess: "public" | "team";
+    namespaceId?: string;
+  },
 ): Promise<CommunityCatalogEntry[]> {
   const meta = loadLocalAppMeta(paprDir);
   const publishService = getCloudAppPublishService();
@@ -255,7 +262,7 @@ async function buildLocalPublicCloudEntries(
   for (const [appId, appMeta] of meta) {
     const prefs = getAppPublishPrefs(appId, paprDir);
     const sharing = resolveSharingSettings(prefs);
-    if (sharing.loginAccess !== "public") continue;
+    if (sharing.loginAccess !== options.loginAccess) continue;
 
     let config: CloudPublishConfig;
     try {
@@ -275,23 +282,29 @@ async function buildLocalPublicCloudEntries(
       ) ?? config.shareUrl;
 
     const fileRequirements = readAppRequirements(paprDir, appId);
+    const teamShared = options.loginAccess === "team";
 
     entries.push({
       catalogId: `cloud:${appId}`,
       source: "cloud",
       name: appMeta.title,
-      description: appMeta.description || "Public app on Papr Cloud",
+      description:
+        appMeta.description ||
+        (teamShared
+          ? "Team-shared app on Papr Cloud"
+          : "Public app on Papr Cloud"),
       version: "cloud",
       author: "You",
-      tags: ["cloud", "public"],
+      tags: teamShared ? ["cloud", "team"] : ["cloud", "public"],
       icon: appMeta.icon,
       appId,
-      namespaceId: undefined,
+      namespaceId: options.namespaceId,
       slug: config.slug,
       liveUrl,
       codeInstallable: communityCodeInstallable(prefs.codeAccess ?? "off"),
       liveViewable: true,
       isOwned: true,
+      visibility: teamShared ? "team" : "public_read",
       requirements:
         fileRequirements.length > 0
           ? fileRequirements
@@ -300,6 +313,22 @@ async function buildLocalPublicCloudEntries(
   }
 
   return entries;
+}
+
+async function buildLocalPublicCloudEntries(
+  paprDir: string,
+): Promise<CommunityCatalogEntry[]> {
+  return buildLocalCloudEntriesForSharing(paprDir, { loginAccess: "public" });
+}
+
+async function buildLocalTeamSharedCloudEntries(
+  paprDir: string,
+  namespaceId: string,
+): Promise<CommunityCatalogEntry[]> {
+  return buildLocalCloudEntriesForSharing(paprDir, {
+    loginAccess: "team",
+    namespaceId,
+  });
 }
 
 export class CommunityCatalogService {
@@ -345,9 +374,7 @@ export class CommunityCatalogService {
 
   private async fetchTeamSharedEntries(
     namespaceId: string,
-    userId?: string,
   ): Promise<CommunityCatalogEntry[]> {
-    const ownedAppIds = this.ownedLocalAppIds();
     const paths = ["/v1/cloud/apps/shared-with-me", "/v1/cloud/apps/team"];
     for (const cloudPath of paths) {
       const remote = await fetchRemoteCloudCatalog(cloudPath);
@@ -357,9 +384,7 @@ export class CommunityCatalogService {
         .filter(
           (entry) =>
             entry.namespaceId === namespaceId &&
-            isTeamSharedVisibility(entry.visibility) &&
-            !(entry.appId && ownedAppIds.has(entry.appId)) &&
-            (!userId || entry.publisherUserId !== userId),
+            isTeamSharedVisibility(entry.visibility),
         );
       if (entries.length > 0) {
         return entries;
@@ -375,7 +400,6 @@ export class CommunityCatalogService {
    */
   async fetchNamespaceCommunity(
     namespaceId: string,
-    userId?: string,
   ): Promise<CommunityCatalog> {
     const ownedAppIds = this.ownedLocalAppIds();
     const workspacePath = `/v1/cloud/apps/namespace/${encodeURIComponent(namespaceId)}/workspace`;
@@ -411,7 +435,10 @@ export class CommunityCatalogService {
       fallbackUsed = publicEntries.length > 0;
     }
 
-    const teamEntries = await this.fetchTeamSharedEntries(namespaceId, userId);
+    const teamEntries = dedupeCloudEntries([
+      ...(await this.fetchTeamSharedEntries(namespaceId)),
+      ...(await buildLocalTeamSharedCloudEntries(this.paprDir, namespaceId)),
+    ]);
     const entries = markOwnedEntries(
       dedupeCloudEntries([...teamEntries, ...publicEntries]),
       ownedAppIds,
@@ -426,10 +453,9 @@ export class CommunityCatalogService {
   async fetchScopedCatalog(input: {
     scope: CommunityCatalogScope;
     namespaceId?: string;
-    userId?: string;
   }): Promise<CommunityCatalog> {
     if (input.scope === "namespace" && input.namespaceId) {
-      return this.fetchNamespaceCommunity(input.namespaceId, input.userId);
+      return this.fetchNamespaceCommunity(input.namespaceId);
     }
     return this.fetchCatalog();
   }
@@ -443,3 +469,6 @@ export function getCommunityCatalogService(): CommunityCatalogService {
   }
   return catalogService;
 }
+
+/** @internal Exported for unit tests */
+export { shouldIncludeInPublicCommunity };

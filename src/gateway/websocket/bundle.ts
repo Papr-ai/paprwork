@@ -75,14 +75,12 @@ export async function setupBundleHandlers(
           | {
               scope?: "global" | "namespace";
               namespaceId?: string;
-              userId?: string;
             }
           | undefined;
         const scope = payload?.scope ?? "global";
         const catalog = await getCommunityCatalogService().fetchScopedCatalog({
           scope,
           namespaceId: payload?.namespaceId,
-          userId: payload?.userId,
         });
         sendResponse(ws, {
           id: message.id,

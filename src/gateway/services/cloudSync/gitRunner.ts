@@ -9,6 +9,7 @@
  */
 
 import { spawn } from "node:child_process";
+import path from "node:path";
 
 export interface RunGitOptions {
   cwd?: string;
@@ -137,6 +138,18 @@ export class GitRunner {
     try {
       await this.run(["rev-parse", "--git-dir"], { cwd, timeout: 5_000 });
       return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** True when `.git` lives directly under `cwd` (not a parent directory). */
+  async isRepoAtRoot(cwd: string): Promise<boolean> {
+    try {
+      const gitDir = (await this.run(["rev-parse", "--git-dir"], { cwd, timeout: 5_000 })).trim();
+      const resolvedGitDir = path.resolve(cwd, gitDir);
+      const expectedGitDir = path.resolve(cwd, ".git");
+      return resolvedGitDir === expectedGitDir;
     } catch {
       return false;
     }

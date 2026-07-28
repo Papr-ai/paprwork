@@ -20,6 +20,8 @@ import {
   collectBackendManifestKeyNames,
   parseAppBackendManifest,
 } from "./appRuntime/appBackendManifest.js";
+import { resolveAppDependentJobIds } from "./cloudSync/resolveAppDependentJobs.js";
+import { extractCustomKeyNames } from "../utils/keySubstitution.js";
 
 export const CLOUD_APP_REQUIREMENTS_FILENAME = "requirements.json";
 
@@ -187,6 +189,36 @@ export async function readBackendManifestKeyNames(
   }
 }
 
+function readJobCommand(paprDir: string, jobId: string): string | null {
+  const jobJsonPath = path.join(paprDir, "Jobs", jobId, "job.json");
+  try {
+    const parsed = JSON.parse(fs.readFileSync(jobJsonPath, "utf8")) as {
+      command?: string;
+    };
+    return typeof parsed.command === "string" ? parsed.command : null;
+  } catch {
+    return null;
+  }
+}
+
+/** ${KEY_NAME} placeholders from jobs linked to this app (data-sources, appIds, deps). */
+export function readLinkedJobKeyNames(
+  paprDir: string,
+  appId: string,
+): string[] {
+  const names = new Set<string>();
+  for (const jobId of resolveAppDependentJobIds(paprDir, appId)) {
+    const command = readJobCommand(paprDir, jobId);
+    if (!command) {
+      continue;
+    }
+    for (const name of extractCustomKeyNames(command)) {
+      names.add(name);
+    }
+  }
+  return [...names].sort();
+}
+
 /** requirements.json merged with backend/manifest.json keys (cloud catalog source of truth). */
 export async function readEffectiveAppRequirements(
   paprDir: string,
@@ -194,7 +226,31 @@ export async function readEffectiveAppRequirements(
 ): Promise<RequiredKeySpec[]> {
   const fromFile = readAppRequirements(paprDir, appId);
   const backendKeys = await readBackendManifestKeyNames(paprDir, appId);
-  return mergeBackendKeysIntoRequirements(fromFile, backendKeys);
+  const jobKeys = readLinkedJobKeyNames(paprDir, appId);
+  return mergeBackendKeysIntoRequirements(
+    mergeBackendKeysIntoRequirements(fromFile, backendKeys),
+    jobKeys,
+  );
+}
+
+export interface AppRequirementsDiscovery {
+  requirements: RequiredKeySpec[];
+  savedRequirements: RequiredKeySpec[];
+  detectedKeyNames: string[];
+}
+
+/** Effective catalog plus which keys were auto-detected (not yet in requirements.json). */
+export async function discoverAppRequirements(
+  paprDir: string,
+  appId: string,
+): Promise<AppRequirementsDiscovery> {
+  const savedRequirements = readAppRequirements(paprDir, appId);
+  const requirements = await readEffectiveAppRequirements(paprDir, appId);
+  const savedNames = new Set(savedRequirements.map((spec) => spec.name));
+  const detectedKeyNames = requirements
+    .map((spec) => spec.name)
+    .filter((name) => !savedNames.has(name));
+  return { requirements, savedRequirements, detectedKeyNames };
 }
 
 /**
@@ -207,15 +263,19 @@ export async function ensureAppRequirementsSyncedWithBackend(
 ): Promise<{ updated: boolean; requirements: RequiredKeySpec[] }> {
   const existing = readAppRequirements(paprDir, appId);
   const backendKeys = await readBackendManifestKeyNames(paprDir, appId);
-  const merged = mergeBackendKeysIntoRequirements(existing, backendKeys);
+  const jobKeys = readLinkedJobKeyNames(paprDir, appId);
+  const merged = mergeBackendKeysIntoRequirements(
+    mergeBackendKeysIntoRequirements(existing, backendKeys),
+    jobKeys,
+  );
   const existingNames = new Set(existing.map((spec) => spec.name));
-  const added = backendKeys.filter((name) => !existingNames.has(name));
+  const added = merged.filter((spec) => !existingNames.has(spec.name));
   if (added.length === 0) {
     return { updated: false, requirements: merged };
   }
   writeAppRequirements(paprDir, appId, merged);
   console.log(
-    `[CloudRequirements] Synced backend manifest keys to requirements.json for ${appId}: ${added.join(", ")}`,
+    `[CloudRequirements] Synced detected keys to requirements.json for ${appId}: ${added.map((spec) => spec.name).join(", ")}`,
   );
   return { updated: true, requirements: merged };
 }

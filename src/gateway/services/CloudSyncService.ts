@@ -307,7 +307,7 @@ export class CloudSyncService {
     }
 
     const token = await this.ensureFreshToken();
-    if (token && this.tokenCache?.cloneUrl && (await this.gitRunner.isRepo(this.paprDir))) {
+    if (token && this.tokenCache?.cloneUrl && this.hasWorkspaceGitAtRoot()) {
       await this.updateRemoteUrl(this.buildAuthedUrl(this.tokenCache.cloneUrl, token));
     }
 
@@ -345,8 +345,8 @@ export class CloudSyncService {
       return;
     }
 
-    // Best-effort repo bootstrap — never blocks git sync
-    void this.callReposInit();
+    // Ensure GitHub repo exists before token fetch / first push
+    await this.callReposInit();
 
     const tokenResp = await this.fetchRepoToken();
     if (!tokenResp) {
@@ -370,7 +370,14 @@ export class CloudSyncService {
 
     const cloneUrl = this.buildAuthedUrl(userRepo.cloneUrl, tokenResp.token);
 
-    if (!(await this.gitRunner.isRepo(this.paprDir))) {
+    const foreignGitRoot = await this.getForeignGitRoot();
+    if (foreignGitRoot) {
+      console.warn(
+        `[CloudSync] Ignoring parent git at ${foreignGitRoot} — workspace ${this.paprDir} needs its own cloud repo`,
+      );
+    }
+
+    if (!this.hasWorkspaceGitAtRoot()) {
       await this.initialClone(cloneUrl);
     } else {
       const previousIdentity = await this.getOriginRepoIdentity();
@@ -516,7 +523,7 @@ export class CloudSyncService {
 
   // ── Token management ──────────────────────────────────────────────
 
-  private async callReposInit(): Promise<void> {
+  private async callReposInit(): Promise<boolean> {
     try {
       const resp = await cloudApiFetch("/v1/cloud/repos/init", {
         method: "POST",
@@ -525,12 +532,13 @@ export class CloudSyncService {
       });
       if (!resp.ok) {
         console.warn("[CloudSync] repos/init failed:", resp.status);
-        return;
+        return false;
       }
       const data = (await resp.json()) as { repoUrl?: string };
       if (data.repoUrl) {
         this.state.repoUrl = data.repoUrl;
       }
+      return true;
     } catch (err) {
       const msg = (err as Error).message;
       if (msg.includes("AbortError") || msg.includes("aborted")) {
@@ -538,6 +546,7 @@ export class CloudSyncService {
       } else {
         console.warn("[CloudSync] repos/init error:", msg.slice(0, 100));
       }
+      return false;
     }
   }
 
@@ -545,7 +554,7 @@ export class CloudSyncService {
     try {
       const resp = await cloudApiFetch("/v1/cloud/repos/token", {
         method: "POST",
-        body: buildCloudReposRequestBody("namespace"),
+        body: buildCloudReposRequestBody("user"),
         timeoutMs: 60_000,
       });
       if (resp.status === 401) return null;
@@ -586,6 +595,51 @@ export class CloudSyncService {
       expiresAt: new Date(expiresAt),
       cloneUrl: userRepo.cloneUrl,
     };
+  }
+
+  private hasWorkspaceGitAtRoot(): boolean {
+    return fs.existsSync(path.join(this.paprDir, ".git"));
+  }
+
+  /** Parent git root when workspace has no local `.git` but inherits ancestor repo. */
+  private async getForeignGitRoot(): Promise<string | null> {
+    if (this.hasWorkspaceGitAtRoot()) {
+      return null;
+    }
+    if (!(await this.gitRunner.isRepo(this.paprDir))) {
+      return null;
+    }
+    try {
+      const topLevel = (await this.git(["rev-parse", "--show-toplevel"])).trim();
+      const resolved = path.resolve(topLevel);
+      if (resolved !== path.resolve(this.paprDir)) {
+        return resolved;
+      }
+    } catch {
+      /* not in a git work tree */
+    }
+    return null;
+  }
+
+  private isRepoNotFoundError(message: string): boolean {
+    const lower = message.toLowerCase();
+    return lower.includes("repository not found") || lower.includes("remote: not found");
+  }
+
+  /** Re-provision GitHub repo + refresh token after push/auth failures. */
+  private async provisionCloudRepo(): Promise<void> {
+    this.tokenCache = null;
+    await this.callReposInit();
+    const resp = await this.fetchRepoToken();
+    if (!resp) {
+      throw new Error("Could not refresh cloud repo token after repos/init");
+    }
+    const userRepo = resp.repos.find((r) => r.scope === "user");
+    if (!userRepo?.cloneUrl) {
+      throw new Error("No user repo in token response after repos/init");
+    }
+    this.applyUserRepoToken(userRepo, resp.token, resp.expiresAt);
+    await this.updateRemoteUrl(this.buildAuthedUrl(userRepo.cloneUrl, resp.token));
   }
 
   private normalizeRepoIdentity(url: string): string {
@@ -1249,6 +1303,16 @@ export class CloudSyncService {
       return;
     } catch (err) {
       const msg = (err as Error).message ?? String(err);
+
+      if (this.isRepoNotFoundError(msg)) {
+        console.warn(
+          "[CloudSync] Remote repo missing or inaccessible — provisioning via repos/init and retrying push",
+        );
+        await this.provisionCloudRepo();
+        await this.git(["push", "-u", "origin", "main"], pushOpts);
+        return;
+      }
+
       const shouldForce =
         msg.includes("rejected") ||
         msg.includes("fetch first") ||

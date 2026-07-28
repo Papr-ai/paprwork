@@ -101,6 +101,7 @@ import {
 } from "../cloudSync/cloudRepoHeadMarker.js";
 import { getAppRevisionHub } from "./AppRevisionHub.js";
 import { registerAppRevisionSseRoutes } from "./registerAppRevisionSse.js";
+import { hydrateCloudDatabaseRegistry } from "./cloudDatabaseRegistry.js";
 
 export interface CloudAppHostDeps {
   tursoCredentials: TursoCredentialsProvider;
@@ -505,7 +506,9 @@ export class CloudAppHostService {
     if (!file?.content) {
       return { sources: [] };
     }
-    return parseDataSourcesFile(file.content);
+    const config = parseDataSourcesFile(file.content);
+    await hydrateCloudDatabaseRegistry(runtimeAuth, config);
+    return config;
   }
 
   private publishDbChangedForSource(

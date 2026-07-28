@@ -718,14 +718,14 @@ export function MiniAppPublishBar({
             {/* Publish button if not live */}
             {!cloud.live ? (
               <div className="share-sheet__notice share-sheet__notice--info">
-                <p>Put your app on the web first to get a shareable link.</p>
+                <p>Publish your app on the web first to get a shareable link.</p>
                 <button
                   type="button"
                   className="share-sheet__primary-btn"
                   disabled={cloud.busy || cloud.loading}
                   onClick={() => void handlePublishClick()}
                 >
-                  Put on web
+                  Publish on Web
                 </button>
               </div>
             ) : null}

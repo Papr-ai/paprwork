@@ -83,13 +83,39 @@ export function readDbMtimeMs(dbPath: string): number | null {
   return maxMtime;
 }
 
+export function resolveTursoPushStateEntry(
+  syncKey: string,
+  dbPath: string,
+  state: TursoSyncStateFile,
+  alternateKeys: readonly string[] = [],
+): TursoJobPushState | undefined {
+  const normalizedPath = path.normalize(dbPath);
+  const keys = [
+    syncKey,
+    ...alternateKeys.filter((key) => key && key !== syncKey),
+  ];
+  for (const key of keys) {
+    const entry = state.jobs[key];
+    if (entry && path.normalize(entry.dbPath) === normalizedPath) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
 export function isJobDbDirty(
   jobId: string,
   dbPath: string,
   state: TursoSyncStateFile,
+  alternateKeys: readonly string[] = [],
 ): boolean {
   if (isJobDbQuarantined(jobId, state)) {
     return false;
+  }
+  for (const key of alternateKeys) {
+    if (key !== jobId && isJobDbQuarantined(key, state)) {
+      return false;
+    }
   }
 
   const normalizedPath = path.normalize(dbPath);
@@ -97,11 +123,8 @@ export function isJobDbDirty(
     return false;
   }
 
-  const prev = state.jobs[jobId];
+  const prev = resolveTursoPushStateEntry(jobId, dbPath, state, alternateKeys);
   if (!prev) {
-    return true;
-  }
-  if (path.normalize(prev.dbPath) !== normalizedPath) {
     return true;
   }
 

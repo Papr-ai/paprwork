@@ -13,6 +13,7 @@
 
 import { buildCloudVaultRequestBody } from "../../core/utils/cloudReposScope.js";
 import type { CloudRepoScope } from "../../core/utils/cloudReposScope.js";
+import { readActiveWorkspacePointer } from "../../core/utils/paprWorkspace.js";
 import { normalizeIntegrationKeyVaultAudience } from "../../core/storage/customKeysVault.js";
 import { getCustomKeysService } from "./CustomKeysService.js";
 import { resolveVaultKeySource } from "./cloudAgentGateway/resolveCloudProviderAuth.js";
@@ -248,6 +249,46 @@ export class VaultSyncService {
     }
   }
 
+  private vaultPullScopes(): CloudRepoScope[] {
+    const pointer = readActiveWorkspacePointer();
+    const scopes: CloudRepoScope[] = ["user"];
+    if (pointer?.namespaceId || process.env.PAPR_NAMESPACE_ID?.trim()) {
+      scopes.push("namespace");
+    }
+    if (pointer?.organizationId) {
+      scopes.push("org");
+    }
+    return scopes;
+  }
+
+  private async fetchVaultKeyNamesForScope(
+    scope: CloudRepoScope,
+    signal: AbortSignal,
+  ): Promise<string[]> {
+    const { scope: resolvedScope, namespace_id: namespaceId } =
+      buildCloudVaultRequestBody([], scope);
+    const params = new URLSearchParams({ scope: resolvedScope });
+    if (namespaceId) {
+      params.set("namespace_id", namespaceId);
+    }
+
+    const resp = await fetch(
+      `http://localhost:${this.gatewayPort}/api/cloud/vault/keys?${params}`,
+      { signal },
+    );
+
+    if (!resp.ok) {
+      const text = await resp.text();
+      console.warn(
+        `[VaultSync] Pull failed for scope ${resolvedScope} (${resp.status}): ${text.slice(0, 120)}`,
+      );
+      return [];
+    }
+
+    const data = (await resp.json()) as VaultListKeysResponse;
+    return data.keys.map((k) => k.name);
+  }
+
   /**
    * Pull vault key names and add any missing keys to local keychain.
    * Values are NOT pulled (would require a resolve endpoint). Only names
@@ -257,26 +298,26 @@ export class VaultSyncService {
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), PULL_TIMEOUT_MS);
-      const resp = await fetch(
-        `http://localhost:${this.gatewayPort}/api/cloud/vault/keys?scope=user`,
-        { signal: controller.signal },
-      );
-      clearTimeout(timer);
 
-      if (!resp.ok) {
-        const text = await resp.text();
-        console.warn(`[VaultSync] Pull failed (${resp.status}): ${text}`);
-        return [];
+      const vaultKeyNames = new Set<string>();
+      for (const scope of this.vaultPullScopes()) {
+        const names = await this.fetchVaultKeyNamesForScope(
+          scope,
+          controller.signal,
+        );
+        for (const name of names) {
+          vaultKeyNames.add(name);
+        }
       }
 
-      const data = (await resp.json()) as VaultListKeysResponse;
-      const vaultKeyNames = data.keys.map((k) => k.name);
+      clearTimeout(timer);
 
+      const allNames = [...vaultKeyNames];
       const customKeys = getCustomKeysService();
       const localKeys = await customKeys.listKeys();
       const localNames = new Set(localKeys.map((k) => k.name));
 
-      const missingLocally = vaultKeyNames.filter((n) => !localNames.has(n));
+      const missingLocally = allNames.filter((n) => !localNames.has(n));
 
       if (missingLocally.length > 0) {
         console.log(
@@ -286,11 +327,18 @@ export class VaultSyncService {
         // The user would need to re-add them or we'd need a resolve endpoint for pull.
       }
 
-      return vaultKeyNames;
+      return allNames;
     } catch (err) {
       console.warn("[VaultSync] Pull failed:", (err as Error).message);
       return [];
     }
+  }
+
+  /** Push + pull after org/namespace workspace switch. */
+  async syncForWorkspaceSwitch(): Promise<void> {
+    console.log("[VaultSync] Re-syncing vault for workspace switch...");
+    await this.pushAllKeys();
+    await this.pullKeys();
   }
 
   /**

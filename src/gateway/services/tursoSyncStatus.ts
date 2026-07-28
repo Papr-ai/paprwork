@@ -234,7 +234,8 @@ export async function buildTursoSyncItemsReport(
   for (const source of sources) {
     const syncKey = linkedSourceSyncKey(source);
     const localTableCount = countLocalSyncableTables(source.dbPath);
-    const dirty = isJobDbDirty(syncKey, source.dbPath, pushState);
+    const alternateKeys = source.jobId && source.jobId !== syncKey ? [source.jobId] : [];
+    const dirty = isJobDbDirty(syncKey, source.dbPath, pushState, alternateKeys);
     let remoteTableCount = 0;
     try {
       remoteTableCount = await countRemoteSyncableTables(

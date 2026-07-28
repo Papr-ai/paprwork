@@ -106,4 +106,21 @@ describe("modelPicker", () => {
       "gpt-5-6-sol",
     ]);
   });
+
+  test("getPickerModels groups enabled models by catalog provider order", () => {
+    const models = getPickerModels([
+      "gpt-5-6-sol",
+      "claude-fable-5",
+      "claude-sonnet-5",
+      "claude-opus-5",
+      "claude-opus-4-6",
+    ]);
+    expect(models.map((m) => m.id)).toEqual([
+      "claude-sonnet-5",
+      "claude-opus-4-6",
+      "claude-opus-5",
+      "claude-fable-5",
+      "gpt-5-6-sol",
+    ]);
+  });
 });
