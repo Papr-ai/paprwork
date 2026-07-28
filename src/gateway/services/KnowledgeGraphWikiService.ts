@@ -7,8 +7,12 @@
 
 import type Papr from "@papr/memory";
 import { getPaprWorkspaceDir } from "../../core/utils/paprRoot.js";
-import { getPaprClient } from "../../core/tools/paprClient.js";
-import { paprMemorySearchScopeSpread } from "../utils/memoryScopeResolver.js";
+import { getPaprClient, isPaprNotFoundError } from "../../core/tools/paprClient.js";
+import {
+  getMemoryScopeContext,
+  paprMemorySearchScopeSpread,
+} from "../utils/memoryScopeResolver.js";
+import { buildMemorySearchScopeFields } from "../../core/utils/memoryScope.js";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -269,7 +273,7 @@ const ENTITY_CONFIGS: EntityTypeConfig[] = [
     railTitle: "Your goals",
     graphqlHasId: false,
     listQuery: `goals {
-      description status priority progress target_date updated_at created_at
+      status priority progress target_date updated_at created_at
     }`,
     detailQuery: (id) => `goals(where: { ${graphqlStringEq("description", id)} }) {
       description status priority progress target_date updated_at created_at
@@ -283,7 +287,7 @@ const ENTITY_CONFIGS: EntityTypeConfig[] = [
     railTitle: "Projects",
     graphqlHasId: true,
     listQuery: `projects {
-      id name description type updated_at
+      id updated_at
     }`,
     detailQuery: (id) => `projects(where: { ${graphqlStringEq("id", id)} }) {
       id name description type updated_at
@@ -301,7 +305,7 @@ const ENTITY_CONFIGS: EntityTypeConfig[] = [
     railTitle: "People",
     graphqlHasId: true,
     listQuery: `people {
-      id name role description updated_at
+      id updated_at
     }`,
     detailQuery: (id) => `people(where: { ${graphqlStringEq("id", id)} }) {
       id name role description updated_at
@@ -332,7 +336,7 @@ const ENTITY_CONFIGS: EntityTypeConfig[] = [
     railTitle: "Insights",
     graphqlHasId: false,
     listQuery: `userInsights {
-      content category confidence context timestamp batch_id session_id created_at
+      content category timestamp created_at
     }`,
     detailQuery: (_id) => `userInsights {
       content category confidence context timestamp batch_id session_id created_at
@@ -346,7 +350,7 @@ const ENTITY_CONFIGS: EntityTypeConfig[] = [
     railTitle: "Tasks",
     graphqlHasId: false,
     listQuery: `userTasks {
-      task_name description status priority outcome created_at updated_at session_id
+      task_name status priority created_at updated_at
     }`,
     detailQuery: (_id) => `userTasks {
       task_name description status priority outcome created_at updated_at session_id
@@ -632,6 +636,15 @@ async function runGraphQL(
 
     if (response.errors?.length) {
       const msg = response.errors.map((e) => e.message).join("; ");
+      const hasRows = response.data
+        ? Object.values(response.data).some(
+            (value) => Array.isArray(value) && value.length > 0,
+          )
+        : false;
+      if (hasRows) {
+        console.warn(`[Wiki] GraphQL ${label} partial: ${msg}`);
+        return response.data ?? null;
+      }
       console.warn(`[Wiki] GraphQL ${label}: ${msg}`);
       return null;
     }
@@ -735,13 +748,24 @@ function buildRailsFromItems(
   return { rails, typeCounts };
 }
 
+function wikiGraphSearchScope(): {
+  external_user_id?: string;
+  search_acl?: { read: string[]; write?: string[] };
+} {
+  const ctx = getMemoryScopeContext();
+  if (ctx.namespaceId) {
+    return buildMemorySearchScopeFields("namespace", ctx);
+  }
+  return buildMemorySearchScopeFields("user", ctx);
+}
+
 async function fetchWikiHomeFromSearch(client: Papr): Promise<{
   rails: WikiRail[];
   typeCounts: Record<string, number>;
 }> {
   const grouped = new Map<string, WikiNode[]>();
   const seen = new Set<string>();
-  const searchScope = await paprMemorySearchScopeSpread();
+  const searchScope = wikiGraphSearchScope();
 
   const addNode = (raw: Record<string, unknown>, wikiType: string) => {
     const record = coerceSearchRecord(raw);
@@ -778,6 +802,9 @@ async function fetchWikiHomeFromSearch(client: Papr): Promise<{
           }
         }
       } catch (error) {
+        if (isPaprNotFoundError(error)) {
+          return;
+        }
         console.warn(
           `[Wiki] Search rail failed (${wikiType}):`,
           error instanceof Error ? error.message : error,
@@ -804,10 +831,12 @@ async function fetchWikiHomeFromSearch(client: Papr): Promise<{
         addNode(memory, "memory");
       }
     } catch (error) {
-      console.warn(
-        "[Wiki] Broad search fallback failed:",
-        error instanceof Error ? error.message : error,
-      );
+      if (!isPaprNotFoundError(error)) {
+        console.warn(
+          "[Wiki] Broad search fallback failed:",
+          error instanceof Error ? error.message : error,
+        );
+      }
     }
   }
 
@@ -863,11 +892,14 @@ async function fetchWikiHomeFromGraphQL(client: Papr): Promise<{
 }
 
 export async function fetchWikiHome(): Promise<WikiHomeResult> {
-  // PRIMARY: Read entity .md files from ~/Papr/workspace/entities/
+  // PRIMARY: entity .md files under the active org/namespace workspace:
+  // {paprHome}/workspace/entities/ (paprHome from .active-workspace.json or PAPR_HOME)
   const entityResult = readEntityFilesSync();
   if (entityResult.nodes.length > 0) {
     const featured = pickFeatured(entityResult.rails);
-    console.log(`[Wiki] Home (entity files): ${entityResult.nodes.length} nodes, ${entityResult.rails.length} rails`);
+    console.log(
+      `[Wiki] Home (entity files): ${entityResult.nodes.length} nodes, ${entityResult.rails.length} rails from ${getEntitiesDir()}`,
+    );
     return {
       featured,
       rails: entityResult.rails,
@@ -877,7 +909,11 @@ export async function fetchWikiHome(): Promise<WikiHomeResult> {
     };
   }
 
-  // FALLBACK: Neo4j / Qdrant search
+  console.log(
+    `[Wiki] No local entities at ${getEntitiesDir()} — falling back to Papr GraphQL/search`,
+  );
+
+  // FALLBACK: Neo4j / Qdrant search (same namespace as PAPR_API_KEY)
   let client: Papr;
   try {
     client = await getPaprClient();
