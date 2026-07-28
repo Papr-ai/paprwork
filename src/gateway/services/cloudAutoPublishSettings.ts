@@ -3,11 +3,11 @@
  */
 
 import * as fs from "fs";
-import * as os from "os";
+import { getPaprDataDir } from "../../core/utils/paprRoot.js";
 import * as path from "path";
 
 export function defaultCloudSettingsPath(): string {
-  return path.join(os.homedir(), "Papr", "data", "settings.json");
+  return path.join(getPaprDataDir(), "settings.json");
 }
 
 function readAutoPublishDisabled(settingsPath: string): boolean {

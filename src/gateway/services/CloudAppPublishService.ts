@@ -3,7 +3,7 @@
  */
 
 import * as fs from "fs";
-import * as os from "os";
+import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import * as path from "path";
 import { cloudApiFetch } from "../utils/cloudApiClient.js";
 import { isCloudAutoPublishGloballyEnabled } from "./cloudAutoPublishSettings.js";
@@ -205,7 +205,7 @@ export class CloudAppPublishService {
   private autoPublishInFlight = false;
 
   constructor(paprDir?: string) {
-    this.paprDir = paprDir ?? path.join(os.homedir(), "Papr");
+    this.paprDir = paprDir ?? getPaprRoot();
   }
 
   private async fetchMemoryPublishResponse(

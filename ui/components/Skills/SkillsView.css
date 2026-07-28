@@ -492,35 +492,6 @@
   color: var(--text-secondary);
 }
 
-.toggle-switch {
-  width: 36px;
-  height: 20px;
-  background: var(--bg-tertiary);
-  border-radius: 10px;
-  position: relative;
-  cursor: pointer;
-}
-
-.toggle-switch.active {
-  background: var(--accent-color);
-}
-
-.toggle-switch::after {
-  content: "";
-  position: absolute;
-  width: 16px;
-  height: 16px;
-  background: white;
-  border-radius: 50%;
-  top: 2px;
-  left: 2px;
-  transition: transform 0.2s;
-}
-
-.toggle-switch.active::after {
-  transform: translateX(16px);
-}
-
 .skill-actions {
   display: flex;
   gap: 8px;

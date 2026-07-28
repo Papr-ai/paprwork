@@ -23,7 +23,7 @@ describe("modelPicker", () => {
     expect(PICKER_DEFAULT_MODEL_IDS).toHaveLength(8);
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-sonnet-5");
     expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-sonnet-4-6");
-    expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-opus-4-8");
+    expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-opus-5");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("gpt-5-6-sol");
   });
 
@@ -81,12 +81,18 @@ describe("modelPicker", () => {
     ]);
   });
 
-  test("legacy Sonnet 4.6 and Opus 4.8 remain available in settings catalog", () => {
+  test("migrates retired Opus 4.8 picker id to Opus 5", () => {
+    expect(resolveEnabledPickerModelIds(["claude-opus-4-8"])).toEqual([
+      "claude-opus-5",
+    ]);
+  });
+
+  test("legacy Sonnet 4.6 and Opus 5 remain available in settings catalog", () => {
     const toggleIds = getAllPickerToggleModelIds();
     expect(toggleIds).toContain("claude-sonnet-4-6");
-    expect(toggleIds).toContain("claude-opus-4-8");
+    expect(toggleIds).toContain("claude-opus-5");
     expect(isPickerDefaultModelId("claude-sonnet-4-6")).toBe(false);
-    expect(isPickerDefaultModelId("claude-opus-4-8")).toBe(false);
+    expect(isPickerDefaultModelId("claude-opus-5")).toBe(false);
     expect(isPickerDefaultModelId("claude-sonnet-5")).toBe(true);
     expect(isPickerDefaultModelId("glm-5.2-max")).toBe(true);
     expect(isPickerDefaultModelId("claude-haiku-4-5")).toBe(false);
@@ -97,6 +103,23 @@ describe("modelPicker", () => {
     expect(isChatPickerModelId("gpt-5.5")).toBe(false);
     expect(getAllPickerToggleModelIds()).not.toContain("gpt-5.5");
     expect(getPickerModels(["gpt-5.5", "gpt-5-6-sol"]).map((m) => m.id)).toEqual([
+      "gpt-5-6-sol",
+    ]);
+  });
+
+  test("getPickerModels groups enabled models by catalog provider order", () => {
+    const models = getPickerModels([
+      "gpt-5-6-sol",
+      "claude-fable-5",
+      "claude-sonnet-5",
+      "claude-opus-5",
+      "claude-opus-4-6",
+    ]);
+    expect(models.map((m) => m.id)).toEqual([
+      "claude-sonnet-5",
+      "claude-opus-4-6",
+      "claude-opus-5",
+      "claude-fable-5",
       "gpt-5-6-sol",
     ]);
   });

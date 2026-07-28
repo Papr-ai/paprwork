@@ -7,14 +7,16 @@ import type { WSMessage } from "./index.js";
 import { getAppService } from "../services/AppService.js";
 import { getCloudAppLineageService } from "../services/CloudAppLineageService.js";
 import type { AppFile } from "../services/AppService.js";
-import { getAppStateStorage, type TabMetadata, type AppState } from "../services/storage/AppStateStorage.js";
+import {
+  getAppStateStorage,
+  type TabMetadata,
+  type AppState,
+} from "../services/storage/AppStateStorage.js";
 import {
   getAppRuntimeLogService,
   type AppRuntimeLogEntry,
   type AppRuntimeLogLevel,
 } from "../services/AppRuntimeLogService.js";
-
-const appStateStorage = getAppStateStorage();
 
 async function enrichAppWithLineage<T extends { id: string }>(
   app: T,
@@ -306,7 +308,7 @@ export async function setupAppHandlers(
       // ========== APP STATE PERSISTENCE ==========
       case "app:save_tabs": {
         const tabs = message.payload as TabMetadata[];
-        appStateStorage.saveTabs(tabs);
+        getAppStateStorage().saveTabs(tabs);
         ws.send(
           JSON.stringify({
             id: message.id,
@@ -318,7 +320,7 @@ export async function setupAppHandlers(
       }
 
       case "app:load_tabs": {
-        const tabs = appStateStorage.loadTabs();
+        const tabs = getAppStateStorage().loadTabs();
         ws.send(
           JSON.stringify({
             id: message.id,
@@ -332,7 +334,7 @@ export async function setupAppHandlers(
 
       case "app:save_state": {
         const state = message.payload as AppState;
-        appStateStorage.saveAppState(state);
+        getAppStateStorage().saveAppState(state);
         ws.send(
           JSON.stringify({
             id: message.id,
@@ -344,7 +346,7 @@ export async function setupAppHandlers(
       }
 
       case "app:load_state": {
-        const state = appStateStorage.loadAppState();
+        const state = getAppStateStorage().loadAppState();
         ws.send(
           JSON.stringify({
             id: message.id,
@@ -358,7 +360,7 @@ export async function setupAppHandlers(
 
       case "app:toggle_favorite_tab": {
         const { tabId } = message.payload as { tabId: string };
-        appStateStorage.toggleFavorite(tabId);
+        getAppStateStorage().toggleFavorite(tabId);
         ws.send(
           JSON.stringify({
             id: message.id,
@@ -370,7 +372,7 @@ export async function setupAppHandlers(
       }
 
       case "app:get_favorites": {
-        const favorites = appStateStorage.getFavorites();
+        const favorites = getAppStateStorage().getFavorites();
         ws.send(
           JSON.stringify({
             id: message.id,

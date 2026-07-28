@@ -325,6 +325,30 @@
   height: 36px;
 }
 
+/* Pre-rendered droplet PNG / data-URI icons */
+.community-card__orb-icon--image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.community-card__orb:has(.community-card__orb-icon--image) {
+  background: transparent;
+  background-color: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-color: transparent;
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.08),
+    0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.community-card__orb:has(.community-card__orb-icon--image)::after {
+  display: none;
+}
+
 /* Details toggle */
 .community-card__details-toggle {
   margin-left: auto;
@@ -523,6 +547,12 @@
   /* White icons in dark mode */
   .community-card__orb-icon svg rect {
     stroke: white !important;
+  }
+
+  .community-card__orb:has(.community-card__orb-icon--image) {
+    box-shadow:
+      0 12px 40px rgba(0, 0, 0, 0.35),
+      0 4px 12px rgba(0, 0, 0, 0.2);
   }
 
   .community-card__tag {

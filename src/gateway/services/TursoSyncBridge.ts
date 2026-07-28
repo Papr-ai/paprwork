@@ -16,6 +16,8 @@ import {
 import {
   discoverTursoLinkedSources,
   findLinkedSourceForJob,
+  linkedSourceAlternateKeys,
+  linkedSourceSyncKey,
   listLinkedJobIdsForTursoSync,
   type TursoLinkedSource,
 } from "./tursoLinkedSources.js";
@@ -35,11 +37,14 @@ import {
   type TursoCredentials,
 } from "./tursoSyncBridgeCore.js";
 import { recordTursoPushQuarantine } from "./tursoSyncState.js";
+import { remoteNeedsBootstrap } from "./tursoDeltaSync.js";
 import { remoteSyncLogExists } from "./tursoSyncLog.js";
 import {
   isJobDbDirty,
   loadTursoSyncState,
+  localDbHasSyncableData,
   recordTursoRemoteVersion,
+  resolveTursoPushStateEntry,
 } from "./tursoSyncState.js";
 
 export interface JobSyncResult {
@@ -309,6 +314,27 @@ export class TursoSyncBridge {
     return findLinkedSourceForJob(sources, jobId) !== undefined;
   }
 
+  /** True when fingerprints/mtime are dirty OR remote Turso lacks local user tables. */
+  async linkedSourceNeedsPush(linked: TursoLinkedSource): Promise<boolean> {
+    const syncKey = linkedSourceSyncKey(linked);
+    const alternateKeys = linkedSourceAlternateKeys(linked);
+    const state = loadTursoSyncState();
+    if (isJobDbDirty(syncKey, linked.dbPath, state, alternateKeys)) {
+      return true;
+    }
+    if (!localDbHasSyncableData(linked.dbPath)) {
+      return false;
+    }
+    const databaseName = await this.resolveTursoDatabaseNameForLinked(linked);
+    const creds = await this.fetchCredentials(databaseName);
+    const remote = createRemoteClient(creds);
+    try {
+      return await remoteNeedsBootstrap(remote);
+    } finally {
+      remote.close();
+    }
+  }
+
   async pushJob(
     jobId: string,
     credentials?: TursoCredentials,
@@ -323,8 +349,15 @@ export class TursoSyncBridge {
       return { status: "skipped", tables: [], reason: "local_db_missing" };
     }
 
+    const syncKey = linkedSourceSyncKey(linked);
+    const alternateKeys = linkedSourceAlternateKeys(linked);
     const state = loadTursoSyncState();
-    const jobState = state.jobs[jobId];
+    const jobState = resolveTursoPushStateEntry(
+      syncKey,
+      dbPath,
+      state,
+      alternateKeys,
+    );
     const databaseName = await this.resolveTursoDatabaseNameForLinked(linked);
     const creds = credentials ?? (await this.fetchCredentials(databaseName));
 
@@ -342,25 +375,51 @@ export class TursoSyncBridge {
         const hasRemoteLog = await remoteSyncLogExists(remote);
         if (!hasRemoteLog) {
           console.warn(
-            `[TursoSyncBridge] Remote ahead for ${jobId} with no changelog — ` +
+            `[TursoSyncBridge] Remote ahead for ${syncKey} with no changelog — ` +
               `full pull fallback (local unpushed rows may be replaced)`,
           );
         }
-        await this.pullJob(jobId, creds, hasRemoteLog ? {} : { force: true });
+        await this.pullJob(syncKey, creds, hasRemoteLog ? {} : { force: true });
       }
     } finally {
       remote.close();
     }
 
     const stateAfterPull = loadTursoSyncState();
-    const refreshedState = stateAfterPull.jobs[jobId];
-    const result = await pushLocalDbToTurso(dbPath, creds, {
-      jobId,
+    const refreshedState = resolveTursoPushStateEntry(
+      syncKey,
+      dbPath,
+      stateAfterPull,
+      alternateKeys,
+    );
+    let result = await pushLocalDbToTurso(dbPath, creds, {
+      jobId: syncKey,
       previousFingerprints: refreshedState?.tableFingerprints,
       lastPushedLogId: refreshedState?.lastPushedLogId,
     });
+
+    if (localDbHasSyncableData(dbPath)) {
+      const verifyRemote = createRemoteClient(creds);
+      try {
+        const stillEmpty = await remoteNeedsBootstrap(verifyRemote);
+        if (stillEmpty) {
+          console.warn(
+            `[TursoSyncBridge] Remote empty after push for ${syncKey} — forcing bootstrap`,
+          );
+          result = await pushLocalDbToTurso(dbPath, creds, {
+            jobId: syncKey,
+            force: true,
+            previousFingerprints: undefined,
+            lastPushedLogId: 0,
+          });
+        }
+      } finally {
+        verifyRemote.close();
+      }
+    }
+
     if (result.status === "pushed" && result.remoteVersion !== undefined) {
-      recordTursoRemoteVersion(jobId, dbPath, result.remoteVersion, undefined, {
+      recordTursoRemoteVersion(syncKey, dbPath, result.remoteVersion, undefined, {
         ...(result.lastPushedLogId !== undefined
           ? { lastPushedLogId: result.lastPushedLogId }
           : {}),
@@ -387,10 +446,17 @@ export class TursoSyncBridge {
     const databaseName = await this.resolveTursoDatabaseNameForLinked(linked);
     const creds = credentials ?? (await this.fetchCredentials(databaseName));
     const state = loadTursoSyncState();
-    const jobState = state.jobs[jobId];
+    const syncKey = linkedSourceSyncKey(linked);
+    const alternateKeys = linkedSourceAlternateKeys(linked);
+    const jobState = resolveTursoPushStateEntry(
+      syncKey,
+      linked.dbPath,
+      state,
+      alternateKeys,
+    );
     const lastSeenRemoteVersion = jobState?.lastSeenRemoteVersion;
     const result = await pullTursoToLocalDb(linked.dbPath, creds, {
-      jobId,
+      jobId: syncKey,
       ...(lastSeenRemoteVersion !== undefined ? { lastSeenRemoteVersion } : {}),
       ...(jobState?.lastPulledLogId !== undefined
         ? { lastPulledLogId: jobState.lastPulledLogId }
@@ -398,7 +464,7 @@ export class TursoSyncBridge {
       ...pullOptions,
     });
     if (result.remoteVersion !== undefined) {
-      recordTursoRemoteVersion(jobId, linked.dbPath, result.remoteVersion, undefined, {
+      recordTursoRemoteVersion(syncKey, linked.dbPath, result.remoteVersion, undefined, {
         ...(result.lastPulledLogId !== undefined
           ? { lastPulledLogId: result.lastPulledLogId }
           : {}),
@@ -502,14 +568,17 @@ export class TursoSyncBridge {
     }
 
     const jobIds = await this.listJobIdsForTursoSync();
-    const state = loadTursoSyncState();
 
     for (const jobId of jobIds) {
       if (mode === "push" && options?.dirtyOnly) {
-        const linked = (await this.listLinkedSources()).find(
-          (source) => source.jobId === jobId,
+        const linked = findLinkedSourceForJob(
+          await this.listLinkedSources(),
+          jobId,
         );
-        if (!linked || !isJobDbDirty(jobId, linked.dbPath, state)) {
+        if (!linked) {
+          continue;
+        }
+        if (!(await this.linkedSourceNeedsPush(linked))) {
           continue;
         }
       }
@@ -529,7 +598,7 @@ export class TursoSyncBridge {
             if (linked) {
               const { recordTursoPushSuccess } = await import("./tursoSyncState.js");
               recordTursoPushSuccess(
-                jobId,
+                linkedSourceSyncKey(linked),
                 linked.dbPath,
                 undefined,
                 pushResult.tableFingerprints,
@@ -548,7 +617,7 @@ export class TursoSyncBridge {
             if (linked) {
               const { recordTursoPushSuccess } = await import("./tursoSyncState.js");
               recordTursoPushSuccess(
-                jobId,
+                linkedSourceSyncKey(linked),
                 linked.dbPath,
                 undefined,
                 pushResult.tableFingerprints,

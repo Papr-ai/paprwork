@@ -5,6 +5,8 @@
 
 import React, { useRef, useCallback, useEffect, useState } from "react";
 import { useTabs } from "../../hooks/useTabs";
+import { ensureDefaultChatTab } from "../../lib/ensureDefaultChatTab";
+import { useTabStore } from "../../stores/tabStore";
 import { ChatContainer } from "../Chat/ChatContainer";
 import { ArtifactsView } from "../Artifacts/ArtifactsView";
 import { AppsView } from "../Apps/AppsView";
@@ -101,6 +103,27 @@ export function ContentArea() {
   let leftPaneTabId: string | null = activeLeftTab;
   let rightPaneTabId: string | null = activeRightTab;
   let showSplitView = isSplitView;
+
+  useEffect(() => {
+    const ensureActiveTab = () => {
+      const { activeTabId: currentActiveId, getTab: resolveTab } =
+        useTabStore.getState();
+      if (!currentActiveId || !resolveTab(currentActiveId)) {
+        ensureDefaultChatTab();
+      }
+    };
+
+    if ((window as Window & { __paprSqliteLoaded?: boolean }).__paprSqliteLoaded) {
+      ensureActiveTab();
+    }
+
+    window.addEventListener("papr-sqlite-loaded", ensureActiveTab);
+    window.addEventListener("papr-workspace-reload", ensureActiveTab);
+    return () => {
+      window.removeEventListener("papr-sqlite-loaded", ensureActiveTab);
+      window.removeEventListener("papr-workspace-reload", ensureActiveTab);
+    };
+  }, [activeTabId, activeLeftTab]);
 
   if (isParentTab && activeTab.childTabIds.length > 0) {
     showSplitView = true;
@@ -225,11 +248,10 @@ export function ContentArea() {
 
   // Render view based on tab type
   const renderView = (tabId: string | null, skipAgents = false) => {
-    if (!tabId)
-      return <div className="content-area__empty">No tab selected</div>;
+    if (!tabId) return null;
 
     const tab = getTab(tabId);
-    if (!tab) return <div className="content-area__empty">Tab not found</div>;
+    if (!tab) return null;
 
     if (skipAgents && tab.type === "agents") {
       return null;

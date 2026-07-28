@@ -6,8 +6,8 @@
  */
 
 import { promises as fs } from "fs";
+import { getPaprWorkspaceDir } from "../../core/utils/paprRoot.js";
 import path from "path";
-import os from "os";
 import { fileURLToPath } from "url";
 import type { JobRecord } from "./jobs/types.js";
 import { STANDALONE_APP_ID } from "./jobs/appIds.js";
@@ -22,7 +22,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const SLEEP_JOB_NAMES = ["Papr Sleep Cycle", "papr-sleep"] as const;
-export const SLEEP_PROMPT_VERSION = 11;
+export const SLEEP_PROMPT_VERSION = 12;
 
 export const SLEEP_JOB_DEFAULTS = {
   provider: "anthropic" as const,
@@ -53,7 +53,7 @@ function resolveTemplatesDir(): string {
 }
 
 function workspaceDir(): string {
-  return path.join(os.homedir(), "Papr", "workspace");
+  return getPaprWorkspaceDir();
 }
 
 function sleepPromptVersion(content: string): number {
@@ -274,6 +274,15 @@ export class SleepCycleService {
       "# Preloaded Sleep Context",
       "",
       "_Auto-generated at run start. Verify with tools; prioritize new signal over prior sleep summaries._",
+      "",
+      "## Active workspace paths",
+      "",
+      `- PAPR_HOME: ${process.env.PAPR_HOME ?? "(unset — use getPaprRoot())"}`,
+      `- PAPR_USER_DATA: ${process.env.PAPR_USER_DATA ?? "(unset)"}`,
+      `- Organization: ${process.env.PAPR_ORG_ID ?? "(unset)"}`,
+      `- Namespace: ${process.env.PAPR_NAMESPACE_ID ?? "(unset)"}`,
+      "",
+      "Use these paths for workspace memory, chat exports, and chats.db — not legacy ~/Papr or ~/.paprwork-v2.",
       "",
     ];
 

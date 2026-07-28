@@ -53,8 +53,8 @@ const AVAILABLE_MODELS: Record<Provider, ModelInfo[]> = {
       supportsVision: true,
     },
     {
-      id: "claude-opus-4-8",
-      name: "Claude Opus 4.8",
+      id: "claude-opus-5",
+      name: "Claude Opus 5",
       provider: "anthropic",
       contextWindow: 1000000,
       supportsThinking: true,

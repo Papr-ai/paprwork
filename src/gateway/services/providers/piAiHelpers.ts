@@ -3,8 +3,9 @@
  */
 
 import type { Message } from "@mariozechner/pi-ai";
-import { zodToJsonSchema } from "zod-to-json-schema";
+import type { ZodTypeAny } from "zod";
 import { extractToolResultText } from "../agent/historyFormatter.js";
+import { getPiToolParameters } from "./piToolSchemaCache.js";
 
 const ORPHAN_TOOL_RESULT_MARKER =
   "[Tool result not persisted — stream likely interrupted before this tool finished. Treat as unknown; re-invoke if needed.]";
@@ -164,29 +165,20 @@ export function buildPiContext(input: PiContextInput): {
       ? (systemMsg as any).content
       : undefined;
 
-  const piTools = Object.entries(tools).map(
-    ([toolKey, tool]: [string, any]) => {
-      let parameters: Record<string, unknown> = {
-        type: "object",
-        properties: {},
-      };
-      if (tool.inputSchema) {
-        try {
-          parameters = zodToJsonSchema(tool.inputSchema, {
-            target: "openApi3",
-            $refStrategy: "none",
-          }) as Record<string, unknown>;
-        } catch (err) {
-          console.warn(`Failed to convert schema for tool ${tool.id}:`, err);
-        }
-      }
-      return {
-        name: tool.id || toolKey,
-        description: tool.description || "",
-        parameters: parameters as any,
-      };
-    },
-  );
+  const piTools = Object.entries(tools).map(([toolKey, tool]) => {
+    const entry = tool as {
+      id?: string;
+      description?: string;
+      inputSchema?: ZodTypeAny;
+    };
+    const toolId = entry.id || toolKey;
+    const parameters = getPiToolParameters(toolId, entry.inputSchema);
+    return {
+      name: toolId,
+      description: entry.description || "",
+      parameters,
+    };
+  });
 
   console.log(`[buildPiContext] Converted ${piTools.length} tool schemas`);
 

@@ -3,7 +3,7 @@
  */
 
 import * as fs from "fs";
-import * as os from "os";
+import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import * as path from "path";
 import {
   getCloudAppPublishService,
@@ -110,7 +110,7 @@ export async function buildCloudLinkSyncReport(): Promise<CloudLinkSyncReport> {
   const appsHost =
     process.env.PAPR_CLOUD_APPS_HOST?.replace(/\/$/, "") ??
     "https://apps.papr.ai";
-  const paprDir = path.join(os.homedir(), "Papr");
+  const paprDir = getPaprRoot();
   const titles = loadAppTitles(paprDir);
 
   if (titles.size === 0) {

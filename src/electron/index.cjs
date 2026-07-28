@@ -39,6 +39,7 @@ let initializePaprLoginIPC;
 let cleanupPaprLogin;
 let handlePaprAuthCallback;
 let syncProfileToGatewaySettings;
+let migrateOrgVaultIsolation;
 
 
 /**
@@ -95,6 +96,7 @@ async function loadESMModules() {
   CustomKeysStorage = storageModule.CustomKeysStorage;
   KeyPermissionsStorage = storageModule.KeyPermissionsStorage;
   SettingsStorage = storageModule.SettingsStorage;
+  migrateOrgVaultIsolation = storageModule.migrateOrgVaultIsolation;
 
   const customKeysIpcModule =
     await importWithRetry("../../dist/electron/electron/ipc/customKeys.js");
@@ -860,6 +862,28 @@ async function createMainWindow() {
 //  - Tiered user notifications (silent → banner → dialog)
 // ---------------------------------------------------------------------------
 
+function readActiveWorkspacePointerOrgId() {
+  try {
+    const fs = require("fs");
+    const pathMod = require("path");
+    const osMod = require("os");
+    const pointerPath = pathMod.join(
+      osMod.homedir(),
+      "Papr",
+      ".active-workspace.json",
+    );
+    if (!fs.existsSync(pointerPath)) {
+      return undefined;
+    }
+    const pointer = JSON.parse(fs.readFileSync(pointerPath, "utf-8"));
+    return typeof pointer?.organizationId === "string"
+      ? pointer.organizationId
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Pure logic functions — imported from separate file for unit testing
 const {
   calculateBackoff,
@@ -880,6 +904,7 @@ class GatewayProcessSupervisor {
     this.gatewayEnv = options.gatewayEnv;
     this.port = options.port;
     this.customKeysStorage = options.customKeysStorage;
+    this.getActiveOrganizationId = options.getActiveOrganizationId;
 
     // State
     this.state = "stopped";
@@ -1176,7 +1201,10 @@ class GatewayProcessSupervisor {
         }
       } else if (msg.type === "CUSTOM_KEYS_LIST") {
         try {
-          //console.log(`[Electron] Received CUSTOM_KEYS_LIST request: ${msg.requestId}`);
+          const organizationId = this.getActiveOrganizationId?.()?.trim();
+          if (organizationId && storage?.ensureOrganizationVault) {
+            await storage.ensureOrganizationVault(organizationId);
+          }
           const keys = await storage.listKeys();
           //console.log(`[Electron] Loaded ${keys.length} keys from storage:`, keys.map(k => k.name));
           if (proc === this.process) {
@@ -1189,7 +1217,10 @@ class GatewayProcessSupervisor {
         }
       } else if (msg.type === "CUSTOM_KEYS_GET_BY_NAME") {
         try {
-          //console.log(`[Electron] Received CUSTOM_KEYS_GET_BY_NAME request: ${msg.requestId} for key: "${msg.name}"`);
+          const organizationId = this.getActiveOrganizationId?.()?.trim();
+          if (organizationId && storage?.ensureOrganizationVault) {
+            await storage.ensureOrganizationVault(organizationId);
+          }
           const value = await storage.getKeyByName(msg.name);
           const found = value ? "found" : "not found";
           const preview = value ? `${value.substring(0, 10)}...` : "null";
@@ -1857,6 +1888,22 @@ app.whenReady().then(async () => {
   });
 
   await customKeysStorage.initialize();
+  const paprProfileForKeys = settingsStorage.getPaprProfile();
+  if (migrateOrgVaultIsolation) {
+    const migrationResult = await migrateOrgVaultIsolation(
+      path.join(app.getPath("userData"), "data"),
+      paprProfileForKeys?.organizationId,
+    );
+    if (migrationResult.ran) {
+      console.log(
+        "[Electron] Org vault isolation migration complete:",
+        migrationResult,
+      );
+    }
+  }
+  if (paprProfileForKeys?.organizationId) {
+    await customKeysStorage.setActiveOrganization(paprProfileForKeys.organizationId);
+  }
   // Note: KeyPermissionsStorage and SettingsStorage auto-initialize via electron-store
 
   if (initializeTelemetryIPC) {
@@ -1896,7 +1943,11 @@ app.whenReady().then(async () => {
     telemetryClientInstance.trackFireAndForget("paprwork_app_started");
   }
 
-  initializeCustomKeysIPC(customKeysStorage);
+  initializeCustomKeysIPC(customKeysStorage, {
+    getActiveOrganizationId: () =>
+      readActiveWorkspacePointerOrgId() ||
+      settingsStorage.getPaprProfile()?.organizationId,
+  });
 
   // Initialize OAuth IPC handlers (pass customKeysStorage for syncing)
   await initializeOAuthIPC(customKeysStorage);
@@ -1925,6 +1976,44 @@ app.whenReady().then(async () => {
     });
   }
 
+  const readActiveWorkspaceEnv = () => {
+    try {
+      const fs = require("fs");
+      const pathMod = require("path");
+      const osMod = require("os");
+      const pointerPath = pathMod.join(osMod.homedir(), "Papr", ".active-workspace.json");
+      if (!fs.existsSync(pointerPath)) {
+        return {};
+      }
+      const pointer = JSON.parse(fs.readFileSync(pointerPath, "utf-8"));
+      if (!pointer?.paprHome || !pointer?.userDataPath) {
+        return {};
+      }
+      return {
+        PAPR_HOME: pointer.paprHome,
+        PAPR_USER_DATA: pointer.userDataPath,
+        PAPR_ORG_ID: pointer.organizationId,
+        PAPR_NAMESPACE_ID: pointer.namespaceId,
+      };
+    } catch {
+      return {};
+    }
+  };
+
+  const readWorkspaceSettingsPath = () => {
+    const fs = require("fs");
+    const pathMod = require("path");
+    const osMod = require("os");
+    const workspaceEnv = readActiveWorkspaceEnv();
+    if (workspaceEnv.PAPR_HOME) {
+      return pathMod.join(workspaceEnv.PAPR_HOME, "data", "settings.json");
+    }
+    return pathMod.join(osMod.homedir(), "Papr", "data", "settings.json");
+  };
+
+  const activeWorkspaceEnv = readActiveWorkspaceEnv();
+  const workspaceSettingsPath = readWorkspaceSettingsPath();
+
   // Build gateway environment (telemetry flags align with main-process resolution)
   const gatewayTelemetryOn =
     isTelemetrySendingEnabledFn != null
@@ -1934,14 +2023,14 @@ app.whenReady().then(async () => {
       : settingsStorage.getTelemetryEnabled();
   const gatewayEnv = {
     ...process.env,
+    ...activeWorkspaceEnv,
     GATEWAY_PORT: String(GATEWAY_PORT),
     NODE_ENV: IS_PRODUCTION ? "production" : "development",
     ELECTRON_RUN_AS_NODE: "1",
     CLOUD_SYNC_ENABLED: (() => {
       try {
-        const settingsPath = require("path").join(require("os").homedir(), "Papr", "data", "settings.json");
-        if (require("fs").existsSync(settingsPath)) {
-          const data = JSON.parse(require("fs").readFileSync(settingsPath, "utf-8"));
+        if (require("fs").existsSync(workspaceSettingsPath)) {
+          const data = JSON.parse(require("fs").readFileSync(workspaceSettingsPath, "utf-8"));
           if (data?.preferences?.cloudSyncEnabled === false) return "false";
         }
         return "true";
@@ -1951,9 +2040,8 @@ app.whenReady().then(async () => {
     })(),
     CLOUD_AUTO_PUBLISH_ENABLED: (() => {
       try {
-        const settingsPath = require("path").join(require("os").homedir(), "Papr", "data", "settings.json");
-        if (require("fs").existsSync(settingsPath)) {
-          const data = JSON.parse(require("fs").readFileSync(settingsPath, "utf-8"));
+        if (require("fs").existsSync(workspaceSettingsPath)) {
+          const data = JSON.parse(require("fs").readFileSync(workspaceSettingsPath, "utf-8"));
           if (data?.preferences?.cloudAutoPublishEnabled === false) return "false";
         }
         return "true";
@@ -2000,6 +2088,9 @@ app.whenReady().then(async () => {
     gatewayEnv,
     port: GATEWAY_PORT,
     customKeysStorage,
+    getActiveOrganizationId: () =>
+      readActiveWorkspacePointerOrgId() ||
+      settingsStorage.getPaprProfile()?.organizationId,
   });
 
   await supervisor.start();

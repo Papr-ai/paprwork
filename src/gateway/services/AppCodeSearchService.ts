@@ -2,12 +2,12 @@
  * Code search for mini-app workspace — Papr Memory when available, keyword fallback otherwise.
  */
 
-import * as os from "os";
+import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import * as path from "path";
 import type { MemoryObject } from "@papr/memory/resources/shared.js";
 import { getPaprClient, isPaprNotFoundError } from "../../core/tools/paprClient.js";
 import { buildSearchPolicy } from "../utils/paprMemoryPolicy.js";
-import { paprUserScope } from "../utils/paprUserId.js";
+import { paprMemorySearchScopeSpread } from "../utils/memoryScopeResolver.js";
 import type {
   AppWorkspaceFilesResult,
   WorkspaceFileKind,
@@ -221,9 +221,10 @@ async function searchProject(
   limit: number,
 ): Promise<MemoryObject[]> {
   try {
+    const searchScope = await paprMemorySearchScopeSpread();
     const response = await client.memory.search({
       query,
-      ...paprUserScope(),
+      ...searchScope,
       max_memories: limit,
       max_nodes: 0,
       enable_agentic_graph: false,
@@ -407,7 +408,7 @@ async function searchAppCodeByKeyword(
 async function searchViaMemory(params: AppCodeSearchParams): Promise<AppCodeSearchHit[]> {
   const query = params.query.trim();
   const client = await getPaprClient();
-  const paprDir = path.join(os.homedir(), "Papr");
+  const paprDir = getPaprRoot();
   const limit = Math.min(Math.max(params.limit ?? 12, 1), 30);
   const scope = params.scope ?? "all";
 

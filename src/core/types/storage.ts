@@ -77,6 +77,11 @@ export interface AppSettings {
      * Enabled by default. Users can disable in Settings → Cloud Sync.
      */
     cloudAutoPublishEnabled: boolean;
+    /**
+     * Default Papr Memory sharing for new chats and agent writes.
+     * "user" = private, "namespace" = workspace team, "org" = organization.
+     */
+    defaultMemoryScope?: "user" | "namespace" | "org";
   };
   /** Anonymous install id for telemetry correlation only; not derived from user data. */
   telemetry: {

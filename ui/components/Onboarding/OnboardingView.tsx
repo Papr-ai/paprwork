@@ -202,7 +202,15 @@ export function OnboardingView() {
     window.dispatchEvent(new CustomEvent("papr-onboarding-changed"));
   };
 
-  if (checkingKeys) return null;
+  if (checkingKeys) {
+    return (
+      <div className="onboarding-view">
+        <div className="onboarding-view-content onboarding-view-content--loading">
+          Loading…
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="onboarding-view">
@@ -272,8 +280,11 @@ export function OnboardingView() {
           </>
         )}
 
-        {/* ---- CHOOSE INTENT PHASE ---- */}
-        {(state.phase === "choose_intent" || state.phase === "first_value") && (
+        {/* ---- CHOOSE INTENT PHASE (also shown when reopening after completion) ---- */}
+        {(state.phase === "choose_intent" ||
+          state.phase === "first_value" ||
+          state.phase === "activated" ||
+          state.phase === "completed") && (
           <>
             <div className="onboarding-view-header">
               <h1 className="onboarding-view-title">What would you like to do?</h1>
@@ -317,9 +328,6 @@ export function OnboardingView() {
             </div>
           </>
         )}
-
-        {/* ---- ACTIVATED / COMPLETED (shouldn't render but safety) ---- */}
-        {(state.phase === "activated" || state.phase === "completed") && null}
       </div>
     </div>
   );

@@ -9,7 +9,7 @@ import Database from 'better-sqlite3';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
+import { resolvePaprUserDataPath } from '../../../core/utils/paprWorkspace.js';
 
 export interface IndexedFile {
   file_path: string;
@@ -59,9 +59,10 @@ export interface ProjectOverviewRecord {
 export class CodeIndexTracker {
   private db: Database.Database;
   private dbPath: string;
-  
+  private closed = false;
+
   constructor(dataDir?: string) {
-    const baseDir = dataDir || path.join(os.homedir(), '.paprwork-v2');
+    const baseDir = dataDir || resolvePaprUserDataPath();
     if (!fs.existsSync(baseDir)) {
       fs.mkdirSync(baseDir, { recursive: true });
     }
@@ -77,6 +78,10 @@ export class CodeIndexTracker {
     this.db.pragma('temp_store = MEMORY');
     
     this.initSchema();
+  }
+
+  isClosed(): boolean {
+    return this.closed;
   }
   
   /**
@@ -147,6 +152,7 @@ export class CodeIndexTracker {
    * Check if file needs indexing (new or changed)
    */
   needsIndexing(filePath: string): boolean {
+    if (this.closed) return false;
     const currentHash = this.calculateFileHash(filePath);
     
     const row = this.db.prepare(
@@ -164,6 +170,7 @@ export class CodeIndexTracker {
    * Record indexed file
    */
   recordIndexedFile(file: IndexedFile): void {
+    if (this.closed) return;
     this.db.prepare(`
       INSERT OR REPLACE INTO indexed_files 
       (file_path, content_hash, last_indexed_at, schema_version, memory_id, project_id, lines_of_code, language)
@@ -184,6 +191,7 @@ export class CodeIndexTracker {
    * Record indexed project
    */
   recordIndexedProject(project: IndexedProject): void {
+    if (this.closed) return;
     this.db.prepare(`
       INSERT OR REPLACE INTO indexed_projects
       (project_id, project_type, last_indexed_at, memory_id, file_count)
@@ -201,6 +209,7 @@ export class CodeIndexTracker {
    * Add file to index queue
    */
   queueFile(filePath: string, priority: number = 0): void {
+    if (this.closed) return;
     this.db.prepare(`
       INSERT OR REPLACE INTO index_queue (file_path, queued_at, priority)
       VALUES (?, ?, ?)
@@ -211,6 +220,7 @@ export class CodeIndexTracker {
    * Get next batch of files from queue
    */
   getQueuedFiles(limit: number = 50): QueuedFile[] {
+    if (this.closed) return [];
     const rows = this.db.prepare(`
       SELECT file_path, queued_at, priority 
       FROM index_queue 
@@ -229,6 +239,7 @@ export class CodeIndexTracker {
    * Remove file from queue
    */
   dequeueFile(filePath: string): void {
+    if (this.closed) return;
     this.db.prepare('DELETE FROM index_queue WHERE file_path = ?').run(filePath);
   }
   
@@ -236,6 +247,7 @@ export class CodeIndexTracker {
    * Get queue size
    */
   getQueueSize(): number {
+    if (this.closed) return 0;
     const row = this.db.prepare('SELECT COUNT(*) as count FROM index_queue').get() as { count: number };
     return row.count;
   }
@@ -244,6 +256,7 @@ export class CodeIndexTracker {
    * Get total indexed files count
    */
   getIndexedFilesCount(): number {
+    if (this.closed) return 0;
     const row = this.db.prepare('SELECT COUNT(*) as count FROM indexed_files').get() as { count: number };
     return row.count;
   }
@@ -252,6 +265,7 @@ export class CodeIndexTracker {
    * Get all indexed files for a project
    */
   getProjectFiles(projectId: string): IndexedFile[] {
+    if (this.closed) return [];
     const rows = this.db.prepare(`
       SELECT * FROM indexed_files WHERE project_id = ?
     `).all(projectId) as Array<{
@@ -286,6 +300,9 @@ export class CodeIndexTracker {
     queue_size: number;
     last_indexed_at?: Date;
   } {
+    if (this.closed) {
+      return { total_files: 0, total_projects: 0, queue_size: 0 };
+    }
     const filesCount = this.getIndexedFilesCount();
     
     const projectsRow = this.db.prepare(
@@ -313,6 +330,7 @@ export class CodeIndexTracker {
    * Check if file summary needs regeneration (missing or stale hash)
    */
   needsSummaryUpdate(filePath: string, currentHash: string): boolean {
+    if (this.closed) return false;
     const row = this.db.prepare(
       'SELECT content_hash FROM file_summaries WHERE file_path = ?'
     ).get(filePath) as { content_hash: string } | undefined;
@@ -325,6 +343,7 @@ export class CodeIndexTracker {
   }
 
   saveFileSummary(summary: FileSummaryRecord): void {
+    if (this.closed) return;
     this.db.prepare(`
       INSERT OR REPLACE INTO file_summaries
       (file_path, project_id, file_name, summary_text, content_hash, memory_id, language, updated_at)
@@ -342,6 +361,7 @@ export class CodeIndexTracker {
   }
 
   getFileSummary(filePath: string): FileSummaryRecord | null {
+    if (this.closed) return null;
     const row = this.db.prepare(
       'SELECT * FROM file_summaries WHERE file_path = ?'
     ).get(filePath) as {
@@ -372,6 +392,7 @@ export class CodeIndexTracker {
   }
 
   getFileSummariesForProject(projectId: string): FileSummaryRecord[] {
+    if (this.closed) return [];
     const rows = this.db.prepare(
       'SELECT * FROM file_summaries WHERE project_id = ? ORDER BY file_name ASC'
     ).all(projectId) as Array<{
@@ -398,10 +419,12 @@ export class CodeIndexTracker {
   }
 
   deleteFileSummary(filePath: string): void {
+    if (this.closed) return;
     this.db.prepare('DELETE FROM file_summaries WHERE file_path = ?').run(filePath);
   }
 
   saveProjectOverview(overview: ProjectOverviewRecord): void {
+    if (this.closed) return;
     this.db.prepare(`
       INSERT OR REPLACE INTO project_overviews
       (project_id, project_type, overview_text, memory_id, file_count, updated_at)
@@ -417,6 +440,7 @@ export class CodeIndexTracker {
   }
 
   getProjectOverview(projectId: string): ProjectOverviewRecord | null {
+    if (this.closed) return null;
     const row = this.db.prepare(
       'SELECT * FROM project_overviews WHERE project_id = ?'
     ).get(projectId) as {
@@ -443,6 +467,7 @@ export class CodeIndexTracker {
   }
 
   getFileSummaryMemoryId(filePath: string): string | undefined {
+    if (this.closed) return undefined;
     const row = this.db.prepare(
       'SELECT memory_id FROM file_summaries WHERE file_path = ?'
     ).get(filePath) as { memory_id?: string } | undefined;
@@ -450,6 +475,7 @@ export class CodeIndexTracker {
   }
 
   getProjectOverviewMemoryId(projectId: string): string | undefined {
+    if (this.closed) return undefined;
     const row = this.db.prepare(
       'SELECT memory_id FROM project_overviews WHERE project_id = ?'
     ).get(projectId) as { memory_id?: string } | undefined;
@@ -457,6 +483,7 @@ export class CodeIndexTracker {
   }
 
   removeIndexedFile(filePath: string): void {
+    if (this.closed) return;
     this.db.prepare('DELETE FROM indexed_files WHERE file_path = ?').run(filePath);
   }
 
@@ -464,6 +491,8 @@ export class CodeIndexTracker {
    * Close database connection
    */
   close(): void {
+    if (this.closed) return;
+    this.closed = true;
     this.db.close();
   }
 }

@@ -3,7 +3,7 @@
  */
 
 import * as fs from "fs";
-import * as os from "os";
+import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import * as path from "path";
 
 import type { CodeAccess } from "../../core/utils/shareAudienceModel.js";
@@ -44,7 +44,7 @@ export interface CloudPublishPrefsFile {
 const PREFS_FILENAME = "cloud-publish-prefs.json";
 
 function prefsPath(paprDir?: string): string {
-  const root = paprDir ?? path.join(os.homedir(), "Papr");
+  const root = paprDir ?? getPaprRoot();
   return path.join(root, "data", PREFS_FILENAME);
 }
 

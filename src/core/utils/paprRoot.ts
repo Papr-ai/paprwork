@@ -1,19 +1,27 @@
 /**
  * Canonical Papr workspace root.
  *
- * Desktop: ~/Papr
+ * Desktop: ~/Papr/orgs/{orgId}/namespaces/{namespaceId} (via .active-workspace.json)
+ * Legacy fallback: ~/Papr
  * Cloud agent gateway: per-run clone mounted at PAPR_HOME
  */
 
-import os from "os";
 import path from "path";
+import {
+  getPaprBaseDir,
+  readActiveWorkspacePointer,
+} from "./paprWorkspace.js";
 
 export function getPaprRoot(): string {
   const override = process.env.PAPR_HOME?.trim();
   if (override) {
     return path.resolve(override);
   }
-  return path.join(os.homedir(), "Papr");
+  const pointer = readActiveWorkspacePointer();
+  if (pointer?.paprHome) {
+    return pointer.paprHome;
+  }
+  return getPaprBaseDir();
 }
 
 export function getPaprJobsRoot(): string {
@@ -60,6 +68,18 @@ export function getMiniAppWriteBlockReason(resolvedFilePath: string): string | n
 
 export function getPaprDataDir(): string {
   return path.join(getPaprRoot(), "data");
+}
+
+export function getPaprWorkspaceDir(): string {
+  return path.join(getPaprRoot(), "workspace");
+}
+
+export function getPaprDocumentsDir(): string {
+  return path.join(getPaprRoot(), "documents");
+}
+
+export function getPaprBundlesDir(): string {
+  return path.join(getPaprRoot(), "bundles");
 }
 
 /** Shared Cloud Run agent gateway — no desktop CloudSync / scheduler. */

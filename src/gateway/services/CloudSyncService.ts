@@ -27,8 +27,8 @@ import { canReconcilePathAsSynced } from "./cloudSync/gitPathStatus.js";
 import { GitRunner, probeGitInstalled } from "./cloudSync/gitRunner.js";
 import { cloudApiFetch, waitForPaprApiKey } from "../utils/cloudApiClient.js";
 import type { DesktopHeartbeatResponse } from "../types/cloudRuntime.js";
-
-const PAPR_DIR = path.join(os.homedir(), "Papr");
+import { getPaprRoot } from "../../core/utils/paprRoot.js";
+import { buildCloudReposRequestBody } from "../../core/utils/cloudReposScope.js";
 
 const INSTANT_DIRS = ["workspace", "data"];
 const QUEUED_DIRS = ["apps", "Jobs"];
@@ -121,8 +121,12 @@ export class CloudSyncService {
   private repoIdentityChanged = false;
   private syncQueue: QueueItem[] = [];
   private queueTotal = 0;
-  private stateManager = new SyncStateManager(PAPR_DIR);
+  private stateManager: SyncStateManager;
   private readonly gitRunner = new GitRunner();
+
+  private get paprDir(): string {
+    return getPaprRoot();
+  }
 
   private state: SyncState = {
     status: "idle",
@@ -151,6 +155,7 @@ export class CloudSyncService {
   }) {
     this.pushDebounceMs = opts?.pushDebounceMs ?? 15_000;
     this.queueIntervalMs = opts?.queueIntervalMs ?? 5_000;
+    this.stateManager = new SyncStateManager(this.paprDir);
   }
 
   getState(): SyncState {
@@ -163,7 +168,7 @@ export class CloudSyncService {
 
   getGitHubSyncItemsReport() {
     return buildGitHubSyncItemsReport({
-      paprDir: PAPR_DIR,
+      paprDir: this.paprDir,
       syncedItems: this.stateManager.data.syncedItems,
       queuedPaths: this.syncQueue.map((item) => item.relativePath),
       hasItemChanged: (relativePath) => this.stateManager.hasItemChanged(relativePath),
@@ -176,7 +181,7 @@ export class CloudSyncService {
     if (!this.stateManager.retryDeadLetter(relativePath)) {
       return false;
     }
-    const fullPath = path.join(PAPR_DIR, relativePath);
+    const fullPath = path.join(this.paprDir, relativePath);
     if (!fs.existsSync(fullPath)) {
       return true;
     }
@@ -199,7 +204,7 @@ export class CloudSyncService {
     );
     const relativePaths = [
       path.join("apps", appId),
-      ...resolveAppDependentJobIds(PAPR_DIR, appId).map(jobRelativePath),
+      ...resolveAppDependentJobIds(this.paprDir, appId).map(jobRelativePath),
     ];
     const reconciled = await this.reconcilePathsIfGitClean(relativePaths);
     return reconciled.length;
@@ -235,7 +240,7 @@ export class CloudSyncService {
     const reconciled: string[] = [];
 
     for (const relativePath of relativePaths) {
-      const fullPath = path.join(PAPR_DIR, relativePath);
+      const fullPath = path.join(this.paprDir, relativePath);
       const exists = fs.existsSync(fullPath);
       let porcelain = "";
       let trackedFiles = "";
@@ -302,7 +307,7 @@ export class CloudSyncService {
     }
 
     const token = await this.ensureFreshToken();
-    if (token && this.tokenCache?.cloneUrl && (await this.gitRunner.isRepo(PAPR_DIR))) {
+    if (token && this.tokenCache?.cloneUrl && this.hasWorkspaceGitAtRoot()) {
       await this.updateRemoteUrl(this.buildAuthedUrl(this.tokenCache.cloneUrl, token));
     }
 
@@ -340,8 +345,8 @@ export class CloudSyncService {
       return;
     }
 
-    // Best-effort repo bootstrap — never blocks git sync
-    void this.callReposInit();
+    // Ensure GitHub repo exists before token fetch / first push
+    await this.callReposInit();
 
     const tokenResp = await this.fetchRepoToken();
     if (!tokenResp) {
@@ -365,7 +370,14 @@ export class CloudSyncService {
 
     const cloneUrl = this.buildAuthedUrl(userRepo.cloneUrl, tokenResp.token);
 
-    if (!(await this.gitRunner.isRepo(PAPR_DIR))) {
+    const foreignGitRoot = await this.getForeignGitRoot();
+    if (foreignGitRoot) {
+      console.warn(
+        `[CloudSync] Ignoring parent git at ${foreignGitRoot} — workspace ${this.paprDir} needs its own cloud repo`,
+      );
+    }
+
+    if (!this.hasWorkspaceGitAtRoot()) {
       await this.initialClone(cloneUrl);
     } else {
       const previousIdentity = await this.getOriginRepoIdentity();
@@ -441,7 +453,7 @@ export class CloudSyncService {
       await this.enqueueSubDirs();
       while (this.syncQueue.length > 0) {
         const item = this.syncQueue.shift()!;
-        if (!fs.existsSync(path.join(PAPR_DIR, item.relativePath))) {
+        if (!fs.existsSync(path.join(this.paprDir, item.relativePath))) {
           this.stateManager.markSynced(item.relativePath);
           continue;
         }
@@ -469,7 +481,7 @@ export class CloudSyncService {
       );
       const relativePaths = [
         path.join("apps", appId),
-        ...resolveAppDependentJobIds(PAPR_DIR, appId).map(jobRelativePath),
+        ...resolveAppDependentJobIds(this.paprDir, appId).map(jobRelativePath),
       ];
 
       if (this.pushTimer) {
@@ -481,7 +493,7 @@ export class CloudSyncService {
       await this.ensureRemoteCaughtUp();
 
       const changedPaths = relativePaths.filter((relativePath) => {
-        const fullPath = path.join(PAPR_DIR, relativePath);
+        const fullPath = path.join(this.paprDir, relativePath);
         if (!fs.existsSync(fullPath)) {
           this.stateManager.markSynced(relativePath);
           return false;
@@ -511,21 +523,22 @@ export class CloudSyncService {
 
   // ── Token management ──────────────────────────────────────────────
 
-  private async callReposInit(): Promise<void> {
+  private async callReposInit(): Promise<boolean> {
     try {
       const resp = await cloudApiFetch("/v1/cloud/repos/init", {
         method: "POST",
-        body: { scope: "user", template: "default" },
+        body: buildCloudReposRequestBody("user"),
         timeoutMs: 60_000,
       });
       if (!resp.ok) {
         console.warn("[CloudSync] repos/init failed:", resp.status);
-        return;
+        return false;
       }
       const data = (await resp.json()) as { repoUrl?: string };
       if (data.repoUrl) {
         this.state.repoUrl = data.repoUrl;
       }
+      return true;
     } catch (err) {
       const msg = (err as Error).message;
       if (msg.includes("AbortError") || msg.includes("aborted")) {
@@ -533,6 +546,7 @@ export class CloudSyncService {
       } else {
         console.warn("[CloudSync] repos/init error:", msg.slice(0, 100));
       }
+      return false;
     }
   }
 
@@ -540,7 +554,7 @@ export class CloudSyncService {
     try {
       const resp = await cloudApiFetch("/v1/cloud/repos/token", {
         method: "POST",
-        body: { scope: "user" },
+        body: buildCloudReposRequestBody("user"),
         timeoutMs: 60_000,
       });
       if (resp.status === 401) return null;
@@ -583,6 +597,51 @@ export class CloudSyncService {
     };
   }
 
+  private hasWorkspaceGitAtRoot(): boolean {
+    return fs.existsSync(path.join(this.paprDir, ".git"));
+  }
+
+  /** Parent git root when workspace has no local `.git` but inherits ancestor repo. */
+  private async getForeignGitRoot(): Promise<string | null> {
+    if (this.hasWorkspaceGitAtRoot()) {
+      return null;
+    }
+    if (!(await this.gitRunner.isRepo(this.paprDir))) {
+      return null;
+    }
+    try {
+      const topLevel = (await this.git(["rev-parse", "--show-toplevel"])).trim();
+      const resolved = path.resolve(topLevel);
+      if (resolved !== path.resolve(this.paprDir)) {
+        return resolved;
+      }
+    } catch {
+      /* not in a git work tree */
+    }
+    return null;
+  }
+
+  private isRepoNotFoundError(message: string): boolean {
+    const lower = message.toLowerCase();
+    return lower.includes("repository not found") || lower.includes("remote: not found");
+  }
+
+  /** Re-provision GitHub repo + refresh token after push/auth failures. */
+  private async provisionCloudRepo(): Promise<void> {
+    this.tokenCache = null;
+    await this.callReposInit();
+    const resp = await this.fetchRepoToken();
+    if (!resp) {
+      throw new Error("Could not refresh cloud repo token after repos/init");
+    }
+    const userRepo = resp.repos.find((r) => r.scope === "user");
+    if (!userRepo?.cloneUrl) {
+      throw new Error("No user repo in token response after repos/init");
+    }
+    this.applyUserRepoToken(userRepo, resp.token, resp.expiresAt);
+    await this.updateRemoteUrl(this.buildAuthedUrl(userRepo.cloneUrl, resp.token));
+  }
+
   private normalizeRepoIdentity(url: string): string {
     return url
       .replace(/x-access-token:[^@]+@/, "")
@@ -610,11 +669,11 @@ export class CloudSyncService {
 
   private async git(args: string[], opts?: { timeout?: number }): Promise<string> {
     this.cleanStaleLock();
-    return this.gitRunner.run(args, { cwd: PAPR_DIR, timeout: opts?.timeout });
+    return this.gitRunner.run(args, { cwd: this.paprDir, timeout: opts?.timeout });
   }
 
   private cleanStaleLock(): void {
-    const lockPath = path.join(PAPR_DIR, ".git", "index.lock");
+    const lockPath = path.join(this.paprDir, ".git", "index.lock");
     if (!fs.existsSync(lockPath)) return;
     try {
       const stat = fs.statSync(lockPath);
@@ -631,7 +690,7 @@ export class CloudSyncService {
     this.ensureGitignore();
     const paths: string[] = [];
     for (const dir of INSTANT_DIRS) {
-      if (!fs.existsSync(path.join(PAPR_DIR, dir))) {
+      if (!fs.existsSync(path.join(this.paprDir, dir))) {
         continue;
       }
       if (this.stateManager.hasItemChanged(dir)) {
@@ -691,7 +750,7 @@ export class CloudSyncService {
     }
 
     for (const parent of QUEUED_DIRS) {
-      const parentPath = path.join(PAPR_DIR, parent);
+      const parentPath = path.join(this.paprDir, parent);
       if (!fs.existsSync(parentPath)) continue;
 
       for (const entry of fs.readdirSync(parentPath, { withFileTypes: true })) {
@@ -768,7 +827,7 @@ export class CloudSyncService {
         this.state.status = "queuing";
 
         try {
-          if (!fs.existsSync(path.join(PAPR_DIR, queueItem.relativePath))) {
+          if (!fs.existsSync(path.join(this.paprDir, queueItem.relativePath))) {
             this.stateManager.markSynced(queueItem.relativePath);
             this.stateManager.save();
             return;
@@ -1052,7 +1111,7 @@ export class CloudSyncService {
         return;
       }
 
-      const markerPath = path.join(PAPR_DIR, CLOUD_REPO_HEAD_RELATIVE_PATH);
+      const markerPath = path.join(this.paprDir, CLOUD_REPO_HEAD_RELATIVE_PATH);
       fs.mkdirSync(path.dirname(markerPath), { recursive: true });
 
       let existing = "";
@@ -1101,7 +1160,7 @@ export class CloudSyncService {
     const { prepareAppsForCloudGitSyncFromPaths, appIdsFromSyncRelativePaths } =
       await import("./cloudSync/prepareAppsForCloud.js");
     const preparedAppIds = await prepareAppsForCloudGitSyncFromPaths(
-      PAPR_DIR,
+      this.paprDir,
       changedPaths,
     );
 
@@ -1244,6 +1303,16 @@ export class CloudSyncService {
       return;
     } catch (err) {
       const msg = (err as Error).message ?? String(err);
+
+      if (this.isRepoNotFoundError(msg)) {
+        console.warn(
+          "[CloudSync] Remote repo missing or inaccessible — provisioning via repos/init and retrying push",
+        );
+        await this.provisionCloudRepo();
+        await this.git(["push", "-u", "origin", "main"], pushOpts);
+        return;
+      }
+
       const shouldForce =
         msg.includes("rejected") ||
         msg.includes("fetch first") ||
@@ -1285,8 +1354,8 @@ export class CloudSyncService {
 
     try {
       await this.gitRunner.clone(cloneUrl, tempDir);
-      if (!fs.existsSync(path.join(PAPR_DIR, ".git"))) {
-        fs.cpSync(path.join(tempDir, ".git"), path.join(PAPR_DIR, ".git"), { recursive: true });
+      if (!fs.existsSync(path.join(this.paprDir, ".git"))) {
+        fs.cpSync(path.join(tempDir, ".git"), path.join(this.paprDir, ".git"), { recursive: true });
       }
       fs.rmSync(tempDir, { recursive: true, force: true });
     } catch (err) {
@@ -1420,7 +1489,7 @@ export class CloudSyncService {
 
   private startWatcher(): void {
     const watchPaths = INSTANT_DIRS
-      .map((d) => path.join(PAPR_DIR, d))
+      .map((d) => path.join(this.paprDir, d))
       .filter((p) => fs.existsSync(p));
     if (watchPaths.length === 0) return;
 
@@ -1465,7 +1534,7 @@ export class CloudSyncService {
       const github = this.getGitHubSyncItemsReport();
       const { buildTursoSyncItemsReport } = await import("./tursoSyncStatus.js");
       const turso = await buildTursoSyncItemsReport(
-        path.join(PAPR_DIR, "apps"),
+        path.join(this.paprDir, "apps"),
       );
       const { getCloudAppPublishService } = await import(
         "./CloudAppPublishService.js"
@@ -1486,7 +1555,7 @@ export class CloudSyncService {
   }
 
   private ensureGitignore(): void {
-    fs.writeFileSync(path.join(PAPR_DIR, ".gitignore"), GITIGNORE_CONTENT, "utf-8");
+    fs.writeFileSync(path.join(this.paprDir, ".gitignore"), GITIGNORE_CONTENT, "utf-8");
   }
 }
 
@@ -1504,4 +1573,12 @@ export function initializeCloudSyncService(opts?: {
 
 export function getCloudSyncService(): CloudSyncService | null {
   return instance;
+}
+
+export async function resetCloudSyncServiceForWorkspaceSwitch(): Promise<void> {
+  if (!instance) {
+    return;
+  }
+  await instance.stop();
+  instance = null;
 }

@@ -1,7 +1,7 @@
 import { ipcMain } from "electron";
 import fs from "fs/promises";
-import os from "os";
 import path from "path";
+import { resolvePaprUserDataPath } from "../../core/utils/paprWorkspace.js";
 
 interface SaveChatAttachmentInput {
   chatId: string;
@@ -51,8 +51,7 @@ export function initializeChatAttachmentsIPC(): void {
 
         const safeChatId = input.chatId.replace(/[^\w-]/g, "_").slice(0, 64);
         const attachmentsRoot = path.join(
-          os.homedir(),
-          ".paprwork-v2",
+          resolvePaprUserDataPath(),
           "attachments",
           safeChatId,
         );

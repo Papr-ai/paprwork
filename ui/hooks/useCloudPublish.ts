@@ -115,9 +115,8 @@ function buildViewModel(
 
   const publishedPreviewUrl = (() => {
     if (!baseUrl || state?.enabled !== true) return null;
-    if (sharing.loginAccess === "none" && externalLinkUrl) {
-      return externalLinkUrl;
-    }
+    // When an invite link is enabled, always preview with the full ?t= URL.
+    if (externalLinkUrl) return externalLinkUrl;
     return loginUrl ?? shareLink ?? baseUrl;
   })();
 

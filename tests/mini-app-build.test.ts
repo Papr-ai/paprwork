@@ -58,6 +58,31 @@ describe("buildMiniApp", () => {
     expect(distCss).toContain("padding: 16px");
   });
 
+  it("leaves /__papr__/ SDK imports external (runtime-served, not bundled)", async () => {
+    await writeFile("app.ts", [
+      "import { subscribeJobEvents } from '/__papr__/papr-job-events.ts';",
+      "subscribeJobEvents({ jobIds: ['job-1'] });",
+    ].join("\n"));
+
+    const result = await buildMiniApp(TEST_DIR);
+    expect(result.success).toBe(true);
+
+    const distJs = await fs.readFile(path.join(TEST_DIR, "dist", "app.js"), "utf-8");
+    expect(distJs).toContain('from "/__papr__/papr-job-events.ts"');
+    expect(distJs).not.toContain("EventSource");
+  });
+
+  it("formats /__papr__/ resolve errors with platform guidance", async () => {
+    const { formatMiniAppBuildErrorMessage } = await import(
+      "../src/gateway/utils/miniAppBuild.js"
+    );
+    const msg = formatMiniAppBuildErrorMessage(
+      'Could not resolve "/__papr__/papr-job-events.ts"',
+    );
+    expect(msg).toContain("Do NOT add local shim");
+    expect(msg).toContain("/__papr__/ import is correct");
+  });
+
   it("fails with clear error when CSS import is missing", async () => {
     await writeFile("app.ts", [
       "import './base.css';",

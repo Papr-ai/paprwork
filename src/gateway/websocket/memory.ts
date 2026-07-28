@@ -7,6 +7,8 @@
  */
 
 import type { WebSocket } from "ws";
+import { getPaprWorkspaceDir } from "../../core/utils/paprRoot.js";
+import { resolvePaprUserDataPath } from "../../core/utils/paprWorkspace.js";
 import type { WSMessage } from "./index.js";
 import { sendResponse, sendError } from "./index.js";
 import * as fs from "fs";
@@ -17,10 +19,9 @@ import { promisify } from "util";
 
 const execAsync = promisify(exec);
 
-const PAPR_DIR = path.join(os.homedir(), "Papr");
-const WORKSPACE_DIR = path.join(PAPR_DIR, "workspace");
-const WORKSPACE_FILE = path.join(WORKSPACE_DIR, "workspace.md");
-const WORKSPACE_MEMORY_DIR = path.join(WORKSPACE_DIR, "memory");
+function workspaceDir(): string { return getPaprWorkspaceDir(); }
+function workspaceFile(): string { return path.join(getPaprWorkspaceDir(), "workspace.md"); }
+function workspaceMemoryDir(): string { return path.join(getPaprWorkspaceDir(), "memory"); }
 
 const WRITABLE_WORKSPACE_FILES = new Set([
   "MEMORY.md",
@@ -37,7 +38,7 @@ const MAX_CONTEXT_FILE_BYTES = 512_000;
 function resolveContextFilePath(fileName: string): string | null {
   const memoryMatch = fileName.match(/^memory\/(\d{4}-\d{2}-\d{2}\.md)/);
   if (memoryMatch) {
-    return path.join(WORKSPACE_MEMORY_DIR, memoryMatch[1]);
+    return path.join(workspaceMemoryDir(), memoryMatch[1]);
   }
 
   const baseName = path.basename(fileName.split(" (")[0] ?? fileName);
@@ -45,7 +46,7 @@ function resolveContextFilePath(fileName: string): string | null {
     return null;
   }
 
-  const workspacePath = path.join(WORKSPACE_DIR, baseName);
+  const workspacePath = path.join(workspaceDir(), baseName);
   if (fs.existsSync(workspacePath)) {
     return workspacePath;
   }
@@ -61,19 +62,19 @@ function resolveContextFilePathForWrite(fileName: string): string | null {
 
   const memoryMatch = fileName.match(/^memory\/(\d{4}-\d{2}-\d{2}\.md)/);
   if (memoryMatch) {
-    return path.join(WORKSPACE_MEMORY_DIR, memoryMatch[1]);
+    return path.join(workspaceMemoryDir(), memoryMatch[1]);
   }
 
   const baseName = path.basename(fileName.split(" (")[0] ?? fileName);
   if (WRITABLE_WORKSPACE_FILES.has(baseName)) {
-    return path.join(WORKSPACE_DIR, baseName);
+    return path.join(workspaceDir(), baseName);
   }
 
   return null;
 }
 
 function assertPathUnderWorkspace(filePath: string): void {
-  const workspaceRoot = path.resolve(WORKSPACE_DIR);
+  const workspaceRoot = path.resolve(workspaceDir());
   const resolved = path.resolve(filePath);
   if (
     resolved !== workspaceRoot &&
@@ -135,14 +136,14 @@ async function handleGetWorkspace(
 ): Promise<void> {
   try {
     // Ensure workspace directory exists
-    if (!fs.existsSync(WORKSPACE_DIR)) {
-      fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+    if (!fs.existsSync(workspaceDir())) {
+      fs.mkdirSync(workspaceDir(), { recursive: true });
     }
 
     // Read or create workspace.md
     let content = "";
-    if (fs.existsSync(WORKSPACE_FILE)) {
-      content = fs.readFileSync(WORKSPACE_FILE, "utf-8");
+    if (fs.existsSync(workspaceFile())) {
+      content = fs.readFileSync(workspaceFile(), "utf-8");
     } else {
       // Create default workspace.md
       content = `# Workspace Context
@@ -158,13 +159,13 @@ This file helps AI agents understand your current work context.
 ## Notes
 
 `;
-      fs.writeFileSync(WORKSPACE_FILE, content, "utf-8");
+      fs.writeFileSync(workspaceFile(), content, "utf-8");
     }
 
     sendResponse(ws, {
       id: message.id,
       success: true,
-      data: { content, path: WORKSPACE_FILE },
+      data: { content, path: workspaceFile() },
     });
   } catch (error) {
     sendError(ws, message.id, error as Error);
@@ -186,17 +187,17 @@ async function handleSaveWorkspace(
     }
 
     // Ensure workspace directory exists
-    if (!fs.existsSync(WORKSPACE_DIR)) {
-      fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+    if (!fs.existsSync(workspaceDir())) {
+      fs.mkdirSync(workspaceDir(), { recursive: true });
     }
 
     // Write content
-    fs.writeFileSync(WORKSPACE_FILE, content, "utf-8");
+    fs.writeFileSync(workspaceFile(), content, "utf-8");
 
     sendResponse(ws, {
       id: message.id,
       success: true,
-      data: { saved: true, path: WORKSPACE_FILE },
+      data: { saved: true, path: workspaceFile() },
     });
   } catch (error) {
     sendError(ws, message.id, error as Error);
@@ -270,7 +271,7 @@ async function handleChatStats(
       last_indexed_at: null,
     };
 
-    const chatsDbPath = path.join(os.homedir(), ".paprwork-v2", "chats.db");
+    const chatsDbPath = path.join(resolvePaprUserDataPath(), "chats.db");
     if (fs.existsSync(chatsDbPath)) {
       try {
         const Database = (await import("better-sqlite3")).default;
@@ -323,13 +324,13 @@ async function handleListWorkspaceFiles(
 ): Promise<void> {
   try {
     // Ensure workspace directory exists
-    if (!fs.existsSync(WORKSPACE_DIR)) {
-      fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+    if (!fs.existsSync(workspaceDir())) {
+      fs.mkdirSync(workspaceDir(), { recursive: true });
     }
 
     // Read all .md files
     const files = fs
-      .readdirSync(WORKSPACE_DIR)
+      .readdirSync(workspaceDir())
       .filter((file) => file.endsWith(".md"))
       .sort();
 
@@ -772,7 +773,7 @@ async function handleListSchemas(
     }
 
     const Papr = (await import("@papr/memory")).default;
-    const client = new Papr({ xAPIKey: apiKey, maxRetries: 1, timeout: 15000 });
+    const client = new Papr({ xAPIKey: apiKey, maxRetries: 2, timeout: 30_000 });
 
     const payload = message.payload as { statusFilter?: string } | undefined;
     const response = await client.schemas.list({

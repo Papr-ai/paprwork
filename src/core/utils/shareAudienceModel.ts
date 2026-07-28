@@ -13,6 +13,8 @@ export type CodeAccess = "off" | "install";
 export interface ShareAudienceModel {
   audience: ShareAudience;
   permission: SharePermission;
+  /** Link sharing only: true = Papr sign-in required (default), false = token-only */
+  requireSignIn?: boolean;
 }
 
 export function permissionToCodeAccess(permission: SharePermission): CodeAccess {
@@ -31,7 +33,10 @@ export function sharingToAudienceModel(
   const editPermission = codeAccessToPermission(codeAccess);
   if (editPermission) {
     if (loginAccess === "none" && externalLink !== "off") {
-      return { audience: "link", permission: "edit" };
+      return { audience: "link", permission: "edit", requireSignIn: false };
+    }
+    if (loginAccess === "public" && externalLink !== "off") {
+      return { audience: "link", permission: "edit", requireSignIn: true };
     }
     if (loginAccess === "public") {
       return { audience: "public", permission: "edit" };
@@ -46,6 +51,14 @@ export function sharingToAudienceModel(
     return {
       audience: "link",
       permission: externalLink === "read_write" ? "write" : "read",
+      requireSignIn: false,
+    };
+  }
+  if (loginAccess === "public" && externalLink !== "off") {
+    return {
+      audience: "link",
+      permission: externalLink === "read_write" ? "write" : "read",
+      requireSignIn: true,
     };
   }
   if (loginAccess === "public") {
@@ -68,9 +81,14 @@ export function audienceModelToSharing(model: ShareAudienceModel): {
       : model.permission;
 
   if (model.audience === "link") {
+    const externalLink =
+      model.permission === "edit" || permission === "write"
+        ? "read_write"
+        : "read";
+    const requireSignIn = model.requireSignIn !== false;
     return {
-      loginAccess: "none",
-      externalLink: permission === "write" ? "read_write" : "read",
+      loginAccess: requireSignIn ? "public" : "none",
+      externalLink,
     };
   }
   if (model.audience === "public") {
@@ -117,12 +135,17 @@ export function isPermissionAvailable(
   audience: ShareAudience,
   permission: SharePermission,
 ): boolean {
-  if (permission === "edit") {
-    return audience !== "private";
+  // Simplified UI: private = only me, team = workspace, link = anyone with link
+  // Both "write" (view & interact) and "edit" (code) require non-private
+  if (audience === "private") {
+    // Private apps don't share permissions
+    return false;
   }
-  if (permission === "write") {
+  // For "team" and "link", both write and edit are available
+  if (permission === "write" || permission === "edit") {
     return audience === "link" || audience === "team";
   }
+  // "read" is always available (though not in UI anymore)
   return true;
 }
 

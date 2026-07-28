@@ -49,7 +49,7 @@ async function generatePicks() {
       [
         "app.ts",
         `
-import { subscribeJobEvents } from './papr-job-events.ts';
+import { subscribeJobEvents } from '/__papr__/papr-job-events.ts';
 setInterval(() => {}, 2000);
 await fetch('/api/db/query', { method: 'POST' });
 subscribeJobEvents({ jobIds: ['x'], onDbChanged: () => loadData() });
@@ -58,6 +58,22 @@ subscribeJobEvents({ jobIds: ['x'], onDbChanged: () => loadData() });
     ]);
     const issues = checkMiniAppJobEventPatterns(files);
     expect(issues.filter((i) => i.rule === "no-db-polling")).toHaveLength(0);
+  });
+
+  test("errors on local papr-job-events shim import", () => {
+    const files = new Map<string, string>([
+      [
+        "app.ts",
+        `
+import { subscribeJobEvents } from './papr-job-events.ts';
+subscribeJobEvents({ jobIds: ['x'], onDbChanged: () => loadData() });
+`,
+      ],
+    ]);
+    const issues = checkMiniAppJobEventPatterns(files);
+    expect(
+      issues.some((i) => i.rule === "no-job-events-shim" && i.severity === "error"),
+    ).toBe(true);
   });
 
   test("passes when job run uses subscribeJobEvents with onDbChanged", () => {

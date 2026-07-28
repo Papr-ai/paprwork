@@ -26,7 +26,7 @@ import {
   resolveCloudAppBackendDatabaseEnv,
 } from "./appBackendDatabase.js";
 import { parseDataSourcesFile } from "../appDataSources.js";
-
+import { hydrateCloudDatabaseRegistry } from "./cloudDatabaseRegistry.js";
 import type { AppBackendBundleManifest } from "../../utils/miniAppBackendBuild.js";
 
 const BACKEND_MANIFEST_PATH = "backend/manifest.json";
@@ -118,6 +118,7 @@ export class CloudAppBackendService {
     const dataSources = dsFile?.content
       ? parseDataSourcesFile(dsFile.content)
       : { sources: [] };
+    await hydrateCloudDatabaseRegistry(auth, dataSources);
     const databaseEnv = await resolveCloudAppBackendDatabaseEnv({
       appId: input.appId,
       config: dataSources,

@@ -4,7 +4,7 @@
 
 import { Papr } from '@papr/memory';
 import { buildCodeIndexAddPolicy } from '../../utils/paprMemoryPolicy.js';
-import { paprUserScope } from '../../utils/paprUserId.js';
+import { paprMemoryScopeSpread } from '../../utils/memoryScopeResolver.js';
 
 export type CodeSummaryMemoryKind = 'code_file_summary' | 'code_project_overview';
 
@@ -111,15 +111,18 @@ export class CodeSummaryMemoryStore {
       }
     }
 
+    const memoryScope = await paprMemoryScopeSpread({
+      addPolicy: buildCodeIndexAddPolicy(this.schemaId),
+    });
+
     const response = await this.client.memory.add({
       content: input.content,
-      ...paprUserScope(),
+      ...memoryScope,
       metadata: {
         role: 'assistant',
         category: 'fact',
         customMetadata: input.customMetadata,
       },
-      policy: buildCodeIndexAddPolicy(this.schemaId),
     });
 
     return extractMemoryId(response);

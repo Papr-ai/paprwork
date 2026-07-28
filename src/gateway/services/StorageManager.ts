@@ -15,8 +15,7 @@ import type {
 import { LocalStorageProvider } from "./storage/LocalStorageProvider.js";
 import { PaprMemoryProvider } from "./storage/PaprMemoryProvider.js";
 import { HybridStorageProvider } from "./storage/HybridStorageProvider.js";
-import * as path from "path";
-import * as os from "os";
+import { resolvePaprUserDataPath } from "../../core/utils/paprWorkspace.js";
 
 export type StorageMode = "local" | "papr" | "hybrid";
 
@@ -84,9 +83,7 @@ export class StorageManager {
    * Get default user data path (Electron app data directory)
    */
   private getDefaultUserDataPath(): string {
-    // In Electron, this would be app.getPath('userData')
-    // For now, use a sensible default
-    return path.join(os.homedir(), ".paprwork-v2");
+    return resolvePaprUserDataPath();
   }
 
   /**
@@ -198,7 +195,7 @@ export class StorageManager {
    */
   async updateChat(
     chatId: string,
-    updates: Partial<{ title: string }>,
+    updates: Partial<{ title: string; memory_scope: import("./storage/IStorageProvider.js").ChatMemoryScope }>,
   ): Promise<void> {
     const provider = this.ensureInitialized();
     await provider.updateChat(chatId, updates);
@@ -498,6 +495,11 @@ export class StorageManager {
 
 // Singleton instance
 let storageManagerInstance: StorageManager | null = null;
+
+/** Reset global singleton after org/namespace workspace switch. */
+export function resetStorageManagerSingleton(): void {
+  storageManagerInstance = null;
+}
 
 /**
  * Get the global StorageManager instance

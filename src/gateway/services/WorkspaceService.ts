@@ -19,8 +19,8 @@
  */
 
 import { promises as fs } from "fs";
+import { getPaprWorkspaceDir } from "../../core/utils/paprRoot.js";
 import path from "path";
-import os from "os";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -64,8 +64,7 @@ export class WorkspaceService {
   private initialized = false;
 
   constructor() {
-    const homeDir = os.homedir();
-    this.workspaceDir = path.join(homeDir, "Papr", "workspace");
+    this.workspaceDir = getPaprWorkspaceDir();
     this.memoryDir = path.join(this.workspaceDir, "memory");
   }
 
@@ -556,4 +555,9 @@ export async function initializeWorkspaceService(): Promise<WorkspaceService> {
   const service = getWorkspaceService();
   await service.initialize();
   return service;
+}
+
+/** Reset singleton after org/namespace workspace switch. */
+export function resetWorkspaceServiceForWorkspaceSwitch(): void {
+  workspaceServiceInstance = null;
 }

@@ -25,7 +25,7 @@ export function usePaprNamespace(): PaprNamespaceContext {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const status = await window.electronAPI.papr.getStatus();
+      const status = await window.electronAPI.papr.checkLoginStatus();
       if (!status.success || !status.isLoggedIn) {
         setIsLoggedIn(false);
         setUserId(null);
@@ -64,15 +64,33 @@ export function usePaprNamespace(): PaprNamespaceContext {
   }, [refresh]);
 
   useEffect(() => {
-    const onNamespaceChanged = (data: { namespaceId: string; namespaceName: string }) => {
-      setNamespaceId(data.namespaceId);
-      setNamespaceName(data.namespaceName);
+    const onNamespaceChanged = () => {
+      void refresh();
     };
+    const onAuthChanged = () => {
+      void refresh();
+    };
+
     window.electronAPI.papr.onNamespaceChanged(onNamespaceChanged);
+    window.electronAPI.papr.onOrganizationChanged(onNamespaceChanged);
+    window.electronAPI.papr.onLoginSuccess(onAuthChanged);
+    window.electronAPI.papr.onLogoutSuccess(onAuthChanged);
+    window.addEventListener("papr-namespace-changed", onNamespaceChanged);
+    window.addEventListener("papr-organization-changed", onNamespaceChanged);
+    window.addEventListener("papr-auth-success", onAuthChanged);
+    window.addEventListener("papr-logout-success", onAuthChanged);
+
     return () => {
       window.electronAPI.papr.removeNamespaceChangedListener(onNamespaceChanged);
+      window.electronAPI.papr.removeOrganizationChangedListener(onNamespaceChanged);
+      window.electronAPI.papr.removeLoginSuccessListener(onAuthChanged);
+      window.electronAPI.papr.removeLogoutSuccessListener(onAuthChanged);
+      window.removeEventListener("papr-namespace-changed", onNamespaceChanged);
+      window.removeEventListener("papr-organization-changed", onNamespaceChanged);
+      window.removeEventListener("papr-auth-success", onAuthChanged);
+      window.removeEventListener("papr-logout-success", onAuthChanged);
     };
-  }, []);
+  }, [refresh]);
 
   return {
     isLoggedIn,

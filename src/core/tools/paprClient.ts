@@ -6,10 +6,11 @@ export async function getPaprClient(): Promise<Papr> {
   if (!apiKey) {
     throw new Error("PAPR_API_KEY is not configured");
   }
-  const sessionToken = await getApiKey("PAPR_SESSION_TOKEN");
+  // Memory server REST + /v1/graphql authenticate via X-API-Key. Do not send
+  // PAPR_SESSION_TOKEN here — that Parse session is for dashboard/Parse APIs only;
+  // sending both can make GraphQL take a JWT/JWKS path and fail with 401.
   return new Papr({
     xAPIKey: apiKey,
-    ...(sessionToken ? { xSessionToken: sessionToken } : {}),
     maxRetries: 2,
     timeout: 120000,
   });

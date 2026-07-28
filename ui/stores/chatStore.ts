@@ -12,6 +12,7 @@ import type {
   StreamingState,
   SequenceItem,
 } from "../types/chat";
+import type { MemoryAudience } from "../constants/memoryScope";
 import type { ToolCall } from "../types/core";
 import { gateway } from "../src/lib/gateway";
 import { trackEvent } from "../lib/telemetry";
@@ -23,6 +24,9 @@ interface ChatStore {
   // All chat metadata
   chats: ChatMetadata[];
 
+  /** Client-side memory scope per chat (includes temp ids before server persist). */
+  memoryScopeByChatId: Map<string, MemoryAudience>;
+
   // Per-chat state for parallel streaming (keyed by chatId)
   chatStates: Map<string, ChatState>;
 
@@ -33,6 +37,8 @@ interface ChatStore {
   // Actions
   addMessage: (message: ChatMessage, chatId?: string) => void;
   prependMessages: (messages: ChatMessage[], chatId: string) => void;
+  /** Clear cached chats/messages after org/namespace workspace switch. */
+  resetForWorkspaceSwitch: () => void;
   updateStreamingMessage: (
     messageId: string,
     content: string,
@@ -42,6 +48,8 @@ interface ChatStore {
   /** Move chat state from a temp id to a permanent id (first message in new chat). */
   migrateChatId: (oldChatId: string, newChatId: string) => void;
   setChats: (chats: ChatMetadata[]) => void;
+  setChatMemoryScope: (chatId: string, scope: MemoryAudience) => void;
+  getChatMemoryScope: (chatId: string) => MemoryAudience;
   setLoading: (loading: boolean) => void;
   setSending: (chatId: string, sending: boolean) => void;
   setConnectionPaused: (chatId: string, paused: boolean) => void;
@@ -121,6 +129,7 @@ export const defaultChatState: ChatState = {
 export const useChatStore = create<ChatStore>((set, get) => ({
   // Initial state
   chats: [],
+  memoryScopeByChatId: new Map(),
   chatStates: new Map(),
   streamingState: new Map(),
   isLoading: false,
@@ -300,16 +309,84 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         newStreamingState.delete(oldChatId);
       }
 
+      const memoryScopeByChatId = new Map(state.memoryScopeByChatId);
+      const migratedScope = memoryScopeByChatId.get(oldChatId);
+      if (migratedScope) {
+        memoryScopeByChatId.set(newChatId, migratedScope);
+        memoryScopeByChatId.delete(oldChatId);
+      }
+
+      const oldChatMeta = state.chats.find((chat) => chat.id === oldChatId);
+      const chats = state.chats
+        .filter((chat) => chat.id !== oldChatId)
+        .map((chat) =>
+          chat.id === newChatId && migratedScope
+            ? { ...chat, memoryScope: migratedScope }
+            : chat,
+        );
+      if (oldChatMeta && !chats.some((chat) => chat.id === newChatId)) {
+        chats.unshift({
+          ...oldChatMeta,
+          id: newChatId,
+          memoryScope: migratedScope ?? oldChatMeta.memoryScope,
+        });
+      }
+
       return {
         chatStates: newChatStates,
         streamingState: newStreamingState,
+        memoryScopeByChatId,
+        chats,
       };
     }),
 
-  setChats: (chats) =>
-    set(() => ({
-      chats,
-    })),
+  setChats: (incoming) =>
+    set((state) => {
+      const memoryScopeByChatId = new Map(state.memoryScopeByChatId);
+      const chats = incoming.map((chat) => {
+        const serverScope = chat.memoryScope ?? "user";
+        const localScope = memoryScopeByChatId.get(chat.id);
+        const resolvedScope =
+          localScope && localScope !== "user" && serverScope === "user"
+            ? localScope
+            : serverScope;
+        memoryScopeByChatId.set(chat.id, resolvedScope);
+        return { ...chat, memoryScope: resolvedScope };
+      });
+      return { chats, memoryScopeByChatId };
+    }),
+
+  setChatMemoryScope: (chatId, scope) =>
+    set((state) => {
+      const memoryScopeByChatId = new Map(state.memoryScopeByChatId);
+      memoryScopeByChatId.set(chatId, scope);
+      return {
+        memoryScopeByChatId,
+        chats: state.chats.map((chat) =>
+          chat.id === chatId ? { ...chat, memoryScope: scope } : chat,
+        ),
+      };
+    }),
+
+  getChatMemoryScope: (chatId) => {
+    const state = get();
+    const scoped = state.memoryScopeByChatId.get(chatId);
+    if (scoped) {
+      return scoped;
+    }
+    const chat = state.chats.find((item) => item.id === chatId);
+    return chat?.memoryScope ?? "user";
+  },
+
+  resetForWorkspaceSwitch: () =>
+    set({
+      chats: [],
+      memoryScopeByChatId: new Map(),
+      chatStates: new Map(),
+      streamingState: new Map(),
+      isLoading: false,
+      error: null,
+    }),
 
   setLoading: (loading) => set({ isLoading: loading }),
 

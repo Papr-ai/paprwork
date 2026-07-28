@@ -7,6 +7,7 @@
 
 import type { AppRuntimeRouteAuth } from "./types.js";
 import { getMemoryServerBaseUrl, cloudApiFetch } from "../../utils/cloudApiClient.js";
+import { buildCloudVaultRequestBody } from "../../../core/utils/cloudReposScope.js";
 
 function getCloudAppHostKey(): string {
   const key = process.env.PAPR_CLOUD_APP_HOST_KEY;
@@ -96,8 +97,12 @@ export async function fetchRuntimeVaultKeyNames(
     return [];
   }
   try {
+    const scope = auth.namespaceId ? "namespace" : "user";
+    const query = scope === "namespace"
+      ? `scope=namespace&namespace_id=${encodeURIComponent(auth.namespaceId)}`
+      : "scope=user";
     const res = await fetch(
-      `${getMemoryServerBaseUrl()}/v1/cloud/vault/keys?scope=user`,
+      `${getMemoryServerBaseUrl()}/v1/cloud/vault/keys?${query}`,
       {
         method: "GET",
         headers: runtimeHeaders(auth),
@@ -125,7 +130,7 @@ export async function syncRuntimeVaultKeys(
     {
       method: "POST",
       headers: runtimeHeaders(auth),
-      body: JSON.stringify({ scope: "user", keys }),
+      body: JSON.stringify(buildCloudVaultRequestBody(keys, auth.namespaceId ? "namespace" : "user")),
     },
   );
   if (!res.ok) {

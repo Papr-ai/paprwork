@@ -5,7 +5,20 @@ import { applyExactStringReplacement } from "../utils/exactStringReplace.js";
 import { withFileEditLock } from "../utils/fileEditLock.js";
 import { buildPostEditSnippet } from "../utils/postEditSnippet.js";
 import { coerceAppIdsValue } from "../utils/coerceAppIds.js";
-import { PRODUCT_ARCHITECT_REMINDER } from "../utils/productArchitectGate.js";
+import {
+  buildJobScriptPathReminder,
+  formatJobScriptPathBlockMessage,
+  assessJobScriptPath,
+  hasBlockingJobScriptPathIssues,
+} from "../utils/jobScriptPathValidation.js";
+import {
+  assertProductArchitectGate,
+  PRODUCT_ARCHITECT_REMINDER,
+} from "../utils/productArchitectGate.js";
+import {
+  buildAppDbJobReminder,
+  buildAppDbRunJobFailureReminder,
+} from "../utils/appDbGuidance.js";
 import {
   getCloudAppPublishTool,
   publishCloudAppTool,
@@ -73,9 +86,12 @@ const APP_BUILD_FAILED_REMINDER =
   "Re-run validate_app after each fix until it passes.";
 
 const JOB_EVENTS_REMINDER =
-  "⚠️ LIVE UPDATES (REQUIRED): import subscribeJobEvents from /__papr__/papr-job-events.ts. " +
-  "Job writes $APP_DB → onDbChanged: () => loadData(). Job returns lastOutput only → onStatusChanged. " +
-  "NEVER poll. validate_app returns a copy-paste snippet when polling errors occur.";
+  "⚠️ LIVE UPDATES (REQUIRED for job-backed apps):\n" +
+  "import { subscribeJobEvents } from '/__papr__/papr-job-events.ts';\n" +
+  "subscribeJobEvents({ jobIds: [JOB_ID], onDbChanged: () => loadData(), onStatusChanged: (e) => updateBadge(e) });\n" +
+  "loadData(); // initial query on page load\n" +
+  "Job writes $APP_DB → onDbChanged refreshes UI. NEVER poll. Do NOT copy papr-job-events.ts into the app — /__papr__/ is external at build time.\n" +
+  "Turso sync is automatic when create_job({ appIds }) links a DB — no manual push. Cloud web reads Turso via same /api/db/query.";
 
 const CHAT_OPEN_REMINDER =
   "⚠️ ASK-AGENT BUTTONS (desktop): window.paprAPI.invoke('chat.open', { message: '…' }) opens main chat — " +
@@ -489,7 +505,7 @@ const createJobSchemaCore = z
       "claude-sonnet-4-6",
       "claude-sonnet-5",
       "claude-opus-4-6",
-      "claude-opus-4-8",
+      "claude-opus-5",
       "claude-fable-5",
       // OpenAI
       "gpt-5-6-luna",
@@ -696,10 +712,24 @@ export const createAppTool = createTool({
   id: "create_app",
   description:
     "Create a mini-app artifact with one or more files. Uses TypeScript (.ts) and Liquid Glass design system by default. " +
+    "ENFORCED: Requires a completed product-architect delegation in this chat first (delegate_task useAgentId product-architect). " +
     "Apps that trigger jobs MUST use subscribeJobEvents (onDbChanged for $APP_DB writes, onStatusChanged for lastOutput) — never poll.",
   inputSchema: createAppSchema,
   execute: async (input) => {
     const args = (input as { context?: CreateAppArgs }).context ?? input;
+    const { getCurrentChatId } = await import("./context.js");
+    const chatId = getCurrentChatId();
+    const architectGate = await assertProductArchitectGate(chatId, {
+      tool: "create_app",
+    });
+    if (!architectGate.allowed) {
+      return {
+        success: false,
+        error: architectGate.message,
+        _architectGateBlocked: true,
+      };
+    }
+
     const { getAppService } =
       await import("../../gateway/services/AppService.js");
     const appService = getAppService();
@@ -796,6 +826,7 @@ export const createJobTool = createTool({
   id: "create_job",
   description:
     "Create a persistent, rerunnable job — NOT for one-time probes. Use the bash tool for quick one-offs (curl, sqlite peek, test script once). " +
+    "ENFORCED for app-linked/scheduled/agent jobs: complete product-architect delegation in this chat before create_job. " +
     "Create a job when: mini-app button (/api/jobs/run), schedule, appIds linkage, dependsOn pipeline, or user will rerun by name. " +
     "REQUIRED fields: name, type (exact field name — python|node|agent|bash|shell|swift|subagent), appIds. " +
     "Do NOT use jobType or workingDirectory — those are not valid parameters. " +
@@ -813,6 +844,23 @@ export const createJobTool = createTool({
   inputSchema: createJobSchema,
   execute: async (input) => {
     const args = (input as { context?: CreateJobArgs }).context ?? input;
+    const { getCurrentChatId } = await import("./context.js");
+    const chatId = getCurrentChatId();
+    const architectGate = await assertProductArchitectGate(chatId, {
+      tool: "create_job",
+      jobType: args.type,
+      appIds: args.appIds,
+      schedule: args.schedule,
+      dependsOn: args.dependsOn,
+    });
+    if (!architectGate.allowed) {
+      return {
+        success: false,
+        error: architectGate.message,
+        _architectGateBlocked: true,
+      };
+    }
+
     const { getJobsService } =
       await import("../../gateway/services/JobsService.js");
     const jobsService = getJobsService();
@@ -925,6 +973,15 @@ export const createJobTool = createTool({
         ? "User must approve this schedule in the app before it runs automatically (approval card will appear)."
         : undefined;
 
+    const jobDir = await getJobDir(job.id);
+    const scriptPathIssues = await assessJobScriptPath(
+      args.type,
+      args.command,
+      jobDir,
+      { skipMissingFile: true },
+    );
+    const scriptPathReminder = buildJobScriptPathReminder(scriptPathIssues);
+
     return {
       success: true,
       data: job,
@@ -940,51 +997,10 @@ export const createJobTool = createTool({
       ...(dataSourceLinkSummary
         ? { _dataSourceLinkReminder: dataSourceLinkSummary }
         : {}),
+      ...(scriptPathReminder ? { _scriptPathReminder: scriptPathReminder } : {}),
     };
   },
 });
-
-/**
- * Remind agents that app-linked jobs must write UI tables via $APP_DB, not $JOB_DB.
- */
-function buildAppDbJobReminder(
-  jobType: string,
-  command: string | undefined,
-  linkedAppIds: readonly string[],
-): string | undefined {
-  if (linkedAppIds.length === 0 || !command) {
-    return undefined;
-  }
-
-  const cmd = command.toUpperCase();
-  const mentionsJobDb = cmd.includes("$JOB_DB") || cmd.includes("JOB_DB");
-  const mentionsAppDb = cmd.includes("$APP_DB") || cmd.includes("APP_DB");
-
-  if (mentionsJobDb && !mentionsAppDb) {
-    return (
-      `⚠️ APP DB REMINDER: Job is linked to mini-app(s) but command references JOB_DB without APP_DB. ` +
-      `UI-facing tables (settings, picks, planner_state, etc.) must be read/written via $APP_DB ` +
-      `(injected env — same file as the app's primary linked DB). JOB_DB is job-local scratch only. ` +
-      `Agent/script jobs: sqlite3 "$APP_DB" "SELECT ..." — not papr_jobs.db (does not exist). ` +
-      `Canonical job index: ~/Papr/data/jobs.json; job data: ~/Papr/Jobs/{jobId}/data/data.db.`
-    );
-  }
-
-  if (
-    (jobType === "agent" || jobType === "subagent") &&
-    !mentionsAppDb &&
-    /\b(INSERT|UPDATE|DELETE|CREATE TABLE|sqlite3)\b/i.test(command)
-  ) {
-    return (
-      `⚠️ APP DB REMINDER: This job writes SQL but does not mention $APP_DB. ` +
-      `For app-linked jobs, UI tables live in APP_DB (primary linked DB). ` +
-      `Call GET /api/db/schema?appId=... or sqlite3 "$APP_DB" ".tables" before writing. ` +
-      `Bootstrap missing tables via POST /api/db/exec or backend migrate action.`
-    );
-  }
-
-  return undefined;
-}
 
 /** Warn when create_job is used for work that should stay a one-off bash call. */
 function shouldSuggestBashInstead(args: CreateJobArgs): boolean {
@@ -1210,6 +1226,8 @@ export const runJobTool = createTool({
   id: "run_job",
   description:
     "Run a job by id and return status/logs/database info. " +
+    "Preflight: python/node jobs must reference an existing script (usually under code/). " +
+    "If the command points to fetch.py but the file is at code/fetch.py, run_job blocks with a fix hint. " +
     "Set runtime='cloud' to execute on Papr Cloud while the desktop is awake (pushes git, runs via memory server, pulls results back).",
   inputSchema: runJobSchema,
   execute: async (input) => {
@@ -1229,6 +1247,26 @@ export const runJobTool = createTool({
             existingJob.appIds.filter((id) => id !== "__standalone__"),
           )
         : undefined;
+
+    if (existingJob && ["python", "node"].includes(existingJob.type)) {
+      const jobDir = await getJobDir(args.jobId);
+      const scriptPathIssues = await assessJobScriptPath(
+        existingJob.type,
+        existingJob.command,
+        jobDir,
+      );
+      if (hasBlockingJobScriptPathIssues(scriptPathIssues)) {
+        return {
+          success: false,
+          error: formatJobScriptPathBlockMessage(scriptPathIssues),
+          data: {
+            jobId: args.jobId,
+            scriptPathIssues,
+            _scriptPathReminder: buildJobScriptPathReminder(scriptPathIssues),
+          },
+        };
+      }
+    }
 
     // Scan source files for env key anti-patterns before running
     const envKeyWarnings =
@@ -1255,6 +1293,13 @@ export const runJobTool = createTool({
       apiKeys,
     );
     const dbPath = await jobsService.getJobDatabasePath(args.jobId);
+
+    const linkedAppIds =
+      existingJob?.appIds?.filter((id) => id !== "__standalone__") ?? [];
+    const appDbFailureReminder = buildAppDbRunJobFailureReminder(
+      logs,
+      linkedAppIds,
+    );
 
     // Return special format for UI to render JobStatusCard
     return {
@@ -1287,6 +1332,9 @@ export const runJobTool = createTool({
             }
           : {}),
         ...(appDbJobReminder ? { _appDbJobReminder: appDbJobReminder } : {}),
+        ...(appDbFailureReminder
+          ? { _appDbFailureReminder: appDbFailureReminder }
+          : {}),
       },
     };
   },
@@ -1294,7 +1342,9 @@ export const runJobTool = createTool({
 
 export const readJobLogsTool = createTool({
   id: "read_job_logs",
-  description: "Read job logs for debugging and validation",
+  description:
+    "Read job stdout/stderr logs for debugging. PREFER this over bash cat/tail/head on log files — " +
+    "it uses the correct workspace job path, sanitizes API keys, and returns structured job metadata.",
   inputSchema: readJobLogsSchema,
   execute: async (input) => {
     const args = (input as { context?: ReadJobLogsArgs }).context ?? input;
@@ -1311,11 +1361,20 @@ export const readJobLogsTool = createTool({
       await jobsService.getLogs(args.jobId, args.maxBytes ?? 20000),
       apiKeys,
     );
+    const linkedAppIds =
+      job.appIds?.filter((id) => id !== "__standalone__") ?? [];
+    const appDbFailureReminder = buildAppDbRunJobFailureReminder(
+      logs,
+      linkedAppIds,
+    );
     return {
       success: true,
       data: {
         job,
         logs,
+        ...(appDbFailureReminder
+          ? { _appDbFailureReminder: appDbFailureReminder }
+          : {}),
       },
     };
   },
@@ -1625,7 +1684,7 @@ const updateJobSchema = z.object({
       "claude-sonnet-4-6",
       "claude-sonnet-5",
       "claude-opus-4-6",
-      "claude-opus-4-8",
+      "claude-opus-5",
       "claude-fable-5",
       // OpenAI
       "gpt-5-6-luna",
@@ -2269,10 +2328,17 @@ Common use cases:
       ? AGENT_JOB_LLM_REMINDER
       : undefined;
 
+    const jobDir = await getJobDir(jobId);
+    const scriptPathIssues = job.command
+      ? await assessJobScriptPath(job.type, job.command, jobDir)
+      : [];
+    const scriptPathReminder = buildJobScriptPathReminder(scriptPathIssues);
+
     return {
       success: true,
       data: job,
       ...(agentJobReminder ? { _agentJobReminder: agentJobReminder } : {}),
+      ...(scriptPathReminder ? { _scriptPathReminder: scriptPathReminder } : {}),
     };
   },
 });
@@ -2306,20 +2372,24 @@ Does NOT affect other jobs that depend on this job; update or recreate those sep
 
 // ===== Job file editing tools =====
 
+/** Resolve the on-disk job directory for the active Papr workspace. */
 async function getJobDir(jobId: string): Promise<string> {
-  const osModule = await import("os");
-  const pathModule = await import("path");
-  return pathModule.default.join(
-    osModule.default.homedir(),
-    "Papr",
-    "jobs",
-    jobId,
+  const { getJobsService } =
+    await import("../../gateway/services/JobsService.js");
+  const jobsService = getJobsService();
+  await jobsService.initialize();
+  const jobPath = await jobsService.getJobPath(jobId);
+  if (jobPath) {
+    return jobPath;
+  }
+  throw new Error(
+    `Job directory not found for ${jobId}. Call list_jobs to confirm the job exists in the active workspace.`,
   );
 }
 
 /**
  * Save a version snapshot of a job file before overwriting.
- * Stored in ~/Papr/jobs/{jobId}/.versions/{filename}/{timestamp}_{reason}
+ * Stored in {jobDir}/.versions/{filename}/{timestamp}_{reason}
  */
 async function saveJobFileVersion(
   jobId: string,
@@ -2541,13 +2611,8 @@ IMPORTANT: Jobs with schedule.enabled: false are NOT deleted or broken — they 
     const limit = args.limit ?? 50;
     jobs = jobs.slice(0, limit);
 
-    const osModule = await import("os");
     const pathModule = await import("path");
-    const jobsRoot = pathModule.default.join(
-      osModule.default.homedir(),
-      "Papr",
-      "jobs",
-    );
+    const jobsRoot = jobsService.getJobsRootPath();
 
     const jobsSummary = jobs.map((j) => ({
       id: j.id,
@@ -3527,6 +3592,25 @@ export const validateJobTool = createTool({
     const jobsService = getJobsService();
     await jobsService.initialize();
     const issues = await jobsService.validateJobArchitecture(args.jobId);
+    const job = await jobsService.getJob(args.jobId);
+    if (job && ["python", "node"].includes(job.type)) {
+      const jobDir = await getJobDir(args.jobId);
+      const scriptIssues = await assessJobScriptPath(
+        job.type,
+        job.command,
+        jobDir,
+      );
+      for (const scriptIssue of scriptIssues) {
+        issues.push({
+          rule: scriptIssue.rule,
+          severity: scriptIssue.severity,
+          message: scriptIssue.message,
+          remediation: scriptIssue.suggestedCommand
+            ? `${scriptIssue.remediation} Suggested: ${scriptIssue.suggestedCommand}`
+            : scriptIssue.remediation,
+        });
+      }
+    }
     const errors = issues.filter((issue) => issue.severity === "error");
     return {
       success: errors.length === 0,
@@ -3557,7 +3641,7 @@ Always runs a fresh esbuild.build() before checking (never uses stale cache).
 Checks:
 - **Job events SDK import**: Errors if subscribeJobEvents is called without import from /__papr__/papr-job-events.ts (declare function does NOT work at runtime)
 - **Job event polling**: Errors if app polls instead of subscribeJobEvents — returns copy-paste fix snippet
-- **TypeScript/TSX build (esbuild)**: Same compiler the iframe uses — catches JSX-in-.ts, syntax errors, etc.
+- **TypeScript/TSX build (esbuild)**: Same bundler for validate_app, local iframe, and cloud publish. Import from \`/__papr__/papr-job-events.ts\` is supported — left external in dist/app.js and loaded at runtime. Do NOT copy papr-job-events.ts into the app or add shims.
 - **100-line limit on code files** (enforced): \`.html\`, \`.css\`, \`.js\`, \`.ts\`, \`.tsx\`, \`.jsx\` must be ≤100 significant lines. **Not enforced on \`.md\`, \`.json\`, \`.txt\`** — put long report prose in \`content/reports/*.md\`, not split across dozens of TS files.
 - **HTML syntax**: Unclosed tags, malformed markup
 - **CSS syntax**: Mismatched braces, double semicolons

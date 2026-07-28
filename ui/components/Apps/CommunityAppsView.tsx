@@ -49,8 +49,13 @@ export interface CommunityAppsViewProps {
   scope?: CommunityCatalogScope;
   namespaceId?: string | null;
   namespaceName?: string | null;
-  /** Papr user id — excludes own publishes from Shared with me */
-  userId?: string | null;
+  /** When set, search is controlled by AppsView topbar */
+  searchQuery?: string;
+  onSearchQueryChange?: (query: string) => void;
+  /** Hide inline toolbar — parent renders search in shared topbar */
+  hideToolbar?: boolean;
+  /** Increment to refetch catalog from parent refresh button */
+  refreshToken?: number;
 }
 
 function emptyMessage(
@@ -61,7 +66,7 @@ function emptyMessage(
   if (searchQuery) return "No apps match your search.";
   if (scope === "namespace") {
     const label = namespaceName?.trim() || "your workspace";
-    return `No team or public apps in ${label} yet. Teammates can share with My team or Anyone on the web from an app's share settings.`;
+    return `No team or public apps in ${label} yet. Share an app with My team from its share settings — your published team apps appear here too.`;
   }
   return "No community apps available yet.";
 }
@@ -166,12 +171,17 @@ export function CommunityAppsView({
   scope = "global",
   namespaceId = null,
   namespaceName = null,
-  userId = null,
+  searchQuery: searchQueryProp,
+  onSearchQueryChange,
+  hideToolbar = false,
+  refreshToken = 0,
 }: CommunityAppsViewProps) {
   const [catalog, setCatalog] = useState<CommunityCatalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [internalSearchQuery, setInternalSearchQuery] = useState("");
+  const searchQuery = searchQueryProp ?? internalSearchQuery;
+  const setSearchQuery = onSearchQueryChange ?? setInternalSearchQuery;
   const [showAllPlatforms, setShowAllPlatforms] = useState(false);
   const [wizardEntry, setWizardEntry] = useState<OssRegistryEntry | null>(null);
   const [installingId, setInstallingId] = useState<string | null>(null);
@@ -199,7 +209,6 @@ export function CommunityAppsView({
       const response = await gateway.send("bundle:fetch-community-catalog", {
         scope,
         ...(namespaceId ? { namespaceId } : {}),
-        ...(userId ? { userId } : {}),
       });
       setCatalog(response.data as CommunityCatalog);
     } catch (err) {
@@ -209,11 +218,17 @@ export function CommunityAppsView({
     } finally {
       setLoading(false);
     }
-  }, [scope, namespaceId, userId]);
+  }, [scope, namespaceId]);
 
   useEffect(() => {
     void fetchCatalog();
   }, [fetchCatalog]);
+
+  useEffect(() => {
+    if (refreshToken > 0) {
+      void fetchCatalog();
+    }
+  }, [refreshToken, fetchCatalog]);
 
   useEffect(() => {
     const onRefresh = (): void => {
@@ -511,39 +526,61 @@ export function CommunityAppsView({
 
   return (
     <div className="community-apps">
-      <div className="community-apps__toolbar">
-        <input
-          type="text"
-          className="community-apps__search"
-          placeholder={
-            scope === "namespace"
-              ? "Search workspace apps..."
-              : "Search community apps..."
-          }
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-        />
-        <button className="community-apps__refresh-btn" onClick={fetchCatalog}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M1 4v6h6M23 20v-6h-6"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <path
-              d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
-      </div>
+      {hideToolbar ? (
+        !loading && !error ? (
+          <div className="apps-view__library-toolbar">
+            <span className="apps-view__section-label">
+              {scope === "namespace" ? "Team apps" : "Community apps"}
+            </span>
+            <div className="apps-view__library-toolbar-actions">
+              {catalog ? (
+                <span className="apps-view__library-count">
+                  {scope === "namespace"
+                    ? namespaceSummary(catalog.entries, namespaceName)
+                    : `${catalog.sources.cloud} cloud · ${catalog.sources.opensource} open source`}
+                  {catalog.fallbackUsed && scope === "namespace"
+                    ? " · some from global"
+                    : null}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        ) : null
+      ) : (
+        <div className="community-apps__toolbar">
+          <input
+            type="text"
+            className="community-apps__search"
+            placeholder={
+              scope === "namespace"
+                ? "Search workspace apps..."
+                : "Search community apps..."
+            }
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+          <button className="community-apps__refresh-btn" onClick={fetchCatalog}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M1 4v6h6M23 20v-6h-6"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
+      )}
 
-      {catalog ? (
+      {!hideToolbar && catalog ? (
         <p className="community-apps__summary">
           {scope === "namespace"
             ? namespaceSummary(catalog.entries, namespaceName)
@@ -730,14 +767,38 @@ function CommunityAppCard({
         .join(", ");
 
   const renderIcon = () => {
-    if (entry.icon) {
-      return (
-        <span
-          className="community-card__orb-icon"
-          dangerouslySetInnerHTML={{ __html: sanitizeIcon(entry.icon) }}
-        />
-      );
+    if (entry.icon?.trim()) {
+      const trimmed = entry.icon.trim();
+
+      if (trimmed.startsWith("data:image/") || trimmed.startsWith("http")) {
+        return (
+          <img
+            className="community-card__orb-icon community-card__orb-icon--image"
+            src={trimmed}
+            alt={entry.name}
+            draggable={false}
+          />
+        );
+      }
+
+      if (trimmed.startsWith("<")) {
+        return (
+          <span
+            className="community-card__orb-icon"
+            dangerouslySetInnerHTML={{ __html: sanitizeIcon(trimmed) }}
+          />
+        );
+      }
+
+      const isEmoji =
+        trimmed.length <= 4 && /[\p{Emoji}]/u.test(trimmed);
+      if (isEmoji) {
+        return (
+          <span className="community-card__orb-icon">{trimmed}</span>
+        );
+      }
     }
+
     return (
       <svg
         className="community-card__orb-icon"

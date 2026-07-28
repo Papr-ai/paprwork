@@ -76,15 +76,9 @@ export class TursoDbAdapter {
     userId: string,
   ): Promise<string> {
     const registry = getDatabaseRegistryService();
-    if (source.dbId) {
-      const record = registry.getById(source.dbId);
-      if (record) {
-        return tursoNameForRecord(record, userId);
-      }
-    }
-    const byPath = registry.getByPath(source.dbPath);
-    if (byPath) {
-      return tursoNameForRecord(byPath, userId);
+    const record = registry.getRecordForSource(source);
+    if (record) {
+      return tursoNameForRecord(record, userId);
     }
     if (source.dbId) {
       // Fail closed: a dbId source without a registry record could be
@@ -125,9 +119,7 @@ export class TursoDbAdapter {
     this.clientCache.set(cacheKey, client);
 
     const registry = getDatabaseRegistryService();
-    const record =
-      (source.dbId ? registry.getById(source.dbId) : undefined) ??
-      registry.getByPath(source.dbPath);
+    const record = registry.getRecordForSource(source);
     if (record?.isolation === "per-user") {
       const baseName = tursoNameForRecord(record);
       if (baseName !== database) {

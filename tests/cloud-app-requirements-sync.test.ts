@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   mergeBackendKeysIntoRequirements,
   readAppRequirements,
+  readLinkedJobKeyNames,
 } from "../src/gateway/services/cloudAppRequirements.js";
 
 describe("cloudAppRequirements backend key sync", () => {
@@ -27,5 +28,9 @@ describe("cloudAppRequirements backend key sync", () => {
 
   it("readAppRequirements returns empty when file missing", () => {
     expect(readAppRequirements("/nonexistent/papr", "app-id")).toEqual([]);
+  });
+
+  it("readLinkedJobKeyNames returns empty when app has no linked jobs", () => {
+    expect(readLinkedJobKeyNames("/nonexistent/papr", "app-id")).toEqual([]);
   });
 });

@@ -6,8 +6,8 @@
  */
 
 import * as fs from "fs-extra";
+import { getPaprRoot } from "../../../core/utils/paprRoot.js";
 import * as path from "path";
-import * as os from "os";
 import type { StoredMessage } from "./IStorageProvider.js";
 
 export class ChatExporter {
@@ -17,7 +17,7 @@ export class ChatExporter {
   private jobsPath: string;
 
   constructor() {
-    this.paprPath = path.join(os.homedir(), "Papr");
+    this.paprPath = getPaprRoot();
     this.chatsPath = path.join(this.paprPath, "Chats");
     this.artifactsPath = path.join(this.paprPath, "Artifacts");
     this.jobsPath = path.join(this.paprPath, "Jobs");

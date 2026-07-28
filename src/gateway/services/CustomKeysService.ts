@@ -7,24 +7,15 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { CustomKeyInput } from "../../core/storage/CustomKeysStorage.js";
+import type {
+  CustomKeyInput,
+  CustomKeyMetadata,
+} from "../../core/storage/CustomKeysStorage.js";
 import { loadCustomKeysMetadataFromFile } from "../utils/customKeysFile.js";
 
-interface CustomKey {
-  id: string;
-  name: string;
+interface CustomKeyWithValue extends CustomKeyMetadata {
   value: string;
-  description?: string;
-  permission: "always" | "ask";
-  clientAccess?: "server" | "client";
-  createdAt: string;
-  updatedAt?: string;
-  source?: "manual" | "oauth";
-  managedBy?: "oauth";
-  oauthProvider?: "openai" | "anthropic";
 }
-
-type CustomKeyMetadata = Omit<CustomKey, "value">;
 
 interface PendingIpcRequest {
   resolve: (value: unknown) => void;
@@ -38,7 +29,7 @@ interface CustomKeysIpcMessage {
   error?: string;
   keys?: CustomKeyMetadata[];
   value?: string | null;
-  key?: CustomKey;
+  key?: CustomKeyWithValue;
 }
 
 /**
@@ -238,6 +229,14 @@ export class CustomKeysService {
       this.valueInFlight.clear();
     }
 
+    void import("../../core/tools/bash.js")
+      .then(({ invalidateCustomKeysCache }) => {
+        invalidateCustomKeysCache();
+      })
+      .catch(() => {
+        /* bash tool may be unavailable in some test contexts */
+      });
+
     for (const listener of this.changeListeners) {
       try {
         listener(keyName);
@@ -280,7 +279,7 @@ export class CustomKeysService {
       return [];
     }
 
-    this.listKeysInFlight = (async () => {
+    this.listKeysInFlight = (async (): Promise<CustomKeyMetadata[]> => {
       try {
         const response = await this.sendIpcRequest(
           { type: "CUSTOM_KEYS_LIST" },
@@ -400,7 +399,7 @@ export class CustomKeysService {
   /**
    * Add a new custom key
    */
-  async addKey(input: CustomKeyInput): Promise<CustomKey> {
+  async addKey(input: CustomKeyInput): Promise<CustomKeyWithValue> {
     if (!this.initialized) {
       await this.initialize();
     }

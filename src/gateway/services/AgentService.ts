@@ -9,8 +9,7 @@
  * - Export chats to ~/Papr/ folder
  */
 
-import path from "path";
-import os from "os";
+import { resolvePaprUserDataPath } from "../../core/utils/paprWorkspace.js";
 import { v4 as uuidv4 } from "uuid";
 import { streamText, generateObject, jsonSchema } from "ai";
 import type { LanguageModel, ToolSet, StepResult } from "ai";
@@ -136,9 +135,7 @@ export class AgentService {
   ]);
 
   constructor() {
-    // Use home directory for user data
-    const homeDir = os.homedir();
-    this.userDataPath = path.join(homeDir, ".paprwork-v2");
+    this.userDataPath = resolvePaprUserDataPath();
 
     this.storageManager = new StorageManager();
     this.sessionManager = new ChatSessionManager(this.storageManager);
@@ -326,6 +323,19 @@ export class AgentService {
     broadcast({ type: "chat:list-updated" });
   }
 
+  /**
+   * Update who can read derived memories from this chat.
+   */
+  async updateChatMemoryScope(
+    chatId: string,
+    memoryScope: import("./storage/IStorageProvider.js").ChatMemoryScope,
+  ): Promise<void> {
+    await this.storageManager.updateChat(chatId, { memory_scope: memoryScope });
+
+    const { broadcast } = await import("../websocket/index.js");
+    broadcast({ type: "chat:list-updated" });
+  }
+
   // ===== Streaming with Parallel Support =====
 
   /**
@@ -390,6 +400,42 @@ export class AgentService {
     // Keep a reference so the finally block can check if it's still the "current" controller
     // before clearing — a rapid second stream may have already replaced it.
     const abortController = new AbortController();
+
+    const skipConcurrencyGate =
+      options?._isContextCompressRetry === true ||
+      options?._isSilentRetry === true;
+    let concurrencyAcquired = false;
+    if (!skipConcurrencyGate) {
+      const { getAgentStreamConcurrencyGate } = await import(
+        "./agent/agentStreamConcurrency.js"
+      );
+      try {
+        await getAgentStreamConcurrencyGate().acquire(
+          chatId,
+          abortController.signal,
+        );
+        concurrencyAcquired = true;
+      } catch (concurrencyError) {
+        const message =
+          concurrencyError instanceof Error
+            ? concurrencyError.message
+            : "Too many concurrent agent sessions";
+        console.warn(
+          `[AgentService] Concurrency gate rejected stream for ${chatId}: ${message}`,
+        );
+        yield {
+          type: "error",
+          chatId,
+          payload: {
+            error: message,
+            code: "concurrency_limit",
+          },
+          timestamp: new Date().toISOString(),
+        } as StreamChunk & { chatId: string };
+        return;
+      }
+    }
+
     this.sessionManager.setAbortController(chatId, abortController);
     this.sessionManager.setStreaming(chatId, true);
 
@@ -1333,9 +1379,11 @@ export class AgentService {
                   outputCost: 50.0,
                   contextWindow: 1000000,
                 }
-              : piModelId.includes("opus-4-8")
+              : piModelId.includes("opus-5") || piModelId.includes("opus-4-8")
                 ? {
-                    name: "Claude Opus 4.8",
+                    name: piModelId.includes("opus-5")
+                      ? "Claude Opus 5"
+                      : "Claude Opus 4.8",
                     inputCost: 5.0,
                     outputCost: 25.0,
                     contextWindow: 1000000,
@@ -1395,6 +1443,7 @@ export class AgentService {
               contextWindow: modelInfo.contextWindow,
               maxTokens:
                 piModelId.includes("fable") ||
+                piModelId.includes("opus-5") ||
                 piModelId.includes("opus-4-8") ||
                 piModelId.includes("sonnet-5")
                   ? 128000
@@ -1995,6 +2044,13 @@ export class AgentService {
         checkpointTimer = null;
       }
       await persistIncompleteAssistant({ asAbort: true });
+
+      if (concurrencyAcquired) {
+        const { getAgentStreamConcurrencyGate } = await import(
+          "./agent/agentStreamConcurrency.js"
+        );
+        getAgentStreamConcurrencyGate().release(chatId);
+      }
 
       // Only clear session state if this stream still owns the abort controller.
       // If a new stream started (e.g. from the auto-send queue) it will have replaced
@@ -3212,12 +3268,14 @@ ${last15.substring(0, 8_000)}`;
     let text = "";
     let retryWithApiKey = false;
     let thinkingBuffer = ""; // Accumulate thinking tokens for job logs
+    let retryChatId: string | undefined;
 
     try {
-      for await (const chunk of this.streamAgent(chatId, input.prompt, config, {
-        allowedToolIds: input.allowedToolIds,
-        maxSteps: input.maxTurns,
-      })) {
+      try {
+        for await (const chunk of this.streamAgent(chatId, input.prompt, config, {
+          allowedToolIds: input.allowedToolIds,
+          maxSteps: input.maxTurns,
+        })) {
         if (chunk.type === "error") {
           const errMsg =
             (chunk.payload as { error?: string })?.error ?? "Model API error";
@@ -3307,20 +3365,20 @@ ${last15.substring(0, 8_000)}`;
         if (typeof payload.text === "string") {
           text += payload.text;
         }
+        }
+
+        // Flush any remaining thinking buffer at end of stream
+        if (input.appendLog && thinkingBuffer.trim()) {
+          await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
+          thinkingBuffer = "";
+        }
+      } catch (err) {
+        // If error wasn't a rate limit, rethrow
+        if (!retryWithApiKey) throw err;
       }
 
-      // Flush any remaining thinking buffer at end of stream
-      if (input.appendLog && thinkingBuffer.trim()) {
-        await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
-        thinkingBuffer = "";
-      }
-    } catch (err) {
-      // If error wasn't a rate limit, rethrow
-      if (!retryWithApiKey) throw err;
-    }
-
-    // Retry with API key if OAuth rate limit was hit
-    if (retryWithApiKey && authType === "oauth") {
+      // Retry with API key if OAuth rate limit was hit
+      if (retryWithApiKey && authType === "oauth") {
       // Try to get API key
       const authProvider = provider === "openai-codex" ? "openai" : provider;
       const keyName =
@@ -3346,7 +3404,7 @@ ${last15.substring(0, 8_000)}`;
       };
 
       // Create new chatId for retry to avoid session cache
-      const retryChatId = `${chatId}-retry`;
+      retryChatId = `${chatId}-retry`;
       thinkingBuffer = ""; // Reset thinking buffer for retry
 
       for await (const chunk of this.streamAgent(
@@ -3437,17 +3495,23 @@ ${last15.substring(0, 8_000)}`;
         await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
         thinkingBuffer = "";
       }
-    }
+      }
 
-    const trimmed = text.trim();
-    if (trimmed.length === 0) {
-      console.error(
-        `[AgentService] runIsolatedJobSession produced no output. ` +
-          `provider=${provider} model=${model} authType=${authType}. ` +
-          `Check: OAuth connected? API key set? Gateway logs for API errors.`,
-      );
+      const trimmed = text.trim();
+      if (trimmed.length === 0) {
+        console.error(
+          `[AgentService] runIsolatedJobSession produced no output. ` +
+            `provider=${provider} model=${model} authType=${authType}. ` +
+            `Check: OAuth connected? API key set? Gateway logs for API errors.`,
+        );
+      }
+      return { chatId, text: trimmed };
+    } finally {
+      await this.sessionManager.clearSession(chatId);
+      if (retryChatId) {
+        await this.sessionManager.clearSession(retryChatId);
+      }
     }
-    return { chatId, text: trimmed };
   }
 
   /**
