@@ -1,8 +1,8 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { resolvePaprUserDataPath } from "../../../core/utils/paprWorkspace.js";
 
 export type ToolCaptureSyncStatus =
   | "pending"
@@ -47,7 +47,7 @@ export class ToolCaptureLedger {
   private db: Database.Database;
 
   constructor(dataDir?: string) {
-    const baseDir = dataDir ?? path.join(os.homedir(), ".paprwork-v2");
+    const baseDir = dataDir ?? resolvePaprUserDataPath();
     if (!fs.existsSync(baseDir)) {
       fs.mkdirSync(baseDir, { recursive: true });
     }
@@ -193,4 +193,12 @@ export function getToolCaptureLedger(): ToolCaptureLedger {
     ledgerInstance = new ToolCaptureLedger();
   }
   return ledgerInstance;
+}
+
+/** Reset singleton after org/namespace workspace switch. */
+export function resetToolCaptureLedgerForWorkspaceSwitch(): void {
+  if (ledgerInstance) {
+    ledgerInstance.close();
+    ledgerInstance = null;
+  }
 }

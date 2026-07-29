@@ -17,7 +17,15 @@ import {
   trimOldestHistoryTurns,
   type HistoryTrimBounds,
 } from "../agent/midTurnContextTrim.js";
-import { compactStaleToolResults } from "../agent/compactToolResults.js";
+import {
+  compactStaleAssistantReasoning,
+  compactStaleToolResults,
+} from "../agent/compactToolResults.js";
+import {
+  checkPiStreamMemory,
+  PI_PROCESS_MEMORY_BACKSTOP_BYTES,
+  PI_STREAM_MEMORY_BUDGET_BYTES,
+} from "./piStreamMemoryLimits.js";
 import { truncateToolResultForModelContext } from "../agent/toolResultTruncation.js";
 import {
   EMPTY_PI_AI_BILLING_USAGE,
@@ -330,10 +338,9 @@ export async function* createPiCodexStreamWithToolLoop(
   let validationErrorCount = 0;
   const MAX_VALIDATION_ERRORS = 20; // Abort after 20 validation errors
   
-  // CIRCUIT BREAKER 2: Memory tracking (Issue 65)
-  const MEMORY_CRITICAL_THRESHOLD = 1.5 * 1024 * 1024 * 1024; // 1.5GB
-  const MEMORY_WARNING_THRESHOLD = 1.0 * 1024 * 1024 * 1024; // 1GB
-  
+  // Per-stream memory budget (baseline captured before context/tool accumulation)
+  const baselineHeap = process.memoryUsage().heapUsed;
+
   // Detect repetitive tool calls (possible infinite loop)
   const recentToolCalls: Array<{ name: string; args: string }> = [];
   const MAX_RECENT_TOOL_CALLS = 10;
@@ -364,34 +371,47 @@ export async function* createPiCodexStreamWithToolLoop(
       break;
     }
     
-    // CIRCUIT BREAKER 2: Check memory usage (Issue 65)
-    const heapUsed = process.memoryUsage().heapUsed;
-    if (heapUsed > MEMORY_CRITICAL_THRESHOLD) {
+    // CIRCUIT BREAKER 2: Per-stream + process backstop memory checks
+    const memoryCheck = checkPiStreamMemory(baselineHeap);
+    if (memoryCheck.overStreamBudget || memoryCheck.overProcessBackstop) {
+      const streamMb = Math.round(memoryCheck.streamDelta / 1024 / 1024);
+      const heapMb = Math.round(memoryCheck.heapUsed / 1024 / 1024);
+      const budgetMb = Math.round(PI_STREAM_MEMORY_BUDGET_BYTES / 1024 / 1024);
+      const backstopMb = Math.round(PI_PROCESS_MEMORY_BACKSTOP_BYTES / 1024 / 1024);
       console.error(
-        `[PiCodexToolLoop] 🚨 CRITICAL: Memory exhaustion detected! ` +
-        `${Math.round(heapUsed / 1024 / 1024)}MB > ${Math.round(MEMORY_CRITICAL_THRESHOLD / 1024 / 1024)}MB. ` +
-        `Aborting to prevent system crash.`
+        `[PiCodexToolLoop] 🚨 CRITICAL: Stream memory budget exceeded — ` +
+          `stream +${streamMb}MB (limit ${budgetMb}MB), process heap ${heapMb}MB ` +
+          `(backstop ${backstopMb}MB). Aborting this stream.`,
       );
       yield {
         type: "error",
         error: {
-          type: "memory_exhaustion",
-          message: "Your computer's memory limit has been exceeded. Please refresh and try a simpler query.",
+          type: memoryCheck.overProcessBackstop
+            ? "process_memory_exhaustion"
+            : "stream_memory_exhaustion",
+          message:
+            memoryCheck.overProcessBackstop
+              ? "The agent service is under heavy load (too many parallel tasks). " +
+                "Try again shortly, restart the app, or stagger scheduled agent jobs."
+              : "This agent task used too much memory (heavy tool use or long reasoning). " +
+                "Start a fresh chat or simplify the task, then try again.",
         },
       };
       break;
-    } else if (heapUsed > MEMORY_WARNING_THRESHOLD) {
+    }
+    if (memoryCheck.overStreamWarning) {
       console.warn(
-        `[PiCodexToolLoop] ⚠️ High memory usage: ${Math.round(heapUsed / 1024 / 1024)}MB. ` +
-        `Approaching critical threshold.`
+        `[PiCodexToolLoop] ⚠️ High stream memory: +${Math.round(memoryCheck.streamDelta / 1024 / 1024)}MB ` +
+          `(process heap ${Math.round(memoryCheck.heapUsed / 1024 / 1024)}MB)`,
       );
     }
-    
+
     if (step > 0) {
       yield { type: "start-step" };
     }
 
     if (historyTrimBounds) {
+      compactStaleAssistantReasoning(context.messages as unknown[]);
       compactStaleToolResults(context.messages as unknown[]);
       trimOldestHistoryTurns(
         context.messages as Array<{ role?: unknown; content?: unknown }>,

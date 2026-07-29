@@ -1,6 +1,6 @@
 import { promises as fs } from "fs";
+import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import path from "path";
-import os from "os";
 import { fileURLToPath } from "url";
 import { v4 as uuidv4 } from "uuid";
 
@@ -87,8 +87,7 @@ export class SkillService {
   private initialized: boolean;
 
   constructor() {
-    const homeDir = os.homedir();
-    this.paprRootDir = path.join(homeDir, "Papr");
+    this.paprRootDir = getPaprRoot();
     this.skillIndexPath = path.join(this.paprRootDir, "data", "skills.json");
     this.skills = new Map();
     this.initialized = false;
@@ -503,4 +502,9 @@ export async function initializeSkillService(): Promise<SkillService> {
   const service = getSkillService();
   await service.initialize();
   return service;
+}
+
+/** Reset singleton after org/namespace workspace switch. */
+export function resetSkillServiceForWorkspaceSwitch(): void {
+  skillServiceInstance = null;
 }

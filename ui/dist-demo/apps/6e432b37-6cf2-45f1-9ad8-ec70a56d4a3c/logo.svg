@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1e1b4b"/>
+      <stop offset="45%" stop-color="#3730a3"/>
+      <stop offset="100%" stop-color="#6d28d9"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="200" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.97"/>
+      <stop offset="100%" stop-color="#e0e7ff" stop-opacity="0.92"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="7" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="shadow" x="-12%" y="-8%" width="124%" height="128%">
+      <feDropShadow dx="0" dy="8" stdDeviation="14" flood-color="#1e1b4b" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="114" fill="url(#bg)"/>
+  <!-- Gloss -->
+  <ellipse cx="180" cy="140" rx="210" ry="125" fill="url(#shine)"/>
+
+  <!-- Calendar card -->
+  <g filter="url(#shadow)">
+    <rect x="96" y="144" width="276" height="236" rx="28" fill="url(#card)"/>
+  </g>
+
+  <!-- Calendar header -->
+  <rect x="96" y="144" width="276" height="62" rx="28" fill="#4338ca"/>
+  <rect x="96" y="174" width="276" height="32" fill="#4338ca"/>
+
+  <!-- Ring clips -->
+  <rect x="164" y="116" width="18" height="54" rx="9" fill="#a5b4fc"/>
+  <rect x="286" y="116" width="18" height="54" rx="9" fill="#a5b4fc"/>
+
+  <!-- Weekday dots in header -->
+  <circle cx="152" cy="176" r="5" fill="#818cf8" opacity="0.65"/>
+  <circle cx="196" cy="176" r="5" fill="#818cf8" opacity="0.65"/>
+  <circle cx="240" cy="176" r="5" fill="#818cf8" opacity="0.65"/>
+  <circle cx="284" cy="176" r="5" fill="#818cf8" opacity="0.65"/>
+  <circle cx="328" cy="176" r="5" fill="#818cf8" opacity="0.65"/>
+
+  <!-- Meeting block row 1 -->
+  <rect x="114" y="222" width="72" height="40" rx="10" fill="#6366f1" opacity="0.13"/>
+  <rect x="114" y="222" width="5" height="40" rx="3" fill="#6366f1"/>
+  <rect x="126" y="230" width="44" height="7" rx="3" fill="#312e81" opacity="0.45"/>
+  <rect x="126" y="242" width="30" height="5" rx="2" fill="#312e81" opacity="0.28"/>
+
+  <rect x="198" y="222" width="72" height="40" rx="10" fill="#ddd6fe" opacity="0.45"/>
+
+  <rect x="282" y="222" width="76" height="40" rx="10" fill="#7c3aed" opacity="0.13"/>
+  <rect x="282" y="222" width="5" height="40" rx="3" fill="#7c3aed"/>
+  <rect x="294" y="230" width="48" height="7" rx="3" fill="#3b0764" opacity="0.4"/>
+  <rect x="294" y="242" width="34" height="5" rx="2" fill="#3b0764" opacity="0.22"/>
+
+  <!-- Meeting block row 2 (wide) -->
+  <rect x="114" y="276" width="152" height="40" rx="10" fill="#0ea5e9" opacity="0.11"/>
+  <rect x="114" y="276" width="5" height="40" rx="3" fill="#0284c7"/>
+  <rect x="126" y="284" width="86" height="7" rx="3" fill="#0c4a6e" opacity="0.38"/>
+  <rect x="126" y="296" width="58" height="5" rx="2" fill="#0c4a6e" opacity="0.22"/>
+
+  <rect x="278" y="276" width="80" height="40" rx="10" fill="#e0e7ff" opacity="0.5"/>
+  <rect x="288" y="284" width="52" height="6" rx="3" fill="#6366f1" opacity="0.3"/>
+  <rect x="288" y="296" width="38" height="5" rx="2" fill="#6366f1" opacity="0.2"/>
+
+  <!-- Sparkle star (AI) top right -->
+  <g filter="url(#glow)">
+    <path d="M390 76 L397 100 L421 107 L397 114 L390 138 L383 114 L359 107 L383 100 Z" fill="#fbbf24"/>
+    <path d="M424 52 L428 64 L440 68 L428 72 L424 84 L420 72 L408 68 L420 64 Z" fill="#fde68a" opacity="0.9"/>
+    <circle cx="408" cy="46" r="4.5" fill="#fef9c3" opacity="0.75"/>
+  </g>
+
+  <!-- Speech bubble (notes) bottom-right -->
+  <g opacity="0.93">
+    <rect x="300" y="334" width="120" height="82" rx="20" fill="#7c3aed" filter="url(#shadow)"/>
+    <path d="M312 416 L292 442 L330 416 Z" fill="#7c3aed"/>
+    <rect x="316" y="352" width="76" height="8" rx="4" fill="#fff" opacity="0.82"/>
+    <rect x="316" y="367" width="58" height="8" rx="4" fill="#fff" opacity="0.58"/>
+    <rect x="316" y="382" width="42" height="8" rx="4" fill="#fff" opacity="0.36"/>
+  </g>
+</svg>

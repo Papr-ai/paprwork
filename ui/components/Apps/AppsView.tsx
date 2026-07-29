@@ -22,7 +22,6 @@ import { fetchCloudPublishState } from "../../utils/cloudPublishApi";
 
 type ViewTab = "my-apps" | "namespace-community" | "community";
 type SortOption = "recent" | "name";
-type GroupOption = "none" | "project";
 type StatusFilter =
   | "all"
   | "favorites"
@@ -50,38 +49,65 @@ export function AppsView() {
   const { createTab, switchToTab } = useTabs();
   const papr = usePaprNamespace();
 
-  const namespaceCommunityLabel = papr.namespaceName?.trim()
-    ? `${papr.namespaceName} Community`
-    : "Workspace Community";
-
   const showNamespaceTabs = papr.isLoggedIn && Boolean(papr.namespaceId);
+
+  const teamAppsTabTitle = papr.namespaceName?.trim()
+    ? `Team and public apps in ${papr.namespaceName}`
+    : "Team and public apps in your workspace";
+
+  const renderLibraryFilters = () => (
+    <>
+      <select
+        className="apps-view__inline-select"
+        aria-label="Filter apps"
+        value={statusFilter}
+        onChange={(event) =>
+          setStatusFilter(event.target.value as StatusFilter)
+        }
+      >
+        <option value="all">Current apps</option>
+        <option value="favorites">Favorites</option>
+        <option value="published">
+          Published
+          {statusCounts.published ? ` (${statusCounts.published})` : ""}
+        </option>
+        <option value="draft">
+          Drafts{statusCounts.draft ? ` (${statusCounts.draft})` : ""}
+        </option>
+        <option value="archived">
+          Archived
+          {statusCounts.archived ? ` (${statusCounts.archived})` : ""}
+        </option>
+      </select>
+      <select
+        className="apps-view__inline-select"
+        aria-label="Sort apps"
+        value={sortBy}
+        onChange={(event) => setSortBy(event.target.value as SortOption)}
+      >
+        <option value="recent">Recently opened</option>
+        <option value="name">Name A–Z</option>
+      </select>
+    </>
+  );
 
   const [viewTab, setViewTab] = useState<ViewTab>("my-apps");
   const [sortBy, setSortBy] = useState<SortOption>("recent");
-  const [groupBy, setGroupBy] = useState<GroupOption>("none");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [publishRevision, setPublishRevision] = useState(0);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [wikiNodes, setWikiNodes] = useState<any[]>([]);
+  const [catalogSearchQuery, setCatalogSearchQuery] = useState("");
+  const [catalogRefreshToken, setCatalogRefreshToken] = useState(0);
 
   useEffect(() => {
-    gateway
-      .send("memory:wiki-home")
-      .then((res) => {
-        if (res.success && res.data?.rails) {
-          const nodes: any[] = [];
-          res.data.rails.forEach((rail: any) => {
-            if (rail.items) {
-              nodes.push(...rail.items);
-            }
-          });
-          setWikiNodes(nodes);
-        }
-      })
-      .catch((err) =>
-        console.error("[AppsView] Failed to load wiki nodes:", err),
-      );
-  }, []);
+    const onWorkspaceChanged = () => {
+      void loadArtifacts();
+      setPublishRevision((value) => value + 1);
+    };
+    window.addEventListener("papr-namespace-changed", onWorkspaceChanged);
+    return () =>
+      window.removeEventListener("papr-namespace-changed", onWorkspaceChanged);
+  }, [loadArtifacts]);
 
   useEffect(() => {
     const onAppsTab = (event: Event) => {
@@ -103,6 +129,10 @@ export function AppsView() {
       setViewTab("my-apps");
     }
   }, [showNamespaceTabs, viewTab]);
+
+  useEffect(() => {
+    setCatalogSearchQuery("");
+  }, [viewTab]);
 
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchQuery(e.target.value);
@@ -265,130 +295,16 @@ export function AppsView() {
   const showRecentApps =
     statusFilter === "all" && !searchQuery.trim() && recentApps.length > 0;
 
-  // Grouping logic using the Wiki Graph.
-  // WikiNode shape: { id, type ("app"|"project"|…), label, description, props: { app_id?, project_id?, … } }
-  // EntityFileNode adds: relationships: [{ type, target, context? }]
-  const groupedApps = useMemo(() => {
-    if (groupBy === "none") return { none: apps };
-
-    const groups: Record<string, Artifact[]> = {};
-    const standalone: Artifact[] = [];
-
-    // 1. Index project display names by wiki id
-    const projectLabelById: Record<string, string> = {};
-    for (const node of wikiNodes) {
-      if (node.type === "project") {
-        projectLabelById[node.id] = node.label;
-      }
-    }
-
-    // 2. Build map: real app UUID → project slug, using wiki app nodes
-    const appToProject: Record<string, string> = {};
-    for (const node of wikiNodes) {
-      if (node.type !== "app") continue;
-      const appId = node.props?.app_id ? String(node.props.app_id) : "";
-      const projectId = node.props?.project_id
-        ? String(node.props.project_id)
-        : "";
-
-      // From explicit project_id in frontmatter
-      if (appId && projectId) {
-        appToProject[appId] = projectId;
-      }
-
-      // From relationships (e.g. BELONGS_TO project/gtm-audit-revenue-reimagined)
-      if (!projectId && node.relationships) {
-        for (const rel of node.relationships) {
-          const target = String(rel.target ?? "");
-          if ((rel.type === "BELONGS_TO" || rel.type === "project") && target) {
-            const slug = target.startsWith("project/")
-              ? target.slice(8)
-              : target;
-            if (appId) appToProject[appId] = slug;
-            break;
-          }
-        }
-      }
-    }
-
-    for (const app of apps) {
-      let projectSlug = "";
-
-      // A. Direct UUID match
-      if (appToProject[app.id]) {
-        projectSlug = appToProject[app.id];
-      }
-
-      // B. Prefix match (wiki may store truncated app_id like "29b2f041")
-      if (!projectSlug) {
-        for (const [wikiAppId, slug] of Object.entries(appToProject)) {
-          if (wikiAppId.length >= 8 && app.id.startsWith(wikiAppId) && slug) {
-            projectSlug = slug;
-            break;
-          }
-        }
-      }
-
-      // C. Title match against wiki app nodes
-      if (!projectSlug) {
-        const byName = wikiNodes.find(
-          (n: any) =>
-            n.type === "app" &&
-            n.label?.toLowerCase() === app.title.toLowerCase(),
-        );
-        if (byName?.props?.project_id) {
-          projectSlug = String(byName.props.project_id);
-        }
-      }
-
-      // D. Fallback: explicit tags on the app artifact
-      if (!projectSlug) {
-        const tag = app.tags?.find((t) =>
-          t.toLowerCase().startsWith("project:"),
-        );
-        if (tag) projectSlug = tag.split(":")[1] ?? "";
-      }
-
-      if (projectSlug) {
-        const displayName =
-          projectLabelById[projectSlug] ||
-          projectSlug
-            .split(/[-_]/)
-            .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-            .join(" ");
-        if (!groups[displayName]) groups[displayName] = [];
-        groups[displayName].push(app);
-      } else {
-        standalone.push(app);
-      }
-    }
-
-    if (standalone.length > 0) {
-      groups["Standalone Utilities"] = standalone;
-    }
-
-    const sortedGroups: Record<string, Artifact[]> = {};
-    Object.keys(groups)
-      .sort((a, b) => {
-        if (a === "Standalone Utilities") return 1;
-        if (b === "Standalone Utilities") return -1;
-        return a.localeCompare(b);
-      })
-      .forEach((k) => {
-        sortedGroups[k] = groups[k];
-      });
-
-    return sortedGroups;
-  }, [apps, groupBy, wikiNodes]);
-
   return (
     <div className="apps-view">
-      {/* Header */}
-      <div className="apps-view__header">
-        <h2 className="apps-view__title">Apps</h2>
+      <header className="apps-view__topbar">
+        <h2 className="apps-view__brand">Apps</h2>
 
-        <div className="apps-view__tabs">
+        <div className="apps-view__tabs" role="tablist" aria-label="Apps library">
           <button
+            type="button"
+            role="tab"
+            aria-selected={viewTab === "my-apps"}
             className={`apps-view__tab ${viewTab === "my-apps" ? "apps-view__tab--active" : ""}`}
             onClick={() => setViewTab("my-apps")}
           >
@@ -396,25 +312,86 @@ export function AppsView() {
           </button>
           {showNamespaceTabs ? (
             <button
+              type="button"
+              role="tab"
+              aria-selected={viewTab === "namespace-community"}
               className={`apps-view__tab ${viewTab === "namespace-community" ? "apps-view__tab--active" : ""}`}
               onClick={() => setViewTab("namespace-community")}
-              title={`Team and public apps in ${papr.namespaceName ?? "your workspace"}`}
+              title={teamAppsTabTitle}
             >
-              {namespaceCommunityLabel}
+              Team Apps
             </button>
           ) : null}
           <button
+            type="button"
+            role="tab"
+            aria-selected={viewTab === "community"}
             className={`apps-view__tab ${viewTab === "community" ? "apps-view__tab--active" : ""}`}
             onClick={() => setViewTab("community")}
           >
-            Community
+            Community Apps
           </button>
         </div>
-      </div>
+
+        <div className="apps-view__topbar-grow" />
+
+        {viewTab === "my-apps" ? (
+          <>
+            <input
+              type="search"
+              className="apps-view__topbar-search"
+              placeholder="Search apps…"
+              value={searchQuery}
+              onChange={handleSearch}
+              aria-label="Search apps"
+            />
+            <button
+              type="button"
+              onClick={() => setShowCreateModal(true)}
+              className="apps-view__create-btn"
+            >
+              + Create
+            </button>
+          </>
+        ) : (
+          <>
+            <input
+              type="search"
+              className="apps-view__topbar-search"
+              placeholder={
+                viewTab === "namespace-community"
+                  ? "Search team apps…"
+                  : "Search community apps…"
+              }
+              value={catalogSearchQuery}
+              onChange={(event) => setCatalogSearchQuery(event.target.value)}
+              aria-label={
+                viewTab === "namespace-community"
+                  ? "Search team apps"
+                  : "Search community apps"
+              }
+            />
+            <button
+              type="button"
+              className="apps-view__topbar-refresh"
+              aria-label="Refresh catalog"
+              onClick={() => setCatalogRefreshToken((token) => token + 1)}
+            >
+              ↻
+            </button>
+          </>
+        )}
+      </header>
 
       {viewTab === "community" ? (
         <div className="apps-view__content">
-          <CommunityAppsView scope="global" />
+          <CommunityAppsView
+            scope="global"
+            searchQuery={catalogSearchQuery}
+            onSearchQueryChange={setCatalogSearchQuery}
+            hideToolbar
+            refreshToken={catalogRefreshToken}
+          />
         </div>
       ) : viewTab === "namespace-community" ? (
         <div className="apps-view__content">
@@ -422,94 +399,25 @@ export function AppsView() {
             scope="namespace"
             namespaceId={papr.namespaceId}
             namespaceName={papr.namespaceName}
-            userId={papr.userId}
+            searchQuery={catalogSearchQuery}
+            onSearchQueryChange={setCatalogSearchQuery}
+            hideToolbar
+            refreshToken={catalogRefreshToken}
           />
         </div>
       ) : (
         <>
-          {/* Controls: search left, sort center, create right */}
-          <div className="apps-view__controls">
-            <div className="apps-view__controls-left">
-              <input
-                type="text"
-                className="apps-view__search"
-                placeholder="Search by name, purpose, tag, or cloud app…"
-                value={searchQuery}
-                onChange={handleSearch}
-              />
-              <label className="apps-view__control-field">
-                <span>Filter</span>
-                <select
-                  value={statusFilter}
-                  onChange={(event) =>
-                    setStatusFilter(event.target.value as StatusFilter)
-                  }
-                >
-                  <option value="all">Current apps</option>
-                  <option value="favorites">Favorites</option>
-                  <option value="published">
-                    Published
-                    {statusCounts.published
-                      ? ` (${statusCounts.published})`
-                      : ""}
-                  </option>
-                  <option value="draft">
-                    Drafts{statusCounts.draft ? ` (${statusCounts.draft})` : ""}
-                  </option>
-                  <option value="archived">
-                    Archived
-                    {statusCounts.archived ? ` (${statusCounts.archived})` : ""}
-                  </option>
-                </select>
-              </label>
-              <label className="apps-view__control-field">
-                <span>Group by</span>
-                <select
-                  value={groupBy}
-                  onChange={(event) =>
-                    setGroupBy(event.target.value as GroupOption)
-                  }
-                >
-                  <option value="none">None</option>
-                  <option value="project">Project</option>
-                </select>
-              </label>
-              <label className="apps-view__control-field">
-                <span>Sort by</span>
-                <select
-                  value={sortBy}
-                  onChange={(event) =>
-                    setSortBy(event.target.value as SortOption)
-                  }
-                >
-                  <option value="recent">Recently opened</option>
-                  <option value="name">Name A–Z</option>
-                </select>
-              </label>
-            </div>
-
-            <button
-              onClick={() => setShowCreateModal(true)}
-              className="apps-view__create-btn"
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-              >
-                <line x1="12" y1="5" x2="12" y2="19" />
-                <line x1="5" y1="12" x2="19" y2="12" />
-              </svg>
-              Create App
-            </button>
-          </div>
-
-          {/* Content */}
           <div className="apps-view__content">
+            {!loading ? (
+              <div className="apps-view__library-toolbar">
+                <span className="apps-view__section-label">App library</span>
+                <div className="apps-view__library-toolbar-actions">
+                  {renderLibraryFilters()}
+                  <span className="apps-view__library-count">{apps.length} apps</span>
+                </div>
+              </div>
+            ) : null}
+
             {loading && (
               <div className="apps-view__empty">
                 <p>Loading apps...</p>
@@ -644,78 +552,24 @@ export function AppsView() {
                   </section>
                 )}
 
-                {groupBy === "none" ? (
-                  <section className="apps-view__section">
-                    <div className="apps-view__section-heading">
-                      <span className="apps-view__section-label">
-                        App library
-                      </span>
-                      <span>{apps.length} apps</span>
-                    </div>
-                    <div className="apps-view__grid">
-                      {apps.map((app) => (
-                        <AppCard
-                          key={app.id}
-                          isPublished={publishedIds.has(app.id)}
-                          artifact={app}
-                          onDelete={() => handleDelete(app.id)}
-                          onToggleFavorite={() => handleToggleFavorite(app.id)}
-                          onOpen={() => handleOpen(app)}
-                          onRename={(title) => handleRename(app.id, title)}
-                          onSetStatus={(status) =>
-                            handleSetStatus(app.id, status)
-                          }
-                        />
-                      ))}
-                    </div>
-                  </section>
-                ) : (
-                  <div className="apps-view__grouped-library">
-                    <div className="apps-view__library-header">
-                      <span className="apps-view__library-title">
-                        App library
-                      </span>
-                      <span className="apps-view__library-count">
-                        {apps.length} apps
-                      </span>
-                    </div>
-                    {Object.entries(groupedApps).map(
-                      ([groupName, groupApps]) => (
-                        <section
-                          key={groupName}
-                          className="apps-view__section apps-view__section--grouped"
-                        >
-                          <div className="apps-view__section-heading">
-                            <span className="apps-view__section-label">
-                              {groupName}
-                            </span>
-                            <span>{groupApps.length} apps</span>
-                          </div>
-                          <div className="apps-view__grid">
-                            {groupApps.map((app) => (
-                              <AppCard
-                                key={app.id}
-                                isPublished={publishedIds.has(app.id)}
-                                artifact={app}
-                                onDelete={() => handleDelete(app.id)}
-                                onToggleFavorite={() =>
-                                  handleToggleFavorite(app.id)
-                                }
-                                onOpen={() => handleOpen(app)}
-                                onRename={(title) =>
-                                  handleRename(app.id, title)
-                                }
-                                onSetStatus={(status) =>
-                                  handleSetStatus(app.id, status)
-                                }
-                              />
-                            ))}
-                          </div>
-                        </section>
-                      ),
-                    )}
+                <section className="apps-view__section">
+                  <div className="apps-view__grid">
+                    {apps.map((app) => (
+                      <AppCard
+                        key={app.id}
+                        isPublished={publishedIds.has(app.id)}
+                        artifact={app}
+                        onDelete={() => handleDelete(app.id)}
+                        onToggleFavorite={() => handleToggleFavorite(app.id)}
+                        onOpen={() => handleOpen(app)}
+                        onRename={(title) => handleRename(app.id, title)}
+                        onSetStatus={(status) =>
+                          handleSetStatus(app.id, status)
+                        }
+                      />
+                    ))}
                   </div>
-                )}
+                </section>
               </>
             )}
           </div>

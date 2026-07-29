@@ -1,7 +1,7 @@
 /**
- * pi-ai 0.64 lacks registry entries for Claude Fable 5 / Opus 4.8 and treats them
+ * pi-ai 0.64 lacks registry entries for Claude Fable 5 / Opus 5 and treats them
  * as budget-based thinking models. Anthropic requires adaptive thinking for these
- * models, and Fable/Opus 4.8 stream empty thinking deltas unless display=summarized.
+ * models, and Fable/Opus 5 stream empty thinking deltas unless display=summarized.
  *
  * We patch the outgoing Messages API payload via pi-ai's onPayload hook.
  */
@@ -50,6 +50,7 @@ export interface PiAiAnthropicStreamOptions {
 export function requiresPiAiAdaptiveThinkingOverride(modelId: string): boolean {
   return (
     modelId.includes("fable") ||
+    modelId.includes("opus-5") ||
     modelId.includes("opus-4-8") ||
     modelId.includes("opus-4.8") ||
     modelId.includes("sonnet-5")
@@ -71,6 +72,7 @@ export function mapPiAiReasoningToAnthropicEffort(
     case "xhigh":
       if (
         modelId.includes("fable") ||
+        modelId.includes("opus-5") ||
         modelId.includes("opus-4-8") ||
         modelId.includes("opus-4.8") ||
         modelId.includes("opus-4-6") ||

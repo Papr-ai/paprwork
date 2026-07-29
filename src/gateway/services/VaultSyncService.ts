@@ -11,6 +11,10 @@
  * on the memory server, attaching the user's PAPR_API_KEY automatically.
  */
 
+import { buildCloudVaultRequestBody } from "../../core/utils/cloudReposScope.js";
+import type { CloudRepoScope } from "../../core/utils/cloudReposScope.js";
+import { readActiveWorkspacePointer } from "../../core/utils/paprWorkspace.js";
+import { normalizeIntegrationKeyVaultAudience } from "../../core/storage/customKeysVault.js";
 import { getCustomKeysService } from "./CustomKeysService.js";
 import { resolveVaultKeySource } from "./cloudAgentGateway/resolveCloudProviderAuth.js";
 import { getPaprApiKey } from "../utils/keyResolver.js";
@@ -115,32 +119,44 @@ export class VaultSyncService {
       return null;
     }
 
-    const keyPairs: Array<{
-      name: string;
-      value: string;
-      clientAccess: "server" | "client";
-      source: string;
-    }> = [];
+    const keyPairsByScope = new Map<
+      CloudRepoScope,
+      Array<{
+        name: string;
+        value: string;
+        clientAccess: "server" | "client";
+        source: string;
+      }>
+    >();
+
     for (const meta of keyList) {
+      if (meta.scope === "global") {
+        continue;
+      }
       try {
         const value = await customKeys.getKeyByName(meta.name);
-        if (value) {
-          keyPairs.push({
-            name: meta.name,
-            value,
-            clientAccess: meta.clientAccess ?? "server",
-            source: resolveVaultKeySource(
-              {
-                name: meta.name,
-                source: meta.source,
-                managedBy: meta.managedBy,
-                oauthProvider: meta.oauthProvider,
-                description: meta.description,
-              },
-              value,
-            ),
-          });
+        if (!value) {
+          continue;
         }
+        const cloudScope = normalizeIntegrationKeyVaultAudience(meta.vaultAudience);
+        const pair = {
+          name: meta.name,
+          value,
+          clientAccess: meta.clientAccess ?? "server",
+          source: resolveVaultKeySource(
+            {
+              name: meta.name,
+              source: meta.source,
+              managedBy: meta.managedBy,
+              oauthProvider: meta.oauthProvider,
+              description: meta.description,
+            },
+            value,
+          ),
+        };
+        const bucket = keyPairsByScope.get(cloudScope) ?? [];
+        bucket.push(pair);
+        keyPairsByScope.set(cloudScope, bucket);
       } catch (err) {
         console.warn(
           `[VaultSync] Could not read key "${meta.name}":`,
@@ -149,46 +165,76 @@ export class VaultSyncService {
       }
     }
 
-    if (keyPairs.length === 0) {
+    const totalKeys = [...keyPairsByScope.values()].reduce(
+      (sum, bucket) => sum + bucket.length,
+      0,
+    );
+
+    if (totalKeys === 0) {
       console.log("[VaultSync] No readable key values to push");
       return null;
     }
 
     this.state.status = "syncing";
-    console.log(`[VaultSync] Pushing ${keyPairs.length} keys to vault...`);
+    console.log(
+      `[VaultSync] Pushing ${totalKeys} keys to vault (${keyPairsByScope.size} scope bucket(s))...`,
+    );
 
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), PUSH_TIMEOUT_MS);
-      const resp = await fetch(
-        `http://localhost:${this.gatewayPort}/api/cloud/vault/sync`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            scope: "user",
-            keys: keyPairs.map(({ name, value, clientAccess, source }) => ({
-              name,
-              value,
-              source,
-              clientAccess,
-            })),
-          }),
-          signal: controller.signal,
-        },
-      );
-      clearTimeout(timer);
+      let syncedTotal = 0;
+      const created: string[] = [];
+      const updated: string[] = [];
+      const deleted: string[] = [];
 
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(`Vault sync failed (${resp.status}): ${text}`);
+      for (const [cloudScope, keyPairs] of keyPairsByScope) {
+        const resp = await fetch(
+          `http://localhost:${this.gatewayPort}/api/cloud/vault/sync`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(
+              buildCloudVaultRequestBody(
+                keyPairs.map(({ name, value, clientAccess, source }) => ({
+                  name,
+                  value,
+                  source,
+                  clientAccess,
+                })),
+                cloudScope,
+              ),
+            ),
+            signal: controller.signal,
+          },
+        );
+
+        if (!resp.ok) {
+          const text = await resp.text();
+          throw new Error(
+            `Vault sync failed for scope ${cloudScope} (${resp.status}): ${text}`,
+          );
+        }
+
+        const result = (await resp.json()) as VaultSyncResponse;
+        syncedTotal += result.synced;
+        created.push(...result.created);
+        updated.push(...result.updated);
+        deleted.push(...result.deleted);
       }
 
-      const result = (await resp.json()) as VaultSyncResponse;
+      clearTimeout(timer);
+
+      const result: VaultSyncResponse = {
+        synced: syncedTotal,
+        created,
+        updated,
+        deleted,
+      };
       this.state.status = "idle";
       this.state.lastSyncAt = new Date().toISOString();
       this.state.lastError = null;
-      this.state.keyCount = keyPairs.length;
+      this.state.keyCount = totalKeys;
 
       console.log(
         `[VaultSync] Pushed ${result.synced} keys (${result.created.length} created, ${result.updated.length} updated)`,
@@ -203,6 +249,46 @@ export class VaultSyncService {
     }
   }
 
+  private vaultPullScopes(): CloudRepoScope[] {
+    const pointer = readActiveWorkspacePointer();
+    const scopes: CloudRepoScope[] = ["user"];
+    if (pointer?.namespaceId || process.env.PAPR_NAMESPACE_ID?.trim()) {
+      scopes.push("namespace");
+    }
+    if (pointer?.organizationId) {
+      scopes.push("org");
+    }
+    return scopes;
+  }
+
+  private async fetchVaultKeyNamesForScope(
+    scope: CloudRepoScope,
+    signal: AbortSignal,
+  ): Promise<string[]> {
+    const { scope: resolvedScope, namespace_id: namespaceId } =
+      buildCloudVaultRequestBody([], scope);
+    const params = new URLSearchParams({ scope: resolvedScope });
+    if (namespaceId) {
+      params.set("namespace_id", namespaceId);
+    }
+
+    const resp = await fetch(
+      `http://localhost:${this.gatewayPort}/api/cloud/vault/keys?${params}`,
+      { signal },
+    );
+
+    if (!resp.ok) {
+      const text = await resp.text();
+      console.warn(
+        `[VaultSync] Pull failed for scope ${resolvedScope} (${resp.status}): ${text.slice(0, 120)}`,
+      );
+      return [];
+    }
+
+    const data = (await resp.json()) as VaultListKeysResponse;
+    return data.keys.map((k) => k.name);
+  }
+
   /**
    * Pull vault key names and add any missing keys to local keychain.
    * Values are NOT pulled (would require a resolve endpoint). Only names
@@ -212,26 +298,26 @@ export class VaultSyncService {
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), PULL_TIMEOUT_MS);
-      const resp = await fetch(
-        `http://localhost:${this.gatewayPort}/api/cloud/vault/keys?scope=user`,
-        { signal: controller.signal },
-      );
-      clearTimeout(timer);
 
-      if (!resp.ok) {
-        const text = await resp.text();
-        console.warn(`[VaultSync] Pull failed (${resp.status}): ${text}`);
-        return [];
+      const vaultKeyNames = new Set<string>();
+      for (const scope of this.vaultPullScopes()) {
+        const names = await this.fetchVaultKeyNamesForScope(
+          scope,
+          controller.signal,
+        );
+        for (const name of names) {
+          vaultKeyNames.add(name);
+        }
       }
 
-      const data = (await resp.json()) as VaultListKeysResponse;
-      const vaultKeyNames = data.keys.map((k) => k.name);
+      clearTimeout(timer);
 
+      const allNames = [...vaultKeyNames];
       const customKeys = getCustomKeysService();
       const localKeys = await customKeys.listKeys();
       const localNames = new Set(localKeys.map((k) => k.name));
 
-      const missingLocally = vaultKeyNames.filter((n) => !localNames.has(n));
+      const missingLocally = allNames.filter((n) => !localNames.has(n));
 
       if (missingLocally.length > 0) {
         console.log(
@@ -241,11 +327,18 @@ export class VaultSyncService {
         // The user would need to re-add them or we'd need a resolve endpoint for pull.
       }
 
-      return vaultKeyNames;
+      return allNames;
     } catch (err) {
       console.warn("[VaultSync] Pull failed:", (err as Error).message);
       return [];
     }
+  }
+
+  /** Push + pull after org/namespace workspace switch. */
+  async syncForWorkspaceSwitch(): Promise<void> {
+    console.log("[VaultSync] Re-syncing vault for workspace switch...");
+    await this.pushAllKeys();
+    await this.pullKeys();
   }
 
   /**

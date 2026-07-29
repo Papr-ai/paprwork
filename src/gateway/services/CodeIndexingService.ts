@@ -12,9 +12,9 @@ import { Papr } from '@papr/memory';
 import { registerCodeSchema, seedControlledVocabulary } from './CodeSchemaRegistration.js';
 import { SmartCodeIndexManager } from './storage/SmartCodeIndexManager.js';
 import { CodeIndexTracker } from './storage/CodeIndexTracker.js';
+import { resolvePaprUserDataPath } from '../../core/utils/paprWorkspace.js';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 
 let indexManager: SmartCodeIndexManager | null = null;
 let fallbackTracker: CodeIndexTracker | null = null;
@@ -22,7 +22,9 @@ let schemaId: string | null = null;
 let indexingInitialized = false;
 let initializationPromise: Promise<void> | null = null; // Mutex to prevent duplicate initialization
 
-const SCHEMA_FILE = path.join(os.homedir(), '.paprwork-v2', 'code-schema-id.txt');
+function getCodeSchemaCachePath(): string {
+  return path.join(resolvePaprUserDataPath(), 'code-schema-id.txt');
+}
 
 /**
  * Get or register the code schema
@@ -30,6 +32,7 @@ const SCHEMA_FILE = path.join(os.homedir(), '.paprwork-v2', 'code-schema-id.txt'
 async function ensureCodeSchema(client: Papr): Promise<string> {
   const SCHEMA_NAME = 'paprwork-code';
   const SCHEMA_VERSION = '2.0.0';
+  const schemaFile = getCodeSchemaCachePath();
   
   // Check if schema exists in user's namespace
   try {
@@ -47,11 +50,11 @@ async function ensureCodeSchema(client: Papr): Promise<string> {
       console.log(`[CodeIndexing] Found existing schema: ${schemaId} (v${SCHEMA_VERSION})`);
       
       // Cache it
-      const dir = path.dirname(SCHEMA_FILE);
+      const dir = path.dirname(schemaFile);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      fs.writeFileSync(SCHEMA_FILE, JSON.stringify({
+      fs.writeFileSync(schemaFile, JSON.stringify({
         schema_id: schemaId,
         version: SCHEMA_VERSION,
         created_at: new Date().toISOString()
@@ -72,9 +75,9 @@ async function ensureCodeSchema(client: Papr): Promise<string> {
   }
 
   // Check local cache as fallback
-  if (fs.existsSync(SCHEMA_FILE)) {
+  if (fs.existsSync(schemaFile)) {
     try {
-      const cached = JSON.parse(fs.readFileSync(SCHEMA_FILE, 'utf-8'));
+      const cached = JSON.parse(fs.readFileSync(schemaFile, 'utf-8'));
       if (cached.schema_id && cached.version === SCHEMA_VERSION) {
         console.log(`[CodeIndexing] Using cached schema: ${cached.schema_id} (v${SCHEMA_VERSION})`);
         return cached.schema_id;
@@ -91,11 +94,11 @@ async function ensureCodeSchema(client: Papr): Promise<string> {
   const { schema_id } = await registerCodeSchema(client);
   
   // Cache it with metadata
-  const dir = path.dirname(SCHEMA_FILE);
+  const dir = path.dirname(schemaFile);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  fs.writeFileSync(SCHEMA_FILE, JSON.stringify({
+  fs.writeFileSync(schemaFile, JSON.stringify({
     schema_id,
     version: SCHEMA_VERSION,
     created_at: new Date().toISOString()
@@ -158,6 +161,7 @@ export async function initializeCodeIndexing(paprApiKey: string): Promise<void> 
     // Start smart index manager
     indexManager = new SmartCodeIndexManager(client, {
       schemaId,
+      dataDir: resolvePaprUserDataPath(),
       debounceMs: 5000, // 5 seconds
       batchSize: 10 // Reduced from 50 to avoid rate limiting
     });
@@ -205,10 +209,22 @@ export function getCodeIndexingStatus(): {
 /**
  * Stop code indexing (called on shutdown)
  */
-export function stopCodeIndexing(): void {
+export async function stopCodeIndexing(): Promise<void> {
   if (indexManager) {
     console.log('[CodeIndexing] Stopping...');
-    indexManager.stop();
+    await indexManager.stopAsync();
     indexManager = null;
   }
+}
+
+/** Reset code indexing after org/namespace workspace switch. */
+export async function resetCodeIndexingForWorkspaceSwitch(): Promise<void> {
+  await stopCodeIndexing();
+  if (fallbackTracker) {
+    fallbackTracker.close();
+    fallbackTracker = null;
+  }
+  schemaId = null;
+  indexingInitialized = false;
+  initializationPromise = null;
 }

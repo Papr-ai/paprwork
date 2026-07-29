@@ -6,8 +6,8 @@
  */
 
 import { promises as fs } from "fs";
+import { getPaprAppsRoot, getPaprWorkspaceDir } from "../../core/utils/paprRoot.js";
 import path from "path";
-import os from "os";
 import type {
   BrandColors,
   BrandFonts,
@@ -24,11 +24,11 @@ export interface ResolvedBrand extends BrandTokens {
 }
 
 function workspaceDir(): string {
-  return path.join(os.homedir(), "Papr", "workspace");
+  return getPaprWorkspaceDir();
 }
 
 function appsDir(): string {
-  return path.join(os.homedir(), "Papr", "apps");
+  return getPaprAppsRoot();
 }
 
 function isNonEmpty(value: string | undefined): value is string {

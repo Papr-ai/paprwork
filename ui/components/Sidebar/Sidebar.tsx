@@ -3,7 +3,7 @@
  * Reference: Paprwork v1 index.html lines 21-215
  */
 
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useMemo, useCallback, useEffect } from "react";
 import { useChat } from "../../hooks/useChat";
 import { useTabs } from "../../hooks/useTabs";
 import type { TabType } from "../../types/tabs";
@@ -15,9 +15,10 @@ import { OnboardingCard } from "./OnboardingCard";
 import { ProfileFooter } from "./ProfileFooter";
 import { SidebarToggleButton } from "./SidebarToggleButton";
 import { MemoryIcon } from "../Memory/MemoryIcon";
+import { switchToChatTab } from "../../lib/ensureDefaultChatTab";
 import "./Sidebar.css";
 
-type View = "chat" | "apps" | "memory" | "artifacts";
+type View = "chat" | "apps" | "memory" | "documents";
 
 /** Map tab types to sidebar nav views */
 function tabTypeToView(type: TabType | undefined): View {
@@ -29,7 +30,7 @@ function tabTypeToView(type: TabType | undefined): View {
       return "memory";
     case "document":
     case "documents":
-      return "artifacts";
+      return "documents";
     case "chat":
     default:
       return "chat";
@@ -37,7 +38,6 @@ function tabTypeToView(type: TabType | undefined): View {
 }
 
 export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void }) {
-  const [isCreatingChat, setIsCreatingChat] = useState(false);
   const { createChat } = useChat();
   const { tabs, createTab, switchToTab, activeLeftTab } = useTabs();
 
@@ -50,30 +50,9 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
 
     // For parent tabs (split view), use the parent's own type
     // If parent type is generic (e.g. "chat"), that's correct
-    // If it's a document/app parent, it maps to "artifacts"
+    // If it's a document/app parent, it maps to "documents"
     return tabTypeToView(tab.type);
   }, [activeLeftTab, tabs]);
-
-  const handleNewChat = async () => {
-    // Prevent multiple simultaneous chat creations
-    if (isCreatingChat) {
-      console.log("[Sidebar] Already creating a chat, ignoring click");
-      return;
-    }
-
-    setIsCreatingChat(true);
-    try {
-      // Create new chat - createTab will handle empty chat detection automatically
-      const chatId = await createChat();
-      if (chatId) {
-        // createTab will check for empty chats and reuse if found
-        const tabId = createTab("chat", chatId, "New Chat");
-        switchToTab(tabId);
-      }
-    } finally {
-      setIsCreatingChat(false);
-    }
-  };
 
   const handleOpenSettings = useCallback(() => {
     const settingsId = createTab("settings", "settings", "Settings");
@@ -119,10 +98,10 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
       tabId = createTab("apps" as TabType, "apps", "Apps");
     } else if (view === "memory") {
       tabId = createTab("memory" as TabType, "memory", "Memory");
-    } else if (view === "artifacts") {
-      tabId = createTab("documents" as TabType, "documents", "Artifacts");
+    } else if (view === "documents") {
+      tabId = createTab("documents" as TabType, "documents", "Documents");
     } else if (view === "chat") {
-      handleNewChat();
+      switchToChatTab();
       return;
     }
 
@@ -266,9 +245,9 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
                 />
               </svg>
             }
-            label="Artifacts"
-            isActive={activeView === "artifacts"}
-            onClick={() => handleNavClick("artifacts")}
+            label="Documents"
+            isActive={activeView === "documents"}
+            onClick={() => handleNavClick("documents")}
           />
         </div>
 

@@ -1,0 +1,22 @@
+.integration-key-vault-audience {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.integration-key-vault-audience__select {
+  margin: 0;
+}
+
+.integration-key-vault-audience__hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary, rgba(60, 60, 67, 0.72));
+}
+
+@media (prefers-color-scheme: dark) {
+  .integration-key-vault-audience__hint {
+    color: rgba(235, 235, 245, 0.68);
+  }
+}

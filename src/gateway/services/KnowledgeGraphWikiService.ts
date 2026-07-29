@@ -6,13 +6,17 @@
  */
 
 import type Papr from "@papr/memory";
-import { getPaprClient } from "../../core/tools/paprClient.js";
-import { paprUserScope } from "../utils/paprUserId.js";
+import { getPaprWorkspaceDir } from "../../core/utils/paprRoot.js";
+import { getPaprClient, isPaprNotFoundError } from "../../core/tools/paprClient.js";
+import {
+  getMemoryScopeContext,
+  paprMemorySearchScopeSpread,
+} from "../utils/memoryScopeResolver.js";
+import { buildMemorySearchScopeFields } from "../../core/utils/memoryScope.js";
 import * as fs from "fs";
 import * as path from "path";
-import * as os from "os";
 
-const ENTITIES_DIR = path.join(os.homedir(), "Papr", "workspace", "entities");
+function getEntitiesDir(): string { return path.join(getPaprWorkspaceDir(), "entities"); }
 
 const ENTITY_DIR_CONFIG: Record<string, { railTitle: string; singular: string }> = {
   projects:    { railTitle: "Projects",    singular: "project" },
@@ -125,12 +129,12 @@ export interface EntityFileNode extends WikiNode {
 function readEntityFilesSync(): { nodes: EntityFileNode[]; rails: WikiRail[]; typeCounts: Record<string, number> } {
   const nodes: EntityFileNode[] = [];
   const typeCounts: Record<string, number> = {};
-  if (!fs.existsSync(ENTITIES_DIR)) return { nodes, rails: [], typeCounts };
+  if (!fs.existsSync(getEntitiesDir())) return { nodes, rails: [], typeCounts };
 
-  for (const typeDir of fs.readdirSync(ENTITIES_DIR)) {
+  for (const typeDir of fs.readdirSync(getEntitiesDir())) {
     const cfg = ENTITY_DIR_CONFIG[typeDir];
     if (!cfg) continue;
-    const dirPath = path.join(ENTITIES_DIR, typeDir);
+    const dirPath = path.join(getEntitiesDir(), typeDir);
     if (!fs.statSync(dirPath).isDirectory()) continue;
     for (const file of fs.readdirSync(dirPath)) {
       if (!file.endsWith(".md")) continue;
@@ -269,7 +273,7 @@ const ENTITY_CONFIGS: EntityTypeConfig[] = [
     railTitle: "Your goals",
     graphqlHasId: false,
     listQuery: `goals {
-      description status priority progress target_date updated_at created_at
+      status priority progress target_date updated_at created_at
     }`,
     detailQuery: (id) => `goals(where: { ${graphqlStringEq("description", id)} }) {
       description status priority progress target_date updated_at created_at
@@ -283,7 +287,7 @@ const ENTITY_CONFIGS: EntityTypeConfig[] = [
     railTitle: "Projects",
     graphqlHasId: true,
     listQuery: `projects {
-      id name description type updated_at
+      id updated_at
     }`,
     detailQuery: (id) => `projects(where: { ${graphqlStringEq("id", id)} }) {
       id name description type updated_at
@@ -301,7 +305,7 @@ const ENTITY_CONFIGS: EntityTypeConfig[] = [
     railTitle: "People",
     graphqlHasId: true,
     listQuery: `people {
-      id name role description updated_at
+      id updated_at
     }`,
     detailQuery: (id) => `people(where: { ${graphqlStringEq("id", id)} }) {
       id name role description updated_at
@@ -332,7 +336,7 @@ const ENTITY_CONFIGS: EntityTypeConfig[] = [
     railTitle: "Insights",
     graphqlHasId: false,
     listQuery: `userInsights {
-      content category confidence context timestamp batch_id session_id created_at
+      content category timestamp created_at
     }`,
     detailQuery: (_id) => `userInsights {
       content category confidence context timestamp batch_id session_id created_at
@@ -346,7 +350,7 @@ const ENTITY_CONFIGS: EntityTypeConfig[] = [
     railTitle: "Tasks",
     graphqlHasId: false,
     listQuery: `userTasks {
-      task_name description status priority outcome created_at updated_at session_id
+      task_name status priority created_at updated_at
     }`,
     detailQuery: (_id) => `userTasks {
       task_name description status priority outcome created_at updated_at session_id
@@ -632,6 +636,15 @@ async function runGraphQL(
 
     if (response.errors?.length) {
       const msg = response.errors.map((e) => e.message).join("; ");
+      const hasRows = response.data
+        ? Object.values(response.data).some(
+            (value) => Array.isArray(value) && value.length > 0,
+          )
+        : false;
+      if (hasRows) {
+        console.warn(`[Wiki] GraphQL ${label} partial: ${msg}`);
+        return response.data ?? null;
+      }
       console.warn(`[Wiki] GraphQL ${label}: ${msg}`);
       return null;
     }
@@ -735,12 +748,24 @@ function buildRailsFromItems(
   return { rails, typeCounts };
 }
 
+function wikiGraphSearchScope(): {
+  external_user_id?: string;
+  search_acl?: { read: string[]; write?: string[] };
+} {
+  const ctx = getMemoryScopeContext();
+  if (ctx.namespaceId) {
+    return buildMemorySearchScopeFields("namespace", ctx);
+  }
+  return buildMemorySearchScopeFields("user", ctx);
+}
+
 async function fetchWikiHomeFromSearch(client: Papr): Promise<{
   rails: WikiRail[];
   typeCounts: Record<string, number>;
 }> {
   const grouped = new Map<string, WikiNode[]>();
   const seen = new Set<string>();
+  const searchScope = wikiGraphSearchScope();
 
   const addNode = (raw: Record<string, unknown>, wikiType: string) => {
     const record = coerceSearchRecord(raw);
@@ -759,7 +784,7 @@ async function fetchWikiHomeFromSearch(client: Papr): Promise<{
       try {
         const response = await client.memory.search({
           query,
-          ...paprUserScope(),
+          ...searchScope,
           max_memories: MIN_SEARCH_MEMORIES,
           max_nodes: 12,
           enable_agentic_graph: true,
@@ -777,6 +802,9 @@ async function fetchWikiHomeFromSearch(client: Papr): Promise<{
           }
         }
       } catch (error) {
+        if (isPaprNotFoundError(error)) {
+          return;
+        }
         console.warn(
           `[Wiki] Search rail failed (${wikiType}):`,
           error instanceof Error ? error.message : error,
@@ -789,7 +817,7 @@ async function fetchWikiHomeFromSearch(client: Papr): Promise<{
     try {
       const response = await client.memory.search({
         query: "knowledge graph entities projects goals people",
-        ...paprUserScope(),
+        ...searchScope,
         max_memories: 20,
         max_nodes: 40,
         enable_agentic_graph: true,
@@ -803,10 +831,12 @@ async function fetchWikiHomeFromSearch(client: Papr): Promise<{
         addNode(memory, "memory");
       }
     } catch (error) {
-      console.warn(
-        "[Wiki] Broad search fallback failed:",
-        error instanceof Error ? error.message : error,
-      );
+      if (!isPaprNotFoundError(error)) {
+        console.warn(
+          "[Wiki] Broad search fallback failed:",
+          error instanceof Error ? error.message : error,
+        );
+      }
     }
   }
 
@@ -862,11 +892,14 @@ async function fetchWikiHomeFromGraphQL(client: Papr): Promise<{
 }
 
 export async function fetchWikiHome(): Promise<WikiHomeResult> {
-  // PRIMARY: Read entity .md files from ~/Papr/workspace/entities/
+  // PRIMARY: entity .md files under the active org/namespace workspace:
+  // {paprHome}/workspace/entities/ (paprHome from .active-workspace.json or PAPR_HOME)
   const entityResult = readEntityFilesSync();
   if (entityResult.nodes.length > 0) {
     const featured = pickFeatured(entityResult.rails);
-    console.log(`[Wiki] Home (entity files): ${entityResult.nodes.length} nodes, ${entityResult.rails.length} rails`);
+    console.log(
+      `[Wiki] Home (entity files): ${entityResult.nodes.length} nodes, ${entityResult.rails.length} rails from ${getEntitiesDir()}`,
+    );
     return {
       featured,
       rails: entityResult.rails,
@@ -876,7 +909,11 @@ export async function fetchWikiHome(): Promise<WikiHomeResult> {
     };
   }
 
-  // FALLBACK: Neo4j / Qdrant search
+  console.log(
+    `[Wiki] No local entities at ${getEntitiesDir()} — falling back to Papr GraphQL/search`,
+  );
+
+  // FALLBACK: Neo4j / Qdrant search (same namespace as PAPR_API_KEY)
   let client: Papr;
   try {
     client = await getPaprClient();
@@ -1014,10 +1051,11 @@ async function _fetchWikiEntityBase(wikiType: string, id: string, label?: string
   }
 
   const searchQuery = label?.trim() || id;
+  const searchScope = await paprMemorySearchScopeSpread();
   try {
     const response = await client.memory.search({
       query: searchQuery,
-      ...paprUserScope(),
+      ...searchScope,
       max_memories: MIN_SEARCH_MEMORIES,
       max_nodes: 20,
       enable_agentic_graph: true,
@@ -1083,9 +1121,10 @@ async function _fetchRelatedMemories(node: WikiNode): Promise<any[]> {
     const client = await getPaprClient();
     const query = [node.label, node.description].filter(Boolean).join(" ");
     if (!query) return [];
+    const searchScope = await paprMemorySearchScopeSpread();
     const response = await client.memory.search({
       query,
-      ...paprUserScope(),
+      ...searchScope,
       max_memories: 20,
       enable_agentic_graph: false,
     });
@@ -1225,9 +1264,10 @@ export async function searchWiki(query: string): Promise<WikiSearchResult> {
   }
 
   try {
+    const searchScope = await paprMemorySearchScopeSpread();
     const response = await client.memory.search({
       query: trimmed,
-      ...paprUserScope(),
+      ...searchScope,
       max_memories: MIN_SEARCH_MEMORIES,
       max_nodes: 12,
       enable_agentic_graph: true,
@@ -1272,7 +1312,7 @@ export async function createWikiEntity(
   name: string,
   description: string,
 ): Promise<{ id: string; filePath: string }> {
-  const entitiesDir = path.join(os.homedir(), "Papr", "workspace", "entities");
+  const entitiesDir = path.join(getPaprWorkspaceDir(), "entities");
   const typeDir = path.join(entitiesDir, type);
   if (!fs.existsSync(typeDir)) fs.mkdirSync(typeDir, { recursive: true });
 
@@ -1349,13 +1389,13 @@ export async function addWikiType(
   icon: string,
   description: string,
 ): Promise<{ typeName: string; dirCreated: boolean; configUpdated: boolean }> {
-  const entitiesDir = path.join(os.homedir(), "Papr", "workspace", "entities");
+  const entitiesDir = path.join(getPaprWorkspaceDir(), "entities");
   const typeDir = path.join(entitiesDir, typeName);
   const dirCreated = !fs.existsSync(typeDir);
   if (dirCreated) fs.mkdirSync(typeDir, { recursive: true });
 
   // Update wiki-config.yaml if it exists
-  const configPath = path.join(os.homedir(), "Papr", "workspace", "wiki-config.yaml");
+  const configPath = path.join(getPaprWorkspaceDir(), "wiki-config.yaml");
   let configUpdated = false;
   if (fs.existsSync(configPath)) {
     const config = fs.readFileSync(configPath, "utf-8");

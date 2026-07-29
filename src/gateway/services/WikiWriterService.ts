@@ -8,8 +8,8 @@
  */
 
 import { promises as fs } from "fs";
+import { getPaprWorkspaceDir } from "../../core/utils/paprRoot.js";
 import path from "path";
-import os from "os";
 import { fileURLToPath } from "url";
 import type { JobRecord } from "./jobs/types.js";
 import { STANDALONE_APP_ID } from "./jobs/appIds.js";
@@ -57,7 +57,7 @@ function resolveTemplatesDir(): string {
 }
 
 function workspaceDir(): string {
-  return path.join(os.homedir(), "Papr", "workspace");
+  return getPaprWorkspaceDir();
 }
 
 function wikiPromptVersion(content: string): number {

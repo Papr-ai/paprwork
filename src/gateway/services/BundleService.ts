@@ -1,4 +1,5 @@
 import { promises as fs } from "fs";
+import { getPaprBundlesDir } from "../../core/utils/paprRoot.js";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { execSync } from "child_process";
 import path from "path";
@@ -792,7 +793,7 @@ export class BundleService {
   ) {
     this.appService = appService;
     this.jobsService = jobsService;
-    this.bundlesRootPath = path.join(os.homedir(), "Papr", "bundles");
+    this.bundlesRootPath = getPaprBundlesDir();
   }
 
   async initialize(): Promise<void> {

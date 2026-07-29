@@ -451,14 +451,102 @@ export class DatabaseRegistryService {
   }
 
   enrichSource(source: AppDataSource): AppDataSource {
-    if (source.dbId) {
-      return source;
-    }
-    const record = this.getByPath(source.dbPath);
+    const record = this.getRecordForSource(source);
     if (!record) {
       return source;
     }
+    if (source.dbId === record.dbId) {
+      return source;
+    }
     return { ...source, dbId: record.dbId };
+  }
+
+  /** Lookup by dbId, then normalized dbPath. */
+  getRecordForSource(source: AppDataSource): DatabaseRecord | undefined {
+    if (source.dbId) {
+      const byId = this.getById(source.dbId);
+      if (byId) {
+        return byId;
+      }
+    }
+    if (source.dbPath) {
+      return this.getByPath(source.dbPath);
+    }
+    return undefined;
+  }
+
+  /**
+   * Merge registry entries from synced git (cloud host). Does not write disk.
+   * Newer updatedAt wins when the same dbId exists locally.
+   */
+  mergeFromRegistryFile(raw: string): number {
+    let parsed: DatabasesRegistryFile;
+    try {
+      parsed = JSON.parse(raw) as DatabasesRegistryFile;
+    } catch {
+      return 0;
+    }
+    if (!parsed?.databases || typeof parsed.databases !== "object") {
+      return 0;
+    }
+
+    const state = this.getState();
+    let merged = 0;
+    for (const [dbId, incoming] of Object.entries(parsed.databases)) {
+      if (!incoming || incoming.status === "tombstone") {
+        continue;
+      }
+      const existing = state.databases[dbId];
+      if (
+        !existing ||
+        existing.status === "tombstone" ||
+        incoming.updatedAt > existing.updatedAt
+      ) {
+        state.databases[dbId] = incoming;
+        merged += 1;
+      }
+    }
+    this.cache = state;
+    return merged;
+  }
+
+  /**
+   * Ensure an in-memory registry record exists for Turso routing (cloud fallback).
+   * Only used when databases.json is missing entries — assumes shared isolation.
+   */
+  ensureRecordForSource(source: AppDataSource): DatabaseRecord {
+    const existing = this.getRecordForSource(source);
+    if (existing) {
+      return existing;
+    }
+
+    if (!source.dbPath) {
+      throw new Error(
+        `Cannot resolve database registry record for source ${source.alias}: missing dbPath`,
+      );
+    }
+
+    const normalizedPath = normalizeDbPath(source.dbPath);
+    const dbId = source.dbId ?? dbIdFromPath(normalizedPath);
+    const now = new Date().toISOString();
+    const record: DatabaseRecord = {
+      dbId,
+      localPath: normalizedPath,
+      tursoShortName: source.jobId
+        ? jobTursoDatabaseName(source.jobId)
+        : dbTursoDatabaseName(dbId),
+      ...(source.alias ? { label: source.alias } : {}),
+      ...(source.jobId ? { ownerJobId: source.jobId } : {}),
+      isolation: "shared",
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const state = this.getState();
+    state.databases[dbId] = record;
+    this.cache = state;
+    return record;
   }
 }
 
@@ -473,4 +561,9 @@ export async function initializeDatabaseRegistry(): Promise<DatabaseRegistryServ
   const service = getDatabaseRegistryService();
   await service.initialize();
   return service;
+}
+
+/** Reset singleton after org/namespace workspace switch. */
+export function resetDatabaseRegistryForWorkspaceSwitch(): void {
+  registryInstance = null;
 }

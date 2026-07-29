@@ -6,7 +6,7 @@
 
 import chokidar, { FSWatcher } from 'chokidar';
 import * as path from 'path';
-import * as os from 'os';
+import { getPaprRoot } from '../../../core/utils/paprRoot.js';
 import { Papr } from '@papr/memory';
 import { isIndexableCodePath } from './codeIndexPaths.js';
 // import { CodeIndexerService } from './CodeIndexerService.js';
@@ -22,7 +22,7 @@ export class CodeFileWatcher {
     _schemaId: string,
     paprDir?: string
   ) {
-    this.paprDir = paprDir || path.join(os.homedir(), 'Papr');
+    this.paprDir = paprDir || getPaprRoot();
     // Store for future use in re-indexing
     // this.client = _client;
     // this.schemaId = _schemaId;

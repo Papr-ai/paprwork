@@ -13,12 +13,13 @@ import {
   CURRENT_CHAT_SCOPE,
   resolveConversationId,
 } from "./chatScope.js";
+import { getCurrentChatId } from "./context.js";
 import { getPaprClient, handlePaprToolError, isPaprNotFoundError } from "./paprClient.js";
 
 const addMemorySchema = z
   .object({
     content: z.string().min(1),
-    // userId resolved at runtime via getPaprUserId() — passed as user_id to API
+    // Writer resolved at runtime via getPaprUserId() — passed as external_user_id (Parse objectId).
     role: z.enum(["user", "assistant"]).optional(),
     category: z
       .enum([
@@ -38,6 +39,32 @@ const addMemorySchema = z
     jobId: z.string().optional(),
     chatId: z.string().optional(),
     workspaceId: z.string().optional(),
+    readAcl: z
+      .array(z.string().min(1))
+      .optional()
+      .describe(
+        "Optional read ACL principals. Use external_user:{Parse objectId}, namespace:{namespaceId}, or organization:{orgId}. " +
+          "When set, overrides the chat Team/Org scope for read access. Writer always keeps write ACL.",
+      ),
+    shareWithUserIds: z
+      .array(z.string().min(1))
+      .optional()
+      .describe(
+        "Parse objectIds (same as external_user_id / list_namespace_users.externalUserId) to grant read access. " +
+          "Converted to external_user:{id} ACL principals automatically.",
+      ),
+    shareWithTeam: z
+      .boolean()
+      .optional()
+      .describe(
+        "When true with explicit ACL fields, also grant namespace read ACL for the active namespace.",
+      ),
+    shareWithOrganization: z
+      .boolean()
+      .optional()
+      .describe(
+        "When true with explicit ACL fields, also grant organization read ACL for the active org.",
+      ),
     signalDomain: z
       .string()
       .optional()
@@ -423,12 +450,16 @@ const updateSchemaSchema = z.object({
 export const addAgentMemoryTool = createTool({
   id: "add_agent_memory",
   description:
-    "Store a structured memory item in PAPR memory. IMPORTANT: When using category='context', you MUST provide role ('user' or 'assistant').",
+    "Store a structured memory item in PAPR memory. IMPORTANT: When using category='context', you MUST provide role ('user' or 'assistant'). " +
+    "For attendee-only sharing, call list_namespace_users first, match emails to externalUserId, then pass shareWithUserIds or readAcl with external_user:{objectId} principals. " +
+    "Use external_user_id semantics (Parse objectId) — NOT Papr internal user_id.",
   inputSchema: addMemorySchema,
   execute: async (args) => {
     try {
       const client = await getPaprClient();
-      const { paprUserScope } = await import("../../gateway/utils/paprUserId.js");
+      const { buildPaprMemoryWriteScope } = await import(
+        "../../gateway/utils/memoryScopeResolver.js"
+      );
 
       // Build customMetadata for fields not in the MemoryMetadata spec
       const customMetadata: Record<string, string> = {};
@@ -437,17 +468,53 @@ export const addAgentMemoryTool = createTool({
         customMetadata.sourceAgentName = args.sourceAgentName;
       if (args.runId) customMetadata.runId = args.runId;
       if (args.jobId) customMetadata.jobId = args.jobId;
-      if (args.chatId) customMetadata.chatId = args.chatId;
+      const resolvedChatId = resolveConversationId(
+        args.chatId ?? getCurrentChatId() ?? undefined,
+      );
+      if (resolvedChatId) customMetadata.chatId = resolvedChatId;
       if (args.workspaceId) customMetadata.workspaceId = args.workspaceId;
 
       const addPolicy = buildAddPolicy({
         signalDomain: args.signalDomain,
       });
 
+      const { getMemoryScopeContext } = await import(
+        "../../gateway/utils/memoryScopeResolver.js"
+      );
+      const scopeCtx = getMemoryScopeContext();
+
+      const explicitReadAcl =
+        args.readAcl?.length ||
+        args.shareWithUserIds?.length ||
+        args.shareWithTeam ||
+        args.shareWithOrganization
+          ? {
+              readAcl: args.readAcl,
+              shareWithUserIds: args.shareWithUserIds,
+              shareWithNamespaceId: args.shareWithTeam
+                ? scopeCtx.namespaceId
+                : undefined,
+              shareWithOrganizationId: args.shareWithOrganization
+                ? scopeCtx.organizationId
+                : undefined,
+            }
+          : undefined;
+
+      const memoryScope = await buildPaprMemoryWriteScope({
+        chatId: resolvedChatId,
+        addPolicy,
+        explicitReadAcl,
+      });
+
       const response = await client.memory.add({
         content: args.content,
-        ...paprUserScope(),
-        ...(addPolicy ? { policy: addPolicy } : {}),
+        ...(memoryScope.external_user_id
+          ? { external_user_id: memoryScope.external_user_id }
+          : {}),
+        ...(memoryScope.namespace_id
+          ? { namespace_id: memoryScope.namespace_id }
+          : {}),
+        ...(memoryScope.policy ? { policy: memoryScope.policy } : {}),
         metadata: {
           role: args.role,
           category: args.category,
@@ -455,6 +522,55 @@ export const addAgentMemoryTool = createTool({
         },
       });
       return { success: true, data: response };
+    } catch (error) {
+      handlePaprToolError(error);
+    }
+  },
+});
+
+const listNamespaceUsersSchema = z.object({
+  emailQuery: z
+    .string()
+    .optional()
+    .describe(
+      "Optional case-insensitive substring filter on member email or display name.",
+    ),
+});
+
+export const listNamespaceUsersTool = createTool({
+  id: "list_namespace_users",
+  description:
+    "List Papr users in the active workspace/namespace team. Returns Parse objectIds as externalUserId " +
+    "and ready-to-use memoryReadPrincipal values (external_user:{objectId}) for add_agent_memory ACL. " +
+    "Call before sharing memories with specific attendees.",
+  inputSchema: listNamespaceUsersSchema,
+  execute: async (args) => {
+    try {
+      const { listNamespaceUsersForAgent } = await import(
+        "../../gateway/services/namespaceUsersService.js"
+      );
+      const result = await listNamespaceUsersForAgent();
+      const query = args.emailQuery?.trim().toLowerCase();
+      const members = query
+        ? result.members.filter(
+            (member) =>
+              member.email.toLowerCase().includes(query) ||
+              member.displayName.toLowerCase().includes(query),
+          )
+        : result.members;
+
+      return {
+        success: true,
+        data: {
+          ...result,
+          members,
+          idGuidance: {
+            bodyField: "external_user_id",
+            aclPrefix: "external_user:",
+            examplePrincipal: members[0]?.memoryReadPrincipal,
+          },
+        },
+      };
     } catch (error) {
       handlePaprToolError(error);
     }
@@ -478,9 +594,9 @@ export const searchAgentMemoryTool = createTool({
         return formatMemoryByIdResponse(args.memoryId, response);
       }
 
-      const { paprUserScope } = await import("../../gateway/utils/paprUserId.js");
-
-      // Build customMetadata filters from code search params + explicit filters
+      const { buildPaprMemorySearchScope } = await import(
+        "../../gateway/utils/memoryScopeResolver.js"
+      );
       const customMetadata: Record<string, string | number | boolean | string[]> = {
         ...(args.customMetadataFilters ?? {}),
       };
@@ -491,6 +607,10 @@ export const searchAgentMemoryTool = createTool({
       if (args.category === "code") customMetadata.source = "code_indexer";
 
       const hasMetadataFilters = Object.keys(customMetadata).length > 0;
+
+      const scopeChatId = resolveConversationId(
+        args.chatId ?? getCurrentChatId() ?? undefined,
+      );
 
       let conversationId: string | undefined;
       if (args.chatId) {
@@ -534,13 +654,22 @@ export const searchAgentMemoryTool = createTool({
         defaultDomain: isCodeSearch ? "code" : undefined,
       });
 
+      const memorySearchScope = await buildPaprMemorySearchScope({
+        chatId: scopeChatId,
+      });
+
       // Pass reranking config directly from agent's chosen provider/model
       const chosenProvider = args.rerankingProvider ?? "cohere";
       const chosenModel = args.rerankingModel ?? (chosenProvider === "cohere" ? "rerank-v3.5" : undefined);
 
       const response = await client.memory.search({
         query: args.query!,
-        ...paprUserScope(),
+        ...(memorySearchScope.external_user_id
+          ? { external_user_id: memorySearchScope.external_user_id }
+          : {}),
+        ...(memorySearchScope.search_acl
+          ? { search_acl: memorySearchScope.search_acl }
+          : {}),
         max_memories: args.maxMemories ?? 20,
         max_nodes: 20,
         enable_agentic_graph: true,
@@ -1145,7 +1274,9 @@ export const createEntitiesAndRelationshipsTool = createTool({
   execute: async (args) => {
     try {
       const client = await getPaprClient();
-      const { paprUserScope } = await import("../../gateway/utils/paprUserId.js");
+      const { buildPaprMemoryWriteScope } = await import(
+        "../../gateway/utils/memoryScopeResolver.js"
+      );
       
       // Build manual graph generation structure
       const manualGeneration = {
@@ -1171,10 +1302,19 @@ export const createEntitiesAndRelationshipsTool = createTool({
         manualRelationships: manualGeneration.relationships,
       });
 
+      const memoryScope = await buildPaprMemoryWriteScope({
+        addPolicy: manualPolicy,
+      });
+
       const response = await client.memory.add({
         content: args.content,
-        ...paprUserScope(),
-        ...(manualPolicy ? { policy: manualPolicy } : {}),
+        ...(memoryScope.external_user_id
+          ? { external_user_id: memoryScope.external_user_id }
+          : {}),
+        ...(memoryScope.namespace_id
+          ? { namespace_id: memoryScope.namespace_id }
+          : {}),
+        ...(memoryScope.policy ? { policy: memoryScope.policy } : {}),
       });
       
       return { 
@@ -1249,6 +1389,7 @@ export const listSignalDomainsTool = createTool({
 
 export const paprMemoryTools = [
   addAgentMemoryTool,
+  listNamespaceUsersTool,
   searchAgentMemoryTool,
   submitMemoryFeedbackTool,
   registerSchemaTool,

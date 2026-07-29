@@ -3,6 +3,7 @@
  */
 
 import { promises as fs } from "node:fs";
+import { getPaprAppsRoot } from "../../core/utils/paprRoot.js";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -87,7 +88,7 @@ export class CloudAppTrackSyncService {
   private readonly appsDir: string;
 
   constructor(appsDir?: string) {
-    this.appsDir = appsDir ?? path.join(os.homedir(), "Papr", "apps");
+    this.appsDir = appsDir ?? getPaprAppsRoot();
   }
 
   async syncTrackApp(appId: string): Promise<TrackSyncResult> {

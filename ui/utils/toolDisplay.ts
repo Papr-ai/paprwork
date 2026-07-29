@@ -93,14 +93,54 @@ export function getBashCommandDescription(
   }
 
   if (cmd.startsWith("head ") || cmd.startsWith("tail ")) {
-    const cmdName = cmd.startsWith("head") ? "head" : "tail";
-    const pathMatch = cmd.match(/(?:head|tail)\s+(?:-n?\s*\d+\s+)?([^\s|;&]+)/);
+    const byteLimitMatch = cmd.match(/(?:head|tail)\s+-c\s+\d+/);
+    if (byteLimitMatch) {
+      const fileMatch = cmd.match(
+        /(?:head|tail)\s+-c\s+\d+\s+((?:[^\s|;&]|\\.)+)/,
+      );
+      if (fileMatch) {
+        const filename = getDisplayFilename(fileMatch[1].replace(/\\/g, ""));
+        if (filename) {
+          return isRunning
+            ? `Reading start of ${filename}`
+            : `Read start of ${filename}`;
+        }
+      }
+      return isRunning ? "Reading file excerpt" : "Read file excerpt";
+    }
+
+    const pathMatch = cmd.match(
+      /(?:head|tail)\s+(?:-(?!c)[^\s]+\s+)*([^\s-|;&>]+)/,
+    );
     if (pathMatch) {
       const filename = getDisplayFilename(pathMatch[1].replace(/\\/g, ""));
       if (filename)
         return isRunning ? `Reading ${filename}` : `Read ${filename}`;
     }
     return isRunning ? "Reading file" : "Read file";
+  }
+
+  if (cmd.startsWith("ls")) {
+    if (/>/.test(cmd)) {
+      const redirectMatch = cmd.match(/>\s*([^\s|;&]+)/);
+      if (redirectMatch) {
+        const outfile = getDisplayFilename(redirectMatch[1]);
+        if (outfile) {
+          return isRunning
+            ? `Saving listing to ${outfile}`
+            : `Saved listing to ${outfile}`;
+        }
+      }
+      return isRunning ? "Saving directory listing" : "Saved directory listing";
+    }
+
+    const pathMatch = cmd.match(/ls\s+[^\s]*\s+([^\s|;&>]+)/);
+    if (pathMatch) {
+      const dirname = getDisplayFilename(pathMatch[1]);
+      if (dirname)
+        return isRunning ? `Listing ${dirname}` : `Listed ${dirname}`;
+    }
+    return isRunning ? "Listing files" : "Listed files";
   }
 
   if (cmd.startsWith("grep")) {
@@ -114,16 +154,6 @@ export function getBashCommandDescription(
     if (cmd.includes("documents/"))
       return isRunning ? "Searching documents" : "Searched documents";
     return isRunning ? "Searching files" : "Searched files";
-  }
-
-  if (cmd.startsWith("ls")) {
-    const pathMatch = cmd.match(/ls\s+[^\s]*\s+([^\s]+)/);
-    if (pathMatch) {
-      const dirname = getDisplayFilename(pathMatch[1]);
-      if (dirname)
-        return isRunning ? `Listing ${dirname}` : `Listed ${dirname}`;
-    }
-    return isRunning ? "Listing files" : "Listed files";
   }
 
   if (cmd.includes("sqlite3")) {

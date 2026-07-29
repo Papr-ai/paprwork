@@ -1,8 +1,7 @@
 import fs from "fs";
 import path from "path";
-import os from "os";
+import { getPaprDataDir } from "../../core/utils/paprRoot.js";
 
-const SETTINGS_PATH = path.join(os.homedir(), "Papr", "data", "settings.json");
 const CACHE_TTL_MS = 30_000;
 
 let cachedUserId: string | undefined;
@@ -26,7 +25,8 @@ export function getPaprUserId(): string | undefined {
   }
 
   try {
-    const raw = fs.readFileSync(SETTINGS_PATH, "utf-8");
+    const settingsPath = path.join(getPaprDataDir(), "settings.json");
+    const raw = fs.readFileSync(settingsPath, "utf-8");
     const settings = JSON.parse(raw) as { profile?: { paprUserId?: string } };
     cachedUserId = settings.profile?.paprUserId?.trim() ?? "";
     cachedAt = now;

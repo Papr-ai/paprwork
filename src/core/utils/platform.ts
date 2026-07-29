@@ -140,13 +140,13 @@ export function getHomeDirAlias(): string {
   return "~";
 }
 
+import { getPaprRoot } from "./paprRoot.js";
+
 /**
- * Get the Papr workspace directory
+ * Get the Papr workspace directory (org/namespace-aware when active).
  */
 export function getPaprDir(): string {
-  const os = require("os");
-  const path = require("path");
-  return path.join(os.homedir(), "Papr");
+  return getPaprRoot();
 }
 
 /**

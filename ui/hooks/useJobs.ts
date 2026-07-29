@@ -235,6 +235,12 @@ export function useJobs() {
       void loadJobs(true);
     }, 10000);
 
+    const onWorkspaceReload = () => {
+      void loadJobs(true);
+      void loadGraph();
+    };
+    window.addEventListener("papr-workspace-reload", onWorkspaceReload);
+
     const handler = (
       event: CustomEvent<{ type: string; data?: Record<string, unknown> }>,
     ) => {
@@ -278,6 +284,7 @@ export function useJobs() {
     window.addEventListener("gateway-broadcast", handler as EventListener);
     return () => {
       clearInterval(timer);
+      window.removeEventListener("papr-workspace-reload", onWorkspaceReload);
       window.removeEventListener("gateway-broadcast", handler as EventListener);
     };
   }, [loadJobs, loadGraph]);

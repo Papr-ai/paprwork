@@ -2,6 +2,10 @@
  * Settings Types - Shared type definitions for settings functionality
  */
 
+export type IntegrationKeyOrgScope = "organization" | "all";
+
+export type IntegrationKeyVaultAudience = "user" | "namespace" | "org";
+
 export interface CustomKey {
   id: string;
   name: string;
@@ -13,6 +17,10 @@ export interface CustomKey {
   source?: "manual" | "oauth";
   managedBy?: "oauth";
   oauthProvider?: "openai" | "anthropic";
+  scope?: "global" | "shared" | "org";
+  orgScope?: IntegrationKeyOrgScope | "global";
+  organizationId?: string;
+  vaultAudience?: IntegrationKeyVaultAudience;
 }
 
 export interface CustomKeyInput {
@@ -21,6 +29,9 @@ export interface CustomKeyInput {
   description?: string;
   permission?: "always" | "ask";
   clientAccess?: "server" | "client";
+  orgScope?: IntegrationKeyOrgScope;
+  organizationId?: string;
+  vaultAudience?: IntegrationKeyVaultAudience;
 }
 
 export interface ProviderConfig {

@@ -3,8 +3,8 @@
  */
 
 import { execSync } from "child_process";
+import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import { promises as fs, type Dirent } from "fs";
-import os from "os";
 import path from "path";
 import type {
   LastEditedFileRef,
@@ -17,9 +17,14 @@ import {
 } from "./agent/focusContextFormatter.js";
 
 const MAX_TRACKED_EDITS = 12;
-const PAPR_ROOT = path.join(os.homedir(), "Papr");
-const APPS_ROOT = path.join(PAPR_ROOT, "apps");
-const JOBS_ROOT = path.join(PAPR_ROOT, "Jobs");
+
+function appsRoot(): string {
+  return path.join(getPaprRoot(), "apps");
+}
+
+function jobsRoot(): string {
+  return path.join(getPaprRoot(), "Jobs");
+}
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -85,8 +90,8 @@ function classifyAbsolutePath(
 ): Omit<LastEditedFileRef, "editedAt"> | null {
   const normalized = path.normalize(absolutePath);
 
-  if (normalized.startsWith(APPS_ROOT + path.sep)) {
-    const rel = path.relative(APPS_ROOT, normalized);
+  if (normalized.startsWith(appsRoot() + path.sep)) {
+    const rel = path.relative(appsRoot(), normalized);
     const parts = rel.split(path.sep);
     const appId = parts[0];
     const filename = parts.slice(1).join("/");
@@ -99,8 +104,8 @@ function classifyAbsolutePath(
     };
   }
 
-  if (normalized.startsWith(JOBS_ROOT + path.sep)) {
-    const rel = path.relative(JOBS_ROOT, normalized);
+  if (normalized.startsWith(jobsRoot() + path.sep)) {
+    const rel = path.relative(jobsRoot(), normalized);
     const parts = rel.split(path.sep);
     const jobId = parts[0];
     const filename = parts.slice(1).join("/");
@@ -189,7 +194,7 @@ export class AgentFocusContextService {
         const { getAppService } = await import("./AppService.js");
         const appService = getAppService();
         await appService.initialize();
-        const appDir = path.join(APPS_ROOT, ui.activeApp.appId);
+        const appDir = path.join(appsRoot(), ui.activeApp.appId);
         const entries = await fs.readdir(appDir);
         server.activeApp.files = entries.filter(
           (name) =>
@@ -206,7 +211,7 @@ export class AgentFocusContextService {
     if (ui?.activeJob?.jobId) {
       server.activeJob = { ...ui.activeJob };
       try {
-        const jobDir = path.join(JOBS_ROOT, ui.activeJob.jobId);
+        const jobDir = path.join(jobsRoot(), ui.activeJob.jobId);
         server.activeJob.files = await listJobFiles(jobDir, 24);
       } catch {
         // Job dir unreadable — still inject jobId/name

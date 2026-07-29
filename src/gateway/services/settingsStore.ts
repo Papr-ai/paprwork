@@ -37,10 +37,13 @@ export interface UIPreferences {
   onboardingStep3Completed: boolean;
 }
 
+export type MemoryAudiencePreference = "user" | "namespace" | "org";
+
 export interface PreferencesData {
   defaultHomeAppId: string | null;
   cloudSyncEnabled: boolean;
   cloudAutoPublishEnabled: boolean;
+  defaultMemoryScope?: MemoryAudiencePreference;
 }
 
 export interface TelemetryData {
@@ -90,6 +93,7 @@ export const DEFAULT_SETTINGS: SettingsData = {
     defaultHomeAppId: DEFAULT_HOME_APP_ID,
     cloudSyncEnabled: true,
     cloudAutoPublishEnabled: true,
+    defaultMemoryScope: "user",
   },
   toolResultTruncation: { ...DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS },
 };

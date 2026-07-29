@@ -3,7 +3,7 @@
  */
 
 import { promises as fs } from "fs";
-import os from "os";
+import { getPaprAppsRoot } from "../../core/utils/paprRoot.js";
 import path from "path";
 import type {
   CloudAppInstallMode,
@@ -93,7 +93,7 @@ function toEntry(
 let singleton: CloudAppLineageService | null = null;
 
 function defaultAppsDir(): string {
-  return path.join(os.homedir(), "Papr", "apps");
+  return getPaprAppsRoot();
 }
 
 export function getCloudAppLineageService(

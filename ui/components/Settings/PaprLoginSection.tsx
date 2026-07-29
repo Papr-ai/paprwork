@@ -4,6 +4,11 @@
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { gateway } from "../../src/lib/gateway";
+import { flushWorkspaceStateToGateway } from "../../lib/persistedAppState";
+import {
+  MEMORY_AUDIENCE_LABELS,
+  type MemoryAudience,
+} from "../../constants/memoryScope";
 import "./PaprLoginSection.css";
 
 interface Namespace {
@@ -16,6 +21,10 @@ interface Organization {
   id: string;
   name: string;
   role?: string;
+  organizationId?: string;
+  organizationName?: string;
+  workspaceName?: string;
+  defaultNamespaceId?: string;
 }
 
 interface SchemaInfo {
@@ -72,6 +81,28 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteMessage, setInviteMessage] = useState<string | null>(null);
+  const [defaultMemoryScope, setDefaultMemoryScope] =
+    useState<MemoryAudience>("user");
+  const [savingMemoryDefault, setSavingMemoryDefault] = useState(false);
+  const switchingOrganizationRef = useRef(false);
+  const activeOrganizationIdRef = useRef<string | null>(null);
+  const organizationsRef = useRef(organizations);
+
+  useEffect(() => {
+    activeOrganizationIdRef.current = activeOrganizationId;
+  }, [activeOrganizationId]);
+
+  useEffect(() => {
+    organizationsRef.current = organizations;
+  }, [organizations]);
+
+  const resolveParseOrganizationId = useCallback(
+    (workspaceId: string | null): string | undefined => {
+      if (!workspaceId) return undefined;
+      return organizations.find((org) => org.id === workspaceId)?.organizationId;
+    },
+    [organizations],
+  );
 
   useEffect(() => {
     checkLoginStatus();
@@ -84,16 +115,117 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
   }, [isLoggedIn]);
 
   useEffect(() => {
-    if (isLoggedIn && activeOrganizationId) {
-      loadNamespaces();
+    if (!isLoggedIn) return;
+    void (async () => {
+      try {
+        const response = await gateway.send("settings:get");
+        const scope = response?.data?.preferences?.defaultMemoryScope;
+        if (scope === "user" || scope === "namespace" || scope === "org") {
+          setDefaultMemoryScope(scope);
+        }
+      } catch (err) {
+        console.error("Failed to load default memory scope:", err);
+      }
+    })();
+  }, [isLoggedIn]);
+
+  const handleDefaultMemoryScopeChange = useCallback(
+    async (event: React.ChangeEvent<HTMLSelectElement>) => {
+      const nextScope = event.target.value as MemoryAudience;
+      setDefaultMemoryScope(nextScope);
+      setSavingMemoryDefault(true);
+      try {
+        await gateway.send("settings:save-preferences", {
+          defaultMemoryScope: nextScope,
+        });
+      } catch (err) {
+        console.error("Failed to save default memory scope:", err);
+      } finally {
+        setSavingMemoryDefault(false);
+      }
+    },
+    [],
+  );
+
+  const loadNamespaces = useCallback(async (parseOrganizationId?: string, forceRefresh = false) => {
+    try {
+      const result = await window.electronAPI.papr.listNamespaces(
+        parseOrganizationId
+          ? { organizationId: parseOrganizationId, forceRefresh }
+          : forceRefresh
+            ? { forceRefresh: true }
+            : undefined,
+      );
+      if (result.success && result.namespaces) {
+        setNamespaces(result.namespaces);
+        setActiveNamespaceId(result.activeNamespaceId || null);
+      }
+    } catch (err) {
+      console.error("Failed to load namespaces:", err);
+    } finally {
+      setNamespacesLoaded(true);
     }
-  }, [isLoggedIn, activeOrganizationId]);
+  }, []);
+
+  const loadSchemas = useCallback(async () => {
+    setSchemasLoading(true);
+    try {
+      const fetchSchemas = () =>
+        gateway.send("memory:list-schemas", {}, { timeoutMs: 45_000 });
+
+      let response: Awaited<ReturnType<typeof fetchSchemas>>;
+      try {
+        response = await fetchSchemas();
+      } catch (firstError) {
+        const message =
+          firstError instanceof Error ? firstError.message : String(firstError);
+        if (!message.includes("timeout")) {
+          throw firstError;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        response = await fetchSchemas();
+      }
+
+      const data = response.data as
+        | { schemas?: SchemaInfo[]; error?: string }
+        | undefined;
+      if (data?.error) {
+        console.warn("[PaprLoginSection] Schema list warning:", data.error);
+      }
+      setSchemas(data?.schemas ?? []);
+    } catch (err) {
+      console.error("Failed to load schemas:", err);
+      setSchemas([]);
+    } finally {
+      setSchemasLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    if (isLoggedIn && activeNamespaceId) {
-      loadSchemas();
+    if (isLoggedIn && activeOrganizationId && organizations.length > 0) {
+      const parseOrgId = resolveParseOrganizationId(activeOrganizationId);
+      if (parseOrgId) {
+        void loadNamespaces(parseOrgId, true);
+      }
     }
-  }, [isLoggedIn, activeNamespaceId]);
+  }, [isLoggedIn, activeOrganizationId, organizations, resolveParseOrganizationId, loadNamespaces]);
+
+  useEffect(() => {
+    if (
+      isLoggedIn &&
+      activeNamespaceId &&
+      !switchingOrganization &&
+      !switchingNamespace
+    ) {
+      void loadSchemas();
+    }
+  }, [
+    isLoggedIn,
+    activeNamespaceId,
+    switchingOrganization,
+    switchingNamespace,
+    loadSchemas,
+  ]);
 
   useEffect(() => {
     if (isLoggedIn) {
@@ -171,59 +303,53 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
     }
   };
 
-  const loadNamespaces = async () => {
-    try {
-      const result = await window.electronAPI.papr.listNamespaces();
-      if (result.success && result.namespaces) {
-        setNamespaces(result.namespaces);
-        setActiveNamespaceId(result.activeNamespaceId || null);
-      }
-    } catch (err) {
-      console.error("Failed to load namespaces:", err);
-    } finally {
-      setNamespacesLoaded(true);
-    }
-  };
-
-  const loadSchemas = useCallback(async () => {
-    setSchemasLoading(true);
-    try {
-      const response = await gateway.send("memory:list-schemas", {});
-      const data = response.data as { schemas?: SchemaInfo[] } | undefined;
-      setSchemas(data?.schemas ?? []);
-    } catch (err) {
-      console.error("Failed to load schemas:", err);
-      setSchemas([]);
-    } finally {
-      setSchemasLoading(false);
-    }
-  }, []);
-
   const handleSwitchOrganization = async (organizationId: string) => {
     const org = organizations.find((o) => o.id === organizationId);
     if (!org || organizationId === activeOrganizationId) return;
 
+    const parseOrgId = org.organizationId;
+    if (!parseOrgId) {
+      setError("Could not resolve organization");
+      return;
+    }
+
     setSwitchingOrganization(true);
+    switchingOrganizationRef.current = true;
     setError(null);
+    setNamespaces([]);
+    setNamespacesLoaded(false);
     try {
+      await flushWorkspaceStateToGateway();
       const result = await window.electronAPI.papr.switchOrganization(organizationId, org.name);
       if (result.success) {
         setActiveOrganizationId(organizationId);
-        setActiveNamespaceId(null);
-        setNamespaces([]);
-        setNamespacesLoaded(false);
+        if (result.namespaces) {
+          setNamespaces(result.namespaces);
+          setNamespacesLoaded(true);
+        } else {
+          await loadNamespaces(parseOrgId, true);
+        }
+        if (result.activeNamespaceId) {
+          setActiveNamespaceId(result.activeNamespaceId);
+        } else {
+          setActiveNamespaceId(null);
+        }
         setSchemas([]);
         setWorkspaceMembers([]);
         setWorkspaceId(null);
         setWorkspaceName(null);
         setInviteEmail("");
         setInviteMessage(null);
+        if (result.apiKey && onApiKeyReceived) {
+          onApiKeyReceived(result.apiKey);
+        }
       } else {
         setError(result.error || "Failed to switch organization");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to switch organization");
     } finally {
+      switchingOrganizationRef.current = false;
       setSwitchingOrganization(false);
     }
   };
@@ -235,6 +361,7 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
     setSwitchingNamespace(true);
     setError(null);
     try {
+      await flushWorkspaceStateToGateway();
       const result = await window.electronAPI.papr.switchNamespace(namespaceId, ns.name);
       if (result.success) {
         setActiveNamespaceId(namespaceId);
@@ -242,10 +369,10 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
           onApiKeyReceived(result.apiKey);
         }
       } else {
-        setError(result.error || "Failed to switch namespace");
+        setError(result.error || "Failed to switch team");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to switch namespace");
+      setError(err instanceof Error ? err.message : "Failed to switch team");
     } finally {
       setSwitchingNamespace(false);
     }
@@ -297,19 +424,72 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
     setActiveNamespaceId(data.namespaceId);
   });
 
-  const handleOrganizationChangedRef = useRef((data: { organizationId: string; organizationName: string }) => {
-    setActiveOrganizationId(data.organizationId);
-    loadNamespaces();
+  const handleOrganizationChangedRef = useRef(
+    (_data: {
+      organizationId: string;
+      parseOrganizationId?: string;
+      organizationName: string;
+      namespaceId?: string;
+      namespaceName?: string;
+      namespaces?: Namespace[];
+    }) => {},
+  );
+
+  const handleWorkspaceCacheUpdatedRef = useRef(() => {});
+
+  const organizationChangedListenerRef = useRef(
+    (data: {
+      organizationId: string;
+      parseOrganizationId?: string;
+      organizationName: string;
+      namespaceId?: string;
+      namespaceName?: string;
+      namespaces?: Namespace[];
+    }) => {
+      handleOrganizationChangedRef.current(data);
+    },
+  );
+
+  const workspaceCacheUpdatedListenerRef = useRef(() => {
+    handleWorkspaceCacheUpdatedRef.current();
   });
+
+  useEffect(() => {
+    handleOrganizationChangedRef.current = (data) => {
+      if (switchingOrganizationRef.current) return;
+      setActiveOrganizationId(data.organizationId);
+      if (data.namespaceId) {
+        setActiveNamespaceId(data.namespaceId);
+      }
+      if (data.namespaces) {
+        setNamespaces(data.namespaces);
+        setNamespacesLoaded(true);
+      } else if (data.parseOrganizationId) {
+        void loadNamespaces(data.parseOrganizationId, true);
+      }
+    };
+
+    handleWorkspaceCacheUpdatedRef.current = () => {
+      void loadOrganizations();
+      const parseOrgId = organizationsRef.current.find(
+        (org) => org.id === activeOrganizationIdRef.current,
+      )?.organizationId;
+      if (parseOrgId) {
+        void loadNamespaces(parseOrgId);
+      }
+    };
+  }, [loadNamespaces]);
 
   useEffect(() => {
     const loginCb = handleLoginSuccessRef.current;
     const nsCb = handleNamespaceChangedRef.current;
-    const orgCb = handleOrganizationChangedRef.current;
+    const orgCb = organizationChangedListenerRef.current;
+    const cacheCb = workspaceCacheUpdatedListenerRef.current;
 
     window.electronAPI.papr.onLoginSuccess(loginCb);
     window.electronAPI.papr.onNamespaceChanged(nsCb);
     window.electronAPI.papr.onOrganizationChanged(orgCb);
+    window.electronAPI.papr.onWorkspaceCacheUpdated(cacheCb);
 
     const handleLoginSuccess = (event: CustomEvent) => {
       const { apiKey, email } = event.detail;
@@ -342,6 +522,7 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
       window.electronAPI.papr.removeLoginSuccessListener(loginCb);
       window.electronAPI.papr.removeNamespaceChangedListener(nsCb);
       window.electronAPI.papr.removeOrganizationChangedListener(orgCb);
+      window.electronAPI.papr.removeWorkspaceCacheUpdatedListener(cacheCb);
       window.removeEventListener("papr-auth-success", handleLoginSuccess as EventListener);
       window.removeEventListener("papr-login-error", handleLoginError as EventListener);
       window.removeEventListener("papr-logout-success", handleLogoutSuccess as EventListener);
@@ -350,7 +531,6 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
 
   // --- Logged-in state ---
   if (isLoggedIn) {
-    const activeOrg = organizations.find((o) => o.id === activeOrganizationId);
     const activeNs = namespaces.find((n) => n.id === activeNamespaceId);
 
     return (
@@ -373,9 +553,9 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
           </button>
         </div>
 
-        {/* Org + Namespace selectors in a row */}
+        {/* Organization + Team selectors in a row */}
         <div className="papr-section__selectors">
-          {organizationsLoaded && organizations.length > 1 && (
+          {organizationsLoaded && organizations.length > 0 && (
             <div className="papr-selector">
               <label className="papr-selector__label">Organization</label>
               <div className="papr-selector__wrapper">
@@ -387,7 +567,7 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
                 >
                   {organizations.map((org) => (
                     <option key={org.id} value={org.id}>
-                      {org.name}{org.role ? ` (${org.role})` : ""}
+                      {org.name}
                     </option>
                   ))}
                 </select>
@@ -398,7 +578,7 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
 
           {namespacesLoaded && namespaces.length > 0 && (
             <div className="papr-selector">
-              <label className="papr-selector__label">Namespace</label>
+              <label className="papr-selector__label">Team</label>
               <div className="papr-selector__wrapper">
                 <select
                   className="papr-selector__select"
@@ -416,33 +596,36 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
               </div>
             </div>
           )}
-        </div>
 
-        {/* Compact summary: org and namespace on one line if only 1 org */}
-        {organizationsLoaded && organizations.length <= 1 && activeOrg && (
-          <div className="papr-section__summary">
-            <span className="papr-section__summary-item">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-                <circle cx="9" cy="7" r="4"/>
-                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-              </svg>
-              {activeOrg.name}
-            </span>
-            {activeNs && (
-              <>
-                <span className="papr-section__summary-sep">/</span>
-                <span className="papr-section__summary-item">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                  </svg>
-                  {activeNs.name}
-                </span>
-              </>
-            )}
-          </div>
-        )}
+          {namespacesLoaded && namespaces.length === 0 && activeOrganizationId && (
+            <div className="papr-selector">
+              <label className="papr-selector__label">Team</label>
+              <div className="papr-selector__empty-row">
+                <div className="papr-selector__placeholder">No teams found</div>
+                <button
+                  type="button"
+                  className="papr-team__refresh"
+                  onClick={() => {
+                    const parseOrgId = resolveParseOrganizationId(activeOrganizationId);
+                    if (parseOrgId) void loadNamespaces(parseOrgId, true);
+                  }}
+                >
+                  Refresh
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!namespacesLoaded && activeOrganizationId && (
+            <div className="papr-selector">
+              <label className="papr-selector__label">Team</label>
+              <div className="papr-selector__placeholder">
+                <Spinner />
+                <span>Loading teams…</span>
+              </div>
+            </div>
+          )}
+        </div>
 
         {error && (
           <div className="papr-section__error">
@@ -454,6 +637,32 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
             <span>{error}</span>
           </div>
         )}
+
+        <div className="papr-selector papr-memory-default">
+          <label className="papr-selector__label" htmlFor="default-memory-scope">
+            Default memory sharing
+          </label>
+          <select
+            id="default-memory-scope"
+            className="papr-selector__select"
+            value={defaultMemoryScope}
+            onChange={(event) => void handleDefaultMemoryScopeChange(event)}
+            disabled={savingMemoryDefault}
+          >
+            {(Object.keys(MEMORY_AUDIENCE_LABELS) as MemoryAudience[]).map(
+              (audience) => (
+                <option key={audience} value={audience}>
+                  {MEMORY_AUDIENCE_LABELS[audience].label}
+                </option>
+              ),
+            )}
+          </select>
+          <p className="papr-memory-default__note">
+            {MEMORY_AUDIENCE_LABELS[defaultMemoryScope].description}. Shares
+            extracted knowledge from chats — not raw transcripts. Applies to new
+            chats; override per chat in the input bar.
+          </p>
+        </div>
 
         {/* Team members — needed for My team cloud app access */}
         <WorkspaceTeamSection
@@ -618,7 +827,7 @@ function WorkspaceTeamSection({
         <div className="papr-team__body">
           <p className="papr-team__hint">
             People here can open cloud apps shared as <strong>My team</strong> on apps.papr.ai.
-            Namespace members are not the same as seeing a namespace in dashboard — team membership controls cloud access.
+            Team membership controls cloud access on apps.papr.ai.
           </p>
 
           {workspaceName && (

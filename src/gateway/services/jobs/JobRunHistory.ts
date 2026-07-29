@@ -1,6 +1,6 @@
 import { promises as fs } from "fs";
+import { getPaprRoot } from "../../../core/utils/paprRoot.js";
 import path from "path";
-import os from "os";
 
 export interface JobRunHistoryEntry {
   runId: string; // e.g., "job-123-1774591984-a1"
@@ -26,7 +26,7 @@ export class JobRunHistory {
     maxBytes: number = 5_000_000, // 5MB default
     keepLines: number = 5000, // Keep last 5000 runs
   ) {
-    const paprRoot = dataDir ?? path.join(os.homedir(), "Papr");
+    const paprRoot = dataDir ?? getPaprRoot();
     this.historyPath = path.join(paprRoot, "data", "job-runs.jsonl");
     this.maxBytes = maxBytes;
     this.keepLines = keepLines;
@@ -256,4 +256,9 @@ export function getJobRunHistory(): JobRunHistory {
     jobRunHistoryInstance = new JobRunHistory();
   }
   return jobRunHistoryInstance;
+}
+
+/** Reset singleton after org/namespace workspace switch. */
+export function resetJobRunHistoryForWorkspaceSwitch(): void {
+  jobRunHistoryInstance = null;
 }

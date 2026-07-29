@@ -1,4 +1,4 @@
-<!-- sleep-prompt-version: 11 -->
+<!-- sleep-prompt-version: 12 -->
 
 # Sleep Cycle
 
@@ -21,14 +21,14 @@ Read the **Workspace file health** section in preloaded context. Before finishin
 
 ### 1. Gather recent activity (last 7 days)
 
-**A. Daily logs** — `~/Papr/workspace/memory/*.md`
+**A. Daily logs** — `$PAPR_HOME/workspace/memory/*.md`
 ```bash
-find ~/Papr/workspace/memory -maxdepth 1 -name '*.md' -mtime -7 -print
+find "$PAPR_HOME/workspace/memory" -maxdepth 1 -name '*.md' -mtime -7 -print
 ```
 
-**B. Chat summaries** — local SQLite (recent conversations with compressed summaries)
+**B. Chat summaries** — workspace SQLite (recent conversations with compressed summaries)
 ```bash
-sqlite3 ~/.paprwork-v2/chats.db "
+sqlite3 "$PAPR_USER_DATA/chats.db" "
 SELECT title, updated_at, substr(summary_short,1,400), substr(summary_medium,1,600)
 FROM chats
 WHERE summary_short IS NOT NULL AND summary_short != ''
@@ -39,13 +39,13 @@ LIMIT 20;"
 
 **C. Recent chat exports** — full text when summaries are thin
 ```bash
-find ~/Papr/Chats -name '*.txt' -mtime -7 -print | head -15
+find "$PAPR_HOME/Chats" -name '*.txt' -mtime -7 -print | head -15
 # read_file or grep key chats for decisions, preferences, project changes
 ```
 
 **D. Brand mentions in recent chats** — explicit user-stated colors, fonts, logos
 ```bash
-grep -riE 'brand|logo|primary color|accent color|typography|font family|brand guide|our colors|#[0-9A-Fa-f]{3,8}' ~/Papr/Chats/*.txt 2>/dev/null | head -40
+grep -riE 'brand|logo|primary color|accent color|typography|font family|brand guide|our colors|#[0-9A-Fa-f]{3,8}' "$PAPR_HOME/Chats"/*.txt 2>/dev/null | head -40
 ```
 Also search Papr Memory:
 ```
@@ -108,14 +108,14 @@ Distill **actionable, durable** learnings only:
 
 Entity discovery and wiki page maintenance is handled by the **Wiki Writer** agent job, which runs after Sleep completes. Sleep's role is to note which entities were active today in the daily log (Step 6) so Wiki Writer knows what to update.
 
-Do NOT create, update, or manage entity files in `~/Papr/workspace/entities/`. That's Wiki Writer's domain.
+Do NOT create, update, or manage entity files in `$PAPR_HOME/workspace/entities/`. That's Wiki Writer's domain.
 
 ### 6. Write daily log
 
 Finally, write today's summary:
 
 ```bash
-# ~/Papr/workspace/memory/YYYY-MM-DD.md
+# $PAPR_HOME/workspace/memory/YYYY-MM-DD.md
 ```
 
 Include:
@@ -157,7 +157,7 @@ Include:
 
   3. **Scan existing entity files** for cross-references:
   ```bash
-  grep -rl "EntityName" ~/Papr/workspace/entities/ 2>/dev/null
+  grep -rl "EntityName" "$PAPR_HOME/workspace/entities/" 2>/dev/null
   ```
 
   **Format each entity like this in the daily log:**

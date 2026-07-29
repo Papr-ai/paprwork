@@ -7,6 +7,7 @@
  */
 
 import type { WebSocket } from "ws";
+import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import {
   mergeToolResultTruncationSettings,
   type ToolResultTruncationSettings,
@@ -196,7 +197,7 @@ async function runV1Migration(
   _messageId: string,
 ): Promise<MigrationResult> {
   const v1Root = path.join(os.homedir(), ".paprwork");
-  const v2Root = path.join(os.homedir(), "Papr");
+  const v2Root = getPaprRoot();
   const result: MigrationResult = {
     chats: { migrated: 0, messages: 0 },
     documents: { migrated: 0 },

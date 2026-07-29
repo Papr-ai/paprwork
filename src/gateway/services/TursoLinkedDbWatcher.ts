@@ -7,7 +7,7 @@
  * decide whether Turso actually needs an upload at flush time.
  */
 
-import * as os from "os";
+import { getPaprAppsRoot } from "../../core/utils/paprRoot.js";
 import * as path from "path";
 import chokidar, { type FSWatcher } from "chokidar";
 import { discoverTursoLinkedSources, linkedSourceSyncKey } from "./tursoLinkedSources.js";
@@ -163,7 +163,7 @@ export async function stopTursoLinkedDbWatcher(): Promise<void> {
 }
 
 export function defaultAppsRootDir(): string {
-  return path.join(os.homedir(), "Papr", "apps");
+  return getPaprAppsRoot();
 }
 
 /** @internal test helper */

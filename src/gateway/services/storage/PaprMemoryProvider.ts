@@ -18,12 +18,12 @@ import {
   extractEnhancedFields,
   formatSummaryForLLM,
 } from "./summaryFormatting.js";
-import { paprUserScope } from "../../utils/paprUserId.js";
 import { RECENT_MESSAGES_MAX } from "./recentMessageWindow.js";
 import {
   buildPaprSyncStoreBody,
   type PaprMessageStoreBody,
 } from "./paprSyncPayload.js";
+import { buildPaprMemoryWriteScope } from "../../utils/memoryScopeResolver.js";
 
 export interface PaprConfig {
   apiKey: string; // X-API-Key from macOS Keychain
@@ -81,14 +81,13 @@ export class PaprMemoryProvider implements IStorageProvider {
 
   async saveMessage(chatId: string, message: StoredMessage): Promise<void> {
     try {
-      const userScope = paprUserScope();
+      const memoryScope = await buildPaprMemoryWriteScope({ chatId });
       const storeBody: PaprMessageStoreBody = buildPaprSyncStoreBody({
         chatId,
         message,
-        externalUserId:
-          "external_user_id" in userScope
-            ? userScope.external_user_id
-            : undefined,
+        externalUserId: memoryScope.external_user_id,
+        namespaceId: memoryScope.namespace_id,
+        policy: memoryScope.policy,
       });
 
       const response = await this.client.messages.store(

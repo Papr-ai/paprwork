@@ -2,13 +2,10 @@
  * Debounced Turso push — serial queue avoids provisioning rate limits on startup.
  */
 
-import * as os from "os";
-import * as path from "path";
-import { discoverTursoLinkedSources, linkedSourceSyncKey } from "./tursoLinkedSources.js";
+import { getPaprAppsRoot } from "../../core/utils/paprRoot.js";
+import { discoverTursoLinkedSources, findLinkedSourceForJob, linkedSourceSyncKey } from "./tursoLinkedSources.js";
 import { getTursoSyncBridge, type TursoSyncBridge } from "./TursoSyncBridge.js";
 import {
-  isJobDbDirty,
-  loadTursoSyncState,
   recordTursoPushQuarantine,
   recordTursoPushSuccess,
 } from "./tursoSyncState.js";
@@ -67,7 +64,7 @@ function pushIntervalMs(): number {
 }
 
 function defaultAppsRoot(): string {
-  return path.join(os.homedir(), "Papr", "apps");
+  return getPaprAppsRoot();
 }
 
 function sleep(ms: number): Promise<void> {
@@ -76,28 +73,27 @@ function sleep(ms: number): Promise<void> {
 
 async function executePushForJob(
   bridge: TursoSyncBridge,
-  jobId: string,
+  syncKey: string,
 ): Promise<void> {
-  if (!(await bridge.isJobLinkedToApp(jobId))) {
+  if (!(await bridge.isJobLinkedToApp(syncKey))) {
     return;
   }
 
   const sources = await bridge.listLinkedSources(true);
-  const linked = sources.find((s) => s.jobId === jobId);
+  const linked = findLinkedSourceForJob(sources, syncKey);
   if (!linked) {
     return;
   }
 
-  const state = loadTursoSyncState();
-  if (!isJobDbDirty(jobId, linked.dbPath, state)) {
+  if (!(await bridge.linkedSourceNeedsPush(linked))) {
     return;
   }
 
   try {
-    const result = await bridge.pushJob(jobId);
+    const result = await bridge.pushJob(syncKey);
     if (result.status === "pushed") {
       recordTursoPushSuccess(
-        jobId,
+        linkedSourceSyncKey(linked),
         linked.dbPath,
         undefined,
         result.tableFingerprints,
@@ -107,14 +103,14 @@ async function executePushForJob(
           ? `, skipped ${result.skippedTables.length} unchanged table(s)`
           : "";
       console.log(
-        `[TursoPushScheduler] Pushed job ${jobId} (${result.tables.length} table(s)${skipped})`,
+        `[TursoPushScheduler] Pushed ${linkedSourceSyncKey(linked)} (${result.tables.length} table(s)${skipped})`,
       );
       return;
     }
 
     if (result.reason === "all_tables_unchanged" && result.tableFingerprints) {
       recordTursoPushSuccess(
-        jobId,
+        linkedSourceSyncKey(linked),
         linked.dbPath,
         undefined,
         result.tableFingerprints,
@@ -126,7 +122,7 @@ async function executePushForJob(
       isTursoLocalDatabaseCorruptError(message) ||
       isTursoSqliteBindTypeError(message)
     ) {
-      recordTursoPushQuarantine(jobId, linked.dbPath, message);
+      recordTursoPushQuarantine(linkedSourceSyncKey(linked), linked.dbPath, message);
       return;
     }
     throw error;
@@ -198,9 +194,9 @@ async function processTursoPushQueue(): Promise<void> {
           isTursoSqliteBindTypeError(message)
         ) {
           const sources = await bridge.listLinkedSources(true);
-          const linked = sources.find((s) => s.jobId === jobId);
+          const linked = findLinkedSourceForJob(sources, jobId);
           if (linked) {
-            recordTursoPushQuarantine(jobId, linked.dbPath, message);
+            recordTursoPushQuarantine(linkedSourceSyncKey(linked), linked.dbPath, message);
           }
           continue;
         }
@@ -274,12 +270,16 @@ export function scheduleTursoPushAllLinked(): void {
 }
 
 async function enqueueDirtyLinkedJobs(appsRootDir: string): Promise<void> {
-  const state = loadTursoSyncState();
+  const bridge = getTursoSyncBridge();
+  if (!bridge) {
+    return;
+  }
+
   const sources = await discoverTursoLinkedSources(appsRootDir);
   let enqueued = 0;
   for (const source of sources) {
     const syncKey = linkedSourceSyncKey(source);
-    if (!isJobDbDirty(syncKey, source.dbPath, state)) {
+    if (!(await bridge.linkedSourceNeedsPush(source))) {
       continue;
     }
     enqueueTursoPush(syncKey);

@@ -6,8 +6,8 @@
  */
 
 import { promises as fs } from "fs";
+import { getPaprDataDir } from "../../core/utils/paprRoot.js";
 import path from "path";
-import os from "os";
 
 // ---------- Types ----------
 
@@ -39,7 +39,7 @@ export class TranscriptionService {
   private tempDir: string;
 
   constructor() {
-    this.tempDir = path.join(os.homedir(), "Papr", "data", "transcriptions");
+    this.tempDir = path.join(getPaprDataDir(), "transcriptions");
   }
 
   async initialize(): Promise<void> {

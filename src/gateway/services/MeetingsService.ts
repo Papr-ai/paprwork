@@ -6,8 +6,8 @@
  */
 
 import { promises as fs } from "fs";
+import { getPaprDataDir } from "../../core/utils/paprRoot.js";
 import path from "path";
-import os from "os";
 import { v4 as uuidv4 } from "uuid";
 
 // ---------- Types ----------
@@ -57,7 +57,7 @@ export class MeetingsService {
   private initialized = false;
 
   constructor() {
-    const dataDir = path.join(os.homedir(), "Papr", "data");
+    const dataDir = getPaprDataDir();
     this.dbPath = path.join(dataDir, "meetings.json");
   }
 

@@ -90,15 +90,15 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
   {
-    id: "claude-opus-4-8",
-    name: "Claude Opus 4.8",
+    id: "claude-opus-5",
+    name: "Claude Opus 5",
     provider: "anthropic",
     description:
       "Latest Opus frontier — adaptive thinking, 1M context, agentic coding",
     group: "Anthropic",
     supportsThinking: true,
     defaultThinkingBudget: 0,
-    maxTokens: 64000,
+    maxTokens: 128000,
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
   {

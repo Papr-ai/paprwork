@@ -35,6 +35,7 @@ import type { AppAgentChatConfig } from "../src/core/types/appAgentChat";
 import "./styles/liquid-glass.css";
 import "./App.css";
 import { shouldShowOnboarding } from "./utils/onboardingState";
+import { reloadUiForWorkspaceSwitch } from "./lib/workspaceSwitchReload";
 
 type ChatOpenPayload = {
   message?: string;
@@ -212,6 +213,30 @@ export function App() {
     window.addEventListener("papr-onboarding-changed", checkOnboarding);
     return () =>
       window.removeEventListener("papr-onboarding-changed", checkOnboarding);
+  }, []);
+
+  // Reload chats/jobs when Papr org or namespace workspace changes
+  useEffect(() => {
+    const onWorkspaceChanged = () => {
+      void reloadUiForWorkspaceSwitch();
+    };
+    window.addEventListener("papr-namespace-changed", onWorkspaceChanged);
+    window.addEventListener("papr-organization-changed", onWorkspaceChanged);
+    return () => {
+      window.removeEventListener("papr-namespace-changed", onWorkspaceChanged);
+      window.removeEventListener("papr-organization-changed", onWorkspaceChanged);
+    };
+  }, []);
+
+  // Reload workspace-scoped UI after Papr login (namespace may differ from boot state)
+  useEffect(() => {
+    const handleLoginSuccess = () => {
+      void reloadUiForWorkspaceSwitch();
+    };
+    window.electronAPI?.papr?.onLoginSuccess(handleLoginSuccess);
+    return () => {
+      window.electronAPI?.papr?.removeLoginSuccessListener(handleLoginSuccess);
+    };
   }, []);
 
   // Initialize Amplitude telemetry (events only, no session replay)
@@ -439,8 +464,12 @@ export function App() {
       <AppLayout
         sidebar={<Sidebar onToggleCollapse={toggleSidebarCollapsed} />}
         sidebarCollapsed={sidebarCollapsed}
-        onToggleSidebar={toggleSidebarCollapsed}
-        topBar={<TabBar />}
+        topBar={
+          <TabBar
+            sidebarCollapsed={sidebarCollapsed}
+            onToggleSidebar={toggleSidebarCollapsed}
+          />
+        }
         content={<ContentArea />}
       />
       {activeRequest && !claimedByChat && (

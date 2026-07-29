@@ -73,13 +73,17 @@ body:not(.platform-darwin) .tab-bar {
   pointer-events: none;
 }
 
-/* Offset nav controls past the fixed sidebar toggle when sidebar is hidden */
+.tab-bar__sidebar-toggle {
+  margin-right: 2px;
+}
+
+/* macOS: room for traffic lights only — sidebar toggle lives in tab bar nav */
 body.platform-darwin .app-layout--sidebar-collapsed .tab-bar {
-  padding-left: 112px;
+  padding-left: 78px;
 }
 
 body:not(.platform-darwin) .app-layout--sidebar-collapsed .tab-bar {
-  padding-left: 44px;
+  padding-left: 8px;
 }
 
 .tab-bar__tabs {

@@ -52,7 +52,17 @@ function bodyPreview(body: string, maxLen = 140): string {
 
 const IC = `fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"`;
 
-/** Big centered icon for context .md cards, keyed by file name. */
+/**
+ * Returns an SVG icon for context .md files based on filename keywords.
+ * Matches against common file naming patterns to provide appropriate visual representation.
+ * 
+ * @param name - The filename to match against (e.g., "IDENTITY.md", "ICP.md", "Playbook.md")
+ * @returns SVG markup string with appropriate icon:
+ *   - identity/brand → person icon
+ *   - icp/customer/audience → target icon
+ *   - playbook/play/guide → book icon
+ *   - default → generic document icon
+ */
 function fileGlyphSvg(name: string): string {
   const n = name.toLowerCase();
   if (n.includes("identity") || n.includes("brand"))
@@ -64,7 +74,16 @@ function fileGlyphSvg(name: string): string {
   return `<svg viewBox="0 0 24 24" ${IC}><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>`;
 }
 
-/** SVG glyph for entity types with no cover image (goal, insight). */
+/**
+ * Returns an SVG icon for entity types when no cover image is available.
+ * Only returns icons for specific entity types that have custom glyphs.
+ * 
+ * @param type - The entity type (e.g., "goal", "insight")
+ * @returns SVG markup string for supported types, or null if the type should use the default glyph
+ *   - goal → target/bullseye icon
+ *   - insight → lightbulb icon
+ *   - other types → null (falls back to type's default glyph)
+ */
 function typeGlyphSvg(type: string): string | null {
   if (type === "goal")
     return `<svg viewBox="0 0 24 24" ${IC}><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4.4"/><circle cx="12" cy="12" r="1"/></svg>`;
@@ -91,7 +110,12 @@ function PosterCard({ node, onClick }: { node: WikiNode; onClick: () => void }) 
         <span className="wiki-card__type-chip">{meta.label}</span>
         {status ? <span className="wiki-card__status"><span className="wiki-card__status-dot" />{status}</span> : null}
         {glyphSvg ? (
-          <span className="wiki-card__art-icon" dangerouslySetInnerHTML={{ __html: glyphSvg }} />
+          <span 
+            className="wiki-card__art-icon" 
+            dangerouslySetInnerHTML={{ __html: glyphSvg }}
+            aria-label={`${node.type} icon`}
+            role="img"
+          />
         ) : image ? null : (
           <span className="wiki-card__glyph">{meta.glyph}</span>
         )}
@@ -139,8 +163,12 @@ function ContextFileCard({ file, onOpen }: { file: WorkspaceFilePreview; onOpen:
       <div className="wiki-card__art wiki-card__art--context">
         <div className="wiki-card__gradient wiki-card__gradient--context" />
         <span className="wiki-card__type-chip">{chipLabel}</span>
-        <span className="wiki-card__art-icon wiki-card__art-icon--context"
-          dangerouslySetInnerHTML={{ __html: fileGlyphSvg(file.name) }} />
+        <span 
+          className="wiki-card__art-icon wiki-card__art-icon--context"
+          dangerouslySetInnerHTML={{ __html: fileGlyphSvg(file.name) }}
+          aria-label={`${fileLabel(file.name)} icon`}
+          role="img"
+        />
       </div>
       <div className="wiki-card__body">
         <h4 className="wiki-card__title">{fileLabel(file.name)}</h4>

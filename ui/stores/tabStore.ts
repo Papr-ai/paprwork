@@ -8,7 +8,6 @@
  */
 
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
 import type { Tab, TabType, DisplayMode } from "../types/tabs";
 import { gateway } from "../src/lib/gateway";
 
@@ -84,9 +83,7 @@ interface TabState {
   activeRightTab: string | null;
 }
 
-export const useTabStore = create<TabState>()(
-  persist(
-    (set, get) => ({
+export const useTabStore = create<TabState>()((set, get) => ({
       tabs: [],
       activeTabId: null,
       splitRatio: 0.5, // DEPRECATED: kept for backward compat
@@ -905,17 +902,4 @@ export const useTabStore = create<TabState>()(
           ),
         }));
       },
-    }),
-    {
-      name: "paprwork-tab-storage",
-      partialize: (state) => ({
-        tabs: state.tabs,
-        activeTabId: state.activeTabId,
-        splitRatio: state.splitRatio,
-        splitRatios: state.splitRatios, // Persist per-tab ratios
-        history: state.history,
-        historyIndex: state.historyIndex,
-      }),
-    },
-  ),
-);
+}));

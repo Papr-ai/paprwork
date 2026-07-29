@@ -90,6 +90,21 @@ export function checkMiniAppJobEventPatterns(
   );
 
   for (const [filename, content] of allJsTs) {
+    if (
+      /from\s*['"`]\.\/?(?:papr-)?job-events(?:\.ts)?['"`]/.test(content) ||
+      (filename.endsWith("papr-job-events.ts") || filename.endsWith("job-events.ts"))
+    ) {
+      issues.push({
+        file: filename,
+        line: 1,
+        severity: "error",
+        message:
+          "Do not copy or shim papr-job-events locally. Import from '/__papr__/papr-job-events.ts' — " +
+          "the bundler leaves it external and the gateway/cloud host serves it at runtime.",
+        rule: "no-job-events-shim",
+      });
+    }
+
     if (callsSubscribeJobEvents(content) && !hasJobEventsSdkImport(content)) {
       const declareOnly = /\bdeclare\s+function\s+subscribeJobEvents\b/.test(
         content,

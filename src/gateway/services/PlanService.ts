@@ -9,8 +9,8 @@
  */
 
 import { promises as fs } from "fs";
+import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import path from "path";
-import os from "os";
 import Database from "better-sqlite3";
 
 export interface PlanStep {
@@ -40,8 +40,7 @@ export class PlanService {
   private initialized: boolean = false;
 
   constructor() {
-    const homeDir = os.homedir();
-    this.paprRootDir = path.join(homeDir, "Papr");
+    this.paprRootDir = getPaprRoot();
     this.dbPath = path.join(this.paprRootDir, "data", "plans.db");
   }
 
@@ -396,4 +395,12 @@ export async function initializePlanService(): Promise<PlanService> {
   const service = getPlanService();
   await service.initialize();
   return service;
+}
+
+/** Reset singleton after org/namespace workspace switch. */
+export function resetPlanServiceForWorkspaceSwitch(): void {
+  if (planServiceInstance) {
+    planServiceInstance.close();
+    planServiceInstance = null;
+  }
 }

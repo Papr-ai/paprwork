@@ -7,6 +7,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import { MessageList } from "./MessageList";
 import { InputBar, InputBarRef } from "./InputBar";
 import { QueuedMessages, type QueuedMessage } from "./QueuedMessages";
+import { JobPermissionBanner } from "./JobPermissionBanner";
 import { useAgent } from "../../hooks/useAgent";
 import { resolveAgentFocusContext } from "../../utils/agentFocusContext";
 import { useAuthStatus } from "../../hooks/useAuthStatus";
@@ -24,7 +25,6 @@ import type { AIModel } from "../../constants/models";
 import { migratePickerModelId } from "../../constants/modelPicker";
 import { useModelPickerSettings } from "../../hooks/useModelPickerSettings";
 import { gateway } from "../../src/lib/gateway";
-import { JobPermissionBanner } from "./JobPermissionBanner";
 import {
   ContextInspectorModal,
   isContextInfo,

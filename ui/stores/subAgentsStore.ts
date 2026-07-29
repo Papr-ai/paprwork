@@ -33,6 +33,7 @@ interface SubAgentsState {
   removeAgent: (agentId: string) => void;
   upsertAgentInList: (agent: SubAgentProfile) => void;
   setError: (error: string | null) => void;
+  resetForWorkspaceSwitch: () => void;
 }
 
 export const useSubAgentsStore = create<SubAgentsState>((set, get) => ({
@@ -140,6 +141,16 @@ export const useSubAgentsStore = create<SubAgentsState>((set, get) => ({
       loadDashboard({ silent }),
     ]);
   },
+
+  resetForWorkspaceSwitch: () =>
+    set({
+      agents: [],
+      runs: [],
+      dashboard: null,
+      loading: false,
+      error: null,
+      hasLoaded: false,
+    }),
 }));
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;

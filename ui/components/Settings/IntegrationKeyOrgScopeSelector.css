@@ -1,0 +1,41 @@
+.integration-key-org-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.integration-key-org-scope__mode,
+.integration-key-org-scope__select {
+  margin: 0;
+}
+
+.integration-key-org-scope__hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary, rgba(60, 60, 67, 0.72));
+}
+
+.key-item__scope-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(10, 132, 255, 0.12);
+  color: #0a84ff;
+  white-space: nowrap;
+}
+
+.key-item__scope-badge--shared {
+  background: rgba(48, 209, 88, 0.14);
+  color: #248a3d;
+}
+
+@media (prefers-color-scheme: dark) {
+  .integration-key-org-scope__hint {
+    color: rgba(235, 235, 245, 0.68);
+  }
+
+  .key-item__scope-badge--shared {
+    color: #30d158;
+  }
+}

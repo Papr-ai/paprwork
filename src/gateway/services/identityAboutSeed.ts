@@ -4,13 +4,24 @@
  */
 
 import { promises as fs } from "fs";
+import { getPaprDataDir, getPaprWorkspaceDir } from "../../core/utils/paprRoot.js";
 import path from "path";
-import os from "os";
 
-const SETTINGS_PATH = path.join(os.homedir(), "Papr", "data", "settings.json");
-const WORKSPACE_DIR = path.join(os.homedir(), "Papr", "workspace");
-const IDENTITY_PATH = path.join(WORKSPACE_DIR, "IDENTITY.md");
-const BRAND_PATH = path.join(WORKSPACE_DIR, "BRAND.md");
+function settingsPath(): string {
+  return path.join(getPaprDataDir(), "settings.json");
+}
+
+function workspaceDir(): string {
+  return getPaprWorkspaceDir();
+}
+
+function identityPath(): string {
+  return path.join(getPaprWorkspaceDir(), "IDENTITY.md");
+}
+
+function brandPath(): string {
+  return path.join(getPaprWorkspaceDir(), "BRAND.md");
+}
 
 const ABOUT_PLACEHOLDER = "(Name, role, industry, organization)";
 
@@ -59,7 +70,7 @@ function organizationFromEmail(email: string): string | undefined {
 
 export async function loadGatewayProfile(): Promise<GatewayProfile> {
   try {
-    const raw = await fs.readFile(SETTINGS_PATH, "utf-8");
+    const raw = await fs.readFile(settingsPath(), "utf-8");
     const settings = JSON.parse(raw) as { profile?: GatewayProfile };
     const profile = settings.profile ?? {};
     if (!profile.organization?.trim() && profile.email?.trim()) {
@@ -142,14 +153,14 @@ function mergeAboutSection(content: string, profile: GatewayProfile): string | n
  */
 export async function seedIdentityAboutFromProfile(): Promise<boolean> {
   try {
-    const content = await fs.readFile(IDENTITY_PATH, "utf8");
+    const content = await fs.readFile(identityPath(), "utf8");
     const profile = await loadGatewayProfile();
     const updated = mergeAboutSection(content, profile);
     if (!updated || updated === content) {
       return false;
     }
 
-    await fs.writeFile(IDENTITY_PATH, updated, "utf8");
+    await fs.writeFile(identityPath(), updated, "utf8");
     console.log("[IdentityAbout] Synced IDENTITY.md About from user profile");
     return true;
   } catch {
@@ -167,8 +178,8 @@ export async function getWorkspaceFileHealth(): Promise<WorkspaceFileHealth> {
   };
 
   try {
-    const onboardPath = path.join(WORKSPACE_DIR, "ONBOARD.md");
-    const onboardDone = path.join(WORKSPACE_DIR, "ONBOARD.completed.md");
+    const onboardPath = path.join(workspaceDir(), "ONBOARD.md");
+    const onboardDone = path.join(workspaceDir(), "ONBOARD.completed.md");
     health.onboardPending =
       (await fileExists(onboardPath)) && !(await fileExists(onboardDone));
   } catch {
@@ -176,7 +187,7 @@ export async function getWorkspaceFileHealth(): Promise<WorkspaceFileHealth> {
   }
 
   try {
-    const identity = await fs.readFile(IDENTITY_PATH, "utf8");
+    const identity = await fs.readFile(identityPath(), "utf8");
     const aboutBody = extractAboutBody(identity);
     if (!aboutBody || aboutBody.includes(ABOUT_PLACEHOLDER)) {
       health.identityAboutMissing.push("name/role/organization (template or empty)");
@@ -192,7 +203,7 @@ export async function getWorkspaceFileHealth(): Promise<WorkspaceFileHealth> {
   }
 
   try {
-    const brand = await fs.readFile(BRAND_PATH, "utf8");
+    const brand = await fs.readFile(brandPath(), "utf8");
     const unsetMatches = brand.match(/\(not set\)/gi);
     health.brandUnsetCount = unsetMatches?.length ?? 0;
     health.brandConfigured = health.brandUnsetCount === 0;

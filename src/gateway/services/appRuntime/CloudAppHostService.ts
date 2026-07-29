@@ -59,7 +59,6 @@ import {
   buildShareTokenCookie,
   readShareTokenFromCookie,
   sanitizeReturnToPath,
-  stripShareTokenFromPath,
 } from "./cloudAppHostCookies.js";
 import {
   ensurePublishedAppRootTrailingSlash,
@@ -102,6 +101,7 @@ import {
 } from "../cloudSync/cloudRepoHeadMarker.js";
 import { getAppRevisionHub } from "./AppRevisionHub.js";
 import { registerAppRevisionSseRoutes } from "./registerAppRevisionSse.js";
+import { hydrateCloudDatabaseRegistry } from "./cloudDatabaseRegistry.js";
 
 export interface CloudAppHostDeps {
   tursoCredentials: TursoCredentialsProvider;
@@ -404,12 +404,13 @@ export class CloudAppHostService {
     if (!ctx) return false;
 
     const secure = this.requestIsSecure(req);
+    // Persist token for /api/* sub-requests, but keep ?t= in the URL so users can
+    // copy, refresh, and embed (e.g. Paprwork Web preview iframe) without losing access.
     res.append(
       "Set-Cookie",
       buildShareTokenCookie(queryToken, ctx.namespaceId, ctx.slug, secure),
     );
-    res.redirect(302, stripShareTokenFromPath(req.originalUrl));
-    return true;
+    return false;
   }
 
   private async respondAccessDenied(
@@ -505,7 +506,9 @@ export class CloudAppHostService {
     if (!file?.content) {
       return { sources: [] };
     }
-    return parseDataSourcesFile(file.content);
+    const config = parseDataSourcesFile(file.content);
+    await hydrateCloudDatabaseRegistry(runtimeAuth, config);
+    return config;
   }
 
   private publishDbChangedForSource(

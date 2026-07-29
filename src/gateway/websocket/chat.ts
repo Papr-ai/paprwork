@@ -21,7 +21,8 @@ interface GetChatPayload {
 
 interface UpdateChatPayload {
   chatId: string;
-  title: string;
+  title?: string;
+  memoryScope?: "user" | "namespace" | "org";
 }
 
 interface DeleteChatPayload {
@@ -61,6 +62,7 @@ export async function setupChatHandlers(
           createdAt: chat.created_at,
           updatedAt: chat.updated_at,
           messageCount: chat.message_count,
+          memoryScope: chat.memory_scope ?? "user",
         }));
 
         sendResponse(ws, {
@@ -106,18 +108,28 @@ export async function setupChatHandlers(
       }
 
       case "chat:update": {
-        const { chatId, title } = message.payload as UpdateChatPayload;
-        await agentService.updateChatTitle(chatId, title);
+        const { chatId, title, memoryScope } =
+          message.payload as UpdateChatPayload;
 
-        const { getGatewayTelemetry } = await import("../services/gatewayTelemetry.js");
-        getGatewayTelemetry().trackFireAndForget("paprwork_chat_renamed", {
-          chat_id: chatId,
-        });
+        if (title !== undefined) {
+          await agentService.updateChatTitle(chatId, title);
+
+          const { getGatewayTelemetry } = await import(
+            "../services/gatewayTelemetry.js"
+          );
+          getGatewayTelemetry().trackFireAndForget("paprwork_chat_renamed", {
+            chat_id: chatId,
+          });
+        }
+
+        if (memoryScope !== undefined) {
+          await agentService.updateChatMemoryScope(chatId, memoryScope);
+        }
 
         sendResponse(ws, {
           id: message.id,
           success: true,
-          data: { chatId, title },
+          data: { chatId, title, memoryScope },
         });
         break;
       }

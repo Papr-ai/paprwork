@@ -14,6 +14,7 @@ import type {
   StoredMessage,
   StoredSummary,
   ChatMetadata,
+  ChatMemoryScope,
   ChatSummarySnapshot,
 } from "./IStorageProvider";
 import { ChatExporter } from "./ChatExporter.js";
@@ -299,6 +300,15 @@ export class LocalStorageProvider implements IStorageProvider {
          SET summary_base_message_count = message_count
          WHERE summary_long IS NOT NULL
            AND summary_base_message_count IS NULL`,
+      );
+    }
+
+    if (!chatColumnNames.includes("memory_scope")) {
+      console.log(
+        '[LocalStorage] Adding "memory_scope" column to chats table...',
+      );
+      this.db.exec(
+        "ALTER TABLE chats ADD COLUMN memory_scope TEXT DEFAULT 'user'",
       );
     }
 
@@ -942,18 +952,37 @@ export class LocalStorageProvider implements IStorageProvider {
 
   async updateChat(
     chatId: string,
-    updates: Partial<{ title: string }>,
+    updates: Partial<{ title: string; memory_scope: ChatMemoryScope }>,
   ): Promise<void> {
+    const sets: string[] = [];
+    const values: Array<string> = [];
+
     if (updates.title !== undefined) {
-      this.db
-        .prepare(`
-        UPDATE chats 
-        SET title = ?,
-            updated_at = ?
-        WHERE id = ?
-      `)
-        .run(updates.title, new Date().toISOString(), chatId);
+      sets.push("title = ?");
+      values.push(updates.title);
     }
+    if (updates.memory_scope !== undefined) {
+      sets.push("memory_scope = ?");
+      values.push(updates.memory_scope);
+    }
+
+    if (sets.length === 0) {
+      return;
+    }
+
+    sets.push("updated_at = ?");
+    values.push(new Date().toISOString());
+    values.push(chatId);
+
+    this.db
+      .prepare(
+        `
+        UPDATE chats
+        SET ${sets.join(", ")}
+        WHERE id = ?
+      `,
+      )
+      .run(...values);
   }
 
   async deleteChat(chatId: string): Promise<void> {
@@ -964,7 +993,7 @@ export class LocalStorageProvider implements IStorageProvider {
   async listChats(): Promise<ChatMetadata[]> {
     const rows = this.db
       .prepare(`
-      SELECT id, title, message_count, created_at as createdAt, updated_at as updatedAt, last_synced_at
+      SELECT id, title, message_count, created_at as createdAt, updated_at as updatedAt, last_synced_at, memory_scope
       FROM chats 
       ORDER BY updated_at DESC
     `)
@@ -977,6 +1006,7 @@ export class LocalStorageProvider implements IStorageProvider {
       created_at: row.createdAt,
       updated_at: row.updatedAt,
       last_synced_at: row.last_synced_at,
+      memory_scope: row.memory_scope as ChatMemoryScope | undefined,
     }));
   }
 
@@ -1022,7 +1052,7 @@ export class LocalStorageProvider implements IStorageProvider {
   async getChat(chatId: string): Promise<ChatMetadata | null> {
     const row = this.db
       .prepare(`
-      SELECT id, title, message_count, created_at as createdAt, updated_at as updatedAt, last_synced_at
+      SELECT id, title, message_count, created_at as createdAt, updated_at as updatedAt, last_synced_at, memory_scope
       FROM chats 
       WHERE id = ?
     `)
@@ -1039,6 +1069,7 @@ export class LocalStorageProvider implements IStorageProvider {
       created_at: row.createdAt,
       updated_at: row.updatedAt,
       last_synced_at: row.last_synced_at,
+      memory_scope: row.memory_scope as ChatMemoryScope | undefined,
     };
   }
 
