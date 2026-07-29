@@ -31,6 +31,28 @@ const OVERRIDES: Record<string, AnyFn> = {
   "ollama.hasModel": () => Promise.resolve(true),
   "ollama.listModels": () => Promise.resolve([]),
   "getAppVersion": () => Promise.resolve("demo"),
+  // Signed-in workspace context — unlocks Team apps tab + sharing UI
+  "papr.checkLoginStatus": () =>
+    Promise.resolve({ success: true, isLoggedIn: true }),
+  "papr.getProfile": () =>
+    Promise.resolve({
+      success: true,
+      profile: {
+        userId: "demo-user",
+        email: "you@papr.ai",
+        name: "Alex Rivera",
+        activeNamespaceId: "demo-namespace",
+        activeNamespaceName: "Papr",
+        workspaceName: "Papr",
+      },
+    }),
+  "papr.listNamespaces": () =>
+    Promise.resolve({
+      success: true,
+      namespaces: [
+        { id: "demo-namespace", name: "Papr", role: "owner" },
+      ],
+    }),
 };
 
 function makeDeepMock(path: string[]): unknown {

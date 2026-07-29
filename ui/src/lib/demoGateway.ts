@@ -15,9 +15,11 @@ import {
   demoDocuments,
 } from "./demoMemory";
 import { MEETINGS_ICON, MEETINGS_DESC } from "./demoMeetingIcon";
+import { X_ACTION_ICON, X_ACTION_DESC } from "./demoXIcon";
 
-/** Real community app embedded in the demo (served from /apps/{id}/). */
+/** Real community apps embedded in the demo (served from /apps/{id}/). */
 const MEETINGS_APP_ID = "6e432b37-6cf2-45f1-9ad8-ec70a56d4a3c";
+const X_ACTION_APP_ID = "3e08bfb2-23f1-4173-b76f-f1910bdc31fd";
 
 type Chunk = { type: string; payload: unknown; timestamp: string };
 const now = () => new Date().toISOString();
@@ -41,31 +43,26 @@ const MEETINGS_APP = {
   updatedAt: now(),
 };
 
-const DEMO_APPS = [
-  MEETINGS_APP,
-  ...[
-    { name: "Account Research", desc: "Enrich target accounts before you reach out" },
-    { name: "Pipeline Signals", desc: "Spot the deals heating up this week" },
-    { name: "Outreach", desc: "Draft personalized follow-ups overnight" },
-    { name: "CRM Updater", desc: "Keep records fresh without the busywork" },
-    { name: "Win Reports", desc: "Your weekly revenue recap, written for you" },
-  ].map((a, i) => ({
-    id: `demo-app-${i + 1}`,
-    type: "app",
-    title: a.name,
-    name: a.name,
-    description: a.desc,
-    status: "active",
-    createdAt: now(),
-    updatedAt: now(),
-  })),
-];
+const X_ACTION_APP = {
+  id: X_ACTION_APP_ID,
+  type: "app",
+  title: "X Action Engine",
+  name: "X Action Engine",
+  description: X_ACTION_DESC,
+  icon: X_ACTION_ICON,
+  status: "active",
+  createdAt: now(),
+  updatedAt: now(),
+};
+
+/** Only real, fully-working embedded apps ship in the demo. */
+const DEMO_APPS = [X_ACTION_APP, MEETINGS_APP];
 
 const DEMO_REPLY =
   "Here's what I'd focus on today. Northwind and Acme Logistics both opened " +
   "your proposal twice this week, and Klein Supply just raised a Series A. " +
   "I'd start with Northwind — your champion there viewed pricing yesterday. " +
-  "Want me to draft a follow-up in your voice, or open Account Research for " +
+  "Want me to draft a follow-up in your voice, or open Meetings Manager for " +
   "the full picture?";
 
 /* ---------------- keyed handlers ---------------- */
