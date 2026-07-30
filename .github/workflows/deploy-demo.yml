@@ -1,0 +1,50 @@
+name: Deploy demo emulator to Vercel
+
+# The dist-demo Vercel project is not git-linked (Vercel's GitHub app
+# connection returns 401), so deploys are driven from here instead.
+# ui/dist-demo is a committed static build - no build step required.
+
+on:
+  push:
+    branches: [demo/web-emulator]
+    paths:
+      - "ui/dist-demo/**"
+      - ".github/workflows/deploy-demo.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-demo
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify build output exists
+        run: |
+          test -f ui/dist-demo/index.html || { echo "::error::ui/dist-demo/index.html missing"; exit 1; }
+          echo "Files to deploy: $(find ui/dist-demo -type f | wc -l)"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Deploy to Vercel (production)
+        working-directory: ui/dist-demo
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          npx --yes vercel@latest deploy --prod --yes --archive=tgz \
+            --token "${{ secrets.VERCEL_TOKEN }}" | tee deploy.log
+
+      - name: Verify live site
+        run: |
+          for i in 1 2 3 4 5; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://dist-demo-iota.vercel.app/)
+            [ "$code" = "200" ] && { echo "Live OK ($code)"; exit 0; }
+            echo "Attempt $i: got $code, retrying..."; sleep 6
+          done
+          echo "::error::Site did not return 200 after deploy"; exit 1
