@@ -43,10 +43,53 @@ export function readPaprWorkspaceCache(): PaprWorkspaceCacheFile | null {
     if (parsed.version !== 2 || !Array.isArray(parsed.workspaces)) {
       return null;
     }
-    return parsed;
+    // Dedupe on read too, so caches written by older builds are cleaned up
+    // without requiring the user to log out and back in.
+    return { ...parsed, workspaces: dedupeCachedWorkspaces(parsed.workspaces) };
   } catch {
     return null;
   }
+}
+
+/**
+ * Collapse workspaces that resolve to the same org + namespace.
+ *
+ * Duplicate provisioning (and older builds that created a workspace on every
+ * login) can leave several workspace rows pointing at one namespace. They are
+ * indistinguishable to the user and make the switcher look broken, so keep the
+ * best-named entry per org/namespace pair.
+ */
+export function dedupeCachedWorkspaces(
+  workspaces: CachedWorkspace[],
+): CachedWorkspace[] {
+  const byScope = new Map<string, CachedWorkspace>();
+
+  for (const workspace of workspaces) {
+    // Entries without a namespace are not interchangeable — keep them by id.
+    const scopeKey = workspace.defaultNamespaceId
+      ? `${workspace.organizationId ?? ""}::${workspace.defaultNamespaceId}`
+      : `id::${workspace.id}`;
+
+    const existing = byScope.get(scopeKey);
+    if (!existing) {
+      byScope.set(scopeKey, workspace);
+      continue;
+    }
+
+    // Prefer the entry with a real name over "Workspace"/"null"/empty.
+    const score = (candidate: CachedWorkspace): number => {
+      const name = candidate.name?.trim().toLowerCase();
+      if (!name || name === "null" || name === "undefined") return 0;
+      if (name === "workspace") return 1;
+      return 2;
+    };
+
+    if (score(workspace) > score(existing)) {
+      byScope.set(scopeKey, workspace);
+    }
+  }
+
+  return [...byScope.values()];
 }
 
 export function writePaprWorkspaceCache(input: {
@@ -57,7 +100,7 @@ export function writePaprWorkspaceCache(input: {
   const next: PaprWorkspaceCacheFile = {
     version: 2,
     updatedAt: new Date().toISOString(),
-    workspaces: input.workspaces,
+    workspaces: dedupeCachedWorkspaces(input.workspaces),
     namespacesByOrgId: {
       ...(existing?.namespacesByOrgId ?? {}),
       ...(input.namespacesByOrgId ?? {}),
