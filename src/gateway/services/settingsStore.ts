@@ -132,6 +132,10 @@ export async function loadSettings(): Promise<SettingsData> {
     const settings = attachTelemetry({
       ...DEFAULT_SETTINGS,
       ...saved,
+      profile: { ...DEFAULT_SETTINGS.profile, ...saved.profile },
+      permissions: { ...DEFAULT_SETTINGS.permissions, ...saved.permissions },
+      codeIndexing: { ...DEFAULT_SETTINGS.codeIndexing, ...saved.codeIndexing },
+      uiPreferences: { ...DEFAULT_SETTINGS.uiPreferences, ...saved.uiPreferences },
       preferences: { ...DEFAULT_SETTINGS.preferences, ...saved.preferences },
       toolResultTruncation: mergeToolResultTruncationSettings(
         saved.toolResultTruncation,

@@ -52,6 +52,10 @@
   line-height: 1.4;
 }
 
+.cloud-sync-tab__stat-meta--updating {
+  color: var(--text-primary);
+}
+
 .cloud-sync-tab__panel {
   padding: 18px 20px;
   border-radius: 14px;

@@ -563,8 +563,18 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ chatId, message }) => {
     : message.reasoning;
 
   // Load user profile from settings
-  const { name: userName, email: userEmail, imageUrl: userImageUrl, loadProfile } = useProfileStore();
-  useEffect(() => { loadProfile(); }, [loadProfile]);
+  const {
+    name: userName,
+    email: userEmail,
+    imageUrl: userImageUrl,
+    loadProfile,
+    loaded: profileLoaded,
+  } = useProfileStore();
+  useEffect(() => {
+    if (!profileLoaded) {
+      void loadProfile();
+    }
+  }, [loadProfile, profileLoaded]);
 
   // Get job name lookup from store
   const getJobName = useJobLiveLogsStore((state) => state.getJobName);

@@ -1,9 +1,9 @@
 /**
  * ProfileFooter - Bottom-of-sidebar identity row.
- * Avatar (→ profile section), name + subscription, and a more (…) button → Settings.
+ * Avatar (→ profile section), name + plan, and a more (…) button → Settings.
  */
 
-import React from "react";
+import React, { useEffect } from "react";
 import { useProfileStore } from "../../stores/profileStore";
 import { ConnectionIndicator } from "../ConnectionIndicator/ConnectionIndicator";
 import "./ProfileFooter.css";
@@ -21,10 +21,61 @@ function initials(name: string): string {
   return (first + last).toUpperCase();
 }
 
+function workspaceTooltip(
+  organizationName: string,
+  namespaceName: string,
+  workspaceName: string,
+): string | undefined {
+  const parts = [organizationName, namespaceName].filter(Boolean);
+  if (parts.length > 0) {
+    return parts.join(" · ");
+  }
+  return workspaceName || undefined;
+}
+
 export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterProps) {
-  const { name, plan, imageUrl } = useProfileStore();
+  const {
+    name,
+    plan,
+    imageUrl,
+    organizationName,
+    namespaceName,
+    workspaceName,
+    loadProfile,
+  } = useProfileStore();
   const displayName = name || "Your account";
   const ini = initials(name);
+  const tooltip = workspaceTooltip(organizationName, namespaceName, workspaceName);
+
+  useEffect(() => {
+    void loadProfile();
+
+    const refresh = () => {
+      void loadProfile({ force: true });
+    };
+
+    window.addEventListener("papr-auth-success", refresh);
+    window.addEventListener("papr-logout-success", refresh);
+    window.addEventListener("papr-organization-changed", refresh);
+    window.addEventListener("papr-namespace-changed", refresh);
+    window.electronAPI.papr.onLoginSuccess(refresh);
+    window.electronAPI.papr.onLogoutSuccess(refresh);
+    window.electronAPI.papr.onOrganizationChanged(refresh);
+    window.electronAPI.papr.onNamespaceChanged(refresh);
+    window.electronAPI.papr.onWorkspaceCacheUpdated(refresh);
+
+    return () => {
+      window.removeEventListener("papr-auth-success", refresh);
+      window.removeEventListener("papr-logout-success", refresh);
+      window.removeEventListener("papr-organization-changed", refresh);
+      window.removeEventListener("papr-namespace-changed", refresh);
+      window.electronAPI.papr.removeLoginSuccessListener(refresh);
+      window.electronAPI.papr.removeLogoutSuccessListener(refresh);
+      window.electronAPI.papr.removeOrganizationChangedListener(refresh);
+      window.electronAPI.papr.removeNamespaceChangedListener(refresh);
+      window.electronAPI.papr.removeWorkspaceCacheUpdatedListener(refresh);
+    };
+  }, [loadProfile]);
 
   return (
     <div className="profile-footer">
@@ -51,9 +102,13 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
         )}
       </button>
 
-      <button className="profile-footer__id" onClick={onOpenProfile}>
+      <button
+        className="profile-footer__id"
+        onClick={onOpenProfile}
+        title={tooltip}
+      >
         <span className="profile-footer__name">{displayName}</span>
-        <span className="profile-footer__plan">{plan}</span>
+        {plan ? <span className="profile-footer__plan">{plan}</span> : null}
       </button>
 
       <ConnectionIndicator />

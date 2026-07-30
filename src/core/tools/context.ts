@@ -13,6 +13,8 @@ interface ToolContext {
   chatId: string;
   /** Set when a sub-agent job is executing tools (delegate_task job id). */
   delegationJobId?: string;
+  /** Injected for agent jobs — APP_DB, PAPR_DB_*, JOB_DIR, etc. */
+  jobEnv?: Record<string, string>;
 }
 
 const asyncLocalStorage = new AsyncLocalStorage<ToolContext>();
@@ -24,10 +26,14 @@ const asyncLocalStorage = new AsyncLocalStorage<ToolContext>();
 export function runWithToolContext<T>(
   chatId: string,
   fn: () => T | Promise<T>,
-  options?: { delegationJobId?: string },
+  options?: { delegationJobId?: string; jobEnv?: Record<string, string> },
 ): T | Promise<T> {
   return asyncLocalStorage.run(
-    { chatId, delegationJobId: options?.delegationJobId },
+    {
+      chatId,
+      delegationJobId: options?.delegationJobId,
+      jobEnv: options?.jobEnv,
+    },
     fn,
   );
 }
@@ -38,12 +44,19 @@ export function runWithToolContext<T>(
  */
 export function setToolContext(
   chatId: string,
-  options?: { delegationJobId?: string },
+  options?: { delegationJobId?: string; jobEnv?: Record<string, string> },
 ): void {
   asyncLocalStorage.enterWith({
     chatId,
     delegationJobId: options?.delegationJobId,
+    jobEnv: options?.jobEnv,
   });
+}
+
+/** Job-scoped env vars (APP_DB, JOB_DIR, …) for agent job bash calls. */
+export function getJobToolEnv(): Record<string, string> {
+  const context = asyncLocalStorage.getStore();
+  return context?.jobEnv ?? {};
 }
 
 /**

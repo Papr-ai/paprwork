@@ -38,6 +38,7 @@ import "./styles/liquid-glass.css";
 import "./App.css";
 import { shouldShowOnboarding } from "./utils/onboardingState";
 import { reloadUiForWorkspaceSwitch } from "./lib/workspaceSwitchReload";
+import { useProfileStore } from "./stores/profileStore";
 
 type ChatOpenPayload = {
   message?: string;
@@ -142,6 +143,11 @@ export function App() {
 
   useEffect(() => {
     ensureGatewayRecoveryRegistered();
+  }, []);
+
+  // Hydrate sidebar profile from cache, then refresh Papr plan/org context in background
+  useEffect(() => {
+    void useProfileStore.getState().loadProfile();
   }, []);
 
   // Listen for SQLite load completion

@@ -28,6 +28,11 @@ import {
   buildSqlitePathWarnings,
   formatSqlitePathWarningBlock,
 } from "../utils/sqlitePathGuard.js";
+import { getJobToolEnv } from "./context.js";
+
+function mergeBashEnv(inputEnv?: Record<string, string>): Record<string, string> {
+  return { ...getJobToolEnv(), ...(inputEnv ?? {}) };
+}
 import {
   isJobsIndexBashWriteBlocked,
   JOBS_INDEX_BASH_BLOCK_MESSAGE,
@@ -402,7 +407,7 @@ export async function executeBashCommand(
   let { command } = input;
   const cwd = input.cwd || "";
   const timeout = input.timeout || 60000;
-  const env = input.env || {};
+  const env = mergeBashEnv(input.env);
 
   // Capture git fingerprint BEFORE command runs (cheap; no-op outside repos)
   // Only when the command might write — saves the probe for read-only ops.
@@ -534,10 +539,7 @@ export async function executeBashCommand(
         cwd: cwd || process.cwd(),
         timeout,
         maxBuffer: 100 * 1024 * 1024, // 100MB buffer (up from 10MB)
-        env:
-          Object.keys(env).length > 0 
-            ? { ...process.env, ...(env as Record<string, string>) } 
-            : process.env,
+        env: { ...process.env, ...(env as Record<string, string>) },
         shell: getShell(),
       }, (error, stdout, stderr) => {
         if (error) {
@@ -767,7 +769,7 @@ export async function executeBashCommandStreaming(
   let command = input.command;
   const cwd = input.cwd || "";
   const timeout = input.timeout || 60000;
-  const env = input.env || {};
+  const env = mergeBashEnv(input.env);
 
   if (!command || command.trim().length === 0) {
     return {

@@ -14,6 +14,7 @@ import { IntegrationKeysTab } from "./IntegrationKeysTab";
 import { CloudSyncTab } from "./CloudSyncTab";
 import { DatabasesTab } from "./DatabasesTab";
 import { WorkspaceMigrationTab } from "./WorkspaceMigrationTab";
+import { resizeProfilePhoto } from "../../utils/profilePhoto";
 import "./SettingsView.css";
 
 export function SettingsView() {
@@ -259,7 +260,11 @@ function ProfileTab() {
           if (data?.profile) {
             setName(data.profile.name ?? paprResponse.profile.displayName ?? "");
             setEmail(data.profile.email ?? paprResponse.profile.email ?? "");
-            setImageUrl(data.profile.imageUrl ?? paprResponse.profile.profileImage ?? "");
+            setImageUrl(
+              data.profile.imageUrl?.trim() ||
+                paprResponse.profile.profileImage?.trim() ||
+                "",
+            );
           } else {
             // No manual profile yet - use Papr profile as defaults
             setName(paprResponse.profile.displayName ?? "");
@@ -298,37 +303,58 @@ function ProfileTab() {
     return () => window.removeEventListener('papr-auth-success', handleAuthSuccess);
   }, []);
 
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const saveProfileFields = async (fields: {
+    name: string;
+    email: string;
+    imageUrl: string;
+  }) => {
+    await gateway.send("settings:save-profile", fields);
+    profileStore.setProfile(fields);
+  };
+
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Validate file type and size
     if (!file.type.startsWith("image/")) return;
     if (file.size > 5 * 1024 * 1024) {
       alert("Image must be under 5MB");
       return;
     }
 
-    // Convert to base64 data URL for storage
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result as string;
+    setSaving(true);
+    try {
+      const dataUrl = await resizeProfilePhoto(file);
       setImageUrl(dataUrl);
-    };
-    reader.readAsDataURL(file);
+      await saveProfileFields({ name, email, imageUrl: dataUrl });
+    } catch (err) {
+      console.error("[ProfileTab] Photo upload error:", err);
+      alert("Could not save profile photo. Please try again.");
+    } finally {
+      setSaving(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
   };
 
-  const handleRemovePhoto = () => {
+  const handleRemovePhoto = async () => {
     setImageUrl("");
     if (fileInputRef.current) fileInputRef.current.value = "";
+
+    setSaving(true);
+    try {
+      await saveProfileFields({ name, email, imageUrl: "" });
+    } catch (err) {
+      console.error("[ProfileTab] Photo remove error:", err);
+      alert("Could not remove profile photo. Please try again.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      await gateway.send("settings:save-profile", { name, email, imageUrl });
-      // Update the global profile store so chat reflects changes immediately
-      profileStore.setProfile({ name, email, imageUrl });
+      await saveProfileFields({ name, email, imageUrl });
     } catch (err) {
       console.error("[ProfileTab] Save error:", err);
     } finally {
@@ -476,13 +502,15 @@ function ProfileTab() {
               <button
                 className="settings-btn settings-btn--secondary"
                 onClick={() => fileInputRef.current?.click()}
+                disabled={saving}
               >
-                {imageUrl ? "Change Photo" : "Upload Photo"}
+                {saving ? "Saving..." : imageUrl ? "Change Photo" : "Upload Photo"}
               </button>
               {imageUrl && (
                 <button
                   className="settings-btn settings-btn--ghost"
-                  onClick={handleRemovePhoto}
+                  onClick={() => void handleRemovePhoto()}
+                  disabled={saving}
                 >
                   Remove
                 </button>
@@ -869,32 +897,102 @@ function AboutTab() {
   return (
     <div className="settings-content">
       <div className="settings-section">
-        <h2 className="settings-section__title">About Paprwork</h2>
+        <h2 className="settings-section__title">About Papr Work</h2>
 
         {/* App Info Card */}
         <div className="about-card">
-          <div className="about-header">
-            <div className="about-logo">
+          <div className="about-header about-header--with-action">
+            <div className="about-header__main">
+              <div className="about-logo">
+                <img
+                  src="/images/papr-logo.svg"
+                  alt="Papr Work"
+                  className="about-logo__image"
+                />
+              </div>
+              <div className="about-info">
+                <h3>Papr Work</h3>
+                <p className="about-version">Version {currentVersion}</p>
+                <span
+                  className={`about-update-status about-update-status--${statusDisplay.color}`}
+                >
+                  {statusDisplay.text}
+                </span>
+              </div>
+            </div>
+            <div className="about-header__action">
+              {isUpdateReady ? (
+                <button
+                  className="settings-btn settings-btn--primary about-update-btn"
+                  onClick={installUpdate}
+                >
+                  Install & Restart
+                </button>
+              ) : isDownloading ? (
+                <button
+                  className="settings-btn settings-btn--secondary about-update-btn"
+                  disabled
+                >
+                  <div className="spinner" />
+                  {updateStatus?.percent || 0}%
+                </button>
+              ) : (
+                <button
+                  className="settings-btn settings-btn--primary about-update-btn"
+                  onClick={checkForUpdates}
+                  disabled={isChecking}
+                >
+                  {isChecking ? (
+                    <>
+                      <div className="spinner" />
+                      Checking...
+                    </>
+                  ) : (
+                    "Check for Updates"
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {hasUpdate && updateStatus?.releaseNotes && (
+            <div className="release-notes">
+              <h4>Update notes</h4>
+              <div className="release-notes-content">
+                {updateStatus.releaseNotes}
+              </div>
+            </div>
+          )}
+
+          {updateStatus?.status === "error" && updateStatus.error && (
+            <div className="update-error-notice">
               <svg
-                width="48"
-                height="48"
+                width="16"
+                height="16"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
-                strokeWidth="1.5"
+                strokeWidth="2"
               >
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                <polyline points="14 2 14 8 20 8" />
-                <line x1="16" y1="13" x2="8" y2="13" />
-                <line x1="16" y1="17" x2="8" y2="17" />
-                <polyline points="10 9 9 9 8 9" />
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
+              <div>
+                <strong>Update check failed</strong>
+                <p>{updateStatus.error}</p>
+                {updateStatus.recoveryHint && (
+                  <p className="update-recovery-hint">{updateStatus.recoveryHint}</p>
+                )}
+                {updateStatus.error.includes("not packaged") && (
+                  <p className="dev-mode-hint">
+                    Auto-updates only work in production builds. Run{" "}
+                    <code>npm run dist:mac</code> to test in a packaged app.
+                  </p>
+                )}
+              </div>
             </div>
-            <div className="about-info">
-              <h3>Paprwork V2</h3>
-              <p className="about-version">Version {currentVersion}</p>
-            </div>
-          </div>
+          )}
 
           <p className="about-description">
             AI-powered desktop assistant built with TypeScript and Mastra
@@ -960,96 +1058,51 @@ function AboutTab() {
           </div>
         </div>
 
-        {/* Update Section */}
-        <div className="about-card">
-          <div className="about-update-header">
-            <h3>Software Updates</h3>
-            <span className={`update-status-badge update-status-badge--${statusDisplay.color}`}>
-              {statusDisplay.text}
-            </span>
+        {currentVersion === "2.0.48" && (
+          <div className="about-card">
+            <h3>What's New in v2.0.48</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Workspace Management</strong>
+                <p>
+                  Organize apps, jobs, and data sources by workspace with
+                  namespace-scoped resources.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Enhanced Profile UI</strong>
+                <p>
+                  New profile footer with workspace switcher for easy navigation.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Quota & Billing</strong>
+                <p>
+                  Plan limits and real-time quota tracking with usage
+                  notifications.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Tool Status Tracking</strong>
+                <p>See real-time status of long-running operations.</p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.0.48"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
           </div>
-
-          {hasUpdate && updateStatus?.releaseNotes && (
-            <div className="release-notes">
-              <h4>What's New</h4>
-              <div className="release-notes-content">
-                {updateStatus.releaseNotes}
-              </div>
-            </div>
-          )}
-
-          {updateStatus?.status === "error" && updateStatus.error && (
-            <div className="update-error-notice">
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <circle cx="12" cy="12" r="10" />
-                <line x1="12" y1="8" x2="12" y2="12" />
-                <line x1="12" y1="16" x2="12.01" y2="16" />
-              </svg>
-              <div>
-                <strong>Update Check Failed</strong>
-                <p>{updateStatus.error}</p>
-                {updateStatus.recoveryHint && (
-                  <p className="update-recovery-hint">{updateStatus.recoveryHint}</p>
-                )}
-                {updateStatus.error.includes("not packaged") && (
-                  <p className="dev-mode-hint">
-                    💡 Tip: Auto-updates only work in production builds. To test updates, 
-                    run <code>npm run dist:mac</code> to create a packaged app.
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-
-          <div className="about-update-actions">
-            {isUpdateReady ? (
-              <button
-                className="settings-btn settings-btn--primary"
-                onClick={installUpdate}
-              >
-                Install Update & Restart
-              </button>
-            ) : isDownloading ? (
-              <button className="settings-btn settings-btn--secondary" disabled>
-                <div className="spinner" />
-                Downloading... {updateStatus?.percent || 0}%
-              </button>
-            ) : (
-              <button
-                className="settings-btn settings-btn--secondary"
-                onClick={checkForUpdates}
-                disabled={isChecking}
-              >
-                {isChecking ? (
-                  <>
-                    <div className="spinner" />
-                    Checking...
-                  </>
-                ) : (
-                  "Check for Updates"
-                )}
-              </button>
-            )}
-          </div>
-
-          <p className="about-update-note">
-            Paprwork automatically checks for updates on startup and every 4
-            hours. Updates install only when you click Restart to update.
-          </p>
-        </div>
+        )}
 
         {/* License & Credits */}
         <div className="about-card">
           <h3>License & Credits</h3>
           <p className="about-license-text">
-            Paprwork V2 is open source software licensed under AGPL-3.0
+            Papr Work is open source software licensed under AGPL-3.0
           </p>
 
           <p className="about-license-text">

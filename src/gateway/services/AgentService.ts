@@ -119,6 +119,18 @@ function finalizeTokenUsageForBilling(
   };
 }
 
+/** Why an isolated agent job finished with no assistant text (for job logs). */
+export interface IsolatedJobRunDiagnostics {
+  provider: Provider;
+  model: string;
+  authType?: "oauth" | "apiKey";
+  toolCallCount: number;
+  orphanToolCount: number;
+  streamError?: string;
+  thinkingChars: number;
+  maxTurns?: number;
+}
+
 export class AgentService {
   private storageManager: StorageManager;
   private sessionManager: ChatSessionManager;
@@ -3059,7 +3071,11 @@ ${last15.substring(0, 8_000)}`;
     };
     /** Cloud agent gateway: Papr Memory API key for tool calls */
     paprApiKey?: string;
-  }): Promise<{ chatId: string; text: string }> {
+  }): Promise<{
+    chatId: string;
+    text: string;
+    diagnostics: IsolatedJobRunDiagnostics;
+  }> {
     if (!this.initialized) {
       throw new Error("AgentService not initialized");
     }
@@ -3282,6 +3298,9 @@ ${last15.substring(0, 8_000)}`;
     let retryWithApiKey = false;
     let thinkingBuffer = ""; // Accumulate thinking tokens for job logs
     let retryChatId: string | undefined;
+    let toolCallCount = 0;
+    let orphanToolCount = 0;
+    let lastStreamError: string | undefined;
 
     try {
       try {
@@ -3292,6 +3311,7 @@ ${last15.substring(0, 8_000)}`;
         if (chunk.type === "error") {
           const errMsg =
             (chunk.payload as { error?: string })?.error ?? "Model API error";
+          lastStreamError = errMsg;
 
           // Check if this is an OAuth rate limit error
           if (
@@ -3313,6 +3333,19 @@ ${last15.substring(0, 8_000)}`;
         }
 
         // Log structured activity to job logs (thinking, tool calls, results)
+        if (chunk.type === "tool-call") {
+          toolCallCount += 1;
+        } else if (chunk.type === "tool-result") {
+          const payload = chunk.payload as ToolResultPayload;
+          const resultRecord =
+            payload.result != null && typeof payload.result === "object"
+              ? (payload.result as Record<string, unknown>)
+              : null;
+          if (resultRecord?.__orphan === true) {
+            orphanToolCount += 1;
+          }
+        }
+
         if (input.appendLog) {
           if (chunk.type === "reasoning-delta") {
             const payload = chunk.payload as ReasoningDeltaPayload;
@@ -3511,14 +3544,26 @@ ${last15.substring(0, 8_000)}`;
       }
 
       const trimmed = text.trim();
+      const diagnostics: IsolatedJobRunDiagnostics = {
+        provider,
+        model,
+        authType,
+        toolCallCount,
+        orphanToolCount,
+        streamError: lastStreamError,
+        thinkingChars: thinkingBuffer.length,
+        maxTurns: input.maxTurns,
+      };
       if (trimmed.length === 0) {
         console.error(
           `[AgentService] runIsolatedJobSession produced no output. ` +
-            `provider=${provider} model=${model} authType=${authType}. ` +
-            `Check: OAuth connected? API key set? Gateway logs for API errors.`,
+            `provider=${provider} model=${model} authType=${authType} ` +
+            `toolCalls=${toolCallCount} orphans=${orphanToolCount} ` +
+            `thinkingChars=${thinkingBuffer.length}` +
+            (lastStreamError ? ` lastError=${lastStreamError}` : ""),
         );
       }
-      return { chatId, text: trimmed };
+      return { chatId, text: trimmed, diagnostics };
     } finally {
       await this.sessionManager.clearSession(chatId);
       if (retryChatId) {

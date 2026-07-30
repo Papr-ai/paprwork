@@ -62,6 +62,9 @@ export function CloudSyncTab() {
   const [cloudAutoPublishEnabled, setCloudAutoPublishEnabled] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
+  /** Any in-flight fetch (initial load or background poll). */
+  const [loading, setLoading] = useState(false);
+  /** User-triggered force refresh (?refresh=1). */
   const [refreshing, setRefreshing] = useState(false);
   const [gitStatus, setGitStatus] = useState<GitSyncStatus | null>(
     (cached?.gitStatus as GitSyncStatus | null) ?? null,
@@ -77,6 +80,7 @@ export function CloudSyncTab() {
   const fetchStatus = useCallback(async (forceRefresh = false) => {
     if (fetchInFlightRef.current) return;
     fetchInFlightRef.current = true;
+    setLoading(true);
     if (forceRefresh) {
       setRefreshing(true);
     }
@@ -104,6 +108,7 @@ export function CloudSyncTab() {
       /* gateway unavailable */
     } finally {
       fetchInFlightRef.current = false;
+      setLoading(false);
       setRefreshing(false);
     }
   }, []);
@@ -187,14 +192,20 @@ export function CloudSyncTab() {
     );
   }
 
-  const showInitialSyncSkeleton =
-    cloudSyncEnabled && !syncItems && !gitStatus && !vaultStatus;
-
   const gitDot = statusMeta(gitStatus?.status);
   const vaultDot = statusMeta(vaultStatus?.status);
   const liveLinks = syncItems?.cloudLinks?.summary.live ?? 0;
   const totalLinks = syncItems?.cloudLinks?.summary.total ?? 0;
   const appsHost = syncItems?.cloudLinks?.appsHost ?? "apps.papr.ai";
+  const cloudAppsUpdating = loading || refreshing;
+  const cloudAppsMeta =
+    totalLinks > 0
+      ? `${liveLinks} live · ${totalLinks} total${cloudAppsUpdating ? " · updating…" : ""}`
+      : cloudAppsUpdating
+        ? "Updating…"
+        : "No apps published yet";
+  const cloudAppsDotColor =
+    liveLinks > 0 ? "#34c759" : cloudAppsUpdating ? "#ff9500" : "#8e8e93";
 
   return (
     <div className="settings-content settings-content--full-width cloud-sync-tab">
@@ -312,16 +323,18 @@ export function CloudSyncTab() {
                 <div className="cloud-sync-tab__stat-label">
                   <span
                     className="cloud-sync-tab__stat-dot"
-                    style={{
-                      background: liveLinks > 0 ? "#34c759" : "#8e8e93",
-                    }}
+                    style={{ background: cloudAppsDotColor }}
                   />
                   Cloud apps
                 </div>
-                <div className="cloud-sync-tab__stat-meta">
-                  {totalLinks > 0
-                    ? `${liveLinks} live · ${totalLinks} total`
-                    : "No apps published yet"}
+                <div
+                  className={
+                    cloudAppsUpdating
+                      ? "cloud-sync-tab__stat-meta cloud-sync-tab__stat-meta--updating"
+                      : "cloud-sync-tab__stat-meta"
+                  }
+                >
+                  {cloudAppsMeta}
                 </div>
               </div>
             </div>
@@ -342,13 +355,9 @@ export function CloudSyncTab() {
               onRefresh={() => void fetchStatus(true)}
               onItemUpdated={patchCloudLinkItem}
               globalAutoPublishEnabled={cloudAutoPublishEnabled}
+              loading={loading}
               refreshing={refreshing}
             />
-            {showInitialSyncSkeleton ? (
-              <div className="cloud-sync-tab__disabled-note">
-                Refreshing cloud sync status…
-              </div>
-            ) : null}
           </>
         )}
       </div>

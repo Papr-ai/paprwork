@@ -660,12 +660,16 @@ export const CloudSyncDetails: React.FC<{
   onRefresh?: () => void;
   onItemUpdated?: (appId: string, patch: Partial<CloudLinkSyncItem>) => void;
   globalAutoPublishEnabled?: boolean;
+  /** Background fetch in progress (initial load or poll). */
+  loading?: boolean;
+  /** User-triggered force refresh. */
   refreshing?: boolean;
 }> = ({
   data,
   onRefresh,
   onItemUpdated,
   globalAutoPublishEnabled = true,
+  loading = false,
   refreshing = false,
 }) => {
   const [message, setMessage] = useState<{
@@ -694,6 +698,21 @@ export const CloudSyncDetails: React.FC<{
   );
 
   if (!data?.enabled || !data.github) {
+    if (loading || refreshing) {
+      return (
+        <div className="cloud-sync-details">
+          <section className="cloud-sync-details__section cloud-sync-details__section--primary">
+            <div className="cloud-sync-details__heading">
+              <span>Published apps · updating…</span>
+            </div>
+            <div className="cloud-sync-details__empty cloud-sync-details__empty--loading">
+              Loading published apps… This can take up to a minute with many
+              apps.
+            </div>
+          </section>
+        </div>
+      );
+    }
     return null;
   }
 
@@ -705,6 +724,7 @@ export const CloudSyncDetails: React.FC<{
   const items = cloudLinks?.items ?? [];
   const liveItems = items.filter((item) => item.status === "live");
   const otherItems = items.filter((item) => item.status !== "live");
+  const updating = loading || refreshing;
 
   const failedGitHubItems = [
     ...github.workspace,
@@ -781,11 +801,13 @@ export const CloudSyncDetails: React.FC<{
 
       <section className="cloud-sync-details__section cloud-sync-details__section--primary">
         <div className="cloud-sync-details__heading">
-          <span>Published apps{refreshing ? " · refreshing…" : ""}</span>
+          <span>Published apps{updating ? " · updating…" : ""}</span>
           <span className="cloud-sync-details__summary">
             {cloudLinks
               ? `${cloudLinks.summary.live}/${cloudLinks.summary.total} live · ${appsHost}`
-              : appsHost}
+              : updating
+                ? "Loading…"
+                : appsHost}
           </span>
         </div>
 
@@ -802,8 +824,16 @@ export const CloudSyncDetails: React.FC<{
         ) : null}
 
         {items.length === 0 ? (
-          <div className="cloud-sync-details__empty">
-            No mini-apps yet. Apps appear here after workspace sync.
+          <div
+            className={
+              updating
+                ? "cloud-sync-details__empty cloud-sync-details__empty--loading"
+                : "cloud-sync-details__empty"
+            }
+          >
+            {updating
+              ? "Loading published apps… This can take up to a minute with many apps."
+              : "No mini-apps yet. Apps appear here after workspace sync."}
           </div>
         ) : (
           <>
