@@ -893,12 +893,25 @@ const UPDATE_USER_SELECTED_WORKSPACE = `
   }
 `;
 
+/** Guard against server rows whose name is literally "null"/"undefined". */
+function cleanWorkspaceName(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  const lowered = trimmed.toLowerCase();
+  if (lowered === "null" || lowered === "undefined") return undefined;
+  return trimmed;
+}
+
 function workspaceDisplayName(input: {
   organizationName?: string;
   workspaceName?: string;
 }): string {
   // Dashboard shows workspace_name (Papr, a12, Myadvice); org.name is often auto-provisioned.
-  return input.workspaceName?.trim() || input.organizationName?.trim() || "Workspace";
+  return (
+    cleanWorkspaceName(input.workspaceName) ||
+    cleanWorkspaceName(input.organizationName) ||
+    "Workspace"
+  );
 }
 
 type GraphQLExecutor = (
@@ -1332,7 +1345,78 @@ async function getSelectedWorkspaceId(
   userId: string,
 ): Promise<string | undefined> {
   const info = await getSelectedWorkspaceInfo(sessionToken, userId);
-  return info.workspaceId;
+  if (info.workspaceId) {
+    return info.workspaceId;
+  }
+
+  // No workspace is flagged isSelected (common: user never picked one in the
+  // dashboard, or the follower row lost the flag). The user may still own
+  // workspaces — reuse one instead of provisioning a duplicate. Without this
+  // fallback every login created a fresh workspace + org for the same user.
+  return await getAnyMemberWorkspaceId(sessionToken, userId);
+}
+
+/**
+ * Any workspace this user is a member of, preferring one that already has an
+ * organization with a default namespace (that is the workspace provisioning
+ * would otherwise recreate). Returns undefined only when the user genuinely
+ * has no workspaces.
+ */
+async function getAnyMemberWorkspaceId(
+  sessionToken: string,
+  userId: string,
+): Promise<string | undefined> {
+  try {
+    const data = (await parseGraphQL(sessionToken, GET_USER_WORKSPACES, {
+      input: {
+        user: { have: { objectId: { equalTo: userId } } },
+        isMember: { equalTo: true },
+      },
+    })) as {
+      workspace_followers?: {
+        edges?: Array<{
+          node?: {
+            archive?: boolean;
+            workspace?: {
+              objectId?: string;
+              organization?: {
+                objectId?: string;
+                default_namespace?: { objectId?: string };
+              };
+            };
+          };
+        }>;
+      };
+    };
+
+    const candidates = (data.workspace_followers?.edges ?? [])
+      .map((edge) => edge.node)
+      .filter((node): node is NonNullable<typeof node> => {
+        return Boolean(node?.workspace?.objectId) && node?.archive !== true;
+      });
+
+    if (candidates.length === 0) {
+      return undefined;
+    }
+
+    // Prefer a workspace that is already fully provisioned.
+    const provisioned = candidates.find(
+      (node) => node.workspace?.organization?.default_namespace?.objectId,
+    );
+    const chosen = provisioned ?? candidates[0];
+    const workspaceId = chosen.workspace?.objectId;
+
+    if (workspaceId) {
+      console.log(
+        `[PaprLogin] No selected workspace — reusing existing workspace ${workspaceId} ` +
+          `(${candidates.length} membership(s) found) instead of creating a new one`,
+      );
+    }
+    return workspaceId;
+  } catch (error) {
+    console.warn("[PaprLogin] Member workspace lookup failed:", error);
+    return undefined;
+  }
 }
 
 async function updateNamespaceACL(
