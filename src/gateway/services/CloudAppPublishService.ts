@@ -234,6 +234,40 @@ export class CloudAppPublishService {
     return this.publishApp(appId);
   }
 
+  /** Lightweight cloud publish check (no drift republish). */
+  async getCloudPublishStatus(
+    appId: string,
+  ): Promise<{ published: boolean; shareUrl: string | null }> {
+    try {
+      const data = await this.fetchMemoryPublishResponse(appId);
+      if (!data?.enabled) {
+        return { published: false, shareUrl: null };
+      }
+      const prefs = getAppPublishPrefs(appId, this.paprDir);
+      const catalogMeta = loadAppCatalogMeta(this.paprDir);
+      const expectedSlug = expectedSlugForApp(appId, catalogMeta);
+      const config = buildConfigFromMemory(
+        appId,
+        data,
+        prefs,
+        expectedSlug,
+      );
+      return {
+        published: data.enabled === true,
+        shareUrl: config.shareUrl,
+      };
+    } catch (error) {
+      const message = (error as Error).message;
+      if (message.includes("404") || message.includes("Not Found")) {
+        return { published: false, shareUrl: null };
+      }
+      if (message.includes("PAPR_API_KEY")) {
+        return { published: false, shareUrl: null };
+      }
+      throw error;
+    }
+  }
+
   private async resolveLocalCatalogRequirements(
     appId: string,
   ): Promise<RequiredKeySpec[]> {

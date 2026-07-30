@@ -2275,6 +2275,12 @@ const deleteAppSchema = z.object({
     .string()
     .min(1)
     .describe("UUID of the mini-app to remove from the catalog and disk"),
+  unpublishFromCloud: z
+    .boolean()
+    .optional()
+    .describe(
+      "Set true when deleting a published app to also remove it from apps.papr.ai. Required if the app is live on the web.",
+    ),
 });
 
 type DeleteAppArgs = z.infer<typeof deleteAppSchema>;
@@ -2282,6 +2288,8 @@ type DeleteAppArgs = z.infer<typeof deleteAppSchema>;
 export const deleteAppTool = createTool({
   id: "delete_app",
   description: `Delete a mini-app by id. Removes the app from $PAPR_HOME/data/apps.json, deletes its app folder under appsRoot, and notifies the UI.
+
+If the app is published to the web, you MUST set unpublishFromCloud: true (after confirming with the user) so it is taken offline on apps.papr.ai.
 
 **Prefer this over bash/rm** when removing an app: deleting files only leaves stale entries in the apps list until the registry is reconciled.`,
   inputSchema: deleteAppSchema,
@@ -2292,8 +2300,25 @@ export const deleteAppTool = createTool({
       await import("../../gateway/services/AppService.js");
     const appService = getAppService();
     await appService.initialize();
-    const deleted = await appService.deleteApp(args.appId);
-    if (!deleted) {
+    const result = await appService.deleteApp(args.appId, {
+      unpublishFromCloud: args.unpublishFromCloud === true,
+    });
+    if (result.requiresUnpublishConfirm) {
+      return {
+        success: false,
+        error: `App "${result.appTitle ?? args.appId}" is published${
+          result.shareUrl ? ` at ${result.shareUrl}` : ""
+        }. Ask the user to confirm, then call delete_app again with unpublishFromCloud: true to remove it locally and unpublish from the web.`,
+        data: {
+          requiresUnpublishConfirm: true,
+          shareUrl: result.shareUrl ?? null,
+          appId: args.appId,
+        },
+        duration: performance.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
+    }
+    if (!result.deleted) {
       return {
         success: false,
         error: `App not found: ${args.appId}`,
@@ -2303,7 +2328,11 @@ export const deleteAppTool = createTool({
     }
     return {
       success: true,
-      data: { deleted: true, appId: args.appId },
+      data: {
+        deleted: true,
+        appId: args.appId,
+        unpublished: result.unpublished === true,
+      },
       duration: performance.now() - startTime,
       timestamp: new Date().toISOString(),
     };

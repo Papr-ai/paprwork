@@ -1192,56 +1192,8 @@ export class BundleService {
     dir: string,
     remaps: Map<string, string>,
   ): Promise<void> {
-    const remappableExts = new Set([
-      ".html",
-      ".js",
-      ".ts",
-      ".tsx",
-      ".jsx",
-      ".json",
-      ".css",
-      ".py",
-      ".sh",
-      ".swift",
-      ".md",
-    ]);
-
-    async function walkAndRemap(currentDir: string): Promise<void> {
-      let entries;
-      try {
-        entries = await fs.readdir(currentDir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const entry of entries) {
-        const full = path.join(currentDir, entry.name);
-        if (entry.isDirectory()) {
-          if (entry.name === "node_modules" || entry.name.startsWith("."))
-            continue;
-          await walkAndRemap(full);
-          continue;
-        }
-        const ext = path.extname(entry.name).toLowerCase();
-        if (!remappableExts.has(ext)) continue;
-        try {
-          let content = await fs.readFile(full, "utf8");
-          let changed = false;
-          for (const [oldId, newId] of remaps) {
-            if (content.includes(oldId)) {
-              content = content.split(oldId).join(newId);
-              changed = true;
-            }
-          }
-          if (changed) {
-            await fs.writeFile(full, content, "utf8");
-          }
-        } catch {
-          // Skip unreadable files
-        }
-      }
-    }
-
-    await walkAndRemap(dir);
+    const { applyIdRemapsToDirectory } = await import("../utils/applyIdRemaps.js");
+    await applyIdRemapsToDirectory(dir, remaps);
   }
 
   private buildJobRecordFromSpec(

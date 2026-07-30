@@ -1119,41 +1119,41 @@ function AboutTab() {
           </div>
         </div>
 
-        {currentVersion === "2.0.49" && (
+        {currentVersion === "2.1.0" && (
           <div className="about-card">
-            <h3>What's New in v2.0.49</h3>
+            <h3>What's New in v2.1.0</h3>
             <ul className="whats-new-list">
               <li className="whats-new-list__item">
-                <strong>Profile Photos & Cloud Sync</strong>
+                <strong>Cloud App Upstream Sync</strong>
                 <p>
-                  Upload a profile photo once — it persists locally and syncs to
-                  your Papr account when signed in.
+                  Forked apps can pull publisher updates and send your changes
+                  back from a dedicated upstream bar in the mini-app header.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>In-App Feedback</strong>
+                <strong>Context Efficiency Dashboard</strong>
                 <p>
-                  Report bugs or request features from Settings → About without
-                  leaving the app.
+                  See billable token savings today, this week, and this month —
+                  based on real prompt + completion usage.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Smarter Agent Jobs</strong>
+                <strong>Smarter Mini-App APIs</strong>
                 <p>
-                  Jobs now pass workspace context to tools, with clearer
-                  diagnostics when a run produces no output.
+                  Database and schema endpoints infer app ID from the iframe URL,
+                  so apps need less boilerplate.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Community Apps</strong>
+                <strong>Cloud Install Improvements</strong>
                 <p>
-                  Open catalog apps locally when you already have a copy installed
-                  in your workspace.
+                  Fork installs remap job and app IDs in source files automatically
+                  so copied apps work out of the box.
                 </p>
               </li>
             </ul>
             <a
-              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.0.49"
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.1.0"
               target="_blank"
               rel="noopener noreferrer"
               className="about-link whats-new-list__link"

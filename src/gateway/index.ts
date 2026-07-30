@@ -48,6 +48,8 @@ import { initializeAppService, getAppService } from "./services/AppService.js";
 import {
   resolveAppDataSource,
 } from "./services/appDataSources.js";
+import { resolveMiniAppIdFromRequest } from "./utils/inferMiniAppIdFromRequest.js";
+import type { Request } from "express";
 import {
   initializeJobsService,
   getJobsService,
@@ -390,8 +392,9 @@ async function startGateway(): Promise<void> {
     // All synchronous better-sqlite3 calls run in a worker-thread pool so they
     // never block the main event loop (keeps health checks & WebSocket alive).
     //
-    // Apps call: fetch('/api/db/query', { method: 'POST', body: JSON.stringify({ appId, sql, params }) })
-    // Apps call: fetch('/api/db/schema?appId=<id>') to list tables and columns
+    // Apps call: fetch('/api/db/query', { method: 'POST', body: JSON.stringify({ sql, params }) })
+    // appId is optional when called from a mini-app iframe — inferred from Referer (/apps/{uuid}/…).
+    // Apps call: fetch('/api/db/schema') — appId inferred the same way, or pass ?appId=
     //
     // Security:
     //  - Only SELECT statements allowed on /query (read-only)
@@ -441,15 +444,31 @@ async function startGateway(): Promise<void> {
       });
     }
 
+    function resolveRequestAppId(
+      req: Request,
+      explicitAppId: string | undefined,
+    ): { appId: string } | { error: string; status: number } {
+      const resolved = resolveMiniAppIdFromRequest(explicitAppId, req.headers);
+      if (!resolved.appId) {
+        return {
+          error: resolved.error ?? "appId is required",
+          status: resolved.status ?? 400,
+        };
+      }
+      return { appId: resolved.appId };
+    }
+
     app.use(express.json({ limit: "5mb" }));
 
     app.get("/api/db/schema", async (req, res) => {
       try {
-        const appId = req.query["appId"] as string | undefined;
-        if (!appId) {
-          res.status(400).json({ error: "appId query param required" });
+        const explicitAppId = req.query["appId"] as string | undefined;
+        const resolved = resolveRequestAppId(req, explicitAppId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
           return;
         }
+        const appId = resolved.appId;
         const appService = getAppService();
         const sources = await appService.listAppDataSources(appId);
         if (!sources.length) {
@@ -678,17 +697,24 @@ async function startGateway(): Promise<void> {
 
     app.post("/api/db/query", async (req, res) => {
       try {
-        const { appId, sourceId, sql, params } = req.body as {
+        const { appId: bodyAppId, sourceId, sql, params } = req.body as {
           appId?: string;
           sourceId?: string;
           sql?: string;
           params?: unknown[];
         };
 
-        if (!appId || !sql) {
-          res.status(400).json({ error: "appId and sql are required" });
+        if (!sql) {
+          res.status(400).json({ error: "sql is required" });
           return;
         }
+
+        const resolved = resolveRequestAppId(req, bodyAppId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
+          return;
+        }
+        const appId = resolved.appId;
 
         const trimmed = sql.trim().toLowerCase();
         if (!trimmed.startsWith("select") && !trimmed.startsWith("with")) {
@@ -723,14 +749,21 @@ async function startGateway(): Promise<void> {
     // local preview and on apps.papr.ai.
     app.post("/api/db/batch", async (req, res) => {
       try {
-        const { appId, statements } = req.body as {
+        const { appId: bodyAppId, statements } = req.body as {
           appId?: string;
           statements?: Array<{ sourceId?: string; sql?: string; params?: unknown[] }>;
         };
-        if (!appId || !Array.isArray(statements) || statements.length === 0) {
-          res.status(400).json({ error: "appId and non-empty statements[] are required" });
+        if (!Array.isArray(statements) || statements.length === 0) {
+          res.status(400).json({ error: "non-empty statements[] is required" });
           return;
         }
+
+        const resolved = resolveRequestAppId(req, bodyAppId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
+          return;
+        }
+        const appId = resolved.appId;
         if (statements.length > 25) {
           res.status(400).json({ error: "Batch limited to 25 statements" });
           return;
@@ -780,17 +813,24 @@ async function startGateway(): Promise<void> {
 
     app.post("/api/db/write", async (req, res) => {
       try {
-        const { appId, sourceId, sql, params } = req.body as {
+        const { appId: bodyAppId, sourceId, sql, params } = req.body as {
           appId?: string;
           sourceId?: string;
           sql?: string;
           params?: unknown[];
         };
 
-        if (!appId || !sql) {
-          res.status(400).json({ error: "appId and sql are required" });
+        if (!sql) {
+          res.status(400).json({ error: "sql is required" });
           return;
         }
+
+        const resolved = resolveRequestAppId(req, bodyAppId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
+          return;
+        }
+        const appId = resolved.appId;
 
         const trimmed = sql.trim().toLowerCase();
         const isWrite =
@@ -839,15 +879,22 @@ async function startGateway(): Promise<void> {
     // ─────────────────────────────────────────────────────────────────────────
     app.post("/api/db/exec", async (req, res) => {
       try {
-        const { appId, sql } = req.body as {
+        const { appId: bodyAppId, sql } = req.body as {
           appId?: string;
           sql?: string;
         };
 
-        if (!appId || !sql) {
-          res.status(400).json({ error: "appId and sql are required" });
+        if (!sql) {
+          res.status(400).json({ error: "sql is required" });
           return;
         }
+
+        const resolved = resolveRequestAppId(req, bodyAppId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
+          return;
+        }
+        const appId = resolved.appId;
 
         const trimmed = sql.trim().toLowerCase();
         if (!trimmed.startsWith("create table if not exists")) {
@@ -1631,7 +1678,7 @@ async function startGateway(): Promise<void> {
       }
     });
 
-    app.post("/api/workspace/papr-api-key", (req, res) => {
+    app.post("/api/workspace/papr-api-key", async (req, res) => {
       if (!isLoopbackRequest(req)) {
         res.status(403).json({
           success: false,
@@ -1647,8 +1694,16 @@ async function startGateway(): Promise<void> {
         res.status(400).json({ success: false, error: "paprApiKey is required" });
         return;
       }
-      applyGatewayPaprApiKey(paprApiKey);
-      res.json({ success: true });
+      try {
+        await applyGatewayPaprApiKey(paprApiKey);
+        res.json({ success: true });
+      } catch (error) {
+        res.status(500).json({
+          success: false,
+          error:
+            error instanceof Error ? error.message : "Failed to apply Papr API key",
+        });
+      }
     });
 
     app.get("/api/workspace/active", (_req, res) => {
@@ -1843,15 +1898,16 @@ async function startGateway(): Promise<void> {
     app.post("/api/credentials/client-keys", async (req, res) => {
       try {
         const body = req.body as { appId?: string; names?: string[] };
-        if (!body.appId?.trim()) {
-          res.status(400).json({ error: "appId is required" });
+        const resolved = resolveRequestAppId(req, body.appId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
           return;
         }
         const { resolveDesktopClientKeys } = await import(
           "./services/ClientKeysService.js"
         );
         const result = await resolveDesktopClientKeys({
-          appId: body.appId.trim(),
+          appId: resolved.appId,
           names: body.names,
         });
         if (result.status && result.error) {
@@ -1879,10 +1935,12 @@ async function startGateway(): Promise<void> {
           appId?: string;
           params?: Record<string, string>;
         };
-        if (!body.appId) {
-          res.status(400).json({ error: "appId is required" });
+        const resolved = resolveRequestAppId(req, body.appId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
           return;
         }
+        const appId = resolved.appId;
 
         const { AppBackendService } = await import(
           "./services/appRuntime/AppBackendService.js"
@@ -1893,7 +1951,7 @@ async function startGateway(): Promise<void> {
         const { sanitizeError } = await import("../core/tools/security.js");
 
         const backend = new AppBackendService();
-        const manifestPath = `apps/${body.appId}/backend/manifest.json`;
+        const manifestPath = `apps/${appId}/backend/manifest.json`;
         const fs = await import("fs/promises");
         const path = await import("path");
         const { getPaprRoot } = await import("../core/utils/paprRoot.js");
@@ -1933,14 +1991,14 @@ async function startGateway(): Promise<void> {
           body.params?.sourceId ??
           spec.sourceId;
         const databaseEnv = await resolveDesktopAppBackendDatabaseEnv({
-          appId: body.appId,
+          appId,
           paprRoot: getPaprRoot(),
           sourceId: actionSourceId,
         });
         secretValues.push(...collectBackendDatabaseSecrets(databaseEnv));
 
         const result = await backend.runAction({
-          appId: body.appId,
+          appId,
           action: action.trim(),
           params: body.params,
           vaultEnv,

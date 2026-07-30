@@ -11,7 +11,11 @@ interface NewChatButtonProps {
 
 export function NewChatButton({ onClick }: NewChatButtonProps) {
   return (
-    <button className="new-chat-button" onClick={onClick}>
+    <button
+      className="new-chat-button"
+      onClick={onClick}
+      data-testid="new-chat-button"
+    >
       <svg
         className="new-chat-button__icon"
         width="16"
@@ -26,7 +30,7 @@ export function NewChatButton({ onClick }: NewChatButtonProps) {
           strokeLinecap="round"
         />
       </svg>
-      <span className="new-chat-button__label">New App</span>
+      <span className="new-chat-button__label">New Chat</span>
     </button>
   );
 }

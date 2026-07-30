@@ -337,6 +337,26 @@ export interface IStorageProvider {
     costEfficiencyScore: number;
     dataSource: "cached" | "partial" | "live";
     pendingFootprintTurns: number;
+    periods: {
+      today: {
+        actualTokens: number;
+        hypotheticalTokensWithoutOptimizations: number;
+        tokensSaved: number;
+        efficiencyScore: number;
+      };
+      thisWeek: {
+        actualTokens: number;
+        hypotheticalTokensWithoutOptimizations: number;
+        tokensSaved: number;
+        efficiencyScore: number;
+      };
+      thisMonth: {
+        actualTokens: number;
+        hypotheticalTokensWithoutOptimizations: number;
+        tokensSaved: number;
+        efficiencyScore: number;
+      };
+    };
     breakdown: {
       chatsAnalyzed: number;
       chatsWithSummaries: number;

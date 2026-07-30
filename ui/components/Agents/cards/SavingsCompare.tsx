@@ -8,6 +8,7 @@ interface Props {
   saved: number;
   format: SavingsFormat;
   compact?: boolean;
+  periodLabel?: string;
 }
 
 function formatCost(value: number): string {
@@ -33,11 +34,15 @@ export function SavingsCompare({
   saved,
   format,
   compact = false,
+  periodLabel,
 }: Props) {
-  if (saved <= 0 && actual <= 0) return null;
+  if (saved <= 0 && actual <= 0 && hypothetical <= 0) return null;
 
   return (
     <div className={`savings-compare ${compact ? "savings-compare--compact" : ""}`}>
+      {periodLabel ? (
+        <div className="savings-period-label">{periodLabel}</div>
+      ) : null}
       <div className="savings-row">
         <span className="savings-label">You used</span>
         <span className="savings-value actual">{formatValue(actual, format)}</span>
@@ -59,6 +64,15 @@ export function SavingsCompare({
           border-radius: 8px;
           background: var(--bg-secondary);
           margin-bottom: 10px;
+        }
+
+        .savings-period-label {
+          font-size: 9px;
+          font-weight: 600;
+          color: var(--text-tertiary);
+          text-transform: uppercase;
+          letter-spacing: 0.4px;
+          margin-bottom: 4px;
         }
 
         .savings-row {

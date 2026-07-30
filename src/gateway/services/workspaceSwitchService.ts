@@ -226,15 +226,32 @@ async function refreshVaultForWorkspaceSwitch(): Promise<void> {
   }
 }
 
-/** Update Papr API key in gateway env/cache without reloading workspace services. */
-export function applyGatewayPaprApiKey(apiKey: string): void {
+/** Update Papr API key in gateway env/cache and reinitialize memory storage. */
+export async function applyGatewayPaprApiKey(apiKey: string): Promise<void> {
   process.env.PAPR_API_KEY = apiKey;
   clearKeyCache("PAPR_API_KEY");
+  invalidatePaprUserIdCache();
+  getCustomKeysService().invalidateCache();
 
   const bridge = getTursoSyncBridge();
   if (bridge) {
     bridge.invalidateCredentialsCache();
   }
+
+  await resetStorageManagerSingleton();
+  resetAgentServiceSingletonForTests();
+  await initializeAgentService({
+    mode: "hybrid",
+    paprApiKey: apiKey,
+  });
+
+  const { ensureIndexingStarted } = await import("./CodeIndexingService.js");
+  void ensureIndexingStarted(apiKey).catch((error: unknown) => {
+    console.warn(
+      "[WorkspaceSwitch] Code indexing restart after API key update failed:",
+      error instanceof Error ? error.message : error,
+    );
+  });
 }
 
 export async function switchActiveWorkspace(

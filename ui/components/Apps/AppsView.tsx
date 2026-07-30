@@ -202,6 +202,24 @@ export function AppsView() {
   };
 
   const handleDelete = async (id: string) => {
+    const isPublished = publishedIds.has(id);
+    const shareUrl = readCachedCloudPublishState(id)?.shareUrl;
+
+    if (isPublished) {
+      const message = shareUrl
+        ? `“${allApps.find((a) => a.id === id)?.title ?? "This app"}” is published at:\n${shareUrl}\n\nDeleting will remove it from this workspace AND unpublish it from the web.\n\nContinue?`
+        : `This app is published to the web.\n\nDeleting will remove it locally AND unpublish it from apps.papr.ai.\n\nContinue?`;
+      if (!confirm(message)) {
+        return;
+      }
+      try {
+        await deleteArtifact(id, "app", { unpublishFromCloud: true });
+      } catch {
+        /* useArtifacts sets error */
+      }
+      return;
+    }
+
     if (confirm("Are you sure you want to delete this app?")) {
       await deleteArtifact(id, "app");
     }

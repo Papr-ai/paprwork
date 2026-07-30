@@ -1954,6 +1954,11 @@ async function applyActiveNamespaceSwitch(input: {
 
   invalidateKeyCache("PAPR_API_KEY");
 
+  // When pointer already matched, gateway was not reloaded — push key + reinit storage.
+  if (pointerMatches) {
+    await notifyGatewayPaprApiKeyUpdate(apiKey);
+  }
+
   if (input.notifyRenderer !== false) {
     const win = BrowserWindow.getAllWindows()[0];
     if (win) {

@@ -21,13 +21,9 @@ import {
   type SharePermission,
 } from "../../utils/shareAudienceModel";
 import type { ArtifactCloudLineage } from "../../stores/artifactsStore";
-import {
-  formatLastSyncedAt,
-  formatTrackSyncSummary,
-  pullTrackUpstream as fetchTrackUpstream,
-} from "../../utils/cloudTrackSyncApi";
 import { CloudChangeRequestsPanel } from "./CloudChangeRequestsPanel";
 import { CloudContributeBackPanel } from "./CloudContributeBackPanel";
+import { CloudUpstreamBar } from "./CloudUpstreamBar";
 import { CloudAppCredentialsPanel } from "./CloudAppCredentialsPanel";
 import { AppWorkspaceMenu } from "./AppWorkspaceMenu";
 import { WebSyncPopover, WebSyncStatusDot } from "./WebSyncPopover";
@@ -183,9 +179,6 @@ export function MiniAppPublishBar({
   const [audience, setAudience] = useState<ShareAudience>("private");
   const [permission, setPermission] = useState<SharePermission>("write");
   const [requireSignIn, setRequireSignIn] = useState(true);
-  const [trackPulling, setTrackPulling] = useState(false);
-  const [trackPullNotice, setTrackPullNotice] = useState<string | null>(null);
-  const [trackPullError, setTrackPullError] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | undefined>(
     cloudLineage?.lastSyncedAt,
   );
@@ -337,31 +330,7 @@ export function MiniAppPublishBar({
   const showCodePanel = isCodePermission(permission);
   const listsInCommunity = shouldListInCommunity(audience, cloud.live);
   const isFork = Boolean(cloudLineage);
-  const isTrackMode = cloudLineage?.mode === "track";
-  const showTrackPullBar = viewMode === "local" && isTrackMode;
-  const lastSyncedLabel = formatLastSyncedAt(lastSyncedAt);
-
-  const handlePullTrackUpstream = async () => {
-    setTrackPulling(true);
-    setTrackPullError(null);
-    setTrackPullNotice(null);
-    try {
-      const result = await fetchTrackUpstream(appId);
-      setLastSyncedAt(result.lastSyncedAt);
-      setTrackPullNotice(formatTrackSyncSummary(result));
-      onTrackPullComplete?.();
-    } catch (err) {
-      setTrackPullError((err as Error).message.slice(0, 120));
-    } finally {
-      setTrackPulling(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!trackPullNotice) return;
-    const timer = setTimeout(() => setTrackPullNotice(null), 5000);
-    return () => clearTimeout(timer);
-  }, [trackPullNotice]);
+  const showUpstreamBar = viewMode === "local" && isFork && cloudLineage;
 
   const showOwnerChangeRequests =
     cloud.live && isCodePermission(permission) && !isFork;
@@ -452,8 +421,8 @@ export function MiniAppPublishBar({
                 ? "Checking web status…"
                 : `${cloud.live ? "Live on web" : "Not on web yet"} · ${cloud.statusLabel}`}
               {cloud.refreshing && cloud.live ? " · updating" : null}
-              {showTrackPullBar && cloudLineage
-                ? ` · Tracking ${cloudLineage.sourceSlug}`
+              {isFork && cloudLineage
+                ? ` · ${cloudLineage.mode === "track" ? "Tracking" : "Fork of"} ${cloudLineage.sourceSlug}`
                 : null}
             </span>
             <CloudCompatibilityBadge
@@ -523,28 +492,24 @@ export function MiniAppPublishBar({
             </div>
           ) : null}
 
-          {showTrackPullBar ? (
-            <div className="mini-app-publish-bar__track-pull">
-              <div className="mini-app-publish-bar__track-pull-copy">
-                <span className="mini-app-publish-bar__track-pull-label">
-                  Publisher updates
-                </span>
-                <span className="mini-app-publish-bar__track-pull-meta">
-                  {lastSyncedLabel
-                    ? `Last pulled ${lastSyncedLabel}`
-                    : "Not pulled yet"}
-                </span>
-              </div>
-              <button
-                type="button"
-                className="mini-app-publish-bar__button mini-app-publish-bar__button--track"
-                disabled={trackPulling || cloud.busy}
-                title="Download the publisher's latest code into your local copy"
-                onClick={() => void handlePullTrackUpstream()}
-              >
-                {trackPulling ? "Pulling…" : "Pull latest"}
-              </button>
-            </div>
+          {showUpstreamBar ? (
+            <CloudUpstreamBar
+              appTitle={appTitle}
+              lineage={{
+                mode: cloudLineage.mode,
+                sourceAppId: cloudLineage.sourceAppId,
+                sourceSlug: cloudLineage.sourceSlug,
+                sourceNamespaceId: cloudLineage.sourceNamespaceId,
+                installedAppId: appId,
+                lastSyncedAt: cloudLineage.lastSyncedAt,
+              }}
+              lastSyncedAt={lastSyncedAt}
+              busy={cloud.busy}
+              onLastSyncedAtChange={setLastSyncedAt}
+              onTrackPullComplete={() => {
+                onTrackPullComplete?.();
+              }}
+            />
           ) : null}
 
           {publishedUrl ? (
@@ -575,12 +540,6 @@ export function MiniAppPublishBar({
         </div>
 
         <div className="mini-app-publish-bar__actions">
-          {trackPullNotice ? (
-            <span className="mini-app-publish-bar__toast">{trackPullNotice}</span>
-          ) : null}
-          {trackPullError ? (
-            <span className="mini-app-publish-bar__error">{trackPullError}</span>
-          ) : null}
           {cloud.toast ? (
             <span className="mini-app-publish-bar__toast">{cloud.toast}</span>
           ) : null}
@@ -641,8 +600,20 @@ export function MiniAppPublishBar({
               </div>
             ) : null}
 
+            {isFork ? (
+              <div className="share-sheet__notice share-sheet__notice--info">
+                <p>
+                  <strong>Publish your copy</strong> — this puts <em>your</em> local
+                  fork on the web. It does not change the team&apos;s shared upstream
+                  app.
+                </p>
+              </div>
+            ) : null}
+
             <fieldset className="share-sheet__fieldset" disabled={cloud.busy}>
-              <legend className="share-sheet__legend">Who can access</legend>
+              <legend className="share-sheet__legend">
+                {isFork ? "Who can access your copy" : "Who can access"}
+              </legend>
               <ul className="share-sheet__list">
                 {ACCESS_OPTIONS.map((option) => (
                   <li key={option.value}>
@@ -724,16 +695,34 @@ export function MiniAppPublishBar({
             {/* Publish button if not live */}
             {!cloud.live ? (
               <div className="share-sheet__notice share-sheet__notice--info">
-                <p>Publish your app on the web first to get a shareable link.</p>
+                <p>
+                  {isFork
+                    ? "Publish your copy on the web to get a shareable link for this fork."
+                    : "Publish your app on the web first to get a shareable link."}
+                </p>
                 <button
                   type="button"
                   className="share-sheet__primary-btn"
                   disabled={cloud.busy || cloud.loading}
                   onClick={() => void handlePublishClick()}
                 >
-                  Publish on Web
+                  {isFork ? "Publish your copy" : "Publish on Web"}
                 </button>
               </div>
+            ) : null}
+
+            {isFork && cloudLineage ? (
+              <CloudContributeBackPanel
+                appTitle={appTitle}
+                lineage={{
+                  mode: cloudLineage.mode,
+                  sourceAppId: cloudLineage.sourceAppId,
+                  sourceSlug: cloudLineage.sourceSlug,
+                  sourceNamespaceId: cloudLineage.sourceNamespaceId,
+                  installedAppId: appId,
+                }}
+                busy={cloud.busy}
+              />
             ) : null}
 
             {/* API Credentials - simplified */}
@@ -792,26 +781,6 @@ export function MiniAppPublishBar({
                   Unpublish
                 </button>
               </div>
-            ) : null}
-
-            {/* Fork/contribute panel */}
-            {isFork && cloudLineage ? (
-              <CloudContributeBackPanel
-                appTitle={appTitle}
-                lineage={{
-                  mode: cloudLineage.mode,
-                  sourceAppId: cloudLineage.sourceAppId,
-                  sourceSlug: cloudLineage.sourceSlug,
-                  sourceNamespaceId: cloudLineage.sourceNamespaceId,
-                  installedAppId: appId,
-                  lastSyncedAt: cloudLineage.lastSyncedAt,
-                }}
-                busy={cloud.busy}
-                onTrackPullComplete={(result) => {
-                  setLastSyncedAt(result.lastSyncedAt);
-                  onTrackPullComplete?.();
-                }}
-              />
             ) : null}
 
             {/* Cloud compatibility info - only show if blocking publish */}

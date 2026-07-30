@@ -229,13 +229,31 @@ function openCodeIndexDb(): Database.Database | null {
 
 export function computeMemorySearchSavings(
   db: Database.Database,
+  sinceIso?: string,
 ): MemorySearchSavingsResult {
   const codeIndexDb = openCodeIndexDb();
 
   try {
-    const rows = db
-      .prepare(
-        `SELECT tool_calls FROM messages
+    const rows = sinceIso
+      ? (db
+          .prepare(
+            `SELECT tool_calls FROM messages
+         WHERE role = 'assistant'
+           AND tool_calls IS NOT NULL
+           AND tool_calls != ''
+           AND timestamp >= ?
+           AND (
+             tool_calls LIKE '%"search_agent_memory"%'
+             OR tool_calls LIKE '%"search_memory"%'
+             OR tool_calls LIKE '%Memory Search Results (Semantic)%'
+           )
+         ORDER BY timestamp DESC
+         LIMIT 500`,
+          )
+          .all(sinceIso) as Array<{ tool_calls: string }>)
+      : (db
+          .prepare(
+            `SELECT tool_calls FROM messages
          WHERE role = 'assistant'
            AND tool_calls IS NOT NULL
            AND tool_calls != ''
@@ -246,8 +264,8 @@ export function computeMemorySearchSavings(
            )
          ORDER BY timestamp DESC
          LIMIT 500`,
-      )
-      .all() as Array<{ tool_calls: string }>;
+          )
+          .all() as Array<{ tool_calls: string }>);
 
     let memorySearchCount = 0;
     let hybridBashCount = 0;

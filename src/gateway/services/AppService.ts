@@ -145,6 +145,19 @@ export interface ValidationIssue {
   rule?: string;
 }
 
+export interface DeleteAppOptions {
+  /** When true, unpublish from cloud before deleting local files. Required if app is live on apps.papr.ai. */
+  unpublishFromCloud?: boolean;
+}
+
+export interface DeleteAppResult {
+  deleted: boolean;
+  unpublished?: boolean;
+  requiresUnpublishConfirm?: boolean;
+  shareUrl?: string | null;
+  appTitle?: string;
+}
+
 export interface ValidationResult {
   appId: string;
   timestamp: string;
@@ -1446,9 +1459,48 @@ export class AppService {
     return updatedApp;
   }
 
-  async deleteApp(id: string): Promise<boolean> {
+  async deleteApp(id: string, options?: DeleteAppOptions): Promise<DeleteAppResult> {
     const app = await this.getApp(id);
-    if (!app) return false;
+    if (!app) {
+      return { deleted: false };
+    }
+
+    let cloudStatus: { published: boolean; shareUrl: string | null } = {
+      published: false,
+      shareUrl: null,
+    };
+    try {
+      const { getCloudAppPublishService } = await import(
+        "./CloudAppPublishService.js"
+      );
+      cloudStatus = await getCloudAppPublishService().getCloudPublishStatus(id);
+    } catch (error) {
+      console.warn(
+        `[AppService] Could not check cloud publish status for ${id}:`,
+        (error as Error).message.slice(0, 120),
+      );
+    }
+
+    if (cloudStatus.published && options?.unpublishFromCloud !== true) {
+      return {
+        deleted: false,
+        requiresUnpublishConfirm: true,
+        shareUrl: cloudStatus.shareUrl,
+        appTitle: app.title,
+      };
+    }
+
+    let unpublished = false;
+    if (cloudStatus.published && options?.unpublishFromCloud === true) {
+      const { getCloudAppPublishService } = await import(
+        "./CloudAppPublishService.js"
+      );
+      await getCloudAppPublishService().unpublishApp(id);
+      unpublished = true;
+    }
+
+    const { removeAppPublishPrefs } = await import("./cloudPublishPrefs.js");
+    removeAppPublishPrefs(id, this.paprRootDir);
 
     // Stop watching the app directory
     this.unwatchApp(id);
@@ -1477,7 +1529,7 @@ export class AppService {
     }).catch(() => {});
 
     console.log(`[AppService] Deleted app: ${id}`);
-    return true;
+    return { deleted: true, unpublished };
   }
 
   /**

@@ -52,6 +52,7 @@ interface UpdateAppPayload {
 
 interface DeleteAppPayload {
   appId: string;
+  unpublishFromCloud?: boolean;
 }
 
 interface CopyAppToNamespacePayload {
@@ -273,13 +274,15 @@ export async function setupAppHandlers(
 
       case "app:delete": {
         const payload = message.payload as DeleteAppPayload;
-        const success = await appService.deleteApp(payload.appId);
+        const result = await appService.deleteApp(payload.appId, {
+          unpublishFromCloud: payload.unpublishFromCloud === true,
+        });
         ws.send(
           JSON.stringify({
             id: message.id,
             type: "app:delete:response",
-            success: true,
-            data: { success },
+            success: result.deleted,
+            data: result,
           }),
         );
         break;

@@ -1326,14 +1326,14 @@ export class LocalStorageProvider implements IStorageProvider {
       .prepare(
         `SELECT 
           COALESCE(SUM(cost), 0) as cost,
-          COALESCE(SUM(total_tokens), 0) as total_tokens,
+          COALESCE(SUM(prompt_tokens + completion_tokens), 0) as total_tokens,
           COUNT(*) as count,
           COALESCE(SUM(CASE WHEN timestamp >= ? THEN cost ELSE 0 END), 0) as today_cost,
           COALESCE(SUM(CASE WHEN timestamp >= ? THEN cost ELSE 0 END), 0) as week_cost,
           COALESCE(SUM(CASE WHEN timestamp >= ? THEN cost ELSE 0 END), 0) as month_cost,
-          COALESCE(SUM(CASE WHEN timestamp >= ? THEN total_tokens ELSE 0 END), 0) as today_tokens,
-          COALESCE(SUM(CASE WHEN timestamp >= ? THEN total_tokens ELSE 0 END), 0) as week_tokens,
-          COALESCE(SUM(CASE WHEN timestamp >= ? THEN total_tokens ELSE 0 END), 0) as month_tokens
+          COALESCE(SUM(CASE WHEN timestamp >= ? THEN prompt_tokens + completion_tokens ELSE 0 END), 0) as today_tokens,
+          COALESCE(SUM(CASE WHEN timestamp >= ? THEN prompt_tokens + completion_tokens ELSE 0 END), 0) as week_tokens,
+          COALESCE(SUM(CASE WHEN timestamp >= ? THEN prompt_tokens + completion_tokens ELSE 0 END), 0) as month_tokens
         FROM messages 
         WHERE role = 'assistant'`,
       )
@@ -1361,7 +1361,7 @@ export class LocalStorageProvider implements IStorageProvider {
         `SELECT 
           model,
           COALESCE(SUM(cost), 0) as cost,
-          COALESCE(SUM(total_tokens), 0) as tokens,
+          COALESCE(SUM(prompt_tokens + completion_tokens), 0) as tokens,
           COUNT(*) as count
         FROM messages 
         WHERE role = 'assistant' AND model IS NOT NULL
@@ -1412,7 +1412,7 @@ export class LocalStorageProvider implements IStorageProvider {
         `SELECT
           DATE(timestamp) as date,
           COALESCE(SUM(cost), 0) as cost,
-          COALESCE(SUM(total_tokens), 0) as tokens,
+          COALESCE(SUM(prompt_tokens + completion_tokens), 0) as tokens,
           COUNT(*) as messages
         FROM messages
         WHERE role = 'assistant' AND timestamp >= ?
@@ -1493,7 +1493,7 @@ export class LocalStorageProvider implements IStorageProvider {
       .prepare(
         `SELECT
           COUNT(*) as message_count,
-          COALESCE(SUM(total_tokens), 0) as total_tokens,
+          COALESCE(SUM(prompt_tokens + completion_tokens), 0) as total_tokens,
           COALESCE(SUM(cost), 0) as total_cost,
           COALESCE(SUM(CASE WHEN tool_calls IS NOT NULL AND tool_calls != '' THEN 1 ELSE 0 END), 0) as tool_calls_count
         FROM messages
@@ -1548,7 +1548,7 @@ export class LocalStorageProvider implements IStorageProvider {
         `SELECT
           source_agent_id as agent_id,
           COUNT(*) as message_count,
-          COALESCE(SUM(total_tokens), 0) as total_tokens,
+          COALESCE(SUM(prompt_tokens + completion_tokens), 0) as total_tokens,
           COALESCE(SUM(cost), 0) as total_cost,
           COALESCE(SUM(CASE WHEN tool_calls IS NOT NULL AND tool_calls != '' THEN 1 ELSE 0 END), 0) as tool_calls_count
         FROM messages

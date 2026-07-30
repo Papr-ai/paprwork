@@ -219,6 +219,7 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
 
       const paprScript = iframeDocument.createElement("script");
       paprScript.textContent = `
+        window.__PAPR_APP_ID__ = ${JSON.stringify(appId)};
         window.paprAPI = {
           invoke: function(method, ...args) {
             return new Promise((resolve, reject) => {

@@ -132,7 +132,11 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
 
   // Delete artifact
   const deleteArtifact = useCallback(
-    async (id: string, type: "document" | "app") => {
+    async (
+      id: string,
+      type: "document" | "app",
+      options?: { unpublishFromCloud?: boolean },
+    ) => {
       setError(null);
 
       try {
@@ -140,13 +144,29 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
           type === "document" ? "document:delete" : "app:delete";
         const payloadKey = type === "document" ? "documentId" : "appId";
 
-        await gateway.send(messageType, { [payloadKey]: id });
+        const response = await gateway.send(messageType, {
+          [payloadKey]: id,
+          ...(type === "app" && options?.unpublishFromCloud
+            ? { unpublishFromCloud: true }
+            : {}),
+        });
+        const data = response.data as {
+          deleted?: boolean;
+          requiresUnpublishConfirm?: boolean;
+        };
+        if (data?.requiresUnpublishConfirm) {
+          throw new Error("Published app requires unpublish confirmation");
+        }
+        if (data?.deleted === false) {
+          throw new Error(`Failed to delete ${type}`);
+        }
         removeArtifact(id);
       } catch (err) {
         const message =
           err instanceof Error ? err.message : `Failed to delete ${type}`;
         setError(message);
         console.error(`[useArtifacts] Delete ${type} error:`, err);
+        throw err;
       }
     },
     [removeArtifact, setError],

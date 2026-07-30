@@ -1,5 +1,12 @@
 import React from "react";
 
+export interface ContextEfficiencyPeriodStats {
+  actualTokens: number;
+  hypotheticalTokensWithoutOptimizations: number;
+  tokensSaved: number;
+  efficiencyScore: number;
+}
+
 export interface ContextEfficiencyStats {
   fullChatTokensPerTurn: number;
   agentContextTokensPerTurn: number;
@@ -18,6 +25,11 @@ export interface ContextEfficiencyStats {
   costEfficiencyScore?: number;
   dataSource?: "cached" | "partial" | "live";
   pendingFootprintTurns?: number;
+  periods?: {
+    today: ContextEfficiencyPeriodStats;
+    thisWeek: ContextEfficiencyPeriodStats;
+    thisMonth: ContextEfficiencyPeriodStats;
+  };
   breakdown: {
     chatsAnalyzed: number;
     chatsWithSummaries: number;
@@ -91,7 +103,7 @@ export function ContextEfficiencyCard({ stats, loading = false }: Props) {
       <div className="card-content">
         <div className="efficiency-usage-compare">
           <div className="usage-row">
-            <span className="usage-label">You used (actual API)</span>
+            <span className="usage-label">You used (billable)</span>
             <span className="usage-value actual">
               {formatTokens(stats.totalTokensConsumed)}
             </span>
@@ -109,6 +121,13 @@ export function ContextEfficiencyCard({ stats, loading = false }: Props) {
             </span>
           </div>
         </div>
+
+        {stats.periods?.thisMonth && stats.periods.thisMonth.actualTokens > 0 ? (
+          <div className="efficiency-period-note">
+            This month: {formatTokens(stats.periods.thisMonth.tokensSaved)} saved
+            ({stats.periods.thisMonth.efficiencyScore}% of estimated spend)
+          </div>
+        ) : null}
 
         <div className="efficiency-hero-sub">
           {stats.dataSource === "cached" ? (
@@ -194,6 +213,12 @@ export function ContextEfficiencyCard({ stats, loading = false }: Props) {
           font-size: 10px;
           color: var(--text-tertiary);
           line-height: 1.45;
+        }
+
+        .efficiency-period-note {
+          font-size: 10px;
+          color: var(--text-secondary);
+          margin-bottom: 8px;
         }
       `}</style>
     </div>

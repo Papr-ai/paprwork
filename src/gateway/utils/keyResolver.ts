@@ -208,8 +208,15 @@ export async function getPaprApiKey(
   ipcProcess: IpcProcessLike = process,
 ): Promise<string | undefined> {
   // Main process is authoritative for Papr login keys (namespace vault slots).
-  if (keyCache.PAPR_API_KEY?.trim()) {
-    return keyCache.PAPR_API_KEY.trim();
+  const cached = keyCache.PAPR_API_KEY?.trim();
+  if (cached) {
+    if (paprApiKeyMatchesActiveWorkspace(cached)) {
+      return cached;
+    }
+    console.warn(
+      "[KeyResolver] Clearing stale cached PAPR_API_KEY — wrong org/namespace for active workspace",
+    );
+    delete keyCache.PAPR_API_KEY;
   }
 
   if (Date.now() < paprApiKeyUnavailableUntil) {

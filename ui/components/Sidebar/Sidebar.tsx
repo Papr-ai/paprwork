@@ -74,6 +74,14 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
     switchToTab(tabId);
   }, [createTab, switchToTab]);
 
+  const handleNewChat = useCallback(async () => {
+    const chatId = await createChat();
+    if (chatId) {
+      const tabId = createTab("chat", chatId, "New Chat");
+      switchToTab(tabId);
+    }
+  }, [createChat, createTab, switchToTab]);
+
   const handleOnboardingSendMessage = useCallback(
     async (message: string) => {
       // Create a new chat, switch to it, then dispatch event for ChatContainer to send
@@ -138,7 +146,7 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
       <div className="sidebar__content">
         <WeatherWidget />
 
-        <NewChatButton onClick={() => handleNavClick("apps")} />
+        <NewChatButton onClick={handleNewChat} />
 
         <div className="sidebar__nav">
           <NavButton

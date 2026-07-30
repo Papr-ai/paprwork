@@ -87,6 +87,7 @@ describe("contextStatsCache", () => {
     expect(stats.pendingTurns).toBe(1);
     expect(stats.projectedPromptTokens).toBe(120);
     expect(stats.pendingPromptTokens).toBe(80);
+    expect(stats.totalTokensConsumed).toBe(155);
     expect(stats.needsRebuild).toBe(false);
   });
 

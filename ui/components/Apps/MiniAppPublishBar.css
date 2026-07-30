@@ -469,7 +469,78 @@
   border-radius: 10px;
   background: rgba(37, 99, 235, 0.08);
   border: 1px solid rgba(37, 99, 235, 0.16);
-  max-width: 320px;
+  max-width: 420px;
+}
+
+.mini-app-publish-bar__upstream {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: rgba(37, 99, 235, 0.08);
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  max-width: min(520px, 100%);
+  position: relative;
+}
+
+.mini-app-publish-bar__upstream-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.mini-app-publish-bar__send-wrap {
+  position: relative;
+}
+
+.mini-app-publish-bar__button--send {
+  border-style: dashed;
+}
+
+.mini-app-publish-bar__send-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  width: min(320px, 80vw);
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface-elevated, #fff);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mini-app-publish-bar__send-popover-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.mini-app-publish-bar__send-popover-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary, #6b7280);
+}
+
+.mini-app-publish-bar__upstream-toast,
+.mini-app-publish-bar__upstream-error {
+  flex-basis: 100%;
+  font-size: 11px;
+}
+
+.mini-app-publish-bar__upstream-toast {
+  color: var(--success);
+}
+
+.mini-app-publish-bar__upstream-error {
+  color: var(--error);
 }
 
 .mini-app-publish-bar__track-pull-copy {
@@ -511,9 +582,15 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  .mini-app-publish-bar__track-pull {
+  .mini-app-publish-bar__track-pull,
+  .mini-app-publish-bar__upstream {
     background: rgba(96, 165, 250, 0.1);
     border-color: rgba(96, 165, 250, 0.2);
+  }
+
+  .mini-app-publish-bar__send-popover {
+    background: #1c1c1e;
+    border-color: rgba(255, 255, 255, 0.12);
   }
 
   .mini-app-publish-bar__button--track {

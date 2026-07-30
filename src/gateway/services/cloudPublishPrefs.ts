@@ -96,3 +96,13 @@ export function setAppPublishPrefs(
   saveCloudPublishPrefs(prefs, paprDir);
   return next;
 }
+
+/** Remove local publish prefs when an app is deleted (does not touch cloud). */
+export function removeAppPublishPrefs(appId: string, paprDir?: string): void {
+  const prefs = loadCloudPublishPrefs(paprDir);
+  if (!(appId in prefs.apps)) {
+    return;
+  }
+  delete prefs.apps[appId];
+  saveCloudPublishPrefs(prefs, paprDir);
+}

@@ -70,6 +70,7 @@ Creates a local copy with papr-cloud-lineage.json (fork or track mode). Use subm
           lineageId: result.lineageId,
           sourceAppId: result.sourceAppId,
           sourceSlug: result.sourceSlug,
+          remappedFiles: result.remappedFiles,
           tip: "Open the app tab to edit locally. Your API keys stay in your Settings — not the owner's.",
         },
         duration: performance.now() - startTime,

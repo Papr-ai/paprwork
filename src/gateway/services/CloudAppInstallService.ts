@@ -3,7 +3,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { getPaprRoot } from "../../core/utils/paprRoot.js";
+import { getPaprRoot, getPaprAppsRoot } from "../../core/utils/paprRoot.js";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
@@ -20,6 +20,7 @@ import type {
   CloudAppLineageFile,
 } from "../../core/types/cloudAppLineage.js";
 import { serializeCloudAppLineageFile } from "../../core/utils/cloudAppLineage.js";
+import { applyIdRemapsToDirectory } from "../utils/applyIdRemaps.js";
 import { cloudApiFetch } from "../utils/cloudApiClient.js";
 import {
   getAppService,
@@ -57,6 +58,7 @@ export interface CloudAppInstallResult {
   sourceAppId: string;
   sourceSlug: string;
   requirements: RequiredKeySpec[];
+  remappedFiles: string[];
 }
 
 async function runCommand(
@@ -256,6 +258,15 @@ export class CloudAppInstallService {
       icon,
     );
 
+    const remaps = new Map<string, string>([[prepare.source.appId, app.id]]);
+    const appDir = path.join(getPaprAppsRoot(), app.id);
+    const { remappedFiles } = await applyIdRemapsToDirectory(appDir, remaps);
+    if (remappedFiles.length > 0) {
+      console.log(
+        `[CloudAppInstall] Remapped publisher app ID in ${remappedFiles.length} file(s) for ${app.id}`,
+      );
+    }
+
     const lineage: CloudAppLineageFile = {
       schemaVersion: "1.1.0",
       lineageId: prepare.lineageId,
@@ -276,7 +287,7 @@ export class CloudAppInstallService {
     };
 
     const paprDir = getPaprRoot();
-    const lineagePath = path.join(paprDir, "apps", app.id, "papr-cloud-lineage.json");
+    const lineagePath = path.join(getPaprAppsRoot(), app.id, "papr-cloud-lineage.json");
     await fs.writeFile(
       lineagePath,
       serializeCloudAppLineageFile(lineage),
@@ -297,6 +308,7 @@ export class CloudAppInstallService {
       sourceAppId: prepare.source.appId,
       sourceSlug: prepare.source.slug,
       requirements,
+      remappedFiles,
     };
   }
 }

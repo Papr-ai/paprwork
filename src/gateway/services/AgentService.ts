@@ -102,7 +102,6 @@ function finalizeTokenUsageForBilling(
   usage: StoredTokenUsage | undefined,
   cacheReadTokens: number,
   cacheWriteTokens: number,
-  contextTokensForStats?: number,
 ): StoredTokenUsage | undefined {
   if (!usage) {
     return undefined;
@@ -111,11 +110,6 @@ function finalizeTokenUsageForBilling(
     ...usage,
     cacheReadTokens: usage.cacheReadTokens ?? cacheReadTokens,
     cacheWriteTokens: usage.cacheWriteTokens ?? cacheWriteTokens,
-    // pi-ai multi-step runs accumulate billing across steps; stats need last context size.
-    totalTokens:
-      contextTokensForStats && contextTokensForStats > 0
-        ? contextTokensForStats
-        : usage.totalTokens,
   };
 }
 
@@ -512,7 +506,6 @@ export class AgentService {
         tokenUsage,
         lastCacheReadTokens,
         lastCacheWriteTokens,
-        piAiContextTokens,
       );
 
       const partialMsg = createPartialAssistantStoredMessage({
@@ -589,7 +582,6 @@ export class AgentService {
         tokenUsage,
         lastCacheReadTokens,
         lastCacheWriteTokens,
-        piAiContextTokens,
       );
 
       try {
@@ -1980,7 +1972,6 @@ export class AgentService {
           tokenUsage,
           lastCacheReadTokens,
           lastCacheWriteTokens,
-          piAiContextTokens,
         ),
       });
       if (checkpointInserted) {

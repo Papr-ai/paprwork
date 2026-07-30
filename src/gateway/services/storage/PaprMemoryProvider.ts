@@ -590,6 +590,26 @@ export class PaprMemoryProvider implements IStorageProvider {
       costEfficiencyScore: 0,
       dataSource: "live" as const,
       pendingFootprintTurns: 0,
+      periods: {
+        today: {
+          actualTokens: 0,
+          hypotheticalTokensWithoutOptimizations: 0,
+          tokensSaved: 0,
+          efficiencyScore: 0,
+        },
+        thisWeek: {
+          actualTokens: 0,
+          hypotheticalTokensWithoutOptimizations: 0,
+          tokensSaved: 0,
+          efficiencyScore: 0,
+        },
+        thisMonth: {
+          actualTokens: 0,
+          hypotheticalTokensWithoutOptimizations: 0,
+          tokensSaved: 0,
+          efficiencyScore: 0,
+        },
+      },
       breakdown: {
         chatsAnalyzed: 0,
         chatsWithSummaries: 0,
