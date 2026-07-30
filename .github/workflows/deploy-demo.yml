@@ -3,6 +3,10 @@ name: Deploy demo emulator to Vercel
 # The dist-demo Vercel project is not git-linked (Vercel's GitHub app
 # connection returns 401), so deploys are driven from here instead.
 # ui/dist-demo is a committed static build - no build step required.
+#
+# The static files are copied to a standalone staging dir first: if we
+# deploy from inside the repo, Vercel CLI walks up, finds the root
+# package.json and tries "npm install", which fails.
 
 on:
   push:
@@ -22,29 +26,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify build output exists
+      - name: Stage static build outside the repo
         run: |
           test -f ui/dist-demo/index.html || { echo "::error::ui/dist-demo/index.html missing"; exit 1; }
-          echo "Files to deploy: $(find ui/dist-demo -type f | wc -l)"
+          mkdir -p "$RUNNER_TEMP/site"
+          cp -R ui/dist-demo/. "$RUNNER_TEMP/site/"
+          printf '{"buildCommand":null,"installCommand":null,"outputDirectory":"."}\n' \
+            > "$RUNNER_TEMP/site/vercel.json"
+          echo "Staged $(find "$RUNNER_TEMP/site" -type f | wc -l) files"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
 
       - name: Deploy to Vercel (production)
-        working-directory: ui/dist-demo
+        working-directory: ${{ runner.temp }}/site
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
           npx --yes vercel@latest deploy --prod --yes --archive=tgz \
-            --token "${{ secrets.VERCEL_TOKEN }}" | tee deploy.log
+            --token "${{ secrets.VERCEL_TOKEN }}" 2>&1 | tee deploy.log
+          url=$(grep -Eo 'https://[a-z0-9.-]*\.vercel\.app' deploy.log | tail -1)
+          echo "DEPLOY_URL=$url" >> "$GITHUB_ENV"
 
-      - name: Verify live site
+      - name: Verify the new deployment serves the site
         run: |
+          echo "Checking $DEPLOY_URL"
           for i in 1 2 3 4 5; do
-            code=$(curl -s -o /dev/null -w '%{http_code}' https://dist-demo-iota.vercel.app/)
-            [ "$code" = "200" ] && { echo "Live OK ($code)"; exit 0; }
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$DEPLOY_URL/")
+            [ "$code" = "200" ] && { echo "New deployment OK ($code)"; break; }
             echo "Attempt $i: got $code, retrying..."; sleep 6
+            [ "$i" = "5" ] && { echo "::error::New deployment did not return 200"; exit 1; }
           done
-          echo "::error::Site did not return 200 after deploy"; exit 1
+          alias=$(curl -s -o /dev/null -w '%{http_code}' https://dist-demo-iota.vercel.app/)
+          [ "$alias" = "200" ] || { echo "::error::Alias returned $alias"; exit 1; }
+          echo "Live alias OK ($alias)"
