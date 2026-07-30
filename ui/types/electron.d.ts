@@ -161,6 +161,32 @@ export interface ElectronAPI {
       };
       error?: string;
     }>;
+    refreshProfile: () => Promise<{
+      success: boolean;
+      profile?: {
+        userId: string;
+        email: string;
+        displayName?: string;
+        profileImage?: string;
+        authenticatedAt: string;
+        organizationId?: string;
+        activeNamespaceId?: string;
+        activeNamespaceName?: string;
+        workspaceId?: string;
+        workspaceName?: string;
+      };
+      error?: string;
+    }>;
+    syncProfile: (input: {
+      name?: string;
+      email?: string;
+      imageUrl?: string;
+    }) => Promise<{
+      success: boolean;
+      profileImageUrl?: string;
+      syncedImageUrl?: string;
+      error?: string;
+    }>;
     getActiveWorkspace: () => Promise<{
       success: boolean;
       pointer?: {

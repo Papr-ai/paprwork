@@ -79,7 +79,13 @@ async function fetchProfileContext(): Promise<{
   }
 
   const [paprProfileResult, planResult, orgsResult] = await Promise.all([
-    window.electronAPI.papr.getProfile(),
+    (async () => {
+      const refreshResult = await window.electronAPI.papr.refreshProfile();
+      if (refreshResult.success && refreshResult.profile) {
+        return { success: true, profile: refreshResult.profile };
+      }
+      return window.electronAPI.papr.getProfile();
+    })(),
     window.electronAPI.papr.getPlanSummary(),
     window.electronAPI.papr.listOrganizations(),
   ]);

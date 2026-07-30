@@ -2346,6 +2346,7 @@ async function completePaprAuthCallback(
     userId: objectId,
     email: email || "",
     displayName: displayName || "",
+    profileImage,
     authenticatedAt: new Date().toISOString(),
     sessionToken: parseSessionToken,
     organizationId: activeOrganizationId,
@@ -2465,6 +2466,102 @@ export function initializePaprLoginIPC(
       };
     }
   });
+
+  ipcMain.handle("papr:refresh-profile", async () => {
+    try {
+      const profile = settingsStorage.getPaprProfile();
+      if (!profile?.sessionToken || !profile.userId) {
+        return { success: true, profile: undefined };
+      }
+
+      const { fetchParseUserProfile } = await import("./paprProfileSync.js");
+      const cloudProfile = await fetchParseUserProfile(
+        profile.sessionToken,
+        profile.userId,
+      );
+
+      settingsStorage.setPaprProfile({
+        ...profile,
+        email: cloudProfile.email || profile.email,
+        displayName:
+          cloudProfile.displayName || cloudProfile.fullname || profile.displayName,
+        profileImage: cloudProfile.profileImageUrl || profile.profileImage,
+      });
+
+      const updated = settingsStorage.getPaprProfile();
+      if (!updated) {
+        return { success: true, profile: undefined };
+      }
+
+      const { sessionToken: _sessionToken, ...safeProfile } = updated;
+      return { success: true, profile: safeProfile };
+    } catch (error) {
+      console.warn("[PaprLogin] Failed to refresh profile from Parse:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error",
+      };
+    }
+  });
+
+  ipcMain.handle(
+    "papr:sync-profile",
+    async (
+      _event,
+      input: { name?: string; email?: string; imageUrl?: string },
+    ) => {
+      try {
+        const profile = settingsStorage.getPaprProfile();
+        if (!profile?.sessionToken || !profile.userId) {
+          return {
+            success: false,
+            error: "Not logged in to Papr",
+          };
+        }
+
+        const { syncProfileToParse } = await import("./paprProfileSync.js");
+        const syncResult = await syncProfileToParse({
+          sessionToken: profile.sessionToken,
+          userId: profile.userId,
+          name: input.name,
+          email: input.email,
+          imageUrl: input.imageUrl,
+        });
+
+        const nextProfileImage =
+          syncResult.profileImageUrl || profile.profileImage;
+        settingsStorage.setPaprProfile({
+          ...profile,
+          displayName: input.name?.trim() || profile.displayName,
+          profileImage: nextProfileImage,
+        });
+
+        if (syncResult.syncedImageUrl) {
+          await syncProfileToGatewaySettings(
+            input.email?.trim() || profile.email,
+            profile.userId,
+            input.name?.trim() || profile.displayName,
+            syncResult.syncedImageUrl,
+            profile.activeNamespaceName,
+            profile.workspaceId,
+            profile.workspaceName,
+          );
+        }
+
+        return {
+          success: true,
+          profileImageUrl: nextProfileImage,
+          syncedImageUrl: syncResult.syncedImageUrl,
+        };
+      } catch (error) {
+        console.warn("[PaprLogin] Failed to sync profile to Parse:", error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Unknown error",
+        };
+      }
+    },
+  );
 
   // Start PKCE login flow (mode: signup shows Auth0 registration, login shows sign-in)
   ipcMain.handle(

@@ -97,6 +97,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
       startLogin: (mode, source) => ipcRenderer.invoke("papr:start-login", mode, source),
       logout: () => ipcRenderer.invoke("papr:logout"),
       getProfile: () => ipcRenderer.invoke("papr:get-profile"),
+      refreshProfile: () => ipcRenderer.invoke("papr:refresh-profile"),
+      syncProfile: (input) => ipcRenderer.invoke("papr:sync-profile", input),
       getActiveWorkspace: () => ipcRenderer.invoke("papr:get-active-workspace"),
       detectLegacyFlatMigration: () =>
         ipcRenderer.invoke("papr:detect-legacy-flat-migration"),

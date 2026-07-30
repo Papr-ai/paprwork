@@ -251,8 +251,15 @@ function ProfileTab() {
           profile?: { name?: string; email?: string; imageUrl?: string };
         };
 
-        // Load Papr profile first
-        const paprResponse = await window.electronAPI.papr.getProfile();
+        const loginStatus = await window.electronAPI.papr.checkLoginStatus();
+        let paprResponse = await window.electronAPI.papr.getProfile();
+        if (loginStatus.success && loginStatus.isLoggedIn) {
+          const refreshResult = await window.electronAPI.papr.refreshProfile();
+          if (refreshResult.success && refreshResult.profile) {
+            paprResponse = refreshResult;
+          }
+        }
+
         if (paprResponse.success && paprResponse.profile) {
           setPaprProfile(paprResponse.profile);
           
@@ -310,6 +317,35 @@ function ProfileTab() {
   }) => {
     await gateway.send("settings:save-profile", fields);
     profileStore.setProfile(fields);
+
+    const loginStatus = await window.electronAPI.papr.checkLoginStatus();
+    if (!loginStatus.success || !loginStatus.isLoggedIn) {
+      return;
+    }
+
+    const syncResult = await window.electronAPI.papr.syncProfile({
+      name: fields.name,
+      email: fields.email,
+      imageUrl: fields.imageUrl,
+    });
+
+    if (!syncResult.success) {
+      console.warn("[ProfileTab] Cloud profile sync failed:", syncResult.error);
+      return;
+    }
+
+    if (syncResult.syncedImageUrl) {
+      const cloudUrl = syncResult.syncedImageUrl;
+      await gateway.send("settings:save-profile", {
+        ...fields,
+        imageUrl: cloudUrl,
+      });
+      profileStore.setProfile({ imageUrl: cloudUrl });
+      setImageUrl(cloudUrl);
+      setPaprProfile((current) =>
+        current ? { ...current, profileImage: cloudUrl } : current,
+      );
+    }
   };
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
