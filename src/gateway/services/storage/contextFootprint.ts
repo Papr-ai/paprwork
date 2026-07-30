@@ -3,6 +3,9 @@ import {
   formatSummaryForLLM,
 } from "./summaryFormatting.js";
 import { computeRecentMessageLimit } from "./recentMessageWindow.js";
+import { formatPaprPathForAgent } from "../../../core/utils/paprAgentPaths.js";
+import { getPaprRoot } from "../../../core/utils/paprRoot.js";
+import * as path from "path";
 
 import {
   ACTIVE_FILE_READ_MAX_CHARS,
@@ -172,7 +175,9 @@ function buildSummaryText(chat: ChatContextRow): string | null {
       last_updated: chat.summary_last_updated ?? new Date().toISOString(),
     },
     enhanced: deserializeEnhancedFields(chat.summary_enhanced),
-    chatFilePath: `~/Papr/Chats/${chat.id}.txt`,
+    chatFilePath: formatPaprPathForAgent(
+      path.join(getPaprRoot(), "Chats", `${chat.id}.txt`),
+    ),
   });
 }
 

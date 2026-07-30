@@ -38,7 +38,10 @@ import {
   applyActiveWorkspaceEnv,
   readActiveWorkspacePointer,
 } from "../core/utils/paprWorkspace.js";
-import { switchActiveWorkspace } from "./services/workspaceSwitchService.js";
+import {
+  applyGatewayPaprApiKey,
+  switchActiveWorkspace,
+} from "./services/workspaceSwitchService.js";
 import { initializeChatService } from "./services/ChatService.js";
 import { initializeDocumentService } from "./services/DocumentService.js";
 import { initializeAppService, getAppService } from "./services/AppService.js";
@@ -80,6 +83,7 @@ import {
 } from "./services/CloudSyncService.js";
 import { initializeTursoSyncBridge } from "./services/TursoSyncBridge.js";
 import { buildTursoSyncItemsReport } from "./services/tursoSyncStatus.js";
+import { isLoopbackRequest } from "./utils/isLoopbackRequest.js";
 import { buildCloudLinkSyncReport } from "./services/cloudPublishStatus.js";
 import {
   getCachedCloudLinkSyncReport,
@@ -301,6 +305,7 @@ async function startGateway(): Promise<void> {
     console.log(
       `[Gateway] Active workspace: org=${activeWorkspace.organizationId} ns=${activeWorkspace.namespaceId}`,
     );
+
   }
 
   try {
@@ -319,6 +324,15 @@ async function startGateway(): Promise<void> {
     );
     setupKeyCacheInvalidationListener();
     console.log("[Gateway] Key cache invalidation listener ready");
+
+    const { setPaprQuotaExceededListener } = await import(
+      "../core/utils/paprQuota.js"
+    );
+    const { broadcastPaprQuotaStatus } = await import(
+      "./utils/paprQuotaNotify.js"
+    );
+    setPaprQuotaExceededListener(broadcastPaprQuotaStatus);
+    console.log("[Gateway] Papr quota status listener ready");
 
     // Bind HTTP early so supervisor health checks succeed while services load.
     // Large chats.db + tool registration can take 60s+ on cold start.
@@ -385,9 +399,9 @@ async function startGateway(): Promise<void> {
     //  - Path traversal blocked at the linked dbPath level
     //
     // Source routing (when sourceId is omitted):
-    //  - Uses primary source from data-sources.json when configured
-    //  - Single source → use it automatically
-    //  - Multiple sources → secondary table routing for reads only
+    //  - Single linked source → use it automatically
+    //  - Legacy `primary` alias (or role: primary) → that source only
+    //  - Multiple sources without legacy default → sourceId required (400)
     // ─────────────────────────────────────────────────────────────────────────
 
     const dbPool = initializeDbPool(
@@ -594,8 +608,6 @@ async function startGateway(): Promise<void> {
         const body = req.body as {
           dbId?: string;
           alias?: string;
-          role?: "primary" | "readonly" | "scratch";
-          setPrimary?: boolean;
         };
         if (!appId || !body.dbId) {
           res.status(400).json({ error: "appId and dbId required" });
@@ -612,15 +624,21 @@ async function startGateway(): Promise<void> {
         }
         const appService = getAppService();
         await appService.initialize();
+        const { resolveAttachAlias } = await import(
+          "./services/appDataSources.js"
+        );
+        const alias = resolveAttachAlias({
+          requested: body.alias,
+          registryLabel: record.label,
+          dbId: body.dbId,
+        });
         const sources = await appService.linkAppDataSource(appId, {
-          id: body.dbId,
+          id: `${body.dbId}:${alias}`,
           type: "sqlite",
           dbId: body.dbId,
-          alias: body.alias ?? record.label ?? body.dbId,
+          alias,
           dbPath: record.localPath,
           tables: [],
-          role: body.role,
-          setPrimary: body.setPrimary,
         });
         res.json({ success: true, sources });
       } catch (err) {
@@ -1489,9 +1507,9 @@ async function startGateway(): Promise<void> {
         const memoryServerBase = getMemoryServerBaseUrl();
 
         const cloudPath = req.originalUrl.replace(/^\/api\/cloud/, "/v1/cloud");
-        const targetUrl = `${memoryServerBase}${cloudPath}`;
-
-        console.log(`[Gateway] Cloud proxy: ${req.method} ${cloudPath} → ${memoryServerBase}`);
+        const { appendCloudActingUserQuery, mergeCloudActingUserBody } = await import(
+          "./utils/cloudActingUser.js"
+        );
 
         const headers: Record<string, string> = {
           "X-API-Key": paprApiKey,
@@ -1516,9 +1534,19 @@ async function startGateway(): Promise<void> {
           headers,
           signal: proxyController.signal,
         };
+        let proxiedPath = cloudPath;
         if (req.method !== "GET" && req.method !== "HEAD" && req.body) {
-          fetchOpts.body = JSON.stringify(req.body);
+          const payload =
+            typeof req.body === "object" && req.body !== null && !Array.isArray(req.body)
+              ? mergeCloudActingUserBody(req.body as Record<string, unknown>)
+              : req.body;
+          fetchOpts.body = JSON.stringify(payload);
+        } else {
+          proxiedPath = appendCloudActingUserQuery(cloudPath);
         }
+
+        const targetUrl = `${memoryServerBase}${proxiedPath}`;
+        console.log(`[Gateway] Cloud proxy: ${req.method} ${proxiedPath} → ${memoryServerBase}`);
 
         const upstream = await fetch(targetUrl, fetchOpts);
         clearTimeout(proxyTimer);
@@ -1551,6 +1579,13 @@ async function startGateway(): Promise<void> {
     });
 
     app.post("/api/workspace/switch", async (req, res) => {
+      if (!isLoopbackRequest(req)) {
+        res.status(403).json({
+          success: false,
+          error: "Workspace control endpoints are localhost-only",
+        });
+        return;
+      }
       try {
         const organizationId =
           typeof req.body?.organizationId === "string"
@@ -1583,6 +1618,9 @@ async function startGateway(): Promise<void> {
             typeof req.body?.paprApiKey === "string"
               ? req.body.paprApiKey
               : undefined,
+          skipLegacyMigration: req.body?.skipLegacyMigration === true,
+          runPostMigrationPathRepair:
+            req.body?.runPostMigrationPathRepair === true,
         });
         res.json(result);
       } catch (error) {
@@ -1591,6 +1629,26 @@ async function startGateway(): Promise<void> {
           error: error instanceof Error ? error.message : "Workspace switch failed",
         });
       }
+    });
+
+    app.post("/api/workspace/papr-api-key", (req, res) => {
+      if (!isLoopbackRequest(req)) {
+        res.status(403).json({
+          success: false,
+          error: "Workspace control endpoints are localhost-only",
+        });
+        return;
+      }
+      const paprApiKey =
+        typeof req.body?.paprApiKey === "string"
+          ? req.body.paprApiKey.trim()
+          : "";
+      if (!paprApiKey) {
+        res.status(400).json({ success: false, error: "paprApiKey is required" });
+        return;
+      }
+      applyGatewayPaprApiKey(paprApiKey);
+      res.json({ success: true });
     });
 
     app.get("/api/workspace/active", (_req, res) => {
@@ -1871,9 +1929,13 @@ async function startGateway(): Promise<void> {
 
         const { resolveDesktopAppBackendDatabaseEnv, collectBackendDatabaseSecrets } =
           await import("./services/appRuntime/appBackendDatabase.js");
+        const actionSourceId =
+          body.params?.sourceId ??
+          spec.sourceId;
         const databaseEnv = await resolveDesktopAppBackendDatabaseEnv({
           appId: body.appId,
           paprRoot: getPaprRoot(),
+          sourceId: actionSourceId,
         });
         secretValues.push(...collectBackendDatabaseSecrets(databaseEnv));
 

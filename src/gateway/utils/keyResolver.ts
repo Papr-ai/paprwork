@@ -17,6 +17,7 @@ import {
   isKeysResponseMessage,
   isInvalidateKeyCacheMessage,
 } from "../../core/types/gateway-ipc.js";
+import { paprApiKeyMatchesActiveWorkspace } from "../../core/utils/paprApiKey.js";
 
 let keyCache: Record<string, string> = {};
 let oauthTokenCache: {
@@ -32,6 +33,10 @@ interface IpcProcessLike {
 }
 
 const IPC_KEY_RESOLVE_TIMEOUT_MS = 15_000;
+const PAPR_API_KEY_RETRY_COOLDOWN_MS = 3_000;
+
+let paprApiKeyIpcInFlight: Promise<string | undefined> | null = null;
+let paprApiKeyUnavailableUntil = 0;
 
 /**
  * Request keys from main process via IPC.
@@ -177,29 +182,63 @@ export async function getApiKey(keyName: string): Promise<string | undefined> {
  * Papr cloud identity key — always prefer Papr login (keychain via IPC) over .env.local.
  * Used for cloud sync, Turso, memory server proxy, Composer.
  */
+async function resolvePaprApiKeyViaIpc(
+  ipcProcess: IpcProcessLike,
+): Promise<string | undefined> {
+  try {
+      const keys = await requestKeysViaIPC(["PAPR_API_KEY"], ipcProcess);
+      if (keys.PAPR_API_KEY?.trim()) {
+        const resolved = keys.PAPR_API_KEY.trim();
+        keyCache.PAPR_API_KEY = resolved;
+        paprApiKeyUnavailableUntil = 0;
+        return resolved;
+      }
+  } catch (error) {
+    console.warn(
+      "[KeyResolver] PAPR_API_KEY IPC lookup failed:",
+      (error as Error).message,
+    );
+    paprApiKeyUnavailableUntil = Date.now() + PAPR_API_KEY_RETRY_COOLDOWN_MS;
+  }
+
+  return undefined;
+}
+
 export async function getPaprApiKey(
   ipcProcess: IpcProcessLike = process,
 ): Promise<string | undefined> {
+  // Main process is authoritative for Papr login keys (namespace vault slots).
+  if (keyCache.PAPR_API_KEY?.trim()) {
+    return keyCache.PAPR_API_KEY.trim();
+  }
+
+  if (Date.now() < paprApiKeyUnavailableUntil) {
+    return undefined;
+  }
+
   if (ipcProcess.send) {
-    try {
-      const keys = await requestKeysViaIPC(["PAPR_API_KEY"], ipcProcess);
-      if (keys.PAPR_API_KEY) {
-        keyCache.PAPR_API_KEY = keys.PAPR_API_KEY;
-        return keys.PAPR_API_KEY;
-      }
-    } catch (error) {
-      console.warn(
-        "[KeyResolver] PAPR_API_KEY IPC lookup failed:",
-        (error as Error).message,
-      );
+    if (!paprApiKeyIpcInFlight) {
+      paprApiKeyIpcInFlight = resolvePaprApiKeyViaIpc(ipcProcess).finally(() => {
+        paprApiKeyIpcInFlight = null;
+      });
+    }
+    const fromIpc = await paprApiKeyIpcInFlight;
+    if (fromIpc) {
+      return fromIpc;
     }
   }
 
-  if (keyCache.PAPR_API_KEY) {
-    return keyCache.PAPR_API_KEY;
+  const envKey = process.env.PAPR_API_KEY?.trim();
+  if (envKey && paprApiKeyMatchesActiveWorkspace(envKey)) {
+    return envKey;
+  }
+  if (envKey) {
+    console.warn(
+      "[KeyResolver] Ignoring PAPR_API_KEY from env — scoped to a different org/namespace than the active workspace",
+    );
   }
 
-  return process.env.PAPR_API_KEY;
+  return undefined;
 }
 
 /**
@@ -209,6 +248,9 @@ export async function getPaprApiKey(
 export function clearKeyCache(keyName?: string): void {
   if (keyName) {
     delete keyCache[keyName];
+    if (keyName === "PAPR_API_KEY") {
+      paprApiKeyUnavailableUntil = 0;
+    }
     if (keyName === "OPENAI_API_KEY") {
       delete oauthTokenCache.openai;
     } else if (keyName === "ANTHROPIC_API_KEY") {

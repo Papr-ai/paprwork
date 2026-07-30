@@ -89,6 +89,8 @@ describe("shareAudienceModel", () => {
   it("gates permissions by audience", () => {
     expect(isPermissionAvailable("link", "write")).toBe(true);
     expect(isPermissionAvailable("team", "edit")).toBe(true);
+    expect(isPermissionAvailable("public", "write")).toBe(true);
+    expect(isPermissionAvailable("public", "edit")).toBe(true);
     expect(isPermissionAvailable("private", "edit")).toBe(false);
   });
 

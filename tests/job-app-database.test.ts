@@ -1,68 +1,164 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getPrimaryDataSource = vi.fn();
-const getApp = vi.fn();
 const initialize = vi.fn();
+const getById = vi.fn();
+const existsSync = vi.fn();
+
+vi.mock("fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs")>();
+  return {
+    ...actual,
+    existsSync: (...args: Parameters<typeof actual.existsSync>) =>
+      existsSync(...args),
+  };
+});
 
 vi.mock("../src/gateway/services/AppService.js", () => ({
-  getAppService: () => ({ initialize, getPrimaryDataSource, getApp }),
+  getAppService: () => ({ initialize, getPrimaryDataSource }),
+}));
+
+vi.mock("../src/gateway/services/DatabaseRegistryService.js", () => ({
+  initializeDatabaseRegistry: vi.fn(async () => ({
+    getById,
+  })),
 }));
 
 import {
-  isLegacyApp,
-  LEGACY_APP_PRIMARY_CUTOFF_ISO,
-  requireJobAppDatabase,
+  databaseEnvKey,
+  jobWriteDatabaseEnv,
+  requireJobWriteTargets,
   resolveJobAppDatabase,
+  resolveJobWriteTargets,
+  validateWriteDbIdsExist,
 } from "../src/gateway/services/jobAppDatabase.js";
 
-describe("job app database resolution", () => {
+describe("job write database resolution", () => {
   beforeEach(() => {
     initialize.mockReset();
     getPrimaryDataSource.mockReset();
-    getApp.mockReset();
+    getById.mockReset();
+    existsSync.mockReset();
+    existsSync.mockReturnValue(true);
   });
 
-  it("returns null for standalone jobs", async () => {
-    await expect(requireJobAppDatabase(["__standalone__"])).resolves.toBeNull();
-    expect(initialize).not.toHaveBeenCalled();
+  it("returns empty targets for standalone jobs without writeDbIds", async () => {
+    await expect(
+      resolveJobWriteTargets({ appIds: ["__standalone__"] }),
+    ).resolves.toEqual([]);
   });
 
-  it("resolves a linked app primary database", async () => {
+  it("resolves writeDbIds from registry", async () => {
+    getById.mockReturnValue({
+      dbId: "db-billing",
+      label: "Billing",
+      localPath: "/tmp/billing/data.db",
+      status: "active",
+    });
+
+    const targets = await resolveJobWriteTargets({
+      writeDbIds: ["db-billing"],
+      appIds: ["app-1"],
+    });
+
+    expect(targets).toHaveLength(1);
+    expect(targets[0]).toMatchObject({
+      dbId: "db-billing",
+      alias: "Billing",
+      dbPath: "/tmp/billing/data.db",
+      envKey: "BILLING",
+    });
+  });
+
+  it("injects multi-DB env vars", () => {
+    const env = jobWriteDatabaseEnv(
+      [
+        {
+          dbId: "db-a",
+          alias: "metrics",
+          dbPath: "/tmp/metrics.db",
+          envKey: "METRICS",
+        },
+        {
+          dbId: "db-b",
+          alias: "billing",
+          dbPath: "/tmp/billing.db",
+          envKey: "BILLING",
+        },
+      ],
+      "app-1",
+    );
+
+    expect(env.PAPR_DB_METRICS).toBe("/tmp/metrics.db");
+    expect(env.PAPR_DB_BILLING).toBe("/tmp/billing.db");
+    expect(env.PAPR_WRITE_DB_IDS).toBe("db-a,db-b");
+    expect(env.APP_DB).toBe("/tmp/metrics.db");
+    expect(env.APP_ID).toBe("app-1");
+  });
+
+  it("legacy fallback uses app primary linked source", async () => {
     getPrimaryDataSource.mockResolvedValue({
-      dbPath: "/tmp/app/data.db",
+      dbId: "db-legacy",
       alias: "primary",
+      dbPath: "/tmp/legacy/data.db",
     });
-    await expect(resolveJobAppDatabase(["app-123"])).resolves.toEqual({
-      appId: "app-123",
-      appDb: "/tmp/app/data.db",
-      appDbAlias: "primary",
+    getById.mockReturnValue({
+      dbId: "db-legacy",
+      label: "primary",
+      localPath: "/tmp/legacy/data.db",
+      status: "active",
     });
+
+    await expect(resolveJobWriteTargets({ appIds: ["app-123"] })).resolves.toEqual([
+      expect.objectContaining({
+        dbId: "db-legacy",
+        dbPath: "/tmp/legacy/data.db",
+      }),
+    ]);
   });
 
-  it("fails fast when a new app has no primary database", async () => {
+  it("requireJobWriteTargets throws when app job writes SQL without writeDbIds", async () => {
     getPrimaryDataSource.mockResolvedValue(null);
-    getApp.mockResolvedValue({
-      id: "app-new",
-      title: "New App",
-      createdAt: LEGACY_APP_PRIMARY_CUTOFF_ISO,
-    });
-    await expect(requireJobAppDatabase(["app-new"])).rejects.toThrow(
-      /has no primary database/,
+
+    await expect(
+      requireJobWriteTargets({
+        appIds: ["app-new"],
+        command: 'sqlite3 "$APP_DB" "INSERT INTO t VALUES (1)"',
+        type: "python",
+      }),
+    ).rejects.toThrow(/no writeDbIds/i);
+  });
+
+  it("validateWriteDbIdsExist rejects unknown dbId", async () => {
+    getById.mockReturnValue(null);
+    await expect(validateWriteDbIdsExist(["db-missing"])).rejects.toThrow(
+      /not found in registry/i,
     );
   });
 
-  it("allows legacy apps without primary to start without APP_DB", async () => {
-    getPrimaryDataSource.mockResolvedValue(null);
-    getApp.mockResolvedValue({
-      id: "app-legacy",
-      title: "Legacy App",
-      createdAt: "2026-03-24T18:41:02.761Z",
-    });
-    await expect(requireJobAppDatabase(["app-legacy"])).resolves.toBeNull();
+  it("databaseEnvKey falls back to dbId when label empty", () => {
+    expect(databaseEnvKey({ dbId: "db-abc-123", label: "" })).toBe(
+      "DB_ABC_123",
+    );
   });
 
-  it("treats apps created before Jul 16 2026 as legacy", () => {
-    expect(isLegacyApp("2026-07-15T23:59:59.999Z")).toBe(true);
-    expect(isLegacyApp(LEGACY_APP_PRIMARY_CUTOFF_ISO)).toBe(false);
+  it("resolveJobAppDatabase returns legacy shape from primary fallback", async () => {
+    getPrimaryDataSource.mockResolvedValue({
+      dbId: "db-x",
+      alias: "orders",
+      dbPath: "/tmp/orders.db",
+    });
+    getById.mockReturnValue({
+      dbId: "db-x",
+      label: "orders",
+      localPath: "/tmp/orders.db",
+      status: "active",
+    });
+
+    await expect(resolveJobAppDatabase(["app-1"])).resolves.toEqual({
+      appId: "app-1",
+      appDb: "/tmp/orders.db",
+      appDbAlias: "orders",
+    });
   });
 });

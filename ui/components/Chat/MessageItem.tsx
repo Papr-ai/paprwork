@@ -13,6 +13,10 @@ import { ExploringCard } from "./ExploringCard";
 import { FileWritePreview, hasFilePreview } from "./FileWritePreview";
 import "./FileWritePreview.css";
 import { WorkingCard } from "./WorkingCard";
+import {
+  ToolCallResultFeedback,
+  ToolCallStatusIcon,
+} from "./ToolCallStatus";
 import { PlanCard, parsePlanFromToolResult } from "./PlanCard";
 import { JobStatusCard, parseJobStatusFromToolResult } from "./JobStatusCard";
 import {
@@ -335,21 +339,13 @@ function renderSequence(
               <span className="exploring-tool-name">
                 {getToolDisplayLabel(toolCall)}
               </span>
-              {toolCall.status === "success" && (
-                <span className="exploring-tool-success">✓</span>
-              )}
-              {toolCall.status === "interrupted" && (
-                <span
-                  className="exploring-tool-interrupted"
-                  title="Interrupted before this tool finished"
-                >
-                  ⚠️
-                </span>
-              )}
-              {toolCall.status === "error" && (
-                <span className="exploring-tool-error">✗</span>
-              )}
+              <ToolCallStatusIcon status={toolCall.status} />
             </div>
+            <ToolCallResultFeedback
+              status={toolCall.status}
+              result={toolData.output}
+              toolError={toolCall.error}
+            />
             {_showFilePreview && (
               <FileWritePreview
                 toolName={toolCall.toolName}

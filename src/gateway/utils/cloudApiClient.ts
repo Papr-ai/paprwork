@@ -4,6 +4,10 @@
  * loopback races during startup and removes an extra hop.
  */
 
+import {
+  appendCloudActingUserQuery,
+  mergeCloudActingUserBody,
+} from "./cloudActingUser.js";
 import { getPaprApiKey } from "./keyResolver.js";
 
 export function getMemoryServerBaseUrl(): string {
@@ -42,10 +46,20 @@ export async function cloudApiFetch(
       },
       signal: controller.signal,
     };
-    if (opts.body !== undefined && fetchOpts.method !== "GET" && fetchOpts.method !== "HEAD") {
-      fetchOpts.body = JSON.stringify(opts.body);
+    const method = fetchOpts.method ?? "GET";
+    const hasJsonBody =
+      opts.body !== undefined && method !== "GET" && method !== "HEAD";
+    let pathWithActingUser = cloudPath;
+    if (hasJsonBody) {
+      const payload =
+        typeof opts.body === "object" && opts.body !== null && !Array.isArray(opts.body)
+          ? mergeCloudActingUserBody(opts.body as Record<string, unknown>)
+          : opts.body;
+      fetchOpts.body = JSON.stringify(payload);
+    } else {
+      pathWithActingUser = appendCloudActingUserQuery(cloudPath);
     }
-    return await fetch(`${getMemoryServerBaseUrl()}${cloudPath}`, fetchOpts);
+    return await fetch(`${getMemoryServerBaseUrl()}${pathWithActingUser}`, fetchOpts);
   } finally {
     clearTimeout(timer);
   }

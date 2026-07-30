@@ -115,8 +115,8 @@ create_job({
 # Check console for: "[AgentService] Using default provider/model: ..."
 
 # 2. Test home dashboard (fresh install simulation)
-rm -rf ~/Papr/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c
-rm -f ~/Papr/data/apps.json
+rm -rf $PAPR_HOME/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c
+rm -f $PAPR_HOME/data/apps.json
 npm run build  # Copies resources to dist/
 npm start      # Auto-installs dashboard
 

@@ -7,8 +7,8 @@
 ## Problem
 
 When users installed Paprwork for the first time, the home dashboard app:
-- ✅ **Files were copied** to `~/Papr/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/`
-- ❌ **Not registered** in `~/Papr/data/apps.json` (apps index)
+- ✅ **Files were copied** to `$PAPR_HOME/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/`
+- ❌ **Not registered** in `$PAPR_HOME/data/apps.json` (apps index)
 - ❌ **HomeRedirect failed** because `app:list` returned empty array
 - ❌ **Showed placeholder** instead of dashboard
 
@@ -162,7 +162,7 @@ Created automated test script: `scripts/test-default-app-install.mjs`
 
 ## Prevention
 
-1. Always test fresh installations (empty `~/Papr/data/apps.json`)
+1. Always test fresh installations (empty `$PAPR_HOME/data/apps.json`)
 2. Verify bundled resources are accessible via `__dirname` paths
 3. Check both registry AND filesystem for app existence
 4. Use automated tests before releasing new default apps

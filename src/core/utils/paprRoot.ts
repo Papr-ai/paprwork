@@ -6,22 +6,42 @@
  * Cloud agent gateway: per-run clone mounted at PAPR_HOME
  */
 
+import os from "os";
 import path from "path";
 import {
   getPaprBaseDir,
   readActiveWorkspacePointer,
 } from "./paprWorkspace.js";
 
+function formatPathForAgent(absolutePath: string): string {
+  const home = os.homedir();
+  const resolved = path.resolve(absolutePath);
+  const prefix = `${home}${path.sep}`;
+  if (resolved.startsWith(prefix)) {
+    return `~${path.sep}${path.relative(home, resolved)}`;
+  }
+  return resolved;
+}
+
 export function getPaprRoot(): string {
   const override = process.env.PAPR_HOME?.trim();
-  if (override) {
-    return path.resolve(override);
-  }
   const pointer = readActiveWorkspacePointer();
-  if (pointer?.paprHome) {
-    return pointer.paprHome;
+
+  // Cloud agent runs use ephemeral PAPR_HOME clones — no desktop pointer file.
+  if (isCloudAgentGatewayMode() || !pointer?.paprHome) {
+    if (override) {
+      return path.resolve(override);
+    }
+    return getPaprBaseDir();
   }
-  return getPaprBaseDir();
+
+  const pointerHome = path.resolve(pointer.paprHome);
+  if (override && path.resolve(override) !== pointerHome) {
+    console.warn(
+      `[PaprRoot] PAPR_HOME (${path.resolve(override)}) differs from active workspace (${pointerHome}); using pointer`,
+    );
+  }
+  return pointerHome;
 }
 
 export function getPaprJobsRoot(): string {
@@ -61,8 +81,9 @@ export function getMiniAppWriteBlockReason(resolvedFilePath: string): string | n
   }
 
   return (
-    `⛔ Use edit_file for mini-app sources (auto-runs esbuild + validation). ` +
-    `Example: edit_file({ path: "~/Papr/apps/${appId}/${filename}", oldString: "...", newString: "..." })`
+    `⛔ Use write_file or edit_file for mini-app sources (auto-runs esbuild + validation). ` +
+    `Active path: ${formatPathForAgent(path.join(appsRoot, appId, filename))} ` +
+    `or write_file({ path: "${formatPathForAgent(path.join(appsRoot, appId, filename))}", content: "..." }).`
   );
 }
 

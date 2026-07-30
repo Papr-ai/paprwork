@@ -50,7 +50,7 @@ Added detailed logging to every scheduler tick:
 Cannot see "job ran 10 times in the last 24h, failed 3 times" or "what was the output from yesterday's run?"
 
 ### Solution
-Created `JobRunHistory` class that persists every run to `~/Papr/data/job-runs.jsonl`:
+Created `JobRunHistory` class that persists every run to `$PAPR_HOME/data/job-runs.jsonl`:
 
 **Schema:**
 ```typescript
@@ -293,7 +293,7 @@ Agent job with network timeout:
 2. **Verify run history:**
    ```bash
    # After a job runs, check:
-   cat ~/Papr/data/job-runs.jsonl | tail -5
+   cat $PAPR_HOME/data/job-runs.jsonl | tail -5
    # Should see JSON entries with runId, status, duration, etc.
    ```
 

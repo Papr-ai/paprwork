@@ -17,7 +17,12 @@ import { gateway, GATEWAY_DISCONNECTED_ERROR } from "../src/lib/gateway";
 import { fetchChatHistory } from "../utils/chatHistoryApi";
 import { mapHistoryMessages } from "../utils/historyMapper";
 import { resolveAgentFocusContext } from "../utils/agentFocusContext";
-import { parseAppIdFromEditFilePath } from "../utils/parseEditFileAppId";
+import {
+  isAppEditToolName,
+  isUserOnChatTab,
+  resolveAppIdForAutoOpen,
+  shouldAutoOpenArtifactTab,
+} from "../utils/resolveAppIdForAutoOpen";
 import {
   activeStreamRequests,
   appliedChunkCounts,
@@ -486,16 +491,31 @@ export function useAgent() {
 
               // === Auto-open document/app tabs when agent creates or edits them ===
               if (
-                !payload.error &&
-                payload.result &&
-                (existingCall.toolName === "create_document" ||
-                  existingCall.toolName === "import_document" ||
-                  existingCall.toolName === "create_app" ||
-                  existingCall.toolName === "edit_app_file" ||
-                  existingCall.toolName === "edit_file" ||
-                  existingCall.toolName === "update_app")
+                shouldAutoOpenArtifactTab({
+                  toolName: existingCall.toolName,
+                  hasError: !!payload.error,
+                  hasResult: !!payload.result,
+                  parsedResult: (() => {
+                    try {
+                      const raw =
+                        typeof payload.result === "string"
+                          ? JSON.parse(payload.result)
+                          : payload.result;
+                      return raw && typeof raw === "object"
+                        ? (raw as Record<string, unknown>)
+                        : null;
+                    } catch {
+                      return null;
+                    }
+                  })(),
+                })
               ) {
                 try {
+                  const parsedResult =
+                    typeof payload.result === "string"
+                      ? JSON.parse(payload.result)
+                      : payload.result;
+
                   let docId: string | undefined;
                   let docTitle: string | undefined;
                   let isApp = false;
@@ -506,25 +526,22 @@ export function useAgent() {
                     existingCall.toolName === "import_document" ||
                     existingCall.toolName === "create_app"
                   ) {
-                    const resultData =
-                      typeof payload.result === "string"
-                        ? JSON.parse(payload.result)
-                        : payload.result;
-                    const docData = resultData?.data ?? resultData;
+                    const docData = parsedResult?.data ?? parsedResult;
                     docId = docData?.id as string | undefined;
                     docTitle = (docData?.title as string) || "Document";
                     isApp = existingCall.toolName === "create_app";
                   }
 
-                  // For app edits, get appId from args (legacy) or path (edit_file)
-                  if (
-                    existingCall.toolName === "edit_app_file" ||
-                    existingCall.toolName === "edit_file" ||
-                    existingCall.toolName === "update_app"
-                  ) {
-                    docId =
-                      (existingCall.args?.appId as string | undefined) ??
-                      parseAppIdFromEditFilePath(existingCall.args?.path);
+                  // For app edits, resolve appId from args/result paths
+                  if (isAppEditToolName(existingCall.toolName)) {
+                    docId = resolveAppIdForAutoOpen({
+                      toolName: existingCall.toolName,
+                      args: existingCall.args,
+                      parsedResult:
+                        parsedResult && typeof parsedResult === "object"
+                          ? (parsedResult as Record<string, unknown>)
+                          : null,
+                    });
                     isApp = true;
 
                     // Resolve title from existing tab if available
@@ -557,10 +574,11 @@ export function useAgent() {
                     const existingTab = getTab(existingTabId);
                     const chatTabId = `chat-${chatId}`;
 
-                    // Only auto-switch if user is currently on the chat tab
-                    // Otherwise, mark as pending refresh to avoid interruption
-                    const isUserOnChatTab = activeTabId === chatTabId;
-                    const autoSwitch = isUserOnChatTab;
+                    const autoSwitch = isUserOnChatTab(
+                      chatTabId,
+                      activeTabId,
+                      getTab,
+                    );
 
                     if (existingTab) {
                       // Tab exists - just merge with chat (refreshes the view)

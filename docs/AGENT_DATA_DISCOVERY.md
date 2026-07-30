@@ -14,7 +14,7 @@ The agent **discovers data sources through tools**. It doesn't have a magical da
 // Agent calls these tools to discover what exists:
 list_jobs()        // Returns ALL jobs with names, types, status, paths
 list_apps()        // Returns ALL mini-apps with titles, IDs
-bash({ command: "ls ~/Papr/jobs/" })  // Browse job directories
+bash({ command: "ls $PAPR_HOME/Jobs/" })  // Browse job directories
 ```
 
 **Example output:**
@@ -27,14 +27,14 @@ list_jobs() → {
       type: "agent",
       status: "idle",
       schedule: { cron: "0 6 * * *" },
-      path: "~/Papr/jobs/2cafb2e9-696b-42db-98fa-5d605977123c"
+      path: "$PAPR_HOME/Jobs/2cafb2e9-696b-42db-98fa-5d605977123c"
     },
     {
       id: "abc-123",
       name: "LinkedIn Scraper",
       type: "python",
       status: "completed",
-      path: "~/Papr/jobs/abc-123"
+      path: "$PAPR_HOME/Jobs/abc-123"
     }
   ]
 }
@@ -47,19 +47,19 @@ list_jobs() → {
 ```typescript
 // Method 1: Read job's database file directly
 bash({ 
-  command: "sqlite3 ~/Papr/jobs/{jobId}/data/data.db '.tables'"
+  command: "sqlite3 $PAPR_HOME/Jobs/{jobId}/data/data.db '.tables'"
 })
 // → Returns: briefs  meetings  priorities
 
 // Method 2: Check schema
 bash({
-  command: "sqlite3 ~/Papr/jobs/{jobId}/data/data.db '.schema briefs'"
+  command: "sqlite3 $PAPR_HOME/Jobs/{jobId}/data/data.db '.schema briefs'"
 })
 // → Returns: CREATE TABLE briefs (date TEXT, brief_json TEXT, ...)
 
 // Method 3: Sample data
 bash({
-  command: "sqlite3 ~/Papr/jobs/{jobId}/data/data.db 'SELECT * FROM briefs LIMIT 1'"
+  command: "sqlite3 $PAPR_HOME/Jobs/{jobId}/data/data.db 'SELECT * FROM briefs LIMIT 1'"
 })
 // → Returns: 2026-04-07|{"hero":{...}}|2026-04-07 06:00:00
 ```
@@ -76,7 +76,7 @@ read_app_data_sources({ appId: "home-dashboard-id" })
     {
       id: "2cafb2e9:Daily Brief",
       jobId: "2cafb2e9-696b-42db-98fa-5d605977123c",
-      dbPath: "~/Papr/jobs/.../data.db",
+      dbPath: "$PAPR_HOME/Jobs/.../data.db",
       tables: ["briefs"],
       alias: "Daily Brief Generator"
     }
@@ -145,14 +145,14 @@ read_app_file({ appId, filename }) // Read app code
 ### Direct Data Access
 ```typescript
 bash({ command: "sqlite3 {path} 'SELECT ...'" })  // Query any database
-bash({ command: "cat ~/Papr/data/jobs.json" })    // Read job registry
-bash({ command: "ls ~/Papr/jobs/" })              // Browse job directories
+bash({ command: "cat $PAPR_HOME/data/jobs.json" })    // Read job registry
+bash({ command: "ls $PAPR_HOME/Jobs/" })              // Browse job directories
 ```
 
 ### File System
 ```typescript
-read_file({ path: "~/Papr/jobs/{id}/code/main.py" })  // Read job code
-list_files({ path: "~/Papr/jobs/{id}/" })             // List job files
+read_file({ path: "$PAPR_HOME/Jobs/{id}/code/main.py" })  // Read job code
+list_files({ path: "$PAPR_HOME/Jobs/{id}/" })             // List job files
 bash({ command: "find ~/Papr -name '*.db'" })         // Find databases
 ```
 
@@ -276,12 +276,12 @@ list_jobs()
 → Agent: "Hmm, no sales job yet"
 
 // Step 2: What about databases?
-bash({ command: "find ~/Papr/jobs -name '*.db'" })
+bash({ command: "find $PAPR_HOME/Jobs -name '*.db'" })
 → Returns: 3 databases (brief, linkedin, email)
 → Agent: "No sales database"
 
 // Step 3: Do they have a CRM?
-bash({ command: "ls ~/Papr/apps" })
+bash({ command: "ls $PAPR_HOME/apps" })
 → Returns: home-dashboard only
 → Agent: "No existing sales app"
 

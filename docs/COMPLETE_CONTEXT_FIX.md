@@ -154,7 +154,7 @@ To verify all fixes:
 
 2. **Check exports have tool calls:**
    ```bash
-   cat ~/Papr/Chats/*.txt | grep "Tool Calls"
+   cat $PAPR_HOME/Chats/*.txt | grep "Tool Calls"
    # Should see tool calls in exported chats
    ```
 

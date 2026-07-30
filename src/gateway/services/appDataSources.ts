@@ -1,15 +1,16 @@
 /**
- * App data source configuration — primary DB routing, roles, and resolution.
+ * App data source configuration — linked registry DBs by alias.
  *
- * data-sources.json supports legacy array format or:
- * { "primary": "audit", "sources": [ ... ] }
- *
- * Backwards compatibility: legacy multi-source arrays without `role: "primary"`
- * do NOT get an implicit primary — table-based routing is preserved until you opt in.
+ * data-sources.json: { "sources": [ { alias, dbPath, dbId, ... } ] }
+ * Legacy files may still contain "primary" (alias string) or role: "primary" on a source.
+ * Those act only as a fallback when sourceId is omitted — never written on new saves.
  */
 
+import { existsSync } from "fs";
+import path from "path";
 import Database from "better-sqlite3";
 
+/** @deprecated Ignored on new links. Parsed only for legacy files. */
 export type AppDataSourceRole = "primary" | "readonly" | "scratch";
 
 export interface AppDataSource {
@@ -23,11 +24,12 @@ export interface AppDataSource {
   dbPath: string;
   tables: string[];
   linkedAt: string;
+  /** @deprecated No longer enforced — all linked sources are read+write for mini-apps. */
   role?: AppDataSourceRole;
 }
 
 export interface AppDataSourcesFile {
-  /** Alias of the primary SQLite source (mini-app default + APP_DB for jobs). */
+  /** @deprecated Legacy alias — read-only fallback when sourceId omitted; not written on new saves. */
   primary?: string;
   sources: AppDataSource[];
 }
@@ -45,11 +47,7 @@ export type DataSourceOperation = "read" | "write";
 export function parseDataSourcesFile(raw: string): AppDataSourcesFile {
   const parsed: unknown = JSON.parse(raw);
   if (Array.isArray(parsed)) {
-    const sources = parsed as AppDataSource[];
-    return {
-      primary: inferPrimaryAlias(sources),
-      sources,
-    };
+    return { sources: parsed as AppDataSource[] };
   }
   if (
     parsed &&
@@ -57,40 +55,144 @@ export function parseDataSourcesFile(raw: string): AppDataSourcesFile {
     Array.isArray((parsed as AppDataSourcesFile).sources)
   ) {
     const config = parsed as AppDataSourcesFile;
-    return {
-      primary: config.primary ?? inferPrimaryAlias(config.sources),
-      sources: config.sources,
-    };
+    return { sources: config.sources, ...(config.primary ? { primary: config.primary } : {}) };
   }
   return { sources: [] };
 }
 
+export function slugifyDatabaseAlias(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+}
+
+/** Prefer descriptive aliases — never default new links to legacy "primary". */
+export function resolveAttachAlias(input: {
+  requested?: string;
+  registryLabel?: string;
+  dbId: string;
+}): string {
+  const trimmed = input.requested?.trim();
+  if (trimmed && trimmed !== "primary") {
+    return trimmed;
+  }
+  if (input.registryLabel?.trim()) {
+    return slugifyDatabaseAlias(input.registryLabel);
+  }
+  return input.dbId;
+}
+
 export function serializeDataSourcesFile(config: AppDataSourcesFile): string {
-  const primary = config.primary ?? inferPrimaryAlias(config.sources);
-  return JSON.stringify(
-    {
-      ...(primary ? { primary } : {}),
-      sources: config.sources,
-    },
-    null,
-    2,
+  const sources = config.sources.map(({ role: _role, ...source }) => source);
+  return JSON.stringify({ sources }, null, 2);
+}
+
+/** Active workspace path for a job-owned SQLite database. */
+export function canonicalJobDatabasePath(
+  jobsRoot: string,
+  jobId: string,
+): string {
+  return path.join(jobsRoot, jobId, "data", "data.db");
+}
+
+export function isPathWithinWorkspace(
+  candidatePath: string,
+  workspaceRoot: string,
+): boolean {
+  const normalizedCandidate = path.resolve(candidatePath);
+  const normalizedRoot = path.resolve(workspaceRoot);
+  return (
+    normalizedCandidate === normalizedRoot ||
+    normalizedCandidate.startsWith(`${normalizedRoot}${path.sep}`)
   );
 }
 
-export function inferPrimaryAlias(sources: AppDataSource[]): string | undefined {
-  const marked = sources.find((s) => s.role === "primary");
-  if (marked) return marked.alias;
-  // Single source: implicit primary. Multi-source legacy apps keep table-based routing.
-  if (sources.length === 1) return sources[0]?.alias;
-  return undefined;
+/**
+ * Resolve job-linked dbPath from the active workspace Jobs tree.
+ * Each namespace owns its own Jobs/ copy — stored paths from other namespaces are ignored
+ * when the job database exists locally (no repair or workspace-switch step required).
+ */
+export function resolveJobLinkedSourceForWorkspace(
+  source: AppDataSource,
+  jobsRoot: string,
+): AppDataSource {
+  const jobId = source.jobId?.trim();
+  if (!jobId) {
+    return source;
+  }
+
+  const canonical = canonicalJobDatabasePath(jobsRoot, jobId);
+  if (!existsSync(canonical)) {
+    return source;
+  }
+
+  const stored = source.dbPath?.trim() ?? "";
+  if (stored.length > 0 && path.normalize(stored) === path.normalize(canonical)) {
+    return source;
+  }
+
+  return { ...source, dbPath: canonical };
 }
 
+export function resolveDataSourcesForWorkspace(
+  config: AppDataSourcesFile,
+  jobsRoot: string,
+): AppDataSourcesFile {
+  if (config.sources.length === 0) {
+    return config;
+  }
+
+  return {
+    ...config,
+    sources: config.sources.map((source) =>
+      resolveJobLinkedSourceForWorkspace(source, jobsRoot),
+    ),
+  };
+}
+
+/** Only linked source when the app has exactly one — strict count check. */
+export function getSingleLinkedSource(
+  config: AppDataSourcesFile,
+): AppDataSource | undefined {
+  return config.sources.length === 1 ? config.sources[0] : undefined;
+}
+
+/**
+ * Default linked source for legacy configs and convenience fallbacks.
+ * New apps should pass sourceId explicitly; this does not reintroduce "primary" as a feature.
+ *
+ * Order: single source → `primary` alias field → source with role "primary".
+ */
+export function getLegacyDefaultSource(
+  config: AppDataSourcesFile,
+): AppDataSource | undefined {
+  const single = getSingleLinkedSource(config);
+  if (single) {
+    return single;
+  }
+
+  if (config.primary) {
+    const byAlias = findDataSource(config, config.primary);
+    if (byAlias) {
+      return byAlias;
+    }
+  }
+
+  return config.sources.find((s) => s.role === "primary");
+}
+
+/** @deprecated Use getLegacyDefaultSource — kept for callers migrating off "primary" naming. */
 export function getPrimarySource(
   config: AppDataSourcesFile,
 ): AppDataSource | undefined {
-  const alias = config.primary ?? inferPrimaryAlias(config.sources);
-  if (!alias) return undefined;
-  return config.sources.find((s) => s.alias === alias || s.id === alias);
+  return getLegacyDefaultSource(config);
+}
+
+/** @deprecated No longer written — kept for tests migrating old configs. */
+export function inferPrimaryAlias(sources: AppDataSource[]): string | undefined {
+  return sources.length === 1 ? sources[0]?.alias : undefined;
 }
 
 export function findDataSource(
@@ -102,45 +204,31 @@ export function findDataSource(
   );
 }
 
-/** Extract the primary table name from SQL for secondary-source routing on reads. */
+/** Extract the main table name from SQL (used by validation helpers). */
 export function extractPrimaryTable(sql: string): string | null {
   const s = sql.trim();
-  let m: RegExpMatchArray | null;
-  m = s.match(/\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+["'`]?(\w+)/i);
-  if (m) return m[1];
-  m = s.match(/\bREPLACE\s+INTO\s+["'`]?(\w+)/i);
-  if (m) return m[1];
-  m = s.match(/\bUPDATE\s+(?:OR\s+\w+\s+)?["'`]?(\w+)/i);
-  if (m) return m[1];
-  m = s.match(/\bDELETE\s+FROM\s+["'`]?(\w+)/i);
-  if (m) return m[1];
-  m = s.match(/\bFROM\s+["'`]?(\w+)/i);
-  if (m) return m[1];
-  return null;
-}
-
-export function assertWritableSource(
-  source: AppDataSource,
-  operation: DataSourceOperation,
-): void {
-  if (operation === "write" && source.role === "readonly") {
-    throw Object.assign(
-      new Error(
-        `Data source "${source.alias}" is read-only. Writes must target the primary source (${source.role}).`,
-      ),
-      { status: 403 },
-    );
+  const patterns = [
+    /\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+["'`]?(\w+)/i,
+    /\bREPLACE\s+INTO\s+["'`]?(\w+)/i,
+    /\bUPDATE\s+(?:OR\s+\w+\s+)?["'`]?(\w+)/i,
+    /\bDELETE\s+FROM\s+["'`]?(\w+)/i,
+    /\bFROM\s+["'`]?(\w+)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = s.match(pattern);
+    if (match?.[1]) {
+      return match[1];
+    }
   }
+  return null;
 }
 
 /**
  * Resolve which linked data source to use.
  *
- * Priority:
- * 1. Explicit sourceId
- * 2. Primary source (default for reads and writes when configured)
- * 3. Single source
- * 4. Table-based routing across non-primary sources (reads only)
+ * - Pass sourceId explicitly (alias) — same as naming the DB in backend code.
+ * - If the app has exactly one linked source, sourceId may be omitted.
+ * - Legacy: omitted sourceId + `primary` alias (or role "primary") resolves that source only.
  */
 export async function resolveAppDataSource(
   config: AppDataSourcesFile,
@@ -151,7 +239,9 @@ export async function resolveAppDataSource(
     tableExists?: TableExistsFn;
   },
 ): Promise<AppDataSource> {
-  const { sourceId, sql, operation = "read", tableExists } = options;
+  void options.sql;
+  void options.tableExists;
+  const { sourceId, operation = "read" } = options;
   const { sources } = config;
 
   if (sourceId) {
@@ -165,74 +255,41 @@ export async function resolveAppDataSource(
         { status: 404 },
       );
     }
-    assertWritableSource(found, operation);
     return found;
   }
 
-  const primary = getPrimarySource(config);
-  if (primary) {
-    assertWritableSource(primary, operation);
-
-    if (
-      operation === "read" &&
-      sql &&
-      tableExists &&
-      sources.length > 1
-    ) {
-      const tableName = extractPrimaryTable(sql);
-      if (tableName) {
-        try {
-          const onPrimary = await tableExists(primary.dbPath, tableName);
-          if (!onPrimary) {
-            for (const source of sources) {
-              if (source.alias === primary.alias) continue;
-              try {
-                if (await tableExists(source.dbPath, tableName)) {
-                  return source;
-                }
-              } catch {
-                // unreadable — skip
-              }
-            }
-          }
-        } catch {
-          // primary unreadable — fall through
-        }
-      }
-    }
-
-    return primary;
-  }
-
   if (sources.length === 1) {
-    assertWritableSource(sources[0], operation);
     return sources[0];
   }
 
-  const tableName = sql ? extractPrimaryTable(sql) : null;
-  if (tableName && tableExists) {
-    for (const source of sources) {
-      try {
-        if (await tableExists(source.dbPath, tableName)) {
-          assertWritableSource(source, operation);
-          return source;
-        }
-      } catch {
-        // unreadable — skip
-      }
-    }
+  const legacyDefault = getLegacyDefaultSource(config);
+  if (legacyDefault && !sourceId) {
+    return legacyDefault;
+  }
+
+  if (sources.length === 0) {
+    throw Object.assign(
+      new Error("No database is linked to this app. Use attach_database first."),
+      { status: 400 },
+    );
   }
 
   const aliases = sources.map((s) => `"${s.alias ?? s.id}"`).join(", ");
-  const tableHint = tableName
-    ? ` Table "${tableName}" was not found in any linked source.`
-    : "";
   throw Object.assign(
     new Error(
-      `Multiple data sources are linked (${aliases}) and no primary source is configured.${tableHint} Pass sourceId or set "primary" in data-sources.json.`,
+      `sourceId is required — this app has ${sources.length} linked databases (${aliases}). ` +
+        `Pass sourceId on /api/db/${operation === "write" ? "write" : "query"} (e.g. sourceId: "billing").`,
     ),
     { status: 400 },
   );
+}
+
+/** @deprecated Mini-apps may read and write any linked source. */
+export function assertWritableSource(
+  _source: AppDataSource,
+  _operation: DataSourceOperation,
+): void {
+  // intentionally no-op
 }
 
 /** True when the DB is missing, empty, or only has job infrastructure tables. */
@@ -252,16 +309,27 @@ export function dbHasOnlyBaselineTables(dbPath: string): boolean {
   }
 }
 
-export function buildAppDbTsContent(appId: string, primaryAlias: string): string {
-  return `const APP_ID = '${appId}';
-/** Primary SQLite source — all app queries route here by default. */
-const PRIMARY_SOURCE = '${primaryAlias}';
+export function buildAppDbTsContent(
+  appId: string,
+  sources: ReadonlyArray<{ alias: string }>,
+): string {
+  const aliases = sources.map((s) => s.alias);
+  const aliasConst =
+    aliases.length > 0
+      ? `export const DB_SOURCES = ${JSON.stringify(aliases)} as const;\nexport type DbSourceId = (typeof DB_SOURCES)[number];\n`
+      : "";
 
-export async function query<T>(sql: string, params: unknown[] = []): Promise<T[]> {
+  return `const APP_ID = '${appId}';
+${aliasConst}
+export async function query<T>(
+  sql: string,
+  params: unknown[] = [],
+  sourceId: string,
+): Promise<T[]> {
   const res = await fetch('/api/db/query', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ appId: APP_ID, sourceId: PRIMARY_SOURCE, sql, params }),
+    body: JSON.stringify({ appId: APP_ID, sourceId, sql, params }),
   });
   const json = (await res.json()) as { rows?: T[]; error?: string };
   if (!res.ok) {
@@ -270,11 +338,15 @@ export async function query<T>(sql: string, params: unknown[] = []): Promise<T[]
   return json.rows ?? [];
 }
 
-export async function exec(sql: string, params: unknown[] = []): Promise<void> {
+export async function exec(
+  sql: string,
+  params: unknown[] = [],
+  sourceId: string,
+): Promise<void> {
   const res = await fetch('/api/db/write', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ appId: APP_ID, sourceId: PRIMARY_SOURCE, sql, params }),
+    body: JSON.stringify({ appId: APP_ID, sourceId, sql, params }),
   });
   const json = (await res.json()) as { error?: string };
   if (!res.ok) {

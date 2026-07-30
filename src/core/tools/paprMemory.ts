@@ -734,16 +734,7 @@ export const registerSchemaTool = createTool({
           : `Schema shell created. Use update or pass node_types to add entity types. Schema ID: ${schemaId}`
       };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "Papr Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid Papr API key. Please check your Settings and ensure your API key is correct."
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });
@@ -785,16 +776,7 @@ export const listSchemasTool = createTool({
         }
       };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct."
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });
@@ -812,16 +794,7 @@ export const getSchemaTool = createTool({
       const response = await client.schemas.retrieve(args.schemaId);
       return { success: true, data: response };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct."
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });
@@ -850,16 +823,7 @@ export const updateSchemaTool = createTool({
         message: `Schema ${schemaId} updated successfully`
       };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct."
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });
@@ -1029,16 +993,7 @@ export const introspectMemoryGraphTool = createTool({
         },
       };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features.",
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct.",
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });
@@ -1152,16 +1107,7 @@ export const queryMemoryGraphTool = createTool({
       }
       return { success: true, data: typed.data ?? response };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features.",
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct.",
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });
@@ -1181,16 +1127,7 @@ export const deleteMemoryTool = createTool({
         message: `Memory ${args.memoryId} deleted successfully`
       };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features.",
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct.",
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });
@@ -1250,16 +1187,7 @@ export const deleteSchemaTool = createTool({
         message: `Schema ${args.schemaId} archived successfully`
       };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features.",
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct.",
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });
@@ -1323,16 +1251,7 @@ export const createEntitiesAndRelationshipsTool = createTool({
         message: `Created ${args.nodes.length} entities${args.relationships ? ` and ${args.relationships.length} relationships` : ''}`
       };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features.",
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct.",
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });
@@ -1373,16 +1292,7 @@ export const listSignalDomainsTool = createTool({
         }
       };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct."
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });

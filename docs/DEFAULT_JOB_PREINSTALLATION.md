@@ -31,7 +31,7 @@ When users click the home button, they see a **fully functional dashboard** with
 - Can navigate to previous/next days
 
 ✅ **Backend working**
-- SQLite database: `~/Papr/jobs/{jobId}/data/data.db`
+- SQLite database: `$PAPR_HOME/Jobs/{jobId}/data/data.db`
 - Briefs table with sample data
 - Dashboard queries real database (not fallback)
 
@@ -81,14 +81,14 @@ src/resources/default-jobs/daily-brief-generator/
 3. **For each default job:**
    - Reads `job-id.txt` to get job ID
    - Checks if job already exists (skip if yes)
-   - Copies job files to `~/Papr/jobs/{jobId}/`
+   - Copies job files to `$PAPR_HOME/Jobs/{jobId}/`
    - Reads `metadata.json` for job configuration
    - Creates `JobRecord` and adds to registry
    - If `init-db.sql` exists:
-     - Creates `~/Papr/jobs/{jobId}/data/` directory
+     - Creates `$PAPR_HOME/Jobs/{jobId}/data/` directory
      - Creates `data.db` SQLite database
      - Executes init SQL script
-   - Saves to `~/Papr/data/jobs.json`
+   - Saves to `$PAPR_HOME/data/jobs.json`
 
 4. **Home dashboard pre-linked:**
    - `data-sources.json` already contains link to job
@@ -168,13 +168,13 @@ CREATE TABLE IF NOT EXISTS briefs (
 **Manual Verification:**
 ```bash
 # Check job exists
-cat ~/Papr/data/jobs.json | jq '.[] | select(.id == "2cafb2e9-696b-42db-98fa-5d605977123c")'
+cat $PAPR_HOME/data/jobs.json | jq '.[] | select(.id == "2cafb2e9-696b-42db-98fa-5d605977123c")'
 
 # Check database
-sqlite3 ~/Papr/jobs/2cafb2e9-696b-42db-98fa-5d605977123c/data/data.db "SELECT date FROM briefs;"
+sqlite3 $PAPR_HOME/Jobs/2cafb2e9-696b-42db-98fa-5d605977123c/data/data.db "SELECT date FROM briefs;"
 
 # Check dashboard link
-cat ~/Papr/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/data-sources.json
+cat $PAPR_HOME/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/data-sources.json
 ```
 
 ## Files Changed

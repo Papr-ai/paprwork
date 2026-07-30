@@ -18,8 +18,10 @@ import {
   type HistoryTrimBounds,
 } from "../agent/midTurnContextTrim.js";
 import {
+  compactMidTurnContextForMemoryPressure,
   compactStaleAssistantReasoning,
   compactStaleToolResults,
+  stripAllAssistantReasoning,
 } from "../agent/compactToolResults.js";
 import {
   checkPiStreamMemory,
@@ -96,6 +98,22 @@ type OurChunk =
  * - Stringified JSON arrays/objects → parsed values
  * Applied before Mastra validation so tools don't silently fail.
  */
+function tryParseJsonString(value: string): unknown {
+  const trimmed = value.trim();
+  if (
+    !trimmed.startsWith("[") &&
+    !trimmed.startsWith("{") &&
+    !trimmed.startsWith('"')
+  ) {
+    return value;
+  }
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return value;
+  }
+}
+
 function coerceArgTypes(args: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args)) {
@@ -108,6 +126,12 @@ function coerceArgTypes(args: Record<string, unknown>): Record<string, unknown> 
       // "true"/"false" → boolean
       if (value === "true" || value === "false") {
         result[key] = value === "true";
+        continue;
+      }
+      // Stringified JSON arrays/objects → parsed values
+      const parsed = tryParseJsonString(value);
+      if (parsed !== value) {
+        result[key] = parsed;
         continue;
       }
     }
@@ -266,6 +290,36 @@ function appendToolTurnToContext(
 }
 
 
+function applyMidTurnContextShaping(
+  messages: unknown[],
+  historyTrimBounds: HistoryTrimBounds | undefined,
+  memoryPressure: boolean,
+): void {
+  if (!historyTrimBounds) {
+    return;
+  }
+
+  if (memoryPressure) {
+    const stats = compactMidTurnContextForMemoryPressure(messages);
+    console.warn(
+      `[PiCodexToolLoop] Memory-pressure compaction: ` +
+        `truncated ${stats.staleResultsTruncated} stale tool result(s), ` +
+        `saved ~${Math.round((stats.bytesBefore - stats.bytesAfter) / 1024)}KB`,
+    );
+  } else {
+    compactStaleAssistantReasoning(messages);
+    compactStaleToolResults(messages);
+  }
+
+  trimOldestHistoryTurns(
+    messages as Array<{ role?: unknown; content?: unknown }>,
+    {
+      ...historyTrimBounds,
+      maxTokens: MID_TURN_MAX_TOKENS,
+    },
+  );
+}
+
 /**
  * Create a stream that runs multiple pi-ai turns when the model returns tool calls
  */
@@ -344,7 +398,8 @@ export async function* createPiCodexStreamWithToolLoop(
   // Detect repetitive tool calls (possible infinite loop)
   const recentToolCalls: Array<{ name: string; args: string }> = [];
   const MAX_RECENT_TOOL_CALLS = 10;
-  const REPETITION_THRESHOLD = 5; // If same tool called 5+ times recently, warn
+  const REPETITION_THRESHOLD = 5; // Same tool 5+ times in recent window → force stop
+  const REPETITION_ABORT_THRESHOLD = 8; // Hard abort (same tool name, any args)
 
   // Estimate initial context tokens
   const initialContextStr = JSON.stringify(context.messages);
@@ -402,7 +457,7 @@ export async function* createPiCodexStreamWithToolLoop(
     if (memoryCheck.overStreamWarning) {
       console.warn(
         `[PiCodexToolLoop] ⚠️ High stream memory: +${Math.round(memoryCheck.streamDelta / 1024 / 1024)}MB ` +
-          `(process heap ${Math.round(memoryCheck.heapUsed / 1024 / 1024)}MB)`,
+          `(process heap ${Math.round(memoryCheck.heapUsed / 1024 / 1024)}MB) — applying aggressive compaction`,
       );
     }
 
@@ -410,17 +465,11 @@ export async function* createPiCodexStreamWithToolLoop(
       yield { type: "start-step" };
     }
 
-    if (historyTrimBounds) {
-      compactStaleAssistantReasoning(context.messages as unknown[]);
-      compactStaleToolResults(context.messages as unknown[]);
-      trimOldestHistoryTurns(
-        context.messages as Array<{ role?: unknown; content?: unknown }>,
-        {
-          ...historyTrimBounds,
-          maxTokens: MID_TURN_MAX_TOKENS,
-        },
-      );
-    }
+    applyMidTurnContextShaping(
+      context.messages,
+      historyTrimBounds,
+      memoryCheck.overStreamWarning,
+    );
 
     const toolCallsThisTurn: ToolCallAccum[] = [];
     let lastFinishReason: string | null = null;
@@ -646,6 +695,28 @@ export async function* createPiCodexStreamWithToolLoop(
           `Call: ${repetitiveCall?.[0].substring(0, 80)}...`
         );
       }
+
+      const toolNameCounts = new Map<string, number>();
+      for (const tc of recentToolCalls) {
+        toolNameCounts.set(tc.name, (toolNameCounts.get(tc.name) || 0) + 1);
+      }
+      const maxSameToolName = Math.max(0, ...Array.from(toolNameCounts.values()));
+      const loopingTool = Array.from(toolNameCounts.entries()).find(
+        ([, count]) => count === maxSameToolName,
+      )?.[0];
+      if (loopingTool && maxSameToolName >= REPETITION_ABORT_THRESHOLD) {
+        console.error(
+          `[PiCodexToolLoop] 🛑 HARD STOP: ${loopingTool} called ${maxSameToolName} times in last ${MAX_RECENT_TOOL_CALLS} calls. Breaking tool loop.`,
+        );
+        context.messages.push({
+          role: "user",
+          content:
+            `[SYSTEM: You called ${loopingTool} ${maxSameToolName} times without success. ` +
+            `STOP retrying this tool. Explain the validation error to the user and ask how to proceed, ` +
+            `or use a different approach (edit_file on an existing app, smaller files payload, fix schema fields).]`,
+        } as never);
+        break stepLoop;
+      }
       
       console.log(
         `[PiCodexToolLoop] Step ${step}: ${toolCallsThisTurn.length} tools this turn, ${totalToolCalls} total tool calls`
@@ -697,12 +768,36 @@ export async function* createPiCodexStreamWithToolLoop(
       );
 
       for (const tr of toolResults) {
+        if (
+          tr.result &&
+          typeof tr.result === "object" &&
+          typeof (tr.result as Record<string, unknown>).error === "string" &&
+          String((tr.result as Record<string, unknown>).error).includes(
+            "Tool input validation failed",
+          )
+        ) {
+          validationErrorCount++;
+        }
         yield {
           type: "tool-result",
           toolCallId: tr.toolCallId,
           toolName: tr.toolName,
           result: tr.result,
         };
+      }
+
+      if (validationErrorCount >= MAX_VALIDATION_ERRORS) {
+        console.error(
+          `[PiCodexToolLoop] 🚨 CRITICAL: ${validationErrorCount} validation errors detected. Aborting.`,
+        );
+        yield {
+          type: "error",
+          error: {
+            type: "validation_loop",
+            message: `Too many validation errors (${validationErrorCount}). This usually indicates a schema mismatch or malformed tool arguments. Please refresh and try again.`,
+          },
+        };
+        break stepLoop;
       }
 
       // Check if approaching step limit
@@ -745,6 +840,9 @@ export async function* createPiCodexStreamWithToolLoop(
 
       // Append full tool results for the current turn (never truncated mid-turn).
       appendToolTurnToContext(context, finalMessage, toolResults, cumulativeTokens);
+
+      // Reasoning blocks are only needed while the model is thinking — drop immediately.
+      stripAllAssistantReasoning(context.messages as unknown[]);
 
       // Do NOT update cumulativeTokens here from raw context size — that
       // double-counts results that will be compacted before the next model call.

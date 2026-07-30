@@ -5,10 +5,12 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { gateway } from "../../src/lib/gateway";
 import { flushWorkspaceStateToGateway } from "../../lib/persistedAppState";
+import { confirmAndAbortStreamsForWorkspaceSwitch } from "../../lib/workspaceSwitchStreaming";
 import {
   MEMORY_AUDIENCE_LABELS,
   type MemoryAudience,
 } from "../../constants/memoryScope";
+import { PaprPlanSection } from "./PaprPlanSection";
 import "./PaprLoginSection.css";
 
 interface Namespace {
@@ -307,6 +309,10 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
     const org = organizations.find((o) => o.id === organizationId);
     if (!org || organizationId === activeOrganizationId) return;
 
+    if (!(await confirmAndAbortStreamsForWorkspaceSwitch())) {
+      return;
+    }
+
     const parseOrgId = org.organizationId;
     if (!parseOrgId) {
       setError("Could not resolve organization");
@@ -316,15 +322,30 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
     setSwitchingOrganization(true);
     switchingOrganizationRef.current = true;
     setError(null);
-    setNamespaces([]);
-    setNamespacesLoaded(false);
+
+    // Teams list only needs Parse — fetch in parallel with gateway workspace switch.
+    const namespacesTask = window.electronAPI.papr.listNamespaces({
+      organizationId: parseOrgId,
+      forceRefresh: true,
+    });
+    void namespacesTask.then((nsResult) => {
+      if (nsResult.success && nsResult.namespaces?.length) {
+        setNamespaces(nsResult.namespaces);
+        setNamespacesLoaded(true);
+      }
+    });
+
     try {
       await flushWorkspaceStateToGateway();
       const result = await window.electronAPI.papr.switchOrganization(organizationId, org.name);
+      const nsResult = await namespacesTask;
       if (result.success) {
         setActiveOrganizationId(organizationId);
-        if (result.namespaces) {
+        if (result.namespaces?.length) {
           setNamespaces(result.namespaces);
+          setNamespacesLoaded(true);
+        } else if (nsResult.success && nsResult.namespaces) {
+          setNamespaces(nsResult.namespaces);
           setNamespacesLoaded(true);
         } else {
           await loadNamespaces(parseOrgId, true);
@@ -357,6 +378,10 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
   const handleSwitchNamespace = async (namespaceId: string) => {
     const ns = namespaces.find((n) => n.id === namespaceId);
     if (!ns || namespaceId === activeNamespaceId) return;
+
+    if (!(await confirmAndAbortStreamsForWorkspaceSwitch())) {
+      return;
+    }
 
     setSwitchingNamespace(true);
     setError(null);
@@ -663,6 +688,8 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
             chats; override per chat in the input bar.
           </p>
         </div>
+
+        <PaprPlanSection key={`${activeOrganizationId ?? "org"}-${activeNamespaceId ?? "ns"}`} />
 
         {/* Team members — needed for My team cloud app access */}
         <WorkspaceTeamSection

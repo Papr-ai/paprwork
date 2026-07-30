@@ -110,6 +110,48 @@ function isCompletedProductArchitectDelegation(
   return false;
 }
 
+function isCompletedProductArchitectFromGetRun(
+  toolCall: DelegateToolCallRow,
+): boolean {
+  const toolName = toolCall.name ?? toolCall.toolName;
+  if (toolName !== "get_delegation_run") {
+    return false;
+  }
+
+  const parsed = parseDelegateResult(toolCall.result);
+  if (!parsed) {
+    return false;
+  }
+
+  const data = (parsed.data as Record<string, unknown> | undefined) ?? parsed;
+  const agentId = String(data.agentId ?? "").trim();
+  if (agentId !== PRODUCT_ARCHITECT_ID) {
+    return false;
+  }
+
+  const status = String(data.status ?? parsed.status ?? "").toLowerCase();
+  return status === "completed" || status === "success";
+}
+
+async function hasCompletedProductArchitectJob(
+  chatId: string,
+): Promise<boolean> {
+  const { getJobsService } = await import(
+    "../../gateway/services/JobsService.js"
+  );
+  const jobsService = getJobsService();
+  await jobsService.initialize();
+  const jobs = await jobsService.listJobs();
+
+  return jobs.some(
+    (job) =>
+      job.type === "subagent" &&
+      job.subAgentId === PRODUCT_ARCHITECT_ID &&
+      job.reportChatId === chatId &&
+      job.status === "completed",
+  );
+}
+
 export async function hasCompletedProductArchitectInChat(
   chatId: string,
 ): Promise<boolean> {
@@ -125,13 +167,16 @@ export async function hasCompletedProductArchitectInChat(
       continue;
     }
     for (const toolCall of message.toolCalls as DelegateToolCallRow[]) {
-      if (isCompletedProductArchitectDelegation(toolCall)) {
+      if (
+        isCompletedProductArchitectDelegation(toolCall) ||
+        isCompletedProductArchitectFromGetRun(toolCall)
+      ) {
         return true;
       }
     }
   }
 
-  return false;
+  return hasCompletedProductArchitectJob(chatId);
 }
 
 export async function assertProductArchitectGate(

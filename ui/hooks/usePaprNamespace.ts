@@ -36,13 +36,21 @@ export function usePaprNamespace(): PaprNamespaceContext {
       }
 
       setIsLoggedIn(true);
+      const workspace = await window.electronAPI.papr.getActiveWorkspace();
+      if (workspace.success && workspace.pointer?.namespaceId) {
+        setNamespaceId(workspace.pointer.namespaceId);
+        setNamespaceName(workspace.pointer.namespaceName ?? null);
+      }
+
       const profile = await window.electronAPI.papr.getProfile();
       if (profile.success && profile.profile) {
         setUserId(profile.profile.userId ?? null);
-        setNamespaceId(profile.profile.activeNamespaceId ?? null);
-        setNamespaceName(profile.profile.activeNamespaceName ?? null);
+        if (!workspace.success || !workspace.pointer?.namespaceId) {
+          setNamespaceId(profile.profile.activeNamespaceId ?? null);
+          setNamespaceName(profile.profile.activeNamespaceName ?? null);
+        }
         setWorkspaceName(profile.profile.workspaceName ?? null);
-      } else {
+      } else if (!workspace.success || !workspace.pointer?.namespaceId) {
         setUserId(null);
         setNamespaceId(null);
         setNamespaceName(null);

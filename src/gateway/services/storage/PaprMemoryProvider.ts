@@ -8,6 +8,7 @@
  */
 
 import Papr from "@papr/memory";
+import { handlePaprToolError } from "../../../core/tools/paprClient.js";
 import type {
   IStorageProvider,
   StoredMessage,
@@ -19,6 +20,9 @@ import {
   formatSummaryForLLM,
 } from "./summaryFormatting.js";
 import { RECENT_MESSAGES_MAX } from "./recentMessageWindow.js";
+import path from "path";
+import { getPaprRoot } from "../../../core/utils/paprRoot.js";
+import { formatPaprPathForAgent } from "../../../core/utils/paprAgentPaths.js";
 import {
   buildPaprSyncStoreBody,
   type PaprMessageStoreBody,
@@ -100,19 +104,8 @@ export class PaprMemoryProvider implements IStorageProvider {
     } catch (error) {
       if (error instanceof Papr.AuthenticationError) {
         console.error("Invalid PAPR_API_KEY - check Settings");
-        throw new Error("Invalid PAPR API key. Please check your Settings.");
-      } else if (error instanceof Papr.RateLimitError) {
-        console.error("PAPR Memory quota exceeded. Please upgrade your account.");
-        throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings"
-        );
-      } else if (error instanceof Papr.PermissionDeniedError) {
-        console.error("PAPR Memory access denied - quota may be exceeded.");
-        throw new Error(
-          "PAPR Memory access denied. Your account may have exceeded its quota. Please upgrade at https://platform.papr.ai/settings"
-        );
       }
-      throw error;
+      handlePaprToolError(error, "papr-memory-save");
     }
   }
 
@@ -247,7 +240,9 @@ export class PaprMemoryProvider implements IStorageProvider {
                 summary.last_updated ?? new Date().toISOString(),
             },
             enhanced,
-            chatFilePath: `~/Papr/Chats/${chatId}.txt`,
+            chatFilePath: formatPaprPathForAgent(
+              path.join(getPaprRoot(), "Chats", `${chatId}.txt`),
+            ),
           });
 
           // Inject summary as special __summary property for AgentService to extract

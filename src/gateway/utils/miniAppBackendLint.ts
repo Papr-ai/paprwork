@@ -283,8 +283,14 @@ export async function checkOrphanBackendHandlers(
     return issues;
   }
 
+  /** Shared DB helper copied by AppService scaffold — not an HTTP action handler. */
+  const backendHelperModules = new Set(["papr_db.py"]);
+
   for (const entry of entries) {
     if (!entry.endsWith(".py") || entry.startsWith("__")) {
+      continue;
+    }
+    if (backendHelperModules.has(entry)) {
       continue;
     }
     const normalized = entry.replace(/\\/g, "/");

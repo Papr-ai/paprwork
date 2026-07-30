@@ -51,9 +51,11 @@ export class AppBackendService {
     await fs.access(handlerPath);
 
     const timeoutMs = resolveActionTimeoutMs(spec);
+    const sourceId = input.params?.sourceId ?? spec.sourceId;
     const databaseEnv = await resolveDesktopAppBackendDatabaseEnv({
       appId: input.appId,
       paprRoot: this.paprRoot,
+      sourceId,
     });
     const env = buildBackendActionEnv({
       appId: input.appId,

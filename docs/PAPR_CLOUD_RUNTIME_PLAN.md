@@ -9,10 +9,10 @@
 
 ## 1. Problem Statement
 
-Paprwork today runs entirely on the user's Mac. All data lives in `~/Papr/`, all AI runs locally (or proxied through the memory server for LLM tokens only). This works for desktop but blocks three things:
+Paprwork today runs entirely on the user's Mac. All workspace data lives under the active org/namespace root (`$PAPR_HOME` = `~/Papr/orgs/{orgId}/namespaces/{nsId}/`), with runtime data in `~/.paprwork-v2/orgs/.../`. AI runs locally (or proxied through the memory server for LLM tokens only). This works for desktop but blocks three things:
 
-1. **Server-side AI agents** (Cursor Composer, Claude Code, Codex) that need file access — the memory server can't see `~/Papr`.
-2. **Web Paprwork** — a future browser-only client has no `~/Papr` at all.
+1. **Server-side AI agents** (Cursor Composer, Claude Code, Codex) that need file access — the memory server can't see `$PAPR_HOME`.
+2. **Web Paprwork** — a future browser-only client has no local `$PAPR_HOME` at all.
 3. **Cloud jobs** — running scheduled jobs and mini-apps when the user's Mac is asleep.
 
 We need a **provider-agnostic cloud workspace** so any AI (Cursor, Claude, GPT, Gemini, local Ollama) can operate on the same user data, and a **sandboxed runtime** where agentic tasks execute safely.
@@ -140,7 +140,7 @@ Mini-app JS  →  same-origin /api/db/* + /apps/*
 
 | Route | Desktop backend | Cloud backend |
 |---|---|---|
-| `GET /apps/{appId}/*` | `~/Papr/apps/` | GitHub repo via `repos/token` |
+| `GET /apps/{appId}/*` | `$PAPR_HOME/apps/` | GitHub repo via `repos/token` |
 | `GET /api/db/schema` | Local SQLite | Turso (prefixed tables) |
 | `POST /api/db/query` | Local SQLite | Turso (server-held token) |
 | `POST /api/db/write` | Local SQLite | Turso (server-held token) |
@@ -221,25 +221,30 @@ Layer 3  Jobs/{jobId}/                     → GKE sandbox (agent, schedule, hea
 
 ---
 
-## 3. What Lives in `~/Papr` Today
+## 3. What Lives in the Active Workspace (`$PAPR_HOME`)
 
 ```
 ~/Papr/
-├── workspace/       # MEMORY.md, IDENTITY.md, BRAND.md, daily logs (5-50 KB)
-├── apps/{appId}/    # mini-app source: HTML, JS, CSS (10-500 KB each)
-│   └── backend/     # app backend handlers + manifest.json (Phase 3E-b)
-├── Jobs/{jobId}/
-│   ├── code/        # source files (1-100 KB each)        ← git-tracked
-│   ├── venv/        # Python virtual env (50-500 MB)      ← .gitignore
-│   ├── .venv/       # Alt Python venv location             ← .gitignore
-│   ├── node_modules/# Node deps (50-500 MB)               ← .gitignore
-│   ├── logs/        # run logs (0-10 MB)                   ← .gitignore
-│   ├── .versions/   # version tracking                     ← .gitignore
-│   └── data/data.db # SQLite (0-50 MB)                    ← cloud DB sync
-├── data/            # apps.json, jobs.json, settings.json, plans.db
-├── bundles/         # portable bundle packages (future)
-└── Chats/           # exported markdown
+├── .active-workspace.json          ← pointer to active org/namespace
+└── orgs/{organizationId}/
+    └── namespaces/{namespaceId}/   ← $PAPR_HOME (active workspace root)
+        ├── workspace/              # MEMORY.md, IDENTITY.md, BRAND.md, daily logs (5-50 KB)
+        ├── apps/{appId}/           # mini-app source: HTML, JS, CSS (10-500 KB each)
+        │   └── backend/            # app backend handlers + manifest.json (Phase 3E-b)
+        ├── Jobs/{jobId}/
+        │   ├── code/               # source files (1-100 KB each)        ← git-tracked
+        │   ├── venv/               # Python virtual env (50-500 MB)      ← .gitignore
+        │   ├── .venv/              # Alt Python venv location             ← .gitignore
+        │   ├── node_modules/       # Node deps (50-500 MB)               ← .gitignore
+        │   ├── logs/               # run logs (0-10 MB)                   ← .gitignore
+        │   ├── .versions/          # version tracking                     ← .gitignore
+        │   └── data/data.db        # SQLite (0-50 MB)                    ← cloud DB sync
+        ├── data/                   # apps.json, jobs.json, settings.json, plans.db
+        ├── bundles/                # portable bundle packages (future)
+        └── documents/
 ```
+
+Runtime chat/index data lives separately under `~/.paprwork-v2/orgs/{orgId}/namespaces/{nsId}/` (e.g. `chats.db`, exported `Chats/`).
 
 **Four sync channels:**
 
@@ -607,9 +612,9 @@ jobs/{jobId}/data/data.db           Turso DB: papr-{org}--{ns}--{user}--{jobId}
 
 | Database | Location | Sync to Turso | Why |
 |---|---|---|---|
-| Job data DBs | `~/Papr/Jobs/{id}/data/data.db` | **Yes** | Mini-apps + jobs; cloud sandboxes need this |
+| Job data DBs | `$PAPR_HOME/Jobs/{id}/data/data.db` | **Yes** | Mini-apps + jobs; cloud sandboxes need this |
 | Chat DB | `~/.paprwork-v2/chats.db` | **No** | PAPR Memory / Parse / MongoDB already syncs chat |
-| Plans DB | `~/Papr/data/plans.db` | **No** (v1) | Local + git `data/`; add later if web needs it |
+| Plans DB | `$PAPR_HOME/data/plans.db` | **No** (v1) | Local + git `data/`; add later if web needs it |
 | Code index DB | `~/.paprwork-v2/code-index.db` | No | Device-specific, rebuilt locally |
 | App state DB | `~/.paprwork-v2/app-state.db` | No | Device-specific UI state |
 
@@ -1144,7 +1149,7 @@ A job in a sandbox runs the **exact same code** as a job on the user's Mac. No r
 LOCAL (Desktop)                           CLOUD (Sandbox)
 ───────────────                           ───────────────
 1. JobsService reads job.json             1. Orchestrator reads job.json
-   from ~/Papr/jobs/{id}/                    from git repo /workspace/jobs/{id}/
+   from $PAPR_HOME/Jobs/{id}/                    from git repo /workspace/jobs/{id}/
 
 2. CommandJobExecutor spawns process      2. GKE sandbox runs process in container
 
@@ -1155,13 +1160,13 @@ LOCAL (Desktop)                           CLOUD (Sandbox)
    --db '${NEON_DB_URL}'                     (NEON_DB_URL is in env)
 
 5. SQLite via better-sqlite3              5. Standard sqlite3 on local file
-   on ~/Papr/jobs/{id}/data/data.db          (orchestrator hydrates from Turso
+   on $PAPR_HOME/Jobs/{id}/data/data.db          (orchestrator hydrates from Turso
                                               before, pushes back after — §6)
 
 6. pip install from requirements.txt      6. pip install from requirements.txt
    in local venv                             in sandbox (fresh install)
 
-7. Logs to ~/Papr/jobs/{id}/logs/         7. Logs captured by orchestrator
+7. Logs to $PAPR_HOME/Jobs/{id}/logs/         7. Logs captured by orchestrator
 
 8. Exit code → JobsService                8. Exit code → orchestrator
    updates jobs.json                         pushes status to git + notifies
@@ -1171,8 +1176,8 @@ LOCAL (Desktop)                           CLOUD (Sandbox)
 
 | Concern | Local | Sandbox | Same? |
 |---|---|---|---|
-| Source files | `~/Papr/jobs/{id}/code/` | `/workspace/jobs/{id}/code/` | **Yes** (git) |
-| `job.json` config | `~/Papr/jobs/{id}/job.json` | `/workspace/jobs/{id}/job.json` | **Yes** (git) |
+| Source files | `$PAPR_HOME/Jobs/{id}/code/` | `/workspace/jobs/{id}/code/` | **Yes** (git) |
+| `job.json` config | `$PAPR_HOME/Jobs/{id}/job.json` | `/workspace/jobs/{id}/job.json` | **Yes** (git) |
 | SQL queries | `SELECT * FROM tweets WHERE ...` | Same SQL on same `.db` file | **Yes** (orchestrator hydrates/pushes via Turso) |
 | Dependencies | `requirements.txt` / `package.json` | Same files | **Yes** (git) |
 | Python/Node version | Local install | Sandbox image | **Matched** via devcontainer.json |
@@ -1391,7 +1396,7 @@ Phase 2 — QUEUED_DIRS (large, incrementally processed):
 2. **Delete detection** ✅ — `detectAndSyncDeletions()` identifies locally deleted files/dirs and `git rm -r` them from the remote repo.
 3. **Periodic pull** ✅ — Timer every `PULL_INTERVAL_MS` calls `git pull` during session. Changes from other devices appear within minutes.
 4. **Sync status UI** ✅ — `SyncStatusCard` component in Settings → Privacy → Cloud Sync shows real-time status for both workspace (git) and credentials (vault) with green/orange/red dots, queue progress, key counts, relative timestamps, and error details. Polls `/api/sync/status` and `/api/vault/status` every 5s.
-5. **~~Opt-in default~~** ✅ — Enabled by default, user can disable in Settings → Privacy → Cloud Sync toggle. Setting persisted in `~/Papr/data/settings.json`, read by main process on startup.
+5. **~~Opt-in default~~** ✅ — Enabled by default, user can disable in Settings → Privacy → Cloud Sync toggle. Setting persisted in `$PAPR_HOME/data/settings.json`, read by main process on startup.
 6. **Memory server URL** ✅ — Uses `PAPR_MEMORY_SERVER_URL` env var (default: `https://memory.papr.ai`). Cloud proxy in gateway resolves at request time.
 7. **Error recovery** ✅ — Failed queue items re-queued up to `MAX_RETRY_FAILURES` (3), then skipped with warning log.
 8. **Conflict resolution** ✅ — Local-wins with stash/pop pattern in `pullChanges()`.
@@ -1491,7 +1496,7 @@ curl -N -X POST https://memory.papr.ai/v1/ai/cursor/runs/stream \
    → Should see streamed response listing ~/Papr files
 3. Send: "Create a new file called cloud-test.md with 'Created from cloud'"
    → Should see tool calls in Working card
-   → After completion, ~/Papr/workspace/cloud-test.md should exist locally
+   → After completion, $PAPR_HOME/workspace/cloud-test.md should exist locally
 4. Check GitHub repo — cloud-test.md committed
 5. Check cost tracking — session should appear in Stripe meter
 ```
@@ -1569,7 +1574,7 @@ print('Write OK')
 
 **Built (paprwork-v2):**
 - `tursoPushScheduler.ts` — debounced push per job (default 8s, `TURSO_PUSH_DEBOUNCE_MS`)
-- `tursoSyncState.ts` — `~/Papr/data/.turso-sync-state.json` tracks last push mtime per job
+- `tursoSyncState.ts` — `$PAPR_HOME/data/.turso-sync-state.json` tracks last push mtime per job
 - `TursoLinkedDbWatcher.ts` — chokidar on linked `data.db` (+ WAL/SHM) files
 - Hooks:
   - After `/api/db/write` and `/api/db/exec` → `scheduleTursoPushForJob`
@@ -1970,7 +1975,7 @@ The original design assumed a simple `git add -A && git commit && git push` loop
 | `src/gateway/services/TursoSyncBridge.ts` | Job `data.db` ↔ Turso boundary push/pull | ✅ Created (3B) |
 | `src/gateway/services/tursoSyncBridgeCore.ts` | Table-copy push/pull core logic | ✅ Created (3B) |
 | `src/gateway/services/tursoPushScheduler.ts` | Debounced auto-push hooks | ✅ Done (3B-h) |
-| `src/gateway/services/tursoSyncState.ts` | Last-push mtime state (`~/Papr/data/.turso-sync-state.json`) | ✅ Done (3B-h) |
+| `src/gateway/services/tursoSyncState.ts` | Last-push mtime state (`$PAPR_HOME/data/.turso-sync-state.json`) | ✅ Done (3B-h) |
 | `src/gateway/services/TursoLinkedDbWatcher.ts` | Watch linked `data.db` for job writes | ✅ Done (3B-h) |
 | `tests/turso-push-scheduler.test.ts` | Unit tests for sync state + scheduler | ✅ Done (3B-h) |
 | `scripts/test-turso-job-sync.mjs` | E2E test for boundary sync (passing) | ✅ Created |

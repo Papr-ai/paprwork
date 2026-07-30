@@ -56,7 +56,7 @@ read_skill()  // No args — lists all installed skills
 
 **Step B: Browse the skills catalog**
 ```javascript
-read_file({ path: "~/Papr/skills-catalog.json" })
+read_file({ path: "$PAPR_HOME/skills-catalog.json" })
 ```
 This has popular skills organized by category. Search for skills matching the user's industry. Do NOT browse the web for skills — everything is in this catalog.
 
@@ -170,7 +170,7 @@ Let me get started..."
 
 ```javascript
 // 1. Find relevant skills
-read_file({ path: "~/Papr/skills-catalog.json" })
+read_file({ path: "$PAPR_HOME/skills-catalog.json" })
 
 // 2. Create schema
 register_schema({
@@ -210,7 +210,7 @@ create_document({ title: "Workspace Setup Summary", content: "# Your Paprwork Se
 ## Best Practices
 
 1. **Be thorough in the interview** — understand workflow deeply before configuring
-2. **Read the skills catalog** — use `read_file("~/Papr/skills-catalog.json")`, never browse web for skills
+2. **Read the skills catalog** — use `read_file("$PAPR_HOME/skills-catalog.json")`, never browse web for skills
 3. **Match skills to their domain** — install only relevant skills
 4. **Community apps first** — check community bundles before building apps from scratch. Import pre-built apps when they fit, create custom apps only for unmet needs
 5. **Always use create_document** — never create DOCX directly

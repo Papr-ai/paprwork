@@ -1,94 +1,271 @@
 /**
- * Resolves APP_DB for jobs linked to mini-apps.
+ * Resolves registry database write targets for jobs (writeDbIds).
+ * JOB_DB remains job-local scratch only — never linked to mini-apps.
  */
 
-import { getAppService } from "./AppService.js";
+import { existsSync } from "fs";
+import type { JobRecord } from "./jobs/types.js";
 import { STANDALONE_APP_ID } from "./jobs/appIds.js";
+import type { DatabaseRecord } from "./DatabaseRegistryService.js";
 
-/** Apps created before this instant are legacy (no primary required at job launch). */
-export const LEGACY_APP_PRIMARY_CUTOFF_ISO = "2026-07-16T00:00:00.000Z";
-
-const LEGACY_APP_PRIMARY_CUTOFF_MS = Date.parse(LEGACY_APP_PRIMARY_CUTOFF_ISO);
-
-export function isLegacyApp(createdAt: string): boolean {
-  const createdMs = Date.parse(createdAt);
-  if (Number.isNaN(createdMs)) {
-    return false;
-  }
-  return createdMs < LEGACY_APP_PRIMARY_CUTOFF_MS;
+export interface JobWriteDatabaseTarget {
+  dbId: string;
+  alias: string;
+  dbPath: string;
+  /** Env suffix e.g. METRICS → PAPR_DB_METRICS */
+  envKey: string;
 }
 
+export function databaseEnvKey(
+  record: Pick<DatabaseRecord, "dbId" | "label">,
+): string {
+  const fromLabel = (record.label ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_|_$/g, "")
+    .slice(0, 48);
+  if (fromLabel) {
+    return fromLabel;
+  }
+  return record.dbId.toUpperCase().replace(/-/g, "_");
+}
+
+export function targetFromRegistryRecord(
+  record: DatabaseRecord,
+): JobWriteDatabaseTarget {
+  const alias = record.label?.trim() || record.dbId;
+  return {
+    dbId: record.dbId,
+    alias,
+    dbPath: record.localPath,
+    envKey: databaseEnvKey(record),
+  };
+}
+
+async function loadRegistryRecord(
+  dbId: string,
+): Promise<DatabaseRecord | null> {
+  const { initializeDatabaseRegistry } = await import(
+    "./DatabaseRegistryService.js"
+  );
+  const registry = await initializeDatabaseRegistry();
+  const record = registry.getById(dbId);
+  if (!record || record.status === "tombstone") {
+    return null;
+  }
+  return record;
+}
+
+export async function resolveJobWriteTargets(
+  job: Pick<JobRecord, "writeDbIds" | "appIds">,
+): Promise<JobWriteDatabaseTarget[]> {
+  const writeDbIds = job.writeDbIds ?? [];
+  if (writeDbIds.length > 0) {
+    const targets: JobWriteDatabaseTarget[] = [];
+    for (const dbId of writeDbIds) {
+      const record = await loadRegistryRecord(dbId);
+      if (!record) {
+        throw new Error(
+          `writeDbIds references unknown or tombstoned database: ${dbId}. ` +
+            "Create it with create_database first.",
+        );
+      }
+      if (!existsSync(record.localPath)) {
+        throw new Error(
+          `Database ${dbId} local file missing: ${record.localPath}. ` +
+            "Run create_database or restore from sync before running this job.",
+        );
+      }
+      targets.push(targetFromRegistryRecord(record));
+    }
+    return targets;
+  }
+
+  // Legacy fallback: jobs created before writeDbIds used app primary linked source.
+  const linkedAppIds = (job.appIds ?? []).filter((id) => id !== STANDALONE_APP_ID);
+  if (linkedAppIds.length === 0) {
+    return [];
+  }
+
+  const { getAppService } = await import("./AppService.js");
+  const appService = getAppService();
+  await appService.initialize();
+  const primary = await appService.getPrimaryDataSource(linkedAppIds[0]);
+  if (!primary?.dbId || !existsSync(primary.dbPath)) {
+    return [];
+  }
+
+  const record = await loadRegistryRecord(primary.dbId);
+  if (!record) {
+    return [
+      {
+        dbId: primary.dbId,
+        alias: primary.alias,
+        dbPath: primary.dbPath,
+        envKey: databaseEnvKey({ dbId: primary.dbId, label: primary.alias }),
+      },
+    ];
+  }
+  return [targetFromRegistryRecord(record)];
+}
+
+/** @deprecated Use resolveJobWriteTargets — kept for legacy call sites during migration. */
 export interface JobAppDatabaseContext {
   appId: string;
   appDb: string;
   appDbAlias: string;
 }
 
+/** @deprecated */
 export async function resolveJobAppDatabase(
   appIds: readonly string[] | undefined,
 ): Promise<JobAppDatabaseContext | null> {
   const linkedAppIds = (appIds ?? []).filter((id) => id !== STANDALONE_APP_ID);
   if (linkedAppIds.length === 0) return null;
 
-  const appService = getAppService();
-  await appService.initialize();
-
-  const appId = linkedAppIds[0];
-  const primary = await appService.getPrimaryDataSource(appId);
-  if (!primary) return null;
+  const targets = await resolveJobWriteTargets({ appIds: [...linkedAppIds] });
+  if (targets.length === 0) return null;
 
   return {
-    appId,
-    appDb: primary.dbPath,
-    appDbAlias: primary.alias,
+    appId: linkedAppIds[0],
+    appDb: targets[0].dbPath,
+    appDbAlias: targets[0].alias,
   };
 }
 
+export async function requireJobWriteTargets(
+  job: Pick<JobRecord, "writeDbIds" | "appIds" | "command" | "type">,
+): Promise<JobWriteDatabaseTarget[]> {
+  const targets = await resolveJobWriteTargets(job);
+  const hasWriteDbIds = (job.writeDbIds ?? []).length > 0;
+  const linkedAppIds = (job.appIds ?? []).filter((id) => id !== STANDALONE_APP_ID);
+
+  if (targets.length > 0) {
+    return targets;
+  }
+
+  const command = job.command ?? "";
+  const appDataIntent =
+    /\$\{?PAPR_DB_|APP_DB|\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP)\b/i.test(
+      command,
+    );
+
+  if (linkedAppIds.length > 0 && appDataIntent && hasWriteDbIds) {
+    throw new Error(
+      "Job declares writeDbIds but none resolved. Check registry dbIds with list_databases.",
+    );
+  }
+
+  if (linkedAppIds.length > 0 && appDataIntent && !hasWriteDbIds) {
+    throw new Error(
+      "Job writes app-facing SQLite but has no writeDbIds. " +
+        "Set writeDbIds to registry dbId(s) from create_database, or use $JOB_DB for scratch-only jobs.",
+    );
+  }
+
+  return [];
+}
+
+/** @deprecated Use requireJobWriteTargets */
 export async function requireJobAppDatabase(
   appIds: readonly string[] | undefined,
 ): Promise<JobAppDatabaseContext | null> {
-  const linkedAppIds = (appIds ?? []).filter((id) => id !== STANDALONE_APP_ID);
-  if (linkedAppIds.length === 0) return null;
-
-  const resolved = await resolveJobAppDatabase(linkedAppIds);
-  if (resolved) return resolved;
-
-  const appId = linkedAppIds[0];
-  const appService = getAppService();
-  await appService.initialize();
-  const app = await appService.getApp(appId);
-
-  if (app && isLegacyApp(app.createdAt)) {
-    console.warn(
-      `[jobAppDatabase] Legacy app ${appId} (${app.title}) has no primary database; ` +
-        "skipping APP_DB injection. Set primary via link_app_data_source({ setPrimary: true }) for new jobs.",
-    );
-    return null;
-  }
-
-  throw new Error(
-    `App-linked job cannot start because app ${appId} has no primary database. ` +
-      "Attach a primary data source before running the job; do not fall back to JOB_DB or a hardcoded path.",
-  );
+  const ctx = await resolveJobAppDatabase(appIds);
+  return ctx;
 }
 
+export function jobWriteDatabaseEnv(
+  targets: readonly JobWriteDatabaseTarget[],
+  appId?: string,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  if (appId) {
+    env.APP_ID = appId;
+  }
+
+  for (const target of targets) {
+    env[`PAPR_DB_${target.envKey}`] = target.dbPath;
+    env[`PAPR_DB_${target.envKey}_ALIAS`] = target.alias;
+    env[`PAPR_DB_${target.envKey}_ID`] = target.dbId;
+  }
+
+  if (targets.length > 0) {
+    env.PAPR_WRITE_DB_IDS = targets.map((t) => t.dbId).join(",");
+    // Backward compatibility for scripts using APP_DB
+    env.APP_DB = targets[0].dbPath;
+    env.APP_DB_ALIAS = targets[0].alias;
+    env.APP_DB_ID = targets[0].dbId;
+  }
+
+  return env;
+}
+
+/** @deprecated */
 export function jobAppDatabaseEnv(
   ctx: JobAppDatabaseContext,
 ): Record<string, string> {
-  return {
-    APP_ID: ctx.appId,
-    APP_DB: ctx.appDb,
-    APP_DB_ALIAS: ctx.appDbAlias,
-  };
+  return jobWriteDatabaseEnv(
+    [
+      {
+        dbId: "",
+        alias: ctx.appDbAlias,
+        dbPath: ctx.appDb,
+        envKey: databaseEnvKey({ dbId: "legacy", label: ctx.appDbAlias }),
+      },
+    ],
+    ctx.appId,
+  );
 }
 
-export function jobAppDatabasePromptLines(ctx: JobAppDatabaseContext): string[] {
-  return [
-    `APP_ID="${ctx.appId}"`,
-    `APP_DB="${ctx.appDb}"`,
-    `APP_DB_ALIAS="${ctx.appDbAlias}"`,
-    "",
-    "Use APP_DB for all mini-app-facing reads/writes (tables the UI displays).",
-    "Use JOB_DB only for job-local scratch (job_runs, checkpoints, temp tables).",
+export function jobWriteDatabasePromptLines(
+  targets: readonly JobWriteDatabaseTarget[],
+): string[] {
+  if (targets.length === 0) {
+    return [
+      "No registry write databases injected for this job.",
+      "Use $JOB_DB for scratch (job_runs, temp tables) only.",
+    ];
+  }
+
+  const lines = [
+    "Write targets (registry SQLite — mini-apps read via /api/db/query + sourceId):",
   ];
+  for (const target of targets) {
+    lines.push(
+      `  PAPR_DB_${target.envKey}="${target.dbPath}"  (${target.alias}, dbId=${target.dbId})`,
+    );
+  }
+  lines.push(
+    "",
+    "Use PAPR_DB_* paths for app-facing tables. Use $JOB_DB only for scratch.",
+  );
+  if (targets.length === 1) {
+    lines.push(`Legacy alias: APP_DB="${targets[0].dbPath}"`);
+  }
+  return lines;
+}
+
+/** @deprecated */
+export function jobAppDatabasePromptLines(
+  ctx: JobAppDatabaseContext,
+): string[] {
+  return jobWriteDatabasePromptLines([
+    {
+      dbId: "",
+      alias: ctx.appDbAlias,
+      dbPath: ctx.appDb,
+      envKey: databaseEnvKey({ dbId: "legacy", label: ctx.appDbAlias }),
+    },
+  ]);
+}
+
+export async function validateWriteDbIdsExist(
+  writeDbIds: readonly string[] | undefined,
+): Promise<void> {
+  for (const dbId of writeDbIds ?? []) {
+    const record = await loadRegistryRecord(dbId);
+    if (!record) {
+      throw new Error(`Database not found in registry: ${dbId}`);
+    }
+  }
 }

@@ -66,8 +66,8 @@ The **sidebar footer** also shows a compact onboarding progress card:
 ### 4. Background - Home Dashboard Ready
 
 Behind the scenes, the app has **already installed** the default home dashboard:
-- ✅ App files copied to `~/Papr/apps/{id}/`
-- ✅ App registered in `~/Papr/data/apps.json`
+- ✅ App files copied to `$PAPR_HOME/apps/{id}/`
+- ✅ App registered in `$PAPR_HOME/data/apps.json`
 - ✅ Default home app set in settings
 - ✅ Ready to open when user clicks home button
 

@@ -234,7 +234,7 @@ list_jobs() → See what other jobs exist
 
 // 2. Check available job databases
 // If calendar job exists:
-bash({ command: "sqlite3 ~/Papr/jobs/*/data.db '.databases'" })
+bash({ command: "sqlite3 $PAPR_HOME/Jobs/*/data.db '.databases'" })
 → Find calendar.db
 
 // If found, query it:
@@ -504,7 +504,7 @@ Default Jobs (Pre-Installed)
 │   └── Reads FROM: calendar.db, linkedin.db, crm.db, etc.
 │
 └── Calendar Sync (Every 15 minutes)
-    └── Writes TO: ~/Papr/jobs/{calendarId}/data/calendar.db
+    └── Writes TO: $PAPR_HOME/Jobs/{calendarId}/data/calendar.db
 ```
 
 ### Calendar Sync Job Structure

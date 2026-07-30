@@ -54,6 +54,18 @@ interface DeleteAppPayload {
   appId: string;
 }
 
+interface CopyAppToNamespacePayload {
+  appId: string;
+  targetOrganizationId: string;
+  targetNamespaceId: string;
+}
+
+interface AssignAppWorkspacePayload {
+  appId: string;
+  targetOrganizationId: string;
+  targetNamespaceId: string;
+}
+
 interface GetAppPayload {
   appId: string;
 }
@@ -169,6 +181,37 @@ export async function setupAppHandlers(
         break;
       }
 
+      case "app:list-unassigned": {
+        const apps = await appService.listUnassignedApps();
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:list-unassigned:response",
+            success: true,
+            data: apps,
+          }),
+        );
+        break;
+      }
+
+      case "app:assign-workspace": {
+        const payload = message.payload as AssignAppWorkspacePayload;
+        const result = await appService.assignAppToWorkspace(
+          payload.appId,
+          payload.targetOrganizationId,
+          payload.targetNamespaceId,
+        );
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:assign-workspace:response",
+            success: true,
+            data: result,
+          }),
+        );
+        break;
+      }
+
       case "app:create": {
         const payload = message.payload as CreateAppPayload;
         const app = await appService.createApp(
@@ -237,6 +280,24 @@ export async function setupAppHandlers(
             type: "app:delete:response",
             success: true,
             data: { success },
+          }),
+        );
+        break;
+      }
+
+      case "app:copy-to-namespace": {
+        const payload = message.payload as CopyAppToNamespacePayload;
+        const result = await appService.copyAppToNamespace(
+          payload.appId,
+          payload.targetOrganizationId,
+          payload.targetNamespaceId,
+        );
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:copy-to-namespace:response",
+            success: true,
+            data: result,
           }),
         );
         break;

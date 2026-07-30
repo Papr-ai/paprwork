@@ -24,6 +24,22 @@ describe("sqlitePathGuard", () => {
     expect(paths).toContain("~/Papr/apps/app-id/database.sqlite");
   });
 
+  test("allows writes to PAPR_DB paths from env", () => {
+    const db = "/Users/test/Papr/data/databases/billing/data.db";
+    const prev = process.env.PAPR_DB_BILLING;
+    process.env.PAPR_DB_BILLING = db;
+    try {
+      const warnings = buildSqlitePathWarnings(
+        `sqlite3 "${db}" "INSERT INTO invoices VALUES (1)"`,
+        {},
+      );
+      expect(warnings).toEqual([]);
+    } finally {
+      if (prev === undefined) delete process.env.PAPR_DB_BILLING;
+      else process.env.PAPR_DB_BILLING = prev;
+    }
+  });
+
   test("warns on app-folder sqlite writes outside APP_DB", () => {
     const home = process.env.HOME ?? "/Users/test";
     const warnings = buildSqlitePathWarnings(
@@ -41,6 +57,18 @@ describe("sqlitePathGuard", () => {
       { appDb: db },
     );
     expect(warnings).toEqual([]);
+  });
+
+  test("warns on non-canonical job root db writes with capital Jobs path", () => {
+    const home = process.env.HOME ?? "/Users/test";
+    const warnings = buildSqlitePathWarnings(
+      `sqlite3 "${home}/Papr/Jobs/job-1/audit.db" "UPDATE t SET x=1"`,
+      {
+        appDb: `${home}/Papr/Jobs/job-1/data/data.db`,
+        jobDb: `${home}/Papr/Jobs/job-1/data/data.db`,
+      },
+    );
+    expect(warnings.length).toBeGreaterThan(0);
   });
 
   test("warns on non-canonical job root db writes", () => {

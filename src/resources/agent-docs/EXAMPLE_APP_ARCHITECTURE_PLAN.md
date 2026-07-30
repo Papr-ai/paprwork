@@ -1,3 +1,5 @@
+> **Paths:** `$PAPR_HOME` = active org/namespace workspace (`~/Papr/orgs/{orgId}/namespaces/{nsId}/`). See `docs/PAPR_WORKSPACE_PATHS.md`. Prefer app/job tools over raw paths.
+
 # Example App Architecture Plan
 
 **Purpose:** Copy this structure when Product Architect (or the main agent) plans a mini-app + jobs system.  
@@ -48,7 +50,7 @@ User goal: *Pull Reddit RSS feeds, pick topics with an agent, enrich with web re
 └───────────────────────────┬─────────────────────────────────────┘
                             │
 ┌───────────────────────────▼─────────────────────────────────────┐
-│ LAYER 3 — Jobs (~/Papr/Jobs/{jobId}/)                          │
+│ LAYER 3 — Jobs ($PAPR_HOME/Jobs/{jobId}/)                          │
 │   python: RSS fetch, persist rows                                │
 │   agent: picker, enricher, writer                                │
 │   All linked via create_job({ appIds: [appId] })                 │
@@ -56,7 +58,7 @@ User goal: *Pull Reddit RSS feeds, pick topics with an agent, enrich with web re
                             │
 ┌───────────────────────────▼─────────────────────────────────────┐
 │ DATA — Primary SQLite (one file, APP_DB)                         │
-│   ~/Papr/Jobs/{primaryJobId}/data/data.db                        │
+│   $PAPR_HOME/Jobs/{primaryJobId}/data/data.db                        │
 │   Linked in data-sources.json as primary                         │
 │   App reads/writes via /api/db/*; jobs write via $APP_DB         │
 └─────────────────────────────────────────────────────────────────┘
@@ -346,7 +348,7 @@ const { summary } = await res.json();
 ### Layers
 - Frontend (apps/{id}/): screens, /api/db/*, /api/jobs/run, subscribeJobEvents
 - Backend (backend/manifest.json): actions, vault keys — list each action OR explicitly justify skipping ("read-only dashboard, 1-2 SELECTs only")
-- Jobs (~/Papr/Jobs/): types, schedules, appIds, dependsOn+autoTrigger
+- Jobs ($PAPR_HOME/Jobs/): types, schedules, appIds, dependsOn+autoTrigger
 ### SQLite (APP_DB primary)
 | Table | Columns | Writer | Reader |
 ### Data flow (ASCII)

@@ -1,3 +1,4 @@
+import { existsSync } from "fs";
 import Database from "better-sqlite3";
 import type { JobArchitectureIssue } from "./jobArchitectureValidation.js";
 
@@ -60,7 +61,32 @@ export function validateJobAgainstAppDatabase(
 ): JobArchitectureIssue[] {
   const text = input.command ?? "";
   const issues: JobArchitectureIssue[] = [];
-  const db = new Database(input.databasePath, { readonly: true, fileMustExist: true });
+
+  if (!existsSync(input.databasePath)) {
+    issues.push({
+      rule: "primary-database-missing",
+      severity: "error",
+      message: `Primary app database not found at ${input.databasePath}.`,
+      remediation:
+        "Restart Paprwork to auto-repair data-sources.json paths after workspace migration, or re-link the job with link_app_data_source({ appId, jobId }).",
+    });
+    return issues;
+  }
+
+  let db: Database.Database;
+  try {
+    db = new Database(input.databasePath, { readonly: true, fileMustExist: true });
+  } catch (error) {
+    issues.push({
+      rule: "primary-database-unopenable",
+      severity: "error",
+      message: `Cannot open primary app database at ${input.databasePath}: ${(error as Error).message}`,
+      remediation:
+        "Restart Paprwork to auto-repair data-sources.json paths after workspace migration, or re-link the job with link_app_data_source({ appId, jobId }).",
+    });
+    return issues;
+  }
+
   try {
     const tables = new Set(
       (db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table','view')").all() as Array<{ name: string }>).map(

@@ -118,10 +118,8 @@ export function ContentArea() {
     }
 
     window.addEventListener("papr-sqlite-loaded", ensureActiveTab);
-    window.addEventListener("papr-workspace-reload", ensureActiveTab);
     return () => {
       window.removeEventListener("papr-sqlite-loaded", ensureActiveTab);
-      window.removeEventListener("papr-workspace-reload", ensureActiveTab);
     };
   }, [activeTabId, activeLeftTab]);
 

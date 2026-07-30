@@ -259,7 +259,7 @@ If you encounter an issue not covered here:
 ### macOS Specific
 
 **Finder Sidebar Entries:**
-- Gateway automatically adds `~/Papr/` to Finder sidebar
+- Gateway automatically adds the active Papr workspace folder to Finder sidebar
 - This is intentional behavior
 - Remove via Finder if not wanted
 

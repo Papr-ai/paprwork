@@ -190,6 +190,27 @@ export class AgentStreamRegistry {
    * Cancel an in-flight stream for a chat and optionally notify subscribers.
    * Silent cancel is used for user stop / replacement — not an error condition.
    */
+  /** Abort every running stream (e.g. before org/namespace workspace switch). */
+  async cancelAllRunningStreams(reason = "Workspace switch"): Promise<void> {
+    const chatIds = [...this.requestIdByChatId.keys()];
+    if (chatIds.length === 0) {
+      return;
+    }
+
+    const { getAgentService } = await import("./AgentService.js");
+    const agentService = getAgentService();
+
+    await Promise.all(
+      chatIds.map(async (chatId) => {
+        if (!this.isStreamRunning(chatId)) {
+          return;
+        }
+        await agentService.stopStreaming(chatId);
+        this.cancelStream(chatId, reason, { silent: true });
+      }),
+    );
+  }
+
   cancelStream(
     chatId: string,
     reason = STREAM_STOPPED_REASON,

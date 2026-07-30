@@ -57,15 +57,14 @@ type FileChangeCallback = (docId: string) => void;
 let documentServiceInstance: DocumentService | null = null;
 
 export class DocumentService {
-  private docsRoot: string;
   private legacyJsonPath: string;
   private initialized = false;
+  private initializedDocsRoot = "";
   private watchers: Map<string, FSWatcher> = new Map();
   private fileChangeCallbacks: Set<FileChangeCallback> = new Set();
 
   constructor() {
     const homeDir = os.homedir();
-    this.docsRoot = getPaprDocumentsDir();
     this.legacyJsonPath = path.join(
       homeDir,
       ".paprwork",
@@ -74,18 +73,36 @@ export class DocumentService {
     );
   }
 
+  private get docsRoot(): string {
+    return getPaprDocumentsDir();
+  }
+
   // ===== Lifecycle =====
 
   async initialize(): Promise<void> {
-    if (this.initialized) return;
+    const docsRoot = this.docsRoot;
+    if (this.initialized && this.initializedDocsRoot === docsRoot) {
+      return;
+    }
 
-    await fs.mkdir(this.docsRoot, { recursive: true });
+    if (this.initialized && this.initializedDocsRoot !== docsRoot) {
+      console.warn(
+        `[DocumentService] Workspace path changed (${this.initializedDocsRoot} -> ${docsRoot}); reinitializing`,
+      );
+      this.close();
+      this.initialized = false;
+    }
+
+    await fs.mkdir(docsRoot, { recursive: true });
     await this.migrateLegacyIfNeeded();
+    const repaired = await this.reconcileMissingMetaFiles();
     this.initialized = true;
+    this.initializedDocsRoot = docsRoot;
 
     const docIds = await this.listDocIds();
     console.log(
-      `[DocumentService] Initialized with ${docIds.length} documents in ${this.docsRoot}`,
+      `[DocumentService] Initialized with ${docIds.length} documents in ${docsRoot}` +
+        (repaired > 0 ? ` (${repaired} missing meta.json repaired)` : ""),
     );
   }
 
@@ -468,8 +485,58 @@ export class DocumentService {
       const raw = await fs.readFile(this.metaPath(id), "utf-8");
       return JSON.parse(raw) as DocumentMeta;
     } catch {
+      return this.repairMetaFromContent(id);
+    }
+  }
+
+  /** Build meta.json when agents wrote content.md without going through createDocument(). */
+  private async repairMetaFromContent(id: string): Promise<DocumentMeta | null> {
+    const contentPath = this.contentPath(id);
+    let content = "";
+    let fileMtime = new Date();
+
+    try {
+      content = await fs.readFile(contentPath, "utf-8");
+      const stat = await fs.stat(contentPath);
+      fileMtime = stat.mtime;
+    } catch {
       return null;
     }
+
+    const titleFromContent = extractTitleFromMarkdown(content);
+    const meta: DocumentMeta = {
+      id,
+      title: titleFromContent ?? slugToDisplayTitle(id),
+      type: "document",
+      createdAt: fileMtime.toISOString(),
+      updatedAt: fileMtime.toISOString(),
+      tags: [],
+      favorite: false,
+      preview: content.slice(0, 200).trim(),
+      wordCount: wordCount(content),
+    };
+
+    await this.writeMeta(id, meta);
+    console.log(
+      `[DocumentService] Repaired missing meta.json for ${id} (${meta.title})`,
+    );
+    return meta;
+  }
+
+  private async reconcileMissingMetaFiles(): Promise<number> {
+    const ids = await this.listDocIds();
+    let repaired = 0;
+
+    for (const id of ids) {
+      try {
+        await fs.access(this.metaPath(id));
+      } catch {
+        const meta = await this.repairMetaFromContent(id);
+        if (meta) repaired++;
+      }
+    }
+
+    return repaired;
   }
 
   private async writeMeta(id: string, meta: DocumentMeta): Promise<void> {
@@ -770,6 +837,25 @@ function slugify(title: string): string {
       .slice(0, 80) || // Cap length
     "untitled"
   ); // Fallback
+}
+
+/** Best-effort human title from a document folder slug. */
+function slugToDisplayTitle(slug: string): string {
+  const trimmed = slug.trim();
+  if (!trimmed) return "Untitled";
+  return trimmed
+    .split("-")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+/** Use the first markdown H1 as title when present. */
+function extractTitleFromMarkdown(content: string): string | null {
+  const match = content.match(/^#\s+(.+)$/m);
+  if (!match?.[1]) return null;
+  const title = match[1].trim();
+  return title.length > 0 ? title : null;
 }
 
 function wordCount(text: string): number {

@@ -167,7 +167,7 @@ Chrome Manager detects expired session:
 ## Storage Locations (3-Location Strategy)
 
 ### 1. Job Data Directory
-**Path:** `~/Papr/Jobs/{authJobId}/data/linkedin_auth.json`  
+**Path:** `$PAPR_HOME/Jobs/{authJobId}/data/linkedin_auth.json`  
 **Purpose:** Job-specific backup, original capture location
 
 ### 2. Shared Location

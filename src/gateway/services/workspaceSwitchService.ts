@@ -5,11 +5,9 @@
 import {
   applyActiveWorkspaceEnv,
   ensureWorkspaceLayout,
-  migrateLegacyFlatPaprLayout,
-  migrateLegacyUserDataRuntime,
   type ActiveWorkspacePointer,
 } from "../../core/utils/paprWorkspace.js";
-import { getPaprApiKey } from "../utils/keyResolver.js";
+import { getPaprApiKey, clearKeyCache } from "../utils/keyResolver.js";
 import {
   initializeAppService,
   resetAppServiceSingletonForTests,
@@ -25,6 +23,10 @@ import {
 import { resetStorageManagerSingleton } from "./StorageManager.js";
 import { resetAppStateStorageSingleton } from "./storage/AppStateStorage.js";
 import { refreshToolResultTruncationSettings } from "./agent/toolResultTruncationSettings.js";
+import { getAgentStreamRegistry } from "./AgentStreamRegistry.js";
+import { getAgentService } from "./AgentService.js";
+import { resetDbRouterTursoCache } from "./appRuntime/DbRouter.js";
+import { invalidatePaprUserIdCache } from "../utils/paprUserId.js";
 import {
   getCloudSyncService,
   initializeCloudSyncService,
@@ -61,6 +63,7 @@ import { broadcast } from "../websocket/index.js";
 import { getCustomKeysService } from "./CustomKeysService.js";
 import { getTursoSyncBridge } from "./TursoSyncBridge.js";
 import { getVaultSyncService } from "./VaultSyncService.js";
+import { resetCommunityCatalogServiceForWorkspaceSwitch } from "./CommunityCatalogService.js";
 
 export interface SwitchWorkspaceInput {
   organizationId: string;
@@ -68,8 +71,10 @@ export interface SwitchWorkspaceInput {
   organizationName?: string;
   namespaceName?: string;
   paprApiKey?: string;
-  /** Skip legacy ~/Papr migration (cloud ephemeral runs). */
+  /** Skip misplaced-target relocation (cloud ephemeral runs). */
   skipLegacyMigration?: boolean;
+  /** Run path repair after consent migration, before app watchers restart. */
+  runPostMigrationPathRepair?: boolean;
 }
 
 export interface SwitchWorkspaceResult {
@@ -81,40 +86,28 @@ export async function activateWorkspacePointer(
   input: SwitchWorkspaceInput,
 ): Promise<ActiveWorkspacePointer> {
   const pointer = await ensureWorkspaceLayout(input);
-
-  if (!input.skipLegacyMigration) {
-    // One-time idempotent migrations only. Do NOT relocate data between namespaces on
-    // every switch — that moved entire apps/documents/Jobs trees and blocked the UI for
-    // minutes. Cross-namespace consolidation belongs in a one-time migration script.
-    const migrated = await migrateLegacyFlatPaprLayout({
-      organizationId: input.organizationId,
-      namespaceId: input.namespaceId,
-      targetPaprHome: pointer.paprHome,
-    });
-    if (migrated) {
-      console.log(
-        `[WorkspaceSwitch] Migrated legacy Papr folders into ${pointer.paprHome}: ${migrated.movedPaths.join(", ")}`,
-      );
-    }
-
-    const migratedUserData = await migrateLegacyUserDataRuntime({
-      organizationId: input.organizationId,
-      namespaceId: input.namespaceId,
-      targetPaprHome: pointer.paprHome,
-      targetUserDataPath: pointer.userDataPath,
-    });
-    if (migratedUserData) {
-      console.log(
-        `[WorkspaceSwitch] Migrated legacy runtime data into ${pointer.userDataPath}: ${migratedUserData.join(", ")}`,
-      );
-    }
-  }
-
   applyActiveWorkspaceEnv(pointer);
   return pointer;
 }
 
+async function abortAllActiveAgentStreams(): Promise<void> {
+  try {
+    await getAgentStreamRegistry().cancelAllRunningStreams(
+      "Workspace switch — stream aborted",
+    );
+    await getAgentService().shutdown();
+    console.log("[WorkspaceSwitch] Aborted active agent streams before switch");
+  } catch (error) {
+    console.warn(
+      "[WorkspaceSwitch] Failed to abort active streams:",
+      error instanceof Error ? error.message : error,
+    );
+  }
+}
+
 async function resetPathBoundSingletons(): Promise<void> {
+  await abortAllActiveAgentStreams();
+  resetCommunityCatalogServiceForWorkspaceSwitch();
   resetPlanServiceForWorkspaceSwitch();
   resetSkillServiceForWorkspaceSwitch();
   resetWorkspaceServiceForWorkspaceSwitch();
@@ -127,7 +120,7 @@ async function resetPathBoundSingletons(): Promise<void> {
   resetJobsServiceSingletonForTests();
   resetAppServiceSingletonForTests();
   resetAgentServiceSingletonForTests();
-  resetStorageManagerSingleton();
+  await resetStorageManagerSingleton();
   resetAppStateStorageSingleton();
 }
 
@@ -142,8 +135,25 @@ async function initializePathBoundServices(): Promise<void> {
 
 export async function reinitializeWorkspaceServices(input?: {
   paprApiKey?: string;
+  runPostMigrationPathRepair?: boolean;
+  scopePaprHome?: string;
 }): Promise<void> {
   await resetPathBoundSingletons();
+
+  if (input?.runPostMigrationPathRepair) {
+    const { runPostMigrationPathRepair, formatPostMigrationRepairSummary } =
+      await import("./postMigrationPathRepair.js");
+    const repairResult = await runPostMigrationPathRepair({
+      dryRun: false,
+      includeApps: true,
+      delayMs: 0,
+      scopePaprHome: input.scopePaprHome,
+    });
+    console.log(
+      "[WorkspaceSwitch] Post-migration path repair:",
+      formatPostMigrationRepairSummary(repairResult),
+    );
+  }
 
   const paprApiKey = input?.paprApiKey ?? (await getPaprApiKey()) ?? undefined;
 
@@ -183,6 +193,7 @@ async function refreshTursoForWorkspaceSwitch(): Promise<void> {
 
   bridge.invalidateCredentialsCache();
   bridge.invalidateLinkedSourcesCache();
+  resetDbRouterTursoCache();
 
   try {
     const { refreshTursoLinkedDbWatcher } = await import(
@@ -215,25 +226,58 @@ async function refreshVaultForWorkspaceSwitch(): Promise<void> {
   }
 }
 
+/** Update Papr API key in gateway env/cache without reloading workspace services. */
+export function applyGatewayPaprApiKey(apiKey: string): void {
+  process.env.PAPR_API_KEY = apiKey;
+  clearKeyCache("PAPR_API_KEY");
+
+  const bridge = getTursoSyncBridge();
+  if (bridge) {
+    bridge.invalidateCredentialsCache();
+  }
+}
+
 export async function switchActiveWorkspace(
   input: SwitchWorkspaceInput,
 ): Promise<SwitchWorkspaceResult> {
   const pointer = await activateWorkspacePointer(input);
-  await reinitializeWorkspaceServices({ paprApiKey: input.paprApiKey });
+  if (input.paprApiKey) {
+    process.env.PAPR_API_KEY = input.paprApiKey;
+  }
+  clearKeyCache("PAPR_API_KEY");
+  invalidatePaprUserIdCache();
+  await reinitializeWorkspaceServices({
+    paprApiKey: input.paprApiKey,
+    runPostMigrationPathRepair: input.runPostMigrationPathRepair,
+    scopePaprHome: input.runPostMigrationPathRepair ? pointer.paprHome : undefined,
+  });
   getCustomKeysService().invalidateCache();
-  void restartCloudSyncIfEnabled();
-  void refreshTursoForWorkspaceSwitch();
-  void refreshVaultForWorkspaceSwitch();
-
-  const runningSync = getCloudSyncService();
-  console.log(
-    `[WorkspaceSwitch] Active workspace: org=${pointer.organizationId} ns=${pointer.namespaceId} home=${pointer.paprHome}` +
-      (runningSync ? " (cloud sync restarted)" : "") +
-      (getTursoSyncBridge() ? " (turso refreshed)" : "") +
-      (getVaultSyncService() ? " (vault re-sync scheduled)" : ""),
-  );
 
   broadcast({ type: "app:list-updated" });
 
+  void runDeferredWorkspaceSwitchMaintenance(pointer).catch((error: unknown) => {
+    console.warn(
+      "[WorkspaceSwitch] Deferred maintenance failed:",
+      error instanceof Error ? error.message : error,
+    );
+  });
+
   return { success: true, pointer };
+}
+
+/** Cloud sync, Turso, and vault — not required before UI can use the new workspace. */
+async function runDeferredWorkspaceSwitchMaintenance(
+  pointer: ActiveWorkspacePointer,
+): Promise<void> {
+  await restartCloudSyncIfEnabled();
+  await refreshTursoForWorkspaceSwitch();
+  await refreshVaultForWorkspaceSwitch();
+
+  const runningSync = getCloudSyncService();
+  console.log(
+    `[WorkspaceSwitch] Deferred maintenance complete: org=${pointer.organizationId} ns=${pointer.namespaceId} home=${pointer.paprHome}` +
+      (runningSync ? " (cloud sync restarted)" : "") +
+      (getTursoSyncBridge() ? " (turso refreshed)" : "") +
+      (getVaultSyncService() ? " (vault re-synced)" : ""),
+  );
 }

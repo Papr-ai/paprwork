@@ -97,6 +97,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
       startLogin: (mode, source) => ipcRenderer.invoke("papr:start-login", mode, source),
       logout: () => ipcRenderer.invoke("papr:logout"),
       getProfile: () => ipcRenderer.invoke("papr:get-profile"),
+      getActiveWorkspace: () => ipcRenderer.invoke("papr:get-active-workspace"),
+      detectLegacyFlatMigration: () =>
+        ipcRenderer.invoke("papr:detect-legacy-flat-migration"),
+      runConsentLegacyMigration: (input) =>
+        ipcRenderer.invoke("papr:run-consent-legacy-migration", input),
       
       // Listen for successful login (via deep link callback)
       onLoginSuccess: (callback) => {
@@ -204,6 +209,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
       inviteWorkspaceMember: (email) =>
         ipcRenderer.invoke("papr:invite-workspace-member", email),
       openWorkspaceTeam: () => ipcRenderer.invoke("papr:open-workspace-team"),
+      getPlanSummary: () => ipcRenderer.invoke("papr:get-plan-summary"),
+      openBillingPortal: (section) =>
+        ipcRenderer.invoke("papr:open-billing-portal", section),
+      openUsageDashboard: () => ipcRenderer.invoke("papr:open-usage-dashboard"),
+      startCheckout: (input) => ipcRenderer.invoke("papr:start-checkout", input),
+      setMeteredBilling: (enabled) =>
+        ipcRenderer.invoke("papr:set-metered-billing", enabled),
     };
   })(),
 

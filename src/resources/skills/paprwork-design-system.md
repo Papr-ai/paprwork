@@ -353,14 +353,14 @@ Mini-apps that read or write data through `/api/db/query`, `/api/db/write`, or `
 
 **Before writing any persistence code:**
 
-1. **Create or choose a database**
-   - Job-owned scratch: `create_job` with `appIds` (auto-links job `data.db` to the app)
-   - Shared / standalone: `create_database` then `attach_database` or `link_app_data_source({ appId, dbId })`
-2. **Set primary** — first link becomes primary; use `setPrimary: true` when attaching a registry DB
+1. **Create and attach a database**
+   - `create_database({ name: "..." })` → `attach_database({ appId, dbId, alias: "billing" })`
+   - Jobs that fill the DB: `create_job({ writeDbIds: [dbId], ... })`
+2. **Name the DB in app code** — pass `sourceId: alias` on every `/api/db/query` (SELECT) and `/api/db/write` (INSERT/UPDATE/DELETE)
 3. **Use the right env in jobs**
-   - `APP_DB` / `$APP_DB` — mini-app tables (what users see; same file as primary linked source)
-   - `JOB_DB` / `$JOB_DB` — job scratch only (`job_runs`, temp ETL). When job DB is primary, **same file** as `$APP_DB`, different role.
-4. **Then build UI** — query via `/api/db/*` or the mini-app SDK; never hardcode absolute `dbPath` in browser code
+   - `PAPR_DB_{ALIAS}` — registry DB paths from `writeDbIds`
+   - `$JOB_DB` — job scratch only (`job_runs`, temp ETL), never auto-linked to apps
+4. **Then build UI** — query via `/api/db/*`; never hardcode absolute `dbPath` in browser code
 
 **Anti-pattern:** Building tables/views in the mini-app before `data-sources.json` exists → runtime 404 / "no database linked".
 

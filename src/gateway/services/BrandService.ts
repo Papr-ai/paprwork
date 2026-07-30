@@ -1,8 +1,9 @@
 /**
  * BrandService — load and merge global + per-app brand tokens for mini-apps.
  *
- * Global: ~/Papr/workspace/brand.json + BRAND.md + brand/ assets
- * Per-app: ~/Papr/apps/{appId}/brand.json + brand/ assets
+ * Global: $PAPR_HOME/workspace/brand.json + BRAND.md + brand/ assets
+ * Per-app: $PAPR_HOME/apps/{appId}/brand.json + brand/ assets
+ * ($PAPR_HOME resolves to the active org/namespace workspace via getPaprRoot().)
  */
 
 import { promises as fs } from "fs";

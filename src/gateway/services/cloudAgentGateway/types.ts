@@ -39,11 +39,11 @@ export interface CloudAgentRunRequest {
   repoBranch?: string;
   /** Linked mini-app sources from memory prepare (metadata). */
   linkedSources?: CloudLinkedSource[];
-  /** Primary Turso short name for APP_DB routing. */
+  /** @deprecated Prefer tursoSources from job writeDbIds + app linked sources. */
   primaryTursoShortName?: string;
-  /** All Turso replicas to pull/push at run bookends (job scratch + APP_DB). */
+  /** All Turso replicas to pull/push at run bookends (writeDbIds + linked registry DBs). */
   tursoSources?: CloudTursoSource[];
-  /** @deprecated Prefer tursoSources — primary source Turso creds. */
+  /** @deprecated Prefer tursoSources — legacy single-source creds. */
   turso?: {
     jobId: string;
     /** Turso short name (j-{jobId8}, d-{dbId8}, or per-user suffix). */

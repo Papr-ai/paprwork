@@ -23,7 +23,8 @@ import {
   getPaprJobsRoot,
 } from "../../core/utils/paprRoot.js";
 import {
-  resolveJobAppDatabase,
+  resolveJobWriteTargets,
+  validateWriteDbIdsExist,
 } from "./jobAppDatabase.js";
 import {
   type AppDataContract,
@@ -286,6 +287,79 @@ export class JobsService {
     }
   }
 
+  /** Known bundled jobs shipped with Paprwork (Home dashboard). */
+  private static readonly BUNDLED_DEFAULT_JOB_IDS = [
+    "2cafb2e9-696b-42db-98fa-5d605977123c",
+    "6c840212-9cdc-4b2e-a3ae-951ee2f277a1",
+  ] as const;
+
+  /**
+   * Sync command/appIds from bundled default-jobs/ for prebuilt jobs already on disk.
+   * Skips architecture validation — bundle is the source of truth for these jobs.
+   */
+  private async syncBundledDefaultJobs(): Promise<void> {
+    const defaultJobsDir = path.join(
+      __dirname,
+      "..",
+      "..",
+      "resources",
+      "default-jobs",
+    );
+
+    let changed = false;
+    for (const jobId of JobsService.BUNDLED_DEFAULT_JOB_IDS) {
+      const job = this.jobs.get(jobId);
+      if (!job) continue;
+
+      const bundledPath = path.join(defaultJobsDir, jobId, "job.json");
+      let bundled: JobRecord;
+      try {
+        bundled = JSON.parse(await fs.readFile(bundledPath, "utf8")) as JobRecord;
+      } catch {
+        continue;
+      }
+
+      const nextCommand = bundled.command?.trim();
+      const nextAppIds = bundled.appIds?.length ? bundled.appIds : job.appIds;
+      const commandChanged = Boolean(nextCommand && nextCommand !== job.command);
+      const appIdsChanged =
+        JSON.stringify(nextAppIds ?? []) !== JSON.stringify(job.appIds ?? []);
+
+      if (!commandChanged && !appIdsChanged) continue;
+
+      const updated: JobRecord = {
+        ...job,
+        ...(commandChanged && nextCommand ? { command: nextCommand } : {}),
+        ...(appIdsChanged ? { appIds: nextAppIds } : {}),
+        updatedAt: new Date().toISOString(),
+      };
+
+      this.jobs.set(jobId, updated);
+      changed = true;
+
+      try {
+        const jobDir = this.getJobDir(jobId);
+        await fs.writeFile(
+          path.join(jobDir, "job.json"),
+          JSON.stringify(updated, null, 2),
+          "utf8",
+        );
+        console.log(
+          `[JobsService] Synced bundled default job ${jobId} from resources`,
+        );
+      } catch (err) {
+        console.warn(
+          `[JobsService] Could not write synced job ${jobId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
+    if (changed) {
+      await this.saveJobs();
+    }
+  }
+
   async initialize(): Promise<void> {
     if (this.initialized) {
       return;
@@ -298,6 +372,7 @@ export class JobsService {
     await this.rebuildIndexIfCorrupted(); // Safety net: recover jobs on disk but missing from index
     await this.pruneStaleJobEntries(); // Remove index entries whose folders were deleted (e.g. bash rm)
     await this.installDefaultJobs(); // Then install defaults (won't overwrite existing)
+    await this.syncBundledDefaultJobs(); // Patch prebuilt jobs (Home) from bundle
     await this.backfillJobAppIds();
 
     // Initialize run history
@@ -329,7 +404,9 @@ export class JobsService {
     try {
       const { getAppService } = await import("./AppService.js");
       const appService = getAppService();
-      await appService.initialize();
+      if (!appService.isInitialized()) {
+        return;
+      }
       const apps = await appService.listApps();
 
       for (const app of apps) {
@@ -874,7 +951,10 @@ export class JobsService {
   }
 
   private async validateJobCandidate(
-    job: Pick<JobRecord, "type" | "command" | "appIds" | "recipe">,
+    job: Pick<
+      JobRecord,
+      "type" | "command" | "appIds" | "writeDbIds" | "recipe"
+    >,
     currentJobId?: string,
   ): Promise<JobArchitectureIssue[]> {
     const issues = validateJobArchitecture(job);
@@ -882,9 +962,10 @@ export class JobsService {
     if (!linkedAppId) return issues;
 
     const contract = await this.loadAppDataContract(linkedAppId);
-    const appDataIntent = /\$\{?APP_DB\}?|\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP)\b/i.test(
-      job.command ?? "",
-    );
+    const appDataIntent =
+      /\$\{?(?:PAPR_DB_|APP_DB)\}?|\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP)\b/i.test(
+        job.command ?? "",
+      );
     const siblingJobs = [...this.jobs.values()].filter(
       (candidate) =>
         candidate.id !== currentJobId && candidate.appIds?.includes(linkedAppId),
@@ -892,7 +973,7 @@ export class JobsService {
     if (appDataIntent && siblingJobs.length > 0 && !contract) {
       issues.push({
         rule: "multi-job-data-contract-required",
-        severity: "error",
+        severity: "warning",
         message: `App ${linkedAppId} has multiple jobs sharing app data but no data-contract.json.`,
         remediation:
           "Add a canonical data-contract.json with required tables/columns and writer/reader ownership before adding another data-writing job.",
@@ -913,12 +994,34 @@ export class JobsService {
       });
     }
 
-    const appDb = await resolveJobAppDatabase(job.appIds);
-    if (appDb) {
+    if (appDataIntent && (job.writeDbIds ?? []).length === 0) {
+      issues.push({
+        rule: "job-write-dbids-recommended",
+        severity: "warning",
+        message:
+          "Job appears to mutate SQLite but writeDbIds is empty. Set writeDbIds to registry dbId(s) from create_database.",
+        remediation:
+          "create_database → attach_database on app → create_job({ writeDbIds: [dbId] }). Use $JOB_DB for scratch only.",
+      });
+    }
+
+    let writeTargets: Awaited<ReturnType<typeof resolveJobWriteTargets>> = [];
+    try {
+      writeTargets = await resolveJobWriteTargets(job);
+    } catch (error) {
+      issues.push({
+        rule: "job-write-dbids-invalid",
+        severity: "error",
+        message: (error as Error).message,
+        remediation: "Fix writeDbIds or create missing databases with create_database.",
+      });
+    }
+
+    for (const target of writeTargets) {
       issues.push(
         ...validateJobAgainstAppDatabase({
           command: job.command,
-          databasePath: appDb.appDb,
+          databasePath: target.dbPath,
           contract,
         }),
       );
@@ -929,11 +1032,13 @@ export class JobsService {
   async createJob(input: CreateJobInput): Promise<JobRecord> {
     const appIds = assertCreateAppIds(input.appIds);
     await this.validateAppIdsExist(appIds);
+    await validateWriteDbIdsExist(input.writeDbIds);
 
     const architectureIssues = await this.validateJobCandidate({
       type: input.type,
       command: input.command,
       appIds,
+      writeDbIds: input.writeDbIds,
       recipe: input.recipe,
     });
     const architectureErrors = formatJobArchitectureErrors(architectureIssues);
@@ -949,6 +1054,7 @@ export class JobsService {
       type: input.type,
       status: "pending",
       appIds,
+      writeDbIds: input.writeDbIds,
       folder: input.folder,
       command: input.command,
       requirements: input.requirements,
@@ -1012,17 +1118,6 @@ export class JobsService {
     this.jobs.set(id, job);
     await this.saveJobs();
     void this.rebuildGraph();
-
-    const { STANDALONE_APP_ID } = await import("./jobs/appIds.js");
-    if (appIds.some((appId) => appId !== STANDALONE_APP_ID)) {
-      try {
-        const { getAppService } = await import("./AppService.js");
-        const appService = getAppService();
-        await appService.autoLinkJobToApps(id, { allowBaseline: true });
-      } catch (err) {
-        console.warn(`[JobsService] Auto-link on create failed for job ${id}:`, err);
-      }
-    }
 
     if (job.schedule?.enabled) {
       void import("./JobsScheduler.js")
@@ -1901,15 +1996,6 @@ export class JobsService {
               );
             });
 
-          void import("./AppService.js")
-            .then(({ getAppService }) => getAppService().autoLinkJobToApps(job.id))
-            .catch((err) => {
-              console.warn(
-                `[JobsService] Auto-link after completion failed for ${job.id}:`,
-                err,
-              );
-            });
-
           // ── Recipe Evaluation (fire-and-forget after completion) ──
           if (updated.recipe?.enabled && updated.recipe?.autoEvaluate) {
             void this.runRecipeEvaluation(updated, runId).catch((err) => {
@@ -2127,6 +2213,7 @@ export class JobsService {
         import("./jobs/types.js").JobRecord,
         | "name"
         | "appIds"
+        | "writeDbIds"
         | "folder"
         | "command"
         | "requirements"
@@ -2159,6 +2246,10 @@ export class JobsService {
     if (updates.appIds !== undefined) {
       updates.appIds = assertCreateAppIds(updates.appIds);
       await this.validateAppIdsExist(updates.appIds);
+    }
+
+    if (updates.writeDbIds !== undefined) {
+      await validateWriteDbIdsExist(updates.writeDbIds);
     }
 
     const candidate = { ...job, ...updates };

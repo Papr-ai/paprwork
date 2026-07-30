@@ -12,6 +12,8 @@ import {
   getToolResultTruncationSettings,
   isToolResultTruncationDisabled,
 } from "./toolResultTruncationSettings.js";
+import { resolvePaprUserDataPath } from "../../../core/utils/paprWorkspace.js";
+import path from "path";
 
 /** Default hard ceiling (~10K tokens at ~4 chars/token). Overridable in settings. */
 export const ABSOLUTE_TOOL_RESULT_MAX_CHARS = 40_000;
@@ -226,10 +228,11 @@ function buildTruncationSuffix(
   toolCallId: string,
   toolName: string,
 ): string {
+  const chatsDbPath = path.join(resolvePaprUserDataPath(), "chats.db");
   return (
     `\n[... ${omitted} chars truncated. ` +
     `Tool: get_full_tool_result({ toolCallId: "${toolCallId}", toolName: "${toolName}" }) ` +
-    `OR query: ~/.paprwork-v2/chats.db → messages.parts (JSONL)]`
+    `OR query: ${chatsDbPath} → messages.parts (JSONL)]`
   );
 }
 

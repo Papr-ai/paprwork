@@ -339,7 +339,7 @@ For "must run when app is closed":
 **Manual fix (if urgent):**
 ```bash
 # Stop the app, then:
-cd ~/Papr/jobs/<job-id>
+cd $PAPR_HOME/Jobs/<job-id>
 python3 -c "import json; d=json.load(open('job.json')); d['status']='failed'; d['error']='Manually cleared stuck state'; d.pop('currentExecutionId',None); json.dump(d, open('job.json','w'), indent=2)"
 # Restart app
 ```

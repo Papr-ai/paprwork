@@ -496,9 +496,34 @@ export class StorageManager {
 // Singleton instance
 let storageManagerInstance: StorageManager | null = null;
 
-/** Reset global singleton after org/namespace workspace switch. */
-export function resetStorageManagerSingleton(): void {
+/** Close SQLite connections before dropping the singleton. */
+export async function shutdownStorageManager(): Promise<void> {
+  if (!storageManagerInstance) {
+    return;
+  }
+
+  try {
+    if (storageManagerInstance.isInitialized()) {
+      const provider = storageManagerInstance.currentProvider;
+      if (provider instanceof HybridStorageProvider) {
+        provider.getLocalProvider().close();
+      } else if (provider instanceof LocalStorageProvider) {
+        provider.close();
+      }
+    }
+  } catch (error) {
+    console.warn(
+      "[StorageManager] Shutdown warning:",
+      error instanceof Error ? error.message : error,
+    );
+  }
+
   storageManagerInstance = null;
+}
+
+/** Reset global singleton after org/namespace workspace switch. */
+export async function resetStorageManagerSingleton(): Promise<void> {
+  await shutdownStorageManager();
 }
 
 /**

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
+import { getPaprDocumentsDir } from "../utils/paprRoot.js";
 
 const createDocumentSchema = z.object({
   title: z
@@ -181,9 +182,7 @@ export const importDocumentTool = createTool({
 
     // Save the original path in meta so we can write back later
     const metaPath = path.join(
-      os.homedir(),
-      "Papr",
-      "documents",
+      getPaprDocumentsDir(),
       document.id,
       "meta.json",
     );

@@ -2,14 +2,18 @@
  * CustomKeysStorage - Secure storage for custom API keys
  * Uses Electron safeStorage (macOS Keychain / Windows DPAPI)
  *
- * Integration keys are scoped per organization. Session/auth tokens stay global.
+ * Integration keys default to the shared vault (all organizations). Session/auth tokens stay global.
  */
 
 import fs from "fs/promises";
 import path from "path";
 import type { KeyClientAccess } from "../types/customKeys.js";
 import { DEFAULT_KEY_CLIENT_ACCESS, normalizeKeyClientAccess } from "../types/customKeys.js";
-import { isGlobalCustomKeyName } from "./customKeysScope.js";
+import {
+  isGlobalCustomKeyName,
+  isPaprPlatformApiKeyName,
+} from "./customKeysScope.js";
+import { isInternalPaprNamespaceApiKeyName } from "../utils/paprApiKey.js";
 import {
   LOCAL_ORG_ID,
   SHARED_ORG_ID,
@@ -47,7 +51,7 @@ export interface CustomKeyInput {
   description?: string;
   permission?: "always" | "ask";
   clientAccess?: KeyClientAccess;
-  /** Default: organization (active workspace). Use "all" for cross-org keys. */
+  /** Default: all organizations (shared vault). Use "organization" for one org only. */
   orgScope?: IntegrationKeyOrgScope;
   /** Parse org id when orgScope is organization (defaults to active org). */
   organizationId?: string;
@@ -102,7 +106,7 @@ export class CustomKeysStorage {
     await fs.mkdir(this.dataDir, { recursive: true });
     await this.loadGlobalKeys();
     await this.loadSharedKeys();
-    await this.migrateLegacyKeysFileIfNeeded(CustomKeysStorage.LOCAL_ORG_ID);
+    await this.migrateLegacyKeysFileIfNeeded();
     await this.loadOrgKeys(CustomKeysStorage.LOCAL_ORG_ID);
   }
 
@@ -126,7 +130,7 @@ export class CustomKeysStorage {
     }
 
     this.activeOrganizationId = normalizedOrgId;
-    await this.migrateLegacyKeysFileIfNeeded(normalizedOrgId);
+    await this.migrateLegacyKeysFileIfNeeded();
     await fs.mkdir(path.dirname(this.orgKeysFile(normalizedOrgId)), {
       recursive: true,
     });
@@ -289,9 +293,7 @@ export class CustomKeysStorage {
     await this.writeKeysFile(this.orgKeysFile(organizationId), this.orgKeys);
   }
 
-  private async migrateLegacyKeysFileIfNeeded(
-    organizationId: string,
-  ): Promise<void> {
+  private async migrateLegacyKeysFileIfNeeded(): Promise<void> {
     if (this.legacyMigrationComplete) {
       return;
     }
@@ -307,26 +309,26 @@ export class CustomKeysStorage {
 
     const legacyKeys = await this.readKeysFile(this.legacyKeysFile);
     const globalKeys = new Map(this.globalKeys);
-    const orgKeys = new Map(this.orgKeys);
+    const sharedKeys = new Map(this.sharedKeys);
 
     for (const [id, key] of legacyKeys) {
       if (isGlobalCustomKeyName(key.name)) {
         globalKeys.set(id, key);
       } else {
-        orgKeys.set(id, key);
+        sharedKeys.set(id, key);
       }
     }
 
     this.globalKeys = globalKeys;
-    this.orgKeys = orgKeys;
+    this.sharedKeys = sharedKeys;
     await this.saveGlobalKeys();
-    await this.saveOrgKeys(organizationId);
+    await this.saveSharedKeys();
 
     const backupPath = `${this.legacyKeysFile}.migrated`;
     await fs.rename(this.legacyKeysFile, backupPath).catch(() => undefined);
     this.legacyMigrationComplete = true;
     console.log(
-      `[CustomKeys] Migrated legacy keys into org ${organizationId} + global vault`,
+      `[CustomKeys] Migrated legacy keys into shared vault + global vault`,
     );
   }
 
@@ -349,6 +351,14 @@ export class CustomKeysStorage {
   } {
     if (isGlobalCustomKeyName(input.name)) {
       return { scope: "global" };
+    }
+    if (isPaprPlatformApiKeyName(input.name)) {
+      const organizationId = resolveIntegrationKeyOrganizationId({
+        orgScope: "organization",
+        organizationId: input.organizationId,
+        activeOrganizationId: this.activeOrganizationId,
+      });
+      return { scope: "org", organizationId };
     }
     if (input.orgScope === "all") {
       return { scope: "shared", organizationId: CustomKeysStorage.SHARED_ORG_ID };
@@ -532,6 +542,9 @@ export class CustomKeysStorage {
   }
 
   async listKeys(options?: { orgOnly?: boolean }): Promise<CustomKeyMetadata[]> {
+    const hideInternalNamespaceKeys = (keys: CustomKeyMetadata[]) =>
+      keys.filter((key) => !isInternalPaprNamespaceApiKeyName(key.name));
+
     if (options?.orgOnly) {
       const activeOrgId =
         this.activeOrganizationId ?? CustomKeysStorage.LOCAL_ORG_ID;
@@ -541,7 +554,7 @@ export class CustomKeysStorage {
       const sharedList = Array.from(this.sharedKeys.values()).map((key) =>
         this.mapKeyMetadata(key, "shared", CustomKeysStorage.SHARED_ORG_ID),
       );
-      return [...orgList, ...sharedList];
+      return hideInternalNamespaceKeys([...orgList, ...sharedList]);
     }
 
     const merged: CustomKeyMetadata[] = [];
@@ -562,7 +575,7 @@ export class CustomKeysStorage {
         ),
       );
     }
-    return merged;
+    return hideInternalNamespaceKeys(merged);
   }
 
   async getKey(keyId: string): Promise<string | null> {
@@ -616,7 +629,16 @@ export class CustomKeysStorage {
   async addKey(input: CustomKeyInput): Promise<CustomKey> {
     const now = new Date().toISOString();
     const target = this.resolveStorageTarget(input);
-    const existing = this.findKeyEntryByName(input.name);
+    let existing = this.findKeyEntryByName(input.name);
+
+    if (
+      existing &&
+      isPaprPlatformApiKeyName(input.name) &&
+      existing.scope !== target.scope
+    ) {
+      await this.deleteKey(existing.id);
+      existing = null;
+    }
 
     if (existing) {
       const updatedKey: CustomKey = {

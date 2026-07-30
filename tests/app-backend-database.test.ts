@@ -1,10 +1,14 @@
+import { mkdtemp, writeFile } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
 import { describe, expect, it } from "vitest";
 import { resolveTursoDatabaseNameForSource } from "../src/gateway/services/DatabaseRegistryService.js";
 import type { AppDataSource } from "../src/gateway/services/appDataSources.js";
 import {
-  getPrimarySource,
+  getLegacyDefaultSource,
   type AppDataSourcesFile,
 } from "../src/gateway/services/appDataSources.js";
+import { resolveAppBackendDatabaseEnvFromConfig } from "../src/gateway/services/appRuntime/appBackendDatabase.js";
 import {
   dbTursoDatabaseName,
   jobTursoDatabaseName,
@@ -42,8 +46,8 @@ describe("resolveTursoDatabaseNameForSource", () => {
   });
 });
 
-describe("getPrimarySource dbId-only", () => {
-  it("resolves primary without jobId", () => {
+describe("getLegacyDefaultSource dbId-only", () => {
+  it("resolves default without jobId", () => {
     const config: AppDataSourcesFile = {
       primary: "crm",
       sources: [
@@ -59,9 +63,56 @@ describe("getPrimarySource dbId-only", () => {
         },
       ],
     };
-    const primary = getPrimarySource(config);
+    const primary = getLegacyDefaultSource(config);
     expect(primary?.dbId).toBe("db-abcdef12");
     expect(primary?.jobId).toBeUndefined();
+  });
+});
+
+describe("resolveAppBackendDatabaseEnvFromConfig", () => {
+  it("injects PAPR_DB_* for every linked source and APP_DB for active sourceId", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "papr-backend-env-"));
+    const metricsPath = join(tempRoot, "metrics.db");
+    const billingPath = join(tempRoot, "billing.db");
+    await writeFile(metricsPath, "sqlite-placeholder");
+    await writeFile(billingPath, "sqlite-placeholder");
+
+    const config: AppDataSourcesFile = {
+      sources: [
+        {
+          id: "db-a:metrics",
+          type: "sqlite",
+          dbId: "db-aaaa1111",
+          alias: "metrics",
+          dbPath: metricsPath,
+          tables: [],
+          linkedAt: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "db-b:billing",
+          type: "sqlite",
+          dbId: "db-bbbb2222",
+          alias: "billing",
+          dbPath: billingPath,
+          tables: [],
+          linkedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    };
+
+    const env = await resolveAppBackendDatabaseEnvFromConfig({
+      appId: "app-1",
+      config,
+      sourceId: "billing",
+    });
+
+    expect(env.PAPR_DB_METRICS).toBe(metricsPath);
+    expect(env.PAPR_DB_BILLING).toBe(billingPath);
+    expect(env.PAPR_DB_METRICS_ALIAS).toBe("metrics");
+    expect(env.PAPR_DB_BILLING_ALIAS).toBe("billing");
+    expect(env.APP_DB).toBe(billingPath);
+    expect(env.PAPR_ACTIVE_SOURCE_ID).toBe("billing");
+    expect(env.PAPR_LINKED_DB_ALIASES).toBe("metrics,billing");
   });
 });
 

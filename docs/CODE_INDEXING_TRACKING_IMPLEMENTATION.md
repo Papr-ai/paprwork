@@ -58,7 +58,7 @@ Implemented a comprehensive SQLite-based tracking system for automatic code inde
 
 **Features:**
 - **Initial Index:** On startup, scans all code files and queues new/changed ones
-- **File Watching:** Monitors `~/Papr/apps` and `~/Papr/Jobs` for changes
+- **File Watching:** Monitors `$PAPR_HOME/apps` and `$PAPR_HOME/Jobs` for changes
 - **5-Second Debounce:** Prevents excessive indexing during rapid edits
 - **Batch Processing:** Processes 50 files at a time
 - **Priority Queue:** New files indexed before changed files
@@ -263,7 +263,7 @@ const shutdown = async () => {
 1. Set `PAPR_API_KEY` in environment
 2. Run `npm run index:code`
 3. Check `~/.paprwork-v2/code-index.db` created
-4. Modify a file in `~/Papr/apps`
+4. Modify a file in `$PAPR_HOME/apps`
 5. Run indexer again - should skip unchanged files
 6. Check queue table for changed file
 

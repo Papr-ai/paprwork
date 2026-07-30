@@ -2,15 +2,21 @@
 """Mini-app backend DB helper — local SQLite or Turso (stdlib-only).
 
 Env (injected by gateway when app has linked data-sources.json):
-  PAPR_DB_MODE=local|turso
-  APP_DB              — local SQLite path (local mode)
-  PAPR_DB_URL         — libsql URL (turso mode)
-  PAPR_DB_AUTH_TOKEN  — Turso auth token (turso mode)
+  Per linked source (alias "billing" → env key BILLING):
+    PAPR_DB_{KEY}              — local SQLite path (local mode)
+    PAPR_DB_{KEY}_MODE         — local|turso
+    PAPR_DB_{KEY}_URL          — libsql URL (turso mode)
+    PAPR_DB_{KEY}_AUTH_TOKEN   — Turso token (turso mode)
+    PAPR_DB_{KEY}_ALIAS        — alias string (e.g. billing)
+
+  Active source (backward compat — manifest sourceId / params.sourceId / legacy primary):
+    PAPR_DB_MODE, APP_DB, PAPR_DB_URL, PAPR_DB_AUTH_TOKEN
 
 Usage:
   from papr_db import connect, execute, executemany
 
-  con = connect()
+  con = connect()              # active source (APP_DB)
+  con = connect("billing")     # explicit alias — works with multiple linked DBs
   execute(con, "INSERT INTO items (name) VALUES (?)", ["hello"])
   rows = execute(con, "SELECT name FROM items")
   con.close()
@@ -160,21 +166,55 @@ def db_mode() -> str:
     return os.environ.get("PAPR_DB_MODE", "")
 
 
-def connect() -> sqlite3.Connection | "_TursoConnection":
+def _env_prefix_for_alias(alias: str) -> str | None:
+    """Find PAPR_DB_{KEY} prefix for a linked source alias."""
+    suffix = "_ALIAS"
+    for key, value in os.environ.items():
+        if key.startswith("PAPR_DB_") and key.endswith(suffix) and value == alias:
+            return key[: -len(suffix)]
+    return None
+
+
+def _connect_local(path: str) -> sqlite3.Connection:
+    if not path:
+        raise RuntimeError("APP_DB not set — attach_database first")
+    return sqlite3.connect(path)
+
+
+def _connect_turso(url: str, token: str) -> "_TursoConnection":
+    if not url or not token:
+        raise RuntimeError("PAPR_DB_URL / PAPR_DB_AUTH_TOKEN not set")
+    return _TursoConnection(url, token)
+
+
+def connect(source_id: str | None = None) -> sqlite3.Connection | "_TursoConnection":
+    if source_id:
+        prefix = _env_prefix_for_alias(source_id)
+        if not prefix:
+            raise RuntimeError(
+                f'No linked database with alias "{source_id}". '
+                f'Linked: {os.environ.get("PAPR_LINKED_DB_ALIASES", "")}'
+            )
+        mode = os.environ.get(f"{prefix}_MODE", "local")
+        if mode == "local":
+            return _connect_local(os.environ.get(prefix, ""))
+        if mode == "turso":
+            return _connect_turso(
+                os.environ.get(f"{prefix}_URL", ""),
+                os.environ.get(f"{prefix}_AUTH_TOKEN", ""),
+            )
+        raise RuntimeError(f"Unknown DB mode for {source_id}: {mode}")
+
     mode = db_mode()
     if mode == "local":
-        path = os.environ.get("APP_DB", "")
-        if not path:
-            raise RuntimeError("APP_DB not set — link_app_data_source first")
-        return sqlite3.connect(path)
+        return _connect_local(os.environ.get("APP_DB", ""))
     if mode == "turso":
-        url = os.environ.get("PAPR_DB_URL", "")
-        token = os.environ.get("PAPR_DB_AUTH_TOKEN", "")
-        if not url or not token:
-            raise RuntimeError("PAPR_DB_URL / PAPR_DB_AUTH_TOKEN not set")
-        return _TursoConnection(url, token)
+        return _connect_turso(
+            os.environ.get("PAPR_DB_URL", ""),
+            os.environ.get("PAPR_DB_AUTH_TOKEN", ""),
+        )
     raise RuntimeError(
-        "No linked database — call link_app_data_source before using papr_db"
+        "No linked database — attach_database first, or pass connect(source_id=alias)"
     )
 
 

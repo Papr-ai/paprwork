@@ -61,14 +61,9 @@
   font-size: 12px;
 }
 
-.mini-app-data-sources__primary {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: rgba(1, 97, 224, 0.12);
-  color: #0161e0;
+.mini-app-data-sources__source-id {
+  font-size: 11px;
+  color: var(--text-secondary);
 }
 
 .mini-app-data-sources__path {

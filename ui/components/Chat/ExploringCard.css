@@ -130,6 +130,33 @@
   font-weight: bold;
 }
 
+.exploring-tool-warning {
+  color: #f59e0b; /* Amber */
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.exploring-tool-feedback {
+  margin: 0 0 4px 18px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.exploring-tool-feedback--error {
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.15);
+}
+
+.exploring-tool-feedback--warning {
+  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.15);
+}
+
 .exploring-tool-interrupted {
   font-size: 13px;
   line-height: 1;

@@ -5,8 +5,16 @@
 import { useChatStore, defaultChatState } from "../stores/chatStore";
 import { useTabStore } from "../stores/tabStore";
 
+/** Prevents concurrent empty-chat creation during workspace reload races. */
+let pendingDefaultChatTabId: string | null = null;
+
 function createTempChatId(): string {
   return `temp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+}
+
+/** Test hook — reset in-flight default chat state between unit tests. */
+export function resetDefaultChatTabGuardForTests(): void {
+  pendingDefaultChatTabId = null;
 }
 
 function createEmptyChatTab(): string {
@@ -37,11 +45,23 @@ export function switchToChatTab(): string {
 
 /** Returns the active tab id after ensuring some tab exists (chat if none). */
 export function ensureDefaultChatTab(): string {
-  const { activeTabId, getTab } = useTabStore.getState();
+  const { activeTabId, getTab, switchToTab } = useTabStore.getState();
 
   if (activeTabId && getTab(activeTabId)) {
+    pendingDefaultChatTabId = null;
     return activeTabId;
   }
 
-  return switchToChatTab();
+  if (pendingDefaultChatTabId) {
+    const pendingTab = getTab(pendingDefaultChatTabId);
+    if (pendingTab) {
+      switchToTab(pendingDefaultChatTabId);
+      return pendingDefaultChatTabId;
+    }
+    pendingDefaultChatTabId = null;
+  }
+
+  const tabId = switchToChatTab();
+  pendingDefaultChatTabId = tabId;
+  return tabId;
 }

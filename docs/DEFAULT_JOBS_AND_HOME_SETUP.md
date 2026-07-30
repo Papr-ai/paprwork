@@ -36,9 +36,9 @@
 2. **For each job:**
    - Reads `job.json` to get configuration
    - Checks if job ID already exists (skip if yes)
-   - **Copies** entire job folder to `~/Papr/Jobs/{jobId}/`
+   - **Copies** entire job folder to `$PAPR_HOME/Jobs/{jobId}/`
      - Includes: `job.json`, `code/`, `data/data.db`, `logs/`, `migrations/`
-   - **Registers** job in `~/Papr/data/jobs.json`
+   - **Registers** job in `$PAPR_HOME/data/jobs.json`
    - **Resets** runtime fields (status → idle, clears errors/lastRunAt)
 3. **Saves** jobs index to disk
 
@@ -46,9 +46,9 @@
 
 1. **Reads** bundled apps from `dist/resources/default-apps/`
 2. **For home dashboard:**
-   - Copies app files to `~/Papr/apps/{appId}/`
+   - Copies app files to `$PAPR_HOME/apps/{appId}/`
    - **Includes pre-linked** `data-sources.json` with both jobs
-   - Registers in `~/Papr/data/apps.json`
+   - Registers in `$PAPR_HOME/data/apps.json`
 
 ### Settings Defaults (`gateway/websocket/settings.ts`)
 
@@ -108,13 +108,13 @@ To test the installation flow:
 
 ```bash
 # 1. Delete existing jobs and home app
-rm -rf ~/Papr/Jobs/2cafb2e9-696b-42db-98fa-5d605977123c
-rm -rf ~/Papr/Jobs/6c840212-9cdc-4b2e-a3ae-951ee2f277a1
-rm -rf ~/Papr/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c
+rm -rf $PAPR_HOME/Jobs/2cafb2e9-696b-42db-98fa-5d605977123c
+rm -rf $PAPR_HOME/Jobs/6c840212-9cdc-4b2e-a3ae-951ee2f277a1
+rm -rf $PAPR_HOME/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c
 
 # 2. Remove from indexes
-# Edit ~/Papr/data/jobs.json and remove both job entries
-# Edit ~/Papr/data/apps.json and remove home app entry
+# Edit $PAPR_HOME/data/jobs.json and remove both job entries
+# Edit $PAPR_HOME/data/apps.json and remove home app entry
 
 # 3. Restart app
 npm start
@@ -127,7 +127,7 @@ npm start
 
 # 5. Click home button → Should open dashboard with sample data
 # 6. Click "Generate My Real Brief" → Should run job
-# 7. Check ~/Papr/Jobs/ - both job folders should exist
+# 7. Check $PAPR_HOME/Jobs/ - both job folders should exist
 ```
 
 ## Known Issues

@@ -106,7 +106,7 @@ async function readSleepPrompt(): Promise<string> {
   return (
     normalizePortableJobPrompt(
       templateContent ||
-        "Review recent chats and jobs, distill learnings into ~/Papr/workspace/*.md",
+        "Review recent chats and jobs, distill learnings into $PAPR_HOME/workspace/*.md",
     )
   );
 }

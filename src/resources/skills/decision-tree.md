@@ -147,7 +147,7 @@ Examples: "Create a lead management system" · "Build a social media tracker" ·
 **Agent must explore/decide/iterate?** → Agent Job  
 **Has "now/currently/this"?** → Sub-agent (delegate_task)  
 **Just data transformation?** → Script Job (Python/Node)  
-**Needs UI?** → Add Mini-app (reads from linked SQLite via `create_job({ appIds })` auto-link or `attach_database`)  
+**Needs UI?** → Add Mini-app (`create_database` → `attach_database` → `/api/db/*` with `sourceId`)  
 **Recurring + UI?** → Full stack: Jobs + SQLite + Mini-app
 
 ---
@@ -164,7 +164,7 @@ Examples: "Create a lead management system" · "Build a social media tracker" ·
 
 **Do NOT create script job when AUTONOMOUS reasoning is needed** — If the agent must decide what to search/fix/explore, use Agent Job.
 
-**Do NOT build a separate backend when SQLite works** — Jobs write to `$APP_DB` / `$JOB_DB`; apps read via `/api/db/*`. `create_job({ appIds })` auto-links — manual `link_app_data_source` only as fallback.
+**Do NOT build a separate backend when SQLite works** — Jobs use `writeDbIds` → `PAPR_DB_*`; apps read/write via `/api/db/*` with `sourceId`. Link with `attach_database` first.
 
 ---
 

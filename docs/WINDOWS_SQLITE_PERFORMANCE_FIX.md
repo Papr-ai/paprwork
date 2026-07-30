@@ -111,11 +111,11 @@ All SQLite databases in the application received these optimizations:
    - Code file indexing status
    - Cache: 5MB, mmap: 15MB
 
-4. **PlanService** (`~/Papr/data/plans.db`)
+4. **PlanService** (`$PAPR_HOME/data/plans.db`)
    - Agent plans, steps
    - Cache: 5MB, mmap: 15MB
 
-5. **JobDatabase** (`~/Papr/Jobs/{jobId}/data/data.db`)
+5. **JobDatabase** (`$PAPR_HOME/Jobs/{jobId}/data/data.db`)
    - Per-job data (many instances)
    - Cache: 5MB, mmap: 15MB
 
@@ -170,7 +170,7 @@ console.log('Temp store:', db.pragma('temp_store', { simple: true }));
    ```bash
    # Delete databases
    rm -rf ~/.paprwork-v2/*.db*
-   rm -rf ~/Papr/data/*.db*
+   rm -rf $PAPR_HOME/data/*.db*
    
    # Start app
    npm start

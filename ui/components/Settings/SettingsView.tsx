@@ -13,6 +13,7 @@ import { AIModelsTab } from "./AIModelsTab";
 import { IntegrationKeysTab } from "./IntegrationKeysTab";
 import { CloudSyncTab } from "./CloudSyncTab";
 import { DatabasesTab } from "./DatabasesTab";
+import { WorkspaceMigrationTab } from "./WorkspaceMigrationTab";
 import "./SettingsView.css";
 
 export function SettingsView() {
@@ -117,6 +118,24 @@ export function SettingsView() {
           Databases
         </button>
         <button
+          className={`settings-tab ${activeTab === "migration" ? "settings-tab--active" : ""}`}
+          onClick={() => setActiveTab("migration")}
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <path d="M12 3v12" />
+            <path d="m8 11 4 4 4-4" />
+            <path d="M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" />
+          </svg>
+          Migration
+        </button>
+        <button
           className={`settings-tab ${activeTab === "profile" ? "settings-tab--active" : ""}`}
           onClick={() => setActiveTab("profile")}
         >
@@ -196,6 +215,7 @@ export function SettingsView() {
         {activeTab === "keys" && <IntegrationKeysTab />}
         {activeTab === "cloud" && <CloudSyncTab />}
         {activeTab === "databases" && <DatabasesTab />}
+        {activeTab === "migration" && <WorkspaceMigrationTab />}
         {activeTab === "profile" && <ProfileTab />}
         {activeTab === "permissions" && <PermissionsTab />}
         {activeTab === "privacy" && <PrivacyTab />}

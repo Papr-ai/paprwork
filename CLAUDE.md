@@ -630,7 +630,7 @@ fetch('/api/bash/run', {
 ### Enhancement 30: Automatic Hybrid Code Search ✅ IMPLEMENTED
 **Added:** 2026-03-31
 **Problem:** Agent used bash grep to search code but missed semantically related files. For example, searching for "authentication" would miss files containing login(), handleAuth(), verifyUser() because the literal text "authentication" didn't appear.
-**Solution:** Enhanced bash tool to automatically run Papr Memory semantic search in parallel with grep when searching `~/Papr/apps/` or `~/Papr/Jobs/`. Results are combined with clear section markers.
+**Solution:** Enhanced bash tool to automatically run Papr Memory semantic search in parallel with grep when searching `$PAPR_HOME/apps/` or `$PAPR_HOME/Jobs/`. Results are combined with clear section markers.
 **Implementation:**
 1. Added `detectPaprGrepCommand()` - Regex detection of grep in PAPR folders
 2. Added `searchPaprMemoryForCode()` - Async memory search using code schema
@@ -640,7 +640,7 @@ fetch('/api/bash/run', {
 **How It Works:**
 ```bash
 # Agent searches:
-bash({ command: "grep -r 'authentication' ~/Papr/apps/" })
+bash({ command: "grep -r 'authentication' $PAPR_HOME/apps/" })
 
 # System automatically:
 # 1. Detects grep in PAPR folder
@@ -650,7 +650,7 @@ bash({ command: "grep -r 'authentication' ~/Papr/apps/" })
 
 === Memory Search Results (Semantic) ===
 Found 3 relevant code files:
-📄 ~/Papr/apps/dashboard/auth-handler.ts
+📄 $PAPR_HOME/apps/dashboard/auth-handler.ts
    Project: app-dashboard
    Language: TypeScript
    Match: Authentication flow manager...
@@ -1163,7 +1163,7 @@ We enforce plan creation through **4 reinforcing layers**:
 
 ### Plan Persistence & Resumption
 
-- **Storage:** `~/Papr/data/plans.db` (SQLite)
+- **Storage:** `$PAPR_HOME/data/plans.db` (SQLite)
 - **Associated with:** `chatId`
 - **Status:** `active`, `completed`, or `cancelled`
 - **On chat reopen:** Active plans automatically loaded into system prompt with progress indicators (☑/▶/☐)
@@ -1282,7 +1282,7 @@ Paprwork V2 now supports OpenAI's latest GPT-5.4 models with native computer use
 **Added:** 2026-03-28
 **Problem:** Limited observability into job execution patterns, all errors treated the same (network blips retry forever, auth failures waste retries), agent jobs always returned exit code 0 even on failure.
 **Solution:** 
-1. Added run history tracking - persists every run to `~/Papr/data/job-runs.jsonl` with auto-pruning
+1. Added run history tracking - persists every run to `$PAPR_HOME/data/job-runs.jsonl` with auto-pruning
 2. Added transient/permanent error classification - network errors retry, auth errors stop immediately
 3. Added log rotation - auto-prune logs >2MB to last 2000 lines
 4. Added verbose scheduler logging - see what scheduler is doing on every tick
@@ -1740,10 +1740,10 @@ npm run set-home-app bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c
 npm run set-home-app --clear
 
 # Find app IDs
-cat ~/Papr/data/apps.json | jq '.[] | {id, title}'
+cat $PAPR_HOME/data/apps.json | jq '.[] | {id, title}'
 ```
 **Architecture:**
-- **Settings Storage:** `preferences.defaultHomeAppId` in `~/Papr/data/settings.json`
+- **Settings Storage:** `preferences.defaultHomeAppId` in `$PAPR_HOME/data/settings.json`
 - **Home Button Handler:** Checks for default app, opens it if configured, falls back to home tab
 - **Home Tab Redirect:** If home tab created directly, redirects to configured app
 - **Graceful Fallback:** If app doesn't exist, shows original placeholder
@@ -2371,7 +2371,7 @@ nativeTheme.on('updated', () => {
 **How It Works:**
 1. First launch: `AppService.installDefaultApps()` reads from `dist/resources/default-apps/`
 2. Checks app ID from `app-id.txt`: `bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c`
-3. Copies to user directory if not exists: `~/Papr/apps/{appId}/`
+3. Copies to user directory if not exists: `$PAPR_HOME/apps/{appId}/`
 4. Subsequent launches skip installation if app exists
 **Files Changed:**
 - `electron-builder.json` - Added resources directory pattern
@@ -2452,8 +2452,8 @@ private getNvmEnv(): NodeJS.ProcessEnv {
 - LocalStorageProvider (`~/.paprwork-v2/chats.db`) - 10MB cache, 30MB mmap
 - AppStateStorage (`~/.paprwork-v2/app-state.db`) - 5MB cache, 15MB mmap
 - CodeIndexTracker (`~/.paprwork-v2/code-index.db`) - 5MB cache, 15MB mmap
-- PlanService (`~/Papr/data/plans.db`) - 5MB cache, 15MB mmap
-- JobDatabase (`~/Papr/Jobs/{id}/data/data.db`) - 5MB cache, 15MB mmap per job
+- PlanService (`$PAPR_HOME/data/plans.db`) - 5MB cache, 15MB mmap
+- JobDatabase (`$PAPR_HOME/Jobs/{id}/data/data.db`) - 5MB cache, 15MB mmap per job
 **Performance Impact (Windows):**
 | Operation | Before | After | Improvement |
 |-----------|--------|-------|-------------|
@@ -3023,7 +3023,7 @@ if (!isEmoji) {
 - **Before:** Plain text "chart", "shield" visible in icon circles, agent could create invalid icons
 - **After:** All apps show proper SVG icons, Zod validation prevents future invalid icons ✅
 - **Prevention:** Tool-level validation blocks plain text, UI gracefully handles legacy data
-**Run migration:** `npm run fix-app-icons` (processes all apps in `~/Papr/data/apps.json`)
+**Run migration:** `npm run fix-app-icons` (processes all apps in `$PAPR_HOME/data/apps.json`)
 
 ---
 
@@ -3637,7 +3637,7 @@ if (delegationCardMap.size > 0) {
 **Problem:** Renderer getting 403 Forbidden errors when sending telemetry events: `{"error":"anonymous_id mismatch"}`
 **Root Cause:** Two separate settings storage systems out of sync:
 1. Electron Main uses `electron-store` at `~/Library/Application Support/Papr Work/config.json`
-2. Gateway WebSocket handler used custom JSON at `~/Papr/data/settings.json` (without telemetry data)
+2. Gateway WebSocket handler used custom JSON at `$PAPR_HOME/data/settings.json` (without telemetry data)
 3. Renderer read from Gateway's file → got different/missing installId
 4. Gateway validation checked against env var from Main's electron-store → mismatch
 **Solution:** Modified Gateway's `loadSettings()` to include telemetry data from environment variables passed by Main process
@@ -4485,7 +4485,7 @@ npm run start:cloud-app-host   # separate terminal
 npm run test:cloud-app-host -- --app-id=<throwaway-uuid> --host=http://localhost:8787
 
 # Rules for agents running this test:
-# 1. NEVER run without --app-id (default picks first real app from ~/Papr/data/apps.json)
+# 1. NEVER run without --app-id (default picks first real app from $PAPR_HOME/data/apps.json)
 # 2. Use a disposable test app, NOT production apps like Audit Workbench
 # 3. Test publishes visibility:team + slug e2e-* — will overwrite memory publish config
 # 4. After testing, unpublish throwaway app or republish production app from Paprwork UI

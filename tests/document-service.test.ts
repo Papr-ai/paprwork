@@ -133,4 +133,24 @@ describe("DocumentService", () => {
     // All non-word chars stripped, fallback to "untitled"
     expect(created.id).toBe("untitled");
   });
+
+  test("repairs documents with content.md but missing meta.json", async () => {
+    const docId = "agent-written-doc";
+    const docDir = path.join(testHomeDir, "Papr", "documents", docId);
+    await fs.mkdir(docDir, { recursive: true });
+    await fs.writeFile(
+      path.join(docDir, "content.md"),
+      "# Agent Draft\n\nBody text for preview.",
+      "utf-8",
+    );
+
+    const listed = await documentService.listDocuments();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.id).toBe(docId);
+    expect(listed[0]?.title).toBe("Agent Draft");
+    expect(listed[0]?.preview).toContain("Body text");
+
+    const metaRaw = await fs.readFile(path.join(docDir, "meta.json"), "utf-8");
+    expect(JSON.parse(metaRaw).title).toBe("Agent Draft");
+  });
 });

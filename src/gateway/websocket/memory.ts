@@ -7,13 +7,13 @@
  */
 
 import type { WebSocket } from "ws";
-import { getPaprWorkspaceDir } from "../../core/utils/paprRoot.js";
+import { getPaprRoot, getPaprWorkspaceDir } from "../../core/utils/paprRoot.js";
+import { resolvePaprAgentPath } from "../../core/utils/paprAgentPaths.js";
 import { resolvePaprUserDataPath } from "../../core/utils/paprWorkspace.js";
 import type { WSMessage } from "./index.js";
 import { sendResponse, sendError } from "./index.js";
 import * as fs from "fs";
 import * as path from "path";
-import * as os from "os";
 import { exec } from "child_process";
 import { promisify } from "util";
 
@@ -204,6 +204,14 @@ async function handleSaveWorkspace(
   }
 }
 
+type MemoryOpenFolderTarget = "workspace" | "paprHome";
+
+interface MemoryOpenFolderPayload {
+  folderPath?: string;
+  /** Prefer target — resolves active org/namespace paths on the gateway. */
+  target?: MemoryOpenFolderTarget;
+}
+
 /**
  * Open folder in system file explorer
  */
@@ -212,16 +220,19 @@ async function handleOpenFolder(
   message: WSMessage
 ): Promise<void> {
   try {
-    const { folderPath } = message.payload as { folderPath: string };
+    const { folderPath, target } = message.payload as MemoryOpenFolderPayload;
 
-    if (!folderPath) {
-      throw new Error("folderPath is required");
+    let resolvedPath: string;
+    if (target === "workspace") {
+      resolvedPath = workspaceDir();
+    } else if (target === "paprHome") {
+      resolvedPath = getPaprRoot();
+    } else if (folderPath) {
+      // Rewrite legacy ~/Papr/apps|Jobs|workspace|… to active org/namespace roots
+      resolvedPath = resolvePaprAgentPath(folderPath);
+    } else {
+      throw new Error("folderPath or target is required");
     }
-
-    // Resolve ~ to home directory
-    const resolvedPath = folderPath.startsWith("~")
-      ? path.join(os.homedir(), folderPath.slice(1))
-      : folderPath;
 
     // Ensure folder exists
     if (!fs.existsSync(resolvedPath)) {

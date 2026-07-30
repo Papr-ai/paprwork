@@ -29,7 +29,7 @@ rm -rf ~/.papr-linkedin/
 pkill -f "remote-debugging-port=9222"
 
 # Check for existing LinkedIn jobs
-ls ~/Papr/Jobs/ | grep -i linkedin
+ls $PAPR_HOME/Jobs/ | grep -i linkedin
 # Delete any found
 ```
 
@@ -85,10 +85,10 @@ create_job({
 **Check Job Files:**
 ```bash
 # Find the auth job ID
-AUTH_JOB_ID=$(cat ~/Papr/data/jobs.json | jq -r '.[] | select(.name == "LinkedIn Auth — Cookie Capture") | .id')
+AUTH_JOB_ID=$(cat $PAPR_HOME/data/jobs.json | jq -r '.[] | select(.name == "LinkedIn Auth — Cookie Capture") | .id')
 
 # Verify job structure
-ls ~/Papr/Jobs/$AUTH_JOB_ID/
+ls $PAPR_HOME/Jobs/$AUTH_JOB_ID/
 # Should show: job.json, linkedin_auth.js, data/ (after first run)
 ```
 
@@ -110,13 +110,13 @@ ls ~/Papr/Jobs/$AUTH_JOB_ID/
 **Verification:**
 ```bash
 # Read the generated file
-cat ~/Papr/Jobs/$AUTH_JOB_ID/linkedin_auth.js | grep -i "remote-debugging-port"
+cat $PAPR_HOME/Jobs/$AUTH_JOB_ID/linkedin_auth.js | grep -i "remote-debugging-port"
 # Should find: --remote-debugging-port=9222
 
-cat ~/Papr/Jobs/$AUTH_JOB_ID/linkedin_auth.js | grep -i "checkpoint"
+cat $PAPR_HOME/Jobs/$AUTH_JOB_ID/linkedin_auth.js | grep -i "checkpoint"
 # Should find: waitForLinkedInHome function
 
-cat ~/Papr/Jobs/$AUTH_JOB_ID/linkedin_auth.js | grep -i ".papr-linkedin"
+cat $PAPR_HOME/Jobs/$AUTH_JOB_ID/linkedin_auth.js | grep -i ".papr-linkedin"
 # Should find: ~/.papr-linkedin/auth.json storage
 ```
 
@@ -159,10 +159,10 @@ create_job({
 **Check Schedule:**
 ```bash
 # Find Chrome Manager job
-MANAGER_JOB_ID=$(cat ~/Papr/data/jobs.json | jq -r '.[] | select(.name == "LinkedIn Chrome Manager") | .id')
+MANAGER_JOB_ID=$(cat $PAPR_HOME/data/jobs.json | jq -r '.[] | select(.name == "LinkedIn Chrome Manager") | .id')
 
 # Check schedule
-cat ~/Papr/Jobs/$MANAGER_JOB_ID/job.json | jq '.schedule'
+cat $PAPR_HOME/Jobs/$MANAGER_JOB_ID/job.json | jq '.schedule'
 # Should show: { "enabled": true, "cron": "*/5 * * * *" }
 ```
 
@@ -183,13 +183,13 @@ cat ~/Papr/Jobs/$MANAGER_JOB_ID/job.json | jq '.schedule'
 
 **Verification:**
 ```bash
-cat ~/Papr/Jobs/$MANAGER_JOB_ID/chrome-manager.js | grep -i "li_at"
+cat $PAPR_HOME/Jobs/$MANAGER_JOB_ID/chrome-manager.js | grep -i "li_at"
 # Should find: token rotation detection logic
 
-cat ~/Papr/Jobs/$MANAGER_JOB_ID/chrome-manager.js | grep -i "session_expired"
+cat $PAPR_HOME/Jobs/$MANAGER_JOB_ID/chrome-manager.js | grep -i "session_expired"
 # Should find: status update on expiration
 
-cat ~/Papr/Jobs/$MANAGER_JOB_ID/chrome-manager.js | grep -i "verifyAndRefreshSession"
+cat $PAPR_HOME/Jobs/$MANAGER_JOB_ID/chrome-manager.js | grep -i "verifyAndRefreshSession"
 # Should find: main refresh function
 ```
 
@@ -248,7 +248,7 @@ cat ~/.papr-linkedin/auth.json
 # Should have: li_at, jsessionid, profileName, cookieExpires
 
 # Check job data file
-cat ~/Papr/Jobs/$AUTH_JOB_ID/data/linkedin_auth.json
+cat $PAPR_HOME/Jobs/$AUTH_JOB_ID/data/linkedin_auth.json
 # Should match shared file
 
 # Check Chrome is running
@@ -256,7 +256,7 @@ lsof -i :9222
 # Should show Chrome process
 
 # Check job output
-cat ~/Papr/Jobs/$AUTH_JOB_ID/logs/latest.log | tail -20
+cat $PAPR_HOME/Jobs/$AUTH_JOB_ID/logs/latest.log | tail -20
 # Should show: "✓ Connected as: [Your Name]"
 # Should show: "Keeping Chrome running on port 9222"
 ```
@@ -281,7 +281,7 @@ cat ~/Papr/Jobs/$AUTH_JOB_ID/logs/latest.log | tail -20
 **Manual Trigger:**
 ```bash
 # Get job ID
-MANAGER_JOB_ID=$(cat ~/Papr/data/jobs.json | jq -r '.[] | select(.name == "LinkedIn Chrome Manager") | .id')
+MANAGER_JOB_ID=$(cat $PAPR_HOME/data/jobs.json | jq -r '.[] | select(.name == "LinkedIn Chrome Manager") | .id')
 
 # Trigger manually
 curl -X POST http://localhost:18789/api/jobs/run \
@@ -299,7 +299,7 @@ curl -X POST http://localhost:18789/api/jobs/run \
 **Verification:**
 ```bash
 # Check Chrome Manager logs
-cat ~/Papr/Jobs/$MANAGER_JOB_ID/logs/latest.log | tail -30
+cat $PAPR_HOME/Jobs/$MANAGER_JOB_ID/logs/latest.log | tail -30
 
 # Should show one of:
 # "✓ Cookie unchanged — session healthy"
@@ -307,7 +307,7 @@ cat ~/Papr/Jobs/$MANAGER_JOB_ID/logs/latest.log | tail -30
 # "🔄 LinkedIn rotated the li_at token — saving fresh cookie!"
 
 # Verify it didn't launch new Chrome (already running)
-cat ~/Papr/Jobs/$MANAGER_JOB_ID/logs/latest.log | grep "already running"
+cat $PAPR_HOME/Jobs/$MANAGER_JOB_ID/logs/latest.log | grep "already running"
 # Should find: "Chrome already running"
 ```
 
@@ -375,7 +375,7 @@ echo "After:  $AFTER"
 
 **Simulation:**
 1. Stop Chrome: `pkill -f "remote-debugging-port=9222"`
-2. Delete cookies from profile: `rm -rf ~/Papr/Jobs/$AUTH_JOB_ID/data/chrome-profile/Default/Cookies*`
+2. Delete cookies from profile: `rm -rf $PAPR_HOME/Jobs/$AUTH_JOB_ID/data/chrome-profile/Default/Cookies*`
 3. Trigger Chrome Manager
 
 **Expected Behavior:**
@@ -395,11 +395,11 @@ curl -X POST http://localhost:18789/api/jobs/run \
 sleep 30
 
 # Check logs
-cat ~/Papr/Jobs/$MANAGER_JOB_ID/logs/latest.log | grep -i "expired"
+cat $PAPR_HOME/Jobs/$MANAGER_JOB_ID/logs/latest.log | grep -i "expired"
 # Should show: "LinkedIn session: EXPIRED"
 
 # Check database status (if using one)
-sqlite3 ~/Papr/data/linkedin_app.db \
+sqlite3 $PAPR_HOME/data/linkedin_app.db \
   "SELECT status, updated_at FROM linkedin_account WHERE id=1"
 # Should show: session_expired | [timestamp]
 ```
@@ -576,7 +576,7 @@ main();
 **Solution:** Kill all Chrome processes, delete singleton files
 ```bash
 pkill -f "Google Chrome"
-rm ~/Papr/Jobs/$AUTH_JOB_ID/data/chrome-profile/SingletonLock
+rm $PAPR_HOME/Jobs/$AUTH_JOB_ID/data/chrome-profile/SingletonLock
 ```
 
 ### Issue 2: Port 9222 Already in Use
@@ -610,7 +610,7 @@ rm -rf ~/.papr-linkedin/
 # Use UI or: delete_job({ jobId: "..." })
 
 # Clear Chrome profile
-rm -rf ~/Papr/Jobs/$AUTH_JOB_ID/data/chrome-profile/
+rm -rf $PAPR_HOME/Jobs/$AUTH_JOB_ID/data/chrome-profile/
 ```
 
 ---
@@ -627,6 +627,6 @@ If any test fails, document:
 
 Include:
 - Agent conversation log
-- Job logs (`~/Papr/Jobs/{jobId}/logs/latest.log`)
+- Job logs (`$PAPR_HOME/Jobs/{jobId}/logs/latest.log`)
 - Browser console errors (if applicable)
 - System info (macOS version, Chrome version)

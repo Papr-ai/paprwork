@@ -36,7 +36,8 @@ data = json.loads(json.load(open(job_json))["lastOutput"])
 ### SQLite Output
 - **Use when:** UI will query/display data
 - **Examples:** Dashboards, reports, monitoring, analytics
-- **How:** Job writes to `$APP_DB` (UI tables) + `$JOB_DB` (scratch). `create_job` with `appIds` auto-links; or `create_database` + `attach_database` for standalone DBs.
+- **How:** Job writes via `writeDbIds` → `PAPR_DB_*`; app reads/writes via `/api/db/query` and `/api/db/write` with `sourceId`
+- **Setup:** `create_database` → `attach_database` → `create_job({ writeDbIds: [dbId] })`
 - **Access:** REST API `/api/db/query` or TableView component
 
 ### Live DB change events (SSE)
@@ -129,7 +130,7 @@ Creating artifacts?
   → Tool-based (write_file, create_app)
 
 UI needs to query?
-  → SQLite — `create_job({ appIds })` auto-links, or `attach_database` for standalone DBs
+  → SQLite — `create_database` → `attach_database` → `create_job({ writeDbIds })`
 
 Needs specialization?
   → delegate_task with complete context

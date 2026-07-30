@@ -26,6 +26,8 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
   const [workspaceMode, setWorkspaceMode] = useState<AppWorkspaceMode>("preview");
   const [iframeLoadKey, setIframeLoadKey] = useState(0);
   const [iframeLoadError, setIframeLoadError] = useState<string | null>(null);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [appMissingInWorkspace, setAppMissingInWorkspace] = useState(false);
   const iframeRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cloud = useCloudPublish(appId, appTitle);
   const { isReady: gatewaySupervisorReady, isStarting: gatewaySupervisorStarting, status: gatewaySupervisorStatus } =
@@ -89,9 +91,19 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
     (gatewaySupervisorReady || gatewaySupervisorStatus === "unknown");
 
   useEffect(() => {
+    setAppMissingInWorkspace(false);
+    setIframeLoadError(null);
+    setRuntimeError(null);
     void (async () => {
       try {
         const resp = await gateway.send("app:get", { appId });
+        if (!resp.success) {
+          setAppMissingInWorkspace(true);
+          setIframeLoadError(
+            "This app is not in the current workspace. Close this tab or switch back to the workspace where it lives.",
+          );
+          return;
+        }
         const data = resp.data as {
           title?: string;
           cloudLineage?: ArtifactCloudLineage;
@@ -100,7 +112,10 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
         if (title) setAppTitle(title);
         setCloudLineage(data?.cloudLineage ?? null);
       } catch {
-        /* optional */
+        setAppMissingInWorkspace(true);
+        setIframeLoadError(
+          "This app is not in the current workspace. Close this tab or switch back to the workspace where it lives.",
+        );
       }
     })();
   }, [appId]);
@@ -262,6 +277,12 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
         origin?: string;
       };
       if (!entry?.message) return;
+      if (entry.level === "error") {
+        const message = entry.message.trim();
+        if (message.length > 0) {
+          setRuntimeError(message);
+        }
+      }
       void gateway
         .send("app:runtime-log", {
           appId,
@@ -341,6 +362,7 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
             </div>
           ) : null}
           {shouldLoadLocalIframe || isPublishedPreview ? (
+            !appMissingInWorkspace ? (
             <iframe
               ref={iframeRef}
               key={`${appId}-${viewMode}-${isPublishedPreview ? cloud.publishedPreviewUrl : reloadKey}-${iframeLoadKey}`}
@@ -362,6 +384,7 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
                   return;
                 }
                 setIframeLoadError(null);
+                setRuntimeError(null);
               }}
               onError={() => {
                 if (!isPublishedPreview) {
@@ -369,8 +392,19 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
                 }
               }}
             />
+            ) : null
           ) : null}
-          {iframeLoadError && !gatewaySupervisorStarting ? (
+          {runtimeError && !gatewaySupervisorStarting ? (
+            <div className="mini-app-view__overlay mini-app-view__overlay--hint">
+              <p className="mini-app-view__runtime-error-title">App failed to load</p>
+              <pre className="mini-app-view__runtime-error">{runtimeError}</pre>
+              <p className="mini-app-view__runtime-error-hint">
+                This often means a linked database path is missing after workspace migration.
+                Check the Apps page warning icon or ask the agent to fix data-sources.json.
+              </p>
+            </div>
+          ) : null}
+          {iframeLoadError && !gatewaySupervisorStarting && !runtimeError ? (
             <div className="mini-app-view__overlay mini-app-view__overlay--hint">
               <p>{iframeLoadError}</p>
             </div>

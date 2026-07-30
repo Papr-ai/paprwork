@@ -43,12 +43,28 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
           ...apps,
         ]);
       } else {
-        const [docsResponse, appsResponse] = await Promise.all([
+        const [docsResult, appsResult] = await Promise.allSettled([
           gateway.send("document:list"),
           gateway.send("app:list"),
         ]);
-        const documents = (docsResponse.data as Artifact[]) || [];
-        const apps = (appsResponse.data as Artifact[]) || [];
+
+        const documents =
+          docsResult.status === "fulfilled"
+            ? (docsResult.value.data as Artifact[]) || []
+            : [];
+        const apps =
+          appsResult.status === "fulfilled"
+            ? (appsResult.value.data as Artifact[]) || []
+            : [];
+
+        if (docsResult.status === "rejected") {
+          console.error("[useArtifacts] document:list failed:", docsResult.reason);
+          if (blockForLoad) setError("Failed to load documents");
+        }
+        if (appsResult.status === "rejected") {
+          console.error("[useArtifacts] app:list failed:", appsResult.reason);
+        }
+
         setArtifacts([...documents, ...apps]);
       }
     } catch (err) {

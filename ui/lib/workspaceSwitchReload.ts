@@ -12,9 +12,18 @@ import { gateway } from "../src/lib/gateway";
 import type { ChatMetadata } from "../types/chat";
 import { clearCloudPublishCache } from "../utils/cloudPublishCache";
 import { loadPersistedAppStateFromGateway } from "./persistedAppState";
-import { ensureDefaultChatTab } from "./ensureDefaultChatTab";
+import { ensureDefaultChatTab, resetDefaultChatTabGuardForTests } from "./ensureDefaultChatTab";
 
 const LEGACY_TAB_STORAGE_KEY = "paprwork-tab-storage";
+
+/** Coalesce org + namespace switch events that fire back-to-back into one reload. */
+let workspaceReloadInFlight: Promise<void> | null = null;
+
+/** Test hook — reset coalescing state between unit tests. */
+export function resetWorkspaceReloadForTests(): void {
+  workspaceReloadInFlight = null;
+  resetDefaultChatTabGuardForTests();
+}
 
 function clearLegacyGlobalTabCache(): void {
   try {
@@ -74,15 +83,39 @@ async function reloadSubAgentsForWorkspace(): Promise<void> {
 }
 
 export async function reloadUiForWorkspaceSwitch(): Promise<void> {
+  if (workspaceReloadInFlight) {
+    return workspaceReloadInFlight;
+  }
+
+  workspaceReloadInFlight = reloadUiForWorkspaceSwitchInner().finally(() => {
+    workspaceReloadInFlight = null;
+  });
+  return workspaceReloadInFlight;
+}
+
+async function reloadUiForWorkspaceSwitchInner(): Promise<void> {
   clearLegacyGlobalTabCache();
   clearCloudPublishCache();
+  resetDefaultChatTabGuardForTests();
+
+  // Drop tabs immediately so app/document views don't fetch stale entity IDs
+  // against the new workspace while persisted tabs reload.
+  useTabStore.setState({
+    tabs: [],
+    activeTabId: null,
+    activeLeftTab: null,
+    activeRightTab: null,
+    isSplitView: false,
+    history: [],
+    historyIndex: -1,
+  });
 
   useArtifactsStore.getState().resetForWorkspaceSwitch();
 
   resetChatListCache();
   useChatStore.getState().resetForWorkspaceSwitch();
 
-  window.dispatchEvent(new CustomEvent("papr-workspace-reload"));
+  window.dispatchEvent(new CustomEvent("papr-community-catalog-refresh"));
 
   let validChatIds = new Set<string>();
   try {
@@ -113,8 +146,22 @@ export async function reloadUiForWorkspaceSwitch(): Promise<void> {
     reloadSubAgentsForWorkspace(),
   ]);
 
+  const artifacts = useArtifactsStore.getState().artifacts;
+  const validAppIds = new Set(
+    artifacts.filter((item) => item.type === "app").map((item) => item.id),
+  );
+  const validDocumentIds = new Set(
+    artifacts
+      .filter((item) => item.type === "document")
+      .map((item) => item.id),
+  );
+
   try {
-    await loadPersistedAppStateFromGateway({ validChatIds });
+    await loadPersistedAppStateFromGateway({
+      validChatIds,
+      validAppIds,
+      validDocumentIds,
+    });
   } catch (error) {
     console.error("[WorkspaceSwitch] Failed to reload tabs:", error);
     useTabStore.setState({
@@ -128,4 +175,8 @@ export async function reloadUiForWorkspaceSwitch(): Promise<void> {
   if (!useTabStore.getState().activeTabId) {
     ensureDefaultChatTab();
   }
+
+  // Notify hooks after tabs/chats are restored — avoids premature empty chat tabs
+  // while gateway is still reinitializing.
+  window.dispatchEvent(new CustomEvent("papr-workspace-reload"));
 }

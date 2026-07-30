@@ -54,6 +54,15 @@ describe("AppService", () => {
     expect(second.title).toBe("mem0 stargazers_1");
   });
 
+  test("createApp rejects SVG icons with white circle backgrounds", async () => {
+    const badIcon =
+      '<svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="white"/><path d="M10 32h44" stroke="black"/></svg>';
+
+    await expect(
+      appService.createApp("Monitor", "Desc", [{ filename: "index.html", content: "<h1>Hi</h1>" }], badIcon),
+    ).rejects.toThrow(/circle background/i);
+  });
+
   test("createApp scaffolds backend/manifest.json and ping.py", async () => {
     const created = await appService.createApp("Backend App", "Desc", [
       { filename: "index.html", content: "<h1>Hi</h1>" },
@@ -135,20 +144,20 @@ describe("AppService", () => {
       { filename: "index.html", content: "<h1>Data App</h1>" },
     ]);
 
-    const linked = await appService.linkAppDataSource(app.id, {
+    const linked =     await appService.linkAppDataSource(app.id, {
       id: "job-1:orders",
       type: "sqlite",
       jobId: "job-1",
       alias: "orders",
       dbPath: "/tmp/job-1/data.db",
       tables: ["orders", "order_items"],
-      setPrimary: true,
     });
 
     expect(linked).toHaveLength(1);
     expect(linked[0].jobId).toBe("job-1");
     const config = await appService.getDataSourcesConfig(app.id);
-    expect(config.primary).toBe("orders");
+    expect(config.sources).toHaveLength(1);
+    expect(config.primary).toBeUndefined();
     const listed = await appService.listAppDataSources(app.id);
     expect(listed[0].alias).toBe("orders");
     const appPath = await appService.getAppPath(app.id);
@@ -156,12 +165,42 @@ describe("AppService", () => {
       path.join(appPath as string, "data-sources.json"),
       "utf8",
     );
-    expect(raw).toContain('"primary": "orders"');
+    expect(raw).not.toContain('"primary"');
     const dbTs = await fs.readFile(
       path.join(appPath as string, "db.ts"),
       "utf8",
     );
-    expect(dbTs).toContain("PRIMARY_SOURCE = 'orders'");
+    expect(dbTs).toContain("sourceId: string");
+    expect(dbTs).not.toContain("DEFAULT_SOURCE");
+  });
+
+  test("allows linking multiple databases to one app", async () => {
+    const app = await appService.createApp("Multi DB", "Desc", [
+      { filename: "index.html", content: "<h1>Multi</h1>" },
+    ]);
+
+    await appService.linkAppDataSource(app.id, {
+      id: "db-a:metrics",
+      type: "sqlite",
+      dbId: "db-a",
+      alias: "metrics",
+      dbPath: "/tmp/metrics/data.db",
+      tables: [],
+    });
+
+    const linked = await appService.linkAppDataSource(app.id, {
+      id: "db-b:billing",
+      type: "sqlite",
+      dbId: "db-b",
+      alias: "billing",
+      dbPath: "/tmp/billing/data.db",
+      tables: [],
+    });
+
+    expect(linked).toHaveLength(2);
+    const config = await appService.getDataSourcesConfig(app.id);
+    expect(config.sources).toHaveLength(2);
+    expect(config.primary).toBeUndefined();
   });
 
   test("validateApp blocks /api/db/* when no data source is linked", async () => {
@@ -201,7 +240,6 @@ describe("AppService", () => {
       alias: "data",
       dbPath: "/tmp/job-1/data.db",
       tables: [],
-      setPrimary: true,
     });
 
     const result = await appService.validateApp(app.id);
@@ -272,5 +310,103 @@ describe("AppService", () => {
         (issue) => issue.rule === "max-lines" && issue.file === "app.ts",
       ),
     ).toBe(true);
+  });
+
+  test("validateApp exempts auto-injected base.css from line limit", async () => {
+    const longCss = Array.from(
+      { length: 150 },
+      (_, i) => `.token-${i} { color: #${String(i).padStart(6, "0")}; }`,
+    ).join("\n");
+    const app = await appService.createApp("Long Base CSS App", "Desc", [
+      {
+        filename: "index.html",
+        content:
+          '<!DOCTYPE html><html><head><link rel="stylesheet" href="base.css"></head><body><div id="app"></div><script type="module" src="dist/app.js"></script></body></html>',
+      },
+      { filename: "app.ts", content: "console.log('ok');" },
+      { filename: "base.css", content: longCss },
+    ]);
+    await appService.buildApp(app.id);
+    const result = await appService.validateApp(app.id);
+
+    expect(
+      result.issues.filter(
+        (issue) => issue.rule === "max-lines" && issue.file === "base.css",
+      ),
+    ).toHaveLength(0);
+  });
+
+  test("rebuildIndexIfCorrupted reads metadata.json instead of placeholder description", async () => {
+    const appId = "11111111-1111-4111-8111-111111111111";
+    const appDir = path.join(testHomeDir, "Papr", "apps", appId);
+    await fs.mkdir(appDir, { recursive: true });
+    await fs.writeFile(
+      path.join(appDir, "index.html"),
+      "<html><head><title>HTML Title Only</title></head></html>",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(appDir, "metadata.json"),
+      JSON.stringify(
+        {
+          appId,
+          title: "Team Meetings App",
+          description: "Shared via cloud sync",
+          updatedAt: "2026-07-01T00:00:00.000Z",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const recovered = new AppService();
+    await recovered.initialize();
+    const app = (await recovered.listApps()).find((entry) => entry.id === appId);
+
+    expect(app?.title).toBe("Team Meetings App");
+    expect(app?.description).toBe("Shared via cloud sync");
+  });
+
+  test("listApps excludes apps owned by another Papr user", async () => {
+    process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID = "user-me";
+    const appId = "22222222-2222-4222-8222-222222222222";
+    const appDir = path.join(testHomeDir, "Papr", "apps", appId);
+    await fs.mkdir(appDir, { recursive: true });
+    await fs.writeFile(path.join(appDir, "index.html"), "<h1>Foreign</h1>", "utf8");
+    await fs.writeFile(
+      path.join(appDir, "metadata.json"),
+      JSON.stringify({
+        appId,
+        title: "Teammate Private App",
+        description: "Not mine",
+        ownerUserId: "user-teammate",
+        updatedAt: new Date().toISOString(),
+      }),
+      "utf8",
+    );
+
+    const dataDir = path.join(testHomeDir, "Papr", "data");
+    await fs.mkdir(dataDir, { recursive: true });
+    await fs.writeFile(
+      path.join(dataDir, "apps.json"),
+      JSON.stringify([
+        {
+          id: appId,
+          title: "Teammate Private App",
+          description: "Not mine",
+          type: "app",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ]),
+      "utf8",
+    );
+
+    const scoped = new AppService();
+    await scoped.initialize();
+    expect((await scoped.listApps()).some((entry) => entry.id === appId)).toBe(
+      false,
+    );
   });
 });

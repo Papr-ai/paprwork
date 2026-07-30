@@ -39,7 +39,7 @@ import type {
   OpenAIReasoningEffort,
   Provider,
 } from "../../core/types/agents.js";
-import { StorageManager } from "./StorageManager.js";
+import { StorageManager, getStorageManager } from "./StorageManager.js";
 import { ChatSessionManager } from "./ChatSessionManager.js";
 import { TitleGenerationService } from "./TitleGenerationService.js";
 import { getSkillService, type SkillRecord } from "./SkillService.js";
@@ -87,8 +87,13 @@ import {
   createPartialAssistantStoredMessage,
   hasPersistableAssistantContent,
 } from "./agent/messagePersistence.js";
+import {
+  clearInFlightToolResults,
+  recordInFlightToolResult,
+} from "./agent/inFlightToolResults.js";
 import { getWorkspaceService } from "./WorkspaceService.js";
 import type { WorkspaceContextData } from "../../core/agents/SystemPrompt.js";
+import { getPaprWorkspacePathsForAgent } from "../../core/utils/paprAgentPaths.js";
 import type { TokenUsageForCost } from "./CostCalculation.js";
 
 type StoredTokenUsage = TokenUsageForCost & { totalTokens: number };
@@ -137,7 +142,7 @@ export class AgentService {
   constructor() {
     this.userDataPath = resolvePaprUserDataPath();
 
-    this.storageManager = new StorageManager();
+    this.storageManager = getStorageManager();
     this.sessionManager = new ChatSessionManager(this.storageManager);
     this.chatExporter = new ChatExporter();
     this.toolRegistry = new ToolRegistry();
@@ -438,6 +443,7 @@ export class AgentService {
 
     this.sessionManager.setAbortController(chatId, abortController);
     this.sessionManager.setStreaming(chatId, true);
+    clearInFlightToolResults(chatId);
 
     // Track response state for error recovery
     let assistantText = "";
@@ -1812,6 +1818,12 @@ export class AgentService {
             result?: unknown;
           } | undefined;
           if (trPayload?.toolCallId) {
+            recordInFlightToolResult(
+              chatId,
+              trPayload.toolCallId,
+              trPayload.toolName ?? "unknown",
+              trPayload.result,
+            );
             toolResults.push({
               toolCallId: trPayload.toolCallId,
               toolName: trPayload.toolName ?? "unknown",
@@ -2056,6 +2068,7 @@ export class AgentService {
       // If a new stream started (e.g. from the auto-send queue) it will have replaced
       // the controller already — don't clobber its state.
       this.sessionManager.clearStreamingStateIfOwner(chatId, abortController);
+      clearInFlightToolResults(chatId);
 
       if (!options?.isSubAgentTrigger) {
         void import("./SubAgentResponseTrigger.js")
@@ -4086,6 +4099,7 @@ ${last15.substring(0, 8_000)}`;
       includeExtendedAppPlaybook,
       activeSkills: enabledSkills,
       workspaceContext,
+      paprWorkspacePaths: getPaprWorkspacePathsForAgent(),
       provider,
     });
   }

@@ -173,6 +173,20 @@ export class DatabaseRegistryService {
     return record;
   }
 
+  async updateLocalPath(dbId: string, localPath: string): Promise<void> {
+    const state = this.getState();
+    const record = state.databases[dbId];
+    if (!record || record.status === "tombstone") {
+      return;
+    }
+    state.databases[dbId] = {
+      ...record,
+      localPath: normalizeDbPath(localPath),
+      updatedAt: new Date().toISOString(),
+    };
+    await this.save(state);
+  }
+
   getByPath(dbPath: string): DatabaseRecord | undefined {
     const normalized = normalizeDbPath(dbPath);
     for (const record of Object.values(this.getState().databases)) {

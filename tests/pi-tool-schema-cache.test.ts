@@ -23,6 +23,10 @@ describe("piToolSchemaCache", () => {
     expect(getPiToolSchemaCacheSize()).toBe(1);
     expect(second).toBe(first);
     expect(first).not.toBeNull();
+    expect(first.properties).toBeDefined();
+    expect(Object.keys(first.properties as Record<string, unknown>)).toContain(
+      "path",
+    );
   });
 
   test("uses separate cache entries per tool id", () => {

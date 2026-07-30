@@ -78,7 +78,12 @@ const ACCESS_OPTIONS: {
   {
     value: "link",
     label: "Anyone with the link",
-    description: "Anyone with the link can sign in to open it",
+    description: "Unlisted — share via link (optionally require Papr sign-in)",
+  },
+  {
+    value: "public",
+    label: "Public in Community Apps",
+    description: "Listed in Community Apps — any Papr user can discover and open it",
   },
 ];
 
@@ -362,7 +367,8 @@ export function MiniAppPublishBar({
     cloud.live && isCodePermission(permission) && !isFork;
 
   const removeFromCommunity = () => {
-    applySharing("private", "read");
+    const nextPermission = permission === "edit" ? "edit" : "write";
+    applySharing("link", nextPermission, false);
   };
 
   const takeOffWeb = () => {
@@ -739,6 +745,23 @@ export function MiniAppPublishBar({
               />
             ) : null}
 
+            {cloud.live && listsInCommunity ? (
+              <div className="share-sheet__section">
+                <p className="share-sheet__notice share-sheet__notice--success">
+                  Listed in <strong>Community Apps</strong> — others can discover and open
+                  this app
+                </p>
+                <button
+                  type="button"
+                  className="share-sheet__secondary-btn"
+                  disabled={cloud.busy}
+                  onClick={removeFromCommunity}
+                >
+                  Share via link only
+                </button>
+              </div>
+            ) : null}
+
             {/* Code access - simplified */}
             {showCodePanel && cloud.live ? (
               <div className="share-sheet__section">
@@ -746,22 +769,6 @@ export function MiniAppPublishBar({
                 <p className="share-sheet__section-desc">
                   Others can install this app's source into their Paprwork to customize or contribute changes back.
                 </p>
-
-                {listsInCommunity ? (
-                  <>
-                    <p className="share-sheet__notice share-sheet__notice--success">
-                      Listed in <strong>Community Apps</strong> — others can discover and install
-                    </p>
-                    <button
-                      type="button"
-                      className="share-sheet__secondary-btn"
-                      disabled={cloud.busy}
-                      onClick={removeFromCommunity}
-                    >
-                      Remove from Community
-                    </button>
-                  </>
-                ) : null}
 
                 {showOwnerChangeRequests ? (
                   <CloudChangeRequestsPanel sourceAppId={appId} busy={cloud.busy} />

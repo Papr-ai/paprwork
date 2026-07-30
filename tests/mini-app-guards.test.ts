@@ -1,13 +1,12 @@
-import os from "os";
 import path from "path";
 import { describe, expect, it } from "vitest";
-import { getMiniAppWriteBlockReason } from "../src/core/utils/paprRoot.js";
+import { getMiniAppWriteBlockReason, getPaprAppsRoot } from "../src/core/utils/paprRoot.js";
 import {
   formatEsbuildErrorMessage,
   isEsbuildInfrastructureError,
 } from "../src/gateway/utils/miniAppTranspile.js";
 
-const appsRoot = path.join(os.homedir(), "Papr", "apps");
+const appsRoot = getPaprAppsRoot();
 
 describe("getMiniAppWriteBlockReason", () => {
   it("allows writes outside ~/Papr/apps", () => {
@@ -18,7 +17,8 @@ describe("getMiniAppWriteBlockReason", () => {
     const reason = getMiniAppWriteBlockReason(
       path.join(appsRoot, "abc-123", "app.ts"),
     );
-    expect(reason).toContain("edit_file");
+    expect(reason).not.toBeNull();
+    expect(reason).toContain("write_file");
     expect(reason).toContain("abc-123");
     expect(reason).toContain("app.ts");
   });
@@ -27,6 +27,7 @@ describe("getMiniAppWriteBlockReason", () => {
     const reason = getMiniAppWriteBlockReason(
       path.join(appsRoot, "abc-123", "dist", "app.js"),
     );
+    expect(reason).not.toBeNull();
     expect(reason).toContain("dist/");
     expect(reason).toContain("validate_app");
   });

@@ -12,6 +12,19 @@ import type {
   CustomKeyMetadata,
 } from "../../core/storage/CustomKeysStorage.js";
 import { loadCustomKeysMetadataFromFile } from "../utils/customKeysFile.js";
+import { paprApiKeyMatchesActiveWorkspace } from "../../core/utils/paprApiKey.js";
+
+function readEnvKey(name: string): string | null {
+  const value = process.env[name]?.trim();
+  if (!value) return null;
+  if (name === "PAPR_API_KEY" && !paprApiKeyMatchesActiveWorkspace(value)) {
+    console.warn(
+      "[CustomKeysService] Ignoring PAPR_API_KEY env fallback — wrong namespace for active workspace",
+    );
+    return null;
+  }
+  return value;
+}
 
 interface CustomKeyWithValue extends CustomKeyMetadata {
   value: string;
@@ -340,7 +353,7 @@ export class CustomKeysService {
 
     if (!this.ipcAvailable) {
       console.warn(`[CustomKeysService] No IPC - checking env for ${name}`);
-      return process.env[name] || null;
+      return readEnvKey(name);
     }
 
     const request = (async () => {
@@ -357,7 +370,7 @@ export class CustomKeysService {
           console.warn(
             `[CustomKeysService] IPC channel closed - checking env for ${name}`,
           );
-          return process.env[name] || null;
+          return readEnvKey(name);
         }
 
         // IPC timeout: reuse REQUEST_KEYS (works even when CUSTOM_KEYS_GET_BY_NAME stalls)
@@ -379,7 +392,7 @@ export class CustomKeysService {
           );
         }
 
-        const envValue = process.env[name] || null;
+        const envValue = readEnvKey(name);
         if (envValue) {
           this.valueCache.set(name, { value: envValue, cachedAt: Date.now() });
           return envValue;

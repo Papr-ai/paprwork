@@ -1,3 +1,5 @@
+> **Paths:** `$PAPR_HOME` = active org/namespace workspace (`~/Papr/orgs/{orgId}/namespaces/{nsId}/`). See `docs/PAPR_WORKSPACE_PATHS.md`. Prefer app/job tools over raw paths.
+
 # Agent Job Output & Delivery Guide
 
 **Last Updated:** 2026-02-19
@@ -431,7 +433,7 @@ const lastRun = jobData.lastOutput
 - Examples: Analytics data, monitoring logs, inventory
 
 **Pattern:**
-1. Job writes to `$JOB_DB` (~/Papr/jobs/{jobId}/data/data.db)
+1. Job writes to `$JOB_DB` ($PAPR_HOME/Jobs/{jobId}/data/data.db)
 2. Link app to job DB via `link_app_data_source`
 3. UI queries via REST API or WebSocket
 

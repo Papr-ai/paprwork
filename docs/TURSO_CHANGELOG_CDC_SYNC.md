@@ -5,7 +5,7 @@
 
 ## Problem
 
-App-linked job SQLite (`~/Papr/Jobs/{id}/data/data.db`) syncs to Turso for cloud mini-apps. The previous sync path was **not true row-level delta**:
+App-linked job SQLite (`$PAPR_HOME/Jobs/{id}/data/data.db`) syncs to Turso for cloud mini-apps. The previous sync path was **not true row-level delta**:
 
 1. **Fingerprints** skipped unchanged tables (good).
 2. Tables **≤ 2,000 rows with a PK** used incremental upsert (good for small tables).
@@ -69,7 +69,7 @@ Triggers are named `_papr_tr_{table}_ai|au|ad` (after insert/update/delete).
 
 ## State persistence
 
-`~/Papr/data/.turso-sync-state.json` per linked job:
+`$PAPR_HOME/data/.turso-sync-state.json` per linked job:
 
 ```json
 {

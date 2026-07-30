@@ -48,6 +48,21 @@ function normalizeDbPath(p: string): string {
 export interface SqlitePathGuardContext {
   appDb?: string;
   jobDb?: string;
+  /** Merged process + tool env (for PAPR_DB_* during job runs). */
+  env?: NodeJS.ProcessEnv;
+}
+
+/** Collect PAPR_DB_* paths from process.env (multi-DB jobs). */
+export function collectPaprDbPathsFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const paths: string[] = [];
+  for (const [key, value] of Object.entries(env)) {
+    if (!key.startsWith("PAPR_DB_") || !value) continue;
+    if (key.endsWith("_ALIAS") || key.endsWith("_ID")) continue;
+    paths.push(value);
+  }
+  return paths;
 }
 
 export function buildSqlitePathWarnings(
@@ -61,6 +76,16 @@ export function buildSqlitePathWarnings(
   if (ctx.jobDb) allowed.add(normalizeDbPath(ctx.jobDb));
   if (process.env.APP_DB) allowed.add(normalizeDbPath(process.env.APP_DB));
   if (process.env.JOB_DB) allowed.add(normalizeDbPath(process.env.JOB_DB));
+  const envSource = ctx.env ?? process.env;
+  if (typeof envSource.APP_DB === "string") {
+    allowed.add(normalizeDbPath(envSource.APP_DB));
+  }
+  if (typeof envSource.JOB_DB === "string") {
+    allowed.add(normalizeDbPath(envSource.JOB_DB));
+  }
+  for (const paprDb of collectPaprDbPathsFromEnv(envSource)) {
+    allowed.add(normalizeDbPath(paprDb));
+  }
 
   const warnings: string[] = [];
   const targets = extractSqliteDbPaths(command);
@@ -69,18 +94,19 @@ export function buildSqlitePathWarnings(
     const resolved = normalizeDbPath(target);
     if (allowed.size > 0 && allowed.has(resolved)) continue;
 
-    const paprApps = `${path.sep}Papr${path.sep}apps${path.sep}`;
-    const paprJobs = `${path.sep}Papr${path.sep}jobs${path.sep}`;
+    const resolvedLower = resolved.toLowerCase();
+    const paprApps = `${path.sep}papr${path.sep}apps${path.sep}`;
+    const paprJobs = `${path.sep}papr${path.sep}jobs${path.sep}`;
 
-    if (resolved.includes(paprApps)) {
+    if (resolvedLower.includes(paprApps)) {
       warnings.push(
-        `SQLite write to app-folder database "${target}" bypasses APP_DB routing. ` +
-          `Mini-app data must go to $APP_DB (${ctx.appDb ?? "primary linked job DB"}).`,
+        `SQLite write to app-folder database "${target}" bypasses PAPR_DB_* routing. ` +
+          `Mini-app data must go to PAPR_DB_* / $APP_DB (${ctx.appDb ?? "linked registry DB"}).`,
       );
       continue;
     }
 
-    if (resolved.includes(paprJobs)) {
+    if (resolvedLower.includes(paprJobs)) {
       const canonicalSuffix = `${path.sep}data${path.sep}data.db`;
       if (!resolved.endsWith(canonicalSuffix) && !allowed.has(resolved)) {
         warnings.push(

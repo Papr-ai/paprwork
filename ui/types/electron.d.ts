@@ -161,13 +161,42 @@ export interface ElectronAPI {
       };
       error?: string;
     }>;
+    getActiveWorkspace: () => Promise<{
+      success: boolean;
+      pointer?: {
+        organizationId: string;
+        namespaceId: string;
+        namespaceName?: string;
+        paprHome: string;
+        userDataPath: string;
+        activatedAt?: string;
+      };
+      error?: string;
+    }>;
+    detectLegacyFlatMigration: () => Promise<{
+      success: boolean;
+      needsUserConsent?: boolean;
+      entries?: string[];
+      error?: string;
+    }>;
+    runConsentLegacyMigration: (input: {
+      organizationId: string;
+      namespaceId: string;
+      organizationName?: string;
+      namespaceName?: string;
+      paprApiKey?: string;
+    }) => Promise<{
+      success: boolean;
+      movedEntries?: string[];
+      error?: string;
+    }>;
     onLoginSuccess: (callback: (data: { email: string; name?: string; userId?: string }) => void) => void;
     removeLoginSuccessListener: (callback: (data: { email: string; name?: string; userId?: string }) => void) => void;
     onLoginError: (callback: (data: { error: string }) => void) => void;
     removeLoginErrorListener: (callback: (data: { error: string }) => void) => void;
     onLogoutSuccess: (callback: () => void) => void;
     removeLogoutSuccessListener: (callback: () => void) => void;
-    listNamespaces: (options?: { organizationId?: string; forceRefresh?: boolean }) => Promise<{
+    listNamespaces: (options?: { organizationId?: string; forceRefresh?: boolean; peek?: boolean }) => Promise<{
       success: boolean;
       namespaces?: Array<{ id: string; name: string; environmentType?: string }>;
       activeNamespaceId?: string;
@@ -248,6 +277,22 @@ export interface ElectronAPI {
       error?: string;
     }>;
     openWorkspaceTeam: () => Promise<{ success: boolean; error?: string }>;
+    getPlanSummary: () => Promise<{
+      success: boolean;
+      summary?: import("../../src/core/types/paprBilling").PaprPlanSummary;
+      error?: string;
+    }>;
+    openBillingPortal: (
+      section?: "billing" | "subscriptions" | "invoices",
+    ) => Promise<{ success: boolean; error?: string }>;
+    openUsageDashboard: () => Promise<{ success: boolean; error?: string }>;
+    startCheckout: (input: {
+      tier: "starter" | "growth";
+      billingCycle: "monthly" | "yearly";
+    }) => Promise<{ success: boolean; error?: string }>;
+    setMeteredBilling: (
+      enabled: boolean,
+    ) => Promise<{ success: boolean; enabled?: boolean; error?: string }>;
   };
 
   // Ollama API - Auto-install and manage local AI models

@@ -51,32 +51,32 @@ const App = {
             message: 'My Home dashboard needs a Daily Brief Generator job. Please create an agent job that generates a daily brief and saves it to the briefs table in its SQLite database ($JOB_DB). The brief_json should include: hero (date, title, subtitle, stats), sections (priorities, timeline, alerts, freeform). The job ID should be linked to my Home app.'
           });
         } catch (e) { /* paprAPI may not be available */ }
-        setTimeout(() => { btn.innerHTML = '✨ Generate My Real Brief'; btn.disabled = false; }, 2000);
+        setTimeout(() => { btn.innerHTML = 'Generate My Real Brief'; btn.disabled = false; }, 2000);
         return;
       }
       
       const result = await response.json();
       
       if (response.ok && result.status === 'completed') {
-        btn.innerHTML = '✓ Generated! Reloading...';
+        btn.innerHTML = 'Generated! Reloading...';
         setTimeout(() => {
           this.dates = [];
           this.init();
         }, 1000);
       } else {
         console.error('Brief generation failed:', result);
-        btn.innerHTML = '✗ Failed - Try Chat';
+        btn.innerHTML = 'Failed — Try Chat';
         btn.disabled = false;
         setTimeout(() => {
-          btn.innerHTML = '✨ Generate My Real Brief';
+          btn.innerHTML = 'Generate My Real Brief';
           btn.disabled = false;
         }, 3000);
       }
     } catch (error) {
       console.error('Failed to generate brief:', error);
-      btn.innerHTML = '✗ Error - Try Chat';
+      btn.innerHTML = 'Error — Try Chat';
       setTimeout(() => {
-        btn.innerHTML = '✨ Generate My Real Brief';
+        btn.innerHTML = 'Generate My Real Brief';
         btn.disabled = false;
       }, 3000);
     }
@@ -87,12 +87,16 @@ const App = {
     return `
       <div class="sample-data-banner">
         <div class="sample-data-content">
-          <div class="sample-data-icon">💡</div>
+          <div class="sample-data-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+              <path d="M9 18h6M10 22h4M12 2a6 6 0 0 0-3.4 11c.6.4 1 1 1.1 1.7V16h4.6v-1.3c.1-.7.5-1.3 1.1-1.7A6 6 0 0 0 12 2z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
           <div class="sample-data-text">
             <strong>This is sample data</strong> — showing what your dashboard will look like when populated.
           </div>
           <button id="gen-real-brief-btn" class="gen-real-brief-btn">
-            ✨ Generate My Real Brief
+            Generate My Real Brief
           </button>
         </div>
       </div>

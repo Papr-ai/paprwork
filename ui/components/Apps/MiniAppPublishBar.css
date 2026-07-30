@@ -50,6 +50,41 @@
   text-align: center;
 }
 
+.mini-app-view__overlay--hint {
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mini-app-view__runtime-error-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.mini-app-view__runtime-error {
+  margin: 0;
+  max-width: min(720px, 100%);
+  max-height: 40vh;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #f5f5f7;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.mini-app-view__runtime-error-hint {
+  margin: 0;
+  max-width: min(520px, 100%);
+  font-size: 13px;
+  line-height: 1.45;
+  opacity: 0.92;
+}
+
 .mini-app-publish-bar__segment {
   display: inline-flex;
   padding: 2px;

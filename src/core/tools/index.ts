@@ -34,6 +34,7 @@ import {
   deleteDatabaseTool,
 } from "./databases.js";
 import { wikiGraphTools } from "./wikiGraph.js";
+import { paprWorkspaceTools } from "./paprWorkspace.js";
 
 export const databaseTools = [
   createDatabaseTool,
@@ -53,6 +54,7 @@ export const allTools = [
   ...documentTools,
   ...paprMemoryTools,
   ...paprDocumentMemoryTools,
+  ...paprWorkspaceTools,
   ...wikiGraphTools,
   ...skillsTools,
   ...appJobsTools,
@@ -85,7 +87,7 @@ export const toolsByCategory = {
   filesystem: [...filesystemTools, editFileTool],
   browser: browserTools,
   webview: webviewTools,
-  papr: [...paprMemoryTools, ...paprDocumentMemoryTools, ...wikiGraphTools],
+  papr: [...paprMemoryTools, ...paprDocumentMemoryTools, ...paprWorkspaceTools, ...wikiGraphTools],
   documents: documentTools,
   skills: skillsTools,
   automation: [...appJobsTools, ...databaseTools, ...appAgentChatTools],
@@ -143,8 +145,11 @@ export {
   listDelegationRunsTool,
 } from "./delegation.js";
 export { documentTools } from "./documents.js";
-export { 
-  paprMemoryTools,
+export {
+  paprWorkspaceTools,
+  getPaprWorkspaceTool,
+} from "./paprWorkspace.js";
+export {
   addAgentMemoryTool,
   searchAgentMemoryTool,
   submitMemoryFeedbackTool,

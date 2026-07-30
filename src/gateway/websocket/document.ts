@@ -73,6 +73,8 @@ export async function setupDocumentHandlers(
   try {
     switch (message.type) {
       case "document:list": {
+        const documentService = getDocumentService();
+        await documentService.initialize();
         const documents = await documentService.listDocuments();
         ws.send(
           JSON.stringify({

@@ -10,6 +10,7 @@ import { TabBar } from "./components/Tabs/TabBar";
 import { ContentArea } from "./components/Layout/ContentArea";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
 import { AuthWall } from "./components/Auth/AuthWall";
+import { KeyPermissionModal } from "./components/Permissions/KeyPermissionModal";
 import { useChat } from "./hooks/useChat";
 import { useTabs } from "./hooks/useTabs";
 import { useTabStore } from "./stores/tabStore";
@@ -18,10 +19,11 @@ import {
   initPermissionListener,
 } from "./stores/permissionStore";
 import { initJobPermissionListener } from "./stores/jobPermissionStore";
+import { initPaprQuotaListener } from "./stores/paprQuotaStore";
 import { initJobLiveLogsListener } from "./stores/jobLiveLogsStore";
 import { initSubagentJobStore } from "./stores/subagentJobStore";
-import { KeyPermissionModal } from "./components/Permissions/KeyPermissionModal";
 import { UpdateBanner } from "./components/UpdateBanner/UpdateBanner";
+import { PaprQuotaBanner } from "./components/PaprQuotaBanner/PaprQuotaBanner";
 import { useAppStatePersistence } from "./hooks/useAppStatePersistence";
 import { useChatStore } from "./stores/chatStore";
 import {
@@ -95,7 +97,7 @@ export function App() {
 
     checkAuth();
   }, []);
-  
+
   // Initialize SQLite persistence for tabs/favorites (fast!)
   useAppStatePersistence();
 
@@ -373,6 +375,7 @@ export function App() {
   useEffect(() => {
     initPermissionListener();
     initJobPermissionListener();
+    initPaprQuotaListener();
     initJobLiveLogsListener();
     initSubagentJobStore();
   }, []);
@@ -479,6 +482,7 @@ export function App() {
         isOpen={commandPaletteOpen}
         onClose={() => setCommandPaletteOpen(false)}
       />
+      <PaprQuotaBanner />
       <UpdateBanner />
       {appAgentChatSession && (
         <AppAgentChatOverlay

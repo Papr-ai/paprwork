@@ -17,11 +17,10 @@ import {
   type AppDataSourcesFile,
   buildAppDbTsContent,
   dbHasOnlyBaselineTables,
-  inferPrimaryAlias,
   parseDataSourcesFile,
+  resolveDataSourcesForWorkspace,
   serializeDataSourcesFile,
 } from "./appDataSources.js";
-import { jobBelongsToApp } from "./jobs/appIds.js";
 import {
   BACKEND_FOLDER,
   DEFAULT_BACKEND_MANIFEST,
@@ -29,13 +28,51 @@ import {
   hasBackendFiles,
 } from "../utils/appBackendScaffold.js";
 import { writeCloudAppMetadataFile } from "./cloudAppMetadataFile.js";
+import { parseCloudAppMetadataFile } from "../../core/utils/cloudAppMetadata.js";
 import {
   getPaprAppsRoot,
   getPaprDataDir,
+  getPaprJobsRoot,
   getPaprRoot,
 } from "../../core/utils/paprRoot.js";
+import { scanAppCodeForJobDatabaseReferences } from "./appCodeDataSourceDiscovery.js";
+import { assertValidMiniAppIcon } from "../../core/utils/miniAppIconValidation.js";
+import {
+  isAppAwaitingAssignmentInWorkspace,
+  mergeAppWorkspaceFields,
+  readActiveAppWorkspaceScope,
+  readAppWorkspaceFieldsFromDisk,
+  shouldShowAppInMyApps,
+  withWorkspaceScope,
+} from "../../core/utils/appWorkspaceScope.js";
+import { getPaprUserId } from "../utils/paprUserId.js";
+import {
+  fetchForeignPublisherAppIds,
+  isAppOwnedByCurrentUser,
+  readAppDiskOwnershipHints,
+  resolveActiveNamespaceId,
+  shouldIndexAppFolderForCurrentUser,
+} from "./appOwnership.js";
+import {
+  copyAppToNamespace as copyAppToNamespaceCore,
+  CopyAppError,
+  type CopyAppToNamespaceResult,
+} from "./copyAppToNamespace.js";
+import {
+  assignAppToWorkspace as assignAppToWorkspaceCore,
+  AppWorkspaceAssignError,
+  type AssignAppToWorkspaceResult,
+} from "./appWorkspaceAssignment.js";
+
+export { CopyAppError, type CopyAppToNamespaceResult, AppWorkspaceAssignError, type AssignAppToWorkspaceResult };
 
 export type { AppDataSource, AppDataSourceRole, AppDataSourcesFile };
+
+/** Written by rebuildIndexIfCorrupted when metadata.json was not read (legacy). */
+export const RECOVERED_INDEX_DESCRIPTION = "Recovered app (index was corrupted)";
+
+/** Bundled home dashboard — stable id across installs (see default-apps/home-dashboard/app-id.txt). */
+export const DEFAULT_HOME_APP_ID = "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c";
 
 // ESM compatibility: get __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -72,6 +109,12 @@ export interface MiniApp {
   createdByAgentName?: string;
   /** Set when app was installed from Papr Cloud (fork or track). */
   cloudLineage?: MiniAppCloudLineage;
+  /** Papr user id that owns this local app copy (My Apps). */
+  ownerUserId?: string;
+  /** Org that owns this app in My Apps (required for legacy apps to appear). */
+  organizationId?: string;
+  /** Namespace that owns this app in My Apps (required for legacy apps to appear). */
+  namespaceId?: string;
   /** Embedded sub-agent chat bubble (desktop + published web). */
   agentChat?: AppAgentChatConfig;
 }
@@ -123,6 +166,8 @@ export class AppService {
   private buildInFlight: Map<string, Promise<MiniAppBuildResult>>;
   private pendingDefaultJobs: Array<{ sourceDir: string; targetDir: string; appId: string }>;
   private lastBuildResult: Map<string, MiniAppBuildResult>;
+  private saveLock: Promise<void> | null = null;
+  private initPromise: Promise<void> | null = null;
 
   /** Coalesce rapid multi-file agent edits into one rebuild + reload. */
   private static readonly FILE_CHANGE_DEBOUNCE_MS = 800;
@@ -145,6 +190,11 @@ export class AppService {
     ".markdown",
     ".json",
     ".txt",
+  ]);
+
+  /** System-provided scaffold files — not subject to the 100-line agent limit. */
+  private static readonly MINI_APP_LOC_EXEMPT_BASENAMES = new Set([
+    "base.css",
   ]);
 
   constructor() {
@@ -330,6 +380,7 @@ export class AppService {
 
         // Create app entry in registry
         const now = new Date().toISOString();
+        const scope = readActiveAppWorkspaceScope();
         const app: MiniApp = {
           id: appId,
           title: metadata.title || appDirName,
@@ -338,6 +389,10 @@ export class AppService {
           createdAt: metadata.createdAt || now,
           updatedAt: now,
           favorite: metadata.favorite || false,
+          ...(getPaprUserId()?.trim()
+            ? { ownerUserId: getPaprUserId()!.trim() }
+            : {}),
+          ...(scope ? withWorkspaceScope({}, scope) : {}),
           ...(icon ? { icon } : {}),
         };
 
@@ -457,9 +512,6 @@ export class AppService {
       }
 
       if (updated) {
-        if (!config.primary && config.sources.length > 0) {
-          config.primary = inferPrimaryAlias(config.sources);
-        }
         await fs.writeFile(
           dataSourcesPath,
           serializeDataSourcesFile(config),
@@ -513,9 +565,22 @@ export class AppService {
 
       await fs.cp(sourceDir, targetDir, { recursive: true });
 
-      // Restore user's data-sources.json (may have custom dbPath)
+      // Restore user's dbPath values for bundled default apps; full restore for others
       if (savedDataSources) {
-        await fs.writeFile(dsPath, savedDataSources);
+        const bundledMeta = await this.readBundledDefaultAppMetadata(sourceDir);
+        if (
+          bundledMeta?.isDefault ||
+          bundledMeta?.defaultHomeApp ||
+          appId === DEFAULT_HOME_APP_ID
+        ) {
+          await this.mergeBundledDefaultAppDataSources(
+            targetDir,
+            sourceDir,
+            savedDataSources,
+          );
+        } else {
+          await fs.writeFile(dsPath, savedDataSources);
+        }
       }
 
       console.log(
@@ -528,22 +593,53 @@ export class AppService {
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
+    if (this.initPromise) {
+      await this.initPromise;
+      return;
+    }
+
+    this.initPromise = this.runInitialize();
+    try {
+      await this.initPromise;
+    } finally {
+      this.initPromise = null;
+    }
+  }
+
+  private async runInitialize(): Promise<void> {
+    if (this.initialized) return;
 
     await this.migrateLegacyIfNeeded();
     await fs.mkdir(this.appsDir, { recursive: true });
     await fs.mkdir(path.dirname(this.appsIndexPath), { recursive: true });
     await this.loadApps(); // Load existing apps FIRST
+    await this.enforceAppOwnershipIndex(); // Drop foreign apps before recovery
     await this.rebuildIndexIfCorrupted(); // Safety net: check for missing apps
+    await this.repairRecoveredAppEntries(); // Fix legacy "Recovered" labels from metadata.json
+    await this.syncBundledDefaultAppRegistry(); // Keep prebuilt apps (Home) in sync with bundled metadata
     await this.pruneStaleAppEntries(); // Index entries whose folders were removed (e.g. bash rm)
     await this.installDefaultApps(); // Then install defaults (won't overwrite existing)
     const { initializeDatabaseRegistry } = await import(
       "./DatabaseRegistryService.js"
     );
     await initializeDatabaseRegistry();
-    await this.repairDataSourceDbIds();
-    await this.startWatchingApps();
     this.initialized = true;
-    console.log(`[AppService] Initialized with ${this.apps.size} apps`);
+    console.log(`[AppService] Initialized with ${this.apps.size} apps (watchers starting in background)`);
+    this.scheduleWatchingApps();
+  }
+
+  /** File watchers are not needed to serve list/open/build — start after init returns. */
+  private scheduleWatchingApps(): void {
+    void this.startWatchingApps().catch((error: unknown) => {
+      console.warn(
+        "[AppService] Background watcher startup failed:",
+        error instanceof Error ? error.message : error,
+      );
+    });
+  }
+
+  isInitialized(): boolean {
+    return this.initialized;
   }
 
 
@@ -553,6 +649,294 @@ export class AppService {
    * installDefaultApps() could overwrite apps.json before loadApps() ran.
    * Scans ~/Papr/apps/ for app directories not in the index and re-adds them.
    */
+  /** Remove teammate / team-catalog apps from local index; stamp owner on legacy entries. */
+  async enforceAppOwnershipIndex(): Promise<void> {
+    const currentUserId = getPaprUserId()?.trim();
+    if (!currentUserId) {
+      return;
+    }
+
+    const namespaceId = resolveActiveNamespaceId();
+    const foreignPublisherAppIds = namespaceId
+      ? await fetchForeignPublisherAppIds(namespaceId)
+      : new Map<string, string>();
+
+    let dirty = false;
+    const toRemove: string[] = [];
+
+    for (const [appId, app] of this.apps.entries()) {
+      const appDir = path.join(this.appsDir, appId);
+      const hints = await readAppDiskOwnershipHints(appDir, appId);
+
+      // Team catalog may list the same appId under a teammate's cloud publish on
+      // shared git disk — keep it in My Apps when this user owns the local copy.
+      if (
+        foreignPublisherAppIds.has(appId) &&
+        !isAppOwnedByCurrentUser(app, hints)
+      ) {
+        toRemove.push(appId);
+        continue;
+      }
+
+      if (!isAppOwnedByCurrentUser(app, hints)) {
+        toRemove.push(appId);
+        continue;
+      }
+
+      if (!app.ownerUserId) {
+        app.ownerUserId = currentUserId;
+        dirty = true;
+      }
+    }
+
+    for (const appId of toRemove) {
+      this.apps.delete(appId);
+      dirty = true;
+      console.log(
+        `[AppService] Removed foreign app from My Apps index: ${appId}`,
+      );
+    }
+
+    if (dirty) {
+      await this.saveApps();
+    }
+  }
+
+  private async readMetadataHintsFromAppDir(
+    appDir: string,
+  ): Promise<{
+    title?: string;
+    description?: string;
+    icon?: string;
+    updatedAt?: string;
+  }> {
+    try {
+      const raw = await fs.readFile(path.join(appDir, "metadata.json"), "utf-8");
+      const metadata = parseCloudAppMetadataFile(raw);
+      if (metadata) {
+        return {
+          title: metadata.title,
+          description: metadata.description,
+          icon: metadata.icon,
+          updatedAt: metadata.updatedAt,
+        };
+      }
+    } catch {
+      // fall through to index.html
+    }
+
+    try {
+      const indexHtml = await fs.readFile(path.join(appDir, "index.html"), "utf-8");
+      const titleMatch = indexHtml.match(/<title>([^<]+)<\/title>/i);
+      const favicon = this.extractFaviconFromHTML(indexHtml);
+      return {
+        ...(titleMatch ? { title: titleMatch[1].trim() } : {}),
+        ...(favicon ? { icon: favicon } : {}),
+      };
+    } catch {
+      return {};
+    }
+  }
+
+  /** Fix apps index entries that still carry the legacy recovered placeholder. */
+  private async repairRecoveredAppEntries(): Promise<void> {
+    let dirty = false;
+
+    for (const app of this.apps.values()) {
+      const appDir = path.join(this.appsDir, app.id);
+      const hints = await this.readMetadataHintsFromAppDir(appDir);
+      const titleIsPlaceholder =
+        !app.title ||
+        app.title === app.id ||
+        app.title.startsWith(app.id.slice(0, 8));
+      const needsRepair =
+        app.description === RECOVERED_INDEX_DESCRIPTION ||
+        (titleIsPlaceholder && Boolean(hints.title));
+      if (!needsRepair) continue;
+
+      if (!hints.title && !hints.description) continue;
+
+      if (hints.title && titleIsPlaceholder) {
+        app.title = hints.title;
+      }
+      if (
+        hints.description &&
+        hints.description !== RECOVERED_INDEX_DESCRIPTION
+      ) {
+        app.description = hints.description;
+      }
+      if (hints.icon && !app.icon) {
+        app.icon = hints.icon;
+      }
+      if (hints.updatedAt) {
+        app.updatedAt = hints.updatedAt;
+      }
+      dirty = true;
+      console.log(
+        `[AppService] Repaired recovered app metadata: ${app.id} - ${app.title}`,
+      );
+    }
+
+    if (dirty) {
+      await this.saveApps();
+    }
+  }
+
+  private async readBundledDefaultAppMetadata(
+    sourceDir: string,
+  ): Promise<{
+    isDefault?: boolean;
+    defaultHomeApp?: boolean;
+    version?: number;
+  } | null> {
+    try {
+      const raw = await fs.readFile(
+        path.join(sourceDir, "metadata.json"),
+        "utf-8",
+      );
+      return JSON.parse(raw) as {
+        isDefault?: boolean;
+        defaultHomeApp?: boolean;
+        version?: number;
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Sync registry title/description for prebuilt apps from on-disk metadata.json. */
+  private async syncBundledDefaultAppRegistry(): Promise<void> {
+    let dirty = false;
+
+    for (const app of this.apps.values()) {
+      const appDir = path.join(this.appsDir, app.id);
+      let metadata: {
+        isDefault?: boolean;
+        defaultHomeApp?: boolean;
+        title?: string;
+        description?: string;
+        icon?: string;
+        updatedAt?: string;
+      };
+      try {
+        const raw = await fs.readFile(
+          path.join(appDir, "metadata.json"),
+          "utf-8",
+        );
+        metadata = JSON.parse(raw) as typeof metadata;
+      } catch {
+        continue;
+      }
+
+      if (!metadata.isDefault && !metadata.defaultHomeApp) {
+        continue;
+      }
+
+      let appDirty = false;
+      if (metadata.title && app.title !== metadata.title) {
+        app.title = metadata.title;
+        appDirty = true;
+      }
+      if (
+        metadata.description &&
+        (app.description === RECOVERED_INDEX_DESCRIPTION ||
+          app.description !== metadata.description)
+      ) {
+        app.description = metadata.description;
+        appDirty = true;
+      }
+      if (metadata.icon && !app.icon) {
+        app.icon = metadata.icon;
+        appDirty = true;
+      }
+      if (metadata.updatedAt && app.updatedAt !== metadata.updatedAt) {
+        app.updatedAt = metadata.updatedAt;
+        appDirty = true;
+      }
+
+      const scope = readActiveAppWorkspaceScope();
+      if (
+        scope &&
+        (app.organizationId !== scope.organizationId ||
+          app.namespaceId !== scope.namespaceId)
+      ) {
+        app.organizationId = scope.organizationId;
+        app.namespaceId = scope.namespaceId;
+        appDirty = true;
+      }
+
+      if (appDirty) {
+        dirty = true;
+        console.log(
+          `[AppService] Synced bundled default app registry: ${app.id} - ${app.title}`,
+        );
+      }
+    }
+
+    if (dirty) {
+      await this.saveApps();
+    }
+  }
+
+  private async mergeBundledDefaultAppDataSources(
+    targetDir: string,
+    sourceDir: string,
+    savedDataSources: string,
+  ): Promise<void> {
+    const bundledPath = path.join(sourceDir, "data-sources.json");
+    const targetPath = path.join(targetDir, "data-sources.json");
+
+    let bundledConfig: AppDataSourcesFile;
+    try {
+      bundledConfig = parseDataSourcesFile(
+        await fs.readFile(bundledPath, "utf-8"),
+      );
+    } catch {
+      await fs.writeFile(targetPath, savedDataSources);
+      return;
+    }
+
+    const savedDbPaths = new Map<string, string>();
+    try {
+      const savedConfig = parseDataSourcesFile(savedDataSources);
+      for (const source of savedConfig.sources ?? []) {
+        if (source.jobId && source.dbPath?.trim()) {
+          savedDbPaths.set(source.jobId, source.dbPath.trim());
+        }
+      }
+    } catch {
+      // Use bundled template as-is
+    }
+
+    const activeHome = path.resolve(getPaprRoot());
+    for (const source of bundledConfig.sources ?? []) {
+      const savedPath = source.jobId
+        ? savedDbPaths.get(source.jobId)
+        : undefined;
+      if (!savedPath) {
+        continue;
+      }
+      // Same app id is installed in every org/namespace — only keep dbPath values
+      // that belong to the active workspace (not a sibling namespace copy).
+      const normalizedSaved = path.resolve(savedPath);
+      if (
+        normalizedSaved.startsWith(`${activeHome}${path.sep}`) ||
+        normalizedSaved === activeHome
+      ) {
+        source.dbPath = savedPath;
+      }
+    }
+
+    await fs.writeFile(
+      targetPath,
+      serializeDataSourcesFile(bundledConfig),
+      "utf8",
+    );
+    console.log(
+      `[AppService] Merged bundled data-sources for default app in ${path.basename(targetDir)}`,
+    );
+  }
+
   private async rebuildIndexIfCorrupted(): Promise<void> {
     try {
       const dirsOnDisk = await fs.readdir(this.appsDir);
@@ -577,8 +961,32 @@ export class AppService {
 
       if (missingAppIds.length === 0) return;
 
+      const namespaceId = resolveActiveNamespaceId();
+      const foreignPublisherAppIds = namespaceId
+        ? await fetchForeignPublisherAppIds(namespaceId)
+        : new Map<string, string>();
+
+      const recoverableAppIds: string[] = [];
+      for (const appId of missingAppIds) {
+        const appDir = path.join(this.appsDir, appId);
+        const allowed = await shouldIndexAppFolderForCurrentUser(
+          appId,
+          appDir,
+          foreignPublisherAppIds,
+        );
+        if (allowed) {
+          recoverableAppIds.push(appId);
+        } else {
+          console.warn(
+            `[AppService] Skipped foreign app folder during index rebuild: ${appId}`,
+          );
+        }
+      }
+
+      if (recoverableAppIds.length === 0) return;
+
       console.warn(
-        `[AppService] INDEX CORRUPTION DETECTED: ${missingAppIds.length} apps on disk but missing from apps.json. Rebuilding...`
+        `[AppService] INDEX CORRUPTION DETECTED: ${recoverableAppIds.length} apps on disk but missing from apps.json. Rebuilding...`
       );
 
       // Back up the corrupted index before fixing
@@ -590,29 +998,21 @@ export class AppService {
         // No existing file to back up — that's fine
       }
 
-      for (const appId of missingAppIds) {
+      for (const appId of recoverableAppIds) {
         const appDir = path.join(this.appsDir, appId);
+        const hints = await this.readMetadataHintsFromAppDir(appDir);
 
-        // Try to recover metadata from files
-        let title = appId;
-        let description = "Recovered app (index was corrupted)";
-        let icon: string | undefined;
+        let title = hints.title ?? appId;
+        let description =
+          hints.description ?? RECOVERED_INDEX_DESCRIPTION;
+        let icon: string | undefined = hints.icon;
         let createdAt = new Date().toISOString();
 
-        // Try reading index.html for <title> tag
-        try {
-          const indexHtml = await fs.readFile(path.join(appDir, "index.html"), "utf-8");
-          const titleMatch = indexHtml.match(/<title>([^<]+)<\/title>/i);
-          if (titleMatch) {
-            title = titleMatch[1].trim();
+        if (!icon) {
+          const resolvedIcon = await this.resolveIconFromAppDir(appDir);
+          if (resolvedIcon) {
+            icon = resolvedIcon;
           }
-          // Try extracting favicon
-          const favicon = this.extractFaviconFromHTML(indexHtml);
-          if (favicon) {
-            icon = favicon;
-          }
-        } catch {
-          // No index.html, try other files for hints
         }
 
         // Try to get actual creation date from filesystem
@@ -623,21 +1023,16 @@ export class AppService {
           // Use current time
         }
 
-        // Try resolving icon from logo files
-        if (!icon) {
-          const resolvedIcon = await this.resolveIconFromAppDir(appDir);
-          if (resolvedIcon) {
-            icon = resolvedIcon;
-          }
-        }
-
         const recoveredApp: MiniApp = {
           id: appId,
           title,
           description,
           type: "app",
           createdAt,
-          updatedAt: new Date().toISOString(),
+          updatedAt: hints.updatedAt ?? new Date().toISOString(),
+          ...(getPaprUserId()?.trim()
+            ? { ownerUserId: getPaprUserId()!.trim() }
+            : {}),
           ...(icon ? { icon } : {}),
         };
 
@@ -647,7 +1042,7 @@ export class AppService {
 
       await this.saveApps();
       console.log(
-        `[AppService] Index rebuilt: recovered ${missingAppIds.length} apps. Total: ${this.apps.size}`
+        `[AppService] Index rebuilt: recovered ${recoverableAppIds.length} apps. Total: ${this.apps.size}`
       );
     } catch (error) {
       console.error("[AppService] Failed to rebuild index:", error);
@@ -696,11 +1091,25 @@ export class AppService {
   }
 
   private async saveApps(): Promise<void> {
-    const appsArray = Array.from(this.apps.values());
-    const data = JSON.stringify(appsArray, null, 2);
-    const tmpPath = this.appsIndexPath + `.tmp-${process.pid}`;
-    await fs.writeFile(tmpPath, data, "utf8");
-    await fs.rename(tmpPath, this.appsIndexPath);
+    if (this.saveLock) {
+      await this.saveLock;
+    }
+
+    this.saveLock = (async () => {
+      try {
+        const appsArray = Array.from(this.apps.values());
+        const data = JSON.stringify(appsArray, null, 2);
+        const tmpPath =
+          this.appsIndexPath +
+          `.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        await fs.writeFile(tmpPath, data, "utf8");
+        await fs.rename(tmpPath, this.appsIndexPath);
+      } finally {
+        this.saveLock = null;
+      }
+    })();
+
+    await this.saveLock;
   }
 
   /**
@@ -824,7 +1233,11 @@ export class AppService {
         resolvedIcon = this.extractFaviconFromHTML(indexFile.content);
       }
     }
+    if (resolvedIcon) {
+      assertValidMiniAppIcon(resolvedIcon);
+    }
 
+    const scope = readActiveAppWorkspaceScope();
     const app: MiniApp = {
       id: uuidv4(),
       title: uniqueTitle,
@@ -833,6 +1246,10 @@ export class AppService {
       createdAt: now,
       updatedAt: now,
       favorite: false,
+      ...(getPaprUserId()?.trim()
+        ? { ownerUserId: getPaprUserId()!.trim() }
+        : {}),
+      ...(scope ? withWorkspaceScope({}, scope) : {}),
       ...(resolvedIcon ? { icon: resolvedIcon } : {}),
       createdByAgentId,
       createdByAgentName,
@@ -859,7 +1276,7 @@ export class AppService {
     if (!hasDbTs) {
       await fs.writeFile(
         path.join(appPath, "db.ts"),
-        buildAppDbTsContent(app.id, "primary"),
+        buildAppDbTsContent(app.id, []),
         "utf8",
       );
     }
@@ -903,10 +1320,7 @@ export class AppService {
       `[AppService] Created app: ${app.id} - ${uniqueTitle} (verified files on disk)`,
     );
 
-    void (process.env.PAPR_AUTO_DISCOVER_DATA_SOURCES === "true"
-      ? this.autoDiscoverDataSources(app.id)
-      : Promise.resolve()
-    ).catch((err) => {
+    void this.autoDiscoverDataSources(app.id).catch((err) => {
       console.warn(
         `[AppService] Auto-discovery failed for new app ${app.id}:`,
         err,
@@ -962,15 +1376,31 @@ export class AppService {
   }
 
   async getApp(id: string): Promise<MiniApp | null> {
-    return this.apps.get(id) || null;
+    const app = this.apps.get(id);
+    if (!app) {
+      return null;
+    }
+
+    const hints = await readAppDiskOwnershipHints(
+      path.join(this.appsDir, id),
+      id,
+    );
+    if (!isAppOwnedByCurrentUser(app, hints)) {
+      return null;
+    }
+    return app;
   }
 
   async updateApp(
     id: string,
     updates: Partial<Omit<MiniApp, "id" | "type" | "createdAt">>,
   ): Promise<MiniApp | null> {
-    const app = this.apps.get(id);
+    const app = await this.getApp(id);
     if (!app) return null;
+
+    if (updates.icon !== undefined && updates.icon.trim()) {
+      assertValidMiniAppIcon(updates.icon);
+    }
 
     let nextUpdates = updates;
     if (updates.title !== undefined) {
@@ -1017,7 +1447,7 @@ export class AppService {
   }
 
   async deleteApp(id: string): Promise<boolean> {
-    const app = this.apps.get(id);
+    const app = await this.getApp(id);
     if (!app) return false;
 
     // Stop watching the app directory
@@ -1048,6 +1478,36 @@ export class AppService {
 
     console.log(`[AppService] Deleted app: ${id}`);
     return true;
+  }
+
+  /**
+   * Copy app bundle (linked jobs + DB registry) into another namespace.
+   * Source is unchanged — delete locally if you no longer want it there.
+   */
+  async copyAppToNamespace(
+    appId: string,
+    targetOrganizationId: string,
+    targetNamespaceId: string,
+  ): Promise<CopyAppToNamespaceResult> {
+    await this.initialize();
+    const app = await this.getApp(appId);
+    if (!app) {
+      throw new CopyAppError("app_not_found", "App not found");
+    }
+
+    const result = await copyAppToNamespaceCore({
+      appId,
+      targetOrganizationId,
+      targetNamespaceId,
+      sourcePaprHome: this.paprRootDir,
+    });
+
+    console.log(
+      `[AppService] Copied app ${appId} to namespace ${targetNamespaceId} ` +
+        `(${result.copiedJobIds.length} job(s), ${result.skippedJobIds.length} already in target)`,
+    );
+
+    return result;
   }
 
   /**
@@ -1103,17 +1563,140 @@ export class AppService {
   async listApps(): Promise<MiniApp[]> {
     await this.initialize();
     await this.pruneStaleAppEntries();
-    return Array.from(this.apps.values()).sort(
+
+    const activeScope = readActiveAppWorkspaceScope();
+    const owned: MiniApp[] = [];
+    for (const app of this.apps.values()) {
+      const appDir = path.join(this.appsDir, app.id);
+      const hints = await readAppDiskOwnershipHints(appDir, app.id);
+      if (!isAppOwnedByCurrentUser(app, hints)) {
+        continue;
+      }
+
+      const merged = {
+        ...app,
+        ...mergeAppWorkspaceFields(app, await readAppWorkspaceFieldsFromDisk(appDir)),
+      };
+
+      if (!shouldShowAppInMyApps(app.id, merged, activeScope)) {
+        continue;
+      }
+
+      owned.push(merged);
+    }
+
+    return owned.sort(
       (a, b) =>
         new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
     );
+  }
+
+  /** Apps on disk in this namespace with no workspace assignment (org/namespace missing). */
+  async listUnassignedApps(): Promise<MiniApp[]> {
+    await this.initialize();
+    await this.pruneStaleAppEntries();
+
+    const activeScope = readActiveAppWorkspaceScope();
+    if (!activeScope) {
+      return [];
+    }
+
+    const unassigned: MiniApp[] = [];
+    for (const app of this.apps.values()) {
+      if (!(await this.appDirHasContent(app.id))) {
+        continue;
+      }
+
+      const appDir = path.join(this.appsDir, app.id);
+      const hints = await readAppDiskOwnershipHints(appDir, app.id);
+      if (!isAppOwnedByCurrentUser(app, hints)) {
+        continue;
+      }
+
+      const merged = {
+        ...app,
+        ...mergeAppWorkspaceFields(app, await readAppWorkspaceFieldsFromDisk(appDir)),
+      };
+
+      if (!isAppAwaitingAssignmentInWorkspace(app.id, merged, activeScope)) {
+        continue;
+      }
+
+      unassigned.push(merged);
+    }
+
+    return unassigned.sort(
+      (a, b) =>
+        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+    );
+  }
+
+  async assignAppToWorkspace(
+    appId: string,
+    targetOrganizationId: string,
+    targetNamespaceId: string,
+  ): Promise<AssignAppToWorkspaceResult> {
+    await this.initialize();
+    const app = this.apps.get(appId);
+    if (!app) {
+      throw new AppWorkspaceAssignError("app_not_found", "App not found");
+    }
+
+    const appDir = path.join(this.appsDir, appId);
+    const hints = await readAppDiskOwnershipHints(appDir, appId);
+    if (!isAppOwnedByCurrentUser(app, hints)) {
+      throw new AppWorkspaceAssignError("not_owner", "App is not owned by the signed-in user");
+    }
+
+    const merged = {
+      ...app,
+      ...mergeAppWorkspaceFields(app, await readAppWorkspaceFieldsFromDisk(appDir)),
+    };
+
+    const result = await assignAppToWorkspaceCore({
+      appId,
+      targetOrganizationId,
+      targetNamespaceId,
+      sourcePaprHome: this.paprRootDir,
+      sourceApp: merged,
+    });
+
+    const activeScope = readActiveAppWorkspaceScope();
+    const assignedHere =
+      activeScope &&
+      activeScope.organizationId === targetOrganizationId &&
+      activeScope.namespaceId === targetNamespaceId;
+
+    if (assignedHere) {
+      const scoped = withWorkspaceScope(merged, {
+        organizationId: targetOrganizationId,
+        namespaceId: targetNamespaceId,
+      });
+      scoped.updatedAt = new Date().toISOString();
+      this.apps.set(appId, scoped);
+      await this.saveApps();
+      void this.autoDiscoverDataSources(appId).catch((err) => {
+        console.warn(
+          `[AppService] Code-based data source discovery failed for ${appId}:`,
+          err,
+        );
+      });
+    } else {
+      this.unwatchApp(appId);
+      this.apps.delete(appId);
+      await this.saveApps();
+    }
+
+    this.broadcastAppListUpdated();
+
+    return result;
   }
 
   async resolveAppFilePath(
     appId: string,
     filename: string,
   ): Promise<string | null> {
-    const app = this.apps.get(appId);
+    const app = await this.getApp(appId);
     if (!app) return null;
 
     const filePath = path.join(this.appsDir, appId, filename);
@@ -1139,7 +1722,7 @@ export class AppService {
 
   /** Recursive source file listing (excludes dist/, backend/, node_modules). */
   async listAppFiles(appId: string): Promise<string[]> {
-    const app = this.apps.get(appId);
+    const app = await this.getApp(appId);
     if (!app) return [];
 
     const appPath = path.join(this.appsDir, appId);
@@ -1147,6 +1730,23 @@ export class AppService {
     return absoluteFiles
       .map((file) => path.relative(appPath, file))
       .sort((a, b) => a.localeCompare(b));
+  }
+
+  /** backend/ manifest + handlers (excluded from listAppFiles browser bundle listing). */
+  async listAppBackendFiles(appId: string): Promise<string[]> {
+    const app = await this.getApp(appId);
+    if (!app) return [];
+
+    const backendDir = path.join(this.appsDir, appId, "backend");
+    try {
+      const entries = await fs.readdir(backendDir);
+      return entries
+        .filter((name) => !name.startsWith("."))
+        .map((name) => `backend/${name}`)
+        .sort((a, b) => a.localeCompare(b));
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -1179,7 +1779,7 @@ export class AppService {
     filename: string,
     content: string,
   ): Promise<boolean> {
-    const app = this.apps.get(appId);
+    const app = await this.getApp(appId);
     if (!app) return false;
 
     const filePath = path.join(this.appsDir, appId, filename);
@@ -1297,8 +1897,11 @@ export class AppService {
    * Start watching all app directories for file changes
    */
   private async startWatchingApps(): Promise<void> {
-    for (const app of this.apps.values()) {
-      await this.watchApp(app.id);
+    const appIds = [...this.apps.values()].map((app) => app.id);
+    const batchSize = 16;
+    for (let index = 0; index < appIds.length; index += batchSize) {
+      const batch = appIds.slice(index, index + batchSize);
+      await Promise.all(batch.map((appId) => this.watchApp(appId)));
     }
     console.log(`[AppService] Started watching ${this.watchers.size} app directories`);
   }
@@ -1327,6 +1930,7 @@ export class AppService {
         ignoreInitial: true,
         ignored: [
           "**/.versions/**",
+          "data-sources.json",
           "**/data-sources.json",
           "**/dist/**",
           "**/.dist-staging/**",
@@ -1465,6 +2069,21 @@ export class AppService {
     const issues: ValidationIssue[] = [];
     const filesToCheck: string[] = [];
 
+    if (app.icon) {
+      const { validateMiniAppIcon } = await import(
+        "../../core/utils/miniAppIconValidation.js"
+      );
+      const iconResult = validateMiniAppIcon(app.icon);
+      if (!iconResult.ok) {
+        issues.push({
+          file: "app",
+          severity: "error",
+          rule: iconResult.rule,
+          message: iconResult.message,
+        });
+      }
+    }
+
     // Find all files to validate
     try {
       const files = await this.getAllAppFiles(appPath);
@@ -1525,7 +2144,10 @@ export class AppService {
         fileContents.set(relativePath, content);
 
         // LOC check (100 lines max for code — not .md/.json content assets)
-        const locIssues = this.checkLineLimit(content, relativePath, 100);
+        const basename = path.basename(relativePath);
+        const locIssues = AppService.MINI_APP_LOC_EXEMPT_BASENAMES.has(basename)
+          ? []
+          : this.checkLineLimit(content, relativePath, 100);
         issues.push(...locIssues);
 
         // HTML checks always run
@@ -1748,7 +2370,7 @@ export class AppService {
       const excess = significantLines - maxLines;
       return [{
         file: filename,
-        severity: 'error',
+        severity: 'warning',
         message: `File has ${significantLines} lines (${excess} over the ${maxLines} line limit). Break into smaller components.`,
         rule: 'max-lines',
       }];
@@ -2034,15 +2656,20 @@ export class AppService {
    */
   private broadcastValidation(result: ValidationResult): void {
     if (result.issues.length > 0) {
+      const errorCount = result.issues.filter((i) => i.severity === "error").length;
+      const warningCount = result.issues.length - errorCount;
       console.log(
-        `[AppService] Validation found ${result.issues.length} issue(s) in app ${result.appId}`,
+        `[AppService] Validation: app ${result.appId} — ${errorCount} error(s), ${warningCount} warning(s)`,
       );
-      
-      // Log errors to console for agent visibility
-      for (const issue of result.issues) {
-        const prefix = issue.severity === 'error' ? '❌' : '⚠️';
-        const location = issue.line ? `:${issue.line}` : '';
-        console.log(`${prefix} ${issue.file}${location} - ${issue.message}`);
+
+      // Full per-issue lines are noisy when cloud sync touches many apps at once.
+      // Agents can call validate_app for details; websocket still carries full results.
+      if (process.env.PAPR_VERBOSE_APP_VALIDATION === "1") {
+        for (const issue of result.issues) {
+          const prefix = issue.severity === "error" ? "❌" : "⚠️";
+          const location = issue.line ? `:${issue.line}` : "";
+          console.log(`${prefix} ${issue.file}${location} - ${issue.message}`);
+        }
       }
     }
 
@@ -2228,11 +2855,9 @@ export class AppService {
     return path.join(this.appsDir, appId, "data-sources.json");
   }
 
-  async getDataSourcesConfig(appId: string): Promise<AppDataSourcesFile> {
-    const app = this.apps.get(appId);
-    if (!app) {
-      throw new Error(`App not found: ${appId}`);
-    }
+  private async readDataSourcesConfigFromDisk(
+    appId: string,
+  ): Promise<AppDataSourcesFile> {
     const dataSourcesPath = this.getDataSourcesPath(appId);
     try {
       const raw = await fs.readFile(dataSourcesPath, "utf8");
@@ -2244,6 +2869,15 @@ export class AppService {
       }
       throw error;
     }
+  }
+
+  async getDataSourcesConfig(appId: string): Promise<AppDataSourcesFile> {
+    const app = this.apps.get(appId);
+    if (!app) {
+      throw new Error(`App not found: ${appId}`);
+    }
+    const config = await this.readDataSourcesConfigFromDisk(appId);
+    return resolveDataSourcesForWorkspace(config, getPaprJobsRoot());
   }
 
   async listAppDataSources(appId: string): Promise<AppDataSource[]> {
@@ -2274,9 +2908,9 @@ export class AppService {
   }
 
   async getPrimaryDataSource(appId: string): Promise<AppDataSource | undefined> {
-    const { getPrimarySource } = await import("./appDataSources.js");
+    const { getLegacyDefaultSource } = await import("./appDataSources.js");
     const config = await this.getDataSourcesConfig(appId);
-    return getPrimarySource(config);
+    return getLegacyDefaultSource(config);
   }
 
   private async writeDataSourcesConfig(
@@ -2331,68 +2965,32 @@ export class AppService {
     const app = this.apps.get(appId);
     if (!app) return;
 
-    const primary = await this.getPrimaryDataSource(appId);
-    if (!primary) return;
+    const config = await this.getDataSourcesConfig(appId);
+    if (config.sources.length === 0) return;
 
-    const alias = primary.alias;
     const appPath = path.join(this.appsDir, appId);
     const dbTsPath = path.join(appPath, "db.ts");
+    const content = buildAppDbTsContent(
+      appId,
+      config.sources.map((s) => ({ alias: s.alias })),
+    );
 
     try {
       await fs.access(dbTsPath);
       const existing = await fs.readFile(dbTsPath, "utf8");
-      if (existing.includes("PRIMARY_SOURCE") && existing.includes(appId)) {
-        if (primary && !existing.includes(`PRIMARY_SOURCE = '${alias}'`)) {
-          await fs.writeFile(dbTsPath, buildAppDbTsContent(appId, alias), "utf8");
-        }
+      if (existing.includes("APP_ID") && existing.includes(appId) && existing === content) {
         return;
       }
     } catch {
       // create below
     }
 
-    await fs.writeFile(dbTsPath, buildAppDbTsContent(appId, alias), "utf8");
-  }
-
-  /**
-   * Fix data-sources.json entries whose dbId drifted from the registry (path hash).
-   * Prevents cloud "No registry record for dbId" after promotion or manual edits.
-   */
-  private async repairDataSourceDbIds(): Promise<void> {
-    const { getDatabaseRegistryService } = await import(
-      "./DatabaseRegistryService.js"
-    );
-    const registry = getDatabaseRegistryService();
-
-    for (const appId of this.apps.keys()) {
-      const config = await this.getDataSourcesConfig(appId);
-      let changed = false;
-      const sources = config.sources.map((source) => {
-        if (!source.dbPath) {
-          return source;
-        }
-        const repaired = registry.enrichSource(source);
-        if (repaired.dbId !== source.dbId) {
-          changed = true;
-        }
-        return repaired;
-      });
-
-      if (changed) {
-        await this.writeDataSourcesConfig(appId, { ...config, sources });
-        console.log(
-          `[AppService] Repaired data-sources dbId for app ${appId}`,
-        );
-      }
-    }
+    await fs.writeFile(dbTsPath, content, "utf8");
   }
 
   async linkAppDataSource(
     appId: string,
-    source: Omit<AppDataSource, "linkedAt"> & {
-      role?: AppDataSourceRole;
-      setPrimary?: boolean;
-    },
+    source: Omit<AppDataSource, "linkedAt">,
   ): Promise<AppDataSource[]> {
     const app = this.apps.get(appId);
     if (!app) {
@@ -2401,46 +2999,33 @@ export class AppService {
 
     const config = await this.getDataSourcesConfig(appId);
     const previousSources = config.sources;
-    const { setPrimary, ...sourceFields } = source;
 
-    const isUpdate = config.sources.some((entry) => entry.id === sourceFields.id);
-    if (config.sources.length >= 1 && !isUpdate && !setPrimary) {
-      const existing = config.primary ?? config.sources[0]?.alias ?? "primary";
-      throw new Error(
-        `App "${app.title}" already has database "${existing}". ` +
-          `One database per mini-app — additional jobs must write to $APP_DB, not link another source. ` +
-          `Pass setPrimary: true only when intentionally replacing the app's database.`,
-      );
-    }
+    const isUpdate = config.sources.some((entry) => entry.id === source.id);
 
-    let role = sourceFields.role;
-    if (!role && (config.sources.length === 0 || setPrimary)) {
-      role = "primary";
-    }
-
-    let dbPath = sourceFields.dbPath;
+    let dbPath = source.dbPath;
     let jobDirForScratch: string | undefined;
 
-    if (sourceFields.jobId) {
+    if (source.jobId) {
       const { getJobsService } = await import("./JobsService.js");
       const jobsService = getJobsService();
       await jobsService.initialize();
       jobDirForScratch =
-        (await jobsService.getJobPath(sourceFields.jobId)) ?? undefined;
+        (await jobsService.getJobPath(source.jobId)) ?? undefined;
+      const workspaceDbPath = await jobsService.getJobDatabasePath(source.jobId);
+      if (workspaceDbPath) {
+        dbPath = workspaceDbPath;
+      }
     }
 
-    const willBePrimary =
-      setPrimary ||
-      role === "primary" ||
-      config.sources.length === 0;
+    const willPromoteJobDb = Boolean(source.jobId);
 
-    if (willBePrimary) {
+    if (willPromoteJobDb) {
       const { isJobOwnedDatabasePath, promoteJobDatabaseToRegistry } =
         await import("./databasePromotion.js");
       if (isJobOwnedDatabasePath(dbPath)) {
         const promoted = await promoteJobDatabaseToRegistry({
           sourcePath: dbPath,
-          label: sourceFields.alias || app.title,
+          label: source.alias || app.title,
           moveFromJobFolder: true,
           jobDirForScratchReset: jobDirForScratch,
         });
@@ -2456,15 +3041,14 @@ export class AppService {
     );
     const registry = await initializeDatabaseRegistry();
     const record = await registry.ensureForPath(dbPath, {
-      label: sourceFields.alias,
-      ownerJobId: sourceFields.jobId,
+      label: source.alias,
+      ownerJobId: source.jobId,
     });
 
     const linked: AppDataSource = {
-      ...sourceFields,
+      ...source,
       dbPath,
       dbId: record.dbId,
-      ...(role ? { role } : {}),
       linkedAt: new Date().toISOString(),
     };
 
@@ -2472,17 +3056,11 @@ export class AppService {
       ? config.sources.map((entry) =>
           entry.id === linked.id ? linked : entry,
         )
-      : [linked];
-
-    let primary = config.primary;
-    if (setPrimary || linked.role === "primary" || config.sources.length === 0) {
-      primary = linked.alias;
-    }
+      : [...config.sources, linked];
 
     await this.writeDataSourcesConfig(
       appId,
       {
-        primary,
         sources: nextSources,
       },
       previousSources,
@@ -2509,81 +3087,13 @@ export class AppService {
   }
 
   /**
-   * Link a job's data.db to every app in job.appIds (skips STANDALONE).
-   * Called after createJob (allowBaseline) and after job completion (data populated).
+   * @deprecated Jobs no longer auto-link scratch data.db to apps. Use create_database + attach_database.
    */
   async autoLinkJobToApps(
-    jobId: string,
-    options?: { allowBaseline?: boolean },
+    _jobId: string,
+    _options?: { allowBaseline?: boolean },
   ): Promise<AppDataSource[]> {
-    const { getJobsService } = await import("./JobsService.js");
-    const { STANDALONE_APP_ID } = await import("./jobs/appIds.js");
-    const jobsService = getJobsService();
-    await jobsService.initialize();
-
-    const job = await jobsService.getJob(jobId);
-    if (!job) {
-      return [];
-    }
-
-    const appIds = (job.appIds ?? []).filter((id) => id !== STANDALONE_APP_ID);
-    if (appIds.length === 0) {
-      return [];
-    }
-
-    const dbPath = await jobsService.getJobDatabasePath(jobId);
-    if (!dbPath) {
-      return [];
-    }
-
-    if (!options?.allowBaseline && dbHasOnlyBaselineTables(dbPath)) {
-      return [];
-    }
-
-    const linked: AppDataSource[] = [];
-    for (const appId of appIds) {
-      const app = this.apps.get(appId);
-      if (!app) {
-        continue;
-      }
-
-      const config = await this.getDataSourcesConfig(appId);
-      if (config.sources.some((entry) => entry.jobId === jobId)) {
-        continue;
-      }
-
-      if (config.sources.length > 0) {
-        console.log(
-          `[AppService] Skipping auto-link for job ${job.name} → app ${app.title}: ` +
-            `app already has primary database "${config.primary ?? config.sources[0]?.alias}". ` +
-            `Job should write UI data to $APP_DB.`,
-        );
-        continue;
-      }
-
-      const source: Omit<AppDataSource, "linkedAt"> & {
-        role?: AppDataSourceRole;
-      } = {
-        id: `${jobId}:auto-linked`,
-        type: "sqlite",
-        jobId,
-        alias: job.name,
-        dbPath,
-        tables: [],
-        role: config.sources.length === 0 ? "primary" : undefined,
-      };
-
-      const nextSources = await this.linkAppDataSource(appId, source);
-      const entry = nextSources.find((s) => s.jobId === jobId);
-      if (entry) {
-        linked.push(entry);
-        console.log(
-          `[AppService] Auto-linked job ${job.name} → app ${app.title}`,
-        );
-      }
-    }
-
-    return linked;
+    return [];
   }
 
   /**
@@ -2609,130 +3119,64 @@ export class AppService {
 
     const allJobs = await jobsService.listJobs();
     const config = await this.getDataSourcesConfig(appId);
-    if (config.sources.length > 0) {
+    const existingJobIds = new Set(
+      config.sources
+        .map((source) => source.jobId)
+        .filter((jobId): jobId is string => Boolean(jobId)),
+    );
+
+    const augmentExisting =
+      process.env.PAPR_AUTO_DISCOVER_DATA_SOURCES === "true";
+    if (config.sources.length > 0 && !augmentExisting) {
       return [];
     }
 
-    const existingJobIds = new Set(config.sources.map((ds) => ds.jobId));
-
-    const appLinkedJobIds = new Set(
-      allJobs.filter((j) => jobBelongsToApp(j.appIds, appId)).map((j) => j.id),
-    );
-
-    // Build map of database paths to jobs (app-linked jobs only)
-    const dbPathToJob = new Map<string, (typeof allJobs)[0]>();
-    for (const job of allJobs) {
-      if (!appLinkedJobIds.has(job.id)) continue;
-      const dbPath = await jobsService.getJobDatabasePath(job.id);
-      if (dbPath) {
-        dbPathToJob.set(dbPath, job);
-      }
-    }
-
-    // Scan app code for database references
     const appDir = path.join(this.appsDir, appId);
-    const referencedDbPaths = await this.scanAppCodeForDatabasePaths(appDir);
+    const discovered = await scanAppCodeForJobDatabaseReferences({
+      appDir,
+      jobsRoot: getPaprJobsRoot(),
+    });
 
     const newSources: AppDataSource[] = [];
-    for (const dbPath of referencedDbPaths) {
-      const job = dbPathToJob.get(dbPath);
-      if (!job || existingJobIds.has(job.id)) continue;
-      if (dbHasOnlyBaselineTables(dbPath)) {
+    for (const reference of discovered) {
+      if (existingJobIds.has(reference.jobId)) {
+        continue;
+      }
+
+      const job = allJobs.find((entry) => entry.id === reference.jobId);
+      if (!job) {
+        continue;
+      }
+
+      if (dbHasOnlyBaselineTables(reference.dbPath)) {
         console.log(
           `[AppService] Skipping auto-link for ${job.name}: DB has only job infrastructure tables`,
         );
         continue;
       }
 
-      const source: Omit<AppDataSource, "linkedAt"> & {
-        role?: AppDataSourceRole;
-      } = {
+      await jobsService.ensureJobLinkedToApp(reference.jobId, appId);
+
+      const source: Omit<AppDataSource, "linkedAt"> = {
         id: `${job.id}:auto-discovered`,
         type: "sqlite",
         jobId: job.id,
         alias: job.name,
-        dbPath,
+        dbPath: reference.dbPath,
         tables: [],
-        role: config.sources.length === 0 ? "primary" : undefined,
       };
 
       const linked = await this.linkAppDataSource(appId, source);
-      newSources.push(linked.find((s) => s.jobId === job.id)!);
-      console.log(`[AppService] Auto-linked data source: ${job.name} → ${app.title}`);
+      const created = linked.find((entry) => entry.jobId === job.id);
+      if (created) {
+        newSources.push(created);
+        console.log(
+          `[AppService] Auto-linked data source from code (${reference.matchedBy}): ${job.name} → ${app.title}`,
+        );
+      }
     }
 
     return newSources;
-  }
-
-  /**
-   * Scan mini-app code files for database path references.
-   * Looks for:
-   * - fetch('/api/db/query', ...) calls with specific database paths
-   * - Direct database file references in code
-   * 
-   * @param appDir - App directory to scan
-   * @returns Set of database paths referenced in the app code
-   */
-  private async scanAppCodeForDatabasePaths(appDir: string): Promise<Set<string>> {
-    const dbPaths = new Set<string>();
-    
-    try {
-      let files: string[];
-      try {
-        files = await fs.readdir(appDir);
-      } catch {
-        return dbPaths;
-      }
-      const codeFiles = files.filter(f => 
-        f.endsWith('.js') || 
-        f.endsWith('.ts') || 
-        f.endsWith('.html')
-      );
-
-      for (const file of codeFiles) {
-        const filePath = path.join(appDir, file);
-        let content: string;
-        try {
-          content = await fs.readFile(filePath, 'utf8');
-        } catch {
-          continue;
-        }
-        
-        // Look for database paths in the code
-        // Pattern 1: Explicit db paths: /Users/.../Papr/jobs/{jobId}/data/*.db
-        const dbPathPattern = /\/Papr\/jobs\/([a-f0-9-]+)\/data\/[^'"]+\.db/gi;
-        let match;
-        while ((match = dbPathPattern.exec(content)) !== null) {
-          dbPaths.add(match[0]);
-        }
-        
-        // Pattern 2: Job ID references that imply database usage
-        // If app code references a job ID, it's likely querying that job's database
-        const jobIdPattern = /['"]([a-f0-9-]{36})['"]/g;
-        const homeDir = os.homedir();
-        while ((match = jobIdPattern.exec(content)) !== null) {
-          const jobId = match[1];
-          // Try both standard paths
-          const possiblePaths = [
-            path.join(homeDir, 'Papr', 'jobs', jobId, 'data', 'data.db'),
-            path.join(homeDir, 'Papr', 'jobs', jobId, 'data', 'data.db'),
-          ];
-          for (const p of possiblePaths) {
-            try {
-              await fs.access(p);
-              dbPaths.add(p);
-              break;
-            } catch {
-              // Path doesn't exist, try next
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.warn(`[AppService] Failed to scan app code for db paths:`, err);
-    }
-
-    return dbPaths;
   }
 
   getAppsRootPath(): string {

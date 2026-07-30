@@ -1,4 +1,8 @@
 import Papr from "@papr/memory";
+import {
+  formatPaprQuotaMessage,
+  reportPaprQuotaError,
+} from "../utils/paprQuota.js";
 
 export async function getPaprClient(): Promise<Papr> {
   const { getApiKey } = await import("../../gateway/utils/keyResolver.js");
@@ -20,11 +24,10 @@ export function isPaprNotFoundError(error: unknown): boolean {
   return error instanceof Papr.NotFoundError;
 }
 
-export function handlePaprToolError(error: unknown): never {
-  if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-    throw new Error(
-      "Papr Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features.",
-    );
+export function handlePaprToolError(error: unknown, source = "papr-tool"): never {
+  const quotaStatus = reportPaprQuotaError(error, source);
+  if (quotaStatus) {
+    throw new Error(formatPaprQuotaMessage(quotaStatus));
   }
   if (error instanceof Papr.AuthenticationError) {
     throw new Error(

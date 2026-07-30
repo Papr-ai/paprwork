@@ -10,13 +10,22 @@ export function getDisplayFilename(path: string): string {
   const parts = cleanPath.split("/");
   let filename = parts[parts.length - 1];
 
-  // UUID-like IDs → generic label
+  // UUID-like IDs → context-aware label (avoid "document" for jobs/apps paths)
   if (
     filename.match(
       /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/,
     )
   ) {
-    return "document";
+    if (/\/Jobs\//i.test(cleanPath)) {
+      return "job folder";
+    }
+    if (/\/apps\//i.test(cleanPath)) {
+      return "app folder";
+    }
+    if (/\/documents\//i.test(cleanPath)) {
+      return "document";
+    }
+    return "folder";
   }
 
   filename = filename.replace(/-content\.md$/, "").replace(/\.md$/, "");
@@ -445,6 +454,7 @@ export const TOOL_DESCRIPTIONS: Record<
 export function getToolDisplayLabel(toolCall: ToolCallLike): string {
   const toolName = toolCall.toolName ?? "tool";
   const isRunning = toolCall.status === "calling";
+  const isError = toolCall.status === "error";
 
   if (toolName === "bash" && typeof toolCall.args?.command === "string") {
     return getBashCommandDescription(toolCall.args.command, isRunning);
@@ -507,7 +517,12 @@ export function getToolDisplayLabel(toolCall: ToolCallLike): string {
   }
 
   const desc = TOOL_DESCRIPTIONS[toolName];
-  if (desc) return isRunning ? desc.running : desc.complete;
+  if (desc) {
+    if (isError) {
+      return `${desc.running} failed`;
+    }
+    return isRunning ? desc.running : desc.complete;
+  }
 
   // Fallback: snake_case → Title Case words
   const friendly = toolName.replace(/_/g, " ");

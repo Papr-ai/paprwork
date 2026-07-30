@@ -24,7 +24,12 @@
 .tracker-val { font-size:13px; color:var(--muted); }
 .intel-bullet { padding-left:14px; position:relative; margin-bottom:4px; }
 .intel-bullet::before { content:'›'; position:absolute; left:0; color:var(--accent); font-weight:700; }
-.alert-icon { font-size:18px; min-width:24px; text-align:center; }
+.alert-icon { font-size:18px; min-width:24px; text-align:center; display:flex; align-items:center; justify-content:center; }
+.alert-dot { width:10px; height:10px; border-radius:999px; display:inline-block; }
+.sev-dot-high { background:#ef4444; }
+.sev-dot-medium { background:#f59e0b; }
+.sev-dot-low { background:#22c55e; }
+.sev-dot-info { background:#94a3b8; }
 .alert-action { color:var(--accent); font-weight:500; }
 .sev-high { border-color:rgba(239,68,68,0.25); }
 .sev-med { border-color:rgba(245,158,11,0.25); }

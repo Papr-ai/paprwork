@@ -19,6 +19,9 @@ interface AppCardProps {
   onSetStatus?: (status: AppStatus) => void;
   /** App is live on apps.papr.ai (from cloud publish snapshot). */
   isPublished?: boolean;
+  /** Show "Copy to namespace" when logged into Papr with multiple namespaces. */
+  showCopyAction?: boolean;
+  onCopy?: () => void;
 }
 
 export function AppCard({
@@ -31,6 +34,8 @@ export function AppCard({
   onRename,
   onSetStatus,
   isPublished = false,
+  showCopyAction = false,
+  onCopy,
 }: AppCardProps) {
   const status: AppStatus = artifact.status ?? "active";
   const [menuOpen, setMenuOpen] = useState(false);
@@ -378,6 +383,17 @@ export function AppCard({
                 }}
               >
                 Archive
+              </button>
+            )}
+            {showCopyAction && onCopy && (
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onCopy();
+                }}
+              >
+                Copy to workspace…
               </button>
             )}
             <div className="app-card__menu-separator" />

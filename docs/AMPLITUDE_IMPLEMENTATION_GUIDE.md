@@ -673,7 +673,7 @@ Watch for:
 **Solution:**
 ```bash
 # Check settings
-cat ~/Papr/data/settings.json | grep telemetry
+cat $PAPR_HOME/data/settings.json | grep telemetry
 
 # Check network
 # Open browser dev tools → Network tab

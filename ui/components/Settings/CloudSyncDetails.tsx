@@ -933,7 +933,7 @@ export const CloudSyncDetails: React.FC<{
           )}
         />
         <ItemList
-          emptyMessage="No apps in ~/Papr/apps."
+          emptyMessage="No apps in your active Papr workspace."
           items={github.apps}
           renderRow={(item) => (
             <SyncItemRow
@@ -945,7 +945,7 @@ export const CloudSyncDetails: React.FC<{
           )}
         />
         <ItemList
-          emptyMessage="No jobs in ~/Papr/Jobs."
+          emptyMessage="No jobs in your active Papr workspace."
           items={github.jobs}
           renderRow={(item) => (
             <SyncItemRow

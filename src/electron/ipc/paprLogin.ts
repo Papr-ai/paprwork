@@ -19,7 +19,10 @@ import { CustomKeysStorage, SettingsStorage } from "../../core/storage/index.js"
 import { invalidateKeyCache } from "./customKeys.js";
 import {
   notifyGatewayWorkspaceSwitch,
+  notifyGatewayPaprApiKeyUpdate,
+  registerPaprWorkspaceHandlers,
 } from "./paprWorkspace.js";
+import { registerPaprLegacyMigrationHandlers } from "./paprLegacyMigration.js";
 import {
   cacheNamespacesForOrg,
   getCachedNamespaces,
@@ -31,11 +34,18 @@ import {
   fetchWorkspaceMembers,
   sendWorkspaceInvite,
 } from "./paprWorkspaceTeam.js";
+import { registerPaprBillingHandlers } from "./paprBilling.js";
 import * as crypto from "crypto";
 import path from "node:path";
 import { getPaprDataDir } from "../../core/utils/paprRoot.js";
-import { getPaprBaseDir } from "../../core/utils/paprWorkspace.js";
-import { paprApiKeyMatchesNamespace } from "../../core/utils/paprApiKey.js";
+import {
+  getPaprBaseDir,
+  readActiveWorkspacePointer,
+} from "../../core/utils/paprWorkspace.js";
+import {
+  paprApiKeyMatchesNamespace,
+  paprNamespaceApiKeyName,
+} from "../../core/utils/paprApiKey.js";
 
 /**
  * Sync Papr profile fields to gateway settings file so the gateway process
@@ -1112,7 +1122,8 @@ async function syncActiveWorkspaceOrganization(
     await syncNamespaceApiKeyIfNeeded({
       profile: updatedProfile,
       organizationId: namespaceOrgId,
-      preferredNamespaceId: active.defaultNamespaceId ?? profile.activeNamespaceId,
+      preferredNamespaceId:
+        readActiveWorkspacePointer()?.namespaceId ?? profile.activeNamespaceId,
       customKeysStorage,
       settingsStorage,
     });
@@ -1781,29 +1792,76 @@ async function applyActiveNamespaceSwitch(input: {
   namespaceName: string;
   customKeysStorage: CustomKeysStorage;
   settingsStorage: SettingsStorage;
+  /** When false, skip renderer IPC (caller sends a combined workspace event). */
+  notifyRenderer?: boolean;
 }): Promise<{ apiKey: string }> {
   await input.customKeysStorage.setActiveOrganization(input.organizationId);
+
+  const pointer = readActiveWorkspacePointer();
+  const pointerMatches =
+    pointer?.organizationId === input.organizationId &&
+    pointer?.namespaceId === input.namespaceId;
 
   const workspaceId =
     input.profile.workspaceId ||
     (await getSelectedWorkspaceId(input.profile.sessionToken!, input.profile.userId!)) ||
     "";
 
-  const resolved = await resolveOrgApiKey(
-    input.profile.sessionToken!,
-    input.profile.userId!,
-    input.organizationId,
-    input.namespaceId,
-    input.namespaceName,
-    workspaceId,
-  );
-  const apiKey = resolved.apiKey;
+  let apiKey: string;
 
-  await input.customKeysStorage.addKey({
-    name: "PAPR_API_KEY",
-    value: apiKey,
-  });
-  invalidateKeyCache("PAPR_API_KEY");
+  if (pointerMatches) {
+    const cachedKey = await resolveActivePaprApiKey(input.customKeysStorage);
+    if (
+      cachedKey &&
+      paprApiKeyMatchesNamespace(
+        cachedKey,
+        input.organizationId,
+        input.namespaceId,
+      )
+    ) {
+      apiKey = cachedKey;
+    } else {
+      const refreshed = await refreshActiveNamespaceApiKey({
+        customKeysStorage: input.customKeysStorage,
+        settingsStorage: input.settingsStorage,
+        organizationId: input.organizationId,
+        namespaceId: input.namespaceId,
+        namespaceName: input.namespaceName,
+      });
+      if (!refreshed) {
+        throw new Error("Failed to refresh namespace API key");
+      }
+      apiKey = refreshed;
+    }
+  } else {
+    const resolved = await resolveOrgApiKey(
+      input.profile.sessionToken!,
+      input.profile.userId!,
+      input.organizationId,
+      input.namespaceId,
+      input.namespaceName,
+      workspaceId,
+    );
+    apiKey = resolved.apiKey;
+
+    const workspaceResult = await notifyGatewayWorkspaceSwitch({
+      organizationId: input.organizationId,
+      namespaceId: input.namespaceId,
+      namespaceName: input.namespaceName,
+      paprApiKey: apiKey,
+    });
+    if (!workspaceResult.success) {
+      throw new Error(
+        workspaceResult.error ?? "Gateway workspace switch failed",
+      );
+    }
+  }
+
+  await persistNamespaceApiKeys(
+    input.customKeysStorage,
+    input.namespaceId,
+    apiKey,
+  );
 
   input.settingsStorage.setPaprProfile({
     ...input.profile,
@@ -1812,28 +1870,140 @@ async function applyActiveNamespaceSwitch(input: {
     activeNamespaceName: input.namespaceName,
   });
 
-  const workspaceResult = await notifyGatewayWorkspaceSwitch({
-    organizationId: input.organizationId,
-    namespaceId: input.namespaceId,
-    namespaceName: input.namespaceName,
-    paprApiKey: apiKey,
-  });
-  if (!workspaceResult.success) {
-    console.warn(
-      "[PaprLogin] Namespace workspace switch warning:",
-      workspaceResult.error ?? "unknown error",
-    );
-  }
+  invalidateKeyCache("PAPR_API_KEY");
 
-  const win = BrowserWindow.getAllWindows()[0];
-  if (win) {
-    win.webContents.send("papr:namespace-changed", {
-      namespaceId: input.namespaceId,
-      namespaceName: input.namespaceName,
-    });
+  if (input.notifyRenderer !== false) {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win) {
+      win.webContents.send("papr:namespace-changed", {
+        namespaceId: input.namespaceId,
+        namespaceName: input.namespaceName,
+      });
+    }
   }
 
   return { apiKey };
+}
+
+/** Fetch + persist namespace API key without reloading gateway workspace services. */
+async function refreshActiveNamespaceApiKey(input: {
+  customKeysStorage: CustomKeysStorage;
+  settingsStorage: SettingsStorage;
+  organizationId: string;
+  namespaceId: string;
+  namespaceName: string;
+}): Promise<string | null> {
+  const auth = await resolvePaprAuthContext(
+    input.customKeysStorage,
+    input.settingsStorage,
+  );
+  if (!auth) {
+    return null;
+  }
+
+  const { profile, sessionToken } = auth;
+  await input.customKeysStorage.setActiveOrganization(input.organizationId);
+
+  const workspaceId =
+    profile.workspaceId ||
+    (await getSelectedWorkspaceId(sessionToken, profile.userId!)) ||
+    "";
+
+  const resolved = await resolveOrgApiKey(
+    sessionToken,
+    profile.userId!,
+    input.organizationId,
+    input.namespaceId,
+    input.namespaceName,
+    workspaceId,
+  );
+
+  await persistNamespaceApiKeys(
+    input.customKeysStorage,
+    input.namespaceId,
+    resolved.apiKey,
+  );
+
+  input.settingsStorage.setPaprProfile({
+    ...profile,
+    organizationId: input.organizationId,
+    activeNamespaceId: input.namespaceId,
+    activeNamespaceName: input.namespaceName,
+  });
+
+  await notifyGatewayPaprApiKeyUpdate(resolved.apiKey);
+  invalidateKeyCache("PAPR_API_KEY");
+
+  return resolved.apiKey;
+}
+
+async function resolvePaprAuthContext(
+  customKeysStorage: CustomKeysStorage,
+  settingsStorage: SettingsStorage,
+): Promise<{ profile: NonNullable<ReturnType<SettingsStorage["getPaprProfile"]>>; sessionToken: string } | null> {
+  const profile = settingsStorage.getPaprProfile();
+  if (!profile?.userId) {
+    return null;
+  }
+
+  const sessionToken =
+    profile.sessionToken?.trim() ||
+    (await customKeysStorage.getKeyByName("PAPR_SESSION_TOKEN"))?.trim() ||
+    "";
+  if (!sessionToken) {
+    return null;
+  }
+
+  return { profile, sessionToken };
+}
+
+async function persistNamespaceApiKeys(
+  customKeysStorage: CustomKeysStorage,
+  namespaceId: string,
+  apiKey: string,
+): Promise<void> {
+  await customKeysStorage.addKey({
+    name: paprNamespaceApiKeyName(namespaceId),
+    value: apiKey,
+    orgScope: "organization",
+  });
+  await customKeysStorage.addKey({
+    name: "PAPR_API_KEY",
+    value: apiKey,
+    orgScope: "organization",
+  });
+}
+
+/** Resolve the Papr API key for the active workspace pointer (namespace cache first). */
+export async function resolveActivePaprApiKey(
+  customKeysStorage: CustomKeysStorage,
+): Promise<string | null> {
+  const pointer = readActiveWorkspacePointer();
+  if (!pointer) {
+    return customKeysStorage.getKeyByName("PAPR_API_KEY");
+  }
+
+  await customKeysStorage.setActiveOrganization(pointer.organizationId);
+
+  const namespaceSlot = paprNamespaceApiKeyName(pointer.namespaceId);
+  const cachedForNamespace = await customKeysStorage.getKeyByName(namespaceSlot);
+  if (cachedForNamespace?.trim()) {
+    return cachedForNamespace.trim();
+  }
+
+  const activeAlias = await customKeysStorage.getKeyByName("PAPR_API_KEY");
+  if (
+    activeAlias &&
+    paprApiKeyMatchesNamespace(
+      activeAlias,
+      pointer.organizationId,
+      pointer.namespaceId,
+    )
+  ) {
+    return activeAlias;
+  }
+
+  return null;
 }
 
 /**
@@ -1848,17 +2018,29 @@ async function syncNamespaceApiKeyIfNeeded(input: {
   settingsStorage: SettingsStorage;
   force?: boolean;
 }): Promise<void> {
-  if (!input.profile.sessionToken || !input.profile.userId) {
+  const auth = await resolvePaprAuthContext(
+    input.customKeysStorage,
+    input.settingsStorage,
+  );
+  if (!auth) {
     invalidateKeyCache("PAPR_API_KEY");
     return;
   }
 
+  const { profile, sessionToken } = auth;
+
   await input.customKeysStorage.setActiveOrganization(input.organizationId);
 
+  const pointer = readActiveWorkspacePointer();
+  const preferredNamespaceId =
+    pointer?.organizationId === input.organizationId
+      ? pointer.namespaceId
+      : input.preferredNamespaceId;
+
   const { choice } = await resolveNamespaceForWorkspaceSwitch({
-    sessionToken: input.profile.sessionToken,
+    sessionToken,
     organizationId: input.organizationId,
-    preferredNamespaceId: input.preferredNamespaceId,
+    preferredNamespaceId,
     customKeysStorage: input.customKeysStorage,
     settingsStorage: input.settingsStorage,
   });
@@ -1874,8 +2056,11 @@ async function syncNamespaceApiKeyIfNeeded(input: {
   }
 
   if (!input.force) {
-    const storedKey = await input.customKeysStorage.getKeyByName("PAPR_API_KEY");
+    const storedKey = await resolveActivePaprApiKey(input.customKeysStorage);
     const currentProfile = input.settingsStorage.getPaprProfile();
+    const pointerMatches =
+      pointer?.organizationId === input.organizationId &&
+      pointer?.namespaceId === choice.namespaceId;
     if (
       storedKey &&
       paprApiKeyMatchesNamespace(
@@ -1884,14 +2069,35 @@ async function syncNamespaceApiKeyIfNeeded(input: {
         choice.namespaceId,
       ) &&
       currentProfile?.activeNamespaceId === choice.namespaceId &&
-      currentProfile.organizationId === input.organizationId
+      currentProfile.organizationId === input.organizationId &&
+      pointerMatches
     ) {
       return;
     }
   }
 
+  if (
+    pointer?.organizationId === input.organizationId &&
+    pointer?.namespaceId === choice.namespaceId
+  ) {
+    await refreshActiveNamespaceApiKey({
+      customKeysStorage: input.customKeysStorage,
+      settingsStorage: input.settingsStorage,
+      organizationId: input.organizationId,
+      namespaceId: choice.namespaceId,
+      namespaceName: choice.namespaceName,
+    });
+    input.settingsStorage.setPaprProfile({
+      ...input.settingsStorage.getPaprProfile()!,
+      organizationId: input.organizationId,
+      activeNamespaceId: choice.namespaceId,
+      activeNamespaceName: choice.namespaceName,
+    });
+    return;
+  }
+
   await applyActiveNamespaceSwitch({
-    profile: { ...input.profile, organizationId: input.organizationId },
+    profile: { ...profile, organizationId: input.organizationId },
     organizationId: input.organizationId,
     namespaceId: choice.namespaceId,
     namespaceName: choice.namespaceName,
@@ -1900,22 +2106,67 @@ async function syncNamespaceApiKeyIfNeeded(input: {
   });
 }
 
-/** Ensure startup uses the API key for the profile's active org + namespace. */
+let ensureActiveNamespaceApiKeyInFlight: Promise<string | null> | null = null;
+
+/** Ensure startup uses the API key for the active workspace pointer (not just profile). */
 export async function ensureActiveNamespaceApiKey(
   customKeysStorage: CustomKeysStorage,
   settingsStorage: SettingsStorage,
-): Promise<void> {
-  const profile = settingsStorage.getPaprProfile();
-  if (!profile?.sessionToken || !profile.userId || !profile.organizationId) {
-    return;
+): Promise<string | null> {
+  if (ensureActiveNamespaceApiKeyInFlight) {
+    return ensureActiveNamespaceApiKeyInFlight;
   }
 
-  await syncNamespaceApiKeyIfNeeded({
-    profile,
-    organizationId: profile.organizationId,
-    preferredNamespaceId: profile.activeNamespaceId,
+  ensureActiveNamespaceApiKeyInFlight = ensureActiveNamespaceApiKeyInternal(
     customKeysStorage,
     settingsStorage,
+  ).finally(() => {
+    ensureActiveNamespaceApiKeyInFlight = null;
+  });
+
+  return ensureActiveNamespaceApiKeyInFlight;
+}
+
+async function ensureActiveNamespaceApiKeyInternal(
+  customKeysStorage: CustomKeysStorage,
+  settingsStorage: SettingsStorage,
+): Promise<string | null> {
+  const auth = await resolvePaprAuthContext(customKeysStorage, settingsStorage);
+  if (!auth) {
+    return null;
+  }
+
+  const { profile } = auth;
+
+  const pointer = readActiveWorkspacePointer();
+  const organizationId = pointer?.organizationId ?? profile.organizationId;
+  const namespaceId = pointer?.namespaceId ?? profile.activeNamespaceId;
+  if (!organizationId || !namespaceId) {
+    return null;
+  }
+
+  const namespaceName =
+    pointer?.namespaceName ?? profile.activeNamespaceName ?? namespaceId;
+
+  await customKeysStorage.setActiveOrganization(organizationId);
+
+  const storedKey = await resolveActivePaprApiKey(customKeysStorage);
+  if (storedKey) {
+    await notifyGatewayPaprApiKeyUpdate(storedKey);
+    invalidateKeyCache("PAPR_API_KEY");
+    return storedKey;
+  }
+
+  console.log(
+    `[PaprLogin] PAPR_API_KEY out of sync with active workspace (${namespaceId}) — refreshing…`,
+  );
+
+  return refreshActiveNamespaceApiKey({
+    customKeysStorage,
+    settingsStorage,
+    organizationId,
+    namespaceId,
+    namespaceName,
   });
 }
 
@@ -2078,7 +2329,6 @@ async function completePaprAuthCallback(
     name: "PAPR_API_KEY",
     value: provision.apiKey,
   });
-  invalidateKeyCache("PAPR_API_KEY");
 
   await customKeysStorage.addKey({
     name: "PAPR_SESSION_TOKEN",
@@ -2112,11 +2362,11 @@ async function completePaprAuthCallback(
     paprApiKey: provision.apiKey,
   });
   if (!workspaceResult.success) {
-    console.warn(
-      "[PaprLogin] Workspace activation warning:",
-      workspaceResult.error ?? "unknown error",
+    throw new Error(
+      workspaceResult.error ?? "Gateway workspace switch failed",
     );
   }
+  invalidateKeyCache("PAPR_API_KEY");
 
   await syncProfileToGatewaySettings(
     email || "",
@@ -2157,6 +2407,17 @@ export function initializePaprLoginIPC(
 ) {
   trackLoginEvent = options?.trackLoginEvent;
   void restorePkceFromDisk();
+  registerPaprWorkspaceHandlers();
+  registerPaprLegacyMigrationHandlers({
+    resolvePaprApiKey: async () => {
+      try {
+        const key = await customKeysStorage.getKey("PAPR_API_KEY");
+        return key?.trim() || undefined;
+      } catch {
+        return undefined;
+      }
+    },
+  });
   // Check if user is already logged in
   ipcMain.handle("papr:check-login-status", async () => {
     try {
@@ -2348,7 +2609,7 @@ export function initializePaprLoginIPC(
     "papr:list-namespaces",
     async (
       _event,
-      options?: { organizationId?: string; forceRefresh?: boolean },
+      options?: { organizationId?: string; forceRefresh?: boolean; peek?: boolean },
     ) => {
       try {
         const profile = settingsStorage.getPaprProfile();
@@ -2363,15 +2624,9 @@ export function initializePaprLoginIPC(
           return { success: false, error: "Missing organization info" };
         }
 
-        if (organizationId !== profile.organizationId) {
+        const peek = options?.peek === true;
+        if (!peek && organizationId !== profile.organizationId) {
           settingsStorage.setPaprProfile({ ...profile, organizationId });
-          await syncNamespaceApiKeyIfNeeded({
-            profile: { ...profile, organizationId },
-            organizationId,
-            preferredNamespaceId: profile.activeNamespaceId,
-            customKeysStorage,
-            settingsStorage,
-          });
         }
 
         const forceRefresh = options?.forceRefresh === true;
@@ -2673,6 +2928,7 @@ export function initializePaprLoginIPC(
         namespaceName: defaultNs.namespaceName,
         customKeysStorage,
         settingsStorage,
+        notifyRenderer: false,
       });
 
       console.log(
@@ -2874,9 +3130,24 @@ export function initializePaprLoginIPC(
     return { success: true };
   });
 
-  void ensureActiveNamespaceApiKey(customKeysStorage, settingsStorage).catch((error) => {
-    console.warn("[PaprLogin] Startup namespace API key sync failed:", error);
+  registerPaprBillingHandlers({
+    settingsStorage,
+    runGraphQLWithRefresh: async (query, variables) => {
+      const profile = settingsStorage.getPaprProfile();
+      if (!profile?.sessionToken) {
+        throw new Error("Connect your Papr account to manage billing.");
+      }
+      return (await parseGraphQLWithRefresh(
+        profile.sessionToken,
+        query,
+        variables,
+        customKeysStorage,
+        settingsStorage,
+      )) as Record<string, unknown>;
+    },
   });
+
+  // Startup sync runs from index.cjs before Gateway spawn (see ensureActiveNamespaceApiKey export).
 }
 
 /**

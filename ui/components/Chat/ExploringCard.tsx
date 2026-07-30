@@ -9,6 +9,10 @@ import type { ToolCall } from "../../types/core";
 import { getToolDisplayLabel } from "../../utils/toolDisplay";
 import { PaprLogoIcon } from "./PaprLogoIcon";
 import { FileWritePreview, hasFilePreview } from "./FileWritePreview";
+import {
+  ToolCallResultFeedback,
+  ToolCallStatusIcon,
+} from "./ToolCallStatus";
 import "./ExploringCard.css";
 import "./FileWritePreview.css";
 
@@ -127,32 +131,6 @@ export const ExploringCard: React.FC<ExploringCardProps> = ({
         {toolCalls.map((toolCall, index) => {
           const displayText = getToolDisplayLabel(toolCall);
 
-          // Determine status indicator
-          let statusIndicator = null;
-          if (toolCall.status === "calling") {
-            // Loading indicator - liquid glass style pulsing dot
-            statusIndicator = (
-              <span className="exploring-tool-loading">
-                <span className="exploring-tool-dot"></span>
-              </span>
-            );
-          } else if (toolCall.status === "success") {
-            // Success checkmark
-            statusIndicator = <span className="exploring-tool-success">✓</span>;
-          } else if (toolCall.status === "interrupted") {
-            statusIndicator = (
-              <span
-                className="exploring-tool-interrupted"
-                title="Interrupted before this tool finished"
-              >
-                ⚠️
-              </span>
-            );
-          } else if (toolCall.status === "error") {
-            // Error X
-            statusIndicator = <span className="exploring-tool-error">✗</span>;
-          }
-
           const showPreview = hasFilePreview(
             toolCall.toolName,
             toolCall.args,
@@ -164,8 +142,13 @@ export const ExploringCard: React.FC<ExploringCardProps> = ({
               <div className="exploring-tool-item">
                 <span className="exploring-tool-arrow">→</span>
                 <span className="exploring-tool-name">{displayText}</span>
-                {statusIndicator}
+                <ToolCallStatusIcon status={toolCall.status} />
               </div>
+              <ToolCallResultFeedback
+                status={toolCall.status}
+                result={toolCall.result}
+                toolError={toolCall.error}
+              />
               {showPreview && (
                 <FileWritePreview
                   toolName={toolCall.toolName}

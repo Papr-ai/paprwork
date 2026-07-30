@@ -19,6 +19,9 @@ export interface CloudAppRegistryEntry {
   title?: string;
   description?: string;
   icon?: string;
+  ownerUserId?: string;
+  organizationId?: string;
+  namespaceId?: string;
   agentChat?: AppAgentChatConfig;
 }
 
@@ -62,6 +65,9 @@ export async function writeCloudAppMetadataFile(
     description:
       entry.description?.trim() || buildDefaultCloudAppDescription(title),
     updatedAt: new Date().toISOString(),
+    ...(entry.ownerUserId ? { ownerUserId: entry.ownerUserId } : {}),
+    ...(entry.organizationId ? { organizationId: entry.organizationId } : {}),
+    ...(entry.namespaceId ? { namespaceId: entry.namespaceId } : {}),
     ...(entry.icon ? { icon: entry.icon } : {}),
     ...(entry.agentChat?.enabled
       ? {

@@ -1,4 +1,5 @@
 import { sanitizeToolOutput } from "../../../core/tools/index.js";
+import { isFailedToolResult } from "../../../core/utils/interruptedToolResult.js";
 import {
   createChatStreamChunk,
   parseToolCallChunk,
@@ -392,6 +393,7 @@ export async function* orchestrateModelStream(
     for (let i = 0; i < toolResultBuffer.length; i++) {
       const item = toolResultBuffer[i];
       const result = item.result;
+      const failed = isFailedToolResult(result);
       const toolResult: ToolResultEvent = {
         toolCallId: item.toolCallId,
         toolName: item.toolName,
@@ -413,7 +415,7 @@ export async function* orchestrateModelStream(
             name: toolCall.toolName,
             input: toolCall.args,
             output: toolResult.result,
-            status: "success",
+            status: failed ? "error" : "success",
             toolCallId: toolResult.toolCallId,
           };
         }
@@ -424,7 +426,15 @@ export async function* orchestrateModelStream(
           toolCallId: toolResult.toolCallId,
           toolName: toolResult.toolName,
           result: toolResult.result,
-          success: true,
+          success: !failed,
+          ...(failed && typeof result === "object" && result !== null
+            ? {
+                error:
+                  typeof (result as Record<string, unknown>).error === "string"
+                    ? ((result as Record<string, unknown>).error as string)
+                    : "Tool call failed",
+              }
+            : {}),
         },
         chatId,
       );

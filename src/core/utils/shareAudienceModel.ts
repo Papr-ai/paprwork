@@ -135,15 +135,15 @@ export function isPermissionAvailable(
   audience: ShareAudience,
   permission: SharePermission,
 ): boolean {
-  // Simplified UI: private = only me, team = workspace, link = anyone with link
+  // Simplified UI: private, team, link (unlisted), public (Community catalog)
   // Both "write" (view & interact) and "edit" (code) require non-private
   if (audience === "private") {
     // Private apps don't share permissions
     return false;
   }
-  // For "team" and "link", both write and edit are available
+  // For team, link, and public, both write and edit are available
   if (permission === "write" || permission === "edit") {
-    return audience === "link" || audience === "team";
+    return audience === "link" || audience === "team" || audience === "public";
   }
   // "read" is always available (though not in UI anymore)
   return true;

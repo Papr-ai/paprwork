@@ -19,8 +19,8 @@ import {
 } from "../../WikiWriterService.js";
 import type { SubAgentIconName } from "../../../../core/types/subagents.js";
 import {
-  jobAppDatabasePromptLines,
-  requireJobAppDatabase,
+  jobWriteDatabasePromptLines,
+  resolveJobWriteTargets,
 } from "../../jobAppDatabase.js";
 
 /** Shared agent job session inputs — used by desktop launch() and cloud gateway streaming. */
@@ -355,9 +355,9 @@ export class AgentJobExecutor implements IJobExecutor {
     envLines.push(`JOB_DIR="${params.jobDir}"`);
     if (ownDbPath) envLines.push(`JOB_DB="${ownDbPath}"`);
 
-    const appDb = await requireJobAppDatabase(params.job.appIds);
-    if (appDb) {
-      envLines.push(...jobAppDatabasePromptLines(appDb));
+    const writeTargets = await resolveJobWriteTargets(params.job);
+    if (writeTargets.length > 0) {
+      envLines.push(...jobWriteDatabasePromptLines(writeTargets));
     }
 
     for (const dep of params.job.dependsOn ?? []) {

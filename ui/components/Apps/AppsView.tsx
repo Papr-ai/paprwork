@@ -10,6 +10,7 @@ import { gateway } from "../../src/lib/gateway";
 import { AppCard } from "./AppCard";
 import { CommunityAppsView } from "./CommunityAppsView";
 import { CreateAppModal } from "./CreateAppModal";
+import { CopyAppModal } from "./CopyAppModal";
 import { usePaprNamespace } from "../../hooks/usePaprNamespace";
 import "./AppsView.css";
 import type { Artifact } from "../../stores/artifactsStore";
@@ -96,6 +97,12 @@ export function AppsView() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [publishRevision, setPublishRevision] = useState(0);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [copyAppTarget, setCopyAppTarget] = useState<Artifact | null>(null);
+  const [otherNamespaceCount, setOtherNamespaceCount] = useState(0);
+  const [otherOrganizationCount, setOtherOrganizationCount] = useState(0);
+  const [currentOrganizationId, setCurrentOrganizationId] = useState<string | null>(
+    null,
+  );
   const [catalogSearchQuery, setCatalogSearchQuery] = useState("");
   const [catalogRefreshToken, setCatalogRefreshToken] = useState(0);
 
@@ -103,10 +110,14 @@ export function AppsView() {
     const onWorkspaceChanged = () => {
       void loadArtifacts();
       setPublishRevision((value) => value + 1);
+      setCatalogRefreshToken((token) => token + 1);
     };
     window.addEventListener("papr-namespace-changed", onWorkspaceChanged);
-    return () =>
+    window.addEventListener("papr-organization-changed", onWorkspaceChanged);
+    return () => {
       window.removeEventListener("papr-namespace-changed", onWorkspaceChanged);
+      window.removeEventListener("papr-organization-changed", onWorkspaceChanged);
+    };
   }, [loadArtifacts]);
 
   useEffect(() => {
@@ -133,6 +144,58 @@ export function AppsView() {
   useEffect(() => {
     setCatalogSearchQuery("");
   }, [viewTab]);
+
+  useEffect(() => {
+    if (!papr.isLoggedIn || !papr.namespaceId) {
+      setOtherNamespaceCount(0);
+      setOtherOrganizationCount(0);
+      setCurrentOrganizationId(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const workspace = await window.electronAPI.papr.getActiveWorkspace();
+      const orgId = workspace.success ? workspace.pointer?.organizationId : null;
+      if (!orgId) {
+        if (!cancelled) {
+          setOtherNamespaceCount(0);
+          setOtherOrganizationCount(0);
+          setCurrentOrganizationId(null);
+        }
+        return;
+      }
+      if (!cancelled) {
+        setCurrentOrganizationId(orgId);
+      }
+
+      const [namespaceResult, organizationResult] = await Promise.all([
+        window.electronAPI.papr.listNamespaces({ organizationId: orgId }),
+        window.electronAPI.papr.listOrganizations(),
+      ]);
+      if (cancelled) {
+        return;
+      }
+
+      const namespaceCount =
+        namespaceResult.success && namespaceResult.namespaces
+          ? namespaceResult.namespaces.filter((ns) => ns.id !== papr.namespaceId)
+              .length
+          : 0;
+      const organizationCount = organizationResult.success
+        ? (organizationResult.organizations?.length ?? 0)
+        : 0;
+
+      setOtherNamespaceCount(namespaceCount);
+      setOtherOrganizationCount(organizationCount);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [papr.isLoggedIn, papr.namespaceId]);
+
+  const showCopyAction =
+    showNamespaceTabs &&
+    (otherOrganizationCount > 1 || otherNamespaceCount > 0);
 
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchQuery(e.target.value);
@@ -406,8 +469,7 @@ export function AppsView() {
           />
         </div>
       ) : (
-        <>
-          <div className="apps-view__content">
+        <div className="apps-view__content">
             {!loading ? (
               <div className="apps-view__library-toolbar">
                 <span className="apps-view__section-label">App library</span>
@@ -546,6 +608,8 @@ export function AppsView() {
                           onSetStatus={(status) =>
                             handleSetStatus(app.id, status)
                           }
+                          showCopyAction={showCopyAction}
+                          onCopy={() => setCopyAppTarget(app)}
                         />
                       ))}
                     </div>
@@ -566,6 +630,8 @@ export function AppsView() {
                         onSetStatus={(status) =>
                           handleSetStatus(app.id, status)
                         }
+                        showCopyAction={showCopyAction}
+                        onCopy={() => setCopyAppTarget(app)}
                       />
                     ))}
                   </div>
@@ -573,12 +639,21 @@ export function AppsView() {
               </>
             )}
           </div>
-        </>
       )}
 
       <CreateAppModal
         isOpen={showCreateModal}
         onClose={() => setShowCreateModal(false)}
+      />
+      <CopyAppModal
+        app={copyAppTarget}
+        currentOrganizationId={currentOrganizationId}
+        currentNamespaceId={papr.namespaceId}
+        onClose={() => setCopyAppTarget(null)}
+        onCopied={() => {
+          void loadArtifacts();
+          setPublishRevision((value) => value + 1);
+        }}
       />
     </div>
   );

@@ -41,6 +41,20 @@ describe("parseAppBackendManifest", () => {
     expect(nodeManifest.actions.fetch.runtime).toBe("typescript");
   });
 
+  it("parses sourceId on actions", () => {
+    const manifest = parseAppBackendManifest({
+      version: 1,
+      actions: {
+        save: {
+          handler: "save.py",
+          runtime: "python",
+          sourceId: "billing",
+        },
+      },
+    });
+    expect(manifest.actions.save.sourceId).toBe("billing");
+  });
+
   it("rejects handler extension mismatch", () => {
     expect(() =>
       parseAppBackendManifest({

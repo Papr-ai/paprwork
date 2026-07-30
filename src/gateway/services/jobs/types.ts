@@ -22,6 +22,8 @@ export interface JobRecord {
   status: JobStatus;
   /** Mini-app UUIDs this job belongs to (from list_apps). At least one required on create. */
   appIds: string[];
+  /** Registry dbIds this job may mutate (from create_database). Omit for scratch-only jobs. */
+  writeDbIds?: string[];
   /** Free-form folder label for grouping related jobs (e.g. "ingestion", "reporting"). Agent-assigned. */
   folder?: string;
   command?: string;
@@ -76,6 +78,8 @@ export interface CreateJobInput {
   type: JobType;
   /** Mini-app UUID(s) this job belongs to. Required — use ['__standalone__'] for orphan jobs. */
   appIds: string[];
+  /** Registry dbIds this job writes to. Required when persisting data apps consume. */
+  writeDbIds?: string[];
   folder?: string;
   command?: string;
   requirements?: string[];

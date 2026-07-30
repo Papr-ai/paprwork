@@ -19,6 +19,9 @@ import {
   buildAppDbJobReminder,
   buildAppDbRunJobFailureReminder,
 } from "../utils/appDbGuidance.js";
+import { getPaprWorkspacePathsForAgent } from "../utils/paprAgentPaths.js";
+import { validateMiniAppIcon } from "../utils/miniAppIconValidation.js";
+import { getPaprBundlesDir } from "../utils/paprRoot.js";
 import {
   getCloudAppPublishTool,
   publishCloudAppTool,
@@ -39,6 +42,79 @@ function coerceFilenameAliasInToolArgs(raw: unknown): unknown {
     return { ...o, filename: o.fileName };
   }
   return raw;
+}
+
+function normalizeAppFileEntry(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+  const file = { ...(raw as Record<string, unknown>) };
+  if (file.filename === undefined && typeof file.fileName === "string") {
+    file.filename = file.fileName;
+  }
+  if (file.filename === undefined && typeof file.path === "string") {
+    file.filename = file.path;
+  }
+  if (file.filename === undefined && typeof file.name === "string") {
+    file.filename = file.name;
+  }
+  if (file.content === undefined && typeof file.source === "string") {
+    file.content = file.source;
+  }
+  return file;
+}
+
+function tryParseJsonString(value: string): unknown {
+  const trimmed = value.trim();
+  if (
+    !trimmed.startsWith("[") &&
+    !trimmed.startsWith("{") &&
+    !trimmed.startsWith('"')
+  ) {
+    return value;
+  }
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+/** Models often send `name`/`appFiles` or JSON-string `files` — normalize before Zod parse. */
+function coerceCreateAppAliases(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+  const o = { ...(raw as Record<string, unknown>) };
+
+  if (o.title === undefined && typeof o.name === "string") {
+    o.title = o.name;
+  }
+
+  if (o.files === undefined && o.appFiles !== undefined) {
+    o.files = o.appFiles;
+  }
+
+  if (typeof o.files === "string") {
+    const parsed = tryParseJsonString(o.files);
+    if (parsed !== o.files) {
+      o.files = parsed;
+    }
+  }
+
+  if (Array.isArray(o.files)) {
+    o.files = o.files.map((item) => {
+      if (typeof item === "string") {
+        const parsed = tryParseJsonString(item);
+        return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+          ? normalizeAppFileEntry(parsed)
+          : item;
+      }
+      return normalizeAppFileEntry(item);
+    });
+  }
+
+  return o;
 }
 
 /** Models sometimes send appIds as a JSON string instead of an array — coerce before Zod parse. */
@@ -81,6 +157,12 @@ const APP_VERIFY_AFTER_EDIT_REMINDER =
   "If validate_app passes, optionally webview_snapshot for visual checks. " +
   "Do not edit other files until validate_app passes.";
 
+const APP_FILES_PATH_REMINDER =
+  "Edit mini-app files via read_app_file + write_file (create/overwrite) or edit_file / edit_app_file_lines (patches). " +
+  "Do NOT use bash rm/touch on app paths — workspace apps live under the active org namespace (see appPath in tool results), not ~/Papr/apps/{id}. " +
+  "base.css is auto-injected Liquid Glass (system file, no line limit). Put custom CSS in style.css. " +
+  "Prototype UI with mock data first; wire DBs with create_database → attach_database → create_job({ writeDbIds }).";
+
 const APP_BUILD_FAILED_REMINDER =
   "BUILD FAILED. Fix all errors above before editing any other files. " +
   "Re-run validate_app after each fix until it passes.";
@@ -90,8 +172,8 @@ const JOB_EVENTS_REMINDER =
   "import { subscribeJobEvents } from '/__papr__/papr-job-events.ts';\n" +
   "subscribeJobEvents({ jobIds: [JOB_ID], onDbChanged: () => loadData(), onStatusChanged: (e) => updateBadge(e) });\n" +
   "loadData(); // initial query on page load\n" +
-  "Job writes $APP_DB → onDbChanged refreshes UI. NEVER poll. Do NOT copy papr-job-events.ts into the app — /__papr__/ is external at build time.\n" +
-  "Turso sync is automatic when create_job({ appIds }) links a DB — no manual push. Cloud web reads Turso via same /api/db/query.";
+  "Job writes PAPR_DB_* / APP_DB → onDbChanged refreshes UI. NEVER poll. Do NOT copy papr-job-events.ts into the app — /__papr__/ is external at build time.\n" +
+  "Turso sync follows attach_database (data-sources.json). Cloud web reads Turso via same /api/db/query.";
 
 const CHAT_OPEN_REMINDER =
   "⚠️ ASK-AGENT BUTTONS (desktop): window.paprAPI.invoke('chat.open', { message: '…' }) opens main chat — " +
@@ -161,6 +243,7 @@ async function runPostEditAppValidation(
 }
 
 function buildAppEditToolResult(input: {
+  appId?: string;
   data: Record<string, unknown>;
   postValidation: Awaited<ReturnType<typeof runPostEditAppValidation>>;
   editedFilename?: string;
@@ -196,12 +279,15 @@ function buildAppEditToolResult(input: {
 
   const enrichedData = postEditFields
     ? {
+        ...(input.appId ? { appId: input.appId } : {}),
         ...data,
         postEditSnippet: postEditFields.postEditSnippet,
         totalLines: postEditFields.totalLines,
         snippetTruncated: postEditFields.snippetTruncated,
       }
-    : data;
+    : input.appId
+      ? { appId: input.appId, ...data }
+      : data;
 
   if (postValidation.buildBlocked) {
     return {
@@ -249,10 +335,11 @@ const BACKEND_VAULT_KEYS_REMINDER =
   "The gateway injects Settings → Integration Keys as environment variables — read with " +
   "os.environ['YOUR_KEY_NAME'] (Python) or process.env.YOUR_KEY_NAME (Node/TS). " +
   "Do NOT grep keychain, query custom-keys.json, call get_key, or invent /api/keys endpoints. " +
-  "Linked DB: gateway injects APP_DB (local) or PAPR_DB_URL+PAPR_DB_AUTH_TOKEN (cloud Turso). " +
-  "Python: from papr_db import connect, execute. Requires link_app_data_source first. " +
+  "Linked DBs: attach_database first; gateway injects PAPR_DB_{KEY}* for every linked source. " +
+  "Set \"sourceId\": \"alias\" on the action (or params.sourceId from frontend) for the active DB — " +
+  "APP_DB / PAPR_DB_URL = active source; Python papr_db.connect(\"alias\") or connect() for active. " +
   "Cloud vault keys: declare in backend/manifest.json action keys AND requirements.json (auto-synced on publish). " +
-  "Frontend call: fetch('/api/app/backend/:action', { body: JSON.stringify({ appId, params: { ... } }) }). " +
+  "Frontend call: fetch('/api/app/backend/:action', { body: JSON.stringify({ appId, params: { sourceId: 'billing', ... } }) }). " +
   "Publishable browser-safe keys (Maps embed, etc.): POST /api/credentials/client-keys — not the manifest keys array.";
 
 const JOB_VERIFY_AFTER_EDIT_REMINDER =
@@ -339,40 +426,37 @@ const appFileSchema = toolSchemaWithFilenameAlias(
   }),
 );
 
-const createAppSchema = z.object({
+const createAppSchema = z.preprocess(
+  coerceCreateAppAliases,
+  z.object({
   title: z.string().min(1),
   description: z.string().optional(),
   icon: z
     .string()
-    .refine(
-      (val) => {
-        const trimmed = val.trim();
-        const startsWithSvg = trimmed.startsWith("<");
-        const isDataImage = trimmed.startsWith("data:image/");
-        const isHttpImage = /^https?:\/\//i.test(trimmed);
-        return startsWithSvg || isDataImage || isHttpImage;
-      },
-      {
-        message:
-          'Icon must be: (1) PNG/JPEG as data:image/...;base64,... or https URL, or (2) inline SVG. ' +
-          'Emojis are not allowed. Plain text like "chart" is not allowed. ' +
-          'See docs/design/papr-mini-app-droplet.png for the Papr droplet brand standard.',
-      },
-    )
+    .superRefine((val, ctx) => {
+      const result = validateMiniAppIcon(val);
+      if (!result.ok) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: result.message,
+        });
+      }
+    })
     .describe(
       "**REQUIRED:** Mini-app icon (tabs, apps grid, favorites). " +
         "**Brand standard (preferred):** One 3D liquid-glass water droplet on pure white, one subject inside, Apple-keynote aesthetic — see `docs/design/papr-mini-app-droplet.png`. " +
         "Master prompt: `Create a minimalist premium icon on a pure white background. Show one perfect transparent water droplet sphere, centered, with soft glass-like edges, subtle reflections, delicate refraction, and a polished Apple-keynote aesthetic. Inside the droplet, place [SUBJECT]. No text, no extra objects, no multiple droplets, no clutter. Lots of whitespace.` " +
         "Append: pure white background; one droplet only; one subject only; centered; no text; minimal soft shadow only. " +
         "Output 512×512 PNG as `data:image/png;base64,...`. " +
-        "Fallback: compact SVG with stroke=currentColor (renders inside the in-app glass orb). " +
-        "Never use emoji icons. Anti-patterns: flat blue gradient orbs, busy scenes, gray backgrounds, multiple bubbles.",
+        "Fallback: compact SVG with stroke=currentColor and fill=none only (transparent background — UI adds the glass orb; filled white circles are rejected). " +
+        "Never use emoji icons. Anti-patterns: flat blue gradient orbs, white circle backgrounds, busy scenes, gray backgrounds, multiple bubbles.",
     ),
   files: z.array(appFileSchema).optional(),
   html: z.string().optional(),
   css: z.string().optional(),
   javascript: z.string().optional(),
-});
+  }),
+);
 
 const dependencySchema = z.object({
   jobId: z.string().min(1),
@@ -445,6 +529,14 @@ const createJobSchemaCore = z
       "REQUIRED. Mini-app UUID(s) this job belongs to (from list_apps). " +
         "Pass multiple IDs when one job serves several apps. " +
         "Use ['__standalone__'] only for jobs not tied to any mini-app.",
+    ),
+  writeDbIds: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      "Registry dbIds this job writes to (from create_database). " +
+        "Required when the job persists data mini-apps read. Omit for scratch-only jobs ($JOB_DB). " +
+        "Example: writeDbIds: ['db-a1b2c3d4']",
     ),
   folder: z
     .string()
@@ -577,16 +669,6 @@ const linkAppDataSourceSchema = z
     alias: z.string().min(1).optional(),
     tables: z.array(z.string().min(1)).optional(),
     dbPath: z.string().min(1).optional(),
-    role: z
-      .enum(["primary", "readonly", "scratch"])
-      .optional()
-      .describe(
-        "primary = mini-app default + APP_DB for jobs; readonly = query only; scratch = job-local only (usually omit linking)",
-      ),
-    setPrimary: z
-      .boolean()
-      .optional()
-      .describe("Mark this source as the app's primary database"),
   })
   .refine((val) => Boolean(val.jobId) || Boolean(val.dbId), {
     message: "Provide jobId or dbId",
@@ -756,12 +838,14 @@ export const createAppTool = createTool({
     // Run esbuild bundle — catches missing CSS imports, TS errors, the same
     // way an IDE + bundler would. validateApp rebuilds before checking.
     const postValidation = await runPostEditAppValidation(app.id);
+    const appPath = await appService.getAppPath(app.id);
     if (postValidation.buildBlocked) {
       return {
         success: false,
         error: postValidation.errorMessage,
         data: {
           ...app,
+          appPath: appPath ?? undefined,
           buildBlocked: true,
           validation: {
             valid: false,
@@ -772,13 +856,14 @@ export const createAppTool = createTool({
         _designReminder:
           `⚠️ DESIGN REQUIREMENT: You MUST load the design system skill BEFORE writing any UI code: ` +
           `read_skill({ skillId: "preloaded-paprwork-design-system" }). ` +
-          `Also check ~/Papr/workspace/BRAND.md and brand.json for user brand colors/fonts/logo — use them when set. ` +
+          `Also check $PAPR_HOME/workspace/BRAND.md and brand.json for user brand colors/fonts/logo — use them when set. ` +
           `Mini-apps: fetch('/api/brand?appId=...') or CSS vars (--brand-primary, etc.). ` +
           `Design target: Steve Jobs meets Elon Musk — obsessively clean, premium, zero clutter. ` +
           `2-3 focused sections max, ONE primary action per screen, generous whitespace. ` +
           `Follow user brand when set; otherwise follow the design system.`,
         _architectReminder: PRODUCT_ARCHITECT_REMINDER,
         _verifyReminder: APP_BUILD_FAILED_REMINDER,
+        _appFilesReminder: APP_FILES_PATH_REMINDER,
         _jobEventsReminder: JOB_EVENTS_REMINDER,
         _emojiReminder: NO_EMOJI_UI_REMINDER,
         _chatOpenReminder: CHAT_OPEN_REMINDER,
@@ -794,16 +879,18 @@ export const createAppTool = createTool({
       success: true,
       data: {
         ...app,
+        appPath: appPath ?? undefined,
         buildCheck: {
           valid: true,
           filesChecked: postValidation.filesChecked,
           message: `✓ Build check passed (${postValidation.filesChecked} files)`,
         },
       },
+      _appFilesReminder: APP_FILES_PATH_REMINDER,
       _designReminder:
         `⚠️ DESIGN REQUIREMENT: You MUST load the design system skill BEFORE writing any UI code: ` +
         `read_skill({ skillId: "preloaded-paprwork-design-system" }). ` +
-        `Also check ~/Papr/workspace/BRAND.md and brand.json for brand colors/fonts/logo — use them when set. ` +
+        `Also check $PAPR_HOME/workspace/BRAND.md and brand.json for brand colors/fonts/logo — use them when set. ` +
         `Mini-apps: fetch('/api/brand?appId=...') or CSS vars (--brand-primary, etc.). ` +
         `Design target: Steve Jobs meets Elon Musk — obsessively clean, premium, zero clutter. ` +
         `2-3 focused sections max, ONE primary action per screen, generous whitespace. ` +
@@ -831,7 +918,9 @@ export const createJobTool = createTool({
     "REQUIRED fields: name, type (exact field name — python|node|agent|bash|shell|swift|subagent), appIds. " +
     "Do NOT use jobType or workingDirectory — those are not valid parameters. " +
     "REQUIRED: appIds — pass one or more mini-app UUIDs from list_apps (use ['__standalone__'] only for orphan jobs). " +
-    "When appIds includes real app UUIDs, the job's data.db is AUTO-LINKED to each app (data-sources.json) — usually no separate link_app_data_source call. " +
+    "Database workflow: create_database → attach_database on app(s) → create_job({ writeDbIds: [dbId] }). " +
+    "writeDbIds declares which registry databases this job mutates (injected as PAPR_DB_* env vars). " +
+    "$JOB_DB is scratch-only (job_runs, temp) — never link job data.db to apps. " +
     "Use folder for pipeline stage grouping (ingestion, processing), not app linkage. " +
     "For pipelines that should run automatically when a parent job finishes, each dependsOn entry MUST include autoTrigger: true (same for subagent→subagent as python→subagent). " +
     "Without autoTrigger, dependencies only order runs when you start the job another way. " +
@@ -869,6 +958,7 @@ export const createJobTool = createTool({
       name: args.name,
       type: args.type,
       appIds: args.appIds,
+      writeDbIds: args.writeDbIds,
       folder: args.folder,
       command: args.command,
       requirements: args.requirements,
@@ -932,32 +1022,23 @@ export const createJobTool = createTool({
     const linkedAppIds = (args.appIds ?? []).filter(
       (appId) => appId !== "__standalone__",
     );
-    let dataSourceLinkSummary: string | undefined;
-    if (linkedAppIds.length > 0) {
-      const { getAppService } =
-        await import("../../gateway/services/AppService.js");
-      const appService = getAppService();
-      const linkedAliases: string[] = [];
-      let usesExistingPrimary = false;
-      for (const appId of linkedAppIds) {
-        const sources = await appService.listAppDataSources(appId);
-        const forJob = sources.filter((source) => source.jobId === job.id);
-        for (const source of forJob) {
-          linkedAliases.push(`${source.alias} → app ${appId.slice(0, 8)}`);
-        }
-        if (forJob.length === 0 && sources.length > 0) {
-          usesExistingPrimary = true;
-        }
-      }
-      dataSourceLinkSummary =
-        linkedAliases.length > 0
-          ? `✓ Job database promoted & linked: ${linkedAliases.join("; ")}. Apps use this as the single primary DB; additional jobs write to $APP_DB.`
-          : usesExistingPrimary
-            ? `✓ Job created for app(s) — uses existing primary $APP_DB (no second database linked). Write UI tables via $APP_DB, scratch via $JOB_DB.`
-            : `⚠️ Job created for app(s) but database not linked yet. Call link_app_data_source({ appId, jobId: "${job.id}", setPrimary: true }) before the app uses /api/db/*.`;
+    let writeDbSummary: string | undefined;
+    const writeDbIds = args.writeDbIds ?? [];
+    if (writeDbIds.length > 0) {
+      writeDbSummary =
+        `✓ Job write targets: ${writeDbIds.join(", ")}. ` +
+        `Use PAPR_DB_* env vars at runtime (APP_DB when single target). $JOB_DB = scratch only.`;
+    } else if (linkedAppIds.length > 0) {
+      writeDbSummary =
+        `⚠️ App-linked job has no writeDbIds. For app-facing data: create_database → attach_database → set writeDbIds. Scratch-only jobs can omit writeDbIds.`;
     }
 
-    const appDbJobReminder = buildAppDbJobReminder(args.type, args.command, linkedAppIds);
+    const appDbJobReminder = buildAppDbJobReminder(
+      args.type,
+      args.command,
+      linkedAppIds,
+      writeDbIds,
+    );
     const bashFirstReminder = shouldSuggestBashInstead(args)
       ? BASH_FIRST_REMINDER
       : undefined;
@@ -994,9 +1075,7 @@ export const createJobTool = createTool({
       ...(scheduleApprovalNote
         ? { _scheduleApprovalNote: scheduleApprovalNote }
         : {}),
-      ...(dataSourceLinkSummary
-        ? { _dataSourceLinkReminder: dataSourceLinkSummary }
-        : {}),
+      ...(writeDbSummary ? { _writeDbReminder: writeDbSummary } : {}),
       ...(scriptPathReminder ? { _scriptPathReminder: scriptPathReminder } : {}),
     };
   },
@@ -1245,6 +1324,7 @@ export const runJobTool = createTool({
             existingJob.type,
             existingJob.command,
             existingJob.appIds.filter((id) => id !== "__standalone__"),
+            existingJob.writeDbIds ?? [],
           )
         : undefined;
 
@@ -1383,10 +1463,9 @@ export const readJobLogsTool = createTool({
 export const linkAppDataSourceTool = createTool({
   id: "link_app_data_source",
   description:
-    "Link a mini-app to a SQLite database (manual fallback). " +
-    "Prefer create_job({ appIds }) for job-owned DBs — auto-links without this tool. " +
-    "Use this for registry dbId, re-linking, or when auto-link failed. " +
-    "Provide jobId (job-owned data.db) OR dbId (standalone registry DB from create_database). Use setPrimary: true for the app's default /api/db/* target.",
+    "Attach a registry database to a mini-app (apps may link multiple DBs). " +
+    "Workflow: create_database → attach_database({ appId, dbId, alias }). " +
+    "Mini-apps pass sourceId (alias) on every /api/db/* call — like naming the DB in backend code.",
   inputSchema: linkAppDataSourceSchema,
   execute: async (input) => {
     const args =
@@ -1449,8 +1528,6 @@ export const linkAppDataSourceTool = createTool({
       alias,
       dbPath: dbPath!,
       tables,
-      ...(args.role ? { role: args.role } : {}),
-      ...(args.setPrimary ? { setPrimary: args.setPrimary } : {}),
     });
     if (jobId) {
       await jobsService.ensureJobLinkedToApp(jobId, args.appId);
@@ -1613,6 +1690,12 @@ const updateJobSchema = z.object({
     .optional()
     .describe(
       "Replace the mini-app UUID list this job belongs to. Pass multiple IDs for shared jobs.",
+    ),
+  writeDbIds: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      "Registry dbIds this job may write. Replaces the previous list when set.",
     ),
   folder: z
     .string()
@@ -1881,6 +1964,7 @@ export async function runEditAppFile(args: EditAppFileArgs): Promise<{
   }
 
   return buildAppEditToolResult({
+    appId: args.appId,
     data: {
       filename: args.filename,
       updated: true,
@@ -1891,6 +1975,57 @@ export async function runEditAppFile(args: EditAppFileArgs): Promise<{
     editedFilename: args.filename,
     postEditContent: postEditContent ?? undefined,
     postEditFocusText: args.newString,
+  });
+}
+
+/** Create or overwrite a mini-app file (runs esbuild + validate_app). Used by write_file routing. */
+export async function runWriteAppFile(args: {
+  appId: string;
+  filename: string;
+  content: string;
+}): Promise<{
+  success: boolean;
+  data: Record<string, unknown>;
+  error?: string;
+  _verifyReminder: string;
+  _backendKeysReminder?: string;
+  _emojiReminder: string;
+  _jobEventsReminder?: string;
+}> {
+  const { getAppService } = await import("../../gateway/services/AppService.js");
+  const appService = getAppService();
+  await appService.initialize();
+
+  const existed = (await appService.readAppFile(args.appId, args.filename)) !== null;
+  const written = await appService.writeAppFile(args.appId, args.filename, args.content);
+  if (!written) {
+    throw new Error(
+      `Failed to write ${args.filename} in app ${args.appId}. Call list_app_files to confirm appId.`,
+    );
+  }
+
+  const postValidation = await runPostEditAppValidation(args.appId);
+
+  try {
+    const { getAgentFocusContextService } = await import(
+      "../../gateway/services/AgentFocusContextService.js"
+    );
+    getAgentFocusContextService().recordMiniAppEdit(args.appId, args.filename);
+  } catch {
+    // Focus tracking is best-effort
+  }
+
+  return buildAppEditToolResult({
+    appId: args.appId,
+    data: {
+      filename: args.filename,
+      created: !existed,
+      overwritten: existed,
+      size: args.content.length,
+    },
+    postValidation,
+    editedFilename: args.filename,
+    postEditContent: args.content,
   });
 }
 
@@ -2036,6 +2171,7 @@ After EVERY edit: validate_app + preview test (see _verifyReminder in result).`,
     }
 
     return buildAppEditToolResult({
+      appId: args.appId,
       data: {
         filename: args.filename,
         updated: true,
@@ -2073,6 +2209,8 @@ export const listAppFilesTool = createTool({
       throw new Error(`App not found: ${args.appId}`);
     }
     const files = await appService.listAppFiles(args.appId);
+    const backendFiles = await appService.listAppBackendFiles(args.appId);
+    const appPath = await appService.getAppPath(args.appId);
     const reportFiles = files.filter((file) =>
       file.startsWith("content/reports/") && file.endsWith(".md"),
     );
@@ -2080,10 +2218,14 @@ export const listAppFilesTool = createTool({
       success: true,
       data: {
         appId: args.appId,
+        appPath: appPath ?? undefined,
         files,
+        backendFiles: backendFiles.length > 0 ? backendFiles : undefined,
         reportFiles: reportFiles.length > 0 ? reportFiles : undefined,
         tip:
-          "Use read_app_file({ appId, filename }) to view any file. Report prose lives in content/reports/*.md (no line limit). Charts/UI stay in components/*.ts.",
+          "Edit mini-app sources with read_app_file + write_file (new/overwrite) or edit_file / edit_app_file_lines (patches). Do NOT use bash rm/touch on app paths. " +
+          "base.css is auto-injected Liquid Glass scaffold (no line limit); put app-specific CSS in style.css. " +
+          "backend/ is server-side only (listed separately). Use read_app_file({ appId, filename }) to view any browser file.",
       },
     };
   },
@@ -2110,11 +2252,19 @@ export const listAppsTool = createTool({
       favorite: app.favorite,
     }));
 
+    const workspace = getPaprWorkspacePathsForAgent();
+
     return {
       success: true,
       data: {
         apps: appsData,
         count: appsData.length,
+        appsRoot: workspace.appsRoot,
+        paprHome: workspace.paprHome,
+        tip:
+          workspace.usesOrgNamespaceLayout
+            ? "Active workspace uses org/namespace layout — edit apps via read_app_file / edit_app_file / edit_app_file_lines (not ~/Papr/apps/ at Papr root)."
+            : "Edit mini-app files via app file tools or edit_file under appsRoot.",
       },
     };
   },
@@ -2131,7 +2281,7 @@ type DeleteAppArgs = z.infer<typeof deleteAppSchema>;
 
 export const deleteAppTool = createTool({
   id: "delete_app",
-  description: `Delete a mini-app by id. Removes the app from ~/Papr/data/apps.json, deletes ~/Papr/apps/{id}/, and notifies the UI.
+  description: `Delete a mini-app by id. Removes the app from $PAPR_HOME/data/apps.json, deletes its app folder under appsRoot, and notifies the UI.
 
 **Prefer this over bash/rm** when removing an app: deleting files only leaves stale entries in the apps list until the registry is reconciled.`,
   inputSchema: deleteAppSchema,
@@ -2493,7 +2643,7 @@ export const listJobFilesTool = createTool({
         name: job.name,
         dir: jobDir,
         files,
-        tip: "Use read_job_file({ jobId, filename }) to view a file, edit_file({ path: '~/Papr/Jobs/{jobId}/...', oldString, newString }) to patch it, or read_job_logs to see the last run output.",
+        tip: "Use read_job_file({ jobId, filename }) to view a file, edit_file({ path: `${dir}/{filename}`, oldString, newString }) using dir above, or read_job_logs for last run output.",
       },
     };
   },
@@ -2739,7 +2889,7 @@ type GetAppBundleInfoArgs = z.infer<typeof getAppBundleInfoSchema>;
 export const exportAppBundleTool = createTool({
   id: "export_app_bundle",
   description: `Export a mini-app with its jobs and database schemas as a portable app bundle.
-Creates an app bundle folder at ~/Papr/bundles/{bundleId}/ containing:
+Creates an app bundle folder at $PAPR_HOME/bundles/{bundleId}/ containing:
 - manifest.json: App + job metadata, database schemas
 - apps/{appId}/: Mini app HTML/CSS/JS/TS files
 - jobs/{jobId}/: Job code, migrations
@@ -2813,13 +2963,10 @@ This makes the app available in Papr Work's "Community Apps" tab for all users.`
         requirements: args.requirements,
       });
 
-      const osModule = await import("os");
       const pathModule = await import("path");
       const fsModule = await import("fs/promises");
       const bundlePath = pathModule.default.join(
-        osModule.default.homedir(),
-        "Papr",
-        "bundles",
+        getPaprBundlesDir(),
         bundleId,
       );
 
@@ -3260,7 +3407,7 @@ After import, check the result for:
 
 export const listAppBundlesTool = createTool({
   id: "list_app_bundles",
-  description: `List all installed app bundles in ~/Papr/bundles/.
+  description: `List all installed app bundles in $PAPR_HOME/bundles/.
 Shows bundle ID, name, version, path, and creation date for each shareable app.`,
   inputSchema: z.object({}),
   execute: async () => {
@@ -3315,12 +3462,7 @@ Use this to inspect an app bundle before deciding to import it.`,
 
       let sourcePath = args.source;
       if (!sourcePath.includes("/")) {
-        sourcePath = pathModule.default.join(
-          osModule.default.homedir(),
-          "Papr",
-          "bundles",
-          sourcePath,
-        );
+        sourcePath = pathModule.default.join(getPaprBundlesDir(), sourcePath);
       } else {
         sourcePath = sourcePath.replace(/^~/, osModule.default.homedir());
       }
@@ -3664,7 +3806,7 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
     if (!result.valid) {
       const errorCount = result.issues.filter(i => i.severity === 'error').length;
       const warningCount = result.issues.filter(i => i.severity === 'warning').length;
-      
+
       const issueList = buildCappedValidationIssueList(
         result.issues.map((issue) => ({
           file: issue.file,
@@ -3681,6 +3823,27 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
         hasJobEventsPollingIssues(result.issues)
           ? `\n\n${formatJobEventsFixGuidance()}`
           : "";
+
+      if (errorCount === 0 && warningCount > 0) {
+        return {
+          success: true,
+          data: {
+            valid: true,
+            hasWarnings: true,
+            filesChecked: result.filesChecked,
+            issues: result.issues.map((issue) => ({
+              file: issue.file,
+              line: issue.line,
+              severity: issue.severity,
+              message: issue.message,
+              rule: issue.rule,
+            })),
+            summary: `${warningCount} warning(s)`,
+            message: `✓ Validation passed with ${warningCount} warning(s). Fix warnings before shipping.`,
+            issueList,
+          },
+        };
+      }
 
       return {
         success: false,

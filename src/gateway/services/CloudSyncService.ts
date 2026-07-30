@@ -1400,6 +1400,16 @@ export class CloudSyncService {
       this.state.lastError = null;
       this.consecutivePullFailures = 0;
       this.pullBackoffUntilMs = 0;
+
+      try {
+        const { getAppService } = await import("./AppService.js");
+        await getAppService().enforceAppOwnershipIndex();
+      } catch (ownershipErr) {
+        console.warn(
+          "[CloudSync] Post-pull app ownership enforcement failed:",
+          (ownershipErr as Error).message.slice(0, 120),
+        );
+      }
     } catch (err) {
       const msg = (err as Error).message;
       const normalized = msg.toLowerCase();

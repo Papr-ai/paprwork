@@ -15,7 +15,7 @@ const createDatabaseSchema = z.object({
     .min(1)
     .optional()
     .describe(
-      "Optional absolute path for data.db. Default: ~/Papr/data/databases/{slug}/data.db",
+      "Optional absolute path for data.db. Default: $PAPR_HOME/data/databases/{slug}/data.db",
     ),
   isolation: z
     .enum(["shared", "per-user"])
@@ -26,9 +26,13 @@ const createDatabaseSchema = z.object({
 const attachDatabaseSchema = z.object({
   appId: z.string().min(1),
   dbId: z.string().min(1),
-  alias: z.string().min(1).optional(),
-  role: z.enum(["primary", "readonly", "scratch"]).optional(),
-  setPrimary: z.boolean().optional(),
+  alias: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "sourceId for /api/db/* (e.g. billing). Do not use legacy alias primary — omit to derive from database name.",
+    ),
 });
 
 const deleteDatabaseSchema = z.object({
@@ -50,10 +54,10 @@ function slugifyName(name: string): string {
 export const createDatabaseTool = createTool({
   id: "create_database",
   description:
-    "Create an independent SQLite database resource (registry entry + local file). " +
-    "Use attach_database to link it to a mini-app. " +
-    "isolation: 'shared' (default, one Turso DB for all users) or 'per-user' (separate Turso DB per authenticated user: d-{dbId8}-u-{userId8}). " +
-    "Jobs keep JOB_DB as private scratch; do not confuse isolation with cloud publish access settings.",
+    "Create an independent SQLite database (registry entry + local file). " +
+    "Next: attach_database({ appId, dbId, alias }) so the mini-app can read/write via /api/db/* with sourceId. " +
+    "Jobs that fill the DB: create_job({ writeDbIds: [dbId] }). " +
+    "isolation: 'shared' (default) or 'per-user' (separate Turso DB per user).",
   inputSchema: createDatabaseSchema,
   execute: async (input) => {
     const args =
@@ -96,8 +100,9 @@ export const createDatabaseTool = createTool({
 export const attachDatabaseTool = createTool({
   id: "attach_database",
   description:
-    "Attach a registry database to a mini-app (alias + role). " +
-    "Equivalent to link_app_data_source with dbId instead of jobId.",
+    "Link a registry database to a mini-app. Apps may attach many DBs. " +
+    "Mini-app code names the DB on every call: sourceId = alias (e.g. 'billing'). " +
+    "Reads: POST /api/db/query. Writes: POST /api/db/write. Both endpoints accept sourceId.",
   inputSchema: attachDatabaseSchema,
   execute: async (input) => {
     const args =
@@ -123,7 +128,14 @@ export const attachDatabaseTool = createTool({
       throw new Error(`App not found: ${args.appId}`);
     }
 
-    const alias = args.alias ?? record.label ?? args.dbId;
+    const { resolveAttachAlias } = await import(
+      "../../gateway/services/appDataSources.js"
+    );
+    const alias = resolveAttachAlias({
+      requested: args.alias,
+      registryLabel: record.label,
+      dbId: args.dbId,
+    });
     const dataSources = await appService.linkAppDataSource(args.appId, {
       id: `${args.dbId}:${alias}`,
       type: "sqlite",
@@ -131,8 +143,6 @@ export const attachDatabaseTool = createTool({
       alias,
       dbPath: record.localPath,
       tables: [],
-      ...(args.role ? { role: args.role } : {}),
-      ...(args.setPrimary ? { setPrimary: args.setPrimary } : {}),
     });
 
     return {

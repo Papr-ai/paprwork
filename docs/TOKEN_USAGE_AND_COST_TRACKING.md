@@ -316,7 +316,7 @@ After implementing Phase 1, verify:
 
 1. **Check SQLite Database:**
 ```bash
-sqlite3 ~/Papr/data/chats.db
+sqlite3 $PAPR_HOME/data/chats.db
 SELECT prompt_tokens, completion_tokens, total_tokens, model 
 FROM messages 
 WHERE role = 'assistant' 

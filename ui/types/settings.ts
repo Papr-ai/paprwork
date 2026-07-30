@@ -63,6 +63,7 @@ export type SettingsTab =
   | "profile"
   | "permissions"
   | "privacy"
+  | "migration"
   | "about";
 
 export interface CodeIndexingStatus {

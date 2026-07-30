@@ -21,7 +21,7 @@ Your Daily Brief / Weekly War Room app is now set as the default home:
 ✓ Set default home app to: bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c
 ```
 
-Settings location: `~/Papr/data/settings.json`
+Settings location: `$PAPR_HOME/data/settings.json`
 
 ### 3. Documentation Created
 
@@ -68,7 +68,7 @@ To verify this works:
 
 ```bash
 # Find app IDs
-cat ~/Papr/data/apps.json | jq '.[] | {id, title}'
+cat $PAPR_HOME/data/apps.json | jq '.[] | {id, title}'
 
 # Set new default
 npm run set-home-app <new-app-id>
@@ -86,7 +86,7 @@ npm run set-home-app --clear
 ### Check Current Setting
 
 ```bash
-cat ~/Papr/data/settings.json | jq '.preferences.defaultHomeAppId'
+cat $PAPR_HOME/data/settings.json | jq '.preferences.defaultHomeAppId'
 # Output: "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c"
 ```
 
@@ -100,7 +100,7 @@ scripts/set-default-home-app.mjs                (configuration tool)
 package.json                                    (added npm script)
 docs/DEFAULT_HOME_APP.md                        (documentation)
 CLAUDE.md                                       (enhancement log)
-~/Papr/data/settings.json                       (user configuration)
+$PAPR_HOME/data/settings.json                       (user configuration)
 ```
 
 ## Edge Cases Handled
@@ -144,12 +144,12 @@ Run this to confirm configuration:
 
 ```bash
 # Check setting
-cat ~/Papr/data/settings.json | jq '.preferences.defaultHomeAppId'
+cat $PAPR_HOME/data/settings.json | jq '.preferences.defaultHomeAppId'
 
 # Should output: "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c"
 
 # Check app exists
-cat ~/Papr/data/apps.json | jq '.[] | select(.id == "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c") | .title'
+cat $PAPR_HOME/data/apps.json | jq '.[] | select(.id == "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c") | .title'
 
 # Should output: "Weekly War Room"
 ```
@@ -158,8 +158,8 @@ cat ~/Papr/data/apps.json | jq '.[] | select(.id == "bbb7e17e-c810-47ef-b9ce-c8a
 
 If home button doesn't open your app:
 
-1. Verify setting exists: `cat ~/Papr/data/settings.json`
-2. Verify app exists: `ls ~/Papr/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/`
+1. Verify setting exists: `cat $PAPR_HOME/data/settings.json`
+2. Verify app exists: `ls $PAPR_HOME/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/`
 3. Check console: Open DevTools → Console for errors
 4. Clear and reset: `npm run set-home-app --clear && npm run set-home-app bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c`
 
@@ -172,6 +172,6 @@ Your Daily Brief / Weekly War Room is now the default home page for all users. J
 **Quick Reference:**
 - **App ID:** `bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c`
 - **App Name:** Weekly War Room
-- **Setting Path:** `~/Papr/data/settings.json`
-- **App Path:** `~/Papr/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/`
+- **Setting Path:** `$PAPR_HOME/data/settings.json`
+- **App Path:** `$PAPR_HOME/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/`
 - **Documentation:** `docs/DEFAULT_HOME_APP.md`

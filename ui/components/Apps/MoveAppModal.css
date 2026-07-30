@@ -1,0 +1,106 @@
+/**
+ * MoveAppModal Styles
+ */
+
+.move-app-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.move-app-modal {
+  width: 90%;
+  max-width: 460px;
+  background: var(--glass-bg, rgba(30, 30, 30, 0.95));
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border, var(--border));
+  border-radius: 16px;
+  padding: 28px;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+}
+
+.move-app-modal__title {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.move-app-modal__subtitle {
+  margin: 0 0 20px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.72));
+}
+
+.move-app-modal__label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.move-app-modal__select {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--input-bg, rgba(255, 255, 255, 0.06));
+  color: inherit;
+  font: inherit;
+}
+
+.move-app-modal__hint,
+.move-app-modal__warning,
+.move-app-modal__error {
+  margin: 16px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.move-app-modal__warning {
+  color: var(--warning-text, #f5a623);
+}
+
+.move-app-modal__error {
+  color: var(--danger-text, #ff6b6b);
+}
+
+.move-app-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.move-app-modal__btn {
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: none;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.move-app-modal__btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.move-app-modal__btn--secondary {
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+}
+
+.move-app-modal__btn--primary {
+  background: var(--accent, #0066ff);
+  color: #fff;
+}

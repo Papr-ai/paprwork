@@ -73,7 +73,7 @@ Expected output:
 Check database for duplicates (should be 0):
 
 ```bash
-sqlite3 ~/Papr/data/plans.db "
+sqlite3 $PAPR_HOME/data/plans.db "
   SELECT chat_id, COUNT(*) as plan_count
   FROM plans 
   WHERE status = 'active'

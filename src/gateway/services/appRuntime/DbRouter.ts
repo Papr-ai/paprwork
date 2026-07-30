@@ -32,6 +32,8 @@ export interface RoutedSchemaResult extends SchemaResult {
 
 const tursoClients = new Map<string, Client>();
 const tursoClientPromises = new Map<string, Promise<Client | null>>();
+const tursoUnavailableUntil = new Map<string, number>();
+const TURSO_UNAVAILABLE_COOLDOWN_MS = 30_000;
 
 export function isLocalDbReadable(dbPath: string): boolean {
   try {
@@ -53,6 +55,11 @@ async function getTursoClientForSource(
     return null;
   }
 
+  const unavailableUntil = tursoUnavailableUntil.get(databaseName);
+  if (unavailableUntil != null && Date.now() < unavailableUntil) {
+    return null;
+  }
+
   const cached = tursoClients.get(databaseName);
   if (cached) {
     return cached;
@@ -66,10 +73,15 @@ async function getTursoClientForSource(
   const promise = (async () => {
     const bridge = getTursoSyncBridge();
     if (!bridge) {
+      tursoUnavailableUntil.set(
+        databaseName,
+        Date.now() + TURSO_UNAVAILABLE_COOLDOWN_MS,
+      );
       return null;
     }
     try {
       const credentials = await bridge.fetchCredentials(databaseName);
+      tursoUnavailableUntil.delete(databaseName);
       const client = createClient({
         url: credentials.tursoUrl,
         authToken: credentials.authToken,
@@ -77,6 +89,10 @@ async function getTursoClientForSource(
       tursoClients.set(databaseName, client);
       return client;
     } catch (error) {
+      tursoUnavailableUntil.set(
+        databaseName,
+        Date.now() + TURSO_UNAVAILABLE_COOLDOWN_MS,
+      );
       console.warn(
         `[DbRouter] Turso fallback unavailable for ${databaseName}:`,
         (error as Error).message.slice(0, 120),

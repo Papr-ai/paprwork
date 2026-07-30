@@ -203,4 +203,87 @@ json.dump({"dbMode": os.environ.get("PAPR_DB_MODE"), "appDb": os.environ.get("AP
     expect(payload.dbMode).toBe("local");
     expect(payload.appDb).toBe(dbPath);
   });
+
+  it("injects PAPR_DB_* for multiple linked sources with manifest sourceId", async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), "papr-backend-"));
+    const appId = "test-app-multi-db";
+    const metricsPath = join(tempRoot, "metrics.db");
+    const billingPath = join(tempRoot, "billing.db");
+    await writeFile(metricsPath, "sqlite-placeholder");
+    await writeFile(billingPath, "sqlite-placeholder");
+
+    const backendDir = join(tempRoot, "apps", appId, "backend");
+    await mkdir(backendDir, { recursive: true });
+    await writeFile(
+      join(tempRoot, "apps", appId, "data-sources.json"),
+      JSON.stringify(
+        {
+          sources: [
+            {
+              id: "db-a:metrics",
+              type: "sqlite",
+              dbId: "db-aaaa1111",
+              alias: "metrics",
+              dbPath: metricsPath,
+              tables: [],
+              linkedAt: new Date().toISOString(),
+            },
+            {
+              id: "db-b:billing",
+              type: "sqlite",
+              dbId: "db-bbbb2222",
+              alias: "billing",
+              dbPath: billingPath,
+              tables: [],
+              linkedAt: new Date().toISOString(),
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(
+      join(backendDir, "manifest.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          actions: {
+            readBilling: {
+              handler: "read_billing.py",
+              runtime: "python",
+              sourceId: "billing",
+              timeoutMs: 10_000,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    const handler = `#!/usr/bin/env python3
+import json, os, sys
+json.dump({
+  "appDb": os.environ.get("APP_DB"),
+  "billing": os.environ.get("PAPR_DB_BILLING"),
+  "metrics": os.environ.get("PAPR_DB_METRICS"),
+  "active": os.environ.get("PAPR_ACTIVE_SOURCE_ID"),
+}, sys.stdout)
+`;
+    await writeFile(join(backendDir, "read_billing.py"), handler);
+
+    const service = new AppBackendService(tempRoot);
+    const result = await service.runAction({ appId, action: "readBilling" });
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      appDb: string;
+      billing: string;
+      metrics: string;
+      active: string;
+    };
+    expect(payload.appDb).toBe(billingPath);
+    expect(payload.billing).toBe(billingPath);
+    expect(payload.metrics).toBe(metricsPath);
+    expect(payload.active).toBe("billing");
+  });
 });

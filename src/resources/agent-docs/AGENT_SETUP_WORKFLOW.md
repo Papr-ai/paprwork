@@ -1,3 +1,5 @@
+> **Paths:** `$PAPR_HOME` = active org/namespace workspace (`~/Papr/orgs/{orgId}/namespaces/{nsId}/`). See `docs/PAPR_WORKSPACE_PATHS.md`. Prefer app/job tools over raw paths.
+
 # Agent Setup & Onboarding Workflow (V2)
 
 ## Overview
@@ -62,7 +64,7 @@ Use `read_skill()` (no arguments) to list all installed skills. Scan for skills 
 Read the cached skills catalog to find additional skills for the user:
 
 ```javascript
-read_file({ path: "~/Papr/skills-catalog.json" })
+read_file({ path: "$PAPR_HOME/skills-catalog.json" })
 ```
 
 This file contains popular skills from skills.sh and ClawHub, organized by category. Search it for skills matching the user's industry and needs. Do NOT browse the web for skills — everything is in this catalog.
@@ -198,7 +200,7 @@ Let me get started..."
 Then execute:
 ```javascript
 // 1. Read the skills catalog to find relevant skills
-read_file({ path: "~/Papr/skills-catalog.json" })
+read_file({ path: "$PAPR_HOME/skills-catalog.json" })
 
 // 2. Create schema
 register_schema({
@@ -244,7 +246,7 @@ create_document({
 ## Best Practices
 
 1. **Be thorough in the interview** — Don't skip questions. Understand their workflow deeply
-2. **Read the skills catalog** — Use `read_file("~/Papr/skills-catalog.json")` to find relevant skills. Never browse the web for skills
+2. **Read the skills catalog** — Use `read_file("$PAPR_HOME/skills-catalog.json")` to find relevant skills. Never browse the web for skills
 3. **Match skills to their domain** — Install only what's relevant to what they told you
 4. **Community apps first** — Check community bundles at `https://github.com/Papr-ai/paprwork-community-apps` before building apps from scratch. Import pre-built apps when they fit the user's needs, create custom apps only for unmet needs
 5. **Always use create_document** — Never create DOCX files directly

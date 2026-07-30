@@ -1,3 +1,5 @@
+> **Paths:** `$PAPR_HOME` = active org/namespace workspace (`~/Papr/orgs/{orgId}/namespaces/{nsId}/`). See `docs/PAPR_WORKSPACE_PATHS.md`. Prefer app/job tools over raw paths.
+
 # Product Architect Guide
 
 Use this when acting as the **Product Architect** sub-agent or when the main agent delegates complex app/automation work.
@@ -18,7 +20,7 @@ list_apps()
 list_jobs()
 ```
 
-Also check `~/Papr/workspace/BRAND.md` when UI is involved.
+Also check `$PAPR_HOME/workspace/BRAND.md` when UI is involved.
 
 ## When This Is Needed
 
@@ -91,7 +93,7 @@ Backend handlers are NOT just for SQL — they handle ALL server-side logic.
 5. **Design** — load design system skill before any UI implementation (main agent enforces)
 6. **Delegate implementation** — Product Architect plans; Implementation Specialist or main agent builds after approval
 7. **One canonical DB contract** — name every table/column once, plus its writers and readers; multi-job apps require `data-contract.json`
-8. **No filesystem coupling** — jobs never read another job's `job.json`, `jobs.json`, or hardcoded `~/Papr/Jobs/...` paths
+8. **No filesystem coupling** — jobs never read another job's `job.json`, `jobs.json`, or hardcoded `$PAPR_HOME/Jobs/...` paths
 9. **Evidence before completion** — interrupted or unavailable tool results are unknown, never proof; rerun validation and acceptance checks before claiming success
 
 ## Definition of Done for App + Job Systems
@@ -107,7 +109,7 @@ Backend handlers are NOT just for SQL — they handle ALL server-side logic.
 
 ```
 User wants: GTM audit — interviews + data → audit questions → conflicts → scores → report
-Existing: 54-file interview app at ~/Papr/apps/{id}/
+Existing: 54-file interview app at $PAPR_HOME/apps/{id}/
 Constraint: consultant workflow, not a note-taking toy
 ```
 

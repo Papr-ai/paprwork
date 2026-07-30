@@ -10,21 +10,20 @@
  */
 
 import fs from "fs/promises";
-import os from "os";
 import path from "path";
 import { z } from "zod";
 import { createTool } from "@mastra/core/tools";
 import type { ToolResult } from "../types/tools.js";
 import { autoStageFile } from "../utils/gitAutoStage.js";
-import { getMiniAppWriteBlockReason } from "../utils/paprRoot.js";
+import {
+  getLegacyPaprMisrouteBlockReason,
+  resolvePaprAgentPath,
+} from "../utils/paprAgentPaths.js";
+import { resolveEditFileTarget } from "../utils/resolveEditFileTarget.js";
 
-/** Expand a leading `~` to the user's home directory. */
+/** Resolve ~ and rewrite legacy ~/Papr/apps → active org/namespace paths (reads/searches). */
 function expandPath(filePath: string): string {
-  if (filePath === "~") return os.homedir();
-  if (filePath.startsWith("~/") || filePath.startsWith("~\\")) {
-    return path.join(os.homedir(), filePath.slice(2));
-  }
-  return filePath;
+  return resolvePaprAgentPath(filePath);
 }
 
 // ========================================
@@ -166,15 +165,55 @@ async function writeFile(
 ): Promise<ToolResult<WriteFileOutput>> {
   try {
     const { path: rawPath, content, encoding, backup, createDirs } = input;
-    const filePath = expandPath(rawPath);
+    const expanded = expandPath(rawPath);
 
-    const miniAppBlock = getMiniAppWriteBlockReason(filePath);
-    if (miniAppBlock) {
+    const legacyMisroute = getLegacyPaprMisrouteBlockReason(expanded);
+    if (legacyMisroute) {
       return {
         success: false,
-        error: miniAppBlock,
+        error: legacyMisroute,
+        type: "legacy_papr_path_guard",
+      };
+    }
+
+    const filePath = expanded;
+
+    const editTarget = resolveEditFileTarget(filePath);
+    if (editTarget.kind === "blocked") {
+      return {
+        success: false,
+        error: editTarget.reason,
         type: "mini_app_edit_guard",
       };
+    }
+
+    if (editTarget.kind === "mini_app") {
+      const { runWriteAppFile } = await import("./appJobs.js");
+      const miniAppResult = await runWriteAppFile({
+        appId: editTarget.appId,
+        filename: editTarget.filename,
+        content,
+      });
+      return {
+        success: miniAppResult.success,
+        data: {
+          path: filePath,
+          appId: editTarget.appId,
+          size: Buffer.byteLength(content, encoding as BufferEncoding),
+          backed_up: false,
+          ...miniAppResult.data,
+        },
+        error: miniAppResult.error,
+        type: miniAppResult.success ? undefined : "mini_app_validation_error",
+        _verifyReminder: miniAppResult._verifyReminder,
+        _emojiReminder: miniAppResult._emojiReminder,
+        ...(miniAppResult._backendKeysReminder
+          ? { _backendKeysReminder: miniAppResult._backendKeysReminder }
+          : {}),
+        ...(miniAppResult._jobEventsReminder
+          ? { _jobEventsReminder: miniAppResult._jobEventsReminder }
+          : {}),
+      } as unknown as ToolResult<WriteFileOutput>;
     }
 
     // Create parent directories if needed
@@ -244,11 +283,21 @@ async function writeFile(
 
 const ListDirectorySchema = z.object({
   path: z.string().describe("Path to directory"),
-  recursive: z.boolean().describe("Whether to scan recursively"),
+  recursive: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe("Whether to scan recursively"),
   pattern: z
     .string()
+    .optional()
+    .default("")
     .describe("Glob pattern to filter files (use empty string for no filter)"),
-  maxDepth: z.number().describe("Max recursion depth"),
+  maxDepth: z
+    .number()
+    .optional()
+    .default(3)
+    .describe("Max recursion depth when recursive is true"),
 });
 
 export type ListDirectoryInput = z.infer<typeof ListDirectorySchema>;
@@ -495,7 +544,8 @@ export const writeFileTool = createTool({
   description:
     "Write content to a file. OVERWRITES existing files in place — you do NOT need to delete a file before recreating it. " +
     "Creates parent directories if needed. Creates backup if specified. " +
-    "BLOCKED for ~/Papr/apps/* — use edit_file instead (runs esbuild + validation). " +
+    "For $PAPR_HOME/apps/{appId}/… paths: creates or overwrites mini-app files and auto-runs esbuild + validate_app (same as edit_file). " +
+    "Use edit_file for surgical patches (oldString/newString); use write_file to create new mini-app files or replace a whole file. " +
     "ANTI-PATTERN: Never run `rm <file>` followed by `write_file({ path: <file> })` in the same turn — if the stream is interrupted between the two, the file is lost. Just call write_file directly; it overwrites.",
   inputSchema: WriteFileSchema,
   execute: writeFile,

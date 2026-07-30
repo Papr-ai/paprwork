@@ -1,5 +1,6 @@
 import {
   ABSOLUTE_TOOL_RESULT_MAX_CHARS,
+  HISTORY_TOOL_RESULT_MAX_CHARS,
   resolveMidTurnToolResultCharLimit,
   truncateToCharLimit,
 } from "./toolResultTruncation.js";
@@ -36,9 +37,16 @@ export interface CompactOpts {
   maxStaleLength?: number;
   /** Hard cap per fresh result (~10K tokens). Default: ABSOLUTE_TOOL_RESULT_MAX_CHARS */
   maxFreshLength?: number;
+  /**
+   * When set, stale tool results use this exact char limit for every tool
+   * (including file reads). Used under stream memory pressure.
+   */
+  forceStaleMaxLen?: number;
 }
 
-const DEFAULTS: Required<CompactOpts> = {
+const DEFAULTS: Required<
+  Pick<CompactOpts, "keepLastBatches" | "maxStaleLength" | "maxFreshLength">
+> = {
   keepLastBatches: 1,
   maxStaleLength: 2000,
   maxFreshLength: ABSOLUTE_TOOL_RESULT_MAX_CHARS,
@@ -128,7 +136,11 @@ function resolveEffectiveMaxLen(toolName: string | undefined, maxLen: number): n
  * Apply a character limit to a single tool result message (in-place).
  * Handles both pi-ai and AI SDK message formats.
  */
-function truncateToolMessage(msg: any, maxLen: number): void {
+function truncateToolMessage(
+  msg: any,
+  maxLen: number,
+  useExactMaxLen = false,
+): void {
   const toolCallId =
     typeof msg.toolCallId === "string" ? msg.toolCallId : undefined;
   const messageToolName =
@@ -136,7 +148,9 @@ function truncateToolMessage(msg: any, maxLen: number): void {
 
   // Pi-ai format: { role: "toolResult", content: [{ type: "text", text }] }
   if (msg.role === "toolResult" && Array.isArray(msg.content)) {
-    const effectiveMaxLen = resolveEffectiveMaxLen(messageToolName, maxLen);
+    const effectiveMaxLen = useExactMaxLen
+      ? maxLen
+      : resolveEffectiveMaxLen(messageToolName, maxLen);
     for (const part of msg.content) {
       if (part.type === "text" && typeof part.text === "string") {
         part.text = truncateStr(
@@ -160,7 +174,9 @@ function truncateToolMessage(msg: any, maxLen: number): void {
         };
         const partToolCallId = toolPart.toolCallId ?? toolCallId;
         const partToolName = toolPart.toolName ?? messageToolName ?? "unknown";
-        const effectiveMaxLen = resolveEffectiveMaxLen(partToolName, maxLen);
+        const effectiveMaxLen = useExactMaxLen
+          ? maxLen
+          : resolveEffectiveMaxLen(partToolName, maxLen);
         const current = readToolResultString(toolPart);
         if (current !== undefined) {
           writeToolResultString(
@@ -282,6 +298,85 @@ function isAssistantMessage(msg: unknown): msg is Record<string, unknown> {
   );
 }
 
+function stripReasoningFromAssistantMessage(msg: Record<string, unknown>): number {
+  let removedParts = 0;
+
+  if (typeof msg.thinking === "string" && msg.thinking.length > 0) {
+    msg.thinking = STALE_REASONING_OMITTED;
+    removedParts += 1;
+  }
+
+  if (Array.isArray(msg.content)) {
+    const nextContent: PiAssistantContentPart[] = [];
+    let contentChanged = false;
+    for (const part of msg.content as PiAssistantContentPart[]) {
+      const partType = part?.type;
+      if (
+        partType === "thinking" ||
+        partType === "reasoning" ||
+        partType === "thinking_delta"
+      ) {
+        contentChanged = true;
+        removedParts += 1;
+        continue;
+      }
+      nextContent.push(part);
+    }
+    if (contentChanged) {
+      msg.content = nextContent;
+    }
+  }
+
+  return removedParts;
+}
+
+/**
+ * Strip reasoning/thinking from every assistant message (including the latest).
+ * Call after each tool step — the model no longer needs prior reasoning blocks.
+ */
+export function stripAllAssistantReasoning(
+  messages: unknown[],
+): { strippedMessages: number; removedParts: number } {
+  let strippedMessages = 0;
+  let removedParts = 0;
+
+  for (const msg of messages) {
+    if (!isAssistantMessage(msg)) {
+      continue;
+    }
+    const removed = stripReasoningFromAssistantMessage(msg);
+    if (removed > 0) {
+      strippedMessages += 1;
+      removedParts += removed;
+    }
+  }
+
+  if (strippedMessages > 0) {
+    console.log(
+      `[stripAllAssistantReasoning] Stripped reasoning from ${strippedMessages} assistant message(s) ` +
+        `(${removedParts} part(s) removed)`,
+    );
+  }
+
+  return { strippedMessages, removedParts };
+}
+
+/**
+ * Aggressive mid-turn compaction when stream memory is high (~300MB+ delta).
+ * Strips all reasoning and truncates stale tool results (including file reads).
+ */
+export function compactMidTurnContextForMemoryPressure(
+  messages: unknown[],
+  opts: CompactOpts = {},
+): CompactStats {
+  stripAllAssistantReasoning(messages);
+  return compactStaleToolResults(messages, {
+    ...opts,
+    keepLastBatches: opts.keepLastBatches ?? 1,
+    forceStaleMaxLen: opts.forceStaleMaxLen ?? HISTORY_TOOL_RESULT_MAX_CHARS,
+  });
+}
+
 /**
  * Remove or shrink reasoning/thinking blocks from assistant messages the model
  * has already acted on (same batch boundary as compactStaleToolResults).
@@ -314,36 +409,10 @@ export function compactStaleAssistantReasoning(
       continue;
     }
 
-    let messageChanged = false;
-
-    if (typeof msg.thinking === "string" && msg.thinking.length > 0) {
-      msg.thinking = STALE_REASONING_OMITTED;
-      messageChanged = true;
-      removedParts += 1;
-    }
-
-    if (Array.isArray(msg.content)) {
-      const nextContent: PiAssistantContentPart[] = [];
-      for (const part of msg.content as PiAssistantContentPart[]) {
-        const partType = part?.type;
-        if (
-          partType === "thinking" ||
-          partType === "reasoning" ||
-          partType === "thinking_delta"
-        ) {
-          messageChanged = true;
-          removedParts += 1;
-          continue;
-        }
-        nextContent.push(part);
-      }
-      if (messageChanged) {
-        msg.content = nextContent;
-      }
-    }
-
-    if (messageChanged) {
+    const removed = stripReasoningFromAssistantMessage(msg);
+    if (removed > 0) {
       strippedMessages += 1;
+      removedParts += removed;
     }
   }
 
@@ -424,8 +493,9 @@ export function compactStaleToolResults(
     // they're noise once the model has moved past them.
 
     if (i < freshCutoffIdx) {
-      // Stale: aggressive truncation
-      truncateToolMessage(msg, o.maxStaleLength);
+      // Stale: aggressive truncation (forceStaleMaxLen overrides per-tool limits)
+      const staleMaxLen = o.forceStaleMaxLen ?? o.maxStaleLength;
+      truncateToolMessage(msg, staleMaxLen, o.forceStaleMaxLen !== undefined);
       stats.staleResultsTruncated++;
     } else {
       // Fresh: only cap pathological results

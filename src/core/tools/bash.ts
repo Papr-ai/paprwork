@@ -32,6 +32,7 @@ import {
   isJobsIndexBashWriteBlocked,
   JOBS_INDEX_BASH_BLOCK_MESSAGE,
 } from "../utils/jobsIndexBashGuard.js";
+import { isPaprAppsOrJobsSearchPath } from "../utils/paprAgentPaths.js";
 import { getShell, getShellCommand } from "../utils/platform.js";
 
 /** Commands that fetch or produce external content - wrap stdout for prompt injection defense */
@@ -132,13 +133,12 @@ function detectPaprGrepCommand(command: string): { pattern: string; path: string
   if (!match) return null;
   
   const pattern = match[1];
-  const path = match[2].trim();
-  
-  // Check if path contains PAPR/apps or PAPR/Jobs
-  if (path.includes('Papr/apps') || path.includes('Papr/jobs')) {
-    return { pattern, path };
+  const grepPath = match[2].trim();
+
+  if (isPaprAppsOrJobsSearchPath(grepPath)) {
+    return { pattern, path: grepPath };
   }
-  
+
   return null;
 }
 
@@ -160,11 +160,12 @@ export function buildHybridMemorySearchQuery(
   grepPath: string,
 ): string {
   const scope =
-    grepPath.includes("Papr/apps") || grepPath.includes("Papr/Jobs")
-      ? grepPath.includes("Papr/Jobs")
-        ? "jobs"
-        : "mini-apps"
-      : "projects";
+    isPaprAppsOrJobsSearchPath(grepPath) &&
+    /(?:Jobs|jobs)\//i.test(grepPath.replace(/\\/g, "/"))
+      ? "jobs"
+      : isPaprAppsOrJobsSearchPath(grepPath)
+        ? "mini-apps"
+        : "projects";
   const projectId = extractProjectIdFromPaprPath(grepPath);
   const projectClause = projectId ? ` Focus on project ${projectId}.` : "";
 
@@ -630,15 +631,17 @@ export async function executeBashCommand(
       // best-effort only
     }
 
+    const mergedEnv: NodeJS.ProcessEnv =
+      Object.keys(env).length > 0
+        ? { ...process.env, ...(env as Record<string, string>) }
+        : process.env;
+
     const sqliteWarnings = buildSqlitePathWarnings(command, {
       appDb:
-        typeof env.APP_DB === "string"
-          ? env.APP_DB
-          : process.env.APP_DB,
+        typeof mergedEnv.APP_DB === "string" ? mergedEnv.APP_DB : undefined,
       jobDb:
-        typeof env.JOB_DB === "string"
-          ? env.JOB_DB
-          : process.env.JOB_DB,
+        typeof mergedEnv.JOB_DB === "string" ? mergedEnv.JOB_DB : undefined,
+      env: mergedEnv,
     });
     if (sqliteWarnings.length > 0) {
       sanitizedStdout += formatSqlitePathWarningBlock(sqliteWarnings);

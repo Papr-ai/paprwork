@@ -1,3 +1,5 @@
+> **Paths:** `$PAPR_HOME` = active org/namespace workspace (`~/Papr/orgs/{orgId}/namespaces/{nsId}/`). See `docs/PAPR_WORKSPACE_PATHS.md`. Prefer app/job tools over raw paths.
+
 # Cloud vs Desktop — Agent Guide
 
 **Audience:** Paprwork agent (system context)  
@@ -79,7 +81,7 @@ Flow:
 1. Cloud gateway: Turso **pull** before run → local `data.db` in temp workspace
 2. Agent/job writes SQLite during run
 3. Cloud gateway: Turso **push** after run
-4. Desktop wake: `handlePendingCloudRuns()` → `syncTursoAfterCloudRun()` → pulls linked sources into local `~/Papr/Jobs/{id}/data/data.db`
+4. Desktop wake: `handlePendingCloudRuns()` → `syncTursoAfterCloudRun()` → pulls linked sources into local `$PAPR_HOME/Jobs/{id}/data/data.db`
 
 **Default:** Turso pull on wake is **enabled**. Set `TURSO_PULL_AFTER_CLOUD_RUN=false` on the desktop gateway to disable.
 
@@ -109,7 +111,7 @@ Flow:
 |----------|-----|
 | **Sleep / Wiki preflight** | Desktop `AgentJobExecutor` injects chat summaries + job activity before run. Cloud gateway receives prompt from memory server **without** that preflight unless memory adds it. Sleep job may miss recent chat context in cloud. |
 | **Main chat history** | Lives in `~/.paprwork-v2/chats.db` — **not** in git. Cloud job sessions are isolated `job:{id}:{runId}`. No access to desktop chat threads unless via Papr Memory search tools. |
-| **Plans** | `~/Papr/data/plans.db` — local SQLite, not in cloud git repo |
+| **Plans** | `$PAPR_HOME/data/plans.db` — local SQLite, not in cloud git repo |
 | **Subagent profiles** | From repo — planned, not fully wired in cloud prep |
 | **Code index / hybrid grep** | Desktop file watcher + Papr Memory code schema — not in cloud gateway |
 | **Custom keys at runtime** | Only keys already in vault; no keychain / no new `request_key` UI |

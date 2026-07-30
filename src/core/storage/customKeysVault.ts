@@ -32,7 +32,7 @@ export function resolveIntegrationKeyOrganizationId(input: {
   organizationId?: string;
   activeOrganizationId?: string | null;
 }): string {
-  if (input.orgScope === "all") {
+  if (input.orgScope === "all" || input.orgScope === undefined) {
     return SHARED_ORG_ID;
   }
 

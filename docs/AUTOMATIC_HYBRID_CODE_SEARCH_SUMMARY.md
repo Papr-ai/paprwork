@@ -5,7 +5,7 @@
 
 ## What Changed
 
-Added automatic Papr Memory semantic search to bash grep commands when searching code in `~/Papr/apps/` or `~/Papr/Jobs/`.
+Added automatic Papr Memory semantic search to bash grep commands when searching code in `$PAPR_HOME/apps/` or `$PAPR_HOME/Jobs/`.
 
 ## Implementation
 
@@ -65,7 +65,7 @@ Just use grep normally:
 
 ```bash
 # This now automatically includes memory search:
-bash({ command: "grep -r 'authentication' ~/Papr/apps/" })
+bash({ command: "grep -r 'authentication' $PAPR_HOME/apps/" })
 
 # Results will show:
 # === Memory Search Results (Semantic) ===
@@ -122,7 +122,7 @@ tail -f ~/.cursor/projects/*/terminals/1.txt | grep "Memory search"
 
 ### Command:
 ```bash
-grep -r "login" ~/Papr/apps/dashboard/
+grep -r "login" $PAPR_HOME/apps/dashboard/
 ```
 
 ### Results:

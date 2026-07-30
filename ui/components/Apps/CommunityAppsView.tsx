@@ -202,14 +202,19 @@ export function CommunityAppsView({
     filteredArtifacts.filter((a) => a.type === "app").map((a) => a.id),
   );
 
-  const fetchCatalog = useCallback(async () => {
+  const fetchCatalog = useCallback(async (forceRefresh = false) => {
     setLoading(true);
     setError(null);
     try {
-      const response = await gateway.send("bundle:fetch-community-catalog", {
-        scope,
-        ...(namespaceId ? { namespaceId } : {}),
-      });
+      const response = await gateway.send(
+        "bundle:fetch-community-catalog",
+        {
+          scope,
+          ...(namespaceId ? { namespaceId } : {}),
+          ...(forceRefresh ? { forceRefresh: true } : {}),
+        },
+        scope === "namespace" ? { timeoutMs: 60_000 } : undefined,
+      );
       setCatalog(response.data as CommunityCatalog);
     } catch (err) {
       setError(
@@ -517,7 +522,7 @@ export function CommunityAppsView({
     return (
       <div className="community-apps__status">
         <p className="community-apps__error">{error}</p>
-        <button className="community-apps__retry-btn" onClick={fetchCatalog}>
+        <button className="community-apps__retry-btn" onClick={() => void fetchCatalog(true)}>
           Retry
         </button>
       </div>
@@ -559,7 +564,7 @@ export function CommunityAppsView({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
-          <button className="community-apps__refresh-btn" onClick={fetchCatalog}>
+          <button className="community-apps__refresh-btn" onClick={() => void fetchCatalog(true)}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
               <path
                 d="M1 4v6h6M23 20v-6h-6"

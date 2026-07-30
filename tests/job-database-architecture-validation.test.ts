@@ -22,6 +22,14 @@ afterEach(() => {
 });
 
 describe("validateJobAgainstAppDatabase", () => {
+  it("reports missing primary database path instead of throwing", () => {
+    const issues = validateJobAgainstAppDatabase({
+      databasePath: path.join(tmpdir(), "missing", "data.db"),
+      command: `sqlite3 "$APP_DB" 'SELECT 1'`,
+    });
+    expect(issues.some((issue) => issue.rule === "primary-database-missing")).toBe(true);
+  });
+
   it("finds missing referenced tables", () => {
     const issues = validateJobAgainstAppDatabase({
       databasePath: fixture(),

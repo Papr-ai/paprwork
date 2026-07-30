@@ -113,7 +113,7 @@ Generate deterministically from existing `jobId` for backfill: `dbId = "db-" + h
 
 **Database registry (~200 lines, new file)**
 
-Location: `~/Papr/data/databases.json`
+Location: `$PAPR_HOME/data/databases.json`
 
 ```ts
 interface DatabaseRegistry {
@@ -161,7 +161,7 @@ When deleting, set `state: "deleted"` + `deletedAt`. On registry load, ignore de
 
 **`create_database` tool (~100 lines)**
 
-Creates `~/Papr/databases/{dbId}/data.db`, registers in `databases.json`. No job required.
+Creates `$PAPR_HOME/databases/{dbId}/data.db`, registers in `databases.json`. No job required.
 
 **`link_app_data_source` accepts `dbId` (~50 lines)**
 
@@ -359,9 +359,9 @@ These were not in the original 4-phase list but were required before registry wo
 
 **"Always auto-links"** = Paprwork does not wait for the agent to call `link_app_data_source`. On save, the gateway:
 
-1. Resolves the job's `~/Papr/Jobs/{jobId}/data/data.db` path
+1. Resolves the job's `$PAPR_HOME/Jobs/{jobId}/data/data.db` path
 2. For each `appId` in `appIds` (skipping `__standalone__`):
-   - Appends an entry to `~/Papr/apps/{appId}/data-sources.json`
+   - Appends an entry to `$PAPR_HOME/apps/{appId}/data-sources.json`
    - Sets `role: "primary"` if the app had no sources yet
    - Registers the path in `databases.json` (registry backfill on link)
 

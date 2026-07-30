@@ -27,7 +27,7 @@ With a contract:
 ## Data Contract: [App Name] <-> [Job Name]
 
 ### Write Model (what the job produces)
-- Database: ~/Papr/jobs/{jobId}/data.db
+- Database: $PAPR_HOME/Jobs/{jobId}/data.db
 - Tables:
   - `table_name`: columns, types, constraints
 - Indexes: which columns, matching which queries
@@ -79,28 +79,34 @@ With a contract:
 
 ## Linking Apps to Data (required for cloud DB)
 
-**Job-owned (default):** `create_job({ appIds: [appId], ... })` **auto-links** the job's `data.db` and writes `data-sources.json` (synced to git). Cloud `/api/db/*` requires this file — auto-link satisfies it for the common path.
+**Standard flow:** `create_database` → `attach_database({ appId, dbId, alias })` → app uses `sourceId` on `/api/db/query` and `/api/db/write`.
 
-**Manual fallback** (re-link, standalone `dbId`, or auto-link failed):
+```javascript
+const { dbId } = await create_database({ name: "Funnel" })
+await attach_database({ appId, dbId, alias: "funnel" })
+// App: fetch('/api/db/query', { body: JSON.stringify({ appId, sourceId: 'funnel', sql, params }) })
+// App: fetch('/api/db/write', { body: JSON.stringify({ appId, sourceId: 'funnel', sql, params }) })
+```
+
+**Manual fallback** (re-link or job-owned DB):
 
 ```javascript
 link_app_data_source({
   appId: "funnel-dashboard",
   jobId: "amplitude-sync",  // OR dbId for registry DB
   alias: "funnel",
-  setPrimary: true,
   tables: ["funnel_runs"]
 })
 ```
 
-Call linking **before** implementing `/api/db/query` or `/api/db/write` if `read_app_data_sources` shows no sources. Linked databases sync to Turso automatically after cloud sync is enabled.
+Call linking **before** implementing `/api/db/*` if `read_app_data_sources` shows no sources. Linked databases sync to Turso automatically after cloud sync is enabled.
 
 ## Cloud hosting (automatic — ready)
 
 When cloud sync is enabled (default):
 
 1. App source syncs to GitHub and auto-publishes to `apps.papr.ai` (private by default)
-2. Linked job databases (via `data-sources.json` — auto-created by `create_job({ appIds })` or manual link) sync to Turso
+2. Linked databases (via `data-sources.json` from `attach_database` or `link_app_data_source`) sync to Turso
 3. App code using relative `/api/db/*` works **unchanged** on the cloud URL
 
 **No extra deploy steps** — do not add Vercel/Netlify publish, Turso credentials, or cloud URL wiring to plans.

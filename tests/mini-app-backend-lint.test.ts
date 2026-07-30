@@ -186,4 +186,24 @@ describe("checkOrphanBackendHandlers", () => {
       ),
     ).toBe(true);
   });
+
+  it("ignores papr_db.py helper copied by scaffold", async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "papr-orphan-"));
+    const backendDir = join(tempDir, "backend");
+    await mkdir(backendDir);
+    await writeFile(
+      join(backendDir, "manifest.json"),
+      JSON.stringify({
+        version: 1,
+        actions: { ping: { handler: "ping.py", runtime: "python" } },
+      }),
+    );
+    await writeFile(join(backendDir, "ping.py"), "print('ok')");
+    await writeFile(join(backendDir, "papr_db.py"), "# shared helper\n");
+
+    const issues = await checkOrphanBackendHandlers(tempDir);
+    expect(
+      issues.filter((i) => i.rule === "backend-handler-orphan"),
+    ).toHaveLength(0);
+  });
 });

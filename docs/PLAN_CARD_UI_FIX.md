@@ -6,7 +6,7 @@
 ## Problem
 
 When the agent called `create_plan` successfully:
-- ✅ Plan was created in the database (`~/Papr/data/plans.db`)
+- ✅ Plan was created in the database (`$PAPR_HOME/data/plans.db`)
 - ✅ Tool returned success with plan data
 - ✅ Backend showed "create_plan ✓"
 - ❌ UI did not show the plan card

@@ -7,6 +7,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { mergeCloudActingUserBody } from "../utils/cloudActingUser.js";
 import { getPaprApiKey } from "../utils/keyResolver.js";
 import { publishDbChanged } from "../utils/publishJobRunEvents.js";
 import {
@@ -208,7 +209,9 @@ export class TursoSyncBridge {
           "Content-Type": "application/json",
           "X-API-Key": apiKey,
         },
-        body: JSON.stringify({ database: databaseName }),
+        body: JSON.stringify(
+          mergeCloudActingUserBody({ database: databaseName }),
+        ),
         signal: AbortSignal.timeout(30_000),
       },
     );
@@ -258,7 +261,9 @@ export class TursoSyncBridge {
             "Content-Type": "application/json",
             "X-API-Key": apiKey,
           },
-          body: JSON.stringify({ database: databaseName }),
+          body: JSON.stringify(
+          mergeCloudActingUserBody({ database: databaseName }),
+        ),
           signal: AbortSignal.timeout(30_000),
         },
       );

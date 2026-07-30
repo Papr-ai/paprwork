@@ -50,7 +50,7 @@ ${fileLines}
 
 **Use this app for edits** unless the user names a different app. Skip \`list_apps\` / \`list_app_files\` when the target file is listed above. **Do not bulk \`read_app_file\` the whole app** — use edit history + \`postEditSnippet\` in prior edit results, or re-read **only** specific files you need to debug.
 
-**Trivial tweak** (one color, label, class): \`edit_file({ path: "~/Papr/apps/${appId}/<filename>", oldString, newString })\` — auto-runs esbuild + validation; follow \`_verifyReminder\`; no plan for one-line changes.`);
+**Trivial tweak** (one color, label, class): \`edit_app_file({ appId: "${appId}", filename: "<filename>", oldString, newString })\` — auto-runs esbuild + validation; follow \`_verifyReminder\`; no plan for one-line changes.`);
   }
 
   if (hasActiveJob && resolved.activeJob) {
@@ -72,7 +72,7 @@ ${fileLines}
 
 **Use this job for edits** unless the user names a different job. Skip \`list_jobs\` / \`list_job_files\` when the target file is listed above.
 
-**Trivial script tweak:** \`edit_file({ path: "~/Papr/Jobs/${jobId}/{filename}", oldString, newString })\` — then \`run_job\` to verify; no plan unless logic or schedule changes.`);
+**Trivial script tweak:** \`edit_file({ path: "<jobDir>/{filename}", oldString, newString })\` (use \`dir\` from \`list_jobs\`) — then \`run_job\` to verify; no plan unless logic or schedule changes.`);
   }
 
   if (hasLastEdited && resolved.lastEdited) {

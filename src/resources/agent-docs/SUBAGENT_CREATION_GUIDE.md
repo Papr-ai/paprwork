@@ -1,3 +1,5 @@
+> **Paths:** `$PAPR_HOME` = active org/namespace workspace (`~/Papr/orgs/{orgId}/namespaces/{nsId}/`). See `docs/PAPR_WORKSPACE_PATHS.md`. Prefer app/job tools over raw paths.
+
 # Sub-Agent Creation Guide (V2)
 
 **When to read:** Creating specialized AI agents for recurring or complex tasks  
@@ -434,7 +436,7 @@ model: "gpt-5.4"  // Fast, cheap, sufficient
 systemPrompt: "Analyze data."
 
 // ✅ Complete instructions
-systemPrompt: `Analyze SQLite data from ~/Papr/jobs/{jobId}/data.db.
+systemPrompt: `Analyze SQLite data from $PAPR_HOME/Jobs/{jobId}/data.db.
 
 Schema:
 - leads table: id, name, email, score, created_at

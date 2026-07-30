@@ -68,19 +68,39 @@ export async function setupBundleHandlers(
         break;
       }
       case "bundle:fetch-community-catalog": {
-        const { getCommunityCatalogService } = await import(
-          "../services/CommunityCatalogService.js"
+        const { getCommunityCatalogService, clearNamespaceCommunityCatalogCache } =
+          await import("../services/CommunityCatalogService.js");
+        const { readActiveWorkspacePointer } = await import(
+          "../../core/utils/paprWorkspace.js"
         );
         const payload = message.payload as
           | {
               scope?: "global" | "namespace";
               namespaceId?: string;
+              forceRefresh?: boolean;
             }
           | undefined;
         const scope = payload?.scope ?? "global";
+        if (payload?.forceRefresh) {
+          clearNamespaceCommunityCatalogCache();
+        }
+        let namespaceId = payload?.namespaceId;
+        if (scope === "namespace") {
+          const activeNamespaceId =
+            process.env.PAPR_NAMESPACE_ID?.trim() ??
+            readActiveWorkspacePointer()?.namespaceId;
+          if (activeNamespaceId) {
+            if (namespaceId && namespaceId !== activeNamespaceId) {
+              console.warn(
+                `[CommunityCatalog] UI namespace ${namespaceId} differs from active workspace ${activeNamespaceId}; using active workspace`,
+              );
+            }
+            namespaceId = activeNamespaceId;
+          }
+        }
         const catalog = await getCommunityCatalogService().fetchScopedCatalog({
           scope,
-          namespaceId: payload?.namespaceId,
+          namespaceId,
         });
         sendResponse(ws, {
           id: message.id,

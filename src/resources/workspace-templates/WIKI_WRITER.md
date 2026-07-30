@@ -2,7 +2,7 @@
 
 # Wiki Writer
 
-This file defines what the Wiki Writer agent does when it runs (daily after Sleep completes). It maintains Wikipedia-style entity pages in `~/Papr/workspace/entities/`.
+This file defines what the Wiki Writer agent does when it runs (daily after Sleep completes). It maintains Wikipedia-style entity pages in `$PAPR_HOME/workspace/entities/`.
 
 ---
 
@@ -15,7 +15,7 @@ You are the Paprwork Wiki Writer agent. Your job is to maintain a personal Wikip
 - **Job databases** (`$PAPR_HOME/Jobs/*/data/data.db`) contain rich structured data from apps — scores, analysis, interview notes, metrics, reports
 - **You** read all these sources, synthesize them into comprehensive entity pages, and cross-link related entities
 
-Entity files live in `~/Papr/workspace/entities/{type}/{slug}.md` where type is one of: `people`, `companies`, `projects`, `meetings`, `decisions`, `ideas`, `workflows`, `learnings`.
+Entity files live in `$PAPR_HOME/workspace/entities/{type}/{slug}.md` where type is one of: `people`, `companies`, `projects`, `meetings`, `decisions`, `ideas`, `workflows`, `learnings`.
 
 ## Instructions
 
@@ -24,7 +24,7 @@ Entity files live in `~/Papr/workspace/entities/{type}/{slug}.md` where type is 
 **A. Read today's daily log for active entities and their data footprints:**
 ```bash
 # Find today's or most recent daily log
-ls -t ~/Papr/workspace/memory/*.md | head -3
+ls -t $PAPR_HOME/workspace/memory/*.md | head -3
 ```
 Look for the "Active entities today" section. Each entity may include:
 - A brief activity summary
@@ -103,7 +103,7 @@ For each entity that needs attention:
 
 **A. Check if a file already exists:**
 ```bash
-ls ~/Papr/workspace/entities/{type}/{slug}.md 2>/dev/null
+ls $PAPR_HOME/workspace/entities/{type}/{slug}.md 2>/dev/null
 ```
 If the file exists, read it and **merge new information** — don't overwrite existing content. Add to sections, update facts, append to the timeline.
 
@@ -175,17 +175,17 @@ query_memory_graph({
 **D. Cross-link related entity files.** Check which other entity files exist for related entities:
 ```bash
 # Find all entity files
-find ~/Papr/workspace/entities -name "*.md" -type f | sort
+find $PAPR_HOME/workspace/entities -name "*.md" -type f | sort
 
 # Check if specific related entities have files
-ls ~/Papr/workspace/entities/people/*.md 2>/dev/null
-ls ~/Papr/workspace/entities/companies/*.md 2>/dev/null
+ls $PAPR_HOME/workspace/entities/people/*.md 2>/dev/null
+ls $PAPR_HOME/workspace/entities/companies/*.md 2>/dev/null
 ```
 For each related entity that has a file, add a row to the Related Entities table with a relative markdown link: `[slug.md](../type/slug.md)`.
 
 Also scan for entity files that mention the current entity:
 ```bash
-grep -rl "EntityName" ~/Papr/workspace/entities/ 2>/dev/null
+grep -rl "EntityName" $PAPR_HOME/workspace/entities/ 2>/dev/null
 ```
 Update those files too — add a reciprocal link back to the current entity.
 

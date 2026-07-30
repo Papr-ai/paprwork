@@ -4,7 +4,7 @@
 Fresh installations of Paprwork showed "Agent Lounge (Coming Soon)" placeholder instead of the bundled home dashboard.
 
 ## Root Cause
-The `installDefaultApps()` method was copying app files to `~/Papr/apps/{id}/` but **not registering them** in `~/Papr/data/apps.json`. This meant:
+The `installDefaultApps()` method was copying app files to `$PAPR_HOME/apps/{id}/` but **not registering them** in `$PAPR_HOME/data/apps.json`. This meant:
 - Files existed on disk ✅
 - Not in apps registry ❌
 - `HomeRedirect` component couldn't find the app ❌
@@ -118,13 +118,13 @@ const __dirname = path.dirname(__filename);
 ## Next Steps for Fresh Install Testing
 
 1. Stop the app (Cmd+Q)
-2. Backup your apps: `mv ~/Papr/data/apps.json ~/Papr/data/apps.json.backup`
-3. Create empty registry: `echo "[]" > ~/Papr/data/apps.json`
-4. Remove home app: `rm -rf ~/Papr/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c`
+2. Backup your apps: `mv $PAPR_HOME/data/apps.json $PAPR_HOME/data/apps.json.backup`
+3. Create empty registry: `echo "[]" > $PAPR_HOME/data/apps.json`
+4. Remove home app: `rm -rf $PAPR_HOME/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c`
 5. Start the app: `npm start`
 6. Verify: `node scripts/verify-home-app.mjs`
 7. Check UI: Click home button → should open dashboard
-8. Restore backup: `mv ~/Papr/data/apps.json.backup ~/Papr/data/apps.json`
+8. Restore backup: `mv $PAPR_HOME/data/apps.json.backup $PAPR_HOME/data/apps.json`
 
 ## Prevention
 

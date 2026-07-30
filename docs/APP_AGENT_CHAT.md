@@ -63,7 +63,7 @@ enable_app_agent_chat({
 })
 ```
 
-**Stored on:** `MiniApp.agentChat` in `~/Papr/data/apps.json` + public fields in `metadata.json` on publish.
+**Stored on:** `MiniApp.agentChat` in `$PAPR_HOME/data/apps.json` + public fields in `metadata.json` on publish.
 
 ### 2. Desktop UX
 
@@ -99,7 +99,7 @@ enable_app_agent_chat({
 1. **CloudAppHost routes** — session create, message send, SSE stream
 2. **Direct user ↔ sub-agent** — no main-agent relay; `delegate_task` / `request_agent_input` blocked in embedded tool allowlist
 3. **Tool override** from `agentChat.allowedToolIds` at runtime (desktop)
-4. **Session persistence** — file store on desktop (`~/Papr/data/app-agent-sessions/`); in-memory on cloud host
+4. **Session persistence** — file store on desktop (`$PAPR_HOME/data/app-agent-sessions/`); in-memory on cloud host
 5. **App refresh** — SDK reloads page when turn completes with file writes
 
 **Cloud execution path (published web bubble):**

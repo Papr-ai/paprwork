@@ -163,7 +163,7 @@ Clicking the sparkle icon (✨) on any card opens a new chat with:
 3. **Agent creates job:**
    - Job type: Agent job (scheduled)
    - Schedule: Daily at 6 AM
-   - Creates SQLite database: `~/Papr/Jobs/{jobId}/data/data.db`
+   - Creates SQLite database: `$PAPR_HOME/Jobs/{jobId}/data/data.db`
    - Table: `briefs (date TEXT, brief_json TEXT)`
    - Generates first brief
 
@@ -191,7 +191,7 @@ data-sources.json: [{
   "id": "job-123:Daily Brief",
   "type": "sqlite",
   "jobId": "job-123",
-  "dbPath": "~/Papr/Jobs/job-123/data/data.db",
+  "dbPath": "$PAPR_HOME/Jobs/job-123/data/data.db",
   "tables": ["briefs"]
 }]
 Dashboard queries → succeeds → shows real data

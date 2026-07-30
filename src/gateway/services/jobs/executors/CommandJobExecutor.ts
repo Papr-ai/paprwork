@@ -9,9 +9,10 @@ import type {
 } from "./IJobExecutor.js";
 import { getShellCommand, wrapCommandWithVenv, getVenvPaths } from "../../../../core/utils/platform.js";
 import {
-  jobAppDatabaseEnv,
-  requireJobAppDatabase,
+  jobWriteDatabaseEnv,
+  requireJobWriteTargets,
 } from "../../jobAppDatabase.js";
+import { STANDALONE_APP_ID } from "../appIds.js";
 
 export class CommandJobExecutor implements IJobExecutor {
   private supportedTypes: Set<JobType>;
@@ -67,16 +68,18 @@ export class CommandJobExecutor implements IJobExecutor {
     const jobDbPath = path.join(params.jobDir, "data", "data.db");
     const [shellPath, shellArgs] = getShellCommand(finalCommand);
 
-    const appDbContext = await requireJobAppDatabase(params.job.appIds);
+    const writeTargets = await requireJobWriteTargets(params.job);
+    const linkedAppId = (params.job.appIds ?? []).find(
+      (id) => id !== STANDALONE_APP_ID,
+    );
 
-    // Ensure we use the correct Node version (nvm's Node v24, not system Node)
-    // This prevents native module version mismatches with better-sqlite3
-    // Uses getNvmEnv() which handles both Unix and Windows properly
     const env: NodeJS.ProcessEnv = {
       ...this.getNvmEnv(),
       JOB_DIR: params.jobDir,
       JOB_DB: jobDbPath,
-      ...(appDbContext ? jobAppDatabaseEnv(appDbContext) : {}),
+      ...(writeTargets.length > 0
+        ? jobWriteDatabaseEnv(writeTargets, linkedAppId)
+        : {}),
       ...(params.runtimeParams ?? {}),
     };
     

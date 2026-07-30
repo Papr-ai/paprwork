@@ -21,11 +21,12 @@ Users can create agent jobs to populate this dashboard with their own data:
 
 ## Data Sources
 
-The app reads from linked job databases (data-sources.json). Users need to:
+The app ships pre-linked to both bundled default jobs via `data-sources.json`:
 
-1. Create their own "Daily Brief Generator" agent job
-2. Link it to this app
-3. Schedule it to run daily/weekly
+1. **Daily Brief Generator** — powers the dashboard UI (briefs table)
+2. **Weekly War Room — Orchestrator** — manual weekly prep workflow (linked for agent use)
+
+On first launch, `dbPath` values are filled automatically after default jobs install.
 
 ## Agent Job Example
 
@@ -51,7 +52,7 @@ create_job({
 
 - **App ID:** `bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c` (fixed)
 - **Display Name:** "Home"
-- **Location:** `~/Papr/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/`
+- **Location:** `$PAPR_HOME/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/`
 - **Installed:** On first launch if not already present
 - **Data:** Linked job databases via data-sources.json
 

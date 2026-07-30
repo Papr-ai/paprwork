@@ -146,14 +146,23 @@ export async function forwardRendererTelemetry(
     });
 
     if (!response.ok) {
+      const detail = `upstream ${response.status}`;
+      console.warn(`[Telemetry] Renderer forward failed: ${detail}`);
       return {
         status: 502,
-        error: `upstream ${response.status}`,
+        error: detail,
       };
     }
     return { status: 204 };
-  } catch {
-    return { status: 502, error: "forward failed" };
+  } catch (err) {
+    const reason =
+      err instanceof Error && err.name === "AbortError"
+        ? "timeout"
+        : err instanceof Error
+          ? err.message
+          : "network error";
+    console.warn(`[Telemetry] Renderer forward failed: ${reason}`);
+    return { status: 502, error: `forward failed: ${reason}` };
   } finally {
     clearTimeout(timer);
   }

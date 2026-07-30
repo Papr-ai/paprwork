@@ -46,10 +46,9 @@ export function appFilesUseDatabaseApi(
 }
 
 export function buildMissingDataSourceMessage(appId: string): string {
-  return (
+    return (
     `App uses /api/db/* but no database is linked in data-sources.json. ` +
-    `Create a database with create_database, attach via attach_database({ appId: "${appId}", dbId, setPrimary: true }), ` +
-    `or link a job DB with link_app_data_source({ appId: "${appId}", jobId, setPrimary: true }). ` +
+    `Create a database with create_database, then attach_database({ appId: "${appId}", dbId, alias }). ` +
     `Cloud and desktop DB APIs fail without a linked source.`
   );
 }

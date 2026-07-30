@@ -22,7 +22,7 @@ There were **two separate settings storage systems** operating independently:
    - Passes to Gateway via `PAPRWORK_TELEMETRY_ANONYMOUS_ID` env var
 
 2. **Gateway WebSocket Handler** - Used custom JSON file (via `settings.ts`)
-   - Location: `~/Papr/data/settings.json`
+   - Location: `$PAPR_HOME/data/settings.json`
    - **Did NOT include telemetry data**
    - Renderer read from this file when calling `settings:get`
 
@@ -30,7 +30,7 @@ There were **two separate settings storage systems** operating independently:
 
 1. Main process creates `installId` in electron-store → sends to Gateway as env var
 2. Renderer requests settings via `settings:get` WebSocket
-3. Gateway returned data from `~/Papr/data/settings.json` (no telemetry data!)
+3. Gateway returned data from `$PAPR_HOME/data/settings.json` (no telemetry data!)
 4. Renderer used empty or default installId from Gateway's file
 5. Gateway validation checked against env var from main process
 6. **Mismatch!** → 403 Forbidden

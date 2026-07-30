@@ -10,7 +10,7 @@
 There are **THREE separate favorite storage systems** that are out of sync:
 
 ### 1. Documents Favorites
-**Location:** `~/Papr/documents/{docId}/meta.json`  
+**Location:** `$PAPR_HOME/documents/{docId}/meta.json`  
 **Field:** `favorite: boolean`  
 **Managed by:** `DocumentService.ts`
 
@@ -25,7 +25,7 @@ There are **THREE separate favorite storage systems** that are out of sync:
 ```
 
 ### 2. Apps Favorites
-**Location:** `~/Papr/data/apps.json`  
+**Location:** `$PAPR_HOME/data/apps.json`  
 **Field:** `favorite?: boolean`  
 **Managed by:** `AppService.ts`
 

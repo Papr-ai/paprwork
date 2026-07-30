@@ -109,7 +109,7 @@ async function readWikiWriterPrompt(): Promise<string> {
 
   return normalizePortableJobPrompt(
     templateContent ||
-      "Maintain entity wiki pages in ~/Papr/workspace/entities/ based on daily logs and graph changes.",
+      "Maintain entity wiki pages in $PAPR_HOME/workspace/entities/ based on daily logs and graph changes.",
   );
 }
 

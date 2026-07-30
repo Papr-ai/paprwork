@@ -36,10 +36,13 @@ let TelemetryClientClass;
 let isTelemetrySendingEnabledFn;
 let telemetryClientInstance = null;
 let initializePaprLoginIPC;
+let ensureActiveNamespaceApiKey;
+let resolveActivePaprApiKey;
 let cleanupPaprLogin;
 let handlePaprAuthCallback;
 let syncProfileToGatewaySettings;
 let migrateOrgVaultIsolation;
+let migrateIntegrationKeysToSharedDefault;
 
 
 /**
@@ -97,6 +100,8 @@ async function loadESMModules() {
   KeyPermissionsStorage = storageModule.KeyPermissionsStorage;
   SettingsStorage = storageModule.SettingsStorage;
   migrateOrgVaultIsolation = storageModule.migrateOrgVaultIsolation;
+  migrateIntegrationKeysToSharedDefault =
+    storageModule.migrateIntegrationKeysToSharedDefault;
 
   const customKeysIpcModule =
     await importWithRetry("../../dist/electron/electron/ipc/customKeys.js");
@@ -119,6 +124,8 @@ async function loadESMModules() {
   const paprLoginIpcModule =
     await importWithRetry("../../dist/electron/electron/ipc/paprLogin.js");
   initializePaprLoginIPC = paprLoginIpcModule.initializePaprLoginIPC;
+  ensureActiveNamespaceApiKey = paprLoginIpcModule.ensureActiveNamespaceApiKey;
+  resolveActivePaprApiKey = paprLoginIpcModule.resolveActivePaprApiKey;
   cleanupPaprLogin = paprLoginIpcModule.cleanupPaprLogin;
   handlePaprAuthCallback = paprLoginIpcModule.handlePaprAuthCallback;
   syncProfileToGatewaySettings = paprLoginIpcModule.syncProfileToGatewaySettings;
@@ -863,6 +870,10 @@ async function createMainWindow() {
 // ---------------------------------------------------------------------------
 
 function readActiveWorkspacePointerOrgId() {
+  return readActiveWorkspacePointer()?.organizationId;
+}
+
+function readActiveWorkspacePointer() {
   try {
     const fs = require("fs");
     const pathMod = require("path");
@@ -876,12 +887,41 @@ function readActiveWorkspacePointerOrgId() {
       return undefined;
     }
     const pointer = JSON.parse(fs.readFileSync(pointerPath, "utf-8"));
-    return typeof pointer?.organizationId === "string"
-      ? pointer.organizationId
-      : undefined;
+    if (
+      typeof pointer?.organizationId !== "string" ||
+      typeof pointer?.namespaceId !== "string"
+    ) {
+      return undefined;
+    }
+    return pointer;
   } catch {
     return undefined;
   }
+}
+
+function paprApiKeyMatchesActiveWorkspace(apiKey) {
+  const orgId = process.env.PAPR_ORG_ID?.trim();
+  const namespaceId = process.env.PAPR_NAMESPACE_ID?.trim();
+  if (orgId && namespaceId) {
+    const prefix = `sk-org-${orgId}-namespace-${namespaceId}-`;
+    if (apiKey.startsWith(prefix)) {
+      return true;
+    }
+    const match = apiKey.match(/^sk-org-([^-]+)-namespace-([^-]+)(?:-.+)?$/);
+    return match?.[2] === namespaceId;
+  }
+
+  const pointer = readActiveWorkspacePointer();
+  if (!pointer) {
+    return true;
+  }
+
+  const prefix = `sk-org-${pointer.organizationId}-namespace-${pointer.namespaceId}-`;
+  if (apiKey.startsWith(prefix)) {
+    return true;
+  }
+  const match = apiKey.match(/^sk-org-([^-]+)-namespace-([^-]+)(?:-.+)?$/);
+  return match?.[2] === pointer.namespaceId;
 }
 
 // Pure logic functions — imported from separate file for unit testing
@@ -904,6 +944,7 @@ class GatewayProcessSupervisor {
     this.gatewayEnv = options.gatewayEnv;
     this.port = options.port;
     this.customKeysStorage = options.customKeysStorage;
+    this.settingsStorage = options.settingsStorage ?? null;
     this.getActiveOrganizationId = options.getActiveOrganizationId;
 
     // State
@@ -1093,6 +1134,7 @@ class GatewayProcessSupervisor {
   _setupIpcHandlers() {
     const proc = this.process;
     const storage = this.customKeysStorage;
+    const settings = this.settingsStorage;
 
     proc.on("message", async (msg) => {
       // Guard: if process was replaced during async handling, skip
@@ -1104,15 +1146,66 @@ class GatewayProcessSupervisor {
         const resolvedKeys = {};
         for (const keyName of msg.keys || []) {
           try {
+            if (keyName === "PAPR_API_KEY" && resolveActivePaprApiKey) {
+              let value = await resolveActivePaprApiKey(storage);
+              if (
+                !value &&
+                ensureActiveNamespaceApiKey &&
+                settings
+              ) {
+                console.log(
+                  "[Electron] PAPR_API_KEY missing for active workspace — syncing namespace key…",
+                );
+                value = await ensureActiveNamespaceApiKey(storage, settings);
+              }
+              if (value) {
+                resolvedKeys[keyName] = value;
+                console.log(`[Electron]   ✓ Resolved ${keyName}`);
+              } else {
+                const envFallback = process.env[keyName];
+                if (
+                  envFallback &&
+                  paprApiKeyMatchesActiveWorkspace(envFallback)
+                ) {
+                  resolvedKeys[keyName] = envFallback;
+                  console.log(`[Electron]   ✓ Resolved ${keyName} from env fallback`);
+                } else if (envFallback) {
+                  console.warn(
+                    "[Electron]   ✗ Ignoring PAPR_API_KEY env fallback — wrong namespace for active workspace",
+                  );
+                } else {
+                  console.log(`[Electron]   ✗ Key ${keyName} not found`);
+                }
+              }
+              continue;
+            }
+
             const value = await storage.getKeyByName(keyName);
             if (value !== null) {
-              resolvedKeys[keyName] = value;
-              console.log(`[Electron]   ✓ Resolved ${keyName}`);
+              if (
+                keyName === "PAPR_API_KEY" &&
+                !paprApiKeyMatchesActiveWorkspace(value)
+              ) {
+                console.warn(
+                  "[Electron]   ✗ PAPR_API_KEY in keychain is for a different namespace — omitting until sync completes",
+                );
+              } else {
+                resolvedKeys[keyName] = value;
+                console.log(`[Electron]   ✓ Resolved ${keyName}`);
+              }
             } else {
               const envFallback = process.env[keyName];
-              if (envFallback) {
+              if (
+                envFallback &&
+                (keyName !== "PAPR_API_KEY" ||
+                  paprApiKeyMatchesActiveWorkspace(envFallback))
+              ) {
                 resolvedKeys[keyName] = envFallback;
                 console.log(`[Electron]   ✓ Resolved ${keyName} from env fallback`);
+              } else if (envFallback && keyName === "PAPR_API_KEY") {
+                console.warn(
+                  "[Electron]   ✗ Ignoring PAPR_API_KEY env fallback — wrong namespace for active workspace",
+                );
               } else {
                 console.log(`[Electron]   ✗ Key ${keyName} not found`);
               }
@@ -1901,6 +1994,18 @@ app.whenReady().then(async () => {
       );
     }
   }
+  if (migrateIntegrationKeysToSharedDefault) {
+    const sharedMigration = await migrateIntegrationKeysToSharedDefault(
+      path.join(app.getPath("userData"), "data"),
+    );
+    if (sharedMigration.ran) {
+      console.log(
+        "[Electron] Integration keys shared-default migration complete:",
+        sharedMigration,
+      );
+      await customKeysStorage.initialize();
+    }
+  }
   if (paprProfileForKeys?.organizationId) {
     await customKeysStorage.setActiveOrganization(paprProfileForKeys.organizationId);
   }
@@ -1960,6 +2065,17 @@ app.whenReady().then(async () => {
       }
     },
   });
+
+  if (ensureActiveNamespaceApiKey) {
+    try {
+      await ensureActiveNamespaceApiKey(customKeysStorage, settingsStorage);
+    } catch (error) {
+      console.warn(
+        "[Electron] Startup namespace API key sync failed:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
 
   // Process deep links queued during startup (Windows cold start + early macOS open-url)
   const coldStartUrl = process.argv.find((arg) => arg.startsWith("papr://"));
@@ -2057,6 +2173,15 @@ app.whenReady().then(async () => {
     PAPRWORK_APP_VERSION: app.getVersion(),
     PAPRWORK_IS_PACKAGED: app.isPackaged ? "true" : "false",
   };
+  if (
+    gatewayEnv.PAPR_API_KEY &&
+    !paprApiKeyMatchesActiveWorkspace(gatewayEnv.PAPR_API_KEY)
+  ) {
+    console.warn(
+      "[Electron] Stripping stale PAPR_API_KEY from gateway env — wrong namespace for active workspace",
+    );
+    delete gatewayEnv.PAPR_API_KEY;
+  }
   if (IS_PRODUCTION) {
     const asarUnpacked = path.join(__dirname, "../..").replace("app.asar", "app.asar.unpacked");
     const esbuildBinName = process.platform === "win32" ? "esbuild.exe" : "esbuild";
@@ -2088,6 +2213,7 @@ app.whenReady().then(async () => {
     gatewayEnv,
     port: GATEWAY_PORT,
     customKeysStorage,
+    settingsStorage,
     getActiveOrganizationId: () =>
       readActiveWorkspacePointerOrgId() ||
       settingsStorage.getPaprProfile()?.organizationId,

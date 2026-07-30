@@ -63,10 +63,16 @@ export async function flushWorkspaceStateToGateway(): Promise<void> {
   });
 }
 
-/** Load tabs + navigation state for the active workspace from gateway SQLite. */
-export async function loadPersistedAppStateFromGateway(options?: {
+export interface WorkspaceEntityIdSets {
   validChatIds?: Set<string>;
-}): Promise<void> {
+  validAppIds?: Set<string>;
+  validDocumentIds?: Set<string>;
+}
+
+/** Load tabs + navigation state for the active workspace from gateway SQLite. */
+export async function loadPersistedAppStateFromGateway(
+  options?: WorkspaceEntityIdSets,
+): Promise<void> {
   const tabsResponse = (await gateway.send("app:load_tabs", {})) as {
     success?: boolean;
     data?: TabRow[];
@@ -95,8 +101,12 @@ export async function loadPersistedAppStateFromGateway(options?: {
       }
     }
 
-    if (options?.validChatIds) {
-      restoredTabs = pruneStaleEntityTabs(restoredTabs, options.validChatIds);
+    if (
+      options?.validChatIds ||
+      options?.validAppIds ||
+      options?.validDocumentIds
+    ) {
+      restoredTabs = pruneStaleEntityTabs(restoredTabs, options);
     }
   }
 
@@ -195,13 +205,24 @@ function mapTabRow(tab: TabRow) {
   };
 }
 
-function pruneStaleEntityTabs<T extends { id: string; type: string; entityId: string; parentTabId: string | null; childTabIds: string[] }>(
-  tabs: T[],
-  validChatIds: Set<string>,
-): T[] {
+export function pruneStaleEntityTabs<
+  T extends {
+    id: string;
+    type: string;
+    entityId: string;
+    parentTabId: string | null;
+    childTabIds: string[];
+  },
+>(tabs: T[], valid: WorkspaceEntityIdSets): T[] {
   const kept = tabs.filter((tab) => {
     if (tab.type === "chat") {
-      return validChatIds.has(tab.entityId);
+      return valid.validChatIds?.has(tab.entityId) ?? true;
+    }
+    if (tab.type === "app") {
+      return valid.validAppIds?.has(tab.entityId) ?? true;
+    }
+    if (tab.type === "document") {
+      return valid.validDocumentIds?.has(tab.entityId) ?? true;
     }
     return true;
   });

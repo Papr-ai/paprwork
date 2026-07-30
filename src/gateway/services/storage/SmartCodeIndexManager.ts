@@ -22,6 +22,7 @@ import {
 import * as path from 'path';
 import * as fs from 'fs';
 import { resolvePaprUserDataPath } from '../../../core/utils/paprWorkspace.js';
+import { reportPaprQuotaError } from '../../../core/utils/paprQuota.js';
 
 export interface IndexManagerConfig {
   paprDir?: string;
@@ -413,6 +414,7 @@ export class SmartCodeIndexManager {
                                   err.message.includes('quota');
         
         if (isRateLimitError) {
+          reportPaprQuotaError(error, "code-index");
           // Extract the actual error message from PAPR API
           let errorMessage = err.message;
           if (error instanceof Papr.RateLimitError) {

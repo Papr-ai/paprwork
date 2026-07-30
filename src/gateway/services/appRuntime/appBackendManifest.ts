@@ -89,12 +89,17 @@ function parseActionSpec(
   }
   const description =
     typeof raw.description === "string" ? raw.description : undefined;
+  const sourceId =
+    typeof raw.sourceId === "string" && raw.sourceId.trim()
+      ? raw.sourceId.trim()
+      : undefined;
   return {
     handler: handler.trim(),
     runtime,
     keys: keyNames,
     timeoutMs,
     description,
+    sourceId,
   };
 }
 

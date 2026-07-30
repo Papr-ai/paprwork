@@ -1,9 +1,10 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 import {
-  getPrimarySource,
-  inferPrimaryAlias,
+  getLegacyDefaultSource,
+  getSingleLinkedSource,
   parseDataSourcesFile,
   resolveAppDataSource,
+  resolveAttachAlias,
   serializeDataSourcesFile,
   type AppDataSource,
 } from "../src/gateway/services/appDataSources.js";
@@ -16,7 +17,6 @@ const auditSource: AppDataSource = {
   dbPath: "/tmp/audit/data.db",
   tables: [],
   linkedAt: "2026-01-01T00:00:00.000Z",
-  role: "primary",
 };
 
 const metricsSource: AppDataSource = {
@@ -27,101 +27,112 @@ const metricsSource: AppDataSource = {
   dbPath: "/tmp/metrics/data.db",
   tables: [],
   linkedAt: "2026-01-01T00:00:00.000Z",
-  role: "readonly",
 };
 
 describe("appDataSources", () => {
-  test("parses legacy array format with role primary", () => {
+  test("parses legacy array format", () => {
     const config = parseDataSourcesFile(
       JSON.stringify([auditSource, metricsSource]),
     );
     expect(config.sources).toHaveLength(2);
-    expect(config.primary).toBe("audit");
   });
 
-  test("legacy multi-source array without roles does not infer primary", () => {
-    const config = parseDataSourcesFile(
-      JSON.stringify([
-        { ...auditSource, role: undefined },
-        { ...metricsSource, role: undefined },
-      ]),
-    );
-    expect(config.primary).toBeUndefined();
-    expect(getPrimarySource(config)).toBeUndefined();
-  });
-
-  test("single legacy source infers primary", () => {
-    const config = parseDataSourcesFile(
-      JSON.stringify([{ ...auditSource, role: undefined }]),
-    );
-    expect(config.primary).toBe("audit");
-  });
-
-  test("parses object format with explicit primary", () => {
+  test("parses legacy primary field and resolves via getLegacyDefaultSource", () => {
     const config = parseDataSourcesFile(
       JSON.stringify({ primary: "metrics", sources: [auditSource, metricsSource] }),
     );
     expect(config.primary).toBe("metrics");
-    expect(getPrimarySource(config)?.alias).toBe("metrics");
+    expect(getSingleLinkedSource(config)).toBeUndefined();
+    expect(getLegacyDefaultSource(config)?.alias).toBe("metrics");
   });
 
-  test("serializes with primary field", () => {
+  test("serializes sources only (no primary field)", () => {
     const raw = serializeDataSourcesFile({
-      primary: "audit",
       sources: [auditSource],
     });
-    const parsed = JSON.parse(raw) as { primary: string; sources: unknown[] };
-    expect(parsed.primary).toBe("audit");
+    const parsed = JSON.parse(raw) as {
+      primary?: string;
+      sources: Array<{ role?: string }>;
+    };
+    expect(parsed.primary).toBeUndefined();
     expect(parsed.sources).toHaveLength(1);
+    expect(parsed.sources[0]?.role).toBeUndefined();
   });
 
-  test("defaults to primary source when sourceId omitted", async () => {
-    const config = {
-      primary: "audit",
-      sources: [auditSource, metricsSource],
-    };
-    const resolved = await resolveAppDataSource(config, {
-      sql: "SELECT * FROM report_evidence",
-      operation: "read",
-    });
+  test("resolveAttachAlias avoids legacy primary default", () => {
+    expect(
+      resolveAttachAlias({
+        registryLabel: "Blog Topic Planner DB",
+        dbId: "db-bcfedc33",
+      }),
+    ).toBe("blog-topic-planner-db");
+    expect(
+      resolveAttachAlias({
+        requested: "primary",
+        registryLabel: "Blog Topic Planner DB",
+        dbId: "db-bcfedc33",
+      }),
+    ).toBe("blog-topic-planner-db");
+    expect(
+      resolveAttachAlias({
+        requested: "topics",
+        registryLabel: "Blog Topic Planner DB",
+        dbId: "db-bcfedc33",
+      }),
+    ).toBe("topics");
+  });
+
+  test("single linked source resolves without sourceId", async () => {
+    const resolved = await resolveAppDataSource(
+      { sources: [auditSource] },
+      { operation: "read" },
+    );
     expect(resolved.alias).toBe("audit");
   });
 
-  test("write to readonly source is rejected", async () => {
-    const config = {
-      primary: "audit",
-      sources: [auditSource, metricsSource],
-    };
+  test("multiple sources without legacy default require explicit sourceId", async () => {
     await expect(
-      resolveAppDataSource(config, {
-        sourceId: "metrics",
-        operation: "write",
-      }),
-    ).rejects.toMatchObject({ status: 403 });
+      resolveAppDataSource(
+        { sources: [auditSource, metricsSource] },
+        { operation: "read" },
+      ),
+    ).rejects.toMatchObject({ status: 400 });
   });
 
-  test("falls back to secondary source on read when table missing on primary", async () => {
-    const config = {
-      primary: "audit",
-      sources: [auditSource, metricsSource],
-    };
-    const tableExists = vi.fn(async (dbPath: string, table: string) => {
-      return dbPath === metricsSource.dbPath && table === "csv_rows";
-    });
-    const resolved = await resolveAppDataSource(config, {
-      sql: "SELECT * FROM csv_rows",
-      operation: "read",
-      tableExists,
-    });
+  test("legacy primary field resolves without sourceId", async () => {
+    const resolved = await resolveAppDataSource(
+      { primary: "metrics", sources: [auditSource, metricsSource] },
+      { operation: "read" },
+    );
     expect(resolved.alias).toBe("metrics");
   });
 
-  test("inferPrimaryAlias prefers role primary", () => {
-    expect(
-      inferPrimaryAlias([
-        { ...metricsSource, role: undefined },
-        auditSource,
-      ]),
-    ).toBe("audit");
+  test("legacy role primary resolves without sourceId", async () => {
+    const resolved = await resolveAppDataSource(
+      {
+        sources: [
+          auditSource,
+          { ...metricsSource, role: "primary" },
+        ],
+      },
+      { operation: "read" },
+    );
+    expect(resolved.alias).toBe("metrics");
+  });
+
+  test("resolves by explicit sourceId", async () => {
+    const resolved = await resolveAppDataSource(
+      { sources: [auditSource, metricsSource] },
+      { sourceId: "metrics", operation: "write" },
+    );
+    expect(resolved.alias).toBe("metrics");
+  });
+
+  test("writes are allowed on any linked source", async () => {
+    const resolved = await resolveAppDataSource(
+      { sources: [auditSource, metricsSource] },
+      { sourceId: "metrics", operation: "write" },
+    );
+    expect(resolved.alias).toBe("metrics");
   });
 });

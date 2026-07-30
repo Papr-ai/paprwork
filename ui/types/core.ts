@@ -10,7 +10,7 @@ export interface ToolCall {
   id: string;
   toolName: string;
   args?: Record<string, unknown>;
-  status: "calling" | "success" | "error" | "interrupted";
+  status: "calling" | "success" | "warning" | "error" | "interrupted";
   result?: string;
   error?: string;
 }

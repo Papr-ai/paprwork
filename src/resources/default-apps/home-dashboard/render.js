@@ -41,8 +41,13 @@ const R = {
     return items.map(n => `<div class="card"><div class="intel-subject">${n.subject}</div>${(n.bullets||[]).map(b => `<div class="intel-bullet">${b}</div>`).join('')}${n.source ? `<div class="intel-src">${n.source}</div>` : ''}${reviewMeta(n)}${hoverActions(n, 'intel', {subject:n.subject,bullets:n.bullets})}</div>`).join('');
   },
   alerts(items) {
-    const icons = {high:'🔴',medium:'🟡',low:'🟢'};
-    return items.map(a => `<div class="card sev-${a.severity||'med'}"><div class="alert-card"><span class="alert-icon">${icons[a.severity]||'⚠️'}</span><div><div class="alert-msg">${a.message}</div>${a.action ? `<div class="alert-action">→ ${a.action}</div>` : ''}</div></div>${reviewMeta(a)}${hoverActions(a, 'alert', {message:a.message,action:a.action,severity:a.severity})}</div>`).join('');
+    const severityClass = (sev) => {
+      if (sev === 'high') return 'sev-dot-high';
+      if (sev === 'low') return 'sev-dot-low';
+      if (sev === 'medium') return 'sev-dot-medium';
+      return 'sev-dot-info';
+    };
+    return items.map(a => `<div class="card sev-${a.severity||'med'}"><div class="alert-card"><span class="alert-icon"><span class="alert-dot ${severityClass(a.severity)}"></span></span><div><div class="alert-msg">${a.message}</div>${a.action ? `<div class="alert-action">→ ${a.action}</div>` : ''}</div></div>${reviewMeta(a)}${hoverActions(a, 'alert', {message:a.message,action:a.action,severity:a.severity})}</div>`).join('');
   },
   reviewed(items) {
     return items.map(i => `<div class="card reviewed-card"><div class="reviewed-kicker">${i._section}</div><div class="reviewed-title">${i.title || i.subject || i.label || i.message}</div>${i.why ? `<div class="pri-why">${i.why}</div>` : ''}${i.context ? `<div class="tracker-ctx">${i.context}</div>` : ''}${i.action ? `<div class="alert-action">→ ${i.action}</div>` : ''}${reviewMeta(i)}<div class="card-hi">${reviewIcons(i)}</div></div>`).join('');

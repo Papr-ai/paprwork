@@ -41,7 +41,7 @@ Redesigned the Data tab as "Memory" tab with comprehensive memory management fea
 **Features:**
 - Displays `workspace.md` content in readable format
 - Inline editor with save/cancel buttons
-- "Open Folder" button to open `~/Papr/workspace/` in system file explorer
+- "Open Folder" button to open `$PAPR_HOME/workspace/` in system file explorer
 - Auto-creates `workspace.md` with default template if doesn't exist
 - Markdown-friendly textarea editor
 
@@ -64,7 +64,7 @@ Redesigned the Data tab as "Memory" tab with comprehensive memory management fea
   - 📁 Jobs/ - Automated jobs
   - 📁 workspace/ - Context files
   - 📄 chats.db - Chat history
-- "Open PAPR Folder" button to open `~/Papr/` in system explorer
+- "Open PAPR Folder" button to open active workspace (`$PAPR_HOME`) in system explorer
 - Replaces old "Data Location" card
 
 **Files Modified:**
@@ -105,7 +105,7 @@ Redesigned the Data tab as "Memory" tab with comprehensive memory management fea
 **New WebSocket Handlers** (`src/gateway/websocket/memory.ts`):
 
 1. **`memory:get-workspace`**
-   - Reads `~/Papr/workspace/workspace.md`
+   - Reads `$PAPR_HOME/workspace/workspace.md`
    - Creates default file if doesn't exist
    - Returns content and file path
 
@@ -116,12 +116,9 @@ Redesigned the Data tab as "Memory" tab with comprehensive memory management fea
 
 3. **`memory:open-folder`**
    - Opens folder in system file explorer
-   - Cross-platform support:
-     - macOS: `open` command
-     - Windows: `explorer` command
-     - Linux: `xdg-open` command
-   - Resolves `~` to home directory
-   - Validates folder exists
+   - Prefer `{ target: "workspace" | "paprHome" }` — gateway resolves active org/namespace paths
+   - Legacy `{ folderPath: "~/…" }` still supported; rewrites flat `~/Papr/…` via `resolvePaprAgentPath`
+   - Cross-platform: macOS `open`, Windows `explorer`, Linux `xdg-open`
 
 4. **`memory:chat-stats`**
    - Queries `chats.db` for statistics
@@ -173,7 +170,8 @@ await gateway.send("memory:get-workspace", {});
 await gateway.send("memory:save-workspace", { content: "..." });
 
 // Open folder
-await gateway.send("memory:open-folder", { folderPath: "~/Papr/" });
+await gateway.send("memory:open-folder", { target: "paprHome" });
+await gateway.send("memory:open-folder", { target: "workspace" });
 
 // Get chat stats
 await gateway.send("memory:chat-stats", {});
@@ -253,7 +251,7 @@ await gateway.send("memory:chat-stats", {});
 
 4. **Document Indexing**
    - Index markdown files from workspace
-   - Index documents from ~/Papr/documents
+   - Index documents from $PAPR_HOME/documents
    - Show document stats in UI
 
 ## Conclusion

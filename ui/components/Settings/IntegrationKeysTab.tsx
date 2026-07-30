@@ -45,12 +45,9 @@ type KeyDisplayItem = CustomKey & {
 };
 
 function defaultOrgScopeValue(
-  organizationId?: string | null,
+  _organizationId?: string | null,
 ): IntegrationKeyOrgScopeValue {
-  return {
-    mode: "current",
-    organizationId: organizationId ?? undefined,
-  };
+  return { mode: "all" };
 }
 
 export function IntegrationKeysTab() {

@@ -119,10 +119,12 @@ export class CloudAppBackendService {
       ? parseDataSourcesFile(dsFile.content)
       : { sources: [] };
     await hydrateCloudDatabaseRegistry(auth, dataSources);
+    const sourceId = input.params?.sourceId ?? spec.sourceId;
     const databaseEnv = await resolveCloudAppBackendDatabaseEnv({
       appId: input.appId,
       config: dataSources,
       fetchTursoToken: (database) => fetchRuntimeDbToken(auth, database),
+      sourceId,
     });
 
     const runEnv = buildBackendActionEnv({

@@ -15,6 +15,7 @@ import type {
 } from "./IStorageProvider";
 import { LocalStorageProvider } from "./LocalStorageProvider.js";
 import { PaprMemoryProvider, type PaprConfig } from "./PaprMemoryProvider.js";
+import { reportPaprQuotaError } from "../../../core/utils/paprQuota.js";
 
 export class HybridStorageProvider implements IStorageProvider {
   private local: LocalStorageProvider;
@@ -74,6 +75,7 @@ export class HybridStorageProvider implements IStorageProvider {
     if (this.syncEnabled && !isIncomplete) {
       this.syncMessageToPapr(chatId, message).catch((err) => {
         console.error(`Failed to sync message ${message.id} to PAPR:`, err);
+        reportPaprQuotaError(err, "chat-sync");
         this.local.markSyncFailed(message.id, err.message);
       });
     }
@@ -96,6 +98,7 @@ export class HybridStorageProvider implements IStorageProvider {
     if (this.syncEnabled && !isIncomplete) {
       this.syncMessageToPapr(chatId, message).catch((err) => {
         console.error(`Failed to sync message ${message.id} to PAPR:`, err);
+        reportPaprQuotaError(err, "chat-sync");
         this.local.markSyncFailed(message.id, err.message);
       });
     }
@@ -219,6 +222,7 @@ export class HybridStorageProvider implements IStorageProvider {
       // PAPR has no new data, use local only
       return localMessages;
     } catch (error) {
+      reportPaprQuotaError(error, "chat-load");
       console.warn(
         "[HybridStorage] PAPR fetch failed, using local only:",
         error,
@@ -250,6 +254,7 @@ export class HybridStorageProvider implements IStorageProvider {
 
       return null;
     } catch (error) {
+      reportPaprQuotaError(error, "chat-compress");
       console.error("PAPR compress failed, using local fallback:", error);
 
       // 3. Fallback to local LLM generation (if implemented)
@@ -461,6 +466,7 @@ export class HybridStorageProvider implements IStorageProvider {
         synced++;
       } catch (error) {
         failed++;
+        reportPaprQuotaError(error, "chat-bulk-sync");
         console.error(`Failed to sync message ${message.id}:`, error);
       }
     }
