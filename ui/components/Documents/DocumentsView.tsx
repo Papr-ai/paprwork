@@ -111,13 +111,13 @@ export function DocumentsView() {
     <div className="documents-view">
       {/* Header */}
       <div className="documents-view__header">
-        <h2 className="documents-view__title">Artifacts</h2>
+        <h2 className="documents-view__title">Documents</h2>
 
         <div className="documents-view__header-actions">
           <input
             type="text"
             className="documents-view__search"
-            placeholder="Search artifacts..."
+            placeholder="Search documents..."
             value={searchQuery}
             onChange={handleSearch}
           />
@@ -129,7 +129,7 @@ export function DocumentsView() {
         <input
           type="text"
           className="documents-view__create-input"
-          placeholder="New artifact name..."
+          placeholder="New document name..."
           value={newDocTitle}
           onChange={(e) => setNewDocTitle(e.target.value)}
           onKeyDown={(e) => {
@@ -168,7 +168,7 @@ export function DocumentsView() {
       <div className="documents-view__content">
         {loading && (
           <div className="documents-view__empty">
-            <p>Loading artifacts...</p>
+            <p>Loading documents...</p>
           </div>
         )}
 
@@ -199,7 +199,7 @@ export function DocumentsView() {
               <line x1="8" y1="13" x2="16" y2="13" stroke="currentColor" strokeWidth="1.5" />
               <line x1="8" y1="17" x2="16" y2="17" stroke="currentColor" strokeWidth="1.5" />
             </svg>
-            <p className="documents-view__empty-title">No artifacts yet</p>
+            <p className="documents-view__empty-title">No documents yet</p>
             <p className="documents-view__empty-subtitle">
               Ask the AI to create one for you, or create one above.
             </p>
@@ -233,7 +233,7 @@ export function DocumentsView() {
             {/* All documents grid */}
             {remainingDocuments.length > 0 && (
               <div className="documents-view__section">
-                <span className="documents-view__section-label">All Artifacts</span>
+                <span className="documents-view__section-label">All Documents</span>
                 <div className="documents-view__grid">
                   {remainingDocuments.map((doc) => (
                     <DocumentCard

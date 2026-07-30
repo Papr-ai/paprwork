@@ -2099,6 +2099,11 @@
   transition: all 0.2s;
 }
 
+button.about-link {
+  cursor: pointer;
+  font-family: inherit;
+}
+
 .about-link:hover {
   background: var(--bg-hover);
   border-color: var(--primary-color);

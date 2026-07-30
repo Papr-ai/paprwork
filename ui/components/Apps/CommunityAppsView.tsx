@@ -19,17 +19,18 @@ import { normalizeRequirements } from "../../../src/core/types/bundles";
 import { lookupService } from "../../../src/core/data/knownServices";
 import "./CommunityAppsView.css";
 import { trackEvent } from "../../lib/telemetry";
+import {
+  canInstallCloudCatalogEntry,
+  cloudSourceKey,
+  resolveLocalAppIdForCatalogEntry,
+  type CloudLineageIndex,
+} from "../../utils/communityAppLocalOpen";
 
 const GATEWAY =
   typeof import.meta !== "undefined" &&
   import.meta.env?.VITE_GATEWAY_PORT
     ? `http://${import.meta.env.VITE_GATEWAY_HOST || "localhost"}:${import.meta.env.VITE_GATEWAY_PORT || "18789"}`
     : "http://localhost:18789";
-
-interface CloudLineageIndex {
-  byAppId: Record<string, { sourceAppId: string; sourceSlug: string; sourceNamespaceId: string }>;
-  bySourceKey: Record<string, string[]>;
-}
 
 type CloudInstallMode = "fork" | "track";
 
@@ -117,10 +118,6 @@ function detectUserPlatform(): "macos" | "windows" | "linux" {
   return "linux";
 }
 
-function cloudSourceKey(namespaceId: string, slug: string): string {
-  return `${namespaceId}:${slug}`;
-}
-
 function isCloudEntryInstalled(
   entry: CommunityCatalogEntry,
   installedAppIds: Set<string>,
@@ -193,13 +190,13 @@ export function CommunityAppsView({
     appTitle: string;
     requirements: RequiredKeySpec[];
   } | null>(null);
-  const { filteredArtifacts, loadArtifacts } = useArtifacts();
+  const { artifacts, loadArtifacts } = useArtifacts();
   const { createChat } = useChat();
   const { createTab, switchToTab } = useTabs();
   const userPlatform = detectUserPlatform();
 
   const installedAppIds = new Set(
-    filteredArtifacts.filter((a) => a.type === "app").map((a) => a.id),
+    artifacts.filter((artifact) => artifact.type === "app").map((artifact) => artifact.id),
   );
 
   const fetchCatalog = useCallback(async (forceRefresh = false) => {
@@ -385,6 +382,14 @@ export function CommunityAppsView({
     void installCloudApp(entry);
   };
 
+  const openLocalApp = useCallback(
+    (appId: string, title: string) => {
+      const tabId = createTab("app", appId, title);
+      switchToTab(tabId);
+    },
+    [createTab, switchToTab],
+  );
+
   const openLiveApp = async (url: string, appName?: string) => {
     trackEvent("paprwork_community_app_previewed", { url, app_name: appName } as Record<string, unknown>);
     try {
@@ -475,26 +480,39 @@ export function CommunityAppsView({
 
   const renderCatalogGrid = (entries: CommunityCatalogEntry[]) => (
     <div className="community-apps__grid">
-      {entries.map((entry) => (
-        <CommunityAppCard
-          key={entry.catalogId}
-          entry={entry}
-          isInstalled={
-            entry.source === "cloud"
-              ? isCloudEntryInstalled(entry, installedAppIds, lineageIndex)
-              : Boolean(entry.bundleId && installedAppIds.has(entry.bundleId))
-          }
-          installedForkCount={installedForkCountForEntry(entry, lineageIndex)}
-          onOssImport={() => handleOssImportClick(entry)}
-          onCloudInstall={() => startCloudInstall(entry)}
-          isInstalling={installingId === entry.catalogId}
-          onOpenLive={
-            entry.liveViewable && entry.liveUrl
-              ? () => void openLiveApp(entry.liveUrl!)
-              : undefined
-          }
-        />
-      ))}
+      {entries.map((entry) => {
+        const localAppId = resolveLocalAppIdForCatalogEntry(
+          entry,
+          installedAppIds,
+          lineageIndex,
+        );
+        return (
+          <CommunityAppCard
+            key={entry.catalogId}
+            entry={entry}
+            localAppId={localAppId}
+            isInstalled={
+              entry.source === "cloud"
+                ? isCloudEntryInstalled(entry, installedAppIds, lineageIndex)
+                : Boolean(entry.bundleId && installedAppIds.has(entry.bundleId))
+            }
+            installedForkCount={installedForkCountForEntry(entry, lineageIndex)}
+            onOssImport={() => handleOssImportClick(entry)}
+            onCloudInstall={() => startCloudInstall(entry)}
+            isInstalling={installingId === entry.catalogId}
+            onOpenLocal={
+              localAppId
+                ? () => openLocalApp(localAppId, entry.name)
+                : undefined
+            }
+            onOpenLive={
+              entry.liveViewable && entry.liveUrl
+                ? () => void openLiveApp(entry.liveUrl!, entry.name)
+                : undefined
+            }
+          />
+        );
+      })}
     </div>
   );
 
@@ -733,21 +751,25 @@ export function CommunityAppsView({
 
 interface CommunityAppCardProps {
   entry: CommunityCatalogEntry;
+  localAppId?: string | null;
   isInstalled: boolean;
   installedForkCount?: number;
   isInstalling?: boolean;
   onOssImport: () => void;
   onCloudInstall: () => void;
+  onOpenLocal?: () => void;
   onOpenLive?: () => void;
 }
 
 function CommunityAppCard({
   entry,
+  localAppId = null,
   isInstalled,
   installedForkCount = 0,
   isInstalling = false,
   onOssImport,
   onCloudInstall,
+  onOpenLocal,
   onOpenLive,
 }: CommunityAppCardProps) {
   const [showDetails, setShowDetails] = useState(false);
@@ -832,6 +854,8 @@ function CommunityAppCard({
         ? "Team shared"
         : "Public"
       : "Open source";
+
+  const showInstall = canInstallCloudCatalogEntry(entry, localAppId);
 
   return (
     <div className="community-card">
@@ -934,6 +958,15 @@ function CommunityAppCard({
       {entry.source === "cloud" ? (
         <div className="community-card__actions">
           <div className="community-card__actions-row">
+            {onOpenLocal ? (
+              <button
+                type="button"
+                className="community-card__action-btn community-card__action-btn--primary"
+                onClick={onOpenLocal}
+              >
+                Open in Paprwork
+              </button>
+            ) : null}
             {entry.liveViewable && onOpenLive ? (
               <button
                 type="button"
@@ -943,24 +976,14 @@ function CommunityAppCard({
                 Open live
               </button>
             ) : null}
-            {entry.codeInstallable ? (
+            {showInstall ? (
               <button
                 type="button"
-                className={
-                  isInstalled
-                    ? "community-card__action-btn community-card__action-btn--primary community-card__import-btn--success"
-                    : "community-card__action-btn community-card__action-btn--primary"
-                }
+                className="community-card__action-btn community-card__action-btn--primary"
                 onClick={onCloudInstall}
-                disabled={isInstalled || isInstalling}
+                disabled={isInstalling}
               >
-                {isInstalled
-                  ? installedForkCount > 0
-                    ? "Forked"
-                    : "Installed"
-                  : isInstalling
-                    ? "Installing…"
-                    : "Install"}
+                {isInstalling ? "Installing…" : "Install"}
               </button>
             ) : null}
           </div>

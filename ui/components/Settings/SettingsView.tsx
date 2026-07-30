@@ -15,6 +15,9 @@ import { CloudSyncTab } from "./CloudSyncTab";
 import { DatabasesTab } from "./DatabasesTab";
 import { WorkspaceMigrationTab } from "./WorkspaceMigrationTab";
 import { resizeProfilePhoto } from "../../utils/profilePhoto";
+import { useChat } from "../../hooks/useChat";
+import { useTabs } from "../../hooks/useTabs";
+import { startPlatformFeedbackChat } from "../../utils/startPlatformFeedbackChat";
 import "./SettingsView.css";
 
 export function SettingsView() {
@@ -881,6 +884,8 @@ function PermissionsTab() {
 // ===== About Tab =====
 
 function AboutTab() {
+  const { createChat } = useChat();
+  const { createTab, switchToTab } = useTabs();
   const {
     currentVersion,
     updateStatus,
@@ -891,6 +896,10 @@ function AboutTab() {
     isUpdateReady,
     hasUpdate,
   } = useAppUpdater();
+
+  const handleFeedbackChat = (kind: "bug" | "feature") => {
+    void startPlatformFeedbackChat(kind, createChat, createTab, switchToTab);
+  };
 
 
   const getStatusDisplay = () => {
@@ -1036,7 +1045,7 @@ function AboutTab() {
 
           <div className="about-links">
             <a
-              href="https://github.com/amirkabbara/paprwork-v2"
+              href="https://github.com/Papr-ai/paprwork"
               target="_blank"
               rel="noopener noreferrer"
               className="about-link"
@@ -1071,11 +1080,10 @@ function AboutTab() {
               </svg>
               Website
             </a>
-            <a
-              href="https://github.com/amirkabbara/paprwork-v2/issues"
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              type="button"
               className="about-link"
+              onClick={() => handleFeedbackChat("bug")}
             >
               <svg
                 width="16"
@@ -1090,41 +1098,62 @@ function AboutTab() {
                 <line x1="12" y1="8" x2="12.01" y2="8" />
               </svg>
               Report Issue
-            </a>
+            </button>
+            <button
+              type="button"
+              className="about-link"
+              onClick={() => handleFeedbackChat("feature")}
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+              </svg>
+              Feature Request
+            </button>
           </div>
         </div>
 
-        {currentVersion === "2.0.48" && (
+        {currentVersion === "2.0.49" && (
           <div className="about-card">
-            <h3>What's New in v2.0.48</h3>
+            <h3>What's New in v2.0.49</h3>
             <ul className="whats-new-list">
               <li className="whats-new-list__item">
-                <strong>Workspace Management</strong>
+                <strong>Profile Photos & Cloud Sync</strong>
                 <p>
-                  Organize apps, jobs, and data sources by workspace with
-                  namespace-scoped resources.
+                  Upload a profile photo once — it persists locally and syncs to
+                  your Papr account when signed in.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Enhanced Profile UI</strong>
+                <strong>In-App Feedback</strong>
                 <p>
-                  New profile footer with workspace switcher for easy navigation.
+                  Report bugs or request features from Settings → About without
+                  leaving the app.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Quota & Billing</strong>
+                <strong>Smarter Agent Jobs</strong>
                 <p>
-                  Plan limits and real-time quota tracking with usage
-                  notifications.
+                  Jobs now pass workspace context to tools, with clearer
+                  diagnostics when a run produces no output.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Tool Status Tracking</strong>
-                <p>See real-time status of long-running operations.</p>
+                <strong>Community Apps</strong>
+                <p>
+                  Open catalog apps locally when you already have a copy installed
+                  in your workspace.
+                </p>
               </li>
             </ul>
             <a
-              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.0.48"
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.0.49"
               target="_blank"
               rel="noopener noreferrer"
               className="about-link whats-new-list__link"

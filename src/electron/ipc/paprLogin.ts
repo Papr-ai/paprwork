@@ -923,7 +923,17 @@ interface OwnedOrgInfo {
   defaultNamespaceId?: string;
 }
 
-/** Which Parse org holds namespaces for a workspace (matches login provisioning). */
+interface NamespaceOrgContext {
+  developerOrgId?: string;
+  ownedOrgById: Map<string, OwnedOrgInfo>;
+  ownedOrgByWorkspaceId: Map<string, OwnedOrgInfo>;
+}
+
+/**
+ * Which Parse org holds namespaces for a workspace.
+ * Team workspaces: workspace.organization (matches dashboard).
+ * Personal Papr workspace (thin owned-org shell): user.organization_id (developer org).
+ */
 export function resolveNamespaceOrganizationId(input: {
   followerOrgId: string;
   ownedOrg?: OwnedOrgInfo;
@@ -932,11 +942,9 @@ export function resolveNamespaceOrganizationId(input: {
   const { followerOrgId, ownedOrg, developerOrgId } = input;
 
   if (ownedOrg) {
-    // Team workspace: follower org and owned org agree (e.g. Myadvice).
     if (followerOrgId === ownedOrg.organizationId) {
       return ownedOrg.organizationId;
     }
-    // Personal workspace: thin owned org shell — real namespaces live in developer org.
     if (developerOrgId) {
       return developerOrgId;
     }
@@ -946,15 +954,28 @@ export function resolveNamespaceOrganizationId(input: {
   return followerOrgId;
 }
 
-async function fetchUserWorkspaces(
+/** Prefer resolved namespace org on login; never raw follower org when developer org applies. */
+export function resolveLoginOrganizationId(input: {
+  namespaceOrganizationId?: string;
+  provisionOrganizationId?: string;
+  developerOrganizationId?: string;
+}): string | undefined {
+  return (
+    input.namespaceOrganizationId?.trim() ||
+    input.provisionOrganizationId?.trim() ||
+    input.developerOrganizationId?.trim() ||
+    undefined
+  );
+}
+
+async function loadNamespaceOrgContext(
   userId: string,
   graphql: GraphQLExecutor,
-): Promise<UserWorkspaceOption[]> {
-  const ownedOrgIds = new Set<string>();
+): Promise<NamespaceOrgContext> {
   const ownedOrgById = new Map<string, OwnedOrgInfo>();
   const ownedOrgByWorkspaceId = new Map<string, OwnedOrgInfo>();
-
   let developerOrgId: string | undefined;
+
   try {
     const devData = (await graphql(GET_USER_DEVELOPER_ORG, { userId })) as {
       user?: { organization_id?: string };
@@ -982,9 +1003,6 @@ async function fetchUserWorkspaces(
       const orgId = node?.objectId as string | undefined;
       const orgName = node?.name?.trim();
       const workspaceId = node?.workspace?.objectId;
-      if (orgId) {
-        ownedOrgIds.add(orgId);
-      }
       if (orgId && orgName) {
         const info: OwnedOrgInfo = {
           organizationId: orgId,
@@ -999,6 +1017,76 @@ async function fetchUserWorkspaces(
     }
   } catch (ownedError) {
     console.warn("[PaprLogin] Owned organizations lookup failed:", ownedError);
+  }
+
+  return { developerOrgId, ownedOrgById, ownedOrgByWorkspaceId };
+}
+
+async function resolveNamespaceOrganizationForWorkspace(
+  sessionToken: string,
+  userId: string,
+  workspaceId: string,
+): Promise<{
+  organizationId: string;
+  organizationName: string;
+  defaultNamespaceId?: string;
+} | null> {
+  const graphql: GraphQLExecutor = (query, variables) =>
+    parseGraphQL(sessionToken, query, variables);
+  const context = await loadNamespaceOrgContext(userId, graphql);
+
+  const wsData = (await parseGraphQL(sessionToken, GET_WORKSPACE_ORG, {
+    workspaceId,
+  })) as {
+    workSpace?: {
+      workspace_name?: string;
+      organization?: {
+        objectId: string;
+        name: string;
+        default_namespace?: { objectId: string; name?: string };
+      };
+    };
+  };
+  const wsOrg = wsData.workSpace?.organization;
+  if (!wsOrg?.objectId) {
+    return null;
+  }
+
+  const followerOrgId = wsOrg.objectId;
+  const ownedOrg = context.ownedOrgByWorkspaceId.get(workspaceId);
+  const namespaceOrgId = resolveNamespaceOrganizationId({
+    followerOrgId,
+    ownedOrg,
+    developerOrgId: context.developerOrgId,
+  });
+  const namespaceOrgInfo =
+    context.ownedOrgById.get(namespaceOrgId) ??
+    (ownedOrg?.organizationId === namespaceOrgId ? ownedOrg : undefined);
+
+  if (ownedOrg && namespaceOrgId !== followerOrgId) {
+    console.log(
+      `[PaprLogin] Workspace ${wsData.workSpace?.workspace_name ?? workspaceId}: ` +
+        `using developer org ${namespaceOrgId} for namespaces ` +
+        `(follower org ${followerOrgId}, owned org ${ownedOrg.organizationId})`,
+    );
+  }
+
+  return {
+    organizationId: namespaceOrgId,
+    organizationName: namespaceOrgInfo?.organizationName ?? wsOrg.name,
+    defaultNamespaceId:
+      namespaceOrgInfo?.defaultNamespaceId ?? wsOrg.default_namespace?.objectId,
+  };
+}
+
+async function fetchUserWorkspaces(
+  userId: string,
+  graphql: GraphQLExecutor,
+): Promise<UserWorkspaceOption[]> {
+  const ownedOrgIds = new Set<string>();
+  const context = await loadNamespaceOrgContext(userId, graphql);
+  for (const orgId of context.ownedOrgById.keys()) {
+    ownedOrgIds.add(orgId);
   }
 
   const data = (await graphql(GET_USER_WORKSPACES, {
@@ -1037,20 +1125,20 @@ async function fetchUserWorkspaces(
     }
 
     const followerOrgId = organization.objectId;
-    const ownedOrg = ownedOrgByWorkspaceId.get(workspace.objectId);
+    const ownedOrg = context.ownedOrgByWorkspaceId.get(workspace.objectId);
     const namespaceOrgId = resolveNamespaceOrganizationId({
       followerOrgId,
       ownedOrg,
-      developerOrgId,
+      developerOrgId: context.developerOrgId,
     });
     const namespaceOrgInfo =
-      ownedOrgById.get(namespaceOrgId) ??
+      context.ownedOrgById.get(namespaceOrgId) ??
       (ownedOrg?.organizationId === namespaceOrgId ? ownedOrg : undefined);
     const namespaceOrgName = namespaceOrgInfo?.organizationName ?? organization.name;
     const defaultNamespaceId =
       namespaceOrgInfo?.defaultNamespaceId ?? organization.default_namespace?.objectId;
 
-    if (ownedOrg && namespaceOrgId !== ownedOrg.organizationId) {
+    if (ownedOrg && namespaceOrgId !== followerOrgId) {
       console.log(
         `[PaprLogin] Workspace ${workspace.workspace_name ?? workspace.objectId}: ` +
           `using developer org ${namespaceOrgId} for namespaces ` +
@@ -1389,7 +1477,50 @@ async function provisionOrGetApiKey(
     }
   }
 
-  // 1. Prefer user.organization_id (developer dashboard org with real namespaces)
+  // 1. Resolve namespace org for selected workspace (team org or developer org)
+  if (workspaceId) {
+    try {
+      const resolved = await resolveNamespaceOrganizationForWorkspace(
+        sessionToken,
+        userId,
+        workspaceId,
+      );
+      if (resolved) {
+        console.log(
+          `[PaprLogin] Workspace ${workspaceId} → namespace org "${resolved.organizationName}" (${resolved.organizationId})`,
+        );
+        if (resolved.defaultNamespaceId) {
+          return await resolveOrgApiKey(
+            sessionToken,
+            userId,
+            resolved.organizationId,
+            resolved.defaultNamespaceId,
+            "default",
+            workspaceId,
+          );
+        }
+
+        console.log(
+          `[PaprLogin] Namespace org ${resolved.organizationId} has no default namespace — creating one`,
+        );
+        return await createNamespaceAndKey(
+          sessionToken,
+          userId,
+          resolved.organizationId,
+          orgName,
+          workspaceId,
+        );
+      }
+
+      console.log(
+        `[PaprLogin] Workspace ${workspaceId} has no organization — creating new org`,
+      );
+    } catch (wsErr) {
+      console.warn("[PaprLogin] Workspace org lookup failed:", wsErr);
+    }
+  }
+
+  // 2. Fallback: user.organization_id (developer org without a linked workspace)
   try {
     const developerOrgId = await fetchUserDeveloperOrganizationId(sessionToken, userId);
     if (developerOrgId) {
@@ -1416,55 +1547,6 @@ async function provisionOrGetApiKey(
     }
   } catch (devOrgErr) {
     console.warn("[PaprLogin] Developer org lookup failed:", devOrgErr);
-  }
-
-  // 2. Workspace-scoped org (legacy / new users without organization_id)
-  if (workspaceId) {
-    try {
-      const wsData = (await parseGraphQL(sessionToken, GET_WORKSPACE_ORG, {
-        workspaceId,
-      })) as {
-        workSpace?: {
-          organization?: {
-            objectId: string;
-            name: string;
-            default_namespace?: { objectId: string; name?: string };
-          };
-        };
-      };
-      const wsOrg = wsData.workSpace?.organization;
-
-      if (wsOrg?.objectId) {
-        console.log(
-          `[PaprLogin] Workspace ${workspaceId} → org "${wsOrg.name}" (${wsOrg.objectId})`,
-        );
-        if (wsOrg.default_namespace?.objectId) {
-          return await resolveOrgApiKey(
-            sessionToken,
-            userId,
-            wsOrg.objectId,
-            wsOrg.default_namespace.objectId,
-            wsOrg.default_namespace.name || "default",
-            workspaceId,
-          );
-        }
-
-        console.log("[PaprLogin] Workspace org has no default namespace — creating one");
-        return await createNamespaceAndKey(
-          sessionToken,
-          userId,
-          wsOrg.objectId,
-          orgName,
-          workspaceId,
-        );
-      }
-
-      console.log(
-        `[PaprLogin] Workspace ${workspaceId} has no organization — creating new org`,
-      );
-    } catch (wsErr) {
-      console.warn("[PaprLogin] Workspace org lookup failed:", wsErr);
-    }
   }
 
   // 3. No org on workspace — full provisioning (new org + namespace + key)
@@ -2317,18 +2399,59 @@ async function completePaprAuthCallback(
   );
 
   const developerOrgId = await fetchUserDeveloperOrganizationId(parseSessionToken, objectId);
-  const activeOrganizationId =
-    developerOrgId || provision.organizationId || workspaceInfo.organizationId;
+
+  let namespaceOrganizationId: string | undefined;
+  if (workspaceInfo.workspaceId) {
+    const resolved = await resolveNamespaceOrganizationForWorkspace(
+      parseSessionToken,
+      objectId,
+      workspaceInfo.workspaceId,
+    );
+    namespaceOrganizationId = resolved?.organizationId;
+  }
+
+  const activeOrganizationId = resolveLoginOrganizationId({
+    namespaceOrganizationId,
+    provisionOrganizationId: provision.organizationId,
+    developerOrganizationId: developerOrgId,
+  });
   if (!activeOrganizationId) {
     throw new Error("Could not resolve organization for Papr login");
   }
 
+  let activeNamespaceId = provision.namespaceId;
+  let activeNamespaceName = provision.namespaceName;
+  if (activeOrganizationId !== provision.organizationId) {
+    const workspaceNs = await resolveDefaultNamespaceForOrg(
+      parseSessionToken,
+      activeOrganizationId,
+    );
+    if (workspaceNs) {
+      const workspaceKey = await resolveOrgApiKey(
+        parseSessionToken,
+        objectId,
+        activeOrganizationId,
+        workspaceNs.namespaceId,
+        workspaceNs.namespaceName,
+        workspaceInfo.workspaceId ?? "",
+      );
+      activeNamespaceId = workspaceKey.namespaceId;
+      activeNamespaceName = workspaceKey.namespaceName;
+      await customKeysStorage.addKey({
+        name: "PAPR_API_KEY",
+        value: workspaceKey.apiKey,
+      });
+    }
+  }
+
   await customKeysStorage.setActiveOrganization(activeOrganizationId);
 
-  await customKeysStorage.addKey({
-    name: "PAPR_API_KEY",
-    value: provision.apiKey,
-  });
+  if (activeOrganizationId === provision.organizationId) {
+    await customKeysStorage.addKey({
+      name: "PAPR_API_KEY",
+      value: provision.apiKey,
+    });
+  }
 
   await customKeysStorage.addKey({
     name: "PAPR_SESSION_TOKEN",
@@ -2350,17 +2473,22 @@ async function completePaprAuthCallback(
     authenticatedAt: new Date().toISOString(),
     sessionToken: parseSessionToken,
     organizationId: activeOrganizationId,
-    activeNamespaceId: provision.namespaceId,
-    activeNamespaceName: provision.namespaceName,
+    activeNamespaceId,
+    activeNamespaceName,
     workspaceId: workspaceInfo.workspaceId,
     workspaceName: workspaceInfo.workspaceName,
   });
 
+  const loginApiKey =
+    activeOrganizationId === provision.organizationId
+      ? provision.apiKey
+      : (await resolveActivePaprApiKey(customKeysStorage)) ?? provision.apiKey;
+
   const workspaceResult = await notifyGatewayWorkspaceSwitch({
     organizationId: activeOrganizationId,
-    namespaceId: provision.namespaceId,
-    namespaceName: provision.namespaceName,
-    paprApiKey: provision.apiKey,
+    namespaceId: activeNamespaceId,
+    namespaceName: activeNamespaceName,
+    paprApiKey: loginApiKey,
   });
   if (!workspaceResult.success) {
     throw new Error(
@@ -2374,7 +2502,7 @@ async function completePaprAuthCallback(
     objectId,
     displayName || "",
     profileImage,
-    provision.namespaceName,
+    activeNamespaceName,
     workspaceInfo.workspaceId,
     workspaceInfo.workspaceName,
   );

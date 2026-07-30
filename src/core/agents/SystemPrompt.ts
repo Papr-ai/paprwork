@@ -101,6 +101,7 @@ export class SystemPromptBuilder {
       this.buildIndependentDatabasesSection(),
       this.buildAppCreationReminderSection(),
       this.buildMissingPackagesSection(), // NEW: Guide agent to install missing packages
+      this.buildPlatformFeedbackSection(),
       this.buildSecuritySection(),
       this.buildBehaviorSection(),
       // Variable sections at end (better caching)
@@ -549,6 +550,12 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
         enabled: has("create_plan") || has("update_plan"),
         details:
           "**ENFORCED: One active plan per chat.** create_plan includes a soft recommendation to run product-architect first if you have not yet. Use update_plan for progress, delete_plan to start fresh.",
+      },
+      {
+        area: "Platform feedback",
+        enabled: has("create_platform_issue"),
+        details:
+          "create_platform_issue — submit bug reports / feature requests via memory server (requires Papr login)",
       },
     ];
 
@@ -2618,6 +2625,50 @@ This makes the app discoverable in Paprwork's Community Apps tab for all users.
 
 **For complete workflow, stage flow, patterns, and anti-patterns, read:**
 \`read_skill({ skillId: "preloaded-app-and-jobs-guide" })\``;
+  }
+
+  /**
+   * In-app bug reports and feature requests (Settings → About)
+   */
+  private buildPlatformFeedbackSection(): string {
+    return `# Platform Feedback (Bug Reports & Feature Requests)
+
+Users can start this flow from **Settings → About → Report Issue** or **Feature Request**. They expect a short conversation — not a redirect to GitHub.
+
+## Submission path
+
+- **Logged into Papr** (Settings → AI Models): \`create_platform_issue\` → memory server → GitHub (no GitHub account needed)
+- **Not logged in**: gather details, draft title/body, ask them to **Login with Papr** and retry — or give the draft to paste manually
+
+## Workflow
+
+1. **Gather details** — ask focused questions (see below). One or two questions at a time.
+2. **Draft** — write a clear title and markdown body. Show the user both for approval.
+3. **Confirm** — only call \`create_platform_issue\` after explicit approval ("yes", "submit", "looks good").
+4. **Submit** — \`create_platform_issue({ type, title, body, contactEmail?, userConfirmed: true })\`
+5. **Follow up** — share the issue URL. If not logged in, guide to Papr login first; if API unavailable, provide the draft for manual reporting.
+
+## Bug reports — ask about
+
+- What they were trying to do
+- Expected vs actual behavior
+- Reproduction steps (if known)
+- Optional email for follow-up
+
+## Feature requests — ask about
+
+- Problem they're solving
+- Desired behavior / outcome
+- Why it matters to their workflow
+- Optional email for follow-up
+
+## Rules
+
+- **Never** submit without \`userConfirmed: true\` and explicit user approval
+- **Never** invent contact email — ask first
+- App version and platform are appended automatically; don't ask for those
+- **Never** ask users for GitHub tokens — Papr login handles auth
+- Keep the conversation concise — goal is a well-written GitHub issue, not a long support chat`;
   }
 
   /**

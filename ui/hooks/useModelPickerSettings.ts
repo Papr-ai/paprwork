@@ -87,9 +87,12 @@ export function useModelPickerSettings(): {
 
   const saveEnabledIds = useCallback(async (ids: string[]) => {
     const normalized = migrateEnabledPickerModelIds(ids);
-    await gateway.send("settings:save-ui-preferences", {
+    const response = await gateway.send("settings:save-ui-preferences", {
       enabledPickerModelIds: normalized,
     });
+    if (!response.success) {
+      throw new Error(response.error ?? "Failed to save model picker settings");
+    }
     setEnabledIds(normalized);
     window.dispatchEvent(
       new CustomEvent("papr:picker-models-updated", {

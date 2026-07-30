@@ -23,7 +23,7 @@ export interface CachedWorkspace {
 }
 
 export interface PaprWorkspaceCacheFile {
-  version: 1;
+  version: 2;
   updatedAt: string;
   workspaces: CachedWorkspace[];
   namespacesByOrgId: Record<string, CachedNamespace[]>;
@@ -40,7 +40,7 @@ export function readPaprWorkspaceCache(): PaprWorkspaceCacheFile | null {
   try {
     const raw = fs.readFileSync(getCachePath(), "utf8");
     const parsed = JSON.parse(raw) as PaprWorkspaceCacheFile;
-    if (parsed.version !== 1 || !Array.isArray(parsed.workspaces)) {
+    if (parsed.version !== 2 || !Array.isArray(parsed.workspaces)) {
       return null;
     }
     return parsed;
@@ -55,7 +55,7 @@ export function writePaprWorkspaceCache(input: {
 }): void {
   const existing = readPaprWorkspaceCache();
   const next: PaprWorkspaceCacheFile = {
-    version: 1,
+    version: 2,
     updatedAt: new Date().toISOString(),
     workspaces: input.workspaces,
     namespacesByOrgId: {

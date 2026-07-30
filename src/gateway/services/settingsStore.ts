@@ -156,3 +156,67 @@ export async function saveSettings(data: SettingsData): Promise<void> {
   await fs.mkdir(path.dirname(settingsPath), { recursive: true });
   await fs.writeFile(settingsPath, JSON.stringify(data, null, 2), "utf-8");
 }
+
+export interface SettingsPatch {
+  profile?: Partial<ProfileData>;
+  permissions?: Partial<PermissionData>;
+  codeIndexing?: Partial<CodeIndexingSettings>;
+  uiPreferences?: Partial<UIPreferences>;
+  preferences?: Partial<PreferencesData>;
+  toolResultTruncation?: Partial<ToolResultTruncationSettings>;
+  telemetry?: Partial<TelemetryData>;
+}
+
+function applySettingsPatch(
+  current: SettingsData,
+  patch: SettingsPatch,
+): SettingsData {
+  const next: SettingsData = { ...current };
+
+  if (patch.profile) {
+    next.profile = { ...current.profile, ...patch.profile };
+  }
+  if (patch.permissions) {
+    next.permissions = { ...current.permissions, ...patch.permissions };
+  }
+  if (patch.codeIndexing) {
+    next.codeIndexing = { ...current.codeIndexing, ...patch.codeIndexing };
+  }
+  if (patch.uiPreferences) {
+    next.uiPreferences = { ...current.uiPreferences, ...patch.uiPreferences };
+  }
+  if (patch.preferences) {
+    next.preferences = { ...current.preferences, ...patch.preferences };
+  }
+  if (patch.toolResultTruncation) {
+    next.toolResultTruncation = mergeToolResultTruncationSettings({
+      ...current.toolResultTruncation,
+      ...patch.toolResultTruncation,
+    });
+  }
+  if (patch.telemetry && current.telemetry) {
+    next.telemetry = { ...current.telemetry, ...patch.telemetry };
+  }
+
+  return next;
+}
+
+let settingsWriteChain: Promise<unknown> = Promise.resolve();
+
+/** Serialize read-modify-write so concurrent UI saves cannot clobber each other. */
+export async function patchSettings(patch: SettingsPatch): Promise<SettingsData> {
+  const run = settingsWriteChain.then(async () => {
+    const current = await loadSettings();
+    const next = applySettingsPatch(current, patch);
+    await saveSettings(next);
+    if (patch.toolResultTruncation) {
+      await syncToolResultTruncationCache(next.toolResultTruncation);
+    }
+    return next;
+  });
+  settingsWriteChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}

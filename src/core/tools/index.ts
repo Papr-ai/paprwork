@@ -35,6 +35,7 @@ import {
 } from "./databases.js";
 import { wikiGraphTools } from "./wikiGraph.js";
 import { paprWorkspaceTools } from "./paprWorkspace.js";
+import { platformFeedbackTools } from "./platformFeedback.js";
 
 export const databaseTools = [
   createDatabaseTool,
@@ -71,6 +72,7 @@ export const allTools = [
   ...cloudPublishTools,
   ...cloudInstallTools,
   ...appAgentChatTools,
+  ...platformFeedbackTools,
 ];
 
 /**
@@ -100,6 +102,7 @@ export const toolsByCategory = {
   codeIndex: codeIndexTools,
   cloudPublish: cloudPublishTools,
   cloudInstall: cloudInstallTools,
+  platformFeedback: platformFeedbackTools,
 } as const;
 
 /**

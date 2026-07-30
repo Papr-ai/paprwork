@@ -42,7 +42,8 @@ export function migratePickerModelId(modelId: string): string {
 /** Flat default list shown to new users (cloud models only). */
 export const PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
   "claude-sonnet-5",
-  "claude-opus-4-6",
+  "claude-opus-5",
+  "claude-fable-5",
   "gpt-5-6-sol",
   "glm-5.2-max",
   "qwen/qwen3-32b",
@@ -64,6 +65,18 @@ export const LEGACY_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
   "gemini-3.1-pro-preview",
 ];
 
+/** Pre-Fable/Opus-5 defaults (Sonnet 5 era) — upgrade on next load. */
+export const PRE_FABLE_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
+  "claude-sonnet-5",
+  "claude-opus-4-6",
+  "gpt-5-6-sol",
+  "glm-5.2-max",
+  "qwen/qwen3-32b",
+  "gemini-3.1-flash-lite",
+  "gemini-3.5-flash",
+  "gemini-3.1-pro-preview",
+];
+
 function sameModelIdSet(
   a: readonly string[],
   b: readonly string[],
@@ -71,6 +84,38 @@ function sameModelIdSet(
   if (a.length !== b.length) return false;
   const setA = new Set(a);
   return b.every((id) => setA.has(id));
+}
+
+/** Non-Anthropic defaults — if all missing from a short list, settings were likely clobbered. */
+const CROSS_PROVIDER_DEFAULT_MARKERS: readonly string[] = [
+  "gpt-5-6-sol",
+  "gemini-3.5-flash",
+  "glm-5.2-max",
+  "qwen/qwen3-32b",
+];
+
+function healTruncatedPickerList(migrated: string[]): string[] {
+  if (migrated.length >= PICKER_DEFAULT_MODEL_IDS.length) {
+    return migrated;
+  }
+  // Single-model lists are intentional user choices, not clobber artifacts.
+  if (migrated.length <= 1) {
+    return migrated;
+  }
+  const hasCrossProviderDefault = CROSS_PROVIDER_DEFAULT_MARKERS.some((id) =>
+    migrated.includes(id),
+  );
+  if (hasCrossProviderDefault) {
+    return migrated;
+  }
+  const allAnthropic = migrated.every((id) => {
+    const model = getModelById(id);
+    return model?.provider === "anthropic";
+  });
+  if (!allAnthropic) {
+    return migrated;
+  }
+  return [...new Set([...PICKER_DEFAULT_MODEL_IDS, ...migrated])];
 }
 
 /** Upgrade saved picker lists after Sonnet 5 launch. */
@@ -95,6 +140,10 @@ export function migrateEnabledPickerModelIds(
     return [...PICKER_DEFAULT_MODEL_IDS];
   }
 
+  if (sameModelIdSet(migrated, PRE_FABLE_PICKER_DEFAULT_MODEL_IDS)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
   // Swap the default Sonnet slot when users still have 4.6 enabled without 5.
   if (
     migrated.includes("claude-sonnet-4-6") &&
@@ -105,7 +154,7 @@ export function migrateEnabledPickerModelIds(
     );
   }
 
-  return migrated;
+  return healTruncatedPickerList(migrated);
 }
 
 export function isPickerDefaultModelId(modelId: string): boolean {

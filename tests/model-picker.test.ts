@@ -19,11 +19,13 @@ describe("modelPicker", () => {
     ]);
   });
 
-  test("default list includes Sonnet 5 and eight cloud models", () => {
-    expect(PICKER_DEFAULT_MODEL_IDS).toHaveLength(8);
+  test("default list includes Sonnet 5, Opus 5, Fable 5, and nine cloud models", () => {
+    expect(PICKER_DEFAULT_MODEL_IDS).toHaveLength(9);
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-sonnet-5");
+    expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-opus-5");
+    expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-fable-5");
     expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-sonnet-4-6");
-    expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-opus-5");
+    expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-opus-4-6");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("gpt-5-6-sol");
   });
 
@@ -87,12 +89,48 @@ describe("modelPicker", () => {
     ]);
   });
 
-  test("legacy Sonnet 4.6 and Opus 5 remain available in settings catalog", () => {
+  test("upgrades exact pre-Fable default picker list", () => {
+    expect(
+      resolveEnabledPickerModelIds([
+        "claude-sonnet-5",
+        "claude-opus-4-6",
+        "gpt-5-6-sol",
+        "glm-5.2-max",
+        "qwen/qwen3-32b",
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-3.1-pro-preview",
+      ]),
+    ).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
+  });
+
+  test("preserves user-enabled models beyond defaults", () => {
+    expect(
+      resolveEnabledPickerModelIds([
+        ...PICKER_DEFAULT_MODEL_IDS,
+        "claude-haiku-4-5",
+      ]),
+    ).toEqual([...PICKER_DEFAULT_MODEL_IDS, "claude-haiku-4-5"]);
+  });
+
+  test("heals truncated Anthropic-only lists from clobbered settings saves", () => {
+    expect(
+      resolveEnabledPickerModelIds(["claude-sonnet-5", "claude-fable-5"]),
+    ).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
+  });
+
+  test("does not heal intentional short lists that include cross-provider models", () => {
+    expect(
+      resolveEnabledPickerModelIds(["claude-sonnet-5", "gpt-5-6-sol"]),
+    ).toEqual(["claude-sonnet-5", "gpt-5-6-sol"]);
+  });
+
+  test("legacy Sonnet 4.6 remains available in settings catalog", () => {
     const toggleIds = getAllPickerToggleModelIds();
     expect(toggleIds).toContain("claude-sonnet-4-6");
-    expect(toggleIds).toContain("claude-opus-5");
     expect(isPickerDefaultModelId("claude-sonnet-4-6")).toBe(false);
-    expect(isPickerDefaultModelId("claude-opus-5")).toBe(false);
+    expect(isPickerDefaultModelId("claude-opus-5")).toBe(true);
+    expect(isPickerDefaultModelId("claude-fable-5")).toBe(true);
     expect(isPickerDefaultModelId("claude-sonnet-5")).toBe(true);
     expect(isPickerDefaultModelId("glm-5.2-max")).toBe(true);
     expect(isPickerDefaultModelId("claude-haiku-4-5")).toBe(false);
