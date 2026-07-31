@@ -28,7 +28,7 @@ describe("PlatformFeedbackService", () => {
     vi.clearAllMocks();
   });
 
-  it("buildPlatformIssueBody includes user content and environment metadata", () => {
+  it("buildPlatformIssueBody includes user content and environment metadata without PII", () => {
     process.env.PAPRWORK_APP_VERSION = "2.0.48";
     process.env.PAPRWORK_IS_PACKAGED = "true";
     process.env.PAPRWORK_TELEMETRY_ANONYMOUS_ID = "install-abc";
@@ -42,8 +42,8 @@ describe("PlatformFeedbackService", () => {
 
     expect(body).toContain("Steps:");
     expect(body).toContain("2.0.48");
-    expect(body).toContain("install-abc");
-    expect(body).toContain("user@example.com");
+    expect(body).not.toContain("install-abc");
+    expect(body).not.toContain("user@example.com");
     expect(body).toContain("Submitted via Papr Work");
   });
 
@@ -69,6 +69,7 @@ describe("PlatformFeedbackService", () => {
           issueNumber: 99,
           issueUrl: "https://github.com/Papr-ai/paprwork/issues/99",
           title: "Bug: Memory path",
+          submissionId: "sub-uuid-1",
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
@@ -81,6 +82,7 @@ describe("PlatformFeedbackService", () => {
     });
 
     expect(result.issueNumber).toBe(99);
+    expect(result.submissionId).toBe("sub-uuid-1");
     expect(result.via).toBe("memory-server");
     expect(cloudApiFetchMock).toHaveBeenCalledWith(
       PLATFORM_FEEDBACK_ISSUES_PATH,
@@ -90,6 +92,7 @@ describe("PlatformFeedbackService", () => {
           type: "bug",
           title: "Bug: Memory path",
           body: "Something broke.",
+          target: { appType: "paprwork" },
           environment: expect.objectContaining({
             platform: process.platform,
           }),

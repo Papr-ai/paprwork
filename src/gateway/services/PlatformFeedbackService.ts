@@ -15,18 +15,28 @@ export const PLATFORM_FEEDBACK_ISSUES_PATH = "/v1/platform-feedback/issues";
 const DEFAULT_REPO = "Papr-ai/paprwork";
 
 export type PlatformIssueType = "bug" | "feature";
+export type AppFeedbackAppType = "paprwork" | "mini_app";
+
+export interface AppFeedbackTargetInput {
+  appType?: AppFeedbackAppType;
+  namespaceId?: string;
+  slug?: string;
+}
 
 export interface CreatePlatformIssueInput {
   type: PlatformIssueType;
   title: string;
   body: string;
   contactEmail?: string;
+  /** Defaults to Papr Work; set mini_app + namespaceId/slug for published apps. */
+  target?: AppFeedbackTargetInput;
 }
 
 export interface CreatePlatformIssueResult {
   issueNumber: number;
   issueUrl: string;
   title: string;
+  submissionId?: string;
   /** Where the issue was created (for logging / agent messaging). */
   via: "memory-server" | "dev-github-token";
 }
@@ -63,6 +73,7 @@ export function getPlatformFeedbackEnvironment(): PlatformFeedbackEnvironment {
   };
 }
 
+/** Public GitHub body for dev-only direct token path — no PII (matches memory server). */
 export function buildPlatformIssueBody(
   input: CreatePlatformIssueInput,
 ): string {
@@ -78,22 +89,33 @@ export function buildPlatformIssueBody(
 
   if (env.installId) {
     meta.push(
-      `- **Install ID:** \`${env.installId}\` (anonymous, for support correlation)`,
+      "- **Install ID:** anonymous client id (support correlation via Papr server logs)",
     );
   }
 
-  if (input.contactEmail?.trim()) {
-    meta.push(`- **Contact:** ${input.contactEmail.trim()}`);
-  }
-
+  const appLabel =
+    input.target?.appType === "mini_app" ? "mini-app" : "Papr Work";
   sections.push("", ...meta);
-  sections.push("", "---", "*Submitted via Papr Work in-app feedback*");
+  sections.push("", "---", `*Submitted via ${appLabel} in-app feedback*`);
 
   return sections.join("\n");
 }
 
 function labelForType(type: PlatformIssueType): string {
   return type === "bug" ? "bug" : "enhancement";
+}
+
+function resolveFeedbackTarget(
+  target?: AppFeedbackTargetInput,
+): AppFeedbackTargetInput {
+  if (!target || target.appType === "paprwork" || !target.appType) {
+    return { appType: "paprwork" };
+  }
+  return {
+    appType: "mini_app",
+    namespaceId: target.namespaceId?.trim(),
+    slug: target.slug?.trim(),
+  };
 }
 
 /** True when memory-server submit (Papr login) or dev-only direct GitHub token is available. */
@@ -107,6 +129,7 @@ interface MemoryServerIssueResponse {
   issueNumber: number;
   issueUrl: string;
   title: string;
+  submissionId?: string;
 }
 
 async function submitViaMemoryServer(
@@ -120,6 +143,7 @@ async function submitViaMemoryServer(
       body: input.body.trim(),
       contactEmail: input.contactEmail?.trim() || undefined,
       environment: getPlatformFeedbackEnvironment(),
+      target: resolveFeedbackTarget(input.target),
     },
     timeoutMs: 30_000,
   });
@@ -157,6 +181,8 @@ async function submitViaMemoryServer(
     issueNumber: data.issueNumber,
     issueUrl: data.issueUrl,
     title: data.title,
+    submissionId:
+      typeof data.submissionId === "string" ? data.submissionId : undefined,
     via: "memory-server",
   };
 }

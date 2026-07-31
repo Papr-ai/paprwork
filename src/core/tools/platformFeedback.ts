@@ -92,6 +92,7 @@ export const createPlatformIssueTool = createTool({
           issueNumber: result.issueNumber,
           issueUrl: result.issueUrl,
           title: result.title,
+          submissionId: result.submissionId,
           via: result.via,
           message: `Issue #${result.issueNumber} created: ${result.issueUrl}`,
         },
