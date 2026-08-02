@@ -309,7 +309,7 @@ export function WorkspaceMigrationTab() {
               >
                 {organizations.map((org) => (
                   <option key={org.organizationId} value={org.organizationId}>
-                    {org.name}
+                    {org.name} ({org.organizationId})
                   </option>
                 ))}
               </select>
@@ -326,7 +326,7 @@ export function WorkspaceMigrationTab() {
               >
                 {namespaces.map((ns) => (
                   <option key={ns.id} value={ns.id}>
-                    {formatWorkspaceTarget(selectedOrganization?.name, ns.name)}
+                    {formatWorkspaceTarget(selectedOrganization?.name, ns.name)} ({ns.id})
                   </option>
                 ))}
               </select>

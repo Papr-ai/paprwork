@@ -1,7 +1,7 @@
 /**
  * OnboardingView - PLG onboarding experience
  * 
- * Flow: Welcome → Connect AI Model → Choose Intent → First Value
+ * Flow: Welcome → Connect Papr → Connect AI Model → Choose Intent → First Value
  * 
  * Key principles:
  * - Model connection is a prerequisite (ChatGPT/Claude accounts)
@@ -21,11 +21,13 @@ import {
   transitionTo,
   dismissOnboarding,
   markModelConnected,
+  markPaprConnected,
   markFirstChatSent,
   type OnboardingPhase,
   type OnboardingIntent,
   type OnboardingState,
 } from "../../utils/onboardingState";
+import { ProviderBrandIcon } from "../Settings/ProviderBrandIcon";
 import "./OnboardingView.css";
 
 const INTENT_ICONS: Record<string, React.ReactNode> = {
@@ -64,6 +66,8 @@ export function OnboardingView() {
   const { keys, loading: keysLoading } = useCustomKeys();
   const [state, setState] = useState<OnboardingState>(getOnboardingState);
   const [checkingKeys, setCheckingKeys] = useState(true);
+  const [paprLoggedIn, setPaprLoggedIn] = useState(false);
+  const [checkingPapr, setCheckingPapr] = useState(true);
 
   // Check if user has any AI model key configured
   const hasModelKey = keys.some(
@@ -73,21 +77,62 @@ export function OnboardingView() {
       k.name === "GOOGLE_API_KEY",
   );
 
+  // Check Papr login status on mount and after auth events
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshPaprStatus = async () => {
+      try {
+        const result = await window.electronAPI.papr.checkLoginStatus();
+        if (cancelled) return;
+        const loggedIn = result.success && result.isLoggedIn === true;
+        setPaprLoggedIn(loggedIn);
+        if (loggedIn) {
+          const next = markPaprConnected();
+          setState(next);
+        }
+      } catch {
+        if (!cancelled) setPaprLoggedIn(false);
+      } finally {
+        if (!cancelled) setCheckingPapr(false);
+      }
+    };
+
+    void refreshPaprStatus();
+
+    const onAuthSuccess = () => {
+      void refreshPaprStatus();
+    };
+    window.addEventListener("papr-auth-success", onAuthSuccess);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("papr-auth-success", onAuthSuccess);
+    };
+  }, []);
+
   // When keys load, detect model connection and advance phase
   useEffect(() => {
-    if (keysLoading) return;
+    if (keysLoading || checkingPapr) return;
     setCheckingKeys(false);
 
     if (hasModelKey && state.phase === "connect_model") {
       const next = markModelConnected();
       setState(next);
     }
-    // If user already has keys, skip connect_model
-    if (hasModelKey && state.phase === "welcome") {
-      const next = transitionTo("choose_intent", { modelConnected: true });
-      setState(next);
+    // Skip connect_papr if already logged in
+    if (paprLoggedIn && state.phase === "welcome") {
+      if (hasModelKey) {
+        const next = transitionTo("choose_intent", {
+          paprConnected: true,
+          modelConnected: true,
+        });
+        setState(next);
+      } else {
+        const next = transitionTo("connect_model", { paprConnected: true });
+        setState(next);
+      }
     }
-  }, [keysLoading, hasModelKey, state.phase]);
+  }, [keysLoading, checkingPapr, hasModelKey, paprLoggedIn, state.phase]);
 
   // Listen for key changes (user adds key in Settings while onboarding is open)
   useEffect(() => {
@@ -121,14 +166,35 @@ export function OnboardingView() {
   );
 
   const handleGetStarted = () => {
-    if (hasModelKey) {
-      const next = transitionTo("choose_intent", { modelConnected: true });
+    if (paprLoggedIn && hasModelKey) {
+      const next = transitionTo("choose_intent", {
+        paprConnected: true,
+        modelConnected: true,
+      });
+      setState(next);
+    } else if (paprLoggedIn) {
+      const next = transitionTo("connect_model", { paprConnected: true });
       setState(next);
     } else {
-      const next = transitionTo("connect_model");
+      const next = transitionTo("connect_papr");
       setState(next);
     }
     trackEvent("paprwork_onboarding_step_completed", { step_name: "welcome" } as Record<string, unknown>);
+  };
+
+  const handleOpenProfile = () => {
+    const tabId = createTab("settings", "settings", "Settings");
+    switchToTab(tabId);
+    window.dispatchEvent(
+      new CustomEvent("papr:open-settings", { detail: { tab: "profile" } }),
+    );
+    trackEvent("paprwork_onboarding_open_profile", {} as Record<string, unknown>);
+  };
+
+  const handlePaprConnected = () => {
+    const next = markPaprConnected();
+    setState(next);
+    trackEvent("paprwork_onboarding_step_completed", { step_name: "connect_papr" } as Record<string, unknown>);
   };
 
   const handleOpenModels = () => {
@@ -202,7 +268,7 @@ export function OnboardingView() {
     window.dispatchEvent(new CustomEvent("papr-onboarding-changed"));
   };
 
-  if (checkingKeys) {
+  if (checkingKeys || checkingPapr) {
     return (
       <div className="onboarding-view">
         <div className="onboarding-view-content onboarding-view-content--loading">
@@ -235,6 +301,50 @@ export function OnboardingView() {
           </>
         )}
 
+        {/* ---- CONNECT PAPR PHASE ---- */}
+        {state.phase === "connect_papr" && (
+          <>
+            <div className="onboarding-view-header">
+              <span className="onboarding-view-icon onboarding-view-icon--key">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
+                  <path
+                    d="M12 2a5 5 0 00-5 5v2H6a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V11a2 2 0 00-2-2h-1V7a5 5 0 00-5-5z"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <circle cx="12" cy="16" r="1.5" fill="currentColor" />
+                </svg>
+              </span>
+              <h1 className="onboarding-view-title">Connect to Papr</h1>
+              <p className="onboarding-view-subtitle">
+                Sign in to Papr for memory, cloud sync, and team workspaces. This takes about 30 seconds.
+              </p>
+            </div>
+
+            <div className="onboarding-view-actions">
+              {paprLoggedIn ? (
+                <button className="onboarding-primary-btn" onClick={handlePaprConnected}>
+                  ✓ Connected to Papr — Continue
+                </button>
+              ) : (
+                <>
+                  <button className="onboarding-primary-btn" onClick={handleOpenProfile}>
+                    Open Profile to Sign In
+                  </button>
+                  <p className="onboarding-model-hint">
+                    Settings → Profile → Sign in with Papr
+                  </p>
+                </>
+              )}
+              <button className="onboarding-skip-btn" onClick={handleSkip}>
+                I'll do this later
+              </button>
+            </div>
+          </>
+        )}
+
         {/* ---- CONNECT MODEL PHASE ---- */}
         {state.phase === "connect_model" && (
           <>
@@ -252,11 +362,17 @@ export function OnboardingView() {
 
             <div className="onboarding-model-cards">
               <button className="onboarding-model-card" onClick={handleOpenModels}>
+                <span className="onboarding-model-card__brand">
+                  <ProviderBrandIcon providerId="openai" size={20} onLightSurface />
+                </span>
                 <div className="onboarding-model-card__name">OpenAI (ChatGPT)</div>
                 <div className="onboarding-model-card__hint">GPT-5.4, GPT-5.3 Codex</div>
                 <div className="onboarding-model-card__action">Connect →</div>
               </button>
               <button className="onboarding-model-card" onClick={handleOpenModels}>
+                <span className="onboarding-model-card__brand">
+                  <ProviderBrandIcon providerId="anthropic" size={20} />
+                </span>
                 <div className="onboarding-model-card__name">Anthropic (Claude)</div>
                 <div className="onboarding-model-card__hint">Claude Opus 4, Sonnet 4</div>
                 <div className="onboarding-model-card__action">Connect →</div>

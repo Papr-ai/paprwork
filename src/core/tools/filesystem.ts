@@ -239,6 +239,13 @@ async function writeFile(
     }
 
     // Write file
+    let isNewFile = false;
+    try {
+      await fs.access(filePath);
+    } catch {
+      isNewFile = true;
+    }
+
     await fs.writeFile(filePath, content, encoding as BufferEncoding);
 
     // Get size
@@ -246,6 +253,20 @@ async function writeFile(
 
     // Auto-stage file in git if in a repo
     const gitResult = await autoStageFile(filePath);
+
+    if (isNewFile) {
+      void import("../../gateway/services/wikiLocalEntityGraphSync.js")
+        .then(({ syncWikiEntityFileToGraph }) =>
+          syncWikiEntityFileToGraph({
+            filePath,
+            content,
+            source: "write_file",
+          }),
+        )
+        .catch(() => {
+          // Best-effort — entity graph sync must not block writes
+        });
+    }
 
     try {
       const { getAgentFocusContextService } = await import(

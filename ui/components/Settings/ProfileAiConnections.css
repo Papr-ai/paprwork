@@ -1,0 +1,106 @@
+.profile-ai-connections {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.profile-ai-connections__label {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.profile-ai-connections__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.profile-ai-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-primary);
+  cursor: pointer;
+  font: inherit;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.profile-ai-chip:hover:not(:disabled) {
+  border-color: rgba(var(--accent-rgb), 0.35);
+  background: var(--hover-bg);
+}
+
+.profile-ai-chip:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.profile-ai-chip--connected {
+  border-color: rgba(34, 197, 94, 0.3);
+  background: rgba(34, 197, 94, 0.06);
+}
+
+.profile-ai-chip__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.profile-ai-chip__icon--openai {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.profile-ai-chip__icon--anthropic {
+  background: rgba(217, 119, 87, 0.12);
+}
+
+.profile-ai-chip--connected .profile-ai-chip__icon--openai {
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.profile-ai-chip--connected .profile-ai-chip__icon--anthropic {
+  background: rgba(217, 119, 87, 0.18);
+}
+
+.profile-ai-chip__label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.profile-ai-chip__status {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+}
+
+.profile-ai-chip--connected .profile-ai-chip__status {
+  color: rgb(34, 197, 94);
+}
+
+@media (max-width: 560px) {
+  .profile-ai-connections {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+}

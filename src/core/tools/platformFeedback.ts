@@ -19,14 +19,17 @@ const createPlatformIssueSchema = z.object({
     .string()
     .min(20)
     .describe(
-      "Detailed description: for bugs include expected vs actual behavior and repro steps; " +
-        "for features include problem, proposed solution, and why it matters",
+      "Public markdown for GitHub — posted verbatim. No emails, names, paths, app/job names, chat content, " +
+        "or secrets. Generic Papr Work repro steps and placeholders. contactEmail is separate (Mongo-only). " +
+        "For bugs: expected vs actual behavior. For features: product gap in generic terms.",
     ),
   contactEmail: z
     .string()
     .email()
     .optional()
-    .describe("Optional email if the user wants follow-up (ask first — never invent)"),
+    .describe(
+      "Optional email for Papr team follow-up only — ask first, never invent. Do NOT repeat email in body.",
+    ),
   userConfirmed: z
     .boolean()
     .describe(
@@ -39,11 +42,12 @@ type CreatePlatformIssueArgs = z.infer<typeof createPlatformIssueSchema>;
 export const createPlatformIssueTool = createTool({
   id: "create_platform_issue",
   description:
-    "Submit a bug report or feature request to the Papr Work GitHub repository (Papr-ai/paprwork). " +
-    "Requires Papr login (Settings → AI Models) — submission goes through the memory server; no GitHub account needed. " +
-    "Use when helping users report platform issues through Settings → About → Report Issue / Feature Request. " +
-    "Gather details, draft title and body, show the user for approval, then call with userConfirmed: true. " +
-    "Never submit without explicit user confirmation.",
+    "Submit a PUBLIC bug report or feature request to Papr-ai/paprwork on GitHub (title+body posted as-is). " +
+    "Use for Papr Work platform issues: crashes, UI bugs, settings/sync/update problems, feature requests. " +
+    "Also when user uses Settings → About → Report Issue / Feature Request. " +
+    "Do NOT use for bugs in the user's mini-apps, jobs, or private projects. " +
+    "Sanitize title and body for public GitHub. contactEmail is optional and Mongo-only (never in body). " +
+    "Submitter identity attached via Papr login, not in GitHub. Requires Papr login. Show draft, get userConfirmed: true.",
   inputSchema: createPlatformIssueSchema,
   execute: async (inputData): Promise<ToolResult> => {
     const args =

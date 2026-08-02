@@ -23,6 +23,7 @@ interface OnboardingCardProps {
 
 const PHASE_LABELS: Record<OnboardingPhase, string> = {
   welcome: "Get started",
+  connect_papr: "Connect to Papr",
   connect_model: "Connect AI model",
   choose_intent: "Choose what to do",
   first_value: "Working on first task",
@@ -32,6 +33,7 @@ const PHASE_LABELS: Record<OnboardingPhase, string> = {
 
 const PHASE_ORDER: OnboardingPhase[] = [
   "welcome",
+  "connect_papr",
   "connect_model",
   "choose_intent",
   "first_value",

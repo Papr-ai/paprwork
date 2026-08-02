@@ -1,4 +1,4 @@
-<!-- sleep-prompt-version: 12 -->
+<!-- sleep-prompt-version: 13 -->
 
 # Sleep Cycle
 
@@ -171,7 +171,7 @@ Include:
   If no job databases contain data for an entity, just note the activity summary — not every entity will have a data footprint. The footprint is for entities where structured data exists beyond chat mentions.
 - **What to watch tomorrow** — open items, follow-ups, things to track
 
-Use `add_agent_memory` to persist the daily log to Papr Memory:
+Use `add_agent_memory` to persist the daily log to Papr Memory. **Graph indexing is automatic** — `add_agent_memory` uses `mode: auto` with the WorkspaceContext schema, so people, companies, projects, and meetings mentioned in the log are extracted into the knowledge graph without extra steps.
 
 ```
 add_agent_memory({

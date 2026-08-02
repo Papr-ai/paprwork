@@ -1308,11 +1308,18 @@ export async function searchWiki(query: string): Promise<WikiSearchResult> {
 
 /* ── User-created entities and types ─────────────── */
 
+export interface CreateWikiEntityOptions {
+  appId?: string;
+  kind?: string;
+  source?: "user" | "create_app" | "wiki_sync";
+}
+
 export async function createWikiEntity(
   type: string,
   name: string,
   description: string,
-): Promise<{ id: string; filePath: string }> {
+  options: CreateWikiEntityOptions = {},
+): Promise<{ id: string; filePath: string; created: boolean }> {
   const entitiesDir = path.join(getPaprWorkspaceDir(), "entities");
   const typeDir = path.join(entitiesDir, type);
   if (!fs.existsSync(typeDir)) fs.mkdirSync(typeDir, { recursive: true });
@@ -1325,10 +1332,24 @@ export async function createWikiEntity(
 
   const filePath = path.join(typeDir, `${id}.md`);
   if (fs.existsSync(filePath)) {
-    return { id, filePath };
+    return { id, filePath, created: false };
   }
 
   const now = new Date().toISOString().split("T")[0];
+  const source = options.source ?? "user";
+  const sourceLabel =
+    source === "create_app"
+      ? "Auto-created when mini-app was shipped"
+      : source === "wiki_sync"
+        ? "Materialized from Papr graph sync"
+        : "Entity created manually by user";
+
+  const extraFrontmatter = [
+    options.appId ? `app_id: ${options.appId}` : "",
+    options.kind ? `kind: ${options.kind}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const content = `---
 type: ${type}
@@ -1339,7 +1360,7 @@ created: ${now}
 updated: ${now}
 confidence: 0.5
 description_short: "${(description || name).replace(/"/g, '\\"')}"
-relationships: []
+${extraFrontmatter ? `${extraFrontmatter}\n` : ""}relationships: []
 evidence: []
 tags: []
 quality:
@@ -1363,7 +1384,7 @@ ${description || "No context captured yet. This entity was created manually and 
 - Type: ${type}
 - Created: ${now}
 - Status: active
-
+${options.appId ? `- App id: \`${options.appId}\`\n` : ""}${options.kind ? `- Kind: ${options.kind}\n` : ""}
 ## Key Interactions
 
 No interactions captured yet.
@@ -1378,11 +1399,31 @@ No decisions or insights captured yet.
 
 ## Changelog
 
-- ${now} — Entity created manually by user
+- ${now} — ${sourceLabel}
 `;
 
   fs.writeFileSync(filePath, content, "utf-8");
-  return { id, filePath };
+
+  void import("./wikiLocalEntityGraphSync.js")
+    .then(({ syncLocalWikiEntityToGraph }) =>
+      syncLocalWikiEntityToGraph({
+        entityDir: type,
+        slug: id,
+        name,
+        description: description || name,
+        appId: options.appId,
+        kind: options.kind,
+        source: options.source ?? "user",
+      }),
+    )
+    .catch((error) => {
+      console.warn(
+        `[Wiki] Graph sync after createWikiEntity failed:`,
+        error instanceof Error ? error.message : error,
+      );
+    });
+
+  return { id, filePath, created: true };
 }
 
 export async function addWikiType(

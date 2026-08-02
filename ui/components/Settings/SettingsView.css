@@ -5,20 +5,39 @@
 
 .settings-view {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100%;
-  background: transparent; /* Show through to app-layout gradient */
+  background: transparent;
   overflow: hidden;
 }
 
-/* Header */
-.settings-view__header {
-  padding: var(--space-6) var(--space-8) var(--space-4);
+/* Left sidebar navigation */
+.settings-view__sidebar {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  width: 220px;
+  min-width: 220px;
+  height: 100%;
+  border-right: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.35);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+@media (prefers-color-scheme: dark) {
+  .settings-view__sidebar {
+    background: rgba(28, 28, 30, 0.55);
+  }
+}
+
+.settings-view__sidebar-header {
+  padding: var(--space-6) var(--space-5) var(--space-4);
   border-bottom: 1px solid var(--border-color);
 }
 
 .settings-view__title {
-  font-size: 32px;
+  font-size: 22px;
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--text-primary);
@@ -26,45 +45,46 @@
   font-family: var(--font-display);
 }
 
-/* Horizontal Tabs */
-.settings-view__tabs {
+.settings-view__nav {
   display: flex;
-  gap: var(--space-1);
-  padding: 0 var(--space-8);
-  border-bottom: 1px solid var(--border-color);
-  background: transparent;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-2);
 }
 
 .settings-tab {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
   background: transparent;
   border: none;
-  border-bottom: 2px solid transparent;
-  font-size: 14px;
+  border-radius: var(--r-sm);
+  font-size: 13px;
   font-weight: 500;
   color: var(--text-secondary);
   cursor: pointer;
   transition: all var(--dur-2) var(--ease);
-  position: relative;
+  text-align: left;
 }
 
 .settings-tab:hover {
   color: var(--text-primary);
   background: var(--hover-bg);
-  border-radius: var(--r-sm) var(--r-sm) 0 0;
 }
 
 .settings-tab--active {
   color: rgb(var(--accent-rgb));
-  border-bottom-color: rgb(var(--accent-rgb));
+  background: rgba(var(--accent-rgb), 0.1);
 }
 
 .settings-tab svg {
   width: 16px;
   height: 16px;
+  flex-shrink: 0;
   opacity: 0.7;
 }
 
@@ -72,7 +92,16 @@
   opacity: 1;
 }
 
-/* Content */
+/* Main content area */
+.settings-view__main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
 .settings-view__content {
   flex: 1;
   overflow-y: auto;
@@ -622,6 +651,64 @@
   color: var(--accent-green, #34c759);
   align-self: center;
   margin-left: var(--space-2);
+}
+
+/* ─── Agent Context Teaser (AI Models tab) ─────────────────── */
+
+.agent-context-teaser {
+  margin-top: 8px;
+  padding: 16px 18px;
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+  border-radius: 12px;
+  background: var(--bg-secondary, rgba(0, 0, 0, 0.02));
+}
+
+.agent-context-teaser__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.agent-context-teaser__title {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.agent-context-teaser__description {
+  margin: 0;
+  font-size: 13px;
+}
+
+.agent-context-teaser__link {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-accent, #007aff);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.agent-context-teaser__link:hover {
+  opacity: 0.85;
+}
+
+.agent-context-modal {
+  width: 640px;
+}
+
+.agent-context-modal__body {
+  padding-top: 8px;
+}
+
+.tool-truncation-settings--modal .settings-actions {
+  margin-top: 8px;
 }
 
 /* Key permission cards - same pattern as Agent Permissions */
@@ -2412,7 +2499,7 @@ button.about-link {
 }
 
 /* ================================================
-   Integration Keys Tab
+   Key Vault Tab
    ================================================ */
 
 .key-search {

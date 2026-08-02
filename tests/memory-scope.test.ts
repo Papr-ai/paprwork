@@ -38,7 +38,7 @@ describe("memoryScope", () => {
       policy: {
         acl: {
           read: ["namespace:ns-abc"],
-          write: ["external_user:user-1"],
+          write: ["external_user:user-1", "namespace:ns-abc"],
         },
       },
     });
@@ -51,7 +51,7 @@ describe("memoryScope", () => {
       policy: {
         acl: {
           read: ["organization:org-xyz"],
-          write: ["external_user:user-1"],
+          write: ["external_user:user-1", "organization:org-xyz"],
         },
       },
     });

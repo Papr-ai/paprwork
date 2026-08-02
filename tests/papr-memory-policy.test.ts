@@ -22,16 +22,24 @@ describe("paprMemoryPolicy", () => {
     });
   });
 
-  it("buildCodeIndexAddPolicy uses code domain and graph schema", () => {
+  it("buildAddPolicy includes graph auto when schema id is set", () => {
+    const policy = buildAddPolicy({
+      graphMode: "auto",
+      graphSchemaId: "schema-ws-ctx",
+    });
+    expect(policy?.graph).toEqual({
+      mode: "auto",
+      schema_id: "schema-ws-ctx",
+    });
+  });
+
+  it("buildCodeIndexAddPolicy uses code domain vector-only (no graph)", () => {
     const policy = buildCodeIndexAddPolicy("schema-abc");
     expect(policy.transform_embedding).toEqual({
       mode: "auto",
       domain_id: "code",
     });
-    expect(policy.graph).toEqual({
-      mode: "auto",
-      schema_id: "schema-abc",
-    });
+    expect(policy.graph).toBeUndefined();
   });
 
   it("buildSearchPolicy defaults code category searches to code domain", () => {

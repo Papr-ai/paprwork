@@ -46,8 +46,12 @@ export async function uploadAttachmentToMemory(
   }
 
   const client = await getPaprClient();
+  const { buildAgentMemoryAddPolicy } = await import(
+    "../utils/workspaceContextSchema.js"
+  );
   const { paprMemoryScopeSpread } = await import("../utils/memoryScopeResolver.js");
-  const memoryScope = await paprMemoryScopeSpread({ chatId });
+  const addPolicy = await buildAgentMemoryAddPolicy({ client });
+  const memoryScope = await paprMemoryScopeSpread({ chatId, addPolicy });
 
   const metadataPayload = {
     customMetadata: {

@@ -556,7 +556,7 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
         area: "Platform feedback",
         enabled: has("create_platform_issue"),
         details:
-          "create_platform_issue — submit bug reports / feature requests via memory server (requires Papr login)",
+          "create_platform_issue — PUBLIC GitHub (title+body as written); contactEmail + user identity Mongo-only",
       },
     ];
 
@@ -1095,7 +1095,7 @@ Use \`bash\` to edit the Markdown file directly at \`filePath\`. Document editor
 | Recall past conversations, preferences, facts | \`search_agent_memory({ query: "..." })\` (semantic search) |
 | **Who is X? / company / project by name** | \`get_wiki_entity({ name: "Patrick" })\` or \`search_wiki_entities({ query: "..." })\` — **local wiki graph, use first** |
 | **Full wiki entity page** (relationships, evidence) | \`get_wiki_entity({ entityId: "person/patrick-hartigan" })\` |
-| Store a new memory for future recall | \`add_agent_memory\` |
+| Store a new memory for future recall | \`add_agent_memory\` (auto graph-indexes via WorkspaceContext) |
 | Store memory with signal-domain encoding | \`add_agent_memory({ signalDomain: "general" })\` |
 | Search with signal-band filtering | \`search_agent_memory({ vectorPolicy: { ... } })\` |
 | **List available signal domains** | \`list_signal_domains\` |
@@ -1394,6 +1394,8 @@ Both have strengths — use them together:
 Papr stores memories as a Neo4j knowledge graph with typed nodes and relationships. The GraphQL endpoint lets you query this graph directly.
 
 **On chat start** you receive a **[WIKI GRAPH]** block — a local index of people, companies, projects, and apps from \`$PAPR_HOME/workspace/entities/\`. **Use it first** when the user asks about a person, company, or project. Call \`get_wiki_entity({ name: "..." })\` or \`get_wiki_entity({ entityId: "person/slug" })\` for full pages.
+
+**Entity files ↔ graph sync:** \`add_agent_memory\` auto-extracts entities into Neo4j (\`graph.mode: auto\`, WorkspaceContext schema). When Sleep/Wiki/\`create_app\` create local entity markdown files, Paprwork also upserts matching graph nodes automatically — you do **not** need \`create_entities\` for routine wiki maintenance.
 
 **Turn 2+** you may receive **[PAPR MEMORY CATALOG]** — Papr sync tiers and semantic matches. Go deeper with \`search_agent_memory({ memoryId })\` or \`query_memory_graph\`.
 
@@ -2647,42 +2649,70 @@ This makes the app discoverable in Paprwork's Community Apps tab for all users.
   private buildPlatformFeedbackSection(): string {
     return `# Platform Feedback (Bug Reports & Feature Requests)
 
-Users can start this flow from **Settings → About → Report Issue** or **Feature Request**. They expect a short conversation — not a redirect to GitHub.
+Use \`create_platform_issue\` for **Papr Work platform** bugs and feature requests — issues with the desktop app itself (UI, chat, settings, sync, updates, agent behavior in Papr Work).
+
+**When to offer this tool:**
+- User reports a **platform-wide** Papr Work problem (crash, broken UI, can't login, update failed)
+- User starts **Settings → About → Report Issue** or **Feature Request**
+- You identify a reproducible **product bug** (not the user's app, job, or data)
+
+**When NOT to use:**
+- Bugs in the user's mini-apps, jobs, scripts, or external repos → fix locally or use their own issue tracker
+- User-specific workflow/data problems that aren't Papr Work product defects
+
+## Public GitHub vs private server-side context
+
+Issues are **public** on https://github.com/Papr-ai/paprwork. The memory server posts \`title\` and \`body\` **verbatim** to GitHub — write both for a public audience.
+
+**What the memory server keeps off GitHub** (stored in Mongo \`app_feedback_submissions\` + server logs only):
+- \`contactEmail\` — optional reply-to; pass in the tool field, **never** in \`body\`
+- Submitter identity — Parse user id, org id, namespace id (from Papr login / \`external_user_id\`)
+- Raw \`installId\` — GitHub env block shows a generic line; full value stays server-side
+
+**What goes to public GitHub as-is:**
+- \`title\` and \`body\` (your markdown narrative)
+- App version, platform, packaged yes/no
+
+So **sanitize \`title\` and \`body\` before submit** — no emails, names, \`$PAPR_HOME\` paths, app/job names, chat excerpts, API keys, tokens, or private workflow details. Use generic product language and placeholders ("a mini-app", "a scheduled job").
+
+Ask optional follow-up email separately → \`contactEmail\` field (Papr team only). Submitter identity is attached automatically when logged in.
+
+Tell the user: **"This title and body will be posted publicly on GitHub. Your email (if provided) and account are kept private for Papr support."**
 
 ## Submission path
 
-- **Logged into Papr** (Settings → AI Models): \`create_platform_issue\` → memory server → GitHub (no GitHub account needed)
-- **Not logged in**: gather details, draft title/body, ask them to **Login with Papr** and retry — or give the draft to paste manually
+- **Logged into Papr** (Settings → AI Models): \`create_platform_issue\` → memory server → public GitHub + private Mongo record
+- **Not logged in**: gather details, draft title/body, ask them to **Login with Papr** and retry — or give a sanitized draft to paste manually
 
 ## Workflow
 
-1. **Gather details** — ask focused questions (see below). One or two questions at a time.
-2. **Draft** — write a clear title and markdown body. Show the user both for approval.
+1. **Gather details** — ask focused questions (see below). One or two at a time.
+2. **Draft** — public-safe \`title\` + markdown \`body\`. Show both for approval.
 3. **Confirm** — only call \`create_platform_issue\` after explicit approval ("yes", "submit", "looks good").
 4. **Submit** — \`create_platform_issue({ type, title, body, contactEmail?, userConfirmed: true })\`
-5. **Follow up** — share the issue URL. If not logged in, guide to Papr login first; if API unavailable, provide the draft for manual reporting.
+5. **Follow up** — share the issue URL.
 
 ## Bug reports — ask about
 
-- What they were trying to do
-- Expected vs actual behavior
-- Reproduction steps (if known)
-- Optional email for follow-up
+- What Papr Work feature they used (Settings, chat, jobs UI, etc.) — describe generically in the draft
+- Expected vs actual **app** behavior
+- Generic reproduction steps (if known)
+- Optional email for follow-up (\`contactEmail\` only — not in \`body\`)
 
 ## Feature requests — ask about
 
-- Problem they're solving
-- Desired behavior / outcome
-- Why it matters to their workflow
-- Optional email for follow-up
+- Product gap in Papr Work (what the app should do differently)
+- Desired behavior in generic terms
+- Why it matters (without private use-case details in \`body\`)
 
 ## Rules
 
 - **Never** submit without \`userConfirmed: true\` and explicit user approval
-- **Never** invent contact email — ask first
-- App version and platform are appended automatically; don't ask for those
+- **Never** invent contact email — ask first; default to omitting
+- **Never** put email in \`body\` — use \`contactEmail\` field only
+- App version and platform are appended automatically server-side; don't paste install IDs or paths in \`body\`
 - **Never** ask users for GitHub tokens — Papr login handles auth
-- Keep the conversation concise — goal is a well-written GitHub issue, not a long support chat`;
+- **Sanitize \`title\` and \`body\`** — they are copied to public GitHub unchanged`;
   }
 
   /**

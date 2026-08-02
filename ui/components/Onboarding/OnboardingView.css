@@ -162,6 +162,21 @@
   box-shadow: 0 8px 24px rgba(0, 96, 224, 0.15);
 }
 
+.onboarding-model-card__brand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.92);
+  margin-bottom: 4px;
+}
+
+.onboarding-model-card__brand .provider-brand-icon--anthropic {
+  /* Anthropic mark includes its own color */
+}
+
 .onboarding-model-card__name {
   font-size: 17px;
   font-weight: 600;

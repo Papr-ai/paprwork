@@ -11,6 +11,8 @@ import {
   type MemoryAudience,
 } from "../../constants/memoryScope";
 import { PaprPlanSection } from "./PaprPlanSection";
+import { ProfileAiConnections } from "./ProfileAiConnections";
+import { formatNamespaceOptionLabel } from "./formatNamespaceOptionLabel";
 import "./PaprLoginSection.css";
 
 interface Namespace {
@@ -52,11 +54,27 @@ interface WorkspaceMember {
   };
 }
 
-interface PaprLoginSectionProps {
-  onApiKeyReceived?: (apiKey: string) => void;
+interface ProfileFieldsBinding {
+  name: string;
+  email: string;
+  imageUrl: string;
+  saving: boolean;
+  connectedSince?: string;
+  onNameChange: (value: string) => void;
+  onEmailChange: (value: string) => void;
+  onPhotoUpload: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  onRemovePhoto: () => void;
+  onSave: () => void | Promise<void>;
+  onSyncFromPapr?: () => void;
+  fileInputRef: React.RefObject<HTMLInputElement | null>;
 }
 
-export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
+interface PaprLoginSectionProps {
+  onApiKeyReceived?: (apiKey: string) => void;
+  profileFields?: ProfileFieldsBinding;
+}
+
+export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginSectionProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -77,7 +95,6 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
   const [expandedSchema, setExpandedSchema] = useState<string | null>(null);
 
   const [workspaceName, setWorkspaceName] = useState<string | null>(null);
-  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [workspaceMembers, setWorkspaceMembers] = useState<WorkspaceMember[]>([]);
   const [workspaceMembersLoading, setWorkspaceMembersLoading] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -241,7 +258,6 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
     try {
       const result = await window.electronAPI.papr.listWorkspaceMembers();
       if (result.success) {
-        setWorkspaceId(result.workspaceId || null);
         setWorkspaceName(result.workspaceName || null);
         setWorkspaceMembers(result.members || []);
       } else {
@@ -357,7 +373,6 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
         }
         setSchemas([]);
         setWorkspaceMembers([]);
-        setWorkspaceId(null);
         setWorkspaceName(null);
         setInviteEmail("");
         setInviteMessage(null);
@@ -428,7 +443,6 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
         setNamespacesLoaded(false);
         setSchemas([]);
         setWorkspaceMembers([]);
-        setWorkspaceId(null);
         setWorkspaceName(null);
         setInviteEmail("");
         setInviteMessage(null);
@@ -559,24 +573,37 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
     const activeNs = namespaces.find((n) => n.id === activeNamespaceId);
 
     return (
-      <div className="papr-section">
-        {/* Header row: status + logout */}
-        <div className="papr-section__header">
-          <div className="papr-section__status">
-            <span className="papr-section__dot papr-section__dot--connected" />
-            <span className="papr-section__status-text">Connected to Papr</span>
-            {userEmail && (
-              <span className="papr-section__email">{userEmail}</span>
-            )}
+      <div className={`papr-section${profileFields ? " papr-section--profile" : ""}`}>
+        {profileFields ? (
+          <>
+            <ProfileIdentitySection
+              {...profileFields}
+              isLoggedIn
+              userEmail={userEmail}
+              onLogout={() => void handleLogout()}
+            />
+            <ProfileAiConnections />
+          </>
+        ) : (
+          <div className="papr-section__header">
+            <div className="papr-section__status">
+              <span className="papr-section__dot papr-section__dot--connected" />
+              <span className="papr-section__status-text">Connected to Papr</span>
+              {userEmail && (
+                <span className="papr-section__email">{userEmail}</span>
+              )}
+            </div>
+            <button
+              type="button"
+              className="papr-section__logout"
+              onClick={handleLogout}
+            >
+              Logout
+            </button>
           </div>
-          <button
-            type="button"
-            className="papr-section__logout"
-            onClick={handleLogout}
-          >
-            Logout
-          </button>
-        </div>
+        )}
+
+        {profileFields && <div className="profile-merged__divider" />}
 
         {/* Organization + Team selectors in a row */}
         <div className="papr-section__selectors">
@@ -592,7 +619,7 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
                 >
                   {organizations.map((org) => (
                     <option key={org.id} value={org.id}>
-                      {org.name}
+                      {org.name} ({org.organizationId ?? org.id})
                     </option>
                   ))}
                 </select>
@@ -613,7 +640,7 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
                 >
                   {namespaces.map((ns) => (
                     <option key={ns.id} value={ns.id}>
-                      {ns.name}{ns.environmentType ? ` (${ns.environmentType})` : ""}
+                      {formatNamespaceOptionLabel(ns)}
                     </option>
                   ))}
                 </select>
@@ -694,7 +721,6 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
         {/* Team members — needed for My team cloud app access */}
         <WorkspaceTeamSection
           workspaceName={workspaceName || undefined}
-          workspaceId={workspaceId || undefined}
           members={workspaceMembers}
           loading={workspaceMembersLoading}
           inviteEmail={inviteEmail}
@@ -720,6 +746,68 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
   }
 
   // --- Logged-out state ---
+  if (profileFields) {
+    return (
+      <div className="papr-section papr-section--profile papr-section--logged-out">
+        <ProfileIdentitySection
+          {...profileFields}
+          isLoggedIn={false}
+          userEmail={null}
+        />
+
+        <ProfileAiConnections />
+
+        <div className="profile-merged__divider" />
+
+        <div className="profile-merged__connect">
+          <h3 className="profile-merged__connect-title">Connect to Papr</h3>
+          <p className="papr-section__description">
+            Sign in for memory, cloud sync, org workspaces, and API access.
+          </p>
+
+          {error && (
+            <div className="papr-section__error">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/>
+                <line x1="12" y1="8" x2="12" y2="12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                <line x1="12" y1="16" x2="12.01" y2="16" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
+              <span>{error}</span>
+            </div>
+          )}
+
+          <button
+            type="button"
+            className="papr-section__login-btn"
+            onClick={() => void handleLogin("login")}
+            disabled={isLoading}
+          >
+            {isLoading ? (
+              <>
+                <Spinner />
+                Waiting for login...
+              </>
+            ) : (
+              "Login with Papr"
+            )}
+          </button>
+
+          <p className="papr-section__note">
+            Don&apos;t have an account?{" "}
+            <button
+              type="button"
+              className="papr-section__inline-link"
+              onClick={() => void handleLogin("signup")}
+              disabled={isLoading}
+            >
+              Create account
+            </button>
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="papr-section papr-section--logged-out">
       <div className="papr-section__header">
@@ -781,6 +869,253 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
 
 // --- Sub-components ---
 
+function ProfileIdentitySection({
+  name,
+  email,
+  imageUrl,
+  saving,
+  connectedSince,
+  onNameChange,
+  onEmailChange,
+  onPhotoUpload,
+  onRemovePhoto,
+  onSave,
+  onSyncFromPapr,
+  fileInputRef,
+  isLoggedIn,
+  userEmail,
+  onLogout,
+}: ProfileFieldsBinding & {
+  isLoggedIn: boolean;
+  userEmail: string | null;
+  onLogout?: () => void;
+}) {
+  const hasProfileInfo = name.trim().length > 0 || email.trim().length > 0;
+  const [isEditing, setIsEditing] = useState(() => !hasProfileInfo);
+  const editSnapshotRef = useRef({ name, email });
+
+  const connectedLabel = connectedSince
+    ? new Date(connectedSince).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      })
+    : null;
+
+  const displayEmail = email.trim() || userEmail || "";
+  const displayName = name.trim() || "Add your name";
+
+  const startEditing = () => {
+    editSnapshotRef.current = { name, email };
+    setIsEditing(true);
+  };
+
+  const cancelEditing = () => {
+    onNameChange(editSnapshotRef.current.name);
+    onEmailChange(editSnapshotRef.current.email);
+    setIsEditing(false);
+  };
+
+  const handleSave = async () => {
+    await onSave();
+    setIsEditing(false);
+  };
+
+  const photoInput = (
+    <input
+      ref={fileInputRef}
+      type="file"
+      accept="image/*"
+      onChange={onPhotoUpload}
+      style={{ display: "none" }}
+    />
+  );
+
+  if (!isEditing && hasProfileInfo) {
+    return (
+      <div className="profile-merged__identity profile-merged__identity--compact">
+        <div className="profile-merged__display">
+          <button
+            type="button"
+            className="profile-merged__display-photo"
+            onClick={() => fileInputRef.current?.click()}
+            aria-label="Change profile photo"
+          >
+            {imageUrl ? (
+              <img src={imageUrl} alt="" className="profile-photo-img" />
+            ) : (
+              <div className="profile-photo-placeholder">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                  <circle cx="12" cy="7" r="4" />
+                </svg>
+              </div>
+            )}
+          </button>
+
+          <div className="profile-merged__display-info">
+            <div className="profile-merged__display-name-row">
+              <div className="profile-merged__display-name">{displayName}</div>
+              <button
+                type="button"
+                className="profile-merged__edit-icon-btn"
+                onClick={startEditing}
+                aria-label="Edit profile"
+                title="Edit profile"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+                  <path
+                    d="M12 20h9M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4L16.5 3.5z"
+                    stroke="currentColor"
+                    strokeWidth="1.75"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            </div>
+            {displayEmail && (
+              <div className="profile-merged__display-email">{displayEmail}</div>
+            )}
+            {isLoggedIn && (
+              <div className="profile-merged__display-status">
+                <span className="papr-section__dot papr-section__dot--connected" />
+                <span>Papr connected{connectedLabel ? ` · ${connectedLabel}` : ""}</span>
+              </div>
+            )}
+          </div>
+
+          {isLoggedIn && onLogout && (
+            <button
+              type="button"
+              className="profile-merged__logout-btn"
+              onClick={onLogout}
+            >
+              Logout
+            </button>
+          )}
+        </div>
+        {photoInput}
+      </div>
+    );
+  }
+
+  return (
+    <div className="profile-merged__identity profile-merged__identity--editing">
+      <div className="profile-merged__edit-header">
+        <h3 className="profile-merged__edit-title">Edit profile</h3>
+        {hasProfileInfo && (
+          <button
+            type="button"
+            className="profile-merged__edit-btn profile-merged__edit-btn--ghost"
+            onClick={cancelEditing}
+            disabled={saving}
+          >
+            Cancel
+          </button>
+        )}
+        {isLoggedIn && onLogout && (
+          <button type="button" className="profile-merged__logout-btn" onClick={onLogout}>
+            Logout
+          </button>
+        )}
+      </div>
+
+      <div className="profile-merged__body profile-merged__body--compact">
+        <div className="profile-photo-upload profile-merged__photo profile-merged__photo--compact">
+          <div
+            className="profile-photo-preview"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            {imageUrl ? (
+              <img src={imageUrl} alt="Profile" className="profile-photo-img" />
+            ) : (
+              <div className="profile-photo-placeholder">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                  <circle cx="12" cy="7" r="4" />
+                </svg>
+              </div>
+            )}
+          </div>
+          <div className="profile-photo-actions profile-photo-actions--compact">
+            <button
+              type="button"
+              className="settings-btn settings-btn--secondary settings-btn--small"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={saving}
+            >
+              {imageUrl ? "Change" : "Upload"}
+            </button>
+            {imageUrl && (
+              <button
+                type="button"
+                className="settings-btn settings-btn--ghost settings-btn--small"
+                onClick={() => void onRemovePhoto()}
+                disabled={saving}
+              >
+                Remove
+              </button>
+            )}
+          </div>
+          {photoInput}
+        </div>
+
+        <div className="profile-merged__fields profile-merged__fields--compact">
+          <div className="form-group form-group--compact">
+            <label className="form-label" htmlFor="profile-name">
+              Name
+            </label>
+            <input
+              id="profile-name"
+              type="text"
+              className="form-input form-input--compact"
+              placeholder="Your name"
+              value={name}
+              onChange={(event) => onNameChange(event.target.value)}
+            />
+          </div>
+
+          <div className="form-group form-group--compact">
+            <label className="form-label" htmlFor="profile-email">
+              Email <span className="form-label__optional">(optional)</span>
+            </label>
+            <input
+              id="profile-email"
+              type="email"
+              className="form-input form-input--compact"
+              placeholder="your@email.com"
+              value={email}
+              onChange={(event) => onEmailChange(event.target.value)}
+            />
+          </div>
+
+          {isLoggedIn && onSyncFromPapr && (
+            <button
+              type="button"
+              className="profile-merged__sync-link"
+              onClick={onSyncFromPapr}
+            >
+              Sync from Papr
+            </button>
+          )}
+
+          <div className="profile-merged__save profile-merged__save--compact">
+            <button
+              type="button"
+              className="settings-btn settings-btn--primary settings-btn--small"
+              onClick={() => void handleSave()}
+              disabled={saving || !name.trim()}
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Spinner() {
   return (
     <svg className="papr-spinner" width="14" height="14" viewBox="0 0 24 24" fill="none">
@@ -792,7 +1127,6 @@ function Spinner() {
 
 function WorkspaceTeamSection({
   workspaceName,
-  workspaceId,
   members,
   loading,
   inviteEmail,
@@ -804,7 +1138,6 @@ function WorkspaceTeamSection({
   onOpenDashboard,
 }: {
   workspaceName?: string;
-  workspaceId?: string;
   members: WorkspaceMember[];
   loading: boolean;
   inviteEmail: string;
@@ -860,7 +1193,6 @@ function WorkspaceTeamSection({
           {workspaceName && (
             <div className="papr-team__meta">
               <span>{workspaceName}</span>
-              {workspaceId && <code className="papr-team__id">{workspaceId}</code>}
             </div>
           )}
 

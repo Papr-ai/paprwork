@@ -1,30 +1,28 @@
 /**
- * AIModelsTab - AI model configuration with Papr account + provider cards
+ * AIModelsTab - AI model configuration: provider keys, OAuth, and model picker
  */
 
 import React, { useState } from "react";
 import { useCustomKeys } from "../../hooks/useCustomKeys";
 import { trackEvent } from "../../lib/telemetry";
 import { OAuthSection } from "./OAuthSection";
-import { PaprLoginSection } from "./PaprLoginSection";
 import { ModelPickerSettings } from "./ModelPickerSettings";
-import { ToolTruncationSettings } from "./ToolTruncationSettings";
-import { OrgKeysVaultBanner } from "./OrgKeysVaultBanner";
+import { AgentContextSettingsModal } from "./AgentContextSettingsModal";
 
 interface AIModelsTabProps {
   scrollToPickerModels?: boolean;
 }
 
 export function AIModelsTab({ scrollToPickerModels = false }: AIModelsTabProps) {
-  const { keys, vaultContext, loading, addKey, updateKey, deleteKey, getKeyValue, loadKeys } =
-    useCustomKeys();
+  const { keys, loading, addKey, updateKey, deleteKey, getKeyValue } = useCustomKeys();
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [apiKeyInputs, setApiKeyInputs] = useState<Record<string, string>>({});
   const [showKeyValue, setShowKeyValue] = useState<Record<string, boolean>>({});
   const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [showAgentContextModal, setShowAgentContextModal] = useState(false);
 
   const getProviderStatus = (keyName: string) => {
-    const key = keys.find(k => k.name === keyName);
+    const key = keys.find((k) => k.name === keyName);
     return {
       hasKey: !!key,
       isOAuth: key?.managedBy === "oauth",
@@ -66,17 +64,19 @@ export function AIModelsTab({ scrollToPickerModels = false }: AIModelsTabProps) 
     if (!value) return;
     setSavingKey(keyName);
     try {
-      const existing = keys.find(k => k.name === keyName);
+      const existing = keys.find((k) => k.name === keyName);
       if (existing) {
         await updateKey(existing.id, { name: keyName, value, permission: "always" });
       } else {
         await addKey({ name: keyName, value, permission: "always" });
       }
-      setApiKeyInputs(prev => ({ ...prev, [keyName]: "" }));
-      // Track activation: model connected
+      setApiKeyInputs((prev) => ({ ...prev, [keyName]: "" }));
       if (!localStorage.getItem("papr-activation-model-connected")) {
         localStorage.setItem("papr-activation-model-connected", "true");
-        trackEvent("paprwork_activation_model_connected", { provider: keyName } as Record<string, unknown>);
+        trackEvent("paprwork_activation_model_connected", { provider: keyName } as Record<
+          string,
+          unknown
+        >);
       }
       setExpandedProvider(null);
     } catch (err) {
@@ -87,19 +87,19 @@ export function AIModelsTab({ scrollToPickerModels = false }: AIModelsTabProps) 
   };
 
   const handleRemoveApiKey = async (keyName: string) => {
-    const key = keys.find(k => k.name === keyName);
+    const key = keys.find((k) => k.name === keyName);
     if (key && confirm(`Remove ${keyName}?`)) {
       await deleteKey(key.id);
     }
   };
 
   const handleLoadKeyValue = async (keyName: string) => {
-    const key = keys.find(k => k.name === keyName);
+    const key = keys.find((k) => k.name === keyName);
     if (!key) return;
     try {
       const value = await getKeyValue(key.id);
-      setApiKeyInputs(prev => ({ ...prev, [keyName]: value ?? "" }));
-      setShowKeyValue(prev => ({ ...prev, [keyName]: true }));
+      setApiKeyInputs((prev) => ({ ...prev, [keyName]: value ?? "" }));
+      setShowKeyValue((prev) => ({ ...prev, [keyName]: true }));
     } catch {
       // ignore
     }
@@ -107,24 +107,16 @@ export function AIModelsTab({ scrollToPickerModels = false }: AIModelsTabProps) 
 
   return (
     <div className="settings-content settings-content--full-width">
-      {/* Papr Account */}
       <div className="settings-section">
-        <PaprLoginSection onApiKeyReceived={() => loadKeys()} />
-        <OrgKeysVaultBanner
-          vaultContext={vaultContext}
-          workspaceName={vaultContext?.workspaceName}
-          namespaceName={vaultContext?.namespaceName}
-        />
-      </div>
-
-      {/* Divider */}
-      <div className="ai-divider">
-        <span className="ai-divider__text">or bring your own keys</span>
+        <h2 className="settings-section__title">AI Models</h2>
+        <p className="settings-section__description">
+          Connect your AI providers and choose which models appear in chat.
+        </p>
       </div>
 
       {/* Provider Cards */}
       <div className="ai-providers-grid">
-        {providers.map(provider => {
+        {providers.map((provider) => {
           const status = getProviderStatus(provider.keyName);
           const isExpanded = expandedProvider === provider.id;
 
@@ -197,8 +189,8 @@ export function AIModelsTab({ scrollToPickerModels = false }: AIModelsTabProps) 
                         className="form-input"
                         placeholder={`Enter ${provider.keyName}`}
                         value={apiKeyInputs[provider.keyName] || ""}
-                        onChange={e =>
-                          setApiKeyInputs(prev => ({
+                        onChange={(e) =>
+                          setApiKeyInputs((prev) => ({
                             ...prev,
                             [provider.keyName]: e.target.value,
                           }))
@@ -208,7 +200,7 @@ export function AIModelsTab({ scrollToPickerModels = false }: AIModelsTabProps) 
                         <button
                           className="settings-btn settings-btn--small"
                           onClick={() =>
-                            setShowKeyValue(prev => ({
+                            setShowKeyValue((prev) => ({
                               ...prev,
                               [provider.keyName]: !prev[provider.keyName],
                             }))
@@ -219,7 +211,10 @@ export function AIModelsTab({ scrollToPickerModels = false }: AIModelsTabProps) 
                         <button
                           className="settings-btn settings-btn--primary settings-btn--small"
                           onClick={() => handleSaveApiKey(provider.keyName)}
-                          disabled={!apiKeyInputs[provider.keyName]?.trim() || savingKey === provider.keyName}
+                          disabled={
+                            !apiKeyInputs[provider.keyName]?.trim() ||
+                            savingKey === provider.keyName
+                          }
                         >
                           {savingKey === provider.keyName ? "Saving..." : "Save"}
                         </button>
@@ -236,7 +231,27 @@ export function AIModelsTab({ scrollToPickerModels = false }: AIModelsTabProps) 
 
       <ModelPickerSettings scrollIntoView={scrollToPickerModels} />
 
-      <ToolTruncationSettings />
+      <div className="settings-section agent-context-teaser">
+        <div className="agent-context-teaser__row">
+          <div>
+            <h3 className="agent-context-teaser__title">Agent Context</h3>
+            <p className="settings-section__description agent-context-teaser__description">
+              Tool result truncation and context limits for long sessions.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="agent-context-teaser__link"
+            onClick={() => setShowAgentContextModal(true)}
+          >
+            Adjust settings
+          </button>
+        </div>
+      </div>
+
+      {showAgentContextModal && (
+        <AgentContextSettingsModal onClose={() => setShowAgentContextModal(false)} />
+      )}
     </div>
   );
 }

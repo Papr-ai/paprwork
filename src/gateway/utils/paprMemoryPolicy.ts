@@ -59,7 +59,11 @@ export function buildAddPolicy(input: {
   const transform_embedding = buildAddTransformEmbedding(input.signalDomain);
 
   let graph: GraphPolicyBlock | undefined;
-  if (input.graphSchemaId || input.graphMode === "manual") {
+  if (
+    input.graphSchemaId ||
+    input.graphMode === "manual" ||
+    input.graphMode === "auto"
+  ) {
     graph = {
       mode: input.graphMode ?? "auto",
       ...(input.graphSchemaId ? { schema_id: input.graphSchemaId } : {}),

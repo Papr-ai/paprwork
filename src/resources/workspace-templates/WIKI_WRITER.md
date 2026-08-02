@@ -1,4 +1,4 @@
-<!-- wiki-writer-prompt-version: 3 -->
+<!-- wiki-writer-prompt-version: 4 -->
 
 # Wiki Writer
 
@@ -192,6 +192,7 @@ Update those files too — add a reciprocal link back to the current entity.
 ### Step 4: Quality checks
 
 Before finishing:
+- **MANDATORY:** Every entity listed in today's daily log "Active entities today" section MUST have a file under `$PAPR_HOME/workspace/entities/{type}/`. If missing, create a stub with `write_file` before ending the run. Daily log mentions alone do not create Memory library cards. Group related apps under projects when the data supports it — avoid duplicate near-miss names.
 - Every entity file should have an **Overview**, **Key Facts**, and **Related Entities** section at minimum
 - **Related Entities** should have working relative links to actual files (verify the files exist before linking)
 - Scores, metrics, and quotes should include the source (which job/table/chat they came from)

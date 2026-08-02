@@ -190,14 +190,19 @@ export const uploadDocumentToMemoryTool = createTool({
 
       const fileName = args.fileName ?? path.basename(resolvedPath);
       const client = await getPaprClient();
+      const { buildAgentMemoryAddPolicy } = await import(
+        "../../gateway/utils/workspaceContextSchema.js"
+      );
       const { paprMemoryScopeSpread } = await import(
         "../../gateway/utils/memoryScopeResolver.js"
       );
       const resolvedChatId = resolveConversationId(
         args.chatId ?? getCurrentChatId() ?? undefined,
       );
+      const addPolicy = await buildAgentMemoryAddPolicy({ client });
       const memoryScope = await paprMemoryScopeSpread({
         chatId: resolvedChatId,
+        addPolicy,
       });
 
       const metadataPayload: Record<string, unknown> = {

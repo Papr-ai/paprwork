@@ -5,7 +5,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useCustomKeys } from "../../hooks/useCustomKeys";
 import type { CustomKey, CustomKeyInput } from "../../types/settings";
-import { PaprLoginSection } from "./PaprLoginSection";
 import { OrgKeysVaultBanner } from "./OrgKeysVaultBanner";
 import {
   IntegrationKeyOrgScopeSelector,
@@ -221,10 +220,6 @@ export function IntegrationKeysTab() {
 
   return (
     <div className="settings-content settings-content--full-width">
-      <div className="settings-section" style={{ marginBottom: "24px" }}>
-        <PaprLoginSection onApiKeyReceived={() => undefined} />
-      </div>
-
       <div className="settings-section">
         <OrgKeysVaultBanner
           vaultContext={vaultContext}
@@ -233,7 +228,7 @@ export function IntegrationKeysTab() {
         />
         <div className="settings-section__header">
           <div>
-            <h2 className="settings-section__title">Integration Keys</h2>
+            <h2 className="settings-section__title">Key Vault</h2>
             <p className="settings-section__description">
               API keys for jobs, automations, and third-party services.
               Choose organization scope and who can use each key (only you, team, or organization).
@@ -374,7 +369,7 @@ export function IntegrationKeysTab() {
           <p className="settings-loading">Loading keys...</p>
         ) : filteredKeys.length === 0 ? (
           <div className="key-empty">
-            <p>No integration keys configured for this vault yet.</p>
+            <p>No keys in this vault yet.</p>
             <p className="key-empty__hint">
               Add organization-only keys here, or choose &quot;All organizations&quot; for shared keys like a team Stripe account.
             </p>

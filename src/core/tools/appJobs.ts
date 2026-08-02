@@ -835,6 +835,28 @@ export const createAppTool = createTool({
       args.icon,
     );
 
+    let wikiEntity: { entityId: string; created: boolean } | undefined;
+    try {
+      const { createWikiEntity } = await import(
+        "../../gateway/services/KnowledgeGraphWikiService.js"
+      );
+      const slug = await createWikiEntity(
+        "apps",
+        args.title,
+        args.description ?? "Mini-app created by agent",
+        { appId: app.id, kind: "mini_app", source: "create_app" },
+      );
+      wikiEntity = {
+        entityId: `app/${slug.id}`,
+        created: slug.created,
+      };
+    } catch (error) {
+      console.warn(
+        "[create_app] Failed to create wiki entity stub:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+
     // Run esbuild bundle — catches missing CSS imports, TS errors, the same
     // way an IDE + bundler would. validateApp rebuilds before checking.
     const postValidation = await runPostEditAppValidation(app.id);
@@ -880,6 +902,7 @@ export const createAppTool = createTool({
       data: {
         ...app,
         appPath: appPath ?? undefined,
+        wikiEntity,
         buildCheck: {
           valid: true,
           filesChecked: postValidation.filesChecked,

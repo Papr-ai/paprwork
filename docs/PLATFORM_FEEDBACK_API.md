@@ -47,8 +47,8 @@ POST /v1/platform-feedback/issues
 |-------|------|----------|-------|
 | `type` | `"bug"` \| `"feature"` | yes | Maps to GitHub labels `bug` / `enhancement` |
 | `title` | string | yes | 5–200 chars (validated client-side) |
-| `body` | string | yes | User-authored markdown (min 20 chars client-side) |
-| `contactEmail` | string | no | Server-side only (Mongo); never on public GitHub issue |
+| `body` | string | yes | User-authored markdown (min 20 chars). **Posted verbatim to public GitHub** — client should send public-safe text |
+| `contactEmail` | string | no | Mongo only; never written to GitHub issue body |
 | `external_user_id` | string | no | Acting Papr user (auto-merged by desktop gateway) |
 | `environment` | object | yes | App metadata from desktop gateway |
 | `target.appType` | `"paprwork"` \| `"mini_app"` | no | Default `paprwork` |
@@ -81,7 +81,17 @@ POST /v1/platform-feedback/issues
 
 ## Privacy
 
-Public GitHub issues intentionally exclude email, user ids, org/ns ids, and raw install ids. Full reporter context is stored server-side in Mongo only.
+Memory server behavior (see `memory/services/platform_feedback_service.py`):
+
+| Field | Public GitHub | Mongo `app_feedback_submissions` |
+|-------|---------------|----------------------------------|
+| `title`, `body` | Posted **as-is** | Stored (same copy) |
+| `contactEmail` | **Excluded** | Stored |
+| `environment.installId` | Generic line only (no raw value) | Full value stored |
+| Submitter org/ns/user ids | **Excluded** | Stored |
+| App version, platform, packaged | Included in env block | Stored |
+
+The desktop client must send **public-safe** `title` and `body`. Identity for follow-up goes in `contactEmail` (optional) and Papr login auth — not in the issue text.
 
 ## Server env (memory)
 

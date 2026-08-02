@@ -57,7 +57,7 @@ export function buildMemoryScopeFields(
       policy: {
         acl: {
           read: [`namespace:${namespaceId}`],
-          write: userWriteAcl(userId),
+          write: [...userWriteAcl(userId), `namespace:${namespaceId}`],
         },
       },
     };
@@ -70,7 +70,7 @@ export function buildMemoryScopeFields(
       policy: {
         acl: {
           read: [`organization:${organizationId}`],
-          write: userWriteAcl(userId),
+          write: [...userWriteAcl(userId), `organization:${organizationId}`],
         },
       },
     };

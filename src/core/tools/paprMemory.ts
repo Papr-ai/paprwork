@@ -7,6 +7,7 @@ import {
   buildAddPolicy,
   buildSearchPolicy,
 } from "../../gateway/utils/paprMemoryPolicy.js";
+import { buildAgentMemoryAddPolicy } from "../../gateway/utils/workspaceContextSchema.js";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import {
@@ -474,7 +475,7 @@ export const addAgentMemoryTool = createTool({
       if (resolvedChatId) customMetadata.chatId = resolvedChatId;
       if (args.workspaceId) customMetadata.workspaceId = args.workspaceId;
 
-      const addPolicy = buildAddPolicy({
+      const addPolicy = await buildAgentMemoryAddPolicy({
         signalDomain: args.signalDomain,
       });
 

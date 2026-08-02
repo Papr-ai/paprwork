@@ -7,7 +7,11 @@ import { gateway } from "../../src/lib/gateway";
 import type { ToolResultTruncationSettings } from "../../../src/core/types/toolResultTruncationSettings";
 import { DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS } from "../../../src/core/types/toolResultTruncationSettings";
 
-export function ToolTruncationSettings() {
+interface ToolTruncationSettingsProps {
+  variant?: "section" | "modal";
+}
+
+export function ToolTruncationSettings({ variant = "section" }: ToolTruncationSettingsProps) {
   const [settings, setSettings] = useState<ToolResultTruncationSettings>({
     ...DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS,
   });
@@ -74,7 +78,7 @@ export function ToolTruncationSettings() {
 
   if (!loaded) {
     return (
-      <div className="settings-section">
+      <div className={variant === "modal" ? undefined : "settings-section"}>
         <p className="settings-section__description">Loading agent context settings…</p>
       </div>
     );
@@ -82,14 +86,25 @@ export function ToolTruncationSettings() {
 
   const advancedDisabled = settings.disableAllTruncation;
 
-  return (
-    <div className="settings-section tool-truncation-settings">
-      <h2 className="settings-section__title">Agent Context</h2>
-      <p className="settings-section__description">
-        Control how much of each tool result the agent keeps in its working memory.
-        Lower limits save context window space but can cause the agent to re-fetch data.
-        Changes apply to new messages immediately.
-      </p>
+  const content = (
+    <>
+      {variant === "section" && (
+        <>
+          <h2 className="settings-section__title">Agent Context</h2>
+          <p className="settings-section__description">
+            Control how much of each tool result the agent keeps in its working memory.
+            Lower limits save context window space but can cause the agent to re-fetch data.
+            Changes apply to new messages immediately.
+          </p>
+        </>
+      )}
+
+      {variant === "modal" && (
+        <p className="settings-section__description">
+          Control how much of each tool result the agent keeps in its working memory.
+          Changes apply to new messages immediately.
+        </p>
+      )}
 
       <div className="tool-truncation-settings__hero">
         <label className="permission-option">
@@ -281,6 +296,16 @@ export function ToolTruncationSettings() {
           <span className="tool-truncation-settings__saved">Saved</span>
         )}
       </div>
+    </>
+  );
+
+  if (variant === "modal") {
+    return <div className="tool-truncation-settings tool-truncation-settings--modal">{content}</div>;
+  }
+
+  return (
+    <div className="settings-section tool-truncation-settings">
+      {content}
     </div>
   );
 }
