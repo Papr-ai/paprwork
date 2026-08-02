@@ -6,9 +6,16 @@
  * 2. Add assistant message + tool results to context
  * 3. Call streamSimple again
  * 4. Repeat until we get stop/length or hit maxSteps
+ *
+ * When pi-ai emits toolcall_end then done with reason stop/length (orphan drain),
+ * tools are executed and one continuation step requests a user-facing summary.
  */
 
 import type { AssistantMessageEvent } from "@mariozechner/pi-ai";
+import {
+  WRAP_UP_AFTER_ORPHAN_DRAIN,
+  WRAP_UP_AFTER_TOOLS_NO_TEXT,
+} from "../agent/wrapUpContinuation.js";
 import {
   sanitizeToolOutput,
 } from "../../../core/tools/index.js";
@@ -395,6 +402,11 @@ export async function* createPiCodexStreamWithToolLoop(
   // Per-stream memory budget (baseline captured before context/tool accumulation)
   const baselineHeap = process.memoryUsage().heapUsed;
 
+  /** True once text was streamed since the last tool batch finished. */
+  let textEmittedSinceLastToolBatch = false;
+  /** At most one automatic wrap-up continuation (orphan drain or tool-only stop). */
+  let wrapUpContinuationUsed = false;
+
   // Detect repetitive tool calls (possible infinite loop)
   const recentToolCalls: Array<{ name: string; args: string }> = [];
   const MAX_RECENT_TOOL_CALLS = 10;
@@ -628,6 +640,13 @@ export async function* createPiCodexStreamWithToolLoop(
                 return;
               }
             }
+            if (chunk?.type === "text-delta") {
+              const text =
+                typeof chunk.text === "string" ? chunk.text.trim() : "";
+              if (text.length > 0) {
+                textEmittedSinceLastToolBatch = true;
+              }
+            }
             if (chunk) yield chunk;
           }
         }
@@ -661,11 +680,31 @@ export async function* createPiCodexStreamWithToolLoop(
       stepStreamCompleted = true;
     }
 
-    if (
+    const isToolUseStep =
       lastFinishReason === "tool-calls" &&
       toolCallsThisTurn.length > 0 &&
-      finalMessage
+      finalMessage != null;
+    // pi-ai can emit toolcall_end (UI shows the call) then done with reason stop/length
+    // instead of toolUse — previously we skipped execution and streamOrchestrator
+    // marked them orphaned. Drain pending calls before ending the turn.
+    const shouldDrainOrphanedTools =
+      toolCallsThisTurn.length > 0 &&
+      finalMessage != null &&
+      (lastFinishReason === "stop" || lastFinishReason === "length");
+
+    if (
+      (isToolUseStep || shouldDrainOrphanedTools) &&
+      finalMessage != null
     ) {
+      const doneMessage = finalMessage;
+      if (shouldDrainOrphanedTools) {
+        console.warn(
+          `[PiCodexToolLoop] ⚠️ Draining ${toolCallsThisTurn.length} pending tool call(s) ` +
+            `after finish reason "${lastFinishReason}" (expected toolUse). ` +
+            `Executing to prevent orphaned tool results.`,
+        );
+      }
+
       // Update total tool call counter
       totalToolCalls += toolCallsThisTurn.length;
       
@@ -756,7 +795,7 @@ export async function* createPiCodexStreamWithToolLoop(
           content: `[SYSTEM: You've made ${totalToolCalls} tool calls, which exceeds the maximum limit of ${MAX_TOTAL_TOOL_CALLS}. You MUST stop making tool calls and provide your final response now. Summarize what you've learned and respond to the user.]`,
         } as any);
         
-        break; // Force stop the loop
+        continue stepLoop;
       }
       
       // Execute all tools in parallel — full results preserved for this turn.
@@ -785,6 +824,9 @@ export async function* createPiCodexStreamWithToolLoop(
           result: tr.result,
         };
       }
+
+      // Next model step should include a user-facing summary if it stops now.
+      textEmittedSinceLastToolBatch = false;
 
       if (validationErrorCount >= MAX_VALIDATION_ERRORS) {
         console.error(
@@ -817,7 +859,7 @@ export async function* createPiCodexStreamWithToolLoop(
           content: `[SYSTEM: You've made ${step} tool calls. You MUST provide your final response now. Do not make any more tool calls. Summarize your findings and respond to the user.]`,
         } as any);
         
-        break; // Force stop the loop
+        continue stepLoop;
       } else if (step >= STEP_WARNING_THRESHOLD) {
         // At 90+ steps, warn the model
         console.warn(
@@ -838,28 +880,66 @@ export async function* createPiCodexStreamWithToolLoop(
         }
       }
 
-      // Append full tool results for the current turn (never truncated mid-turn).
-      appendToolTurnToContext(context, finalMessage, toolResults, cumulativeTokens);
+      if (isToolUseStep) {
+        // Append full tool results for the current turn (never truncated mid-turn).
+        appendToolTurnToContext(context, doneMessage, toolResults, cumulativeTokens);
 
-      // Reasoning blocks are only needed while the model is thinking — drop immediately.
-      stripAllAssistantReasoning(context.messages as unknown[]);
+        // Reasoning blocks are only needed while the model is thinking — drop immediately.
+        stripAllAssistantReasoning(context.messages as unknown[]);
 
-      // Do NOT update cumulativeTokens here from raw context size — that
-      // double-counts results that will be compacted before the next model call.
-      // The next streamSimple() will set cumulativeTokens from usage.input_tokens
-      // (line ~378), which reflects the COMPACTED prompt the model actually saw.
-      // For the threshold check on the NEXT iteration we estimate post-compaction
-      // size by simulating compaction on a clone (cheap — just walks the array).
+        // Do NOT update cumulativeTokens here from raw context size — that
+        // double-counts results that will be compacted before the next model call.
+        // The next streamSimple() will set cumulativeTokens from usage.input_tokens
+        // (line ~378), which reflects the COMPACTED prompt the model actually saw.
+        // For the threshold check on the NEXT iteration we estimate post-compaction
+        // size by simulating compaction on a clone (cheap — just walks the array).
 
-      step++;
-      console.log(
-        `[PiCodexToolLoop] Step ${step}: executed ${toolCallsThisTurn.length} tools, ` +
-          `cumulative context: ~${Math.round(cumulativeTokens / 1000)}K tokens, ` +
-          `total tool calls: ${totalToolCalls}`,
-      );
+        step++;
+        console.log(
+          `[PiCodexToolLoop] Step ${step}: executed ${toolCallsThisTurn.length} tools, ` +
+            `cumulative context: ~${Math.round(cumulativeTokens / 1000)}K tokens, ` +
+            `total tool calls: ${totalToolCalls}`,
+        );
+      } else {
+        // Orphan drain — append results and continue once for a user-facing summary.
+        appendToolTurnToContext(context, doneMessage, toolResults, cumulativeTokens);
+        stripAllAssistantReasoning(context.messages as unknown[]);
+
+        if (!wrapUpContinuationUsed && step < maxSteps - 1) {
+          wrapUpContinuationUsed = true;
+          context.messages.push({
+            role: "user",
+            content: WRAP_UP_AFTER_ORPHAN_DRAIN,
+          } as never);
+          step++;
+          console.log(
+            `[PiCodexToolLoop] Continuing after orphan drain (${toolCallsThisTurn.length} tools) for user-facing summary`,
+          );
+          continue stepLoop;
+        }
+        break stepLoop;
+      }
     } else {
-      // Done - no more tool turns
-      break;
+      // Model stopped without pending tools — wrap up if last actions were tools only.
+      const needsWrapUp =
+        totalToolCalls > 0 &&
+        !textEmittedSinceLastToolBatch &&
+        !wrapUpContinuationUsed &&
+        step < maxSteps - 1;
+
+      if (needsWrapUp) {
+        wrapUpContinuationUsed = true;
+        context.messages.push({
+          role: "user",
+          content: WRAP_UP_AFTER_TOOLS_NO_TEXT,
+        } as never);
+        step++;
+        console.log(
+          `[PiCodexToolLoop] Requesting wrap-up summary — ${totalToolCalls} tool calls ended without trailing user text`,
+        );
+        continue stepLoop;
+      }
+      break stepLoop;
     }
   }
 }

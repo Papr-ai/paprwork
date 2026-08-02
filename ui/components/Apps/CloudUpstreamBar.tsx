@@ -105,38 +105,39 @@ export function CloudUpstreamBar({
     }
   };
 
+  const upstreamSummary = isTrack
+    ? lastSyncedLabel
+      ? `Pulled ${lastSyncedLabel}`
+      : "Not pulled yet"
+    : "Fork";
+
   return (
-    <div className="mini-app-publish-bar__upstream">
-      <div className="mini-app-publish-bar__track-pull-copy">
-        <span className="mini-app-publish-bar__track-pull-label">
-          Upstream · {lineage.sourceSlug}
-        </span>
-        <span className="mini-app-publish-bar__track-pull-meta">
-          {isTrack
-            ? lastSyncedLabel
-              ? `Last pulled ${lastSyncedLabel}`
-              : "Not pulled yet"
-            : "Fork — send edits to the owner"}
-        </span>
-      </div>
+    <div
+      className="mini-app-publish-bar__upstream"
+      title={`Upstream · ${lineage.sourceSlug}${isTrack && lastSyncedLabel ? ` · Last pulled ${lastSyncedLabel}` : ""}`}
+    >
+      <span className="mini-app-publish-bar__track-pull-label">
+        ↑ {lineage.sourceSlug}
+      </span>
+      <span className="mini-app-publish-bar__track-pull-meta">{upstreamSummary}</span>
 
       <div className="mini-app-publish-bar__upstream-actions">
         {isTrack ? (
           <button
             type="button"
-            className="mini-app-publish-bar__button mini-app-publish-bar__button--track"
+            className="mini-app-publish-bar__button mini-app-publish-bar__button--track mini-app-publish-bar__button--compact"
             disabled={busy || pulling}
             title="Download the publisher's latest code into your local copy"
             onClick={() => void handlePull()}
           >
-            {pulling ? "Pulling…" : "Pull latest"}
+            {pulling ? "…" : "Pull"}
           </button>
         ) : null}
 
         <div className="mini-app-publish-bar__send-wrap" ref={sendPopoverRef}>
           <button
             type="button"
-            className="mini-app-publish-bar__button mini-app-publish-bar__button--track mini-app-publish-bar__button--send"
+            className="mini-app-publish-bar__button mini-app-publish-bar__button--track mini-app-publish-bar__button--send mini-app-publish-bar__button--compact"
             disabled={busy || submitting}
             title="Send your local changes to the app owner for review"
             onClick={() => {
@@ -145,7 +146,7 @@ export function CloudUpstreamBar({
               setSendMessage(null);
             }}
           >
-            {submitting ? "Sending…" : "Send changes"}
+            {submitting ? "…" : "Send"}
           </button>
 
           {sendOpen ? (
@@ -194,14 +195,18 @@ export function CloudUpstreamBar({
         </div>
       </div>
 
-      {pullNotice ? (
-        <span className="mini-app-publish-bar__upstream-toast">{pullNotice}</span>
-      ) : null}
-      {pullError ? (
-        <span className="mini-app-publish-bar__upstream-error">{pullError}</span>
-      ) : null}
-      {sendMessage ? (
-        <span className="mini-app-publish-bar__upstream-toast">{sendMessage}</span>
+      {pullNotice || sendMessage || pullError ? (
+        <div className="mini-app-publish-bar__upstream-feedback" role="status">
+          {pullNotice ? (
+            <span className="mini-app-publish-bar__upstream-toast">{pullNotice}</span>
+          ) : null}
+          {sendMessage ? (
+            <span className="mini-app-publish-bar__upstream-toast">{sendMessage}</span>
+          ) : null}
+          {pullError ? (
+            <span className="mini-app-publish-bar__upstream-error">{pullError}</span>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

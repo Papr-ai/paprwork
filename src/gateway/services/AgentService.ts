@@ -78,7 +78,13 @@ import {
   type ToolCallEvent,
   type ToolResultEvent,
 } from "./agent/streamChunks.js";
-import { orchestrateModelStream } from "./agent/streamOrchestrator.js";
+import { orchestrateModelStream, sequenceEndsWithToolWithoutTrailingText } from "./agent/streamOrchestrator.js";
+import {
+  mergeWrapUpTextIntoState,
+  runAiSdkWrapUpContinuation,
+  runPiAiWrapUpContinuation,
+  shouldRequestWrapUpSummary,
+} from "./agent/wrapUpContinuation.js";
 import { RATE_LIMIT_EXHAUSTED_ERROR_CODE } from "../utils/providerRateLimitRetry.js";
 import { streamCursorAgentTurn } from "./providers/cursorAgentStream.js";
 import {
@@ -372,6 +378,8 @@ export class AgentService {
       _isContextCompressRetry?: boolean;
       /** Internal: synthetic turn from SubAgentResponseTrigger — skip delegation flush recursion. */
       isSubAgentTrigger?: boolean;
+      /** Internal: post-stream wrap-up continuation — prevents infinite wrap-up loops. */
+      _isWrapUpContinuation?: boolean;
     },
   ): AsyncGenerator<StreamChunk & { chatId: string }> {
     if (!this.initialized) {
@@ -1224,6 +1232,19 @@ export class AgentService {
       // Choose streaming method based on provider and auth
       // OAuth → pi-ai (ChatGPT/Claude subscription). API key only → AI SDK/Mastra
       let fullStream: AsyncIterable<unknown>;
+      let aiSdkStreamResult: Awaited<ReturnType<typeof streamText>> | undefined;
+      let piWrapUpContext: { messages: unknown[] } | undefined;
+      let piWrapUpDeps:
+        | {
+            streamSimple: (
+              model: unknown,
+              context: unknown,
+              options: unknown,
+            ) => AsyncIterable<unknown>;
+            finalModel: unknown;
+            streamOpts: Record<string, unknown>;
+          }
+        | undefined;
       
       // Check if model is actually supported by pi-ai before using OAuth route
       const { isOpenAICodexModel } = await import("../utils/modelNormalizer.js");
@@ -1604,6 +1625,16 @@ export class AgentService {
           maxSteps,
           piHistoryTrimBounds,
         );
+        piWrapUpContext = piContext;
+        piWrapUpDeps = {
+          streamSimple: streamSimple as (
+            model: unknown,
+            context: unknown,
+            options: unknown,
+          ) => AsyncIterable<unknown>,
+          finalModel,
+          streamOpts: streamOpts as unknown as Record<string, unknown>,
+        };
         timings.streamTextInit = performance.now() - t;
         console.log(
           `  pi-ai ${piProvider} init: ${timings.streamTextInit.toFixed(2)}ms`,
@@ -1646,19 +1677,19 @@ export class AgentService {
         console.log(`Max steps: ${streamTextOptions.stopWhen ? 'custom' : 'default'}`);
         console.log(`${'='.repeat(80)}\n`);
         
-        const result = await streamText(streamTextOptions);
+        aiSdkStreamResult = await streamText(streamTextOptions);
         if (config.provider === "groq") {
           const { adaptGroqAISDKFullStream } = await import(
             "../utils/groqProvider.js"
           );
-          fullStream = adaptGroqAISDKFullStream(result.fullStream);
+          fullStream = adaptGroqAISDKFullStream(aiSdkStreamResult.fullStream);
         } else if (config.provider === "moonshot") {
           const { adaptMoonshotAISDKFullStream } = await import(
             "../utils/moonshotProvider.js"
           );
-          fullStream = adaptMoonshotAISDKFullStream(result.fullStream);
+          fullStream = adaptMoonshotAISDKFullStream(aiSdkStreamResult.fullStream);
         } else {
-          fullStream = result.fullStream;
+          fullStream = aiSdkStreamResult.fullStream;
         }
         timings.streamTextInit = performance.now() - t;
         console.log(`  AI SDK init: ${timings.streamTextInit.toFixed(2)}ms`);
@@ -1721,6 +1752,16 @@ export class AgentService {
           console.log(`  Thinking text length: ${thinkingText.length} chars`);
           console.log(`  Tool calls: ${toolCalls.length}`);
           console.log(`  Tool results: ${toolResults.length}`);
+
+          if (
+            toolCalls.length > 0 &&
+            sequenceEndsWithToolWithoutTrailingText(sequence)
+          ) {
+            console.warn(
+              `[AgentService] Turn ended on tool call(s) without trailing user text ` +
+                `(chatId=${chatId}). Post-stream wrap-up will run if not aborted.`,
+            );
+          }
 
           break;
         }
@@ -1898,6 +1939,90 @@ export class AgentService {
       if (rateLimitExhausted) {
         this.sessionManager.setStreaming(chatId, false);
         return;
+      }
+
+      if (
+        shouldRequestWrapUpSummary({
+          sequence,
+          toolCallCount: toolCalls.length,
+          aborted: abortController.signal.aborted,
+          isWrapUpContinuation: Boolean(options?._isWrapUpContinuation),
+        })
+      ) {
+        console.log(
+          `[AgentService] Running wrap-up summary for ${chatId} — tools completed without a user-facing reply`,
+        );
+
+        try {
+          let wrapUpState:
+            | {
+                assistantText: string;
+                thinkingText: string;
+              }
+            | null
+            | undefined = null;
+
+          if (usePiAi && piWrapUpContext && piWrapUpDeps) {
+            const wrapUpIterator = runPiAiWrapUpContinuation({
+              piContext: piWrapUpContext,
+              streamSimple: piWrapUpDeps.streamSimple,
+              piModel: piWrapUpDeps.finalModel,
+              streamOpts: piWrapUpDeps.streamOpts,
+              chatId,
+              apiKeys: getApiKeysForSanitization(),
+              abortSignal: abortController.signal,
+            });
+            while (true) {
+              const wrapUpNext = await wrapUpIterator.next();
+              if (wrapUpNext.done) {
+                wrapUpState = wrapUpNext.value;
+                break;
+              }
+              yield wrapUpNext.value;
+            }
+          } else if (aiSdkStreamResult) {
+            const wrapUpIterator = runAiSdkWrapUpContinuation({
+              aiSdkResult: aiSdkStreamResult,
+              streamTextOptions: streamTextOptions as {
+                model: LanguageModel;
+                [key: string]: unknown;
+              },
+              chatId,
+              apiKeys: getApiKeysForSanitization(),
+              provider: config.provider,
+              abortSignal: abortController.signal,
+            });
+            while (true) {
+              const wrapUpNext = await wrapUpIterator.next();
+              if (wrapUpNext.done) {
+                wrapUpState = wrapUpNext.value;
+                break;
+              }
+              yield wrapUpNext.value;
+            }
+          }
+
+          if (wrapUpState?.assistantText.trim()) {
+            const merged = mergeWrapUpTextIntoState(
+              {
+                assistantText,
+                thinkingText,
+                toolCalls,
+                toolResults,
+                sequence,
+              },
+              wrapUpState.assistantText,
+            );
+            assistantText = merged.assistantText;
+            thinkingText = merged.thinkingText + wrapUpState.thinkingText;
+            sequence = merged.sequence;
+          }
+        } catch (wrapUpError) {
+          console.warn(
+            `[AgentService] Wrap-up summary failed for ${chatId}:`,
+            wrapUpError,
+          );
+        }
       }
 
       // 4. Empty-completion silent self-heal

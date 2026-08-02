@@ -58,6 +58,7 @@ import "./MessageItem.css";
 interface MessageItemProps {
   chatId: string;
   message: ChatMessage;
+  delegationFollowUps?: ChatMessage[];
 }
 
 /**
@@ -75,6 +76,7 @@ function renderSequence(
   getJobName: (jobId: string) => string | undefined,
   getAgentName: (agentId: string) => string,
   connectionPaused = false,
+  delegationFollowUps: ChatMessage[] = [],
 ): React.ReactNode {
 
 
@@ -436,11 +438,11 @@ function renderSequence(
 
     // Job status cards are rendered INLINE inside exploring card (after run_job tool)
 
-    // Delegation cards — inline on this message, collapsed by default (expand for full report)
+    const delegationCardElements: React.ReactNode[] = [];
     if (delegationCardMap.size > 0) {
       delegationCardMap.forEach((delegationData, delegationId) => {
         if ("delegationId" in delegationData) {
-          elements.push(
+          delegationCardElements.push(
             <MiniChatCard
               key={`delegation-${delegationId}`}
               delegationId={delegationData.delegationId}
@@ -455,7 +457,7 @@ function renderSequence(
             />,
           );
         } else {
-          elements.push(
+          delegationCardElements.push(
             <DelegationCard
               key={`delegation-${delegationId}`}
               data={delegationData}
@@ -464,6 +466,18 @@ function renderSequence(
         }
       });
     }
+
+    const hasActiveDelegation = Array.from(delegationCardMap.values()).some(
+      (delegationData) => {
+        if ("delegationId" in delegationData) {
+          return delegationData.status === "active";
+        }
+        return (
+          delegationData.status === "running" ||
+          delegationData.status === "pending"
+        );
+      },
+    );
 
     // Extract last activity for header
     let lastActivity = "Working";
@@ -490,22 +504,27 @@ function renderSequence(
         }
         break;
       } else if (item.type === "text" && typeof item.data === "string" && item.data.trim()) {
-        // Use first 50 chars of text as activity
+        // Text after the last tool is the user-facing reply (rendered below Working)
+        if (i > lastToolIndex) {
+          continue;
+        }
+        // Use first 50 chars of in-progress narration as activity
         const text = item.data.trim();
         lastActivity = text.length > 50 ? text.substring(0, 50) + "..." : text;
         break;
       }
     }
 
-    // Render exploring card with all interleaved items
-    if (exploringItems.length > 0) {
+    // Render working card with delegation cards and tool activity only
+    if (exploringItems.length > 0 || delegationCardElements.length > 0) {
       const hasCallingTool = sequence.some(
         (item) =>
           item.type === "tool" &&
           (item.data as { status?: string }).status === "calling",
       );
-      const isExploring = message.isStreaming || hasCallingTool;
-      
+      const isExploring =
+        message.isStreaming || hasCallingTool || hasActiveDelegation;
+
       // Detect if the message was stopped by checking for stopped tools
       const wasStopped = sequence.some(
         (item) =>
@@ -514,24 +533,43 @@ function renderSequence(
           (item.data as { error?: string }).error === "Stopped by user",
       );
 
+      const workingChildren: React.ReactNode[] = [
+        ...delegationCardElements,
+        ...exploringItems,
+      ];
+
       elements.push(
-        <WorkingCard 
-          key="working" 
+        <WorkingCard
+          key="working"
           isExploring={isExploring}
           lastActivity={lastActivity}
           wasStopped={wasStopped}
           connectionPaused={connectionPaused}
         >
-          {exploringItems}
+          {workingChildren}
         </WorkingCard>,
       );
     }
 
-    // Render final text outside exploring card
+    // User-facing response text stays below Working (not inside the collapsible)
     if (finalTextAfterAllTools) {
       elements.push(
         <div key="final-text" className="message-text">
           <Markdown>{finalTextAfterAllTools}</Markdown>
+        </div>,
+      );
+    }
+
+    for (const followUp of delegationFollowUps) {
+      const followUpText =
+        getAssistantCopyText(followUp) || followUp.content.trim();
+      if (!followUpText) continue;
+      elements.push(
+        <div
+          key={`delegation-followup-${followUp.id}`}
+          className="message-text"
+        >
+          <Markdown>{followUpText}</Markdown>
         </div>,
       );
     }
@@ -551,7 +589,11 @@ function renderSequence(
   return <>{elements}</>;
 }
 
-const MessageItemInner: React.FC<MessageItemProps> = ({ chatId, message }) => {
+const MessageItemInner: React.FC<MessageItemProps> = ({
+  chatId,
+  message,
+  delegationFollowUps = [],
+}) => {
   const isUser = message.role === "user";
   const content = message.isStreaming
     ? message.streamingContent || message.content
@@ -676,6 +718,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ chatId, message }) => {
             getJobName,
             getAgentName,
             connectionPaused && !!message.isStreaming,
+            delegationFollowUps,
           )
         ) : (
           /* FALLBACK: OLD FORMAT (no sequence) */
@@ -898,5 +941,6 @@ export const MessageItem = React.memo(MessageItemInner, (prev, next) => {
   if (prev.message.attachments !== next.message.attachments) return false;
   if (prev.message.sequence !== next.message.sequence) return false;
   if (prev.chatId !== next.chatId) return false;
+  if (prev.delegationFollowUps !== next.delegationFollowUps) return false;
   return true;
 });

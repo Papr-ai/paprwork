@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { validateMiniAppIcon } from "../src/core/utils/miniAppIconValidation.js";
+import { sanitizeMiniAppIcon, validateMiniAppIcon } from "../src/core/utils/miniAppIconValidation.js";
 
 const VALID_CHART_ICON =
   '<svg viewBox="0 0 24 24"><path d="M3 3v16a2 2 0 002 2h16" stroke="currentColor" stroke-width="2" fill="none"/></svg>';
@@ -61,5 +61,18 @@ describe("validateMiniAppIcon", () => {
       '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>',
     );
     expect(result).toEqual({ ok: true });
+  });
+
+  test("sanitizeMiniAppIcon returns null for invalid icons", () => {
+    expect(sanitizeMiniAppIcon("chart")).toBeNull();
+    expect(sanitizeMiniAppIcon("  ")).toBeNull();
+    expect(sanitizeMiniAppIcon(undefined)).toBeNull();
+  });
+
+  test("sanitizeMiniAppIcon returns trimmed valid icons", () => {
+    expect(sanitizeMiniAppIcon(`  ${VALID_CHART_ICON}  `)).toBe(VALID_CHART_ICON);
+    expect(sanitizeMiniAppIcon("data:image/png;base64,abc")).toBe(
+      "data:image/png;base64,abc",
+    );
   });
 });

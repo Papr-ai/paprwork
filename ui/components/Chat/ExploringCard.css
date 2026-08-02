@@ -124,16 +124,21 @@
   font-weight: bold;
 }
 
-.exploring-tool-error {
-  color: #ef4444; /* Red */
-  font-size: 14px;
-  font-weight: bold;
+/* Agent tool retry — status note, not a user action button */
+.exploring-tool-agent-note {
+  margin-left: 6px;
+  font-size: 11px;
+  font-style: italic;
+  font-weight: 400;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  opacity: 0.9;
 }
 
 .exploring-tool-warning {
-  color: #f59e0b; /* Amber */
-  font-size: 14px;
-  font-weight: bold;
+  color: var(--warning-color);
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .exploring-tool-feedback {
@@ -145,16 +150,26 @@
   word-break: break-word;
 }
 
-.exploring-tool-feedback--error {
-  color: #fca5a5;
-  background: rgba(239, 68, 68, 0.08);
-  border: 1px solid rgba(239, 68, 68, 0.15);
+.exploring-tool-feedback__label {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 10px;
+  font-style: italic;
+  font-weight: 500;
+  color: var(--text-tertiary);
+}
+
+/* Neutral tone: agent uses this to adjust, not a broken-app signal */
+.exploring-tool-feedback--agent {
+  color: var(--text-secondary);
+  background: var(--hover-bg);
+  border: 1px solid var(--border-color);
 }
 
 .exploring-tool-feedback--warning {
-  color: #fcd34d;
-  background: rgba(245, 158, 11, 0.08);
-  border: 1px solid rgba(245, 158, 11, 0.15);
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--warning-color) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning-color) 18%, transparent);
 }
 
 .exploring-tool-interrupted {

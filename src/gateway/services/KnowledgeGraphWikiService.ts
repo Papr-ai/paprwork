@@ -13,6 +13,11 @@ import {
   paprMemorySearchScopeSpread,
 } from "../utils/memoryScopeResolver.js";
 import { buildMemorySearchScopeFields } from "../../core/utils/memoryScope.js";
+import {
+  isWikiRailExcluded,
+  pickWikiLabel,
+} from "./wikiGraphHelpers.js";
+import { syncWikiGraphEntity } from "./wikiGraphEntitySync.js";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -287,7 +292,7 @@ const ENTITY_CONFIGS: EntityTypeConfig[] = [
     railTitle: "Projects",
     graphqlHasId: true,
     listQuery: `projects {
-      id updated_at
+      id name description type updated_at
     }`,
     detailQuery: (id) => `projects(where: { ${graphqlStringEq("id", id)} }) {
       id name description type updated_at
@@ -305,7 +310,7 @@ const ENTITY_CONFIGS: EntityTypeConfig[] = [
     railTitle: "People",
     graphqlHasId: true,
     listQuery: `people {
-      id updated_at
+      id name role description updated_at
     }`,
     detailQuery: (id) => `people(where: { ${graphqlStringEq("id", id)} }) {
       id name role description updated_at
@@ -399,24 +404,6 @@ function asString(value: unknown): string {
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   return "";
-}
-
-function pickLabel(record: Record<string, unknown>, wikiType: string): string {
-  const candidates = [
-    record.name,
-    record.title,
-    record.task_name,
-    record.description,
-    record.content,
-    record.label,
-  ];
-  for (const candidate of candidates) {
-    const text = asString(candidate).trim();
-    if (text) {
-      return text.length > 80 ? `${text.slice(0, 77)}…` : text;
-    }
-  }
-  return `${wikiType} ${asString(record.id).slice(0, 8)}`;
 }
 
 function pickDescription(record: Record<string, unknown>): string {
@@ -513,7 +500,7 @@ function normalizeNode(
   return {
     id: asString(record.id) || syntheticNodeId(record, wikiType),
     type: wikiType,
-    label: pickLabel(record, wikiType),
+    label: pickWikiLabel(record, wikiType),
     description: pickDescription(record),
     props,
   };
@@ -769,6 +756,7 @@ async function fetchWikiHomeFromSearch(client: Papr): Promise<{
 
   const addNode = (raw: Record<string, unknown>, wikiType: string) => {
     const record = coerceSearchRecord(raw);
+    if (isWikiRailExcluded(record, wikiType)) return;
     const node = normalizeNode(record, wikiType);
     if (!node.id) return;
     const key = `${node.type}:${node.id}`;
@@ -854,6 +842,7 @@ async function fetchWikiHomeFromGraphQL(client: Papr): Promise<{
   const rails: WikiRail[] = [];
   const typeCounts: Record<string, number> = {};
   let graphqlFailed = false;
+  let graphRepairsRemaining = 8;
 
   await Promise.all(
     ENTITY_CONFIGS.map(async (config) => {
@@ -870,13 +859,23 @@ async function fetchWikiHomeFromGraphQL(client: Papr): Promise<{
       const rows = data[config.graphqlPlural];
       if (!Array.isArray(rows) || rows.length === 0) return;
 
-      const items = rows
+      const filtered = rows
         .filter(
           (row): row is Record<string, unknown> =>
             typeof row === "object" && row !== null,
         )
-        .slice(0, MAX_RAIL_ITEMS)
-        .map((row) => normalizeNode(row, config.wikiType));
+        .filter((row) => !isWikiRailExcluded(row, config.wikiType))
+        .slice(0, MAX_RAIL_ITEMS);
+
+      const items: WikiNode[] = [];
+      for (const row of filtered) {
+        const allowGraphRepair = graphRepairsRemaining > 0;
+        const synced = await syncWikiGraphEntity(client, row, config.wikiType, {
+          allowGraphRepair,
+        });
+        if (synced.graphRepaired) graphRepairsRemaining -= 1;
+        items.push(normalizeNode(synced.record, config.wikiType));
+      }
 
       typeCounts[config.wikiType] = items.length;
       rails.push({
@@ -1037,8 +1036,9 @@ async function _fetchWikiEntityBase(wikiType: string, id: string, label?: string
         const rows = data[config.graphqlPlural];
         if (Array.isArray(rows) && rows.length > 0) {
           const record = rows[0] as Record<string, unknown>;
-          const node = normalizeNode(record, wikiType);
-          const { edges, rails } = extractEdgesAndRails(record, node.id);
+          const synced = await syncWikiGraphEntity(client, record, wikiType);
+          const node = normalizeNode(synced.record, wikiType);
+          const { edges, rails } = extractEdgesAndRails(synced.record, node.id);
           return { node, edges, rails };
         }
       }
@@ -1073,12 +1073,13 @@ async function _fetchWikiEntityBase(wikiType: string, id: string, label?: string
       candidates.find(
         (row) =>
           label &&
-          pickLabel(row, wikiType).toLowerCase() === label.toLowerCase(),
+          pickWikiLabel(row, wikiType).toLowerCase() === label.toLowerCase(),
       ) ??
       candidates[0];
 
     if (match) {
-      const node = normalizeNode(match, wikiType);
+      const synced = await syncWikiGraphEntity(client, match, wikiType);
+      const node = normalizeNode(synced.record, wikiType);
       return { node, edges: [], rails: [] };
     }
   } catch {

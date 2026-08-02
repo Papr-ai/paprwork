@@ -521,23 +521,22 @@ export function MiniChatCard({
   };
 
   const title = task.length > 40 ? `${task.slice(0, 40)}…` : task;
-  const hasDetails =
-    messages.length > 0 || !!resultText || !!error || !!context;
 
   return (
     <div
       className={`mini-chat-card${isCollapsed ? " mini-chat-card--collapsed" : ""}`}
       data-testid="mini-chat-card"
+      onMouseDown={(e) => e.stopPropagation()}
     >
       <div
         className="mini-chat-card__header"
-        onClick={() => hasDetails && setIsCollapsed((c) => !c)}
+        onClick={() => setIsCollapsed((c) => !c)}
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
+          if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            hasDetails && setIsCollapsed((c) => !c);
+            setIsCollapsed((c) => !c);
           }
         }}
       >
@@ -582,6 +581,13 @@ export function MiniChatCard({
         <div className="mini-chat-card__body" ref={bodyRef}>
           {context && <div className="mini-chat-card__context">{context}</div>}
 
+          {liveStatus === "active" &&
+            !activity.thinking &&
+            activity.toolCalls.length === 0 &&
+            messages.length === 0 && (
+              <div className="mini-chat-card__waiting">Sub-agent is working…</div>
+            )}
+
           {/* Sub-agent activity: thinking + tool calls (like main chat) */}
           {(activity.thinking || activity.toolCalls.length > 0) && liveStatus === "active" && (
             <div className="mini-chat-card__activity">
@@ -610,7 +616,9 @@ export function MiniChatCard({
                         <span className="mini-chat-card__tool-status">✓</span>
                       )}
                       {tc.status === "error" && (
-                        <span className="mini-chat-card__tool-status">✗</span>
+                        <span className="mini-chat-card__tool-status mini-chat-card__tool-status--agent">
+                          Agent auto-fixing…
+                        </span>
                       )}
                     </div>
                   ))}

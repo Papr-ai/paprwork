@@ -106,7 +106,7 @@ export function buildPreviewLandingHtml(
     : null;
   const loginBlock =
     showLoginButton && loginUrl
-      ? `<p class="actions"><a class="btn" href="${loginUrl}">Sign in with Papr</a></p>`
+      ? `<p class="actions"><a class="btn" href="${loginUrl}" target="_blank" rel="noopener noreferrer">Sign in with Papr</a></p>`
       : "";
   const headlineBlock = gateHeadline
     ? `<p class="status">${gateHeadline}</p>`

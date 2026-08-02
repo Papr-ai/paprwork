@@ -141,6 +141,7 @@ interface SearchAppCodePayload {
   scope?: "all" | "app" | "jobs";
   jobFilter?: string[];
   limit?: number;
+  mode?: "keyword" | "memory" | "hybrid";
 }
 
 export async function setupAppHandlers(
@@ -615,6 +616,7 @@ export async function setupAppHandlers(
           scope: payload.scope,
           jobFilter: payload.jobFilter,
           limit: payload.limit,
+          mode: payload.mode,
         });
         ws.send(
           JSON.stringify({

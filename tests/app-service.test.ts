@@ -54,13 +54,27 @@ describe("AppService", () => {
     expect(second.title).toBe("mem0 stargazers_1");
   });
 
-  test("createApp rejects SVG icons with white circle backgrounds", async () => {
+  test("createApp drops invalid icons instead of blocking install", async () => {
     const badIcon =
       '<svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="white"/><path d="M10 32h44" stroke="black"/></svg>';
 
-    await expect(
-      appService.createApp("Monitor", "Desc", [{ filename: "index.html", content: "<h1>Hi</h1>" }], badIcon),
-    ).rejects.toThrow(/circle background/i);
+    const created = await appService.createApp(
+      "Monitor",
+      "Desc",
+      [{ filename: "index.html", content: "<h1>Hi</h1>" }],
+      badIcon,
+    );
+    expect(created.icon).toBeUndefined();
+  });
+
+  test("createApp drops plain-text icons for community-style installs", async () => {
+    const created = await appService.createApp(
+      "Community App",
+      "Desc",
+      [{ filename: "index.html", content: "<h1>Hi</h1>" }],
+      "chart",
+    );
+    expect(created.icon).toBeUndefined();
   });
 
   test("createApp scaffolds backend/manifest.json and ping.py", async () => {

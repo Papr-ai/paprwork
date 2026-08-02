@@ -28,6 +28,10 @@ import {
   readCachedCloudPublishState,
   writeCachedCloudPublishState,
 } from "../utils/cloudPublishCache";
+import {
+  buildDesktopCloudPreviewUrl,
+  isDesktopElectron,
+} from "../utils/cloudDesktopPreview";
 
 export interface CloudPublishViewModel {
   loading: boolean;
@@ -44,7 +48,9 @@ export interface CloudPublishViewModel {
   shareUrl: string | null;
   loginUrl: string | null;
   externalLinkUrl: string | null;
-  /** Best URL to load the live cloud app (iframe or browser). */
+  /** Public apps.papr.ai URL (for display, copy, open in browser). */
+  publishedWebUrl: string | null;
+  /** Iframe src for Web preview (gateway proxy on desktop, direct URL elsewhere). */
   publishedPreviewUrl: string | null;
   slug: string | null;
   statusLabel: string;
@@ -113,11 +119,18 @@ function buildViewModel(
   const codeLabel = sharing.codeAccess === "install" ? "Code install" : null;
   const statusParts = [loginLabel, linkLabel, codeLabel].filter(Boolean);
 
+  const publishedWebUrl =
+    baseUrl && state?.enabled === true
+      ? (externalLinkUrl ?? loginUrl ?? shareLink ?? baseUrl)
+      : null;
+
   const publishedPreviewUrl = (() => {
-    if (!baseUrl || state?.enabled !== true) return null;
-    // When an invite link is enabled, always preview with the full ?t= URL.
-    if (externalLinkUrl) return externalLinkUrl;
-    return loginUrl ?? shareLink ?? baseUrl;
+    if (!publishedWebUrl) return null;
+    if (isDesktopElectron()) {
+      const proxied = buildDesktopCloudPreviewUrl(publishedWebUrl);
+      if (proxied) return proxied;
+    }
+    return publishedWebUrl;
   })();
 
   return {
@@ -134,6 +147,7 @@ function buildViewModel(
     shareUrl: baseUrl,
     loginUrl,
     externalLinkUrl,
+    publishedWebUrl,
     publishedPreviewUrl,
     slug: state?.slug ?? null,
     statusLabel:

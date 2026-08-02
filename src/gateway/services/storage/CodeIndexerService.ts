@@ -12,6 +12,7 @@ import { Papr } from '@papr/memory';
 import { buildCodeIndexAddPolicy } from '../../utils/paprMemoryPolicy.js';
 import { paprMemoryScopeSpread } from '../../utils/memoryScopeResolver.js';
 import { getProjectPathInfo } from './codeIndexPaths.js';
+import { resolveMiniAppDisplayName } from './codeIndexMetadata.js';
 
 export interface CodeFileMetadata {
   file_path: string;
@@ -285,7 +286,7 @@ export class CodeIndexerService {
   private async extractMiniAppMetadata(appPath: string, appId: string): Promise<ProjectMetadata> {
     const metadata: ProjectMetadata = {
       project_id: appId,
-      name: appId,
+      name: resolveMiniAppDisplayName(appId, appPath),
       type: 'mini_app'
     };
     

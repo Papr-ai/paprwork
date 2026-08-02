@@ -192,6 +192,16 @@ export function validateMiniAppIcon(icon: string): MiniAppIconValidationResult {
   return { ok: true };
 }
 
+/** Returns a trimmed icon when valid, or null so callers can fall back to the default orb. */
+export function sanitizeMiniAppIcon(icon: string | null | undefined): string | null {
+  if (!icon?.trim()) {
+    return null;
+  }
+  const trimmed = icon.trim();
+  const result = validateMiniAppIcon(trimmed);
+  return result.ok ? trimmed : null;
+}
+
 export function assertValidMiniAppIcon(icon: string): void {
   const result = validateMiniAppIcon(icon);
   if (!result.ok) {

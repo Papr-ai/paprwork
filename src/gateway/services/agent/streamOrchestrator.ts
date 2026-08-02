@@ -18,6 +18,39 @@ export interface StreamOrchestratorResult {
   sequence: Array<{ type: "text" | "tool" | "thinking"; data: any }>; // V1-style sequence for interleaving
 }
 
+/** True when the turn ends on tool call(s) with no user-visible text after them. */
+export function sequenceEndsWithToolWithoutTrailingText(
+  sequence: Array<{ type: string; data: unknown }>,
+): boolean {
+  if (sequence.length === 0) {
+    return false;
+  }
+
+  let lastToolIndex = -1;
+  for (let i = sequence.length - 1; i >= 0; i--) {
+    if (sequence[i]?.type === "tool") {
+      lastToolIndex = i;
+      break;
+    }
+  }
+  if (lastToolIndex < 0) {
+    return false;
+  }
+
+  for (let i = lastToolIndex + 1; i < sequence.length; i++) {
+    const item = sequence[i];
+    if (
+      item?.type === "text" &&
+      typeof item.data === "string" &&
+      item.data.trim().length > 0
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 const NETWORK_ERROR_CODES = new Set([
   "UND_ERR_CONNECT_TIMEOUT",
   "UND_ERR_HEADERS_TIMEOUT",

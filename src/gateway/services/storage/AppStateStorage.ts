@@ -94,43 +94,39 @@ export class AppStateStorage {
   }
 
   /**
-   * Save tabs (replaces all tabs)
-   * Non-blocking: uses setImmediate to avoid blocking the event loop
+   * Save tabs (replaces all tabs).
+   * Must complete synchronously — workspace switch closes this DB immediately after flush.
    */
   saveTabs(tabs: TabMetadata[]): void {
-    // Run on next event loop tick to avoid blocking
-    setImmediate(() => {
-      if (this.closed) return;
-      const transaction = this.db.transaction((tabsToSave: TabMetadata[]) => {
-        // Clear existing tabs
-        this.db.prepare('DELETE FROM tabs').run();
-        
-        // Insert new tabs
-        const stmt = this.db.prepare(`
-          INSERT INTO tabs (
-            id, type, entity_id, title, display_mode, parent_tab_id,
-            position, is_favorite, created_at, last_accessed_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
+    if (this.closed) return;
 
-        for (const tab of tabsToSave) {
-          stmt.run(
-            tab.id,
-            tab.type,
-            tab.entityId,
-            tab.title,
-            tab.displayMode,
-            tab.parentTabId,
-            tab.position,
-            tab.isFavorite ? 1 : 0,
-            tab.createdAt,
-            tab.lastAccessedAt
-          );
-        }
-      });
+    const transaction = this.db.transaction((tabsToSave: TabMetadata[]) => {
+      this.db.prepare('DELETE FROM tabs').run();
 
-      transaction(tabs);
+      const stmt = this.db.prepare(`
+        INSERT INTO tabs (
+          id, type, entity_id, title, display_mode, parent_tab_id,
+          position, is_favorite, created_at, last_accessed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      for (const tab of tabsToSave) {
+        stmt.run(
+          tab.id,
+          tab.type,
+          tab.entityId,
+          tab.title,
+          tab.displayMode,
+          tab.parentTabId,
+          tab.position,
+          tab.isFavorite ? 1 : 0,
+          tab.createdAt,
+          tab.lastAccessedAt,
+        );
+      }
     });
+
+    transaction(tabs);
   }
 
   /**
@@ -157,48 +153,46 @@ export class AppStateStorage {
   }
 
   /**
-   * Save app state (active tab, split ratio, onboarding, etc.)
-   * Non-blocking: uses setImmediate to avoid blocking the event loop
+   * Save app state (active tab, split ratio, onboarding, etc.).
+   * Must complete synchronously — workspace switch closes this DB immediately after flush.
    */
   saveAppState(state: Partial<AppState>): void {
-    // Run on next event loop tick to avoid blocking
-    setImmediate(() => {
-      if (this.closed) return;
-      const stmt = this.db.prepare(`
-        INSERT OR REPLACE INTO app_state (key, value, updated_at)
-        VALUES (?, ?, ?)
-      `);
+    if (this.closed) return;
 
-      const now = new Date().toISOString();
-      const splitRatio = state.splitRatio ?? 0.5;
-      const historyIndex = state.historyIndex ?? -1;
-      stmt.run('activeTabId', state.activeTabId ?? '', now);
-      stmt.run('splitRatio', splitRatio.toString(), now);
-      stmt.run('splitRatios', JSON.stringify(state.splitRatios ?? {}), now);
-      stmt.run('history', JSON.stringify(state.history ?? []), now);
-      stmt.run('historyIndex', historyIndex.toString(), now);
-      stmt.run(
-        'onboardingStep1Completed',
-        (state.onboardingStep1Completed ?? false).toString(),
-        now,
-      );
-      stmt.run(
-        'onboardingStep2Completed',
-        (state.onboardingStep2Completed ?? false).toString(),
-        now,
-      );
-      stmt.run(
-        'onboardingStep3Completed',
-        (state.onboardingStep3Completed ?? false).toString(),
-        now,
-      );
-      stmt.run(
-        'onboardingDismissed',
-        (state.onboardingDismissed ?? false).toString(),
-        now,
-      );
-      stmt.run('lastSavedAt', state.lastSavedAt ?? now, now);
-    });
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO app_state (key, value, updated_at)
+      VALUES (?, ?, ?)
+    `);
+
+    const now = new Date().toISOString();
+    const splitRatio = state.splitRatio ?? 0.5;
+    const historyIndex = state.historyIndex ?? -1;
+    stmt.run('activeTabId', state.activeTabId ?? '', now);
+    stmt.run('splitRatio', splitRatio.toString(), now);
+    stmt.run('splitRatios', JSON.stringify(state.splitRatios ?? {}), now);
+    stmt.run('history', JSON.stringify(state.history ?? []), now);
+    stmt.run('historyIndex', historyIndex.toString(), now);
+    stmt.run(
+      'onboardingStep1Completed',
+      (state.onboardingStep1Completed ?? false).toString(),
+      now,
+    );
+    stmt.run(
+      'onboardingStep2Completed',
+      (state.onboardingStep2Completed ?? false).toString(),
+      now,
+    );
+    stmt.run(
+      'onboardingStep3Completed',
+      (state.onboardingStep3Completed ?? false).toString(),
+      now,
+    );
+    stmt.run(
+      'onboardingDismissed',
+      (state.onboardingDismissed ?? false).toString(),
+      now,
+    );
+    stmt.run('lastSavedAt', state.lastSavedAt ?? now, now);
   }
 
   /**

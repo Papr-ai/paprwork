@@ -11,6 +11,7 @@ import {
 } from "./MiniAppPublishBar";
 import { MiniAppFilesView } from "./MiniAppFilesView";
 import type { AppWorkspaceMode } from "../../hooks/useAppWorkspace";
+import { clearCloudPreviewCookies } from "../../utils/cloudDesktopPreview";
 import "./MiniAppPublishBar.css";
 
 interface MiniAppViewProps {
@@ -136,6 +137,17 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
       setViewMode("local");
     }
   }, [cloud.live, viewMode]);
+
+  const handleViewModeChange = useCallback(
+    (mode: AppPreviewMode) => {
+      if (mode === "local" && viewMode === "published") {
+        clearCloudPreviewCookies();
+        setIframeLoadKey((key) => key + 1);
+      }
+      setViewMode(mode);
+    },
+    [viewMode],
+  );
 
   useEffect(() => {
     trackEvent("paprwork_app_opened", { app_id: appId } as Record<string, unknown>);
@@ -340,6 +352,39 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
     return () => window.removeEventListener("message", handleMessage);
   }, [appId, isPublishedPreview]);
 
+  // Auth0 login cannot run inside an iframe — open apps.papr.ai sign-in externally.
+  useEffect(() => {
+    if (!isPublishedPreview) return;
+
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+
+    const handleLoad = () => {
+      try {
+        const doc = iframe.contentDocument;
+        if (!doc) return;
+        doc.querySelectorAll('a[href*="/auth/login"]').forEach((node) => {
+          const anchor = node as HTMLAnchorElement;
+          anchor.addEventListener("click", (event) => {
+            event.preventDefault();
+            const href = anchor.href;
+            if (!href) return;
+            if (window.electronAPI?.system?.invoke) {
+              void window.electronAPI.system.invoke("shell.openExternal", href);
+            } else {
+              window.open(href, "_blank", "noopener,noreferrer");
+            }
+          });
+        });
+      } catch {
+        /* cross-origin — ignore */
+      }
+    };
+
+    iframe.addEventListener("load", handleLoad);
+    return () => iframe.removeEventListener("load", handleLoad);
+  }, [isPublishedPreview, iframeSrc]);
+
   return (
     <div className="mini-app-view">
       <MiniAppPublishBar
@@ -348,7 +393,7 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
         cloud={cloud}
         cloudLineage={cloudLineage}
         viewMode={viewMode}
-        onViewModeChange={setViewMode}
+        onViewModeChange={handleViewModeChange}
         workspaceMode={workspaceMode}
         onWorkspaceModeChange={setWorkspaceMode}
         onTrackPullComplete={() => void refreshAppMetadata()}

@@ -36,7 +36,10 @@ import {
   getPaprRoot,
 } from "../../core/utils/paprRoot.js";
 import { scanAppCodeForJobDatabaseReferences } from "./appCodeDataSourceDiscovery.js";
-import { assertValidMiniAppIcon } from "../../core/utils/miniAppIconValidation.js";
+import {
+  sanitizeMiniAppIcon,
+  validateMiniAppIcon,
+} from "../../core/utils/miniAppIconValidation.js";
 import {
   isAppAwaitingAssignmentInWorkspace,
   mergeAppWorkspaceFields,
@@ -1247,7 +1250,17 @@ export class AppService {
       }
     }
     if (resolvedIcon) {
-      assertValidMiniAppIcon(resolvedIcon);
+      const sanitizedIcon = sanitizeMiniAppIcon(resolvedIcon);
+      if (!sanitizedIcon) {
+        const iconResult = validateMiniAppIcon(resolvedIcon);
+        console.warn(
+          `[AppService] Dropping invalid icon for ${JSON.stringify(uniqueTitle)}` +
+            (iconResult.ok ? "" : `: ${iconResult.message}`),
+        );
+        resolvedIcon = null;
+      } else {
+        resolvedIcon = sanitizedIcon;
+      }
     }
 
     const scope = readActiveAppWorkspaceScope();
@@ -1308,7 +1321,7 @@ export class AppService {
 
     // If still no icon, try to read a logo SVG from the app directory
     if (!app.icon) {
-      const dirIcon = await this.resolveIconFromAppDir(appPath);
+      const dirIcon = sanitizeMiniAppIcon(await this.resolveIconFromAppDir(appPath));
       if (dirIcon) {
         app.icon = dirIcon;
       }
@@ -1411,11 +1424,21 @@ export class AppService {
     const app = await this.getApp(id);
     if (!app) return null;
 
-    if (updates.icon !== undefined && updates.icon.trim()) {
-      assertValidMiniAppIcon(updates.icon);
-    }
-
     let nextUpdates = updates;
+    if (updates.icon !== undefined && updates.icon.trim()) {
+      const sanitizedIcon = sanitizeMiniAppIcon(updates.icon);
+      if (!sanitizedIcon) {
+        const iconResult = validateMiniAppIcon(updates.icon);
+        console.warn(
+          `[AppService] Ignoring invalid icon update for ${id}` +
+            (iconResult.ok ? "" : `: ${iconResult.message}`),
+        );
+        const { icon: _dropped, ...withoutIcon } = nextUpdates;
+        nextUpdates = withoutIcon;
+      } else if (sanitizedIcon !== updates.icon.trim()) {
+        nextUpdates = { ...nextUpdates, icon: sanitizedIcon };
+      }
+    }
     if (updates.title !== undefined) {
       const { ensureUniqueAppTitle } = await import("../utils/uniqueAppNaming.js");
       const uniqueTitle = ensureUniqueAppTitle(
@@ -2129,7 +2152,7 @@ export class AppService {
       if (!iconResult.ok) {
         issues.push({
           file: "app",
-          severity: "error",
+          severity: "warning",
           rule: iconResult.rule,
           message: iconResult.message,
         });
@@ -2338,7 +2361,7 @@ export class AppService {
     const result: ValidationResult = {
       appId,
       timestamp: new Date().toISOString(),
-      valid: issues.length === 0,
+      valid: !issues.some((issue) => issue.severity === "error"),
       issues,
       filesChecked: filesToCheck.length,
     };

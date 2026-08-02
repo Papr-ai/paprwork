@@ -35,6 +35,19 @@ function filterSyntheticSubAgentExchange(history: unknown[]): unknown[] {
       if (nextIsAssistant) i++; // Skip next too
       continue;
     }
+    if (
+      typeof msg === "object" &&
+      msg !== null &&
+      (msg as Record<string, unknown>).role === "assistant"
+    ) {
+      const content =
+        typeof (msg as Record<string, unknown>).content === "string"
+          ? ((msg as Record<string, unknown>).content as string)
+          : "";
+      if (/^Agent job Delegation: .+ finished with no textual output\.$/.test(content.trim())) {
+        continue;
+      }
+    }
     result.push(msg);
   }
   return result;

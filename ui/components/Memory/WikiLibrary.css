@@ -702,7 +702,18 @@
 }
 
 /* States */
-.wiki-loading,
+.wiki-loading {
+  margin: 16px 24px 0;
+  padding: 12px 16px;
+}
+
+.wiki-loading--inline {
+  margin: 20px 0 0;
+  padding: 0;
+  width: 100%;
+  max-width: 360px;
+}
+
 .wiki-entity__error {
   margin: 16px 24px 0;
   padding: 12px 16px;

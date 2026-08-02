@@ -649,8 +649,22 @@ function WikiHome({ data, loading, loadError, onRetry, onPick, onSearch, onAdd, 
   const wikiEmpty = (data?.rails.length ?? 0) === 0 && !featured;
 
   if (loading && !data) {
-    return (<div className="wiki-loading"><div className="wiki-loading__shimmer" /><div className="wiki-loading__shimmer" />
-      <div className="wiki-loading__shimmer wiki-loading__shimmer--wide" /></div>);
+    return (
+      <div className="wiki-library wiki-library--setup-only">
+        <section className="wiki-setup-panel wiki-setup-panel--connecting" aria-busy="true">
+          <div className="wiki-setup-panel__icon" aria-hidden>↻</div>
+          <h2 className="wiki-setup-panel__title">Loading your knowledge graph…</h2>
+          <p className="wiki-setup-panel__body">
+            Fetching goals, projects, people, and memories from Papr.
+          </p>
+          <div className="wiki-loading wiki-loading--inline">
+            <div className="wiki-loading__shimmer" />
+            <div className="wiki-loading__shimmer" />
+            <div className="wiki-loading__shimmer wiki-loading__shimmer--wide" />
+          </div>
+        </section>
+      </div>
+    );
   }
 
   if (!data && loadError) {

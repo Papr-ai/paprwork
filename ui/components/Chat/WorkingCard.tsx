@@ -41,6 +41,12 @@ export const WorkingCard: React.FC<WorkingCardProps> = ({
     };
   }, [lastActivity, isExploring]);
 
+  useEffect(() => {
+    if (isExploring) {
+      setIsCollapsed(false);
+    }
+  }, [isExploring]);
+
   const shimmerActive = isExploring && showShimmer;
 
   return (

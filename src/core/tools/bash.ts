@@ -9,7 +9,7 @@
  * - Error handling
  */
 
-import { exec, spawn } from "child_process";
+import { exec, spawn, type ChildProcess } from "child_process";
 import { z } from "zod";
 import { createTool } from "@mastra/core/tools";
 import type { ToolResult } from "../types/tools.js";
@@ -39,6 +39,17 @@ import {
 } from "../utils/jobsIndexBashGuard.js";
 import { isPaprAppsOrJobsSearchPath } from "../utils/paprAgentPaths.js";
 import { getShell, getShellCommand } from "../utils/platform.js";
+import { classifyChildProcessError } from "../utils/childProcessErrors.js";
+
+/** Avoid inheriting a closed stdin from the Gateway child process (prevents EBADF). */
+const EXEC_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
+
+function destroyChildProcessStreams(proc: ChildProcess | null): void {
+  if (!proc) return;
+  proc.stdout?.destroy();
+  proc.stderr?.destroy();
+  proc.stdin?.destroy();
+}
 
 /** Commands that fetch or produce external content - wrap stdout for prompt injection defense */
 const CURL_WGET_REGEX = /\b(curl|wget)\b/i;
@@ -541,7 +552,7 @@ export async function executeBashCommand(
         maxBuffer: 100 * 1024 * 1024, // 100MB buffer (up from 10MB)
         env: { ...process.env, ...(env as Record<string, string>) },
         shell: getShell(),
-      }, (error, stdout, stderr) => {
+      }, (error: Error | null, stdout: string, stderr: string) => {
         if (error) {
           reject(error);
         } else {
@@ -567,6 +578,7 @@ export async function executeBashCommand(
       stderr = result.stderr;
     } finally {
       clearTimeout(killTimer);
+      destroyChildProcessStreams(childProcess);
     }
     
     // Validate output exists (catch undefined/null from process failures)
@@ -685,46 +697,13 @@ export async function executeBashCommand(
     const duration = Date.now() - startTime;
     const apiKeys = getApiKeysForSanitization();
 
-    // Handle exec errors (non-zero exit codes)
-    if (error && typeof error === "object" && "code" in error) {
+    const classified = classifyChildProcessError(error, timeout);
+    if (classified) {
       const execError = error as {
-        code?: number;
         stdout?: string;
         stderr?: string;
-        killed?: boolean;
-        signal?: string;
       };
-
-      // Timeout
-      if (execError.killed || execError.signal === "SIGTERM" || execError.signal === "SIGKILL") {
-        const sanitizedError = sanitizeError(
-          `Command timed out after ${timeout}ms`,
-          apiKeys,
-        );
-        let errStdout = sanitizeError(execError.stdout || "", apiKeys);
-        const wrapSource = shouldWrapBashOutput(input.command);
-        if (wrapSource && errStdout) {
-          errStdout = wrapUntrustedContent(wrapSource, "", errStdout);
-        }
-        return {
-          success: false,
-          error: sanitizedError,
-          type: "timeout_error",
-          data: {
-            stdout: errStdout,
-            stderr: sanitizeError(execError.stderr || "", apiKeys),
-            exitCode: execError.code || -1,
-            command: sanitizeError(input.command, apiKeys),
-            duration,
-          },
-        };
-      }
-
-      // Non-zero exit code
-      const sanitizedError = sanitizeError(
-        `Command failed with exit code ${execError.code}`,
-        apiKeys,
-      );
+      const sanitizedError = sanitizeError(classified.message, apiKeys);
       let errStdout = sanitizeError(execError.stdout || "", apiKeys);
       const wrapSource = shouldWrapBashOutput(input.command);
       if (wrapSource && errStdout) {
@@ -733,13 +712,16 @@ export async function executeBashCommand(
       return {
         success: false,
         error: sanitizedError,
-        type: "execution_error",
+        type: classified.type,
         data: {
           stdout: errStdout,
           stderr: sanitizeError(execError.stderr || "", apiKeys),
-          exitCode: execError.code || 1,
+          exitCode: classified.exitCode,
           command: sanitizeError(input.command, apiKeys),
           duration,
+          ...(classified.agentHint
+            ? { _processHint: classified.agentHint }
+            : {}),
         },
       };
     }
@@ -865,6 +847,7 @@ export async function executeBashCommandStreaming(
       cwd: cwd || process.cwd(),
       env: env ? { ...process.env, ...(env as Record<string, string>) } : process.env,
       timeout,
+      stdio: EXEC_STDIO,
     });
 
     // Stream stdout (sanitize before sending)
@@ -886,7 +869,8 @@ export async function executeBashCommandStreaming(
     // Handle exit
     proc.on("close", (code: number | null) => {
       if (killTimer) clearTimeout(killTimer);
-      
+      destroyChildProcessStreams(proc);
+
       const duration = Date.now() - startTime;
       const exitCode = code ?? -1;
 
@@ -950,12 +934,19 @@ export async function executeBashCommandStreaming(
     // Handle errors
     proc.on("error", (error: Error) => {
       if (killTimer) clearTimeout(killTimer);
-      
+      destroyChildProcessStreams(proc);
+
       const duration = Date.now() - startTime;
       let sanitizedStdout = sanitizeError(stdoutData, apiKeys);
       const sanitizedStderr = sanitizeError(stderrData, apiKeys);
       const sanitizedCommand = sanitizeError(input.command, apiKeys);
-      const sanitizedError = sanitizeError(error.message, apiKeys);
+      const classified = classifyChildProcessError(error, timeout);
+      const failure = classified ?? {
+        type: "spawn_error" as const,
+        message: `Could not start command — ${error.message}`,
+        exitCode: -1,
+      };
+      const sanitizedError = sanitizeError(failure.message, apiKeys);
 
       const wrapSource = shouldWrapBashOutput(input.command);
       if (wrapSource && sanitizedStdout) {
@@ -964,14 +955,15 @@ export async function executeBashCommandStreaming(
 
       resolve({
         success: false,
-        error: `Failed to execute: ${sanitizedError}`,
-        type: "spawn_error",
+        error: sanitizedError,
+        type: failure.type,
         data: {
           stdout: sanitizedStdout,
           stderr: sanitizedStderr,
-          exitCode: -1,
+          exitCode: failure.exitCode,
           command: sanitizedCommand,
           duration,
+          ...(failure.agentHint ? { _processHint: failure.agentHint } : {}),
         },
       });
     });

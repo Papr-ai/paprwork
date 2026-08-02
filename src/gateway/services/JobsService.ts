@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
-import type { ChildProcessWithoutNullStreams } from "child_process";
+import type { ChildProcess } from "child_process";
 import { v4 as uuidv4 } from "uuid";
 import { fileURLToPath } from "url";
 import Database from "better-sqlite3";
@@ -12,6 +12,7 @@ import {
   validateJobArchitecture,
 } from "./jobs/jobArchitectureValidation.js";
 import { CommandJobExecutor } from "./jobs/executors/CommandJobExecutor.js";
+import { formatSpawnErrorForLogs } from "../../core/utils/childProcessErrors.js";
 import { AgentJobExecutor } from "./jobs/executors/AgentJobExecutor.js";
 import type { IJobExecutor } from "./jobs/executors/IJobExecutor.js";
 import { sanitizeError } from "../../core/tools/security.js";
@@ -102,7 +103,7 @@ export class JobsService {
   private legacyJobsRootDir: string;
   private legacyJobsIndexPath: string;
   private jobs: Map<string, JobRecord>;
-  private running: Map<string, ChildProcessWithoutNullStreams>;
+  private running: Map<string, ChildProcess>;
   private jobDatabase: JobDatabase;
   private executors: IJobExecutor[];
   private initialized: boolean;
@@ -1723,6 +1724,12 @@ export class JobsService {
         `Executor returned process mode without process for ${job.type}`,
       );
     }
+    const { stdout, stderr } = proc;
+    if (!stdout || !stderr) {
+      throw new Error(
+        `Job process for ${job.type} must expose stdout/stderr pipes`,
+      );
+    }
     this.running.set(job.id, proc);
 
     const MAX_OUTPUT_BYTES = 32 * 1024; // 32KB cap
@@ -1756,7 +1763,7 @@ export class JobsService {
         }
       }, WATCHDOG_MS);
 
-      proc.stdout.on("data", async (chunk: Buffer) => {
+      stdout.on("data", async (chunk: Buffer) => {
         const text = chunk.toString("utf8").trimEnd();
         // Sanitize stdout before logging
         const sanitized = await this.sanitizeCommandForLogging(
@@ -1769,7 +1776,7 @@ export class JobsService {
           outputSize += sanitized.length;
         }
       });
-      proc.stderr.on("data", async (chunk: Buffer) => {
+      stderr.on("data", async (chunk: Buffer) => {
         const text = chunk.toString("utf8").trimEnd();
         // Sanitize stderr before logging
         const sanitized = await this.sanitizeCommandForLogging(
@@ -1788,8 +1795,9 @@ export class JobsService {
       });
       proc.on("error", (error: Error) => {
         this.running.delete(job.id);
-        void appendRunLog(`Process error: ${error.message}`);
-        safeResolve({ exitCode: -1, errorMessage: error.message });
+        const formatted = formatSpawnErrorForLogs(error.message);
+        void appendRunLog(`Process error: ${formatted}`);
+        safeResolve({ exitCode: -1, errorMessage: formatted });
       });
     });
   }

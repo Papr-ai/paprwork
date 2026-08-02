@@ -2,7 +2,7 @@
  * MessageList Component - Scrollable list of messages
  */
 
-import React, { useLayoutEffect, useRef, useEffect } from "react";
+import React, { useLayoutEffect, useRef, useEffect, useMemo } from "react";
 import { MessageItem } from "./MessageItem";
 import { WelcomeMessage } from "./WelcomeMessage";
 import { PermissionCard } from "./PermissionCard";
@@ -11,6 +11,7 @@ import { useChatStore } from "../../stores/chatStore";
 import type { ChatMessage } from "../../stores/chatStore";
 import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
 import { isHiddenContinueUserMessage } from "../../lib/agentStreamRecovery";
+import { groupDelegationFollowUpMessages } from "../../utils/delegationMessageGrouping";
 import "./MessageList.css";
 
 interface MessageListProps {
@@ -22,6 +23,13 @@ interface MessageListProps {
   onFilesDropped?: (files: File[]) => void;
   /** Called when user scrolls to the top (for loading older messages) */
   onLoadOlder?: () => void;
+}
+
+/** Job auto-deliver placeholders — SubAgentResponseTrigger handles user-facing updates instead */
+function isSubAgentDeliveryPlaceholder(content: string): boolean {
+  return /^Agent job Delegation: .+ finished with no textual output\.$/.test(
+    content.trim(),
+  );
 }
 
 export const MessageList: React.FC<MessageListProps> = ({
@@ -68,8 +76,19 @@ export const MessageList: React.FC<MessageListProps> = ({
     ) {
       return false;
     }
+    if (
+      msg.role === "assistant" &&
+      isSubAgentDeliveryPlaceholder(msg.content)
+    ) {
+      return false;
+    }
     return true;
   });
+
+  const groupedMessages = useMemo(
+    () => groupDelegationFollowUpMessages(filteredMessages),
+    [filteredMessages],
+  );
 
   // Detect scroll position for auto-scroll and load-more triggers
   useEffect(() => {
@@ -235,8 +254,13 @@ export const MessageList: React.FC<MessageListProps> = ({
           </span>
         </div>
       )}
-      {filteredMessages.map((message) => (
-        <MessageItem key={message.id} chatId={chatId} message={message} />
+      {groupedMessages.map((message) => (
+        <MessageItem
+          key={message.id}
+          chatId={chatId}
+          message={message}
+          delegationFollowUps={message.delegationFollowUps}
+        />
       ))}
       {activeRequest && (
         <div className="message-item">

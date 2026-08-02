@@ -35,6 +35,42 @@
   color: var(--text-tertiary);
 }
 
+.community-apps__install-error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--error, #ef4444) 35%, transparent);
+  background: color-mix(in srgb, var(--error, #ef4444) 8%, transparent);
+}
+
+.community-apps__install-error-text {
+  margin: 0;
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--error, #ef4444);
+}
+
+.community-apps__install-error-dismiss {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.community-apps__install-error-dismiss:hover {
+  background: var(--hover);
+  color: var(--text-primary);
+}
+
 .community-apps__search {
   flex: 1;
   max-width: 320px;

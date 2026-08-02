@@ -308,7 +308,8 @@ export class AgentJobExecutor implements IJobExecutor {
     }
     // ─────────────────────────────────────────────────────────────────────────
 
-    if (params.job.deliver?.channel === "chat") {
+    if (params.job.deliver?.channel === "chat" && params.job.type !== "subagent") {
+      // Sub-agent delegations: SubAgentResponseTrigger posts the user-facing summary.
       const deliveryMessage = {
         id: `msg-${uuidv4()}`,
         chat_id: params.job.deliver.targetId,

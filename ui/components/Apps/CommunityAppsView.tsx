@@ -183,6 +183,7 @@ export function CommunityAppsView({
   const [wizardEntry, setWizardEntry] = useState<OssRegistryEntry | null>(null);
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [installToast, setInstallToast] = useState<string | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
   const [lineageIndex, setLineageIndex] = useState<CloudLineageIndex | null>(null);
   const [installModeEntry, setInstallModeEntry] = useState<CommunityCatalogEntry | null>(null);
   const [cloudInstallWizard, setCloudInstallWizard] = useState<{
@@ -324,7 +325,7 @@ export function CommunityAppsView({
     }
 
     setInstallingId(entry.catalogId);
-    setError(null);
+    setInstallError(null);
     try {
       const res = await fetch(`${GATEWAY}/api/cloud/install`, {
         method: "POST",
@@ -366,8 +367,8 @@ export function CommunityAppsView({
         switchToTab(tabId);
       }
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message.slice(0, 160) : "Install failed",
+      setInstallError(
+        err instanceof Error ? err.message.slice(0, 240) : "Install failed",
       );
     } finally {
       setInstallingId(null);
@@ -616,6 +617,19 @@ export function CommunityAppsView({
 
       {installToast ? (
         <p className="community-apps__summary">{installToast}</p>
+      ) : null}
+
+      {installError ? (
+        <div className="community-apps__install-error" role="alert">
+          <p className="community-apps__install-error-text">{installError}</p>
+          <button
+            type="button"
+            className="community-apps__install-error-dismiss"
+            onClick={() => setInstallError(null)}
+          >
+            Dismiss
+          </button>
+        </div>
       ) : null}
 
       {hiddenByPlatform > 0 && (

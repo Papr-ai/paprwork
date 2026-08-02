@@ -1119,41 +1119,41 @@ function AboutTab() {
           </div>
         </div>
 
-        {currentVersion === "2.1.0" && (
+        {currentVersion === "2.2.0" && (
           <div className="about-card">
-            <h3>What's New in v2.1.0</h3>
+            <h3>What's New in v2.2.0</h3>
             <ul className="whats-new-list">
               <li className="whats-new-list__item">
-                <strong>Cloud App Upstream Sync</strong>
+                <strong>Agent Wrap-Up Summaries</strong>
                 <p>
-                  Forked apps can pull publisher updates and send your changes
-                  back from a dedicated upstream bar in the mini-app header.
+                  When the agent finishes tool calls without a closing message,
+                  it now automatically writes a final summary for you.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Context Efficiency Dashboard</strong>
+                <strong>Cleaner Delegation UI</strong>
                 <p>
-                  See billable token savings today, this week, and this month —
-                  based on real prompt + completion usage.
+                  Sub-agent follow-up summaries stay grouped inside the Working
+                  card instead of cluttering the chat.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Smarter Mini-App APIs</strong>
+                <strong>Cloud Desktop Preview</strong>
                 <p>
-                  Database and schema endpoints infer app ID from the iframe URL,
-                  so apps need less boilerplate.
+                  Preview published apps locally through the gateway with your
+                  Papr credentials — no separate browser login needed.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Cloud Install Improvements</strong>
+                <strong>Wiki & Code Search</strong>
                 <p>
-                  Fork installs remap job and app IDs in source files automatically
-                  so copied apps work out of the box.
+                  Knowledge graph wiki sync improvements and merged semantic +
+                  exact code search in mini-apps.
                 </p>
               </li>
             </ul>
             <a
-              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.1.0"
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.2.0"
               target="_blank"
               rel="noopener noreferrer"
               className="about-link whats-new-list__link"

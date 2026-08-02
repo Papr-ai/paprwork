@@ -36,7 +36,14 @@ export function ToolCallStatusIcon({ status }: { status: ToolCallStatus }): Reac
       </span>
     );
   }
-  return <span className="exploring-tool-error">✗</span>;
+  return (
+    <span
+      className="exploring-tool-agent-note"
+      title="The agent reads this and retries — no action needed from you"
+    >
+      Agent auto-fixing…
+    </span>
+  );
 }
 
 export const ToolCallResultFeedback: React.FC<ToolCallStatusProps> = ({
@@ -53,11 +60,21 @@ export const ToolCallResultFeedback: React.FC<ToolCallStatusProps> = ({
     status === "warning"
       ? "exploring-tool-feedback exploring-tool-feedback--warning"
       : status === "error"
-        ? "exploring-tool-feedback exploring-tool-feedback--error"
+        ? "exploring-tool-feedback exploring-tool-feedback--agent"
         : "exploring-tool-feedback";
 
+  const title =
+    status === "error"
+      ? "Technical detail for the agent — you don't need to do anything"
+      : feedback.detail;
+
   return (
-    <div className={className} title={feedback.detail}>
+    <div className={className} title={title}>
+      {status === "error" && (
+        <span className="exploring-tool-feedback__label">
+          Agent read this and will retry
+        </span>
+      )}
       {feedback.message}
     </div>
   );

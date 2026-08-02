@@ -324,8 +324,13 @@ export function MiniAppPublishBar({
     window.dispatchEvent(new CustomEvent("papr-open-community-apps"));
   };
 
-  const publishedUrl = cloud.publishedPreviewUrl;
-  const copyUrl = cloud.externalLinkUrl ?? cloud.loginUrl ?? publishedUrl;
+  const gatewayHost = import.meta.env.VITE_GATEWAY_HOST || "localhost";
+  const gatewayPort = import.meta.env.VITE_GATEWAY_PORT || "18789";
+  const localPreviewUrl = `http://${gatewayHost}:${gatewayPort}/apps/${appId}/index.html`;
+  const webDisplayUrl = cloud.publishedWebUrl ?? cloud.shareUrl;
+  const previewDisplayUrl =
+    viewMode === "published" ? webDisplayUrl : localPreviewUrl;
+  const copyUrl = cloud.externalLinkUrl ?? cloud.loginUrl ?? webDisplayUrl;
   const showWebPanel = isWebLinkPermission(permission);
   const showCodePanel = isCodePermission(permission);
   const listsInCommunity = shouldListInCommunity(audience, cloud.live);
@@ -353,7 +358,7 @@ export function MiniAppPublishBar({
       ? "mini-app-publish-bar__dot mini-app-publish-bar__dot--pending"
       : "mini-app-publish-bar__dot";
 
-  const canOpenWebPreview = cloud.live && !!publishedUrl;
+  const canOpenWebPreview = cloud.live && !!cloud.publishedPreviewUrl;
   const webSyncLoadingState = webSyncLoading || webSyncRefreshing;
   const webSyncTooltip = formatWebSyncStatusTooltip(webSyncStatus, {
     loading: webSyncLoadingState,
@@ -416,19 +421,19 @@ export function MiniAppPublishBar({
           <span className={statusDotClass} aria-hidden />
           <div className="mini-app-publish-bar__meta">
             <span className="mini-app-publish-bar__title">{appTitle}</span>
-            <span className="mini-app-publish-bar__status">
-              {cloud.loading && !cloud.live
-                ? "Checking web status…"
-                : `${cloud.live ? "Live on web" : "Not on web yet"} · ${cloud.statusLabel}`}
-              {cloud.refreshing && cloud.live ? " · updating" : null}
-              {isFork && cloudLineage
-                ? ` · ${cloudLineage.mode === "track" ? "Tracking" : "Fork of"} ${cloudLineage.sourceSlug}`
-                : null}
-            </span>
             <CloudCompatibilityBadge
               report={compatReport ?? cloud.compatibility}
               loading={compatLoading && !compatReport && !cloud.compatibility}
             />
+            <span className="mini-app-publish-bar__status">
+              {cloud.loading && !cloud.live
+                ? "Checking…"
+                : `${cloud.live ? "Live" : "Draft"} · ${cloud.statusLabel}`}
+              {cloud.refreshing && cloud.live ? " · updating" : null}
+              {isFork && cloudLineage && !showUpstreamBar
+                ? ` · ${cloudLineage.mode === "track" ? "Tracking" : "Fork"} ${cloudLineage.sourceSlug}`
+                : null}
+            </span>
           </div>
 
           {workspaceMode === "preview" ? (
@@ -512,31 +517,6 @@ export function MiniAppPublishBar({
             />
           ) : null}
 
-          {publishedUrl ? (
-            <div className="mini-app-publish-bar__url-row">
-              <span className="mini-app-publish-bar__url" title={publishedUrl}>
-                {publishedUrl}
-              </span>
-              <button
-                type="button"
-                className="mini-app-publish-bar__icon-button"
-                title="Open in browser"
-                aria-label="Open in browser"
-                onClick={() => void cloud.openInBrowser(publishedUrl)}
-              >
-                <OpenExternalIcon />
-              </button>
-              <button
-                type="button"
-                className="mini-app-publish-bar__icon-button"
-                title="Copy link"
-                aria-label="Copy link"
-                onClick={() => void cloud.copyLink(publishedUrl)}
-              >
-                <CopyIcon />
-              </button>
-            </div>
-          ) : null}
         </div>
 
         <div className="mini-app-publish-bar__actions">
@@ -545,6 +525,32 @@ export function MiniAppPublishBar({
           ) : null}
           {cloud.error ? (
             <span className="mini-app-publish-bar__error">{cloud.error}</span>
+          ) : null}
+
+          {previewDisplayUrl ? (
+            <div className="mini-app-publish-bar__url-row">
+              <span className="mini-app-publish-bar__url" title={previewDisplayUrl}>
+                {previewDisplayUrl}
+              </span>
+              <button
+                type="button"
+                className="mini-app-publish-bar__icon-button"
+                title="Open in browser"
+                aria-label="Open in browser"
+                onClick={() => void cloud.openInBrowser(previewDisplayUrl)}
+              >
+                <OpenExternalIcon />
+              </button>
+              <button
+                type="button"
+                className="mini-app-publish-bar__icon-button"
+                title="Copy link"
+                aria-label="Copy link"
+                onClick={() => void cloud.copyLink(previewDisplayUrl)}
+              >
+                <CopyIcon />
+              </button>
+            </div>
           ) : null}
 
           <AppWorkspaceMenu
@@ -569,13 +575,13 @@ export function MiniAppPublishBar({
 
           <div className="share-sheet__panel">
             {/* Share link at the top - most prominent */}
-            {cloud.live && (copyUrl || publishedUrl) ? (
+            {cloud.live && (copyUrl || webDisplayUrl) ? (
               <div className="share-sheet__link-section">
                 <div className="share-sheet__url-field">
                   <input
                     className="share-sheet__url-input"
                     readOnly
-                    value={copyUrl ?? publishedUrl ?? ""}
+                    value={copyUrl ?? webDisplayUrl ?? ""}
                     aria-label="Share link"
                   />
                   <button
@@ -583,7 +589,7 @@ export function MiniAppPublishBar({
                     className="share-sheet__icon-btn"
                     title="Copy link"
                     aria-label="Copy link"
-                    onClick={() => void cloud.copyLink(copyUrl ?? publishedUrl)}
+                    onClick={() => void cloud.copyLink(copyUrl ?? webDisplayUrl)}
                   >
                     <CopyIcon />
                   </button>
@@ -592,7 +598,7 @@ export function MiniAppPublishBar({
                     className="share-sheet__icon-btn"
                     title="Open in browser"
                     aria-label="Open in browser"
-                    onClick={() => void cloud.openInBrowser(publishedUrl)}
+                    onClick={() => void cloud.openInBrowser(webDisplayUrl)}
                   >
                     <OpenExternalIcon />
                   </button>

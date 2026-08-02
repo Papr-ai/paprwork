@@ -209,7 +209,7 @@ export function getToolResultFeedback(args: {
     return { message: issueSummary };
   }
 
-  return { message: "Tool failed" };
+  return { message: "Agent will retry with a different approach" };
 }
 
 /** Tool results that hard-failed (blocking errors or thrown errors). */

@@ -49,6 +49,10 @@ import {
   resolveAppDataSource,
 } from "./services/appDataSources.js";
 import { resolveMiniAppIdFromRequest } from "./utils/inferMiniAppIdFromRequest.js";
+import {
+  registerCloudDesktopPreviewApiProxy,
+  registerCloudDesktopPreviewRoutes,
+} from "./services/appRuntime/cloudDesktopPreviewProxy.js";
 import type { Request } from "express";
 import {
   initializeJobsService,
@@ -459,6 +463,8 @@ async function startGateway(): Promise<void> {
     }
 
     app.use(express.json({ limit: "5mb" }));
+
+    registerCloudDesktopPreviewApiProxy(app);
 
     app.get("/api/db/schema", async (req, res) => {
       try {
@@ -2080,6 +2086,8 @@ async function startGateway(): Promise<void> {
       }
     });
     // ─────────────────────────────────────────────────────────────────────────
+
+    registerCloudDesktopPreviewRoutes(app);
 
     // Serve mini-app files for iframe rendering in UI.
     // Supports on-the-fly TypeScript transpilation via esbuild.

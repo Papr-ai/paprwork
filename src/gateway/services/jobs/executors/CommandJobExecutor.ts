@@ -86,6 +86,7 @@ export class CommandJobExecutor implements IJobExecutor {
     const proc = spawn(shellPath, shellArgs, {
       cwd: params.jobDir,
       env,
+      stdio: ["ignore", "pipe", "pipe"],
     });
 
     return {

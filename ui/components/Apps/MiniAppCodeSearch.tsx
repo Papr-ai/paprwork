@@ -1,8 +1,8 @@
 /**
- * MiniAppCodeSearch — semantic code search via Papr Memory for workspace files.
+ * MiniAppCodeSearch — keyword search immediately, semantic memory search in background.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
 import type { WorkspaceFileTarget } from "../../hooks/useAppWorkspace";
 import type { WorkspaceJobFiles } from "../../hooks/useAppWorkspace";
@@ -24,6 +24,45 @@ interface MiniAppCodeSearchProps {
   appId: string;
   jobs: WorkspaceJobFiles[];
   onOpenHit: (target: WorkspaceFileTarget) => void;
+}
+
+interface SearchResponseData {
+  hits?: AppCodeSearchHit[];
+  notice?: string;
+}
+
+function hitDedupeKey(hit: AppCodeSearchHit): string {
+  return `${hit.projectType}:${hit.projectId}:${hit.relativePath}`;
+}
+
+function mergeSearchHits(
+  memoryHits: AppCodeSearchHit[],
+  keywordHits: AppCodeSearchHit[],
+  limit: number,
+): AppCodeSearchHit[] {
+  const seen = new Set<string>();
+  const merged: AppCodeSearchHit[] = [];
+
+  const sortedMemory = [...memoryHits].sort(
+    (a, b) => (b.score ?? 0) - (a.score ?? 0),
+  );
+
+  for (const hit of sortedMemory) {
+    const key = hitDedupeKey(hit);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(hit);
+  }
+
+  for (const hit of keywordHits) {
+    if (merged.length >= limit) break;
+    const key = hitDedupeKey(hit);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(hit);
+  }
+
+  return merged.slice(0, limit);
 }
 
 function hitToTarget(
@@ -57,12 +96,15 @@ export function MiniAppCodeSearch({
   const [scope, setScope] = useState<SearchScope>("all");
   const [jobFilter, setJobFilter] = useState<string | null>(null);
   const [hits, setHits] = useState<AppCodeSearchHit[]>([]);
-  const [searching, setSearching] = useState(false);
+  const [searchingKeyword, setSearchingKeyword] = useState(false);
+  const [searchingMemory, setSearchingMemory] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
+  const searchGenerationRef = useRef(0);
 
   const jobIds = useMemo(() => jobs.map((job) => job.jobId), [jobs]);
+  const searching = searchingKeyword || searchingMemory;
 
   const runSearch = useCallback(
     async (searchQuery: string) => {
@@ -72,36 +114,86 @@ export function MiniAppCodeSearch({
         setError(null);
         setNotice(null);
         setHasSearched(false);
+        setSearchingKeyword(false);
+        setSearchingMemory(false);
         return;
       }
 
-      setSearching(true);
+      const generation = ++searchGenerationRef.current;
+      const isStale = () => generation !== searchGenerationRef.current;
+
+      setSearchingKeyword(true);
+      setSearchingMemory(true);
       setError(null);
       setNotice(null);
       setHasSearched(true);
 
+      const payload = {
+        appId,
+        query: trimmed,
+        jobIds,
+        scope: jobFilter ? ("jobs" as const) : scope,
+        jobFilter: jobFilter ? [jobFilter] : undefined,
+        limit: 15,
+      };
+
+      let keywordHits: AppCodeSearchHit[] = [];
+
+      const keywordPromise = gateway.send("app:search-code", {
+        ...payload,
+        mode: "keyword",
+      });
+
+      const memoryPromise = gateway.send(
+        "app:search-code",
+        { ...payload, mode: "memory" },
+        { timeoutMs: 60_000 },
+      );
+
       try {
-        const resp = await gateway.send("app:search-code", {
-          appId,
-          query: trimmed,
-          jobIds,
-          scope: jobFilter ? "jobs" : scope,
-          jobFilter: jobFilter ? [jobFilter] : undefined,
-          limit: 15,
-        });
-        const data = resp.data as {
-          hits?: AppCodeSearchHit[];
-          notice?: string;
-        };
-        setHits(data.hits ?? []);
-        setNotice(data.notice ?? null);
+        const keywordResp = await keywordPromise;
+        if (isStale()) return;
+
+        const keywordData = keywordResp.data as SearchResponseData;
+        keywordHits = keywordData.hits ?? [];
+        setHits(keywordHits);
       } catch (err) {
+        if (isStale()) return;
+        searchGenerationRef.current += 1;
         setHits([]);
         setNotice(null);
         setError((err as Error).message);
+        setSearchingKeyword(false);
+        setSearchingMemory(false);
+        return;
       } finally {
-        setSearching(false);
+        if (!isStale()) {
+          setSearchingKeyword(false);
+        }
       }
+
+      void memoryPromise
+        .then((memoryResp) => {
+          if (isStale()) return;
+
+          const memoryData = memoryResp.data as SearchResponseData;
+          const memoryHits = memoryData.hits ?? [];
+          setHits(mergeSearchHits(memoryHits, keywordHits, payload.limit));
+          if (memoryData.notice) {
+            setNotice(memoryData.notice);
+          }
+        })
+        .catch((err: Error) => {
+          if (isStale()) return;
+          if (err.message.includes("timeout")) {
+            setNotice("Semantic search timed out. Showing keyword matches.");
+          }
+        })
+        .finally(() => {
+          if (!isStale()) {
+            setSearchingMemory(false);
+          }
+        });
     },
     [appId, jobIds, jobFilter, scope],
   );
@@ -112,6 +204,8 @@ export function MiniAppCodeSearch({
       setError(null);
       setNotice(null);
       setHasSearched(false);
+      setSearchingKeyword(false);
+      setSearchingMemory(false);
       return;
     }
 
@@ -152,7 +246,11 @@ export function MiniAppCodeSearch({
           onChange={(event) => setQuery(event.target.value)}
         />
         {searching ? (
-          <span className="mini-app-code-search__status">Searching…</span>
+          <span className="mini-app-code-search__status">
+            {searchingMemory && !searchingKeyword
+              ? "Searching memory…"
+              : "Searching…"}
+          </span>
         ) : null}
       </div>
 
