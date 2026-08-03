@@ -80,12 +80,17 @@ function expandJobPipeline(paprDir: string, seedJobIds: readonly string[]): stri
 }
 
 /** Job IDs linked to an app via data-sources, appIds, and dependency/runtime chains. */
-export function resolveAppDependentJobIds(paprDir: string, appId: string): string[] {
-  const jobIds = new Set<string>(readDataSourceJobIds(paprDir, appId));
+export function resolveAppDependentJobIds(
+  paprDir: string,
+  appId: string,
+  options?: { sourceAppId?: string },
+): string[] {
+  const resolveAppId = options?.sourceAppId ?? appId;
+  const jobIds = new Set<string>(readDataSourceJobIds(paprDir, resolveAppId));
 
   for (const job of readJobsIndex(paprDir)) {
     if (!job.id) continue;
-    if (jobBelongsToApp(job.appIds, appId)) {
+    if (jobBelongsToApp(job.appIds, resolveAppId)) {
       jobIds.add(job.id);
     }
   }

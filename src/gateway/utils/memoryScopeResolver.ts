@@ -31,6 +31,40 @@ export function getMemoryScopeContext(): MemoryScopeContext {
   };
 }
 
+export interface MemoryReadAclToolArgs {
+  readAcl?: string[];
+  shareWithUserIds?: string[];
+  shareWithTeam?: boolean;
+  shareWithOrganization?: boolean;
+}
+
+/** Map agent tool ACL fields to explicit read ACL for memory.add / create_entities. */
+export function resolveExplicitReadAclFromToolArgs(
+  args: MemoryReadAclToolArgs,
+  ctx?: MemoryScopeContext,
+): ExplicitMemoryReadAclInput | undefined {
+  if (
+    !args.readAcl?.length &&
+    !args.shareWithUserIds?.length &&
+    !args.shareWithTeam &&
+    !args.shareWithOrganization
+  ) {
+    return undefined;
+  }
+
+  const scopeCtx = ctx ?? getMemoryScopeContext();
+  return {
+    readAcl: args.readAcl,
+    shareWithUserIds: args.shareWithUserIds,
+    shareWithNamespaceId: args.shareWithTeam
+      ? scopeCtx.namespaceId
+      : undefined,
+    shareWithOrganizationId: args.shareWithOrganization
+      ? scopeCtx.organizationId
+      : undefined,
+  };
+}
+
 async function getChatMemoryScope(
   chatId: string,
 ): Promise<MemoryAudience | null> {

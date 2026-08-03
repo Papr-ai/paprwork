@@ -11,7 +11,8 @@ import {
 } from "./MiniAppPublishBar";
 import { MiniAppFilesView } from "./MiniAppFilesView";
 import type { AppWorkspaceMode } from "../../hooks/useAppWorkspace";
-import { clearCloudPreviewCookies } from "../../utils/cloudDesktopPreview";
+import { clearCloudPreviewCookies, buildUpstreamCloudPreviewUrl } from "../../utils/cloudDesktopPreview";
+import { confirmRefreshIfNewRevision } from "../../utils/publishedAppRevisionCheck";
 import "./MiniAppPublishBar.css";
 
 interface MiniAppViewProps {
@@ -41,12 +42,32 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
     return `http://${host}:${port}/apps/${appId}/index.html`;
   }, [appId]);
 
+  const isTrackCollaborator =
+    cloudLineage?.mode === "track" &&
+    Boolean(cloudLineage.sourceNamespaceId && cloudLineage.sourceSlug);
+
+  const upstreamPreviewUrl = useMemo(() => {
+    if (!isTrackCollaborator || !cloudLineage) return null;
+    return buildUpstreamCloudPreviewUrl({
+      sourceNamespaceId: cloudLineage.sourceNamespaceId,
+      sourceSlug: cloudLineage.sourceSlug,
+    });
+  }, [isTrackCollaborator, cloudLineage]);
+
   const isPublishedPreview =
-    viewMode === "published" && cloud.live && !!cloud.publishedPreviewUrl;
+    viewMode === "published" &&
+    ((isTrackCollaborator && !!upstreamPreviewUrl) ||
+      (cloud.live && !!cloud.publishedPreviewUrl));
 
   const iframeSrc = useMemo(() => {
     if (isPublishedPreview) {
-      return cloud.publishedPreviewUrl!;
+      const base =
+        isTrackCollaborator && upstreamPreviewUrl
+          ? upstreamPreviewUrl
+          : cloud.publishedPreviewUrl!;
+      const url = new URL(base);
+      url.searchParams.set("_r", String(iframeLoadKey));
+      return url.toString();
     }
     const url = new URL(localSrc);
     url.searchParams.set("_r", String(reloadKey));
@@ -58,6 +79,8 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
     iframeLoadKey,
     isPublishedPreview,
     cloud.publishedPreviewUrl,
+    isTrackCollaborator,
+    upstreamPreviewUrl,
   ]);
 
   const scheduleIframeRetry = useCallback((reason: string) => {
@@ -133,10 +156,14 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
   };
 
   useEffect(() => {
-    if (!cloud.live && viewMode === "published") {
+    if (
+      !isTrackCollaborator &&
+      !cloud.live &&
+      viewMode === "published"
+    ) {
       setViewMode("local");
     }
-  }, [cloud.live, viewMode]);
+  }, [cloud.live, viewMode, isTrackCollaborator]);
 
   const handleViewModeChange = useCallback(
     (mode: AppPreviewMode) => {
@@ -148,6 +175,20 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
     },
     [viewMode],
   );
+
+  const handleRefreshPreview = useCallback(async () => {
+    if (isPublishedPreview && iframeRef.current) {
+      const proceed = await confirmRefreshIfNewRevision(
+        iframeRef.current,
+        iframeSrc,
+      );
+      if (!proceed) {
+        return;
+      }
+    }
+    triggerReload();
+    setIframeLoadKey((key) => key + 1);
+  }, [triggerReload, isPublishedPreview, iframeSrc]);
 
   useEffect(() => {
     trackEvent("paprwork_app_opened", { app_id: appId } as Record<string, unknown>);
@@ -397,6 +438,7 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
         workspaceMode={workspaceMode}
         onWorkspaceModeChange={setWorkspaceMode}
         onTrackPullComplete={() => void refreshAppMetadata()}
+        onRefreshPreview={handleRefreshPreview}
       />
       {workspaceMode === "files" ? (
         <MiniAppFilesView appId={appId} />

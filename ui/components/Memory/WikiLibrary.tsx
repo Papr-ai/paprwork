@@ -939,7 +939,7 @@ export function WikiLibrary({ refreshToken = 0, paletteOpen: paletteOpenProp, on
     return merged;
   }, [home, focus, entityRails]);
 
-  const loadHome = useCallback(async (options?: { silent?: boolean }) => {
+  const loadHome = useCallback(async (options?: { silent?: boolean; forceRefresh?: boolean }) => {
     if (!options?.silent) {
       setHomeLoading(true);
     }
@@ -950,7 +950,11 @@ export function WikiLibrary({ refreshToken = 0, paletteOpen: paletteOpenProp, on
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         try {
           await gateway.waitForConnection(20_000);
-          const response = await gateway.send("memory:wiki-home", {}, { timeoutMs: 30_000 });
+          const response = await gateway.send(
+            "memory:wiki-home",
+            { forceRefresh: options?.forceRefresh === true },
+            { timeoutMs: 30_000 },
+          );
           if (response.success && response.data) {
             setHome(response.data as WikiHomeData);
             setHomeLoadError(null);
@@ -1002,7 +1006,7 @@ export function WikiLibrary({ refreshToken = 0, paletteOpen: paletteOpenProp, on
   }, []);
 
   const reloadLibrary = useCallback(() => {
-    void loadHome();
+    void loadHome({ forceRefresh: true });
     void loadContext();
   }, [loadHome, loadContext]);
 

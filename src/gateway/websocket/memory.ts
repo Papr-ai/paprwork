@@ -614,9 +614,13 @@ async function handleUploadAttachment(
       return;
     }
 
-    const { getApiKey } = await import("../utils/keyResolver.js");
-    const apiKey = await getApiKey("PAPR_API_KEY");
+    const { getPaprApiKey } = await import("../utils/keyResolver.js");
+    const apiKey = await getPaprApiKey();
     if (!apiKey) {
+      console.warn(
+        "[Memory] Attachment upload skipped — no PAPR_API_KEY for active workspace",
+        { filePath: payload.filePath, chatId: payload.chatId },
+      );
       sendResponse(ws, {
         id: message.id,
         success: true,
@@ -632,12 +636,24 @@ async function handleUploadAttachment(
       "../services/AttachmentMemoryUpload.js"
     );
 
+    console.log("[Memory] Uploading attachment to Papr Memory:", {
+      filePath: payload.filePath,
+      chatId: payload.chatId,
+      fileName: payload.fileName,
+    });
+
     const result = await uploadAttachmentToMemory(
       payload.filePath,
       payload.chatId,
       payload.fileName ?? path.basename(payload.filePath),
       payload.mimeType ?? "",
     );
+
+    console.log("[Memory] Attachment upload complete:", {
+      filePath: payload.filePath,
+      uploadId: result?.uploadId ?? null,
+      status: result?.status,
+    });
 
     sendResponse(ws, {
       id: message.id,
@@ -654,10 +670,13 @@ async function handleWikiHome(
   message: WSMessage,
 ): Promise<void> {
   try {
+    const payload = message.payload as { forceRefresh?: boolean } | undefined;
     const { fetchWikiHome } = await import(
       "../services/KnowledgeGraphWikiService.js"
     );
-    const data = await fetchWikiHome();
+    const data = await fetchWikiHome({
+      forceRefresh: payload?.forceRefresh === true,
+    });
     sendResponse(ws, { id: message.id, success: true, data });
   } catch (error) {
     sendError(ws, message.id, error as Error);

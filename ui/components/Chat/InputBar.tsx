@@ -99,6 +99,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     const [slashQuery, setSlashQuery] = useState("");
     const [selectedArtifacts, setSelectedArtifacts] = useState<Artifact[]>([]);
     const [isSavingAttachments, setIsSavingAttachments] = useState(false);
+    const [attachmentError, setAttachmentError] = useState<string | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const inputBarRef = useRef<HTMLDivElement>(null);
     const lastSendAttemptRef = useRef<number>(0);
@@ -130,9 +131,15 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       async (files: File[]) => {
         if (files.length === 0) return;
         setIsSavingAttachments(true);
+        setAttachmentError(null);
         try {
           const newArtifacts = await createArtifactsFromIncomingFiles(files, chatId);
-          if (newArtifacts.length === 0) return;
+          if (newArtifacts.length === 0) {
+            setAttachmentError(
+              "Could not attach file. Try again or check that Paprwork can access the file.",
+            );
+            return;
+          }
           setSelectedArtifacts((prev) => {
             const out = [...prev];
             for (const a of newArtifacts) {
@@ -380,6 +387,11 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
           {/* Context pills - shown when artifacts are selected */}
           {(isFocused || selectedArtifacts.length > 0) && (
             <div className="input-context-section">
+              {attachmentError ? (
+                <div className="input-context-section__error" role="alert">
+                  {attachmentError}
+                </div>
+              ) : null}
               <ContextPills
                 artifacts={selectedArtifacts}
                 onRemove={handleRemoveArtifact}

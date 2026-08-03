@@ -83,6 +83,8 @@
     "test:cloud-bash-run": "node scripts/test-cloud-bash-run-e2e.mjs",
     "test:cloud-publish-permissions": "node scripts/test-cloud-publish-permissions-e2e.mjs",
     "test:cloud-community-install": "node scripts/test-cloud-community-install-e2e.mjs",
+    "test:cloud-track-install": "node scripts/test-cloud-track-install-e2e.mjs",
+    "test:cloud-track-two-user": "node scripts/test-cloud-track-two-user-e2e.mjs",
     "test:cloud-runtime": "node scripts/test-cloud-runtime-phase.mjs",
     "test:cloud-writeback": "node scripts/test-cloud-job-writeback-e2e.mjs",
     "test:memory-runtime-phase1": "node scripts/test-memory-runtime-phase1.mjs",
@@ -113,7 +115,7 @@
     "claude",
     "openai"
   ],
-  "author": "Amir Kabbara <amir@papr.ai> (https://github.com/amirkabbara)",
+  "author": "Papr, Inc. <support@papr.ai> (https://papr.ai)",
   "license": "AGPL-3.0",
   "engines": {
     "node": ">=24.0.0",

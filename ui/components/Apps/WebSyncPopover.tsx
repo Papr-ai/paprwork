@@ -13,8 +13,10 @@ export interface WebSyncPopoverProps {
   status: AppCloudSyncStatus;
   error: string | null;
   pushing: boolean;
+  pulling: boolean;
   syncActionNeeded: boolean;
   onPushNow: () => void;
+  onPullUpdates: () => void;
 }
 
 function rowIcon(phase: AppCloudItemPhase): string {
@@ -35,9 +37,12 @@ export function WebSyncPopover({
   status,
   error,
   pushing,
+  pulling,
   syncActionNeeded,
   onPushNow,
+  onPullUpdates,
 }: WebSyncPopoverProps) {
+  const busy = pushing || pulling;
   return (
     <div
       className="mini-app-publish-bar__sync-popover"
@@ -88,10 +93,10 @@ export function WebSyncPopover({
       {syncActionNeeded ? (
         <p className="mini-app-publish-bar__sync-popover-hint">
           {pushing
-            ? "Uploading this app and its linked jobs to GitHub. This usually takes under a minute."
+            ? "Uploading this app and its linked jobs to the cloud. This usually takes under a minute."
             : status.globallySyncing
-              ? "Sync now uploads this app and its jobs immediately — it does not wait for the background workspace queue."
-              : "Click Sync now to upload this app and its linked jobs."}
+              ? "Upload now sends this app immediately — it does not wait for the background workspace queue."
+              : "Upload now sends your local app code and database changes to the cloud."}
         </p>
       ) : (
         <p className="mini-app-publish-bar__sync-popover-hint">
@@ -99,6 +104,11 @@ export function WebSyncPopover({
           up to date.
         </p>
       )}
+      <p className="mini-app-publish-bar__sync-popover-hint">
+        {pulling
+          ? "Getting the latest app code and database rows from the cloud…"
+          : "Get updates downloads the latest code and database rows from teammates or cloud jobs."}
+      </p>
       {status.cloudPublishing && status.overall === "synced" ? (
         <p className="mini-app-publish-bar__sync-popover-hint">
           Updating cloud publish config so the web app can use new backend keys. Refresh the
@@ -111,16 +121,26 @@ export function WebSyncPopover({
         </p>
       ) : null}
       {error ? <p className="mini-app-publish-bar__sync-popover-error">{error}</p> : null}
-      {syncActionNeeded || pushing ? (
+      <div className="mini-app-publish-bar__sync-popover-actions">
         <button
           type="button"
-          className="mini-app-publish-bar__sync-popover-btn"
-          disabled={pushing}
-          onClick={() => void onPushNow()}
+          className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+          disabled={busy}
+          onClick={() => void onPullUpdates()}
         >
-          {pushing ? "Uploading…" : "Sync now"}
+          {pulling ? "Getting updates…" : "Get updates"}
         </button>
-      ) : null}
+        {syncActionNeeded || pushing ? (
+          <button
+            type="button"
+            className="mini-app-publish-bar__sync-popover-btn"
+            disabled={busy}
+            onClick={() => void onPushNow()}
+          >
+            {pushing ? "Uploading…" : "Upload now"}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }

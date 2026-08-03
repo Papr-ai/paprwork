@@ -185,7 +185,7 @@ const deployCmd = [
   "--cpu=1",
   "--min-instances=1",
   "--max-instances=20",
-  "--timeout=60",
+  "--timeout=120",
   `--set-secrets=PAPR_CLOUD_APP_HOST_KEY=${secretName}:latest`,
   `--set-env-vars=PAPR_MEMORY_SERVER_URL=${memoryUrl},PAPR_CLOUD_APP_PUBLIC_URL=${publicUrl},AUTH0_DOMAIN=papr.auth0.com,AUTH0_CLIENT_ID=asVGkVRkRAxYvtQadqivntIRjB4D1Iur,NODE_ENV=production`,
 ].join(" ");

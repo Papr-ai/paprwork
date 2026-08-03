@@ -120,9 +120,11 @@ export function useAppCloudSyncStatus(
   loading: boolean;
   refreshing: boolean;
   pushing: boolean;
+  pulling: boolean;
   error: string | null;
   refresh: (force?: boolean) => Promise<void>;
   pushNow: () => Promise<void>;
+  pullUpdates: () => Promise<void>;
 } {
   const active = options?.enabled !== false;
   const initialItems = readInitialSyncItems();
@@ -151,6 +153,7 @@ export function useAppCloudSyncStatus(
   const [loading, setLoading] = useState(initialStatus === null);
   const [refreshing, setRefreshing] = useState(false);
   const [pushing, setPushing] = useState(false);
+  const [pulling, setPulling] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const hasLoadedOnceRef = useRef(initialStatus !== null);
   const refreshInFlightRef = useRef(false);
@@ -236,7 +239,7 @@ export function useAppCloudSyncStatus(
       });
       if (!res.ok) {
         const body = (await res.json()) as { error?: string };
-        throw new Error(body.error ?? `Sync failed (${res.status})`);
+        throw new Error(body.error ?? `Upload failed (${res.status})`);
       }
       await refresh(true);
     } catch (err) {
@@ -245,6 +248,26 @@ export function useAppCloudSyncStatus(
       setPushing(false);
     }
   }, [refresh, appId]);
+
+  const pullUpdates = useCallback(async () => {
+    setPulling(true);
+    setError(null);
+    try {
+      const res = await fetch(`${GATEWAY}/api/sync/pull`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const body = (await res.json()) as { error?: string };
+        throw new Error(body.error ?? `Get updates failed (${res.status})`);
+      }
+      await refresh(true);
+    } catch (err) {
+      setError((err as Error).message.slice(0, 120));
+    } finally {
+      setPulling(false);
+    }
+  }, [refresh]);
 
   useEffect(() => {
     if (!active) {
@@ -258,6 +281,7 @@ export function useAppCloudSyncStatus(
     if (!active) return;
     const intervalMs =
       pushing ||
+      pulling ||
       status?.overall === "uploading" ||
       status?.globallySyncing ||
       status?.cloudPublishing
@@ -267,7 +291,7 @@ export function useAppCloudSyncStatus(
       void refresh();
     }, intervalMs);
     return () => clearInterval(timer);
-  }, [active, refresh, pushing, status?.overall, status?.globallySyncing, status?.cloudPublishing]);
+  }, [active, refresh, pushing, pulling, status?.overall, status?.globallySyncing, status?.cloudPublishing]);
 
   return {
     status,
@@ -275,8 +299,10 @@ export function useAppCloudSyncStatus(
     loading,
     refreshing,
     pushing,
+    pulling,
     error,
     refresh,
     pushNow,
+    pullUpdates,
   };
 }

@@ -744,20 +744,34 @@ export function shouldPullTursoAfterCloudRun(): boolean {
   return true;
 }
 
-export async function syncTursoAfterCloudRun(): Promise<void> {
-  if (!shouldPullTursoAfterCloudRun()) {
-    return;
-  }
+async function pullAllLinkedSourcesQuiet(logLabel: string): Promise<void> {
   const bridge = getTursoSyncBridge();
   if (!bridge) {
     return;
   }
   try {
-    await bridge.pullAllLinkedSources();
+    const summary = await bridge.pullAllLinkedSources();
+    if (summary.pulled > 0) {
+      console.log(
+        `[TursoSyncBridge] ${logLabel}: pulled ${summary.pulled} linked DB(s)`,
+      );
+    }
   } catch (error) {
     console.warn(
-      "[TursoSyncBridge] Post-cloud pull failed:",
+      `[TursoSyncBridge] ${logLabel} failed:`,
       (error as Error).message.slice(0, 120),
     );
   }
+}
+
+/** Merge remote Turso changes into local SQLite after git pull (workspace updates). */
+export async function syncTursoAfterGitPull(): Promise<void> {
+  await pullAllLinkedSourcesQuiet("Post-git-pull Turso pull");
+}
+
+export async function syncTursoAfterCloudRun(): Promise<void> {
+  if (!shouldPullTursoAfterCloudRun()) {
+    return;
+  }
+  await pullAllLinkedSourcesQuiet("Post-cloud-run Turso pull");
 }

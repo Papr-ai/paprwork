@@ -41,6 +41,7 @@ import {
 import {
   applyGatewayPaprApiKey,
   switchActiveWorkspace,
+  getWorkspaceSwitchHealthStatus,
 } from "./services/workspaceSwitchService.js";
 import { initializeChatService } from "./services/ChatService.js";
 import { initializeDocumentService } from "./services/DocumentService.js";
@@ -373,6 +374,13 @@ async function startGateway(): Promise<void> {
     });
 
     app.get("/health", (_req, res) => {
+      if (getWorkspaceSwitchHealthStatus() === "switching") {
+        res.json({
+          status: "switching",
+          timestamp: Date.now(),
+        });
+        return;
+      }
       res.json({
         status: gatewayReady ? "ok" : "starting",
         timestamp: Date.now(),
@@ -1803,6 +1811,20 @@ async function startGateway(): Promise<void> {
         } else {
           await sync.pushNow();
         }
+        res.json({ success: true, ...sync.getState() });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/sync/pull", async (_req, res) => {
+      const sync = getCloudSyncService();
+      if (!sync) {
+        res.status(503).json({ error: "Cloud sync not initialized" });
+        return;
+      }
+      try {
+        await sync.pullNow();
         res.json({ success: true, ...sync.getState() });
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });

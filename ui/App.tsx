@@ -37,7 +37,10 @@ import type { AppAgentChatConfig } from "../src/core/types/appAgentChat";
 import "./styles/liquid-glass.css";
 import "./App.css";
 import { shouldShowOnboarding } from "./utils/onboardingState";
-import { reloadUiForWorkspaceSwitch } from "./lib/workspaceSwitchReload";
+import {
+  attachWorkspaceSwitchBroadcastListener,
+  reloadUiForWorkspaceSwitch,
+} from "./lib/workspaceSwitchReload";
 import { useProfileStore } from "./stores/profileStore";
 
 type ChatOpenPayload = {
@@ -225,6 +228,7 @@ export function App() {
 
   // Reload chats/jobs when Papr org or namespace workspace changes
   useEffect(() => {
+    attachWorkspaceSwitchBroadcastListener();
     const onWorkspaceChanged = () => {
       void reloadUiForWorkspaceSwitch();
     };

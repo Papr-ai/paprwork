@@ -5,11 +5,13 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { getPaprJobsRoot } from "../../core/utils/paprRoot.js";
 import {
   parseDataSourcesFile,
   type AppDataSource,
   type AppDataSourceRole,
 } from "./appDataSources.js";
+import { resolveLinkedSourceDbPath } from "./portableDataSources.js";
 
 export interface TursoLinkedSource {
   appId: string;
@@ -62,11 +64,22 @@ export async function discoverTursoLinkedSources(
       if (!isSyncableSource(source)) {
         continue;
       }
+
+      const resolvedDbPath = await resolveLinkedSourceDbPath({
+        dbPath: source.dbPath,
+        dbId: source.dbId,
+        jobId: source.jobId,
+        jobsRoot: getPaprJobsRoot(),
+      });
+      if (!resolvedDbPath) {
+        continue;
+      }
+
       const linked: TursoLinkedSource = {
         appId: entry.name,
         ...(source.jobId ? { jobId: source.jobId } : {}),
         ...(source.dbId ? { dbId: source.dbId } : {}),
-        dbPath: path.normalize(source.dbPath),
+        dbPath: path.normalize(resolvedDbPath),
         alias: source.alias,
         role: source.role,
       };
@@ -82,9 +95,6 @@ export async function discoverTursoLinkedSources(
 
 function isSyncableSource(source: AppDataSource): boolean {
   if (source.type !== "sqlite") {
-    return false;
-  }
-  if (!source.dbPath) {
     return false;
   }
   if (!source.jobId && !source.dbId) {
@@ -128,6 +138,10 @@ export async function listLinkedJobIdsForTursoSync(
   const sources = await discoverTursoLinkedSources(appsRootDir);
   const keys = new Set<string>();
   for (const source of sources) {
+    if (source.dbId || source.jobId) {
+      keys.add(linkedSourceSyncKey(source));
+      continue;
+    }
     try {
       await fs.promises.access(source.dbPath, fs.constants.R_OK);
       keys.add(linkedSourceSyncKey(source));

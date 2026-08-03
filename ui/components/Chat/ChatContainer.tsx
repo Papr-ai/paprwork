@@ -482,12 +482,20 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
 
             if (isPdfOrImage) {
               try {
-                const uploadResponse = await gateway.send("memory:upload-attachment", {
-                  filePath,
-                  chatId,
-                  fileName: artifact.title,
-                  mimeType: fileType,
-                });
+                console.log(
+                  "[ChatContainer] Uploading attachment to Papr Memory:",
+                  { filePath, fileName: artifact.title, mimeType: fileType },
+                );
+                const uploadResponse = await gateway.send(
+                  "memory:upload-attachment",
+                  {
+                    filePath,
+                    chatId,
+                    fileName: artifact.title,
+                    mimeType: fileType,
+                  },
+                  { timeoutMs: 120_000 },
+                );
                 const uploadData =
                   uploadResponse.success
                     ? (uploadResponse.data as {
@@ -499,6 +507,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
                       } | null)
                     : null;
 
+                console.log("[ChatContainer] Attachment upload result:", uploadData);
+
                 if (uploadData && !uploadData.skipped && uploadData.uploadId) {
                   artifactsContext += `Upload ID: ${uploadData.uploadId}\n`;
                   if (uploadData.memoryIds?.length) {
@@ -507,6 +517,13 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
                   artifactsContext += `Papr Memory Status: ${uploadData.status ?? "processing"} (${Math.round((uploadData.progress ?? 0) * 100)}%)\n`;
                   artifactsContext +=
                     "\nThis PDF/image was auto-uploaded to Papr Memory. Poll get_document_upload_status({ uploadId }) until completed, then search_agent_memory({ memoryId }) for extracted text. Use parse_pdf({ filePath }) if you need text before processing finishes.\n";
+                } else if (uploadData?.skipped) {
+                  console.warn(
+                    "[ChatContainer] Attachment upload skipped:",
+                    uploadData,
+                  );
+                  artifactsContext +=
+                    "\nPoll upload_document_to_memory({ filePath, chatId }) if PAPR_API_KEY is configured, or parse_pdf({ filePath }) for quick local extraction.\n";
                 } else {
                   artifactsContext +=
                     "\nPoll upload_document_to_memory({ filePath, chatId }) if PAPR_API_KEY is configured, or parse_pdf({ filePath }) for quick local extraction.\n";
@@ -580,13 +597,13 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   }, [chatId, interruptActiveStream]);
 
   // Queue management handlers
-  const handleQueueMessage = useCallback((message: string, _context?: Artifact[]) => {
-    // TODO: Store and handle artifacts in queued messages
+  const handleQueueMessage = useCallback((message: string, context?: Artifact[]) => {
     const queuedMessage: QueuedMessage = {
       id: `queued-${Date.now()}-${Math.random()}`,
       text: message,
       timestamp: Date.now(),
       chatId, // ✅ Scope message to this chat
+      ...(context && context.length > 0 ? { contextArtifacts: context } : {}),
     };
     setMessageQueue(prev => [...prev, queuedMessage]);
   }, [chatId]);
@@ -600,7 +617,10 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
 
     isProcessingQueue.current = true;
     try {
-      await handleSendMessage(queued.text);
+      await handleSendMessage(
+        queued.text,
+        queued.contextArtifacts,
+      );
     } finally {
       isProcessingQueue.current = false;
     }
@@ -622,7 +642,10 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     setMessageQueue(prev => prev.filter(q => q.id !== nextMessage.id));
 
     try {
-      await handleSendMessage(nextMessage.text);
+      await handleSendMessage(
+        nextMessage.text,
+        nextMessage.contextArtifacts,
+      );
     } catch (error) {
       console.error('[ChatContainer] Failed to send queued message:', error);
     } finally {

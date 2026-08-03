@@ -34,6 +34,11 @@ export async function prepareAppForCloudGitSync(
 ): Promise<void> {
   const appDir = path.join(paprDir, "apps", appId);
   try {
+    const { scrubAppDataSourcesForGitSync } = await import(
+      "../portableDataSources.js"
+    );
+    await scrubAppDataSourcesForGitSync(appDir);
+
     await ensureAppRequirementsSyncedWithBackend(paprDir, appId);
 
     const { buildMiniApp } = await import("../../utils/miniAppBuild.js");

@@ -76,6 +76,38 @@ describe("mergeHistoryWithLocal", () => {
     expect(merged.some((m) => m.id === "stream")).toBe(false);
     expect(merged.some((m) => m.id === "a2")).toBe(true);
   });
+
+  it("merges persisted attachments from server onto optimistic duplicate user message", () => {
+    const local: ChatMessage[] = [
+      {
+        id: "msg-user-local",
+        role: "user",
+        content: "Review this PDF",
+      },
+    ];
+    const server: ChatMessage[] = [
+      {
+        id: "msg-server",
+        role: "user",
+        content: "Review this PDF",
+        attachments: [
+          {
+            id: "file-1",
+            name: "report.pdf",
+            kind: "file",
+            mimeType: "application/pdf",
+            filePath: "/tmp/report.pdf",
+          },
+        ],
+      },
+    ];
+
+    const merged = mergeHistoryWithLocal(local, server);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.attachments).toHaveLength(1);
+    expect(merged[0]?.attachments?.[0]?.name).toBe("report.pdf");
+  });
 });
 
 describe("lastUserTurnNeedsContinue", () => {

@@ -1,6 +1,6 @@
 /**
- * Tell apps.papr.ai to invalidate repo caches and push a revision event to open tabs.
- * Called from desktop gateway after a successful git sync push.
+ * Tell apps.papr.ai to invalidate repo caches after a successful git sync push.
+ * Open browser tabs refresh manually (F5) — same model as Vercel/static hosting.
  */
 
 export interface NotifyCloudAppRevisionInput {

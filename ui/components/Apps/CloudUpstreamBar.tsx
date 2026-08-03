@@ -130,7 +130,7 @@ export function CloudUpstreamBar({
             title="Download the publisher's latest code into your local copy"
             onClick={() => void handlePull()}
           >
-            {pulling ? "…" : "Pull"}
+            {pulling ? "…" : "Updates"}
           </button>
         ) : null}
 

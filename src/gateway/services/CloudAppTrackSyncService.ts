@@ -179,6 +179,31 @@ export class CloudAppTrackSyncService {
         syncSnapshot: nextSnapshot,
       });
 
+      try {
+        const { installCloudAppLinkedResources, finalizePortableCloudAppResources } =
+          await import("./cloudAppLinkedResourcesInstall.js");
+        const linked = await installCloudAppLinkedResources({
+          repoDir,
+          repoAppDir: upstreamDir,
+          publisherAppId: lineage.source.appId,
+          localAppId: appId,
+          env,
+        });
+        if (linked.copiedJobIds.length > 0) {
+          console.log(
+            `[CloudTrackSync] Updated ${linked.copiedJobIds.length} linked job(s) for ${appId}`,
+          );
+        }
+        await finalizePortableCloudAppResources();
+        const { syncTursoAfterGitPull } = await import("./TursoSyncBridge.js");
+        await syncTursoAfterGitPull();
+      } catch (linkedErr) {
+        console.warn(
+          `[CloudTrackSync] Linked job sync skipped for ${appId}:`,
+          (linkedErr as Error).message.slice(0, 160),
+        );
+      }
+
       return {
         appId,
         updatedFiles,

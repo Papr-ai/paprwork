@@ -21,6 +21,11 @@ import { mergeJobAppIds } from "./jobs/appIds.js";
 import type { JobRecord } from "./jobs/types.js";
 import type { DatabasesRegistryFile } from "./DatabaseRegistryService.js";
 import { getPaprUserId } from "../utils/paprUserId.js";
+import {
+  extractDatabaseSlugFromPath,
+  workspaceRegistryDbPath,
+} from "./resolveRegistryDbPath.js";
+import { isUnreadableDbPath } from "./portableDataSources.js";
 
 export interface CopyAppToNamespaceInput {
   appId: string;
@@ -169,6 +174,7 @@ async function rewriteDataSourcesForTarget(
     return;
   }
 
+  const targetDataDir = path.join(targetPaprHome, "data");
   const config = parseDataSourcesFile(raw);
   const sources = config.sources.map((source) => {
     if (source.jobId) {
@@ -186,6 +192,19 @@ async function rewriteDataSourcesForTarget(
         dbPath: jobDatabasePath(targetPaprHome, jobMatch[1]),
       };
     }
+
+    const slug = extractDatabaseSlugFromPath(source.dbPath ?? "");
+    if (slug) {
+      return {
+        ...source,
+        dbPath: workspaceRegistryDbPath(slug, targetDataDir),
+      };
+    }
+
+    if (source.dbId && isUnreadableDbPath(source.dbPath)) {
+      return { ...source, dbPath: "" };
+    }
+
     return source;
   });
 
@@ -250,10 +269,13 @@ async function mergeDatabaseRegistryForCopy(input: {
       continue;
     }
     const ownerJobId = record.ownerJobId;
+    const slug = extractDatabaseSlugFromPath(record.localPath ?? "");
     const localPath =
       ownerJobId && input.copiedJobIds.has(ownerJobId)
         ? jobDatabasePath(input.targetPaprHome, ownerJobId)
-        : record.localPath;
+        : slug
+          ? workspaceRegistryDbPath(slug, path.join(input.targetPaprHome, "data"))
+          : record.localPath;
     merged.databases[dbId] = {
       ...record,
       localPath,
@@ -268,6 +290,8 @@ export interface SyncAppLinkedResourcesInput {
   appId: string;
   sourcePaprHome: string;
   targetPaprHome: string;
+  /** When source app id differs (cloud install remaps app id). */
+  sourceAppId?: string;
 }
 
 export interface SyncAppLinkedResourcesResult {
@@ -305,6 +329,7 @@ export async function syncAppLinkedResourcesToTarget(
   const dependentJobIds = resolveAppDependentJobIds(
     input.sourcePaprHome,
     input.appId,
+    input.sourceAppId ? { sourceAppId: input.sourceAppId } : undefined,
   );
   const copiedJobIdSet = new Set(dependentJobIds);
   const sourceJobs = await readJobsIndex(sourceJobsIndexPath);
@@ -367,7 +392,6 @@ export async function syncAppLinkedResourcesToTarget(
   }
 
   await writeJobsIndex(targetJobsIndexPath, [...targetJobById.values()]);
-  await rewriteDataSourcesForTarget(targetAppDir, input.targetPaprHome);
 
   const jobsForRegistry = dependentJobIds
     .map((jobId) => targetJobById.get(jobId))
@@ -381,6 +405,7 @@ export async function syncAppLinkedResourcesToTarget(
     dbIdsFromJobs,
     appDir: targetAppDir,
   });
+  await rewriteDataSourcesForTarget(targetAppDir, input.targetPaprHome);
 
   return { copiedJobIds, skippedJobIds };
 }

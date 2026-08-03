@@ -1382,6 +1382,19 @@ export class CloudSyncService {
     return this.pull();
   }
 
+  /** Git pull + Turso pull into local linked DBs (workspace "get updates"). */
+  private async pullTursoLinkedSourcesAfterGitPull(): Promise<void> {
+    try {
+      const { syncTursoAfterGitPull } = await import("./TursoSyncBridge.js");
+      await syncTursoAfterGitPull();
+    } catch (err) {
+      console.warn(
+        "[CloudSync] Turso pull after git pull failed:",
+        (err as Error).message.slice(0, 120),
+      );
+    }
+  }
+
   private async pull(): Promise<void> {
     console.log("[CloudSync] Pulling latest...");
     this.state.status = "syncing";
@@ -1410,6 +1423,20 @@ export class CloudSyncService {
           (ownershipErr as Error).message.slice(0, 120),
         );
       }
+
+      try {
+        const { finalizePortableCloudAppResources } = await import(
+          "./cloudAppLinkedResourcesInstall.js"
+        );
+        await finalizePortableCloudAppResources();
+      } catch (repairErr) {
+        console.warn(
+          "[CloudSync] Portable resource repair after pull failed:",
+          (repairErr as Error).message.slice(0, 120),
+        );
+      }
+
+      await this.pullTursoLinkedSourcesAfterGitPull();
     } catch (err) {
       const msg = (err as Error).message;
       const normalized = msg.toLowerCase();
@@ -1417,6 +1444,7 @@ export class CloudSyncService {
         this.state.status = "idle";
         this.consecutivePullFailures = 0;
         this.pullBackoffUntilMs = 0;
+        await this.pullTursoLinkedSourcesAfterGitPull();
         return;
       }
 
@@ -1435,6 +1463,7 @@ export class CloudSyncService {
           this.state.lastError = null;
           this.consecutivePullFailures = 0;
           this.pullBackoffUntilMs = 0;
+          await this.pullTursoLinkedSourcesAfterGitPull();
           return;
         } catch (re) {
           console.error("[CloudSync] Conflict resolution failed:", (re as Error).message.slice(0, 200));

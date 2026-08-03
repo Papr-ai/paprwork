@@ -34,6 +34,7 @@ import {
   fetchRuntimeDbToken,
   listRuntimeJobs,
   runRuntimeJob,
+  runtimeFetch,
 } from "./memoryRuntimeClient.js";
 import { CloudAppBackendService } from "./CloudAppBackendService.js";
 import {
@@ -99,8 +100,6 @@ import {
   CLOUD_REPO_HEAD_RELATIVE_PATH,
   parseCloudRepoHeadContent,
 } from "../cloudSync/cloudRepoHeadMarker.js";
-import { getAppRevisionHub } from "./AppRevisionHub.js";
-import { registerAppRevisionSseRoutes } from "./registerAppRevisionSse.js";
 import { hydrateCloudDatabaseRegistry } from "./cloudDatabaseRegistry.js";
 
 export interface CloudAppHostDeps {
@@ -138,7 +137,7 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
       headers["X-Session-Token"] = input.sessionToken;
     }
 
-    const res = await fetch(`${getMemoryServerBaseUrl()}/v1/cloud/apps/access/validate`, {
+    const res = await runtimeFetch(`${getMemoryServerBaseUrl()}/v1/cloud/apps/access/validate`, {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -210,7 +209,6 @@ export class CloudAppHostService {
     this.credentials.registerRoutes(app);
 
     registerPaprMiniAppSdkRoutes(app);
-    registerAppRevisionSseRoutes(app, getAppRevisionHub());
     registerAppAgentChatRoutes(app, {
       mode: "cloud",
       sessionStore: getMemoryAppAgentChatSessionStore(),
@@ -498,6 +496,43 @@ export class CloudAppHostService {
     return access;
   }
 
+  /**
+   * Resolves auth + appId for /api/db/* and backend actions.
+   * When the client omits appId (team/community installs must not hardcode UUIDs),
+   * uses the published app's id from namespace/slug route context — same as
+   * cloudDesktopPreviewProxy injects for desktop cloud-preview.
+   */
+  private async resolveDbAppContext(
+    req: Request,
+    res: Response,
+    requestedAppId?: string,
+  ): Promise<{
+    runtimeAuth: AppRuntimeRouteAuth;
+    access: AppAccessContext;
+    appId: string;
+  } | null> {
+    const runtimeAuth = this.buildRuntimeAuth(req);
+    if (!runtimeAuth) {
+      res.status(403).json({ error: "Forbidden" });
+      return null;
+    }
+
+    const trimmedAppId = requestedAppId?.trim() || undefined;
+    const access = await this.resolveAccess(req, trimmedAppId);
+    if (!access) {
+      await this.respondAccessDenied(req, res, runtimeAuth);
+      return null;
+    }
+
+    const appId = trimmedAppId ?? access.appId;
+    if (!appId) {
+      res.status(400).json({ error: "appId could not be resolved from request context" });
+      return null;
+    }
+
+    return { runtimeAuth, access, appId };
+  }
+
   private async loadDataSources(
     runtimeAuth: AppRuntimeRouteAuth,
     requestedPath = "data-sources.json",
@@ -524,21 +559,14 @@ export class CloudAppHostService {
 
   private async handleSchema(req: Request, res: Response): Promise<void> {
     try {
-      const appId = req.query["appId"] as string | undefined;
-      if (!appId) {
-        res.status(400).json({ error: "appId query param required" });
-        return;
-      }
+      const requestedAppId = req.query["appId"] as string | undefined;
       if (!this.enforceDbRateLimit(req, res, "read")) return;
 
-      const runtimeAuth = this.buildRuntimeAuth(req);
-      if (!runtimeAuth) {
-        res.status(403).json({ error: "Forbidden" });
-        return;
-      }
+      const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+      if (!ctx) return;
+      const { runtimeAuth, access } = ctx;
 
-      const access = await this.resolveAccess(req, appId);
-      if (!access?.canRead) {
+      if (!access.canRead) {
         await this.respondAccessDenied(req, res, runtimeAuth);
         return;
       }
@@ -559,14 +587,14 @@ export class CloudAppHostService {
 
   private async handleQuery(req: Request, res: Response): Promise<void> {
     try {
-      const { appId, sourceId, sql, params } = req.body as {
+      const { appId: requestedAppId, sourceId, sql, params } = req.body as {
         appId?: string;
         sourceId?: string;
         sql?: string;
         params?: unknown[];
       };
-      if (!appId || !sql) {
-        res.status(400).json({ error: "appId and sql are required" });
+      if (!sql) {
+        res.status(400).json({ error: "sql is required" });
         return;
       }
 
@@ -574,14 +602,11 @@ export class CloudAppHostService {
 
       if (!this.enforceDbRateLimit(req, res, "read")) return;
 
-      const runtimeAuth = this.buildRuntimeAuth(req);
-      if (!runtimeAuth) {
-        res.status(403).json({ error: "Forbidden" });
-        return;
-      }
+      const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+      if (!ctx) return;
+      const { runtimeAuth, access, appId } = ctx;
 
-      const access = await this.resolveAccess(req, appId);
-      if (!access?.canRead) {
+      if (!access.canRead) {
         await this.respondAccessDenied(req, res, runtimeAuth);
         return;
       }
@@ -652,12 +677,12 @@ export class CloudAppHostService {
    */
   private async handleBatchQuery(req: Request, res: Response): Promise<void> {
     try {
-      const { appId, statements } = req.body as {
+      const { appId: requestedAppId, statements } = req.body as {
         appId?: string;
         statements?: Array<{ sourceId?: string; sql?: string; params?: unknown[] }>;
       };
-      if (!appId || !Array.isArray(statements) || statements.length === 0) {
-        res.status(400).json({ error: "appId and non-empty statements[] are required" });
+      if (!Array.isArray(statements) || statements.length === 0) {
+        res.status(400).json({ error: "non-empty statements[] is required" });
         return;
       }
       if (statements.length > 25) {
@@ -674,14 +699,11 @@ export class CloudAppHostService {
 
       if (!this.enforceDbRateLimit(req, res, "read", statements.length)) return;
 
-      const runtimeAuth = this.buildRuntimeAuth(req);
-      if (!runtimeAuth) {
-        res.status(403).json({ error: "Forbidden" });
-        return;
-      }
+      const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+      if (!ctx) return;
+      const { runtimeAuth, access, appId } = ctx;
 
-      const access = await this.resolveAccess(req, appId);
-      if (!access?.canRead) {
+      if (!access.canRead) {
         await this.respondAccessDenied(req, res, runtimeAuth);
         return;
       }
@@ -751,14 +773,14 @@ export class CloudAppHostService {
 
   private async handleWrite(req: Request, res: Response): Promise<void> {
     try {
-      const { appId, sourceId, sql, params } = req.body as {
+      const { appId: requestedAppId, sourceId, sql, params } = req.body as {
         appId?: string;
         sourceId?: string;
         sql?: string;
         params?: unknown[];
       };
-      if (!appId || !sql) {
-        res.status(400).json({ error: "appId and sql are required" });
+      if (!sql) {
+        res.status(400).json({ error: "sql is required" });
         return;
       }
 
@@ -766,15 +788,12 @@ export class CloudAppHostService {
 
       if (!this.enforceDbRateLimit(req, res, "write")) return;
 
-      const runtimeAuth = this.buildRuntimeAuth(req);
-      if (!runtimeAuth) {
-        res.status(403).json({ error: "Forbidden" });
-        return;
-      }
+      const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+      if (!ctx) return;
+      const { runtimeAuth, access, appId } = ctx;
 
-      const access = await this.resolveAccess(req, appId);
-      if (!access?.canWrite) {
-        if (!access?.canRead) {
+      if (!access.canWrite) {
+        if (!access.canRead) {
           await this.respondAccessDenied(req, res, runtimeAuth);
         } else {
           res.status(403).json({ error: "Write not allowed for this link" });
@@ -805,13 +824,13 @@ export class CloudAppHostService {
 
   private async handleExec(req: Request, res: Response): Promise<void> {
     try {
-      const { appId, sourceId, sql } = req.body as {
+      const { appId: requestedAppId, sourceId, sql } = req.body as {
         appId?: string;
         sourceId?: string;
         sql?: string;
       };
-      if (!appId || !sql) {
-        res.status(400).json({ error: "appId and sql are required" });
+      if (!sql) {
+        res.status(400).json({ error: "sql is required" });
         return;
       }
 
@@ -819,15 +838,12 @@ export class CloudAppHostService {
 
       if (!this.enforceDbRateLimit(req, res, "write")) return;
 
-      const runtimeAuth = this.buildRuntimeAuth(req);
-      if (!runtimeAuth) {
-        res.status(403).json({ error: "Forbidden" });
-        return;
-      }
+      const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+      if (!ctx) return;
+      const { runtimeAuth, access, appId } = ctx;
 
-      const access = await this.resolveAccess(req, appId);
-      if (!access?.canWrite) {
-        if (!access?.canRead) {
+      if (!access.canWrite) {
+        if (!access.canRead) {
           await this.respondAccessDenied(req, res, runtimeAuth);
         } else {
           res.status(403).json({ error: "Write not allowed for this link" });
@@ -923,19 +939,12 @@ export class CloudAppHostService {
         params?: Record<string, string>;
         timeoutMs?: number;
       };
-      if (!body.appId || typeof body.appId !== "string") {
-        res.status(400).json({ error: "appId is required" });
-        return;
-      }
 
-      const runtimeAuth = this.buildRuntimeAuth(req);
-      if (!runtimeAuth) {
-        res.status(403).json({ error: "Forbidden — open the app in this browser tab first" });
-        return;
-      }
+      const ctx = await this.resolveDbAppContext(req, res, body.appId);
+      if (!ctx) return;
+      const { runtimeAuth, access, appId } = ctx;
 
-      const access = await this.resolveAccess(req, body.appId);
-      if (!access?.canRead) {
+      if (!access.canRead) {
         await this.respondAccessDenied(req, res, runtimeAuth);
         return;
       }
@@ -953,7 +962,7 @@ export class CloudAppHostService {
       const bypassFresh = shouldBypassRepoFileCache(req.headers);
 
       const result = await backend.runAction(runtimeAuth, {
-        appId: body.appId,
+        appId,
         action: action.trim(),
         params: body.params,
         timeoutMs: body.timeoutMs,
@@ -1223,9 +1232,6 @@ export class CloudAppHostService {
       const revision = await resolvePublishedAppRevision(runtimeAuth, {
         bypassFresh: true,
       });
-      if (revision) {
-        getAppRevisionHub().publish({ namespaceId, slug, revision });
-      }
 
       res.json({ ok: true, revision: revision ?? null });
     } catch (err) {
@@ -1398,17 +1404,11 @@ export class CloudAppHostService {
     let transpiled = false;
 
     if (ext === ".html" && requestedPath === "index.html") {
-      const distBundle = await fetchCachedRuntimeRepoFile(
-        runtimeAuth,
-        "dist/app.js",
-        { bypassFresh },
-      );
+      const [distBundle, distCss] = await Promise.all([
+        fetchCachedRuntimeRepoFile(runtimeAuth, "dist/app.js", { bypassFresh }),
+        fetchCachedRuntimeRepoFile(runtimeAuth, "dist/app.css", { bypassFresh }),
+      ]);
       if (distBundle) {
-        const distCss = await fetchCachedRuntimeRepoFile(
-          runtimeAuth,
-          "dist/app.css",
-          { bypassFresh },
-        );
         const { rewriteHtmlForBundledDist, appendDistAssetCacheBusters } =
           await import("../../utils/miniAppBuild.js");
         const { createHash } = await import("node:crypto");
@@ -1461,10 +1461,10 @@ export class CloudAppHostService {
         runtimeAuth.slug,
       );
 
-      // Platform scripts: auth guard + auto-reload when synced bundle changes.
+      // Platform scripts: auth guard + one-shot version check on focus / refresh.
       const platformScripts = [
         `<script src="/__papr__/papr-auth-guard.js" defer></script>`,
-        `<script src="/__papr__/papr-app-refresh.js" defer></script>`,
+        `<script src="/__papr__/papr-version-check.js" defer></script>`,
       ].join("\n");
       if (content.includes("</head>")) {
         content = content.replace("</head>", `${platformScripts}\n</head>`);

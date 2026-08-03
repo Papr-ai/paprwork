@@ -295,6 +295,11 @@ describe("parseHealthResponse", () => {
     expect(health).toEqual({ alive: true, ready: false });
   });
 
+  test('status "switching" is alive but not ready', () => {
+    const health = parseHealthResponse(JSON.stringify({ status: "switching" }));
+    expect(health).toEqual({ alive: true, ready: false });
+  });
+
   test("invalid JSON is not alive", () => {
     expect(parseHealthResponse("not-json")).toEqual({
       alive: false,
@@ -312,6 +317,16 @@ describe("shouldKillUnhealthyGateway", () => {
     expect(
       shouldKillUnhealthyGateway(10, health, false, 5).shouldKill,
     ).toBe(false);
+  });
+
+  test("switching status never triggers kill while gateway was healthy", () => {
+    const health = { alive: true, ready: false };
+    expect(
+      shouldKillUnhealthyGateway(4, health, true, 5).shouldKill,
+    ).toBe(false);
+    expect(
+      shouldKillUnhealthyGateway(4, health, true, 5).newCount,
+    ).toBe(0);
   });
 
   test("ok status resets failures", () => {

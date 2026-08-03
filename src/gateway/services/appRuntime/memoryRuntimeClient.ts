@@ -19,6 +19,32 @@ function getCloudAppHostKey(): string {
   return key;
 }
 
+const DEFAULT_RUNTIME_FETCH_TIMEOUT_MS = Number(
+  process.env.CLOUD_APP_HOST_MEMORY_TIMEOUT_MS ?? 25_000,
+);
+
+/** Fail fast when memory.papr.ai is slow — avoids opaque Cloud Run 504s at 60s. */
+export async function runtimeFetch(
+  url: string,
+  init: RequestInit,
+  timeoutMs = DEFAULT_RUNTIME_FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(
+        `Memory server request timed out after ${timeoutMs}ms`,
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function runtimeHeaders(auth: AppRuntimeRouteAuth): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -37,7 +63,7 @@ export async function fetchRuntimeDbToken(
   auth: AppRuntimeRouteAuth,
   database: string,
 ): Promise<{ tursoUrl: string; authToken: string }> {
-  const res = await fetch(
+  const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/db-token`,
     {
       method: "POST",
@@ -64,7 +90,7 @@ export async function fetchRuntimeRepoFile(
   auth: AppRuntimeRouteAuth,
   relativePath: string,
 ): Promise<{ content: string; contentType: string } | null> {
-  const res = await fetch(
+  const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/repo-file`,
     {
       method: "POST",
@@ -101,7 +127,7 @@ export async function fetchRuntimeVaultKeyNames(
     const query = scope === "namespace"
       ? `scope=namespace&namespace_id=${encodeURIComponent(auth.namespaceId)}`
       : "scope=user";
-    const res = await fetch(
+    const res = await runtimeFetch(
       `${getMemoryServerBaseUrl()}/v1/cloud/vault/keys?${query}`,
       {
         method: "GET",
@@ -125,7 +151,7 @@ export async function syncRuntimeVaultKeys(
   if (!auth.sessionToken) {
     throw new Error("Sign in required to save credentials");
   }
-  const res = await fetch(
+  const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/vault/sync`,
     {
       method: "POST",
@@ -151,7 +177,7 @@ export async function resolveRuntimeVaultEnv(
   auth: AppRuntimeRouteAuth,
   options?: { keyNames?: string[] },
 ): Promise<RuntimeVaultResolveResult> {
-  const res = await fetch(
+  const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/vault-resolve`,
     {
       method: "POST",
@@ -185,7 +211,7 @@ export async function resolveRuntimeVaultClientKeys(
   auth: AppRuntimeRouteAuth,
   options?: { keyNames?: string[] },
 ): Promise<RuntimeVaultClientResolveResult> {
-  const res = await fetch(
+  const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/vault-client-resolve`,
     {
       method: "POST",
@@ -251,7 +277,7 @@ export async function runRuntimeJob(
     tier?: "sandbox" | "ephemeral";
   },
 ): Promise<RuntimeJobRunResult> {
-  const res = await fetch(
+  const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/job-run`,
     {
       method: "POST",
@@ -267,6 +293,7 @@ export async function runRuntimeJob(
         tier: input.tier ?? "sandbox",
       }),
     },
+    Math.max(DEFAULT_RUNTIME_FETCH_TIMEOUT_MS, (input.timeoutMs ?? 60_000) + 5_000),
   );
   if (!res.ok) {
     throw new Error(
@@ -280,7 +307,7 @@ export async function runRuntimeJob(
 export async function listRuntimeJobs(
   auth: AppRuntimeRouteAuth,
 ): Promise<{ jobs: RuntimeJobSummary[]; count: number }> {
-  const res = await fetch(
+  const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/jobs-list`,
     {
       method: "POST",
@@ -320,7 +347,7 @@ export async function runRuntimeBash(
   auth: AppRuntimeRouteAuth,
   input: { command: string; timeoutMs?: number; keyNames?: string[] },
 ): Promise<RuntimeBashRunResult> {
-  const res = await fetch(
+  const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/bash-run`,
     {
       method: "POST",
@@ -366,7 +393,7 @@ export async function warmRuntimeAppAgentChat(
     jobId: string;
   },
 ): Promise<RuntimeAppAgentWarmResult> {
-  const res = await fetch(
+  const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/app-agent/warm`,
     {
       method: "POST",

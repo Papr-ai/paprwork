@@ -2024,6 +2024,7 @@ export function useAgent() {
             message,
             config,
             ...(focusContext ? { focusContext } : {}),
+            ...(attachments && attachments.length > 0 ? { attachments } : {}),
           },
           (chunk) => handleStreamChunk(chunk as StreamChunk),
           (requestId) => {

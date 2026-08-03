@@ -713,8 +713,8 @@ export function CommunityAppsView({
             >
               <strong>Track upstream</strong>
               <span>
-                Stay linked to the publisher — pull their updates manually when
-                you want them (Local preview → Pull latest).
+                Stay linked to the publisher — get their updates manually when
+                you want them (Local preview → Updates).
               </span>
             </button>
             <button

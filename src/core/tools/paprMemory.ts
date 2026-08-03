@@ -16,6 +16,36 @@ import {
 } from "./chatScope.js";
 import { getCurrentChatId } from "./context.js";
 import { getPaprClient, handlePaprToolError, isPaprNotFoundError } from "./paprClient.js";
+import { assertValidWikiGraphQLSelection } from "../../gateway/services/wikiGraphqlUtils.js";
+
+const memoryReadAclToolFields = {
+  readAcl: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      "Optional read ACL principals. Use external_user:{Parse objectId}, namespace:{namespaceId}, or organization:{orgId}. " +
+        "When set, overrides the chat Team/Org scope for read access. Writer always keeps write ACL.",
+    ),
+  shareWithUserIds: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      "Parse objectIds (same as external_user_id / list_namespace_users.externalUserId) to grant read access. " +
+        "Converted to external_user:{id} ACL principals automatically.",
+    ),
+  shareWithTeam: z
+    .boolean()
+    .optional()
+    .describe(
+      "When true with explicit ACL fields, also grant namespace read ACL for the active namespace.",
+    ),
+  shareWithOrganization: z
+    .boolean()
+    .optional()
+    .describe(
+      "When true with explicit ACL fields, also grant organization read ACL for the active org.",
+    ),
+};
 
 const addMemorySchema = z
   .object({
@@ -40,32 +70,7 @@ const addMemorySchema = z
     jobId: z.string().optional(),
     chatId: z.string().optional(),
     workspaceId: z.string().optional(),
-    readAcl: z
-      .array(z.string().min(1))
-      .optional()
-      .describe(
-        "Optional read ACL principals. Use external_user:{Parse objectId}, namespace:{namespaceId}, or organization:{orgId}. " +
-          "When set, overrides the chat Team/Org scope for read access. Writer always keeps write ACL.",
-      ),
-    shareWithUserIds: z
-      .array(z.string().min(1))
-      .optional()
-      .describe(
-        "Parse objectIds (same as external_user_id / list_namespace_users.externalUserId) to grant read access. " +
-          "Converted to external_user:{id} ACL principals automatically.",
-      ),
-    shareWithTeam: z
-      .boolean()
-      .optional()
-      .describe(
-        "When true with explicit ACL fields, also grant namespace read ACL for the active namespace.",
-      ),
-    shareWithOrganization: z
-      .boolean()
-      .optional()
-      .describe(
-        "When true with explicit ACL fields, also grant organization read ACL for the active org.",
-      ),
+    ...memoryReadAclToolFields,
     signalDomain: z
       .string()
       .optional()
@@ -479,32 +484,14 @@ export const addAgentMemoryTool = createTool({
         signalDomain: args.signalDomain,
       });
 
-      const { getMemoryScopeContext } = await import(
+      const { resolveExplicitReadAclFromToolArgs } = await import(
         "../../gateway/utils/memoryScopeResolver.js"
       );
-      const scopeCtx = getMemoryScopeContext();
-
-      const explicitReadAcl =
-        args.readAcl?.length ||
-        args.shareWithUserIds?.length ||
-        args.shareWithTeam ||
-        args.shareWithOrganization
-          ? {
-              readAcl: args.readAcl,
-              shareWithUserIds: args.shareWithUserIds,
-              shareWithNamespaceId: args.shareWithTeam
-                ? scopeCtx.namespaceId
-                : undefined,
-              shareWithOrganizationId: args.shareWithOrganization
-                ? scopeCtx.organizationId
-                : undefined,
-            }
-          : undefined;
 
       const memoryScope = await buildPaprMemoryWriteScope({
         chatId: resolvedChatId,
         addPolicy,
-        explicitReadAcl,
+        explicitReadAcl: resolveExplicitReadAclFromToolArgs(args),
       });
 
       const response = await client.memory.add({
@@ -542,7 +529,7 @@ export const listNamespaceUsersTool = createTool({
   id: "list_namespace_users",
   description:
     "List Papr users in the active workspace/namespace team. Returns Parse objectIds as externalUserId " +
-    "and ready-to-use memoryReadPrincipal values (external_user:{objectId}) for add_agent_memory ACL. " +
+    "and ready-to-use memoryReadPrincipal values (external_user:{objectId}) for add_agent_memory and create_entities ACL. " +
     "Call before sharing memories with specific attendees.",
   inputSchema: listNamespaceUsersSchema,
   execute: async (args) => {
@@ -1075,6 +1062,13 @@ const createEntitiesSchema = z.object({
   nodes: z.array(manualNodeSchema).min(1).describe("Exact nodes to create with manual specifications"),
   relationships: z.array(manualRelationshipSchema).optional().describe("Exact relationships to create between nodes"),
   schemaId: z.string().optional().describe("Schema ID that defines the node and relationship types"),
+  chatId: z
+    .string()
+    .optional()
+    .describe(
+      `Optional chat ID for default Team/Org scope when ACL fields are omitted. Use "${CURRENT_CHAT_SCOPE}" for the active chat.`,
+    ),
+  ...memoryReadAclToolFields,
 });
 
 export const queryMemoryGraphTool = createTool({
@@ -1086,6 +1080,32 @@ export const queryMemoryGraphTool = createTool({
   inputSchema: queryMemoryGraphSchema,
   execute: async (args) => {
     try {
+      const normalizedQuery = args.query.trim();
+      if (/^\s*mutation\b/i.test(normalizedQuery)) {
+        return {
+          success: false,
+          error: "query_memory_graph is read-only — mutations are not allowed",
+        };
+      }
+
+      const innerSelection = normalizedQuery
+        .replace(/^query\s+\w*\s*/i, "")
+        .trim()
+        .replace(/^\{/, "")
+        .replace(/\}$/, "")
+        .trim();
+      try {
+        assertValidWikiGraphQLSelection(innerSelection);
+      } catch (validationError) {
+        return {
+          success: false,
+          error:
+            validationError instanceof Error
+              ? validationError.message
+              : "Invalid GraphQL query",
+        };
+      }
+
       const client = await getPaprClient();
       const response = await client.graphql.query({
         body: {
@@ -1198,13 +1218,20 @@ export const createEntitiesAndRelationshipsTool = createTool({
   description:
     "Create entities (nodes) and relationships in the knowledge graph with exact specifications. " +
     "Use this for structured data imports, API integrations, or when you need complete control over graph structure. " +
-    "Nodes and relationships must conform to types defined in your registered schema.",
+    "Nodes and relationships must conform to types defined in your registered schema. " +
+    "Supports the same read ACL options as add_agent_memory (readAcl, shareWithUserIds, shareWithTeam, shareWithOrganization). " +
+    "Call list_namespace_users before sharing with specific users.",
   inputSchema: createEntitiesSchema,
   execute: async (args) => {
     try {
       const client = await getPaprClient();
-      const { buildPaprMemoryWriteScope } = await import(
-        "../../gateway/utils/memoryScopeResolver.js"
+      const {
+        buildPaprMemoryWriteScope,
+        resolveExplicitReadAclFromToolArgs,
+      } = await import("../../gateway/utils/memoryScopeResolver.js");
+
+      const resolvedChatId = resolveConversationId(
+        args.chatId ?? getCurrentChatId() ?? undefined,
       );
       
       // Build manual graph generation structure
@@ -1232,7 +1259,9 @@ export const createEntitiesAndRelationshipsTool = createTool({
       });
 
       const memoryScope = await buildPaprMemoryWriteScope({
+        chatId: resolvedChatId,
         addPolicy: manualPolicy,
+        explicitReadAcl: resolveExplicitReadAclFromToolArgs(args),
       });
 
       const response = await client.memory.add({
@@ -1249,7 +1278,7 @@ export const createEntitiesAndRelationshipsTool = createTool({
       return { 
         success: true, 
         data: response,
-        message: `Created ${args.nodes.length} entities${args.relationships ? ` and ${args.relationships.length} relationships` : ''}`
+        message: `Created ${args.nodes.length} entities${args.relationships ? ` and ${args.relationships.length} relationships` : ""}`,
       };
     } catch (error) {
       handlePaprToolError(error);

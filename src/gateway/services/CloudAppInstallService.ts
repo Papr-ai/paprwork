@@ -136,7 +136,7 @@ async function collectAppFiles(
 
 async function cloneAppSource(
   prepare: MemoryInstallResponse,
-): Promise<string> {
+): Promise<{ sourceDir: string; repoDir: string; cleanup: () => Promise<void> }> {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "papr-cloud-install-"));
   const repoDir = path.join(tempRoot, "repo");
 
@@ -157,7 +157,13 @@ async function cloneAppSource(
     { cwd: repoDir, env },
   );
 
-  return path.join(repoDir, prepare.repoPath);
+  return {
+    sourceDir: path.join(repoDir, prepare.repoPath),
+    repoDir,
+    cleanup: async () => {
+      await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+    },
+  };
 }
 
 function resolveTitle(files: AppFile[], slug: string): string {
@@ -234,82 +240,131 @@ export class CloudAppInstallService {
 
   async installApp(input: CloudAppInstallInput): Promise<CloudAppInstallResult> {
     const prepare = await this.prepareInstall(input);
-    const sourceDir = await cloneAppSource(prepare);
-    const files = await collectAppFiles(sourceDir);
+    const cloned = await cloneAppSource(prepare);
 
-    if (files.length === 0) {
-      throw new Error(
-        `No app files found at ${prepare.repoPath} in owner repo`,
+    try {
+      const files = await collectAppFiles(cloned.sourceDir);
+
+      if (files.length === 0) {
+        throw new Error(
+          `No app files found at ${prepare.repoPath} in owner repo`,
+        );
+      }
+
+      const title = resolveTitle(files, prepare.source.slug);
+      const description = resolveDescription(
+        files,
+        `Installed from Papr Cloud (${prepare.source.slug})`,
       );
-    }
+      const icon = resolveIcon(files);
 
-    const title = resolveTitle(files, prepare.source.slug);
-    const description = resolveDescription(
-      files,
-      `Installed from Papr Cloud (${prepare.source.slug})`,
-    );
-    const icon = resolveIcon(files);
-
-    const appService = getAppService();
-    const app = await appService.createApp(
-      title,
-      description,
-      files,
-      icon,
-    );
-
-    const remaps = new Map<string, string>([[prepare.source.appId, app.id]]);
-    const appDir = path.join(getPaprAppsRoot(), app.id);
-    const { remappedFiles } = await applyIdRemapsToDirectory(appDir, remaps);
-    if (remappedFiles.length > 0) {
-      console.log(
-        `[CloudAppInstall] Remapped publisher app ID in ${remappedFiles.length} file(s) for ${app.id}`,
+      const appService = getAppService();
+      const app = await appService.createApp(
+        title,
+        description,
+        files,
+        icon,
       );
+
+      const remaps = new Map<string, string>([[prepare.source.appId, app.id]]);
+      const appDir = path.join(getPaprAppsRoot(), app.id);
+      const { remappedFiles } = await applyIdRemapsToDirectory(appDir, remaps);
+      if (remappedFiles.length > 0) {
+        console.log(
+          `[CloudAppInstall] Remapped publisher app ID in ${remappedFiles.length} file(s) for ${app.id}`,
+        );
+      }
+
+      try {
+        const { installCloudAppLinkedResources } = await import(
+          "./cloudAppLinkedResourcesInstall.js"
+        );
+        const linked = await installCloudAppLinkedResources({
+          repoDir: cloned.repoDir,
+          repoAppDir: cloned.sourceDir,
+          publisherAppId: prepare.source.appId,
+          localAppId: app.id,
+        });
+        if (linked.copiedJobIds.length > 0) {
+          console.log(
+            `[CloudAppInstall] Installed ${linked.copiedJobIds.length} linked job(s) for ${app.id}`,
+          );
+        }
+      } catch (linkedErr) {
+        console.warn(
+          `[CloudAppInstall] Linked job install skipped for ${app.id}:`,
+          (linkedErr as Error).message.slice(0, 160),
+        );
+      }
+
+      try {
+        const { finalizePortableCloudAppResources } = await import(
+          "./cloudAppLinkedResourcesInstall.js"
+        );
+        await finalizePortableCloudAppResources();
+      } catch (repairErr) {
+        console.warn(
+          `[CloudAppInstall] Portable resource repair skipped:`,
+          (repairErr as Error).message.slice(0, 120),
+        );
+      }
+
+      try {
+        const { syncTursoAfterGitPull } = await import("./TursoSyncBridge.js");
+        await syncTursoAfterGitPull();
+      } catch (tursoErr) {
+        console.warn(
+          `[CloudAppInstall] Turso pull after install skipped:`,
+          (tursoErr as Error).message.slice(0, 120),
+        );
+      }
+
+      const lineage: CloudAppLineageFile = {
+        schemaVersion: "1.1.0",
+        lineageId: prepare.lineageId,
+        mode: prepare.mode,
+        source: prepare.source,
+        installedAt: new Date().toISOString(),
+        ...(prepare.mode === "track"
+          ? {
+              lastSyncedAt: new Date().toISOString(),
+              syncSnapshot: Object.fromEntries(
+                files.map((file) => [
+                  file.filename.replace(/\\/g, "/"),
+                  createHash("sha256").update(file.content, "utf8").digest("hex"),
+                ]),
+              ),
+            }
+          : {}),
+      };
+
+      const paprDir = getPaprRoot();
+      const lineagePath = path.join(getPaprAppsRoot(), app.id, "papr-cloud-lineage.json");
+      await fs.writeFile(
+        lineagePath,
+        serializeCloudAppLineageFile(lineage),
+        "utf8",
+      );
+
+      const requirementsFile = files.find(
+        (file) => file.filename === CLOUD_APP_REQUIREMENTS_FILENAME,
+      );
+      const requirements = requirementsFile
+        ? parseRequirementsFileContent(requirementsFile.content)
+        : readAppRequirements(paprDir, app.id);
+
+      return {
+        app,
+        lineageId: prepare.lineageId,
+        mode: prepare.mode,
+        sourceAppId: prepare.source.appId,
+        sourceSlug: prepare.source.slug,
+        requirements,
+        remappedFiles,
+      };
+    } finally {
+      await cloned.cleanup();
     }
-
-    const lineage: CloudAppLineageFile = {
-      schemaVersion: "1.1.0",
-      lineageId: prepare.lineageId,
-      mode: prepare.mode,
-      source: prepare.source,
-      installedAt: new Date().toISOString(),
-      ...(prepare.mode === "track"
-        ? {
-            lastSyncedAt: new Date().toISOString(),
-            syncSnapshot: Object.fromEntries(
-              files.map((file) => [
-                file.filename.replace(/\\/g, "/"),
-                createHash("sha256").update(file.content, "utf8").digest("hex"),
-              ]),
-            ),
-          }
-        : {}),
-    };
-
-    const paprDir = getPaprRoot();
-    const lineagePath = path.join(getPaprAppsRoot(), app.id, "papr-cloud-lineage.json");
-    await fs.writeFile(
-      lineagePath,
-      serializeCloudAppLineageFile(lineage),
-      "utf8",
-    );
-
-    const requirementsFile = files.find(
-      (file) => file.filename === CLOUD_APP_REQUIREMENTS_FILENAME,
-    );
-    const requirements = requirementsFile
-      ? parseRequirementsFileContent(requirementsFile.content)
-      : readAppRequirements(paprDir, app.id);
-
-    return {
-      app,
-      lineageId: prepare.lineageId,
-      mode: prepare.mode,
-      sourceAppId: prepare.source.appId,
-      sourceSlug: prepare.source.slug,
-      requirements,
-      remappedFiles,
-    };
   }
 }
 

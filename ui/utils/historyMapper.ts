@@ -2,7 +2,7 @@ import {
   isInterruptedToolResult,
   resolveToolCallStatus,
 } from "../../src/core/utils/interruptedToolResult";
-import type { ChatMessage } from "../types/chat";
+import type { ChatMessage, MessageAttachment } from "../types/chat";
 
 /** Synthetic user messages injected by SubAgentResponseTrigger - shown only in MiniChatCard, not main chat */
 function isSyntheticSubAgentMessage(msg: unknown): boolean {
@@ -142,6 +142,36 @@ export function mapHistoryMessages(
       ? candidate.sequence
       : undefined;
 
+    const attachmentsRaw = Array.isArray(candidate.attachments)
+      ? candidate.attachments
+      : undefined;
+    const attachments: MessageAttachment[] | undefined =
+      attachmentsRaw && attachmentsRaw.length > 0
+        ? attachmentsRaw.map((raw, attachmentIndex) => {
+            const item =
+              typeof raw === "object" && raw !== null
+                ? (raw as Record<string, unknown>)
+                : {};
+            const kind = item.kind;
+            const normalizedKind: MessageAttachment["kind"] =
+              kind === "document" || kind === "app" || kind === "file"
+                ? kind
+                : "file";
+            return {
+              id:
+                typeof item.id === "string"
+                  ? item.id
+                  : `attachment-${timestampSeed}-${index}-${attachmentIndex}`,
+              name: typeof item.name === "string" ? item.name : "Attachment",
+              kind: normalizedKind,
+              mimeType:
+                typeof item.mimeType === "string" ? item.mimeType : undefined,
+              filePath:
+                typeof item.filePath === "string" ? item.filePath : undefined,
+            };
+          })
+        : undefined;
+
     return {
       id:
         typeof candidate.id === "string"
@@ -152,6 +182,7 @@ export function mapHistoryMessages(
       reasoning,
       toolCalls,
       sequence: sequenceRaw, // Include sequence for interleaved rendering
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
     };
   });
 }

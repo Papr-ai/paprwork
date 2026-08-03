@@ -30,14 +30,14 @@ function shouldKillProcess(consecutiveFailures, isSuccess, threshold = 3) {
   return { newCount, shouldKill: newCount >= threshold };
 }
 
-/** Parse /health JSON body. Gateway returns { status: "ok" | "starting" }. */
+/** Parse /health JSON body. Gateway returns { status: "ok" | "starting" | "switching" }. */
 function parseHealthResponse(body) {
   try {
     const parsed = JSON.parse(body);
     if (parsed.status === "ok") {
       return { alive: true, ready: true };
     }
-    if (parsed.status === "starting") {
+    if (parsed.status === "starting" || parsed.status === "switching") {
       return { alive: true, ready: false };
     }
     return { alive: false, ready: false };

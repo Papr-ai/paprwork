@@ -87,6 +87,7 @@ export async function notifyGatewayWorkspaceSwitch(
       success?: boolean;
       pointer?: ActiveWorkspacePointer;
       error?: string;
+      status?: "switching" | "ready";
     };
     if (payload.success === false) {
       return {
@@ -94,6 +95,11 @@ export async function notifyGatewayWorkspaceSwitch(
         pointer: local.pointer,
         error: payload.error ?? "Gateway workspace switch rejected",
       };
+    }
+    if (payload.status === "switching") {
+      console.log(
+        "[PaprWorkspace] Gateway accepted workspace switch (background reinit in progress)",
+      );
     }
     return {
       success: true,

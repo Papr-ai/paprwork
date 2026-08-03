@@ -36,7 +36,9 @@ File: `src/gateway/services/cloudSync/prepareAppsForCloud.ts`
 
 User refreshes the browser tab (normal F5). Cloud app host serves fresh repo content and versioned `dist/app.js`.
 
-**Open tabs without refresh:** After Sync now, desktop gateway notifies `apps.papr.ai`, which invalidates server caches and pushes a revision event over SSE. Injected `papr-app-refresh.js` reloads the tab when the revision changes — no polling, no Cmd+Shift+R. Tab focus also re-checks once as a fallback.
+**Open tabs:** Stay on the previous bundle until the user refreshes (standard static hosting, same as Vercel). After Sync now, desktop gateway notifies `apps.papr.ai` to invalidate server-side caches so the **next** load gets the new bundle.
+
+**Optional version nudge (no SSE):** Injected `papr-version-check.js` compares `<meta name="papr-app-revision">` to `__papr__/app-revision.json` **once on first tab focus** and shows “New version available — refresh?” if sync happened while the tab was open. Paprwork’s publish-bar **Refresh** runs the same check before reloading web preview.
 
 ## Agent guidance
 
@@ -51,10 +53,9 @@ User refreshes the browser tab (normal F5). Cloud app host serves fresh repo con
 - `CloudAppPublishService.ts` — `tryAutoPublishSyncedApps({ syncedAppIds })`
 - `cloudPublishDrift.ts` — catalog + sharing drift
 - `cloudRepoHeadMarker.ts` — cache invalidation marker
-- `notifyCloudAppRevision.ts` / `notifySyncedAppRevisions.ts` — desktop → cloud push on sync
-- `publishedAppRevision.ts` — revision meta + `__papr__/app-revision.json` endpoint
-- `AppRevisionHub.ts` / `registerAppRevisionSse.ts` — SSE push to open tabs
-- `papr-app-refresh.ts` — client SSE listener + tab-focus fallback
+- `notifyCloudAppRevision.ts` / `notifySyncedAppRevisions.ts` — desktop → cloud cache invalidation on sync
+- `publishedAppRevision.ts` — revision meta + `__papr__/app-revision.json` (cache busting on reload)
+- `papr-version-check.ts` — one-shot focus check + refresh prompt (no SSE)
 - `cloudAppHostCache.ts` / `cloudAppHostRequestCache.ts` — host-side cache (deploy separately)
 
 ## Deploy notes

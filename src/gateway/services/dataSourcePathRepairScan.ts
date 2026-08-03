@@ -110,13 +110,14 @@ export async function runGlobalDataSourcePathRepair(
   const dryRun = options.dryRun ?? false;
   const delayMs = options.delayMs ?? 25;
   const scopePaprHome = options.scopePaprHome;
+  const workspaceRoot = scopePaprHome ?? paprBase;
 
-  const jobIndex = await buildJobDatabasePathIndex(paprBase);
+  const jobIndex = await buildJobDatabasePathIndex(workspaceRoot);
   const { getDatabaseRegistryService } = await import(
     "./DatabaseRegistryService.js"
   );
   await getDatabaseRegistryService().initialize();
-  let dataSourcesPaths = await discoverDataSourcesFiles(paprBase);
+  let dataSourcesPaths = await discoverDataSourcesFiles(workspaceRoot);
   if (scopePaprHome) {
     const scopeRoot = path.join(scopePaprHome, "apps") + path.sep;
     dataSourcesPaths = dataSourcesPaths.filter((filePath) =>
@@ -158,7 +159,7 @@ export async function runGlobalDataSourcePathRepair(
 
     const resolver = createJobPathResolverForDataSourcesFile(
       dataSourcesPath,
-      paprBase,
+      workspaceRoot,
       jobIndex,
     );
 

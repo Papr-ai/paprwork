@@ -1,0 +1,80 @@
+/**
+ * One-shot version check for published cloud apps (Vercel-style).
+ *
+ * - On first tab focus: fetch __papr__/app-revision.json vs meta tag
+ * - On parent Refresh (postMessage): same check before reload
+ * - No polling, no persistent SSE
+ */
+
+const REVISION_META = "papr-app-revision";
+const REVISION_JSON_PATH = "__papr__/app-revision.json";
+const PROMPT_MESSAGE = "New version available — refresh?";
+
+function readLoadedRevision(): string | null {
+  return (
+    document.querySelector(`meta[name="${REVISION_META}"]`)?.getAttribute("content") ??
+    null
+  );
+}
+
+async function fetchCurrentRevision(): Promise<string | null> {
+  try {
+    const response = await fetch(REVISION_JSON_PATH, {
+      cache: "no-store",
+      headers: { "Cache-Control": "no-cache" },
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const body = (await response.json()) as { revision?: string };
+    return typeof body.revision === "string" ? body.revision : null;
+  } catch {
+    return null;
+  }
+}
+
+function postToParent(source: MessageEventSource | null, reload: boolean): void {
+  if (source && "postMessage" in source) {
+    source.postMessage({ type: "papr-check-version-result", reload }, "*");
+  }
+}
+
+const loadedRevision = readLoadedRevision();
+if (loadedRevision) {
+  let focusChecked = false;
+
+  document.addEventListener("visibilitychange", () => {
+    if (focusChecked || document.hidden) {
+      return;
+    }
+    focusChecked = true;
+    void (async () => {
+      const currentRevision = await fetchCurrentRevision();
+      if (!currentRevision || currentRevision === loadedRevision) {
+        return;
+      }
+      if (window.confirm(PROMPT_MESSAGE)) {
+        location.reload();
+      }
+    })();
+  });
+
+  window.addEventListener("message", (event) => {
+    if (event.data?.type !== "papr-check-version") {
+      return;
+    }
+    void (async () => {
+      const currentRevision = await fetchCurrentRevision();
+      if (currentRevision && currentRevision !== loadedRevision) {
+        if (window.confirm(PROMPT_MESSAGE)) {
+          location.reload();
+          postToParent(event.source, false);
+          return;
+        }
+        postToParent(event.source, false);
+        return;
+      }
+      postToParent(event.source, true);
+    })();
+  });
+}

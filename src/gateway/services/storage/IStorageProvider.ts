@@ -7,12 +7,24 @@
  * - HybridStorageProvider: Local cache + PAPR sync
  */
 
+/** File/context attached to a user message (UI + history). */
+export interface StoredMessageAttachment {
+  id: string;
+  name: string;
+  kind: "file" | "document" | "app";
+  mimeType?: string;
+  filePath?: string;
+}
+
 export interface StoredMessage {
   id: string;
   chat_id: string;
   role: "user" | "assistant"; // Aligned with CoreMessage
   content: string; // Aligned with CoreMessage
   timestamp: string;
+
+  /** Context files attached when the user sent this message */
+  attachments?: StoredMessageAttachment[];
 
   // AI response metadata
   thinking?: string; // Reasoning/thinking from model

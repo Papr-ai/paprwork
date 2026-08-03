@@ -380,6 +380,8 @@ export class AgentService {
       isSubAgentTrigger?: boolean;
       /** Internal: post-stream wrap-up continuation — prevents infinite wrap-up loops. */
       _isWrapUpContinuation?: boolean;
+      /** File/context attachments from the chat UI (persisted on user message). */
+      attachments?: import("./storage/IStorageProvider.js").StoredMessageAttachment[];
     },
   ): AsyncGenerator<StreamChunk & { chatId: string }> {
     if (!this.initialized) {
@@ -647,6 +649,9 @@ export class AgentService {
         content: userMessage,
         timestamp: new Date().toISOString(),
         sync_status: "local",
+        ...(options?.attachments && options.attachments.length > 0
+          ? { attachments: options.attachments }
+          : {}),
       };
       if (!options?._skipSaveUserMessage) {
         await this.storageManager.saveMessage(chatId, userMsg);

@@ -179,12 +179,24 @@ export function mergeHistoryWithLocal(
     if (localIds.has(serverMsg.id)) continue;
 
     if (serverMsg.role === "user") {
-      const duplicateUser = merged.some(
+      const localIdx = merged.findIndex(
         (m) =>
           m.role === "user" &&
           m.content.trim() === serverMsg.content.trim(),
       );
-      if (duplicateUser) continue;
+      if (localIdx >= 0) {
+        const local = merged[localIdx];
+        if (
+          serverMsg.attachments?.length &&
+          !local.attachments?.length
+        ) {
+          merged[localIdx] = {
+            ...local,
+            attachments: serverMsg.attachments,
+          };
+        }
+        continue;
+      }
     }
 
     if (serverMsg.role === "assistant") {

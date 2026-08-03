@@ -21,6 +21,10 @@ import {
   type SharePermission,
 } from "../../utils/shareAudienceModel";
 import type { ArtifactCloudLineage } from "../../stores/artifactsStore";
+import {
+  buildUpstreamCloudPreviewUrl,
+  buildUpstreamPublishedWebUrl,
+} from "../../utils/cloudDesktopPreview";
 import { CloudChangeRequestsPanel } from "./CloudChangeRequestsPanel";
 import { CloudContributeBackPanel } from "./CloudContributeBackPanel";
 import { CloudUpstreamBar } from "./CloudUpstreamBar";
@@ -54,6 +58,7 @@ interface MiniAppPublishBarProps {
   workspaceMode: AppWorkspaceMode;
   onWorkspaceModeChange: (mode: AppWorkspaceMode) => void;
   onTrackPullComplete?: () => void;
+  onRefreshPreview?: () => void;
 }
 
 const ACCESS_OPTIONS: {
@@ -164,6 +169,26 @@ function CopyIcon() {
   );
 }
 
+function RefreshIcon() {
+  return (
+    <svg className="share-sheet__icon" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path
+        d="M13.5 8a5.5 5.5 0 01-9.2 4M2.5 8a5.5 5.5 0 019.2-4"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+      <path
+        d="M11.5 2.5V5.5H8.5M4.5 13.5V10.5H7.5"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function MiniAppPublishBar({
   appId,
   appTitle,
@@ -174,6 +199,7 @@ export function MiniAppPublishBar({
   workspaceMode,
   onWorkspaceModeChange,
   onTrackPullComplete,
+  onRefreshPreview,
 }: MiniAppPublishBarProps) {
   const [shareOpen, setShareOpen] = useState(false);
   const [audience, setAudience] = useState<ShareAudience>("private");
@@ -190,7 +216,7 @@ export function MiniAppPublishBar({
   const [compatLoading, setCompatLoading] = useState(false);
   const [needsDesktopAck, setNeedsDesktopAck] = useState(false);
 
-  const { status: webSyncStatus, loading: webSyncLoading, refreshing: webSyncRefreshing, pushing: webSyncPushing, error: webSyncError, pushNow: webSyncPushNow } =
+  const { status: webSyncStatus, loading: webSyncLoading, refreshing: webSyncRefreshing, pushing: webSyncPushing, pulling: webSyncPulling, error: webSyncError, pushNow: webSyncPushNow, pullUpdates: webSyncPullUpdates } =
     useAppCloudSyncStatus(appId, { enabled: workspaceMode === "preview" });
 
   useEffect(() => {
@@ -327,10 +353,34 @@ export function MiniAppPublishBar({
   const gatewayHost = import.meta.env.VITE_GATEWAY_HOST || "localhost";
   const gatewayPort = import.meta.env.VITE_GATEWAY_PORT || "18789";
   const localPreviewUrl = `http://${gatewayHost}:${gatewayPort}/apps/${appId}/index.html`;
-  const webDisplayUrl = cloud.publishedWebUrl ?? cloud.shareUrl;
+  const isTrackCollaborator = cloudLineage?.mode === "track";
+  const upstreamWebUrl =
+    isTrackCollaborator && cloudLineage
+      ? buildUpstreamPublishedWebUrl({
+          sourceNamespaceId: cloudLineage.sourceNamespaceId,
+          sourceSlug: cloudLineage.sourceSlug,
+        })
+      : null;
+  const upstreamPreviewUrl =
+    isTrackCollaborator && cloudLineage
+      ? buildUpstreamCloudPreviewUrl({
+          sourceNamespaceId: cloudLineage.sourceNamespaceId,
+          sourceSlug: cloudLineage.sourceSlug,
+        })
+      : null;
+
+  const webDisplayUrl = isTrackCollaborator
+    ? upstreamWebUrl
+    : cloud.publishedWebUrl ?? cloud.shareUrl;
   const previewDisplayUrl =
-    viewMode === "published" ? webDisplayUrl : localPreviewUrl;
-  const copyUrl = cloud.externalLinkUrl ?? cloud.loginUrl ?? webDisplayUrl;
+    viewMode === "published"
+      ? isTrackCollaborator
+        ? upstreamWebUrl
+        : webDisplayUrl
+      : localPreviewUrl;
+  const copyUrl = isTrackCollaborator
+    ? upstreamWebUrl
+    : cloud.externalLinkUrl ?? cloud.loginUrl ?? webDisplayUrl;
   const showWebPanel = isWebLinkPermission(permission);
   const showCodePanel = isCodePermission(permission);
   const listsInCommunity = shouldListInCommunity(audience, cloud.live);
@@ -358,7 +408,9 @@ export function MiniAppPublishBar({
       ? "mini-app-publish-bar__dot mini-app-publish-bar__dot--pending"
       : "mini-app-publish-bar__dot";
 
-  const canOpenWebPreview = cloud.live && !!cloud.publishedPreviewUrl;
+  const canOpenWebPreview = isTrackCollaborator
+    ? !!upstreamPreviewUrl
+    : cloud.live && !!cloud.publishedPreviewUrl;
   const webSyncLoadingState = webSyncLoading || webSyncRefreshing;
   const webSyncTooltip = formatWebSyncStatusTooltip(webSyncStatus, {
     loading: webSyncLoadingState,
@@ -374,7 +426,7 @@ export function MiniAppPublishBar({
     webSyncStatus != null &&
     webSyncStatus.overall !== "synced" &&
     webSyncStatus.overall !== "disabled";
-  const webSyncSpinning = webSyncPushing || webSyncState === "syncing";
+  const webSyncSpinning = webSyncPushing || webSyncPulling || webSyncState === "syncing";
 
   const handleWebPreviewClick = () => {
     setWebSyncPopoverOpen(false);
@@ -384,10 +436,7 @@ export function MiniAppPublishBar({
   };
 
   const handleWebSyncDotClick = () => {
-    if (canOpenWebPreview) {
-      onViewModeChange("published");
-    }
-    setWebSyncPopoverOpen(true);
+    setWebSyncPopoverOpen((open) => !open);
   };
 
   const handlePublishClick = async () => {
@@ -470,7 +519,9 @@ export function MiniAppPublishBar({
                   disabled={!canOpenWebPreview}
                   title={
                     canOpenWebPreview
-                      ? "Preview the live web version"
+                      ? isTrackCollaborator
+                        ? "Preview the team's live web version (publisher)"
+                        : "Preview the live web version"
                       : "Publish to the web first"
                   }
                   onClick={handleWebPreviewClick}
@@ -490,8 +541,10 @@ export function MiniAppPublishBar({
                   status={webSyncStatus}
                   error={webSyncError}
                   pushing={webSyncPushing}
+                  pulling={webSyncPulling}
                   syncActionNeeded={webSyncActionNeeded}
                   onPushNow={() => void webSyncPushNow()}
+                  onPullUpdates={() => void webSyncPullUpdates()}
                 />
               ) : null}
             </div>
@@ -519,38 +572,47 @@ export function MiniAppPublishBar({
 
         </div>
 
+        {workspaceMode === "preview" && previewDisplayUrl ? (
+          <div className="mini-app-publish-bar__url-row">
+            <span className="mini-app-publish-bar__url" title={previewDisplayUrl}>
+              {previewDisplayUrl}
+            </span>
+            <button
+              type="button"
+              className="mini-app-publish-bar__icon-button"
+              title={viewMode === "published" ? "Refresh web preview" : "Refresh local preview"}
+              aria-label="Refresh preview"
+              onClick={() => onRefreshPreview?.()}
+            >
+              <RefreshIcon />
+            </button>
+            <button
+              type="button"
+              className="mini-app-publish-bar__icon-button"
+              title="Open in browser"
+              aria-label="Open in browser"
+              onClick={() => void cloud.openInBrowser(previewDisplayUrl)}
+            >
+              <OpenExternalIcon />
+            </button>
+            <button
+              type="button"
+              className="mini-app-publish-bar__icon-button"
+              title="Copy link"
+              aria-label="Copy link"
+              onClick={() => void cloud.copyLink(previewDisplayUrl)}
+            >
+              <CopyIcon />
+            </button>
+          </div>
+        ) : null}
+
         <div className="mini-app-publish-bar__actions">
           {cloud.toast ? (
             <span className="mini-app-publish-bar__toast">{cloud.toast}</span>
           ) : null}
           {cloud.error ? (
             <span className="mini-app-publish-bar__error">{cloud.error}</span>
-          ) : null}
-
-          {previewDisplayUrl ? (
-            <div className="mini-app-publish-bar__url-row">
-              <span className="mini-app-publish-bar__url" title={previewDisplayUrl}>
-                {previewDisplayUrl}
-              </span>
-              <button
-                type="button"
-                className="mini-app-publish-bar__icon-button"
-                title="Open in browser"
-                aria-label="Open in browser"
-                onClick={() => void cloud.openInBrowser(previewDisplayUrl)}
-              >
-                <OpenExternalIcon />
-              </button>
-              <button
-                type="button"
-                className="mini-app-publish-bar__icon-button"
-                title="Copy link"
-                aria-label="Copy link"
-                onClick={() => void cloud.copyLink(previewDisplayUrl)}
-              >
-                <CopyIcon />
-              </button>
-            </div>
           ) : null}
 
           <AppWorkspaceMenu

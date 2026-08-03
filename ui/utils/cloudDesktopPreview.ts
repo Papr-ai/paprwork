@@ -38,6 +38,26 @@ export function buildDesktopCloudPreviewUrl(publishedUrl: string): string | null
   return `${GATEWAY}/cloud-preview/${parsed.namespaceId}/${parsed.slug}/${query}`;
 }
 
+export interface UpstreamCloudAppRef {
+  sourceNamespaceId: string;
+  sourceSlug: string;
+}
+
+/** Public apps.papr.ai URL for the publisher's live deployment. */
+export function buildUpstreamPublishedWebUrl(ref: UpstreamCloudAppRef): string {
+  return `https://apps.papr.ai/${ref.sourceNamespaceId}/${ref.sourceSlug}`;
+}
+
+/**
+ * Desktop iframe src for track-mode collaborators — proxies the publisher's
+ * live web app (Turso-backed) without requiring a separate fork publish.
+ */
+export function buildUpstreamCloudPreviewUrl(
+  ref: UpstreamCloudAppRef,
+): string | null {
+  return buildDesktopCloudPreviewUrl(buildUpstreamPublishedWebUrl(ref));
+}
+
 /** Clear stale cloud-preview cookies so Local mode uses local SQLite again. */
 export function clearCloudPreviewCookies(): void {
   const names = ["papr_cloud_preview", "papr_cloud_ns", "papr_cloud_slug"];

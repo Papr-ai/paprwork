@@ -172,6 +172,10 @@ try {
     test('Has nodes parameter', 'nodes' in schema);
     test('Has relationships parameter', 'relationships' in schema);
     test('Has schemaId parameter', 'schemaId' in schema);
+    test('Has readAcl parameter', 'readAcl' in schema);
+    test('Has shareWithTeam parameter', 'shareWithTeam' in schema);
+    test('Has shareWithOrganization parameter', 'shareWithOrganization' in schema);
+    test('Description mentions ACL', createTool.description.toLowerCase().includes('acl'));
     test('Description mentions entities', createTool.description.toLowerCase().includes('entit'));
   } else {
     failed++;

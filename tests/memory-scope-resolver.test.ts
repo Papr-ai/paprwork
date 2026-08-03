@@ -73,3 +73,48 @@ describe("memoryScopeResolver chat scope", () => {
     expect(scope.policy?.acl?.read).not.toContain("namespace:ns-abc");
   });
 });
+
+describe("resolveExplicitReadAclFromToolArgs", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns undefined when no ACL fields are set", async () => {
+    const { resolveExplicitReadAclFromToolArgs } = await import(
+      "../src/gateway/utils/memoryScopeResolver.js"
+    );
+    expect(resolveExplicitReadAclFromToolArgs({})).toBeUndefined();
+  });
+
+  it("maps shareWithTeam and shareWithOrganization to namespace/org principals", async () => {
+    vi.doMock("../src/core/utils/paprWorkspace.js", () => ({
+      readActiveWorkspacePointer: () => ({
+        organizationId: "org-xyz",
+        namespaceId: "ns-abc",
+      }),
+    }));
+    vi.doMock("../src/gateway/utils/paprUserId.js", () => ({
+      getPaprUserId: () => "user-1",
+    }));
+
+    const { resolveExplicitReadAclFromToolArgs } = await import(
+      "../src/gateway/utils/memoryScopeResolver.js"
+    );
+
+    expect(
+      resolveExplicitReadAclFromToolArgs({
+        shareWithTeam: true,
+        shareWithOrganization: true,
+      }),
+    ).toEqual({
+      readAcl: undefined,
+      shareWithUserIds: undefined,
+      shareWithNamespaceId: "ns-abc",
+      shareWithOrganizationId: "org-xyz",
+    });
+  });
+});

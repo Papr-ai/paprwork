@@ -10,12 +10,14 @@ import { sendResponse, sendError } from "./index.js";
 import { getAgentService } from "../services/AgentService.js";
 import type { AgentConfig } from "../../core/types/agents.js";
 import type { UiAgentFocusContext } from "../../core/types/agentFocus.js";
+import type { StoredMessageAttachment } from "../services/storage/IStorageProvider.js";
 
 interface StreamPayload {
   chatId: string;
   message: string;
   config: AgentConfig;
   focusContext?: UiAgentFocusContext;
+  attachments?: StoredMessageAttachment[];
 }
 
 interface StopStreamingPayload {
@@ -54,7 +56,8 @@ export async function setupAgentHandlers(
     switch (message.type) {
       case "agent:stream": {
         const payload = message.payload as StreamPayload;
-        const { chatId, message: userMessage, config, focusContext } = payload;
+        const { chatId, message: userMessage, config, focusContext, attachments } =
+          payload;
 
         if (!chatId || !userMessage) {
           sendError(ws, message.id, "Missing chatId or message");
@@ -229,6 +232,7 @@ export async function setupAgentHandlers(
           userMessage,
           config: configInternal,
           focusContext,
+          attachments,
           ws,
         });
         break;

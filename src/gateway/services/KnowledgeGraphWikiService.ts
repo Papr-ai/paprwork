@@ -18,8 +18,60 @@ import {
   pickWikiLabel,
 } from "./wikiGraphHelpers.js";
 import { syncWikiGraphEntity } from "./wikiGraphEntitySync.js";
+import {
+  graphqlNameContainsWhere,
+  graphqlStringEq,
+  runInBatches,
+  WIKI_HOME_REMOTE_CACHE_TTL_MS,
+  WIKI_REMOTE_FETCH_BATCH_DELAY_MS,
+  WIKI_REMOTE_FETCH_BATCH_SIZE,
+  wrapWikiGraphQLSelection,
+} from "./wikiGraphqlUtils.js";
 import * as fs from "fs";
 import * as path from "path";
+
+interface WikiHomeRemoteCacheEntry {
+  fetchedAt: number;
+  key: string;
+  result: WikiHomeResult;
+}
+
+let wikiHomeRemoteCache: WikiHomeRemoteCacheEntry | null = null;
+
+/** Test hook — clear cached remote wiki home payload. */
+export function clearWikiHomeRemoteCache(): void {
+  wikiHomeRemoteCache = null;
+}
+
+function wikiHomeRemoteCacheKey(): string {
+  const ctx = getMemoryScopeContext();
+  return (
+    [ctx.organizationId, ctx.namespaceId, ctx.userId]
+      .filter(Boolean)
+      .join(":") || "default"
+  );
+}
+
+function getCachedWikiHomeRemote(): WikiHomeResult | null {
+  const key = wikiHomeRemoteCacheKey();
+  if (
+    wikiHomeRemoteCache &&
+    wikiHomeRemoteCache.key === key &&
+    Date.now() - wikiHomeRemoteCache.fetchedAt < WIKI_HOME_REMOTE_CACHE_TTL_MS
+  ) {
+    console.log("[Wiki] Home (remote cache hit)");
+    return wikiHomeRemoteCache.result;
+  }
+  return null;
+}
+
+function setCachedWikiHomeRemote(result: WikiHomeResult): void {
+  wikiHomeRemoteCache = {
+    fetchedAt: Date.now(),
+    key: wikiHomeRemoteCacheKey(),
+    result,
+  };
+}
 
 function getEntitiesDir(): string { return path.join(getPaprWorkspaceDir(), "entities"); }
 
@@ -263,7 +315,7 @@ interface EntityTypeConfig {
   label: string;
   railTitle: string;
   listQuery: string;
-  detailQuery: (id: string) => string;
+  detailQuery: (id: string) => string | null;
   graphqlHasId: boolean;
 }
 
@@ -277,13 +329,17 @@ const ENTITY_CONFIGS: EntityTypeConfig[] = [
     label: "Goals",
     railTitle: "Your goals",
     graphqlHasId: false,
-    listQuery: `goals {
+    listQuery: `goals(first: ${MAX_RAIL_ITEMS}) {
       status priority progress target_date updated_at created_at
     }`,
-    detailQuery: (id) => `goals(where: { ${graphqlStringEq("description", id)} }) {
+    detailQuery: (id) => {
+      const eq = graphqlStringEq("description", id);
+      if (!eq) return null;
+      return `goals(where: { ${eq} }) {
       description status priority progress target_date updated_at created_at
       forGoalByUserTask { task_name description status priority }
-    }`,
+    }`;
+    },
   },
   {
     wikiType: "project",
@@ -291,17 +347,21 @@ const ENTITY_CONFIGS: EntityTypeConfig[] = [
     label: "Projects",
     railTitle: "Projects",
     graphqlHasId: true,
-    listQuery: `projects {
+    listQuery: `projects(first: ${MAX_RAIL_ITEMS}) {
       id name description type updated_at
     }`,
-    detailQuery: (id) => `projects(where: { ${graphqlStringEq("id", id)} }) {
+    detailQuery: (id) => {
+      const eq = graphqlStringEq("id", id);
+      if (!eq) return null;
+      return `projects(where: { ${eq} }) {
       id name description type updated_at
       containsMemory { id content title memory_category }
       containsTask { name description }
       containsInsight { description }
       managedByPerson { id name role }
       participantsPerson { id name role }
-    }`,
+    }`;
+    },
   },
   {
     wikiType: "person",
@@ -309,14 +369,18 @@ const ENTITY_CONFIGS: EntityTypeConfig[] = [
     label: "People",
     railTitle: "People",
     graphqlHasId: true,
-    listQuery: `people {
+    listQuery: `people(first: ${MAX_RAIL_ITEMS}) {
       id name role description updated_at
     }`,
-    detailQuery: (id) => `people(where: { ${graphqlStringEq("id", id)} }) {
+    detailQuery: (id) => {
+      const eq = graphqlStringEq("id", id);
+      if (!eq) return null;
+      return `people(where: { ${eq} }) {
       id name role description updated_at
       participatedInProject { id name description }
       createdMemory { id content title }
-    }`,
+    }`;
+    },
   },
   {
     wikiType: "memory",
@@ -324,15 +388,19 @@ const ENTITY_CONFIGS: EntityTypeConfig[] = [
     label: "Memories",
     railTitle: "Recent memories",
     graphqlHasId: true,
-    listQuery: `memories {
+    listQuery: `memories(first: ${MAX_RAIL_ITEMS}) {
       id content title memory_category memory_role topics updatedAt
     }`,
-    detailQuery: (id) => `memories(where: { ${graphqlStringEq("id", id)} }) {
+    detailQuery: (id) => {
+      const eq = graphqlStringEq("id", id);
+      if (!eq) return null;
+      return `memories(where: { ${eq} }) {
       id content title memory_category memory_role topics updatedAt
       relatedToMemory { id content title }
       referencesProject { id name description }
       createdByPerson { id name role }
-    }`,
+    }`;
+    },
   },
   {
     wikiType: "insight",
@@ -340,7 +408,7 @@ const ENTITY_CONFIGS: EntityTypeConfig[] = [
     label: "Insights",
     railTitle: "Insights",
     graphqlHasId: false,
-    listQuery: `userInsights {
+    listQuery: `userInsights(first: ${MAX_RAIL_ITEMS}) {
       content category timestamp created_at
     }`,
     detailQuery: (_id) => `userInsights {
@@ -354,7 +422,7 @@ const ENTITY_CONFIGS: EntityTypeConfig[] = [
     label: "Tasks",
     railTitle: "Tasks",
     graphqlHasId: false,
-    listQuery: `userTasks {
+    listQuery: `userTasks(first: ${MAX_RAIL_ITEMS}) {
       task_name status priority created_at updated_at
     }`,
     detailQuery: (_id) => `userTasks {
@@ -378,15 +446,6 @@ const SEARCH_RAIL_QUERIES: Array<{
   { query: "insights decisions learnings", wikiType: "insight", railTitle: "Insights" },
   { query: "tasks action items todos", wikiType: "task", railTitle: "Tasks" },
 ];
-
-function escapeGraphQL(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-}
-
-/** Neo4j GraphQL scalar filters require `{ eq: "..." }`, not a bare string. */
-function graphqlStringEq(field: string, value: string): string {
-  return `${field}: { eq: "${escapeGraphQL(value)}" }`;
-}
 
 function isConversationBatchMemory(record: Record<string, unknown>): boolean {
   const content = asString(record.content ?? record.title ?? record.description);
@@ -613,8 +672,9 @@ async function runGraphQL(
   label: string,
 ): Promise<Record<string, unknown> | null> {
   try {
+    const wrappedQuery = wrapWikiGraphQLSelection(query);
     const raw = await client.graphql.query({
-      body: { query: `{ ${query} }` },
+      body: { query: wrappedQuery },
     });
     const response = raw as {
       data?: Record<string, unknown>;
@@ -767,8 +827,11 @@ async function fetchWikiHomeFromSearch(client: Papr): Promise<{
     grouped.set(node.type, list);
   };
 
-  await Promise.all(
-    SEARCH_RAIL_QUERIES.map(async ({ query, wikiType }) => {
+  await runInBatches(
+    SEARCH_RAIL_QUERIES,
+    WIKI_REMOTE_FETCH_BATCH_SIZE,
+    WIKI_REMOTE_FETCH_BATCH_DELAY_MS,
+    async ({ query, wikiType }) => {
       try {
         const response = await client.memory.search({
           query,
@@ -798,7 +861,7 @@ async function fetchWikiHomeFromSearch(client: Papr): Promise<{
           error instanceof Error ? error.message : error,
         );
       }
-    }),
+    },
   );
 
   if ([...grouped.values()].every((items) => items.length === 0)) {
@@ -844,8 +907,11 @@ async function fetchWikiHomeFromGraphQL(client: Papr): Promise<{
   let graphqlFailed = false;
   let graphRepairsRemaining = 8;
 
-  await Promise.all(
-    ENTITY_CONFIGS.map(async (config) => {
+  await runInBatches(
+    ENTITY_CONFIGS,
+    WIKI_REMOTE_FETCH_BATCH_SIZE,
+    WIKI_REMOTE_FETCH_BATCH_DELAY_MS,
+    async (config) => {
       const data = await runGraphQL(
         client,
         config.listQuery,
@@ -883,14 +949,16 @@ async function fetchWikiHomeFromGraphQL(client: Papr): Promise<{
         reason: `${items.length} in your graph`,
         items,
       });
-    }),
+    },
   );
 
   rails.sort((a, b) => b.items.length - a.items.length);
   return { rails, typeCounts, graphqlFailed };
 }
 
-export async function fetchWikiHome(): Promise<WikiHomeResult> {
+export async function fetchWikiHome(options?: {
+  forceRefresh?: boolean;
+}): Promise<WikiHomeResult> {
   // PRIMARY: entity .md files under the active org/namespace workspace:
   // {paprHome}/workspace/entities/ (paprHome from .active-workspace.json or PAPR_HOME)
   const entityResult = readEntityFilesSync();
@@ -912,6 +980,13 @@ export async function fetchWikiHome(): Promise<WikiHomeResult> {
     `[Wiki] No local entities at ${getEntitiesDir()} — falling back to Papr GraphQL/search`,
   );
 
+  if (!options?.forceRefresh) {
+    const cached = getCachedWikiHomeRemote();
+    if (cached) {
+      return cached;
+    }
+  }
+
   // FALLBACK: Neo4j / Qdrant search (same namespace as PAPR_API_KEY)
   let client: Papr;
   try {
@@ -926,10 +1001,8 @@ export async function fetchWikiHome(): Promise<WikiHomeResult> {
     };
   }
 
-  const [graphqlResult, searchResult] = await Promise.all([
-    fetchWikiHomeFromGraphQL(client),
-    fetchWikiHomeFromSearch(client),
-  ]);
+  const graphqlResult = await fetchWikiHomeFromGraphQL(client);
+  const searchResult = await fetchWikiHomeFromSearch(client);
 
   const rails = mergeWikiRails(graphqlResult.rails, searchResult.rails);
   const typeCounts = { ...searchResult.typeCounts, ...graphqlResult.typeCounts };
@@ -940,7 +1013,7 @@ export async function fetchWikiHome(): Promise<WikiHomeResult> {
     `[Wiki] Home (fallback): ${rails.length} rails (graphql=${graphqlResult.rails.length}, search=${searchResult.rails.length})`,
   );
 
-  return {
+  const result: WikiHomeResult = {
     featured,
     rails,
     typeCounts,
@@ -953,6 +1026,9 @@ export async function fetchWikiHome(): Promise<WikiHomeResult> {
         }
       : {}),
   };
+
+  setCachedWikiHomeRemote(result);
+  return result;
 }
 
 async function _fetchWikiEntityBase(wikiType: string, id: string, label?: string): Promise<WikiEntityResult> {
@@ -1027,9 +1103,15 @@ async function _fetchWikiEntityBase(wikiType: string, id: string, label?: string
 
   if (config.graphqlHasId) {
     try {
+      const selection = config.detailQuery(id);
+      if (!selection) {
+        console.warn(
+          `[Wiki] Skipping GraphQL entity load — invalid id (${wikiType}/${id})`,
+        );
+      } else {
       const data = await runGraphQL(
         client,
-        config.detailQuery(id),
+        selection,
         `${config.graphqlPlural}:${id}`,
       );
       if (data) {
@@ -1041,6 +1123,7 @@ async function _fetchWikiEntityBase(wikiType: string, id: string, label?: string
           const { edges, rails } = extractEdgesAndRails(synced.record, node.id);
           return { node, edges, rails };
         }
+      }
       }
     } catch (error) {
       console.warn(
@@ -1151,7 +1234,7 @@ async function _fetchGraphConnectedEntities(
   try {
     const client = await getPaprClient();
     const entityType = node.type;
-    const escapedLabel = escapeGraphQL(node.label);
+    const nameWhere = graphqlNameContainsWhere(node.label);
     const allRails: WikiRail[] = [];
 
     // --- Graph queries: best-effort, entity files are the primary source ---
@@ -1163,11 +1246,11 @@ async function _fetchGraphConnectedEntities(
       : entityType === "goal" ? "goals"
       : null;
 
-    if (graphType) {
+    if (graphType && nameWhere) {
       // For companies: get connection count, then fetch person IDs individually
       if (entityType === "company") {
         // Safe query: only get totalCount (no nested name fields that could error)
-        const countQuery = `${graphType}(where: { name: { contains: "${escapedLabel}" } }, limit: 1) { id name employeesPersonConnection { totalCount edges { node { id } } } }`;
+        const countQuery = `${graphType}(where: ${nameWhere}, limit: 1) { id name employeesPersonConnection { totalCount edges { node { id } } } }`;
         const data = await runGraphQL(client, countQuery, `connected-company-people`);
         if (data) {
           const records = (data[graphType] as Record<string, unknown>[]) ?? [];
@@ -1191,7 +1274,7 @@ async function _fetchGraphConnectedEntities(
                 }
               }
               // Also try fetching names directly (may fail on corrupt nodes, that's OK)
-              const nameQuery = `${graphType}(where: { name: { contains: "${escapedLabel}" } }, limit: 1) { employeesPerson { id name } }`;
+              const nameQuery = `${graphType}(where: ${nameWhere}, limit: 1) { employeesPerson { id name } }`;
               const nameData = await runGraphQL(client, nameQuery, `connected-company-people-names`);
               if (nameData) {
                 const recs = (nameData[graphType] as Record<string, unknown>[]) ?? [];
@@ -1220,7 +1303,7 @@ async function _fetchGraphConnectedEntities(
 
       // For people: find companies they work at
       if (entityType === "person") {
-        const q = `${graphType}(where: { name: { contains: "${escapedLabel}" } }, limit: 1) { id name worksAtCompany { id name } }`;
+        const q = `${graphType}(where: ${nameWhere}, limit: 1) { id name worksAtCompany { id name } }`;
         const data = await runGraphQL(client, q, `connected-person-companies`);
         if (data) {
           const records = (data[graphType] as Record<string, unknown>[]) ?? [];

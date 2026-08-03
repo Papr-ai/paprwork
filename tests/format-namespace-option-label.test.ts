@@ -21,4 +21,14 @@ describe("formatNamespaceOptionLabel", () => {
       }),
     ).toBe("Engineering · production (abc123)");
   });
+
+  it("hides environment when name already ends with -production", () => {
+    expect(
+      formatNamespaceOptionLabel({
+        id: "85ZIB7mD1V",
+        name: "papr-ai-production",
+        environmentType: "production",
+      }),
+    ).toBe("papr-ai-production (85ZIB7mD1V)");
+  });
 });

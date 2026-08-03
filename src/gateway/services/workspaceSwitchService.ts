@@ -77,9 +77,54 @@ export interface SwitchWorkspaceInput {
   runPostMigrationPathRepair?: boolean;
 }
 
+export type WorkspaceSwitchPhase =
+  | "idle"
+  | "preparing"
+  | "core"
+  | "artifacts"
+  | "services"
+  | "deferred"
+  | "complete"
+  | "error";
+
+export interface WorkspaceSwitchStatus {
+  active: boolean;
+  phase: WorkspaceSwitchPhase;
+  organizationId?: string;
+  namespaceId?: string;
+  error?: string;
+  startedAt?: number;
+}
+
 export interface SwitchWorkspaceResult {
   success: true;
   pointer: ActiveWorkspacePointer;
+  /** `switching` = accepted; heavy reinit continues in background. */
+  status: "switching" | "ready";
+}
+
+let switchGeneration = 0;
+let switchStatus: WorkspaceSwitchStatus = { active: false, phase: "idle" };
+
+function isSwitchGenerationStale(generation: number): boolean {
+  return generation !== switchGeneration;
+}
+
+function setSwitchStatus(patch: Partial<WorkspaceSwitchStatus>): void {
+  switchStatus = { ...switchStatus, ...patch };
+}
+
+export function getWorkspaceSwitchStatus(): WorkspaceSwitchStatus {
+  return { ...switchStatus };
+}
+
+/** Health endpoint uses this to avoid supervisor SIGKILL during background switch. */
+export function getWorkspaceSwitchHealthStatus(): "ok" | "switching" {
+  return switchStatus.active ? "switching" : "ok";
+}
+
+function yieldEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 export async function activateWorkspacePointer(
@@ -133,43 +178,99 @@ async function initializePathBoundServices(): Promise<void> {
   await initializeDatabaseRegistry();
 }
 
-export async function reinitializeWorkspaceServices(input?: {
-  paprApiKey?: string;
+async function runPostMigrationPathRepairIfNeeded(input?: {
   runPostMigrationPathRepair?: boolean;
   scopePaprHome?: string;
 }): Promise<void> {
-  await resetPathBoundSingletons();
+  if (!input?.runPostMigrationPathRepair) {
+    return;
+  }
+  const { runPostMigrationPathRepair, formatPostMigrationRepairSummary } =
+    await import("./postMigrationPathRepair.js");
+  const repairResult = await runPostMigrationPathRepair({
+    dryRun: false,
+    includeApps: true,
+    delayMs: 0,
+    scopePaprHome: input.scopePaprHome,
+  });
+  console.log(
+    "[WorkspaceSwitch] Post-migration path repair:",
+    formatPostMigrationRepairSummary(repairResult),
+  );
+}
 
-  if (input?.runPostMigrationPathRepair) {
-    const { runPostMigrationPathRepair, formatPostMigrationRepairSummary } =
-      await import("./postMigrationPathRepair.js");
-    const repairResult = await runPostMigrationPathRepair({
-      dryRun: false,
-      includeApps: true,
-      delayMs: 0,
-      scopePaprHome: input.scopePaprHome,
-    });
-    console.log(
-      "[WorkspaceSwitch] Post-migration path repair:",
-      formatPostMigrationRepairSummary(repairResult),
-    );
+/** Phased init after pointer reset — yields between phases so /health stays responsive. */
+async function initializeWorkspaceServicesPhased(input?: {
+  paprApiKey?: string;
+  runPostMigrationPathRepair?: boolean;
+  scopePaprHome?: string;
+  onPhase?: (phase: WorkspaceSwitchPhase) => void;
+  isStale?: () => boolean;
+}): Promise<void> {
+  if (input?.isStale?.()) {
+    return;
+  }
+
+  await runPostMigrationPathRepairIfNeeded(input);
+  await yieldEventLoop();
+  if (input?.isStale?.()) {
+    return;
   }
 
   const paprApiKey = input?.paprApiKey ?? (await getPaprApiKey()) ?? undefined;
 
-  await Promise.all([initializeAppService(), initializeJobsService()]);
+  input?.onPhase?.("core");
   await initializeAgentService({
     mode: paprApiKey ? "hybrid" : "local",
     paprApiKey,
     openaiApiKey: undefined,
   });
+  if (input?.isStale?.()) {
+    return;
+  }
+  broadcast({ type: "workspace:switch-phase", data: { phase: "core" } });
+  await yieldEventLoop();
+  if (input?.isStale?.()) {
+    return;
+  }
+
+  input?.onPhase?.("artifacts");
+  await Promise.all([initializeAppService(), initializeDocumentService()]);
+  if (input?.isStale?.()) {
+    return;
+  }
+  broadcast({ type: "workspace:switch-phase", data: { phase: "artifacts" } });
+  await yieldEventLoop();
+  if (input?.isStale?.()) {
+    return;
+  }
+
+  input?.onPhase?.("services");
+  await initializeJobsService();
   await initializePathBoundServices();
+  if (input?.isStale?.()) {
+    return;
+  }
+  broadcast({ type: "workspace:switch-phase", data: { phase: "services" } });
+  await yieldEventLoop();
 
   const truncationSettings = await refreshToolResultTruncationSettings();
   console.log(
     `[WorkspaceSwitch] Tool truncation loaded from ${process.env.PAPR_HOME ?? "Papr"}/data/settings.json` +
       (truncationSettings.disableAllTruncation ? " (truncation disabled)" : ""),
   );
+}
+
+/** Full reset + reinit (tests, migration flows that need synchronous completion). */
+export async function reinitializeWorkspaceServices(input?: {
+  paprApiKey?: string;
+  runPostMigrationPathRepair?: boolean;
+  scopePaprHome?: string;
+  onPhase?: (phase: WorkspaceSwitchPhase) => void;
+}): Promise<void> {
+  await resetPathBoundSingletons();
+  await yieldEventLoop();
+  await initializeWorkspaceServicesPhased(input);
 }
 
 async function restartCloudSyncIfEnabled(): Promise<void> {
@@ -254,32 +355,106 @@ export async function applyGatewayPaprApiKey(apiKey: string): Promise<void> {
   });
 }
 
+async function finishWorkspaceSwitchInBackground(
+  input: SwitchWorkspaceInput,
+  pointer: ActiveWorkspacePointer,
+  generation: number,
+): Promise<void> {
+  try {
+    if (isSwitchGenerationStale(generation)) {
+      return;
+    }
+
+    await initializeWorkspaceServicesPhased({
+      paprApiKey: input.paprApiKey,
+      runPostMigrationPathRepair: input.runPostMigrationPathRepair,
+      scopePaprHome: input.runPostMigrationPathRepair ? pointer.paprHome : undefined,
+      isStale: () => isSwitchGenerationStale(generation),
+      onPhase: (phase) => {
+        if (isSwitchGenerationStale(generation)) {
+          return;
+        }
+        setSwitchStatus({ phase });
+      },
+    });
+    if (isSwitchGenerationStale(generation)) {
+      return;
+    }
+
+    getCustomKeysService().invalidateCache();
+
+    broadcast({ type: "app:list-updated" });
+
+    setSwitchStatus({ phase: "deferred" });
+    await runDeferredWorkspaceSwitchMaintenance(pointer);
+    if (isSwitchGenerationStale(generation)) {
+      return;
+    }
+
+    setSwitchStatus({ active: false, phase: "complete" });
+    broadcast({ type: "workspace:switch-complete", data: { pointer } });
+    console.log(
+      `[WorkspaceSwitch] Background switch complete: org=${pointer.organizationId} ns=${pointer.namespaceId}`,
+    );
+  } catch (error) {
+    if (isSwitchGenerationStale(generation)) {
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[WorkspaceSwitch] Background switch failed:", message);
+    setSwitchStatus({ active: false, phase: "error", error: message });
+    broadcast({ type: "workspace:switch-error", data: { error: message } });
+  }
+}
+
 export async function switchActiveWorkspace(
   input: SwitchWorkspaceInput,
 ): Promise<SwitchWorkspaceResult> {
-  const pointer = await activateWorkspacePointer(input);
-  if (input.paprApiKey) {
-    process.env.PAPR_API_KEY = input.paprApiKey;
-  }
-  clearKeyCache("PAPR_API_KEY");
-  invalidatePaprUserIdCache();
-  await reinitializeWorkspaceServices({
-    paprApiKey: input.paprApiKey,
-    runPostMigrationPathRepair: input.runPostMigrationPathRepair,
-    scopePaprHome: input.runPostMigrationPathRepair ? pointer.paprHome : undefined,
-  });
-  getCustomKeysService().invalidateCache();
+  const generation = ++switchGeneration;
+  const superseding = switchStatus.active;
 
-  broadcast({ type: "app:list-updated" });
-
-  void runDeferredWorkspaceSwitchMaintenance(pointer).catch((error: unknown) => {
-    console.warn(
-      "[WorkspaceSwitch] Deferred maintenance failed:",
-      error instanceof Error ? error.message : error,
+  if (superseding) {
+    console.log(
+      `[WorkspaceSwitch] Superseding in-flight switch → org=${input.organizationId} ns=${input.namespaceId}`,
     );
+  }
+
+  setSwitchStatus({
+    active: true,
+    phase: "preparing",
+    organizationId: input.organizationId,
+    namespaceId: input.namespaceId,
+    error: undefined,
+    startedAt: Date.now(),
   });
 
-  return { success: true, pointer };
+  try {
+    await abortAllActiveAgentStreams();
+    const pointer = await activateWorkspacePointer(input);
+    if (input.paprApiKey) {
+      process.env.PAPR_API_KEY = input.paprApiKey;
+    }
+    clearKeyCache("PAPR_API_KEY");
+    invalidatePaprUserIdCache();
+    await resetPathBoundSingletons();
+
+    broadcast({
+      type: "workspace:switch-started",
+      data: {
+        organizationId: input.organizationId,
+        namespaceId: input.namespaceId,
+      },
+    });
+
+    void finishWorkspaceSwitchInBackground(input, pointer, generation);
+
+    return { success: true, pointer, status: "switching" };
+  } catch (error) {
+    if (generation === switchGeneration) {
+      setSwitchStatus({ active: false, phase: "error" });
+    }
+    throw error;
+  }
 }
 
 /** Cloud sync, Turso, and vault — not required before UI can use the new workspace. */

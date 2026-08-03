@@ -32,16 +32,14 @@ export async function resolvePublishedAppRevision(
 ): Promise<string | null> {
   const fetchOpts = opts?.bypassFresh ? { bypassFresh: true as const } : undefined;
 
-  const repoHeadFile = await fetchCachedRuntimeRepoFile(
-    auth,
-    CLOUD_REPO_HEAD_RELATIVE_PATH,
-    fetchOpts,
-  );
+  const [repoHeadFile, distBundle] = await Promise.all([
+    fetchCachedRuntimeRepoFile(auth, CLOUD_REPO_HEAD_RELATIVE_PATH, fetchOpts),
+    fetchCachedRuntimeRepoFile(auth, "dist/app.js", fetchOpts),
+  ]);
   const repoHead = repoHeadFile
     ? parseCloudRepoHeadContent(repoHeadFile.content)
     : "0";
 
-  const distBundle = await fetchCachedRuntimeRepoFile(auth, "dist/app.js", fetchOpts);
   return formatPublishedAppRevision(repoHead, distBundle?.content ?? null);
 }
 

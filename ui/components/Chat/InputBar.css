@@ -41,8 +41,14 @@
 /* Context section - above textarea */
 .input-context-section {
   display: flex;
+  flex-direction: column;
   gap: 6px;
-  flex-wrap: wrap;
+}
+
+.input-context-section__error {
+  font-size: 12px;
+  color: var(--danger, #ff6b6b);
+  padding: 0 4px;
 }
 
 .add-context-pill {

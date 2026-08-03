@@ -69,10 +69,17 @@ export interface WorkspaceEntityIdSets {
   validDocumentIds?: Set<string>;
 }
 
-/** Load tabs + navigation state for the active workspace from gateway SQLite. */
-export async function loadPersistedAppStateFromGateway(
-  options?: WorkspaceEntityIdSets,
-): Promise<void> {
+export interface PersistedAppStateSnapshot {
+  tabs: ReturnType<typeof mapTabRow>[];
+  activeTabId: string | null;
+  splitRatio: number;
+  splitRatios: Record<string, number>;
+  history: string[];
+  historyIndex: number;
+}
+
+/** Fetch tab metadata + navigation state from workspace SQLite (no store writes). */
+export async function fetchPersistedAppStateFromGateway(): Promise<PersistedAppStateSnapshot | null> {
   const tabsResponse = (await gateway.send("app:load_tabs", {})) as {
     success?: boolean;
     data?: TabRow[];
@@ -99,14 +106,6 @@ export async function loadPersistedAppStateFromGateway(
           parent.childTabIds.push(tab.id);
         }
       }
-    }
-
-    if (
-      options?.validChatIds ||
-      options?.validAppIds ||
-      options?.validDocumentIds
-    ) {
-      restoredTabs = pruneStaleEntityTabs(restoredTabs, options);
     }
   }
 
@@ -169,11 +168,48 @@ export async function loadPersistedAppStateFromGateway(
     activeTabId = restoredTabs[0]?.id ?? null;
   }
 
-  useTabStore.setState({
+  return {
     tabs: restoredTabs,
     activeTabId,
     splitRatio,
     splitRatios,
+    history,
+    historyIndex,
+  };
+}
+
+/** Apply fetched tab snapshot to tabStore, optionally pruning stale entity tabs. */
+export function applyPersistedAppStateToTabStore(
+  snapshot: PersistedAppStateSnapshot,
+  options?: WorkspaceEntityIdSets,
+): void {
+  let restoredTabs = snapshot.tabs;
+
+  if (
+    options?.validChatIds ||
+    options?.validAppIds ||
+    options?.validDocumentIds
+  ) {
+    restoredTabs = pruneStaleEntityTabs(restoredTabs, options);
+  }
+
+  const restoredIds = new Set(restoredTabs.map((t) => t.id));
+  let activeTabId = snapshot.activeTabId;
+  if (activeTabId && !restoredIds.has(activeTabId)) {
+    activeTabId = restoredTabs[0]?.id ?? null;
+  }
+
+  const history = snapshot.history.filter((id) => restoredIds.has(id));
+  let historyIndex = snapshot.historyIndex;
+  if (historyIndex >= history.length) {
+    historyIndex = history.length - 1;
+  }
+
+  useTabStore.setState({
+    tabs: restoredTabs,
+    activeTabId,
+    splitRatio: snapshot.splitRatio,
+    splitRatios: snapshot.splitRatios,
     history,
     historyIndex,
   });
@@ -188,6 +224,33 @@ export async function loadPersistedAppStateFromGateway(
   if (!useTabStore.getState().activeTabId) {
     ensureDefaultChatTab();
   }
+}
+
+/** Drop chat tabs whose entityId is not in the workspace chat list. */
+export function reconcileChatTabsInStore(validChatIds: Set<string>): void {
+  if (validChatIds.size === 0) {
+    return;
+  }
+  const snapshot: PersistedAppStateSnapshot = {
+    tabs: useTabStore.getState().tabs,
+    activeTabId: useTabStore.getState().activeTabId,
+    splitRatio: useTabStore.getState().splitRatio,
+    splitRatios: useTabStore.getState().splitRatios,
+    history: useTabStore.getState().history,
+    historyIndex: useTabStore.getState().historyIndex,
+  };
+  applyPersistedAppStateToTabStore(snapshot, { validChatIds });
+}
+
+/** Load tabs + navigation state for the active workspace from gateway SQLite. */
+export async function loadPersistedAppStateFromGateway(
+  options?: WorkspaceEntityIdSets,
+): Promise<void> {
+  const snapshot = await fetchPersistedAppStateFromGateway();
+  if (!snapshot) {
+    return;
+  }
+  applyPersistedAppStateToTabStore(snapshot, options);
 }
 
 function mapTabRow(tab: TabRow) {

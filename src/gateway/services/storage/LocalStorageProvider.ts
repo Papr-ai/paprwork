@@ -277,6 +277,13 @@ export class LocalStorageProvider implements IStorageProvider {
       this.db.exec("ALTER TABLE messages ADD COLUMN sequence TEXT"); // Store as JSON
     }
 
+    if (!columnNames.includes("attachments")) {
+      console.log(
+        '[LocalStorage] Adding "attachments" column to messages table...',
+      );
+      this.db.exec("ALTER TABLE messages ADD COLUMN attachments TEXT");
+    }
+
     const chatColumns = this.db.pragma("table_info(chats)") as Array<{
       name: string;
     }>;
@@ -358,6 +365,7 @@ export class LocalStorageProvider implements IStorageProvider {
       total_tokens: totalTokens,
       hasThinking: !!message.thinking,
       hasToolCalls: !!message.toolCalls,
+      hasAttachments: !!message.attachments?.length,
       hasError: !!message.error,
       incomplete: message.incomplete,
     });
@@ -374,8 +382,8 @@ export class LocalStorageProvider implements IStorageProvider {
         cache_read_tokens, cache_write_tokens,
         sync_status, papr_message_id,
         source_agent_id, source_agent_name,
-        sequence
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        sequence, attachments
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
       .run(
         messageId,
@@ -399,6 +407,9 @@ export class LocalStorageProvider implements IStorageProvider {
         message.source_agent_id || "main-agent",
         message.source_agent_name || "Paprwork Assistant",
         message.sequence ? JSON.stringify(message.sequence) : null, // Store sequence as JSON
+        message.attachments?.length
+          ? JSON.stringify(message.attachments)
+          : null,
       );
 
     // Update chat message count and updated_at
@@ -626,7 +637,7 @@ export class LocalStorageProvider implements IStorageProvider {
         model, prompt_tokens, completion_tokens, total_tokens,
         sync_status, papr_message_id, last_sync_attempt, sync_error,
         source_agent_id, source_agent_name,
-        sequence
+        sequence, attachments
       FROM messages 
       WHERE chat_id = ? 
       ORDER BY timestamp ${limit ? 'DESC' : 'ASC'}
@@ -677,6 +688,7 @@ export class LocalStorageProvider implements IStorageProvider {
       sync_error: row.sync_error,
       source_agent_id: row.source_agent_id || "main-agent",
       source_agent_name: row.source_agent_name || "Paprwork Assistant",
+      attachments: row.attachments ? JSON.parse(row.attachments) : undefined,
     }));
   }
 

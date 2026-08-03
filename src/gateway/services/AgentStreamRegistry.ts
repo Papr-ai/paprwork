@@ -255,9 +255,18 @@ export class AgentStreamRegistry {
     userMessage: string;
     config: AgentConfigInternal;
     focusContext?: UiAgentFocusContext;
+    attachments?: import("./storage/IStorageProvider.js").StoredMessageAttachment[];
     ws: WebSocket;
   }): void {
-    const { chatId, requestId, userMessage, config, focusContext, ws } = params;
+    const {
+      chatId,
+      requestId,
+      userMessage,
+      config,
+      focusContext,
+      attachments,
+      ws,
+    } = params;
 
     const existingRequestId = this.requestIdByChatId.get(chatId);
     if (existingRequestId) {
@@ -287,7 +296,7 @@ export class AgentStreamRegistry {
     this.streamsByRequestId.set(requestId, entry);
     this.requestIdByChatId.set(chatId, requestId);
 
-    void this.runStream(entry, userMessage, config, focusContext);
+    void this.runStream(entry, userMessage, config, focusContext, attachments);
   }
 
   private async runStream(
@@ -295,6 +304,7 @@ export class AgentStreamRegistry {
     userMessage: string,
     config: AgentConfigInternal,
     focusContext?: UiAgentFocusContext,
+    attachments?: import("./storage/IStorageProvider.js").StoredMessageAttachment[],
   ): Promise<void> {
     const { getAgentService } = await import("./AgentService.js");
     const agentService = getAgentService();
@@ -310,7 +320,7 @@ export class AgentStreamRegistry {
           chatId,
           userMessage,
           config,
-          { focusContext },
+          { focusContext, attachments },
         )) {
           if (entry.cancelled) break;
           this.bufferChunk(entry, chunk);

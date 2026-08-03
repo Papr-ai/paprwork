@@ -1500,12 +1500,14 @@ Soft-deletes (archives) a schema. Data is preserved but marked inactive. Restore
 
 ## Manual Entity & Relationship Creation
 
-For structured data imports or exact graph control, use \`create_entities\`:
+For structured data imports or exact graph control, use \`create_entities\`. It supports the same ACL options as \`add_agent_memory\` — pass \`shareWithTeam: true\`, \`shareWithOrganization: true\`, \`shareWithUserIds\`, or \`readAcl\` to share graph nodes with your team/org (defaults to personal scope when omitted).
 
 \\\`\\\`\\\`typescript
 create_entities({
   content: "LinkedIn profile data for John Smith",
   schemaId: "linkedin-schema-id",
+  shareWithTeam: true,
+  shareWithOrganization: true,
   nodes: [
     {
       id: "person_1",

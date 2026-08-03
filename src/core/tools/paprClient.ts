@@ -5,8 +5,8 @@ import {
 } from "../utils/paprQuota.js";
 
 export async function getPaprClient(): Promise<Papr> {
-  const { getApiKey } = await import("../../gateway/utils/keyResolver.js");
-  const apiKey = await getApiKey("PAPR_API_KEY");
+  const { getPaprApiKey } = await import("../../gateway/utils/keyResolver.js");
+  const apiKey = await getPaprApiKey();
   if (!apiKey) {
     throw new Error("PAPR_API_KEY is not configured");
   }
