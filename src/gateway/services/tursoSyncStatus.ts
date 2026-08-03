@@ -95,6 +95,9 @@ export function resolveTursoSourceStatus(
   if (dirty && localTableCount > 0) {
     return "pending";
   }
+  if (localTableCount > 0 && remoteTableCount > 0 && localTableCount > remoteTableCount) {
+    return "pending";
+  }
   if (remoteTableCount > 0) {
     return "synced";
   }

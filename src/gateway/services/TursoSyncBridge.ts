@@ -29,6 +29,7 @@ import {
   isTursoLocalDatabaseCorruptError,
   isTursoProvisioningRateLimitError,
   isTursoSqliteBindTypeError,
+  openWritableLocalJobDb,
   pullTursoToLocalDb,
   pushLocalDbToTurso,
   remoteAheadOfLocal,
@@ -38,7 +39,7 @@ import {
   type TursoCredentials,
 } from "./tursoSyncBridgeCore.js";
 import { recordTursoPushQuarantine } from "./tursoSyncState.js";
-import { remoteNeedsBootstrap } from "./tursoDeltaSync.js";
+import { remoteNeedsBootstrap, remoteMissingLocalTables } from "./tursoDeltaSync.js";
 import { remoteSyncLogExists } from "./tursoSyncLog.js";
 import {
   isJobDbDirty,
@@ -334,7 +335,20 @@ export class TursoSyncBridge {
     const creds = await this.fetchCredentials(databaseName);
     const remote = createRemoteClient(creds);
     try {
-      return await remoteNeedsBootstrap(remote);
+      if (await remoteNeedsBootstrap(remote)) {
+        return true;
+      }
+      const localDb = openWritableLocalJobDb(linked.dbPath);
+      try {
+        const { filterSyncableTables, listUserTables } = await import(
+          "./tursoSyncBridgeCore.js"
+        );
+        const localTables = filterSyncableTables(listUserTables(localDb));
+        const missing = await remoteMissingLocalTables(remote, localTables);
+        return missing.length > 0;
+      } finally {
+        localDb.close();
+      }
     } finally {
       remote.close();
     }

@@ -28,6 +28,27 @@ export async function remoteNeedsBootstrap(remote: Client): Promise<boolean> {
   return result.rows.length === 0;
 }
 
+/** User tables currently on remote Turso (excludes infra tables). */
+export async function listRemoteUserTables(remote: Client): Promise<string[]> {
+  const result = await remote.execute(
+    `SELECT name FROM sqlite_master
+     WHERE type = 'table'
+       AND name NOT LIKE 'sqlite_%'
+       AND name NOT LIKE 'libsql_%'
+       AND name NOT LIKE '_papr_%'`,
+  );
+  return result.rows.map((row) => String(row.name ?? "")).filter(Boolean);
+}
+
+/** Local syncable tables missing from remote — schema drift after partial bootstrap. */
+export async function remoteMissingLocalTables(
+  remote: Client,
+  localTableNames: readonly string[],
+): Promise<string[]> {
+  const remoteNames = new Set(await listRemoteUserTables(remote));
+  return localTableNames.filter((name) => !remoteNames.has(name));
+}
+
 function fetchLocalRowByPk(
   db: Database.Database,
   tableName: string,

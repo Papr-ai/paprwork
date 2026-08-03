@@ -925,41 +925,28 @@ function AboutTab() {
           </div>
         </div>
 
-        {currentVersion === "2.2.1" && (
+        {currentVersion === "2.2.2" && (
           <div className="about-card">
-            <h3>What's New in v2.2.1</h3>
+            <h3>What's New in v2.2.2</h3>
             <ul className="whats-new-list">
               <li className="whats-new-list__item">
-                <strong>Redesigned Settings & Profile</strong>
+                <strong>Turso Schema Drift Fix</strong>
                 <p>
-                  Cleaner profile tab with Papr account card, AI provider
-                  connections, and a dedicated agent context settings modal.
+                  Cloud sync now detects when local databases have tables missing
+                  on Turso and automatically re-bootstraps instead of showing a
+                  false "Synced" status.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Improved Onboarding</strong>
+                <strong>App Database Path Resolution</strong>
                 <p>
-                  Streamlined first-run flow with clearer Papr login and setup
-                  steps.
-                </p>
-              </li>
-              <li className="whats-new-list__item">
-                <strong>Wiki Local Graph Sync</strong>
-                <p>
-                  Knowledge graph wiki entities sync locally for faster, more
-                  reliable wiki updates.
-                </p>
-              </li>
-              <li className="whats-new-list__item">
-                <strong>Memory Scope Refinements</strong>
-                <p>
-                  Clearer namespace-scoped memory policies for tools, attachments,
-                  and sleep/wiki jobs.
+                  Mini-app data sources resolve registry database paths correctly
+                  when job IDs are not set.
                 </p>
               </li>
             </ul>
             <a
-              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.2.1"
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.2.2"
               target="_blank"
               rel="noopener noreferrer"
               className="about-link whats-new-list__link"

@@ -12,6 +12,10 @@ describe("resolveTursoSourceStatus", () => {
     expect(resolveTursoSourceStatus(30, 30, true, true)).toBe("pending");
   });
 
+  it("reports pending when local has more tables than remote (schema drift)", () => {
+    expect(resolveTursoSourceStatus(6, 5, true, false)).toBe("pending");
+  });
+
   it("reports synced when remote has tables and local is clean", () => {
     expect(resolveTursoSourceStatus(30, 30, true, false)).toBe("synced");
   });

@@ -41,6 +41,7 @@ import {
   applyRemoteSyncLogToLocal,
   pushDeltaToRemote,
   remoteNeedsBootstrap,
+  remoteMissingLocalTables,
 } from "./tursoDeltaSync.js";
 
 export interface TursoCredentials {
@@ -716,7 +717,18 @@ export async function pushLocalDbToTurso(
 
     const lastPushedLogId = syncOptions.lastPushedLogId ?? 0;
     const pendingEntries = readSyncLogSince(localDb, lastPushedLogId);
-    const bootstrap = syncOptions.force === true || (await remoteNeedsBootstrap(remote));
+    const missingOnRemote = await remoteMissingLocalTables(remote, tableNames);
+    const bootstrap =
+      syncOptions.force === true ||
+      (await remoteNeedsBootstrap(remote)) ||
+      missingOnRemote.length > 0;
+
+    if (missingOnRemote.length > 0 && !syncOptions.force) {
+      console.warn(
+        `[TursoSync] Remote missing ${missingOnRemote.length} local table(s) for ${syncOptions.jobId}: ` +
+          `${missingOnRemote.join(", ")} — forcing bootstrap`,
+      );
+    }
 
     if (bootstrap) {
       const syncedRemote = await syncTablesToRemote(
@@ -843,7 +855,7 @@ export function resetChangeLogReadyCacheForTests(): void {
   changeLogReadyPaths.clear();
 }
 
-function openWritableLocalJobDb(localDbPath: string): Database.Database {
+export function openWritableLocalJobDb(localDbPath: string): Database.Database {
   const db = new Database(localDbPath);
   db.pragma("journal_mode = WAL");
   db.pragma(`busy_timeout = ${LOCAL_DB_BUSY_TIMEOUT_MS}`);

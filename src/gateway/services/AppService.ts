@@ -2952,7 +2952,38 @@ export class AppService {
       throw new Error(`App not found: ${appId}`);
     }
     const config = await this.readDataSourcesConfigFromDisk(appId);
-    return resolveDataSourcesForWorkspace(config, getPaprJobsRoot());
+    const workspaceConfig = resolveDataSourcesForWorkspace(
+      config,
+      getPaprJobsRoot(),
+    );
+
+    const { getDatabaseRegistryService } = await import(
+      "./DatabaseRegistryService.js"
+    );
+    const { resolveReadableRegistryDbPath } = await import(
+      "./resolveRegistryDbPath.js"
+    );
+    const registry = getDatabaseRegistryService();
+    const dataDir = getPaprDataDir();
+
+    return {
+      ...workspaceConfig,
+      sources: workspaceConfig.sources.map((source) => {
+        if (source.jobId?.trim()) {
+          return source;
+        }
+        const record = source.dbId ? registry.getById(source.dbId) : undefined;
+        const resolved = resolveReadableRegistryDbPath({
+          dbPath: source.dbPath,
+          registryPath: record?.localPath,
+          dataDir,
+        });
+        if (resolved && resolved !== source.dbPath) {
+          return { ...source, dbPath: resolved };
+        }
+        return source;
+      }),
+    };
   }
 
   async listAppDataSources(appId: string): Promise<AppDataSource[]> {
