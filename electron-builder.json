@@ -71,8 +71,7 @@
         ]
       }
     ],
-    "icon": "build/icon.ico",
-    "publisherName": "Papr, Inc."
+    "icon": "build/icon.ico"
   },
   "linux": {
     "target": [
