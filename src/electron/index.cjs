@@ -40,6 +40,8 @@ let ensureActiveNamespaceApiKey;
 let resolveActivePaprApiKey;
 let cleanupPaprLogin;
 let handlePaprAuthCallback;
+let trackPaprLoginDeepLinkQueued;
+let trackPaprLoginDeepLinkFlushStarted;
 let syncProfileToGatewaySettings;
 let migrateOrgVaultIsolation;
 let migrateIntegrationKeysToSharedDefault;
@@ -128,6 +130,8 @@ async function loadESMModules() {
   resolveActivePaprApiKey = paprLoginIpcModule.resolveActivePaprApiKey;
   cleanupPaprLogin = paprLoginIpcModule.cleanupPaprLogin;
   handlePaprAuthCallback = paprLoginIpcModule.handlePaprAuthCallback;
+  trackPaprLoginDeepLinkQueued = paprLoginIpcModule.trackPaprLoginDeepLinkQueued;
+  trackPaprLoginDeepLinkFlushStarted = paprLoginIpcModule.trackPaprLoginDeepLinkFlushStarted;
   syncProfileToGatewaySettings = paprLoginIpcModule.syncProfileToGatewaySettings;
 
   // Import Ollama IPC module
@@ -1430,7 +1434,7 @@ class GatewayProcessSupervisor {
       req.on("error", () =>
         this._onHealthCheckResult({ alive: false, ready: false }),
       );
-      req.setTimeout(5000, () => {
+      req.setTimeout(10000, () => {
         req.destroy();
         this._onHealthCheckResult({ alive: false, ready: false });
       });
@@ -1893,12 +1897,24 @@ let settingsStorage;
 
 /** Deep links received before auth IPC is ready (macOS open-url can fire pre-ready). */
 const pendingDeepLinks = [];
+/** True after Gateway + main window are ready — auth callbacks need both. */
+let authDeepLinksReady = false;
 
 async function flushPendingDeepLinks() {
-  if (!handlePaprAuthCallback || !customKeysStorage || !settingsStorage) {
+  if (
+    !authDeepLinksReady ||
+    !handlePaprAuthCallback ||
+    !customKeysStorage ||
+    !settingsStorage
+  ) {
     return;
   }
   while (pendingDeepLinks.length > 0) {
+    const pendingCount = pendingDeepLinks.length;
+    if (trackPaprLoginDeepLinkFlushStarted) {
+      trackPaprLoginDeepLinkFlushStarted(pendingCount);
+    }
+    console.log("[Electron] Flushing pending deep links:", pendingCount);
     const url = pendingDeepLinks.shift();
     try {
       await handlePaprAuthCallback(url, customKeysStorage, settingsStorage);
@@ -1912,8 +1928,17 @@ function queueDeepLink(url) {
   if (typeof url !== "string" || !url.startsWith("papr://")) {
     return;
   }
-  console.log("[Electron] Queued deep link:", url);
+  console.log("[Electron] Queued deep link:", url.split("?")[0], {
+    authDeepLinksReady,
+    pending: pendingDeepLinks.length + 1,
+  });
   pendingDeepLinks.push(url);
+  if (trackPaprLoginDeepLinkQueued) {
+    trackPaprLoginDeepLinkQueued({
+      deepLinkReady: authDeepLinksReady,
+      pendingCount: pendingDeepLinks.length,
+    });
+  }
   void flushPendingDeepLinks();
 }
 
@@ -2077,14 +2102,6 @@ app.whenReady().then(async () => {
     }
   }
 
-  // Process deep links queued during startup (Windows cold start + early macOS open-url)
-  const coldStartUrl = process.argv.find((arg) => arg.startsWith("papr://"));
-  if (coldStartUrl) {
-    queueDeepLink(coldStartUrl);
-  }
-  await flushPendingDeepLinks();
-
-
   // Check Python installation on Windows (for non-technical users)
   if (process.platform === 'win32') {
     checkPythonInstallation().catch(err => {
@@ -2221,6 +2238,15 @@ app.whenReady().then(async () => {
 
   await supervisor.start();
   await createMainWindow();
+  authDeepLinksReady = true;
+
+  // Process auth deep links after Gateway + window are ready (callback needs both)
+  const coldStartUrl = process.argv.find((arg) => arg.startsWith("papr://"));
+  if (coldStartUrl) {
+    queueDeepLink(coldStartUrl);
+  }
+  await flushPendingDeepLinks();
+
   setupAutoUpdater();
 
   // Initialize permissions IPC after window is created

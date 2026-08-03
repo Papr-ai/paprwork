@@ -144,8 +144,9 @@ describe("reloadUiForWorkspaceSwitch", () => {
     await vi.runAllTimersAsync();
     await reloadPromise;
 
-    expect(useTabStore.getState().tabs).toHaveLength(1);
-    expect(useTabStore.getState().tabs[0]?.title).toBe("Hi");
+    expect(useTabStore.getState().tabs).toHaveLength(2);
+    expect(useTabStore.getState().tabs.some((tab) => tab.title === "Hi")).toBe(true);
+    expect(useTabStore.getState().activeTabId).toBe("settings-settings");
 
     const tabsIndex = callOrder.indexOf("app:load_tabs");
     const chatIndex = callOrder.indexOf("chat:list");

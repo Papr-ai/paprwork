@@ -334,11 +334,20 @@ export class VaultSyncService {
     }
   }
 
-  /** Push + pull after org/namespace workspace switch. */
-  async syncForWorkspaceSwitch(): Promise<void> {
-    console.log("[VaultSync] Re-syncing vault for workspace switch...");
-    await this.pushAllKeys();
-    await this.pullKeys();
+  /** Push + pull after org/namespace workspace switch (non-blocking). */
+  syncForWorkspaceSwitch(): void {
+    console.log("[VaultSync] Re-syncing vault for workspace switch (background)...");
+    void (async () => {
+      try {
+        await this.pushAllKeys();
+        await this.pullKeys();
+      } catch (err) {
+        console.warn(
+          "[VaultSync] Workspace switch re-sync failed:",
+          (err as Error).message,
+        );
+      }
+    })();
   }
 
   /**

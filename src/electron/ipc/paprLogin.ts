@@ -24,6 +24,10 @@ import {
 } from "./paprWorkspace.js";
 import { registerPaprLegacyMigrationHandlers } from "./paprLegacyMigration.js";
 import {
+  startPaprAuthCallbackServer,
+  stopPaprAuthCallbackServer,
+} from "./paprAuthCallbackServer.js";
+import {
   cacheNamespacesForOrg,
   getCachedNamespaces,
   readPaprWorkspaceCache,
@@ -46,6 +50,11 @@ import {
   paprApiKeyMatchesNamespace,
   paprNamespaceApiKeyName,
 } from "../../core/utils/paprApiKey.js";
+import {
+  logPaprLoginStep,
+  PAPR_LOGIN_STEP_EVENT,
+  type PaprLoginStep,
+} from "../../core/telemetry/paprLoginSteps.js";
 
 /**
  * Sync Papr profile fields to gateway settings file so the gateway process
@@ -165,6 +174,7 @@ interface PaprLoginState {
   codeVerifier?: string;
   mode?: PaprAuthMode;
   source?: PaprLoginSource;
+  redirectUri?: string;
 }
 
 interface PersistedPkceState {
@@ -177,6 +187,8 @@ interface PersistedPkceState {
 
 const loginState: PaprLoginState = {};
 const PKCE_TTL_MS = 10 * 60 * 1000;
+/** When shell.openExternal(authUrl) ran — for callback duration metrics. */
+let loginBrowserOpenedAt: number | null = null;
 
 type LoginTelemetryTracker = (
   eventName: string,
@@ -184,6 +196,7 @@ type LoginTelemetryTracker = (
 ) => void;
 
 let trackLoginEvent: LoginTelemetryTracker | undefined;
+let loginCompletionInFlight = false;
 
 function getPkceStatePath(): string {
   return path.join(getPaprBaseDir(), "data", "papr-auth-pkce.json");
@@ -232,6 +245,7 @@ function clearInMemoryPkceState(): void {
   loginState.codeVerifier = undefined;
   loginState.mode = undefined;
   loginState.source = undefined;
+  loginState.redirectUri = undefined;
 }
 
 async function restorePkceFromDisk(): Promise<void> {
@@ -269,6 +283,28 @@ async function hydratePkceForCallback(state: string | null): Promise<void> {
   loginState.source = persisted.source;
 }
 
+function trackLoginStep(
+  step: PaprLoginStep,
+  properties?: Record<string, unknown>,
+): void {
+  const payload: Record<string, unknown> = {
+    step,
+    ...(loginState.mode ? { mode: loginState.mode } : {}),
+    ...(loginState.source ? { source: loginState.source } : {}),
+    ...properties,
+  };
+  if (
+    loginBrowserOpenedAt !== null &&
+    (step === "callback_received" ||
+      step === "login_success_notified" ||
+      step === "token_exchanged")
+  ) {
+    payload.duration_ms = Date.now() - loginBrowserOpenedAt;
+  }
+  logPaprLoginStep(step, payload);
+  trackLoginEvent?.(PAPR_LOGIN_STEP_EVENT, payload);
+}
+
 function trackLoginStarted(mode: PaprAuthMode, source: PaprLoginSource): void {
   trackLoginEvent?.("paprwork_papr_login_started", { mode, source });
 }
@@ -278,6 +314,7 @@ function trackLoginCompleted(mode: PaprAuthMode | undefined, source: PaprLoginSo
     ...(mode ? { mode } : {}),
     ...(source ? { source } : {}),
   });
+  loginBrowserOpenedAt = null;
 }
 
 function trackLoginFailed(
@@ -294,6 +331,7 @@ function trackLoginFailed(
     ...(options?.source ? { source: options.source } : {}),
     ...(options?.stage ? { stage: options.stage } : {}),
   });
+  loginBrowserOpenedAt = null;
 }
 
 /** Build Auth0 authorize URL. Use screen_hint=signup so new users see registration, not login. */
@@ -301,10 +339,11 @@ export function buildAuth0AuthorizeUrl(params: {
   state: string;
   codeChallenge: string;
   mode?: PaprAuthMode;
+  redirectUri?: string;
 }): URL {
   const authUrl = new URL(`https://${AUTH0_DOMAIN}/authorize`);
   authUrl.searchParams.set("client_id", AUTH0_CLIENT_ID);
-  authUrl.searchParams.set("redirect_uri", AUTH0_REDIRECT_URI);
+  authUrl.searchParams.set("redirect_uri", params.redirectUri ?? AUTH0_REDIRECT_URI);
   authUrl.searchParams.set("response_type", "code");
   authUrl.searchParams.set("code_challenge", params.codeChallenge);
   authUrl.searchParams.set("code_challenge_method", "S256");
@@ -314,11 +353,30 @@ export function buildAuth0AuthorizeUrl(params: {
 
   if (params.mode === "signup") {
     authUrl.searchParams.set("screen_hint", "signup");
-  } else if (params.mode === "login") {
-    authUrl.searchParams.set("screen_hint", "login");
+  } else {
+    // Returning users: account picker when a browser session exists (SSO-friendly)
+    authUrl.searchParams.set("prompt", "select_account");
   }
 
   return authUrl;
+}
+
+/**
+ * Optional Auth0 federated logout in the system browser.
+ * Only used when AUTH0_LOGOUT_RETURN_TO is set AND whitelisted in Auth0
+ * (Application → Settings → Allowed Logout URLs). Desktop apps default to
+ * local-only logout — no browser tab, no error page.
+ */
+export function buildAuth0LogoutUrl(returnTo: string): string {
+  const url = new URL(`https://${AUTH0_DOMAIN}/v2/logout`);
+  url.searchParams.set("client_id", AUTH0_CLIENT_ID);
+  url.searchParams.set("return_to", returnTo);
+  return url.toString();
+}
+
+function getAuth0LogoutReturnTo(): string | undefined {
+  const raw = process.env.AUTH0_LOGOUT_RETURN_TO?.trim();
+  return raw || undefined;
 }
 
 /** Map Auth0 callback errors to actionable messages for the app UI. */
@@ -370,8 +428,24 @@ function notifyLoginError(win: BrowserWindow | undefined, message: string): void
     source: loginState.source,
     stage: "callback",
   });
-  if (!win) return;
-  win.webContents.send("papr:login-error", { error: message });
+  const targets = win
+    ? [win]
+    : BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed());
+  for (const target of targets) {
+    target.webContents.send("papr:login-error", { error: message });
+  }
+}
+
+function notifyLoginSuccess(data: {
+  email: string;
+  name: string;
+  userId: string;
+}): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send("papr:login-success", data);
+    }
+  }
 }
 
 // ─── PKCE Helpers ──────────────────────────────────────────────
@@ -393,6 +467,7 @@ function generateState(): string {
 async function exchangeCodeForTokens(
   code: string,
   codeVerifier: string,
+  redirectUri: string = AUTH0_REDIRECT_URI,
 ): Promise<{
   access_token: string;
   refresh_token?: string;
@@ -408,7 +483,7 @@ async function exchangeCodeForTokens(
       client_id: AUTH0_CLIENT_ID,
       code,
       code_verifier: codeVerifier,
-      redirect_uri: AUTH0_REDIRECT_URI,
+      redirect_uri: redirectUri,
     }),
   });
 
@@ -2509,6 +2584,24 @@ async function completePaprAuthCallback(
   name: string;
   userId: string;
 }> {
+  if (loginCompletionInFlight) {
+    const profile = settingsStorage.getPaprProfile();
+    return {
+      success: true,
+      email: profile?.email ?? "",
+      name: profile?.displayName ?? "",
+      userId: profile?.userId ?? "",
+    };
+  }
+  loginCompletionInFlight = true;
+  stopPaprAuthCallbackServer();
+
+  try {
+  trackLoginStep("callback_received", {
+    has_code: Boolean(code),
+    has_state: Boolean(state),
+  });
+
   await hydratePkceForCallback(state);
 
   const completedMode = loginState.mode;
@@ -2522,8 +2615,16 @@ async function completePaprAuthCallback(
     throw new Error("No code verifier found — login flow may have expired. Please try again.");
   }
 
+  trackLoginStep("pkce_validated");
+
+  const redirectUri = loginState.redirectUri ?? AUTH0_REDIRECT_URI;
   console.log("[PaprLogin] Exchanging authorization code for tokens...");
-  const tokens = await exchangeCodeForTokens(code, loginState.codeVerifier);
+  const tokens = await exchangeCodeForTokens(
+    code,
+    loginState.codeVerifier,
+    redirectUri,
+  );
+  trackLoginStep("token_exchanged");
 
   clearInMemoryPkceState();
   await clearPersistedPkceState();
@@ -2548,6 +2649,7 @@ async function completePaprAuthCallback(
   }
 
   console.log(`[PaprLogin] Authenticated user: ${email} (${objectId})`);
+  trackLoginStep("user_claims_decoded", { user_id: objectId });
 
   let workspaceInfo: SelectedWorkspaceInfo = {};
   try {
@@ -2562,6 +2664,10 @@ async function completePaprAuthCallback(
     email || "user",
     workspaceInfo.workspaceId,
   );
+  trackLoginStep("api_key_provisioned", {
+    organization_id: provision.organizationId,
+    namespace_id: provision.namespaceId,
+  });
 
   const developerOrgId = await fetchUserDeveloperOrganizationId(parseSessionToken, objectId);
 
@@ -2644,6 +2750,38 @@ async function completePaprAuthCallback(
     workspaceName: workspaceInfo.workspaceName,
   });
 
+  // Prefer Parse cloud profile photo over Auth0 picture (Gravatar may be missing)
+  let resolvedDisplayName = displayName || "";
+  let resolvedProfileImage = profileImage;
+  try {
+    const { fetchParseUserProfile } = await import("./paprProfileSync.js");
+    const cloudProfile = await fetchParseUserProfile(parseSessionToken, objectId);
+    resolvedDisplayName =
+      cloudProfile.displayName || cloudProfile.fullname || resolvedDisplayName;
+    resolvedProfileImage =
+      cloudProfile.profileImageUrl?.trim() || resolvedProfileImage;
+    settingsStorage.setPaprProfile({
+      userId: objectId,
+      email: cloudProfile.email || email || "",
+      displayName: resolvedDisplayName,
+      profileImage: resolvedProfileImage,
+      authenticatedAt: new Date().toISOString(),
+      sessionToken: parseSessionToken,
+      organizationId: activeOrganizationId,
+      activeNamespaceId,
+      activeNamespaceName,
+      workspaceId: workspaceInfo.workspaceId,
+      workspaceName: workspaceInfo.workspaceName,
+    });
+    console.log(
+      `[PaprLogin] Parse profile synced${resolvedProfileImage ? " (photo from cloud)" : ""}`,
+    );
+  } catch (e) {
+    console.warn("[PaprLogin] Could not fetch Parse profile after login:", e);
+  }
+
+  trackLoginStep("credentials_stored", { organization_id: activeOrganizationId });
+
   const loginApiKey =
     activeOrganizationId === provision.organizationId
       ? provision.apiKey
@@ -2655,41 +2793,48 @@ async function completePaprAuthCallback(
     namespaceName: activeNamespaceName,
     paprApiKey: loginApiKey,
   });
+  trackLoginStep("gateway_switch_attempted", {
+    gateway_switch_success: workspaceResult.success,
+  });
   if (!workspaceResult.success) {
-    throw new Error(
-      workspaceResult.error ?? "Gateway workspace switch failed",
+    console.warn(
+      "[PaprLogin] Gateway workspace switch failed (login still succeeded):",
+      workspaceResult.error,
     );
+    trackLoginStep("gateway_switch_failed", { error: workspaceResult.error });
   }
   invalidateKeyCache("PAPR_API_KEY");
 
   await syncProfileToGatewaySettings(
     email || "",
     objectId,
-    displayName || "",
-    profileImage,
+    resolvedDisplayName,
+    resolvedProfileImage,
     activeNamespaceName,
     workspaceInfo.workspaceId,
     workspaceInfo.workspaceName,
   );
+  trackLoginStep("profile_synced");
 
   console.log("[PaprLogin] Login complete. API key stored as PAPR_API_KEY.");
   trackLoginCompleted(completedMode, completedSource);
 
-  const win = BrowserWindow.getAllWindows()[0];
-  if (win) {
-    win.webContents.send("papr:login-success", {
-      email: email || "",
-      name: displayName || "",
-      userId: objectId,
-    });
-  }
+  notifyLoginSuccess({
+    email: email || "",
+    name: resolvedDisplayName,
+    userId: objectId,
+  });
+  trackLoginStep("login_success_notified", { user_id: objectId });
 
   return {
     success: true,
     email: email || "",
-    name: displayName || "",
+    name: resolvedDisplayName,
     userId: objectId,
   };
+  } finally {
+    loginCompletionInFlight = false;
+  }
 }
 
 export function initializePaprLoginIPC(
@@ -2715,8 +2860,8 @@ export function initializePaprLoginIPC(
   // Check if user is already logged in
   ipcMain.handle("papr:check-login-status", async () => {
     try {
-      const keys = await customKeysStorage.listKeys();
-      const hasApiKey = keys.some((k) => k.name === "PAPR_API_KEY");
+      const apiKey = await customKeysStorage.getKeyByName("PAPR_API_KEY");
+      const hasApiKey = apiKey !== null;
       const profile = settingsStorage.getPaprProfile();
 
       return {
@@ -2881,18 +3026,67 @@ export function initializePaprLoginIPC(
         createdAt: new Date().toISOString(),
       });
 
+      let redirectUri = AUTH0_REDIRECT_URI;
+      const useDeepLinkOnly = process.env.PAPR_AUTH_USE_DEEPLINK === "true";
+
+      if (!useDeepLinkOnly) {
+        try {
+          redirectUri = await startPaprAuthCallbackServer(async (params) => {
+            const oauthError = params.get("error");
+            if (oauthError) {
+              notifyLoginError(
+                undefined,
+                formatAuth0CallbackError(
+                  oauthError,
+                  params.get("error_description"),
+                ),
+              );
+              return;
+            }
+            try {
+              await completePaprAuthCallback(
+                params.get("code"),
+                params.get("state"),
+                customKeysStorage,
+                settingsStorage,
+              );
+            } catch (callbackError) {
+              const message =
+                callbackError instanceof Error
+                  ? callbackError.message
+                  : "Login failed";
+              notifyLoginError(undefined, message);
+            }
+          });
+          console.log("[PaprLogin] Using localhost callback:", redirectUri);
+        } catch (callbackServerError) {
+          stopPaprAuthCallbackServer();
+          console.warn(
+            "[PaprLogin] Localhost callback unavailable, falling back to deep link:",
+            callbackServerError,
+          );
+          redirectUri = AUTH0_REDIRECT_URI;
+        }
+      }
+
+      loginState.redirectUri = redirectUri;
+
       const authUrl = buildAuth0AuthorizeUrl({
         state,
         codeChallenge,
         mode: authMode,
+        redirectUri,
       });
 
-      console.log(`[PaprLogin] Starting Auth0 flow (mode=${authMode})`);
+      console.log(`[PaprLogin] Starting Auth0 flow (mode=${authMode}, source=${loginSource})`);
+      loginBrowserOpenedAt = Date.now();
       trackLoginStarted(authMode, loginSource);
       await shell.openExternal(authUrl.toString());
+      trackLoginStep("browser_opened", { mode: authMode, source: loginSource });
 
       return { success: true };
     } catch (error) {
+      stopPaprAuthCallbackServer();
       clearInMemoryPkceState();
       await clearPersistedPkceState();
       const message = error instanceof Error ? error.message : "Failed to start login";
@@ -2948,6 +3142,7 @@ export function initializePaprLoginIPC(
   // Logout — clear stored keys + OAuth tokens, open Auth0 logout
   ipcMain.handle("papr:logout", async () => {
     try {
+      stopPaprAuthCallbackServer();
       const keys = await customKeysStorage.listKeys();
 
       for (const key of keys) {
@@ -2981,9 +3176,18 @@ export function initializePaprLoginIPC(
         win.webContents.send("papr:logout-success");
       }
 
-      // Open Auth0 logout URL to clear browser session (so next login shows account picker)
-      const logoutUrl = `https://${AUTH0_DOMAIN}/v2/logout?client_id=${AUTH0_CLIENT_ID}&returnTo=${encodeURIComponent("https://papr.ai")}`;
-      shell.openExternal(logoutUrl);
+      // Open Auth0 federated logout only when configured (returnTo must be whitelisted)
+      const logoutReturnTo = getAuth0LogoutReturnTo();
+      if (logoutReturnTo) {
+        const logoutUrl = buildAuth0LogoutUrl(logoutReturnTo);
+        console.log("[PaprLogin] Opening Auth0 federated logout:", logoutUrl);
+        await shell.openExternal(logoutUrl);
+      } else {
+        console.log(
+          "[PaprLogin] Local logout complete (browser Auth0 session unchanged). " +
+            "Set AUTH0_LOGOUT_RETURN_TO to clear browser session on logout.",
+        );
+      }
 
       return { success: true };
     } catch (error) {
@@ -3072,7 +3276,7 @@ export function initializePaprLoginIPC(
   // away instead of requiring an org switch first.
   ipcMain.handle(
     "papr:list-all-namespaces",
-    async (_event, options?: { forceRefresh?: boolean }) => {
+    async (_event, options?: { forceRefresh?: boolean; workspaceId?: string }) => {
       try {
         const profile = settingsStorage.getPaprProfile();
         if (!profile?.sessionToken || !profile?.userId) {
@@ -3101,6 +3305,14 @@ export function initializePaprLoginIPC(
             }),
           );
           writePaprWorkspaceCache({ workspaces });
+        }
+
+        const workspaceFilter = options?.workspaceId?.trim();
+        if (workspaceFilter) {
+          workspaces = workspaces.filter((workspace) => workspace.id === workspaceFilter);
+          if (workspaces.length === 0) {
+            return { success: false, error: "Workspace not found" };
+          }
         }
 
         let partial = false;
@@ -3755,6 +3967,8 @@ export async function handlePaprAuthCallback(
 ): Promise<void> {
   if (!callbackUrl.startsWith("papr://auth/callback")) return;
 
+  console.log("[PaprLogin] Deep link callback received:", callbackUrl.split("?")[0]);
+
   try {
     const url = new URL(callbackUrl);
     const code = url.searchParams.get("code");
@@ -3772,7 +3986,7 @@ export async function handlePaprAuthCallback(
     console.error("[PaprLogin] Callback failed:", err);
 
     const message = err instanceof Error ? err.message : "Login failed";
-    notifyLoginError(BrowserWindow.getAllWindows()[0], message);
+    notifyLoginError(undefined, message);
     clearInMemoryPkceState();
     await clearPersistedPkceState();
   }
@@ -3783,6 +3997,23 @@ export async function handlePaprAuthCallback(
  */
 export function cleanupPaprLogin(): void {
   clearInMemoryPkceState();
+  loginBrowserOpenedAt = null;
   trackLoginEvent = undefined;
   console.log("[PaprLogin] Cleaned up login state.");
+}
+
+/** Amplitude + console: deep link queued (may flush later if app still starting). */
+export function trackPaprLoginDeepLinkQueued(options: {
+  deepLinkReady: boolean;
+  pendingCount: number;
+}): void {
+  trackLoginStep("deep_link_queued", {
+    deep_link_ready: options.deepLinkReady,
+    pending_count: options.pendingCount,
+  });
+}
+
+/** Amplitude + console: about to process queued deep links. */
+export function trackPaprLoginDeepLinkFlushStarted(pendingCount: number): void {
+  trackLoginStep("deep_link_flush_started", { pending_count: pendingCount });
 }

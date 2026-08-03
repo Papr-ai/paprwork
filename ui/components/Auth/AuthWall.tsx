@@ -3,12 +3,28 @@
  * Split-screen design: Sign in form (left) + Papr branding (right)
  */
 
-import React, { useState, useEffect, useCallback } from "react";
-import { setTelemetryPaprUserId } from "../../lib/telemetry";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { setTelemetryPaprUserId, trackEvent } from "../../lib/telemetry";
+import { AmplitudeEvents } from "../../../src/core/telemetry/events";
+import {
+  logPaprLoginStep,
+  type PaprLoginMode,
+  type PaprLoginStep,
+} from "../../../src/core/telemetry/paprLoginSteps";
+import { useProfileStore } from "../../stores/profileStore";
 import "./AuthWall.css";
 
 interface AuthWallProps {
   onAuthenticated: () => void;
+}
+
+function trackAuthWallStep(
+  step: PaprLoginStep,
+  properties?: Record<string, unknown>,
+): void {
+  const payload = { step, source: "auth_wall" as const, ...properties };
+  logPaprLoginStep(step, payload);
+  trackEvent(AmplitudeEvents.PAPR_LOGIN_STEP, payload);
 }
 
 async function identifyTelemetryAfterLogin(): Promise<void> {
@@ -28,25 +44,51 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showRefresh, setShowRefresh] = useState(false);
+  const authWallViewedTracked = useRef(false);
+  const waitingForCallbackTracked = useRef(false);
 
   const handleAuthenticated = useCallback(async () => {
     await identifyTelemetryAfterLogin();
+    void useProfileStore.getState().loadProfile({ force: true });
     onAuthenticated();
   }, [onAuthenticated]);
 
-  const checkAuthentication = useCallback(async () => {
-    try {
-      const result = await window.electronAPI.papr.checkLoginStatus();
-      if (result.isLoggedIn) {
-        await handleAuthenticated();
-      } else {
+  const checkAuthentication = useCallback(
+    async (options?: { fromPoll?: boolean }) => {
+      try {
+        const result = await window.electronAPI.papr.checkLoginStatus();
+        if (result.isLoggedIn) {
+          if (options?.fromPoll) {
+            trackAuthWallStep("poll_detected_login");
+          }
+          await handleAuthenticated();
+        } else {
+          setIsLoading(false);
+        }
+      } catch (err) {
+        console.error("[AuthWall] Failed to check authentication:", err);
         setIsLoading(false);
       }
-    } catch (err) {
-      console.error("Failed to check authentication:", err);
-      setIsLoading(false);
+    },
+    [handleAuthenticated],
+  );
+
+  useEffect(() => {
+    if (!isLoading && !authWallViewedTracked.current) {
+      authWallViewedTracked.current = true;
+      trackAuthWallStep("auth_wall_viewed");
     }
-  }, [handleAuthenticated]);
+  }, [isLoading]);
+
+  useEffect(() => {
+    if (isAuthenticating && !waitingForCallbackTracked.current) {
+      waitingForCallbackTracked.current = true;
+      trackAuthWallStep("waiting_for_callback");
+    }
+    if (!isAuthenticating) {
+      waitingForCallbackTracked.current = false;
+    }
+  }, [isAuthenticating]);
 
   // Check if user is already authenticated
   useEffect(() => {
@@ -64,7 +106,7 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
 
     if (isAuthenticating) {
       pollInterval = setInterval(() => {
-        void checkAuthentication();
+        void checkAuthentication({ fromPoll: true });
       }, 2000);
 
       refreshTimer = setTimeout(() => {
@@ -79,7 +121,45 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
     };
   }, [checkAuthentication, handleAuthenticated, isAuthenticating]);
 
-  const handleAuth = async (mode: "login" | "signup") => {
+  // IPC listeners for login success/error (belt-and-suspenders with DOM events)
+  useEffect(() => {
+    const papr = window.electronAPI?.papr;
+    if (!papr) return;
+
+    const onSuccess = () => {
+      void handleAuthenticated();
+    };
+    const onError = (data: { error: string }) => {
+      console.error("[AuthWall] Login error from main process:", data.error);
+      setError(data.error);
+      setIsAuthenticating(false);
+    };
+
+    papr.onLoginSuccess(onSuccess);
+    papr.onLoginError(onError);
+    return () => {
+      papr.removeLoginSuccessListener(onSuccess);
+      papr.removeLoginErrorListener(onError);
+    };
+  }, [handleAuthenticated]);
+
+  // Show helpful message if auth takes too long (deep link may not have fired)
+  useEffect(() => {
+    if (!isAuthenticating) return;
+
+    const timeout = setTimeout(() => {
+      trackAuthWallStep("login_timeout");
+      setShowRefresh(true);
+      setError(
+        "Sign-in is taking longer than expected. When your browser asks to open Papr Work, click Open or Allow, then switch back here and tap Check again.",
+      );
+    }, 90_000);
+
+    return () => clearTimeout(timeout);
+  }, [isAuthenticating]);
+
+  const handleAuth = async (mode: PaprLoginMode) => {
+    trackAuthWallStep("login_button_clicked", { mode });
     setIsAuthenticating(true);
     setShowRefresh(false);
     setError(null);
@@ -98,6 +178,7 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
 
   useEffect(() => {
     const handleLoginError = (event: CustomEvent<{ error: string }>) => {
+      console.error("[AuthWall] Login error event:", event.detail.error);
       setError(event.detail.error);
       setIsAuthenticating(false);
     };
@@ -109,7 +190,9 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
   }, []);
 
   const handleRefresh = () => {
-    void checkAuthentication();
+    trackAuthWallStep("check_again_clicked");
+    setError(null);
+    void checkAuthentication({ fromPoll: true });
   };
 
   if (isLoading) {

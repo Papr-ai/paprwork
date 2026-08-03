@@ -6,6 +6,7 @@ import { useTabStore } from "../stores/tabStore";
 import type { TabType } from "../types/tabs";
 import { gateway } from "../src/lib/gateway";
 import { ensureDefaultChatTab } from "./ensureDefaultChatTab";
+import { ensureSettingsTab } from "./ensureSettingsTab";
 
 interface TabRow {
   id: string;
@@ -67,6 +68,11 @@ export interface WorkspaceEntityIdSets {
   validChatIds?: Set<string>;
   validAppIds?: Set<string>;
   validDocumentIds?: Set<string>;
+}
+
+export interface ApplyPersistedAppStateOptions extends WorkspaceEntityIdSets {
+  /** When restored workspace has no valid active tab. Default: open chat. */
+  emptyActiveTabFallback?: "chat" | "settings" | "none";
 }
 
 export interface PersistedAppStateSnapshot {
@@ -181,7 +187,7 @@ export async function fetchPersistedAppStateFromGateway(): Promise<PersistedAppS
 /** Apply fetched tab snapshot to tabStore, optionally pruning stale entity tabs. */
 export function applyPersistedAppStateToTabStore(
   snapshot: PersistedAppStateSnapshot,
-  options?: WorkspaceEntityIdSets,
+  options?: ApplyPersistedAppStateOptions,
 ): void {
   let restoredTabs = snapshot.tabs;
 
@@ -222,24 +228,40 @@ export function applyPersistedAppStateToTabStore(
   }
 
   if (!useTabStore.getState().activeTabId) {
-    ensureDefaultChatTab();
+    const fallback = options?.emptyActiveTabFallback ?? "chat";
+    if (fallback === "chat") {
+      ensureDefaultChatTab();
+    } else if (fallback === "settings") {
+      ensureSettingsTab({ section: "profile" });
+    }
   }
 }
 
 /** Drop chat tabs whose entityId is not in the workspace chat list. */
 export function reconcileChatTabsInStore(validChatIds: Set<string>): void {
-  if (validChatIds.size === 0) {
-    return;
-  }
+  const { activeTabId, tabs, splitRatio, splitRatios, history, historyIndex } =
+    useTabStore.getState();
+  const activeTab = activeTabId
+    ? tabs.find((tab) => tab.id === activeTabId)
+    : undefined;
+  const stayOnSettings = activeTab?.type === "settings";
+
   const snapshot: PersistedAppStateSnapshot = {
-    tabs: useTabStore.getState().tabs,
-    activeTabId: useTabStore.getState().activeTabId,
-    splitRatio: useTabStore.getState().splitRatio,
-    splitRatios: useTabStore.getState().splitRatios,
-    history: useTabStore.getState().history,
-    historyIndex: useTabStore.getState().historyIndex,
+    tabs,
+    activeTabId,
+    splitRatio,
+    splitRatios,
+    history,
+    historyIndex,
   };
-  applyPersistedAppStateToTabStore(snapshot, { validChatIds });
+  applyPersistedAppStateToTabStore(snapshot, {
+    validChatIds,
+    emptyActiveTabFallback: "none",
+  });
+
+  if (stayOnSettings) {
+    ensureSettingsTab({ section: "profile" });
+  }
 }
 
 /** Load tabs + navigation state for the active workspace from gateway SQLite. */

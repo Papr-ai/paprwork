@@ -25,6 +25,11 @@ import {
   resolveLocalAppIdForCatalogEntry,
   type CloudLineageIndex,
 } from "../../utils/communityAppLocalOpen";
+import {
+  readCommunityCatalogCache,
+  writeCommunityCatalogCache,
+} from "../../utils/communityCatalogCache";
+import { isWorkspaceSwitchReloading } from "../../lib/workspaceSwitchReload";
 
 const GATEWAY =
   typeof import.meta !== "undefined" &&
@@ -57,6 +62,12 @@ export interface CommunityAppsViewProps {
   hideToolbar?: boolean;
   /** Increment to refetch catalog from parent refresh button */
   refreshToken?: number;
+  /** Shown while the catalog is loading (defaults from scope). */
+  loadingLabel?: string;
+}
+
+function defaultLoadingLabel(scope: CommunityCatalogScope): string {
+  return scope === "namespace" ? "Loading team apps..." : "Loading community apps...";
 }
 
 function emptyMessage(
@@ -172,9 +183,11 @@ export function CommunityAppsView({
   onSearchQueryChange,
   hideToolbar = false,
   refreshToken = 0,
+  loadingLabel,
 }: CommunityAppsViewProps) {
   const [catalog, setCatalog] = useState<CommunityCatalog | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [internalSearchQuery, setInternalSearchQuery] = useState("");
   const searchQuery = searchQueryProp ?? internalSearchQuery;
@@ -195,51 +208,107 @@ export function CommunityAppsView({
   const { createChat } = useChat();
   const { createTab, switchToTab } = useTabs();
   const userPlatform = detectUserPlatform();
+  const catalogLoadingLabel = loadingLabel ?? defaultLoadingLabel(scope);
 
   const installedAppIds = new Set(
     artifacts.filter((artifact) => artifact.type === "app").map((artifact) => artifact.id),
   );
 
-  const fetchCatalog = useCallback(async (forceRefresh = false) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await gateway.send(
-        "bundle:fetch-community-catalog",
-        {
-          scope,
-          ...(namespaceId ? { namespaceId } : {}),
-          ...(forceRefresh ? { forceRefresh: true } : {}),
-        },
-        scope === "namespace" ? { timeoutMs: 60_000 } : undefined,
-      );
-      setCatalog(response.data as CommunityCatalog);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Failed to load community apps",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [scope, namespaceId]);
+  const loadCatalog = useCallback(
+    async (options?: { forceRefresh?: boolean; isStale?: () => boolean }) => {
+      const forceRefresh = options?.forceRefresh === true;
+      const isStale = options?.isStale ?? (() => false);
+
+      if (isWorkspaceSwitchReloading()) {
+        return;
+      }
+
+      const cached = !forceRefresh
+        ? readCommunityCatalogCache(scope, namespaceId)
+        : null;
+
+      if (isStale()) {
+        return;
+      }
+
+      if (cached) {
+        setCatalog(cached);
+        setLoading(false);
+        setRefreshing(true);
+        setError(null);
+      } else {
+        setCatalog(null);
+        setLoading(true);
+        setRefreshing(false);
+        setError(null);
+      }
+
+      try {
+        const response = await gateway.send(
+          "bundle:fetch-community-catalog",
+          {
+            scope,
+            ...(namespaceId ? { namespaceId } : {}),
+            ...(forceRefresh ? { forceRefresh: true } : {}),
+          },
+          scope === "namespace" ? { timeoutMs: 60_000 } : undefined,
+        );
+        if (isStale()) {
+          return;
+        }
+        const nextCatalog = response.data as CommunityCatalog;
+        setCatalog(nextCatalog);
+        writeCommunityCatalogCache(scope, namespaceId, nextCatalog);
+        setError(null);
+      } catch (err) {
+        if (isStale()) {
+          return;
+        }
+        if (!cached) {
+          setError(
+            err instanceof Error ? err.message : "Failed to load community apps",
+          );
+        }
+      } finally {
+        if (!isStale()) {
+          setLoading(false);
+          setRefreshing(false);
+        }
+      }
+    },
+    [scope, namespaceId],
+  );
 
   useEffect(() => {
-    void fetchCatalog();
-  }, [fetchCatalog]);
+    let stale = false;
+    void loadCatalog({ isStale: () => stale });
+    return () => {
+      stale = true;
+    };
+  }, [loadCatalog]);
+
+  useEffect(() => {
+    const onSwitchComplete = (): void => {
+      void loadCatalog();
+    };
+    window.addEventListener("papr-workspace-switch-complete", onSwitchComplete);
+    return () =>
+      window.removeEventListener("papr-workspace-switch-complete", onSwitchComplete);
+  }, [loadCatalog]);
 
   useEffect(() => {
     if (refreshToken > 0) {
-      void fetchCatalog();
+      void loadCatalog({ forceRefresh: true });
     }
-  }, [refreshToken, fetchCatalog]);
+  }, [refreshToken, loadCatalog]);
 
   useEffect(() => {
     const onRefresh = (): void => {
-      void fetchCatalog();
+      void loadCatalog();
     };
     window.addEventListener("papr-community-catalog-refresh", onRefresh);
     return () => window.removeEventListener("papr-community-catalog-refresh", onRefresh);
-  }, [fetchCatalog]);
+  }, [loadCatalog]);
 
   const fetchLineage = useCallback(async () => {
     try {
@@ -532,7 +601,7 @@ export function CommunityAppsView({
     return (
       <div className="community-apps__status">
         <div className="community-apps__spinner" />
-        <p>Loading community apps...</p>
+        <p>{catalogLoadingLabel}</p>
       </div>
     );
   }
@@ -541,7 +610,7 @@ export function CommunityAppsView({
     return (
       <div className="community-apps__status">
         <p className="community-apps__error">{error}</p>
-        <button className="community-apps__retry-btn" onClick={() => void fetchCatalog(true)}>
+        <button className="community-apps__retry-btn" onClick={() => void loadCatalog({ forceRefresh: true })}>
           Retry
         </button>
       </div>
@@ -565,6 +634,7 @@ export function CommunityAppsView({
                   {catalog.fallbackUsed && scope === "namespace"
                     ? " · some from global"
                     : null}
+                  {refreshing ? " · updating…" : null}
                 </span>
               ) : null}
             </div>
@@ -583,7 +653,7 @@ export function CommunityAppsView({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
-          <button className="community-apps__refresh-btn" onClick={() => void fetchCatalog(true)}>
+          <button className="community-apps__refresh-btn" onClick={() => void loadCatalog({ forceRefresh: true })}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
               <path
                 d="M1 4v6h6M23 20v-6h-6"

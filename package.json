@@ -1,6 +1,6 @@
 {
   "name": "paprwork",
-  "version": "2.2.2",
+  "version": "2.2.3",
   "description": "AI-powered desktop assistant - Rebuilt with TypeScript and Mastra",
   "main": "./src/electron/main.cjs",
   "type": "module",
@@ -10,10 +10,13 @@
   "scripts": {
     "postinstall": "npx @electron/rebuild",
     "dev": "npm run build:gateway && concurrently \"npm run ui:dev\" \"npm run electron:dev\"",
+    "dev:commercial": "npm run build:gateway && concurrently \"cross-env VITE_REQUIRE_PAPR_AUTH=true npm run ui:dev\" \"npm run electron:dev\"",
     "build": "npm run build:gateway && npm run build:electron && npm run build:ui",
     "build:gateway": "tsc -p tsconfig.gateway.json && shx cp -r src/resources dist/ && shx cp src/gateway/services/appRuntime/backendDbHelper.py dist/gateway/services/appRuntime/backendDbHelper.py",
     "build:electron": "tsc -p tsconfig.electron.json && shx mkdir -p dist/electron && shx cp src/electron/preload.cjs dist/electron/preload.cjs",
     "build:ui": "cd ui && vite build",
+    "build:ui:commercial": "cd ui && cross-env VITE_REQUIRE_PAPR_AUTH=true vite build",
+    "start:commercial": "node scripts/ensure-electron-native.mjs && npm run build:gateway && npm run build:electron && npm run build:ui:commercial && cross-env NODE_ENV=production electron .",
     "gateway:dev": "cross-env ELECTRON_RUN_AS_NODE=1 NODE_ENV=development electron ./node_modules/tsx/dist/cli.mjs watch src/gateway/index.ts",
     "rebuild:native": "npx @electron/rebuild -f -w better-sqlite3",
     "ui:dev": "cd ui && vite",

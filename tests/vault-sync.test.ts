@@ -105,8 +105,8 @@ describe("VaultSyncService", () => {
       path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
       "utf-8",
     );
-    expect(content).toContain("async syncForWorkspaceSwitch()");
-    expect(content).toContain("Re-syncing vault for workspace switch");
+    expect(content).toContain("syncForWorkspaceSwitch(): void");
+    expect(content).toContain("Re-syncing vault for workspace switch (background)");
   });
 });
 
@@ -218,5 +218,7 @@ describe("Workspace switch cloud hooks", () => {
     expect(content).toContain("invalidateCredentialsCache");
     expect(content).toContain("refreshTursoLinkedDbWatcher");
     expect(content).toContain("syncForWorkspaceSwitch");
+    expect(content).toContain("postSwitchMaintenanceUntil");
+    expect(content).toContain("deferQueueProcessingUntil");
   });
 });

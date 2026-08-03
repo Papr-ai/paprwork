@@ -11,6 +11,7 @@ export interface CallbackServerOptions {
   timeout?: number; // Auto-close after this many ms (default: 60000)
   callbackPath?: string; // Path to listen on (default: "/auth/callback")
   hostname?: string; // Hostname to bind to (default: "127.0.0.1")
+  successHtml?: string; // Custom success page HTML
   onCallback?: (params: URLSearchParams) => void;
 }
 
@@ -20,6 +21,7 @@ export class OAuthCallbackServer {
   private timeout: number;
   private callbackPath: string;
   private hostname: string;
+  private successHtml?: string;
   private timeoutHandle: NodeJS.Timeout | null = null;
   private onCallback?: (params: URLSearchParams) => void;
 
@@ -28,6 +30,7 @@ export class OAuthCallbackServer {
     this.timeout = options.timeout || 60000; // 1 minute default
     this.callbackPath = options.callbackPath || "/auth/callback";
     this.hostname = options.hostname || "127.0.0.1";
+    this.successHtml = options.successHtml;
     this.onCallback = options.onCallback;
   }
 
@@ -125,8 +128,9 @@ export class OAuthCallbackServer {
 
           // Success! Return success page
           res.writeHead(200, { "Content-Type": "text/html" });
-          res.end(`
-            <!DOCTYPE html>
+          res.end(
+            this.successHtml ??
+              `<!DOCTYPE html>
             <html>
               <head>
                 <title>Authentication Successful</title>
@@ -150,14 +154,13 @@ export class OAuthCallbackServer {
                 <div class="success">✓ You can now close this window</div>
                 <p>Return to Papr Work to continue.</p>
                 <script>
-                  // Auto-close after 2 seconds if possible
                   setTimeout(() => {
                     window.close();
                   }, 2000);
                 </script>
               </body>
-            </html>
-          `);
+            </html>`,
+          );
 
           // Call callback handler
           if (this.onCallback) {

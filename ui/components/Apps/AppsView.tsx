@@ -468,6 +468,7 @@ export function AppsView() {
         <div className="apps-view__content">
           <CommunityAppsView
             scope="global"
+            loadingLabel="Loading community apps..."
             searchQuery={catalogSearchQuery}
             onSearchQueryChange={setCatalogSearchQuery}
             hideToolbar
@@ -477,7 +478,9 @@ export function AppsView() {
       ) : viewTab === "namespace-community" ? (
         <div className="apps-view__content">
           <CommunityAppsView
+            key={papr.namespaceId ?? "no-namespace"}
             scope="namespace"
+            loadingLabel="Loading team apps..."
             namespaceId={papr.namespaceId}
             namespaceName={papr.namespaceName}
             searchQuery={catalogSearchQuery}

@@ -105,6 +105,12 @@ export interface SwitchWorkspaceResult {
 
 let switchGeneration = 0;
 let switchStatus: WorkspaceSwitchStatus = { active: false, phase: "idle" };
+/** Keeps /health in "switching" while deferred cloud/vault work catches up (supervisor grace). */
+let postSwitchMaintenanceUntil = 0;
+
+const POST_SWITCH_HEALTH_GRACE_MS = 90_000;
+/** Delay cloud git push backlog after namespace switch so /health stays responsive. */
+const POST_SWITCH_CLOUD_SYNC_DEFER_MS = 60_000;
 
 function isSwitchGenerationStale(generation: number): boolean {
   return generation !== switchGeneration;
@@ -120,7 +126,18 @@ export function getWorkspaceSwitchStatus(): WorkspaceSwitchStatus {
 
 /** Health endpoint uses this to avoid supervisor SIGKILL during background switch. */
 export function getWorkspaceSwitchHealthStatus(): "ok" | "switching" {
-  return switchStatus.active ? "switching" : "ok";
+  if (switchStatus.active) {
+    return "switching";
+  }
+  if (Date.now() < postSwitchMaintenanceUntil) {
+    return "switching";
+  }
+  return "ok";
+}
+
+/** @internal test hook */
+export function resetPostSwitchMaintenanceGraceForTests(): void {
+  postSwitchMaintenanceUntil = 0;
 }
 
 function yieldEventLoop(): Promise<void> {
@@ -279,6 +296,7 @@ async function restartCloudSyncIfEnabled(): Promise<void> {
   }
   await resetCloudSyncServiceForWorkspaceSwitch();
   const cloudSync = initializeCloudSyncService();
+  cloudSync.deferQueueProcessingUntil(Date.now() + POST_SWITCH_CLOUD_SYNC_DEFER_MS);
   await cloudSync.initialize();
 }
 
@@ -316,15 +334,8 @@ async function refreshVaultForWorkspaceSwitch(): Promise<void> {
     return;
   }
 
-  try {
-    await vault.syncForWorkspaceSwitch();
-    console.log("[WorkspaceSwitch] Vault re-synced for active workspace");
-  } catch (err) {
-    console.warn(
-      "[WorkspaceSwitch] Vault re-sync failed:",
-      (err as Error).message.slice(0, 120),
-    );
-  }
+  vault.syncForWorkspaceSwitch();
+  console.log("[WorkspaceSwitch] Vault re-sync scheduled for active workspace");
 }
 
 /** Update Papr API key in gateway env/cache and reinitialize memory storage. */
@@ -385,17 +396,13 @@ async function finishWorkspaceSwitchInBackground(
 
     broadcast({ type: "app:list-updated" });
 
-    setSwitchStatus({ phase: "deferred" });
-    await runDeferredWorkspaceSwitchMaintenance(pointer);
-    if (isSwitchGenerationStale(generation)) {
-      return;
-    }
-
     setSwitchStatus({ active: false, phase: "complete" });
     broadcast({ type: "workspace:switch-complete", data: { pointer } });
     console.log(
       `[WorkspaceSwitch] Background switch complete: org=${pointer.organizationId} ns=${pointer.namespaceId}`,
     );
+
+    runDeferredWorkspaceSwitchMaintenance(pointer);
   } catch (error) {
     if (isSwitchGenerationStale(generation)) {
       return;
@@ -458,18 +465,27 @@ export async function switchActiveWorkspace(
 }
 
 /** Cloud sync, Turso, and vault — not required before UI can use the new workspace. */
-async function runDeferredWorkspaceSwitchMaintenance(
-  pointer: ActiveWorkspacePointer,
-): Promise<void> {
-  await restartCloudSyncIfEnabled();
-  await refreshTursoForWorkspaceSwitch();
-  await refreshVaultForWorkspaceSwitch();
+function runDeferredWorkspaceSwitchMaintenance(pointer: ActiveWorkspacePointer): void {
+  postSwitchMaintenanceUntil = Date.now() + POST_SWITCH_HEALTH_GRACE_MS;
 
-  const runningSync = getCloudSyncService();
-  console.log(
-    `[WorkspaceSwitch] Deferred maintenance complete: org=${pointer.organizationId} ns=${pointer.namespaceId} home=${pointer.paprHome}` +
-      (runningSync ? " (cloud sync restarted)" : "") +
-      (getTursoSyncBridge() ? " (turso refreshed)" : "") +
-      (getVaultSyncService() ? " (vault re-synced)" : ""),
-  );
+  void (async () => {
+    try {
+      await refreshTursoForWorkspaceSwitch();
+      await restartCloudSyncIfEnabled();
+      await refreshVaultForWorkspaceSwitch();
+
+      const runningSync = getCloudSyncService();
+      console.log(
+        `[WorkspaceSwitch] Deferred maintenance complete: org=${pointer.organizationId} ns=${pointer.namespaceId} home=${pointer.paprHome}` +
+          (runningSync ? " (cloud sync restarted)" : "") +
+          (getTursoSyncBridge() ? " (turso refreshed)" : "") +
+          (getVaultSyncService() ? " (vault re-synced)" : ""),
+      );
+    } catch (error) {
+      console.warn(
+        "[WorkspaceSwitch] Deferred maintenance failed:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  })();
 }

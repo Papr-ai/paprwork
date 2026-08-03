@@ -6,6 +6,7 @@
 import React, { useRef, useCallback, useEffect, useState } from "react";
 import { useTabs } from "../../hooks/useTabs";
 import { ensureDefaultChatTab } from "../../lib/ensureDefaultChatTab";
+import { isWorkspaceSwitchReloading } from "../../lib/workspaceSwitchReload";
 import { useTabStore } from "../../stores/tabStore";
 import { ChatContainer } from "../Chat/ChatContainer";
 import { ArtifactsView } from "../Artifacts/ArtifactsView";
@@ -75,6 +76,23 @@ function HomeRedirect() {
 }
 
 export function ContentArea() {
+  const [workspaceSwitching, setWorkspaceSwitching] = useState(
+    () => isWorkspaceSwitchReloading(),
+  );
+
+  useEffect(() => {
+    const onStart = (): void => setWorkspaceSwitching(true);
+    const onComplete = (): void => setWorkspaceSwitching(false);
+    window.addEventListener("papr-workspace-switch-start", onStart);
+    window.addEventListener("papr-workspace-reload", onComplete);
+    window.addEventListener("papr-workspace-switch-complete", onComplete);
+    return () => {
+      window.removeEventListener("papr-workspace-switch-start", onStart);
+      window.removeEventListener("papr-workspace-reload", onComplete);
+      window.removeEventListener("papr-workspace-switch-complete", onComplete);
+    };
+  }, []);
+
   const {
     activeTabId,
     activeLeftTab,
@@ -109,7 +127,9 @@ export function ContentArea() {
       const { activeTabId: currentActiveId, getTab: resolveTab } =
         useTabStore.getState();
       if (!currentActiveId || !resolveTab(currentActiveId)) {
-        ensureDefaultChatTab();
+        if (!isWorkspaceSwitchReloading()) {
+          ensureDefaultChatTab();
+        }
       }
     };
 
@@ -321,6 +341,12 @@ export function ContentArea() {
   if (!showSplitView) {
     return (
       <div className="content-area">
+        {workspaceSwitching ? (
+          <div className="content-area__workspace-switch">
+            <div className="content-area__workspace-switch-spinner" />
+            <p>Switching workspace…</p>
+          </div>
+        ) : null}
         <div className="content-pane content-pane--full">
           {renderPaneContent(leftPaneTabId, "left", isAgentsInLeft)}
         </div>
@@ -334,6 +360,12 @@ export function ContentArea() {
       className="content-area content-area--split"
       style={{ "--split-ratio": currentSplitRatio } as React.CSSProperties}
     >
+      {workspaceSwitching ? (
+        <div className="content-area__workspace-switch content-area__workspace-switch--overlay">
+          <div className="content-area__workspace-switch-spinner" />
+          <p>Switching workspace…</p>
+        </div>
+      ) : null}
       <div className="content-pane content-pane--left">
         {renderPaneContent(leftPaneTabId, "left", isAgentsInLeft)}
       </div>

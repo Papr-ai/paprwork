@@ -32,6 +32,7 @@ export const AmplitudeEvents = {
   ACTIVATION_RESULT_INSPECTED: "paprwork_activation_result_inspected",
   ACTIVATION_REPEAT_VALUE: "paprwork_activation_repeat_value",
   PAPR_LOGIN_STARTED: "paprwork_papr_login_started",
+  PAPR_LOGIN_STEP: "paprwork_papr_login_step",
   PAPR_LOGIN_COMPLETED: "paprwork_papr_login_completed",
   PAPR_LOGIN_FAILED: "paprwork_papr_login_failed",
 
@@ -138,6 +139,19 @@ export interface PaprLoginFailedProperties extends BaseEventProperties {
   mode?: "login" | "signup";
   source?: "auth_wall" | "settings" | "unknown";
   stage?: "start" | "callback";
+}
+
+export interface PaprLoginStepEventProperties extends BaseEventProperties {
+  step: string;
+  mode?: "login" | "signup";
+  source?: "auth_wall" | "settings" | "unknown";
+  error?: string;
+  duration_ms?: number;
+  deep_link_ready?: boolean;
+  pending_count?: number;
+  has_code?: boolean;
+  has_state?: boolean;
+  gateway_switch_success?: boolean;
 }
 
 export interface MessageSentProperties extends BaseEventProperties {

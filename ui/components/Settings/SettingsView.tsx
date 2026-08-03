@@ -261,15 +261,19 @@ function ProfileTab() {
     // Listen for auth success to reload profile
     const handleAuthSuccess = () => {
       console.log('[ProfileTab] Auth success - reloading profile');
-      window.electronAPI.papr.getProfile().then((response) => {
+      void (async () => {
+        const refreshResult = await window.electronAPI.papr.refreshProfile();
+        const response =
+          refreshResult.success && refreshResult.profile
+            ? refreshResult
+            : await window.electronAPI.papr.getProfile();
         if (response.success && response.profile) {
           setPaprProfile(response.profile);
-          // Auto-populate if manual fields are empty
-          if (!name) setName(response.profile.displayName ?? "");
-          if (!email) setEmail(response.profile.email ?? "");
-          if (!imageUrl) setImageUrl(response.profile.profileImage ?? "");
+          setName(response.profile.displayName ?? "");
+          setEmail(response.profile.email ?? "");
+          setImageUrl(response.profile.profileImage ?? "");
         }
-      });
+      })();
     };
 
     const handleLogoutSuccess = () => {
@@ -925,28 +929,40 @@ function AboutTab() {
           </div>
         </div>
 
-        {currentVersion === "2.2.2" && (
+        {currentVersion === "2.2.3" && (
           <div className="about-card">
-            <h3>What's New in v2.2.2</h3>
+            <h3>What's New in v2.2.3</h3>
             <ul className="whats-new-list">
               <li className="whats-new-list__item">
-                <strong>Turso Schema Drift Fix</strong>
+                <strong>Smoother Papr Login</strong>
                 <p>
-                  Cloud sync now detects when local databases have tables missing
-                  on Turso and automatically re-bootstraps instead of showing a
-                  false "Synced" status.
+                  Sign-in uses a localhost callback with a branded success page
+                  instead of relying only on deep links.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>App Database Path Resolution</strong>
+                <strong>Multi-Org Team Picker</strong>
                 <p>
-                  Mini-app data sources resolve registry database paths correctly
-                  when job IDs are not set.
+                  The Team picker now shows namespaces from every organization
+                  on your workspace, and switching teams no longer bounces back.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Faster Community Catalog</strong>
+                <p>
+                  Team and community app lists load from cache instantly, then
+                  refresh in the background.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Login Funnel Telemetry</strong>
+                <p>
+                  Each login step is tracked to help diagnose auth issues faster.
                 </p>
               </li>
             </ul>
             <a
-              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.2.2"
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.2.3"
               target="_blank"
               rel="noopener noreferrer"
               className="about-link whats-new-list__link"

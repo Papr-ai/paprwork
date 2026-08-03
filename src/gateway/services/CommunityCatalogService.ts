@@ -246,13 +246,17 @@ function filterNamespaceCloudEntries(
 }
 
 const NAMESPACE_CATALOG_CACHE_TTL_MS = 30_000;
+const GLOBAL_CATALOG_CACHE_TTL_MS = 5 * 60_000;
 const namespaceCatalogCache = new Map<
   string,
   { fetchedAt: number; catalog: CommunityCatalog }
 >();
+let globalCatalogCache: { fetchedAt: number; catalog: CommunityCatalog } | null =
+  null;
 
 export function clearNamespaceCommunityCatalogCache(): void {
   namespaceCatalogCache.clear();
+  globalCatalogCache = null;
 }
 
 /** Merge memory-server workspace rows with local-only team publishes. */
@@ -487,6 +491,14 @@ export class CommunityCatalogService {
   }
 
   async fetchCatalog(): Promise<CommunityCatalog> {
+    const cached = globalCatalogCache;
+    if (
+      cached &&
+      Date.now() - cached.fetchedAt < GLOBAL_CATALOG_CACHE_TTL_MS
+    ) {
+      return { ...cached.catalog, fromCache: true };
+    }
+
     const bundleService = getBundleService();
     const ossRegistry = await bundleService.fetchCommunityRegistry();
     const ossEntries = ossRegistry.bundles.map(opensourceEntry);
@@ -513,7 +525,9 @@ export class CommunityCatalogService {
       ownedAppIds,
     );
 
-    return buildCatalog("global", [...cloudEntries, ...ossEntries]);
+    const catalog = buildCatalog("global", [...cloudEntries, ...ossEntries]);
+    globalCatalogCache = { fetchedAt: Date.now(), catalog };
+    return catalog;
   }
 
   private async fetchTeamSharedEntries(
@@ -611,7 +625,7 @@ export class CommunityCatalogService {
       cached &&
       Date.now() - cached.fetchedAt < NAMESPACE_CATALOG_CACHE_TTL_MS
     ) {
-      return cached.catalog;
+      return { ...cached.catalog, fromCache: true };
     }
 
     await assertPaprApiKeyForNamespace(namespaceId);

@@ -16,7 +16,8 @@ import {
   fetchPersistedAppStateFromGateway,
   reconcileChatTabsInStore,
 } from "./persistedAppState";
-import { ensureDefaultChatTab, resetDefaultChatTabGuardForTests } from "./ensureDefaultChatTab";
+import { ensureSettingsTab } from "./ensureSettingsTab";
+import { resetDefaultChatTabGuardForTests } from "./ensureDefaultChatTab";
 
 const LEGACY_TAB_STORAGE_KEY = "paprwork-tab-storage";
 const GATEWAY_RETRY_MS = 200;
@@ -28,12 +29,19 @@ const CHAT_LIST_MAX_ATTEMPTS = 12;
 let workspaceReloadGeneration = 0;
 let workspaceReloadChain: Promise<void> = Promise.resolve();
 let workspaceBroadcastListenerAttached = false;
+let workspaceSwitchReloading = false;
+
+/** True while tabs/stores are being reset and reloaded for a workspace switch. */
+export function isWorkspaceSwitchReloading(): boolean {
+  return workspaceSwitchReloading;
+}
 
 /** Test hook — reset coalescing state between unit tests. */
 export function resetWorkspaceReloadForTests(): void {
   workspaceReloadGeneration = 0;
   workspaceReloadChain = Promise.resolve();
   workspaceBroadcastListenerAttached = false;
+  workspaceSwitchReloading = false;
   resetDefaultChatTabGuardForTests();
 }
 
@@ -50,7 +58,9 @@ async function loadTabsForWorkspaceWithRetry(): Promise<boolean> {
     try {
       const snapshot = await fetchPersistedAppStateFromGateway();
       if (snapshot) {
-        applyPersistedAppStateToTabStore(snapshot);
+        applyPersistedAppStateToTabStore(snapshot, {
+          emptyActiveTabFallback: "none",
+        });
         return true;
       }
     } catch (error) {
@@ -173,6 +183,9 @@ export function attachWorkspaceSwitchBroadcastListener(): void {
 }
 
 async function reloadUiForWorkspaceSwitchInner(generation: number): Promise<void> {
+  workspaceSwitchReloading = true;
+  window.dispatchEvent(new CustomEvent("papr-workspace-switch-start"));
+  try {
   attachWorkspaceSwitchBroadcastListener();
   clearLegacyGlobalTabCache();
   clearCloudPublishCache();
@@ -196,15 +209,18 @@ async function reloadUiForWorkspaceSwitchInner(generation: number): Promise<void
     historyIndex: -1,
   });
 
-  const tabsLoaded = await loadTabsForWorkspaceWithRetry();
+  await loadTabsForWorkspaceWithRetry();
   if (generation !== workspaceReloadGeneration) {
     return;
   }
-  if (!tabsLoaded) {
-    ensureDefaultChatTab();
-  }
+
+  // Stay on Settings (Profile / namespace picker) — load workspace tabs in the tab bar only.
+  ensureSettingsTab({ section: "profile" });
 
   window.dispatchEvent(new CustomEvent("papr-workspace-reload"));
 
   scheduleBackgroundChatValidation(generation);
+  } finally {
+    workspaceSwitchReloading = false;
+  }
 }

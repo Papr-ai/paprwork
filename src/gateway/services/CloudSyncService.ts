@@ -166,6 +166,17 @@ export class CloudSyncService {
     };
   }
 
+  /** Pause Phase-2 push queue (e.g. after workspace switch while UI reconnects). */
+  deferQueueProcessingUntil(untilMs: number): void {
+    this.queuePausedUntilMs = Math.max(this.queuePausedUntilMs, untilMs);
+    if (this.queueTimer) {
+      clearTimeout(this.queueTimer);
+      this.queueTimer = null;
+    }
+    const delaySec = Math.max(0, Math.round((untilMs - Date.now()) / 1000));
+    console.log(`[CloudSync] Push queue deferred for ${delaySec}s (workspace switch grace)`);
+  }
+
   getGitHubSyncItemsReport() {
     return buildGitHubSyncItemsReport({
       paprDir: this.paprDir,

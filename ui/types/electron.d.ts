@@ -230,7 +230,11 @@ export interface ElectronAPI {
       fromCache?: boolean;
       error?: string;
     }>;
-    listAllNamespaces: (options?: { forceRefresh?: boolean }) => Promise<{
+    listAllNamespaces: (options?: {
+      forceRefresh?: boolean;
+      /** When set, only namespaces for orgs in this workspace are returned. */
+      workspaceId?: string;
+    }) => Promise<{
       success: boolean;
       groups?: Array<{
         workspaceId: string;

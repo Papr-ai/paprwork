@@ -9,8 +9,8 @@
 import os from "os";
 import path from "path";
 import {
+  ensureActiveWorkspaceEnvSynced,
   getPaprBaseDir,
-  readActiveWorkspacePointer,
 } from "./paprWorkspace.js";
 
 function formatPathForAgent(absolutePath: string): string {
@@ -25,7 +25,7 @@ function formatPathForAgent(absolutePath: string): string {
 
 export function getPaprRoot(): string {
   const override = process.env.PAPR_HOME?.trim();
-  const pointer = readActiveWorkspacePointer();
+  const pointer = ensureActiveWorkspaceEnvSynced();
 
   // Cloud agent runs use ephemeral PAPR_HOME clones — no desktop pointer file.
   if (isCloudAgentGatewayMode() || !pointer?.paprHome) {
@@ -35,13 +35,7 @@ export function getPaprRoot(): string {
     return getPaprBaseDir();
   }
 
-  const pointerHome = path.resolve(pointer.paprHome);
-  if (override && path.resolve(override) !== pointerHome) {
-    console.warn(
-      `[PaprRoot] PAPR_HOME (${path.resolve(override)}) differs from active workspace (${pointerHome}); using pointer`,
-    );
-  }
-  return pointerHome;
+  return path.resolve(pointer.paprHome);
 }
 
 export function getPaprJobsRoot(): string {

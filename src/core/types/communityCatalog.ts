@@ -65,4 +65,6 @@ export interface CommunityCatalog {
   /** When namespace workspace catalog used client-side fallback (no dedicated memory route) */
   fallbackUsed?: boolean;
   namespaceId?: string;
+  /** True when served from an in-process cache (may be stale). */
+  fromCache?: boolean;
 }

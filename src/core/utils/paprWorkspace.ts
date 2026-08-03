@@ -1361,6 +1361,36 @@ export function applyActiveWorkspaceEnv(pointer: ActiveWorkspacePointer): void {
   process.env.PAPR_NAMESPACE_ID = pointer.namespaceId;
 }
 
+let lastStaleEnvWarnKey: string | null = null;
+
+/**
+ * Desktop: `.active-workspace.json` is source of truth. Electron may update the pointer
+ * before the gateway switch HTTP handler runs; heal stale spawn env and log once.
+ */
+export function ensureActiveWorkspaceEnvSynced(): ActiveWorkspacePointer | null {
+  const pointer = readActiveWorkspacePointer();
+  if (process.env.GATEWAY_MODE === "cloud_agent" || !pointer?.paprHome) {
+    return pointer;
+  }
+
+  const pointerHome = path.resolve(pointer.paprHome);
+  const envHome = process.env.PAPR_HOME?.trim();
+  if (!envHome || path.resolve(envHome) === pointerHome) {
+    lastStaleEnvWarnKey = null;
+    return pointer;
+  }
+
+  const warnKey = `${path.resolve(envHome)}|${pointerHome}`;
+  if (lastStaleEnvWarnKey !== warnKey) {
+    console.warn(
+      `[PaprWorkspace] Syncing stale PAPR_HOME (${path.resolve(envHome)}) to active workspace (${pointerHome})`,
+    );
+    lastStaleEnvWarnKey = warnKey;
+  }
+  applyActiveWorkspaceEnv(pointer);
+  return pointer;
+}
+
 export function clearActiveWorkspaceEnv(): void {
   delete process.env.PAPR_HOME;
   delete process.env.PAPR_USER_DATA;
@@ -1369,18 +1399,12 @@ export function clearActiveWorkspaceEnv(): void {
 }
 
 export function resolvePaprUserDataPath(): string {
+  const pointer = ensureActiveWorkspaceEnvSynced();
   const fromEnv = process.env.PAPR_USER_DATA?.trim();
-  const pointer = readActiveWorkspacePointer();
   const isCloudAgent = process.env.GATEWAY_MODE === "cloud_agent";
 
   if (!isCloudAgent && pointer?.userDataPath) {
-    const pointerPath = path.resolve(pointer.userDataPath);
-    if (fromEnv && path.resolve(fromEnv) !== pointerPath) {
-      console.warn(
-        `[PaprWorkspace] PAPR_USER_DATA (${path.resolve(fromEnv)}) differs from active workspace (${pointerPath}); using pointer`,
-      );
-    }
-    return pointerPath;
+    return path.resolve(pointer.userDataPath);
   }
 
   if (fromEnv) {

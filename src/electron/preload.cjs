@@ -85,6 +85,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // Papr Login API - Authenticate with Papr platform for automatic API key provisioning
   papr: (() => {
+    // Always forward login events to DOM so AuthWall works even before onLoginSuccess is registered.
+    ipcRenderer.on("papr:login-success", (_event, data) => {
+      window.dispatchEvent(new CustomEvent("papr-auth-success", { detail: data }));
+    });
+    ipcRenderer.on("papr:login-error", (_event, data) => {
+      window.dispatchEvent(new CustomEvent("papr-login-error", { detail: data }));
+    });
+
     const loginSuccessListenerMap = new WeakMap();
     const loginErrorListenerMap = new WeakMap();
     const logoutSuccessListenerMap = new WeakMap();
@@ -109,8 +117,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
       onLoginSuccess: (callback) => {
         const wrapper = (_event, data) => {
           callback(data);
-          // Also dispatch a DOM event for easier listening
-          window.dispatchEvent(new CustomEvent('papr-auth-success', { detail: data }));
         };
         loginSuccessListenerMap.set(callback, wrapper);
         ipcRenderer.on("papr:login-success", wrapper);
@@ -126,7 +132,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
       onLoginError: (callback) => {
         const wrapper = (_event, data) => {
           callback(data);
-          window.dispatchEvent(new CustomEvent("papr-login-error", { detail: data }));
         };
         loginErrorListenerMap.set(callback, wrapper);
         ipcRenderer.on("papr:login-error", wrapper);

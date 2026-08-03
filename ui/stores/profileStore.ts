@@ -4,6 +4,7 @@
 
 import { create } from "zustand";
 import { gateway } from "../src/lib/gateway";
+import { isWorkspaceSwitchReloading } from "../lib/workspaceSwitchReload";
 import {
   clearProfileSidebarCache,
   readProfileSidebarCache,
@@ -56,6 +57,19 @@ async function fetchProfileContext(): Promise<{
   namespaceName: string;
   workspaceName: string;
 }> {
+  const cached = readProfileSidebarCache();
+  if (isWorkspaceSwitchReloading() && cached) {
+    return {
+      name: cached.name,
+      email: cached.email,
+      imageUrl: cached.imageUrl,
+      plan: cached.plan,
+      organizationName: cached.organizationName,
+      namespaceName: cached.namespaceName,
+      workspaceName: cached.workspaceName,
+    };
+  }
+
   const settingsResponse = await gateway.send("settings:get");
   const settingsData = settingsResponse.data as {
     profile?: {
@@ -94,7 +108,12 @@ async function fetchProfileContext(): Promise<{
     const paprProfile = paprProfileResult.profile;
     if (!name) name = paprProfile.displayName?.trim() || "";
     if (!email) email = paprProfile.email || "";
-    if (!imageUrl) imageUrl = paprProfile.profileImage?.trim() || "";
+    const cloudImage = paprProfile.profileImage?.trim();
+    if (cloudImage) {
+      imageUrl = cloudImage;
+    } else if (!imageUrl) {
+      imageUrl = "";
+    }
     namespaceName = paprProfile.activeNamespaceName?.trim() || namespaceName;
     workspaceName = paprProfile.workspaceName?.trim() || workspaceName;
   }

@@ -333,6 +333,8 @@ export function App() {
       name?: string;
       userId?: string;
     }) => {
+      void useProfileStore.getState().loadProfile({ force: true });
+
       let userId = data?.userId;
       if (!userId) {
         try {
@@ -349,6 +351,11 @@ export function App() {
 
     const handleLogoutSuccess = () => {
       setTelemetryPaprUserId(null);
+      if (REQUIRE_PAPR_AUTH) {
+        console.log("[App] Papr logout — returning to auth wall (commercial build)");
+        setAppAgentChatSession(null);
+        setIsAuthenticated(false);
+      }
     };
 
     paprApi.onLoginSuccess(handleLoginSuccess);

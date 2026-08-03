@@ -11,7 +11,10 @@ const appVersion = packageJson.version;
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), '');
+  const repoRoot = resolve(__dirname, "..");
+  const rootEnv = loadEnv(mode, repoRoot, "");
+  const uiEnv = loadEnv(mode, process.cwd(), "");
+  const env = { ...rootEnv, ...uiEnv };
   
   return {
   plugins: [
@@ -28,7 +31,7 @@ export default defineConfig(({ mode }) => {
   ],
   define: {
     'import.meta.env.VITE_REQUIRE_PAPR_AUTH': JSON.stringify(
-      env.VITE_REQUIRE_PAPR_AUTH || 'false'
+      env.VITE_REQUIRE_PAPR_AUTH || env.REQUIRE_PAPR_AUTH || 'false'
     ),
   },
   base: "./",
