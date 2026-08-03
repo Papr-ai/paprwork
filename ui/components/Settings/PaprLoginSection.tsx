@@ -21,6 +21,14 @@ interface Namespace {
   environmentType?: string;
 }
 
+/** Namespaces of one organization, as rendered in the Team picker's optgroup. */
+interface NamespaceGroup {
+  workspaceId: string;
+  organizationId: string;
+  organizationName: string;
+  namespaces: Namespace[];
+}
+
 interface Organization {
   id: string;
   name: string;
@@ -85,7 +93,9 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
   const [switchingOrganization, setSwitchingOrganization] = useState(false);
   const [organizationsLoaded, setOrganizationsLoaded] = useState(false);
 
-  const [namespaces, setNamespaces] = useState<Namespace[]>([]);
+  // Every org's namespaces, not just the active one — picking a team in another
+  // org switches the workspace along with it.
+  const [namespaceGroups, setNamespaceGroups] = useState<NamespaceGroup[]>([]);
   const [activeNamespaceId, setActiveNamespaceId] = useState<string | null>(null);
   const [switchingNamespace, setSwitchingNamespace] = useState(false);
   const [namespacesLoaded, setNamespacesLoaded] = useState(false);
@@ -104,24 +114,7 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
     useState<MemoryAudience>("user");
   const [savingMemoryDefault, setSavingMemoryDefault] = useState(false);
   const switchingOrganizationRef = useRef(false);
-  const activeOrganizationIdRef = useRef<string | null>(null);
-  const organizationsRef = useRef(organizations);
-
-  useEffect(() => {
-    activeOrganizationIdRef.current = activeOrganizationId;
-  }, [activeOrganizationId]);
-
-  useEffect(() => {
-    organizationsRef.current = organizations;
-  }, [organizations]);
-
-  const resolveParseOrganizationId = useCallback(
-    (workspaceId: string | null): string | undefined => {
-      if (!workspaceId) return undefined;
-      return organizations.find((org) => org.id === workspaceId)?.organizationId;
-    },
-    [organizations],
-  );
+  const switchingNamespaceRef = useRef(false);
 
   useEffect(() => {
     checkLoginStatus();
@@ -166,18 +159,25 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
     [],
   );
 
-  const loadNamespaces = useCallback(async (parseOrganizationId?: string, forceRefresh = false) => {
+  /**
+   * Load namespaces for every organization the user belongs to.
+   *
+   * Cache-first by default: the main process answers from its disk cache and
+   * refreshes each org in the background, firing `papr:workspace-cache-updated`
+   * if anything actually changed. Pass `forceRefresh` for an explicit re-fetch.
+   */
+  const loadNamespaceGroups = useCallback(async (forceRefresh = false) => {
     try {
-      const result = await window.electronAPI.papr.listNamespaces(
-        parseOrganizationId
-          ? { organizationId: parseOrganizationId, forceRefresh }
-          : forceRefresh
-            ? { forceRefresh: true }
-            : undefined,
+      const result = await window.electronAPI.papr.listAllNamespaces(
+        forceRefresh ? { forceRefresh: true } : undefined,
       );
-      if (result.success && result.namespaces) {
-        setNamespaces(result.namespaces);
-        setActiveNamespaceId(result.activeNamespaceId || null);
+      if (result.success && result.groups) {
+        setNamespaceGroups(result.groups);
+        // A switch in flight owns the selection — the profile on disk still
+        // holds the previous namespace until it completes.
+        if (!switchingNamespaceRef.current && !switchingOrganizationRef.current) {
+          setActiveNamespaceId(result.activeNamespaceId || null);
+        }
       }
     } catch (err) {
       console.error("Failed to load namespaces:", err);
@@ -221,13 +221,10 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
   }, []);
 
   useEffect(() => {
-    if (isLoggedIn && activeOrganizationId && organizations.length > 0) {
-      const parseOrgId = resolveParseOrganizationId(activeOrganizationId);
-      if (parseOrgId) {
-        void loadNamespaces(parseOrgId, true);
-      }
+    if (isLoggedIn) {
+      void loadNamespaceGroups();
     }
-  }, [isLoggedIn, activeOrganizationId, organizations, resolveParseOrganizationId, loadNamespaces]);
+  }, [isLoggedIn, loadNamespaceGroups]);
 
   useEffect(() => {
     if (
@@ -321,88 +318,106 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
     }
   };
 
-  const handleSwitchOrganization = async (organizationId: string) => {
-    const org = organizations.find((o) => o.id === organizationId);
-    if (!org || organizationId === activeOrganizationId) return;
+  /** Core workspace switch. Callers own the confirm prompt. */
+  const switchToWorkspace = useCallback(
+    async (
+      workspaceId: string,
+      target?: { namespaceId: string; organizationId: string },
+    ) => {
+      const org = organizations.find((o) => o.id === workspaceId);
+      if (!org) return;
+
+      if (!org.organizationId) {
+        setError("Could not resolve organization");
+        return;
+      }
+
+      setSwitchingOrganization(true);
+      switchingOrganizationRef.current = true;
+      setError(null);
+
+      try {
+        await flushWorkspaceStateToGateway();
+        const result = await window.electronAPI.papr.switchOrganization(
+          workspaceId,
+          org.name,
+          target && {
+            preferredNamespaceId: target.namespaceId,
+            preferredOrganizationId: target.organizationId,
+          },
+        );
+        if (result.success) {
+          setActiveOrganizationId(workspaceId);
+          setActiveNamespaceId(result.activeNamespaceId || null);
+          setSchemas([]);
+          setWorkspaceMembers([]);
+          setWorkspaceName(null);
+          setInviteEmail("");
+          setInviteMessage(null);
+          if (result.apiKey && onApiKeyReceived) {
+            onApiKeyReceived(result.apiKey);
+          }
+        } else {
+          setError(result.error || "Failed to switch organization");
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to switch organization");
+      } finally {
+        switchingOrganizationRef.current = false;
+        setSwitchingOrganization(false);
+        // Re-read so the picker reflects the workspace that is now active.
+        void loadNamespaceGroups();
+      }
+    },
+    [organizations, onApiKeyReceived, loadNamespaceGroups],
+  );
+
+  const handleSwitchOrganization = async (workspaceId: string) => {
+    if (!workspaceId || workspaceId === activeOrganizationId) return;
+    if (!organizations.some((org) => org.id === workspaceId)) return;
 
     if (!(await confirmAndAbortStreamsForWorkspaceSwitch())) {
       return;
     }
 
-    const parseOrgId = org.organizationId;
-    if (!parseOrgId) {
-      setError("Could not resolve organization");
-      return;
-    }
-
-    setSwitchingOrganization(true);
-    switchingOrganizationRef.current = true;
-    setError(null);
-
-    // Teams list only needs Parse — fetch in parallel with gateway workspace switch.
-    const namespacesTask = window.electronAPI.papr.listNamespaces({
-      organizationId: parseOrgId,
-      forceRefresh: true,
-    });
-    void namespacesTask.then((nsResult) => {
-      if (nsResult.success && nsResult.namespaces?.length) {
-        setNamespaces(nsResult.namespaces);
-        setNamespacesLoaded(true);
-      }
-    });
-
-    try {
-      await flushWorkspaceStateToGateway();
-      const result = await window.electronAPI.papr.switchOrganization(organizationId, org.name);
-      const nsResult = await namespacesTask;
-      if (result.success) {
-        setActiveOrganizationId(organizationId);
-        if (result.namespaces?.length) {
-          setNamespaces(result.namespaces);
-          setNamespacesLoaded(true);
-        } else if (nsResult.success && nsResult.namespaces) {
-          setNamespaces(nsResult.namespaces);
-          setNamespacesLoaded(true);
-        } else {
-          await loadNamespaces(parseOrgId, true);
-        }
-        if (result.activeNamespaceId) {
-          setActiveNamespaceId(result.activeNamespaceId);
-        } else {
-          setActiveNamespaceId(null);
-        }
-        setSchemas([]);
-        setWorkspaceMembers([]);
-        setWorkspaceName(null);
-        setInviteEmail("");
-        setInviteMessage(null);
-        if (result.apiKey && onApiKeyReceived) {
-          onApiKeyReceived(result.apiKey);
-        }
-      } else {
-        setError(result.error || "Failed to switch organization");
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to switch organization");
-    } finally {
-      switchingOrganizationRef.current = false;
-      setSwitchingOrganization(false);
-    }
+    await switchToWorkspace(workspaceId);
   };
 
-  const handleSwitchNamespace = async (namespaceId: string) => {
-    const ns = namespaces.find((n) => n.id === namespaceId);
-    if (!ns || namespaceId === activeNamespaceId) return;
+  const handleSelectNamespace = async (namespaceId: string) => {
+    if (!namespaceId || namespaceId === activeNamespaceId) return;
+
+    const group = namespaceGroups.find((candidate) =>
+      candidate.namespaces.some((ns) => ns.id === namespaceId),
+    );
+    const ns = group?.namespaces.find((candidate) => candidate.id === namespaceId);
+    if (!group || !ns) return;
 
     if (!(await confirmAndAbortStreamsForWorkspaceSwitch())) {
       return;
     }
 
     setSwitchingNamespace(true);
+    switchingNamespaceRef.current = true;
     setError(null);
     try {
+      // Team in another workspace: a single switch carries the workspace, the
+      // org, and the namespace, so we never land on a default namespace first.
+      if (group.workspaceId !== activeOrganizationId) {
+        await switchToWorkspace(group.workspaceId, {
+          namespaceId: ns.id,
+          organizationId: group.organizationId,
+        });
+        return;
+      }
+
+      // Same workspace, but possibly a different org within it — pass the org
+      // explicitly so the switch doesn't resolve against the primary one.
       await flushWorkspaceStateToGateway();
-      const result = await window.electronAPI.papr.switchNamespace(namespaceId, ns.name);
+      const result = await window.electronAPI.papr.switchNamespace(
+        namespaceId,
+        ns.name,
+        group.organizationId,
+      );
       if (result.success) {
         setActiveNamespaceId(namespaceId);
         if (result.apiKey && onApiKeyReceived) {
@@ -414,6 +429,7 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to switch team");
     } finally {
+      switchingNamespaceRef.current = false;
       setSwitchingNamespace(false);
     }
   };
@@ -438,7 +454,7 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
       if (result.success) {
         setIsLoggedIn(false);
         setUserEmail(null);
-        setNamespaces([]);
+        setNamespaceGroups([]);
         setActiveNamespaceId(null);
         setNamespacesLoaded(false);
         setSchemas([]);
@@ -500,24 +516,18 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
       if (data.namespaceId) {
         setActiveNamespaceId(data.namespaceId);
       }
-      if (data.namespaces) {
-        setNamespaces(data.namespaces);
-        setNamespacesLoaded(true);
-      } else if (data.parseOrganizationId) {
-        void loadNamespaces(data.parseOrganizationId, true);
-      }
+      // The event only carries the new org's namespaces; the picker lists every
+      // org, so re-read the full set instead of narrowing it to one.
+      void loadNamespaceGroups();
     };
 
     handleWorkspaceCacheUpdatedRef.current = () => {
       void loadOrganizations();
-      const parseOrgId = organizationsRef.current.find(
-        (org) => org.id === activeOrganizationIdRef.current,
-      )?.organizationId;
-      if (parseOrgId) {
-        void loadNamespaces(parseOrgId);
-      }
+      // Cache-first is safe here: the main process writes the disk cache before
+      // it fires this event, so what we read back is the replacement list.
+      void loadNamespaceGroups();
     };
-  }, [loadNamespaces]);
+  }, [loadNamespaceGroups]);
 
   useEffect(() => {
     const loginCb = handleLoginSuccessRef.current;
@@ -548,7 +558,7 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
       setUserEmail(null);
       setOrganizations([]);
       setActiveOrganizationId(null);
-      setNamespaces([]);
+      setNamespaceGroups([]);
       setActiveNamespaceId(null);
       setSchemas([]);
     };
@@ -570,7 +580,14 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
 
   // --- Logged-in state ---
   if (isLoggedIn) {
-    const activeNs = namespaces.find((n) => n.id === activeNamespaceId);
+    // An org the user belongs to but has no namespaces in would render an empty
+    // optgroup, so drop it from the picker entirely.
+    const populatedGroups = namespaceGroups.filter(
+      (group) => group.namespaces.length > 0,
+    );
+    const activeNs = populatedGroups
+      .flatMap((group) => group.namespaces)
+      .find((ns) => ns.id === activeNamespaceId);
 
     return (
       <div className={`papr-section${profileFields ? " papr-section--profile" : ""}`}>
@@ -628,20 +645,32 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
             </div>
           )}
 
-          {namespacesLoaded && namespaces.length > 0 && (
+          {namespacesLoaded && populatedGroups.length > 0 && (
             <div className="papr-selector">
               <label className="papr-selector__label">Team</label>
               <div className="papr-selector__wrapper">
                 <select
                   className="papr-selector__select"
                   value={activeNamespaceId || ""}
-                  onChange={(e) => handleSwitchNamespace(e.target.value)}
-                  disabled={switchingNamespace}
+                  onChange={(e) => void handleSelectNamespace(e.target.value)}
+                  disabled={switchingNamespace || switchingOrganization}
                 >
-                  {namespaces.map((ns) => (
-                    <option key={ns.id} value={ns.id}>
-                      {formatNamespaceOptionLabel(ns)}
+                  {!activeNamespaceId && <option value="">Select a team…</option>}
+                  {/* Keep the select from rendering blank when the active team's
+                      org failed to load (partial result). */}
+                  {activeNamespaceId && !activeNs && (
+                    <option value={activeNamespaceId}>
+                      Active team ({activeNamespaceId})
                     </option>
+                  )}
+                  {populatedGroups.map((group) => (
+                    <optgroup key={group.organizationId} label={group.organizationName}>
+                      {group.namespaces.map((ns) => (
+                        <option key={ns.id} value={ns.id}>
+                          {formatNamespaceOptionLabel(ns)}
+                        </option>
+                      ))}
+                    </optgroup>
                   ))}
                 </select>
                 {switchingNamespace && <Spinner />}
@@ -649,7 +678,7 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
             </div>
           )}
 
-          {namespacesLoaded && namespaces.length === 0 && activeOrganizationId && (
+          {namespacesLoaded && populatedGroups.length === 0 && (
             <div className="papr-selector">
               <label className="papr-selector__label">Team</label>
               <div className="papr-selector__empty-row">
@@ -657,10 +686,7 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
                 <button
                   type="button"
                   className="papr-team__refresh"
-                  onClick={() => {
-                    const parseOrgId = resolveParseOrganizationId(activeOrganizationId);
-                    if (parseOrgId) void loadNamespaces(parseOrgId, true);
-                  }}
+                  onClick={() => void loadNamespaceGroups(true)}
                 >
                   Refresh
                 </button>
@@ -668,7 +694,7 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
             </div>
           )}
 
-          {!namespacesLoaded && activeOrganizationId && (
+          {!namespacesLoaded && (
             <div className="papr-selector">
               <label className="papr-selector__label">Team</label>
               <div className="papr-selector__placeholder">

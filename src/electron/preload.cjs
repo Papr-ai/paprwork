@@ -157,7 +157,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
       },
       
       listNamespaces: (options) => ipcRenderer.invoke("papr:list-namespaces", options),
-      switchNamespace: (namespaceId, namespaceName) => ipcRenderer.invoke("papr:switch-namespace", namespaceId, namespaceName),
+      listAllNamespaces: (options) => ipcRenderer.invoke("papr:list-all-namespaces", options),
+      switchNamespace: (namespaceId, namespaceName, organizationId) => ipcRenderer.invoke("papr:switch-namespace", namespaceId, namespaceName, organizationId),
       onNamespaceChanged: (callback) => {
         const wrapper = (_event, data) => {
           callback(data);
@@ -175,7 +176,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
       },
       
       listOrganizations: () => ipcRenderer.invoke("papr:list-organizations"),
-      switchOrganization: (organizationId, organizationName) => ipcRenderer.invoke("papr:switch-organization", organizationId, organizationName),
+      switchOrganization: (organizationId, organizationName, options) => ipcRenderer.invoke("papr:switch-organization", organizationId, organizationName, options),
       onOrganizationChanged: (callback) => {
         const wrapper = (_event, data) => {
           callback(data);

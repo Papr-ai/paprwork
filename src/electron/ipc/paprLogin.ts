@@ -869,6 +869,29 @@ const GET_ORG_NAMESPACES = `
   }
 `;
 
+/**
+ * Every organization attached to a workspace.
+ *
+ * `workSpace.organization` is a single pointer to the primary org, but
+ * Organization carries its own `workspace` pointer — so one workspace can hold
+ * several orgs, and the primary-org lookup alone hides the rest of them.
+ */
+const GET_WORKSPACE_ORGANIZATIONS = `
+  query GetWorkspaceOrganizations($workspaceId: ID!) {
+    organizations(
+      where: { workspace: { have: { objectId: { equalTo: $workspaceId } } } }
+      order: createdAt_DESC
+    ) {
+      edges {
+        node {
+          objectId
+          name
+        }
+      }
+    }
+  }
+`;
+
 const UPDATE_WORKSPACE_FOLLOWER_SELECTION = `
   mutation UpdateWorkspaceFollowerSelection($input: UpdateWorkspace_followerInput!) {
     updateWorkspace_follower(input: $input) {
@@ -1186,10 +1209,18 @@ async function syncActiveWorkspaceOrganization(
     return undefined;
   }
 
-  const orgChanged = namespaceOrgId !== profile.organizationId;
+  const workspaceChanged = active.workspaceId !== profile.workspaceId;
+
+  // A workspace can host several organizations, and `active.organizationId` is
+  // only its primary one. So an org that differs from the primary is the user's
+  // deliberate in-workspace choice, not drift — realigning it here would undo
+  // the namespace switch they just made (and issue a competing gateway switch
+  // below, which supersedes theirs). Only realign when the workspace itself
+  // changed, or when the profile carries no org at all.
+  const shouldRealignOrg = workspaceChanged || !profile.organizationId;
+  const orgChanged = shouldRealignOrg && namespaceOrgId !== profile.organizationId;
   const workspaceMetadataChanged =
-    active.workspaceId !== profile.workspaceId ||
-    active.workspaceName !== profile.workspaceName;
+    workspaceChanged || active.workspaceName !== profile.workspaceName;
 
   if (!orgChanged && !workspaceMetadataChanged) {
     return active;
@@ -1199,7 +1230,7 @@ async function syncActiveWorkspaceOrganization(
     ...profile,
     workspaceId: active.workspaceId,
     workspaceName: active.workspaceName,
-    organizationId: namespaceOrgId,
+    organizationId: orgChanged ? namespaceOrgId : profile.organizationId,
   });
 
   if (orgChanged) {
@@ -1267,6 +1298,13 @@ async function fetchUserDeveloperOrganizationId(
 async function resolveOrganizationIdForProfile(
   profile: PaprProfile,
 ): Promise<string | undefined> {
+  // The profile's org is authoritative when set: a workspace can host several
+  // organizations, so the workspace lookup below only knows the primary one and
+  // would silently move the user off the org they actually selected.
+  if (profile.organizationId) {
+    return profile.organizationId;
+  }
+
   if (profile.sessionToken && profile.userId) {
     try {
       const graphql: GraphQLExecutor = (query, variables) =>
@@ -1287,10 +1325,6 @@ async function resolveOrganizationIdForProfile(
     } catch (error) {
       console.warn("[PaprLogin] Could not resolve namespace org from workspaces:", error);
     }
-  }
-
-  if (profile.organizationId) {
-    return profile.organizationId;
   }
 
   if (profile.sessionToken && profile.userId) {
@@ -1797,16 +1831,142 @@ async function fetchOrgNamespaces(
     }),
   );
 
-  cacheNamespacesForOrg(
-    organizationId,
-    namespaces.map((ns: OrgNamespaceListItem) => ({
-      id: ns.id,
-      name: ns.name,
-      environmentType: ns.environmentType,
-    })),
-  );
+  const nextCacheEntries = namespaces.map((ns: OrgNamespaceListItem) => ({
+    id: ns.id,
+    name: ns.name,
+    environmentType: ns.environmentType,
+  }));
+
+  // Compare against what was cached BEFORE overwriting, so a background refresh
+  // that discovers new/removed namespaces can wake the renderer up.
+  const previousCacheEntries = getCachedNamespaces(organizationId) ?? [];
+  const changed =
+    namespaceListSignature(previousCacheEntries) !==
+    namespaceListSignature(nextCacheEntries);
+
+  cacheNamespacesForOrg(organizationId, nextCacheEntries);
+
+  if (changed) {
+    console.log(
+      `[PaprLogin] Namespace cache changed for org ${organizationId} ` +
+        `(${previousCacheEntries.length} -> ${nextCacheEntries.length}); notifying renderer`,
+    );
+    notifyWorkspaceCacheUpdated();
+  }
 
   return namespaces;
+}
+
+/**
+ * Tell the renderer the workspace/namespace disk cache changed underneath it.
+ *
+ * Renderers (Settings + ProfileFooter) listen on `papr:workspace-cache-updated`.
+ * Without this, a background refresh rewrites the cache but the UI keeps showing
+ * the stale list until a manual reload, so one bad cache write sticks forever.
+ */
+function notifyWorkspaceCacheUpdated(): void {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win && !win.isDestroyed()) {
+    win.webContents.send("papr:workspace-cache-updated");
+  }
+}
+
+/** Stable signature for namespace cache change detection (order-insensitive). */
+function namespaceListSignature(
+  namespaces: Array<{ id: string; name?: string; environmentType?: string }>,
+): string {
+  return namespaces
+    .map((ns) => `${ns.id}:${ns.name ?? ""}:${ns.environmentType ?? ""}`)
+    .sort()
+    .join("|");
+}
+
+/** Stable signature for workspace list change detection (order-insensitive). */
+function workspaceListSignature(
+  workspaces: Array<{
+    workspaceId?: string;
+    organizationId?: string;
+    workspaceName?: string;
+  }>,
+): string {
+  return workspaces
+    .map(
+      (ws) =>
+        `${ws.workspaceId ?? ""}:${ws.organizationId ?? ""}:${ws.workspaceName ?? ""}`,
+    )
+    .sort()
+    .join("|");
+}
+
+async function fetchWorkspaceOrganizations(
+  sessionToken: string,
+  workspaceId: string,
+  customKeysStorage: CustomKeysStorage,
+  settingsStorage: SettingsStorage,
+): Promise<Array<{ id: string; name: string }>> {
+  const data = (await parseGraphQLWithRefresh(
+    sessionToken,
+    GET_WORKSPACE_ORGANIZATIONS,
+    { workspaceId },
+    customKeysStorage,
+    settingsStorage,
+  )) as {
+    organizations?: {
+      edges?: Array<{ node: { objectId: string; name?: string } }>;
+    };
+  };
+
+  return (data.organizations?.edges ?? [])
+    .map((edge) => ({
+      id: edge.node.objectId,
+      name: edge.node.name?.trim() || "",
+    }))
+    .filter((org) => org.id);
+}
+
+/** One picker group per organization, with that org's namespaces. */
+interface WorkspaceNamespaceGroup {
+  workspaceId: string;
+  organizationId: string;
+  organizationName: string;
+  namespaces: OrgNamespaceListItem[];
+}
+
+/**
+ * Orgs with a background namespace refresh already running.
+ *
+ * The settings picker lists every org at once, so a cache-first load fans out
+ * one refresh per org. Without this guard, overlapping loads (mount + a
+ * cache-updated event) would multiply that fan-out by the number of callers.
+ */
+const backgroundNamespaceRefreshes = new Set<string>();
+
+function refreshOrgNamespacesInBackground(
+  sessionToken: string,
+  organizationId: string,
+  customKeysStorage: CustomKeysStorage,
+  settingsStorage: SettingsStorage,
+): void {
+  if (backgroundNamespaceRefreshes.has(organizationId)) return;
+  backgroundNamespaceRefreshes.add(organizationId);
+
+  // fetchOrgNamespaces rewrites the disk cache and fires
+  // `papr:workspace-cache-updated` itself when the list actually changed.
+  void fetchOrgNamespaces(
+    sessionToken,
+    organizationId,
+    customKeysStorage,
+    settingsStorage,
+  )
+    .catch((error) => {
+      console.warn(
+        `[PaprLogin] Background namespace refresh failed for org ${organizationId}:`,
+        error,
+      );
+    })
+    .finally(() => {
+      backgroundNamespaceRefreshes.delete(organizationId);
+    });
 }
 
 async function resolveNamespaceForWorkspaceSwitch(input: {
@@ -2907,6 +3067,171 @@ export function initializePaprLoginIPC(
     },
   );
 
+  // List namespaces across every workspace the user belongs to. The settings
+  // picker shows all orgs at once, so a namespace in another org is one click
+  // away instead of requiring an org switch first.
+  ipcMain.handle(
+    "papr:list-all-namespaces",
+    async (_event, options?: { forceRefresh?: boolean }) => {
+      try {
+        const profile = settingsStorage.getPaprProfile();
+        if (!profile?.sessionToken || !profile?.userId) {
+          return { success: false, error: "Not logged in" };
+        }
+
+        const sessionToken = profile.sessionToken;
+        const forceRefresh = options?.forceRefresh === true;
+
+        let workspaces: CachedWorkspace[] = readPaprWorkspaceCache()?.workspaces ?? [];
+        if (forceRefresh || workspaces.length === 0) {
+          const fetched = await fetchUserWorkspacesWithRefresh(
+            profile,
+            customKeysStorage,
+            settingsStorage,
+          );
+          workspaces = fetched.map(
+            (workspace): CachedWorkspace => ({
+              id: workspace.workspaceId,
+              name: workspaceDisplayName(workspace),
+              role: workspace.role,
+              organizationId: workspace.organizationId,
+              organizationName: workspace.organizationName,
+              workspaceName: workspace.workspaceName,
+              defaultNamespaceId: workspace.defaultNamespaceId,
+            }),
+          );
+          writePaprWorkspaceCache({ workspaces });
+        }
+
+        let partial = false;
+
+        // A workspace can hold several organizations, so ask for all of them
+        // rather than settling for `workspace.organization` (the primary).
+        const orgsPerWorkspace = await Promise.all(
+          workspaces.map(async (workspace) => {
+            const primaryOrgId = workspace.organizationId?.trim();
+            const orgs = new Map<string, string>();
+            if (primaryOrgId) {
+              orgs.set(primaryOrgId, workspace.organizationName?.trim() || "");
+            }
+
+            try {
+              for (const org of await fetchWorkspaceOrganizations(
+                sessionToken,
+                workspace.id,
+                customKeysStorage,
+                settingsStorage,
+              )) {
+                // Named result wins — the primary entry may have no name.
+                orgs.set(org.id, org.name || orgs.get(org.id) || "");
+              }
+            } catch (error) {
+              // Falling back to the primary org keeps this no worse than before.
+              console.warn(
+                `[PaprLogin] Failed to list organizations for workspace ${workspace.id}:`,
+                error,
+              );
+              partial = true;
+            }
+
+            return { workspace, orgs };
+          }),
+        );
+
+        // One group per organization: two workspaces sharing an org would
+        // otherwise list identical namespaces twice, and picking one would have
+        // an ambiguous workspace to switch to.
+        const orgEntries = new Map<
+          string,
+          { workspace: CachedWorkspace; organizationName: string }
+        >();
+        for (const { workspace, orgs } of orgsPerWorkspace) {
+          for (const [organizationId, orgName] of orgs) {
+            if (orgEntries.has(organizationId)) continue;
+            // With one org the workspace name is the familiar label; with
+            // several, qualify each so they can be told apart.
+            const organizationName =
+              orgs.size > 1 && orgName
+                ? `${workspace.name} · ${orgName}`
+                : workspace.name;
+            orgEntries.set(organizationId, { workspace, organizationName });
+          }
+        }
+
+        const groups = await Promise.all(
+          [...orgEntries.entries()].map(
+            async ([
+              organizationId,
+              { workspace, organizationName },
+            ]): Promise<WorkspaceNamespaceGroup> => {
+              const base = {
+                workspaceId: workspace.id,
+                organizationId,
+                organizationName,
+              };
+
+              const cached = forceRefresh ? null : getCachedNamespaces(organizationId);
+              if (cached) {
+                refreshOrgNamespacesInBackground(
+                  sessionToken,
+                  organizationId,
+                  customKeysStorage,
+                  settingsStorage,
+                );
+                return { ...base, namespaces: cached };
+              }
+
+              try {
+                const namespaces = await fetchOrgNamespaces(
+                  sessionToken,
+                  organizationId,
+                  customKeysStorage,
+                  settingsStorage,
+                );
+                return { ...base, namespaces };
+              } catch (error) {
+                // One unreachable org shouldn't blank the whole picker.
+                console.warn(
+                  `[PaprLogin] Failed to list namespaces for org ${organizationId}:`,
+                  error,
+                );
+                partial = true;
+                return { ...base, namespaces: [] };
+              }
+            },
+          ),
+        );
+
+        // Active workspace first so the current team stays at the top.
+        groups.sort((a, b) => {
+          if (a.workspaceId === profile.workspaceId) return -1;
+          if (b.workspaceId === profile.workspaceId) return 1;
+          return 0;
+        });
+
+        console.log(
+          `[PaprLogin] Listed ${groups.reduce((total, group) => total + group.namespaces.length, 0)} ` +
+            `namespaces across ${groups.length} organization(s)`,
+        );
+
+        return {
+          success: true,
+          groups,
+          activeOrganizationId: profile.workspaceId,
+          activeNamespaceId: profile.activeNamespaceId,
+          partial,
+        };
+      } catch (error) {
+        console.error("[PaprLogin] Failed to list all namespaces:", error);
+        return {
+          success: false,
+          error:
+            error instanceof Error ? error.message : "Failed to list namespaces",
+        };
+      }
+    },
+  );
+
   // List workspaces (dashboard uses workspace_follower → organization name for display)
   ipcMain.handle("papr:list-organizations", async () => {
     try {
@@ -2947,6 +3272,15 @@ export function initializePaprLoginIPC(
       if (cachedWorkspaces.length > 0) {
         void fetchUserWorkspacesWithRefresh(profile, customKeysStorage, settingsStorage)
           .then(async (workspaces) => {
+            const workspacesChanged =
+              workspaceListSignature(
+                cachedWorkspaces.map((workspace) => ({
+                  workspaceId: workspace.id,
+                  organizationId: workspace.organizationId,
+                  workspaceName: workspace.workspaceName ?? workspace.name,
+                })),
+              ) !== workspaceListSignature(workspaces);
+
             writePaprWorkspaceCache({
               workspaces: workspaces.map(
                 (workspace): CachedWorkspace => ({
@@ -2960,6 +3294,14 @@ export function initializePaprLoginIPC(
                 }),
               ),
             });
+
+            if (workspacesChanged) {
+              console.log(
+                `[PaprLogin] Workspace cache changed ` +
+                  `(${cachedWorkspaces.length} -> ${workspaces.length}); notifying renderer`,
+              );
+              notifyWorkspaceCacheUpdated();
+            }
 
             const active = await syncActiveWorkspaceOrganization(
               profile,
@@ -3064,7 +3406,17 @@ export function initializePaprLoginIPC(
   });
 
   // Switch workspace (updates Parse selection, then default namespace for that org)
-  ipcMain.handle("papr:switch-organization", async (_event, workspaceId: string, displayName: string) => {
+  // `preferredNamespaceId` lets the settings picker jump straight to a namespace
+  // in another org — without it the switch lands on that org's default namespace
+  // and would need a second switch to reach the one the user actually picked.
+  // `preferredOrganizationId` names which of the workspace's organizations that
+  // namespace belongs to, since the workspace's primary org is only one of them.
+  ipcMain.handle("papr:switch-organization", async (
+    _event,
+    workspaceId: string,
+    displayName: string,
+    options?: { preferredNamespaceId?: string; preferredOrganizationId?: string },
+  ) => {
     try {
       const profile = settingsStorage.getPaprProfile();
       if (!profile?.sessionToken || !profile?.userId) {
@@ -3099,7 +3451,8 @@ export function initializePaprLoginIPC(
       };
       settingsStorage.setPaprProfile(updatedProfile);
 
-      const namespaceOrgId = target.organizationId;
+      const namespaceOrgId =
+        options?.preferredOrganizationId?.trim() || target.organizationId;
       if (!namespaceOrgId) {
         return { success: false, error: "Could not resolve organization for namespaces" };
       }
@@ -3119,7 +3472,8 @@ export function initializePaprLoginIPC(
       const { namespaces, choice: defaultNs } = await resolveNamespaceForWorkspaceSwitch({
         sessionToken: profile.sessionToken,
         organizationId: namespaceOrgId,
-        preferredNamespaceId: target.defaultNamespaceId,
+        preferredNamespaceId:
+          options?.preferredNamespaceId?.trim() || target.defaultNamespaceId,
         customKeysStorage,
         settingsStorage,
       });
@@ -3195,15 +3549,25 @@ export function initializePaprLoginIPC(
     }
   });
 
-  // Switch to a different namespace — gets or creates API key for it
-  ipcMain.handle("papr:switch-namespace", async (_event, namespaceId: string, namespaceName: string) => {
+  // Switch to a different namespace — gets or creates API key for it.
+  // `organizationIdOverride` comes from the settings picker, which lists every
+  // org in the workspace: the chosen namespace may belong to a different org
+  // than the profile's current one, and resolving by profile would pick wrong.
+  ipcMain.handle("papr:switch-namespace", async (
+    _event,
+    namespaceId: string,
+    namespaceName: string,
+    organizationIdOverride?: string,
+  ) => {
     try {
       const profile = settingsStorage.getPaprProfile();
       if (!profile?.sessionToken || !profile?.userId) {
         return { success: false, error: "Not logged in or missing org info" };
       }
 
-      const organizationId = await resolveOrganizationIdForProfile(profile);
+      const organizationId =
+        organizationIdOverride?.trim() ||
+        (await resolveOrganizationIdForProfile(profile));
       if (!organizationId) {
         return { success: false, error: "Missing organization info" };
       }

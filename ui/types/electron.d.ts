@@ -230,7 +230,26 @@ export interface ElectronAPI {
       fromCache?: boolean;
       error?: string;
     }>;
-    switchNamespace: (namespaceId: string, namespaceName: string) => Promise<{
+    listAllNamespaces: (options?: { forceRefresh?: boolean }) => Promise<{
+      success: boolean;
+      groups?: Array<{
+        workspaceId: string;
+        organizationId: string;
+        organizationName: string;
+        namespaces: Array<{ id: string; name: string; environmentType?: string }>;
+      }>;
+      activeOrganizationId?: string;
+      activeNamespaceId?: string;
+      /** True when at least one org's namespaces could not be loaded. */
+      partial?: boolean;
+      error?: string;
+    }>;
+    switchNamespace: (
+      namespaceId: string,
+      namespaceName: string,
+      /** Org this namespace belongs to; defaults to the profile's current org. */
+      organizationId?: string,
+    ) => Promise<{
       success: boolean;
       apiKey?: string;
       error?: string;
@@ -251,7 +270,16 @@ export interface ElectronAPI {
       activeOrganizationId?: string;
       error?: string;
     }>;
-    switchOrganization: (organizationId: string, organizationName: string) => Promise<{
+    switchOrganization: (
+      organizationId: string,
+      organizationName: string,
+      options?: {
+        /** Land on this namespace instead of the org's default. */
+        preferredNamespaceId?: string;
+        /** Which of the workspace's orgs that namespace belongs to. */
+        preferredOrganizationId?: string;
+      },
+    ) => Promise<{
       success: boolean;
       organizationId?: string;
       parseOrganizationId?: string;
