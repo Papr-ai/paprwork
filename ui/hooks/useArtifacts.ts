@@ -5,6 +5,12 @@
 import { useCallback, useEffect } from "react";
 import { useArtifactsStore, type Artifact } from "../stores/artifactsStore";
 import { gateway } from "../src/lib/gateway";
+import {
+  getActiveWorkspaceUiCacheKey,
+  writeWorkspaceUiCache,
+} from "../lib/workspaceUiCache";
+import { normalizeTabHierarchy } from "../lib/persistedAppState";
+import { useTabStore } from "../stores/tabStore";
 
 export function useArtifacts(scope: "all" | "apps" = "all") {
   const {
@@ -25,6 +31,34 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
     getFilteredArtifacts,
   } = useArtifactsStore();
 
+  const persistArtifactsToWorkspaceCache = useCallback((apps: Artifact[]) => {
+    const key = getActiveWorkspaceUiCacheKey();
+    if (!key) {
+      return;
+    }
+    const {
+      tabs,
+      activeTabId,
+      splitRatio,
+      splitRatios,
+      history,
+      historyIndex,
+    } = useTabStore.getState();
+    const current = useArtifactsStore.getState().artifacts;
+    writeWorkspaceUiCache(key, {
+      tabs: normalizeTabHierarchy(tabs),
+      activeTabId,
+      splitRatio,
+      splitRatios,
+      history,
+      historyIndex,
+      artifacts: [
+        ...current.filter((item) => item.type !== "app"),
+        ...apps,
+      ],
+    });
+  }, []);
+
   // Apps use a fast stale-while-refresh path; other views load both kinds.
   const loadArtifacts = useCallback(async () => {
     const cached = useArtifactsStore.getState().artifacts;
@@ -42,6 +76,7 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
           ...current.filter((item) => item.type !== "app"),
           ...apps,
         ]);
+        persistArtifactsToWorkspaceCache(apps);
       } else {
         const [docsResult, appsResult] = await Promise.allSettled([
           gateway.send("document:list"),
@@ -66,6 +101,7 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
         }
 
         setArtifacts([...documents, ...apps]);
+        persistArtifactsToWorkspaceCache(apps);
       }
     } catch (err) {
       const message =
@@ -75,7 +111,7 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
     } finally {
       if (blockForLoad) setLoading(false);
     }
-  }, [scope, setArtifacts, setLoading, setError]);
+  }, [scope, setArtifacts, setLoading, setError, persistArtifactsToWorkspaceCache]);
 
   // Create document
   const createDocument = useCallback(
@@ -225,6 +261,22 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
   // Load artifacts on mount
   useEffect(() => {
     loadArtifacts();
+  }, [loadArtifacts]);
+
+  // Background refresh after workspace switch (cache already hydrated).
+  useEffect(() => {
+    const onArtifactsReady = () => {
+      void loadArtifacts();
+    };
+    window.addEventListener("papr-workspace-artifacts-ready", onArtifactsReady);
+    window.addEventListener("papr-workspace-switch-complete", onArtifactsReady);
+    return () => {
+      window.removeEventListener("papr-workspace-artifacts-ready", onArtifactsReady);
+      window.removeEventListener(
+        "papr-workspace-switch-complete",
+        onArtifactsReady,
+      );
+    };
   }, [loadArtifacts]);
 
   // Agent/bash can change apps on disk; gateway prunes stale entries and broadcasts

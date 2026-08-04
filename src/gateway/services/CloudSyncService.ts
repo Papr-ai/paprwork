@@ -487,13 +487,10 @@ export class CloudSyncService {
   /** Push one mini-app and its linked/dependent jobs immediately (skips global queue). */
   async pushAppNow(appId: string): Promise<void> {
     return this.runExclusiveGitOp(async () => {
-      const { resolveAppDependentJobIds, jobRelativePath } = await import(
+      const { resolveAppCloudSyncRelativePaths } = await import(
         "./cloudSync/resolveAppDependentJobs.js"
       );
-      const relativePaths = [
-        path.join("apps", appId),
-        ...resolveAppDependentJobIds(this.paprDir, appId).map(jobRelativePath),
-      ];
+      const relativePaths = resolveAppCloudSyncRelativePaths(this.paprDir, appId);
 
       if (this.pushTimer) {
         clearTimeout(this.pushTimer);

@@ -1,8 +1,9 @@
 /**
- * Upstream sync bar for cloud-installed forks — pull publisher updates + send changes.
+ * Upstream sync bar for cloud-installed forks — pull publisher updates + propose changes.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   formatLastSyncedAt,
   formatTrackSyncSummary,
@@ -39,24 +40,65 @@ export function CloudUpstreamBar({
   const [sendMessage, setSendMessage] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState(lastSyncedAtProp);
+  const sendButtonRef = useRef<HTMLButtonElement>(null);
   const sendPopoverRef = useRef<HTMLDivElement>(null);
+  const [sendPopoverPos, setSendPopoverPos] = useState<{
+    top: number;
+    right: number;
+  } | null>(null);
 
   useEffect(() => {
     setLastSyncedAt(lastSyncedAtProp);
   }, [lastSyncedAtProp]);
 
+  const updateSendPopoverPos = useCallback(() => {
+    const anchor = sendButtonRef.current;
+    if (!anchor) {
+      setSendPopoverPos(null);
+      return;
+    }
+    const rect = anchor.getBoundingClientRect();
+    setSendPopoverPos({
+      top: rect.bottom + 8,
+      right: Math.max(8, window.innerWidth - rect.right),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!sendOpen) {
+      setSendPopoverPos(null);
+      return;
+    }
+    updateSendPopoverPos();
+    window.addEventListener("resize", updateSendPopoverPos);
+    window.addEventListener("scroll", updateSendPopoverPos, true);
+    return () => {
+      window.removeEventListener("resize", updateSendPopoverPos);
+      window.removeEventListener("scroll", updateSendPopoverPos, true);
+    };
+  }, [sendOpen, updateSendPopoverPos]);
+
   useEffect(() => {
     if (!sendOpen) return;
     const onDocClick = (event: MouseEvent) => {
+      const target = event.target as Node;
       if (
-        sendPopoverRef.current &&
-        !sendPopoverRef.current.contains(event.target as Node)
+        sendButtonRef.current?.contains(target) ||
+        sendPopoverRef.current?.contains(target)
       ) {
-        setSendOpen(false);
+        return;
       }
+      setSendOpen(false);
+    };
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSendOpen(false);
     };
     document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onEscape);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onEscape);
+    };
   }, [sendOpen]);
 
   const lastSyncedLabel = formatLastSyncedAt(lastSyncedAt);
@@ -134,64 +176,87 @@ export function CloudUpstreamBar({
           </button>
         ) : null}
 
-        <div className="mini-app-publish-bar__send-wrap" ref={sendPopoverRef}>
+        <div className="mini-app-publish-bar__send-wrap">
           <button
+            ref={sendButtonRef}
             type="button"
             className="mini-app-publish-bar__button mini-app-publish-bar__button--track mini-app-publish-bar__button--send mini-app-publish-bar__button--compact"
             disabled={busy || submitting}
-            title="Send your local changes to the app owner for review"
+            title="Propose your local changes to the app owner for review"
+            aria-expanded={sendOpen}
+            aria-haspopup="dialog"
             onClick={() => {
               setSendOpen((open) => !open);
               setSendError(null);
               setSendMessage(null);
             }}
           >
-            {submitting ? "…" : "Send"}
+            {submitting ? "…" : "Propose"}
           </button>
 
-          {sendOpen ? (
-            <div className="mini-app-publish-bar__send-popover" role="dialog">
-              <p className="mini-app-publish-bar__send-popover-title">
-                Send changes to owner
-              </p>
-              <p className="mini-app-publish-bar__send-popover-desc">
-                The owner can review and merge your edits into the shared app.
-              </p>
-              <label className="share-sheet__field-label" htmlFor="upstream-change-title">
-                Request title
-              </label>
-              <input
-                id="upstream-change-title"
-                className="share-sheet__text-input"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                disabled={busy || submitting}
-              />
-              <label className="share-sheet__field-label" htmlFor="upstream-change-desc">
-                What changed?
-              </label>
-              <textarea
-                id="upstream-change-desc"
-                className="share-sheet__textarea"
-                rows={3}
-                placeholder="Describe fixes or features for the owner to review…"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                disabled={busy || submitting}
-              />
-              {sendError ? (
-                <p className="share-sheet__error">{sendError}</p>
-              ) : null}
-              <button
-                type="button"
-                className="share-sheet__primary-btn"
-                disabled={busy || submitting}
-                onClick={() => void handleSend()}
-              >
-                {submitting ? "Sending…" : "Submit change request"}
-              </button>
-            </div>
-          ) : null}
+          {sendOpen && sendPopoverPos
+            ? createPortal(
+                <div
+                  ref={sendPopoverRef}
+                  className="mini-app-publish-bar__send-popover mini-app-publish-bar__send-popover--portal"
+                  role="dialog"
+                  aria-label="Propose changes to owner"
+                  style={{
+                    position: "fixed",
+                    top: sendPopoverPos.top,
+                    right: sendPopoverPos.right,
+                  }}
+                >
+                  <p className="mini-app-publish-bar__send-popover-title">
+                    Propose changes to owner
+                  </p>
+                  <p className="mini-app-publish-bar__send-popover-desc">
+                    Describe what you changed. The owner can review and merge
+                    your edits into the shared app.
+                  </p>
+                  <label
+                    className="share-sheet__field-label"
+                    htmlFor="upstream-change-title"
+                  >
+                    Request title
+                  </label>
+                  <input
+                    id="upstream-change-title"
+                    className="share-sheet__text-input"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    disabled={busy || submitting}
+                  />
+                  <label
+                    className="share-sheet__field-label"
+                    htmlFor="upstream-change-desc"
+                  >
+                    What changed?
+                  </label>
+                  <textarea
+                    id="upstream-change-desc"
+                    className="share-sheet__textarea"
+                    rows={3}
+                    placeholder="Describe fixes or features for the owner to review…"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    disabled={busy || submitting}
+                  />
+                  {sendError ? (
+                    <p className="share-sheet__error">{sendError}</p>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="share-sheet__primary-btn"
+                    disabled={busy || submitting}
+                    onClick={() => void handleSend()}
+                  >
+                    {submitting ? "Submitting…" : "Submit change request"}
+                  </button>
+                </div>,
+                document.body,
+              )
+            : null}
         </div>
       </div>
 

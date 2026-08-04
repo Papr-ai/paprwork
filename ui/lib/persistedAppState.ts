@@ -22,13 +22,15 @@ interface TabRow {
 /** Save open tabs + navigation state to the current workspace before switching away. */
 export async function flushWorkspaceStateToGateway(): Promise<void> {
   const {
-    tabs,
+    tabs: rawTabs,
     activeTabId,
     splitRatio,
     splitRatios,
     history,
     historyIndex,
   } = useTabStore.getState();
+
+  const tabs = normalizeTabHierarchy(rawTabs);
 
   const tabsToSave = tabs.map((tab, index) => ({
     id: tab.id,
@@ -184,6 +186,83 @@ export async function fetchPersistedAppStateFromGateway(): Promise<PersistedAppS
   };
 }
 
+type TabHierarchyFields = {
+  id: string;
+  displayMode: "standalone" | "parent" | "child";
+  parentTabId: string | null;
+  childTabIds: string[];
+  position?: "left" | "right";
+};
+
+/**
+ * Fix tabs left in an invalid hierarchy (e.g. displayMode "child" with no parent).
+ * Orphan children are hidden from the tab bar but still render full-screen — promote them.
+ */
+export function normalizeTabHierarchy<T extends TabHierarchyFields>(tabs: T[]): T[] {
+  const tabIds = new Set(tabs.map((tab) => tab.id));
+
+  let normalized = tabs.map((tab) => {
+    const parentMissing = tab.parentTabId !== null && !tabIds.has(tab.parentTabId);
+    const orphanChild =
+      tab.displayMode === "child" && (tab.parentTabId === null || parentMissing);
+
+    if (orphanChild) {
+      return {
+        ...tab,
+        parentTabId: null,
+        displayMode: "standalone" as const,
+        position: undefined,
+      };
+    }
+
+    if (parentMissing) {
+      return {
+        ...tab,
+        parentTabId: null,
+        displayMode: tab.displayMode === "child" ? ("standalone" as const) : tab.displayMode,
+        position: undefined,
+      };
+    }
+
+    return tab;
+  });
+
+  normalized = normalized.map((tab) => {
+    const validChildIds = tab.childTabIds.filter((childId) => tabIds.has(childId));
+    if (tab.displayMode === "parent" && validChildIds.length === 0) {
+      return {
+        ...tab,
+        childTabIds: [],
+        displayMode: "standalone" as const,
+      };
+    }
+    if (validChildIds.length !== tab.childTabIds.length) {
+      return { ...tab, childTabIds: validChildIds };
+    }
+    return tab;
+  });
+
+  return normalized;
+}
+
+/** Preserve in-memory tabs not yet written to SQLite (debounced save). */
+export function mergeLocalTabsIntoSnapshot(
+  snapshot: PersistedAppStateSnapshot,
+  localTabs: PersistedAppStateSnapshot["tabs"],
+  localActiveTabId: string | null,
+): PersistedAppStateSnapshot {
+  const persistedIds = new Set(snapshot.tabs.map((tab) => tab.id));
+  const localOnly = localTabs.filter((tab) => !persistedIds.has(tab.id));
+  if (localOnly.length === 0) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    tabs: [...snapshot.tabs, ...localOnly],
+    activeTabId: localActiveTabId ?? snapshot.activeTabId,
+  };
+}
+
 /** Apply fetched tab snapshot to tabStore, optionally pruning stale entity tabs. */
 export function applyPersistedAppStateToTabStore(
   snapshot: PersistedAppStateSnapshot,
@@ -198,6 +277,8 @@ export function applyPersistedAppStateToTabStore(
   ) {
     restoredTabs = pruneStaleEntityTabs(restoredTabs, options);
   }
+
+  restoredTabs = normalizeTabHierarchy(restoredTabs);
 
   const restoredIds = new Set(restoredTabs.map((t) => t.id));
   let activeTabId = snapshot.activeTabId;
@@ -295,6 +376,7 @@ export function pruneStaleEntityTabs<
     id: string;
     type: string;
     entityId: string;
+    displayMode: "standalone" | "parent" | "child";
     parentTabId: string | null;
     childTabIds: string[];
   },
@@ -312,12 +394,12 @@ export function pruneStaleEntityTabs<
     return true;
   });
   const keptIds = new Set(kept.map((t) => t.id));
-  return kept
-    .map((tab) => ({
+  return normalizeTabHierarchy(
+    kept.map((tab) => ({
       ...tab,
       parentTabId:
         tab.parentTabId && keptIds.has(tab.parentTabId) ? tab.parentTabId : null,
       childTabIds: tab.childTabIds.filter((id) => keptIds.has(id)),
-    }))
-    .filter((tab) => tab.type !== "child" || tab.parentTabId);
+    })),
+  );
 }

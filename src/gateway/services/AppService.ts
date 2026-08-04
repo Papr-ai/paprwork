@@ -28,6 +28,11 @@ import {
   hasBackendFiles,
 } from "../utils/appBackendScaffold.js";
 import { writeCloudAppMetadataFile } from "./cloudAppMetadataFile.js";
+import { writeAgentChatSidecar } from "./appAgentChatSidecar.js";
+import {
+  hydrateAppAgentChatFromDisk,
+  resolveAppAgentChatConfig,
+} from "./appAgentChat/appAgentChatPersistence.js";
 import { parseCloudAppMetadataFile } from "../../core/utils/cloudAppMetadata.js";
 import {
   getPaprAppsRoot,
@@ -42,6 +47,7 @@ import {
 } from "../../core/utils/miniAppIconValidation.js";
 import {
   isAppAwaitingAssignmentInWorkspace,
+  isAppWorkspaceUnassigned,
   mergeAppWorkspaceFields,
   readActiveAppWorkspaceScope,
   readAppWorkspaceFieldsFromDisk,
@@ -631,6 +637,8 @@ export class AppService {
     await this.loadApps(); // Load existing apps FIRST
     await this.enforceAppOwnershipIndex(); // Drop foreign apps before recovery
     await this.rebuildIndexIfCorrupted(); // Safety net: check for missing apps
+    await this.backfillAppAgentChatFromDisk(); // Sidecar + registry from metadata/registry
+    await this.backfillAppWorkspaceScope(); // Apps on disk in this namespace must have org/ns
     await this.repairRecoveredAppEntries(); // Fix legacy "Recovered" labels from metadata.json
     await this.syncBundledDefaultAppRegistry(); // Keep prebuilt apps (Home) in sync with bundled metadata
     await this.pruneStaleAppEntries(); // Index entries whose folders were removed (e.g. bash rm)
@@ -1039,6 +1047,13 @@ export class AppService {
           // Use current time
         }
 
+        const hydration = await hydrateAppAgentChatFromDisk(
+          this.paprRootDir,
+          appId,
+        );
+
+        const scope = readActiveAppWorkspaceScope();
+
         const recoveredApp: MiniApp = {
           id: appId,
           title,
@@ -1049,7 +1064,9 @@ export class AppService {
           ...(getPaprUserId()?.trim()
             ? { ownerUserId: getPaprUserId()!.trim() }
             : {}),
+          ...(scope ? withWorkspaceScope({}, scope) : {}),
           ...(icon ? { icon } : {}),
+          ...(hydration.agentChat ? { agentChat: hydration.agentChat } : {}),
         };
 
         this.apps.set(appId, recoveredApp);
@@ -1104,6 +1121,118 @@ export class AppService {
     if (dirty) {
       await this.saveApps();
     }
+
+    let agentChatHydrated = false;
+    for (const app of this.apps.values()) {
+      const hydration = await hydrateAppAgentChatFromDisk(
+        this.paprRootDir,
+        app.id,
+        app.agentChat,
+      );
+      if (!hydration.agentChat) continue;
+      if (
+        !app.agentChat?.enabled ||
+        hydration.registryNeedsUpdate ||
+        hydration.sidecarBackfilled
+      ) {
+        app.agentChat = hydration.agentChat;
+        agentChatHydrated = true;
+        console.log(
+          `[AppService] Restored app agent chat for ${app.id}` +
+            (hydration.sidecarBackfilled ? " (sidecar backfilled)" : ""),
+        );
+      }
+    }
+    if (agentChatHydrated) {
+      await this.saveApps();
+      for (const app of this.apps.values()) {
+        if (app.agentChat?.enabled) {
+          void writeCloudAppMetadataFile(this.paprRootDir, app.id).catch(() => {});
+        }
+      }
+    }
+  }
+
+  /** Backfill agent-chat.json + registry after rebuild or cloud sync pull. */
+  private async backfillAppAgentChatFromDisk(): Promise<void> {
+    let dirty = false;
+    for (const app of this.apps.values()) {
+      const hydration = await hydrateAppAgentChatFromDisk(
+        this.paprRootDir,
+        app.id,
+        app.agentChat,
+      );
+      if (!hydration.agentChat) continue;
+      if (
+        !app.agentChat?.enabled ||
+        hydration.registryNeedsUpdate ||
+        hydration.sidecarBackfilled
+      ) {
+        app.agentChat = hydration.agentChat;
+        dirty = true;
+      }
+    }
+    if (!dirty) return;
+
+    await this.saveApps();
+    for (const app of this.apps.values()) {
+      if (app.agentChat?.enabled) {
+        await writeCloudAppMetadataFile(this.paprRootDir, app.id).catch((err) => {
+          console.warn(
+            `[AppService] Failed to write metadata.json for ${app.id}:`,
+            (err as Error).message,
+          );
+        });
+      }
+    }
+  }
+
+  /**
+   * Apps stored under the active org/namespace workspace belong to that workspace.
+   * Index rebuilds can strip organizationId/namespaceId — restore so listApps shows them.
+   */
+  private async backfillAppWorkspaceScope(): Promise<void> {
+    const scope = readActiveAppWorkspaceScope();
+    if (!scope) {
+      return;
+    }
+
+    let dirty = false;
+    for (const app of this.apps.values()) {
+      if (!(await this.appDirHasContent(app.id))) {
+        continue;
+      }
+
+      const diskFields = await readAppWorkspaceFieldsFromDisk(
+        path.join(this.appsDir, app.id),
+      );
+      const merged = mergeAppWorkspaceFields(app, diskFields);
+      if (!isAppWorkspaceUnassigned(merged)) {
+        continue;
+      }
+
+      const scoped = withWorkspaceScope(app, scope);
+      scoped.updatedAt = new Date().toISOString();
+      this.apps.set(app.id, scoped);
+      dirty = true;
+      console.log(
+        `[AppService] Restored workspace scope for app: ${app.id} → ${scope.organizationId}/${scope.namespaceId}`,
+      );
+    }
+
+    if (!dirty) {
+      return;
+    }
+
+    await this.saveApps();
+    for (const app of this.apps.values()) {
+      if (
+        app.organizationId === scope.organizationId &&
+        app.namespaceId === scope.namespaceId
+      ) {
+        await writeCloudAppMetadataFile(this.paprRootDir, app.id).catch(() => {});
+      }
+    }
   }
 
   private async saveApps(): Promise<void> {
@@ -1113,6 +1242,20 @@ export class AppService {
 
     this.saveLock = (async () => {
       try {
+        for (const app of this.apps.values()) {
+          if (app.agentChat?.enabled) continue;
+          const resolved = await resolveAppAgentChatConfig(
+            this.paprRootDir,
+            app.id,
+            app.agentChat,
+          );
+          if (!resolved?.enabled) continue;
+          app.agentChat = resolved;
+          console.warn(
+            `[AppService] Prevented agentChat strip on save for app: ${app.id}`,
+          );
+        }
+
         const appsArray = Array.from(this.apps.values());
         const data = JSON.stringify(appsArray, null, 2);
         const tmpPath =
@@ -1414,7 +1557,49 @@ export class AppService {
     if (!isAppOwnedByCurrentUser(app, hints)) {
       return null;
     }
+
+    if (!app.agentChat?.enabled) {
+      const hydration = await hydrateAppAgentChatFromDisk(
+        this.paprRootDir,
+        id,
+        app.agentChat,
+      );
+      if (hydration.agentChat) {
+        const hydrated = { ...app, agentChat: hydration.agentChat };
+        this.apps.set(id, hydrated);
+        void this.saveApps().catch(() => {});
+        void writeCloudAppMetadataFile(this.paprRootDir, id).catch(() => {});
+        return hydrated;
+      }
+    }
+
     return app;
+  }
+
+  /**
+   * Persist embedded app-agent chat (enable_app_agent_chat entry point).
+   * Writes agent-chat.json sidecar, registry, and metadata.json in one flow.
+   */
+  async setAppAgentChat(
+    appId: string,
+    agentChat: AppAgentChatConfig | undefined,
+  ): Promise<MiniApp | null> {
+    const app = await this.getApp(appId);
+    if (!app) return null;
+
+    await writeAgentChatSidecar(this.paprRootDir, appId, agentChat);
+
+    const updated = await this.updateApp(appId, { agentChat });
+    if (!updated) return null;
+
+    await writeCloudAppMetadataFile(this.paprRootDir, appId).catch((err) => {
+      console.warn(
+        `[AppService] Failed to write metadata.json after setAppAgentChat for ${appId}:`,
+        (err as Error).message,
+      );
+    });
+
+    return updated;
   }
 
   async updateApp(
@@ -1462,6 +1647,10 @@ export class AppService {
 
     this.apps.set(id, updatedApp);
     await this.saveApps();
+
+    if ("agentChat" in nextUpdates) {
+      await writeAgentChatSidecar(this.paprRootDir, id, updatedApp.agentChat);
+    }
 
     import("./gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
       getGatewayTelemetry().trackFireAndForget("paprwork_app_edited", {

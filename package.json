@@ -1,6 +1,6 @@
 {
   "name": "paprwork",
-  "version": "2.2.3",
+  "version": "2.2.4",
   "description": "AI-powered desktop assistant - Rebuilt with TypeScript and Mastra",
   "main": "./src/electron/main.cjs",
   "type": "module",
@@ -96,6 +96,7 @@
     "test:cloud-agent-gateway": "node scripts/test-cloud-agent-gateway-health.mjs",
     "test:cloud-agent-job-e2e": "node scripts/test-cloud-agent-job-e2e.mjs --start-gateway --e2e-prompt",
     "test:app-agent-warm-e2e": "node scripts/test-app-agent-warm-e2e.mjs",
+    "test:app-agent-deploy-verify": "node scripts/verify-app-agent-chat-deploy.mjs",
     "setup:apps-dns": "node scripts/setup-apps-papr-ai-dns.mjs",
     "test:turso-auto-push": "ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-turso-auto-push.mjs",
     "test:turso-delta-sync": "npm run build:gateway && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-turso-delta-sync.mjs",

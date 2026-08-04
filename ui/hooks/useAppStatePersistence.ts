@@ -6,7 +6,20 @@
 import { useEffect, useCallback } from 'react';
 import { useTabStore } from '../stores/tabStore';
 import { gateway } from '../src/lib/gateway';
-import { loadPersistedAppStateFromGateway } from '../lib/persistedAppState';
+import {
+  applyPersistedAppStateToTabStore,
+  fetchPersistedAppStateFromGateway,
+  mergeLocalTabsIntoSnapshot,
+  normalizeTabHierarchy,
+} from '../lib/persistedAppState';
+import { isWorkspaceSwitchReloading } from '../lib/workspaceSwitchReload';
+import {
+  buildWorkspaceUiCacheKey,
+  getActiveWorkspaceUiCacheKey,
+  setActiveWorkspaceUiCacheKey,
+  writeWorkspaceUiCache,
+} from '../lib/workspaceUiCache';
+import { useArtifactsStore } from '../stores/artifactsStore';
 
 export function useAppStatePersistence() {
   const tabs = useTabStore((state) => state.tabs);
@@ -27,8 +40,61 @@ export function useAppStatePersistence() {
       /* legacy global tab cache */
     }
 
-    void loadPersistedAppStateFromGateway()
-      .then(() => {
+    void fetchPersistedAppStateFromGateway()
+      .then((snapshot) => {
+        if (!snapshot) {
+          return;
+        }
+
+        const { tabs: currentTabs, activeTabId: currentActiveTabId } =
+          useTabStore.getState();
+
+        const mergedSnapshot = mergeLocalTabsIntoSnapshot(
+          snapshot,
+          currentTabs,
+          currentActiveTabId,
+        );
+        if (mergedSnapshot.tabs.length > snapshot.tabs.length) {
+          console.log(
+            `[Persistence] Merged ${mergedSnapshot.tabs.length - snapshot.tabs.length} local tab(s) created during load`,
+          );
+        }
+
+        applyPersistedAppStateToTabStore(mergedSnapshot);
+
+        void window.electronAPI.papr
+          ?.getActiveWorkspace?.()
+          .then((workspace) => {
+            const pointer = workspace?.pointer;
+            if (pointer?.organizationId && pointer.namespaceId) {
+              const key = buildWorkspaceUiCacheKey(
+                pointer.organizationId,
+                pointer.namespaceId,
+              );
+              setActiveWorkspaceUiCacheKey(key);
+              const {
+                tabs,
+                activeTabId,
+                splitRatio,
+                splitRatios,
+                history,
+                historyIndex,
+              } = useTabStore.getState();
+              writeWorkspaceUiCache(key, {
+                tabs: normalizeTabHierarchy(tabs),
+                activeTabId,
+                splitRatio,
+                splitRatios,
+                history,
+                historyIndex,
+                artifacts: useArtifactsStore.getState().artifacts,
+              });
+            }
+          })
+          .catch(() => {
+            /* optional — offline / demo mode */
+          });
+
         console.log(
           `[Persistence] Loaded workspace tabs in ${(performance.now() - loadStartTime).toFixed(2)}ms`,
         );
@@ -44,7 +110,7 @@ export function useAppStatePersistence() {
 
   // Save tabs to SQLite (debounced)
   useEffect(() => {
-    if (tabs.length === 0) return;
+    if (tabs.length === 0 || isWorkspaceSwitchReloading()) return;
 
     const saveTimeout = setTimeout(() => {
       console.log('[Persistence] Saving tabs to SQLite...');
@@ -66,6 +132,25 @@ export function useAppStatePersistence() {
 
       gateway.send('app:save_tabs', tabsToSave).then(() => {
         console.log(`[Persistence] Saved ${tabs.length} tabs in ${(performance.now() - saveStartTime).toFixed(2)}ms`);
+        const key = getActiveWorkspaceUiCacheKey();
+        if (key) {
+          const {
+            activeTabId: savedActiveTabId,
+            splitRatio,
+            splitRatios,
+            history,
+            historyIndex,
+          } = useTabStore.getState();
+          writeWorkspaceUiCache(key, {
+            tabs: normalizeTabHierarchy(tabs),
+            activeTabId: savedActiveTabId,
+            splitRatio,
+            splitRatios,
+            history,
+            historyIndex,
+            artifacts: useArtifactsStore.getState().artifacts,
+          });
+        }
       }).catch((error: Error) => {
         console.error('[Persistence] Failed to save tabs:', error);
       });
@@ -76,6 +161,8 @@ export function useAppStatePersistence() {
 
   // Save app state (debounced) - includes split ratios, navigation history, and onboarding
   useEffect(() => {
+    if (isWorkspaceSwitchReloading()) return;
+
     const saveTimeout = setTimeout(() => {
       // Read onboarding state from localStorage
       const onboardingStep1 = localStorage.getItem('papr-onboarding-step1') === 'true';

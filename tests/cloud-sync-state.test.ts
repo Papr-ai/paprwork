@@ -12,6 +12,7 @@ describe("shouldExcludePathFromContentHash", () => {
     expect(shouldExcludePathFromContentHash("apps/x/backend/bundle.json")).toBe(true);
     expect(shouldExcludePathFromContentHash("apps/x/requirements.json")).toBe(true);
     expect(shouldExcludePathFromContentHash("data/cloud-repo-head.txt")).toBe(true);
+    expect(shouldExcludePathFromContentHash("apps/x/linked-databases.json")).toBe(true);
     expect(shouldExcludePathFromContentHash("apps/x/src/App.tsx")).toBe(false);
   });
 });

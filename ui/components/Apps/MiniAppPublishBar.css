@@ -17,7 +17,6 @@
 .mini-app-publish-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
   padding: 5px 12px;
   min-height: 36px;
@@ -187,21 +186,17 @@
 }
 
 .mini-app-publish-bar__url-row {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 1;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: min(380px, 100%);
+  margin-inline: auto;
   display: flex;
   align-items: center;
   gap: 2px;
-  min-width: 0;
-  max-width: min(380px, 42vw);
   padding: 2px 2px 2px 8px;
   border-radius: 8px;
   border: 1px solid var(--border-color);
   background: var(--bg-secondary);
-  pointer-events: auto;
 }
 
 .mini-app-publish-bar__icon-button {
@@ -233,7 +228,7 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  flex: 1;
+  flex: 0 1 auto;
   flex-wrap: nowrap;
   overflow: hidden;
 }
@@ -342,6 +337,76 @@
   }
 }
 
+.share-sheet__sync-banner {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.share-sheet__sync-banner p {
+  margin: 0;
+}
+
+.share-sheet__sync-banner-selection {
+  margin-top: 8px !important;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.share-sheet__sync-banner-selection-label {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.share-sheet__sync-banner--info {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-primary);
+}
+
+.share-sheet__sync-banner--warn {
+  background: color-mix(in srgb, #ff9500 14%, transparent);
+  color: var(--text-primary);
+}
+
+.share-sheet__sync-banner--success {
+  background: color-mix(in srgb, #34c759 14%, transparent);
+  color: var(--text-primary);
+}
+
+.share-sheet__sync-banner-btn {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.share-sheet__sync-banner-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.share-sheet__link-hint {
+  margin: 0 0 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
 .mini-app-publish-bar__sync-popover {
   position: absolute;
   top: calc(100% + 8px);
@@ -353,6 +418,11 @@
   border: 1px solid var(--border-color);
   background: var(--popover-bg);
   box-shadow: var(--popover-shadow);
+}
+
+.mini-app-publish-bar__sync-popover--portal {
+  position: fixed;
+  z-index: 10000;
 }
 
 .mini-app-publish-bar__sync-popover-title {
@@ -456,7 +526,8 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-shrink: 0;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .mini-app-publish-bar__button {
@@ -554,6 +625,10 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.mini-app-publish-bar__send-popover--portal {
+  z-index: 10000;
 }
 
 .mini-app-publish-bar__send-popover-title {
@@ -954,6 +1029,27 @@
   margin: 0 0 12px;
   padding: 0;
   border: 0;
+}
+
+.share-sheet__fieldset--locked {
+  pointer-events: none;
+}
+
+.share-sheet__fieldset--locked .share-sheet__row:not(.share-sheet__row--selected) {
+  opacity: 0.55;
+}
+
+.share-sheet__row--selected {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.share-sheet__row--selected .share-sheet__row-label {
+  color: var(--accent);
+}
+
+.share-sheet__row--selected input[type="radio"],
+.share-sheet__row--selected input[type="checkbox"] {
+  accent-color: var(--accent);
 }
 
 .share-sheet__legend {

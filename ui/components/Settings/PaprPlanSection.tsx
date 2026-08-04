@@ -9,6 +9,7 @@ import {
   storageLimitToBytes,
   usageBarPercent,
 } from "../../../src/core/utils/paprPlanLimits";
+import { useProfileStore } from "../../stores/profileStore";
 import "./PaprPlanSection.css";
 
 function Spinner() {
@@ -91,6 +92,7 @@ export function PaprPlanSection() {
         throw new Error(result.error || "Failed to load plan details");
       }
       setSummary(result.summary);
+      useProfileStore.getState().setProfile({ plan: result.summary.planName });
     } catch (err) {
       setSummary(null);
       setError(err instanceof Error ? err.message : "Failed to load plan details");

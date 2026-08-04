@@ -43,6 +43,41 @@ function queryValue(query: Record<string, unknown> | undefined, key: string): st
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+export const PAPR_CLOUD_NAMESPACE_META = "papr-cloud-namespace";
+export const PAPR_CLOUD_SLUG_META = "papr-cloud-slug";
+
+export function injectPaprCloudContextMeta(
+  html: string,
+  namespaceId: string,
+  slug: string,
+): string {
+  const escape = (value: string) => value.replace(/"/g, "&quot;");
+  const tags = [
+    `<meta name="${PAPR_CLOUD_NAMESPACE_META}" content="${escape(namespaceId)}">`,
+    `<meta name="${PAPR_CLOUD_SLUG_META}" content="${escape(slug)}">`,
+  ].join("\n  ");
+
+  if (html.includes(`name="${PAPR_CLOUD_NAMESPACE_META}"`)) {
+    return html
+      .replace(
+        new RegExp(`<meta name="${PAPR_CLOUD_NAMESPACE_META}" content="[^"]*">`),
+        `<meta name="${PAPR_CLOUD_NAMESPACE_META}" content="${escape(namespaceId)}">`,
+      )
+      .replace(
+        new RegExp(`<meta name="${PAPR_CLOUD_SLUG_META}" content="[^"]*">`),
+        `<meta name="${PAPR_CLOUD_SLUG_META}" content="${escape(slug)}">`,
+      );
+  }
+
+  if (html.includes("<head>")) {
+    return html.replace("<head>", `<head>\n  ${tags}`);
+  }
+  if (/<head\s[^>]*>/i.test(html)) {
+    return html.replace(/<head\s[^>]*>/i, (match) => `${match}\n  ${tags}`);
+  }
+  return `${tags}\n${html}`;
+}
+
 export function resolveCloudRouteContext(input: {
   params?: { namespaceId?: string; slug?: string };
   query?: Record<string, unknown>;
@@ -51,17 +86,18 @@ export function resolveCloudRouteContext(input: {
 }): CloudRouteContext | null {
   const cookies = parseCookieHeader(input.cookieHeader);
 
+  // Per-tab meta → request headers beat site-wide cookies (multi-tab / back-nav safe).
   const namespaceId =
     input.params?.namespaceId ??
     queryValue(input.query, "namespaceId") ??
-    cookies.papr_cloud_ns ??
-    headerValue(input.headers, "x-papr-namespace-id");
+    headerValue(input.headers, "x-papr-namespace-id") ??
+    cookies.papr_cloud_ns;
 
   const slug =
     input.params?.slug ??
     queryValue(input.query, "slug") ??
-    cookies.papr_cloud_slug ??
-    headerValue(input.headers, "x-papr-slug");
+    headerValue(input.headers, "x-papr-slug") ??
+    cookies.papr_cloud_slug;
 
   if (!namespaceId || !slug) return null;
   if (isReservedCloudPathSegment(namespaceId)) return null;

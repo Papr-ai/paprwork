@@ -13,6 +13,10 @@ import {
 import { PaprPlanSection } from "./PaprPlanSection";
 import { ProfileAiConnections } from "./ProfileAiConnections";
 import { formatNamespaceOptionLabel } from "./formatNamespaceOptionLabel";
+import {
+  OrgNamespaceSetup,
+  type OrgNamespaceSetupRequest,
+} from "../Auth/OrgNamespaceSetup";
 import "./PaprLoginSection.css";
 
 interface Namespace {
@@ -101,6 +105,7 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
   const [namespacesLoaded, setNamespacesLoaded] = useState(false);
 
   const [schemas, setSchemas] = useState<SchemaInfo[]>([]);
+  const [setupRequest, setSetupRequest] = useState<OrgNamespaceSetupRequest | null>(null);
   const [schemasLoading, setSchemasLoading] = useState(false);
   const [expandedSchema, setExpandedSchema] = useState<string | null>(null);
 
@@ -539,10 +544,17 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
     const orgCb = organizationChangedListenerRef.current;
     const cacheCb = workspaceCacheUpdatedListenerRef.current;
 
+    const onSetupRequired = (data: OrgNamespaceSetupRequest) => {
+      setSetupRequest(data);
+      setIsLoading(false);
+      setError(null);
+    };
+
     window.electronAPI.papr.onLoginSuccess(loginCb);
     window.electronAPI.papr.onNamespaceChanged(nsCb);
     window.electronAPI.papr.onOrganizationChanged(orgCb);
     window.electronAPI.papr.onWorkspaceCacheUpdated(cacheCb);
+    window.electronAPI.papr.onSetupRequired(onSetupRequired);
 
     const handleLoginSuccess = (event: CustomEvent) => {
       const { apiKey, email } = event.detail;
@@ -557,6 +569,12 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
       setIsLoading(false);
     };
 
+    const handleSetupRequired = (event: CustomEvent<OrgNamespaceSetupRequest>) => {
+      setSetupRequest(event.detail);
+      setIsLoading(false);
+      setError(null);
+    };
+
     const handleLogoutSuccess = () => {
       setIsLoggedIn(false);
       setUserEmail(null);
@@ -569,6 +587,7 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
 
     window.addEventListener("papr-auth-success", handleLoginSuccess as EventListener);
     window.addEventListener("papr-login-error", handleLoginError as EventListener);
+    window.addEventListener("papr-setup-required", handleSetupRequired as EventListener);
     window.addEventListener("papr-logout-success", handleLogoutSuccess as EventListener);
 
     return () => {
@@ -576,11 +595,28 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
       window.electronAPI.papr.removeNamespaceChangedListener(nsCb);
       window.electronAPI.papr.removeOrganizationChangedListener(orgCb);
       window.electronAPI.papr.removeWorkspaceCacheUpdatedListener(cacheCb);
+      window.electronAPI.papr.removeSetupRequiredListener(onSetupRequired);
       window.removeEventListener("papr-auth-success", handleLoginSuccess as EventListener);
       window.removeEventListener("papr-login-error", handleLoginError as EventListener);
+      window.removeEventListener("papr-setup-required", handleSetupRequired as EventListener);
       window.removeEventListener("papr-logout-success", handleLogoutSuccess as EventListener);
     };
   }, []);
+
+  if (setupRequest) {
+    return (
+      <div className="org-namespace-setup-overlay">
+        <OrgNamespaceSetup
+          request={setupRequest}
+          onComplete={() => {
+            setSetupRequest(null);
+            setIsLoading(false);
+            void checkLoginStatus();
+          }}
+        />
+      </div>
+    );
+  }
 
   // --- Logged-in state ---
   if (isLoggedIn) {
@@ -775,6 +811,7 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
           onRefresh={loadSchemas}
           namespaceName={activeNs?.name}
         />
+
       </div>
     );
   }
@@ -837,6 +874,7 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
               Create account
             </button>
           </p>
+
         </div>
       </div>
     );
@@ -897,6 +935,7 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
           Create account
         </button>
       </p>
+
     </div>
   );
 }

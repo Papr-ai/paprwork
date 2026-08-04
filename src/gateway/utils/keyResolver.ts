@@ -17,7 +17,12 @@ import {
   isKeysResponseMessage,
   isInvalidateKeyCacheMessage,
 } from "../../core/types/gateway-ipc.js";
-import { paprApiKeyMatchesActiveWorkspace } from "../../core/utils/paprApiKey.js";
+import {
+  getActivePaprWorkspacePointer,
+  paprApiKeyMatchesActiveWorkspace,
+  paprApiKeyMatchesNamespaceBound,
+} from "../../core/utils/paprApiKey.js";
+import { readActiveWorkspacePointer } from "../../core/utils/paprWorkspace.js";
 
 let keyCache: Record<string, string> = {};
 let oauthTokenCache: {
@@ -37,6 +42,19 @@ const PAPR_API_KEY_RETRY_COOLDOWN_MS = 3_000;
 
 let paprApiKeyIpcInFlight: Promise<string | undefined> | null = null;
 let paprApiKeyUnavailableUntil = 0;
+
+function paprApiKeyMatchesBoundActiveWorkspace(apiKey: string): boolean {
+  const pointer =
+    getActivePaprWorkspacePointer() ?? readActiveWorkspacePointer();
+  if (!pointer) {
+    return true;
+  }
+  return paprApiKeyMatchesNamespaceBound(
+    apiKey,
+    pointer.organizationId,
+    pointer.namespaceId,
+  );
+}
 
 /**
  * Request keys from main process via IPC.
@@ -132,8 +150,19 @@ export async function getApiKeys(
     let missingAfterIpc = uncachedKeys;
     try {
       const resolved = await requestKeysViaIPC(uncachedKeys, ipcProcess);
-      Object.assign(keyCache, resolved);
-      missingAfterIpc = uncachedKeys.filter((keyName) => !resolved[keyName]);
+      for (const [keyName, value] of Object.entries(resolved)) {
+        if (
+          keyName === "PAPR_API_KEY" &&
+          !paprApiKeyMatchesBoundActiveWorkspace(value)
+        ) {
+          console.warn(
+            "[KeyResolver] Ignoring IPC PAPR_API_KEY — wrong org/namespace for active workspace",
+          );
+          continue;
+        }
+        keyCache[keyName] = value;
+      }
+      missingAfterIpc = uncachedKeys.filter((keyName) => !keyCache[keyName]);
       console.log(
         `[KeyResolver] Received ${Object.keys(resolved).length} keys`,
       );
@@ -154,9 +183,19 @@ export async function getApiKeys(
     // This keeps development usable while still preferring secure IPC lookups.
     for (const keyName of missingAfterIpc) {
       const value = process.env[keyName];
-      if (value) {
-        keyCache[keyName] = value;
+      if (!value) {
+        continue;
       }
+      if (
+        keyName === "PAPR_API_KEY" &&
+        !paprApiKeyMatchesActiveWorkspace(value)
+      ) {
+        console.warn(
+          "[KeyResolver] Ignoring PAPR_API_KEY env fallback — wrong org/namespace for active workspace",
+        );
+        continue;
+      }
+      keyCache[keyName] = value;
     }
   }
 
@@ -189,6 +228,12 @@ async function resolvePaprApiKeyViaIpc(
       const keys = await requestKeysViaIPC(["PAPR_API_KEY"], ipcProcess);
       if (keys.PAPR_API_KEY?.trim()) {
         const resolved = keys.PAPR_API_KEY.trim();
+        if (!paprApiKeyMatchesBoundActiveWorkspace(resolved)) {
+          console.warn(
+            "[KeyResolver] IPC returned PAPR_API_KEY for wrong org/namespace — omitting until namespace key sync completes",
+          );
+          return undefined;
+        }
         keyCache.PAPR_API_KEY = resolved;
         paprApiKeyUnavailableUntil = 0;
         return resolved;
@@ -210,7 +255,7 @@ export async function getPaprApiKey(
   // Main process is authoritative for Papr login keys (namespace vault slots).
   const cached = keyCache.PAPR_API_KEY?.trim();
   if (cached) {
-    if (paprApiKeyMatchesActiveWorkspace(cached)) {
+    if (paprApiKeyMatchesBoundActiveWorkspace(cached)) {
       return cached;
     }
     console.warn(

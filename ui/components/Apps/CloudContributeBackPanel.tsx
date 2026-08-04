@@ -68,9 +68,8 @@ export function CloudContributeBackPanel({
         <strong>
           {lineage.sourceSlug} ({lineage.sourceAppId.slice(0, 8)}…)
         </strong>
-        . Your copy stays local — API keys and data are yours. Use{" "}
-        <strong>Send changes</strong> in the bar above to propose edits to the
-        owner, or pull their updates when tracking upstream.
+        . Use <strong>Propose</strong> in the bar above to suggest edits to
+        the owner, or pull their updates when tracking upstream.
       </p>
 
       <label className="share-sheet__field-label" htmlFor="change-title">

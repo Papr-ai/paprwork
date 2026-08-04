@@ -9,8 +9,52 @@ import {
   readActiveWorkspacePointer,
   type ActiveWorkspacePointer,
 } from "../../core/utils/paprWorkspace.js";
+import {
+  paprApiKeyMatchesNamespaceBound,
+  parsePaprApiKeyScope,
+} from "../../core/utils/paprApiKey.js";
 
 const DEFAULT_GATEWAY_PORT = 18789;
+const WORKSPACE_SWITCH_FETCH_TIMEOUT_MS = 8_000;
+const WORKSPACE_SWITCH_FETCH_RETRIES = 3;
+
+let restartGatewayAfterWorkspaceSwitch: (() => Promise<void>) | null = null;
+
+/** Set by Electron main — restarts gateway when switch POST fails but local pointer saved. */
+export function setGatewayRestartAfterWorkspaceSwitch(
+  handler: (() => Promise<void>) | null,
+): void {
+  restartGatewayAfterWorkspaceSwitch = handler;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function postWorkspaceSwitchRequest(
+  port: number,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < WORKSPACE_SWITCH_FETCH_RETRIES; attempt++) {
+    if (attempt > 0) {
+      await sleep(400 * attempt);
+    }
+    try {
+      return await fetch(`http://127.0.0.1:${port}/api/workspace/switch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(WORKSPACE_SWITCH_FETCH_TIMEOUT_MS),
+      });
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Gateway unreachable");
+}
 
 export interface ActivatePaprWorkspaceInput {
   organizationId: string;
@@ -61,20 +105,17 @@ export async function notifyGatewayWorkspaceSwitch(
   }
 
   const port = getGatewayPort();
+  const requestBody = {
+    organizationId: input.organizationId,
+    namespaceId: input.namespaceId,
+    organizationName: input.organizationName,
+    namespaceName: input.namespaceName,
+    paprApiKey: input.paprApiKey,
+    skipLegacyMigration: input.skipLegacyMigration === true,
+    runPostMigrationPathRepair: input.runPostMigrationPathRepair === true,
+  };
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/workspace/switch`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        organizationId: input.organizationId,
-        namespaceId: input.namespaceId,
-        organizationName: input.organizationName,
-        namespaceName: input.namespaceName,
-        paprApiKey: input.paprApiKey,
-        skipLegacyMigration: input.skipLegacyMigration === true,
-        runPostMigrationPathRepair: input.runPostMigrationPathRepair === true,
-      }),
-    });
+    const response = await postWorkspaceSwitchRequest(port, requestBody);
     if (!response.ok) {
       const text = await response.text();
       return {
@@ -108,6 +149,38 @@ export async function notifyGatewayWorkspaceSwitch(
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Gateway unreachable";
+
+    if (local.pointer && restartGatewayAfterWorkspaceSwitch) {
+      console.warn(
+        "[PaprWorkspace] Gateway switch POST failed — restarting with updated pointer:",
+        message,
+      );
+      try {
+        await restartGatewayAfterWorkspaceSwitch();
+        console.log(
+          "[PaprWorkspace] Gateway restarted after workspace pointer update",
+        );
+        return {
+          success: true,
+          pointer: local.pointer,
+        };
+      } catch (restartError) {
+        const restartMessage =
+          restartError instanceof Error
+            ? restartError.message
+            : String(restartError);
+        console.warn(
+          "[PaprWorkspace] Gateway restart after switch failed:",
+          restartMessage,
+        );
+        return {
+          success: false,
+          pointer: local.pointer,
+          error: `Gateway workspace switch failed: ${message} (restart: ${restartMessage})`,
+        };
+      }
+    }
+
     console.warn(
       "[PaprWorkspace] Gateway switch notification failed (local pointer saved):",
       message,
@@ -124,6 +197,24 @@ export async function notifyGatewayWorkspaceSwitch(
 export async function notifyGatewayPaprApiKeyUpdate(
   apiKey: string,
 ): Promise<void> {
+  const pointer = readActiveWorkspacePointer();
+  if (
+    pointer &&
+    !paprApiKeyMatchesNamespaceBound(
+      apiKey,
+      pointer.organizationId,
+      pointer.namespaceId,
+    )
+  ) {
+    const scope = parsePaprApiKeyScope(apiKey.trim());
+    console.warn(
+      scope
+        ? `[PaprWorkspace] Skipping gateway Papr API key update — key namespace ${scope.namespaceId} != active ${pointer.namespaceId}`
+        : "[PaprWorkspace] Skipping gateway Papr API key update — rejected by namespace binding",
+    );
+    return;
+  }
+
   const port = getGatewayPort();
   try {
     const response = await fetch(

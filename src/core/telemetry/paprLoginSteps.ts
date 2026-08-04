@@ -17,6 +17,7 @@ export type PaprLoginStep =
   | "pkce_validated"
   | "token_exchanged"
   | "user_claims_decoded"
+  | "org_setup_required"
   | "api_key_provisioned"
   | "credentials_stored"
   | "gateway_switch_attempted"

@@ -94,6 +94,8 @@ const PROXYABLE_API_PREFIXES = [
   "/api/jobs/status/",
   "/api/jobs/run",
   "/api/credentials/client-keys",
+  "/api/app-agent/",
+  "/api/apps/",
 ] as const;
 
 export function isCloudProxyableApiPath(path: string): boolean {
@@ -138,7 +140,8 @@ function apiPathNeedsAppId(path: string): boolean {
   return (
     path.startsWith("/api/db/") ||
     path.startsWith("/api/app/backend/") ||
-    path.startsWith("/api/jobs/")
+    path.startsWith("/api/jobs/") ||
+    path.startsWith("/api/app-agent/")
   );
 }
 

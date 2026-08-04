@@ -9,6 +9,9 @@
 
 const API_PREFIX = "/api/";
 const OVERLAY_ID = "__papr_auth_overlay__";
+const NS_META = "papr-cloud-namespace";
+const SLUG_META = "papr-cloud-slug";
+const ACCESS_DENIED_DISMISS_COOLDOWN_MS = 60_000;
 const AGENT_JOB_TYPES = new Set(["agent", "subagent"]);
 const JOB_RUN_PATH = "/api/jobs/run";
 
@@ -34,6 +37,62 @@ type AuthErrorKind = "sign_in" | "no_access" | "key_missing";
 let loggedIn = false;
 let agentJobIds = new Set<string>();
 let jobsCatalogLoaded = false;
+let accessDeniedDismissedAt = 0;
+
+function readCloudContextFromPage(): { namespaceId?: string; slug?: string } {
+  const namespaceId =
+    document.querySelector(`meta[name="${NS_META}"]`)?.getAttribute("content")?.trim() ??
+    undefined;
+  const slug =
+    document.querySelector(`meta[name="${SLUG_META}"]`)?.getAttribute("content")?.trim() ??
+    undefined;
+  return { namespaceId, slug };
+}
+
+/** Tab-local app identity — avoids site-wide papr_cloud_* cookie collisions. */
+function withCloudContextHeaders(init?: RequestInit): RequestInit | undefined {
+  const { namespaceId, slug } = readCloudContextFromPage();
+  if (!namespaceId || !slug) {
+    return init;
+  }
+
+  const headers = new Headers(init?.headers);
+  if (!headers.has("X-Papr-Namespace-Id")) {
+    headers.set("X-Papr-Namespace-Id", namespaceId);
+  }
+  if (!headers.has("X-Papr-Slug")) {
+    headers.set("X-Papr-Slug", slug);
+  }
+  return { ...init, headers };
+}
+
+function applyCloudContextToFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): { input: RequestInfo | URL; init?: RequestInit } {
+  const url = requestUrl(input);
+  if (!url.includes(API_PREFIX)) {
+    return { input, init };
+  }
+
+  const { namespaceId, slug } = readCloudContextFromPage();
+  if (!namespaceId || !slug) {
+    return { input, init: withCloudContextHeaders(init) };
+  }
+
+  if (input instanceof Request) {
+    const headers = new Headers(input.headers);
+    if (!headers.has("X-Papr-Namespace-Id")) {
+      headers.set("X-Papr-Namespace-Id", namespaceId);
+    }
+    if (!headers.has("X-Papr-Slug")) {
+      headers.set("X-Papr-Slug", slug);
+    }
+    return { input: new Request(input, { headers }), init: undefined };
+  }
+
+  return { input, init: withCloudContextHeaders(init) };
+}
 
 function loginUrl(returnTo?: string): string {
   const path = returnTo ?? window.location.pathname;
@@ -89,6 +148,13 @@ function classifyAuthError(
 
 function showOverlay(info: { kind: AuthErrorKind; loginUrl?: string; message: string }): void {
   if (document.getElementById(OVERLAY_ID)) return;
+  if (
+    info.kind === "no_access" &&
+    accessDeniedDismissedAt > 0 &&
+    Date.now() - accessDeniedDismissedAt < ACCESS_DENIED_DISMISS_COOLDOWN_MS
+  ) {
+    return;
+  }
 
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
@@ -139,7 +205,12 @@ function showOverlay(info: { kind: AuthErrorKind; loginUrl?: string; message: st
     background: none; border: 1px solid #ddd; border-radius: 6px;
     color: #888; font-size: 12px; cursor: pointer;
   `;
-  dismiss.onclick = () => overlay.remove();
+  dismiss.onclick = () => {
+    overlay.remove();
+    if (info.kind === "no_access") {
+      accessDeniedDismissedAt = Date.now();
+    }
+  };
   card.appendChild(dismiss);
 
   overlay.appendChild(card);
@@ -203,9 +274,11 @@ const _originalFetch = window.fetch;
 
 async function refreshPlatformAuthState(): Promise<void> {
   try {
+    const statusScoped = applyCloudContextToFetch("/auth/status");
+    const jobsScoped = applyCloudContextToFetch("/api/jobs/list");
     const [statusRes, jobsRes] = await Promise.all([
-      _originalFetch("/auth/status"),
-      _originalFetch("/api/jobs/list"),
+      _originalFetch.call(window, statusScoped.input, statusScoped.init),
+      _originalFetch.call(window, jobsScoped.input, jobsScoped.init),
     ]);
     if (statusRes.ok) {
       const status = (await statusRes.json()) as AuthStatusBody;
@@ -230,16 +303,17 @@ window.fetch = async function paprPlatformGuardFetch(
   init?: RequestInit,
 ): Promise<Response> {
   const url = requestUrl(input);
+  const scoped = applyCloudContextToFetch(input, init);
 
-  if (url.includes(API_PREFIX) && isJobRunRequest(url, init)) {
-    const jobId = parseJobRunBody(init);
+  if (url.includes(API_PREFIX) && isJobRunRequest(url, scoped.init)) {
+    const jobId = parseJobRunBody(scoped.init);
     if (jobId && requiresSignInForJob(jobId)) {
       showAgentJobSignInOverlay();
       return jobRunSignInResponse();
     }
   }
 
-  const response = await _originalFetch.call(window, input, init);
+  const response = await _originalFetch.call(window, scoped.input, scoped.init);
 
   if (!url.includes(API_PREFIX)) return response;
   if (response.status !== 401 && response.status !== 403) return response;

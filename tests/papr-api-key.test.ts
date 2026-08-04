@@ -45,6 +45,20 @@ describe("paprApiKeyMatchesNamespace", () => {
       paprApiKeyMatchesNamespace(apiKey, "Y8D4H7Yp3Z", "85ZIB7mD1V"),
     ).toBe(true);
   });
+
+  it("accepts legacy keys without embedded namespace when namespace-bound", () => {
+    expect(
+      paprApiKeyMatchesNamespace("sk-org-ns-legacy-key", "Y8D4H7Yp3Z", "85ZIB7mD1V", {
+        trustLegacyBinding: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects legacy keys without embedded namespace for untrusted sources", () => {
+    expect(
+      paprApiKeyMatchesNamespace("sk-org-ns-legacy-key", "Y8D4H7Yp3Z", "85ZIB7mD1V"),
+    ).toBe(false);
+  });
 });
 
 describe("parsePaprApiKeyScope", () => {
@@ -120,6 +134,15 @@ describe("paprApiKeyMatchesActiveWorkspace", () => {
         "sk-org-T1HzjVDD3R-namespace-aXNvpekYXn-abc123",
       ),
     ).toBe(false);
+  });
+
+  it("rejects legacy keys from env even when workspace pointer exists", () => {
+    process.env.PAPR_ORG_ID = "Y8D4H7Yp3Z";
+    process.env.PAPR_NAMESPACE_ID = "85ZIB7mD1V";
+
+    expect(paprApiKeyMatchesActiveWorkspace("sk-org-ns-legacy-key")).toBe(
+      false,
+    );
   });
 
   it("rejects wrong-namespace keys when env is unset but workspace pointer file exists", () => {

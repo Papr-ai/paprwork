@@ -43,6 +43,8 @@ export const HASH_IGNORED_RELATIVE_SUFFIXES = [
   "backend/bundle.json",
   "requirements.json",
   "data/cloud-repo-head.txt",
+  ".papr-cloud-revision",
+  "linked-databases.json",
 ] as const;
 
 /**

@@ -97,6 +97,7 @@ export class SystemPromptBuilder {
       this.buildFocusContextSection(),
       this.buildAutomationArchitectureSection(),
       this.buildProductArchitectGateSection(),
+      this.buildThreeAgentExecutionPathsSection(),
       this.buildJobOutputStrategySection(),
       this.buildIndependentDatabasesSection(),
       this.buildAppCreationReminderSection(),
@@ -1792,6 +1793,70 @@ delegate_task({
   }
 
   /**
+   * Three distinct ways to run AI — do not mix them up.
+   */
+  private buildThreeAgentExecutionPathsSection(): string {
+    return `# Three AI Execution Paths (Do Not Confuse)
+
+Paprwork has **three separate ways** to run AI. Pick the right one **before** building or testing.
+
+## 1. Agent jobs → mini-app automation (background + DB + live UI)
+
+**Who:** End users (via app buttons) or scheduled runs — **not** Pen delegating in chat.
+
+**When:** Recurring or button-triggered work that writes structured data; mini-app reads DB and refreshes UI.
+
+**Pattern:**
+1. \`create_database\` → \`attach_database({ appId, dbId, alias })\`
+2. \`create_job({ type: "agent", writeDbIds: [dbId], ... })\` or script job that writes to \`$PAPR_DB_*\` / \`$APP_DB\`
+3. Mini-app: \`fetch('/api/db/query', { sourceId: alias, ... })\` to render
+4. Mini-app: \`onDbChange\` / \`subscribeJobEvents\` to refresh when jobs finish or DB rows change
+5. Wire buttons: \`fetch('/api/jobs/run', { jobId })\` — works on desktop **and** published share links
+
+**NOT for:** Multi-turn chat inside the app. **NOT for:** Pen testing a sub-agent by calling \`delegate_task\`.
+
+## 2. \`delegate_task\` → Pen sidebar sub-agent (builder chat only)
+
+**Who:** **Pen (main agent)** delegating during a **Paprwork chat tab** — shows DelegationCard + MiniChat in the Working section.
+
+**When:** One-off builder work in chat: product brief, research, code review, "score this while I'm building."
+
+**How:** \`list_sub_agents()\` → \`delegate_task({ useAgentId, task, context })\` → \`get_delegation_run({ runId })\` when done.
+
+**NOT for:** End-user features inside a published mini-app. **NOT for:** Testing embedded app chat — that is path 3.
+
+**Do NOT** use \`create_job\` + \`run_job\` when you want a DelegationCard in chat — use \`delegate_task\` instead.
+
+## 3. \`enable_app_agent_chat\` → embedded assistant (in-app bubble)
+
+**Who:** **End users** chatting inside the mini-app (desktop overlay or published web SSE bubble).
+
+**When:** Conversational help in context: "score this deck", "add a slide", "fix this chart", edit app files/DB from chat.
+
+**How:**
+1. \`create_sub_agent\` with app-scoped tools (\`read_app_file\`, \`edit_app_file\`, \`read_app_data_sources\`; add \`bash\` only if needed for sqlite/API)
+2. \`enable_app_agent_chat({ appId, subAgentId, welcomeMessage, systemContext, injectSdk: true })\`
+3. Users open bubble → multi-turn session via \`/api/app-agent/sessions\` (desktop + cloud)
+
+**Scope (embedded sub-agent):**
+- ✅ All app source files under \`$PAPR_HOME/apps/{appId}/\` (read/edit via app tools)
+- ✅ Linked registry DBs (schema via \`read_app_data_sources\`; writes via \`bash\` + sqlite on \`PAPR_DB_*\` paths injected in prompt, or add tools you need to \`allowedToolIds\`)
+- ✅ App refresh after file edits (SDK reloads iframe)
+- ❌ \`delegate_task\`, \`request_agent_input\` (blocked — talks to user directly)
+- ❌ Creating/scheduling jobs from embedded chat (use app UI → \`/api/jobs/run\` instead)
+
+**Testing embedded chat:** Open the app → click the bubble → chat there. **Never** validate embedded UX with \`delegate_task\` in Pen chat.
+
+| Goal | Path |
+|------|------|
+| Scheduled AI + DB + dashboard refresh | Agent job + \`onDbChange\` |
+| Pen delegates research in chat | \`delegate_task\` |
+| User asks AI inside the app | \`enable_app_agent_chat\` |
+
+See \`docs/APP_AGENT_CHAT.md\` and \`read_file({ path: "src/resources/agent-docs/DECISION_TREE_AGENT_CAPABILITIES.md" })\`.`;
+  }
+
+  /**
    * Job output and delivery strategy guidance
    */
   private buildJobOutputStrategySection(): string {
@@ -1811,12 +1876,15 @@ delegate_task({
 - **Background**: No \`deliver\` field (access via \`read_job_logs\`)
 - **Memory**: Default \`memoryPolicy: "none"\`. On success, user tables in \`$PAPR_HOME/Jobs/{id}/data/data.db\` sync to Papr Memory automatically. Use \`memoryPolicy: "summary"\` only when you explicitly want job log text in memory too.
 
-## CRITICAL: Sub-Agent Delegation
+## CRITICAL: Sub-Agent Delegation (Pen chat only — path 2)
 
-**Use \`delegate_task\`, NOT \`create_job\` + \`run_job\`:**
+**In main Paprwork chat**, use \`delegate_task\`, NOT \`create_job\` + \`run_job\`, when you want a DelegationCard + MiniChat:
 
-✅ \`delegate_task({ task: "...", useAgentId: "...", context: "..." })\` → Shows DelegationCard + MiniChat
-❌ \`create_job\` + \`run_job\` → Shows generic job card (no mini-chat)
+✅ \`delegate_task({ task: "...", useAgentId: "...", context: "..." })\` → Sidebar delegation in Pen chat
+❌ \`create_job\` + \`run_job\` in chat → Generic job card (no mini-chat)
+
+**For end-user in-app AI**, use \`enable_app_agent_chat\` (path 3), not \`delegate_task\`.
+**For background automation + DB**, use agent jobs (path 1), not \`delegate_task\`.
 
 **Routing rules (prevents wrong-agent delegation):**
 1. Call \`list_sub_agents()\` before every \`delegate_task\` (returns compact id/name list — built-ins listed first)

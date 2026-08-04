@@ -6,7 +6,7 @@
  *
  * 1. Git repo — dist/app.js, backend/bundle.json, requirements.json, repo head marker
  * 2. Publish catalog — memory server allowlist for vault-resolve (auto-republish on drift)
- * 3. Edge cache — repo head marker + dist query versioning (cloud app host)
+ * 3. Edge cache — per-app `.papr-cloud-revision` + dist query versioning (cloud app host)
  *
  * This module handles layer 1 before commit. Layers 2–3 run in runPostSyncHooks().
  */
@@ -39,6 +39,11 @@ export async function prepareAppForCloudGitSync(
     );
     await scrubAppDataSourcesForGitSync(appDir);
 
+    const { writeLinkedDatabasesForApp } = await import(
+      "./linkedDatabasesForCloud.js"
+    );
+    await writeLinkedDatabasesForApp(paprDir, appId);
+
     await ensureAppRequirementsSyncedWithBackend(paprDir, appId);
 
     const { buildMiniApp } = await import("../../utils/miniAppBuild.js");
@@ -60,6 +65,11 @@ export async function prepareAppForCloudGitSync(
         backend.errors.join("; "),
       );
     }
+
+    const { writeAppCloudRevisionMarker } = await import(
+      "./cloudAppRevisionMarker.js"
+    );
+    writeAppCloudRevisionMarker(appDir);
   } catch (error) {
     console.warn(
       `[CloudSync] cloud prep skipped for ${appId}:`,

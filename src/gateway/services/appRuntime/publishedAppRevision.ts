@@ -6,6 +6,10 @@ import { createHash } from "node:crypto";
 import type { AppRuntimeRouteAuth } from "./types.js";
 import { fetchCachedRuntimeRepoFile } from "./cloudAppHostCache.js";
 import {
+  PAPR_APP_CLOUD_REVISION_PATH,
+  parseAppCloudRevisionContent,
+} from "../cloudSync/cloudAppRevisionMarker.js";
+import {
   CLOUD_REPO_HEAD_RELATIVE_PATH,
   parseCloudRepoHeadContent,
 } from "../cloudSync/cloudRepoHeadMarker.js";
@@ -31,6 +35,16 @@ export async function resolvePublishedAppRevision(
   opts?: { bypassFresh?: boolean },
 ): Promise<string | null> {
   const fetchOpts = opts?.bypassFresh ? { bypassFresh: true as const } : undefined;
+
+  const markerFile = await fetchCachedRuntimeRepoFile(
+    auth,
+    PAPR_APP_CLOUD_REVISION_PATH,
+    fetchOpts,
+  );
+  if (markerFile) {
+    const revision = parseAppCloudRevisionContent(markerFile.content);
+    return revision === "0" ? null : revision;
+  }
 
   const [repoHeadFile, distBundle] = await Promise.all([
     fetchCachedRuntimeRepoFile(auth, CLOUD_REPO_HEAD_RELATIVE_PATH, fetchOpts),

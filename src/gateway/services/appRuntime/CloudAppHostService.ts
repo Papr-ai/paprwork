@@ -51,9 +51,11 @@ import {
 import { shouldBypassRepoFileCache } from "./cloudAppHostRequestCache.js";
 import {
   cloudContextCookieHeaders,
+  injectPaprCloudContextMeta,
   isReservedCloudPathSegment,
   resolveCloudRouteContext,
 } from "./cloudAppHostContext.js";
+import { enrichRuntimeAuthWithPaprApiKey } from "./resolveCloudSessionPaprApiKey.js";
 import { CloudAppHostAuthService } from "./CloudAppHostAuthService.js";
 import { CloudAppHostCredentialService } from "./CloudAppHostCredentialService.js";
 import {
@@ -92,14 +94,9 @@ import {
   resolvePreviewIconSvg,
 } from "./CloudAppPreviewService.js";
 import {
-  formatPublishedAppRevision,
   injectPaprAppRevisionMeta,
   resolvePublishedAppRevision,
 } from "./publishedAppRevision.js";
-import {
-  CLOUD_REPO_HEAD_RELATIVE_PATH,
-  parseCloudRepoHeadContent,
-} from "../cloudSync/cloudRepoHeadMarker.js";
 import { hydrateCloudDatabaseRegistry } from "./cloudDatabaseRegistry.js";
 
 export interface CloudAppHostDeps {
@@ -483,11 +480,12 @@ export class CloudAppHostService {
     req: Request,
     appId?: string,
   ): Promise<AppAccessContext | null> {
-    const runtimeAuth = this.buildRuntimeAuth(req);
-    if (!runtimeAuth) {
+    const baseAuth = this.buildRuntimeAuth(req);
+    if (!baseAuth) {
       return null;
     }
 
+    const runtimeAuth = (await enrichRuntimeAuthWithPaprApiKey(baseAuth)) ?? baseAuth;
     const access = await validateCachedAccess(this.deps.publishResolver, runtimeAuth);
     if (!access) return null;
     if (appId && access.appId !== appId) {
@@ -1431,15 +1429,9 @@ export class CloudAppHostService {
             : {}),
         });
 
-        const repoHeadFile = await fetchCachedRuntimeRepoFile(
-          runtimeAuth,
-          CLOUD_REPO_HEAD_RELATIVE_PATH,
-          { bypassFresh },
-        );
-        const repoHead = repoHeadFile
-          ? parseCloudRepoHeadContent(repoHeadFile.content)
-          : "0";
-        const revision = formatPublishedAppRevision(repoHead, distBundle.content);
+        const revision = await resolvePublishedAppRevision(runtimeAuth, {
+          bypassFresh,
+        });
         if (revision) {
           content = injectPaprAppRevisionMeta(content, revision);
         }
@@ -1453,7 +1445,11 @@ export class CloudAppHostService {
       });
       content = injectCloudAppPreviewIntoHtml(
         injectPublishedAppBaseHref(
-          content,
+          injectPaprCloudContextMeta(
+            content,
+            runtimeAuth.namespaceId,
+            runtimeAuth.slug,
+          ),
           publishedAppBaseHref(runtimeAuth.namespaceId, runtimeAuth.slug),
         ),
         previewMeta,

@@ -214,6 +214,17 @@ describe("deriveAppCloudSyncStatus", () => {
     expect(status.chipLabel).toBe("Uploading 0/1…");
   });
 
+  it("flags registry when app code (linked-databases.json) is not synced", () => {
+    const items = baseItems({ appId: "app-1", codeStatus: "pending" });
+    items.appContext = { appId: "app-1", dependentJobIds: [], registryDbIds: ["db-2e4a46d7"] };
+
+    const status = deriveAppCloudSyncStatus("app-1", items, "idle");
+    expect(status.overall).toBe("needs_sync");
+    expect(status.hasRegistryDatabases).toBe(true);
+    expect(status.registryPhase).toBe("not_uploaded");
+    expect(status.summaryLine).toContain("database registry not on web yet");
+  });
+
   it("formats web sync status tooltip for the status dot", () => {
     const synced = deriveAppCloudSyncStatus(
       "app-1",

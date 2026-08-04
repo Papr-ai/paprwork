@@ -225,6 +225,17 @@ function requireLoggedInProfile(settingsStorage: SettingsStorage) {
   return profile;
 }
 
+function persistPlanNameToProfile(
+  settingsStorage: SettingsStorage,
+  planName: string,
+): void {
+  const profile = settingsStorage.getPaprProfile();
+  if (!profile || profile.planName === planName) {
+    return;
+  }
+  settingsStorage.setPaprProfile({ ...profile, planName });
+}
+
 interface StripeSubscriptionApiResponse {
   subscription?: PaprStripeSubscriptionInfo | null;
   error?: string;
@@ -529,6 +540,7 @@ export function registerPaprBillingHandlers(deps: {
   ipcMain.handle("papr:get-plan-summary", async () => {
     try {
       const summary = await buildPlanSummary(services);
+      persistPlanNameToProfile(deps.settingsStorage, summary.planName);
       return { success: true, summary };
     } catch (error) {
       return {

@@ -243,7 +243,7 @@ export function WorkspaceMigrationTab() {
         return;
       }
 
-      await reloadUiForWorkspaceSwitch();
+      await reloadUiForWorkspaceSwitch({ waitForGateway: true });
       await loadLegacyDetection();
       await loadUnassigned();
     } catch (err) {

@@ -127,6 +127,22 @@ See **`docs/APP_AGENT_GATEWAY_WARM_SPEC.md`** for the full memory + gateway cont
 5. `publish_cloud_app` — sync `subagents.json` + app config + `metadata.json`
 6. Test desktop bubble → overlay; test published web bubble → live chat
 
+**Do not confuse with `delegate_task`:** That is Pen's sidebar delegation in main chat (path 2). Embedded chat (path 3) uses `/api/app-agent/sessions` — multi-turn, composer always visible.
+
+---
+
+## Embedded sub-agent scope (what it can access)
+
+| Resource | Access |
+|----------|--------|
+| App source files | ✅ `read_app_file`, `edit_app_file`, `edit_app_file_lines`, `list_app_files` |
+| Linked registry DBs | ✅ Schema via `read_app_data_sources`; env paths (`PAPR_DB_*`, `APP_ID`) injected in system prompt |
+| DB writes from agent | ✅ Via `bash` + sqlite on injected paths, or extend `allowedToolIds` — mini-app UI uses `/api/db/write` |
+| Background jobs | ❌ Not from embedded chat — wire app buttons to `/api/jobs/run` |
+| `delegate_task` / main-agent relay | ❌ Blocked in embedded mode |
+
+Default tool list: `DEFAULT_APP_AGENT_CHAT_TOOL_IDS` in `src/core/types/appAgentChat.ts`. Deck Studio–style scoring needs `bash` (or similar) in `allowedToolIds` on both `create_sub_agent` and `enable_app_agent_chat`.
+
 ---
 
 ## Files
@@ -138,6 +154,7 @@ See **`docs/APP_AGENT_GATEWAY_WARM_SPEC.md`** for the full memory + gateway cont
 | `src/gateway/services/appAgentChat/*` | Session store, runners, routes |
 | `src/resources/mini-app-sdk/papr-agent-chat.ts` | Client SDK (live chat) |
 | `ui/components/Apps/AppAgentChatOverlay.tsx` | Desktop floating panel |
+| `ui/components/Apps/EmbeddedAppAgentChatPanel.tsx` | Multi-turn session UI (desktop overlay body) |
 | `tests/app-agent-chat.test.ts` | Unit tests |
 
 ---

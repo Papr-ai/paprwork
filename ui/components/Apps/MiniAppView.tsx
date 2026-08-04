@@ -316,6 +316,18 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
   }, [appId, reloadKey, isPublishedPreview]);
 
   useEffect(() => {
+    const handleAgentRefresh = (event: Event) => {
+      const detail = (event as CustomEvent<{ appId?: string }>).detail;
+      if (detail?.appId === appId) {
+        triggerReload();
+      }
+    };
+    window.addEventListener("papr-app-agent-refresh", handleAgentRefresh);
+    return () =>
+      window.removeEventListener("papr-app-agent-refresh", handleAgentRefresh);
+  }, [appId, triggerReload]);
+
+  useEffect(() => {
     if (isPublishedPreview) return;
 
     const handleRuntimeLog = (event: MessageEvent) => {

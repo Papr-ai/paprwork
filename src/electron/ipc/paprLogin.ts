@@ -48,13 +48,24 @@ import {
 } from "../../core/utils/paprWorkspace.js";
 import {
   paprApiKeyMatchesNamespace,
+  paprApiKeyMatchesNamespaceBound,
   paprNamespaceApiKeyName,
+  parsePaprApiKeyScope,
 } from "../../core/utils/paprApiKey.js";
 import {
   logPaprLoginStep,
   PAPR_LOGIN_STEP_EVENT,
   type PaprLoginStep,
 } from "../../core/telemetry/paprLoginSteps.js";
+import {
+  deriveProvisioningDefaults,
+  isProvisioningSetupRequired,
+  resolveProvisioningPlan,
+  sanitizeProvisioningName,
+  DEFAULT_NAMESPACE_NAME,
+  type ProvisioningNameDefaults,
+} from "../../core/papr/provisioningDefaults.js";
+import { UPDATE_WORKSPACE_ORG } from "../../core/papr/paprLoginGraphql.js";
 
 /**
  * Sync Papr profile fields to gateway settings file so the gateway process
@@ -197,6 +208,23 @@ type LoginTelemetryTracker = (
 
 let trackLoginEvent: LoginTelemetryTracker | undefined;
 let loginCompletionInFlight = false;
+
+interface PendingOrgSetupContext {
+  parseSessionToken: string;
+  refreshToken?: string;
+  objectId: string;
+  email: string;
+  displayName: string;
+  profileImage?: string;
+  workspaceInfo: SelectedWorkspaceInfo;
+  needsOrg: boolean;
+  needsNamespace: boolean;
+  defaults: ProvisioningNameDefaults;
+  completedMode: PaprAuthMode;
+  completedSource: PaprLoginSource;
+}
+
+let pendingOrgSetup: PendingOrgSetupContext | null = null;
 
 function getPkceStatePath(): string {
   return path.join(getPaprBaseDir(), "data", "papr-auth-pkce.json");
@@ -444,6 +472,19 @@ function notifyLoginSuccess(data: {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       win.webContents.send("papr:login-success", data);
+    }
+  }
+}
+
+function notifySetupRequired(data: {
+  orgName: string;
+  namespaceName: string;
+  needsOrg: boolean;
+  needsNamespace: boolean;
+}): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send("papr:setup-required", data);
     }
   }
 }
@@ -767,26 +808,6 @@ const UPDATE_ORG_DEFAULT_NAMESPACE = `
       }
     ) {
       organization {
-        objectId
-      }
-    }
-  }
-`;
-
-const UPDATE_WORKSPACE_ORG = `
-  mutation UpdateWorkspaceOrganization(
-    $workspaceId: ID!,
-    $organizationId: ID!
-  ) {
-    updateWorkSpace(
-      input: {
-        id: $workspaceId
-        fields: {
-          organization: { link: $organizationId }
-        }
-      }
-    ) {
-      workspace {
         objectId
       }
     }
@@ -1466,12 +1487,6 @@ function memberRoleName(workspaceId: string): string {
   return workspaceId.startsWith("member-") ? workspaceId : `member-${workspaceId}`;
 }
 
-function deriveOrgName(userEmail: string): string {
-  return userEmail.includes("@")
-    ? userEmail.split("@")[0].toLowerCase().replace(/[^a-z0-9]/g, "-")
-    : "default";
-}
-
 // Workspace-scoped org lookup (never scans all namespaces globally)
 const GET_WORKSPACE_ORG = `
   query GetWorkspaceOrganization($workspaceId: ID!) {
@@ -1567,15 +1582,86 @@ interface ProvisionResult {
   namespaceName: string;
 }
 
+async function assessProvisioningNeeds(
+  sessionToken: string,
+  userId: string,
+  email: string,
+  displayName: string | undefined,
+  workspaceInfo: SelectedWorkspaceInfo,
+): Promise<{
+  plan: ReturnType<typeof resolveProvisioningPlan>;
+  defaults: ProvisioningNameDefaults;
+}> {
+  let workspaceId = workspaceInfo.workspaceId;
+  if (!workspaceId) {
+    workspaceId = await getSelectedWorkspaceId(sessionToken, userId);
+  }
+
+  let workspaceHasOrganization = Boolean(workspaceInfo.organizationId);
+  let workspaceOrgHasDefaultNamespace = false;
+
+  if (workspaceId) {
+    try {
+      const resolved = await resolveNamespaceOrganizationForWorkspace(
+        sessionToken,
+        userId,
+        workspaceId,
+      );
+      if (resolved) {
+        workspaceHasOrganization = true;
+        workspaceOrgHasDefaultNamespace = Boolean(resolved.defaultNamespaceId);
+      } else if (workspaceInfo.organizationId) {
+        const defaultNs = await resolveDefaultNamespaceForOrg(
+          sessionToken,
+          workspaceInfo.organizationId,
+        );
+        workspaceOrgHasDefaultNamespace = Boolean(defaultNs);
+      }
+    } catch (error) {
+      console.warn("[PaprLogin] assessProvisioningNeeds workspace lookup failed:", error);
+    }
+  }
+
+  let developerOrgId: string | undefined;
+  let developerOrgHasDefaultNamespace = false;
+  try {
+    developerOrgId = await fetchUserDeveloperOrganizationId(sessionToken, userId);
+    if (developerOrgId) {
+      const defaultNs = await resolveDefaultNamespaceForOrg(sessionToken, developerOrgId);
+      developerOrgHasDefaultNamespace = Boolean(defaultNs);
+    }
+  } catch (error) {
+    console.warn("[PaprLogin] assessProvisioningNeeds developer org lookup failed:", error);
+  }
+
+  const plan = resolveProvisioningPlan({
+    workspaceId,
+    workspaceHasOrganization,
+    workspaceOrgHasDefaultNamespace,
+    developerOrgId,
+    developerOrgHasDefaultNamespace,
+  });
+
+  const defaults = deriveProvisioningDefaults({
+    email,
+    displayName,
+    workspaceName: workspaceInfo.workspaceName,
+  });
+
+  return { plan, defaults };
+}
+
 async function provisionOrGetApiKey(
   sessionToken: string,
   userId: string,
-  userEmail: string,
-  workspaceId?: string,
+  _userEmail: string,
+  workspaceId: string | undefined,
+  names: ProvisioningNameDefaults,
 ): Promise<ProvisionResult> {
   console.log("[PaprLogin] Provisioning org/namespace...");
 
-  const orgName = deriveOrgName(userEmail);
+  const orgName = names.orgName;
+  const namespaceName = names.namespaceName;
 
   if (!workspaceId) {
     workspaceId = await getSelectedWorkspaceId(sessionToken, userId);
@@ -1618,6 +1704,7 @@ async function provisionOrGetApiKey(
           resolved.organizationId,
           orgName,
           workspaceId,
+          namespaceName,
         );
       }
 
@@ -1652,6 +1739,7 @@ async function provisionOrGetApiKey(
         developerOrgId,
         orgName,
         workspaceId ?? "",
+        namespaceName,
       );
     }
   } catch (devOrgErr) {
@@ -1659,14 +1747,21 @@ async function provisionOrGetApiKey(
   }
 
   // 3. No org on workspace — full provisioning (new org + namespace + key)
-  return await provisionNewOrgNamespace(sessionToken, userId, orgName, workspaceId);
+  return await provisionNewOrgNamespace(
+    sessionToken,
+    userId,
+    orgName,
+    workspaceId,
+    namespaceName,
+  );
 }
 
 async function provisionNewOrgNamespace(
   sessionToken: string,
   userId: string,
   orgName: string,
-  workspaceId?: string,
+  workspaceId: string | undefined,
+  namespaceName: string,
 ): Promise<ProvisionResult> {
   console.log("[PaprLogin] Full provisioning: org + namespace + API key...");
 
@@ -1735,6 +1830,7 @@ async function provisionNewOrgNamespace(
     orgId,
     orgName,
     workspaceId || "",
+    namespaceName,
   );
 }
 
@@ -1747,9 +1843,10 @@ async function createNamespaceAndKey(
   orgId: string,
   orgName: string,
   workspaceId: string,
+  namespaceName: string,
 ): Promise<ProvisionResult> {
-  const nsName = `${orgName}-dev`;
-  console.log(`[PaprLogin] Creating namespace "${nsName}" under org ${orgId}...`);
+  const nsName = namespaceName.trim() || DEFAULT_NAMESPACE_NAME;
+  console.log(`[PaprLogin] Creating namespace "${nsName}" under org "${orgName}" (${orgId})...`);
 
   const createNsData = (await parseGraphQL(sessionToken, CREATE_NAMESPACE, {
     name: nsName,
@@ -1803,11 +1900,22 @@ async function resolveOrgApiKey(
   const existingKey = keyData.aPIKeys?.edges?.[0]?.node;
   if (existingKey?.key) {
     console.log("[PaprLogin] Reusing existing API key for namespace");
-    return { apiKey: existingKey.key, organizationId: orgId, namespaceId, namespaceName };
+    return {
+      apiKey: existingKey.key,
+      organizationId: orgId,
+      namespaceId,
+      namespaceName,
+    };
   }
 
   console.log("[PaprLogin] No API key for namespace, creating one...");
-  const newKey = await createApiKey(sessionToken, userId, orgId, namespaceId, workspaceId);
+  const newKey = await createApiKey(
+    sessionToken,
+    userId,
+    orgId,
+    namespaceId,
+    workspaceId,
+  );
   return { apiKey: newKey, organizationId: orgId, namespaceId, namespaceName };
 }
 
@@ -2310,7 +2418,22 @@ export async function resolveActivePaprApiKey(
   const namespaceSlot = paprNamespaceApiKeyName(pointer.namespaceId);
   const cachedForNamespace = await customKeysStorage.getKeyByName(namespaceSlot);
   if (cachedForNamespace?.trim()) {
-    return cachedForNamespace.trim();
+    const trimmed = cachedForNamespace.trim();
+    if (
+      paprApiKeyMatchesNamespaceBound(
+        trimmed,
+        pointer.organizationId,
+        pointer.namespaceId,
+      )
+    ) {
+      return trimmed;
+    }
+    const scope = parsePaprApiKeyScope(trimmed);
+    console.warn(
+      scope
+        ? `[PaprLogin] Stale key in ${namespaceSlot} — key namespace ${scope.namespaceId} != active ${pointer.namespaceId}`
+        : `[PaprLogin] Stale key in ${namespaceSlot} — rejected by namespace binding`,
+    );
   }
 
   const activeAlias = await customKeysStorage.getKeyByName("PAPR_API_KEY");
@@ -2573,6 +2696,215 @@ async function getSelectedWorkspaceInfo(
 
 // ─── IPC Handlers ──────────────────────────────────────────────
 
+async function finalizeLoginWithProvisioning(
+  auth: {
+    parseSessionToken: string;
+    refreshToken?: string;
+    objectId: string;
+    email: string;
+    displayName: string;
+    profileImage?: string;
+    workspaceInfo: SelectedWorkspaceInfo;
+    completedMode: PaprAuthMode;
+    completedSource: PaprLoginSource;
+  },
+  names: ProvisioningNameDefaults,
+  customKeysStorage: CustomKeysStorage,
+  settingsStorage: SettingsStorage,
+): Promise<{
+  success: true;
+  email: string;
+  name: string;
+  userId: string;
+}> {
+  const {
+    parseSessionToken,
+    refreshToken,
+    objectId,
+    email,
+    displayName,
+    profileImage,
+    workspaceInfo,
+    completedMode,
+    completedSource,
+  } = auth;
+
+  const provision = await provisionOrGetApiKey(
+    parseSessionToken,
+    objectId,
+    email || "user",
+    workspaceInfo.workspaceId,
+    names,
+  );
+  trackLoginStep("api_key_provisioned", {
+    organization_id: provision.organizationId,
+    namespace_id: provision.namespaceId,
+  });
+
+  const developerOrgId = await fetchUserDeveloperOrganizationId(parseSessionToken, objectId);
+
+  let namespaceOrganizationId: string | undefined;
+  if (workspaceInfo.workspaceId) {
+    const resolved = await resolveNamespaceOrganizationForWorkspace(
+      parseSessionToken,
+      objectId,
+      workspaceInfo.workspaceId,
+    );
+    namespaceOrganizationId = resolved?.organizationId;
+  }
+
+  const activeOrganizationId = resolveLoginOrganizationId({
+    namespaceOrganizationId,
+    provisionOrganizationId: provision.organizationId,
+    developerOrganizationId: developerOrgId,
+  });
+  if (!activeOrganizationId) {
+    throw new Error("Could not resolve organization for Papr login");
+  }
+
+  let activeNamespaceId = provision.namespaceId;
+  let activeNamespaceName = provision.namespaceName;
+  if (activeOrganizationId !== provision.organizationId) {
+    const workspaceNs = await resolveDefaultNamespaceForOrg(
+      parseSessionToken,
+      activeOrganizationId,
+    );
+    if (workspaceNs) {
+      const workspaceKey = await resolveOrgApiKey(
+        parseSessionToken,
+        objectId,
+        activeOrganizationId,
+        workspaceNs.namespaceId,
+        workspaceNs.namespaceName,
+        workspaceInfo.workspaceId ?? "",
+      );
+      activeNamespaceId = workspaceKey.namespaceId;
+      activeNamespaceName = workspaceKey.namespaceName;
+      await customKeysStorage.addKey({
+        name: "PAPR_API_KEY",
+        value: workspaceKey.apiKey,
+      });
+    }
+  }
+
+  await customKeysStorage.setActiveOrganization(activeOrganizationId);
+
+  if (activeOrganizationId === provision.organizationId) {
+    await customKeysStorage.addKey({
+      name: "PAPR_API_KEY",
+      value: provision.apiKey,
+    });
+  }
+
+  await customKeysStorage.addKey({
+    name: "PAPR_SESSION_TOKEN",
+    value: parseSessionToken,
+  });
+
+  if (refreshToken) {
+    await customKeysStorage.addKey({
+      name: "PAPR_REFRESH_TOKEN",
+      value: refreshToken,
+    });
+  }
+
+  settingsStorage.setPaprProfile({
+    userId: objectId,
+    email: email || "",
+    displayName: displayName || "",
+    profileImage,
+    authenticatedAt: new Date().toISOString(),
+    sessionToken: parseSessionToken,
+    organizationId: activeOrganizationId,
+    activeNamespaceId,
+    activeNamespaceName,
+    workspaceId: workspaceInfo.workspaceId,
+    workspaceName: workspaceInfo.workspaceName,
+  });
+
+  let resolvedDisplayName = displayName || "";
+  let resolvedProfileImage = profileImage;
+  try {
+    const { fetchParseUserProfile } = await import("./paprProfileSync.js");
+    const cloudProfile = await fetchParseUserProfile(parseSessionToken, objectId);
+    resolvedDisplayName =
+      cloudProfile.displayName || cloudProfile.fullname || resolvedDisplayName;
+    resolvedProfileImage =
+      cloudProfile.profileImageUrl?.trim() || resolvedProfileImage;
+    settingsStorage.setPaprProfile({
+      userId: objectId,
+      email: cloudProfile.email || email || "",
+      displayName: resolvedDisplayName,
+      profileImage: resolvedProfileImage,
+      authenticatedAt: new Date().toISOString(),
+      sessionToken: parseSessionToken,
+      organizationId: activeOrganizationId,
+      activeNamespaceId,
+      activeNamespaceName,
+      workspaceId: workspaceInfo.workspaceId,
+      workspaceName: workspaceInfo.workspaceName,
+    });
+    console.log(
+      `[PaprLogin] Parse profile synced${resolvedProfileImage ? " (photo from cloud)" : ""}`,
+    );
+  } catch (error) {
+    console.warn("[PaprLogin] Could not fetch Parse profile after login:", error);
+  }
+
+  trackLoginStep("credentials_stored", { organization_id: activeOrganizationId });
+
+  const loginApiKey =
+    activeOrganizationId === provision.organizationId
+      ? provision.apiKey
+      : (await resolveActivePaprApiKey(customKeysStorage)) ?? provision.apiKey;
+
+  const workspaceResult = await notifyGatewayWorkspaceSwitch({
+    organizationId: activeOrganizationId,
+    namespaceId: activeNamespaceId,
+    namespaceName: activeNamespaceName,
+    paprApiKey: loginApiKey,
+  });
+  trackLoginStep("gateway_switch_attempted", {
+    gateway_switch_success: workspaceResult.success,
+  });
+  if (!workspaceResult.success) {
+    console.warn(
+      "[PaprLogin] Gateway workspace switch failed (login still succeeded):",
+      workspaceResult.error,
+    );
+    trackLoginStep("gateway_switch_failed", { error: workspaceResult.error });
+  }
+  invalidateKeyCache("PAPR_API_KEY");
+
+  await syncProfileToGatewaySettings(
+    email || "",
+    objectId,
+    resolvedDisplayName,
+    resolvedProfileImage,
+    activeNamespaceName,
+    workspaceInfo.workspaceId,
+    workspaceInfo.workspaceName,
+  );
+  trackLoginStep("profile_synced");
+
+  console.log("[PaprLogin] Login complete. API key stored as PAPR_API_KEY.");
+  trackLoginCompleted(completedMode, completedSource);
+
+  notifyLoginSuccess({
+    email: email || "",
+    name: resolvedDisplayName,
+    userId: objectId,
+  });
+  trackLoginStep("login_success_notified", { user_id: objectId });
+
+  return {
+    success: true,
+    email: email || "",
+    name: resolvedDisplayName,
+    userId: objectId,
+  };
+}
+
 async function completePaprAuthCallback(
   code: string | null,
   state: string | null,
@@ -2658,180 +2990,63 @@ async function completePaprAuthCallback(
     console.warn("[PaprLogin] Could not fetch workspace info:", e);
   }
 
-  const provision = await provisionOrGetApiKey(
+  const { plan, defaults } = await assessProvisioningNeeds(
     parseSessionToken,
     objectId,
     email || "user",
-    workspaceInfo.workspaceId,
+    displayName,
+    workspaceInfo,
   );
-  trackLoginStep("api_key_provisioned", {
-    organization_id: provision.organizationId,
-    namespace_id: provision.namespaceId,
-  });
 
-  const developerOrgId = await fetchUserDeveloperOrganizationId(parseSessionToken, objectId);
-
-  let namespaceOrganizationId: string | undefined;
-  if (workspaceInfo.workspaceId) {
-    const resolved = await resolveNamespaceOrganizationForWorkspace(
+  if (isProvisioningSetupRequired(plan)) {
+    pendingOrgSetup = {
       parseSessionToken,
+      refreshToken: tokens.refresh_token,
       objectId,
-      workspaceInfo.workspaceId,
-    );
-    namespaceOrganizationId = resolved?.organizationId;
-  }
-
-  const activeOrganizationId = resolveLoginOrganizationId({
-    namespaceOrganizationId,
-    provisionOrganizationId: provision.organizationId,
-    developerOrganizationId: developerOrgId,
-  });
-  if (!activeOrganizationId) {
-    throw new Error("Could not resolve organization for Papr login");
-  }
-
-  let activeNamespaceId = provision.namespaceId;
-  let activeNamespaceName = provision.namespaceName;
-  if (activeOrganizationId !== provision.organizationId) {
-    const workspaceNs = await resolveDefaultNamespaceForOrg(
-      parseSessionToken,
-      activeOrganizationId,
-    );
-    if (workspaceNs) {
-      const workspaceKey = await resolveOrgApiKey(
-        parseSessionToken,
-        objectId,
-        activeOrganizationId,
-        workspaceNs.namespaceId,
-        workspaceNs.namespaceName,
-        workspaceInfo.workspaceId ?? "",
-      );
-      activeNamespaceId = workspaceKey.namespaceId;
-      activeNamespaceName = workspaceKey.namespaceName;
-      await customKeysStorage.addKey({
-        name: "PAPR_API_KEY",
-        value: workspaceKey.apiKey,
-      });
-    }
-  }
-
-  await customKeysStorage.setActiveOrganization(activeOrganizationId);
-
-  if (activeOrganizationId === provision.organizationId) {
-    await customKeysStorage.addKey({
-      name: "PAPR_API_KEY",
-      value: provision.apiKey,
+      email: email || "",
+      displayName: displayName || "",
+      profileImage,
+      workspaceInfo,
+      needsOrg: plan.needsOrg,
+      needsNamespace: plan.needsNamespace,
+      defaults,
+      completedMode: completedMode ?? "login",
+      completedSource: completedSource ?? "unknown",
+    };
+    trackLoginStep("org_setup_required", {
+      needs_org: plan.needsOrg,
+      needs_namespace: plan.needsNamespace,
     });
-  }
-
-  await customKeysStorage.addKey({
-    name: "PAPR_SESSION_TOKEN",
-    value: parseSessionToken,
-  });
-
-  if (tokens.refresh_token) {
-    await customKeysStorage.addKey({
-      name: "PAPR_REFRESH_TOKEN",
-      value: tokens.refresh_token,
+    notifySetupRequired({
+      orgName: defaults.orgName,
+      namespaceName: defaults.namespaceName,
+      needsOrg: plan.needsOrg,
+      needsNamespace: plan.needsNamespace,
     });
-  }
-
-  settingsStorage.setPaprProfile({
-    userId: objectId,
-    email: email || "",
-    displayName: displayName || "",
-    profileImage,
-    authenticatedAt: new Date().toISOString(),
-    sessionToken: parseSessionToken,
-    organizationId: activeOrganizationId,
-    activeNamespaceId,
-    activeNamespaceName,
-    workspaceId: workspaceInfo.workspaceId,
-    workspaceName: workspaceInfo.workspaceName,
-  });
-
-  // Prefer Parse cloud profile photo over Auth0 picture (Gravatar may be missing)
-  let resolvedDisplayName = displayName || "";
-  let resolvedProfileImage = profileImage;
-  try {
-    const { fetchParseUserProfile } = await import("./paprProfileSync.js");
-    const cloudProfile = await fetchParseUserProfile(parseSessionToken, objectId);
-    resolvedDisplayName =
-      cloudProfile.displayName || cloudProfile.fullname || resolvedDisplayName;
-    resolvedProfileImage =
-      cloudProfile.profileImageUrl?.trim() || resolvedProfileImage;
-    settingsStorage.setPaprProfile({
+    return {
+      success: true,
+      email: email || "",
+      name: displayName || "",
       userId: objectId,
-      email: cloudProfile.email || email || "",
-      displayName: resolvedDisplayName,
-      profileImage: resolvedProfileImage,
-      authenticatedAt: new Date().toISOString(),
-      sessionToken: parseSessionToken,
-      organizationId: activeOrganizationId,
-      activeNamespaceId,
-      activeNamespaceName,
-      workspaceId: workspaceInfo.workspaceId,
-      workspaceName: workspaceInfo.workspaceName,
-    });
-    console.log(
-      `[PaprLogin] Parse profile synced${resolvedProfileImage ? " (photo from cloud)" : ""}`,
-    );
-  } catch (e) {
-    console.warn("[PaprLogin] Could not fetch Parse profile after login:", e);
+    };
   }
 
-  trackLoginStep("credentials_stored", { organization_id: activeOrganizationId });
-
-  const loginApiKey =
-    activeOrganizationId === provision.organizationId
-      ? provision.apiKey
-      : (await resolveActivePaprApiKey(customKeysStorage)) ?? provision.apiKey;
-
-  const workspaceResult = await notifyGatewayWorkspaceSwitch({
-    organizationId: activeOrganizationId,
-    namespaceId: activeNamespaceId,
-    namespaceName: activeNamespaceName,
-    paprApiKey: loginApiKey,
-  });
-  trackLoginStep("gateway_switch_attempted", {
-    gateway_switch_success: workspaceResult.success,
-  });
-  if (!workspaceResult.success) {
-    console.warn(
-      "[PaprLogin] Gateway workspace switch failed (login still succeeded):",
-      workspaceResult.error,
-    );
-    trackLoginStep("gateway_switch_failed", { error: workspaceResult.error });
-  }
-  invalidateKeyCache("PAPR_API_KEY");
-
-  await syncProfileToGatewaySettings(
-    email || "",
-    objectId,
-    resolvedDisplayName,
-    resolvedProfileImage,
-    activeNamespaceName,
-    workspaceInfo.workspaceId,
-    workspaceInfo.workspaceName,
+  return await finalizeLoginWithProvisioning(
+    {
+      parseSessionToken,
+      refreshToken: tokens.refresh_token,
+      objectId,
+      email: email || "",
+      displayName: displayName || "",
+      profileImage,
+      workspaceInfo,
+      completedMode: completedMode ?? "login",
+      completedSource: completedSource ?? "unknown",
+    },
+    defaults,
+    customKeysStorage,
+    settingsStorage,
   );
-  trackLoginStep("profile_synced");
-
-  console.log("[PaprLogin] Login complete. API key stored as PAPR_API_KEY.");
-  trackLoginCompleted(completedMode, completedSource);
-
-  notifyLoginSuccess({
-    email: email || "",
-    name: resolvedDisplayName,
-    userId: objectId,
-  });
-  trackLoginStep("login_success_notified", { user_id: objectId });
-
-  return {
-    success: true,
-    email: email || "",
-    name: resolvedDisplayName,
-    userId: objectId,
-  };
   } finally {
     loginCompletionInFlight = false;
   }
@@ -2876,6 +3091,59 @@ export function initializePaprLoginIPC(
       };
     }
   });
+
+  ipcMain.handle(
+    "papr:complete-org-setup",
+    async (_event, input: { orgName?: string; namespaceName?: string }) => {
+      const pending = pendingOrgSetup;
+      if (!pending) {
+        return {
+          success: false,
+          error: "No workspace setup is pending. Sign in again to continue.",
+        };
+      }
+
+      pendingOrgSetup = null;
+      loginCompletionInFlight = true;
+
+      try {
+        const orgName = sanitizeProvisioningName(
+          input.orgName ?? "",
+          pending.defaults.orgName,
+        );
+        const namespaceName = sanitizeProvisioningName(
+          input.namespaceName ?? "",
+          pending.defaults.namespaceName,
+        );
+
+        const result = await finalizeLoginWithProvisioning(
+          {
+            parseSessionToken: pending.parseSessionToken,
+            refreshToken: pending.refreshToken,
+            objectId: pending.objectId,
+            email: pending.email,
+            displayName: pending.displayName,
+            profileImage: pending.profileImage,
+            workspaceInfo: pending.workspaceInfo,
+            completedMode: pending.completedMode,
+            completedSource: pending.completedSource,
+          },
+          { orgName, namespaceName },
+          customKeysStorage,
+          settingsStorage,
+        );
+
+        return result;
+      } catch (error) {
+        pendingOrgSetup = pending;
+        const message = error instanceof Error ? error.message : "Setup failed";
+        notifyLoginError(undefined, message);
+        return { success: false, error: message };
+      } finally {
+        loginCompletionInFlight = false;
+      }
+    },
+  );
 
   // Return stored Papr profile for Settings UI and telemetry (no session token)
   ipcMain.handle("papr:get-profile", async () => {

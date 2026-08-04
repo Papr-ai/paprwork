@@ -5,6 +5,7 @@ import { useChatStore } from "../ui/stores/chatStore";
 import {
   reloadUiForWorkspaceSwitch,
   resetWorkspaceReloadForTests,
+  attachWorkspaceSwitchBroadcastListener,
 } from "../ui/lib/workspaceSwitchReload";
 
 const gatewaySendMock = vi.fn(async (type: string) => {
@@ -47,15 +48,29 @@ vi.mock("../ui/src/lib/gateway", () => ({
 }));
 
 function stubWindowForReload(): void {
+  const listeners = new Map<string, Set<EventListener>>();
   vi.stubGlobal("window", {
-    dispatchEvent: vi.fn(() => true),
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn((event: Event) => {
+      listeners.get(event.type)?.forEach((handler) => {
+        handler(event);
+      });
+      return true;
+    }),
+    addEventListener: vi.fn((type: string, handler: EventListener) => {
+      if (!listeners.has(type)) {
+        listeners.set(type, new Set());
+      }
+      listeners.get(type)!.add(handler);
+    }),
+    removeEventListener: vi.fn((type: string, handler: EventListener) => {
+      listeners.get(type)?.delete(handler);
+    }),
   });
-  vi.stubGlobal("CustomEvent", class CustomEvent {
-    type: string;
-    constructor(type: string) {
-      this.type = type;
+  vi.stubGlobal("CustomEvent", class CustomEvent<T = unknown> extends Event {
+    detail: T;
+    constructor(type: string, init?: { detail?: T }) {
+      super(type);
+      this.detail = init?.detail as T;
     }
   });
   vi.stubGlobal("localStorage", {
@@ -155,5 +170,147 @@ describe("reloadUiForWorkspaceSwitch", () => {
 
     await vi.advanceTimersByTimeAsync(500);
     expect(useChatStore.getState().chats).toHaveLength(1);
+  });
+
+  it("retries tab load when gateway switch completes after an empty early load", async () => {
+    vi.useFakeTimers();
+    stubWindowForReload();
+
+    let loadTabsCalls = 0;
+    gatewaySendMock.mockImplementation(async (type: string) => {
+      if (type === "app:load_tabs") {
+        loadTabsCalls += 1;
+        if (loadTabsCalls === 1) {
+          return { success: true, data: [] };
+        }
+        return {
+          success: true,
+          data: [
+            {
+              id: "tab-chat-1",
+              type: "chat",
+              entityId: "chat-1",
+              title: "Saved chat",
+              displayMode: "standalone",
+              parentTabId: null,
+              position: 0,
+              isFavorite: false,
+            },
+          ],
+        };
+      }
+      if (type === "app:load_state") {
+        return {
+          success: true,
+          data: {
+            activeTabId: loadTabsCalls > 1 ? "tab-chat-1" : null,
+            splitRatio: 0.5,
+            history: [],
+            historyIndex: -1,
+          },
+        };
+      }
+      if (type === "chat:list") {
+        return {
+          success: true,
+          data: [{ id: "chat-1", title: "Saved chat", createdAt: "", updatedAt: "" }],
+        };
+      }
+      return { success: true, data: undefined };
+    });
+
+    const reloadPromise = reloadUiForWorkspaceSwitch();
+    await vi.runAllTimersAsync();
+    await reloadPromise;
+
+    expect(useTabStore.getState().tabs.filter((t) => t.type !== "settings")).toHaveLength(
+      0,
+    );
+
+    attachWorkspaceSwitchBroadcastListener();
+    window.dispatchEvent(
+      new CustomEvent("gateway-broadcast", {
+        detail: { type: "workspace:switch-complete", data: {} },
+      }),
+    );
+    await vi.runAllTimersAsync();
+    await Promise.resolve();
+
+    expect(loadTabsCalls).toBeGreaterThanOrEqual(2);
+    expect(
+      useTabStore.getState().tabs.some((tab) => tab.title === "Saved chat"),
+    ).toBe(true);
+  });
+
+  it("waitForGateway clears stale tabs and loads new workspace tabs only after switch-complete", async () => {
+    vi.useFakeTimers();
+    stubWindowForReload();
+    attachWorkspaceSwitchBroadcastListener();
+
+    useTabStore.getState().createTab("app", "old-app-id", "Old org app");
+
+    let loadTabsCalls = 0;
+    gatewaySendMock.mockImplementation(async (type: string) => {
+      if (type === "app:load_tabs") {
+        loadTabsCalls += 1;
+        return {
+          success: true,
+          data: [
+            {
+              id: "tab-chat-new",
+              type: "chat",
+              entityId: "chat-new",
+              title: "New org chat",
+              displayMode: "standalone",
+              parentTabId: null,
+              position: 0,
+              isFavorite: false,
+            },
+          ],
+        };
+      }
+      if (type === "app:load_state") {
+        return {
+          success: true,
+          data: {
+            activeTabId: "tab-chat-new",
+            splitRatio: 0.5,
+            history: [],
+            historyIndex: -1,
+          },
+        };
+      }
+      if (type === "chat:list") {
+        return {
+          success: true,
+          data: [{ id: "chat-new", title: "New org chat", createdAt: "", updatedAt: "" }],
+        };
+      }
+      return { success: true, data: undefined };
+    });
+
+    const reloadPromise = reloadUiForWorkspaceSwitch({ waitForGateway: true });
+    await reloadPromise;
+
+    expect(useTabStore.getState().tabs.some((tab) => tab.title === "Old org app")).toBe(
+      false,
+    );
+    expect(loadTabsCalls).toBe(0);
+
+    window.dispatchEvent(
+      new CustomEvent("gateway-broadcast", {
+        detail: { type: "workspace:switch-complete", data: {} },
+      }),
+    );
+    await vi.runAllTimersAsync();
+    await Promise.resolve();
+
+    expect(loadTabsCalls).toBeGreaterThanOrEqual(1);
+    expect(
+      useTabStore.getState().tabs.some((tab) => tab.title === "New org chat"),
+    ).toBe(true);
+    expect(
+      useTabStore.getState().tabs.some((tab) => tab.title === "Old org app"),
+    ).toBe(false);
   });
 });

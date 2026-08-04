@@ -1,12 +1,10 @@
 /**
  * Floating sub-agent chat panel for mini-app embedded assistant (desktop Paprwork).
+ * Uses session-based /api/app-agent/* (multi-turn), not one-shot delegate_task.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
 import type { AppAgentChatConfig } from "../../../src/core/types/appAgentChat";
-import { buildAppAgentChatContext } from "../../../src/core/types/appAgentChat";
-import { gateway } from "../../src/lib/gateway";
-import { MiniChatCard } from "../Chat/MiniChatCard";
+import { EmbeddedAppAgentChatPanel } from "./EmbeddedAppAgentChatPanel";
 import "./AppAgentChatOverlay.css";
 
 export interface AppAgentChatOverlayProps {
@@ -21,59 +19,18 @@ export interface AppAgentChatOverlayProps {
 
 export function AppAgentChatOverlay({
   appId,
-  appTitle,
   config,
   subAgentName,
-  subAgentIcon,
   initialMessage,
   onClose,
 }: AppAgentChatOverlayProps) {
-  const [delegationId, setDelegationId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [starting, setStarting] = useState(true);
-  const startedRef = useRef(false);
-
-  const startSession = useCallback(async () => {
-    if (startedRef.current) return;
-    startedRef.current = true;
-    setStarting(true);
-    setError(null);
-
-    const reportChatId = `app-agent:${appId}`;
-    const task =
-      initialMessage?.trim() ||
-      config.welcomeMessage?.trim() ||
-      `Help me with ${appTitle}`;
-
-    try {
-      const response = await gateway.send("subagent:delegate", {
-        useAgentId: config.subAgentId,
-        task,
-        context: buildAppAgentChatContext(appId, appTitle, config),
-        reportChatId,
-        background: true,
-        appIds: [appId],
-        delegatedBy: "app-user",
-      });
-      const run = (response.data as { run?: { id: string } })?.run;
-      if (!run?.id) {
-        throw new Error("Delegation did not return a run id");
-      }
-      setDelegationId(run.id);
-      await gateway.send("subagent:join-chat", { delegationId: run.id });
-    } catch (err) {
-      setError((err as Error).message);
-      startedRef.current = false;
-    } finally {
-      setStarting(false);
-    }
-  }, [appId, appTitle, config, initialMessage]);
-
-  useEffect(() => {
-    void startSession();
-  }, [startSession]);
-
   const label = config.bubbleLabel ?? subAgentName;
+
+  const handleAppRefresh = () => {
+    window.dispatchEvent(
+      new CustomEvent("papr-app-agent-refresh", { detail: { appId } }),
+    );
+  };
 
   return (
     <div className="app-agent-chat-overlay" role="dialog" aria-label={`${label} chat`}>
@@ -90,27 +47,14 @@ export function AppAgentChatOverlay({
             ×
           </button>
         </header>
-        <div className="app-agent-chat-overlay__body">
-          {starting && !delegationId && (
-            <p className="app-agent-chat-overlay__status">Starting assistant…</p>
-          )}
-          {error && (
-            <p className="app-agent-chat-overlay__error">{error}</p>
-          )}
-          {delegationId && (
-            <MiniChatCard
-              delegationId={delegationId}
-              subAgentName={subAgentName}
-              task={
-                initialMessage?.trim() ||
-                config.welcomeMessage ||
-                `Help with ${appTitle}`
-              }
-              status="active"
-              subAgentIcon={subAgentIcon}
-              defaultExpanded
-            />
-          )}
+        <div className="app-agent-chat-overlay__body app-agent-chat-overlay__body--chat">
+          <EmbeddedAppAgentChatPanel
+            appId={appId}
+            subAgentName={subAgentName}
+            config={config}
+            initialMessage={initialMessage}
+            onAppRefresh={handleAppRefresh}
+          />
         </div>
       </div>
     </div>

@@ -39,6 +39,18 @@ function readJobJson(paprDir: string, jobId: string): JobJsonEntry | null {
   }
 }
 
+function readAgentChatJobId(paprDir: string, appId: string): string | null {
+  const metadataPath = path.join(paprDir, "apps", appId, "metadata.json");
+  try {
+    const raw = fs.readFileSync(metadataPath, "utf8");
+    const parsed = JSON.parse(raw) as { agentChatJobId?: string };
+    const jobId = parsed.agentChatJobId?.trim();
+    return jobId && jobId.length > 0 ? jobId : null;
+  } catch {
+    return null;
+  }
+}
+
 function readDataSourceJobIds(paprDir: string, appId: string): string[] {
   const dataSourcesPath = path.join(paprDir, "apps", appId, "data-sources.json");
   try {
@@ -50,6 +62,44 @@ function readDataSourceJobIds(paprDir: string, appId: string): string[] {
   } catch {
     return [];
   }
+}
+
+/** Registry dbIds linked in app data-sources (require databases.json on web). */
+export function readDataSourceRegistryDbIds(paprDir: string, appId: string): string[] {
+  const dataSourcesPath = path.join(paprDir, "apps", appId, "data-sources.json");
+  try {
+    const raw = fs.readFileSync(dataSourcesPath, "utf8");
+    const config = parseDataSourcesFile(raw);
+    const dbIds = new Set<string>();
+    for (const source of config.sources) {
+      if (source.dbId?.trim()) {
+        dbIds.add(source.dbId.trim());
+      }
+    }
+    return [...dbIds].sort();
+  } catch {
+    return [];
+  }
+}
+
+/** Git-relative paths to upload so apps.papr.ai can serve this app. */
+export function resolveAppCloudSyncRelativePaths(
+  paprDir: string,
+  appId: string,
+): string[] {
+  const dependentJobIds = resolveAppDependentJobIds(paprDir, appId);
+  const paths = [
+    path.join("apps", appId),
+    ...dependentJobIds.map(jobRelativePath),
+  ];
+  // jobs.json index must travel with job folders — memory runtime resolves jobId from it.
+  if (dependentJobIds.length > 0) {
+    paths.push(path.join("data", "jobs.json"));
+  }
+  if (readDataSourceRegistryDbIds(paprDir, appId).length > 0) {
+    paths.push("data");
+  }
+  return paths;
 }
 
 function expandJobPipeline(paprDir: string, seedJobIds: readonly string[]): string[] {
@@ -87,6 +137,11 @@ export function resolveAppDependentJobIds(
 ): string[] {
   const resolveAppId = options?.sourceAppId ?? appId;
   const jobIds = new Set<string>(readDataSourceJobIds(paprDir, resolveAppId));
+
+  const agentChatJobId = readAgentChatJobId(paprDir, resolveAppId);
+  if (agentChatJobId) {
+    jobIds.add(agentChatJobId);
+  }
 
   for (const job of readJobsIndex(paprDir)) {
     if (!job.id) continue;

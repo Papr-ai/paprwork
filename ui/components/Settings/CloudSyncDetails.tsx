@@ -121,6 +121,7 @@ export interface SyncItemsResponse {
   appContext?: {
     appId: string;
     dependentJobIds: string[];
+    registryDbIds?: string[];
   };
   reason?: string;
 }

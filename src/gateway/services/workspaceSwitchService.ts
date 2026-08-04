@@ -2,9 +2,11 @@
  * Desktop workspace switch — re-point PAPR_HOME / PAPR_USER_DATA and reload services.
  */
 
+import { paprApiKeyMatchesNamespaceBound } from "../../core/utils/paprApiKey.js";
 import {
   applyActiveWorkspaceEnv,
   ensureWorkspaceLayout,
+  readActiveWorkspacePointer,
   type ActiveWorkspacePointer,
 } from "../../core/utils/paprWorkspace.js";
 import { getPaprApiKey, clearKeyCache } from "../utils/keyResolver.js";
@@ -152,11 +154,23 @@ export async function activateWorkspacePointer(
   return pointer;
 }
 
-async function abortAllActiveAgentStreams(): Promise<void> {
+/** Cancel in-flight streams quickly — must stay fast enough for /health to respond. */
+async function cancelActiveAgentStreamsQuick(): Promise<void> {
   try {
     await getAgentStreamRegistry().cancelAllRunningStreams(
       "Workspace switch — stream aborted",
     );
+  } catch (error) {
+    console.warn(
+      "[WorkspaceSwitch] Failed to cancel active streams:",
+      error instanceof Error ? error.message : error,
+    );
+  }
+}
+
+async function abortAllActiveAgentStreams(): Promise<void> {
+  await cancelActiveAgentStreamsQuick();
+  try {
     await getAgentService().shutdown();
     console.log("[WorkspaceSwitch] Aborted active agent streams before switch");
   } catch (error) {
@@ -169,6 +183,8 @@ async function abortAllActiveAgentStreams(): Promise<void> {
 
 async function resetPathBoundSingletons(): Promise<void> {
   await abortAllActiveAgentStreams();
+  await yieldEventLoop();
+
   resetCommunityCatalogServiceForWorkspaceSwitch();
   resetPlanServiceForWorkspaceSwitch();
   resetSkillServiceForWorkspaceSwitch();
@@ -177,13 +193,20 @@ async function resetPathBoundSingletons(): Promise<void> {
   resetDocumentServiceForWorkspaceSwitch();
   resetDatabaseRegistryForWorkspaceSwitch();
   resetJobRunHistoryForWorkspaceSwitch();
+  await yieldEventLoop();
+
   await resetCodeIndexingForWorkspaceSwitch();
   resetToolCaptureLedgerForWorkspaceSwitch();
+  await yieldEventLoop();
+
   resetJobsServiceSingletonForTests();
   resetAppServiceSingletonForTests();
+  await yieldEventLoop();
+
   resetAgentServiceSingletonForTests();
   await resetStorageManagerSingleton();
   resetAppStateStorageSingleton();
+  await yieldEventLoop();
 }
 
 async function initializePathBoundServices(): Promise<void> {
@@ -340,6 +363,21 @@ async function refreshVaultForWorkspaceSwitch(): Promise<void> {
 
 /** Update Papr API key in gateway env/cache and reinitialize memory storage. */
 export async function applyGatewayPaprApiKey(apiKey: string): Promise<void> {
+  const pointer = readActiveWorkspacePointer();
+  if (
+    pointer &&
+    !paprApiKeyMatchesNamespaceBound(
+      apiKey,
+      pointer.organizationId,
+      pointer.namespaceId,
+    )
+  ) {
+    console.warn(
+      "[WorkspaceSwitch] Ignoring Papr API key update — wrong org/namespace for active workspace",
+    );
+    return;
+  }
+
   process.env.PAPR_API_KEY = apiKey;
   clearKeyCache("PAPR_API_KEY");
   invalidatePaprUserIdCache();
@@ -372,6 +410,11 @@ async function finishWorkspaceSwitchInBackground(
   generation: number,
 ): Promise<void> {
   try {
+    if (isSwitchGenerationStale(generation)) {
+      return;
+    }
+
+    await resetPathBoundSingletons();
     if (isSwitchGenerationStale(generation)) {
       return;
     }
@@ -436,14 +479,15 @@ export async function switchActiveWorkspace(
   });
 
   try {
-    await abortAllActiveAgentStreams();
+    await cancelActiveAgentStreamsQuick();
     const pointer = await activateWorkspacePointer(input);
+    // Point tab SQLite at the new workspace before renderer reload can load tabs.
+    resetAppStateStorageSingleton();
     if (input.paprApiKey) {
       process.env.PAPR_API_KEY = input.paprApiKey;
     }
     clearKeyCache("PAPR_API_KEY");
     invalidatePaprUserIdCache();
-    await resetPathBoundSingletons();
 
     broadcast({
       type: "workspace:switch-started",

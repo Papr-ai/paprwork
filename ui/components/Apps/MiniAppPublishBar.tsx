@@ -2,7 +2,7 @@
  * MiniAppPublishBar — publish, share, preview mode controls.
  */
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { useCloudPublish } from "../../hooks/useCloudPublish";
 import { useAppCloudSyncStatus } from "../../hooks/useAppCloudSyncStatus";
@@ -104,6 +104,26 @@ const PERMISSION_OPTIONS: {
     description: "Install into Paprwork to customize and send changes back",
   },
 ];
+
+function formatShareSelectionSummary(
+  audience: ShareAudience,
+  permission: SharePermission,
+  requireSignIn: boolean,
+): string {
+  const accessLabel =
+    ACCESS_OPTIONS.find((option) => option.value === audience)?.label ?? audience;
+  if (audience === "private") {
+    return accessLabel;
+  }
+  const permissionLabel =
+    PERMISSION_OPTIONS.find((option) => option.value === permission)?.label ??
+    permission;
+  const parts = [accessLabel, permissionLabel];
+  if (audience === "link") {
+    parts.push(requireSignIn ? "Sign-in required" : "No sign-in required");
+  }
+  return parts.join(" · ");
+}
 
 interface ShareSheetProps {
   title: string;
@@ -210,6 +230,13 @@ export function MiniAppPublishBar({
   );
   const [webSyncPopoverOpen, setWebSyncPopoverOpen] = useState(false);
   const webSyncAnchorRef = useRef<HTMLDivElement>(null);
+  const webSyncPopoverRef = useRef<HTMLDivElement>(null);
+  const [webSyncPopoverPos, setWebSyncPopoverPos] = useState<{
+    top: number;
+    left: number;
+  } | null>(null);
+  const [shareSyncNotice, setShareSyncNotice] = useState<string | null>(null);
+  const applyingSharingRef = useRef(false);
   const [compatReport, setCompatReport] = useState<CloudCompatibilityReport | null>(
     cloud.compatibility,
   );
@@ -226,6 +253,7 @@ export function MiniAppPublishBar({
   useEffect(() => {
     if (!shareOpen) {
       setNeedsDesktopAck(false);
+      setShareSyncNotice(null);
       return;
     }
     setCompatLoading(true);
@@ -242,7 +270,7 @@ export function MiniAppPublishBar({
   }, [cloudLineage?.lastSyncedAt, cloudLineage?.mode]);
 
   useEffect(() => {
-    if (!shareOpen) return;
+    if (!shareOpen || applyingSharingRef.current) return;
     const model = sharingToAudienceModel(
       cloud.loginAccess,
       cloud.externalLink,
@@ -262,19 +290,51 @@ export function MiniAppPublishBar({
     return () => window.removeEventListener("keydown", onEscape);
   }, [shareOpen]);
 
+  const updateWebSyncPopoverPos = useCallback(() => {
+    const anchor = webSyncAnchorRef.current;
+    if (!anchor) {
+      setWebSyncPopoverPos(null);
+      return;
+    }
+    const rect = anchor.getBoundingClientRect();
+    setWebSyncPopoverPos({ top: rect.bottom + 8, left: rect.left });
+  }, []);
+
+  useEffect(() => {
+    if (!webSyncPopoverOpen) {
+      setWebSyncPopoverPos(null);
+      return;
+    }
+    updateWebSyncPopoverPos();
+    window.addEventListener("resize", updateWebSyncPopoverPos);
+    window.addEventListener("scroll", updateWebSyncPopoverPos, true);
+    return () => {
+      window.removeEventListener("resize", updateWebSyncPopoverPos);
+      window.removeEventListener("scroll", updateWebSyncPopoverPos, true);
+    };
+  }, [webSyncPopoverOpen, updateWebSyncPopoverPos]);
+
   useEffect(() => {
     if (!webSyncPopoverOpen) return;
     const onPointerDown = (event: MouseEvent) => {
-      if (!webSyncAnchorRef.current?.contains(event.target as Node)) {
-        setWebSyncPopoverOpen(false);
+      const target = event.target as Node;
+      if (
+        webSyncAnchorRef.current?.contains(target) ||
+        webSyncPopoverRef.current?.contains(target)
+      ) {
+        return;
       }
+      setWebSyncPopoverOpen(false);
     };
     const onEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") setWebSyncPopoverOpen(false);
     };
-    window.addEventListener("mousedown", onPointerDown);
+    const timer = window.setTimeout(() => {
+      window.addEventListener("mousedown", onPointerDown);
+    }, 0);
     window.addEventListener("keydown", onEscape);
     return () => {
+      window.clearTimeout(timer);
       window.removeEventListener("mousedown", onPointerDown);
       window.removeEventListener("keydown", onEscape);
     };
@@ -286,7 +346,7 @@ export function MiniAppPublishBar({
     }
   }, [workspaceMode]);
 
-  const applySharing = (
+  const applySharing = async (
     nextAudience: ShareAudience,
     nextPermission: SharePermission,
     nextRequireSignIn = requireSignIn,
@@ -302,7 +362,22 @@ export function MiniAppPublishBar({
       requireSignIn: nextAudience === "link" ? nextRequireSignIn : undefined,
     };
     if (!isPermissionAvailable(nextAudience, nextPermission)) return;
-    void cloud.updateSharing(model);
+
+    const needsCloudPublish =
+      model.permission !== "edit" || model.audience !== "private";
+
+    applyingSharingRef.current = true;
+    setShareSyncNotice("Saving sharing settings…");
+    try {
+      await cloud.updateSharing(model);
+      if (needsCloudPublish) {
+        setShareSyncNotice("Uploading app code and databases to the web…");
+        await webSyncPushNow();
+      }
+    } finally {
+      applyingSharingRef.current = false;
+      setShareSyncNotice(null);
+    }
   };
 
   const pickAudience = (nextAudience: ShareAudience) => {
@@ -427,6 +502,43 @@ export function MiniAppPublishBar({
     webSyncStatus.overall !== "synced" &&
     webSyncStatus.overall !== "disabled";
   const webSyncSpinning = webSyncPushing || webSyncPulling || webSyncState === "syncing";
+  const shareSheetBusy = cloud.busy || webSyncPushing || Boolean(shareSyncNotice);
+  const shareLinkReady =
+    cloud.live &&
+    webSyncStatus?.overall === "synced" &&
+    !webSyncPushing &&
+    !shareSyncNotice;
+
+  const shareSelectionSummary = formatShareSelectionSummary(
+    audience,
+    permission,
+    requireSignIn,
+  );
+  const shareSyncBanner = (() => {
+    if (shareSyncNotice) {
+      return { tone: "info" as const, message: shareSyncNotice };
+    }
+    if (cloud.busy) {
+      return { tone: "info" as const, message: "Saving sharing settings…" };
+    }
+    if (webSyncPushing || webSyncStatus?.overall === "uploading") {
+      return {
+        tone: "info" as const,
+        message: "Uploading app code and databases to the web…",
+      };
+    }
+    if (cloud.live && webSyncStatus?.overall === "needs_sync") {
+      return {
+        tone: "warn" as const,
+        message:
+          "Sharing is saved, but the live link won't work until upload finishes.",
+      };
+    }
+    if (shareLinkReady) {
+      return { tone: "success" as const, message: "Your app is live and synced — the link is ready." };
+    }
+    return null;
+  })();
 
   const handleWebPreviewClick = () => {
     setWebSyncPopoverOpen(false);
@@ -440,26 +552,39 @@ export function MiniAppPublishBar({
   };
 
   const handlePublishClick = async () => {
+    setShareSyncNotice("Publishing to the web…");
     try {
       await cloud.publish();
       setNeedsDesktopAck(false);
+      setShareSyncNotice("Uploading app code and databases to the web…");
+      await webSyncPushNow();
     } catch (err) {
       if (err instanceof CloudPublishBlockedError) {
         setCompatReport(err.compatibility);
         setNeedsDesktopAck(true);
       }
+    } finally {
+      setShareSyncNotice(null);
     }
   };
 
   const handleConfirmDesktopPublish = () => {
+    setShareSyncNotice("Publishing to the web…");
     void cloud
       .publish({ acknowledgeDesktopOnly: true })
-      .then(() => setNeedsDesktopAck(false))
+      .then(async () => {
+        setNeedsDesktopAck(false);
+        setShareSyncNotice("Uploading app code and databases to the web…");
+        await webSyncPushNow();
+      })
       .catch((err: unknown) => {
         if (err instanceof CloudPublishBlockedError) {
           setCompatReport(err.compatibility);
           setNeedsDesktopAck(true);
         }
+      })
+      .finally(() => {
+        setShareSyncNotice(null);
       });
   };
 
@@ -485,71 +610,6 @@ export function MiniAppPublishBar({
             </span>
           </div>
 
-          {workspaceMode === "preview" ? (
-            <div
-              ref={webSyncAnchorRef}
-              className="mini-app-publish-bar__segment mini-app-publish-bar__segment--with-sync"
-              role="group"
-              aria-label="Preview mode"
-            >
-              <button
-                type="button"
-                className={
-                  viewMode === "local"
-                    ? "mini-app-publish-bar__segment-btn mini-app-publish-bar__segment-btn--active"
-                    : "mini-app-publish-bar__segment-btn"
-                }
-                onClick={() => {
-                  setWebSyncPopoverOpen(false);
-                  onViewModeChange("local");
-                }}
-              >
-                Local
-              </button>
-              <div
-                className={
-                  viewMode === "published"
-                    ? "mini-app-publish-bar__web-option mini-app-publish-bar__web-option--active"
-                    : "mini-app-publish-bar__web-option"
-                }
-              >
-                <button
-                  type="button"
-                  className="mini-app-publish-bar__segment-btn"
-                  disabled={!canOpenWebPreview}
-                  title={
-                    canOpenWebPreview
-                      ? isTrackCollaborator
-                        ? "Preview the team's live web version (publisher)"
-                        : "Preview the live web version"
-                      : "Publish to the web first"
-                  }
-                  onClick={handleWebPreviewClick}
-                >
-                  Web
-                </button>
-                <WebSyncStatusDot
-                  state={webSyncState}
-                  spinning={webSyncSpinning}
-                  tooltip={webSyncTooltip}
-                  popoverOpen={webSyncPopoverOpen}
-                  onClick={handleWebSyncDotClick}
-                />
-              </div>
-              {webSyncPopoverOpen && webSyncStatus ? (
-                <WebSyncPopover
-                  status={webSyncStatus}
-                  error={webSyncError}
-                  pushing={webSyncPushing}
-                  pulling={webSyncPulling}
-                  syncActionNeeded={webSyncActionNeeded}
-                  onPushNow={() => void webSyncPushNow()}
-                  onPullUpdates={() => void webSyncPullUpdates()}
-                />
-              ) : null}
-            </div>
-          ) : null}
-
           {showUpstreamBar ? (
             <CloudUpstreamBar
               appTitle={appTitle}
@@ -571,6 +631,83 @@ export function MiniAppPublishBar({
           ) : null}
 
         </div>
+
+        {workspaceMode === "preview" ? (
+          <div
+            ref={webSyncAnchorRef}
+            className="mini-app-publish-bar__segment mini-app-publish-bar__segment--with-sync"
+            role="group"
+            aria-label="Preview mode"
+          >
+            <button
+              type="button"
+              className={
+                viewMode === "local"
+                  ? "mini-app-publish-bar__segment-btn mini-app-publish-bar__segment-btn--active"
+                  : "mini-app-publish-bar__segment-btn"
+              }
+              onClick={() => {
+                setWebSyncPopoverOpen(false);
+                onViewModeChange("local");
+              }}
+            >
+              Local
+            </button>
+            <div
+              className={
+                viewMode === "published"
+                  ? "mini-app-publish-bar__web-option mini-app-publish-bar__web-option--active"
+                  : "mini-app-publish-bar__web-option"
+              }
+            >
+              <button
+                type="button"
+                className="mini-app-publish-bar__segment-btn"
+                disabled={!canOpenWebPreview}
+                title={
+                  canOpenWebPreview
+                    ? isTrackCollaborator
+                      ? "Preview the team's live web version (publisher)"
+                      : "Preview the live web version"
+                    : "Publish to the web first"
+                }
+                onClick={handleWebPreviewClick}
+              >
+                Web
+              </button>
+              <WebSyncStatusDot
+                state={webSyncState}
+                spinning={webSyncSpinning}
+                tooltip={webSyncTooltip}
+                popoverOpen={webSyncPopoverOpen}
+                onClick={handleWebSyncDotClick}
+              />
+            </div>
+            {webSyncPopoverOpen && webSyncPopoverPos
+              ? createPortal(
+                  <WebSyncPopover
+                    popoverRef={webSyncPopoverRef}
+                    className="mini-app-publish-bar__sync-popover--portal"
+                    style={{
+                      position: "fixed",
+                      top: webSyncPopoverPos.top,
+                      left: webSyncPopoverPos.left,
+                      zIndex: 10000,
+                    }}
+                    status={webSyncStatus}
+                    loading={webSyncLoadingState}
+                    error={webSyncError}
+                    pushing={webSyncPushing}
+                    pulling={webSyncPulling}
+                    syncActionNeeded={webSyncActionNeeded}
+                    onPushNow={() => void webSyncPushNow()}
+                    onPullUpdates={() => void webSyncPullUpdates()}
+                  />,
+                  document.body,
+                )
+              : null}
+          </div>
+        ) : null}
 
         {workspaceMode === "preview" && previewDisplayUrl ? (
           <div className="mini-app-publish-bar__url-row">
@@ -636,9 +773,41 @@ export function MiniAppPublishBar({
         <ShareSheet title={`Share “${appTitle}”`} onClose={() => setShareOpen(false)}>
 
           <div className="share-sheet__panel">
+            {shareSyncBanner ? (
+              <div
+                className={`share-sheet__sync-banner share-sheet__sync-banner--${shareSyncBanner.tone}`}
+                role="status"
+              >
+                <p>{shareSyncBanner.message}</p>
+                {shareSheetBusy ? (
+                  <p className="share-sheet__sync-banner-selection">
+                    <span className="share-sheet__sync-banner-selection-label">
+                      Your selection
+                    </span>
+                    {shareSelectionSummary}
+                  </p>
+                ) : null}
+                {shareSyncBanner.tone === "warn" ? (
+                  <button
+                    type="button"
+                    className="share-sheet__sync-banner-btn"
+                    disabled={shareSheetBusy}
+                    onClick={() => void webSyncPushNow()}
+                  >
+                    {webSyncPushing ? "Uploading…" : "Upload now"}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+
             {/* Share link at the top - most prominent */}
             {cloud.live && (copyUrl || webDisplayUrl) ? (
               <div className="share-sheet__link-section">
+                {!shareLinkReady ? (
+                  <p className="share-sheet__link-hint">
+                    The link below may show &quot;not found&quot; until upload completes.
+                  </p>
+                ) : null}
                 <div className="share-sheet__url-field">
                   <input
                     className="share-sheet__url-input"
@@ -678,19 +847,34 @@ export function MiniAppPublishBar({
               </div>
             ) : null}
 
-            <fieldset className="share-sheet__fieldset" disabled={cloud.busy}>
+            <fieldset
+              className={
+                shareSheetBusy
+                  ? "share-sheet__fieldset share-sheet__fieldset--locked"
+                  : "share-sheet__fieldset"
+              }
+            >
               <legend className="share-sheet__legend">
                 {isFork ? "Who can access your copy" : "Who can access"}
               </legend>
               <ul className="share-sheet__list">
                 {ACCESS_OPTIONS.map((option) => (
                   <li key={option.value}>
-                    <label className="share-sheet__row">
+                    <label
+                      className={
+                        audience === option.value
+                          ? "share-sheet__row share-sheet__row--selected"
+                          : "share-sheet__row"
+                      }
+                    >
                       <input
                         type="radio"
                         name={`access-${appId}`}
                         checked={audience === option.value}
-                        onChange={() => pickAudience(option.value)}
+                        onChange={() => {
+                          if (shareSheetBusy) return;
+                          pickAudience(option.value);
+                        }}
                       />
                       <span className="share-sheet__row-text">
                         <span className="share-sheet__row-label">{option.label}</span>
@@ -708,9 +892,9 @@ export function MiniAppPublishBar({
                     <input
                       type="checkbox"
                       checked={requireSignIn}
-                      disabled={cloud.busy}
                       onChange={(event) => {
-                        applySharing(audience, permission, event.target.checked);
+                        if (shareSheetBusy) return;
+                        void applySharing(audience, permission, event.target.checked);
                       }}
                     />
                     <span>Require Papr sign-in</span>
@@ -725,26 +909,37 @@ export function MiniAppPublishBar({
             </fieldset>
 
             {audience !== "private" ? (
-              <fieldset className="share-sheet__fieldset" disabled={cloud.busy}>
+              <fieldset
+                className={
+                  shareSheetBusy
+                    ? "share-sheet__fieldset share-sheet__fieldset--locked"
+                    : "share-sheet__fieldset"
+                }
+              >
                 <legend className="share-sheet__legend">What can they do</legend>
                 <ul className="share-sheet__list">
                   {PERMISSION_OPTIONS.map((option) => {
                     const available = isPermissionAvailable(audience, option.value);
+                    const selected = permission === option.value;
                     return (
                       <li key={option.value}>
                         <label
                           className={
-                            available
-                              ? "share-sheet__row"
-                              : "share-sheet__row share-sheet__row--disabled"
+                            !available
+                              ? "share-sheet__row share-sheet__row--disabled"
+                              : selected
+                                ? "share-sheet__row share-sheet__row--selected"
+                                : "share-sheet__row"
                           }
                         >
                           <input
                             type="radio"
                             name={`permission-${appId}`}
-                            checked={permission === option.value}
-                            disabled={!available}
-                            onChange={() => pickPermission(option.value)}
+                            checked={selected}
+                            onChange={() => {
+                              if (shareSheetBusy || !available) return;
+                              pickPermission(option.value);
+                            }}
                           />
                           <span className="share-sheet__row-text">
                             <span className="share-sheet__row-label">{option.label}</span>
@@ -771,7 +966,7 @@ export function MiniAppPublishBar({
                 <button
                   type="button"
                   className="share-sheet__primary-btn"
-                  disabled={cloud.busy || cloud.loading}
+                  disabled={shareSheetBusy || cloud.loading}
                   onClick={() => void handlePublishClick()}
                 >
                   {isFork ? "Publish your copy" : "Publish on Web"}

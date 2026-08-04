@@ -158,6 +158,7 @@ export interface ElectronAPI {
         activeNamespaceName?: string;
         workspaceId?: string;
         workspaceName?: string;
+        planName?: string;
       };
       error?: string;
     }>;
@@ -174,6 +175,7 @@ export interface ElectronAPI {
         activeNamespaceName?: string;
         workspaceId?: string;
         workspaceName?: string;
+        planName?: string;
       };
       error?: string;
     }>;
@@ -220,6 +222,28 @@ export interface ElectronAPI {
     removeLoginSuccessListener: (callback: (data: { email: string; name?: string; userId?: string }) => void) => void;
     onLoginError: (callback: (data: { error: string }) => void) => void;
     removeLoginErrorListener: (callback: (data: { error: string }) => void) => void;
+    onSetupRequired: (callback: (data: {
+      orgName: string;
+      namespaceName: string;
+      needsOrg: boolean;
+      needsNamespace: boolean;
+    }) => void) => void;
+    removeSetupRequiredListener: (callback: (data: {
+      orgName: string;
+      namespaceName: string;
+      needsOrg: boolean;
+      needsNamespace: boolean;
+    }) => void) => void;
+    completeOrgSetup: (input: {
+      orgName?: string;
+      namespaceName?: string;
+    }) => Promise<{
+      success: boolean;
+      email?: string;
+      name?: string;
+      userId?: string;
+      error?: string;
+    }>;
     onLogoutSuccess: (callback: () => void) => void;
     removeLogoutSuccessListener: (callback: () => void) => void;
     listNamespaces: (options?: { organizationId?: string; forceRefresh?: boolean; peek?: boolean }) => Promise<{

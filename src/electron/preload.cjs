@@ -92,9 +92,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("papr:login-error", (_event, data) => {
       window.dispatchEvent(new CustomEvent("papr-login-error", { detail: data }));
     });
+    ipcRenderer.on("papr:setup-required", (_event, data) => {
+      window.dispatchEvent(new CustomEvent("papr-setup-required", { detail: data }));
+    });
 
     const loginSuccessListenerMap = new WeakMap();
     const loginErrorListenerMap = new WeakMap();
+    const setupRequiredListenerMap = new WeakMap();
     const logoutSuccessListenerMap = new WeakMap();
     const namespaceChangedListenerMap = new WeakMap();
     const organizationChangedListenerMap = new WeakMap();
@@ -102,6 +106,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
     return {
       checkLoginStatus: () => ipcRenderer.invoke("papr:check-login-status"),
+      completeOrgSetup: (input) => ipcRenderer.invoke("papr:complete-org-setup", input),
       startLogin: (mode, source) => ipcRenderer.invoke("papr:start-login", mode, source),
       logout: () => ipcRenderer.invoke("papr:logout"),
       getProfile: () => ipcRenderer.invoke("papr:get-profile"),
@@ -141,6 +146,21 @@ contextBridge.exposeInMainWorld("electronAPI", {
         if (wrapper) {
           ipcRenderer.removeListener("papr:login-error", wrapper);
           loginErrorListenerMap.delete(callback);
+        }
+      },
+
+      onSetupRequired: (callback) => {
+        const wrapper = (_event, data) => {
+          callback(data);
+        };
+        setupRequiredListenerMap.set(callback, wrapper);
+        ipcRenderer.on("papr:setup-required", wrapper);
+      },
+      removeSetupRequiredListener: (callback) => {
+        const wrapper = setupRequiredListenerMap.get(callback);
+        if (wrapper) {
+          ipcRenderer.removeListener("papr:setup-required", wrapper);
+          setupRequiredListenerMap.delete(callback);
         }
       },
       

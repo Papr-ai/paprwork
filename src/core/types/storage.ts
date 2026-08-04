@@ -104,6 +104,8 @@ export interface AppSettings {
     /** Papr workspace tied to the active namespace (for team access on cloud apps) */
     workspaceId?: string;
     workspaceName?: string;
+    /** Last known billing plan label (sidebar + settings; refreshed via getPlanSummary) */
+    planName?: string;
   };
   compaction: CompactionConfig;
   permissions: PermissionSettings;

@@ -20,12 +20,17 @@ import {
   CLOUD_REPO_HEAD_RELATIVE_PATH,
   parseCloudRepoHeadContent,
 } from "../cloudSync/cloudRepoHeadMarker.js";
+import {
+  PAPR_APP_CLOUD_REVISION_PATH,
+  parseAppCloudRevisionContent,
+} from "../cloudSync/cloudAppRevisionMarker.js";
 
 /**
  * Repo files: stale-while-revalidate for repeat viewers. Cache keys include the
- * git head marker (`data/cloud-repo-head.txt`) so a desktop sync busts edge
- * caches without Cmd+Shift+R. Browser reload (F5) bypasses SWR via
- * shouldBypassRepoFileCache().
+ * per-app revision marker (`.papr-cloud-revision`, dist bundle hash) so syncing
+ * one app does not bust caches for other apps in the same git repo. Legacy apps
+ * without the marker fall back to repo-wide `data/cloud-repo-head.txt`.
+ * Browser reload (F5) bypasses SWR via shouldBypassRepoFileCache().
  */
 const REPO_FILE_FRESH_MS = 600_000;
 const REPO_FILE_STALE_MS = 86_400_000;
@@ -113,7 +118,7 @@ function repoFileCacheKey(
   return `${runtimeAuthKey(auth)}:${revision}:${relativePath}`;
 }
 
-async function getRepoRevision(
+async function getAppCacheRevision(
   auth: AppRuntimeRouteAuth,
   bypassRevisionCache: boolean,
 ): Promise<string> {
@@ -126,8 +131,15 @@ async function getRepoRevision(
   }
 
   try {
-    const file = await fetchRuntimeRepoFile(auth, CLOUD_REPO_HEAD_RELATIVE_PATH);
-    const revision = file ? parseCloudRepoHeadContent(file.content) : "0";
+    const markerFile = await fetchRuntimeRepoFile(auth, PAPR_APP_CLOUD_REVISION_PATH);
+    if (markerFile) {
+      const revision = parseAppCloudRevisionContent(markerFile.content);
+      writeTimed(repoRevisionCache, revKey, revision, REPO_REVISION_TTL_MS);
+      return revision;
+    }
+
+    const headFile = await fetchRuntimeRepoFile(auth, CLOUD_REPO_HEAD_RELATIVE_PATH);
+    const revision = headFile ? parseCloudRepoHeadContent(headFile.content) : "0";
     writeTimed(repoRevisionCache, revKey, revision, REPO_REVISION_TTL_MS);
     return revision;
   } catch {
@@ -139,6 +151,12 @@ function writeRepoFileEntry(
   key: string,
   value: { content: string; contentType: string } | null,
 ): void {
+  // Never long-cache missing files — a transient GitHub/memory 404 must not
+  // make published apps look dead for hours until desktop sync busts cache.
+  if (!value) {
+    repoFileCache.delete(key);
+    return;
+  }
   const now = Date.now();
   repoFileCache.set(key, {
     value,
@@ -160,7 +178,7 @@ export async function fetchCachedRuntimeRepoFile(
     bypassFresh?: boolean;
   },
 ): Promise<{ content: string; contentType: string } | null> {
-  const revision = await getRepoRevision(auth, opts?.bypassFresh === true);
+  const revision = await getAppCacheRevision(auth, opts?.bypassFresh === true);
   const key = repoFileCacheKey(auth, revision, relativePath);
   const now = Date.now();
   const entry = repoFileCache.get(key);
@@ -174,17 +192,17 @@ export async function fetchCachedRuntimeRepoFile(
       }
       return file;
     } catch {
-      // Origin refetch failed — fall back to whatever we have cached.
-      if (entry && now <= entry.staleUntil) return entry.value;
+      // Origin refetch failed — fall back to cached hit only (never a cached miss).
+      if (entry?.value && now <= entry.staleUntil) return entry.value;
       throw new Error(`Failed to fetch ${relativePath}`);
     }
   }
 
-  if (entry && now <= entry.freshUntil) {
+  if (entry?.value && now <= entry.freshUntil) {
     return entry.value;
   }
 
-  if (entry && now <= entry.staleUntil) {
+  if (entry?.value && now <= entry.staleUntil) {
     // Stale-while-revalidate: serve stale immediately, refresh in background.
     if (!entry.revalidating) {
       entry.revalidating = true;
@@ -236,7 +254,10 @@ export async function validateCachedAccess(
     sessionToken: runtimeAuth.sessionToken,
     shareToken: runtimeAuth.shareToken,
   });
-  writeTimed(accessCache, key, access, ACCESS_TTL_MS);
+  // Do not negative-cache denials — shared cookies can briefly point at the wrong app.
+  if (access !== null) {
+    writeTimed(accessCache, key, access, ACCESS_TTL_MS);
+  }
   return access;
 }
 

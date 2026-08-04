@@ -10,6 +10,7 @@ import {
   DATABASES_REGISTRY_FILENAME,
   getDatabaseRegistryService,
 } from "../DatabaseRegistryService.js";
+import { LINKED_DATABASES_FILENAME } from "../cloudSync/linkedDatabasesForCloud.js";
 import type { AppDataSourcesFile } from "../appDataSources.js";
 import { fetchCachedRuntimeRepoFile } from "./cloudAppHostCache.js";
 import type { AppRuntimeRouteAuth } from "./types.js";
@@ -21,6 +22,14 @@ export async function hydrateCloudDatabaseRegistry(
   config?: AppDataSourcesFile,
 ): Promise<void> {
   const registry = getDatabaseRegistryService();
+
+  const linked = await fetchCachedRuntimeRepoFile(
+    runtimeAuth,
+    LINKED_DATABASES_FILENAME,
+  );
+  if (linked?.content) {
+    registry.mergeFromRegistryFile(linked.content);
+  }
 
   const file = await fetchCachedRuntimeRepoFile(runtimeAuth, REGISTRY_REPO_PATH);
   if (file?.content) {

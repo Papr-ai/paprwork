@@ -1,6 +1,9 @@
 /**
- * Resolve the built-in WorkspaceContext knowledge-graph schema for the active namespace.
- * Used by add_agent_memory (graph mode auto) and local wiki entity sync.
+ * Resolve the WorkspaceContext knowledge-graph schema for the active namespace.
+ *
+ * Schema selection is client-driven (same pattern as code indexing):
+ * - Paprwork resolves the schema ID and passes policy.graph.schema_id
+ * - Memory server uses that ID, or LLM auto-selects when none is provided
  */
 
 import type Papr from "@papr/memory";
@@ -25,6 +28,7 @@ export function clearWorkspaceContextSchemaCache(): void {
   cachedAtMs = 0;
 }
 
+/** List active WorkspaceContext schema in the namespace (does not register). */
 export async function resolveWorkspaceContextSchemaId(
   client?: Papr,
 ): Promise<string | undefined> {
@@ -70,16 +74,35 @@ export async function resolveWorkspaceContextSchemaId(
   return undefined;
 }
 
-/** Default add policy for agent memories: optional signal domain + graph auto extraction. */
+/**
+ * Default add policy for agent memories.
+ *
+ * Passes an explicit graph schema when resolved (WorkspaceContext for wiki/meeting
+ * memories). When no schema is found, omits graph policy so the memory server can
+ * auto-select or skip — same separation as code indexing (client picks schema/domain).
+ */
 export async function buildAgentMemoryAddPolicy(input?: {
   signalDomain?: string;
+  /** Override graph schema (e.g. custom KG schema). Defaults to WorkspaceContext. */
+  graphSchemaId?: string;
   client?: Papr;
 }): Promise<MemoryAddPolicy | undefined> {
-  const schemaId = await resolveWorkspaceContextSchemaId(input?.client);
+  const schemaId =
+    input?.graphSchemaId ??
+    (await resolveWorkspaceContextSchemaId(input?.client));
+
+  if (!schemaId) {
+    console.warn(
+      "[WorkspaceContextSchema] No graph schema resolved — omitting graph policy; memory server will auto-select if graph extraction runs.",
+    );
+    return buildAddPolicy({
+      signalDomain: input?.signalDomain,
+    });
+  }
+
   return buildAddPolicy({
     signalDomain: input?.signalDomain,
-    ...(schemaId
-      ? { graphMode: "auto" as const, graphSchemaId: schemaId }
-      : {}),
+    graphMode: "auto",
+    graphSchemaId: schemaId,
   });
 }

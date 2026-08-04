@@ -929,40 +929,41 @@ function AboutTab() {
           </div>
         </div>
 
-        {currentVersion === "2.2.3" && (
+        {currentVersion === "2.2.4" && (
           <div className="about-card">
-            <h3>What's New in v2.2.3</h3>
+            <h3>What's New in v2.2.4</h3>
             <ul className="whats-new-list">
               <li className="whats-new-list__item">
-                <strong>Smoother Papr Login</strong>
+                <strong>Embedded App Agent Chat</strong>
                 <p>
-                  Sign-in uses a localhost callback with a branded success page
-                  instead of relying only on deep links.
+                  Multi-turn agent chat inside mini-apps with a dedicated panel,
+                  session persistence, and scoped tool access.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Multi-Org Team Picker</strong>
+                <strong>Org & Namespace Setup</strong>
                 <p>
-                  The Team picker now shows namespaces from every organization
-                  on your workspace, and switching teams no longer bounces back.
+                  New users name their organization and team space right after
+                  signing in, before entering the app.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Faster Community Catalog</strong>
+                <strong>Cloud Publish & Sync</strong>
                 <p>
-                  Team and community app lists load from cache instantly, then
-                  refresh in the background.
+                  Improved publish bar, cloud revision tracking, linked database
+                  sync, and upstream fork workflow.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Login Funnel Telemetry</strong>
+                <strong>Faster Workspace Switching</strong>
                 <p>
-                  Each login step is tracked to help diagnose auth issues faster.
+                  Tabs and UI state restore instantly after switching teams with
+                  background reload.
                 </p>
               </li>
             </ul>
             <a
-              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.2.3"
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.2.4"
               target="_blank"
               rel="noopener noreferrer"
               className="about-link whats-new-list__link"

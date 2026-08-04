@@ -38,6 +38,7 @@ let telemetryClientInstance = null;
 let initializePaprLoginIPC;
 let ensureActiveNamespaceApiKey;
 let resolveActivePaprApiKey;
+let setGatewayRestartAfterWorkspaceSwitch;
 let cleanupPaprLogin;
 let handlePaprAuthCallback;
 let trackPaprLoginDeepLinkQueued;
@@ -133,6 +134,11 @@ async function loadESMModules() {
   trackPaprLoginDeepLinkQueued = paprLoginIpcModule.trackPaprLoginDeepLinkQueued;
   trackPaprLoginDeepLinkFlushStarted = paprLoginIpcModule.trackPaprLoginDeepLinkFlushStarted;
   syncProfileToGatewaySettings = paprLoginIpcModule.syncProfileToGatewaySettings;
+
+  const paprWorkspaceIpcModule =
+    await importWithRetry("../../dist/electron/electron/ipc/paprWorkspace.js");
+  setGatewayRestartAfterWorkspaceSwitch =
+    paprWorkspaceIpcModule.setGatewayRestartAfterWorkspaceSwitch;
 
   // Import Ollama IPC module
   const ollamaIpcModule =
@@ -903,16 +909,31 @@ function readActiveWorkspacePointer() {
   }
 }
 
+function paprApiKeyMatchesNamespaceBound(apiKey, organizationId, namespaceId) {
+  const trimmed = apiKey.trim();
+  const prefix = `sk-org-${organizationId}-namespace-${namespaceId}-`;
+  if (trimmed.startsWith(prefix)) {
+    return true;
+  }
+  const match = trimmed.match(/^sk-org-([^-]+)-namespace-([^-]+)(?:-.+)?$/);
+  if (!match) {
+    // Legacy keys omit embedded namespace — trust vault slot / GraphQL binding.
+    return true;
+  }
+  return match[2] === namespaceId;
+}
+
 function paprApiKeyMatchesActiveWorkspace(apiKey) {
+  const trimmed = apiKey.trim();
+  const match = trimmed.match(/^sk-org-([^-]+)-namespace-([^-]+)(?:-.+)?$/);
+  if (!match) {
+    return false;
+  }
+
   const orgId = process.env.PAPR_ORG_ID?.trim();
   const namespaceId = process.env.PAPR_NAMESPACE_ID?.trim();
   if (orgId && namespaceId) {
-    const prefix = `sk-org-${orgId}-namespace-${namespaceId}-`;
-    if (apiKey.startsWith(prefix)) {
-      return true;
-    }
-    const match = apiKey.match(/^sk-org-([^-]+)-namespace-([^-]+)(?:-.+)?$/);
-    return match?.[2] === namespaceId;
+    return paprApiKeyMatchesNamespaceBound(apiKey, orgId, namespaceId);
   }
 
   const pointer = readActiveWorkspacePointer();
@@ -920,12 +941,11 @@ function paprApiKeyMatchesActiveWorkspace(apiKey) {
     return true;
   }
 
-  const prefix = `sk-org-${pointer.organizationId}-namespace-${pointer.namespaceId}-`;
-  if (apiKey.startsWith(prefix)) {
-    return true;
-  }
-  const match = apiKey.match(/^sk-org-([^-]+)-namespace-([^-]+)(?:-.+)?$/);
-  return match?.[2] === pointer.namespaceId;
+  return paprApiKeyMatchesNamespaceBound(
+    apiKey,
+    pointer.organizationId,
+    pointer.namespaceId,
+  );
 }
 
 // Pure logic functions — imported from separate file for unit testing
@@ -946,6 +966,7 @@ class GatewayProcessSupervisor {
     this.gatewayArgs = options.gatewayArgs ?? [];
     this.electronNodePath = options.electronNodePath;
     this.gatewayEnv = options.gatewayEnv;
+    this.readActiveWorkspaceEnv = options.readActiveWorkspaceEnv ?? null;
     this.port = options.port;
     this.customKeysStorage = options.customKeysStorage;
     this.settingsStorage = options.settingsStorage ?? null;
@@ -1103,18 +1124,28 @@ class GatewayProcessSupervisor {
     }
   }
 
+  _resolveSpawnEnv() {
+    const workspaceEnv =
+      typeof this.readActiveWorkspaceEnv === "function"
+        ? this.readActiveWorkspaceEnv()
+        : {};
+    return { ...this.gatewayEnv, ...workspaceEnv };
+  }
+
   _spawnProcess() {
     console.log(`[Supervisor] Starting Gateway on port ${this.port}...`);
     console.log(
       `[Supervisor] Gateway spawn: ${this.electronNodePath} ${this.gatewayScript} ${this.gatewayArgs.join(" ")}`.trim(),
     );
 
+    const spawnEnv = this._resolveSpawnEnv();
+
     this.process = spawn(
       this.electronNodePath,
       [this.gatewayScript, ...this.gatewayArgs],
       {
       stdio: ["inherit", "inherit", "inherit", "ipc"],
-      env: this.gatewayEnv,
+      env: spawnEnv,
       },
     );
 
@@ -1163,8 +1194,22 @@ class GatewayProcessSupervisor {
                 value = await ensureActiveNamespaceApiKey(storage, settings);
               }
               if (value) {
-                resolvedKeys[keyName] = value;
-                console.log(`[Electron]   ✓ Resolved ${keyName}`);
+                const pointer = readActiveWorkspacePointer();
+                const boundOk =
+                  !pointer ||
+                  paprApiKeyMatchesNamespaceBound(
+                    value,
+                    pointer.organizationId,
+                    pointer.namespaceId,
+                  );
+                if (boundOk) {
+                  resolvedKeys[keyName] = value;
+                  console.log(`[Electron]   ✓ Resolved ${keyName}`);
+                } else {
+                  console.warn(
+                    "[Electron]   ✗ PAPR_API_KEY resolved with wrong namespace scope — omitting",
+                  );
+                }
               } else {
                 const envFallback = process.env[keyName];
                 if (
@@ -1419,6 +1464,35 @@ class GatewayProcessSupervisor {
     this._sendStatusToRenderer("running", "Gateway reconnected");
   }
 
+  /** Restart gateway after workspace pointer change (Electron-side recovery). */
+  async restartForWorkspaceSwitch() {
+    if (this.isStopping) {
+      return;
+    }
+    console.log("[Supervisor] Restarting gateway for workspace switch recovery...");
+    this._stopHealthCheck();
+    if (this.process && !this.process.killed) {
+      try {
+        this.process.kill("SIGTERM");
+      } catch {
+        // Process may already be exiting
+      }
+      await new Promise((resolve) => {
+        let attempts = 0;
+        const timer = setInterval(() => {
+          attempts++;
+          if (!this.process || this.process.killed || attempts >= 30) {
+            clearInterval(timer);
+            resolve();
+          }
+        }, 100);
+      });
+      this.process = null;
+      gatewayProcess = null;
+    }
+    await this._performRestart();
+  }
+
   _startHealthCheck() {
     this.healthFailures = 0;
     this._stopHealthCheck();
@@ -1665,6 +1739,42 @@ function formatUpdateError(rawMessage) {
   return { error: message };
 }
 
+/**
+ * Synchronously kill Gateway before ShipIt swaps the app bundle.
+ * Graceful async cleanup races ShipIt; skipping cleanup leaves native module
+ * file locks inside the .app and the update never installs or relaunches.
+ */
+function fastKillChildProcessesForUpdate() {
+  if (!supervisor) {
+    return;
+  }
+
+  supervisor.isStopping = true;
+  supervisor._stopHealthCheck();
+  if (supervisor.backoffTimer) {
+    clearTimeout(supervisor.backoffTimer);
+    supervisor.backoffTimer = null;
+  }
+
+  const proc = supervisor.getProcess();
+  if (proc && !proc.killed) {
+    console.log("[AutoUpdater] SIGKILL Gateway before update (PID:", proc.pid, ")");
+    try {
+      proc.kill("SIGKILL");
+    } catch (error) {
+      console.warn("[AutoUpdater] Gateway SIGKILL failed:", error.message);
+    }
+  }
+
+  supervisor.process = null;
+  gatewayProcess = null;
+  if (setGatewayProcess) {
+    setGatewayProcess(null);
+  }
+
+  supervisor._killOrphans();
+}
+
 function setupAutoUpdater() {
   autoUpdater.autoDownload = true;
   // Only install when the user explicitly clicks "Restart to update".
@@ -1707,7 +1817,19 @@ function setupAutoUpdater() {
     console.log("[AutoUpdater] User requested install, quitting and installing...");
     isInstallingUpdate = true;
     isQuitting = true;
-    autoUpdater.quitAndInstall(false, true);
+
+    fastKillChildProcessesForUpdate();
+
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        win.destroy();
+      }
+    }
+
+    // Brief delay so the OS releases native module file handles before ShipIt runs.
+    setTimeout(() => {
+      autoUpdater.quitAndInstall(false, true);
+    }, 300);
   });
 
   // IPC: renderer can manually trigger a check
@@ -2228,6 +2350,7 @@ app.whenReady().then(async () => {
     gatewayArgs,
     electronNodePath: process.execPath,
     gatewayEnv,
+    readActiveWorkspaceEnv,
     port: GATEWAY_PORT,
     customKeysStorage,
     settingsStorage,
@@ -2235,6 +2358,10 @@ app.whenReady().then(async () => {
       readActiveWorkspacePointerOrgId() ||
       settingsStorage.getPaprProfile()?.organizationId,
   });
+
+  if (setGatewayRestartAfterWorkspaceSwitch) {
+    setGatewayRestartAfterWorkspaceSwitch(() => supervisor.restartForWorkspaceSwitch());
+  }
 
   await supervisor.start();
   await createMainWindow();
@@ -2359,8 +2486,9 @@ app.on("activate", async () => {
 app.on("before-quit", async (event) => {
   // ShipIt needs an immediate quit — async cleanup races the bundle swap.
   if (isInstallingUpdate) {
-    console.log("[Electron] Installing update — fast quit (skipping cleanup)");
+    console.log("[Electron] Installing update — fast quit (skipping async cleanup)");
     isQuitting = true;
+    fastKillChildProcessesForUpdate();
     return;
   }
 
@@ -2438,7 +2566,8 @@ app.on("will-quit", (event) => {
   console.log("[Electron] App will quit - final cleanup");
 
   if (isInstallingUpdate) {
-    console.log("[Electron] Installing update — skipping Gateway force-kill");
+    console.log("[Electron] Installing update — final Gateway kill for ShipIt");
+    fastKillChildProcessesForUpdate();
     return;
   }
   

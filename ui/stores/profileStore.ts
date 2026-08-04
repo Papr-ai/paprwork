@@ -57,16 +57,16 @@ async function fetchProfileContext(): Promise<{
   namespaceName: string;
   workspaceName: string;
 }> {
-  const cached = readProfileSidebarCache();
-  if (isWorkspaceSwitchReloading() && cached) {
+  const sidebarCache = readProfileSidebarCache();
+  if (isWorkspaceSwitchReloading() && sidebarCache) {
     return {
-      name: cached.name,
-      email: cached.email,
-      imageUrl: cached.imageUrl,
-      plan: cached.plan,
-      organizationName: cached.organizationName,
-      namespaceName: cached.namespaceName,
-      workspaceName: cached.workspaceName,
+      name: sidebarCache.name,
+      email: sidebarCache.email,
+      imageUrl: sidebarCache.imageUrl,
+      plan: sidebarCache.plan,
+      organizationName: sidebarCache.organizationName,
+      namespaceName: sidebarCache.namespaceName,
+      workspaceName: sidebarCache.workspaceName,
     };
   }
 
@@ -82,7 +82,8 @@ async function fetchProfileContext(): Promise<{
   let name = settingsData?.profile?.name ?? "";
   let email = settingsData?.profile?.email ?? "";
   let imageUrl = settingsData?.profile?.imageUrl ?? "";
-  let plan = "";
+  // Keep last-known plan from sidebar cache until billing refresh succeeds.
+  let plan = sidebarCache?.plan ?? "";
   let organizationName = "";
   let namespaceName = "";
   let workspaceName = "";
@@ -113,6 +114,10 @@ async function fetchProfileContext(): Promise<{
       imageUrl = cloudImage;
     } else if (!imageUrl) {
       imageUrl = "";
+    }
+    const profilePlan = paprProfile.planName?.trim();
+    if (profilePlan) {
+      plan = profilePlan;
     }
     namespaceName = paprProfile.activeNamespaceName?.trim() || namespaceName;
     workspaceName = paprProfile.workspaceName?.trim() || workspaceName;

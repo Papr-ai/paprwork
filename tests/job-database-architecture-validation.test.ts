@@ -3,7 +3,7 @@ import { tmpdir } from "os";
 import path from "path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
-import { validateJobAgainstAppDatabase } from "../src/gateway/services/jobs/jobDatabaseArchitectureValidation.js";
+import { validateJobAgainstAppDatabase, extractSqlSnippetsFromJobCommand } from "../src/gateway/services/jobs/jobDatabaseArchitectureValidation.js";
 
 const dirs: string[] = [];
 
@@ -87,5 +87,43 @@ describe("validateJobAgainstAppDatabase", () => {
       },
     });
     expect(issues).toHaveLength(0);
+  });
+
+  it("ignores SQL-like prose in agent job commands", () => {
+    const dbPath = fixture();
+    const proseCommand = [
+      "Score each deck dimension 1-5.",
+      "Use ON CONFLICT DO UPDATE to make reruns idempotent.",
+      "Redirect stderr into a file before running python3 score.py.",
+      "Never INSERT INTO a temp table without cleaning up.",
+    ].join(" ");
+    const issues = validateJobAgainstAppDatabase({
+      databasePath: dbPath,
+      command: proseCommand,
+      jobType: "agent",
+    });
+    expect(issues.filter((issue) => issue.severity === "error")).toHaveLength(0);
+  });
+
+  it("extracts sqlite3 SQL and ignores surrounding prose for script jobs", () => {
+    const issues = validateJobAgainstAppDatabase({
+      databasePath: fixture(),
+      command: [
+        "# DO UPDATE to make reruns idempotent — not SQL",
+        `sqlite3 "$APP_DB" 'INSERT INTO blog_picks(title) VALUES (?)'`,
+      ].join("\n"),
+      jobType: "python",
+    });
+    expect(issues.some((issue) => issue.rule === "job-table-missing-on-primary")).toBe(true);
+    expect(issues.some((issue) => issue.message.includes('"to"'))).toBe(false);
+    expect(issues.some((issue) => issue.message.includes('"a"'))).toBe(false);
+  });
+
+  it("extractSqlSnippetsFromJobCommand pulls quoted sqlite3 bodies only", () => {
+    const sql = extractSqlSnippetsFromJobCommand(
+      `notes about UPDATE to files\nsqlite3 "$APP_DB" 'SELECT * FROM deck_scores'`,
+    );
+    expect(sql).toContain("deck_scores");
+    expect(sql).not.toMatch(/\bUPDATE to\b/i);
   });
 });

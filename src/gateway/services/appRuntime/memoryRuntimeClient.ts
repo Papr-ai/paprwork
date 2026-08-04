@@ -20,10 +20,10 @@ function getCloudAppHostKey(): string {
 }
 
 const DEFAULT_RUNTIME_FETCH_TIMEOUT_MS = Number(
-  process.env.CLOUD_APP_HOST_MEMORY_TIMEOUT_MS ?? 25_000,
+  process.env.CLOUD_APP_HOST_MEMORY_TIMEOUT_MS ?? 90_000,
 );
 
-/** Fail fast when memory.papr.ai is slow — avoids opaque Cloud Run 504s at 60s. */
+/** Abort hung memory.papr.ai calls before Cloud Run's 120s request limit. */
 export async function runtimeFetch(
   url: string,
   init: RequestInit,
@@ -59,6 +59,20 @@ function runtimeHeaders(auth: AppRuntimeRouteAuth): Record<string, string> {
   return headers;
 }
 
+/** Common auth fields for memory runtime POST bodies (session + key + share link). */
+export function runtimeAuthPayload(
+  auth: AppRuntimeRouteAuth,
+): Record<string, string> {
+  const payload: Record<string, string> = {
+    namespaceId: auth.namespaceId,
+    slug: auth.slug,
+  };
+  if (auth.paprApiKey) payload.paprApiKey = auth.paprApiKey;
+  if (auth.shareToken) payload.shareToken = auth.shareToken;
+  if (auth.sessionToken) payload.sessionToken = auth.sessionToken;
+  return payload;
+}
+
 export async function fetchRuntimeDbToken(
   auth: AppRuntimeRouteAuth,
   database: string,
@@ -69,10 +83,7 @@ export async function fetchRuntimeDbToken(
       method: "POST",
       headers: runtimeHeaders(auth),
       body: JSON.stringify({
-        namespaceId: auth.namespaceId,
-        slug: auth.slug,
-        paprApiKey: auth.paprApiKey,
-        shareToken: auth.shareToken,
+        ...runtimeAuthPayload(auth),
         database,
       }),
     },
@@ -96,10 +107,7 @@ export async function fetchRuntimeRepoFile(
       method: "POST",
       headers: runtimeHeaders(auth),
       body: JSON.stringify({
-        namespaceId: auth.namespaceId,
-        slug: auth.slug,
-        paprApiKey: auth.paprApiKey,
-        shareToken: auth.shareToken,
+        ...runtimeAuthPayload(auth),
         relativePath,
       }),
     },
@@ -183,10 +191,7 @@ export async function resolveRuntimeVaultEnv(
       method: "POST",
       headers: runtimeHeaders(auth),
       body: JSON.stringify({
-        namespaceId: auth.namespaceId,
-        slug: auth.slug,
-        paprApiKey: auth.paprApiKey,
-        shareToken: auth.shareToken,
+        ...runtimeAuthPayload(auth),
         keyNames: options?.keyNames,
       }),
     },
@@ -217,10 +222,7 @@ export async function resolveRuntimeVaultClientKeys(
       method: "POST",
       headers: runtimeHeaders(auth),
       body: JSON.stringify({
-        namespaceId: auth.namespaceId,
-        slug: auth.slug,
-        paprApiKey: auth.paprApiKey,
-        shareToken: auth.shareToken,
+        ...runtimeAuthPayload(auth),
         keyNames: options?.keyNames,
       }),
     },
@@ -283,10 +285,7 @@ export async function runRuntimeJob(
       method: "POST",
       headers: runtimeHeaders(auth),
       body: JSON.stringify({
-        namespaceId: auth.namespaceId,
-        slug: auth.slug,
-        paprApiKey: auth.paprApiKey,
-        shareToken: auth.shareToken,
+        ...runtimeAuthPayload(auth),
         jobId: input.jobId,
         params: input.params,
         timeoutMs: input.timeoutMs,
@@ -313,10 +312,7 @@ export async function listRuntimeJobs(
       method: "POST",
       headers: runtimeHeaders(auth),
       body: JSON.stringify({
-        namespaceId: auth.namespaceId,
-        slug: auth.slug,
-        paprApiKey: auth.paprApiKey,
-        shareToken: auth.shareToken,
+        ...runtimeAuthPayload(auth),
       }),
     },
   );
@@ -353,10 +349,7 @@ export async function runRuntimeBash(
       method: "POST",
       headers: runtimeHeaders(auth),
       body: JSON.stringify({
-        namespaceId: auth.namespaceId,
-        slug: auth.slug,
-        paprApiKey: auth.paprApiKey,
-        shareToken: auth.shareToken,
+        ...runtimeAuthPayload(auth),
         command: input.command,
         timeoutMs: input.timeoutMs,
         keyNames: input.keyNames,
@@ -399,10 +392,7 @@ export async function warmRuntimeAppAgentChat(
       method: "POST",
       headers: runtimeHeaders(auth),
       body: JSON.stringify({
-        namespaceId: auth.namespaceId,
-        slug: auth.slug,
-        paprApiKey: auth.paprApiKey,
-        shareToken: auth.shareToken,
+        ...runtimeAuthPayload(auth),
         sessionId: input.sessionId,
         appId: input.appId,
         subAgentId: input.subAgentId,
@@ -448,10 +438,7 @@ export async function streamRuntimeAppAgentChat(
       method: "POST",
       headers: runtimeHeaders(auth),
       body: JSON.stringify({
-        namespaceId: auth.namespaceId,
-        slug: auth.slug,
-        paprApiKey: auth.paprApiKey,
-        shareToken: auth.shareToken,
+        ...runtimeAuthPayload(auth),
         sessionId: input.sessionId,
         appId: input.appId,
         subAgentId: input.subAgentId,

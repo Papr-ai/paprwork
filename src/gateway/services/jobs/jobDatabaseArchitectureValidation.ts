@@ -17,6 +17,36 @@ export interface JobDatabaseValidationInput {
   command?: string;
   databasePath: string;
   contract?: AppDataContract | null;
+  /** agent/subagent commands are natural-language prompts, not SQL */
+  jobType?: string;
+}
+
+const AGENT_LIKE_JOB_TYPES = new Set(["agent", "subagent"]);
+
+/** Pull SQL out of sqlite3 invocations / explicit DDL — not from prose instructions. */
+export function extractSqlSnippetsFromJobCommand(command: string): string {
+  const snippets: string[] = [];
+
+  for (const match of command.matchAll(
+    /sqlite3\s+(?:\$APP_DB|\$PAPR_DB_\w+|\$\{[^}]+\}|"[^"]+"|'[^']+')\s+(['"])([\s\S]*?)\1/gi,
+  )) {
+    snippets.push(match[2]);
+  }
+
+  for (const match of command.matchAll(
+    /(?:^|[;\n])\s*(CREATE\s+TABLE[\s\S]*?;|ALTER\s+TABLE[\s\S]*?;|INSERT\s+INTO[\s\S]*?;|UPDATE[\s\S]*?;|DELETE\s+FROM[\s\S]*?;)/gi,
+  )) {
+    snippets.push(match[1].trim());
+  }
+
+  return snippets.join("\n");
+}
+
+function shouldScanCommandForSql(input: JobDatabaseValidationInput): boolean {
+  if (input.jobType && AGENT_LIKE_JOB_TYPES.has(input.jobType)) {
+    return false;
+  }
+  return true;
 }
 
 const TABLE_REFERENCE =
@@ -59,7 +89,10 @@ function referencedColumns(text: string): Map<string, Set<string>> {
 export function validateJobAgainstAppDatabase(
   input: JobDatabaseValidationInput,
 ): JobArchitectureIssue[] {
-  const text = input.command ?? "";
+  const scanCommand = shouldScanCommandForSql(input);
+  const text = scanCommand
+    ? extractSqlSnippetsFromJobCommand(input.command ?? "")
+    : "";
   const issues: JobArchitectureIssue[] = [];
 
   if (!existsSync(input.databasePath)) {
@@ -105,6 +138,7 @@ export function validateJobAgainstAppDatabase(
     }
 
     for (const table of referenced) {
+      if (!scanCommand || !text.trim()) continue;
       if (!tables.has(table) && !created.has(table)) {
         issues.push({
           rule: "job-table-missing-on-primary",
@@ -115,7 +149,10 @@ export function validateJobAgainstAppDatabase(
       }
     }
 
-    const checkedTables = new Set([...columnsByTable.keys(), ...Object.keys(input.contract?.tables ?? {}).map((name) => name.toLowerCase())]);
+    const checkedTables = new Set([
+      ...columnsByTable.keys(),
+      ...Object.keys(input.contract?.tables ?? {}).map((name) => name.toLowerCase()),
+    ]);
     for (const table of checkedTables) {
       if (!tables.has(table)) continue;
       const existingColumns = new Set(
@@ -123,15 +160,18 @@ export function validateJobAgainstAppDatabase(
           (row) => row.name.toLowerCase(),
         ),
       );
-      const referencedColumnsForTable = columnsByTable.get(table) ?? new Set<string>();
-      for (const column of referencedColumnsForTable) {
-        if (!existingColumns.has(column) && !addedColumns.get(table)?.has(column)) {
-          issues.push({
-            rule: "job-column-missing-on-primary",
-            severity: "error",
-            message: `Job writes column "${table}.${column}" but it is missing from the primary app database.`,
-            remediation: "Use the canonical column name or add and run a migration before updating the job.",
-          });
+      if (scanCommand && text.trim()) {
+        const referencedColumnsForTable = columnsByTable.get(table) ?? new Set<string>();
+        for (const column of referencedColumnsForTable) {
+          if (!existingColumns.has(column) && !addedColumns.get(table)?.has(column)) {
+            issues.push({
+              rule: "job-column-missing-on-primary",
+              severity: "error",
+              message: `Job writes column "${table}.${column}" but it is missing from the primary app database.`,
+              remediation:
+                "Use the canonical column name or add and run a migration before updating the job.",
+            });
+          }
         }
       }
       const contractTable = Object.entries(input.contract?.tables ?? {}).find(

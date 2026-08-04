@@ -50,6 +50,9 @@ export interface AppCloudSyncStatus {
   summaryLine: string;
   databases: AppCloudDatabaseStatus[];
   hasLinkedDatabases: boolean;
+  hasRegistryDatabases: boolean;
+  registryPhase: AppCloudItemPhase;
+  registryLabel: string;
   chipLabel: string;
   globallySyncing: boolean;
   /** Auto-republish after git push (publish catalog / vault allowlist). */
@@ -145,10 +148,17 @@ function buildSummaryLine(opts: {
   syncedJobCount: number;
   totalJobCount: number;
   dbPending: number;
+  registryNeedsSync: boolean;
   isUploading: boolean;
 }): string {
-  const { codePhase, syncedJobCount, totalJobCount, dbPending, isUploading } =
-    opts;
+  const {
+    codePhase,
+    syncedJobCount,
+    totalJobCount,
+    dbPending,
+    registryNeedsSync,
+    isUploading,
+  } = opts;
 
   if (isUploading) {
     if (totalJobCount > 0) {
@@ -163,6 +173,9 @@ function buildSummaryLine(opts: {
   }
   if (codePhase === "changed" || codePhase === "not_uploaded") {
     parts.push("app code not on web yet");
+  }
+  if (registryNeedsSync) {
+    parts.push("database registry not on web yet");
   }
   if (dbPending > 0) {
     parts.push(`${dbPending} database(s) need Turso sync`);
@@ -179,6 +192,7 @@ export function deriveAppCloudSyncStatus(
   gitGlobalStatus?: string | null,
   options?: {
     dependentJobIds?: readonly string[];
+    registryDbIds?: readonly string[];
     isUploading?: boolean;
     cloudPublishing?: boolean;
   },
@@ -199,6 +213,9 @@ export function deriveAppCloudSyncStatus(
       summaryLine: "Cloud sync is off",
       databases: [],
       hasLinkedDatabases: false,
+      hasRegistryDatabases: false,
+      registryPhase: "changed",
+      registryLabel: "Database registry not checked",
       chipLabel: "Cloud off",
       globallySyncing: false,
       cloudPublishing: false,
@@ -270,6 +287,29 @@ export function deriveAppCloudSyncStatus(
   const totalJobCount = dependentJobs.length;
   const dbPending = databases.filter((db) => db.status === "pending").length;
 
+  const registryDbIds =
+    options?.registryDbIds ?? items.appContext?.registryDbIds ?? [];
+  const hasRegistryDatabases = registryDbIds.length > 0;
+  // Registry ships beside data-sources.json as apps/{id}/linked-databases.json.
+  let registryPhase: AppCloudItemPhase = "synced";
+  if (!hasRegistryDatabases) {
+    registryPhase = "synced";
+  } else if (codePhase === "synced") {
+    registryPhase = "synced";
+  } else if (isUploading || codePhase === "uploading") {
+    registryPhase = "uploading";
+  } else if (codePhase === "not_uploaded") {
+    registryPhase = "not_uploaded";
+  } else {
+    registryPhase = "changed";
+  }
+  const registryNeedsSync = hasRegistryDatabases && registryPhase !== "synced";
+  const registryLabel = !hasRegistryDatabases
+    ? "No registry databases"
+    : registryPhase === "synced"
+      ? "Database registry (linked-databases.json) is on the web"
+      : "Database registry (linked-databases.json) not on web yet";
+
   const codePhaseDisplay =
     isUploading && codePhase !== "synced" ? "uploading" : codePhase;
   const codeLabel = codeDetail(codePhaseDisplay);
@@ -285,7 +325,8 @@ export function deriveAppCloudSyncStatus(
     dependentJobs.some(
       (job) => job.phase === "changed" || job.phase === "not_uploaded",
     ) ||
-    dbPending > 0;
+    dbPending > 0 ||
+    registryNeedsSync;
 
   let overall: AppCloudSyncOverall = "unknown";
   if (anyUploading) {
@@ -299,7 +340,8 @@ export function deriveAppCloudSyncStatus(
   } else if (
     codePhase === "synced" &&
     dependentJobs.every((job) => job.phase === "synced") &&
-    dbPending === 0
+    dbPending === 0 &&
+    !registryNeedsSync
   ) {
     overall = "synced";
   } else if (needsSync) {
@@ -327,6 +369,7 @@ export function deriveAppCloudSyncStatus(
     syncedJobCount,
     totalJobCount,
     dbPending,
+    registryNeedsSync,
     isUploading: anyUploading,
   });
 
@@ -342,6 +385,9 @@ export function deriveAppCloudSyncStatus(
     summaryLine,
     databases,
     hasLinkedDatabases,
+    hasRegistryDatabases,
+    registryPhase,
+    registryLabel,
     chipLabel,
     globallySyncing,
     cloudPublishing,

@@ -10,13 +10,17 @@ import type {
 } from "../../utils/appCloudSyncStatus";
 
 export interface WebSyncPopoverProps {
-  status: AppCloudSyncStatus;
+  status: AppCloudSyncStatus | null;
+  loading?: boolean;
   error: string | null;
   pushing: boolean;
   pulling: boolean;
   syncActionNeeded: boolean;
   onPushNow: () => void;
   onPullUpdates: () => void;
+  popoverRef?: React.RefObject<HTMLDivElement | null>;
+  className?: string;
+  style?: React.CSSProperties;
 }
 
 function rowIcon(phase: AppCloudItemPhase): string {
@@ -35,17 +39,59 @@ function rowIcon(phase: AppCloudItemPhase): string {
 
 export function WebSyncPopover({
   status,
+  loading = false,
   error,
   pushing,
   pulling,
   syncActionNeeded,
   onPushNow,
   onPullUpdates,
+  popoverRef,
+  className,
+  style,
 }: WebSyncPopoverProps) {
-  const busy = pushing || pulling;
+  const busy = pushing || pulling || loading;
+  const popoverClassName = className
+    ? `mini-app-publish-bar__sync-popover ${className}`
+    : "mini-app-publish-bar__sync-popover";
+
+  if (loading && !status) {
+    return (
+      <div
+        ref={popoverRef}
+        className={popoverClassName}
+        style={style}
+        role="dialog"
+        aria-label="Web sync details"
+      >
+        <p className="mini-app-publish-bar__sync-popover-title">What&apos;s on the web</p>
+        <p className="mini-app-publish-bar__sync-popover-summary">
+          Checking sync status for this app…
+        </p>
+        {error ? <p className="mini-app-publish-bar__sync-popover-error">{error}</p> : null}
+        <div className="mini-app-publish-bar__sync-popover-actions">
+          <button
+            type="button"
+            className="mini-app-publish-bar__sync-popover-btn"
+            disabled={busy}
+            onClick={() => void onPushNow()}
+          >
+            {pushing ? "Uploading…" : "Upload now"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!status) {
+    return null;
+  }
+
   return (
     <div
-      className="mini-app-publish-bar__sync-popover"
+      ref={popoverRef}
+      className={popoverClassName}
+      style={style}
       role="dialog"
       aria-label="Web sync details"
     >
@@ -89,6 +135,16 @@ export function WebSyncPopover({
               </li>
             ))
           : null}
+        {status.hasRegistryDatabases ? (
+          <li>
+            <span className="mini-app-publish-bar__sync-popover-icon">
+              {rowIcon(status.registryPhase)}
+            </span>
+            <span>
+              <strong>Database registry</strong> — {status.registryLabel}
+            </span>
+          </li>
+        ) : null}
       </ul>
       {syncActionNeeded ? (
         <p className="mini-app-publish-bar__sync-popover-hint">

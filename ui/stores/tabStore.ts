@@ -139,7 +139,13 @@ export const useTabStore = create<TabState>()((set, get) => ({
         // Check if tab already exists
         const existingTab = get().tabs.find((t) => t.id === tabId);
         if (existingTab) {
-          // If it's a child, switch to its parent
+          // Orphan child (hidden from tab bar) — promote so explicit opens get a visible tab
+          if (existingTab.displayMode === "child" && !existingTab.parentTabId) {
+            get().promoteToStandalone(tabId);
+            get().switchToTab(tabId);
+            return tabId;
+          }
+          // Merged child — switch to parent split view
           if (existingTab.parentTabId) {
             get().switchToTab(existingTab.parentTabId);
           } else {
@@ -216,7 +222,7 @@ export const useTabStore = create<TabState>()((set, get) => ({
 
       switchToTab: (tabId, skipHistory = false) => {
         console.log(`[TabStore.switchToTab] Called with tabId: ${tabId}`);
-        const tab = get().getTab(tabId);
+        let tab = get().getTab(tabId);
         if (!tab) {
           console.error(`[TabStore.switchToTab] Tab not found: ${tabId}`);
           console.error(
@@ -229,6 +235,12 @@ export const useTabStore = create<TabState>()((set, get) => ({
         console.log(
           `[TabStore.switchToTab] Found tab, displayMode: ${tab.displayMode}`,
         );
+
+        // Orphan child: full-screen content but hidden from tab bar — fix before switching
+        if (tab.displayMode === "child" && !tab.parentTabId) {
+          get().promoteToStandalone(tabId);
+          tab = get().getTab(tabId)!;
+        }
 
         // If switching to a child, switch to its parent instead
         if (tab.parentTabId) {

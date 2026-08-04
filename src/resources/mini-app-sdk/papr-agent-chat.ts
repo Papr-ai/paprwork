@@ -153,6 +153,29 @@ async function ensureSession(appId: string): Promise<string> {
   return data.sessionId;
 }
 
+async function loadSessionMessages(sessionId: string): Promise<ChatMessage[]> {
+  try {
+    const res = await fetch(`/api/app-agent/sessions/${sessionId}`, {
+      credentials: "same-origin",
+    });
+    if (!res.ok) {
+      return [];
+    }
+    const data = (await res.json()) as {
+      messages?: Array<{ id: string; role: string; content: string }>;
+    };
+    return (data.messages ?? [])
+      .filter((msg) => msg.role === "user" || msg.role === "assistant")
+      .map((msg) => ({
+        id: msg.id,
+        role: msg.role as "user" | "assistant",
+        content: msg.content,
+      }));
+  } catch {
+    return [];
+  }
+}
+
 type WarmStatus = "idle" | "warming" | "ready" | "unavailable" | "failed";
 
 async function warmSession(sessionId: string): Promise<{ status: WarmStatus; message?: string }> {
@@ -708,6 +731,16 @@ function mountWidget(
   let warmStatusEl: HTMLDivElement | null = null;
   let warmingInFlight = false;
 
+  const hydrateSessionHistory = async (): Promise<void> => {
+    if (!sessionId) {
+      sessionId = await ensureSession(appId);
+    }
+    const history = await loadSessionMessages(sessionId);
+    if (history.length > 0) {
+      messages.splice(0, messages.length, ...history);
+    }
+  };
+
   const startWarmOnIntent = (): void => {
     if ((window as Window & { paprAPI?: unknown }).paprAPI) {
       return;
@@ -757,8 +790,12 @@ function mountWidget(
     open = next;
     panel.classList.toggle("papr-agent-chat-panel--open", open);
     if (open) {
-      renderMessages();
-      startWarmOnIntent();
+      void hydrateSessionHistory()
+        .catch(() => undefined)
+        .finally(() => {
+          renderMessages();
+          startWarmOnIntent();
+        });
     } else if (warmStatusEl) {
       warmStatusEl.remove();
       warmStatusEl = null;

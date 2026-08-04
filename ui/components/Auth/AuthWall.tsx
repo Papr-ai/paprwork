@@ -12,6 +12,10 @@ import {
   type PaprLoginStep,
 } from "../../../src/core/telemetry/paprLoginSteps";
 import { useProfileStore } from "../../stores/profileStore";
+import {
+  OrgNamespaceSetup,
+  type OrgNamespaceSetupRequest,
+} from "./OrgNamespaceSetup";
 import "./AuthWall.css";
 
 interface AuthWallProps {
@@ -44,6 +48,7 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showRefresh, setShowRefresh] = useState(false);
+  const [setupRequest, setSetupRequest] = useState<OrgNamespaceSetupRequest | null>(null);
   const authWallViewedTracked = useRef(false);
   const waitingForCallbackTracked = useRef(false);
 
@@ -134,12 +139,19 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
       setError(data.error);
       setIsAuthenticating(false);
     };
+    const onSetupRequired = (data: OrgNamespaceSetupRequest) => {
+      setSetupRequest(data);
+      setIsAuthenticating(false);
+      setError(null);
+    };
 
     papr.onLoginSuccess(onSuccess);
     papr.onLoginError(onError);
+    papr.onSetupRequired(onSetupRequired);
     return () => {
       papr.removeLoginSuccessListener(onSuccess);
       papr.removeLoginErrorListener(onError);
+      papr.removeSetupRequiredListener(onSetupRequired);
     };
   }, [handleAuthenticated]);
 
@@ -177,6 +189,19 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
   };
 
   useEffect(() => {
+    const handleSetupRequired = (event: CustomEvent<OrgNamespaceSetupRequest>) => {
+      setSetupRequest(event.detail);
+      setIsAuthenticating(false);
+      setError(null);
+    };
+
+    window.addEventListener("papr-setup-required", handleSetupRequired as EventListener);
+    return () => {
+      window.removeEventListener("papr-setup-required", handleSetupRequired as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
     const handleLoginError = (event: CustomEvent<{ error: string }>) => {
       console.error("[AuthWall] Login error event:", event.detail.error);
       setError(event.detail.error);
@@ -201,6 +226,18 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
         <div className="auth-wall-spinner" />
         <p className="auth-wall-loading-text">Loading...</p>
       </div>
+    );
+  }
+
+  if (setupRequest) {
+    return (
+      <OrgNamespaceSetup
+        request={setupRequest}
+        onComplete={() => {
+          setSetupRequest(null);
+          void handleAuthenticated();
+        }}
+      />
     );
   }
 

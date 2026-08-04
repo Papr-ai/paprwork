@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveAppDependentJobIds } from "../src/gateway/services/cloudSync/resolveAppDependentJobs.js";
+import { resolveAppDependentJobIds, resolveAppCloudSyncRelativePaths } from "../src/gateway/services/cloudSync/resolveAppDependentJobs.js";
 import { buildGitHubSyncItemsReport } from "../src/gateway/services/cloudSync/syncItemStatus.js";
 
 const tempDirs: string[] = [];
@@ -24,6 +24,25 @@ function makePaprDir(): string {
 }
 
 describe("resolveAppDependentJobIds", () => {
+  it("includes agent chat job from metadata.json when missing from jobs index", () => {
+    const paprDir = makePaprDir();
+    const agentChatJobId = "job-agent-chat";
+
+    fs.mkdirSync(path.join(paprDir, "Jobs", agentChatJobId), { recursive: true });
+    fs.writeFileSync(
+      path.join(paprDir, "apps", "app-1", "metadata.json"),
+      JSON.stringify({
+        appId: "app-1",
+        title: "Demo",
+        description: "Demo app",
+        updatedAt: new Date().toISOString(),
+        agentChatJobId,
+      }),
+    );
+
+    expect(resolveAppDependentJobIds(paprDir, "app-1")).toEqual([agentChatJobId]);
+  });
+
   it("includes jobs linked via data-sources and appIds", () => {
     const paprDir = makePaprDir();
 
@@ -62,6 +81,28 @@ describe("resolveAppDependentJobIds", () => {
       "job-b",
       "job-c",
     ]);
+  });
+});
+
+describe("resolveAppCloudSyncRelativePaths", () => {
+  it("includes data/jobs.json when app has dependent jobs", () => {
+    const paprDir = makePaprDir();
+
+    fs.writeFileSync(
+      path.join(paprDir, "data", "jobs.json"),
+      JSON.stringify({
+        jobs: [{ id: "job-b", name: "App Agent Chat", appIds: ["app-1"] }],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(paprDir, "Jobs", "job-b", "job.json"),
+      JSON.stringify({ id: "job-b", type: "subagent" }),
+    );
+
+    const paths = resolveAppCloudSyncRelativePaths(paprDir, "app-1");
+    expect(paths).toContain(path.join("apps", "app-1"));
+    expect(paths).toContain(path.join("Jobs", "job-b"));
+    expect(paths).toContain(path.join("data", "jobs.json"));
   });
 });
 

@@ -295,4 +295,41 @@ describe("JobsService index corruption recovery", () => {
     expect(pipeline?.name).not.toBe(created.id);
     expect(pipeline?.name).toBe("Data Pipeline");
   });
+
+  test("recovers app agent chat subagent jobs missing from jobs.json", async () => {
+    const service = await setupService();
+    const appService = getAppService();
+    await appService.initialize();
+    const app = await appService.createApp("Deck Studio", "Pitch deck builder", [
+      { filename: "index.html", content: "<div>Deck</div>" },
+    ]);
+
+    const agentChatJob = await service.createJob({
+      name: "App Agent Chat: Deck Studio",
+      type: "subagent",
+      subAgentId: "agent-test",
+      appIds: [app.id],
+      command:
+        "Embedded app assistant turn. Full conversation prompt is passed via runtime params.prompt.",
+      maxTurns: 20,
+    });
+
+    const jobsIndexPath = path.join(
+      process.env.HOME!,
+      "Papr",
+      "data",
+      "jobs.json",
+    );
+    await fs.writeFile(jobsIndexPath, "[]", "utf-8");
+
+    const recovered = new JobsService();
+    await recovered.initialize();
+    const jobs = await recovered.listJobs();
+
+    const chatJob = jobs.find((j) => j.id === agentChatJob.id);
+    expect(chatJob).toBeDefined();
+    expect(chatJob?.type).toBe("subagent");
+    expect(chatJob?.appIds).toEqual([app.id]);
+    expect(chatJob?.subAgentId).toBe("agent-test");
+  });
 });

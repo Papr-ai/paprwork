@@ -10,9 +10,15 @@ import {
   type CloudAppMetadataFile,
 } from "../../core/utils/cloudAppMetadata.js";
 import {
+  readActiveAppWorkspaceScope,
+  withWorkspaceScope,
+  type AppWorkspaceFields,
+} from "../../core/utils/appWorkspaceScope.js";
+import {
   toPublicAppAgentChatConfig,
   type AppAgentChatConfig,
 } from "../../core/types/appAgentChat.js";
+import { resolveAppAgentChatForMetadataWrite } from "./appAgentChat/appAgentChatPersistence.js";
 
 export interface CloudAppRegistryEntry {
   id: string;
@@ -58,6 +64,23 @@ export async function writeCloudAppMetadataFile(
     return;
   }
 
+  const agentChat = resolveAppAgentChatForMetadataWrite(
+    paprDir,
+    appId,
+    entry.agentChat,
+  );
+
+  const workspaceFields: AppWorkspaceFields = {
+    ...(entry.organizationId ? { organizationId: entry.organizationId } : {}),
+    ...(entry.namespaceId ? { namespaceId: entry.namespaceId } : {}),
+  };
+  const activeScope = readActiveAppWorkspaceScope();
+  const scopedFields =
+    activeScope &&
+    (!workspaceFields.organizationId || !workspaceFields.namespaceId)
+      ? withWorkspaceScope(workspaceFields, activeScope)
+      : workspaceFields;
+
   const title = entry.title?.trim() || appId.slice(0, 8);
   const metadata: CloudAppMetadataFile = {
     appId,
@@ -66,15 +89,15 @@ export async function writeCloudAppMetadataFile(
       entry.description?.trim() || buildDefaultCloudAppDescription(title),
     updatedAt: new Date().toISOString(),
     ...(entry.ownerUserId ? { ownerUserId: entry.ownerUserId } : {}),
-    ...(entry.organizationId ? { organizationId: entry.organizationId } : {}),
-    ...(entry.namespaceId ? { namespaceId: entry.namespaceId } : {}),
+    ...(scopedFields.organizationId
+      ? { organizationId: scopedFields.organizationId }
+      : {}),
+    ...(scopedFields.namespaceId ? { namespaceId: scopedFields.namespaceId } : {}),
     ...(entry.icon ? { icon: entry.icon } : {}),
-    ...(entry.agentChat?.enabled
+    ...(agentChat?.enabled
       ? {
-          agentChat: toPublicAppAgentChatConfig(entry.agentChat),
-          ...(entry.agentChat.cloudJobId
-            ? { agentChatJobId: entry.agentChat.cloudJobId }
-            : {}),
+          agentChat: toPublicAppAgentChatConfig(agentChat),
+          ...(agentChat.cloudJobId ? { agentChatJobId: agentChat.cloudJobId } : {}),
         }
       : {}),
   };

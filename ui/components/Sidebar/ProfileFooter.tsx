@@ -58,6 +58,7 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
     window.addEventListener("papr-logout-success", refresh);
     window.addEventListener("papr-organization-changed", refresh);
     window.addEventListener("papr-namespace-changed", refresh);
+    window.addEventListener("papr-workspace-reload", refresh);
     window.electronAPI.papr.onLoginSuccess(refresh);
     window.electronAPI.papr.onLogoutSuccess(refresh);
     window.electronAPI.papr.onOrganizationChanged(refresh);
@@ -69,6 +70,7 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
       window.removeEventListener("papr-logout-success", refresh);
       window.removeEventListener("papr-organization-changed", refresh);
       window.removeEventListener("papr-namespace-changed", refresh);
+      window.removeEventListener("papr-workspace-reload", refresh);
       window.electronAPI.papr.removeLoginSuccessListener(refresh);
       window.electronAPI.papr.removeLogoutSuccessListener(refresh);
       window.electronAPI.papr.removeOrganizationChangedListener(refresh);

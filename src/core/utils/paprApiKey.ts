@@ -9,6 +9,7 @@ export function paprApiKeyMatchesNamespace(
   apiKey: string,
   organizationId: string,
   namespaceId: string,
+  options?: { trustLegacyBinding?: boolean },
 ): boolean {
   const trimmed = apiKey.trim();
   const prefix = `sk-org-${organizationId}-namespace-${namespaceId}-`;
@@ -16,10 +17,30 @@ export function paprApiKeyMatchesNamespace(
     return true;
   }
 
+  const scope = parsePaprApiKeyScope(trimmed);
+  if (!scope) {
+    // Legacy keys omit embedded namespace. Trust only when the caller bound the
+    // key to this namespace (vault slot PAPR_API_KEY__{id} or GraphQL filtered by namespaceId).
+    return options?.trustLegacyBinding === true;
+  }
+
   // Namespace is the hard binding for Papr API keys. Org id in the key string can
   // differ from the active workspace pointer when Parse org vs workspace ids diverge.
-  const scope = parsePaprApiKeyScope(trimmed);
-  return scope?.namespaceId === namespaceId;
+  return scope.namespaceId === namespaceId;
+}
+
+/**
+ * Validate a key resolved from a namespace-bound source (vault slot or GraphQL
+ * query filtered by namespaceId). Legacy keys without embedded namespace are accepted.
+ */
+export function paprApiKeyMatchesNamespaceBound(
+  apiKey: string,
+  organizationId: string,
+  namespaceId: string,
+): boolean {
+  return paprApiKeyMatchesNamespace(apiKey, organizationId, namespaceId, {
+    trustLegacyBinding: true,
+  });
 }
 
 /** Parse org + namespace embedded in a Papr API key, when present. */
@@ -50,26 +71,25 @@ export function isActivePaprNamespace(namespaceId: string): boolean {
 
 /** Env fallback is only valid when it matches the active workspace pointer. */
 export function paprApiKeyMatchesActiveWorkspace(apiKey: string): boolean {
-  const envPointer = getActivePaprWorkspacePointer();
-  if (envPointer) {
-    return paprApiKeyMatchesNamespace(
-      apiKey,
-      envPointer.organizationId,
-      envPointer.namespaceId,
-    );
+  const trimmed = apiKey.trim();
+  const pointer =
+    getActivePaprWorkspacePointer() ?? readActiveWorkspacePointer();
+  if (!pointer) {
+    // No workspace selected yet (first launch before namespace pick).
+    return true;
   }
 
-  const filePointer = readActiveWorkspacePointer();
-  if (filePointer) {
-    return paprApiKeyMatchesNamespace(
-      apiKey,
-      filePointer.organizationId,
-      filePointer.namespaceId,
-    );
+  // Untrusted sources (.env, generic PAPR_API_KEY alias) must be parseable.
+  const scope = parsePaprApiKeyScope(trimmed);
+  if (!scope) {
+    return false;
   }
 
-  // No workspace selected yet (first launch before namespace pick).
-  return true;
+  return paprApiKeyMatchesNamespace(
+    trimmed,
+    pointer.organizationId,
+    pointer.namespaceId,
+  );
 }
 
 /** Internal vault slot for a namespace-scoped Papr API key (not shown in Settings). */

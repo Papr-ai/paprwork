@@ -1748,20 +1748,24 @@ async function startGateway(): Promise<void> {
           : undefined;
 
       try {
-        let appContext: { appId: string; dependentJobIds: string[] } | undefined;
+        let appContext:
+          | { appId: string; dependentJobIds: string[]; registryDbIds: string[] }
+          | undefined;
         if (appId) {
-          const { resolveAppDependentJobIds } = await import(
-            "./services/cloudSync/resolveAppDependentJobs.js"
-          );
-          if (forceRefresh) {
-            await sync.reconcileAppDependentPaths(appId);
-          }
+          const {
+            resolveAppDependentJobIds,
+            readDataSourceRegistryDbIds,
+          } = await import("./services/cloudSync/resolveAppDependentJobs.js");
+          // Reconcile whenever the UI asks for this app — git-clean folders
+          // should show green even if mtime-only drift fooled the hash cache.
+          await sync.reconcileAppDependentPaths(appId);
           appContext = {
             appId,
             dependentJobIds: resolveAppDependentJobIds(
               getPaprRoot(),
               appId,
             ),
+            registryDbIds: readDataSourceRegistryDbIds(getPaprRoot(), appId),
           };
         }
 

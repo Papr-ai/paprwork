@@ -107,6 +107,7 @@ export class JobsService {
   private jobDatabase: JobDatabase;
   private executors: IJobExecutor[];
   private initialized: boolean;
+  private initPromise: Promise<void> | null = null;
   private saveLock: Promise<void> | null = null; // Prevent concurrent saves
 
   constructor() {
@@ -365,6 +366,23 @@ export class JobsService {
     if (this.initialized) {
       return;
     }
+    if (this.initPromise) {
+      await this.initPromise;
+      return;
+    }
+
+    this.initPromise = this.runInitialize();
+    try {
+      await this.initPromise;
+    } finally {
+      this.initPromise = null;
+    }
+  }
+
+  private async runInitialize(): Promise<void> {
+    if (this.initialized) {
+      return;
+    }
     await this.migrateLegacyIfNeeded();
     await fs.mkdir(this.jobsRootDir, { recursive: true });
     await fs.mkdir(path.dirname(this.jobsIndexPath), { recursive: true });
@@ -564,6 +582,56 @@ export class JobsService {
       for (const jobId of missingJobIds) {
         const jobDir = path.join(this.jobsRootDir, jobId);
 
+        let jobJsonRecord: Partial<JobRecord> | null = null;
+        try {
+          const content = await fs.readFile(
+            path.join(jobDir, "job.json"),
+            "utf-8",
+          );
+          jobJsonRecord = JSON.parse(content) as Partial<JobRecord>;
+        } catch {
+          // job.json missing or corrupt — fall back to legacy recovery below
+        }
+
+        if (jobJsonRecord?.type === "subagent") {
+          // Ephemeral delegate_task runs — not indexed user jobs.
+          if (jobJsonRecord.delegatedBy?.trim()) {
+            console.log(
+              `[JobsService] Skipping delegated subagent entry: ${jobId}`,
+            );
+            continue;
+          }
+          // Persistent subagent jobs (app agent chat) must stay in jobs.json for cloud web.
+          if (
+            jobJsonRecord.id &&
+            jobJsonRecord.name &&
+            Array.isArray(jobJsonRecord.appIds) &&
+            jobJsonRecord.appIds.length > 0
+          ) {
+            const recoveredSubagent: JobRecord = {
+              ...(jobJsonRecord as JobRecord),
+              id: jobJsonRecord.id,
+              name: jobJsonRecord.name,
+              type: "subagent",
+              status: (jobJsonRecord.status as JobStatus) ?? "idle",
+              appIds: jobJsonRecord.appIds,
+              createdAt:
+                jobJsonRecord.createdAt ?? new Date().toISOString(),
+              updatedAt:
+                jobJsonRecord.updatedAt ?? new Date().toISOString(),
+            };
+            this.jobs.set(jobId, recoveredSubagent);
+            console.log(
+              `[JobsService] Recovered subagent job from job.json: ${jobId} - ${recoveredSubagent.name}`,
+            );
+            continue;
+          }
+          console.log(
+            `[JobsService] Skipping subagent entry without appIds: ${jobId}`,
+          );
+          continue;
+        }
+
         let name = jobId;
         let type: JobType = "bash";
         let command = "";
@@ -587,12 +655,6 @@ export class JobsService {
           } catch {
             // File doesn't exist or is corrupted, try next
           }
-        }
-
-        // Skip subagent delegation entries — these are sub-agent executions, not user jobs
-        if (type === "subagent") {
-          console.log(`[JobsService] Skipping subagent entry: ${jobId} (${name})`);
-          continue;
         }
 
         if (!recoveredFromFile) {
@@ -1024,6 +1086,7 @@ export class JobsService {
           command: job.command,
           databasePath: target.dbPath,
           contract,
+          jobType: job.type,
         }),
       );
     }

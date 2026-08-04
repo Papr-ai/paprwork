@@ -39,6 +39,7 @@ import "./App.css";
 import { shouldShowOnboarding } from "./utils/onboardingState";
 import {
   attachWorkspaceSwitchBroadcastListener,
+  parseWorkspaceKeyFromSwitchEvent,
   reloadUiForWorkspaceSwitch,
 } from "./lib/workspaceSwitchReload";
 import { useProfileStore } from "./stores/profileStore";
@@ -229,8 +230,14 @@ export function App() {
   // Reload chats/jobs when Papr org or namespace workspace changes
   useEffect(() => {
     attachWorkspaceSwitchBroadcastListener();
-    const onWorkspaceChanged = () => {
-      void reloadUiForWorkspaceSwitch();
+    const onWorkspaceChanged = (event: Event) => {
+      const targetWorkspaceKey = parseWorkspaceKeyFromSwitchEvent(
+        (event as CustomEvent).detail,
+      );
+      void reloadUiForWorkspaceSwitch({
+        waitForGateway: true,
+        targetWorkspaceKey,
+      });
     };
     window.addEventListener("papr-namespace-changed", onWorkspaceChanged);
     window.addEventListener("papr-organization-changed", onWorkspaceChanged);
