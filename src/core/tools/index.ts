@@ -25,6 +25,7 @@ import { connectorsTools } from "./connectors.js";
 import { codeIndexTools } from "./codeIndex.js";
 import { cloudPublishTools } from "./cloudPublish.js";
 import { cloudInstallTools } from "./cloudInstall.js";
+import { cloudObservabilityTools } from "./cloudObservability.js";
 import { appAgentChatTools } from "./appAgentChat.js";
 import { editFileTool } from "./editFile.js";
 import { editAppFileTool, editJobFileTool } from "./appJobs.js";
@@ -71,6 +72,7 @@ export const allTools = [
   ...codeIndexTools,
   ...cloudPublishTools,
   ...cloudInstallTools,
+  ...cloudObservabilityTools,
   ...appAgentChatTools,
   ...platformFeedbackTools,
 ];
@@ -102,6 +104,7 @@ export const toolsByCategory = {
   codeIndex: codeIndexTools,
   cloudPublish: cloudPublishTools,
   cloudInstall: cloudInstallTools,
+  cloudObservability: cloudObservabilityTools,
   platformFeedback: platformFeedbackTools,
 } as const;
 
@@ -210,6 +213,14 @@ export {
   listCloudAppChangesTool,
   resolveCloudAppChangeTool,
 } from "./cloudInstall.js";
+
+export {
+  cloudObservabilityTools,
+  getCloudSyncStatusTool,
+  pushCloudSyncTool,
+  queryCloudTursoTool,
+  inspectCloudRepoTool,
+} from "./cloudObservability.js";
 
 export { appAgentChatTools, enableAppAgentChatTool } from "./appAgentChat.js";
 

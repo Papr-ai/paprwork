@@ -25,6 +25,10 @@ import { CLOUD_REPO_HEAD_RELATIVE_PATH } from "./cloudSync/cloudRepoHeadMarker.j
 import { buildGitHubSyncItemsReport } from "./cloudSync/syncItemStatus.js";
 import { canReconcilePathAsSynced } from "./cloudSync/gitPathStatus.js";
 import { GitRunner, probeGitInstalled } from "./cloudSync/gitRunner.js";
+import {
+  formatGitSyncSizeLimitMb,
+  isTooLargeForGitSync,
+} from "./cloudSync/gitSyncLimits.js";
 import { cloudApiFetch, waitForPaprApiKey } from "../utils/cloudApiClient.js";
 import type { DesktopHeartbeatResponse } from "../types/cloudRuntime.js";
 import { getPaprRoot } from "../../core/utils/paprRoot.js";
@@ -67,6 +71,13 @@ const GITIGNORE_CONTENT = `# Runtime — rebuilt per environment
 # (Turso sync); large files belong in object storage (bucket), not GitHub.
 **/*.wav
 **/data/recordings/
+
+# Backup / corrupt recovery artifacts — local only (Turso repair, index recovery)
+**/*.bak
+**/*.bak.*
+**/*.backup.*
+**/*.corrupt-*
+**/*corrupt-backup*
 
 # Logs — ephemeral
 **/logs/
@@ -1148,6 +1159,36 @@ export class CloudSyncService {
     }
   }
 
+  private async unstageOversizedFiles(): Promise<void> {
+    const staged = await this.git(["diff", "--cached", "--name-only"]);
+    if (!staged) {
+      return;
+    }
+
+    const oversized: string[] = [];
+    for (const relativePath of staged.split("\n").filter(Boolean)) {
+      const fullPath = path.join(this.paprDir, relativePath);
+      try {
+        const stat = fs.statSync(fullPath);
+        if (stat.isFile() && isTooLargeForGitSync(stat.size)) {
+          oversized.push(relativePath);
+        }
+      } catch {
+        /* skip missing paths */
+      }
+    }
+
+    if (oversized.length === 0) {
+      return;
+    }
+
+    const limit = formatGitSyncSizeLimitMb();
+    console.warn(
+      `[CloudSync] Skipping ${oversized.length} file(s) over ${limit} (use Papr Memory for large docs): ${oversized.slice(0, 5).join(", ")}${oversized.length > 5 ? "…" : ""}`,
+    );
+    await this.git(["reset", "HEAD", "--", ...oversized]);
+  }
+
   private async commitAndPushPaths(
     paths: readonly string[],
     label: string,
@@ -1179,6 +1220,7 @@ export class CloudSyncService {
       ),
     ];
     await this.git(["add", "--", ...stagePaths]);
+    await this.unstageOversizedFiles();
     const stagedFiles = await this.getStagedFilesUnder(changedPaths);
     if (stagedFiles.length === 0) {
       const reconciled = await this.reconcilePathsIfGitClean(changedPaths);

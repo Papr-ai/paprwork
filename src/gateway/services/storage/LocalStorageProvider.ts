@@ -730,7 +730,8 @@ export class LocalStorageProvider implements IStorageProvider {
         content: message.content,
         thinking: message.thinking,
         toolCalls: message.toolCalls,
-        timestamp: message.timestamp, // Preserve timestamp for debugging/ordering verification
+        timestamp: message.timestamp,
+        ...(message.attachments?.length ? { attachments: message.attachments } : {}),
       }));
     }
 
@@ -751,7 +752,7 @@ export class LocalStorageProvider implements IStorageProvider {
 
     let recentMessages = this.db
       .prepare(`
-      SELECT role, content, thinking, tool_calls, timestamp
+      SELECT role, content, thinking, tool_calls, timestamp, attachments
       FROM messages 
       WHERE chat_id = ? 
       ORDER BY timestamp DESC 
@@ -827,6 +828,10 @@ export class LocalStorageProvider implements IStorageProvider {
         typeof message.tool_calls === "string" && message.tool_calls.length > 0
           ? (JSON.parse(message.tool_calls) as unknown[])
           : undefined;
+      const parsedAttachments =
+        typeof message.attachments === "string" && message.attachments.length > 0
+          ? (JSON.parse(message.attachments) as unknown[])
+          : undefined;
 
       return {
         role: typeof message.role === "string" ? message.role : "assistant",
@@ -834,7 +839,10 @@ export class LocalStorageProvider implements IStorageProvider {
         thinking:
           typeof message.thinking === "string" ? message.thinking : undefined,
         toolCalls: parsedToolCalls,
-        timestamp: message.timestamp, // Preserve timestamp for debugging/ordering verification
+        timestamp: message.timestamp,
+        ...(Array.isArray(parsedAttachments) && parsedAttachments.length > 0
+          ? { attachments: parsedAttachments }
+          : {}),
       };
     });
 

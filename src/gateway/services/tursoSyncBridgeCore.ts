@@ -33,7 +33,6 @@ import {
   readRemoteSyncLogSince,
   readSyncLogSince,
   remoteSyncLogExists,
-  tableHasPrimaryKey,
   withSyncMuted,
   withSyncMutedAsync,
 } from "./tursoSyncLog.js";
@@ -804,23 +803,17 @@ export async function pushLocalDbToTurso(
       };
     }
 
-    const snapshotTables = changed.filter(
-      (name) => !tableHasPrimaryKey(localDb, name),
-    );
-    if (snapshotTables.length === 0) {
-      return {
-        status: "skipped",
-        tables: [],
-        reason: "all_tables_unchanged",
-        tableFingerprints: currentFingerprints,
-        skippedTables: skipped,
-      };
-    }
-
+    // Changelog empty but fingerprints show local changes (e.g. agent writes
+    // before sync triggers were installed). Push all changed tables directly.
+    await ensureRemoteSyncInfrastructure(remote);
     const syncedRemote = await syncTablesToRemote(
       remote,
-      snapshotTables.map((name) => readLocalTable(localDb, name)),
+      changed.map((name) => readLocalTable(localDb, name)),
     );
+    for (const tableName of changed) {
+      const columns = readTableSchema(localDb, tableName);
+      await ensureRemoteTableSyncTriggers(remote, columns, tableName);
+    }
     const remoteVersion = await bumpRemoteSyncVersion(remote);
     return {
       status: "pushed",

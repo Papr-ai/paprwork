@@ -929,41 +929,41 @@ function AboutTab() {
           </div>
         </div>
 
-        {currentVersion === "2.2.4" && (
+        {currentVersion === "2.2.5" && (
           <div className="about-card">
-            <h3>What's New in v2.2.4</h3>
+            <h3>What's New in v2.2.5</h3>
             <ul className="whats-new-list">
               <li className="whats-new-list__item">
-                <strong>Embedded App Agent Chat</strong>
+                <strong>Image Attachments in Chat</strong>
                 <p>
-                  Multi-turn agent chat inside mini-apps with a dedicated panel,
-                  session persistence, and scoped tool access.
+                  Pasted or attached images are sent directly to vision-capable
+                  models — no extra tool step needed.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Org & Namespace Setup</strong>
+                <strong>Cloud Observability Tools</strong>
                 <p>
-                  New users name their organization and team space right after
-                  signing in, before entering the app.
+                  Agents can inspect cloud sync status, Turso replicas, GitHub
+                  repo files, and cloud job runtime logs.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Cloud Publish & Sync</strong>
+                <strong>Cloud Sync Hardening</strong>
                 <p>
-                  Improved publish bar, cloud revision tracking, linked database
-                  sync, and upstream fork workflow.
+                  Git sync skips files over 10MB and local backup artifacts;
+                  cloud agent jobs sync Turso at run start and finish.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Faster Workspace Switching</strong>
+                <strong>OAuth & Context Fixes</strong>
                 <p>
-                  Tabs and UI state restore instantly after switching teams with
-                  background reload.
+                  Cleaner OAuth callback handling and improved pi-ai context for
+                  attachment-heavy conversations.
                 </p>
               </li>
             </ul>
             <a
-              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.2.4"
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.2.5"
               target="_blank"
               rel="noopener noreferrer"
               className="about-link whats-new-list__link"

@@ -339,6 +339,23 @@ export const TOOL_DESCRIPTIONS: Record<
     running: "Reading data sources",
     complete: "Data sources read",
   },
+  // Cloud observability
+  get_cloud_sync_status: {
+    running: "Checking cloud sync",
+    complete: "Cloud sync checked",
+  },
+  push_cloud_sync: {
+    running: "Pushing cloud sync",
+    complete: "Cloud sync pushed",
+  },
+  query_cloud_turso: {
+    running: "Querying cloud database",
+    complete: "Cloud database queried",
+  },
+  inspect_cloud_repo: {
+    running: "Inspecting cloud repo",
+    complete: "Cloud repo inspected",
+  },
   // Jobs
   create_job: { running: "Creating job", complete: "Job created" },
   run_job: { running: "Running job", complete: "Job finished" },

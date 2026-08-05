@@ -554,6 +554,16 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
           "**ENFORCED: One active plan per chat.** create_plan includes a soft recommendation to run product-architect first if you have not yet. Use update_plan for progress, delete_plan to start fresh.",
       },
       {
+        area: "Cloud observability",
+        enabled:
+          has("get_cloud_sync_status") ||
+          has("query_cloud_turso") ||
+          has("inspect_cloud_repo") ||
+          has("push_cloud_sync"),
+        details:
+          "get_cloud_sync_status (GitHub + Turso + jobs + heartbeat) — query_cloud_turso — inspect_cloud_repo — push_cloud_sync; NOT Memory API",
+      },
+      {
         area: "Platform feedback",
         enabled: has("create_platform_issue"),
         details:
@@ -2264,6 +2274,15 @@ When only one DB is linked, \`sourceId\` may be omitted. With multiple linked DB
 | Linked registry DBs synced to Turso | \`attach_database\` / \`link_app_data_source\` before \`/api/db/*\`; jobs use \`writeDbIds\` for writes |
 | Auto-publish to \`apps.papr.ai\` (private by default) | Use relative \`/api/db/*\` paths — never hardcode \`localhost:18789\` |
 
+**Cloud git sync — what syncs vs. stays local (REQUIRED):**
+| Syncs to GitHub | Local only — do NOT rely on git for these |
+|---|---|
+| App source (\`apps/{id}/\`), job code (\`Jobs/{id}/\`), small assets (<10MB PDFs/icons) | \`**/*.db\` — data lives in **Turso** (\`attach_database\`) |
+| \`workspace/\`, \`data/*.json\` indexes | \`**/*.bak\`, \`**/*corrupt-*\` — recovery backups from crashes/repair |
+| | Files **>10MB** — cloud sync skips them; use \`upload_document_to_memory\` for large PDFs/docs and store the memory ID or URL in app DB |
+
+**Large brand/docs PDFs:** Do NOT copy 10MB+ PDFs into \`apps/\` or \`data/\` expecting git sync. Index with \`upload_document_to_memory\` (or \`add_document\`) and reference from the app via memory search or a stored metadata row. Small PDFs (<10MB) in \`apps/{id}/assets/\` are fine as static files.
+
 | Capability | Desktop gateway | Cloud (\`apps.papr.ai\`) |
 |---|---|---|
 | \`/api/db/schema\`, \`/api/db/query\`, \`/api/db/write\`, \`/api/db/exec\` | ✅ SQLite | ✅ Turso — **same endpoints, same app code** |
@@ -2337,6 +2356,16 @@ await fetch('/api/jobs/run', { method: 'POST', body: JSON.stringify({ jobId: JOB
 - \`publish_cloud_app({ appId, loginAccess?, externalLink?, codeAccess?, unpublish? })\` — publish or update sharing
 - \`install_cloud_app({ namespaceId, slug, mode? })\` — fork/track a cloud app into Paprwork (publisher must set codeAccess=install)
 - \`submit_cloud_app_change\` / \`list_cloud_app_changes\` / \`resolve_cloud_app_change\` — contribute-back workflow
+
+**Cloud observability (debug sync, Turso, GitHub, stuck jobs — NOT Memory API):**
+- \`get_cloud_sync_status({ appId?, jobId?, includeJobLogs? })\` — **start here**: GitHub sync + Turso + publish + heartbeat/pendingCloudRuns + local jobs + GitHub job.json
+- \`query_cloud_turso({ sql, jobId? | tursoDatabase? | appId+alias })\` — read-only SQL on Turso cloud replica
+- \`inspect_cloud_repo({ action: "read"|"list", relativePath?, prefix?, source? })\` — read/list GitHub cloud repo files
+- \`push_cloud_sync({ appId? })\` — force git + Turso push (after local fixes)
+
+**Cloud job debugging:** Job stuck \`pending\` on apps.papr.ai → \`get_cloud_sync_status({ appId, jobId })\` → check \`desktopHeartbeat.desktopAwake\` and \`pendingCloudRuns\`. If desktop asleep, user must wake Paprwork. If sync pending, \`push_cloud_sync({ appId })\` then \`run_job({ jobId })\`.
+
+Workflow: diagnose with \`get_cloud_sync_status\` → fix with \`push_cloud_sync\`, \`run_job\` (optional \`runtime: "cloud"\`), \`update_job\`, \`publish_cloud_app\` → verify with \`get_cloud_sync_status\` again.
 
 **Sharing decision tree (prefer cloud when available):**
 1. **Default / recommended:** Cloud Sync on + Papr login → \`publish_cloud_app\` with **loginAccess=public, codeAccess=install** for Community discovery + fork/install (live app + private source on papr-work)

@@ -153,8 +153,24 @@ async function pullTursoTargets(tursoTargets: TursoBookendTarget[]): Promise<voi
 }
 
 async function pushTursoTargets(tursoTargets: TursoBookendTarget[]): Promise<void> {
+  if (tursoTargets.length === 0) {
+    return;
+  }
+
+  const failures: string[] = [];
   for (const target of tursoTargets) {
-    await pushLinkedSourceToCloud(target);
+    const result = await pushLinkedSourceToCloud(target);
+    if (result.status !== "pushed") {
+      failures.push(
+        `${target.syncKey}@${target.dbPath}: ${result.reason ?? "unknown"} (status=${result.status})`,
+      );
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new Error(
+      `Turso sync did not complete for cloud agent run — sandbox retained. ${failures.join("; ")}`,
+    );
   }
 }
 
@@ -222,12 +238,27 @@ export async function beginCloudAgentRun(
     paprHome,
     tursoTargets,
     finish: async (finishOptions?: { deleteWorkspace?: boolean }) => {
-      await pushTursoTargets(tursoTargets);
-      await restoreCloudRunEnv(envSnapshot);
+      let syncSucceeded = true;
+      try {
+        await pushTursoTargets(tursoTargets);
+      } catch (error) {
+        syncSucceeded = false;
+        console.error(
+          `[CloudAgentRun] Turso push failed for ${runRoot}:`,
+          (error as Error).message,
+        );
+        throw error;
+      } finally {
+        await restoreCloudRunEnv(envSnapshot);
 
-      const deleteWorkspace = finishOptions?.deleteWorkspace ?? true;
-      if (deleteWorkspace) {
-        await fs.rm(runRoot, { recursive: true, force: true }).catch(() => undefined);
+        const deleteWorkspace = finishOptions?.deleteWorkspace ?? true;
+        if (deleteWorkspace && syncSucceeded) {
+          await fs.rm(runRoot, { recursive: true, force: true }).catch(() => undefined);
+        } else if (deleteWorkspace && !syncSucceeded) {
+          console.warn(
+            `[CloudAgentRun] Retaining sandbox at ${runRoot} until Turso sync succeeds`,
+          );
+        }
       }
     },
   };

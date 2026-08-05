@@ -7,6 +7,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { isLocalOnlyCloudSyncArtifact, isTooLargeForGitSync } from "./gitSyncLimits.js";
 
 export const STATE_FILENAME = ".cloud-sync-state.json";
 
@@ -64,6 +65,9 @@ export function shouldExcludePathFromContentHash(relativePath: string): boolean 
   }
 
   const baseName = path.basename(normalized);
+  if (isLocalOnlyCloudSyncArtifact(baseName)) {
+    return true;
+  }
   return SQLITE_HASH_IGNORED_SUFFIXES.some((suffix) => baseName.endsWith(suffix));
 }
 
@@ -212,6 +216,9 @@ export class SyncStateManager {
       if (shouldExcludePathFromContentHash(relativePath)) {
         return "ignored-artifact";
       }
+      if (isTooLargeForGitSync(stat.size)) {
+        return "ignored-large-file";
+      }
       return `${stat.mtimeMs}:${stat.size}`;
     } catch {
       return "missing";
@@ -247,6 +254,7 @@ export class SyncStateManager {
             }
             continue;
           }
+          if (isTooLargeForGitSync(stat.size)) continue;
           if (stat.mtimeMs > latest) latest = stat.mtimeMs;
           totalSize += stat.size;
           fileCount++;

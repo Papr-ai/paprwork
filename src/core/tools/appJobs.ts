@@ -1330,7 +1330,8 @@ export const runJobTool = createTool({
     "Run a job by id and return status/logs/database info. " +
     "Preflight: python/node jobs must reference an existing script (usually under code/). " +
     "If the command points to fetch.py but the file is at code/fetch.py, run_job blocks with a fix hint. " +
-    "Set runtime='cloud' to execute on Papr Cloud while the desktop is awake (pushes git, runs via memory server, pulls results back).",
+    "Set runtime='cloud' to execute on Papr Cloud while the desktop is awake (pushes git, runs via memory server, pulls results back). " +
+    "If a cloud mini-app job is stuck pending, call get_cloud_sync_status first — check desktopAwake and pendingCloudRuns before re-running.",
   inputSchema: runJobSchema,
   execute: async (input) => {
     const args = (input as { context?: RunJobArgs }).context ?? input;
@@ -1447,7 +1448,8 @@ export const readJobLogsTool = createTool({
   id: "read_job_logs",
   description:
     "Read job stdout/stderr logs for debugging. PREFER this over bash cat/tail/head on log files — " +
-    "it uses the correct workspace job path, sanitizes API keys, and returns structured job metadata.",
+    "it uses the correct workspace job path, sanitizes API keys, and returns structured job metadata. " +
+    "For cloud sync/Turso/heartbeat context, also call get_cloud_sync_status({ jobId, includeJobLogs: true }).",
   inputSchema: readJobLogsSchema,
   execute: async (input) => {
     const args = (input as { context?: ReadJobLogsArgs }).context ?? input;
@@ -2787,6 +2789,8 @@ Use this to:
 - Detect jobs stuck in waiting_permission (need API key approval) — check waitingPermissionKeys
 - See schedule status: schedule.enabled: true (scheduled), schedule.enabled: false (disabled), schedule: undefined (never scheduled)
 Returns jobs sorted newest-first. Filter by status or type as needed.
+
+For cloud-related issues (apps.papr.ai, Turso, sync), prefer get_cloud_sync_status({ appId, jobId }) — it includes local job status plus GitHub/Turso sync and desktop heartbeat.
 
 IMPORTANT: Jobs with schedule.enabled: false are NOT deleted or broken — they can still run manually or via dependencies. They just won't run automatically on a schedule.`,
   inputSchema: listJobsSchema,

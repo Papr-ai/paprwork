@@ -71,47 +71,31 @@ async function syncOAuthTokenToApiKeys(
       : "Claude Pro/Max OAuth Token (Auto-managed)";
 
   try {
-    // Check if key already exists
     const existingKeyMetadata =
       await customKeysStorage.getKeyMetadataByName(keyName);
 
-    if (existingKeyMetadata) {
-      // Update existing key with new token
-      const updatedKey = {
-        ...existingKeyMetadata,
-        description,
-        permission: "always" as const,
-        encryptedValue: (customKeysStorage as any).encryptValue(cleanToken),
-        updatedAt: new Date().toISOString(),
-        source: "oauth" as const,
-        managedBy: "oauth" as const,
-        oauthProvider: provider,
-      };
+    const oauthKeyFields = {
+      description,
+      permission: "always" as const,
+      source: "oauth" as const,
+      managedBy: "oauth" as const,
+      oauthProvider: provider,
+    };
 
-      (customKeysStorage as any).keys.set(existingKeyMetadata.id, updatedKey);
-      await (customKeysStorage as any).saveKeys();
+    if (existingKeyMetadata) {
+      await customKeysStorage.updateKey(existingKeyMetadata.id, {
+        value: cleanToken,
+        ...oauthKeyFields,
+      });
       invalidateKeyCache(keyName);
       console.log(`[OAuth IPC] Updated ${keyName} with OAuth token`);
     } else {
-      // Create new key
-      const id = `key-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      const now = new Date().toISOString();
-
-      const newKey = {
-        id,
+      await customKeysStorage.addKey({
         name: keyName,
-        description,
-        permission: "always" as const,
-        encryptedValue: (customKeysStorage as any).encryptValue(cleanToken),
-        createdAt: now,
-        updatedAt: now,
-        source: "oauth" as const,
-        managedBy: "oauth" as const,
-        oauthProvider: provider,
-      };
-
-      (customKeysStorage as any).keys.set(id, newKey);
-      await (customKeysStorage as any).saveKeys();
+        value: cleanToken,
+        orgScope: "all",
+        ...oauthKeyFields,
+      });
       invalidateKeyCache(keyName);
       console.log(`[OAuth IPC] Created ${keyName} with OAuth token`);
     }

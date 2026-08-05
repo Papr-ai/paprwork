@@ -69,7 +69,7 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
 
     try {
       if (scope === "apps") {
-        const response = await gateway.send("app:list");
+        const response = await gateway.send("app:list", {}, { timeoutMs: 90_000 });
         const apps = (response.data as Artifact[]) || [];
         const current = useArtifactsStore.getState().artifacts;
         setArtifacts([
@@ -80,7 +80,7 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
       } else {
         const [docsResult, appsResult] = await Promise.allSettled([
           gateway.send("document:list"),
-          gateway.send("app:list"),
+          gateway.send("app:list", {}, { timeoutMs: 90_000 }),
         ]);
 
         const documents =
@@ -98,6 +98,15 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
         }
         if (appsResult.status === "rejected") {
           console.error("[useArtifacts] app:list failed:", appsResult.reason);
+          const message =
+            appsResult.reason instanceof Error
+              ? appsResult.reason.message
+              : "Failed to load apps";
+          setError(
+            message.includes("timeout")
+              ? "Could not refresh apps — gateway is busy. Your apps are still on disk; try again in a moment."
+              : message,
+          );
         }
 
         setArtifacts([...documents, ...apps]);
@@ -106,7 +115,17 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Failed to load artifacts";
-      if (blockForLoad) setError(message);
+      const isAppListTimeout =
+        scope === "apps" &&
+        err instanceof Error &&
+        message.toLowerCase().includes("timeout");
+      if (blockForLoad || isAppListTimeout) {
+        setError(
+          isAppListTimeout
+            ? "Could not refresh apps — gateway is busy. Your apps are still on disk; try again in a moment."
+            : message,
+        );
+      }
       console.error("[useArtifacts] Load error:", err);
     } finally {
       if (blockForLoad) setLoading(false);

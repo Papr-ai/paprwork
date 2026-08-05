@@ -80,6 +80,7 @@ export class CloudAgentGatewayService {
     };
 
     let exitCode = 0;
+    let syncError: string | undefined;
     let handle: Awaited<ReturnType<typeof beginCloudAgentRun>> | undefined;
 
     try {
@@ -90,8 +91,17 @@ export class CloudAgentGatewayService {
       yield { type: "error", message: (error as Error).message, chatId };
     } finally {
       if (handle) {
-        await handle.finish();
+        try {
+          await handle.finish();
+        } catch (error) {
+          exitCode = 1;
+          syncError = (error as Error).message;
+        }
       }
+    }
+
+    if (syncError) {
+      yield { type: "error", message: syncError, chatId };
     }
 
     yield { type: "done", exitCode, chatId };
@@ -114,6 +124,7 @@ export class CloudAgentGatewayService {
 
     const releaseTurn = await cache.acquireTurnLock(sessionId);
     let exitCode = 0;
+    let syncError: string | undefined;
     let handle: Awaited<ReturnType<typeof cache.acquireForTurn>> | undefined;
 
     try {
@@ -124,9 +135,18 @@ export class CloudAgentGatewayService {
       yield { type: "error", message: (error as Error).message, chatId };
     } finally {
       if (handle) {
-        await handle.finish({ deleteWorkspace: false });
+        try {
+          await handle.finish({ deleteWorkspace: false });
+        } catch (error) {
+          exitCode = 1;
+          syncError = (error as Error).message;
+        }
       }
       releaseTurn();
+    }
+
+    if (syncError) {
+      yield { type: "error", message: syncError, chatId };
     }
 
     yield { type: "done", exitCode, chatId };

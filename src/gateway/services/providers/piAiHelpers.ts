@@ -70,8 +70,47 @@ export function buildPiContext(input: PiContextInput): {
     if (msg.role === "system") continue;
 
     if (msg.role === "user") {
-      const content = typeof msg.content === "string" ? msg.content : "";
-      piMessages.push({ role: "user", content, timestamp: now });
+      if (typeof msg.content === "string") {
+        piMessages.push({ role: "user", content: msg.content, timestamp: now });
+        continue;
+      }
+
+      if (Array.isArray(msg.content)) {
+        type PiUserPart =
+          | { type: "text"; text: string }
+          | { type: "image"; data: string; mimeType: string };
+        const piContent: PiUserPart[] = [];
+        for (const part of msg.content as Array<{
+          type?: string;
+          text?: string;
+          image?: string;
+          mediaType?: string;
+        }>) {
+          if (part.type === "text") {
+            piContent.push({ type: "text", text: part.text ?? "" });
+          } else if (part.type === "image" && typeof part.image === "string") {
+            piContent.push({
+              type: "image",
+              data: part.image,
+              mimeType: part.mediaType ?? "image/png",
+            });
+          }
+        }
+        if (piContent.length === 1 && piContent[0].type === "text") {
+          piMessages.push({
+            role: "user",
+            content: piContent[0].text,
+            timestamp: now,
+          });
+        } else if (piContent.length > 0) {
+          piMessages.push({ role: "user", content: piContent, timestamp: now });
+        } else {
+          piMessages.push({ role: "user", content: "", timestamp: now });
+        }
+        continue;
+      }
+
+      piMessages.push({ role: "user", content: "", timestamp: now });
       continue;
     }
 

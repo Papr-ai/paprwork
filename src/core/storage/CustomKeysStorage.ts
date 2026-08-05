@@ -57,6 +57,9 @@ export interface CustomKeyInput {
   organizationId?: string;
   /** Who can use this key in cloud vault: user, team (namespace), or organization. */
   vaultAudience?: IntegrationKeyVaultAudience;
+  source?: "manual" | "oauth";
+  managedBy?: "oauth";
+  oauthProvider?: "openai" | "anthropic";
 }
 
 export type CustomKeyStorageScope = "global" | "shared" | "org";
@@ -652,6 +655,11 @@ export class CustomKeysStorage {
         ...(input.vaultAudience !== undefined && {
           vaultAudience: normalizeIntegrationKeyVaultAudience(input.vaultAudience),
         }),
+        ...(input.source !== undefined && { source: input.source }),
+        ...(input.managedBy !== undefined && { managedBy: input.managedBy }),
+        ...(input.oauthProvider !== undefined && {
+          oauthProvider: input.oauthProvider,
+        }),
         updatedAt: now,
       };
 
@@ -692,6 +700,11 @@ export class CustomKeysStorage {
       createdAt: now,
       updatedAt: now,
       vaultAudience: normalizeIntegrationKeyVaultAudience(input.vaultAudience),
+      ...(input.source !== undefined && { source: input.source }),
+      ...(input.managedBy !== undefined && { managedBy: input.managedBy }),
+      ...(input.oauthProvider !== undefined && {
+        oauthProvider: input.oauthProvider,
+      }),
     };
 
     if (target.scope === "org" && target.organizationId !== this.activeOrganizationId) {
@@ -749,6 +762,11 @@ export class CustomKeysStorage {
       }),
       ...(updates.vaultAudience !== undefined && {
         vaultAudience: normalizeIntegrationKeyVaultAudience(updates.vaultAudience),
+      }),
+      ...(updates.source !== undefined && { source: updates.source }),
+      ...(updates.managedBy !== undefined && { managedBy: updates.managedBy }),
+      ...(updates.oauthProvider !== undefined && {
+        oauthProvider: updates.oauthProvider,
       }),
       updatedAt: new Date().toISOString(),
     };

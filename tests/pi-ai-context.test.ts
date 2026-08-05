@@ -73,4 +73,36 @@ describe("buildPiContext", () => {
       '{"success":true,"stdout":"ok"}',
     );
   });
+
+  test("passes user image parts through to pi-ai ImageContent", () => {
+    const { messages } = buildPiContext({
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Describe this screenshot" },
+            {
+              type: "image",
+              image: "abc123",
+              mediaType: "image/png",
+            },
+          ],
+        },
+      ],
+      tools: {},
+      apiId: "openai-codex-responses",
+      providerId: "openai-codex",
+      modelId: "gpt-5.4",
+    });
+
+    const user = messages.find((m) => m.role === "user");
+    expect(user).toBeDefined();
+    expect(Array.isArray((user as { content: unknown }).content)).toBe(true);
+    const parts = (user as { content: Array<{ type: string; data?: string; mimeType?: string }> })
+      .content;
+    expect(parts).toEqual([
+      { type: "text", text: "Describe this screenshot" },
+      { type: "image", data: "abc123", mimeType: "image/png" },
+    ]);
+  });
 });

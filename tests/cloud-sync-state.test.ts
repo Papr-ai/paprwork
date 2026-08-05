@@ -15,6 +15,28 @@ describe("shouldExcludePathFromContentHash", () => {
     expect(shouldExcludePathFromContentHash("apps/x/linked-databases.json")).toBe(true);
     expect(shouldExcludePathFromContentHash("apps/x/src/App.tsx")).toBe(false);
   });
+
+  it("excludes local-only backup artifacts", () => {
+    expect(
+      shouldExcludePathFromContentHash(
+        "data/databases/gtm-foundations/data.db.corrupt-1785826750.bak",
+      ),
+    ).toBe(true);
+    expect(
+      shouldExcludePathFromContentHash(
+        "Jobs/job-1/data/data.db.corrupt-backup-2026-04-01T12-00-00",
+      ),
+    ).toBe(true);
+    expect(shouldExcludePathFromContentHash("data/apps.json.corrupt-1234567890")).toBe(
+      true,
+    );
+    expect(shouldExcludePathFromContentHash("data/settings.json")).toBe(false);
+    expect(
+      shouldExcludePathFromContentHash(
+        "data/brand/revenue-reimagined/source/RR-Brand-Guidelines.pdf",
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("SyncStateManager content hash", () => {

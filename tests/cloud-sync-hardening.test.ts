@@ -326,6 +326,18 @@ describe("Per-folder commit strategy", () => {
     expect(content).toContain("**/*.wav");
     expect(content).toContain("**/data/recordings/");
   });
+
+  it("excludes backup artifacts from git sync", () => {
+    const content = fs.readFileSync(
+      path.join(process.cwd(), "src/gateway/services/CloudSyncService.ts"),
+      "utf-8",
+    );
+    expect(content).toContain("**/*.bak");
+    expect(content).toContain("**/*.corrupt-*");
+    expect(content).toContain("**/*corrupt-backup*");
+    expect(content).not.toContain("**/*.pdf");
+    expect(content).toContain("unstageOversizedFiles");
+  });
 });
 
 describe("Gateway init check", () => {

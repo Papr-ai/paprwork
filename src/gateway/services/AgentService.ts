@@ -836,7 +836,19 @@ export class AgentService {
         memoryContextBlocks,
         activePlansContext,
         focusContextMessage,
+        options?.attachments,
       );
+
+      const { modelSupportsVision, injectAttachmentVisionIntoMessages } =
+        await import("./agent/attachmentVision.js");
+      if (modelSupportsVision(config.provider, config.model)) {
+        const imageCount = await injectAttachmentVisionIntoMessages(messages);
+        if (imageCount > 0) {
+          console.log(
+            `[AgentService] Injected ${imageCount} image(s) as native vision content`,
+          );
+        }
+      }
 
       const useAnthropicPromptCache =
         config.provider === "anthropic" && config.authType !== "oauth";

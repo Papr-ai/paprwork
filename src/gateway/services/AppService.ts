@@ -190,6 +190,8 @@ export class AppService {
   private lastBuildResult: Map<string, MiniAppBuildResult>;
   private saveLock: Promise<void> | null = null;
   private initPromise: Promise<void> | null = null;
+  /** PAPR_HOME at last successful initialize — prune must not run after env drift. */
+  private loadedPaprRoot: string | null = null;
 
   /** Coalesce rapid multi-file agent edits into one rebuild + reload. */
   private static readonly FILE_CHANGE_DEBOUNCE_MS = 800;
@@ -262,6 +264,7 @@ export class AppService {
     }
     this.watchers.clear();
     this.initialized = false;
+    this.loadedPaprRoot = null;
     this.apps.clear();
     this.pendingDefaultJobs = [];
     this.lastBuildResult.clear();
@@ -647,6 +650,7 @@ export class AppService {
       "./DatabaseRegistryService.js"
     );
     await initializeDatabaseRegistry();
+    this.loadedPaprRoot = this.paprRootDir;
     this.initialized = true;
     console.log(`[AppService] Initialized with ${this.apps.size} apps (watchers starting in background)`);
     this.scheduleWatchingApps();
@@ -1794,6 +1798,14 @@ export class AppService {
    * Persists apps.json and optionally notifies clients.
    */
   private async pruneStaleAppEntries(): Promise<boolean> {
+    const currentRoot = this.paprRootDir;
+    if (this.loadedPaprRoot && currentRoot !== this.loadedPaprRoot) {
+      console.warn(
+        `[AppService] Skipping stale-app prune — PAPR_HOME changed (${this.loadedPaprRoot} → ${currentRoot})`,
+      );
+      return false;
+    }
+
     const staleIds: string[] = [];
     for (const id of this.apps.keys()) {
       if (!(await this.appDirHasContent(id))) {
@@ -1826,21 +1838,31 @@ export class AppService {
 
   async listApps(): Promise<MiniApp[]> {
     await this.initialize();
-    await this.pruneStaleAppEntries();
 
     const activeScope = readActiveAppWorkspaceScope();
     const owned: MiniApp[] = [];
     for (const app of this.apps.values()) {
+      const needsDiskOwnership = !app.ownerUserId?.trim();
+      const needsDiskWorkspace =
+        !app.organizationId?.trim() || !app.namespaceId?.trim();
+
       const appDir = path.join(this.appsDir, app.id);
-      const hints = await readAppDiskOwnershipHints(appDir, app.id);
+      const hints = needsDiskOwnership
+        ? await readAppDiskOwnershipHints(appDir, app.id)
+        : undefined;
       if (!isAppOwnedByCurrentUser(app, hints)) {
         continue;
       }
 
-      const merged = {
-        ...app,
-        ...mergeAppWorkspaceFields(app, await readAppWorkspaceFieldsFromDisk(appDir)),
-      };
+      const merged = needsDiskWorkspace
+        ? {
+            ...app,
+            ...mergeAppWorkspaceFields(
+              app,
+              await readAppWorkspaceFieldsFromDisk(appDir),
+            ),
+          }
+        : app;
 
       if (!shouldShowAppInMyApps(app.id, merged, activeScope)) {
         continue;
@@ -1858,7 +1880,6 @@ export class AppService {
   /** Apps on disk in this namespace with no workspace assignment (org/namespace missing). */
   async listUnassignedApps(): Promise<MiniApp[]> {
     await this.initialize();
-    await this.pruneStaleAppEntries();
 
     const activeScope = readActiveAppWorkspaceScope();
     if (!activeScope) {

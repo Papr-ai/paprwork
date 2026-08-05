@@ -1,8 +1,12 @@
 import {
+  createRemoteClient,
+  ensureLocalDbChangeLogReady,
   pullTursoToLocalDb,
   pushLocalDbToTurso,
+  type PushResult,
 } from "../tursoSyncBridgeCore.js";
-import { loadTursoSyncState } from "../tursoSyncState.js";
+import { remoteNeedsBootstrap } from "../tursoDeltaSync.js";
+import { loadTursoSyncState, localDbHasSyncableData } from "../tursoSyncState.js";
 
 /** Sync state key — job id or registry dbId (matches TursoSyncBridge linkedSourceSyncKey). */
 export interface TursoBookendTarget {
@@ -30,18 +34,19 @@ export async function pullLinkedSourceFromCloud(
       ? { lastSeenRemoteVersion: sourceState.lastSeenRemoteVersion }
       : {}),
   });
+  ensureLocalDbChangeLogReady(input.dbPath);
 }
 
 export async function pushLinkedSourceToCloud(
   input: TursoBookendTarget,
-): Promise<boolean> {
+): Promise<PushResult> {
   const creds = {
     tursoUrl: input.tursoUrl,
     authToken: input.authToken,
   };
   const state = loadTursoSyncState();
   const sourceState = state.jobs[input.syncKey];
-  const pushResult = await pushLocalDbToTurso(input.dbPath, creds, {
+  let pushResult = await pushLocalDbToTurso(input.dbPath, creds, {
     jobId: input.syncKey,
     ...(sourceState?.tableFingerprints
       ? { previousFingerprints: sourceState.tableFingerprints }
@@ -50,7 +55,28 @@ export async function pushLinkedSourceToCloud(
       ? { lastPushedLogId: sourceState.lastPushedLogId }
       : {}),
   });
-  return pushResult.status === "pushed";
+
+  if (localDbHasSyncableData(input.dbPath)) {
+    const verifyRemote = createRemoteClient(creds);
+    try {
+      const stillEmpty = await remoteNeedsBootstrap(verifyRemote);
+      if (stillEmpty) {
+        console.warn(
+          `[CloudTursoBookends] Remote empty after push for ${input.syncKey} — forcing bootstrap`,
+        );
+        pushResult = await pushLocalDbToTurso(input.dbPath, creds, {
+          jobId: input.syncKey,
+          force: true,
+          previousFingerprints: undefined,
+          lastPushedLogId: 0,
+        });
+      }
+    } finally {
+      verifyRemote.close();
+    }
+  }
+
+  return pushResult;
 }
 
 /** @deprecated Use pullLinkedSourceFromCloud — job-owned DB only. */
@@ -74,7 +100,7 @@ export async function pushJobTursoToCloud(input: {
   jobId: string;
   tursoUrl: string;
   authToken: string;
-}): Promise<boolean> {
+}): Promise<PushResult> {
   const { getPaprJobsRoot } = await import("../../../core/utils/paprRoot.js");
   const dbPath = `${getPaprJobsRoot()}/${input.jobId}/data/data.db`;
   return pushLinkedSourceToCloud({

@@ -161,6 +161,10 @@ Publish access and per-user DB isolation are **independent**. A team-visible app
 | `edit_app_file_lines` | Mini-app line-range edits (multi-line HTML/JS blocks) |
 | `list_app_files` | List all files in an app |
 | `list_jobs` | List all jobs with status, deps, dir path (call before create!) |
+| `get_cloud_sync_status` | **Cloud debug** — GitHub/Turso sync, publish, jobs, heartbeat, pending cloud runs |
+| `push_cloud_sync` | Force git + Turso push after local fixes |
+| `query_cloud_turso` | Read-only SQL on Turso cloud replica |
+| `inspect_cloud_repo` | Read/list files in cloud GitHub repo |
 | `create_job` | Create a job with retries, dependencies, delivery |
 | `update_job` | Patch job config (command, requirements, schedule, deps) |
 | `delete_job` | Remove a job from the index (optionally wipe files) |
@@ -414,6 +418,39 @@ Jobs with **`writeDbIds`** receive **`PAPR_DB_{ALIAS}`** pointing at registry da
 Papr auto-publish is the supported cloud path (source from git + Cloud App Host API). Manual static deploys often ship an incomplete API (e.g. only `/api/query`, no `/api/db/write`). If writes 404 on a custom URL, the deployment is wrong — **do not** shim INSERTs through `/api/db/query`. On `apps.papr.ai`, `/api/db/write` is available and returns `{ changes, lastInsertRowid }`.
 
 Users can opt out globally in **Settings → Privacy → Cloud Sync**, or per-app under **Sync Status → Cloud links** (disable **Auto** or turn the link **Off**). Do not add Turso credentials, cloud URLs, or publish steps to agent plans.
+
+### Cloud debugging (agent tools)
+
+When a published app misbehaves on `apps.papr.ai` — stale data, missing job runs, sync drift — use **cloud observability tools** (NOT Memory API; Memory stores content snapshots, not sync/job infra).
+
+| Tool | Purpose |
+|------|---------|
+| `get_cloud_sync_status({ appId?, jobId?, includeJobLogs? })` | **Start here** — GitHub folder sync, Turso table counts, publish links, `desktopAwake`, `pendingCloudRuns`, local job status/logs, GitHub `job.json` snapshots |
+| `query_cloud_turso({ sql, jobId \| tursoDatabase \| appId+alias })` | Read-only SQL on Turso replica — verify cloud rows match local |
+| `inspect_cloud_repo({ action: "read"\|"list", relativePath?, prefix? })` | Read/list files on GitHub (e.g. `apps/{id}/dist/app.js`, `Jobs/{id}/job.json`) |
+| `push_cloud_sync({ appId? })` | Force git + Turso push after local code/data fixes |
+
+**Diagnose → fix → verify:**
+
+```
+1. get_cloud_sync_status({ appId, jobId })     # what's wrong?
+2. push_cloud_sync({ appId })                # if github/turso pending
+3. update_job / edit_file                    # if job/code wrong
+4. run_job({ jobId })                        # re-run locally
+5. get_cloud_sync_status({ appId, jobId })   # confirm fixed
+```
+
+**Job stuck `pending` on cloud (common):**
+
+1. Call `get_cloud_sync_status({ appId, jobId, includeJobLogs: true })`
+2. Check `desktopHeartbeat.desktopAwake` — if `false`, cloud triggered the job but desktop gateway is asleep; user must open Paprwork
+3. Check `desktopHeartbeat.pendingCloudRuns` — lists jobs waiting for desktop
+4. Check `jobs.githubRecords` — confirms job definition reached GitHub
+5. Check `turso.sources` — `pending` means local DB changes not yet on Turso; run `push_cloud_sync({ appId })`
+
+**Turso vs local mismatch:** `query_cloud_turso({ jobId, sql: "SELECT COUNT(*) FROM your_table" })` and compare to local `bash` sqlite3 query.
+
+**Do NOT use** `turso` CLI, `apps.papr.ai/api/db/query` from bash, or Memory API for cloud ops debugging — use the tools above (they use Papr credentials correctly).
 
 ---
 
