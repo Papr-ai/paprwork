@@ -756,7 +756,7 @@ export function CommunityAppsView({
               Install {installModeEntry.name}
             </h3>
             <p className="community-install-modal__desc">
-              Choose how this cloud app lands in your Paprwork workspace.
+              Choose how this cloud app lands in your Papr Work workspace.
             </p>
             <button
               type="button"
@@ -781,10 +781,10 @@ export function CommunityAppsView({
                 void installCloudApp(target, "track");
               }}
             >
-              <strong>Track upstream</strong>
+              <strong>Collaborate and get updates</strong>
               <span>
-                Stay linked to the publisher — get their updates manually when
-                you want them (Local preview → Updates).
+                Stay connected to the publisher and pull their updates when
+                you&apos;re ready.
               </span>
             </button>
             <button
@@ -864,18 +864,28 @@ function CommunityAppCard({
 
   const allPlatforms = ["macos", "windows", "linux"];
   const platforms = entry.platform ?? allPlatforms;
+  const requiresDesktop = entry.requiresDesktopForFullFunctionality ?? false;
   const isCrossPlatform =
-    entry.source === "opensource" &&
     platforms.length === allPlatforms.length &&
-    allPlatforms.every((p) => platforms.includes(p));
+    allPlatforms.every((p) => platforms.includes(p)) &&
+    !requiresDesktop;
 
   const platformLabel = isCrossPlatform
     ? "All Platforms"
-    : platforms
-        .map((p) =>
-          p === "macos" ? "macOS" : p === "windows" ? "Windows" : "Linux",
-        )
-        .join(", ");
+    : requiresDesktop &&
+        platforms.length === allPlatforms.length &&
+        allPlatforms.every((p) => platforms.includes(p))
+      ? "Desktop required"
+      : platforms
+          .map((p) =>
+            p === "macos" ? "macOS" : p === "windows" ? "Windows" : "Linux",
+          )
+          .join(", ");
+
+  const showPlatformBadge =
+    entry.source === "opensource"
+      ? !isCrossPlatform
+      : requiresDesktop || !isCrossPlatform;
 
   const renderIcon = () => {
     if (entry.icon?.trim()) {
@@ -990,9 +1000,9 @@ function CommunityAppCard({
               {tag}
             </span>
           ))}
-          {entry.source === "opensource" && !isCrossPlatform && (
+          {showPlatformBadge ? (
             <span className="community-card__platform-badge">{platformLabel}</span>
-          )}
+          ) : null}
         </div>
 
         {showDetails && (
@@ -1009,13 +1019,16 @@ function CommunityAppCard({
                   : "No API keys needed"}
               </span>
             </div>
-            {entry.source === "opensource" ? (
+            {showPlatformBadge ? (
               <div className="community-card__detail-row">
                 <span className="community-card__detail-label">Platform</span>
                 <span
                   className={`community-card__detail-value ${isCrossPlatform ? "community-card__detail-value--good" : ""}`}
                 >
                   {platformLabel}
+                  {entry.source === "cloud" && requiresDesktop
+                    ? " for full functionality"
+                    : ""}
                 </span>
               </div>
             ) : null}

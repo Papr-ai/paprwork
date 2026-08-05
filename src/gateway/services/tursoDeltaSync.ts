@@ -5,6 +5,7 @@
 import type { Client, InArgs } from "@libsql/client";
 import type Database from "better-sqlite3";
 import {
+  filterSyncableTables,
   quoteIdent,
   readLocalTable,
   readRemoteTableSchema,
@@ -58,6 +59,16 @@ export async function remoteMissingLocalTables(
 ): Promise<string[]> {
   const remoteNames = new Set(await listRemoteUserTables(remote));
   return localTableNames.filter((name) => !remoteNames.has(name));
+}
+
+/** Remote syncable tables missing from local — partial delta pull on empty sandbox. */
+export async function localMissingRemoteTables(
+  remote: Client,
+  localTableNames: readonly string[],
+): Promise<string[]> {
+  const remoteNames = filterSyncableTables(await listRemoteUserTables(remote));
+  const localNames = new Set(localTableNames);
+  return remoteNames.filter((name) => !localNames.has(name));
 }
 
 function fetchLocalRowByPk(

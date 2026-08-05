@@ -19,16 +19,17 @@ import {
 import { resolveAppDependentJobIds } from "./cloudSync/resolveAppDependentJobs.js";
 import { mergeJobAppIds } from "./jobs/appIds.js";
 import type { JobRecord } from "./jobs/types.js";
-import type { DatabasesRegistryFile } from "./DatabaseRegistryService.js";
+import type { DatabasesRegistryFile, DatabaseRecord } from "./DatabaseRegistryService.js";
+import { LINKED_DATABASES_FILENAME } from "./cloudSync/linkedDatabasesForCloud.js";
 import { getPaprUserId } from "../utils/paprUserId.js";
 import {
   ensureRegistryDbInWorkspace,
   extractDatabaseSlugFromPath,
+  isReadableDbFile,
   resolveReadableRegistryDbPath,
   workspaceRegistryDbPath,
 } from "./resolveRegistryDbPath.js";
 import { isUnreadableDbPath } from "./portableDataSources.js";
-import type { DatabaseRecord } from "./DatabaseRegistryService.js";
 
 export interface CopyAppToNamespaceInput {
   appId: string;
@@ -219,6 +220,7 @@ async function rewriteDataSourcesForTarget(
 async function hydrateDataSourcesFromRegistry(
   targetAppDir: string,
   targetRegistryPath: string,
+  targetPaprHome: string,
 ): Promise<void> {
   const configPath = path.join(targetAppDir, "data-sources.json");
   let raw: string;
@@ -229,6 +231,7 @@ async function hydrateDataSourcesFromRegistry(
   }
 
   const registry = await readDatabasesRegistry(targetRegistryPath);
+  const targetDataDir = path.join(targetPaprHome, "data");
   const config = parseDataSourcesFile(raw);
   let changed = false;
   const sources = config.sources.map((source) => {
@@ -236,7 +239,13 @@ async function hydrateDataSourcesFromRegistry(
       return source;
     }
     const record = registry.databases[source.dbId];
-    const registryPath = record?.localPath?.trim() ?? "";
+    let registryPath = record?.localPath?.trim() ?? "";
+    if (!registryPath && record) {
+      const slug = resolveRegistrySlug(record);
+      if (slug) {
+        registryPath = workspaceRegistryDbPath(slug, targetDataDir);
+      }
+    }
     if (!registryPath) {
       return source;
     }
@@ -274,20 +283,58 @@ function collectRegistryDbIds(
   return dbIds;
 }
 
+function slugifyRegistryLabel(label: string): string {
+  return label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "database";
+}
+
+function resolveRegistrySlug(record: DatabaseRecord): string | null {
+  const fromPath = extractDatabaseSlugFromPath(record.localPath ?? "");
+  if (fromPath) {
+    return fromPath;
+  }
+  const label = record.label?.trim();
+  if (label) {
+    return slugifyRegistryLabel(label);
+  }
+  return null;
+}
+
 function resolveCopiedRegistryLocalPath(
   record: DatabaseRecord,
   targetPaprHome: string,
   copiedJobIds: ReadonlySet<string>,
 ): string {
   const ownerJobId = record.ownerJobId;
-  const slug = extractDatabaseSlugFromPath(record.localPath ?? "");
   if (ownerJobId && copiedJobIds.has(ownerJobId)) {
     return jobDatabasePath(targetPaprHome, ownerJobId);
   }
+  const slug = resolveRegistrySlug(record);
   if (slug) {
     return workspaceRegistryDbPath(slug, path.join(targetPaprHome, "data"));
   }
   return record.localPath;
+}
+
+async function readLinkedDatabasesAt(
+  appDir: string,
+): Promise<DatabasesRegistryFile> {
+  try {
+    const raw = await fs.readFile(
+      path.join(appDir, LINKED_DATABASES_FILENAME),
+      "utf8",
+    );
+    const parsed = JSON.parse(raw) as DatabasesRegistryFile;
+    if (parsed?.databases && typeof parsed.databases === "object") {
+      return parsed;
+    }
+  } catch {
+    /* no linked-databases.json */
+  }
+  return { version: 1, databases: {} };
 }
 
 async function collectLinkedRegistryDbIds(appDir: string): Promise<Set<string>> {
@@ -334,7 +381,7 @@ async function copyRegistryDatabaseFiles(input: {
       continue;
     }
 
-    const slug = extractDatabaseSlugFromPath(record.localPath ?? "");
+    const slug = resolveRegistrySlug(record);
     if (!slug) {
       continue;
     }
@@ -359,6 +406,11 @@ async function copyRegistryDatabaseFiles(input: {
 
     if (sourcePath && (await ensureRegistryDbInWorkspace({ sourcePath, targetPath }))) {
       copiedSlugs.push(slug);
+      continue;
+    }
+
+    if (isReadableDbFile(targetPath)) {
+      copiedSlugs.push(slug);
     }
   }
 
@@ -372,9 +424,14 @@ async function mergeDatabaseRegistryForCopy(input: {
   copiedJobIds: ReadonlySet<string>;
   dbIdsFromJobs: Set<string>;
   appDir: string;
+  sourceAppDir?: string;
 }): Promise<Set<string>> {
   const sourceRegistry = await readDatabasesRegistry(input.sourceRegistryPath);
   const targetRegistry = await readDatabasesRegistry(input.targetRegistryPath);
+  const linkedFromTargetApp = await readLinkedDatabasesAt(input.appDir);
+  const linkedFromSourceApp = input.sourceAppDir
+    ? await readLinkedDatabasesAt(input.sourceAppDir)
+    : { version: 1 as const, databases: {} };
   const dbIds = new Set(input.dbIdsFromJobs);
 
   for (const sourceDbId of await collectLinkedRegistryDbIds(input.appDir)) {
@@ -387,7 +444,11 @@ async function mergeDatabaseRegistryForCopy(input: {
   };
 
   for (const dbId of dbIds) {
-    const record = sourceRegistry.databases[dbId];
+    const record =
+      sourceRegistry.databases[dbId] ??
+      linkedFromSourceApp.databases[dbId] ??
+      linkedFromTargetApp.databases[dbId] ??
+      targetRegistry.databases[dbId];
     if (!record) {
       continue;
     }
@@ -575,6 +636,9 @@ export async function syncAppLinkedResourcesToTarget(
     "data",
     "databases.json",
   );
+  const sourceAppDir = input.sourceAppId
+    ? path.join(input.sourcePaprHome, "apps", input.sourceAppId)
+    : undefined;
   const registryDbIds = await mergeDatabaseRegistryForCopy({
     sourceRegistryPath,
     targetRegistryPath: targetDatabasesPath,
@@ -582,6 +646,7 @@ export async function syncAppLinkedResourcesToTarget(
     copiedJobIds: copiedJobIdSet,
     dbIdsFromJobs,
     appDir: targetAppDir,
+    sourceAppDir,
   });
   await rewriteDataSourcesForTarget(targetAppDir, input.targetPaprHome);
 
@@ -594,7 +659,11 @@ export async function syncAppLinkedResourcesToTarget(
     copiedJobIds: copiedJobIdSet,
   });
 
-  await hydrateDataSourcesFromRegistry(targetAppDir, targetDatabasesPath);
+  await hydrateDataSourcesFromRegistry(
+    targetAppDir,
+    targetDatabasesPath,
+    input.targetPaprHome,
+  );
 
   return {
     copiedJobIds,

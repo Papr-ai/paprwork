@@ -30,6 +30,8 @@ export interface CommunityCatalogEntry {
   tags: string[];
   icon?: string;
   platform?: string[];
+  /** True when full functionality needs Paprwork desktop (not just apps.papr.ai preview). */
+  requiresDesktopForFullFunctionality?: boolean;
   requirements?: RequirementItem[];
   minPaprworkVersion?: string;
   /** Open-source bundle fields */

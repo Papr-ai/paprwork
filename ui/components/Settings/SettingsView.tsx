@@ -929,41 +929,42 @@ function AboutTab() {
           </div>
         </div>
 
-        {currentVersion === "2.2.6" && (
+        {currentVersion === "2.2.7" && (
           <div className="about-card">
-            <h3>What's New in v2.2.6</h3>
+            <h3>What's New in v2.2.7</h3>
             <ul className="whats-new-list">
               <li className="whats-new-list__item">
-                <strong>Turso Incremental Schema Migration</strong>
+                <strong>Cloud Sync Ready Pipeline</strong>
                 <p>
-                  Job and app databases sync schema changes with ADD/DROP/RENAME
-                  column migrations instead of full table rebuilds.
+                  Sync now rebuilds dist and backend bundles, writes per-app
+                  revision markers, and auto-republishes when catalog drift is
+                  detected — one action to update apps.papr.ai.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Job Database Migrations</strong>
+                <strong>Community Platform Badges</strong>
                 <p>
-                  Versioned migration framework with manifest tracking and Turso
-                  sync for job SQLite databases.
+                  Community apps show macOS, Windows, and Linux compatibility
+                  badges, plus when desktop is required for full functionality.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Cloud Sync Improvements</strong>
+                <strong>Turso Sync Safety</strong>
                 <p>
-                  Debounced Turso push for cloud agents, clearer sync status in
-                  the UI, and improved copy-to-namespace workflow.
+                  Hardened delta sync, migration Turso sync, and safer push/pull
+                  boundaries for linked job databases.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>OAuth Login Telemetry</strong>
+                <strong>Publish & Sharing Fixes</strong>
                 <p>
-                  Provider login funnel tracking for better diagnostics during
-                  Papr and OAuth sign-in flows.
+                  Backend manifest vault keys auto-sync before git push; improved
+                  cloud sharing ACL and publish bar status.
                 </p>
               </li>
             </ul>
             <a
-              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.2.6"
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.2.7"
               target="_blank"
               rel="noopener noreferrer"
               className="about-link whats-new-list__link"

@@ -157,6 +157,16 @@ function buildViewModel(
   };
 }
 
+function publishStateMatchesApp(
+  targetAppId: string,
+  state: CloudPublishState | null,
+): boolean {
+  if (!state) {
+    return true;
+  }
+  return !state.appId || state.appId === targetAppId;
+}
+
 export function useCloudPublish(appId: string, appTitle?: string) {
   const cachedOnMount = readCachedCloudPublishState(appId);
   const [state, setState] = useState<CloudPublishState | null>(cachedOnMount);
@@ -166,14 +176,30 @@ export function useCloudPublish(appId: string, appTitle?: string) {
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const hasDisplayedStateRef = useRef(cachedOnMount !== null);
+  const appIdRef = useRef(appId);
+  const fetchGenerationRef = useRef(0);
 
-  const applyPublishState = useCallback((next: CloudPublishState | null) => {
-    setState(next);
-    hasDisplayedStateRef.current = next !== null;
-    writeCachedCloudPublishState(appId, next);
-  }, [appId]);
+  appIdRef.current = appId;
+
+  const applyPublishState = useCallback(
+    (targetAppId: string, next: CloudPublishState | null) => {
+      if (targetAppId !== appIdRef.current) {
+        return;
+      }
+      if (!publishStateMatchesApp(targetAppId, next)) {
+        return;
+      }
+      setState(next);
+      hasDisplayedStateRef.current = next !== null;
+      writeCachedCloudPublishState(targetAppId, next);
+    },
+    [],
+  );
 
   const refresh = useCallback(async () => {
+    const targetAppId = appIdRef.current;
+    const generation = ++fetchGenerationRef.current;
+
     try {
       setError(null);
       if (hasDisplayedStateRef.current) {
@@ -182,19 +208,45 @@ export function useCloudPublish(appId: string, appTitle?: string) {
         setLoading(true);
       }
 
-      const next = await fetchCloudPublishState(appId);
-      applyPublishState(next);
+      const next = await fetchCloudPublishState(targetAppId);
+      if (
+        generation !== fetchGenerationRef.current ||
+        targetAppId !== appIdRef.current
+      ) {
+        return;
+      }
+      if (!publishStateMatchesApp(targetAppId, next)) {
+        return;
+      }
+      applyPublishState(targetAppId, next);
     } catch (err) {
+      if (
+        generation !== fetchGenerationRef.current ||
+        targetAppId !== appIdRef.current
+      ) {
+        return;
+      }
       setError((err as Error).message.slice(0, 160));
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (
+        generation === fetchGenerationRef.current &&
+        targetAppId === appIdRef.current
+      ) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, [appId, applyPublishState]);
+  }, [applyPublishState]);
 
   useEffect(() => {
+    fetchGenerationRef.current += 1;
+
+    setBusy(false);
+    setError(null);
+    setToast(null);
+
     const cached = readCachedCloudPublishState(appId);
-    if (cached) {
+    if (cached && publishStateMatchesApp(appId, cached)) {
       setState(cached);
       hasDisplayedStateRef.current = true;
       setLoading(false);
@@ -224,22 +276,30 @@ export function useCloudPublish(appId: string, appTitle?: string) {
         const needsCloudPublish =
           model.permission !== "edit" || model.audience !== "private";
 
+        const targetAppId = appIdRef.current;
         if (needsCloudPublish) {
-          const result = await publishCloudApp(appId, {
+          const result = await publishCloudApp(targetAppId, {
             ...sharing,
             codeAccess,
             acknowledgeDesktopOnly: options?.acknowledgeDesktopOnly,
           });
-          applyPublishState(result);
+          applyPublishState(targetAppId, result);
         } else {
-          const prefs = await patchCloudPublishPrefs(appId, { codeAccess: "off" });
+          const prefs = await patchCloudPublishPrefs(targetAppId, {
+            codeAccess: "off",
+          });
+          if (targetAppId !== appIdRef.current) {
+            return;
+          }
           setState((prev) => {
-            if (!prev) return prev;
+            if (!prev || !publishStateMatchesApp(targetAppId, prev)) {
+              return prev;
+            }
             const next = {
               ...prev,
               prefs: { ...prev.prefs, ...prefs, codeAccess: "off" },
             };
-            writeCachedCloudPublishState(appId, next);
+            writeCachedCloudPublishState(targetAppId, next);
             return next;
           });
         }
@@ -251,7 +311,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
         setBusy(false);
       }
     },
-    [appId, appTitle, applyPublishState],
+    [appTitle, applyPublishState],
   );
 
   const publish = useCallback(
@@ -259,12 +319,13 @@ export function useCloudPublish(appId: string, appTitle?: string) {
       setBusy(true);
       setError(null);
       try {
+        const targetAppId = appIdRef.current;
         const sharing = resolveSharing(state);
-        const result = await publishCloudApp(appId, {
+        const result = await publishCloudApp(targetAppId, {
           ...sharing,
           acknowledgeDesktopOnly: options?.acknowledgeDesktopOnly,
         });
-        applyPublishState(result);
+        applyPublishState(targetAppId, result);
         setToast(`${appTitle ?? "App"} published to ${result.shareUrl ?? "cloud"}`);
         window.dispatchEvent(new CustomEvent("papr-community-catalog-refresh"));
       } catch (err) {
@@ -274,15 +335,16 @@ export function useCloudPublish(appId: string, appTitle?: string) {
         setBusy(false);
       }
     },
-    [appId, appTitle, state, applyPublishState],
+    [appTitle, state, applyPublishState],
   );
 
   const unpublish = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
-      await unpublishCloudApp(appId);
-      applyPublishState(null);
+      const targetAppId = appIdRef.current;
+      await unpublishCloudApp(targetAppId);
+      applyPublishState(targetAppId, null);
       setToast(`${appTitle ?? "App"} unpublished`);
       window.dispatchEvent(new CustomEvent("papr-community-catalog-refresh"));
     } catch (err) {
@@ -290,7 +352,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
     } finally {
       setBusy(false);
     }
-  }, [appId, appTitle, applyPublishState]);
+  }, [appTitle, applyPublishState]);
 
   const copyLink = useCallback(async (link: string | null) => {
     if (!link) return;

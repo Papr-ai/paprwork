@@ -34,6 +34,45 @@ import { slugifyPublishTitle } from "./cloudPublishDrift.js";
 import { getAppPublishPrefs } from "./cloudPublishPrefs.js";
 import { readAppRequirements } from "./cloudAppRequirements.js";
 
+async function loadCommunityPlatformForApp(appId: string): Promise<{
+  platform: string[];
+  requiresDesktopForFullFunctionality: boolean;
+}> {
+  const { detectCommunityPlatformForApp } = await import(
+    "./cloudAppCompatibility.js"
+  );
+  const report = await detectCommunityPlatformForApp(appId);
+  return {
+    platform: report.platform,
+    requiresDesktopForFullFunctionality: report.requiresDesktopForFullFunctionality,
+  };
+}
+
+async function enrichOwnedCloudPlatformEntries(
+  entries: CommunityCatalogEntry[],
+  ownedAppIds: Set<string>,
+): Promise<CommunityCatalogEntry[]> {
+  return Promise.all(
+    entries.map(async (entry) => {
+      if (
+        entry.source !== "cloud" ||
+        !entry.appId ||
+        !ownedAppIds.has(entry.appId)
+      ) {
+        return entry;
+      }
+      if (
+        entry.platform?.length &&
+        entry.requiresDesktopForFullFunctionality !== undefined
+      ) {
+        return entry;
+      }
+      const platformMeta = await loadCommunityPlatformForApp(entry.appId);
+      return { ...entry, ...platformMeta };
+    }),
+  );
+}
+
 interface CloudCommunityApiEntry {
   appId: string;
   namespaceId?: string;
@@ -59,6 +98,8 @@ interface CloudCommunityApiEntry {
     signupUrl?: string;
     docsUrl?: string;
   }>;
+  catalogPlatform?: string[];
+  catalogRequiresDesktop?: boolean;
 }
 
 interface CloudCommunityApiResponse {
@@ -144,6 +185,8 @@ function cloudEntryFromApi(entry: CloudCommunityApiEntry): CommunityCatalogEntry
     author: entry.author ?? "Papr Cloud",
     tags: entry.tags ?? ["cloud"],
     icon: entry.icon,
+    platform: entry.catalogPlatform,
+    requiresDesktopForFullFunctionality: entry.catalogRequiresDesktop,
     appId: entry.appId,
     namespaceId: entry.namespaceId,
     slug,
@@ -427,6 +470,7 @@ async function buildLocalCloudEntriesForSharing(
 
     const fileRequirements = readAppRequirements(paprDir, appId);
     const teamShared = options.loginAccess === "team";
+    const platformMeta = await loadCommunityPlatformForApp(appId);
 
     entries.push({
       catalogId: `cloud:${appId}`,
@@ -441,6 +485,9 @@ async function buildLocalCloudEntriesForSharing(
       author: "You",
       tags: teamShared ? ["cloud", "team"] : ["cloud", "public"],
       icon: appMeta.icon,
+      platform: platformMeta.platform,
+      requiresDesktopForFullFunctionality:
+        platformMeta.requiresDesktopForFullFunctionality,
       appId,
       namespaceId: options.namespaceId,
       slug: config.slug,
@@ -524,6 +571,10 @@ export class CommunityCatalogService {
       this.paprDir,
       ownedAppIds,
     );
+    cloudEntries = await enrichOwnedCloudPlatformEntries(
+      cloudEntries,
+      ownedAppIds,
+    );
 
     const catalog = buildCatalog("global", [...cloudEntries, ...ossEntries]);
     globalCatalogCache = { fetchedAt: Date.now(), catalog };
@@ -601,8 +652,11 @@ export class CommunityCatalogService {
     }
 
     const teamEntries = dedupeCloudEntries([...teamRemote, ...localTeamEntries]);
-    const entries = markOwnedEntries(
-      dedupeCloudEntries([...teamEntries, ...publicEntries]),
+    const entries = await enrichOwnedCloudPlatformEntries(
+      markOwnedEntries(
+        dedupeCloudEntries([...teamEntries, ...publicEntries]),
+        ownedAppIds,
+      ),
       ownedAppIds,
     );
 
@@ -641,13 +695,16 @@ export class CommunityCatalogService {
         this.paprDir,
         namespaceId,
       );
-      const entries = mergeNamespaceWorkspaceCatalog({
-        workspaceRemote,
-        localTeamEntries,
-        paprDir: this.paprDir,
-        namespaceId,
+      const entries = await enrichOwnedCloudPlatformEntries(
+        mergeNamespaceWorkspaceCatalog({
+          workspaceRemote,
+          localTeamEntries,
+          paprDir: this.paprDir,
+          namespaceId,
+          ownedAppIds,
+        }),
         ownedAppIds,
-      });
+      );
       catalog = buildCatalog("namespace", entries, { namespaceId });
     } else {
       catalog = await this.fetchNamespaceCommunityFallback(

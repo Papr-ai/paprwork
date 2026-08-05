@@ -5,6 +5,7 @@ import {
   isCodePermission,
   isPermissionAvailable,
   isWebLinkPermission,
+  liveLinkPermissionForAudienceModel,
   permissionAffectsCloud,
   permissionToCodeAccess,
   sharingToAudienceModel,
@@ -32,16 +33,20 @@ describe("shareAudienceModel", () => {
 
   it("round-trips public and team", () => {
     const publicModel = sharingToAudienceModel("public", "off");
+    expect(publicModel).toEqual({ audience: "public", permission: "write" });
     expect(audienceModelToSharing(publicModel)).toEqual({
       loginAccess: "public",
       externalLink: "off",
     });
+    expect(liveLinkPermissionForAudienceModel(publicModel)).toBe("read_write");
 
     const teamModel = sharingToAudienceModel("team", "off");
+    expect(teamModel).toEqual({ audience: "team", permission: "write" });
     expect(audienceModelToSharing(teamModel)).toEqual({
       loginAccess: "team",
       externalLink: "off",
     });
+    expect(liveLinkPermissionForAudienceModel(teamModel)).toBe("read_write");
   });
 
   it("maps code access to edit permission", () => {

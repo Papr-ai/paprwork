@@ -291,7 +291,7 @@ export function ContentArea() {
       case "view":
         return <TableView entityId={tab.entityId} />;
       case "app":
-        return <MiniAppView appId={tab.entityId} />;
+        return <MiniAppView key={tab.entityId} appId={tab.entityId} />;
       case "getting-started":
         return <OnboardingView />;
       case "home":

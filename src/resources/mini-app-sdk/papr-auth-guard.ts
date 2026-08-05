@@ -121,6 +121,18 @@ function classifyAuthError(
           "Sign in to Papr to run AI agent jobs from this app.",
       };
     }
+    if (
+      typeof body.error === "string" &&
+      body.error.toLowerCase().includes("write not allowed")
+    ) {
+      return {
+        kind: "no_access",
+        message:
+          body.message ??
+          body.error ??
+          "This app is read-only. The owner must republish with write access enabled.",
+      };
+    }
     if (body.authenticated) {
       return {
         kind: "no_access",

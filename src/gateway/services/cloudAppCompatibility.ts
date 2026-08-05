@@ -11,6 +11,8 @@ import {
   scanJobCloudCompatibility,
   scanMiniAppCloudCompatibility,
 } from "../utils/miniAppCloudCompatibility.js";
+import { deriveCommunityPlatform } from "../utils/communityPlatformDetection.js";
+import type { CommunityPlatformReport } from "../utils/communityPlatformDetection.js";
 import { getAppService } from "./AppService.js";
 import { getJobsService } from "./JobsService.js";
 
@@ -169,4 +171,46 @@ export async function scanAppCloudCompatibility(
   }
 
   return mergeCloudCompatibilityFindings([appFindings, ...jobFindingGroups]);
+}
+
+export async function detectCommunityPlatformForApp(
+  appId: string,
+): Promise<CommunityPlatformReport> {
+  const appService = getAppService();
+  await appService.initialize();
+  const jobsService = getJobsService();
+  await jobsService.initialize();
+
+  const compatibility = await scanAppCloudCompatibility(appId);
+
+  const appDir = path.join(getPaprAppsRoot(), appId);
+  const fileContents = await collectAppFiles(appDir);
+
+  const jobIds = extractJobIdsFromApp(fileContents);
+  try {
+    const config = await appService.getDataSourcesConfig(appId);
+    for (const source of config.sources) {
+      if (source.jobId) jobIds.add(source.jobId.toLowerCase());
+    }
+  } catch {
+    // optional
+  }
+
+  const linkedJobs = await jobsService.listJobs({ appId });
+  for (const job of linkedJobs) {
+    jobIds.add(job.id.toLowerCase());
+  }
+
+  const jobs: Array<{ command?: string; type: string }> = [];
+  for (const jobId of jobIds) {
+    const job = await jobsService.getJob(jobId);
+    if (!job) continue;
+    jobs.push({ command: job.command, type: job.type });
+  }
+
+  return deriveCommunityPlatform({
+    fileContents,
+    jobs,
+    compatibilityFindings: compatibility.findings,
+  });
 }

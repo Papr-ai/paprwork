@@ -2,7 +2,13 @@
  * Multi-option cloud sharing — Papr login access + optional external link.
  */
 
-import type { CloudAccessMode } from "./cloudPublishPrefs.js";
+import {
+  audienceModelToSharing,
+  liveLinkPermissionForAudienceModel,
+  sharingToAudienceModel,
+  type ShareAudienceModel,
+} from "../../core/utils/shareAudienceModel.js";
+import type { CloudAccessMode, CloudPublishAppPrefs } from "./cloudPublishPrefs.js";
 
 export type CloudLoginAccess = "private" | "team" | "public" | "none";
 export type CloudExternalLink = "off" | "read" | "read_write";
@@ -78,6 +84,71 @@ export function sharingSettingsToAccessMode(
   return "private";
 }
 
+export function audienceModelToPublishFields(
+  model: ShareAudienceModel,
+  actualSharing?: CloudSharingSettings,
+): MemoryPublishSharingFields {
+  const sharing = audienceModelToSharing(model);
+  const externalLink = actualSharing?.externalLink ?? sharing.externalLink;
+  const shareLinkEnabled = externalLink !== "off";
+
+  if (model.audience === "link") {
+    const linkPermission = liveLinkPermissionForAudienceModel(model);
+    const loginAccess = actualSharing?.loginAccess ?? sharing.loginAccess;
+    if (model.requireSignIn !== false && loginAccess !== "none") {
+      return {
+        visibility: loginAccess === "team" ? "team" : "public_read",
+        linkPermission,
+        shareLinkEnabled: externalLink !== "off",
+      };
+    }
+    return {
+      visibility:
+        linkPermission === "read_write" ? "link_read_write" : "link_read",
+      linkPermission,
+      shareLinkEnabled: true,
+    };
+  }
+
+  const linkPermission = liveLinkPermissionForAudienceModel(model);
+
+  if (model.audience === "public") {
+    return {
+      visibility: "public_read",
+      linkPermission,
+      shareLinkEnabled,
+    };
+  }
+
+  if (model.audience === "team") {
+    return {
+      visibility: "team",
+      linkPermission,
+      shareLinkEnabled,
+    };
+  }
+
+  return sharingSettingsToPublishFields({
+    loginAccess: sharing.loginAccess,
+    externalLink,
+  });
+}
+
+export function resolvePublishFieldsFromPrefs(
+  prefs: Pick<
+    CloudPublishAppPrefs,
+    "loginAccess" | "externalLink" | "accessMode" | "codeAccess"
+  >,
+): MemoryPublishSharingFields {
+  const sharing = resolveSharingSettings(prefs);
+  const model = sharingToAudienceModel(
+    sharing.loginAccess,
+    sharing.externalLink,
+    prefs.codeAccess ?? "off",
+  );
+  return audienceModelToPublishFields(model, sharing);
+}
+
 export function sharingSettingsToPublishFields(
   settings: CloudSharingSettings,
 ): MemoryPublishSharingFields {
@@ -94,25 +165,18 @@ export function sharingSettingsToPublishFields(
     };
   }
 
-  if (settings.loginAccess === "public") {
-    return {
-      visibility: "public_read",
-      linkPermission,
-      shareLinkEnabled,
-    };
-  }
-
-  if (settings.loginAccess === "team") {
-    return {
-      visibility: "team",
-      linkPermission,
-      shareLinkEnabled,
-    };
+  if (settings.loginAccess === "public" || settings.loginAccess === "team") {
+    const model = sharingToAudienceModel(
+      settings.loginAccess,
+      settings.externalLink,
+      "off",
+    );
+    return audienceModelToPublishFields(model, settings);
   }
 
   return {
     visibility: "private",
-    linkPermission,
+    linkPermission: "read_write",
     shareLinkEnabled,
   };
 }

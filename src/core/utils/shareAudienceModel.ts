@@ -62,7 +62,7 @@ export function sharingToAudienceModel(
     };
   }
   if (loginAccess === "public") {
-    return { audience: "public", permission: "read" };
+    return { audience: "public", permission: "write" };
   }
   if (loginAccess === "team") {
     return { audience: "team", permission: "write" };
@@ -104,8 +104,23 @@ export function audienceModelToSharing(model: ShareAudienceModel): {
 export function resolveLivePermissionForEdit(
   audience: ShareAudience,
 ): Exclude<SharePermission, "edit"> {
-  if (audience === "team" || audience === "link") {
+  if (audience === "team" || audience === "link" || audience === "public") {
     return "write";
+  }
+  return "read";
+}
+
+/** Maps live-app permission to memory server linkPermission for publish ACL. */
+export function liveLinkPermissionForAudienceModel(
+  model: ShareAudienceModel,
+): "read" | "read_write" {
+  if (model.permission === "write") {
+    return "read_write";
+  }
+  if (model.permission === "edit") {
+    return resolveLivePermissionForEdit(model.audience) === "write"
+      ? "read_write"
+      : "read";
   }
   return "read";
 }

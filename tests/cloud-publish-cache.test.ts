@@ -45,4 +45,11 @@ describe("cloudPublishCache", () => {
     writeCachedCloudPublishState("app-1", null);
     expect(readCachedCloudPublishState("app-1")).toBeNull();
   });
+
+  it("refuses to write publish state under the wrong app id", () => {
+    writeCachedCloudPublishState("app-1", sampleState("app-1"));
+    writeCachedCloudPublishState("app-2", sampleState("app-1"));
+    expect(readCachedCloudPublishState("app-2")).toBeNull();
+    expect(readCachedCloudPublishState("app-1")?.loginAccess).toBe("team");
+  });
 });

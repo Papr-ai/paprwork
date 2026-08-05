@@ -227,8 +227,9 @@ export async function finalizePortableCloudAppResources(): Promise<void> {
     dryRun: false,
     includeApps: false,
     delayMs: 0,
+    paprBase: getPaprRoot(),
     scopePaprHome: getPaprRoot(),
-    skipDataSources: true,
+    skipDataSources: false,
   });
 
   try {

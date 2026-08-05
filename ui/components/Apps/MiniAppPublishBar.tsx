@@ -250,6 +250,24 @@ export function MiniAppPublishBar({
     setCompatReport(cloud.compatibility);
   }, [cloud.compatibility]);
 
+  // MiniAppView is reused across app tabs — reset transient UI when switching apps
+  // so one app's publish/upload does not lock another app's share sheet.
+  useEffect(() => {
+    setShareOpen(false);
+    setShareSyncNotice(null);
+    applyingSharingRef.current = false;
+    setNeedsDesktopAck(false);
+    setWebSyncPopoverOpen(false);
+    const model = sharingToAudienceModel(
+      cloud.loginAccess,
+      cloud.externalLink,
+      cloud.codeAccess,
+    );
+    setAudience(model.audience);
+    setPermission(model.permission);
+    setRequireSignIn(model.requireSignIn !== false);
+  }, [appId]); // eslint-disable-line react-hooks/exhaustive-deps -- cloud.* read only on app switch
+
   useEffect(() => {
     if (!shareOpen) {
       setNeedsDesktopAck(false);
@@ -279,7 +297,13 @@ export function MiniAppPublishBar({
     setAudience(model.audience);
     setPermission(model.permission);
     setRequireSignIn(model.requireSignIn !== false);
-  }, [shareOpen, cloud.loginAccess, cloud.externalLink, cloud.codeAccess]);
+  }, [
+    appId,
+    shareOpen,
+    cloud.loginAccess,
+    cloud.externalLink,
+    cloud.codeAccess,
+  ]);
 
   useEffect(() => {
     if (!shareOpen) return;
@@ -350,7 +374,7 @@ export function MiniAppPublishBar({
     nextAudience: ShareAudience,
     nextPermission: SharePermission,
     nextRequireSignIn = requireSignIn,
-  ) => {
+  ): Promise<{ published: boolean }> => {
     setAudience(nextAudience);
     setPermission(nextPermission);
     if (nextAudience === "link") {
@@ -361,7 +385,9 @@ export function MiniAppPublishBar({
       permission: nextPermission,
       requireSignIn: nextAudience === "link" ? nextRequireSignIn : undefined,
     };
-    if (!isPermissionAvailable(nextAudience, nextPermission)) return;
+    if (!isPermissionAvailable(nextAudience, nextPermission)) {
+      return { published: false };
+    }
 
     const needsCloudPublish =
       model.permission !== "edit" || model.audience !== "private";
@@ -374,24 +400,43 @@ export function MiniAppPublishBar({
         setShareSyncNotice("Uploading app code and databases to the web…");
         await webSyncPushNow();
       }
+      return { published: needsCloudPublish };
     } finally {
       applyingSharingRef.current = false;
       setShareSyncNotice(null);
     }
   };
 
+  const appliedModel = sharingToAudienceModel(
+    cloud.loginAccess,
+    cloud.externalLink,
+    cloud.codeAccess,
+  );
+  const hasSharingDraftChanges =
+    audience !== appliedModel.audience ||
+    permission !== appliedModel.permission ||
+    (audience === "link" &&
+      requireSignIn !== (appliedModel.requireSignIn !== false));
+
   const pickAudience = (nextAudience: ShareAudience) => {
     let nextPermission = permission;
     if (!isPermissionAvailable(nextAudience, nextPermission)) {
       nextPermission = "write";
     }
-    const nextRequireSignIn = nextAudience === "link" ? true : requireSignIn;
-    applySharing(nextAudience, nextPermission, nextRequireSignIn);
+    setAudience(nextAudience);
+    setPermission(nextPermission);
+    if (nextAudience === "link") {
+      setRequireSignIn(true);
+    }
   };
 
   const pickPermission = (nextPermission: SharePermission) => {
     if (!isPermissionAvailable(audience, nextPermission)) return;
-    applySharing(audience, nextPermission);
+    setPermission(nextPermission);
+  };
+
+  const saveSharingSettings = () => {
+    void applySharing(audience, permission, requireSignIn);
   };
 
   const openCloudInstallHelp = () => {
@@ -467,7 +512,7 @@ export function MiniAppPublishBar({
 
   const removeFromCommunity = () => {
     const nextPermission = permission === "edit" ? "edit" : "write";
-    applySharing("link", nextPermission, false);
+    void applySharing("link", nextPermission, false);
   };
 
   const takeOffWeb = () => {
@@ -506,7 +551,8 @@ export function MiniAppPublishBar({
     webSyncPulling ||
     (webSyncLoading && !webSyncStatus) ||
     webSyncState === "syncing";
-  const shareSheetBusy = cloud.busy || webSyncPushing || Boolean(shareSyncNotice);
+  const shareSheetBusy =
+    cloud.busy || webSyncPushing || Boolean(shareSyncNotice);
   const shareLinkReady =
     cloud.live &&
     webSyncStatus?.overall === "synced" &&
@@ -525,7 +571,7 @@ export function MiniAppPublishBar({
     if (cloud.busy) {
       return { tone: "info" as const, message: "Saving sharing settings…" };
     }
-    if (webSyncPushing || webSyncStatus?.overall === "uploading") {
+    if (webSyncPushing) {
       return {
         tone: "info" as const,
         message: "Uploading app code and databases to the web…",
@@ -558,10 +604,17 @@ export function MiniAppPublishBar({
   const handlePublishClick = async () => {
     setShareSyncNotice("Publishing to the web…");
     try {
-      await cloud.publish();
-      setNeedsDesktopAck(false);
-      setShareSyncNotice("Uploading app code and databases to the web…");
-      await webSyncPushNow();
+      let published = cloud.live;
+      if (hasSharingDraftChanges || !cloud.live) {
+        const result = await applySharing(audience, permission, requireSignIn);
+        published = published || result.published;
+      }
+      if (!published) {
+        await cloud.publish();
+        setNeedsDesktopAck(false);
+        setShareSyncNotice("Uploading app code and databases to the web…");
+        await webSyncPushNow();
+      }
     } catch (err) {
       if (err instanceof CloudPublishBlockedError) {
         setCompatReport(err.compatibility);
@@ -898,7 +951,7 @@ export function MiniAppPublishBar({
                       checked={requireSignIn}
                       onChange={(event) => {
                         if (shareSheetBusy) return;
-                        void applySharing(audience, permission, event.target.checked);
+                        setRequireSignIn(event.target.checked);
                       }}
                     />
                     <span>Require Papr sign-in</span>
@@ -957,6 +1010,23 @@ export function MiniAppPublishBar({
                   })}
                 </ul>
               </fieldset>
+            ) : null}
+
+            {cloud.live && hasSharingDraftChanges ? (
+              <div className="share-sheet__section share-sheet__save-row">
+                <p className="share-sheet__footnote">
+                  Choose who can access and what they can do, then save — nothing
+                  is published until you confirm.
+                </p>
+                <button
+                  type="button"
+                  className="share-sheet__primary-btn"
+                  disabled={shareSheetBusy}
+                  onClick={saveSharingSettings}
+                >
+                  {shareSheetBusy ? "Saving…" : "Save sharing settings"}
+                </button>
+              </div>
             ) : null}
 
             {/* Publish button if not live */}

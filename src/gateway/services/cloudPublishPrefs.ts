@@ -31,6 +31,8 @@ export interface CloudPublishAppPrefs {
   shareToken?: string;
   /** Allow others to install/sync app source into Paprwork (stored locally until server ACL). */
   codeAccess?: CodeAccess;
+  /** @deprecated Record only — never used to override computed ACL. */
+  liveLinkPermission?: "read" | "read_write";
   /** API keys the app needs — mirrored from requirements.json for quick reads. */
   credentialRequirements?: RequiredKeySpec[];
   lastAutoPublishAttemptAt?: string;
@@ -90,7 +92,10 @@ export function setAppPublishPrefs(
   paprDir?: string,
 ): CloudPublishAppPrefs {
   const prefs = loadCloudPublishPrefs(paprDir);
-  const current = getAppPublishPrefs(appId, paprDir);
+  const current = prefs.apps[appId] ?? {
+    autoPublish: true,
+    accessMode: "private" as const,
+  };
   const next = { ...current, ...update };
   prefs.apps[appId] = next;
   saveCloudPublishPrefs(prefs, paprDir);

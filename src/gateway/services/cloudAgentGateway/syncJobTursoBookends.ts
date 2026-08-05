@@ -2,6 +2,7 @@ import fs from "fs";
 import {
   createRemoteClient,
   ensureLocalDbChangeLogReady,
+  localDbHasSyncableUserTables,
   pullTursoToLocalDb,
   pushLocalDbToTurso,
   type PushResult,
@@ -33,12 +34,18 @@ export async function pullLinkedSourceFromCloud(
   };
   const state = loadTursoSyncState();
   const sourceState = state.jobs[input.syncKey];
+  const freshLocalDb = !localDbHasSyncableUserTables(input.dbPath);
+  if (freshLocalDb && sourceState) {
+    console.log(
+      `[CloudTursoBookends] Fresh local DB for ${input.syncKey} — ignoring git sync cursors`,
+    );
+  }
   await pullTursoToLocalDb(input.dbPath, creds, {
     jobId: input.syncKey,
-    ...(sourceState?.lastPulledLogId !== undefined
+    ...(!freshLocalDb && sourceState?.lastPulledLogId !== undefined
       ? { lastPulledLogId: sourceState.lastPulledLogId }
       : {}),
-    ...(sourceState?.lastSeenRemoteVersion !== undefined
+    ...(!freshLocalDb && sourceState?.lastSeenRemoteVersion !== undefined
       ? { lastSeenRemoteVersion: sourceState.lastSeenRemoteVersion }
       : {}),
   });

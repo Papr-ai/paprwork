@@ -29,6 +29,11 @@ import {
   type JobType,
 } from "./JobsService.js";
 import { STANDALONE_APP_ID } from "./jobs/appIds.js";
+import {
+  detectPlatformsFromDirectory,
+  TEXT_EXTENSIONS,
+  type CatalogPlatform,
+} from "../utils/appPlatformDetection.js";
 
 export interface ExportBundleInput {
   appId: string;
@@ -42,7 +47,7 @@ export interface ExportBundleInput {
   /** Keep database files, logs, and caches in the bundle (user explicitly wants to share data) */
   includeData?: boolean;
   /** Override auto-detected platform. If omitted, platforms are detected from job types and source files. */
-  platform?: Platform[];
+  platform?: CatalogPlatform[];
   /** Rich key requirements provided by the agent. Takes priority over auto-detection. */
   requirements?: RequirementItem[];
 }
@@ -126,7 +131,13 @@ const SCRUB_PATTERNS: RegExp[] = [
   /\.sqlite3$/,
   /\.log$/,
   /\.backup\.[0-9]+$/,
+  /\.bak(?:\.|$|-)/,
   /\.DS_Store$/,
+  /^\.(?:groq|openai_platform|openai|anthropic)_key$/,
+  /^pending_meetings\.json$/,
+  /^monitor_state\.json$/,
+  /^meeting_summary\.md$/,
+  /^current_meeting\.txt$/,
 ];
 
 /** Directory names that contain user data or build artifacts */
@@ -138,6 +149,7 @@ const SCRUB_DIRS = new Set([
   "node_modules",
   ".versions",
   "data",
+  "dist",
 ]);
 
 export interface LeakedSecretWarning {
@@ -178,6 +190,7 @@ const HARDCODED_SECRET_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /postgres(?:ql)?:\/\/[^\s'"]+:[^\s'"]+@[^\s'"]+/g, label: "PostgreSQL connection string with password" },
   { pattern: /mysql:\/\/[^\s'"]+:[^\s'"]+@[^\s'"]+/g, label: "MySQL connection string with password" },
   { pattern: /mongodb(?:\+srv)?:\/\/[^\s'"]+:[^\s'"]+@[^\s'"]+/g, label: "MongoDB connection string with password" },
+  { pattern: /gsk_[A-Za-z0-9]{20,}/g, label: "Groq API key" },
 ];
 
 const SCANNABLE_EXTENSIONS = new Set([
@@ -331,6 +344,20 @@ const JOB_JSON_KEEP_FIELDS = new Set([
  * keeping only the job definition fields needed for portability.
  * Resets status to "pending" and sets fresh timestamps.
  */
+/** Strip dev-only IDs from exported app metadata (cloud org/namespace from local export). */
+async function sanitizeAppMetadata(appDest: string): Promise<void> {
+  const metadataPath = path.join(appDest, "metadata.json");
+  try {
+    const raw = await fs.readFile(metadataPath, "utf8");
+    const meta = JSON.parse(raw) as Record<string, unknown>;
+    delete meta.organizationId;
+    delete meta.namespaceId;
+    await fs.writeFile(metadataPath, JSON.stringify(meta, null, 2) + "\n", "utf8");
+  } catch {
+    // No metadata.json or parse error — skip
+  }
+}
+
 async function sanitizeJobJson(jobJsonPath: string): Promise<void> {
   try {
     const raw = await fs.readFile(jobJsonPath, "utf8");
@@ -496,190 +523,6 @@ async function detectRequiredKeys(
 
   return [...keys].sort();
 }
-
-type Platform = "macos" | "windows" | "linux";
-
-const MACOS_INDICATORS = [
-  /\bosascript\b/,
-  /\bopen\s+-a\b/,
-  /\bpbcopy\b/,
-  /\bpbpaste\b/,
-  /\bafplay\b/,
-  /\bsay\b/,
-  /\bbrew\s+(install|tap|cask)\b/,
-  /\bdefaults\s+(write|read|delete)\b/,
-  /\blaunchctl\b/,
-  /\bAppleScript\b/i,
-  /\/usr\/local\//,
-  /\.app\b/,
-  /\bsox\b/,
-  /\brec\b.*\baudio\b/i,
-  // Apple frameworks and bridge packages
-  /\bEventKit\b/,
-  /\bCoreAudio\b/,
-  /\bAVFoundation\b/,
-  /\bNSWorkspace\b/,
-  /\bAppKit\b/,
-  /\bCocoa\b/,
-  /\bpyobjc\b/i,
-  // macOS-specific tools
-  /\bterminal-notifier\b/,
-  /\bstat\s+-f%/,
-  /\bsecurity\s+(find-identity|import|create-keychain)\b/,
-  /\bcodesign\b/,
-  /\bxcrun\b/,
-  /\bxcode-select\b/,
-  /\bmdfind\b/,
-  /\bmdls\b/,
-  // macOS paths
-  /\/Library\/(Application Support|Preferences|LaunchAgents)\//,
-];
-
-const WINDOWS_INDICATORS = [
-  /\bpowershell\b/i,
-  /\bcmd\.exe\b/i,
-  /\breg\.exe\b/i,
-  /\bnet\s+start\b/i,
-  /[A-Z]:\\/,
-  /\.bat\b/,
-  /\.ps1\b/,
-  /\bchoco\s+install\b/i,
-];
-
-const LINUX_INDICATORS = [
-  /\bapt-get\b/,
-  /\bapt\s+install\b/,
-  /\bsystemctl\b/,
-  /\bjournalctl\b/,
-  /\/etc\/init\.d\//,
-  /\byum\s+install\b/,
-  /\bdnf\s+install\b/,
-  /\bpacman\s+-S\b/,
-];
-
-/**
- * Detect which platforms a bundle supports based on job types, commands,
- * and source file contents. Defaults to all platforms unless platform-specific
- * indicators are found.
- */
-async function detectPlatforms(
-  jobs: Array<{ command?: string; type: string }>,
-  bundlePath: string,
-): Promise<Platform[]> {
-  const macOnly = new Set<string>();
-  const winOnly = new Set<string>();
-  const linuxOnly = new Set<string>();
-
-  function scanText(text: string, source: string): void {
-    for (const pattern of MACOS_INDICATORS) {
-      if (pattern.test(text)) {
-        macOnly.add(`${source}: ${pattern.source}`);
-      }
-    }
-    for (const pattern of WINDOWS_INDICATORS) {
-      if (pattern.test(text)) {
-        winOnly.add(`${source}: ${pattern.source}`);
-      }
-    }
-    for (const pattern of LINUX_INDICATORS) {
-      if (pattern.test(text)) {
-        linuxOnly.add(`${source}: ${pattern.source}`);
-      }
-    }
-  }
-
-  // Check job types
-  for (const job of jobs) {
-    if (job.type === "swift") {
-      macOnly.add("swift job type");
-    }
-    if (job.command) {
-      scanText(job.command, "job command");
-    }
-  }
-
-  // Scan source files in the bundle
-  async function scanDir(dir: string): Promise<void> {
-    let entries;
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await scanDir(full);
-        continue;
-      }
-      const ext = path.extname(entry.name).toLowerCase();
-      // Swift files = macOS only
-      if (ext === ".swift") {
-        macOnly.add("swift source file");
-        continue;
-      }
-      if (ext === ".bat" || ext === ".ps1") {
-        winOnly.add(`${ext} script file`);
-        continue;
-      }
-      if (!TEXT_EXTENSIONS.has(ext)) continue;
-      const stat = await fs.stat(full).catch(() => null);
-      if (!stat || stat.size > 512 * 1024) continue;
-      let content: string;
-      try {
-        content = await fs.readFile(full, "utf8");
-      } catch {
-        continue;
-      }
-      const relPath = path.relative(bundlePath, full);
-      scanText(content, relPath);
-    }
-  }
-  await scanDir(bundlePath);
-
-  const hasMacSignals = macOnly.size > 0;
-  const hasWinSignals = winOnly.size > 0;
-  const hasLinuxSignals = linuxOnly.size > 0;
-
-  // If no platform-specific signals found, it's cross-platform
-  if (!hasMacSignals && !hasWinSignals && !hasLinuxSignals) {
-    return ["macos", "windows", "linux"];
-  }
-
-  // If signals found for only one platform, restrict to that
-  const platforms: Platform[] = [];
-  if (hasMacSignals) platforms.push("macos");
-  if (hasWinSignals) platforms.push("windows");
-  if (hasLinuxSignals) platforms.push("linux");
-
-  // If only restricting signals found (e.g. only mac signals),
-  // the bundle is only for that platform
-  return platforms;
-}
-
-const TEXT_EXTENSIONS = new Set([
-  ".ts",
-  ".tsx",
-  ".js",
-  ".jsx",
-  ".json",
-  ".py",
-  ".sh",
-  ".bash",
-  ".zsh",
-  ".swift",
-  ".html",
-  ".css",
-  ".md",
-  ".txt",
-  ".yml",
-  ".yaml",
-  ".toml",
-  ".cfg",
-  ".ini",
-  ".env",
-  ".sql",
-]);
 
 /**
  * Build regex patterns that detect hardcoded user-specific paths.
@@ -961,7 +804,7 @@ export class BundleService {
     scrubReport: ScrubReport;
     portabilityReport: PortabilityReport;
     detectedKeys: string[];
-    detectedPlatform: Platform[];
+    detectedPlatform: CatalogPlatform[];
     resolvedJobIds: string[];
   }> {
     await this.initialize();
@@ -987,6 +830,7 @@ export class BundleService {
     const appDest = path.join(destinationPath, appRelPath);
     await fs.mkdir(path.dirname(appDest), { recursive: true });
     await fs.cp(appPath, appDest, { recursive: true });
+    await sanitizeAppMetadata(appDest);
 
     // Clean data-sources.json: clear absolute dbPath (resolved from jobId at import)
     const dataSourcesFile = path.join(appDest, "data-sources.json");
@@ -1118,7 +962,7 @@ export class BundleService {
     const detectedKeys = await detectRequiredKeys(jobRecords, destinationPath);
 
     // Use explicit platform override or auto-detect from job types and source files
-    let detectedPlatform: Platform[];
+    let detectedPlatform: CatalogPlatform[];
     if (input.platform && input.platform.length > 0) {
       detectedPlatform = input.platform;
     } else {
@@ -1126,7 +970,7 @@ export class BundleService {
         command: j.command ?? undefined,
         type: j.type,
       }));
-      detectedPlatform = await detectPlatforms(
+      detectedPlatform = await detectPlatformsFromDirectory(
         jobsForPlatformCheck,
         destinationPath,
       );

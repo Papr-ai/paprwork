@@ -26,6 +26,7 @@ import {
 } from "./tursoLinkedSources.js";
 import { jobTursoDatabaseName } from "./tursoDatabaseNaming.js";
 import {
+  backupLocalJobDb,
   createRemoteClient,
   filterSyncableTables,
   isTursoDatabaseLimitError,
@@ -38,7 +39,10 @@ import {
   pushLocalDbToTurso,
   readLocalTable,
   readTableSchema,
+  removeLocalJobDbBackup,
   replaceRemoteTable,
+  restoreLocalJobDb,
+  type LocalJobDbBackup,
   type PullResult,
   type PullSourceSyncOptions,
   type PushResult,
@@ -422,127 +426,158 @@ export class TursoSyncBridge {
     const databaseName = await this.resolveTursoDatabaseNameForLinked(linked);
     const creds = credentials ?? (await this.fetchCredentials(databaseName));
 
-    // Merge remote row deltas into local before pushing local deltas (bidirectional sync).
-    await this.pullJob(syncKey, creds, {});
+    const stateBeforePush = loadTursoSyncState();
+    const localDirty = isJobDbDirty(syncKey, dbPath, stateBeforePush, alternateKeys);
+    let dbBackup: LocalJobDbBackup | undefined;
 
-    const migrationRoot = resolveMigrationRootFromDbPath(dbPath);
-    if (migrationRoot) {
-      const migrationRemote = createRemoteClient(creds);
-      try {
-        const appliedMigrations = await applyPendingDatabaseMigrationsToTurso(
-          migrationRemote,
-          dbPath,
-          migrationRoot,
+    try {
+      // When local has unpushed changes, local wins — never pull remote DELETEs
+      // into the source-of-truth DB before pushing (failed push must be a no-op).
+      if (!localDirty) {
+        dbBackup = backupLocalJobDb(dbPath);
+        await this.pullJob(syncKey, creds, {});
+      } else {
+        console.log(
+          `[TursoSyncBridge] Skipping pre-push pull for ${syncKey} — local has unpushed changes`,
         );
-        if (appliedMigrations.length > 0) {
-          console.log(
-            `[TursoSyncBridge] Applied database migrations on Turso for ${syncKey}: ` +
-              appliedMigrations.join(", "),
-          );
-        }
-      } finally {
-        migrationRemote.close();
       }
-    }
 
-    const stateAfterPull = loadTursoSyncState();
-    const refreshedState = resolveTursoPushStateEntry(
-      syncKey,
-      dbPath,
-      stateAfterPull,
-      alternateKeys,
-    );
-    let result = await pushLocalDbToTurso(dbPath, creds, {
-      jobId: syncKey,
-      previousFingerprints: refreshedState?.tableFingerprints,
-      lastPushedLogId: refreshedState?.lastPushedLogId,
-      ...(pushOptions?.tableNames?.length
-        ? { tableNames: pushOptions.tableNames }
-        : {}),
-      ...(pushOptions?.force ? { force: true } : {}),
-    });
-
-    if (localDbHasSyncableData(dbPath)) {
-      const verifyRemote = createRemoteClient(creds);
-      try {
-        const stillEmpty = await remoteNeedsBootstrap(verifyRemote);
-        if (stillEmpty) {
-          console.warn(
-            `[TursoSyncBridge] Remote empty after push for ${syncKey} — forcing bootstrap`,
+      const migrationRoot = resolveMigrationRootFromDbPath(dbPath);
+      if (migrationRoot) {
+        const migrationRemote = createRemoteClient(creds);
+        try {
+          const appliedMigrations = await applyPendingDatabaseMigrationsToTurso(
+            migrationRemote,
+            dbPath,
+            migrationRoot,
           );
-          result = await pushLocalDbToTurso(dbPath, creds, {
-            jobId: syncKey,
-            force: true,
-            previousFingerprints: undefined,
-            lastPushedLogId: 0,
-            ...(pushOptions?.tableNames?.length
-              ? { tableNames: pushOptions.tableNames }
-              : {}),
-          });
-        } else {
-          const localDb = openWritableLocalJobDb(dbPath);
-          try {
-            const localTables = filterSyncableTables(listUserTables(localDb));
-            const driftCheckTables = pushOptions?.tableNames?.length
-              ? localTables.filter((name) =>
-                  pushOptions.tableNames!.includes(name),
-                )
-              : localTables;
-            const drifted = await localRemoteSchemaDriftTables(
-              verifyRemote,
-              localDb,
-              driftCheckTables,
+          if (appliedMigrations.length > 0) {
+            console.log(
+              `[TursoSyncBridge] Applied database migrations on Turso for ${syncKey}: ` +
+                appliedMigrations.join(", "),
             );
-            if (drifted.length > 0) {
-              console.warn(
-                `[TursoSyncBridge] Remote schema drift for ${syncKey} on ` +
-                  `${drifted.join(", ")} — applying incremental migration`,
-              );
-              for (const tableName of drifted) {
-                await migrateRemoteTableSchema(
-                  verifyRemote,
-                  localDb,
-                  tableName,
-                  async () => {
-                    const table = readLocalTable(localDb, tableName);
-                    await replaceRemoteTable(verifyRemote, table);
-                  },
-                );
-                const columns = readTableSchema(localDb, tableName);
-                await ensureRemoteRowSyncColumns(verifyRemote, tableName);
-                await ensureRemoteTableSyncTriggers(verifyRemote, columns, tableName);
-              }
-              result = await pushLocalDbToTurso(dbPath, creds, {
-                jobId: syncKey,
-                previousFingerprints: refreshedState?.tableFingerprints,
-                lastPushedLogId: refreshedState?.lastPushedLogId,
-                ...(pushOptions?.tableNames?.length
-                  ? { tableNames: pushOptions.tableNames }
-                  : {}),
-              });
-            }
-          } finally {
-            localDb.close();
           }
+        } finally {
+          migrationRemote.close();
         }
-      } finally {
-        verifyRemote.close();
+      }
+
+      const stateAfterPull = loadTursoSyncState();
+      const refreshedState = resolveTursoPushStateEntry(
+        syncKey,
+        dbPath,
+        stateAfterPull,
+        alternateKeys,
+      );
+      let result = await pushLocalDbToTurso(dbPath, creds, {
+        jobId: syncKey,
+        previousFingerprints: refreshedState?.tableFingerprints,
+        lastPushedLogId: refreshedState?.lastPushedLogId,
+        ...(pushOptions?.tableNames?.length
+          ? { tableNames: pushOptions.tableNames }
+          : {}),
+        ...(pushOptions?.force ? { force: true } : {}),
+      });
+
+      if (localDbHasSyncableData(dbPath)) {
+        const verifyRemote = createRemoteClient(creds);
+        try {
+          const stillEmpty = await remoteNeedsBootstrap(verifyRemote);
+          if (stillEmpty) {
+            console.warn(
+              `[TursoSyncBridge] Remote empty after push for ${syncKey} — forcing bootstrap`,
+            );
+            result = await pushLocalDbToTurso(dbPath, creds, {
+              jobId: syncKey,
+              force: true,
+              previousFingerprints: undefined,
+              lastPushedLogId: 0,
+              ...(pushOptions?.tableNames?.length
+                ? { tableNames: pushOptions.tableNames }
+                : {}),
+            });
+          } else {
+            const localDb = openWritableLocalJobDb(dbPath);
+            try {
+              const localTables = filterSyncableTables(listUserTables(localDb));
+              const driftCheckTables = pushOptions?.tableNames?.length
+                ? localTables.filter((name) =>
+                    pushOptions.tableNames!.includes(name),
+                  )
+                : localTables;
+              const drifted = await localRemoteSchemaDriftTables(
+                verifyRemote,
+                localDb,
+                driftCheckTables,
+              );
+              if (drifted.length > 0) {
+                console.warn(
+                  `[TursoSyncBridge] Remote schema drift for ${syncKey} on ` +
+                    `${drifted.join(", ")} — applying incremental migration`,
+                );
+                for (const tableName of drifted) {
+                  await migrateRemoteTableSchema(
+                    verifyRemote,
+                    localDb,
+                    tableName,
+                    async () => {
+                      const table = readLocalTable(localDb, tableName);
+                      await replaceRemoteTable(verifyRemote, table);
+                    },
+                  );
+                  const columns = readTableSchema(localDb, tableName);
+                  await ensureRemoteRowSyncColumns(verifyRemote, tableName);
+                  await ensureRemoteTableSyncTriggers(verifyRemote, columns, tableName);
+                }
+                result = await pushLocalDbToTurso(dbPath, creds, {
+                  jobId: syncKey,
+                  previousFingerprints: refreshedState?.tableFingerprints,
+                  lastPushedLogId: refreshedState?.lastPushedLogId,
+                  ...(pushOptions?.tableNames?.length
+                    ? { tableNames: pushOptions.tableNames }
+                    : {}),
+                });
+              }
+            } finally {
+              localDb.close();
+            }
+          }
+        } finally {
+          verifyRemote.close();
+        }
+      }
+
+      if (result.status === "pushed" && result.remoteVersion !== undefined) {
+        recordTursoRemoteVersion(syncKey, dbPath, result.remoteVersion, undefined, {
+          ...(result.lastPushedLogId !== undefined
+            ? { lastPushedLogId: result.lastPushedLogId }
+            : {}),
+          ...(result.remoteLogMaxId !== undefined
+            ? { lastPulledLogId: result.remoteLogMaxId }
+            : {}),
+        });
+      }
+      return result;
+    } catch (error) {
+      if (dbBackup) {
+        try {
+          restoreLocalJobDb(dbPath, dbBackup);
+          console.warn(
+            `[TursoSyncBridge] Restored local DB after failed push for ${syncKey}`,
+          );
+        } catch (restoreError) {
+          console.error(
+            `[TursoSyncBridge] Failed to restore local DB backup for ${syncKey}:`,
+            (restoreError as Error).message,
+          );
+        }
+      }
+      throw error;
+    } finally {
+      if (dbBackup) {
+        removeLocalJobDbBackup(dbBackup);
       }
     }
-
-    if (result.status === "pushed" && result.remoteVersion !== undefined) {
-      recordTursoRemoteVersion(syncKey, dbPath, result.remoteVersion, undefined, {
-        ...(result.lastPushedLogId !== undefined
-          ? { lastPushedLogId: result.lastPushedLogId }
-          : {}),
-        // Advance lastPulledLogId past our own mirrored entries so the next
-        // push doesn't see them as "remote ahead" (self-echo → forced pull).
-        ...(result.remoteLogMaxId !== undefined
-          ? { lastPulledLogId: result.remoteLogMaxId }
-          : {}),
-      });
-    }
-    return result;
   }
 
   async pullJob(

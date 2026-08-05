@@ -218,4 +218,110 @@ describe("cloud linked resources (install/sync)", () => {
     expect(command).not.toContain("/Users/publisher/Papr");
     expect(command).toMatch(/\$JOB_DIR|\$PAPR_HOME/);
   });
+
+  it("hydrates registry dbPath from linked-databases.json label when localPath is empty", async () => {
+    const dbId = "db-2d6b4294";
+    const slug = "gtm-foundations";
+
+    await fs.writeFile(
+      path.join(sourceHome, "apps", publisherAppId, "linked-databases.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          databases: {
+            [dbId]: {
+              dbId,
+              localPath: "",
+              tursoShortName: "d-2d6b4294",
+              label: "GTM Foundations",
+              isolation: "shared",
+              status: "active",
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    await fs.writeFile(
+      path.join(targetHome, "apps", localAppId, "linked-databases.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          databases: {
+            [dbId]: {
+              dbId,
+              localPath: "",
+              tursoShortName: "d-2d6b4294",
+              label: "GTM Foundations",
+              isolation: "shared",
+              status: "active",
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const sourceDbDir = path.join(sourceHome, "data", "databases", slug);
+    await fs.mkdir(sourceDbDir, { recursive: true });
+    await fs.writeFile(path.join(sourceDbDir, "data.db"), "sqlite", "utf8");
+
+    await fs.writeFile(
+      path.join(targetHome, "apps", localAppId, "data-sources.json"),
+      JSON.stringify(
+        {
+          sources: [
+            {
+              id: `${dbId}:gtm`,
+              type: "sqlite",
+              dbId,
+              alias: "gtm",
+              dbPath: "",
+              tables: [],
+              linkedAt: "2026-01-01T00:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+
+    await syncAppLinkedResourcesToTarget({
+      appId: localAppId,
+      sourceAppId: publisherAppId,
+      sourcePaprHome: sourceHome,
+      targetPaprHome: targetHome,
+    });
+
+    const targetRegistry = JSON.parse(
+      await fs.readFile(path.join(targetHome, "data", "databases.json"), "utf8"),
+    ) as { databases: Record<string, { localPath?: string }> };
+    expect(targetRegistry.databases[dbId]?.localPath).toBe(
+      path.join(targetHome, "data", "databases", slug, "data.db"),
+    );
+
+    const dsRaw = await fs.readFile(
+      path.join(targetHome, "apps", localAppId, "data-sources.json"),
+      "utf8",
+    );
+    const ds = JSON.parse(dsRaw) as {
+      sources: Array<{ dbId?: string; dbPath?: string }>;
+    };
+    const source = ds.sources.find((entry) => entry.dbId === dbId);
+    expect(source?.dbPath).toBe(
+      path.join(targetHome, "data", "databases", slug, "data.db"),
+    );
+
+    await fs.access(
+      path.join(targetHome, "data", "databases", slug, "data.db"),
+    );
+  });
 });

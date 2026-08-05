@@ -8,8 +8,8 @@ import { catalogRequirementsForPublish } from "./cloudAppRequirements.js";
 import type { CloudPublishAppPrefs } from "./cloudPublishPrefs.js";
 import {
   resolveSharingSettings,
+  resolvePublishFieldsFromPrefs,
   sharingSettingsRequireShareToken,
-  sharingSettingsToPublishFields,
   type MemoryCatalogRequirementFields,
   type MemoryPublishResponseFields,
 } from "./cloudPublishMapping.js";
@@ -135,14 +135,13 @@ export function detectPublishDrift(input: PublishDriftInput): string[] {
 
   const reasons: string[] = [];
   const sharing = resolveSharingSettings(prefs);
-  const desired = sharingSettingsToPublishFields(sharing);
+  const desired = resolvePublishFieldsFromPrefs(prefs);
 
   if (memory.visibility !== desired.visibility) {
     reasons.push(`visibility:${memory.visibility ?? "none"}→${desired.visibility}`);
   }
 
   if (
-    desired.shareLinkEnabled &&
     memory.linkPermission !== undefined &&
     memory.linkPermission !== desired.linkPermission
   ) {

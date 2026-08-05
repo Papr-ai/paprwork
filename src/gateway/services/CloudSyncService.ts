@@ -94,8 +94,9 @@ const GITIGNORE_CONTENT = `# Runtime — rebuilt per environment
 # OS files
 **/.DS_Store
 
-# Sync state (local only)
+# Sync state (local only — machine-specific Turso cursors)
 ${STATE_FILENAME}
+data/.turso-sync-state.json
 `;
 
 interface RepoTokenResponse {

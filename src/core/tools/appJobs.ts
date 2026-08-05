@@ -334,14 +334,13 @@ function buildAppEditToolResult(input: {
 }
 
 const BACKEND_VAULT_KEYS_REMINDER =
-  "Backend vault keys: add `\"keys\": [\"YOUR_KEY_NAME\"]` to the action in backend/manifest.json. " +
-  "The gateway injects Settings → Integration Keys as environment variables — read with " +
-  "os.environ['YOUR_KEY_NAME'] (Python) or process.env.YOUR_KEY_NAME (Node/TS). " +
+  "Backend vault keys: when handlers read os.environ / process.env, key names are auto-synced " +
+  "into backend/manifest.json action \"keys\" (and requirements.json on save). " +
+  "The gateway injects Settings → Integration Keys as environment variables. " +
   "Do NOT grep keychain, query custom-keys.json, call get_key, or invent /api/keys endpoints. " +
   "Linked DBs: attach_database first; gateway injects PAPR_DB_{KEY}* for every linked source. " +
   "Set \"sourceId\": \"alias\" on the action (or params.sourceId from frontend) for the active DB — " +
   "APP_DB / PAPR_DB_URL = active source; Python papr_db.connect(\"alias\") or connect() for active. " +
-  "Cloud vault keys: declare in backend/manifest.json action keys AND requirements.json (auto-synced on publish). " +
   "Frontend call: fetch('/api/app/backend/:action', { body: JSON.stringify({ appId, params: { sourceId: 'billing', ... } }) }). " +
   "Publishable browser-safe keys (Maps embed, etc.): POST /api/credentials/client-keys — not the manifest keys array.";
 
@@ -3019,7 +3018,9 @@ By default, automatically scrubs private data (databases, logs, WAL files, venvs
 
 Use this to share complete mini-apps (with all jobs and schemas) via GitHub, Dropbox, or file transfer.
 
-**Publishing to the Papr Work Community:**
+**Prefer cloud share for Community:** When Cloud Sync + Papr login are on, use \`publish_cloud_app({ loginAccess: "public", codeAccess: "install" })\` instead — listed in Community Apps without a GitHub PR. Use export only for desktop-native apps when cloud is unavailable, or for offline/OSS distribution.
+
+**Publishing to the Papr Work Community (fallback — requires export):**
 After export, publish the bundle to the official community repo so other Paprwork users can discover and install it:
 
 1. Fork & clone: gh repo fork Papr-ai/paprwork-community-apps --clone --remote (NEVER clone the main repo directly)
@@ -3174,6 +3175,23 @@ ${args.version} - Created ${new Date().toISOString().split("T")[0]}
 
 # Paprwork editor backups
 **/*.backup.*
+**/*.bak
+**/*.bak-*
+
+# Local credential dotfiles (use Settings → Integration Keys / \${KEY_NAME} in jobs)
+**/.groq_key
+**/.openai_platform_key
+**/.openai_key
+**/.anthropic_key
+
+# Transpiled mini-app output (source is app.ts)
+**/dist/
+
+# Job runtime state (not portable)
+**/pending_meetings.json
+**/monitor_state.json
+**/meeting_summary.md
+**/current_meeting.txt
 
 # OS files
 .DS_Store

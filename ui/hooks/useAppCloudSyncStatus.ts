@@ -271,6 +271,11 @@ export function useAppCloudSyncStatus(
       setLoading(false);
       return;
     }
+
+    setPushing(false);
+    setPulling(false);
+    setError(null);
+
     void refresh(false);
   }, [active, appId, refresh]);
 

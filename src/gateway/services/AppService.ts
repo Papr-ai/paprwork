@@ -2084,6 +2084,44 @@ export class AppService {
       // Flush to disk immediately to prevent race conditions
       await fs.writeFile(filePath, content, { flush: true });
 
+      if (filename.replace(/\\/g, "/").startsWith("backend/")) {
+        try {
+          const { syncBackendManifestVaultKeys } = await import(
+            "../utils/backendManifestKeySync.js"
+          );
+          const syncResult = await syncBackendManifestVaultKeys(
+            path.join(this.appsDir, appId),
+            filename,
+            content,
+          );
+          if (syncResult.updated) {
+            console.log(
+              `[AppService] Auto-synced backend manifest keys for ${appId}/${filename}: ` +
+                `${syncResult.addedKeys.join(", ")} on action(s) ${syncResult.actionNames.join(", ")}`,
+            );
+            try {
+              const { ensureAppRequirementsSyncedWithBackend } = await import(
+                "./cloudAppRequirements.js"
+              );
+              await ensureAppRequirementsSyncedWithBackend(
+                this.paprRootDir,
+                appId,
+              );
+            } catch (reqSyncError) {
+              console.warn(
+                `[AppService] requirements.json sync after manifest keys failed for ${appId}:`,
+                reqSyncError,
+              );
+            }
+          }
+        } catch (syncError) {
+          console.warn(
+            `[AppService] Backend manifest key auto-sync failed for ${appId}/${filename}:`,
+            syncError,
+          );
+        }
+      }
+
       // Sync icon to registry when icon-bearing files are written
       const basename = path.basename(filename);
       if (basename === "index.html") {

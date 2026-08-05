@@ -45,6 +45,59 @@ async function listRemoteAppliedMigrationIds(remote: Client): Promise<Set<string
   );
 }
 
+async function remoteTableHasColumn(
+  remote: Client,
+  tableName: string,
+  columnName: string,
+): Promise<boolean> {
+  const result = await remote.execute(`PRAGMA table_info(${quoteIdent(tableName)})`);
+  return result.rows.some((row) => String(row.name ?? "") === columnName);
+}
+
+function isDuplicateColumnError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /duplicate column name/i.test(message);
+}
+
+function parseAddColumnStatement(
+  statement: string,
+): { table: string; column: string } | null {
+  const match =
+    /^ALTER\s+TABLE\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+ADD\s+COLUMN\s+(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(
+      statement.trim(),
+    );
+  if (!match) {
+    return null;
+  }
+  const table = match[1] ?? match[2] ?? match[3];
+  const column = match[4] ?? match[5] ?? match[6];
+  if (!table || !column) {
+    return null;
+  }
+  return { table, column };
+}
+
+async function executeRemoteSqlIdempotent(
+  remote: Client,
+  statement: string,
+): Promise<void> {
+  const addColumn = parseAddColumnStatement(statement);
+  if (addColumn) {
+    if (await remoteTableHasColumn(remote, addColumn.table, addColumn.column)) {
+      return;
+    }
+  }
+
+  try {
+    await remote.execute(statement);
+  } catch (error) {
+    if (isDuplicateColumnError(error)) {
+      return;
+    }
+    throw error;
+  }
+}
+
 function listLocalAppliedMigrationIds(localDb: Database.Database): string[] {
   try {
     const rows = localDb
@@ -62,6 +115,9 @@ async function applySchemaOpToRemote(
 ): Promise<void> {
   switch (op.kind) {
     case "add_column":
+      if (await remoteTableHasColumn(remote, op.table, op.column)) {
+        return;
+      }
       await dropRemoteTableSyncTriggers(remote, op.table);
       await remote.execute({
         sql:
@@ -118,7 +174,7 @@ async function applyMigrationToRemote(
     throw new Error(`Migration SQL missing for ${migrationId}`);
   }
   for (const statement of splitSqlStatements(sql)) {
-    await remote.execute(statement);
+    await executeRemoteSqlIdempotent(remote, statement);
   }
 }
 

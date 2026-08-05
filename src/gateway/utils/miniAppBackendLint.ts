@@ -95,7 +95,7 @@ export function checkMiniAppBashPatterns(
   return issues;
 }
 
-function extractVaultEnvReferences(handlerSource: string): Set<string> {
+export function extractVaultEnvReferences(handlerSource: string): Set<string> {
   const names = new Set<string>();
   for (const pattern of ENV_VAR_REFERENCE_PATTERNS) {
     pattern.lastIndex = 0;

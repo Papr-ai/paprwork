@@ -2730,6 +2730,13 @@ Current content is auto-saved as "before-restore" so restores are always reversi
 1. \`publish_cloud_app({ appId, loginAccess: "public", codeAccess: "install" })\` — live on \`apps.papr.ai\` + listed in Community Apps; others fork via \`install_cloud_app\` (source stays on papr-work)
 2. If \`publish_cloud_app\` errors (Cloud Sync off / not signed in): explain that **enabling Cloud Sync is recommended**, then either help them enable it and retry **or** fall back to export below
 
+**Desktop-native / macOS-only apps** (Swift binaries, ScreenCaptureKit, Calendar.app/osascript, local mic, ffmpeg avfoundation):
+- **Primary path: \`publish_cloud_app\` — NOT \`export_app_bundle\` + GitHub PR.** Example: Meetings Manager (recording + calendar pipeline).
+- Community discovery uses the **cloud catalog** (\`install_cloud_app\` forks synced source from papr-work git). No \`paprwork-community-apps\` PR needed when Cloud Sync + Papr login are on.
+- **No full web runtime:** UI may preview on \`apps.papr.ai\`, but OS integrations (mic, calendar, screen capture, permissions) require **Paprwork desktop on macOS**. Tell users upfront; use tags like \`macos\`, \`desktop-only\` in the app description.
+- Jobs run on the user's Mac when desktop Paprwork is awake (\`get_cloud_sync_status\` → \`desktopHeartbeat\`). Cloud can queue work but cannot replace local OS APIs.
+- \`export_app_bundle\` → paprwork-community-apps is **fallback only** when Cloud Sync or Papr login is unavailable.
+
 **Fallback — open-source export (no Cloud Sync required):**
 When users want OSS sharing or cloud is unavailable, publish to **paprwork-community-apps** (GitHub PR):
 

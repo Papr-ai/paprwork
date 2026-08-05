@@ -16,6 +16,7 @@ export {
   sharingSettingsRequireShareToken,
   sharingSettingsToPublishFields,
   resolveSharingSettings,
+  resolvePublishFieldsFromPrefs,
   sharingSettingsSummary,
   type CloudSharingSettings,
   type CloudLoginAccess,

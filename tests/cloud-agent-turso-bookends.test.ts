@@ -5,11 +5,13 @@ const {
   ensureLocalDbChangeLogReady,
   pushLocalDbToTurso,
   createRemoteClient,
+  localDbHasSyncableUserTables,
 } = vi.hoisted(() => ({
   pullTursoToLocalDb: vi.fn(),
   ensureLocalDbChangeLogReady: vi.fn(),
   pushLocalDbToTurso: vi.fn(),
   createRemoteClient: vi.fn(),
+  localDbHasSyncableUserTables: vi.fn(() => true),
 }));
 
 const applyPendingDatabaseMigrationsToTurso = vi.hoisted(() => vi.fn());
@@ -24,6 +26,7 @@ vi.mock("../src/gateway/services/tursoSyncBridgeCore.js", () => ({
   ensureLocalDbChangeLogReady,
   pushLocalDbToTurso,
   createRemoteClient,
+  localDbHasSyncableUserTables,
 }));
 
 vi.mock("../src/gateway/services/jobs/jobMigrationTursoSync.js", () => ({
@@ -40,7 +43,11 @@ vi.mock("../src/gateway/services/jobs/jobMigrationTursoSync.js", () => ({
 }));
 
 vi.mock("../src/gateway/services/tursoSyncState.js", () => ({
-  loadTursoSyncState: () => ({ jobs: {} }),
+  loadTursoSyncState: vi.fn(() => ({
+    jobs: {
+      "db-abc": { lastPulledLogId: 316, lastSeenRemoteVersion: 18 },
+    },
+  })),
   localDbHasSyncableData: () => true,
 }));
 
@@ -65,6 +72,7 @@ import {
 describe("cloud agent Turso bookends", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(localDbHasSyncableUserTables).mockReturnValue(true);
     pullTursoToLocalDb.mockResolvedValue({ status: "pulled" });
     pushLocalDbToTurso.mockResolvedValue({
       status: "pushed",
@@ -90,6 +98,22 @@ describe("cloud agent Turso bookends", () => {
 
     expect(pullTursoToLocalDb).toHaveBeenCalledOnce();
     expect(ensureLocalDbChangeLogReady).toHaveBeenCalledWith(target.dbPath);
+  });
+
+  it("ignores git sync cursors when local db has no user tables yet", async () => {
+    vi.mocked(localDbHasSyncableUserTables).mockReturnValue(false);
+
+    await pullLinkedSourceFromCloud({
+      syncKey: "db-abc",
+      dbPath: "/tmp/sandbox/data.db",
+      tursoUrl: "libsql://example.turso.io",
+      authToken: "token",
+    });
+
+    const pullOptions = pullTursoToLocalDb.mock.calls[0]?.[2];
+    expect(pullOptions).toEqual({ jobId: "db-abc" });
+    expect(pullOptions).not.toHaveProperty("lastPulledLogId");
+    expect(pullOptions).not.toHaveProperty("lastSeenRemoteVersion");
   });
 
   it("returns full PushResult from pushLinkedSourceToCloud", async () => {

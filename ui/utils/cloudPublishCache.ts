@@ -53,10 +53,13 @@ export function writeCachedCloudPublishState(
   appId: string,
   state: CloudPublishState | null,
 ): void {
+  if (state && state.appId && state.appId !== appId) {
+    return;
+  }
   const snapshot = readSnapshot();
   const byAppId = { ...(snapshot?.byAppId ?? {}) };
   if (state) {
-    byAppId[appId] = state;
+    byAppId[appId] = { ...state, appId };
   } else {
     delete byAppId[appId];
   }

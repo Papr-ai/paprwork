@@ -17,7 +17,7 @@ import {
   formatShareLink,
   memoryPublishResponseToConfig,
   sharingSettingsRequireShareToken,
-  sharingSettingsToPublishFields,
+  resolvePublishFieldsFromPrefs,
   resolveSharingSettings,
   type CloudSharingSettings,
   type MemoryPublishResponseFields,
@@ -341,14 +341,19 @@ export class CloudAppPublishService {
       ? [options.slug]
       : publishSlugRetryCandidates(resolvedSlug);
 
+    const codeAccess: CodeAccess =
+      options?.codeAccess ?? prefs.codeAccess ?? "off";
     const sharing = resolveSharingSettings({
       loginAccess: options?.loginAccess ?? prefs.loginAccess,
       externalLink: options?.externalLink ?? prefs.externalLink,
       accessMode: options?.accessMode ?? prefs.accessMode,
     });
-    const publishFields = sharingSettingsToPublishFields(sharing);
-    const codeAccess: CodeAccess =
-      options?.codeAccess ?? prefs.codeAccess ?? "off";
+    const publishFields = resolvePublishFieldsFromPrefs({
+      loginAccess: sharing.loginAccess,
+      externalLink: sharing.externalLink,
+      accessMode: options?.accessMode ?? prefs.accessMode,
+      codeAccess,
+    });
 
     const { requirements: credentialRequirements } =
       await ensureAppRequirementsSyncedWithBackend(this.paprDir, appId);
@@ -410,6 +415,17 @@ export class CloudAppPublishService {
       console.log(`[CloudPublish] ${catalogIconResult.note}`);
     }
 
+    const { detectCommunityPlatformForApp } = await import(
+      "./cloudAppCompatibility.js"
+    );
+    const platformReport = await detectCommunityPlatformForApp(appId);
+    console.log(
+      `[CloudPublish] Platform for ${appId}: ${platformReport.platform.join(", ")}` +
+        (platformReport.requiresDesktopForFullFunctionality
+          ? " (desktop required for full functionality)"
+          : " (cloud-ready)"),
+    );
+
     let response: Response | null = null;
     let lastBody = "";
     for (const slug of slugCandidates) {
@@ -432,6 +448,8 @@ export class CloudAppPublishService {
           ...(appMeta?.title ? { catalogTitle: appMeta.title } : {}),
           ...(appMeta?.description ? { catalogDescription: appMeta.description } : {}),
           ...(catalogIconResult.icon ? { catalogIcon: catalogIconResult.icon } : {}),
+          catalogPlatform: platformReport.platform,
+          catalogRequiresDesktop: platformReport.requiresDesktopForFullFunctionality,
         },
       });
 
@@ -471,6 +489,7 @@ export class CloudAppPublishService {
         loginAccess: sharing.loginAccess,
         externalLink: sharing.externalLink,
         codeAccess,
+        liveLinkPermission: publishFields.linkPermission,
         shareToken:
           sharingSettingsRequireShareToken(sharing) && config.shareToken
             ? config.shareToken

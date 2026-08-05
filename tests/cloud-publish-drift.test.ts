@@ -226,6 +226,46 @@ describe("cloudPublishDrift", () => {
     ).not.toThrow();
   });
 
+  it("detects linkPermission drift even when prefs cached stale liveLinkPermission", () => {
+    const reasons = detectPublishDrift({
+      memory: {
+        enabled: true,
+        visibility: "public_read",
+        slug: "gtm-audit",
+        linkPermission: "read",
+      },
+      prefs: {
+        autoPublish: true,
+        accessMode: "public_read",
+        loginAccess: "public",
+        externalLink: "off",
+        codeAccess: "install",
+        liveLinkPermission: "read",
+      },
+      expectedSlug: "gtm-audit",
+    });
+    expect(reasons).toContain("linkPermission:read→read_write");
+  });
+
+  it("detects linkPermission drift for public community apps", () => {
+    const reasons = detectPublishDrift({
+      memory: {
+        enabled: true,
+        visibility: "public_read",
+        slug: "gtm-audit",
+        linkPermission: "read",
+      },
+      prefs: {
+        autoPublish: true,
+        accessMode: "public_read",
+        loginAccess: "public",
+        externalLink: "off",
+      },
+      expectedSlug: "gtm-audit",
+    });
+    expect(reasons).toContain("linkPermission:read→read_write");
+  });
+
   it("detectPublishDrift includes catalog key drift", () => {
     const reasons = detectPublishDrift({
       memory: {

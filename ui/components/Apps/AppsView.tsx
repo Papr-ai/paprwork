@@ -314,7 +314,11 @@ export function AppsView() {
         if (cancelled) return;
         for (const result of results) {
           if (result.status === "fulfilled") {
-            writeCachedCloudPublishState(result.value.id, result.value.state);
+            const { id, state } = result.value;
+            if (state && state.appId && state.appId !== id) {
+              continue;
+            }
+            writeCachedCloudPublishState(id, state);
           }
         }
         setPublishRevision((value) => value + 1);

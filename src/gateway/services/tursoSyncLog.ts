@@ -35,7 +35,14 @@ export interface SyncLogEntry {
 }
 
 const MUTE_ROW_ID = 1;
-const LOG_BATCH_LIMIT = 10_000;
+/** Max changelog rows read/applied per batch (loop until exhausted). */
+export const LOG_BATCH_LIMIT = 10_000;
+
+/** Above this pending count, push uses a full bootstrap snapshot instead of delta replay. */
+export const LOCAL_LOG_BOOTSTRAP_THRESHOLD = 25_000;
+
+/** Log a warning when the local changelog exceeds this size. */
+export const LOCAL_LOG_WARN_THRESHOLD = 10_000;
 
 function triggerSuffix(tableName: string): string {
   return tableName.replace(/[^a-zA-Z0-9_]/g, "_").slice(0, 48);
@@ -409,6 +416,30 @@ export function maxSyncLogId(db: Database.Database): number {
     .prepare(`SELECT COALESCE(MAX(id), 0) AS max_id FROM ${quoteIdent(SYNC_LOG_TABLE)}`)
     .get() as { max_id: number };
   return row.max_id ?? 0;
+}
+
+export function countSyncLogSince(db: Database.Database, afterId: number): number {
+  ensureLocalSyncInfrastructure(db);
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS count FROM ${quoteIdent(SYNC_LOG_TABLE)} WHERE id > ?`,
+    )
+    .get(afterId) as { count: number };
+  return row.count ?? 0;
+}
+
+export function warnIfLocalSyncLogLarge(
+  db: Database.Database,
+  syncKey: string,
+): void {
+  const total = countSyncLogSince(db, 0);
+  if (total >= LOCAL_LOG_WARN_THRESHOLD) {
+    console.warn(
+      `[TursoSync] Local changelog for ${syncKey} has ${total} entries ` +
+        `(warn ≥${LOCAL_LOG_WARN_THRESHOLD}). Bulk reseeds inflate this table; ` +
+        `push will bootstrap when pending exceeds ${LOCAL_LOG_BOOTSTRAP_THRESHOLD}.`,
+    );
+  }
 }
 
 export function pruneSyncLogThrough(db: Database.Database, throughId: number): void {

@@ -92,4 +92,62 @@ describe("BundleService", () => {
     const jobs = await target.jobsService.listJobs();
     expect(jobs.some((entry) => entry.id === job.id)).toBe(true);
   });
+
+  test("scrubs private artifacts from exported bundle", async () => {
+    const { bundleService, appService, jobsService, root } = await createWorkspace();
+    const app = await appService.createApp("Scrub App", "desc", [
+      { filename: "index.html", content: "<h1>Hi</h1>" },
+      {
+        filename: "metadata.json",
+        content: JSON.stringify({
+          organizationId: "org-test",
+          namespaceId: "ns-test",
+          title: "Scrub App",
+        }),
+      },
+    ]);
+    const appPath = await appService.getAppPath(app.id);
+    expect(appPath).toBeTruthy();
+    await fs.mkdir(path.join(appPath!, "dist"), { recursive: true });
+    await fs.writeFile(path.join(appPath!, "dist", "app.js"), "compiled", "utf8");
+    await fs.writeFile(path.join(appPath!, "app.ts.bak-bg"), "backup", "utf8");
+    await fs.writeFile(path.join(appPath!, ".groq_key"), "gsk_test_should_not_export", "utf8");
+
+    const job = await jobsService.createJob({
+      name: "Scrub Job",
+      appIds: [STANDALONE_APP_ID],
+      type: "python",
+      command: "python3 -c \"print('ok')\"",
+    });
+    const jobPath = await jobsService.getJobPath(job.id);
+    expect(jobPath).toBeTruthy();
+    await fs.writeFile(
+      path.join(jobPath!, "pending_meetings.json"),
+      '[{"title":"private"}]',
+      "utf8",
+    );
+
+    const { scrubReport } = await bundleService.exportBundle({
+      appId: app.id,
+      bundleId: "bundle-scrub",
+      name: "Scrub Bundle",
+      version: "1.0.0",
+      jobIds: [job.id],
+    });
+
+    const bundlePath = path.join(root, "Papr", "bundles", "bundle-scrub");
+    expect(scrubReport.removedFiles.some((f) => f.includes("app.ts.bak-bg"))).toBe(true);
+    expect(scrubReport.removedFiles.some((f) => f.includes(".groq_key"))).toBe(true);
+    expect(scrubReport.removedFiles.some((f) => f.includes("pending_meetings.json"))).toBe(true);
+    expect(scrubReport.removedDirs.some((d) => d.includes("dist"))).toBe(true);
+
+    const metadataRaw = await fs.readFile(
+      path.join(bundlePath, "apps", app.id, "metadata.json"),
+      "utf8",
+    );
+    const metadata = JSON.parse(metadataRaw) as Record<string, unknown>;
+    expect(metadata.organizationId).toBeUndefined();
+    expect(metadata.namespaceId).toBeUndefined();
+    expect(scrubReport.leakedSecrets).toHaveLength(0);
+  });
 });

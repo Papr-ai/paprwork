@@ -8,6 +8,7 @@ import type {
   CloudCompatibilityLevel,
   CloudCompatibilityReport,
 } from "../../core/types/cloudAppCompatibility.js";
+import { contentUsesDesktopOnlyPaprApi } from "./paprApiCloudSafety.js";
 
 const SOURCE_FILE = /\.(html|css|tsx?|jsx?|json)$/i;
 
@@ -19,8 +20,6 @@ const DESKTOP_ONLY_CATEGORIES = new Set<CloudCompatibilityCategory>([
 
 const HYBRID_CATEGORIES = new Set<CloudCompatibilityCategory>([
   "bash-run",
-  "job-create",
-  "job-trigger",
   "absolute-path",
 ]);
 
@@ -34,14 +33,6 @@ interface PatternRule {
 
 const APP_PATTERNS: PatternRule[] = [
   {
-    category: "papr-api",
-    severity: "error",
-    pattern: /\bwindow\.paprAPI\b|\bpaprAPI\.invoke\s*\(/,
-    message: "Uses window.paprAPI — desktop Electron only, not available on apps.papr.ai.",
-    remediation:
-      "Use /api/db/* for data, /api/jobs/run for background work, or mark the feature as desktop-only in the UI.",
-  },
-  {
     category: "localhost-gateway",
     severity: "error",
     pattern:
@@ -54,34 +45,36 @@ const APP_PATTERNS: PatternRule[] = [
     category: "bash-run",
     severity: "warning",
     pattern: /fetch\s*\(\s*['"`]\/api\/bash\/run|['"`]\/api\/bash\/run['"`]/,
-    message: "/api/bash/run is disabled on cloud app host.",
+    message:
+      "Mini-app calls /api/bash/run directly — blocked on apps.papr.ai (use /api/jobs/run or /api/app/backend/*; bash runs in cloud sandbox via jobs).",
     remediation:
-      "Use POST /api/app/backend/:action, POST /api/jobs/run, or /api/db/* instead.",
+      "Use POST /api/app/backend/:action or POST /api/jobs/run. Cloud runs bash in the job sandbox with vault keys.",
   },
   {
     category: "job-create",
-    severity: "warning",
+    severity: "info",
     pattern: /fetch\s*\(\s*['"`]\/api\/jobs\/create|['"`]\/api\/jobs\/create['"`]/,
-    message: "Creates jobs from the mini-app — limited on cloud and needs Paprwork desktop for some job types.",
+    message: "Creates jobs dynamically from the mini-app UI.",
     remediation:
-      "Pre-create jobs on desktop or use backend handlers for dynamic workflows.",
+      "Supported on cloud when the app owner is signed in; prefer pre-created synced jobs when possible.",
   },
   {
     category: "job-trigger",
-    severity: "warning",
+    severity: "info",
     pattern: /fetch\s*\(\s*['"`]\/api\/jobs\/run|['"`]\/api\/jobs\/run['"`]/,
-    message: "Triggers background jobs from the web UI.",
+    message: "Triggers synced jobs from the web UI.",
     remediation:
-      "Cloud can run compatible jobs; Chrome/automation jobs still need Paprwork desktop open.",
+      "Runs in the cloud job sandbox on apps.papr.ai (python, node, bash, agent jobs). Sign-in may be required.",
   },
   {
     category: "chrome-automation",
     severity: "error",
     pattern:
       /(?:puppeteer\.connect|connectOverCDP|:9222\b|chrome-manager|linkedin-chrome-shared)/i,
-    message: "Uses local Chrome / CDP automation — requires Paprwork desktop.",
+    message:
+      "Attaches to the user's local Chrome via CDP (:9222) — requires Paprwork desktop with that Chrome profile open.",
     remediation:
-      "Run automation on desktop only, or redesign with cloud-safe APIs and ephemeral Playwright in agent jobs.",
+      "Use cloud agent jobs with Playwright (ephemeral browser in cloud), or API-first integrations. Local CDP cannot run on apps.papr.ai.",
   },
   {
     category: "absolute-path",
@@ -106,9 +99,9 @@ const JOB_PATTERNS: PatternRule[] = [
     severity: "error",
     pattern:
       /(?:puppeteer\.connect|connectOverCDP|browserURL.*9222|:9222\b|chrome-manager|linkedin-chrome-shared|Launching Chrome)/i,
-    message: "Job uses persistent local Chrome / CDP — cannot run on apps.papr.ai.",
+    message: "Job attaches to the user's local Chrome via CDP — requires Paprwork desktop with Chrome Manager.",
     remediation:
-      "Schedule this job on desktop Paprwork only, or migrate to API-first / vault-cookie Playwright in cloud agent runs.",
+      "Use cloud agent jobs with Playwright, or API-first flows. CDP to localhost:9222 does not run on apps.papr.ai.",
   },
   {
     category: "localhost-gateway",
@@ -171,6 +164,27 @@ function scanContentWithPatterns(
   return findings;
 }
 
+function scanDesktopOnlyPaprApi(
+  content: string,
+  file: string,
+): CloudCompatibilityFinding[] {
+  if (!contentUsesDesktopOnlyPaprApi(content)) {
+    return [];
+  }
+
+  return [
+    {
+      category: "papr-api",
+      severity: "error",
+      file,
+      message:
+        "Uses desktop-only paprAPI (shell, dialog, notifications, etc.) — not available on apps.papr.ai. chat.open works in cloud.",
+      remediation:
+        "Use /api/db/*, /api/app/backend/*, or cloud-safe chat.open. Mark OS features as desktop-only in the UI.",
+    },
+  ];
+}
+
 export function scanMiniAppCloudCompatibility(
   fileContents: Map<string, string>,
   dataSourcesRaw?: string,
@@ -180,6 +194,7 @@ export function scanMiniAppCloudCompatibility(
   for (const [filename, content] of fileContents.entries()) {
     if (!SOURCE_FILE.test(filename)) continue;
     findings.push(...scanContentWithPatterns(content, filename, APP_PATTERNS));
+    findings.push(...scanDesktopOnlyPaprApi(content, filename));
   }
 
   if (dataSourcesRaw) {
@@ -265,17 +280,22 @@ export function buildCloudCompatibilityReport(
   }
   if (level === "hybrid") {
     cloudWorks.push("Viewing linked database data on apps.papr.ai (when Turso is synced)");
-    desktopOnly.push("Job triggers, bash, or job creation from the web UI");
+    cloudWorks.push("Synced jobs via /api/jobs/run (cloud sandbox)");
+    desktopOnly.push("Direct /api/bash/run from the mini-app iframe (use jobs or backend instead)");
   }
   if (level === "desktop-only") {
     if (findings.some((f) => f.category === "papr-api")) {
-      desktopOnly.push("Electron paprAPI features (chat.open, shell, notifications)");
+      desktopOnly.push(
+        "Desktop paprAPI (shell, dialog, notifications — chat.open works in cloud)",
+      );
     }
     if (findings.some((f) => f.category === "localhost-gateway")) {
       desktopOnly.push("Features calling localhost:18789 instead of same-origin APIs");
     }
     if (findings.some((f) => f.category === "chrome-automation")) {
-      desktopOnly.push("LinkedIn / Chrome Manager / CDP browser automation");
+      desktopOnly.push(
+        "Local Chrome CDP (chrome-manager, :9222) — not cloud Playwright",
+      );
     }
     if (cloudDb) {
       cloudWorks.push("Read-only dashboard data may still load on apps.papr.ai");

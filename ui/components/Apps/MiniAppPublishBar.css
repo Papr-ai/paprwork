@@ -1216,6 +1216,14 @@
   color: var(--text-tertiary);
 }
 
+.share-sheet__save-row .share-sheet__footnote {
+  margin: 0 0 10px;
+}
+
+.share-sheet__save-row .share-sheet__primary-btn {
+  margin-top: 0;
+}
+
 .share-sheet__inline-link {
   padding: 0;
   border: 0;
