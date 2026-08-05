@@ -20,27 +20,43 @@ import {
   linkedSourceAlternateKeys,
   linkedSourceSyncKey,
   listLinkedJobIdsForTursoSync,
+  resolveLinkedSourcesForTursoPush,
+  resolveTursoDatabaseLabel,
   type TursoLinkedSource,
 } from "./tursoLinkedSources.js";
 import { jobTursoDatabaseName } from "./tursoDatabaseNaming.js";
 import {
   createRemoteClient,
+  filterSyncableTables,
   isTursoDatabaseLimitError,
   isTursoLocalDatabaseCorruptError,
   isTursoProvisioningRateLimitError,
   isTursoSqliteBindTypeError,
+  listUserTables,
   openWritableLocalJobDb,
   pullTursoToLocalDb,
   pushLocalDbToTurso,
-  remoteAheadOfLocal,
+  readLocalTable,
+  readTableSchema,
+  replaceRemoteTable,
   type PullResult,
   type PullSourceSyncOptions,
   type PushResult,
   type TursoCredentials,
 } from "./tursoSyncBridgeCore.js";
 import { recordTursoPushQuarantine } from "./tursoSyncState.js";
-import { remoteNeedsBootstrap, remoteMissingLocalTables } from "./tursoDeltaSync.js";
-import { remoteSyncLogExists } from "./tursoSyncLog.js";
+import {
+  localRemoteSchemaDriftTables,
+  remoteMissingLocalTables,
+  remoteNeedsBootstrap,
+} from "./tursoDeltaSync.js";
+import {
+  applyPendingDatabaseMigrationsToTurso,
+  resolveMigrationRootFromDbPath,
+} from "./jobs/jobMigrationTursoSync.js";
+import { migrateRemoteTableSchema } from "./tursoSchemaMigration.js";
+import { ensureRemoteRowSyncColumns } from "./rowSyncColumns.js";
+import { ensureRemoteTableSyncTriggers } from "./tursoSyncLog.js";
 import {
   isJobDbDirty,
   loadTursoSyncState,
@@ -63,6 +79,33 @@ export interface SyncSummary {
   skipped: number;
   failed: number;
   results: JobSyncResult[];
+}
+
+export interface PushJobOptions {
+  tableNames?: string[];
+  force?: boolean;
+}
+
+export interface TursoPushScopedOptions {
+  appId?: string;
+  jobId?: string;
+  alias?: string;
+  tursoDatabase?: string;
+  tables?: string[];
+  /** When true (default with no scope), only push dirty linked DBs. */
+  dirtyOnly?: boolean;
+}
+
+export interface TursoPushScopedDatabase {
+  syncKey: string;
+  tursoDatabase: string;
+  alias: string;
+  appId: string;
+  tables?: string[];
+}
+
+export interface TursoPushScopedResult extends SyncSummary {
+  databases: TursoPushScopedDatabase[];
 }
 
 interface TursoTokenResponse {
@@ -340,12 +383,17 @@ export class TursoSyncBridge {
       }
       const localDb = openWritableLocalJobDb(linked.dbPath);
       try {
-        const { filterSyncableTables, listUserTables } = await import(
-          "./tursoSyncBridgeCore.js"
-        );
         const localTables = filterSyncableTables(listUserTables(localDb));
         const missing = await remoteMissingLocalTables(remote, localTables);
-        return missing.length > 0;
+        if (missing.length > 0) {
+          return true;
+        }
+        const drifted = await localRemoteSchemaDriftTables(
+          remote,
+          localDb,
+          localTables,
+        );
+        return drifted.length > 0;
       } finally {
         localDb.close();
       }
@@ -357,6 +405,7 @@ export class TursoSyncBridge {
   async pushJob(
     jobId: string,
     credentials?: TursoCredentials,
+    pushOptions?: PushJobOptions,
   ): Promise<PushResult> {
     const sources = await this.listLinkedSources();
     const linked = findLinkedSourceForJob(sources, jobId);
@@ -370,38 +419,30 @@ export class TursoSyncBridge {
 
     const syncKey = linkedSourceSyncKey(linked);
     const alternateKeys = linkedSourceAlternateKeys(linked);
-    const state = loadTursoSyncState();
-    const jobState = resolveTursoPushStateEntry(
-      syncKey,
-      dbPath,
-      state,
-      alternateKeys,
-    );
     const databaseName = await this.resolveTursoDatabaseNameForLinked(linked);
     const creds = credentials ?? (await this.fetchCredentials(databaseName));
 
-    const remote = createRemoteClient(creds);
-    try {
-      const remoteAhead = await remoteAheadOfLocal(remote, {
-        lastSeenRemoteVersion: jobState?.lastSeenRemoteVersion,
-        lastPulledLogId: jobState?.lastPulledLogId,
-      });
-      if (remoteAhead) {
-        // Prefer delta merge from the remote changelog so unpushed local rows
-        // survive. A force (full-table replace) pull would clobber local dirty
-        // state — only fall back to it when the remote has no changelog to
-        // merge from (legacy pre-CDC databases).
-        const hasRemoteLog = await remoteSyncLogExists(remote);
-        if (!hasRemoteLog) {
-          console.warn(
-            `[TursoSyncBridge] Remote ahead for ${syncKey} with no changelog — ` +
-              `full pull fallback (local unpushed rows may be replaced)`,
+    // Merge remote row deltas into local before pushing local deltas (bidirectional sync).
+    await this.pullJob(syncKey, creds, {});
+
+    const migrationRoot = resolveMigrationRootFromDbPath(dbPath);
+    if (migrationRoot) {
+      const migrationRemote = createRemoteClient(creds);
+      try {
+        const appliedMigrations = await applyPendingDatabaseMigrationsToTurso(
+          migrationRemote,
+          dbPath,
+          migrationRoot,
+        );
+        if (appliedMigrations.length > 0) {
+          console.log(
+            `[TursoSyncBridge] Applied database migrations on Turso for ${syncKey}: ` +
+              appliedMigrations.join(", "),
           );
         }
-        await this.pullJob(syncKey, creds, hasRemoteLog ? {} : { force: true });
+      } finally {
+        migrationRemote.close();
       }
-    } finally {
-      remote.close();
     }
 
     const stateAfterPull = loadTursoSyncState();
@@ -415,6 +456,10 @@ export class TursoSyncBridge {
       jobId: syncKey,
       previousFingerprints: refreshedState?.tableFingerprints,
       lastPushedLogId: refreshedState?.lastPushedLogId,
+      ...(pushOptions?.tableNames?.length
+        ? { tableNames: pushOptions.tableNames }
+        : {}),
+      ...(pushOptions?.force ? { force: true } : {}),
     });
 
     if (localDbHasSyncableData(dbPath)) {
@@ -430,7 +475,55 @@ export class TursoSyncBridge {
             force: true,
             previousFingerprints: undefined,
             lastPushedLogId: 0,
+            ...(pushOptions?.tableNames?.length
+              ? { tableNames: pushOptions.tableNames }
+              : {}),
           });
+        } else {
+          const localDb = openWritableLocalJobDb(dbPath);
+          try {
+            const localTables = filterSyncableTables(listUserTables(localDb));
+            const driftCheckTables = pushOptions?.tableNames?.length
+              ? localTables.filter((name) =>
+                  pushOptions.tableNames!.includes(name),
+                )
+              : localTables;
+            const drifted = await localRemoteSchemaDriftTables(
+              verifyRemote,
+              localDb,
+              driftCheckTables,
+            );
+            if (drifted.length > 0) {
+              console.warn(
+                `[TursoSyncBridge] Remote schema drift for ${syncKey} on ` +
+                  `${drifted.join(", ")} — applying incremental migration`,
+              );
+              for (const tableName of drifted) {
+                await migrateRemoteTableSchema(
+                  verifyRemote,
+                  localDb,
+                  tableName,
+                  async () => {
+                    const table = readLocalTable(localDb, tableName);
+                    await replaceRemoteTable(verifyRemote, table);
+                  },
+                );
+                const columns = readTableSchema(localDb, tableName);
+                await ensureRemoteRowSyncColumns(verifyRemote, tableName);
+                await ensureRemoteTableSyncTriggers(verifyRemote, columns, tableName);
+              }
+              result = await pushLocalDbToTurso(dbPath, creds, {
+                jobId: syncKey,
+                previousFingerprints: refreshedState?.tableFingerprints,
+                lastPushedLogId: refreshedState?.lastPushedLogId,
+                ...(pushOptions?.tableNames?.length
+                  ? { tableNames: pushOptions.tableNames }
+                  : {}),
+              });
+            }
+          } finally {
+            localDb.close();
+          }
         }
       } finally {
         verifyRemote.close();
@@ -523,6 +616,119 @@ export class TursoSyncBridge {
     return this.syncLinkedSources("push", { dirtyOnly: true });
   }
 
+  /** Push Turso with explicit scope (app, alias, job, tables) instead of all dirty DBs. */
+  async pushScoped(options: TursoPushScopedOptions = {}): Promise<TursoPushScopedResult> {
+    const sources = await this.listLinkedSources();
+    const tableNames = options.tables?.length ? options.tables : undefined;
+    const explicitTargets = resolveLinkedSourcesForTursoPush(sources, options);
+    const databases: TursoPushScopedDatabase[] = [];
+    const summary: SyncSummary = {
+      attempted: 0,
+      pushed: 0,
+      pulled: 0,
+      skipped: 0,
+      failed: 0,
+      results: [],
+    };
+
+    type PushEntry = { source: TursoLinkedSource; syncKey: string };
+    let entries: PushEntry[];
+
+    if (explicitTargets.length > 0) {
+      entries = explicitTargets.map((source) => ({
+        source,
+        syncKey: linkedSourceSyncKey(source),
+      }));
+    } else {
+      const dirtyOnly = options.dirtyOnly !== false;
+      const jobIds = await this.listJobIdsForTursoSync();
+      entries = [];
+      for (const syncKey of jobIds) {
+        const linked = findLinkedSourceForJob(sources, syncKey);
+        if (!linked) {
+          continue;
+        }
+        if (dirtyOnly && !(await this.linkedSourceNeedsPush(linked))) {
+          continue;
+        }
+        entries.push({ source: linked, syncKey });
+      }
+    }
+
+    for (const { source, syncKey } of entries) {
+      databases.push({
+        syncKey,
+        tursoDatabase: resolveTursoDatabaseLabel(source),
+        alias: source.alias,
+        appId: source.appId,
+        ...(tableNames ? { tables: [...tableNames] } : {}),
+      });
+
+      summary.attempted += 1;
+      const result: JobSyncResult = { jobId: syncKey };
+      try {
+        const pushResult = await this.pushJob(syncKey, undefined, { tableNames });
+        result.push = pushResult;
+        if (pushResult.status === "pushed") {
+          summary.pushed += 1;
+          const linked = findLinkedSourceForJob(await this.listLinkedSources(), syncKey);
+          if (linked) {
+            const { recordTursoPushSuccess } = await import("./tursoSyncState.js");
+            recordTursoPushSuccess(
+              linkedSourceSyncKey(linked),
+              linked.dbPath,
+              undefined,
+              pushResult.tableFingerprints,
+              pushResult.lastPushedLogId,
+            );
+          }
+        } else if (
+          pushResult.reason === "all_tables_unchanged" &&
+          pushResult.tableFingerprints
+        ) {
+          summary.skipped += 1;
+          const linked = findLinkedSourceForJob(await this.listLinkedSources(), syncKey);
+          if (linked) {
+            const { recordTursoPushSuccess } = await import("./tursoSyncState.js");
+            recordTursoPushSuccess(
+              linkedSourceSyncKey(linked),
+              linked.dbPath,
+              undefined,
+              pushResult.tableFingerprints,
+              pushResult.lastPushedLogId,
+            );
+          }
+        } else {
+          summary.skipped += 1;
+        }
+      } catch (error) {
+        const message = (error as Error).message;
+        summary.failed += 1;
+        result.error = message;
+        console.warn(
+          `[TursoSyncBridge] scoped push failed for ${syncKey}:`,
+          message.slice(0, 120),
+        );
+      }
+      summary.results.push(result);
+    }
+
+    if (summary.attempted > 0) {
+      console.log(
+        `[TursoSyncBridge] scoped push complete: ` +
+          `databases=${databases.map((db) => db.tursoDatabase).join(", ") || "none"} ` +
+          `pushed=${summary.pushed} skipped=${summary.skipped} failed=${summary.failed}`,
+      );
+    }
+
+    return { ...summary, databases };
+  }
+
+  /** Push every Turso-linked database for one mini-app (Upload now). */
+  async pushAppLinkedSources(appId: string): Promise<SyncSummary> {
+    return this.syncLinkedSources("push", { appId });
+  }
+
   async pullLinkedSourcesIfNeeded(): Promise<SyncSummary> {
     return this.syncLinkedSources("pull", {
       pullOptions: {
@@ -559,6 +765,7 @@ export class TursoSyncBridge {
     mode: "push" | "pull",
     options?: {
       dirtyOnly?: boolean;
+      appId?: string;
       forcePull?: boolean;
       pullOptions?: Omit<PullSourceSyncOptions, "jobId">;
     },
@@ -587,13 +794,22 @@ export class TursoSyncBridge {
     }
 
     const jobIds = await this.listJobIdsForTursoSync();
+    const linkedSources = await this.listLinkedSources();
+    const appJobIds =
+      options?.appId === undefined
+        ? null
+        : new Set(
+            linkedSources
+              .filter((source) => source.appId === options.appId)
+              .map((source) => linkedSourceSyncKey(source)),
+          );
 
     for (const jobId of jobIds) {
+      if (appJobIds && !appJobIds.has(jobId)) {
+        continue;
+      }
       if (mode === "push" && options?.dirtyOnly) {
-        const linked = findLinkedSourceForJob(
-          await this.listLinkedSources(),
-          jobId,
-        );
+        const linked = findLinkedSourceForJob(linkedSources, jobId);
         if (!linked) {
           continue;
         }

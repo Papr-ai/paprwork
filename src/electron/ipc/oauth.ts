@@ -11,12 +11,91 @@ import { ClaudeSetupTokenService } from "../../core/services/ClaudeSetupTokenSer
 import { OAuthCallbackServer } from "../../core/services/OAuthCallbackServer.js";
 import { invalidateKeyCache } from "./customKeys.js";
 import { sanitizeOAuthAccessToken } from "../../core/utils/oauthTokenSanitize.js";
+import {
+  getOAuthCompletedEventName,
+  getOAuthFailedEventName,
+  getOAuthStepEventName,
+  logOAuthProviderStep,
+  type OAuthProviderId,
+  type OAuthProviderStep,
+} from "../../core/telemetry/oauthProviderSteps.js";
+
+type OAuthTelemetryTracker = (
+  eventName: string,
+  properties?: Record<string, unknown>,
+) => void;
 
 let oauthTokenStorage: OAuthTokenStorage | null = null;
 let customKeysStorage: CustomKeysStorage | null = null;
 let openaiOAuthService: OpenAIOAuthService | null = null;
 let claudeSetupTokenService: ClaudeSetupTokenService | null = null;
 let claudeOAuthService: ClaudeOAuthService | null = null;
+let trackOAuthEvent: OAuthTelemetryTracker | undefined;
+const oauthFlowStartedAt = new Map<OAuthProviderId, number>();
+
+function trackOAuthStep(
+  provider: OAuthProviderId,
+  step: OAuthProviderStep,
+  properties?: Record<string, unknown>,
+): void {
+  const payload: Record<string, unknown> = { step, ...properties };
+  if (step === "connected" || step === "connect_failed") {
+    const startedAt = oauthFlowStartedAt.get(provider);
+    if (startedAt !== undefined) {
+      payload.duration_ms = Date.now() - startedAt;
+      oauthFlowStartedAt.delete(provider);
+    }
+  }
+  logOAuthProviderStep(provider, step, payload);
+  trackOAuthEvent?.(getOAuthStepEventName(provider), payload);
+}
+
+function trackOAuthCompleted(
+  provider: OAuthProviderId,
+  properties?: Record<string, unknown>,
+): void {
+  trackOAuthEvent?.(getOAuthCompletedEventName(provider), properties);
+  trackOAuthEvent?.("paprwork_provider_configured", {
+    provider,
+    method: "oauth",
+    ...properties,
+  });
+}
+
+function trackOAuthFailed(
+  provider: OAuthProviderId,
+  error: string,
+  properties?: Record<string, unknown>,
+): void {
+  trackOAuthStep(provider, "connect_failed", { error, ...properties });
+  trackOAuthEvent?.(getOAuthFailedEventName(provider), { error, ...properties });
+}
+
+async function persistOAuthConnection(
+  provider: OAuthProviderId,
+  tokenInput: {
+    provider: OAuthProviderId;
+    accessToken: string;
+    refreshToken: string;
+    expiresIn: number;
+    accountId?: string;
+  },
+  options?: {
+    flow_source?: "keychain" | "browser" | "terminal" | "paste";
+    source?: string;
+    stage?: "start" | "callback" | "paste" | "provisioning";
+  },
+): Promise<void> {
+  await oauthTokenStorage!.storeToken(tokenInput);
+  trackOAuthStep(provider, "token_stored", options);
+
+  await syncOAuthTokenToApiKeys(provider, tokenInput.accessToken);
+  trackOAuthStep(provider, "key_synced", options);
+
+  trackOAuthStep(provider, "connected", options);
+  trackOAuthCompleted(provider, options);
+  sendOAuthStatus(provider, "connected");
+}
 
 // Active callback servers (OpenAI and Claude PKCE flows)
 const activeServers = new Map<string, OAuthCallbackServer>();
@@ -249,8 +328,14 @@ function stopRefreshTimer(): void {
 /**
  * Initialize OAuth IPC handlers
  */
-export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
+export async function initializeOAuthIPC(
+  keysStorage: CustomKeysStorage,
+  options?: {
+    trackOAuthEvent?: OAuthTelemetryTracker;
+  },
+) {
   console.log("[OAuth IPC] Initializing...");
+  trackOAuthEvent = options?.trackOAuthEvent;
 
   // Store reference to CustomKeysStorage for syncing
   customKeysStorage = keysStorage;
@@ -267,6 +352,8 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
   ipcMain.handle("auth:openai:start-oauth", async () => {
     try {
       console.log("[OAuth IPC] Starting OpenAI OAuth flow");
+      oauthFlowStartedAt.set("openai", Date.now());
+      trackOAuthStep("openai", "flow_started");
 
       // Stop any existing server
       const existingServer = activeServers.get("openai");
@@ -294,8 +381,16 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
             const state = params.get("state");
             const flow = activeFlows.get("openai");
 
+            trackOAuthStep("openai", "callback_received", {
+              has_code: Boolean(code),
+              has_state: Boolean(state),
+            });
+
             if (!code || !state || !flow) {
               console.error("[OAuth IPC] Missing code, state, or flow data");
+              trackOAuthFailed("openai", "Missing code, state, or flow data", {
+                stage: "callback",
+              });
               return;
             }
 
@@ -306,36 +401,40 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
               state,
               flow.pkce.state,
             );
+            trackOAuthStep("openai", "token_exchanged");
 
-            // Store tokens in OAuthTokenStorage
-            await oauthTokenStorage!.storeToken(tokenInput);
-
-            // Sync token to CustomKeysStorage (makes it available as OPENAI_API_KEY)
-            await syncOAuthTokenToApiKeys("openai", tokenInput.accessToken);
+            await persistOAuthConnection("openai", tokenInput, {
+              flow_source: "browser",
+            });
 
             console.log("[OAuth IPC] OpenAI OAuth flow completed successfully");
             activeFlows.delete("openai");
-            sendOAuthStatus("openai", "connected");
           } catch (error) {
             console.error("[OAuth IPC] OpenAI callback error:", error);
             activeFlows.delete("openai");
-            sendOAuthStatus("openai", "error", (error as Error).message);
+            const message = error instanceof Error ? error.message : "Callback failed";
+            trackOAuthFailed("openai", message, { stage: "callback" });
+            sendOAuthStatus("openai", "error", message);
           }
         },
       });
 
       await server.start();
       activeServers.set("openai", server);
+      trackOAuthStep("openai", "callback_server_started");
 
       // Open browser to authorization URL
       await shell.openExternal(url);
+      trackOAuthStep("openai", "browser_opened");
 
       return { success: true, url };
     } catch (error) {
       console.error("[OAuth IPC] Failed to start OpenAI OAuth:", error);
+      const message = error instanceof Error ? error.message : "Start OAuth failed";
+      trackOAuthFailed("openai", message, { stage: "start" });
       return {
         success: false,
-        error: (error as Error).message,
+        error: message,
       };
     }
   });
@@ -364,6 +463,7 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
 
   ipcMain.handle("auth:openai:disconnect", async () => {
     try {
+      trackOAuthStep("openai", "disconnected");
       // Remove OAuth token from OAuthTokenStorage
       await oauthTokenStorage!.deleteTokenByProvider("openai");
       activeFlows.delete("openai");
@@ -396,20 +496,23 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
   ipcMain.handle("auth:claude:start-oauth", async () => {
     try {
       console.log("[OAuth IPC] Starting Claude OAuth flow");
+      oauthFlowStartedAt.set("anthropic", Date.now());
+      trackOAuthStep("anthropic", "flow_started");
 
       // Step 0: Check for existing token in Keychain / credential files
       const existingToken = await claudeSetupTokenService!.readTokenFromCLIStorage();
       if (existingToken) {
         console.log("[OAuth IPC] Found existing Claude token in CLI storage");
+        trackOAuthStep("anthropic", "keychain_token_found");
         const tokenInput = {
           provider: "anthropic" as const,
           accessToken: existingToken,
           refreshToken: existingToken,
           expiresIn: 365 * 24 * 60 * 60,
         };
-        await oauthTokenStorage!.storeToken(tokenInput);
-        await syncOAuthTokenToApiKeys("anthropic", existingToken);
-        sendOAuthStatus("anthropic", "connected");
+        await persistOAuthConnection("anthropic", tokenInput, {
+          flow_source: "keychain",
+        });
         return { success: true, source: "keychain" };
       }
 
@@ -417,23 +520,22 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
       const isInstalled = await claudeSetupTokenService!.isClaudeCLIInstalled();
       if (!isInstalled) {
         console.log("[OAuth IPC] Claude CLI not found, installing...");
+        trackOAuthStep("anthropic", "cli_install_started");
         const installResult = await claudeSetupTokenService!.installClaudeCLI();
         if (!installResult.success) {
           console.error("[OAuth IPC] Failed to install Claude CLI:", installResult.error);
-          sendOAuthStatus(
-            "anthropic",
-            "error",
-            "Could not install Claude CLI. Use Manual Setup instead.",
-          );
+          const message = "Could not install Claude CLI. Use Manual Setup instead.";
+          trackOAuthStep("anthropic", "cli_install_failed", {
+            error: installResult.error,
+          });
+          trackOAuthFailed("anthropic", message, { stage: "start" });
+          sendOAuthStatus("anthropic", "error", message);
           return { success: false, error: "CLI install failed", fallback: "manual" };
         }
         console.log("[OAuth IPC] Claude CLI installed");
       }
 
       // Step 2: Open a real terminal window with `claude setup-token`
-      // The CLI needs an interactive TTY, so we open the user's terminal app.
-      // After sign-in, the CLI prints the token -- the user copies it and pastes
-      // it into our UI (the paste field is shown immediately).
       console.log("[OAuth IPC] Opening terminal with claude setup-token...");
       const { exec: execCb } = await import("child_process");
 
@@ -453,15 +555,17 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
         console.error("[OAuth IPC] Failed to open terminal:", termErr);
       }
 
-      // Return immediately -- UI will show the paste field for the user
-      // to copy/paste the token from the terminal
+      trackOAuthStep("anthropic", "terminal_opened", { terminal_opened: terminalOpened });
+
       return { success: true, source: "terminal-opened", terminalOpened };
     } catch (error) {
       console.error("[OAuth IPC] Failed to start Claude OAuth:", error);
-      sendOAuthStatus("anthropic", "error", (error as Error).message);
+      const message = error instanceof Error ? error.message : "Start OAuth failed";
+      trackOAuthFailed("anthropic", message, { stage: "start" });
+      sendOAuthStatus("anthropic", "error", message);
       return {
         success: false,
-        error: (error as Error).message,
+        error: message,
       };
     }
   });
@@ -503,6 +607,7 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
 
   ipcMain.handle("auth:claude:disconnect", async () => {
     try {
+      trackOAuthStep("anthropic", "disconnected");
       // Remove OAuth token from OAuthTokenStorage
       await oauthTokenStorage!.deleteTokenByProvider("anthropic");
       activeFlows.delete("anthropic");
@@ -531,9 +636,17 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
   ipcMain.handle("auth:claude:paste-token", async (_event, token: string) => {
     try {
       console.log("[OAuth IPC] Pasting Claude OAuth token");
+      if (!oauthFlowStartedAt.has("anthropic")) {
+        oauthFlowStartedAt.set("anthropic", Date.now());
+      }
+      trackOAuthStep("anthropic", "paste_token_submitted", {
+        stage: "paste",
+        flow_source: "paste",
+      });
 
       // Validate token format (Claude OAuth tokens start with sk-ant-oat)
       if (!token || typeof token !== "string") {
+        trackOAuthFailed("anthropic", "Token is required", { stage: "paste" });
         return {
           success: false,
           error: "Token is required",
@@ -543,6 +656,7 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
       const cleanedToken = sanitizeOAuthAccessToken("anthropic", token);
 
       if (!cleanedToken.startsWith("sk-ant-oat")) {
+        trackOAuthFailed("anthropic", "Invalid token format", { stage: "paste" });
         return {
           success: false,
           error:
@@ -550,26 +664,27 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
         };
       }
 
-      // Store as OAuth token (1 year expiry)
       const tokenInput = {
         provider: "anthropic" as const,
         accessToken: cleanedToken,
-        refreshToken: cleanedToken, // OAuth tokens are self-contained
-        expiresIn: 365 * 24 * 60 * 60, // 1 year in seconds
+        refreshToken: cleanedToken,
+        expiresIn: 365 * 24 * 60 * 60,
       };
 
-      await oauthTokenStorage!.storeToken(tokenInput);
-
-      // Sync to CustomKeysStorage (makes it available as ANTHROPIC_API_KEY for jobs/bash)
-      await syncOAuthTokenToApiKeys("anthropic", cleanedToken);
+      await persistOAuthConnection("anthropic", tokenInput, {
+        flow_source: "paste",
+        stage: "paste",
+      });
 
       console.log("[OAuth IPC] Claude OAuth token stored successfully");
       return { success: true };
     } catch (error) {
       console.error("[OAuth IPC] Failed to paste Claude token:", error);
+      const message = error instanceof Error ? error.message : "Paste token failed";
+      trackOAuthFailed("anthropic", message, { stage: "paste" });
       return {
         success: false,
-        error: (error as Error).message,
+        error: message,
       };
     }
   });
@@ -627,6 +742,8 @@ export function getOAuthTokenStorage(): OAuthTokenStorage | null {
  * Cleanup on app quit
  */
 export function cleanupOAuthServers(): void {
+  trackOAuthEvent = undefined;
+  oauthFlowStartedAt.clear();
   // Stop refresh timer
   stopRefreshTimer();
 

@@ -36,6 +36,13 @@ export const AmplitudeEvents = {
   PAPR_LOGIN_COMPLETED: "paprwork_papr_login_completed",
   PAPR_LOGIN_FAILED: "paprwork_papr_login_failed",
 
+  OPENAI_OAUTH_STEP: "paprwork_openai_oauth_step",
+  OPENAI_OAUTH_COMPLETED: "paprwork_openai_oauth_completed",
+  OPENAI_OAUTH_FAILED: "paprwork_openai_oauth_failed",
+  CLAUDE_OAUTH_STEP: "paprwork_claude_oauth_step",
+  CLAUDE_OAUTH_COMPLETED: "paprwork_claude_oauth_completed",
+  CLAUDE_OAUTH_FAILED: "paprwork_claude_oauth_failed",
+
   // Chat Events
   CHAT_CREATED: "paprwork_chat_created",
   MESSAGE_SENT: "paprwork_message_sent",
@@ -152,6 +159,34 @@ export interface PaprLoginStepEventProperties extends BaseEventProperties {
   has_code?: boolean;
   has_state?: boolean;
   gateway_switch_success?: boolean;
+  needs_org?: boolean;
+  needs_namespace?: boolean;
+  stage?: "form" | "provisioning";
+}
+
+export interface OAuthProviderStepEventProperties extends BaseEventProperties {
+  step: string;
+  source?: "settings" | "onboarding" | "unknown";
+  error?: string;
+  duration_ms?: number;
+  stage?: "start" | "callback" | "paste" | "provisioning";
+  flow_source?: "keychain" | "browser" | "terminal" | "paste";
+  terminal_opened?: boolean;
+  has_code?: boolean;
+  has_state?: boolean;
+}
+
+export interface OAuthProviderCompletedProperties extends BaseEventProperties {
+  source?: "settings" | "onboarding" | "unknown";
+  flow_source?: "keychain" | "browser" | "terminal" | "paste";
+  duration_ms?: number;
+}
+
+export interface OAuthProviderFailedProperties extends BaseEventProperties {
+  error: string;
+  source?: "settings" | "onboarding" | "unknown";
+  stage?: "start" | "callback" | "paste" | "provisioning";
+  duration_ms?: number;
 }
 
 export interface MessageSentProperties extends BaseEventProperties {

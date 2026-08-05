@@ -12,6 +12,9 @@ import {
   hasBlockingJobScriptPathIssues,
 } from "../utils/jobScriptPathValidation.js";
 import {
+  scanSourceForSchemaDdlAntiPattern,
+} from "../utils/jobDbSchemaGuard.js";
+import {
   assertProductArchitectGate,
   PRODUCT_ARCHITECT_REMINDER,
 } from "../utils/productArchitectGate.js";
@@ -1243,6 +1246,53 @@ async function scanJobSourceForEnvKeyAntiPattern(
   return warnings;
 }
 
+/** Scan job source for inline ALTER/CREATE TABLE instead of migrations/*.sql */
+async function scanJobSourceForSchemaDdlAntiPattern(
+  jobId: string,
+): Promise<string[]> {
+  const { promises: fsP } = await import("fs");
+  const pathMod = await import("path");
+  const warnings: string[] = [];
+  const jobDir = await getJobDir(jobId);
+
+  const scanDir = async (dir: string, prefix: string): Promise<void> => {
+    try {
+      const entries = await fsP.readdir(dir);
+      for (const entry of entries) {
+        if (
+          entry.startsWith(".") ||
+          ["node_modules", "__pycache__", "data", ".venv", "venv", "migrations"].includes(
+            entry,
+          )
+        ) {
+          continue;
+        }
+        const fullPath = pathMod.default.join(dir, entry);
+        const stat = await fsP.stat(fullPath);
+
+        if (stat.isDirectory()) {
+          await scanDir(fullPath, prefix ? `${prefix}/${entry}` : entry);
+          continue;
+        }
+
+        if (!/\.(py|js|ts|mjs)$/.test(entry)) continue;
+        if (stat.size > 100_000) continue;
+
+        const content = await fsP.readFile(fullPath, "utf-8");
+        const relPath = prefix ? `${prefix}/${entry}` : entry;
+        for (const warning of scanSourceForSchemaDdlAntiPattern(content)) {
+          warnings.push(`${relPath}: ${warning}`);
+        }
+      }
+    } catch {
+      // directory doesn't exist or can't be read
+    }
+  };
+
+  await scanDir(jobDir, "");
+  return warnings;
+}
+
 /**
  * Scan job source files for direct LLM API usage (OpenAI, Anthropic, Gemini).
  * Script jobs that call LLM SDKs should usually be agent jobs instead.
@@ -1375,6 +1425,8 @@ export const runJobTool = createTool({
     // Scan source files for env key anti-patterns before running
     const envKeyWarnings =
       await scanJobSourceForEnvKeyAntiPattern(args.jobId);
+    const schemaDdlWarnings =
+      await scanJobSourceForSchemaDdlAntiPattern(args.jobId);
     const llmApiWarnings =
       existingJob && isScriptJobType(existingJob.type)
         ? await scanJobSourceForLlmApiCalls(args.jobId)
@@ -1427,6 +1479,15 @@ export const runJobTool = createTool({
                 `This job will likely fail with None/undefined for those keys. ` +
                 `Fix: update_job to add \${KEY_NAME} to the command, update the script to use argparse/process.argv. ` +
                 `Read: read_skill({ skillId: "preloaded-api-key-testing" })`,
+            }
+          : {}),
+        ...(schemaDdlWarnings.length > 0
+          ? {
+              _schemaDdlWarnings: schemaDdlWarnings,
+              _schemaMigrationReminder:
+                `⚠️ DETECTED: Inline SQLite schema DDL in job source. ` +
+                `Use write_file on data/databases/{slug}/migrations/000N_….sql for app tables (writeDbIds), ` +
+                `not ALTER TABLE in scripts or bash sqlite3. run_job + Turso sync apply migrations locally and on cloud.`,
             }
           : {}),
         ...(llmApiWarnings.length > 0 || configLlmSignals

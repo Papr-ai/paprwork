@@ -24,6 +24,7 @@ import {
   resolveJobWriteTargets,
 } from "../../jobAppDatabase.js";
 import { STANDALONE_APP_ID } from "../appIds.js";
+import { runtimeParamsForJobEnv } from "../../../utils/normalizeRuntimeParams.js";
 import type { IsolatedJobRunDiagnostics } from "../../AgentService.js";
 
 export interface AgentJobSessionInput {
@@ -224,6 +225,7 @@ export class AgentJobExecutor implements IJobExecutor {
       ...(writeTargets.length > 0
         ? jobWriteDatabaseEnv(writeTargets, linkedAppId)
         : {}),
+      ...runtimeParamsForJobEnv(params.runtimeParams),
     };
 
     const { setToolContext } = await import("../../../../core/tools/context.js");
@@ -416,6 +418,12 @@ export class AgentJobExecutor implements IJobExecutor {
         envLines.push(`DEP_${key}_DIR="${depDir}"`);
         if (depDb) envLines.push(`DEP_${key}_DB="${depDb}"`);
       }
+    }
+
+    for (const [key, value] of Object.entries(
+      runtimeParamsForJobEnv(params.runtimeParams),
+    )) {
+      envLines.push(`${key}="${value}"`);
     }
 
     return envLines.length > 0

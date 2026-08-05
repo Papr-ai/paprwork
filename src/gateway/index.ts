@@ -2313,6 +2313,12 @@ async function startGateway(): Promise<void> {
         process.env.CLOUD_SYNC_STARTUP_DELAY_MS ?? "30000",
       );
       setTimeout(() => {
+        if (getCloudSyncService()) {
+          console.log(
+            "[Gateway] Cloud sync already initialized (e.g. workspace switch) — skipping deferred startup init",
+          );
+          return;
+        }
         const cloudSync = initializeCloudSyncService();
         cloudSync.initialize().catch((err) => {
           console.warn(

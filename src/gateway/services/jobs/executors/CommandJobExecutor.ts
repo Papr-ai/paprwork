@@ -2,6 +2,7 @@ import { spawn, execSync } from "child_process";
 import { existsSync } from "fs";
 import path from "path";
 import type { JobType } from "../types.js";
+import { runtimeParamsForJobEnv } from "../../../utils/normalizeRuntimeParams.js";
 import type {
   ExecutorLaunchParams,
   ExecutorLaunchResult,
@@ -80,7 +81,7 @@ export class CommandJobExecutor implements IJobExecutor {
       ...(writeTargets.length > 0
         ? jobWriteDatabaseEnv(writeTargets, linkedAppId)
         : {}),
-      ...(params.runtimeParams ?? {}),
+      ...(runtimeParamsForJobEnv(params.runtimeParams)),
     };
     
     const proc = spawn(shellPath, shellArgs, {

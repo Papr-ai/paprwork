@@ -64,6 +64,8 @@ export interface PostMigrationPathRepairOptions {
   delayMs?: number;
   /** Limit scan/repair to one workspace papr home (faster after consent migration). */
   scopePaprHome?: string;
+  /** Skip data-sources scan when caller already ran repairWorkspacePortableDataSources. */
+  skipDataSources?: boolean;
 }
 
 export interface TextFileRepairEntry {
@@ -500,12 +502,19 @@ export async function runPostMigrationPathRepair(
       (scopePaprHome ? ` (scoped to ${scopePaprHome})` : ""),
   );
 
-  const dataSources = await runGlobalDataSourcePathRepair({
-    paprBase,
-    dryRun,
-    delayMs,
-    scopePaprHome,
-  });
+  const dataSources = options.skipDataSources
+    ? {
+        scannedApps: 0,
+        repairedApps: 0,
+        repairCount: 0,
+        repairs: [],
+      }
+    : await runGlobalDataSourcePathRepair({
+        paprBase,
+        dryRun,
+        delayMs,
+        scopePaprHome,
+      });
 
   const jobsJsonPaths = await discoverJobsJsonFiles(paprBase, scopePaprHome);
   const jobsJson = await repairJobsJsonFiles(jobsJsonPaths, { dryRun, delayMs });

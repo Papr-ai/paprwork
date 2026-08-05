@@ -223,23 +223,64 @@ const pushCloudSyncSchema = z.object({
     .string()
     .uuid()
     .optional()
-    .describe("Optional mini-app ID — push only that app and its dependent jobs. Omit to push full workspace."),
+    .describe("Mini-app ID — limits GitHub + Turso to this app and dependent jobs"),
+  jobId: z
+    .string()
+    .uuid()
+    .optional()
+    .describe("Job ID — GitHub: Jobs/{id}; Turso: linked DB for that job if any"),
+  alias: z
+    .string()
+    .optional()
+    .describe("Linked DB alias from data-sources.json (use with appId for one Turso database)"),
+  tursoDatabase: z
+    .string()
+    .optional()
+    .describe("Turso short name from get_cloud_sync_status, e.g. d-2d6b4294"),
+  tables: z
+    .array(z.string().min(1))
+    .optional()
+    .describe("Turso only: sync specific tables (schema + rows), e.g. ['audits']"),
+  targets: z
+    .array(z.enum(["github", "turso"]))
+    .optional()
+    .describe(
+      "What to push. Default: both. Use ['turso'] for fast DB-only (migrations/schema). Use ['github'] for code-only.",
+    ),
 });
 
 export const pushCloudSyncTool = createTool({
   id: "push_cloud_sync",
-  description: `Force Cloud Sync push to GitHub + Turso (same as Settings → Sync now).
+  description: `Force Cloud Sync push (same engine as Settings → Sync now) with explicit scope.
 
-Use after fixing local app/job code or SQLite data and you need cloud (apps.papr.ai) updated immediately.
-Optionally scope to one appId (pushes app folder + dependent job folders + linked Turso sources).
+Targets (default: both github + turso):
+- github — apps/{id}, Jobs/{id}, data/ to GitHub
+- turso — linked SQLite → Turso replica (migrations, schema, rows)
 
-After push, call get_cloud_sync_status to verify github/turso sections show synced.`,
+Scope examples (prefer narrow scope — much faster than full workspace):
+- push_cloud_sync({ appId, targets: ['turso'] }) — Turso DBs for one app only
+- push_cloud_sync({ appId, alias: 'gtm-audit', targets: ['turso'] }) — one linked database
+- push_cloud_sync({ appId, alias: 'gtm-audit', tables: ['audits'], targets: ['turso'] }) — one table
+- push_cloud_sync({ tursoDatabase: 'd-2d6b4294', targets: ['turso'] }) — by Turso short name
+- push_cloud_sync({ appId, jobId, targets: ['github'] }) — job code folder only
+- push_cloud_sync({ appId }) — app folder + dependent jobs + linked Turso (recommended default)
+- push_cloud_sync() — full workspace (slow — avoid unless needed)
+
+Returns scope label, github pushedPaths, turso databases touched, durationMs.
+After push, call get_cloud_sync_status to verify.`,
   inputSchema: pushCloudSyncSchema,
   execute: async (input) => {
     const args = unwrapContext(input);
     const startTime = performance.now();
     try {
-      const data = await pushCloudSync({ appId: args.appId });
+      const data = await pushCloudSync({
+        appId: args.appId,
+        jobId: args.jobId,
+        alias: args.alias,
+        tursoDatabase: args.tursoDatabase,
+        tables: args.tables,
+        targets: args.targets,
+      });
       return {
         success: true,
         data,

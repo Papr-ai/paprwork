@@ -3718,6 +3718,7 @@ ${last15.substring(0, 8_000)}`;
     maxTurns?: number;
     authOverride: { apiKey: string; authType: "oauth" | "apiKey" };
     paprApiKey?: string;
+    appendLog?: (line: string) => Promise<void>;
   }): AsyncGenerator<StreamChunk & { chatId: string }> {
     if (!this.initialized) {
       throw new Error("AgentService not initialized");
@@ -3772,10 +3773,50 @@ ${last15.substring(0, 8_000)}`;
       systemPrompt: `${this.systemPrompt}\n\n# Isolated Job Run\n- Session: ${chatId}\n- Keep output concise and actionable.`,
     };
 
-    yield* this.streamAgent(chatId, input.prompt, config, {
+    let thinkingBuffer = "";
+    for await (const chunk of this.streamAgent(chatId, input.prompt, config, {
       allowedToolIds: input.allowedToolIds,
       maxSteps: input.maxTurns,
-    });
+    })) {
+      if (input.appendLog) {
+        if (chunk.type === "reasoning-delta") {
+          const payload = chunk.payload as ReasoningDeltaPayload;
+          if (typeof payload.text === "string") {
+            thinkingBuffer += payload.text;
+          }
+        } else if (chunk.type === "tool-call") {
+          if (thinkingBuffer.trim()) {
+            await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
+            thinkingBuffer = "";
+          }
+          const payload = chunk.payload as ToolCallPayload;
+          const argsStr = payload.args
+            ? JSON.stringify(payload.args).slice(0, 200)
+            : "";
+          await input.appendLog(
+            `🔧 Tool: ${payload.toolName}${argsStr ? `(${argsStr}${argsStr.length >= 200 ? "..." : ""})` : "()"}`,
+          );
+        } else if (chunk.type === "tool-result") {
+          const payload = chunk.payload as ToolResultPayload;
+          const resultStr =
+            typeof payload.result === "string"
+              ? payload.result.slice(0, 300)
+              : JSON.stringify(payload.result).slice(0, 300);
+          await input.appendLog(
+            `✅ Result: ${resultStr}${resultStr.length >= 300 ? "..." : ""}`,
+          );
+        } else if (chunk.type === "tool-error") {
+          const payload = chunk.payload as ErrorPayload;
+          await input.appendLog(
+            `❌ Error: ${typeof payload.error === "string" ? payload.error : JSON.stringify(payload.error)}`,
+          );
+        } else if (chunk.type === "text-delta" && thinkingBuffer.trim()) {
+          await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
+          thinkingBuffer = "";
+        }
+      }
+      yield chunk;
+    }
   }
 
   /**

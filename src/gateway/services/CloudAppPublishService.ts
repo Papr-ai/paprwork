@@ -33,6 +33,7 @@ import {
   type PublishSlugCatalogEntry,
 } from "../utils/uniqueAppNaming.js";
 import { writeCloudAppMetadataFile } from "./cloudAppMetadataFile.js";
+import { prepareCatalogIconForPublish } from "../utils/catalogIconForPublish.js";
 import { buildMiniApp } from "../utils/miniAppBuild.js";
 import {
   catalogRequirementsForPublish,
@@ -400,6 +401,15 @@ export class CloudAppPublishService {
 
     await writeCloudAppMetadataFile(this.paprDir, appId);
 
+    const appDir = path.join(this.paprDir, "apps", appId);
+    const catalogIconResult = await prepareCatalogIconForPublish({
+      icon: appMeta?.icon,
+      appDir,
+    });
+    if (catalogIconResult.note) {
+      console.log(`[CloudPublish] ${catalogIconResult.note}`);
+    }
+
     let response: Response | null = null;
     let lastBody = "";
     for (const slug of slugCandidates) {
@@ -421,7 +431,7 @@ export class CloudAppPublishService {
             : {}),
           ...(appMeta?.title ? { catalogTitle: appMeta.title } : {}),
           ...(appMeta?.description ? { catalogDescription: appMeta.description } : {}),
-          ...(appMeta?.icon ? { catalogIcon: appMeta.icon } : {}),
+          ...(catalogIconResult.icon ? { catalogIcon: catalogIconResult.icon } : {}),
         },
       });
 

@@ -19,6 +19,7 @@ import {
   copyAppToNamespace,
   CopyAppError,
   syncAppLinkedResourcesToTarget,
+  finalizeCopiedAppResources,
   type CopyAppToNamespaceInput,
 } from "./copyAppToNamespace.js";
 import { writeCloudAppMetadataFile } from "./cloudAppMetadataFile.js";
@@ -163,10 +164,16 @@ async function copyAppBundleAndLinkedResources(
     if (!(await appDirHasRunnableBundle(targetAppDir))) {
       await copyAppBundleIntoTarget(sourceHome, targetHome, appId);
     }
-    await syncAppLinkedResourcesToTarget({
+    const sync = await syncAppLinkedResourcesToTarget({
       appId,
       sourcePaprHome: sourceHome,
       targetPaprHome: targetHome,
+    });
+    await finalizeCopiedAppResources({
+      targetPaprHome: targetHome,
+      appId,
+      copiedJobIds: sync.copiedJobIds,
+      registryDbIds: sync.registryDbIds,
     });
     return;
   }

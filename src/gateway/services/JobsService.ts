@@ -1373,6 +1373,11 @@ export class JobsService {
     this.broadcastJobLogLine(jobId, line);
   }
 
+  /** Cloud agent gateway + external callers — same path as desktop job runs. */
+  async appendJobRunLog(jobId: string, line: string): Promise<void> {
+    await this.appendLog(jobId, line);
+  }
+
   private async setJobStatus(
     jobId: string,
     status: JobStatus,
@@ -1700,6 +1705,24 @@ export class JobsService {
     };
     const jobDir = this.getJobDir(job.id);
     const appliedMigrations = await this.jobDatabase.applyMigrations(jobDir);
+
+    const { resolveJobWriteTargets } = await import("./jobAppDatabase.js");
+    const { applyRegistryDatabaseMigrations } = await import(
+      "./jobs/databaseMigrations.js"
+    );
+    const writeTargets = await resolveJobWriteTargets(job);
+    const registryMigrationSummaries: string[] = [];
+    for (const target of writeTargets) {
+      const appliedRegistry = await applyRegistryDatabaseMigrations(
+        target.dbPath,
+      );
+      if (appliedRegistry.length > 0) {
+        registryMigrationSummaries.push(
+          `${target.alias}: ${appliedRegistry.join(", ")}`,
+        );
+      }
+    }
+
     await this.jobDatabase.recordRunStart(
       jobDir,
       runId,
@@ -1716,7 +1739,12 @@ export class JobsService {
       this.broadcastJobLogLine(job.id, line);
     };
     if (appliedMigrations.length > 0) {
-      await appendRunLog(`Applied migrations: ${appliedMigrations.join(", ")}`);
+      await appendRunLog(`Applied job scratch migrations: ${appliedMigrations.join(", ")}`);
+    }
+    if (registryMigrationSummaries.length > 0) {
+      await appendRunLog(
+        `Applied registry DB migrations: ${registryMigrationSummaries.join("; ")}`,
+      );
     }
 
     const { requestKeyPermission: requestKeyPermissionFromMain } =

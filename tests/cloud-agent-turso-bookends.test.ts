@@ -12,6 +12,13 @@ const {
   createRemoteClient: vi.fn(),
 }));
 
+const applyPendingDatabaseMigrationsToTurso = vi.hoisted(() => vi.fn());
+
+const fsMocks = vi.hoisted(() => ({
+  existsSync: vi.fn(() => true),
+  statSync: vi.fn(() => ({ size: 4096 })),
+}));
+
 vi.mock("../src/gateway/services/tursoSyncBridgeCore.js", () => ({
   pullTursoToLocalDb,
   ensureLocalDbChangeLogReady,
@@ -19,9 +26,31 @@ vi.mock("../src/gateway/services/tursoSyncBridgeCore.js", () => ({
   createRemoteClient,
 }));
 
+vi.mock("../src/gateway/services/jobs/jobMigrationTursoSync.js", () => ({
+  applyPendingDatabaseMigrationsToTurso,
+  resolveMigrationRootFromDbPath: vi.fn((dbPath: string) => {
+    if (dbPath.includes("/data/databases/")) {
+      return dbPath.replace(/\/data\.db$/, "");
+    }
+    if (dbPath.includes("/data/data.db")) {
+      return dbPath.replace(/\/data\/data\.db$/, "");
+    }
+    return null;
+  }),
+}));
+
 vi.mock("../src/gateway/services/tursoSyncState.js", () => ({
   loadTursoSyncState: () => ({ jobs: {} }),
   localDbHasSyncableData: () => true,
+}));
+
+vi.mock("fs", () => ({
+  default: {
+    existsSync: fsMocks.existsSync,
+    statSync: fsMocks.statSync,
+  },
+  existsSync: fsMocks.existsSync,
+  statSync: fsMocks.statSync,
 }));
 
 vi.mock("../src/gateway/services/tursoDeltaSync.js", () => ({
@@ -46,6 +75,7 @@ describe("cloud agent Turso bookends", () => {
       execute: vi.fn(),
       close: vi.fn(),
     });
+    applyPendingDatabaseMigrationsToTurso.mockResolvedValue([]);
   });
 
   it("installs changelog triggers after pulling from Turso", async () => {
@@ -78,5 +108,17 @@ describe("cloud agent Turso bookends", () => {
 
     expect(result.status).toBe("pushed");
     expect(result.syncMode).toBe("snapshot_fallback");
+  });
+
+  it("replays database migrations before pushing when local db has data", async () => {
+    await pushLinkedSourceToCloud({
+      syncKey: "db-abc",
+      dbPath: "/tmp/Papr/data/databases/gtm-audit/data.db",
+      tursoUrl: "libsql://example.turso.io",
+      authToken: "token",
+    });
+
+    expect(applyPendingDatabaseMigrationsToTurso).toHaveBeenCalledOnce();
+    expect(pushLocalDbToTurso).toHaveBeenCalledOnce();
   });
 });

@@ -8,6 +8,7 @@ import Database from "better-sqlite3";
 import {
   filterSyncableTables,
   listUserTables,
+  openWritableLocalJobDb,
 } from "./tursoSyncBridgeCore.js";
 import { jobTursoDatabaseName } from "./tursoDatabaseNaming.js";
 import {
@@ -17,6 +18,7 @@ import {
 } from "./tursoLinkedSources.js";
 import { getTursoSyncBridge } from "./TursoSyncBridge.js";
 import { isJobDbDirty, loadTursoSyncState } from "./tursoSyncState.js";
+import { localRemoteUserSchemaDriftTables } from "./tursoDeltaSync.js";
 import {
   getDatabaseRegistryService,
 } from "./DatabaseRegistryService.js";
@@ -38,6 +40,7 @@ export interface TursoSourceSyncItem {
   status: TursoSourceSyncState;
   localTableCount: number;
   remoteTableCount: number;
+  schemaDrift?: boolean;
   quarantinedAt?: string | null;
   quarantineReason?: string | null;
 }
@@ -85,6 +88,7 @@ export function resolveTursoSourceStatus(
   dbExists: boolean,
   dirty: boolean,
   quarantined = false,
+  schemaDrift = false,
 ): TursoSourceSyncState {
   if (quarantined) {
     return "quarantined";
@@ -92,13 +96,16 @@ export function resolveTursoSourceStatus(
   if (!dbExists) {
     return "unavailable";
   }
+  if (schemaDrift && localTableCount > 0 && remoteTableCount > 0) {
+    return "pending";
+  }
   if (dirty && localTableCount > 0) {
     return "pending";
   }
   if (localTableCount > 0 && remoteTableCount > 0 && localTableCount > remoteTableCount) {
     return "pending";
   }
-  if (remoteTableCount > 0) {
+  if (remoteTableCount > 0 && !schemaDrift) {
     return "synced";
   }
   if (localTableCount > 0) {
@@ -146,6 +153,7 @@ function sourceItem(
   localTableCount: number,
   remoteTableCount: number,
   dirty: boolean,
+  schemaDrift: boolean,
   pushState: ReturnType<typeof loadTursoSyncState>,
 ): TursoSourceSyncItem {
   const dbExists = fs.existsSync(source.dbPath);
@@ -165,12 +173,49 @@ function sourceItem(
       dbExists,
       dirty,
       quarantined,
+      schemaDrift,
     ),
     localTableCount,
     remoteTableCount,
+    schemaDrift,
     quarantinedAt: jobState?.quarantinedAt ?? null,
     quarantineReason: jobState?.quarantineReason ?? null,
   };
+}
+
+async function detectRemoteSchemaDrift(
+  dbPath: string,
+  tursoDatabase: string,
+): Promise<boolean> {
+  if (!fs.existsSync(dbPath)) {
+    return false;
+  }
+  const bridge = getTursoSyncBridge();
+  if (!bridge) {
+    return false;
+  }
+  let credentials;
+  try {
+    credentials = await bridge.fetchCredentials(tursoDatabase);
+  } catch {
+    return false;
+  }
+  const remote = createClient({
+    url: credentials.tursoUrl,
+    authToken: credentials.authToken,
+  });
+  const localDb = openWritableLocalJobDb(dbPath);
+  try {
+    const tableNames = filterSyncableTables(listUserTables(localDb));
+    if (tableNames.length === 0) {
+      return false;
+    }
+    const drifted = await localRemoteUserSchemaDriftTables(remote, localDb, tableNames);
+    return drifted.length > 0;
+  } finally {
+    localDb.close();
+    remote.close();
+  }
 }
 
 async function countRemoteSyncableTables(
@@ -240,14 +285,19 @@ export async function buildTursoSyncItemsReport(
     const alternateKeys = source.jobId && source.jobId !== syncKey ? [source.jobId] : [];
     const dirty = isJobDbDirty(syncKey, source.dbPath, pushState, alternateKeys);
     let remoteTableCount = 0;
+    let schemaDrift = false;
+    const tursoDatabase = resolveTursoDatabaseLabel(source);
     try {
-      remoteTableCount = await countRemoteSyncableTables(
-        resolveTursoDatabaseLabel(source),
-      );
+      remoteTableCount = await countRemoteSyncableTables(tursoDatabase);
+      if (remoteTableCount > 0 && localTableCount > 0) {
+        schemaDrift = await detectRemoteSchemaDrift(source.dbPath, tursoDatabase);
+      }
     } catch (err) {
       reportError = (err as Error).message.slice(0, 200);
     }
-    items.push(sourceItem(source, localTableCount, remoteTableCount, dirty, pushState));
+    items.push(
+      sourceItem(source, localTableCount, remoteTableCount, dirty, schemaDrift, pushState),
+    );
   }
 
   items.sort((a, b) => a.alias.localeCompare(b.alias));

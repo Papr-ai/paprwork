@@ -533,6 +533,29 @@ export function getToolDisplayLabel(toolCall: ToolCallLike): string {
     return isRunning ? `Listing ${dirname}` : `Listed ${dirname}`;
   }
 
+  if (toolName === "push_cloud_sync") {
+    const args = toolCall.args ?? {};
+    const parts: string[] = [];
+    const targets = Array.isArray(args.targets) ? args.targets as string[] : ["github", "turso"];
+    if (targets.length === 1) {
+      parts.push(targets[0] === "turso" ? "Turso" : "GitHub");
+    }
+    if (typeof args.alias === "string" && args.alias.length > 0) {
+      parts.push(`db ${args.alias}`);
+    } else if (typeof args.tursoDatabase === "string" && args.tursoDatabase.length > 0) {
+      parts.push(`Turso ${args.tursoDatabase}`);
+    }
+    if (Array.isArray(args.tables) && args.tables.length > 0) {
+      parts.push(`tables ${(args.tables as string[]).join(", ")}`);
+    } else if (typeof args.jobId === "string" && args.jobId.length > 0) {
+      parts.push(`job ${args.jobId.slice(0, 8)}…`);
+    } else if (typeof args.appId === "string" && args.appId.length > 0) {
+      parts.push(`app ${args.appId.slice(0, 8)}…`);
+    }
+    const scope = parts.length > 0 ? parts.join(" · ") : "full workspace";
+    return isRunning ? `Pushing cloud sync (${scope})` : `Cloud sync pushed (${scope})`;
+  }
+
   const desc = TOOL_DESCRIPTIONS[toolName];
   if (desc) {
     if (isError) {

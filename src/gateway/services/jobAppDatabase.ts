@@ -4,9 +4,16 @@
  */
 
 import { existsSync } from "fs";
+import path from "path";
+import { getPaprDataDir, getPaprRoot } from "../../core/utils/paprRoot.js";
 import type { JobRecord } from "./jobs/types.js";
 import { STANDALONE_APP_ID } from "./jobs/appIds.js";
 import type { DatabaseRecord } from "./DatabaseRegistryService.js";
+import { rewritePaprPathForCloudRun } from "./cloudAgentGateway/cloudPaprPath.js";
+import {
+  extractDatabaseSlugFromPath,
+  workspaceRegistryDbPath,
+} from "./resolveRegistryDbPath.js";
 
 export interface JobWriteDatabaseTarget {
   dbId: string;
@@ -30,14 +37,64 @@ export function databaseEnvKey(
   return record.dbId.toUpperCase().replace(/-/g, "_");
 }
 
+function isCloudRunSandbox(paprHome: string): boolean {
+  return (
+    paprHome.includes(`${path.sep}papr-cloud-run${path.sep}`) ||
+    paprHome.includes(`${path.sep}papr-cloud-session${path.sep}`)
+  );
+}
+
+/** Resolve a registry db path for the active workspace (desktop or cloud sandbox). */
+export function registryDbPathCandidates(storedPath: string): string[] {
+  const trimmed = storedPath.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const add = (candidate: string): void => {
+    const normalized = path.normalize(candidate);
+    if (seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    candidates.push(normalized);
+  };
+
+  add(trimmed);
+
+  const slug = extractDatabaseSlugFromPath(trimmed);
+  if (slug) {
+    add(workspaceRegistryDbPath(slug, getPaprDataDir()));
+  }
+
+  const paprHome = getPaprRoot();
+  if (isCloudRunSandbox(paprHome)) {
+    add(rewritePaprPathForCloudRun(trimmed, paprHome));
+  }
+
+  return candidates;
+}
+
+export function resolveExistingRegistryDbPath(storedPath: string): string | null {
+  for (const candidate of registryDbPathCandidates(storedPath)) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 export function targetFromRegistryRecord(
   record: DatabaseRecord,
+  dbPath: string = record.localPath,
 ): JobWriteDatabaseTarget {
   const alias = record.label?.trim() || record.dbId;
   return {
     dbId: record.dbId,
     alias,
-    dbPath: record.localPath,
+    dbPath,
     envKey: databaseEnvKey(record),
   };
 }
@@ -70,13 +127,15 @@ export async function resolveJobWriteTargets(
             "Create it with create_database first.",
         );
       }
-      if (!existsSync(record.localPath)) {
+      const dbPath = resolveExistingRegistryDbPath(record.localPath);
+      if (!dbPath) {
         throw new Error(
           `Database ${dbId} local file missing: ${record.localPath}. ` +
+            `Checked workspace paths under ${getPaprDataDir()}. ` +
             "Run create_database or restore from sync before running this job.",
         );
       }
-      targets.push(targetFromRegistryRecord(record));
+      targets.push(targetFromRegistryRecord(record, dbPath));
     }
     return targets;
   }
@@ -91,22 +150,28 @@ export async function resolveJobWriteTargets(
   const appService = getAppService();
   await appService.initialize();
   const primary = await appService.getPrimaryDataSource(linkedAppIds[0]);
-  if (!primary?.dbId || !existsSync(primary.dbPath)) {
+  if (!primary?.dbId) {
     return [];
   }
 
   const record = await loadRegistryRecord(primary.dbId);
+  const storedPath = record?.localPath ?? primary.dbPath ?? "";
+  const dbPath = resolveExistingRegistryDbPath(storedPath);
+  if (!dbPath) {
+    return [];
+  }
+
   if (!record) {
     return [
       {
         dbId: primary.dbId,
         alias: primary.alias,
-        dbPath: primary.dbPath,
+        dbPath,
         envKey: databaseEnvKey({ dbId: primary.dbId, label: primary.alias }),
       },
     ];
   }
-  return [targetFromRegistryRecord(record)];
+  return [targetFromRegistryRecord(record, dbPath)];
 }
 
 /** @deprecated Use resolveJobWriteTargets — kept for legacy call sites during migration. */

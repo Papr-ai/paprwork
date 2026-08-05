@@ -2014,6 +2014,31 @@ await fetch('/api/app/backend/save-invoice', {
 
 **Mental model:** \`create_database\` → \`attach_database\` → app SQL with \`sourceId\`. No hidden default DB, no readonly sources — every attached DB is readable and writable from the app.
 
+## Schema migrations (registry DBs — synced to Turso)
+
+**Never** run \`ALTER TABLE\` / \`CREATE TABLE\` via bash on synced paths — bash blocks DDL and returns the migration file path.
+
+\`\`\`javascript
+// After create_database + attach_database:
+write_file({
+  path: "$PAPR_HOME/data/databases/{slug}/migrations/0001_init.sql",
+  content: \`
+CREATE TABLE contacts (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  email TEXT
+);
+\`.trim(),
+})
+// Apply locally + queue Turso replay: run_job({ jobId, writeDbIds: [dbId] }) or Upload now
+\`\`\`
+
+**Rules:**
+- **PRIMARY KEY required** on every table that syncs to Turso — without it, row sync and delta CDC are disabled (data will not sync reliably).
+- One migration file = local apply + Turso replay (not two steps).
+- Platform adds \`_papr_created_at\`, \`_papr_updated_at\`, \`_papr_row_version\` automatically — do not create or edit these columns.
+- Prefer \`UPDATE … WHERE id = ?\` over \`INSERT OR REPLACE\` for edits (keeps row metadata stable).
+
 | Layer | How it uses the DB |
 |-------|-------------------|
 | **Mini-app** | \`POST /api/db/query\` (SELECT) and \`POST /api/db/write\` (INSERT/UPDATE/DELETE) with \`sourceId: alias\` |
@@ -2361,7 +2386,7 @@ await fetch('/api/jobs/run', { method: 'POST', body: JSON.stringify({ jobId: JOB
 - \`get_cloud_sync_status({ appId?, jobId?, includeJobLogs? })\` — **start here**: GitHub sync + Turso + publish + heartbeat/pendingCloudRuns + local jobs + GitHub job.json
 - \`query_cloud_turso({ sql, jobId? | tursoDatabase? | appId+alias })\` — read-only SQL on Turso cloud replica
 - \`inspect_cloud_repo({ action: "read"|"list", relativePath?, prefix?, source? })\` — read/list GitHub cloud repo files
-- \`push_cloud_sync({ appId? })\` — force git + Turso push (after local fixes)
+- \`push_cloud_sync({ appId?, alias?, jobId?, tursoDatabase?, tables?, targets?: ['github'|'turso'] })\` — scoped push (prefer \`targets: ['turso']\` + \`appId\` + \`alias\` for DB/migration fixes — avoid full workspace)
 
 **Cloud job debugging:** Job stuck \`pending\` on apps.papr.ai → \`get_cloud_sync_status({ appId, jobId })\` → check \`desktopHeartbeat.desktopAwake\` and \`pendingCloudRuns\`. If desktop asleep, user must wake Paprwork. If sync pending, \`push_cloud_sync({ appId })\` then \`run_job({ jobId })\`.
 

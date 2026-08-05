@@ -5,6 +5,12 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import type { OAuthProviderSource } from "../../src/core/telemetry/oauthProviderSteps";
+import { trackEvent } from "../lib/telemetry";
+import {
+  trackOAuthProviderFailed,
+  trackOAuthProviderStep,
+} from "../lib/oauthProviderTelemetry";
 
 export interface OAuthStatus {
   connected: boolean;
@@ -19,7 +25,26 @@ export interface OAuthStatus {
 
 const OAUTH_TIMEOUT_MS = 30_000; // 30 seconds before showing fallback
 
-export function useOAuth(provider: "openai" | "anthropic") {
+export interface UseOAuthOptions {
+  source?: OAuthProviderSource;
+}
+
+function trackActivationModelConnected(provider: "openai" | "anthropic"): void {
+  const keyName = provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+  if (!localStorage.getItem("papr-activation-model-connected")) {
+    localStorage.setItem("papr-activation-model-connected", "true");
+    trackEvent("paprwork_activation_model_connected", {
+      provider: keyName,
+      method: "oauth",
+    } as Record<string, unknown>);
+  }
+}
+
+export function useOAuth(
+  provider: "openai" | "anthropic",
+  options?: UseOAuthOptions,
+) {
+  const source = options?.source ?? "settings";
   const [status, setStatus] = useState<OAuthStatus>({ connected: false });
   const [loading, setLoading] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -49,6 +74,7 @@ export function useOAuth(provider: "openai" | "anthropic") {
   const startOAuthLogin = useCallback(async () => {
     setLoading(true);
     setStatus({ connected: false }); // Clear previous errors
+    trackOAuthProviderStep(provider, "connect_clicked", { source });
 
     // Clean up any previous listener/timeout
     if (cleanupRef.current) cleanupRef.current();
@@ -65,9 +91,14 @@ export function useOAuth(provider: "openai" | "anthropic") {
 
           if (data.status === "connected") {
             setLoading(false);
+            trackActivationModelConnected(provider);
             loadStatus(); // Refresh full status (accountId, expiry, etc.)
           } else if (data.status === "error") {
             setLoading(false);
+            trackOAuthProviderFailed(provider, data.error || "Authentication failed", {
+              source,
+              stage: "callback",
+            });
             setStatus({
               connected: false,
               error: data.error || "Authentication failed",
@@ -88,6 +119,7 @@ export function useOAuth(provider: "openai" | "anthropic") {
       // If source is "keychain", token was found immediately — no need to wait
       if (result.source === "keychain") {
         setLoading(false);
+        trackActivationModelConnected(provider);
         await loadStatus();
         if (cleanupRef.current) cleanupRef.current();
         return;
@@ -109,21 +141,25 @@ export function useOAuth(provider: "openai" | "anthropic") {
       // Set timeout — if no response in 30s, show fallback
       timeoutRef.current = setTimeout(() => {
         setLoading(false);
+        const message =
+          provider === "anthropic"
+            ? "Sign-in didn't complete. Use Manual Setup below."
+            : "Sign-in timed out. Please try again.";
+        trackOAuthProviderStep(provider, "connect_timeout", { source, error: message });
         setStatus({
           connected: false,
           timedOut: true,
-          error:
-            provider === "anthropic"
-              ? "Sign-in didn't complete. Use Manual Setup below."
-              : "Sign-in timed out. Please try again.",
+          error: message,
         });
       }, OAUTH_TIMEOUT_MS);
     } catch (error) {
       console.error(`[useOAuth] Failed to start ${provider} OAuth:`, error);
-      setStatus({ connected: false, error: (error as Error).message });
+      const message = error instanceof Error ? error.message : "OAuth flow failed";
+      trackOAuthProviderFailed(provider, message, { source, stage: "start" });
+      setStatus({ connected: false, error: message });
       setLoading(false);
     }
-  }, [provider, loadStatus]);
+  }, [provider, loadStatus, source]);
 
   /**
    * Disconnect OAuth

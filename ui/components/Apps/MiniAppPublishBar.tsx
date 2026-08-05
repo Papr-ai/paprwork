@@ -486,13 +486,13 @@ export function MiniAppPublishBar({
   const canOpenWebPreview = isTrackCollaborator
     ? !!upstreamPreviewUrl
     : cloud.live && !!cloud.publishedPreviewUrl;
-  const webSyncLoadingState = webSyncLoading || webSyncRefreshing;
   const webSyncTooltip = formatWebSyncStatusTooltip(webSyncStatus, {
-    loading: webSyncLoadingState,
+    loading: webSyncLoading,
     error: webSyncError,
+    refreshing: webSyncRefreshing,
   });
   const webSyncState = webSyncVisualState(webSyncStatus, {
-    loading: webSyncLoadingState,
+    loading: webSyncLoading,
     error: webSyncError,
     pushing: webSyncPushing,
     refreshing: webSyncRefreshing,
@@ -501,7 +501,11 @@ export function MiniAppPublishBar({
     webSyncStatus != null &&
     webSyncStatus.overall !== "synced" &&
     webSyncStatus.overall !== "disabled";
-  const webSyncSpinning = webSyncPushing || webSyncPulling || webSyncState === "syncing";
+  const webSyncSpinning =
+    webSyncPushing ||
+    webSyncPulling ||
+    (webSyncLoading && !webSyncStatus) ||
+    webSyncState === "syncing";
   const shareSheetBusy = cloud.busy || webSyncPushing || Boolean(shareSyncNotice);
   const shareLinkReady =
     cloud.live &&
@@ -695,7 +699,7 @@ export function MiniAppPublishBar({
                       zIndex: 10000,
                     }}
                     status={webSyncStatus}
-                    loading={webSyncLoadingState}
+                    loading={webSyncLoading && !webSyncStatus}
                     error={webSyncError}
                     pushing={webSyncPushing}
                     pulling={webSyncPulling}

@@ -55,6 +55,8 @@ export const createDatabaseTool = createTool({
   id: "create_database",
   description:
     "Create an independent SQLite database (registry entry + local file). " +
+    "Schema: write_file on data/databases/{slug}/migrations/000N_….sql — applied on job run + Turso sync. " +
+    "Every synced table MUST have a PRIMARY KEY (INTEGER or TEXT) — required for cloud sync and row versioning. " +
     "Next: attach_database({ appId, dbId, alias }) so the mini-app can read/write via /api/db/* with sourceId. " +
     "Jobs that fill the DB: create_job({ writeDbIds: [dbId] }). " +
     "isolation: 'shared' (default) or 'per-user' (separate Turso DB per user).",
@@ -74,9 +76,11 @@ export const createDatabaseTool = createTool({
       path.join(getPaprDataDir(), "databases", slug, "data.db");
 
     await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
-    if (!fs.existsSync(localPath)) {
-      await fs.promises.writeFile(localPath, "");
-    }
+
+    const { ensureRegistryDatabase } = await import(
+      "../../gateway/services/jobs/databaseMigrations.js"
+    );
+    await ensureRegistryDatabase(localPath);
 
     const registry = await initializeDatabaseRegistry();
     const record = await registry.register({

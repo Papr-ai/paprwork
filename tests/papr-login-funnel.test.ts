@@ -34,6 +34,12 @@ describe("Papr login funnel telemetry", () => {
     "deep_link_queued",
     "callback_received",
     "token_exchanged",
+    "org_setup_required",
+    "org_setup_viewed",
+    "org_setup_submitted",
+    "org_setup_provisioning_started",
+    "org_setup_completed",
+    "org_setup_failed",
     "login_success_notified",
     "login_timeout",
   ];

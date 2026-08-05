@@ -1,6 +1,10 @@
 import Database from "better-sqlite3";
 import { promises as fs } from "fs";
 import path from "path";
+import {
+  applyDatabaseMigrations,
+  applySqlitePerformancePragmas,
+} from "./databaseMigrations.js";
 
 export class JobDatabase {
   private getDbPath(jobDir: string): string {
@@ -34,13 +38,7 @@ export class JobDatabase {
     let db: Database.Database | null = null;
     try {
       db = new Database(dbPath);
-      
-      // Performance optimizations
-      db.pragma("journal_mode = WAL");
-      db.pragma("synchronous = NORMAL");
-      db.pragma("cache_size = -5000"); // 5MB cache per job
-      db.pragma("mmap_size = 15000000"); // 15MB mmap
-      db.pragma("temp_store = MEMORY");
+      applySqlitePerformancePragmas(db, 5000);
       
       db.exec(`
         CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -98,44 +96,7 @@ export class JobDatabase {
   }
 
   async applyMigrations(jobDir: string): Promise<string[]> {
-    const migrationsDir = path.join(jobDir, "migrations");
-    await fs.mkdir(migrationsDir, { recursive: true });
-    const files = (await fs.readdir(migrationsDir))
-      .filter((name) => name.endsWith(".sql"))
-      .sort();
-    const migrationSqlByFile = new Map<string, string>();
-    for (const fileName of files) {
-      const sqlPath = path.join(migrationsDir, fileName);
-      migrationSqlByFile.set(fileName, await fs.readFile(sqlPath, "utf8"));
-    }
-
-    const applied = await this.withDatabase(jobDir, (db) => {
-      const selectApplied = db.prepare("SELECT id FROM schema_migrations");
-      const rows = selectApplied.all() as Array<{ id: string }>;
-      const appliedIds = new Set(rows.map((row) => row.id));
-      const appliedNow: string[] = [];
-
-      for (const fileName of files) {
-        if (appliedIds.has(fileName)) {
-          continue;
-        }
-        const sql = migrationSqlByFile.get(fileName);
-        if (!sql) {
-          continue;
-        }
-        db.exec(sql);
-        db.prepare(
-          "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
-        ).run(fileName, new Date().toISOString());
-        appliedNow.push(fileName);
-      }
-      return appliedNow;
-    });
-
-    if (applied === null) {
-      return files;
-    }
-    return applied;
+    return applyDatabaseMigrations(jobDir, this.getDbPath(jobDir));
   }
 
   async recordRunStart(

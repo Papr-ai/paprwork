@@ -2202,7 +2202,13 @@ app.whenReady().then(async () => {
   });
 
   // Initialize OAuth IPC handlers (pass customKeysStorage for syncing)
-  await initializeOAuthIPC(customKeysStorage);
+  await initializeOAuthIPC(customKeysStorage, {
+    trackOAuthEvent: (eventName, properties) => {
+      if (telemetryClientInstance) {
+        telemetryClientInstance.trackFireAndForget(eventName, properties);
+      }
+    },
+  });
 
   // Initialize Papr Login IPC handlers
   initializePaprLoginIPC(customKeysStorage, settingsStorage, {

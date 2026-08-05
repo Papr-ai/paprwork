@@ -174,9 +174,7 @@ export function useAppCloudSyncStatus(
       refreshInFlightRef.current = true;
       try {
         setError(null);
-        if (hasLoadedOnceRef.current) {
-          setRefreshing(true);
-        } else {
+        if (!hasLoadedOnceRef.current) {
           setLoading(true);
         }
 
@@ -222,7 +220,6 @@ export function useAppCloudSyncStatus(
       } finally {
         refreshInFlightRef.current = false;
         setLoading(false);
-        setRefreshing(false);
       }
     },
     [active, appId],
@@ -274,7 +271,7 @@ export function useAppCloudSyncStatus(
       setLoading(false);
       return;
     }
-    void refresh(true);
+    void refresh(false);
   }, [active, appId, refresh]);
 
   useEffect(() => {

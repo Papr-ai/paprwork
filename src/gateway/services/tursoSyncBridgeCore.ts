@@ -10,9 +10,11 @@ import * as fs from "fs";
 import * as path from "path";
 import { JOB_BASELINE_TABLES } from "./appDataSources.js";
 import {
+  migrateRemoteTableSchemaFromColumns,
+} from "./tursoSchemaMigration.js";
+import {
   computeSyncableTableFingerprints,
   computeSyncableTableFingerprintsForPath,
-  schemasMatch,
 } from "./tursoTableFingerprint.js";
 import {
   jobTursoDatabaseName,
@@ -38,10 +40,13 @@ import {
 } from "./tursoSyncLog.js";
 import {
   applyRemoteSyncLogToLocal,
+  localRemoteSchemaDriftTables,
+  prepareRemoteTableForSync,
   pushDeltaToRemote,
   remoteNeedsBootstrap,
   remoteMissingLocalTables,
 } from "./tursoDeltaSync.js";
+import { ensureRemoteRowSyncColumns } from "./rowSyncColumns.js";
 
 export interface TursoCredentials {
   tursoUrl: string;
@@ -102,6 +107,8 @@ export interface LinkedSourceSyncOptions {
   lastPushedLogId?: number;
   /** Last remote _papr_sync_log id successfully pulled to local. */
   lastPulledLogId?: number;
+  /** When set, only sync these tables (schema + row deltas). */
+  tableNames?: readonly string[];
 }
 
 export interface PullSourceSyncOptions extends LinkedSourceSyncOptions {
@@ -146,6 +153,7 @@ export function isScratchTable(tableName: string): boolean {
     JOB_BASELINE_TABLES.has(tableName) ||
     tableName === SYNC_REGISTRY_TABLE ||
     tableName === SYNC_META_TABLE ||
+    tableName === "_papr_schema_migrations" ||
     SYNC_INFRA_TABLES.has(tableName)
   );
 }
@@ -378,7 +386,7 @@ async function listRemoteUserTables(remote: Client): Promise<string[]> {
     .filter((name): name is string => typeof name === "string");
 }
 
-async function readRemoteTableSchema(
+export async function readRemoteTableSchema(
   remote: Client,
   tableName: string,
 ): Promise<TableColumn[]> {
@@ -480,11 +488,19 @@ async function upsertRemoteTableIncremental(
     return "incremental";
   }
 
-  const remoteSchema = await readRemoteTableSchema(remote, table.name);
-  if (!schemasMatch(table.columns, remoteSchema)) {
-    await replaceRemoteTable(remote, table);
+  const result = await migrateRemoteTableSchemaFromColumns(
+    remote,
+    table.name,
+    table.columns,
+    async () => {
+      await replaceRemoteTable(remote, table);
+    },
+  );
+  if (result === "rebuilt") {
     return "replaced";
   }
+
+  await ensureRemoteRowSyncColumns(remote, table.name);
 
   if (pkCols.length === 0) {
     await replaceRemoteTable(remote, table);
@@ -697,9 +713,19 @@ export async function pushLocalDbToTurso(
     localDb.pragma("wal_checkpoint(TRUNCATE)");
     ensureLocalSyncInfrastructure(localDb);
 
-    const tableNames = filterSyncableTables(listUserTables(localDb));
+    const allTableNames = filterSyncableTables(listUserTables(localDb));
+    const tableFilter = syncOptions.tableNames?.length
+      ? new Set(syncOptions.tableNames)
+      : null;
+    const tableNames = tableFilter
+      ? allTableNames.filter((name) => tableFilter.has(name))
+      : allTableNames;
     if (tableNames.length === 0) {
-      return { status: "skipped", tables: [], reason: "no_syncable_tables" };
+      return {
+        status: "skipped",
+        tables: [],
+        reason: tableFilter ? "no_matching_tables" : "no_syncable_tables",
+      };
     }
 
     for (const tableName of tableNames) {
@@ -715,7 +741,9 @@ export async function pushLocalDbToTurso(
     );
 
     const lastPushedLogId = syncOptions.lastPushedLogId ?? 0;
-    const pendingEntries = readSyncLogSince(localDb, lastPushedLogId);
+    const pendingEntries = readSyncLogSince(localDb, lastPushedLogId).filter(
+      (entry) => !tableFilter || tableFilter.has(entry.tableName),
+    );
     const missingOnRemote = await remoteMissingLocalTables(remote, tableNames);
     const bootstrap =
       syncOptions.force === true ||
@@ -776,6 +804,23 @@ export async function pushLocalDbToTurso(
       };
     }
 
+    // DDL (ADD COLUMN, etc.) does not appear in the row changelog — migrate any
+    // table whose local schema differs from Turso before delta or snapshot push.
+    const schemaDriftTables = await localRemoteSchemaDriftTables(
+      remote,
+      localDb,
+      tableNames,
+    );
+    const tablesNeedingSchema = [
+      ...new Set([...changed, ...schemaDriftTables]),
+    ];
+    if (tablesNeedingSchema.length > 0) {
+      await ensureRemoteSyncInfrastructure(remote);
+      for (const tableName of tablesNeedingSchema) {
+        await prepareRemoteTableForSync(remote, localDb, tableName);
+      }
+    }
+
     if (pendingEntries.length > 0) {
       await ensureRemoteSyncInfrastructure(remote);
       const touched = await pushDeltaToRemote(localDb, remote, pendingEntries);
@@ -806,11 +851,13 @@ export async function pushLocalDbToTurso(
     // Changelog empty but fingerprints show local changes (e.g. agent writes
     // before sync triggers were installed). Push all changed tables directly.
     await ensureRemoteSyncInfrastructure(remote);
+    const snapshotTables =
+      tablesNeedingSchema.length > 0 ? tablesNeedingSchema : changed;
     const syncedRemote = await syncTablesToRemote(
       remote,
-      changed.map((name) => readLocalTable(localDb, name)),
+      snapshotTables.map((name) => readLocalTable(localDb, name)),
     );
-    for (const tableName of changed) {
+    for (const tableName of snapshotTables) {
       const columns = readTableSchema(localDb, tableName);
       await ensureRemoteTableSyncTriggers(remote, columns, tableName);
     }

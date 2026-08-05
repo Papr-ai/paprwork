@@ -12,6 +12,8 @@ import {
   type AppDataSourceRole,
 } from "./appDataSources.js";
 import { resolveLinkedSourceDbPath } from "./portableDataSources.js";
+import { getDatabaseRegistryService } from "./DatabaseRegistryService.js";
+import { jobTursoDatabaseName } from "./tursoDatabaseNaming.js";
 
 export interface TursoLinkedSource {
   appId: string;
@@ -118,6 +120,72 @@ export function linkedSourceAlternateKeys(source: TursoLinkedSource): string[] {
     keys.push(source.dbId);
   }
   return keys;
+}
+
+export function resolveTursoDatabaseLabel(source: TursoLinkedSource): string {
+  const registry = getDatabaseRegistryService();
+  if (source.dbId) {
+    const record = registry.getById(source.dbId);
+    if (record) {
+      return record.tursoShortName;
+    }
+  }
+  const byPath = registry.getByPath(source.dbPath);
+  if (byPath) {
+    return byPath.tursoShortName;
+  }
+  if (source.jobId) {
+    return jobTursoDatabaseName(source.jobId);
+  }
+  throw new Error(`Could not resolve Turso database for source alias "${source.alias}".`);
+}
+
+export function resolveLinkedSourcesForTursoPush(
+  sources: readonly TursoLinkedSource[],
+  options: {
+    appId?: string;
+    jobId?: string;
+    alias?: string;
+    tursoDatabase?: string;
+  },
+): TursoLinkedSource[] {
+  const appId = options.appId?.trim();
+  const jobId = options.jobId?.trim();
+  const alias = options.alias?.trim();
+  const tursoDatabase = options.tursoDatabase?.trim();
+
+  if (tursoDatabase) {
+    const matches = sources.filter(
+      (source) => resolveTursoDatabaseLabel(source) === tursoDatabase,
+    );
+    if (matches.length === 0) {
+      throw new Error(`No linked source for Turso database "${tursoDatabase}".`);
+    }
+    return matches;
+  }
+
+  if (appId && alias) {
+    const match = sources.find(
+      (source) => source.appId === appId && source.alias === alias,
+    );
+    if (!match) {
+      throw new Error(
+        `No linked database alias "${alias}" for app ${appId}. Check data-sources.json.`,
+      );
+    }
+    return [match];
+  }
+
+  if (appId) {
+    return sources.filter((source) => source.appId === appId);
+  }
+
+  if (jobId) {
+    const match = findLinkedSourceForJob(sources, jobId);
+    return match ? [match] : [];
+  }
+
+  return [];
 }
 
 export function findLinkedSourceForJob(

@@ -4,10 +4,9 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { setTelemetryPaprUserId, trackEvent } from "../../lib/telemetry";
-import { AmplitudeEvents } from "../../../src/core/telemetry/events";
+import { setTelemetryPaprUserId } from "../../lib/telemetry";
+import { trackPaprLoginStep } from "../../lib/paprLoginTelemetry";
 import {
-  logPaprLoginStep,
   type PaprLoginMode,
   type PaprLoginStep,
 } from "../../../src/core/telemetry/paprLoginSteps";
@@ -26,9 +25,7 @@ function trackAuthWallStep(
   step: PaprLoginStep,
   properties?: Record<string, unknown>,
 ): void {
-  const payload = { step, source: "auth_wall" as const, ...properties };
-  logPaprLoginStep(step, payload);
-  trackEvent(AmplitudeEvents.PAPR_LOGIN_STEP, payload);
+  trackPaprLoginStep(step, { source: "auth_wall", ...properties });
 }
 
 async function identifyTelemetryAfterLogin(): Promise<void> {
@@ -233,6 +230,7 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
     return (
       <OrgNamespaceSetup
         request={setupRequest}
+        source="auth_wall"
         onComplete={() => {
           setSetupRequest(null);
           void handleAuthenticated();

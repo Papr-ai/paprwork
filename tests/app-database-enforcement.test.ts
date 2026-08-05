@@ -26,9 +26,34 @@ vi.mock("fs", async (importOriginal) => {
 });
 
 import {
+  appCodeUsesDatabaseApi,
   checkDbQueryWriteAntiPattern,
   checkMissingTablesOnPrimaryDb,
 } from "../src/gateway/services/appDatabaseEnforcement.js";
+
+describe("appCodeUsesDatabaseApi", () => {
+  it("detects fetch calls to /api/db/*", () => {
+    expect(
+      appCodeUsesDatabaseApi(
+        "await fetch('/api/db/query', { method: 'POST', body: '{}' });",
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores bare endpoint mentions in docs or table cells", () => {
+    expect(
+      appCodeUsesDatabaseApi(
+        `const rows = [["Renderer ↔ Gateway", "GET /api/db/query for reads"]];`,
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores endpoint mentions in line comments", () => {
+    expect(
+      appCodeUsesDatabaseApi("// See /api/db/query for SELECT-only reads"),
+    ).toBe(false);
+  });
+});
 
 describe("checkDbQueryWriteAntiPattern", () => {
   it("errors when UPDATE is sent to /api/db/query", () => {

@@ -3,7 +3,9 @@
  * Uses the same split-screen layout as AuthWall.
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import type { PaprLoginSource } from "../../../src/core/telemetry/paprLoginSteps";
+import { trackPaprLoginStep } from "../../lib/paprLoginTelemetry";
 import "./OrgNamespaceSetup.css";
 import "../Auth/AuthWall.css";
 
@@ -23,17 +25,33 @@ export interface OrgNamespaceSetupRequest {
 interface OrgNamespaceSetupProps {
   request: OrgNamespaceSetupRequest;
   onComplete: () => void;
+  source?: PaprLoginSource;
 }
 
 export function OrgNamespaceSetup({
   request,
   onComplete,
+  source = "unknown",
 }: OrgNamespaceSetupProps) {
   const [orgName, setOrgName] = useState(request.orgName);
   const [namespaceName, setNamespaceName] = useState(request.namespaceName);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const setupViewedTracked = useRef(false);
+  const submitStartedAt = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (setupViewedTracked.current) {
+      return;
+    }
+    setupViewedTracked.current = true;
+    trackPaprLoginStep("org_setup_viewed", {
+      source,
+      needs_org: request.needsOrg,
+      needs_namespace: request.needsNamespace,
+    });
+  }, [request.needsNamespace, request.needsOrg, source]);
 
   useEffect(() => {
     if (!isSubmitting) {
@@ -53,6 +71,12 @@ export function OrgNamespaceSetup({
 
     setIsSubmitting(true);
     setError(null);
+    submitStartedAt.current = Date.now();
+    trackPaprLoginStep("org_setup_submitted", {
+      source,
+      needs_org: request.needsOrg,
+      needs_namespace: request.needsNamespace,
+    });
 
     try {
       const result = await window.electronAPI.papr.completeOrgSetup({
@@ -61,15 +85,36 @@ export function OrgNamespaceSetup({
       });
 
       if (!result.success) {
-        setError(result.error || "Could not finish setup");
+        const message = result.error || "Could not finish setup";
+        trackPaprLoginStep("org_setup_failed", {
+          source,
+          needs_org: request.needsOrg,
+          needs_namespace: request.needsNamespace,
+          stage: "form",
+          error: message,
+          ...(submitStartedAt.current
+            ? { duration_ms: Date.now() - submitStartedAt.current }
+            : {}),
+        });
+        setError(message);
         return;
       }
 
       onComplete();
     } catch (submitError) {
-      setError(
-        submitError instanceof Error ? submitError.message : "Could not finish setup",
-      );
+      const message =
+        submitError instanceof Error ? submitError.message : "Could not finish setup";
+      trackPaprLoginStep("org_setup_failed", {
+        source,
+        needs_org: request.needsOrg,
+        needs_namespace: request.needsNamespace,
+        stage: "form",
+        error: message,
+        ...(submitStartedAt.current
+          ? { duration_ms: Date.now() - submitStartedAt.current }
+          : {}),
+      });
+      setError(message);
     } finally {
       setIsSubmitting(false);
     }

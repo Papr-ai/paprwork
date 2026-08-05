@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "fs/promises";
+import os from "os";
+import path from "path";
 
 const getPrimaryDataSource = vi.fn();
 const initialize = vi.fn();
@@ -28,6 +31,7 @@ import {
   databaseEnvKey,
   jobWriteDatabaseEnv,
   requireJobWriteTargets,
+  resolveExistingRegistryDbPath,
   resolveJobAppDatabase,
   resolveJobWriteTargets,
   validateWriteDbIdsExist,
@@ -160,5 +164,80 @@ describe("job write database resolution", () => {
       appDb: "/tmp/orders.db",
       appDbAlias: "orders",
     });
+  });
+
+  it("resolves stale desktop registry path from cloud sandbox workspace", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "papr-job-db-"));
+    const paprHome = path.join(
+      tempRoot,
+      "Papr",
+      "orgs",
+      "org1",
+      "namespaces",
+      "ns1",
+    );
+    const workspaceDb = path.join(
+      paprHome,
+      "data",
+      "databases",
+      "gtm-audit",
+      "data.db",
+    );
+    await fs.mkdir(path.dirname(workspaceDb), { recursive: true });
+    await fs.writeFile(workspaceDb, "sqlite");
+
+    const storedPath =
+      "/Users/me/Papr/orgs/org1/namespaces/ns1/data/databases/gtm-audit/data.db";
+
+    getById.mockReturnValue({
+      dbId: "db-gtm",
+      label: "GTM Audit",
+      localPath: storedPath,
+      status: "active",
+    });
+
+    const originalPaprHome = process.env.PAPR_HOME;
+    const originalGatewayMode = process.env.GATEWAY_MODE;
+    const originalHome = process.env.HOME;
+    process.env.HOME = tempRoot;
+    process.env.PAPR_HOME = paprHome;
+    process.env.GATEWAY_MODE = "cloud_agent";
+
+    try {
+      existsSync.mockImplementation((candidate: Parameters<typeof existsSync>[0]) => {
+        const resolved = path.resolve(String(candidate));
+        return resolved === workspaceDb;
+      });
+
+      const targets = await resolveJobWriteTargets({
+        writeDbIds: ["db-gtm"],
+        appIds: ["app-1"],
+      });
+
+      expect(targets).toEqual([
+        expect.objectContaining({
+          dbId: "db-gtm",
+          dbPath: workspaceDb,
+        }),
+      ]);
+      expect(resolveExistingRegistryDbPath(storedPath)).toBe(workspaceDb);
+    } finally {
+      if (originalPaprHome === undefined) {
+        delete process.env.PAPR_HOME;
+      } else {
+        process.env.PAPR_HOME = originalPaprHome;
+      }
+      if (originalGatewayMode === undefined) {
+        delete process.env.GATEWAY_MODE;
+      } else {
+        process.env.GATEWAY_MODE = originalGatewayMode;
+      }
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 });

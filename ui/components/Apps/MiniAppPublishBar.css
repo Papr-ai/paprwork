@@ -167,9 +167,21 @@
   color: #ff9500;
 }
 
-.mini-app-publish-bar__web-sync-dot--loading,
-.mini-app-publish-bar__web-sync-dot--neutral {
+.mini-app-publish-bar__web-sync-dot--loading {
   color: var(--text-tertiary);
+}
+
+.mini-app-publish-bar__web-sync-dot--disabled {
+  color: var(--text-tertiary);
+}
+
+.mini-app-publish-bar__web-sync-dot--disabled::before {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px currentColor;
+}
+
+.mini-app-publish-bar__web-sync-dot--error {
+  color: #ff3b30;
 }
 
 .mini-app-publish-bar__web-sync-dot--spinning::before {

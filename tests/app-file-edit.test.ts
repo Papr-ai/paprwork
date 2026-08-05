@@ -50,6 +50,48 @@ describe("exactStringReplace", () => {
     expect(result.occurrencesFound).toBe(2);
     expect(result.occurrenceReplaced).toBe(2);
   });
+
+  it("allows newString that contains oldString (expanded function body)", () => {
+    const content = `def main():\n    cur.execute("INSERT INTO t VALUES (?)", row)\n`;
+    const oldBlock = `def main():\n    cur.execute("INSERT INTO t VALUES (?)", row)\n`;
+    const newBlock = `def main():\n    COLS = ("id", "name")\n    cur.execute(f"INSERT INTO t ({','.join(COLS)}) VALUES (?)", row)\n`;
+    const result = applyExactStringReplacement({
+      content,
+      filename: "main.py",
+      oldString: oldBlock,
+      newString: newBlock,
+    });
+    expect(result.newContent).toBe(newBlock);
+    expect(result.occurrencesFound).toBe(1);
+  });
+
+  it("allows newString that embeds oldString prefix when replacing a single line", () => {
+    const content = `def main():\n    cur.execute("INSERT INTO t VALUES (?)", row)\n`;
+    const newMain = `def main():\n    COLS = ("id", "name")\n    cur.execute(f"INSERT INTO t ({','.join(COLS)}) VALUES (?)", row)\n`;
+    const result = applyExactStringReplacement({
+      content,
+      filename: "main.py",
+      oldString: "def main():",
+      newString: newMain,
+    });
+    expect(result.newContent).toBe(
+      `${newMain}\n    cur.execute("INSERT INTO t VALUES (?)", row)\n`,
+    );
+    expect(result.occurrencesFound).toBe(1);
+  });
+
+  it("allows newString that embeds oldString when replacing ambiguous match", () => {
+    const content = 'class="section-body"></div><div class="section-body"></div>';
+    const result = applyExactStringReplacement({
+      content,
+      filename: "render.js",
+      oldString: 'class="section-body"',
+      newString: 'class="section-body expanded"',
+      occurrence: 1,
+    });
+    expect(result.newContent).toContain('class="section-body expanded"');
+    expect(result.occurrencesFound).toBe(2);
+  });
 });
 
 describe("AppService.updateAppFile", () => {

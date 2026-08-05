@@ -7,15 +7,26 @@ import type Database from "better-sqlite3";
 import {
   quoteIdent,
   readLocalTable,
+  readRemoteTableSchema,
   readTableSchema,
   replaceRemoteTable,
   type TableColumn,
 } from "./tursoSyncBridgeCore.js";
 import {
+  migrateLocalTableSchema,
+  migrateRemoteTableSchema,
+} from "./tursoSchemaMigration.js";
+import { fullSchemasMatch, userSchemasMatch } from "./tursoTableFingerprint.js";
+import {
   buildPkWhereClause,
   ensureRemoteTableSyncTriggers,
   type SyncLogEntry,
 } from "./tursoSyncLog.js";
+import {
+  ensureLocalRowSyncColumns,
+  ensureRemoteRowSyncColumns,
+  shouldApplyIncomingRow,
+} from "./rowSyncColumns.js";
 
 export async function remoteNeedsBootstrap(remote: Client): Promise<boolean> {
   const result = await remote.execute(
@@ -70,14 +81,21 @@ function fetchLocalRowByPk(
 async function fetchRemoteRowByPk(
   remote: Client,
   tableName: string,
-  columns: TableColumn[],
+  localColumns: TableColumn[],
   rowPk: unknown[],
 ): Promise<unknown[] | null> {
-  const { sql: whereSql, usePk } = buildPkWhereClause(columns);
+  const remoteColumns = await readRemoteTableSchema(remote, tableName);
+  if (remoteColumns.length === 0) {
+    return null;
+  }
+  const pkColumns = remoteColumns.some((col) => col.primaryKey)
+    ? remoteColumns
+    : localColumns;
+  const { sql: whereSql, usePk } = buildPkWhereClause(pkColumns);
   if (!usePk) {
     return null;
   }
-  const colList = columns.map((col) => quoteIdent(col.name)).join(", ");
+  const colList = remoteColumns.map((col) => quoteIdent(col.name)).join(", ");
   const result = await remote.execute({
     sql: `SELECT ${colList} FROM ${quoteIdent(tableName)} WHERE ${whereSql} LIMIT 1`,
     args: rowPk as InArgs,
@@ -89,7 +107,7 @@ async function fetchRemoteRowByPk(
   if (!row) {
     return null;
   }
-  return columns.map((col) => row[col.name] ?? null);
+  return localColumns.map((col) => row[col.name] ?? null);
 }
 
 async function upsertRemoteRow(
@@ -97,7 +115,12 @@ async function upsertRemoteRow(
   tableName: string,
   columns: TableColumn[],
   row: unknown[],
+  rowPk: unknown[],
 ): Promise<void> {
+  const existing = await fetchRemoteRowByPk(remote, tableName, columns, rowPk);
+  if (!shouldApplyIncomingRow(columns, existing, row)) {
+    return;
+  }
   const placeholders = columns.map(() => "?").join(", ");
   const colNames = columns.map((col) => quoteIdent(col.name)).join(", ");
   await remote.execute({
@@ -113,7 +136,12 @@ function upsertLocalRow(
   tableName: string,
   columns: TableColumn[],
   row: unknown[],
+  rowPk: unknown[],
 ): void {
+  const existing = fetchLocalRowByPk(db, tableName, columns, rowPk);
+  if (!shouldApplyIncomingRow(columns, existing, row)) {
+    return;
+  }
   const placeholders = columns.map(() => "?").join(", ");
   const colNames = columns.map((col) => quoteIdent(col.name)).join(", ");
   db.prepare(
@@ -150,15 +178,18 @@ function deleteLocalRowByPk(
   db.prepare(`DELETE FROM ${quoteIdent(tableName)} WHERE ${whereSql}`).run(...rowPk);
 }
 
-async function ensureRemoteTableSchema(
+/** Align remote Turso schema with local before push/pull row sync (DDL + _papr_* columns). */
+export async function prepareRemoteTableForSync(
   remote: Client,
   localDb: Database.Database,
   tableName: string,
 ): Promise<TableColumn[]> {
-  const columns = readTableSchema(localDb, tableName);
+  ensureLocalRowSyncColumns(localDb, tableName);
+  let columns = readTableSchema(localDb, tableName);
   if (columns.length === 0) {
     return columns;
   }
+
   const exists = await remote.execute({
     sql: `SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1`,
     args: [tableName],
@@ -166,8 +197,75 @@ async function ensureRemoteTableSchema(
   if (exists.rows.length === 0) {
     const table = readLocalTable(localDb, tableName);
     await replaceRemoteTable(remote, table);
+    return readTableSchema(localDb, tableName);
   }
-  return columns;
+
+  await migrateRemoteTableSchema(remote, localDb, tableName, async () => {
+    const table = readLocalTable(localDb, tableName);
+    await replaceRemoteTable(remote, table);
+  });
+
+  await ensureRemoteRowSyncColumns(remote, tableName);
+
+  columns = readTableSchema(localDb, tableName);
+  await ensureRemoteTableSyncTriggers(remote, columns, tableName);
+  return readTableSchema(localDb, tableName);
+}
+
+/** Tables whose local schema differs from Turso (user + platform columns). */
+export async function localRemoteSchemaDriftTables(
+  remote: Client,
+  localDb: Database.Database,
+  tableNames: readonly string[],
+): Promise<string[]> {
+  const drifted: string[] = [];
+  for (const tableName of tableNames) {
+    const localColumns = readTableSchema(localDb, tableName);
+    if (localColumns.length === 0) {
+      continue;
+    }
+    const exists = await remote.execute({
+      sql: `SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1`,
+      args: [tableName],
+    });
+    if (exists.rows.length === 0) {
+      drifted.push(tableName);
+      continue;
+    }
+    const remoteColumns = await readRemoteTableSchema(remote, tableName);
+    if (!fullSchemasMatch(localColumns, remoteColumns)) {
+      drifted.push(tableName);
+    }
+  }
+  return drifted;
+}
+
+/** User-column drift only — for UI status (ignores platform _papr_* columns). */
+export async function localRemoteUserSchemaDriftTables(
+  remote: Client,
+  localDb: Database.Database,
+  tableNames: readonly string[],
+): Promise<string[]> {
+  const drifted: string[] = [];
+  for (const tableName of tableNames) {
+    const localColumns = readTableSchema(localDb, tableName);
+    if (localColumns.length === 0) {
+      continue;
+    }
+    const exists = await remote.execute({
+      sql: `SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1`,
+      args: [tableName],
+    });
+    if (exists.rows.length === 0) {
+      drifted.push(tableName);
+      continue;
+    }
+    const remoteColumns = await readRemoteTableSchema(remote, tableName);
+    if (!userSchemasMatch(localColumns, remoteColumns)) {
+      drifted.push(tableName);
+    }
+  }
+  return drifted;
 }
 
 /** Push changelog entries from local → Turso. Returns touched table names. */
@@ -182,11 +280,12 @@ export async function pushDeltaToRemote(
   for (const entry of entries) {
     let columns = schemaCache.get(entry.tableName);
     if (!columns) {
-      columns = await ensureRemoteTableSchema(remote, localDb, entry.tableName);
+      columns = await prepareRemoteTableForSync(
+        remote,
+        localDb,
+        entry.tableName,
+      );
       schemaCache.set(entry.tableName, columns);
-      if (columns.length > 0) {
-        await ensureRemoteTableSyncTriggers(remote, columns, entry.tableName);
-      }
     }
     if (columns.length === 0) {
       continue;
@@ -202,7 +301,13 @@ export async function pushDeltaToRemote(
     if (!row) {
       await deleteRemoteRowByPk(remote, entry.tableName, columns, entry.rowPk);
     } else {
-      await upsertRemoteRow(remote, entry.tableName, columns, row);
+      await upsertRemoteRow(
+        remote,
+        entry.tableName,
+        columns,
+        row,
+        entry.rowPk,
+      );
     }
     touched.add(entry.tableName);
   }
@@ -218,11 +323,16 @@ export async function applyRemoteSyncLogToLocal(
 ): Promise<string[]> {
   const touched = new Set<string>();
   const schemaCache = new Map<string, TableColumn[]>();
+  const rowSyncReady = new Set<string>();
 
   for (const entry of entries) {
     let columns = schemaCache.get(entry.tableName);
     if (!columns) {
       columns = readTableSchema(localDb, entry.tableName);
+      if (columns.length > 0) {
+        await migrateLocalTableSchema(localDb, remote, entry.tableName);
+        columns = readTableSchema(localDb, entry.tableName);
+      }
       if (columns.length === 0) {
         const remoteCols = await remote.execute(
           `PRAGMA table_info(${quoteIdent(entry.tableName)})`,
@@ -254,6 +364,12 @@ export async function applyRemoteSyncLogToLocal(
       continue;
     }
 
+    if (!rowSyncReady.has(entry.tableName)) {
+      columns = await prepareRemoteTableForSync(remote, localDb, entry.tableName);
+      schemaCache.set(entry.tableName, columns);
+      rowSyncReady.add(entry.tableName);
+    }
+
     if (entry.op === "delete") {
       deleteLocalRowByPk(localDb, entry.tableName, columns, entry.rowPk);
       touched.add(entry.tableName);
@@ -264,7 +380,7 @@ export async function applyRemoteSyncLogToLocal(
     if (!row) {
       deleteLocalRowByPk(localDb, entry.tableName, columns, entry.rowPk);
     } else {
-      upsertLocalRow(localDb, entry.tableName, columns, row);
+      upsertLocalRow(localDb, entry.tableName, columns, row, entry.rowPk);
     }
     touched.add(entry.tableName);
   }

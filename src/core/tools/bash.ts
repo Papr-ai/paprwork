@@ -33,10 +33,43 @@ import { getJobToolEnv } from "./context.js";
 function mergeBashEnv(inputEnv?: Record<string, string>): Record<string, string> {
   return { ...getJobToolEnv(), ...(inputEnv ?? {}) };
 }
+
+function jobDbSchemaDdlBlockResult(
+  command: string,
+  env: Record<string, string>,
+): ToolResult<BashOutput> | null {
+  const mergedEnv = mergeBashEnv(env);
+  const block = detectJobDbSchemaDdlBlock(command, {
+    appDb:
+      typeof mergedEnv.APP_DB === "string" ? mergedEnv.APP_DB : undefined,
+    jobDb:
+      typeof mergedEnv.JOB_DB === "string" ? mergedEnv.JOB_DB : undefined,
+    env: mergedEnv,
+  });
+  if (!block) {
+    return null;
+  }
+  return {
+    success: false,
+    error: block.message,
+    type: "validation_error",
+    data: {
+      stdout: "",
+      stderr: block.message,
+      exitCode: 1,
+      command,
+      duration: 0,
+      migrationPath: block.migrationPath,
+      suggestedSql: block.suggestedSql,
+      _schemaMigrationReminder: block.message,
+    },
+  };
+}
 import {
   isJobsIndexBashWriteBlocked,
   JOBS_INDEX_BASH_BLOCK_MESSAGE,
 } from "../utils/jobsIndexBashGuard.js";
+import { detectJobDbSchemaDdlBlock } from "../utils/jobDbSchemaGuard.js";
 import { isPaprAppsOrJobsSearchPath } from "../utils/paprAgentPaths.js";
 import { getShell, getShellCommand } from "../utils/platform.js";
 import { classifyChildProcessError } from "../utils/childProcessErrors.js";
@@ -134,6 +167,10 @@ export interface BashOutput {
   exitCode: number;
   command: string;
   duration: number;
+  /** Present when schema DDL is blocked on a synced database. */
+  migrationPath?: string;
+  suggestedSql?: string;
+  _schemaMigrationReminder?: string;
 }
 
 /**
@@ -443,6 +480,11 @@ export async function executeBashCommand(
         error: JOBS_INDEX_BASH_BLOCK_MESSAGE,
         type: "validation_error",
       };
+    }
+
+    const schemaDdlBlock = jobDbSchemaDdlBlockResult(command, env);
+    if (schemaDdlBlock) {
+      return schemaDdlBlock;
     }
     
     // Check if this is a grep command in PAPR folders
@@ -767,6 +809,11 @@ export async function executeBashCommandStreaming(
       error: JOBS_INDEX_BASH_BLOCK_MESSAGE,
       type: "validation_error",
     };
+  }
+
+  const schemaDdlBlock = jobDbSchemaDdlBlockResult(command, env);
+  if (schemaDdlBlock) {
+    return schemaDdlBlock;
   }
 
   // Get API keys for sanitization and substitution

@@ -410,8 +410,8 @@ export async function* createPiCodexStreamWithToolLoop(
   // Detect repetitive tool calls (possible infinite loop)
   const recentToolCalls: Array<{ name: string; args: string }> = [];
   const MAX_RECENT_TOOL_CALLS = 10;
-  const REPETITION_THRESHOLD = 5; // Same tool 5+ times in recent window → force stop
-  const REPETITION_ABORT_THRESHOLD = 8; // Hard abort (same tool name, any args)
+  const REPETITION_THRESHOLD = 5; // Same tool+args 5+ times in recent window → warn
+  const REPETITION_ABORT_THRESHOLD = 8; // Hard abort on identical tool+args loops only
 
   // Estimate initial context tokens
   const initialContextStr = JSON.stringify(context.messages);
@@ -735,23 +735,21 @@ export async function* createPiCodexStreamWithToolLoop(
         );
       }
 
-      const toolNameCounts = new Map<string, number>();
-      for (const tc of recentToolCalls) {
-        toolNameCounts.set(tc.name, (toolNameCounts.get(tc.name) || 0) + 1);
-      }
-      const maxSameToolName = Math.max(0, ...Array.from(toolNameCounts.values()));
-      const loopingTool = Array.from(toolNameCounts.entries()).find(
-        ([, count]) => count === maxSameToolName,
-      )?.[0];
-      if (loopingTool && maxSameToolName >= REPETITION_ABORT_THRESHOLD) {
+      // Hard stop only on identical tool+args loops (not same tool with different args).
+      // Agent jobs legitimately call bash many times with different commands.
+      if (maxRepetitions >= REPETITION_ABORT_THRESHOLD) {
+        const repetitiveCall = Array.from(toolCallCounts.entries()).find(
+          ([, count]) => count === maxRepetitions,
+        );
+        const toolName = repetitiveCall?.[0].split(":")[0] ?? "tool";
         console.error(
-          `[PiCodexToolLoop] 🛑 HARD STOP: ${loopingTool} called ${maxSameToolName} times in last ${MAX_RECENT_TOOL_CALLS} calls. Breaking tool loop.`,
+          `[PiCodexToolLoop] 🛑 HARD STOP: Identical ${toolName} call repeated ${maxRepetitions} times in last ${MAX_RECENT_TOOL_CALLS} calls. Breaking tool loop.`,
         );
         context.messages.push({
           role: "user",
           content:
-            `[SYSTEM: You called ${loopingTool} ${maxSameToolName} times without success. ` +
-            `STOP retrying this tool. Explain the validation error to the user and ask how to proceed, ` +
+            `[SYSTEM: You repeated the same ${toolName} call ${maxRepetitions} times without success. ` +
+            `STOP retrying this exact call. Explain the validation error to the user and ask how to proceed, ` +
             `or use a different approach (edit_file on an existing app, smaller files payload, fix schema fields).]`,
         } as never);
         break stepLoop;

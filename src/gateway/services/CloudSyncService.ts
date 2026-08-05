@@ -23,7 +23,7 @@ import chokidar, { type FSWatcher } from "chokidar";
 import { SyncStateManager, STATE_FILENAME, type QueueItem } from "./cloudSync/syncState.js";
 import { CLOUD_REPO_HEAD_RELATIVE_PATH } from "./cloudSync/cloudRepoHeadMarker.js";
 import { buildGitHubSyncItemsReport } from "./cloudSync/syncItemStatus.js";
-import { canReconcilePathAsSynced } from "./cloudSync/gitPathStatus.js";
+import { canReconcilePathAsSynced, loadGitTrackedSubdirPaths } from "./cloudSync/gitPathStatus.js";
 import { GitRunner, probeGitInstalled } from "./cloudSync/gitRunner.js";
 import {
   formatGitSyncSizeLimitMb,
@@ -117,6 +117,14 @@ interface SyncState {
   cloudPublishing: boolean;
 }
 
+export interface PushGitScopedResult {
+  pushedPaths: string[];
+  skippedPaths: string[];
+  scope: "workspace" | "app" | "job";
+  appId?: string;
+  jobId?: string;
+}
+
 export class CloudSyncService {
   private watcher: FSWatcher | null = null;
   private pushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -130,6 +138,8 @@ export class CloudSyncService {
   private gitOpChain: Promise<void> = Promise.resolve();
   private tokenCache: { token: string; expiresAt: Date; cloneUrl: string } | null = null;
   private repoIdentityChanged = false;
+  /** Prevents duplicate runBackgroundInit / heartbeat timers on repeated initialize(). */
+  private backgroundInitStarted = false;
   private syncQueue: QueueItem[] = [];
   private queueTotal = 0;
   private stateManager: SyncStateManager;
@@ -195,6 +205,7 @@ export class CloudSyncService {
       queuedPaths: this.syncQueue.map((item) => item.relativePath),
       hasItemChanged: (relativePath) => this.stateManager.hasItemChanged(relativePath),
       deadLetter: this.stateManager.data.deadLetter,
+      trackedInGit: loadGitTrackedSubdirPaths(this.paprDir),
     });
   }
 
@@ -344,6 +355,12 @@ export class CloudSyncService {
   // ── Lifecycle ─────────────────────────────────────────────────────
 
   async initialize(): Promise<void> {
+    if (this.backgroundInitStarted) {
+      console.log("[CloudSync] initialize() skipped — background init already started");
+      return;
+    }
+    this.backgroundInitStarted = true;
+
     console.log("[CloudSync] Initializing (background)...");
 
     if (!(await probeGitInstalled())) {
@@ -460,6 +477,21 @@ export class CloudSyncService {
   }
 
   async pushNow(): Promise<void> {
+    await this.pushGitNow();
+    const bridge = (await import("./TursoSyncBridge.js")).getTursoSyncBridge();
+    if (bridge) {
+      await bridge.pushDirtyLinkedSources();
+    }
+  }
+
+  /**
+   * Push local folders to GitHub only (no Turso).
+   * Scope: workspace (default), one app (+ dependent jobs), or one job folder.
+   */
+  async pushGitNow(options?: {
+    appId?: string;
+    jobId?: string;
+  }): Promise<PushGitScopedResult> {
     return this.runExclusiveGitOp(async () => {
       if (this.pushTimer) {
         clearTimeout(this.pushTimer);
@@ -467,9 +499,106 @@ export class CloudSyncService {
       }
       await this.ensureRemoteCaughtUp();
 
+      const appId = options?.appId?.trim();
+      const jobId = options?.jobId?.trim();
+
+      if (appId) {
+        const { resolveAppCloudSyncRelativePaths } = await import(
+          "./cloudSync/resolveAppDependentJobs.js"
+        );
+        let relativePaths = resolveAppCloudSyncRelativePaths(this.paprDir, appId);
+        if (jobId) {
+          const jobPath = path.join("Jobs", jobId);
+          const appPath = path.join("apps", appId);
+          relativePaths = relativePaths.filter(
+            (relativePath) =>
+              relativePath === appPath ||
+              relativePath === jobPath ||
+              relativePath === path.join("data", "jobs.json"),
+          );
+        }
+
+        this.removePathsFromQueue(relativePaths);
+        const pushedPaths: string[] = [];
+        const skippedPaths: string[] = [];
+
+        for (const relativePath of relativePaths) {
+          const fullPath = path.join(this.paprDir, relativePath);
+          if (!fs.existsSync(fullPath)) {
+            this.stateManager.markSynced(relativePath);
+            skippedPaths.push(relativePath);
+            continue;
+          }
+          if (!this.stateManager.hasItemChanged(relativePath)) {
+            this.stateManager.markSynced(relativePath);
+            skippedPaths.push(relativePath);
+            continue;
+          }
+          await this.commitAndPushPaths(
+            [relativePath],
+            `app sync: ${appId}${jobId ? ` job ${jobId}` : ""} (${relativePath})`,
+          );
+          pushedPaths.push(relativePath);
+        }
+
+        await this.reconcilePathsIfGitClean(relativePaths);
+        this.lastFinalizedAppIds = [appId];
+        this.stateManager.save();
+        await this.runPostSyncHooks();
+
+        return {
+          pushedPaths,
+          skippedPaths,
+          scope: jobId ? "job" : "app",
+          appId,
+          ...(jobId ? { jobId } : {}),
+        };
+      }
+
+      if (jobId) {
+        const relativePaths = [
+          path.join("Jobs", jobId),
+          path.join("data", "jobs.json"),
+        ];
+        this.removePathsFromQueue(relativePaths);
+        const pushedPaths: string[] = [];
+        const skippedPaths: string[] = [];
+
+        for (const relativePath of relativePaths) {
+          const fullPath = path.join(this.paprDir, relativePath);
+          if (!fs.existsSync(fullPath)) {
+            this.stateManager.markSynced(relativePath);
+            skippedPaths.push(relativePath);
+            continue;
+          }
+          if (!this.stateManager.hasItemChanged(relativePath)) {
+            this.stateManager.markSynced(relativePath);
+            skippedPaths.push(relativePath);
+            continue;
+          }
+          await this.commitAndPushPaths(
+            [relativePath],
+            `job sync: ${jobId} (${relativePath})`,
+          );
+          pushedPaths.push(relativePath);
+        }
+
+        await this.reconcilePathsIfGitClean(relativePaths);
+        this.stateManager.save();
+
+        return {
+          pushedPaths,
+          skippedPaths,
+          scope: "job",
+          jobId,
+        };
+      }
+
       const instantPaths = this.getChangedInstantPaths();
+      const pushedPaths: string[] = [];
       if (instantPaths.length > 0) {
         await this.commitAndPushPaths(instantPaths, "manual push: workspace and data");
+        pushedPaths.push(...instantPaths);
       }
 
       await this.enqueueSubDirs();
@@ -484,60 +613,37 @@ export class CloudSyncService {
           continue;
         }
         await this.commitAndPushPaths([item.relativePath], `cloud sync: ${item.relativePath}`);
+        pushedPaths.push(item.relativePath);
       }
       this.stateManager.save();
-
       await this.finishQueueProcessing();
-      const bridge = (await import("./TursoSyncBridge.js")).getTursoSyncBridge();
-      if (bridge) {
-        await bridge.pushDirtyLinkedSources();
-      }
+
+      return {
+        pushedPaths,
+        skippedPaths: [],
+        scope: "workspace",
+      };
     });
   }
 
   /** Push one mini-app and its linked/dependent jobs immediately (skips global queue). */
   async pushAppNow(appId: string): Promise<void> {
-    return this.runExclusiveGitOp(async () => {
-      const { resolveAppCloudSyncRelativePaths } = await import(
-        "./cloudSync/resolveAppDependentJobs.js"
-      );
-      const relativePaths = resolveAppCloudSyncRelativePaths(this.paprDir, appId);
-
-      if (this.pushTimer) {
-        clearTimeout(this.pushTimer);
-        this.pushTimer = null;
-      }
-
-      this.removePathsFromQueue(relativePaths);
-      await this.ensureRemoteCaughtUp();
-
-      const changedPaths = relativePaths.filter((relativePath) => {
-        const fullPath = path.join(this.paprDir, relativePath);
-        if (!fs.existsSync(fullPath)) {
-          this.stateManager.markSynced(relativePath);
-          return false;
-        }
-        return this.stateManager.hasItemChanged(relativePath);
-      });
-
-      if (changedPaths.length > 0) {
-        await this.commitAndPushPaths(
-          changedPaths,
-          `app sync: ${appId} (${changedPaths.length} folder(s))`,
+    await this.pushGitNow({ appId });
+    const bridge = (await import("./TursoSyncBridge.js")).getTursoSyncBridge();
+    if (bridge) {
+      const summary = await bridge.pushAppLinkedSources(appId);
+      if (summary.failed > 0) {
+        const errors = summary.results
+          .filter((result) => result.error)
+          .map((result) => result.error)
+          .join("; ");
+        throw new Error(
+          errors.length > 0
+            ? `Database sync to Turso failed: ${errors}`
+            : "Database sync to Turso failed",
         );
       }
-
-      await this.reconcilePathsIfGitClean(relativePaths);
-
-      this.lastFinalizedAppIds = [appId];
-      this.stateManager.save();
-      await this.runPostSyncHooks();
-
-      const bridge = (await import("./TursoSyncBridge.js")).getTursoSyncBridge();
-      if (bridge) {
-        await bridge.pushDirtyLinkedSources();
-      }
-    });
+    }
   }
 
   // ── Token management ──────────────────────────────────────────────
@@ -740,13 +846,27 @@ export class CloudSyncService {
 
   // ── Phase 2: queued sub-dirs ──────────────────────────────────────
 
-  private async isGitCleanUnderQueuedRoots(): Promise<boolean> {
-    try {
-      const porcelain = await this.git(["status", "--porcelain", "--", "apps/", "Jobs/"]);
-      return porcelain.trim().length === 0;
-    } catch {
-      return false;
+  private async reconcileAllGitCleanSubdirs(): Promise<number> {
+    let reconciled = 0;
+    for (const parent of QUEUED_DIRS) {
+      const parentPath = path.join(this.paprDir, parent);
+      if (!fs.existsSync(parentPath)) {
+        continue;
+      }
+      for (const entry of fs.readdirSync(parentPath, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name.startsWith(".")) {
+          continue;
+        }
+        const relativePath = path.join(parent, entry.name);
+        reconciled += (await this.reconcilePathsIfGitClean([relativePath])).length;
+      }
     }
+    if (reconciled > 0) {
+      console.log(
+        `[CloudSync] Reconciled ${reconciled} git-clean app/job folder(s) after sync state reset`,
+      );
+    }
+    return reconciled;
   }
 
   private async enqueueSubDirs(): Promise<void> {
@@ -754,30 +874,23 @@ export class CloudSyncService {
     let deadLetterSkipped = 0;
     let reconciled = 0;
 
-    const hasPriorFullSync = Boolean(this.stateManager.data.lastFullSyncAt);
-    const gitClean =
-      hasPriorFullSync && Object.keys(this.stateManager.data.syncedItems).length > 0
-        ? await this.isGitCleanUnderQueuedRoots()
-        : false;
-
-    if (gitClean) {
-      const knownPaths = Object.keys(this.stateManager.data.syncedItems).filter(
-        (relativePath) =>
-          relativePath.startsWith("apps/") || relativePath.startsWith("Jobs/"),
-      );
-      reconciled = (await this.reconcilePathsIfGitClean(knownPaths)).length;
-    }
-
     for (const parent of QUEUED_DIRS) {
       const parentPath = path.join(this.paprDir, parent);
       if (!fs.existsSync(parentPath)) continue;
 
       for (const entry of fs.readdirSync(parentPath, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name.startsWith(".")) {
+          continue;
+        }
         const relativePath = path.join(parent, entry.name);
         if (this.stateManager.isDeadLetter(relativePath)) {
           deadLetterSkipped++;
           continue;
         }
+
+        // Per-path reconcile — one dirty app must not block healing others.
+        reconciled += (await this.reconcilePathsIfGitClean([relativePath])).length;
+
         if (!this.stateManager.hasItemChanged(relativePath)) {
           skipped++;
           continue;
@@ -791,9 +904,6 @@ export class CloudSyncService {
       const parts = [`queued ${this.queueTotal} changed`, `skipped ${skipped} unchanged`];
       if (deadLetterSkipped > 0) {
         parts.push(`${deadLetterSkipped} failed (dead-letter)`);
-      }
-      if (gitClean && this.queueTotal === 0) {
-        parts.unshift("git clean");
       }
       if (reconciled > 0) {
         parts.push(`reconciled ${reconciled}`);
@@ -955,6 +1065,13 @@ export class CloudSyncService {
 
   /** Tell memory server the desktop gateway is awake (cloud scheduler defers). */
   private startDesktopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      console.warn(
+        "[CloudSync] Desktop heartbeat already running — skipping duplicate timer",
+      );
+      return;
+    }
+
     const ping = async (): Promise<void> => {
       try {
         const res = await cloudApiFetch("/v1/cloud/runtime/heartbeat", {
@@ -1106,6 +1223,7 @@ export class CloudSyncService {
     await this.git(["reset", "--mixed", "origin/main"]);
     this.stateManager.invalidateAllSyncedItems();
     this.stateManager.save();
+    await this.reconcileAllGitCleanSubdirs();
   }
 
   private pathMatchesPrefix(filePath: string, prefix: string): boolean {
@@ -1457,33 +1575,38 @@ export class CloudSyncService {
 
     try {
       const output = await this.git(["pull", "--rebase=false", "--ff-only", "origin", "main"]);
-      console.log("[CloudSync] Pull:", output.split("\n")[0]);
+      const pullSummary = output.split("\n")[0] ?? "";
+      console.log("[CloudSync] Pull:", pullSummary);
       this.state.status = "idle";
       this.state.lastSyncAt = new Date().toISOString();
       this.state.lastError = null;
       this.consecutivePullFailures = 0;
       this.pullBackoffUntilMs = 0;
 
-      try {
-        const { getAppService } = await import("./AppService.js");
-        await getAppService().enforceAppOwnershipIndex();
-      } catch (ownershipErr) {
-        console.warn(
-          "[CloudSync] Post-pull app ownership enforcement failed:",
-          (ownershipErr as Error).message.slice(0, 120),
-        );
-      }
+      const pulledChanges = !pullSummary.includes("Already up to date");
 
-      try {
-        const { finalizePortableCloudAppResources } = await import(
-          "./cloudAppLinkedResourcesInstall.js"
-        );
-        await finalizePortableCloudAppResources();
-      } catch (repairErr) {
-        console.warn(
-          "[CloudSync] Portable resource repair after pull failed:",
-          (repairErr as Error).message.slice(0, 120),
-        );
+      if (pulledChanges) {
+        try {
+          const { getAppService } = await import("./AppService.js");
+          await getAppService().enforceAppOwnershipIndex();
+        } catch (ownershipErr) {
+          console.warn(
+            "[CloudSync] Post-pull app ownership enforcement failed:",
+            (ownershipErr as Error).message.slice(0, 120),
+          );
+        }
+
+        try {
+          const { finalizePortableCloudAppResources } = await import(
+            "./cloudAppLinkedResourcesInstall.js"
+          );
+          await finalizePortableCloudAppResources();
+        } catch (repairErr) {
+          console.warn(
+            "[CloudSync] Portable resource repair after pull failed:",
+            (repairErr as Error).message.slice(0, 120),
+          );
+        }
       }
 
       await this.pullTursoLinkedSourcesAfterGitPull();
@@ -1656,6 +1779,12 @@ export function initializeCloudSyncService(opts?: {
   pushDebounceMs?: number;
   queueIntervalMs?: number;
 }): CloudSyncService {
+  if (instance) {
+    console.warn(
+      "[CloudSync] initializeCloudSyncService called while instance exists — stopping orphaned timers",
+    );
+    void instance.stop();
+  }
   instance = new CloudSyncService(opts);
   return instance;
 }

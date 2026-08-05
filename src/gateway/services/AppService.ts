@@ -6,6 +6,7 @@
 import { promises as fs } from "fs";
 import chokidar, { type FSWatcher } from "chokidar";
 import path from "path";
+import { shouldIgnoreAppWatchPath } from "./appWatchIgnore.js";
 import os from "os";
 import { v4 as uuidv4 } from "uuid";
 import { fileURLToPath } from "url";
@@ -2213,14 +2214,7 @@ export class AppService {
       const watcher = chokidar.watch(appPath, {
         persistent: true,
         ignoreInitial: true,
-        ignored: [
-          "**/.versions/**",
-          "data-sources.json",
-          "**/data-sources.json",
-          "**/dist/**",
-          "**/.dist-staging/**",
-          "**/.*", // Hidden files
-        ],
+        ignored: shouldIgnoreAppWatchPath,
         awaitWriteFinish: {
           stabilityThreshold: 200, // Wait 200ms after last change
           pollInterval: 100,

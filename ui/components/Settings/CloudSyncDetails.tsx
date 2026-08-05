@@ -45,6 +45,7 @@ interface TursoSourceSyncItem {
   status: "synced" | "pending" | "empty" | "unavailable" | "quarantined";
   localTableCount: number;
   remoteTableCount: number;
+  schemaDrift?: boolean;
   quarantinedAt?: string | null;
   quarantineReason?: string | null;
 }

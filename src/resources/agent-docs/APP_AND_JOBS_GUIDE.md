@@ -127,6 +127,27 @@ create_job({
 
 For **per-user isolation**: `create_database({ isolation: "per-user" })` + `attach_database`.
 
+### Schema migrations (registry DBs)
+
+Registry DBs sync to Turso. Schema changes **must** use migration files — bash blocks raw `ALTER TABLE` on synced paths.
+
+```javascript
+write_file({
+  path: "$PAPR_HOME/data/databases/billing/migrations/0001_init.sql",
+  content: `
+CREATE TABLE invoices (
+  id INTEGER PRIMARY KEY,
+  amount REAL NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open'
+);`.trim(),
+})
+// Apply: run_job({ writeDbIds: [dbId] }) or app Upload now / sync
+```
+
+**Required:** Every synced table needs a **PRIMARY KEY** (`INTEGER PRIMARY KEY`, `TEXT PRIMARY KEY`, or composite PK). Without it, delta sync and row versioning are disabled.
+
+**Platform-managed (auto-added, do not create):** `_papr_created_at`, `_papr_updated_at`, `_papr_row_version` — used for conflict resolution across devices.
+
 ### Cloud Turso naming (paprwork-v2 ↔ memory server)
 
 | Linked source | Turso short name | With `isolation: "per-user"` |

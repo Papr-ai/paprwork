@@ -608,6 +608,7 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
       <div className="org-namespace-setup-overlay">
         <OrgNamespaceSetup
           request={setupRequest}
+          source="settings"
           onComplete={() => {
             setSetupRequest(null);
             setIsLoading(false);

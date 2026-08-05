@@ -196,6 +196,166 @@ describe("copyAppToNamespace", () => {
     );
   });
 
+  test("copies shared registry database files and remaps registry paths", async () => {
+    const appId = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+    const dbId = "db-7c4c3837";
+    const slug = "gtm-metrics";
+    const app: MiniApp = {
+      id: appId,
+      title: "Registry App",
+      description: "Uses shared DB",
+      type: "app",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    const sourceHome = await seedNamespace("org-d", "ns-reg-source", [app], {
+      [appId]: {
+        html: "<h1>Registry</h1>",
+        dataSources: serializeDataSourcesFile({
+          sources: [
+            {
+              id: `${dbId}:main`,
+              type: "sqlite",
+              dbId,
+              alias: "main",
+              dbPath: "",
+              tables: [],
+              linkedAt: "2026-01-01T00:00:00.000Z",
+            },
+          ],
+        }),
+      },
+    });
+
+    const sourceDbDir = path.join(sourceHome, "data", "databases", slug);
+    await fs.mkdir(sourceDbDir, { recursive: true });
+    await fs.writeFile(path.join(sourceDbDir, "data.db"), "sqlite-registry", "utf8");
+    await fs.writeFile(
+      path.join(sourceHome, "data", "databases.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          databases: {
+            [dbId]: {
+              dbId,
+              localPath: path.join(sourceDbDir, "data.db"),
+              tursoShortName: "d-7c4c3837",
+              isolation: "shared",
+              status: "active",
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    await seedNamespace("org-d", "ns-reg-target", [], {}, []);
+
+    const activePointer = await ensureWorkspaceLayout({
+      organizationId: "org-d",
+      namespaceId: "ns-reg-source",
+    });
+    await writeActiveWorkspacePointer(activePointer);
+
+    const result = await copyAppToNamespace({
+      appId,
+      targetOrganizationId: "org-d",
+      targetNamespaceId: "ns-reg-target",
+      sourcePaprHome: sourceHome,
+    });
+
+    expect(result.copiedRegistryDbSlugs).toEqual([slug]);
+
+    const targetHome = path.join(
+      testHomeDir,
+      "Papr",
+      "orgs",
+      "org-d",
+      "namespaces",
+      "ns-reg-target",
+    );
+    await fs.access(path.join(targetHome, "data", "databases", slug, "data.db"));
+
+    const dataSourcesRaw = await fs.readFile(
+      path.join(targetHome, "apps", appId, "data-sources.json"),
+      "utf8",
+    );
+    const dataSources = parseDataSourcesFile(dataSourcesRaw);
+    expect(dataSources.sources[0]?.dbPath).toBe(
+      path.join(targetHome, "data", "databases", slug, "data.db"),
+    );
+  });
+
+  test("repairs hardcoded Papr paths in copied job commands", async () => {
+    const appId = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+    const jobId = "22222222-3333-4444-5555-666666666666";
+    const app: MiniApp = {
+      id: appId,
+      title: "Path Repair App",
+      description: "",
+      type: "app",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const hardcodedCommand =
+      `python3 ~/Papr/orgs/org-e/namespaces/ns-path-source/Jobs/${jobId}/code/run.py`;
+
+    const sourceHome = await seedNamespace(
+      "org-e",
+      "ns-path-source",
+      [app],
+      { [appId]: { html: "<h1>Paths</h1>" } },
+      [
+        {
+          id: jobId,
+          name: "Runner",
+          type: "python",
+          status: "completed",
+          appIds: [appId],
+          command: hardcodedCommand,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      { [jobId]: { hasDb: false } },
+    );
+
+    await seedNamespace("org-e", "ns-path-target", [], {}, []);
+
+    const activePointer = await ensureWorkspaceLayout({
+      organizationId: "org-e",
+      namespaceId: "ns-path-source",
+    });
+    await writeActiveWorkspacePointer(activePointer);
+
+    await copyAppToNamespace({
+      appId,
+      targetOrganizationId: "org-e",
+      targetNamespaceId: "ns-path-target",
+      sourcePaprHome: sourceHome,
+    });
+
+    const targetHome = path.join(
+      testHomeDir,
+      "Papr",
+      "orgs",
+      "org-e",
+      "namespaces",
+      "ns-path-target",
+    );
+    const targetJobs = JSON.parse(
+      await fs.readFile(path.join(targetHome, "data", "jobs.json"), "utf8"),
+    ) as JobRecord[];
+    const command = targetJobs.find((job) => job.id === jobId)?.command ?? "";
+    expect(command).not.toContain("ns-path-source");
+    expect(command).toMatch(/\$JOB_DIR|\$PAPR_HOME/);
+  });
+
   test("suffixes title when target namespace already has same name", async () => {
     const movingId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
     const existingId = "cccccccc-cccc-cccc-cccc-cccccccccccc";

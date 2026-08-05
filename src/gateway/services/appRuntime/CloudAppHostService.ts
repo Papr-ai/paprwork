@@ -247,6 +247,10 @@ export class CloudAppHostService {
       void this.handleInternalAppRevisionUpdated(req, res),
     );
 
+    app.post("/internal/db-changed", (req, res) =>
+      void this.handleInternalDbChanged(req, res),
+    );
+
     app.get("/api/db/schema", (req, res) => this.handleSchema(req, res));
     app.post("/api/db/query", (req, res) => this.handleQuery(req, res));
     app.post("/api/db/batch", (req, res) => this.handleBatchQuery(req, res));
@@ -1208,10 +1212,7 @@ export class CloudAppHostService {
     req: Request,
     res: Response,
   ): Promise<void> {
-    const configuredKey = process.env.PAPR_CLOUD_APP_HOST_KEY?.trim();
-    const providedKey = String(req.headers["x-cloud-app-host-key"] ?? "").trim();
-    if (!configuredKey || providedKey !== configuredKey) {
-      res.status(401).json({ error: "Unauthorized" });
+    if (!this.verifyCloudAppHostInternalKey(req, res)) {
       return;
     }
 
@@ -1235,6 +1236,41 @@ export class CloudAppHostService {
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
+  }
+
+  private verifyCloudAppHostInternalKey(req: Request, res: Response): boolean {
+    const configuredKey = process.env.PAPR_CLOUD_APP_HOST_KEY?.trim();
+    const providedKey = String(req.headers["x-cloud-app-host-key"] ?? "").trim();
+    if (!configuredKey || providedKey !== configuredKey) {
+      res.status(401).json({ error: "Unauthorized" });
+      return false;
+    }
+    return true;
+  }
+
+  private handleInternalDbChanged(req: Request, res: Response): void {
+    if (!this.verifyCloudAppHostInternalKey(req, res)) {
+      return;
+    }
+
+    const body = req.body as {
+      jobId?: string;
+      dbId?: string;
+      tables?: string[];
+    };
+    const jobId = body.jobId?.trim();
+    const dbId = body.dbId?.trim();
+    if (!jobId && !dbId) {
+      res.status(400).json({ error: "jobId or dbId is required" });
+      return;
+    }
+
+    publishDbChanged({
+      ...(jobId ? { jobId } : {}),
+      ...(dbId ? { dbId } : {}),
+      tables: Array.isArray(body.tables) ? body.tables : [],
+    });
+    res.json({ ok: true });
   }
 
   private async handleAppRevision(req: Request, res: Response): Promise<void> {

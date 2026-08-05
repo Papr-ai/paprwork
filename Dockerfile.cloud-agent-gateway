@@ -46,7 +46,7 @@ RUN node -e "\
   fs.writeFileSync('package-lock.json', JSON.stringify(lock,null,2));\
 " && npm install --omit=dev --no-audit --no-fund \
   && apt-get update \
-  && apt-get install -y --no-install-recommends git ca-certificates python3 python3-pip sqlite3 \
+  && apt-get install -y --no-install-recommends git ca-certificates curl python3 python3-pip sqlite3 \
   && npx playwright install-deps chromium \
   && ./node_modules/.bin/playwright install chromium \
   && rm -rf /var/lib/apt/lists/*

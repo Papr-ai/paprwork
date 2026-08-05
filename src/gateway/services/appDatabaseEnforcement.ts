@@ -11,14 +11,31 @@ import {
 } from "./appDataSources.js";
 import type { ValidationIssue } from "./AppService.js";
 
-const DB_API_PATTERNS: readonly RegExp[] = [
-  /\/api\/db\/query\b/i,
-  /\/api\/db\/write\b/i,
-  /\/api\/db\/exec\b/i,
-  /\/api\/db\/schema\b/i,
+/** Actual HTTP/import usage — not bare mentions in docs, table cells, or comments. */
+const DB_API_USAGE_PATTERNS: readonly RegExp[] = [
+  /fetch\s*\(\s*[`'"]\/api\/db\/(query|write|exec|schema)/i,
+  /fetch\s*\([^)]{0,400}?\/api\/db\/(query|write|exec|schema)/i,
   /from\s+['"]\.\/db['"]/i,
   /from\s+['"]\.\/db\.ts['"]/i,
 ];
+
+function stripLineComments(content: string): string {
+  return content
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      if (
+        trimmed.startsWith("//") ||
+        trimmed.startsWith("*") ||
+        trimmed.startsWith("/*")
+      ) {
+        return "";
+      }
+      const slash = line.indexOf("//");
+      return slash >= 0 ? line.slice(0, slash) : line;
+    })
+    .join("\n");
+}
 
 const MUTATION_KEYWORDS =
   /\b(INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE\s+|DELETE\s+FROM|REPLACE\s+INTO|UPSERT\s+INTO)\b/i;
@@ -31,7 +48,8 @@ const SQL_TABLE_REFERENCE =
   /\b(?:FROM|INTO|UPDATE|JOIN)\s+["'`]?([a-z_][a-z0-9_]*)["'`]?/gi;
 
 export function appCodeUsesDatabaseApi(content: string): boolean {
-  return DB_API_PATTERNS.some((pattern) => pattern.test(content));
+  const code = stripLineComments(content);
+  return DB_API_USAGE_PATTERNS.some((pattern) => pattern.test(code));
 }
 
 export function appFilesUseDatabaseApi(

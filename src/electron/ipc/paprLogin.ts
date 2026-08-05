@@ -3105,6 +3105,14 @@ export function initializePaprLoginIPC(
 
       pendingOrgSetup = null;
       loginCompletionInFlight = true;
+      const setupStartedAt = Date.now();
+
+      trackLoginStep("org_setup_provisioning_started", {
+        needs_org: pending.needsOrg,
+        needs_namespace: pending.needsNamespace,
+        source: pending.completedSource,
+        mode: pending.completedMode,
+      });
 
       try {
         const orgName = sanitizeProvisioningName(
@@ -3133,10 +3141,28 @@ export function initializePaprLoginIPC(
           settingsStorage,
         );
 
+        trackLoginStep("org_setup_completed", {
+          needs_org: pending.needsOrg,
+          needs_namespace: pending.needsNamespace,
+          source: pending.completedSource,
+          mode: pending.completedMode,
+          duration_ms: Date.now() - setupStartedAt,
+          organization_id: settingsStorage.getPaprProfile()?.organizationId,
+        });
+
         return result;
       } catch (error) {
         pendingOrgSetup = pending;
         const message = error instanceof Error ? error.message : "Setup failed";
+        trackLoginStep("org_setup_failed", {
+          needs_org: pending.needsOrg,
+          needs_namespace: pending.needsNamespace,
+          source: pending.completedSource,
+          mode: pending.completedMode,
+          stage: "provisioning",
+          error: message,
+          duration_ms: Date.now() - setupStartedAt,
+        });
         notifyLoginError(undefined, message);
         return { success: false, error: message };
       } finally {

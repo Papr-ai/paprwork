@@ -121,6 +121,29 @@ describe("tursoSyncLog", () => {
   );
 
   it.skipIf(!canUseBetterSqlite)(
+    "update logs one changelog entry (metadata bump excluded)",
+    () => {
+      const db = new Database(":memory:");
+      db.exec(`
+        CREATE TABLE records (
+          id INTEGER PRIMARY KEY,
+          label TEXT NOT NULL
+        );
+      `);
+      ensureLocalTableSyncTriggers(db, "records");
+      db.prepare("INSERT INTO records (label) VALUES (?)").run("alpha");
+      const afterInsert = readSyncLogSince(db, 0);
+      expect(afterInsert).toHaveLength(1);
+
+      db.prepare("UPDATE records SET label = ? WHERE id = 1").run("beta");
+      const afterUpdate = readSyncLogSince(db, afterInsert[0]!.id);
+      expect(afterUpdate).toHaveLength(1);
+      expect(afterUpdate[0]?.op).toBe("update");
+      db.close();
+    },
+  );
+
+  it.skipIf(!canUseBetterSqlite)(
     "skips trigger install for tables without primary key",
     () => {
       const db = new Database(":memory:");

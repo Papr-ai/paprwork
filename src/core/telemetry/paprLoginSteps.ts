@@ -18,6 +18,11 @@ export type PaprLoginStep =
   | "token_exchanged"
   | "user_claims_decoded"
   | "org_setup_required"
+  | "org_setup_viewed"
+  | "org_setup_submitted"
+  | "org_setup_provisioning_started"
+  | "org_setup_completed"
+  | "org_setup_failed"
   | "api_key_provisioned"
   | "credentials_stored"
   | "gateway_switch_attempted"
@@ -42,6 +47,9 @@ export interface PaprLoginStepProperties {
   has_code?: boolean;
   has_state?: boolean;
   gateway_switch_success?: boolean;
+  needs_org?: boolean;
+  needs_namespace?: boolean;
+  stage?: "form" | "provisioning";
 }
 
 export function logPaprLoginStep(

@@ -33,7 +33,7 @@ export interface AppCloudJobStatus {
 export interface AppCloudDatabaseStatus {
   alias: string;
   jobId: string;
-  status: "synced" | "pending" | "empty" | "unavailable";
+  status: "synced" | "pending" | "empty" | "unavailable" | "quarantined";
   phase: AppCloudItemPhase;
   detail: string;
 }
@@ -110,18 +110,27 @@ function databaseDetail(item: {
   status: AppCloudDatabaseStatus["status"];
   localTableCount: number;
   remoteTableCount: number;
+  schemaDrift?: boolean;
+  quarantineReason?: string | null;
 }): string {
   switch (item.status) {
     case "synced":
       return `${item.remoteTableCount} table(s) on Turso`;
     case "pending":
+      if (item.schemaDrift) {
+        return "Local schema changed — click Upload now to update Turso";
+      }
       return item.remoteTableCount > 0
-        ? "Local DB changes not on Turso yet"
-        : `${item.localTableCount} local table(s) not on Turso yet`;
+        ? "Local changes waiting — click Upload now to push to Turso"
+        : `${item.localTableCount} local table(s) not on Turso yet — click Upload now`;
     case "empty":
       return "No data tables yet";
     case "unavailable":
-      return "Database unavailable";
+      return "Database file missing or unreadable";
+    case "quarantined":
+      return item.quarantineReason
+        ? `Sync paused: ${item.quarantineReason.slice(0, 100)}`
+        : "Sync paused — repair in Settings → Cloud Sync";
     default:
       return item.status;
   }
@@ -136,6 +145,7 @@ function databasePhase(
       return "synced";
     case "pending":
       return "changed";
+    case "quarantined":
     case "unavailable":
       return "changed";
     default:
@@ -171,14 +181,20 @@ function buildSummaryLine(opts: {
   if (totalJobCount > 0) {
     parts.push(`${syncedJobCount} of ${totalJobCount} jobs on the web`);
   }
-  if (codePhase === "changed" || codePhase === "not_uploaded") {
-    parts.push("app code not on web yet");
+  if (codePhase === "not_uploaded") {
+    parts.push("app code not uploaded yet");
+  } else if (codePhase === "changed") {
+    parts.push("app code changed locally");
   }
   if (registryNeedsSync) {
-    parts.push("database registry not on web yet");
+    parts.push(
+      codePhase === "not_uploaded"
+        ? "database registry not on web yet"
+        : "database registry will upload with app code",
+    );
   }
   if (dbPending > 0) {
-    parts.push(`${dbPending} database(s) need Turso sync`);
+    parts.push(`${dbPending} database(s) waiting for Turso upload`);
   }
   if (parts.length === 0) {
     return "Everything for this app matches the web";
@@ -277,7 +293,14 @@ export function deriveAppCloudSyncStatus(
         jobId: source.jobId,
         status: source.status,
         phase,
-        detail: databaseDetail(source),
+        detail: databaseDetail({
+          alias: source.alias,
+          status: source.status,
+          localTableCount: source.localTableCount,
+          remoteTableCount: source.remoteTableCount,
+          schemaDrift: source.schemaDrift,
+          quarantineReason: source.quarantineReason,
+        }),
       };
     });
 
@@ -285,7 +308,9 @@ export function deriveAppCloudSyncStatus(
   const hasDependentJobs = dependentJobs.length > 0;
   const syncedJobCount = dependentJobs.filter((job) => job.phase === "synced").length;
   const totalJobCount = dependentJobs.length;
-  const dbPending = databases.filter((db) => db.status === "pending").length;
+  const dbPending = databases.filter(
+    (db) => db.status === "pending" || db.status === "quarantined",
+  ).length;
 
   const registryDbIds =
     options?.registryDbIds ?? items.appContext?.registryDbIds ?? [];
@@ -308,7 +333,9 @@ export function deriveAppCloudSyncStatus(
     ? "No registry databases"
     : registryPhase === "synced"
       ? "Database registry (linked-databases.json) is on the web"
-      : "Database registry (linked-databases.json) not on web yet";
+      : codePhase === "not_uploaded"
+        ? "Database registry (linked-databases.json) not on web yet"
+        : "Database registry (linked-databases.json) will upload with app code";
 
   const codePhaseDisplay =
     isUploading && codePhase !== "synced" ? "uploading" : codePhase;
@@ -363,8 +390,12 @@ export function deriveAppCloudSyncStatus(
         ? `Needs sync (${syncedJobCount}/${totalJobCount})`
         : "Needs sync";
   } else if (overall === "disabled") chipLabel = "Cloud off";
+  else if (overall === "unknown") chipLabel = "Sync status unknown";
 
-  const summaryLine = buildSummaryLine({
+  const summaryLine =
+    overall === "unknown"
+      ? "Could not determine web sync status — open for details"
+      : buildSummaryLine({
     codePhase: codePhaseDisplay,
     syncedJobCount,
     totalJobCount,
@@ -394,16 +425,31 @@ export function deriveAppCloudSyncStatus(
   };
 }
 
-export type WebSyncVisualState = "loading" | "synced" | "syncing" | "warn" | "neutral";
+export type WebSyncVisualState =
+  | "loading"
+  | "synced"
+  | "syncing"
+  | "warn"
+  | "disabled"
+  | "error";
 
 /** Hover tooltip for the web sync status dot. */
 export function formatWebSyncStatusTooltip(
   status: AppCloudSyncStatus | null,
-  options: { loading?: boolean; error?: string | null } = {},
+  options: { loading?: boolean; error?: string | null; refreshing?: boolean } = {},
 ): string {
-  if (options.error) return "Web sync unavailable";
-  if (options.loading || !status) return "Checking web sync status…";
-  if (status.overall === "disabled") return "Cloud sync is off";
+  if (options.error) {
+    return options.error.length > 0
+      ? `Web sync unavailable — ${options.error}`
+      : "Web sync unavailable";
+  }
+  if (options.loading || !status) return "Checking what's on the web…";
+  if (status.overall === "disabled") {
+    return "Cloud sync is off — turn on in Settings → Cloud Sync";
+  }
+  if (status.overall === "unknown") {
+    return status.summaryLine || "Sync status unknown — click for details";
+  }
   return status.summaryLine || status.chipLabel;
 }
 
@@ -416,10 +462,13 @@ export function webSyncVisualState(
     refreshing?: boolean;
   } = {},
 ): WebSyncVisualState {
-  if (options.error || options.loading || !status) return "loading";
-  if (status.overall === "disabled") return "neutral";
+  if (options.error) return "error";
+  if (options.loading || !status) return "loading";
+  if (status.overall === "disabled") return "disabled";
   if (options.pushing || status.overall === "uploading") return "syncing";
   if (status.overall === "synced") return "synced";
-  if (status.overall === "needs_sync") return "warn";
-  return "neutral";
+  if (status.overall === "needs_sync" || status.overall === "unknown") {
+    return "warn";
+  }
+  return "warn";
 }

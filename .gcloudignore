@@ -1,0 +1,17 @@
+.git
+.gitignore
+node_modules
+**/node_modules
+dist
+**/.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+coverage
+**/*.timestamp-*.mjs
+ui/dist
+release
+*.md
+!Dockerfile*
+!cloudbuild*.yaml

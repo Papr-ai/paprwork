@@ -225,6 +225,17 @@ describe("deriveAppCloudSyncStatus", () => {
     expect(status.summaryLine).toContain("database registry not on web yet");
   });
 
+  it("reports changed locally when app is on git but sync state is missing", () => {
+    const items = baseItems({ appId: "app-1", codeStatus: "outdated" });
+    items.github!.apps[0]!.lastSyncAt = null;
+
+    const status = deriveAppCloudSyncStatus("app-1", items, "idle");
+    expect(status.codePhase).toBe("changed");
+    expect(status.codeLabel).toBe("App code changed locally");
+    expect(status.summaryLine).toContain("app code changed locally");
+    expect(status.summaryLine).not.toContain("not uploaded yet");
+  });
+
   it("formats web sync status tooltip for the status dot", () => {
     const synced = deriveAppCloudSyncStatus(
       "app-1",
@@ -238,13 +249,13 @@ describe("deriveAppCloudSyncStatus", () => {
       baseItems({ appId: "app-1", codeStatus: "pending" }),
       "idle",
     );
-    expect(formatWebSyncStatusTooltip(pending)).toContain("not on web yet");
+    expect(formatWebSyncStatusTooltip(pending)).toContain("not uploaded yet");
 
     expect(formatWebSyncStatusTooltip(null, { loading: true })).toBe(
-      "Checking web sync status…",
+      "Checking what's on the web…",
     );
     expect(formatWebSyncStatusTooltip(null, { error: "offline" })).toBe(
-      "Web sync unavailable",
+      "Web sync unavailable — offline",
     );
   });
 });

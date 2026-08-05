@@ -29,8 +29,8 @@ export class CloudAgentGatewayService {
       const result = await withCloudAgentRunContext(request, async () => {
         const agentService = getAgentService();
         const streamInput = await resolveCloudAgentJobStreamInput(request);
-        const { session: _session, ...jobSession } = streamInput;
-        return agentService.runIsolatedJobSession(jobSession);
+        const { session: _session, appendLog, ...jobSession } = streamInput;
+        return agentService.runIsolatedJobSession({ ...jobSession, appendLog });
       });
 
       const output = result.text.trim();
@@ -158,11 +158,12 @@ export class CloudAgentGatewayService {
     let exitCode = 0;
     const agentService = getAgentService();
     const streamInput = await resolveCloudAgentJobStreamInput(request);
-    const { session: _session, ...jobSession } = streamInput;
+    const { session: _session, appendLog, ...jobSession } = streamInput;
 
-    for await (const chunk of agentService.streamIsolatedJobSessionForCloud(
-      jobSession,
-    )) {
+    for await (const chunk of agentService.streamIsolatedJobSessionForCloud({
+      ...jobSession,
+      appendLog,
+    })) {
       if (chunk.type === "error") {
         exitCode = 1;
       }

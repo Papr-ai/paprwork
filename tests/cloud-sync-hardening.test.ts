@@ -278,6 +278,27 @@ describe("Periodic Pull", () => {
   });
 });
 
+describe("Desktop heartbeat deduplication", () => {
+  it("guards against duplicate heartbeat timers and orphaned CloudSync instances", () => {
+    const content = fs.readFileSync(
+      path.join(process.cwd(), "src/gateway/services/CloudSyncService.ts"),
+      "utf-8",
+    );
+    expect(content).toContain("backgroundInitStarted");
+    expect(content).toContain("Desktop heartbeat already running");
+    expect(content).toContain("stopping orphaned timers");
+  });
+
+  it("gateway deferred startup skips when cloud sync already initialized", () => {
+    const content = fs.readFileSync(
+      path.join(process.cwd(), "src/gateway/index.ts"),
+      "utf-8",
+    );
+    expect(content).toContain("getCloudSyncService()");
+    expect(content).toContain("skipping deferred startup init");
+  });
+});
+
 describe("Per-folder commit strategy", () => {
   it("commits and pushes each queued app/job folder separately", () => {
     const content = fs.readFileSync(

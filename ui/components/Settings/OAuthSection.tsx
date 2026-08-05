@@ -59,7 +59,9 @@ export function OAuthSection({
   apiKeyName,
   apiKeyHint,
 }: OAuthSectionProps) {
-  const { status, loading, startOAuthLogin, disconnect } = useOAuth(provider);
+  const { status, loading, startOAuthLogin, disconnect } = useOAuth(provider, {
+    source: "settings",
+  });
   const [useApiKey, setUseApiKey] = useState(false);
   const [showPasteToken, setShowPasteToken] = useState(false);
   const [pasteMode, setPasteMode] = useState<PasteMode>("idle");

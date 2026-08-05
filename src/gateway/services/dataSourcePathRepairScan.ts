@@ -176,19 +176,26 @@ export async function runGlobalDataSourcePathRepair(
 
     for (const repair of repairs) {
       result.repairs.push({ ...repair, dataSourcesPath });
+      const jobLabel =
+        repair.jobId !== undefined ? `job ${repair.jobId}` : "registry db";
+      const action =
+        repair.fromPath === "(empty)" ? "hydrated local dbPath" : "resolved dbPath";
       console.log(
         `[repair:data-sources] ${dryRun ? "(dry-run) " : ""}` +
-          `app ${repair.appId} (${repair.alias}, job ${repair.jobId}): ` +
+          `${action} for app ${repair.appId} (${repair.alias}, ${jobLabel}): ` +
           `${repair.fromPath} → ${repair.toPath}`,
       );
     }
 
+    const nextContent = `${serializeDataSourcesFile(repairedConfig)}\n`;
+    const priorContent = `${serializeDataSourcesFile(config)}\n`;
+    if (nextContent === priorContent) {
+      await delay(delayMs);
+      continue;
+    }
+
     if (!dryRun) {
-      await fs.writeFile(
-        dataSourcesPath,
-        `${serializeDataSourcesFile(repairedConfig)}\n`,
-        "utf8",
-      );
+      await fs.writeFile(dataSourcesPath, nextContent, "utf8");
     }
 
     await delay(delayMs);

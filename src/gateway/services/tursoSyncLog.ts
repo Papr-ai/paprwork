@@ -6,7 +6,19 @@
 
 import type { Client } from "@libsql/client";
 import type Database from "better-sqlite3";
-import { quoteIdent, readTableSchema, type TableColumn } from "./tursoSyncBridgeCore.js";
+import { PAPR_ROW_SYNC_COLUMNS } from "../../core/types/jobMigrations.js";
+import {
+  quoteIdent,
+  readRemoteTableSchema,
+  readTableSchema,
+  type TableColumn,
+} from "./tursoSyncBridgeCore.js";
+import {
+  dropLocalRowSyncTriggers,
+  dropRemoteRowSyncTriggers,
+  ensureLocalRowSyncColumns,
+  ensureRemoteRowSyncColumns,
+} from "./rowSyncColumns.js";
 
 export const SYNC_LOG_TABLE = "_papr_sync_log";
 export const SYNC_MUTE_TABLE = "_papr_sync_mute";
@@ -43,6 +55,19 @@ function muteWhenClause(): string {
     `(SELECT COALESCE((SELECT depth FROM ${quoteIdent(SYNC_MUTE_TABLE)} ` +
     `WHERE id = ${MUTE_ROW_ID}), 0)) = 0`
   );
+}
+
+/** Skip CDC when only platform row-metadata columns changed (version bump trigger). */
+function cdcUpdateWhenClause(columns: TableColumn[]): string {
+  const mute = muteWhenClause();
+  const hasRowVersion = columns.some(
+    (col) => col.name === PAPR_ROW_SYNC_COLUMNS.rowVersion,
+  );
+  if (!hasRowVersion) {
+    return mute;
+  }
+  const versionCol = quoteIdent(PAPR_ROW_SYNC_COLUMNS.rowVersion);
+  return `${mute} AND OLD.${versionCol} = NEW.${versionCol}`;
 }
 
 export function parseRowPkJson(raw: unknown): unknown[] {
@@ -141,7 +166,7 @@ function buildTriggerSql(
   statements.push(
     `CREATE TRIGGER IF NOT EXISTS ${quoteIdent(`_papr_tr_${suffix}_au`)} ` +
       `AFTER UPDATE ON ${quotedTable} ` +
-      `WHEN ${when} ` +
+      `WHEN ${cdcUpdateWhenClause(columns)} ` +
       `BEGIN ` +
       `INSERT INTO ${quotedLog} (table_name, op, row_pk) ` +
       `VALUES ('${tableName.replace(/'/g, "''")}', 'update', ${pkExprInsert}); ` +
@@ -159,6 +184,84 @@ function buildTriggerSql(
   return statements;
 }
 
+function buildCdcUpdateTriggerSql(
+  tableName: string,
+  suffix: string,
+  columns: TableColumn[],
+): string | null {
+  const pkExprInsert = pkJsonExpr(columns, "NEW");
+  if (!pkExprInsert) {
+    return null;
+  }
+  const quotedTable = quoteIdent(tableName);
+  const quotedLog = quoteIdent(SYNC_LOG_TABLE);
+  return (
+    `CREATE TRIGGER ${quoteIdent(`_papr_tr_${suffix}_au`)} ` +
+    `AFTER UPDATE ON ${quotedTable} ` +
+    `WHEN ${cdcUpdateWhenClause(columns)} ` +
+    `BEGIN ` +
+    `INSERT INTO ${quotedLog} (table_name, op, row_pk) ` +
+    `VALUES ('${tableName.replace(/'/g, "''")}', 'update', ${pkExprInsert}); ` +
+    `END`
+  );
+}
+
+function refreshLocalCdcUpdateTrigger(
+  db: Database.Database,
+  tableName: string,
+  suffix: string,
+  columns: TableColumn[],
+): void {
+  const updateSql = buildCdcUpdateTriggerSql(tableName, suffix, columns);
+  if (!updateSql) {
+    return;
+  }
+  db.exec(`DROP TRIGGER IF EXISTS ${quoteIdent(`_papr_tr_${suffix}_au`)}`);
+  db.exec(updateSql);
+}
+
+async function refreshRemoteCdcUpdateTrigger(
+  remote: Client,
+  tableName: string,
+  suffix: string,
+  columns: TableColumn[],
+): Promise<void> {
+  const updateSql = buildCdcUpdateTriggerSql(tableName, suffix, columns);
+  if (!updateSql) {
+    return;
+  }
+  await remote.execute({
+    sql: `DROP TRIGGER IF EXISTS ${quoteIdent(`_papr_tr_${suffix}_au`)}`,
+    args: [],
+  });
+  await remote.execute({ sql: updateSql, args: [] });
+}
+
+export function dropLocalTableSyncTriggers(
+  db: Database.Database,
+  tableName: string,
+): void {
+  const suffix = triggerSuffix(tableName);
+  for (const part of ["ai", "au", "ad"] as const) {
+    db.exec(`DROP TRIGGER IF EXISTS ${quoteIdent(`_papr_tr_${suffix}_${part}`)}`);
+  }
+  dropLocalRowSyncTriggers(db, tableName);
+}
+
+export async function dropRemoteTableSyncTriggers(
+  remote: Client,
+  tableName: string,
+): Promise<void> {
+  const suffix = triggerSuffix(tableName);
+  for (const part of ["ai", "au", "ad"] as const) {
+    await remote.execute({
+      sql: `DROP TRIGGER IF EXISTS ${quoteIdent(`_papr_tr_${suffix}_${part}`)}`,
+      args: [],
+    });
+  }
+  await dropRemoteRowSyncTriggers(remote, tableName);
+}
+
 export function ensureLocalTableSyncTriggers(
   db: Database.Database,
   tableName: string,
@@ -168,14 +271,18 @@ export function ensureLocalTableSyncTriggers(
   if (!pkJsonExpr(columns, "NEW")) {
     return false;
   }
+  ensureLocalRowSyncColumns(db, tableName);
+  const syncColumns = readTableSchema(db, tableName);
   const suffix = triggerSuffix(tableName);
   const insertName = `_papr_tr_${suffix}_ai`;
-  if (triggerExists(db, insertName)) {
-    return true;
+  if (!triggerExists(db, insertName)) {
+    for (const sql of buildTriggerSql(tableName, suffix, syncColumns)) {
+      if (!sql.includes("_au")) {
+        db.exec(sql);
+      }
+    }
   }
-  for (const sql of buildTriggerSql(tableName, suffix, columns)) {
-    db.exec(sql);
-  }
+  refreshLocalCdcUpdateTrigger(db, tableName, suffix, syncColumns);
   return true;
 }
 
@@ -185,17 +292,22 @@ export async function ensureRemoteTableSyncTriggers(
   tableName: string,
 ): Promise<boolean> {
   await ensureRemoteSyncInfrastructure(remote);
+  await ensureRemoteRowSyncColumns(remote, tableName);
   if (!pkJsonExpr(columns, "NEW")) {
     return false;
   }
+  const syncColumns = await readRemoteTableSchema(remote, tableName);
+  const triggerColumns = syncColumns.length > 0 ? syncColumns : columns;
   const suffix = triggerSuffix(tableName);
   const insertName = `_papr_tr_${suffix}_ai`;
-  if (await remoteTriggerExists(remote, insertName)) {
-    return true;
+  if (!(await remoteTriggerExists(remote, insertName))) {
+    for (const sql of buildTriggerSql(tableName, suffix, triggerColumns)) {
+      if (!sql.includes("_au")) {
+        await remote.execute({ sql, args: [] });
+      }
+    }
   }
-  for (const sql of buildTriggerSql(tableName, suffix, columns)) {
-    await remote.execute(sql);
-  }
+  await refreshRemoteCdcUpdateTrigger(remote, tableName, suffix, triggerColumns);
   return true;
 }
 

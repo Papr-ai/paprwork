@@ -54,7 +54,7 @@ function rewriteSameJobPaths(text: string, jobId: string): string {
 /** True when text still contains paths this repair pass can fix. */
 export function containsRepairablePaprPaths(text: string): boolean {
   return (
-    /(?:\$HOME\/Papr\/(?:Jobs|jobs|data|apps|workspace|Chats)|~\/Papr\/(?:Jobs|jobs|data|apps|workspace|Chats)|\/Users\/[^\s"'`]+?\/Papr\/)/i.test(
+    /(?:\$HOME\/Papr\/(?:Jobs|jobs|data|apps|workspace|Chats|orgs)|~\/Papr\/(?:Jobs|jobs|data|apps|workspace|Chats|orgs)|\/Users\/[^\s"'`]+?\/Papr\/)/i.test(
       text,
     ) || /~\/\.paprwork-v2\//i.test(text)
   );

@@ -19,16 +19,17 @@ import {
 } from "./cloudSync/resolveAppDependentJobs.js";
 import { GitRunner } from "./cloudSync/gitRunner.js";
 import { buildCloudLinkSyncReport } from "./cloudPublishStatus.js";
-import { getDatabaseRegistryService } from "./DatabaseRegistryService.js";
 import { getJobsService } from "./JobsService.js";
 import { getTursoSyncBridge } from "./TursoSyncBridge.js";
+import type { TursoPushScopedResult } from "./TursoSyncBridge.js";
+import type { PushGitScopedResult } from "./CloudSyncService.js";
 import {
   buildTursoSyncItemsReport,
   type TursoSyncItemsReport,
 } from "./tursoSyncStatus.js";
 import {
   discoverTursoLinkedSources,
-  type TursoLinkedSource,
+  resolveTursoDatabaseLabel,
 } from "./tursoLinkedSources.js";
 import { jobTursoDatabaseName } from "./tursoDatabaseNaming.js";
 import type { GitHubSyncItemsReport } from "./cloudSync/syncItemStatus.js";
@@ -243,24 +244,6 @@ export function assertReadOnlySql(sql: string): void {
   }
 }
 
-function resolveTursoDatabaseLabel(source: TursoLinkedSource): string {
-  const registry = getDatabaseRegistryService();
-  if (source.dbId) {
-    const record = registry.getById(source.dbId);
-    if (record) {
-      return record.tursoShortName;
-    }
-  }
-  const byPath = registry.getByPath(source.dbPath);
-  if (byPath) {
-    return byPath.tursoShortName;
-  }
-  if (source.jobId) {
-    return jobTursoDatabaseName(source.jobId);
-  }
-  throw new Error(`Could not resolve Turso database for source alias "${source.alias}".`);
-}
-
 export async function resolveTursoDatabaseName(input: {
   tursoDatabase?: string;
   jobId?: string;
@@ -410,29 +393,133 @@ export async function getCloudSyncStatus(options?: {
   };
 }
 
-export async function pushCloudSync(options?: {
+export type PushCloudSyncTarget = "github" | "turso";
+
+export interface PushCloudSyncOptions {
   appId?: string;
-}): Promise<{
+  jobId?: string;
+  alias?: string;
+  tursoDatabase?: string;
+  tables?: string[];
+  /** What to upload. Default: both. Use ["turso"] for fast DB-only pushes. */
+  targets?: PushCloudSyncTarget[];
+}
+
+export interface PushCloudSyncResult {
   success: true;
+  scope: string;
+  targets: PushCloudSyncTarget[];
   appId?: string;
+  jobId?: string;
+  alias?: string;
+  tursoDatabase?: string;
+  tables?: string[];
+  github?: PushGitScopedResult;
+  turso?: TursoPushScopedResult;
   syncState: ReturnType<NonNullable<ReturnType<typeof getCloudSyncService>>["getState"]>;
   pushedAt: string;
-}> {
+  durationMs: number;
+}
+
+function buildPushCloudSyncScopeLabel(options: PushCloudSyncOptions): string {
+  const parts: string[] = [];
+  if (options.appId) {
+    parts.push(`app ${options.appId.slice(0, 8)}…`);
+  }
+  if (options.jobId) {
+    parts.push(`job ${options.jobId.slice(0, 8)}…`);
+  }
+  if (options.alias) {
+    parts.push(`db alias "${options.alias}"`);
+  }
+  if (options.tursoDatabase) {
+    parts.push(`Turso ${options.tursoDatabase}`);
+  }
+  if (options.tables?.length) {
+    parts.push(`tables ${options.tables.join(", ")}`);
+  }
+  return parts.length > 0 ? parts.join(", ") : "full workspace";
+}
+
+function resolvePushCloudSyncTargets(
+  options: PushCloudSyncOptions,
+): PushCloudSyncTarget[] {
+  if (options.targets?.length) {
+    return [...options.targets];
+  }
+  return ["github", "turso"];
+}
+
+export async function pushCloudSync(
+  options?: PushCloudSyncOptions,
+): Promise<PushCloudSyncResult> {
+  const startMs = performance.now();
   const sync = getCloudSyncService();
   if (!sync) {
     throw new Error("Cloud sync not initialized. Enable Cloud Sync in Settings.");
   }
-  const appId = options?.appId?.trim();
-  if (appId) {
-    await sync.pushAppNow(appId);
-  } else {
-    await sync.pushNow();
+
+  const pushOptions: PushCloudSyncOptions = options ?? {};
+  const targets = resolvePushCloudSyncTargets(pushOptions);
+  const scope = buildPushCloudSyncScopeLabel(pushOptions);
+
+  let github: PushGitScopedResult | undefined;
+  if (targets.includes("github")) {
+    github = await sync.pushGitNow({
+      appId: pushOptions.appId,
+      jobId: pushOptions.jobId,
+    });
   }
+
+  let turso: TursoPushScopedResult | undefined;
+  if (targets.includes("turso")) {
+    const bridge = getTursoSyncBridge();
+    if (!bridge) {
+      throw new Error("Turso sync is not initialized.");
+    }
+    const hasTursoScope =
+      Boolean(pushOptions.appId) ||
+      Boolean(pushOptions.jobId) ||
+      Boolean(pushOptions.alias) ||
+      Boolean(pushOptions.tursoDatabase) ||
+      Boolean(pushOptions.tables?.length);
+
+    turso = await bridge.pushScoped({
+      appId: pushOptions.appId,
+      jobId: pushOptions.jobId,
+      alias: pushOptions.alias,
+      tursoDatabase: pushOptions.tursoDatabase,
+      tables: pushOptions.tables,
+      dirtyOnly: !hasTursoScope,
+    });
+
+    if (turso.failed > 0) {
+      const errors = turso.results
+        .filter((result) => result.error)
+        .map((result) => result.error)
+        .join("; ");
+      throw new Error(
+        errors.length > 0
+          ? `Database sync to Turso failed: ${errors}`
+          : "Database sync to Turso failed",
+      );
+    }
+  }
+
   return {
     success: true,
-    ...(appId ? { appId } : {}),
+    scope,
+    targets,
+    ...(pushOptions.appId ? { appId: pushOptions.appId } : {}),
+    ...(pushOptions.jobId ? { jobId: pushOptions.jobId } : {}),
+    ...(pushOptions.alias ? { alias: pushOptions.alias } : {}),
+    ...(pushOptions.tursoDatabase ? { tursoDatabase: pushOptions.tursoDatabase } : {}),
+    ...(pushOptions.tables?.length ? { tables: pushOptions.tables } : {}),
+    ...(github ? { github } : {}),
+    ...(turso ? { turso } : {}),
     syncState: sync.getState(),
     pushedAt: new Date().toISOString(),
+    durationMs: Math.round(performance.now() - startMs),
   };
 }
 

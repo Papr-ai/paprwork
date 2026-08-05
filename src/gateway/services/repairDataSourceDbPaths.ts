@@ -85,18 +85,22 @@ async function repairRegistryBackedSource(
     }
   }
 
-  if (!resolved || resolved === storedPath) {
+  if (!resolved || pathsEqual(resolved, storedPath)) {
     return source;
   }
 
   repairs.push({
     appId,
     alias: source.alias,
-    fromPath: storedPath || record?.localPath || "(missing)",
+    fromPath: storedPath.length > 0 ? storedPath : "(empty)",
     toPath: resolved,
   });
 
-  if (source.dbId && record && record.localPath !== resolved) {
+  if (
+    source.dbId &&
+    record &&
+    !pathsEqual(record.localPath?.trim() ?? "", resolved)
+  ) {
     await registry.updateLocalPath(source.dbId, resolved);
   }
 
@@ -148,16 +152,18 @@ export async function repairDataSourceDbPathsInConfig(
     }
 
     if (!storedExists && canonicalExists) {
-      if (storedPath.length > 0) {
+      if (!pathsEqual(storedPath, canonical)) {
         repairs.push({
           appId,
           alias: source.alias,
           jobId: source.jobId,
-          fromPath: storedPath,
+          fromPath: storedPath.length > 0 ? storedPath : "(empty)",
           toPath: canonical,
         });
+        sources.push({ ...source, dbPath: canonical });
+      } else {
+        sources.push(source);
       }
-      sources.push({ ...source, dbPath: canonical });
       continue;
     }
 

@@ -90,6 +90,7 @@ describe("repairDataSourceDbPathsInConfig", () => {
 
   it("leaves config unchanged when stored path already matches canonical", async () => {
     const canonical = path.join(os.tmpdir(), "already-correct.db");
+    writeFileSync(canonical, "sqlite");
     const config: AppDataSourcesFile = {
       sources: [
         {
@@ -116,5 +117,36 @@ describe("repairDataSourceDbPathsInConfig", () => {
 
     expect(result.repairs).toHaveLength(0);
     expect(result.config).toEqual(config);
+  });
+
+  it("hydrates empty job dbPath and logs fromPath as (empty)", async () => {
+    const canonical = path.join(os.tmpdir(), `papr-hydrate-${Date.now()}.db`);
+    mkdirSync(path.dirname(canonical), { recursive: true });
+    writeFileSync(canonical, "sqlite");
+
+    const config: AppDataSourcesFile = {
+      sources: [
+        {
+          id: "job-1:brief",
+          type: "sqlite",
+          jobId: "job-1",
+          alias: "brief",
+          dbPath: "",
+          tables: [],
+          linkedAt: new Date().toISOString(),
+        },
+      ],
+    };
+
+    const result = await repairDataSourceDbPathsInConfig(
+      "app-1",
+      config,
+      { getJobDatabasePath: async () => canonical },
+    );
+
+    expect(result.repairs).toHaveLength(1);
+    expect(result.repairs[0]?.fromPath).toBe("(empty)");
+    expect(result.repairs[0]?.toPath).toBe(canonical);
+    expect(result.config.sources[0]?.dbPath).toBe(canonical);
   });
 });

@@ -929,41 +929,41 @@ function AboutTab() {
           </div>
         </div>
 
-        {currentVersion === "2.2.5" && (
+        {currentVersion === "2.2.6" && (
           <div className="about-card">
-            <h3>What's New in v2.2.5</h3>
+            <h3>What's New in v2.2.6</h3>
             <ul className="whats-new-list">
               <li className="whats-new-list__item">
-                <strong>Image Attachments in Chat</strong>
+                <strong>Turso Incremental Schema Migration</strong>
                 <p>
-                  Pasted or attached images are sent directly to vision-capable
-                  models — no extra tool step needed.
+                  Job and app databases sync schema changes with ADD/DROP/RENAME
+                  column migrations instead of full table rebuilds.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Cloud Observability Tools</strong>
+                <strong>Job Database Migrations</strong>
                 <p>
-                  Agents can inspect cloud sync status, Turso replicas, GitHub
-                  repo files, and cloud job runtime logs.
+                  Versioned migration framework with manifest tracking and Turso
+                  sync for job SQLite databases.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Cloud Sync Hardening</strong>
+                <strong>Cloud Sync Improvements</strong>
                 <p>
-                  Git sync skips files over 10MB and local backup artifacts;
-                  cloud agent jobs sync Turso at run start and finish.
+                  Debounced Turso push for cloud agents, clearer sync status in
+                  the UI, and improved copy-to-namespace workflow.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>OAuth & Context Fixes</strong>
+                <strong>OAuth Login Telemetry</strong>
                 <p>
-                  Cleaner OAuth callback handling and improved pi-ai context for
-                  attachment-heavy conversations.
+                  Provider login funnel tracking for better diagnostics during
+                  Papr and OAuth sign-in flows.
                 </p>
               </li>
             </ul>
             <a
-              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.2.5"
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.2.6"
               target="_blank"
               rel="noopener noreferrer"
               className="about-link whats-new-list__link"

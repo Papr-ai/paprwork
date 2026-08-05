@@ -50,6 +50,7 @@ export function resolveGitHubItemSyncStatus(
   queuedPaths: readonly string[],
   hasItemChanged: (relativePath: string) => boolean,
   deadLetter?: Readonly<Record<string, DeadLetterItem>>,
+  trackedInGit?: ReadonlySet<string>,
 ): GitHubItemSyncState {
   return resolveItemStatus(
     relativePath,
@@ -57,6 +58,7 @@ export function resolveGitHubItemSyncStatus(
     new Set(queuedPaths),
     hasItemChanged,
     deadLetter,
+    trackedInGit,
   );
 }
 
@@ -66,6 +68,7 @@ function resolveItemStatus(
   queuedPaths: ReadonlySet<string>,
   hasItemChanged: (relativePath: string) => boolean,
   deadLetter?: Readonly<Record<string, DeadLetterItem>>,
+  trackedInGit?: ReadonlySet<string>,
 ): GitHubItemSyncState {
   if (deadLetter?.[relativePath]) {
     return "failed";
@@ -79,6 +82,11 @@ function resolveItemStatus(
     return "pending";
   }
   if (!prev) {
+    // Missing sync-state entry but git already has commits → local changes pending push,
+    // not "never uploaded" (common after invalidateAllSyncedItems or state file reset).
+    if (trackedInGit?.has(relativePath)) {
+      return "outdated";
+    }
     return "pending";
   }
   return hasItemChanged(relativePath) ? "outdated" : "synced";
@@ -136,6 +144,7 @@ function buildFolderItems(
   queuedPaths: ReadonlySet<string>,
   hasItemChanged: (relativePath: string) => boolean,
   deadLetter?: Readonly<Record<string, DeadLetterItem>>,
+  trackedInGit?: ReadonlySet<string>,
 ): GitHubSyncItem[] {
   return folders.map((relativePath) => {
     const dead = deadLetter?.[relativePath];
@@ -150,6 +159,7 @@ function buildFolderItems(
         queuedPaths,
         hasItemChanged,
         deadLetter,
+        trackedInGit,
       ),
       lastSyncAt: syncedItems[relativePath]?.lastSyncAt ?? null,
       lastError: dead?.lastError ?? null,
@@ -164,6 +174,7 @@ function buildAppItems(
   queuedPaths: ReadonlySet<string>,
   hasItemChanged: (relativePath: string) => boolean,
   deadLetter?: Readonly<Record<string, DeadLetterItem>>,
+  trackedInGit?: ReadonlySet<string>,
 ): GitHubSyncItem[] {
   const titles = loadAppTitles(paprDir);
   return listChildDirs(paprDir, "apps")
@@ -181,6 +192,7 @@ function buildAppItems(
           queuedPaths,
           hasItemChanged,
           deadLetter,
+          trackedInGit,
         ),
         lastSyncAt: syncedItems[relativePath]?.lastSyncAt ?? null,
         lastError: dead?.lastError ?? null,
@@ -206,6 +218,7 @@ function buildJobItems(
   queuedPaths: ReadonlySet<string>,
   hasItemChanged: (relativePath: string) => boolean,
   deadLetter?: Readonly<Record<string, DeadLetterItem>>,
+  trackedInGit?: ReadonlySet<string>,
 ): GitHubSyncItem[] {
   const names = loadJobNames(paprDir);
   return listJobIds(paprDir)
@@ -223,6 +236,7 @@ function buildJobItems(
           queuedPaths,
           hasItemChanged,
           deadLetter,
+          trackedInGit,
         ),
         lastSyncAt: syncedItems[relativePath]?.lastSyncAt ?? null,
         lastError: dead?.lastError ?? null,
@@ -252,6 +266,7 @@ export function buildGitHubSyncItemsReport(opts: {
   queuedPaths: readonly string[];
   hasItemChanged: (relativePath: string) => boolean;
   deadLetter?: Readonly<Record<string, DeadLetterItem>>;
+  trackedInGit?: ReadonlySet<string>;
 }): GitHubSyncItemsReport {
   const queuedSet = new Set(opts.queuedPaths);
   const deadLetter = opts.deadLetter ?? {};
@@ -262,6 +277,7 @@ export function buildGitHubSyncItemsReport(opts: {
     queuedSet,
     opts.hasItemChanged,
     deadLetter,
+    opts.trackedInGit,
   );
   const apps = buildAppItems(
     opts.paprDir,
@@ -269,6 +285,7 @@ export function buildGitHubSyncItemsReport(opts: {
     queuedSet,
     opts.hasItemChanged,
     deadLetter,
+    opts.trackedInGit,
   );
   const jobs = buildJobItems(
     opts.paprDir,
@@ -276,6 +293,7 @@ export function buildGitHubSyncItemsReport(opts: {
     queuedSet,
     opts.hasItemChanged,
     deadLetter,
+    opts.trackedInGit,
   );
   const all = [...workspace, ...apps, ...jobs];
   return {

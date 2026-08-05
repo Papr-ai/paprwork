@@ -37,6 +37,21 @@ function rowIcon(phase: AppCloudItemPhase): string {
   }
 }
 
+function rowIconLabel(phase: AppCloudItemPhase): string {
+  switch (phase) {
+    case "synced":
+      return "Synced";
+    case "uploading":
+      return "Uploading";
+    case "not_uploaded":
+      return "Not uploaded";
+    case "changed":
+      return "Needs upload";
+    default:
+      return "Unknown";
+  }
+}
+
 export function WebSyncPopover({
   status,
   loading = false,
@@ -97,6 +112,19 @@ export function WebSyncPopover({
     >
       <p className="mini-app-publish-bar__sync-popover-title">What&apos;s on the web</p>
       <p className="mini-app-publish-bar__sync-popover-summary">{status.summaryLine}</p>
+      {status.databases.some((db) => db.phase === "changed") ? (
+        <p className="mini-app-publish-bar__sync-popover-hint">
+          ⚠ means local changes are not on Turso yet — not an error. Click{" "}
+          <strong>Upload now</strong> to push them. If upload fails, the error appears below
+          in red.
+        </p>
+      ) : null}
+      {status.overall === "disabled" ? (
+        <p className="mini-app-publish-bar__sync-popover-hint">
+          Cloud sync is turned off. Enable it in Settings → Cloud Sync to upload this app to
+          the web.
+        </p>
+      ) : null}
       <ul className="mini-app-publish-bar__sync-popover-list">
         <li>
           <span className="mini-app-publish-bar__sync-popover-icon">
@@ -126,7 +154,10 @@ export function WebSyncPopover({
         {status.hasLinkedDatabases
           ? status.databases.map((db) => (
               <li key={db.jobId}>
-                <span className="mini-app-publish-bar__sync-popover-icon">
+                <span
+                  className="mini-app-publish-bar__sync-popover-icon"
+                  title={rowIconLabel(db.phase)}
+                >
                   {rowIcon(db.phase)}
                 </span>
                 <span>

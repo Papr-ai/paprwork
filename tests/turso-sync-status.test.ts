@@ -16,6 +16,10 @@ describe("resolveTursoSourceStatus", () => {
     expect(resolveTursoSourceStatus(6, 5, true, false)).toBe("pending");
   });
 
+  it("reports pending when local schema differs from remote columns", () => {
+    expect(resolveTursoSourceStatus(5, 5, true, false, false, true)).toBe("pending");
+  });
+
   it("reports synced when remote has tables and local is clean", () => {
     expect(resolveTursoSourceStatus(30, 30, true, false)).toBe("synced");
   });
@@ -66,7 +70,7 @@ describe("deriveAppCloudSyncStatus database detail", () => {
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");
     expect(status.overall).toBe("needs_sync");
     expect(status.databases[0]?.detail).toBe(
-      "Local DB changes not on Turso yet",
+      "Local changes waiting — click Upload now to push to Turso",
     );
   });
 });
