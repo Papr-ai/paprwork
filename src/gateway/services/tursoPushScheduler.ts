@@ -304,11 +304,6 @@ export async function pushDirtyLinkedJobsOnStartup(
   await enqueueDirtyLinkedJobs(root);
 }
 
-/** Debounced push after job completion or local DB mutation. */
-export async function pushJobTursoIfEnabled(jobId: string): Promise<void> {
-  scheduleTursoPushForJob(jobId, "completion");
-}
-
 /** Test hook — flush queue state between tests. */
 export function resetTursoPushQueueForTests(): void {
   for (const timer of jobTimers.values()) {

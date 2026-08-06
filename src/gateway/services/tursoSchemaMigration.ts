@@ -18,6 +18,7 @@ import {
   dropLocalTableSyncTriggers,
   dropRemoteTableSyncTriggers,
 } from "./tursoSyncLog.js";
+import { isDuplicateColumnError } from "./jobs/migrationSqlHelpers.js";
 
 export type SchemaMigrationStep =
   | { kind: "add_column"; column: TableColumn }
@@ -98,11 +99,17 @@ export async function applySchemaMigrationToRemote(
     switch (step.kind) {
       case "add_column": {
         const type = step.column.type.trim() || "TEXT";
-        await remote.execute({
-          sql:
-            `ALTER TABLE ${quoteIdent(tableName)} ADD COLUMN ${quoteIdent(step.column.name)} ${type}`,
-          args: [],
-        });
+        try {
+          await remote.execute({
+            sql:
+              `ALTER TABLE ${quoteIdent(tableName)} ADD COLUMN ${quoteIdent(step.column.name)} ${type}`,
+            args: [],
+          });
+        } catch (error) {
+          if (!isDuplicateColumnError(error)) {
+            throw error;
+          }
+        }
         break;
       }
       case "drop_column":

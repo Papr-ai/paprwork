@@ -33,11 +33,9 @@ export class CloudAgentGatewayService {
         return agentService.runIsolatedJobSession({ ...jobSession, appendLog });
       });
 
-      const output = result.text.trim();
       return {
-        exitCode: output ? 0 : 1,
+        exitCode: 0,
         output: result.text,
-        error: output ? undefined : "Agent job finished with no output",
         chatId: result.chatId,
       };
     } catch (error) {

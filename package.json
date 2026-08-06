@@ -100,6 +100,7 @@
     "setup:apps-dns": "node scripts/setup-apps-papr-ai-dns.mjs",
     "test:turso-auto-push": "ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-turso-auto-push.mjs",
     "test:turso-delta-sync": "npm run build:gateway && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-turso-delta-sync.mjs",
+    "test:cloud-agent-turso-bookends": "npm run build:gateway && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-cloud-agent-turso-bookends-e2e.mjs",
     "test:new-models": "tsx tests/ai-proxy-new-models.ts",
     "fix-app-icons": "node scripts/fix-app-icons.mjs",
     "set-home-app": "node scripts/set-default-home-app.mjs",

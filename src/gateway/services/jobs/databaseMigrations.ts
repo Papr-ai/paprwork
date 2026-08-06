@@ -7,6 +7,12 @@
 import Database from "better-sqlite3";
 import { promises as fs } from "fs";
 import path from "path";
+import { quoteIdent } from "../tursoSyncBridgeCore.js";
+import {
+  isDuplicateColumnError,
+  parseAddColumnStatement,
+  splitSqlStatements,
+} from "./migrationSqlHelpers.js";
 import {
   loadJobMigrationManifest,
   sha256Hex,
@@ -82,6 +88,38 @@ export function applySqlitePerformancePragmas(
   db.pragma(`cache_size = -${cacheSizeKb}`);
   db.pragma("mmap_size = 15000000");
   db.pragma("temp_store = MEMORY");
+}
+
+export function localTableHasColumn(
+  db: Database.Database,
+  tableName: string,
+  columnName: string,
+): boolean {
+  const rows = db
+    .prepare(`PRAGMA table_info(${quoteIdent(tableName)})`)
+    .all() as Array<{ name: string }>;
+  return rows.some((row) => row.name === columnName);
+}
+
+function executeLocalSqlIdempotent(
+  db: Database.Database,
+  statement: string,
+): void {
+  const addColumn = parseAddColumnStatement(statement);
+  if (addColumn) {
+    if (localTableHasColumn(db, addColumn.table, addColumn.column)) {
+      return;
+    }
+  }
+
+  try {
+    db.exec(`${statement};`);
+  } catch (error) {
+    if (isDuplicateColumnError(error)) {
+      return;
+    }
+    throw error;
+  }
 }
 
 export function ensureSchemaMigrationsTable(db: Database.Database): void {
@@ -187,7 +225,9 @@ export async function applyDatabaseMigrations(
           `Migration checksum mismatch for ${fileName}: manifest does not match SQL file`,
         );
       }
-      db.exec(sql);
+      for (const statement of splitSqlStatements(sql)) {
+        executeLocalSqlIdempotent(db, statement);
+      }
       db.prepare(
         "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
       ).run(fileName, new Date().toISOString());

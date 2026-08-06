@@ -18,6 +18,12 @@ import {
   manifestEntryById,
   readMigrationSql,
 } from "./jobMigrationManifest.js";
+import { alignMigrationLedgers } from "./jobMigrationLedgerSync.js";
+import {
+  isDuplicateColumnError,
+  parseAddColumnStatement,
+  splitSqlStatements,
+} from "./migrationSqlHelpers.js";
 
 export const REMOTE_SCHEMA_MIGRATIONS_TABLE = "_papr_schema_migrations";
 
@@ -52,29 +58,6 @@ async function remoteTableHasColumn(
 ): Promise<boolean> {
   const result = await remote.execute(`PRAGMA table_info(${quoteIdent(tableName)})`);
   return result.rows.some((row) => String(row.name ?? "") === columnName);
-}
-
-function isDuplicateColumnError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /duplicate column name/i.test(message);
-}
-
-function parseAddColumnStatement(
-  statement: string,
-): { table: string; column: string } | null {
-  const match =
-    /^ALTER\s+TABLE\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+ADD\s+COLUMN\s+(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(
-      statement.trim(),
-    );
-  if (!match) {
-    return null;
-  }
-  const table = match[1] ?? match[2] ?? match[3];
-  const column = match[4] ?? match[5] ?? match[6];
-  if (!table || !column) {
-    return null;
-  }
-  return { table, column };
 }
 
 async function executeRemoteSqlIdempotent(
@@ -119,11 +102,17 @@ async function applySchemaOpToRemote(
         return;
       }
       await dropRemoteTableSyncTriggers(remote, op.table);
-      await remote.execute({
-        sql:
-          `ALTER TABLE ${quoteIdent(op.table)} ADD COLUMN ${quoteIdent(op.column)} ${op.type.trim() || "TEXT"}`,
-        args: [],
-      });
+      try {
+        await remote.execute({
+          sql:
+            `ALTER TABLE ${quoteIdent(op.table)} ADD COLUMN ${quoteIdent(op.column)} ${op.type.trim() || "TEXT"}`,
+          args: [],
+        });
+      } catch (error) {
+        if (!isDuplicateColumnError(error)) {
+          throw error;
+        }
+      }
       return;
     case "drop_column":
       await dropRemoteTableSyncTriggers(remote, op.table);
@@ -142,16 +131,9 @@ async function applySchemaOpToRemote(
       });
       return;
     case "sql":
-      await remote.execute(op.statement);
+      await executeRemoteSqlIdempotent(remote, op.statement);
       return;
   }
-}
-
-function splitSqlStatements(sql: string): string[] {
-  return sql
-    .split(";")
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0 && !part.startsWith("--"));
 }
 
 async function applyMigrationToRemote(
@@ -205,6 +187,7 @@ export async function applyPendingDatabaseMigrationsToTurso(
     return [];
   }
 
+  await alignMigrationLedgers(remote, localDbPath, migrationRoot);
   await applyDatabaseMigrations(migrationRoot, localDbPath);
 
   const localDb = new Database(localDbPath, { readonly: true });

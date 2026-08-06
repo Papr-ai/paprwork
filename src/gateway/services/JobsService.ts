@@ -1747,6 +1747,11 @@ export class JobsService {
       );
     }
 
+    if ((job.writeDbIds ?? []).length > 0 || writeTargets.length > 0) {
+      const { pullJobTursoBeforeRun } = await import("./jobTursoSyncBookends.js");
+      await pullJobTursoBeforeRun(job, appendRunLog);
+    }
+
     const { requestKeyPermission: requestKeyPermissionFromMain } =
       await import("../permissions/PermissionRequester.js");
     const launch = await executor.launch({
@@ -2086,8 +2091,8 @@ export class JobsService {
               );
             });
 
-          void import("./tursoPushScheduler.js")
-            .then(({ pushJobTursoIfEnabled }) => pushJobTursoIfEnabled(job.id))
+          void import("./jobTursoSyncBookends.js")
+            .then(({ pushJobTursoIfEnabled }) => pushJobTursoIfEnabled(job))
             .catch((err) => {
               console.warn(
                 `[JobsService] Turso push failed for ${job.id}:`,

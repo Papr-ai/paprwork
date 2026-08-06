@@ -68,6 +68,8 @@ export interface LocalTable {
   name: string;
   columns: TableColumn[];
   rows: unknown[][];
+  /** Full CREATE TABLE from sqlite_master — preserves NOT NULL, DEFAULT, FK, etc. */
+  createSql?: string;
 }
 
 export type TursoSyncMode = "delta" | "bootstrap" | "snapshot_fallback" | "full";
@@ -239,6 +241,31 @@ export function listUserTables(db: Database.Database): string[] {
   return rows.map((row) => row.name);
 }
 
+export function readTableCreateSql(
+  db: Database.Database,
+  tableName: string,
+): string | undefined {
+  const row = db
+    .prepare(
+      `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`,
+    )
+    .get(tableName) as { sql: string | null } | undefined;
+  const sql = row?.sql?.trim();
+  return sql && sql.length > 0 ? sql : undefined;
+}
+
+export async function readRemoteTableCreateSql(
+  remote: Client,
+  tableName: string,
+): Promise<string | undefined> {
+  const result = await remote.execute({
+    sql: `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`,
+    args: [tableName],
+  });
+  const sql = String(result.rows[0]?.sql ?? "").trim();
+  return sql.length > 0 ? sql : undefined;
+}
+
 export function readTableSchema(
   db: Database.Database,
   tableName: string,
@@ -268,10 +295,18 @@ export function readLocalTable(
     .prepare(`SELECT ${colList} FROM ${quoteIdent(tableName)}`)
     .raw()
     .all() as unknown[][];
-  return { name: tableName, columns, rows };
+  return {
+    name: tableName,
+    columns,
+    rows,
+    createSql: readTableCreateSql(db, tableName),
+  };
 }
 
 export function buildCreateTableSql(table: LocalTable): string {
+  if (table.createSql) {
+    return table.createSql;
+  }
   const pkCols = table.columns.filter((col) => col.primaryKey);
   const colDefs = table.columns
     .map((col) => {
@@ -418,7 +453,8 @@ async function readRemoteTable(
   const rows = result.rows.map((row) =>
     columns.map((col) => row[col.name] ?? null),
   );
-  return { name: tableName, columns, rows };
+  const createSql = await readRemoteTableCreateSql(remote, tableName);
+  return { name: tableName, columns, rows, createSql };
 }
 
 async function remoteTableExists(
@@ -1277,7 +1313,7 @@ export async function pullTursoToLocalDb(
       }
     }
 
-    return performFullTursoPull(remote, localDbPath, syncOptions, {
+    return await performFullTursoPull(remote, localDbPath, syncOptions, {
       remoteVersion,
       hasRemoteLog,
     });

@@ -103,6 +103,8 @@ export function resolveTursoBookendTargets(
       tursoUrl: source.databaseUrl,
       authToken: source.authToken,
       ...dbEventIdsForSyncKey(syncKey, linked),
+      // Apps subscribe by jobId; registry writeDbIds targets only had dbId before.
+      jobId: request.jobId,
     });
   };
 
@@ -119,6 +121,7 @@ export function resolveTursoBookendTargets(
       tursoUrl: request.turso.databaseUrl,
       authToken: request.turso.authToken,
       ...dbEventIdsForSyncKey(request.turso.jobId, linked),
+      jobId: request.jobId,
     });
   }
 

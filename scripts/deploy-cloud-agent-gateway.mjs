@@ -14,6 +14,8 @@
  *   --memory-url=URL      Memory server URL (default: https://memory.papr.ai)
  *   --memory-service=NAME Cloud Run service to wire CLOUD_AGENT_GATEWAY_URL (default: memoryserver-staging)
  *   --skip-memory-wire    Skip updating memory Cloud Run env after deploy
+ *   --cloud-build         Build on GCP (faster on Apple Silicon vs local linux/amd64)
+ *   --fast                Shorthand: --cloud-build --skip-memory-wire (repeat deploys)
  *   --dry-run             Print commands without executing
  */
 
@@ -44,6 +46,7 @@ const getArg = (name, fallback) => {
   return hit ? hit.split("=").slice(1).join("=") : fallback;
 };
 const dryRun = args.includes("--dry-run");
+const fastDeploy = args.includes("--fast");
 
 const project = getArg("project", process.env.GCP_APPS_PROJECT_ID);
 const region = getArg("region", process.env.GCP_APPS_REGION ?? "us-west1");
@@ -52,7 +55,7 @@ const repo = getArg("repo", "papr-apps");
 const imageName = getArg("image", "cloud-agent-gateway");
 const memoryUrl = getArg("memory-url", "https://memory.papr.ai");
 const memoryService = getArg("memory-service", "memoryserver-staging");
-const skipMemoryWire = args.includes("--skip-memory-wire");
+const skipMemoryWire = args.includes("--skip-memory-wire") || fastDeploy;
 
 function gitShortSha() {
   try {
@@ -93,6 +96,7 @@ console.log(`Region:      ${region}`);
 console.log(`Service:     ${service}`);
 console.log(`Image:       ${fullImage}`);
 console.log(`Memory URL:  ${memoryUrl}`);
+if (fastDeploy) console.log("Mode:        FAST (cloud-build + skip memory wire)");
 if (dryRun) console.log("Mode:        DRY RUN");
 
 console.log("\n--- Pre-flight checklist ---");
@@ -179,7 +183,10 @@ if (appHostSecretCheck.status !== 0) {
 }
 
 console.log("\n--- Step 4: Build & push Docker image ---");
-const useCloudBuild = args.includes("--cloud-build") || process.env.CLOUD_AGENT_GATEWAY_CLOUD_BUILD === "1";
+const useCloudBuild =
+  fastDeploy ||
+  args.includes("--cloud-build") ||
+  process.env.CLOUD_AGENT_GATEWAY_CLOUD_BUILD === "1";
 if (useCloudBuild) {
   run(
     `gcloud builds submit --project=${project} --region=${region} --config=cloudbuild-cloud-agent-gateway.yaml --substitutions=_IMAGE=${fullImage} .`,

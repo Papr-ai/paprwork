@@ -58,6 +58,7 @@ import {
   applyPendingDatabaseMigrationsToTurso,
   resolveMigrationRootFromDbPath,
 } from "./jobs/jobMigrationTursoSync.js";
+import { alignMigrationLedgers } from "./jobs/jobMigrationLedgerSync.js";
 import { migrateRemoteTableSchema } from "./tursoSchemaMigration.js";
 import { ensureRemoteRowSyncColumns } from "./rowSyncColumns.js";
 import { ensureRemoteTableSyncTriggers } from "./tursoSyncLog.js";
@@ -618,6 +619,20 @@ export class TursoSyncBridge {
       });
     }
     if (result.status === "pulled") {
+      const migrationRoot = resolveMigrationRootFromDbPath(linked.dbPath);
+      if (migrationRoot && fs.existsSync(linked.dbPath)) {
+        const ledgerRemote = createRemoteClient(creds);
+        try {
+          await alignMigrationLedgers(
+            ledgerRemote,
+            linked.dbPath,
+            migrationRoot,
+          );
+        } finally {
+          ledgerRemote.close();
+        }
+      }
+
       const target: { jobId?: string; dbId?: string } = {};
       if (linked.jobId) {
         target.jobId = linked.jobId;

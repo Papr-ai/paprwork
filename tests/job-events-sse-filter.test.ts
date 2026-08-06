@@ -40,4 +40,28 @@ describe("job events SSE filter", () => {
     expect(matchesFilter(event, ["job-1"], [])).toBe(true);
     expect(matchesFilter(event, [], ["db-abcdef12"])).toBe(false);
   });
+
+  it("matches db-changed by jobId when app subscribes with jobIds only", () => {
+    const event: JobEvent = {
+      type: "jobs:db-changed",
+      data: {
+        jobId: "51abf434-1d0f-4f14-8111-fabe8eedf224",
+        dbId: "db-2d6b4294",
+        tables: ["audit_modules"],
+      },
+    };
+    expect(
+      matchesFilter(event, ["51abf434-1d0f-4f14-8111-fabe8eedf224"], []),
+    ).toBe(true);
+  });
+
+  it("does not match db-changed with dbId only when subscribed by jobIds", () => {
+    const event: JobEvent = {
+      type: "jobs:db-changed",
+      data: { dbId: "db-2d6b4294", tables: ["audit_modules"] },
+    };
+    expect(matchesFilter(event, ["51abf434-1d0f-4f14-8111-fabe8eedf224"], [])).toBe(
+      false,
+    );
+  });
 });

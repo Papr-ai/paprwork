@@ -15,6 +15,7 @@ import {
   pushLocalDbToTurso,
   quoteIdent,
   readLocalTable,
+  readTableCreateSql,
   resetChangeLogReadyCacheForTests,
   sortTablesForInsert,
   toLocalTableName,
@@ -101,8 +102,48 @@ describe("tursoSyncBridgeCore", () => {
     const table = readLocalTable(db, "items");
     expect(table.columns).toHaveLength(2);
     expect(table.rows).toEqual([[1, "alpha"]]);
+    expect(table.createSql).toContain("CREATE TABLE");
     db.close();
   });
+
+  it.skipIf(!canUseBetterSqlite)(
+    "buildCreateTableSql preserves NOT NULL and DEFAULT from sqlite_master",
+    () => {
+      const db = new Database(":memory:");
+      db.exec(`
+        CREATE TABLE audits (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          contact_name TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      const originalSql = readTableCreateSql(db, "audits");
+      expect(originalSql).toBeTruthy();
+
+      const table = readLocalTable(db, "audits");
+      expect(buildCreateTableSql(table)).toBe(originalSql);
+
+      db.exec("DROP TABLE audits");
+      db.exec(buildCreateTableSql(table));
+
+      const roundTrip = readTableCreateSql(db, "audits");
+      expect(roundTrip).toBeTruthy();
+      expect(roundTrip).toContain("NOT NULL");
+      expect(roundTrip).toContain("DEFAULT");
+
+      const info = db.prepare("PRAGMA table_info(audits)").all() as Array<{
+        name: string;
+        notnull: number;
+        dflt_value: string | null;
+      }>;
+      const contactName = info.find((col) => col.name === "contact_name");
+      const createdAt = info.find((col) => col.name === "created_at");
+      expect(contactName?.notnull).toBe(1);
+      expect(createdAt?.notnull).toBe(1);
+      expect(createdAt?.dflt_value).toBeTruthy();
+      db.close();
+    },
+  );
 
   it.skipIf(!canUseBetterSqlite)(
     "ensureLocalDbChangeLogReady installs infra once per session",
@@ -221,6 +262,10 @@ describe("tursoSyncBridgeCore", () => {
         INSERT INTO leads (id, campaign_id) VALUES (10, 1);
       `);
 
+      const campaignsSql = readTableCreateSql(db, "campaigns");
+      const leadsSql = readTableCreateSql(db, "leads");
+      expect(leadsSql).toContain("REFERENCES");
+
       const pulled: LocalTable[] = [
         {
           name: "leads",
@@ -229,6 +274,7 @@ describe("tursoSyncBridgeCore", () => {
             { name: "campaign_id", type: "INTEGER", primaryKey: false },
           ],
           rows: [[20, 2]],
+          createSql: leadsSql,
         },
         {
           name: "campaigns",
@@ -237,10 +283,14 @@ describe("tursoSyncBridgeCore", () => {
             { name: "name", type: "TEXT", primaryKey: false },
           ],
           rows: [[2, "new"]],
+          createSql: campaignsSql,
         },
       ];
 
       expect(() => applyPulledTablesToLocalDb(db, pulled)).not.toThrow();
+
+      const roundTripLeadsSql = readTableCreateSql(db, "leads");
+      expect(roundTripLeadsSql).toContain("REFERENCES");
 
       const campaigns = db
         .prepare("SELECT id, name FROM campaigns ORDER BY id")

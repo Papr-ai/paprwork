@@ -15,6 +15,7 @@ const {
 }));
 
 const applyPendingDatabaseMigrationsToTurso = vi.hoisted(() => vi.fn());
+const alignMigrationLedgers = vi.hoisted(() => vi.fn());
 
 const fsMocks = vi.hoisted(() => ({
   existsSync: vi.fn(() => true),
@@ -40,6 +41,10 @@ vi.mock("../src/gateway/services/jobs/jobMigrationTursoSync.js", () => ({
     }
     return null;
   }),
+}));
+
+vi.mock("../src/gateway/services/jobs/jobMigrationLedgerSync.js", () => ({
+  alignMigrationLedgers,
 }));
 
 vi.mock("../src/gateway/services/tursoSyncState.js", () => ({
@@ -84,6 +89,11 @@ describe("cloud agent Turso bookends", () => {
       close: vi.fn(),
     });
     applyPendingDatabaseMigrationsToTurso.mockResolvedValue([]);
+    alignMigrationLedgers.mockResolvedValue({
+      remoteBackfilled: [],
+      localHydrated: [],
+      localInferred: [],
+    });
   });
 
   it("installs changelog triggers after pulling from Turso", async () => {
@@ -98,6 +108,20 @@ describe("cloud agent Turso bookends", () => {
 
     expect(pullTursoToLocalDb).toHaveBeenCalledOnce();
     expect(ensureLocalDbChangeLogReady).toHaveBeenCalledWith(target.dbPath);
+    expect(alignMigrationLedgers).not.toHaveBeenCalled();
+  });
+
+  it("aligns migration ledgers after pull when registry layout is recognized", async () => {
+    const target = {
+      syncKey: "db-abc",
+      dbPath: "/tmp/Papr/data/databases/gtm-audit/data.db",
+      tursoUrl: "libsql://example.turso.io",
+      authToken: "token",
+    };
+
+    await pullLinkedSourceFromCloud(target);
+
+    expect(alignMigrationLedgers).toHaveBeenCalledOnce();
   });
 
   it("ignores git sync cursors when local db has no user tables yet", async () => {

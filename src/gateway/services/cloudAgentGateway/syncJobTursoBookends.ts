@@ -9,6 +9,7 @@ import {
 } from "../tursoSyncBridgeCore.js";
 import { remoteNeedsBootstrap } from "../tursoDeltaSync.js";
 import { loadTursoSyncState, localDbHasSyncableData } from "../tursoSyncState.js";
+import { alignMigrationLedgers } from "../jobs/jobMigrationLedgerSync.js";
 import {
   applyPendingDatabaseMigrationsToTurso,
   resolveMigrationRootFromDbPath,
@@ -50,6 +51,16 @@ export async function pullLinkedSourceFromCloud(
       : {}),
   });
   ensureLocalDbChangeLogReady(input.dbPath);
+
+  const migrationRoot = resolveMigrationRootFromDbPath(input.dbPath);
+  if (migrationRoot && fs.existsSync(input.dbPath)) {
+    const ledgerRemote = createRemoteClient(creds);
+    try {
+      await alignMigrationLedgers(ledgerRemote, input.dbPath, migrationRoot);
+    } finally {
+      ledgerRemote.close();
+    }
+  }
 }
 
 export async function pushLinkedSourceToCloud(
