@@ -25,8 +25,8 @@ import {
 } from "../agent/compactToolResults.js";
 import {
   checkPiStreamMemory,
-  PI_PROCESS_MEMORY_BACKSTOP_BYTES,
-  PI_STREAM_MEMORY_BUDGET_BYTES,
+  describePiStreamMemoryLimits,
+  getPiProcessBackstopBytes,
 } from "./piStreamMemoryLimits.js";
 import { truncateToolResultForModelContext } from "../agent/toolResultTruncation.js";
 import {
@@ -431,12 +431,13 @@ export async function* createPiCodexStreamWithToolLoop(
     if (memoryCheck.overStreamBudget || memoryCheck.overProcessBackstop) {
       const streamMb = Math.round(memoryCheck.streamDelta / 1024 / 1024);
       const heapMb = Math.round(memoryCheck.heapUsed / 1024 / 1024);
-      const budgetMb = Math.round(PI_STREAM_MEMORY_BUDGET_BYTES / 1024 / 1024);
-      const backstopMb = Math.round(PI_PROCESS_MEMORY_BACKSTOP_BYTES / 1024 / 1024);
+      const budgetMb = Math.round(memoryCheck.streamBudget / 1024 / 1024);
+      const backstopMb = Math.round(getPiProcessBackstopBytes() / 1024 / 1024);
       console.error(
         `[PiCodexToolLoop] 🚨 CRITICAL: Stream memory budget exceeded — ` +
           `stream +${streamMb}MB (limit ${budgetMb}MB), process heap ${heapMb}MB ` +
-          `(backstop ${backstopMb}MB). Aborting this stream.`,
+          `(backstop ${backstopMb}MB, gcConfirmed=${memoryCheck.confirmedAfterGc}). ` +
+          `Limits: ${describePiStreamMemoryLimits()}. Aborting this stream.`,
       );
       yield {
         type: "error",
@@ -448,8 +449,11 @@ export async function* createPiCodexStreamWithToolLoop(
             memoryCheck.overProcessBackstop
               ? "The agent service is under heavy load (too many parallel tasks). " +
                 "Try again shortly, restart the app, or stagger scheduled agent jobs."
-              : "This agent task used too much memory (heavy tool use or long reasoning). " +
-                "Start a fresh chat or simplify the task, then try again.",
+              : `This task buffered too much tool output in one turn ` +
+                `(+${streamMb} MB, limit ${budgetMb} MB). This is about the SIZE of ` +
+                `tool results in this turn, not the length of the conversation. ` +
+                `Retry with fewer/smaller tool calls — write bulky output to a file ` +
+                `and read back only a summary, and avoid re-fetching large results.`,
         },
       };
       break;
