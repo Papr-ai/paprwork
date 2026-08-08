@@ -41,6 +41,14 @@ import {
   describeOversizedSkip,
   isTooLargeForGitSync,
 } from "./cloudSync/gitSyncLimits.js";
+import {
+  HYGIENE_INTERVAL_MS,
+  classifyRepoSize,
+  measureGitDirBytes,
+  partitionStagePaths,
+  REPO_SIZE_CRITICAL_BYTES,
+} from "./cloudSync/repoHygiene.js";
+import { runRepoMaintenance } from "./cloudSync/repoMaintenance.js";
 import { cloudApiFetch, waitForPaprApiKey } from "../utils/cloudApiClient.js";
 import type { DesktopHeartbeatResponse } from "../types/cloudRuntime.js";
 import { getPaprRoot } from "../../core/utils/paprRoot.js";
@@ -82,6 +90,21 @@ const GITIGNORE_CONTENT = `# Runtime — rebuilt per environment
 **/*.db
 **/*.db-wal
 **/*.db-shm
+**/*.sqlite
+**/*.sqlite3
+
+# Backups — local disaster-recovery artifacts. These are snapshots of data that
+# is already synced (Turso for SQLite, git for code), so committing them stores
+# a second, uncompressible copy of everything. Keep them OUT of the sync tree.
+**/*.bak
+**/*.bak.*
+backups/
+**/backups/
+
+# Archives — migration tarballs and exports are large, opaque, and regenerable
+**/*.tgz
+**/*.tar.gz
+**/*.zip
 
 # Audio / recordings — runtime blobs (not git). Store metadata in job data.db
 # (Turso sync); large files belong in object storage (bucket), not GitHub.
@@ -186,6 +209,8 @@ export class CloudSyncService {
   private queueTotal = 0;
   private stateManager: SyncStateManager;
   private readonly gitRunner = new GitRunner();
+  /** Throttle for maybeRunRepoHygiene(). 0 = run on first sync after launch. */
+  private lastHygieneAtMs = 0;
 
   private get paprDir(): string {
     return this.boundPaprDir;
@@ -1401,6 +1426,9 @@ export class CloudSyncService {
       } catch (err) {
         console.warn("[CloudSync] Periodic pull failed:", (err as Error).message.slice(0, 100));
       }
+      // Hygiene rides the pull tick: idle, serialized, and self-throttled to
+      // HYGIENE_INTERVAL_MS so it never competes with a user-facing push.
+      await this.maybeRunRepoHygiene();
     }, PULL_INTERVAL_MS) as ReturnType<typeof setTimeout>;
 
     console.log(`[CloudSync] Periodic pull every ${PULL_INTERVAL_MS / 60_000} min`);
@@ -1769,7 +1797,7 @@ export class CloudSyncService {
         path.join("apps", appId),
       ),
     ];
-    await this.git(["add", "--", ...stagePaths]);
+    await this.stageFiltered(stagePaths);
     await this.unstageOversizedFiles();
 
     // SAFETY: Detect accidental mass deletions (e.g., empty workspace after clone)
@@ -2514,6 +2542,77 @@ export class CloudSyncService {
     }
     const appendix = ["", ...requiredRuntimeLines, ""].join("\n");
     fs.writeFileSync(gitignorePath, `${existing.trimEnd()}\n${appendix}`, "utf-8");
+  }
+
+  // ── Repo hygiene ──────────────────────────────────────────────────
+
+  /**
+   * Stage paths after filtering out never-track and oversized files.
+   *
+   * `.gitignore` alone is NOT sufficient here: an explicit `git add -- <path>`
+   * bypasses ignore rules for already-tracked files, which is how 47 SQLite
+   * databases and 78 `.bak` blobs ended up in one user's history (253 GB).
+   */
+  private async stageFiltered(stagePaths: string[]): Promise<void> {
+    const { allowed, rejected } = partitionStagePaths(this.paprDir, stagePaths);
+    if (rejected.length > 0) {
+      console.warn(
+        `[CloudSync] Skipped ${rejected.length} path(s) from git: ` +
+          rejected
+            .slice(0, 5)
+            .map((r) => `${r.path} (${r.reason})`)
+            .join(", "),
+      );
+    }
+    if (allowed.length === 0) return;
+    await this.git(["add", "--", ...allowed]);
+  }
+
+  /**
+   * Bounded git maintenance, throttled to HYGIENE_INTERVAL_MS.
+   *
+   * Sweeps orphaned repack temp files, untracks forbidden blobs, and prunes
+   * unreachable objects. Never throws — hygiene failing must not break sync.
+   */
+  private async maybeRunRepoHygiene(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastHygieneAtMs < HYGIENE_INTERVAL_MS) return;
+    this.lastHygieneAtMs = now;
+
+    try {
+      const result = await runRepoMaintenance(this.gitRunner, this.paprDir);
+      const freedGb = (
+        (result.gitDirBytesBefore - result.gitDirBytesAfter) /
+        1073741824
+      ).toFixed(2);
+      if (
+        result.tmpPacksRemoved > 0 ||
+        result.untrackedFiles > 0 ||
+        result.level !== "ok"
+      ) {
+        console.log(
+          `[CloudSync] Repo hygiene: removed ${result.tmpPacksRemoved} temp pack(s), ` +
+            `untracked ${result.untrackedFiles} file(s), freed ${freedGb} GB, ` +
+            `repo now ${(result.gitDirBytesAfter / 1073741824).toFixed(2)} GB (${result.level})`,
+        );
+      }
+      if (result.level === "critical") {
+        this.state.lastError =
+          `Cloud Sync repo is ${(result.gitDirBytesAfter / 1073741824).toFixed(1)} GB — ` +
+          `above the ${REPO_SIZE_CRITICAL_BYTES / 1073741824} GB limit. ` +
+          `Large binaries are being skipped. Run repo cleanup from Settings → Sync.`;
+      }
+    } catch (err) {
+      console.warn(
+        "[CloudSync] Repo hygiene failed:",
+        (err as Error).message.slice(0, 160),
+      );
+    }
+  }
+
+  /** Current `.git` size for Settings → Sync display. */
+  getRepoSizeInfo(): { gitDirBytes: number; level: "ok" | "warn" | "critical" } {
+    return classifyRepoSize(measureGitDirBytes(this.paprDir));
   }
 }
 

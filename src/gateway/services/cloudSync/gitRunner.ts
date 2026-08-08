@@ -81,7 +81,15 @@ function runGitOnce(args: string[], opts: RunGitOptions = {}): Promise<string> {
     child.stderr?.on("data", (chunk: Buffer) => onData(chunk, "stderr"));
 
     const timer = setTimeout(() => {
+      // SIGTERM lets git unlink its temp packs; SIGKILL strands them. A killed
+      // `repack` previously left 18 orphaned tmp_pack_* files totalling 207 GB
+      // in one user's repo, so we give git a grace period to clean up itself
+      // and only escalate if it ignores the term.
       child.kill("SIGTERM");
+      const escalate = setTimeout(() => {
+        try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      }, 10_000);
+      child.once("close", () => clearTimeout(escalate));
       reject(
         new Error(
           `git ${args.join(" ")} timed out after ${timeout}ms`,
