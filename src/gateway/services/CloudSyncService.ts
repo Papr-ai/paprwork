@@ -89,7 +89,16 @@ backups/
 # Audio / recordings — runtime blobs (not git). Store metadata in job data.db
 # (Turso sync); large files belong in object storage (bucket), not GitHub.
 **/*.wav
-**/data/recordings/
+**/*.m4a
+**/*.mp3
+**/*.aiff
+**/*.caf
+**/*.flac
+**/*.webm
+# Match the directory at ANY depth, not just under data/. Extension rules alone
+# are fragile — a future encoder change would silently start committing again.
+recordings/
+**/recordings/
 
 # Logs — ephemeral
 **/logs/
