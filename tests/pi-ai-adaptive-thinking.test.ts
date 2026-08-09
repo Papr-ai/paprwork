@@ -71,4 +71,30 @@ describe("piAiAnthropicAdaptiveThinking", () => {
     );
     expect(sonnetOpts.onPayload).toBeUndefined();
   });
+
+  it("reports a Claude Code version new enough for Opus 5 on OAuth", () => {
+    const opts = augmentPiAiAnthropicStreamOptions(
+      "claude-opus-5",
+      "medium",
+      {
+        apiKey: "sk-ant-oat01-test",
+        sessionId: "chat-1",
+        reasoning: "medium",
+      },
+    );
+    expect(opts.headers?.["user-agent"]).toBe("claude-cli/2.1.226");
+  });
+
+  it("does not spoof Claude Code headers for direct API keys", () => {
+    const opts = augmentPiAiAnthropicStreamOptions(
+      "claude-opus-5",
+      "medium",
+      {
+        apiKey: "sk-ant-api03-test",
+        sessionId: "chat-1",
+        reasoning: "medium",
+      },
+    );
+    expect(opts.headers).toBeUndefined();
+  });
 });
