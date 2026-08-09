@@ -108,3 +108,56 @@ describe("classifyRepoSize", () => {
     expect(classifyRepoSize(253 * 1024 ** 3).level).toBe("critical");
   });
 });
+
+describe("partitionStagePaths — directory expansion", () => {
+  it("does not let a directory pathspec smuggle oversized files past the ceiling", () => {
+    // Regression: CloudSync stages `apps/<id>` (a directory). `git add -- <dir>`
+    // recurses, so per-file size checks never ran and multi-GB blobs were
+    // committed. The directory must expand and each file be vetted.
+    const dir = tmpRepo();
+    fs.mkdirSync(path.join(dir, "apps", "x", "data"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "apps", "x", "main.ts"), "export {};");
+    fs.writeFileSync(
+      path.join(dir, "apps", "x", "data", "big.bin"),
+      Buffer.alloc(MAX_TRACKED_FILE_BYTES + 1024),
+    );
+
+    const { allowed, rejected } = partitionStagePaths(dir, ["apps/x"]);
+
+    expect(allowed).toContain("apps/x/main.ts");
+    expect(allowed).not.toContain("apps/x/data/big.bin");
+    expect(rejected.some((r) => r.path === "apps/x/data/big.bin")).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("prunes recordings directories without enumerating them", () => {
+    const dir = tmpRepo();
+    const rec = path.join(dir, "Jobs", "j1", "data", "recordings");
+    fs.mkdirSync(rec, { recursive: true });
+    fs.writeFileSync(path.join(rec, "meeting.wav"), "audio");
+    fs.mkdirSync(path.join(dir, "Jobs", "j1", "code"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "Jobs", "j1", "code", "run.py"), "print(1)");
+
+    const { allowed, rejected } = partitionStagePaths(dir, ["Jobs/j1"]);
+
+    expect(allowed).toContain("Jobs/j1/code/run.py");
+    expect(allowed.some((p) => p.includes("recordings"))).toBe(false);
+    expect(rejected.some((r) => r.path.includes("recordings"))).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("blocks recordings and audio formats by name at any depth", () => {
+    expect(matchesNeverTrack("Jobs/j/data/recordings/a.wav")).toBe(true);
+    expect(matchesNeverTrack("Jobs/j/data/recordings/a.m4a")).toBe(true);
+    // Format-independent: a future encoder still cannot escape the rule.
+    expect(matchesNeverTrack("Jobs/j/data/recordings/a.opus")).toBe(true);
+    expect(matchesNeverTrack("apps/x/audio.mp3")).toBe(true);
+  });
+
+  it("still stages deletions for paths that no longer exist", () => {
+    const dir = tmpRepo();
+    const { allowed } = partitionStagePaths(dir, ["apps/gone/index.html"]);
+    expect(allowed).toContain("apps/gone/index.html");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

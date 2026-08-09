@@ -6,7 +6,13 @@ export default defineConfig({
     name: "unit-backend",
     globals: true,
     environment: "node",
-    include: ["tests/**/*.{test,spec}.{js,ts}"],
+    // Co-located `src/**` specs are included so tests living next to the code
+    // they cover actually run in CI. Without this, repoHygiene.test.ts was
+    // collected by no project and silently never executed.
+    include: [
+      "tests/**/*.{test,spec}.{js,ts}",
+      "src/**/*.{test,spec}.{js,ts}",
+    ],
     exclude: [
       "**/node_modules/**",
       "**/dist/**",
