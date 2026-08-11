@@ -33,6 +33,7 @@ import { WebSocketServer } from "ws";
 import path from "path";
 import { fileURLToPath } from "url";
 import { initializeAgentService } from "./services/AgentService.js";
+import { registerAppFilesRoutes } from "./services/appFiles/appFilesRoutes.js";
 import { getPaprAppsRoot, getPaprRoot, isCloudAgentGatewayMode } from "../core/utils/paprRoot.js";
 import {
   clearGatewaySyncBusy,
@@ -913,6 +914,20 @@ async function startGateway(): Promise<void> {
       }
     });
     // ─────────────────────────────────────────────────────────────────────────
+
+    // ── App Files API (large blobs → GCS, pointer rows in the app DB) ───────
+    // Apps call: fetch('/api/files/upload', { body: { appId, filePath } }).
+    // Bytes never go through git — repoHygiene rejects anything over 25 MB, so
+    // this is where large assets belong.
+    // ─────────────────────────────────────────────────────────────────────────
+    registerAppFilesRoutes(app, {
+      resolveSource: (appId, sourceId, sql, operation) =>
+        resolveLinkedSource(appId, sourceId, sql, operation),
+      dbQuery: (appId, source, sql, params) =>
+        dbRouter.query(appId, source as never, sql, params) as never,
+      dbWrite: (appId, source, sql, params) =>
+        dbRouter.write(appId, source as never, sql, params) as never,
+    });
 
     // ── Mini-app SQLite DDL API ──────────────────────────────────────────────
     // Apps call: fetch('/api/db/exec', { method: 'POST', body: JSON.stringify({ appId, sql }) })
