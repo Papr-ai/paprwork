@@ -37,6 +37,7 @@ export interface PiAiAnthropicStreamOptions {
   signal?: AbortSignal;
   reasoning?: PiAiReasoningLevel;
   cacheRetention?: "none" | "short" | "long";
+  headers?: Record<string, string>;
   onPayload?: (
     params: AnthropicMessagesParams,
     model: unknown,
@@ -117,8 +118,16 @@ export function augmentPiAiAnthropicStreamOptions(
   reasoningLevel: PiAiReasoningLevel,
   base: PiAiAnthropicStreamOptions,
 ): PiAiAnthropicStreamOptions {
+  const isOAuth = base.apiKey.includes("sk-ant-oat");
+  const headers = isOAuth
+    ? {
+        ...base.headers,
+        "user-agent": "claude-cli/2.1.226",
+      }
+    : base.headers;
+
   if (!requiresPiAiAdaptiveThinkingOverride(modelId)) {
-    return base;
+    return headers === base.headers ? base : { ...base, headers };
   }
 
   console.log(
@@ -128,6 +137,7 @@ export function augmentPiAiAnthropicStreamOptions(
 
   return {
     ...base,
+    headers,
     onPayload: buildAdaptiveThinkingOnPayload(modelId, reasoningLevel),
   };
 }

@@ -747,19 +747,34 @@ export async function* createPiCodexStreamWithToolLoop(
       
       // HARD LIMIT: Check total tool calls (not just steps)
       // Even if agent makes multiple tool calls per step, we enforce a hard limit
-      const MAX_TOTAL_TOOL_CALLS = maxSteps * 2; // Allow 2x maxSteps as absolute maximum
+      // Budget must account for PARALLEL tool calls. The agent is explicitly
+      // told to batch independent calls, so a single step can spend 5-10 calls.
+      // At maxSteps*2 (=200) a batching agent hit the cap around step 20 — far
+      // below its 95-step budget — and the turn died mid-task with the plan
+      // still unchecked ("finished working" but nothing done).
+      // The step loop is what actually guards against runaway loops; this is a
+      // secondary backstop, so give it headroom for realistic batch sizes.
+      const MAX_PARALLEL_CALLS_PER_STEP = 10;
+      const MAX_TOTAL_TOOL_CALLS = maxSteps * MAX_PARALLEL_CALLS_PER_STEP;
       if (totalToolCalls >= MAX_TOTAL_TOOL_CALLS) {
         console.error(
           `[PiCodexToolLoop] 🛑 HARD LIMIT: ${totalToolCalls} tool calls exceeds maximum (${MAX_TOTAL_TOOL_CALLS}). ` +
           `Forcing stop to prevent infinite loops.`
         );
         
-        // Add a system instruction to force a response
-        context.messages.push({
-          role: "user",
-          content: `[SYSTEM: You've made ${totalToolCalls} tool calls, which exceeds the maximum limit of ${MAX_TOTAL_TOOL_CALLS}. You MUST stop making tool calls and provide your final response now. Summarize what you've learned and respond to the user.]`,
-        } as any);
-        
+        // NOTE: pushing a message here and breaking immediately means the model
+        // never sees it — the loop exits before the next model call. Tell the
+        // USER directly instead, otherwise the turn ends silently mid-task and
+        // looks like "finished working" with the plan still unchecked.
+        yield {
+          type: "text-delta",
+          text:
+            `\n\n---\n\n⚠️ **Turn stopped early — tool-call budget reached** ` +
+            `(${totalToolCalls}/${MAX_TOTAL_TOOL_CALLS} tool calls).\n\n` +
+            `This task is **not finished**. Parallel tool calls consume this budget ` +
+            `faster than step count suggests. Send "continue" to resume from here.\n`,
+        };
+
         break; // Force stop the loop
       }
       
@@ -815,12 +830,16 @@ export async function* createPiCodexStreamWithToolLoop(
           `Breaking tool loop and forcing final response.`
         );
         
-        // Add a system instruction as the last tool result to force a response
-        context.messages.push({
-          role: "user",
-          content: `[SYSTEM: You've made ${step} tool calls. You MUST provide your final response now. Do not make any more tool calls. Summarize your findings and respond to the user.]`,
-        } as any);
-        
+        // Same as the tool-call hard limit: a message pushed here is never read,
+        // because we break before the next model call. Surface it to the user.
+        yield {
+          type: "text-delta",
+          text:
+            `\n\n---\n\n⚠️ **Turn stopped early — step limit reached** ` +
+            `(${step}/${maxSteps} steps).\n\n` +
+            `This task is **not finished**. Send "continue" to resume from here.\n`,
+        };
+
         break; // Force stop the loop
       } else if (step >= STEP_WARNING_THRESHOLD) {
         // At 90+ steps, warn the model
