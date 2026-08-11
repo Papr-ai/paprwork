@@ -111,7 +111,9 @@ export class CodeIndexTracker {
       CREATE TABLE IF NOT EXISTS index_queue (
         file_path TEXT PRIMARY KEY,
         queued_at DATETIME NOT NULL,
-        priority INTEGER DEFAULT 0
+        priority INTEGER DEFAULT 0,
+        attempts INTEGER DEFAULT 0,
+        last_error TEXT
       );
       
       CREATE INDEX IF NOT EXISTS idx_queue_priority ON index_queue(priority DESC, queued_at ASC);
@@ -138,6 +140,26 @@ export class CodeIndexTracker {
 
       CREATE INDEX IF NOT EXISTS idx_file_summaries_project ON file_summaries(project_id);
     `);
+
+    this.migrateIndexQueueColumns();
+  }
+
+  /**
+   * Existing installs already have index_queue, so CREATE TABLE IF NOT EXISTS
+   * will not add newer columns. Add them idempotently.
+   */
+  private migrateIndexQueueColumns(): void {
+    const cols = this.db
+      .prepare(`PRAGMA table_info(index_queue)`)
+      .all() as Array<{ name: string }>;
+    const have = new Set(cols.map((c) => c.name));
+
+    if (!have.has('attempts')) {
+      this.db.exec(`ALTER TABLE index_queue ADD COLUMN attempts INTEGER DEFAULT 0`);
+    }
+    if (!have.has('last_error')) {
+      this.db.exec(`ALTER TABLE index_queue ADD COLUMN last_error TEXT`);
+    }
   }
   
   /**
@@ -210,10 +232,34 @@ export class CodeIndexTracker {
    */
   queueFile(filePath: string, priority: number = 0): void {
     if (this.closed) return;
+    // Preserve attempts across re-queues of the same path so a poison file
+    // cannot reset its own retry budget and spin forever.
     this.db.prepare(`
-      INSERT OR REPLACE INTO index_queue (file_path, queued_at, priority)
-      VALUES (?, ?, ?)
+      INSERT INTO index_queue (file_path, queued_at, priority, attempts)
+      VALUES (?, ?, ?, 0)
+      ON CONFLICT(file_path) DO UPDATE SET
+        queued_at = excluded.queued_at,
+        priority = excluded.priority
     `).run(filePath, new Date().toISOString(), priority);
+  }
+
+  /**
+   * Record a failed indexing attempt. Returns the new attempt count so the
+   * caller can decide whether to give up and dequeue.
+   */
+  recordQueueFailure(filePath: string, errorMessage: string): number {
+    if (this.closed) return 0;
+    this.db.prepare(`
+      UPDATE index_queue
+      SET attempts = COALESCE(attempts, 0) + 1, last_error = ?
+      WHERE file_path = ?
+    `).run(errorMessage.slice(0, 500), filePath);
+
+    const row = this.db.prepare(
+      'SELECT attempts FROM index_queue WHERE file_path = ?'
+    ).get(filePath) as { attempts: number } | undefined;
+
+    return row?.attempts ?? 0;
   }
   
   /**

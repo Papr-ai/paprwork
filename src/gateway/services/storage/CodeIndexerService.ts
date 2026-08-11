@@ -13,6 +13,7 @@ import { buildCodeIndexAddPolicy } from '../../utils/paprMemoryPolicy.js';
 import { paprMemoryScopeSpread } from '../../utils/memoryScopeResolver.js';
 import { getProjectPathInfo } from './codeIndexPaths.js';
 import { resolveMiniAppDisplayName } from './codeIndexMetadata.js';
+import { parseJsonTolerant } from '../../../core/utils/atomicJsonWrite.js';
 
 export interface CodeFileMetadata {
   file_path: string;
@@ -318,7 +319,15 @@ export class CodeIndexerService {
       };
     }
     
-    const jobJson = JSON.parse(fs.readFileSync(jobJsonPath, 'utf-8'));
+    const jobJsonRaw = fs.readFileSync(jobJsonPath, 'utf-8');
+    const jobJson = parseJsonTolerant<Record<string, unknown>>(jobJsonRaw);
+    if (!jobJson) {
+      return {
+        project_id: jobId,
+        name: jobId,
+        type: 'job',
+      };
+    }
     
     const metadata: ProjectMetadata = {
       project_id: jobJson.id || jobId,

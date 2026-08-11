@@ -4,7 +4,7 @@ import os from "os";
 import type { ChildProcess } from "child_process";
 import { v4 as uuidv4 } from "uuid";
 import { fileURLToPath } from "url";
-import Database from "better-sqlite3";
+import { writeJsonAtomic, parseJsonTolerant } from "../../core/utils/atomicJsonWrite.js";
 import { JobDatabase } from "./jobs/JobDatabase.js";
 import {
   formatJobArchitectureErrors,
@@ -880,23 +880,11 @@ export class JobsService {
     await fs.mkdir(jobDir, { recursive: true });
     if (isJobRuntimeOffGit()) {
       const { config, runtime } = splitJobRecord(job);
-      await fs.writeFile(
-        path.join(jobDir, "job.json"),
-        JSON.stringify(config, null, 2),
-        "utf8",
-      );
-      await fs.writeFile(
-        path.join(jobDir, JOB_RUNTIME_FILE_NAME),
-        JSON.stringify(runtime, null, 2),
-        "utf8",
-      );
+      await writeJsonAtomic(path.join(jobDir, "job.json"), config);
+      await writeJsonAtomic(path.join(jobDir, JOB_RUNTIME_FILE_NAME), runtime);
       return;
     }
-    await fs.writeFile(
-      path.join(jobDir, "job.json"),
-      JSON.stringify(job, null, 2),
-      "utf8",
-    );
+    await writeJsonAtomic(path.join(jobDir, "job.json"), job);
   }
 
   /**
@@ -920,18 +908,20 @@ export class JobsService {
 
     let raw: Record<string, unknown>;
     try {
-      raw = JSON.parse(
-        await fs.readFile(jobJsonPath, "utf8"),
-      ) as Record<string, unknown>;
+      const jobJsonText = await fs.readFile(jobJsonPath, "utf8");
+      const parsed = parseJsonTolerant<Record<string, unknown>>(jobJsonText);
+      if (!parsed) {
+        return null;
+      }
+      raw = parsed;
     } catch {
       return null;
     }
 
     let runtimeRaw: Partial<JobRecord> | null = null;
     try {
-      runtimeRaw = JSON.parse(
-        await fs.readFile(runtimePath, "utf8"),
-      ) as Partial<JobRecord>;
+      const runtimeText = await fs.readFile(runtimePath, "utf8");
+      runtimeRaw = parseJsonTolerant<Partial<JobRecord>>(runtimeText) ?? null;
     } catch {
       // no runtime file yet
     }
