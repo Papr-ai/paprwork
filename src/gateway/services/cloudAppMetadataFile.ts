@@ -29,6 +29,7 @@ export interface CloudAppRegistryEntry {
   organizationId?: string;
   namespaceId?: string;
   agentChat?: AppAgentChatConfig;
+  tags?: string[];
 }
 
 export function loadCloudAppRegistryEntries(
@@ -94,6 +95,7 @@ export async function writeCloudAppMetadataFile(
       : {}),
     ...(scopedFields.namespaceId ? { namespaceId: scopedFields.namespaceId } : {}),
     ...(entry.icon ? { icon: entry.icon } : {}),
+    ...(entry.tags?.length ? { tags: entry.tags } : {}),
     ...(agentChat?.enabled
       ? {
           agentChat: toPublicAppAgentChatConfig(agentChat),

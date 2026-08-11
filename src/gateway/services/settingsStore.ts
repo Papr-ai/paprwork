@@ -43,6 +43,7 @@ export interface PreferencesData {
   defaultHomeAppId: string | null;
   cloudSyncEnabled: boolean;
   cloudAutoPublishEnabled: boolean;
+  cloudAutoUploadEnabled: boolean;
   defaultMemoryScope?: MemoryAudiencePreference;
 }
 
@@ -93,6 +94,7 @@ export const DEFAULT_SETTINGS: SettingsData = {
     defaultHomeAppId: DEFAULT_HOME_APP_ID,
     cloudSyncEnabled: true,
     cloudAutoPublishEnabled: true,
+    cloudAutoUploadEnabled: true,
     defaultMemoryScope: "user",
   },
   toolResultTruncation: { ...DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS },

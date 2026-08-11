@@ -17,6 +17,7 @@ import {
 import {
   discoverTursoLinkedSources,
   findLinkedSourceForJob,
+  isBidirectionalWriteAuthority,
   linkedSourceAlternateKeys,
   linkedSourceSyncKey,
   listLinkedJobIdsForTursoSync,
@@ -37,10 +38,7 @@ import {
   openWritableLocalJobDb,
   pullTursoToLocalDb,
   pushLocalDbToTurso,
-  readLocalTable,
-  readTableSchema,
   removeLocalJobDbBackup,
-  replaceRemoteTable,
   restoreLocalJobDb,
   type LocalJobDbBackup,
   type PullResult,
@@ -50,7 +48,9 @@ import {
 } from "./tursoSyncBridgeCore.js";
 import { recordTursoPushQuarantine } from "./tursoSyncState.js";
 import {
+  ensureRemoteTablesFromLocal,
   localRemoteSchemaDriftTables,
+  prepareRemoteTableForSync,
   remoteMissingLocalTables,
   remoteNeedsBootstrap,
 } from "./tursoDeltaSync.js";
@@ -59,16 +59,27 @@ import {
   resolveMigrationRootFromDbPath,
 } from "./jobs/jobMigrationTursoSync.js";
 import { alignMigrationLedgers } from "./jobs/jobMigrationLedgerSync.js";
-import { migrateRemoteTableSchema } from "./tursoSchemaMigration.js";
-import { ensureRemoteRowSyncColumns } from "./rowSyncColumns.js";
-import { ensureRemoteTableSyncTriggers } from "./tursoSyncLog.js";
 import {
+  clearStaleDirtyFlagIfClean,
   isJobDbDirty,
+  isLinkedSourceDirtyFast,
   loadTursoSyncState,
   localDbHasSyncableData,
+  recordTursoPushSuccess,
   recordTursoRemoteVersion,
+  recordTursoIndexVersion,
   resolveTursoPushStateEntry,
 } from "./tursoSyncState.js";
+import {
+  reconcileLinkedSourcesFromCloud,
+  reconcileFromCloudDbChanges,
+  reconcileFromSyncIndex,
+  type CloudTursoDbChange,
+  type TursoCloudSyncScope,
+  type TursoCloudSyncSessionResult,
+  type TursoCloudSyncTrigger,
+} from "./tursoSyncSession.js";
+import { bumpSyncIndexForShortName } from "./tursoSyncIndex.js";
 
 export interface JobSyncResult {
   jobId: string;
@@ -141,11 +152,13 @@ export class TursoSyncBridge {
   private readonly jobsRootOverride?: string;
   private readonly appsRootOverride?: string;
   private readonly memoryServerBase: string;
-  private readonly enabled: boolean;
+  readonly enabled: boolean;
   private databaseLimitLogged = false;
   private linkedSourcesCache: TursoLinkedSource[] | null = null;
   private credentialsCacheByDb = new Map<string, CachedCredentials>();
   private credentialsFetchPromises = new Map<string, Promise<TursoCredentials>>();
+  /** Serialize pushJob per syncKey — avoids concurrent backup/pull on the same SQLite file. */
+  private pushJobChains = new Map<string, Promise<PushResult>>();
 
   private static readonly CREDENTIALS_TTL_MS = 30 * 60_000;
 
@@ -177,7 +190,7 @@ export class TursoSyncBridge {
     return jobTursoDatabaseName(jobId);
   }
 
-  private async resolveTursoDatabaseNameForLinked(
+  async resolveTursoDatabaseNameForLinked(
     linked: TursoLinkedSource,
   ): Promise<string> {
     const { getDatabaseRegistryService } = await import(
@@ -368,12 +381,30 @@ export class TursoSyncBridge {
     return findLinkedSourceForJob(sources, jobId) !== undefined;
   }
 
-  /** True when fingerprints/mtime are dirty OR remote Turso lacks local user tables. */
+  /** True when dirty fast-path, fingerprints, or remote lacks local tables. */
   async linkedSourceNeedsPush(linked: TursoLinkedSource): Promise<boolean> {
     const syncKey = linkedSourceSyncKey(linked);
     const alternateKeys = linkedSourceAlternateKeys(linked);
+    clearStaleDirtyFlagIfClean(
+      syncKey,
+      linked.dbPath,
+      undefined,
+      alternateKeys,
+    );
     const state = loadTursoSyncState();
-    if (isJobDbDirty(syncKey, linked.dbPath, state, alternateKeys)) {
+    const fast = isLinkedSourceDirtyFast(
+      syncKey,
+      linked.dbPath,
+      state,
+      alternateKeys,
+    );
+    if (fast === false) {
+      return false;
+    }
+    if (fast !== true && isJobDbDirty(syncKey, linked.dbPath, state, alternateKeys)) {
+      return true;
+    }
+    if (fast === true) {
       return true;
     }
     if (!localDbHasSyncableData(linked.dbPath)) {
@@ -423,32 +454,72 @@ export class TursoSyncBridge {
     }
 
     const syncKey = linkedSourceSyncKey(linked);
+    const prior = this.pushJobChains.get(syncKey);
+    const run = (prior ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => this.pushJobUnlocked(linked, credentials, pushOptions));
+    this.pushJobChains.set(syncKey, run);
+    try {
+      return await run;
+    } finally {
+      if (this.pushJobChains.get(syncKey) === run) {
+        this.pushJobChains.delete(syncKey);
+      }
+    }
+  }
+
+  private async pushJobUnlocked(
+    linked: TursoLinkedSource,
+    credentials?: TursoCredentials,
+    pushOptions?: PushJobOptions,
+  ): Promise<PushResult> {
+    const dbPath = linked.dbPath;
+    const syncKey = linkedSourceSyncKey(linked);
     const alternateKeys = linkedSourceAlternateKeys(linked);
     const databaseName = await this.resolveTursoDatabaseNameForLinked(linked);
     const creds = credentials ?? (await this.fetchCredentials(databaseName));
 
     const stateBeforePush = loadTursoSyncState();
     const localDirty = isJobDbDirty(syncKey, dbPath, stateBeforePush, alternateKeys);
+    const bidirectional = isBidirectionalWriteAuthority(linked.writeAuthority);
     let dbBackup: LocalJobDbBackup | undefined;
 
     try {
-      // When local has unpushed changes, local wins — never pull remote DELETEs
-      // into the source-of-truth DB before pushing (failed push must be a no-op).
-      if (!localDirty) {
+      // Bidirectional (default): merge remote via delta+LWW before push so web rows survive.
+      // Desktop-only sources skip pre-push pull when local is dirty (local wins).
+      const shouldPreMergePull = !localDirty || bidirectional;
+      if (shouldPreMergePull) {
         dbBackup = backupLocalJobDb(dbPath);
-        await this.pullJob(syncKey, creds, {});
+        await this.pullJob(syncKey, creds, {
+          ...(localDirty && bidirectional ? { mergeWhileLocalDirty: true } : {}),
+        });
       } else {
         console.log(
-          `[TursoSyncBridge] Skipping pre-push pull for ${syncKey} — local has unpushed changes`,
+          `[TursoSyncBridge] Skipping pre-push pull for ${syncKey} — ` +
+            `desktop-only source with local unpushed changes`,
         );
       }
 
       const migrationRoot = resolveMigrationRootFromDbPath(dbPath);
-      if (migrationRoot) {
-        const migrationRemote = createRemoteClient(creds);
-        try {
+      const prepRemote = createRemoteClient(creds);
+      const prepLocal = openWritableLocalJobDb(dbPath);
+      try {
+        const localTables = filterSyncableTables(listUserTables(prepLocal));
+        const createdOnRemote = await ensureRemoteTablesFromLocal(
+          prepRemote,
+          prepLocal,
+          localTables,
+        );
+        if (createdOnRemote.length > 0) {
+          console.warn(
+            `[TursoSyncBridge] ${createdOnRemote.length} local table(s) were missing on remote for ${syncKey}: ` +
+              `${createdOnRemote.join(", ")} — created from local schema before migrations`,
+          );
+        }
+
+        if (migrationRoot) {
           const appliedMigrations = await applyPendingDatabaseMigrationsToTurso(
-            migrationRemote,
+            prepRemote,
             dbPath,
             migrationRoot,
           );
@@ -458,9 +529,10 @@ export class TursoSyncBridge {
                 appliedMigrations.join(", "),
             );
           }
-        } finally {
-          migrationRemote.close();
         }
+      } finally {
+        prepLocal.close();
+        prepRemote.close();
       }
 
       const stateAfterPull = loadTursoSyncState();
@@ -470,14 +542,19 @@ export class TursoSyncBridge {
         stateAfterPull,
         alternateKeys,
       );
+
+      const repairBootstrap = pushOptions?.force === true;
+
       let result = await pushLocalDbToTurso(dbPath, creds, {
         jobId: syncKey,
-        previousFingerprints: refreshedState?.tableFingerprints,
-        lastPushedLogId: refreshedState?.lastPushedLogId,
+        previousFingerprints: repairBootstrap
+          ? undefined
+          : refreshedState?.tableFingerprints,
+        lastPushedLogId: repairBootstrap ? 0 : refreshedState?.lastPushedLogId,
         ...(pushOptions?.tableNames?.length
           ? { tableNames: pushOptions.tableNames }
           : {}),
-        ...(pushOptions?.force ? { force: true } : {}),
+        ...(repairBootstrap ? { force: true } : {}),
       });
 
       if (localDbHasSyncableData(dbPath)) {
@@ -517,18 +594,11 @@ export class TursoSyncBridge {
                     `${drifted.join(", ")} — applying incremental migration`,
                 );
                 for (const tableName of drifted) {
-                  await migrateRemoteTableSchema(
+                  await prepareRemoteTableForSync(
                     verifyRemote,
                     localDb,
                     tableName,
-                    async () => {
-                      const table = readLocalTable(localDb, tableName);
-                      await replaceRemoteTable(verifyRemote, table);
-                    },
                   );
-                  const columns = readTableSchema(localDb, tableName);
-                  await ensureRemoteRowSyncColumns(verifyRemote, tableName);
-                  await ensureRemoteTableSyncTriggers(verifyRemote, columns, tableName);
                 }
                 result = await pushLocalDbToTurso(dbPath, creds, {
                   jobId: syncKey,
@@ -558,6 +628,29 @@ export class TursoSyncBridge {
             : {}),
         });
       }
+
+      const pushSucceeded =
+        result.status === "pushed" || result.reason === "all_tables_unchanged";
+
+      if (pushSucceeded) {
+        recordTursoPushSuccess(
+          syncKey,
+          dbPath,
+          undefined,
+          result.tableFingerprints,
+          result.lastPushedLogId,
+        );
+
+        void bumpSyncIndexForShortName(
+          (shortName) => this.fetchCredentials(shortName),
+          databaseName,
+        ).then((indexVersion) => {
+          if (indexVersion !== undefined) {
+            recordTursoIndexVersion(syncKey, dbPath, indexVersion);
+          }
+        });
+      }
+
       return result;
     } catch (error) {
       if (dbBackup) {
@@ -775,8 +868,74 @@ export class TursoSyncBridge {
   }
 
   /** Push every Turso-linked database for one mini-app (Upload now). */
-  async pushAppLinkedSources(appId: string): Promise<SyncSummary> {
-    return this.syncLinkedSources("push", { appId });
+  async pushAppLinkedSources(
+    appId: string,
+    options?: { force?: boolean },
+  ): Promise<SyncSummary> {
+    return this.syncLinkedSources("push", {
+      appId,
+      forcePush: options?.force === true,
+    });
+  }
+
+  /** Pull Turso into local SQLite for one mini-app (post-install bootstrap). */
+  async pullAppLinkedSources(
+    appId: string,
+    options?: { force?: boolean },
+  ): Promise<SyncSummary> {
+    if (options?.force === true) {
+      return this.syncLinkedSources("pull", {
+        appId,
+        forcePull: true,
+        pullOptions: {},
+      });
+    }
+    return this.reconcileFromCloud(
+      { appId },
+      { assumeRemoteChanged: true, trigger: "manual" },
+    );
+  }
+
+  /**
+   * Event-driven cloud→local sync: scoped, cheap remote-ahead check, push-if-dirty.
+   */
+  async reconcileFromCloud(
+    scope?: TursoCloudSyncScope,
+    options?: {
+      assumeRemoteChanged?: boolean;
+      trigger?: TursoCloudSyncTrigger;
+    },
+  ): Promise<SyncSummary> {
+    const sessions = await reconcileLinkedSourcesFromCloud(
+      this,
+      scope,
+      options,
+    );
+    return sessionResultsToSyncSummary(sessions);
+  }
+
+  /** Hydrate local SQLite from cloud Turso db-changed notifications. */
+  async reconcileFromCloudDbChanges(
+    changes: readonly CloudTursoDbChange[],
+    options?: {
+      jobWriteDbIds?: ReadonlyMap<string, readonly string[]>;
+    },
+  ): Promise<SyncSummary> {
+    const sessions = await reconcileFromCloudDbChanges(this, changes, {
+      trigger: "cloud_db_changed",
+      ...(options?.jobWriteDbIds ? { jobWriteDbIds: options.jobWriteDbIds } : {}),
+    });
+    return sessionResultsToSyncSummary(sessions);
+  }
+
+  /** Poll workspace sync-index for linked sources that advanced remotely. */
+  async reconcileFromSyncIndex(options?: {
+    trigger?: TursoCloudSyncTrigger;
+  }): Promise<SyncSummary> {
+    const sessions = await reconcileFromSyncIndex(this, {
+      trigger: options?.trigger ?? "sync_index",
+    });
+    return sessionResultsToSyncSummary(sessions);
   }
 
   async pullLinkedSourcesIfNeeded(): Promise<SyncSummary> {
@@ -793,12 +952,8 @@ export class TursoSyncBridge {
   }
 
   async pullAllLinkedSources(): Promise<SyncSummary> {
-    // No onlyIfLocalEmpty/skipIfLocalDirty guards (we want cloud changes even
-    // when local has data), but NOT force either: force does a full-table
-    // replace that clobbers local unpushed rows. Without force the pull
-    // delta-merges from the remote changelog and only falls back to a full
-    // read when the remote has no changelog.
-    return this.syncLinkedSources("pull", { pullOptions: {} });
+    // Scoped session sync: skip when remote unchanged; push-then-pull when local dirty.
+    return this.reconcileFromCloud(undefined, { trigger: "periodic" });
   }
 
   /** @deprecated Use pushAllLinkedSources */
@@ -816,6 +971,7 @@ export class TursoSyncBridge {
     options?: {
       dirtyOnly?: boolean;
       appId?: string;
+      forcePush?: boolean;
       forcePull?: boolean;
       pullOptions?: Omit<PullSourceSyncOptions, "jobId">;
     },
@@ -872,7 +1028,11 @@ export class TursoSyncBridge {
       const result: JobSyncResult = { jobId };
       try {
         if (mode === "push") {
-          const pushResult = await this.pushJob(jobId);
+          const pushResult = await this.pushJob(
+            jobId,
+            undefined,
+            options?.forcePush ? { force: true } : undefined,
+          );
           result.push = pushResult;
           if (pushResult.status === "pushed") {
             summary.pushed += 1;
@@ -986,6 +1146,21 @@ export function getTursoSyncBridge(): TursoSyncBridge | null {
   return instance;
 }
 
+/** Initialize Turso bridge immediately (install/bootstrap must not wait for startup delay). */
+export function ensureTursoSyncBridge(options?: {
+  jobsRootDir?: string;
+  appsRootDir?: string;
+  memoryServerBase?: string;
+}): TursoSyncBridge {
+  return getTursoSyncBridge() ?? initializeTursoSyncBridge(options);
+}
+
+/** Pull linked DBs for one app after cloud install or track sync. */
+export async function syncTursoAfterAppInstall(appId: string): Promise<SyncSummary> {
+  const bridge = ensureTursoSyncBridge();
+  return bridge.pullAppLinkedSources(appId);
+}
+
 export async function syncTursoBeforeCloudRun(): Promise<void> {
   const bridge = getTursoSyncBridge();
   if (!bridge) {
@@ -1001,25 +1176,109 @@ export async function syncTursoBeforeCloudRun(): Promise<void> {
   }
 }
 
-/** Pull Turso into local SQLite after cloud job runs (desktop wake). Default on; set false to disable. */
-export function shouldPullTursoAfterCloudRun(): boolean {
-  const raw = process.env.TURSO_PULL_AFTER_CLOUD_RUN?.trim().toLowerCase();
-  if (raw === "false" || raw === "0" || raw === "no") {
-    return false;
-  }
-  return true;
+export interface SyncTursoFromCloudDbChangedOptions {
+  jobWriteDbIds?: ReadonlyMap<string, readonly string[]>;
 }
 
-async function pullAllLinkedSourcesQuiet(logLabel: string): Promise<void> {
+/** Desktop handler for cloud Turso db-changed (direct test invoke). */
+export async function syncTursoFromCloudDbChanged(
+  changes: readonly CloudTursoDbChange[],
+  options?: SyncTursoFromCloudDbChangedOptions,
+): Promise<SyncSummary> {
+  const bridge = getTursoSyncBridge();
+  if (!bridge?.enabled || changes.length === 0) {
+    return {
+      attempted: 0,
+      pushed: 0,
+      pulled: 0,
+      skipped: 0,
+      failed: 0,
+      results: [],
+    };
+  }
+  return bridge.reconcileFromCloudDbChanges(changes, options);
+}
+
+/** Desktop handler for sync-index heartbeat poll. */
+export async function syncTursoFromSyncIndex(): Promise<SyncSummary> {
+  const bridge = getTursoSyncBridge();
+  if (!bridge?.enabled) {
+    return {
+      attempted: 0,
+      pushed: 0,
+      pulled: 0,
+      skipped: 0,
+      failed: 0,
+      results: [],
+    };
+  }
+  return bridge.reconcileFromSyncIndex({ trigger: "heartbeat" });
+}
+
+function sessionResultsToSyncSummary(
+  sessions: TursoCloudSyncSessionResult[],
+): SyncSummary {
+  const summary: SyncSummary = {
+    attempted: sessions.length,
+    pushed: 0,
+    pulled: 0,
+    skipped: 0,
+    failed: 0,
+    results: [],
+  };
+
+  for (const session of sessions) {
+    const result: JobSyncResult = { jobId: session.syncKey };
+    if (session.push) {
+      result.push = session.push;
+    }
+    if (session.pull) {
+      result.pull = session.pull;
+    }
+    if (session.error) {
+      result.error = session.error;
+    }
+    summary.results.push(result);
+
+    switch (session.action) {
+      case "failed":
+        summary.failed += 1;
+        break;
+      case "pulled":
+      case "pushed_then_pulled":
+        summary.pulled += 1;
+        if (session.action === "pushed_then_pulled") {
+          summary.pushed += 1;
+        }
+        break;
+      case "pushed":
+        summary.pushed += 1;
+        break;
+      default:
+        summary.skipped += 1;
+    }
+  }
+
+  return summary;
+}
+
+async function reconcileFromCloudQuiet(
+  logLabel: string,
+  scope?: TursoCloudSyncScope,
+  options?: {
+    assumeRemoteChanged?: boolean;
+    trigger?: TursoCloudSyncTrigger;
+  },
+): Promise<void> {
   const bridge = getTursoSyncBridge();
   if (!bridge) {
     return;
   }
   try {
-    const summary = await bridge.pullAllLinkedSources();
-    if (summary.pulled > 0) {
+    const summary = await bridge.reconcileFromCloud(scope, options);
+    if (summary.pulled > 0 || summary.pushed > 0) {
       console.log(
-        `[TursoSyncBridge] ${logLabel}: pulled ${summary.pulled} linked DB(s)`,
+        `[TursoSyncBridge] ${logLabel}: pulled=${summary.pulled} pushed=${summary.pushed} skipped=${summary.skipped}`,
       );
     }
   } catch (error) {
@@ -1032,12 +1291,7 @@ async function pullAllLinkedSourcesQuiet(logLabel: string): Promise<void> {
 
 /** Merge remote Turso changes into local SQLite after git pull (workspace updates). */
 export async function syncTursoAfterGitPull(): Promise<void> {
-  await pullAllLinkedSourcesQuiet("Post-git-pull Turso pull");
-}
-
-export async function syncTursoAfterCloudRun(): Promise<void> {
-  if (!shouldPullTursoAfterCloudRun()) {
-    return;
-  }
-  await pullAllLinkedSourcesQuiet("Post-cloud-run Turso pull");
+  await reconcileFromCloudQuiet("Post-git-pull Turso reconcile", undefined, {
+    trigger: "post_git_pull",
+  });
 }

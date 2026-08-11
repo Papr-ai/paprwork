@@ -245,7 +245,8 @@ const pushCloudSyncSchema = z.object({
     .array(z.enum(["github", "turso"]))
     .optional()
     .describe(
-      "What to push. Default: both. Use ['turso'] for fast DB-only (migrations/schema). Use ['github'] for code-only.",
+      "What to push. Default: both (recommended for appId — database then code, same as Upload now). " +
+        "['turso'] = database only. ['github'] = code folders only — does NOT sync linked DBs or refresh live web app.",
     ),
 });
 
@@ -253,18 +254,20 @@ export const pushCloudSyncTool = createTool({
   id: "push_cloud_sync",
   description: `Force Cloud Sync push (same engine as Settings → Sync now) with explicit scope.
 
-Targets (default: both github + turso):
-- github — apps/{id}, Jobs/{id}, data/ to GitHub
+Targets (default: both github + turso — use this for appId when the live web app should update):
+- github — apps/{id}, Jobs/{id}, data/ to GitHub (code only — skips database + live link refresh)
 - turso — linked SQLite → Turso replica (migrations, schema, rows)
 
 Scope examples (prefer narrow scope — much faster than full workspace):
-- push_cloud_sync({ appId, targets: ['turso'] }) — Turso DBs for one app only
+- push_cloud_sync({ appId }) — **recommended** — database, then app code + jobs (ordered, like Upload now)
+- push_cloud_sync({ appId, targets: ['turso'] }) — Turso DBs for one app only (DB fix, no code publish)
 - push_cloud_sync({ appId, alias: 'gtm-audit', targets: ['turso'] }) — one linked database
 - push_cloud_sync({ appId, alias: 'gtm-audit', tables: ['audits'], targets: ['turso'] }) — one table
 - push_cloud_sync({ tursoDatabase: 'd-2d6b4294', targets: ['turso'] }) — by Turso short name
-- push_cloud_sync({ appId, jobId, targets: ['github'] }) — job code folder only
-- push_cloud_sync({ appId }) — app folder + dependent jobs + linked Turso (recommended default)
+- push_cloud_sync({ appId, jobId, targets: ['github'] }) — job script folder only (not for live app refresh)
 - push_cloud_sync() — full workspace (slow — avoid unless needed)
+
+Do NOT use targets: ['github'] alone when the user expects the web app or database to update — use default both or Upload now.
 
 Returns scope label, github pushedPaths, turso databases touched, durationMs.
 After push, call get_cloud_sync_status to verify.`,

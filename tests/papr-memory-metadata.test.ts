@@ -29,32 +29,53 @@ type MessageStoreCall = {
   };
 };
 
-// Mock @papr/memory SDK
+vi.mock("../src/gateway/utils/memoryScopeResolver.js", () => ({
+  buildPaprMemoryWriteScope: vi.fn().mockResolvedValue({
+    external_user_id: "WkPutXGdqg",
+    namespace_id: undefined,
+    policy: undefined,
+  }),
+}));
+
+// Mock @papr/memory SDK — attach error classes on default export (matches real SDK)
 vi.mock("@papr/memory", () => {
-  return {
-    default: vi.fn().mockImplementation(() => ({
-      messages: {
-        store: vi.fn().mockResolvedValue({ objectId: "test-obj-123" }),
-        sessions: {
-          retrieveHistory: vi.fn().mockResolvedValue({
-            messages: [],
-            total_count: 0,
-          }),
-          compress: vi.fn().mockResolvedValue({
-            summaries: {
-              short_term: "Short summary",
-              medium_term: "Medium summary",
-              long_term: "Long summary",
-              topics: ["topic1", "topic2"],
-              last_updated: new Date().toISOString(),
-            },
-          }),
-        },
+  class AuthenticationError extends Error {}
+  class RateLimitError extends Error {}
+  class PermissionDeniedError extends Error {}
+  class NotFoundError extends Error {}
+
+  const MockPapr = vi.fn().mockImplementation(() => ({
+    messages: {
+      store: vi.fn().mockResolvedValue({ objectId: "test-obj-123" }),
+      sessions: {
+        retrieveHistory: vi.fn().mockResolvedValue({
+          messages: [],
+          total_count: 0,
+        }),
+        compress: vi.fn().mockResolvedValue({
+          summaries: {
+            short_term: "Short summary",
+            medium_term: "Medium summary",
+            long_term: "Long summary",
+            topics: ["topic1", "topic2"],
+            last_updated: new Date().toISOString(),
+          },
+        }),
       },
-    })),
-    AuthenticationError: class AuthenticationError extends Error {},
-    RateLimitError: class RateLimitError extends Error {},
-    PermissionDeniedError: class PermissionDeniedError extends Error {},
+    },
+  }));
+
+  MockPapr.AuthenticationError = AuthenticationError;
+  MockPapr.RateLimitError = RateLimitError;
+  MockPapr.PermissionDeniedError = PermissionDeniedError;
+  MockPapr.NotFoundError = NotFoundError;
+
+  return {
+    default: MockPapr,
+    AuthenticationError,
+    RateLimitError,
+    PermissionDeniedError,
+    NotFoundError,
   };
 });
 

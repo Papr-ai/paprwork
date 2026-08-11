@@ -35,6 +35,8 @@ logs/
 # Test coverage & reports
 coverage/
 test-results/
+test_reports/
+.test-stack/
 
 # Electron
 out/

@@ -16,6 +16,7 @@ const {
 
 const applyPendingDatabaseMigrationsToTurso = vi.hoisted(() => vi.fn());
 const alignMigrationLedgers = vi.hoisted(() => vi.fn());
+const pushLinkedSourceWithDesktopParity = vi.hoisted(() => vi.fn());
 
 const fsMocks = vi.hoisted(() => ({
   existsSync: vi.fn(() => true),
@@ -65,6 +66,10 @@ vi.mock("fs", () => ({
   statSync: fsMocks.statSync,
 }));
 
+vi.mock("../src/gateway/services/tursoLinkedSourcePush.js", () => ({
+  pushLinkedSourceWithDesktopParity,
+}));
+
 vi.mock("../src/gateway/services/tursoDeltaSync.js", () => ({
   remoteNeedsBootstrap: vi.fn().mockResolvedValue(false),
 }));
@@ -79,7 +84,7 @@ describe("cloud agent Turso bookends", () => {
     vi.clearAllMocks();
     vi.mocked(localDbHasSyncableUserTables).mockReturnValue(true);
     pullTursoToLocalDb.mockResolvedValue({ status: "pulled" });
-    pushLocalDbToTurso.mockResolvedValue({
+    pushLinkedSourceWithDesktopParity.mockResolvedValue({
       status: "pushed",
       tables: ["audits"],
       syncMode: "delta",
@@ -141,7 +146,7 @@ describe("cloud agent Turso bookends", () => {
   });
 
   it("returns full PushResult from pushLinkedSourceToCloud", async () => {
-    pushLocalDbToTurso.mockResolvedValue({
+    pushLinkedSourceWithDesktopParity.mockResolvedValue({
       status: "pushed",
       tables: ["audit_modules"],
       syncMode: "snapshot_fallback",
@@ -156,9 +161,10 @@ describe("cloud agent Turso bookends", () => {
 
     expect(result.status).toBe("pushed");
     expect(result.syncMode).toBe("snapshot_fallback");
+    expect(pushLinkedSourceWithDesktopParity).toHaveBeenCalledOnce();
   });
 
-  it("replays database migrations before pushing when local db has data", async () => {
+  it("delegates push to desktop-parity helper with sync state", async () => {
     await pushLinkedSourceToCloud({
       syncKey: "db-abc",
       dbPath: "/tmp/Papr/data/databases/gtm-audit/data.db",
@@ -166,7 +172,16 @@ describe("cloud agent Turso bookends", () => {
       authToken: "token",
     });
 
-    expect(applyPendingDatabaseMigrationsToTurso).toHaveBeenCalledOnce();
-    expect(pushLocalDbToTurso).toHaveBeenCalledOnce();
+    expect(pushLinkedSourceWithDesktopParity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        syncKey: "db-abc",
+        dbPath: "/tmp/Papr/data/databases/gtm-audit/data.db",
+        credentials: {
+          tursoUrl: "libsql://example.turso.io",
+          authToken: "token",
+        },
+        state: {},
+      }),
+    );
   });
 });

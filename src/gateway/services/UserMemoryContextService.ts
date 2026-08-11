@@ -31,6 +31,12 @@ import {
   isWikiGraphCatalogBlock,
   type PaprCatalogSnapshot,
 } from "./memoryGraphCatalog.js";
+import {
+  fetchSyncTiersThrottled,
+  seedSyncTiersFailureFromCache,
+  SyncTiersBackoffError,
+} from "./syncTiersClient.js";
+import { shouldQueueMemoryPreviewRefresh } from "./MemoryPreviewCache.js";
 
 export const IDLE_THRESHOLD_MS = 2 * 60 * 60 * 1000;
 export const MAX_TIER0 = 20;
@@ -296,6 +302,7 @@ export class UserMemoryContextService {
   private wikiHomeCache: Awaited<ReturnType<typeof fetchLocalWikiHome>> | null =
     null;
   private wikiHomeCacheAt = 0;
+  private previewRefreshInFlight = false;
 
   static getInstance(): UserMemoryContextService {
     if (!UserMemoryContextService.instance) {
@@ -654,7 +661,12 @@ export class UserMemoryContextService {
       );
       await writeMemoryPreviewCache({
         paprMemory: { goalsOkrs, useCases, syncTiers },
-        status: { ...statusBase, errors: {} },
+        status: {
+          ...statusBase,
+          errors: {},
+          syncTiersFetched: Boolean(syncTiers || catalogSnapshot),
+        },
+        syncTiersFailedAt: syncTiers || catalogSnapshot ? null : undefined,
       });
     } catch (error) {
       console.warn(
@@ -705,7 +717,9 @@ export class UserMemoryContextService {
    * Fetch Papr memory context for Settings preview (goals/OKRs, use cases, sync tiers).
    * Same sources as chat bootstrap, without message-scoped search.
    */
-  async fetchMemoryPreviewForSettings(): Promise<{
+  async fetchMemoryPreviewForSettings(options?: {
+    forceSyncTiers?: boolean;
+  }): Promise<{
     goalsOkrs: string | null;
     useCases: string | null;
     syncTiers: string | null;
@@ -798,21 +812,36 @@ export class UserMemoryContextService {
     ]);
 
     const tiersStarted = performance.now();
-    const tiersResult = await Promise.allSettled([
-      client.sync.getTiers(
+    let tiersResult:
+      | { status: "fulfilled"; value: { tier0: MemoryObject[]; tier1: MemoryObject[] } }
+      | { status: "rejected"; reason: unknown };
+
+    try {
+      const tiersValue = await fetchSyncTiersThrottled(
+        client,
+        userId,
         {
-          external_user_id: userId,
           max_tier0: SETTINGS_MAX_TIER0,
           max_tier1: SETTINGS_MAX_TIER1,
           include_embeddings: false,
         },
-        { timeout: SYNC_TIERS_SDK_TIMEOUT_MS },
-      ),
-    ]).then((results) => results[0]);
+        {
+          timeout: SYNC_TIERS_SDK_TIMEOUT_MS,
+          force: options?.forceSyncTiers,
+        },
+      );
+      tiersResult = { status: "fulfilled", value: tiersValue };
+    } catch (reason) {
+      tiersResult = { status: "rejected", reason };
+    }
 
     if (tiersResult.status === "fulfilled") {
       console.log(
-        `[UserMemoryContext] sync.getTiers OK in ${Math.round(performance.now() - tiersStarted)}ms (tier0=${tiersResult.value.tier0?.length ?? 0}, tier1=${tiersResult.value.tier1?.length ?? 0})`,
+        `[UserMemoryContext] sync.getTiers OK in ${Math.round(performance.now() - tiersStarted)}ms (tier0=${tiersResult.value.tier0.length}, tier1=${tiersResult.value.tier1.length})`,
+      );
+    } else if (tiersResult.reason instanceof SyncTiersBackoffError) {
+      console.warn(
+        `[UserMemoryContext] sync.getTiers skipped (backoff active, retry in ${Math.ceil(tiersResult.reason.retryAfterMs / 1000)}s)`,
       );
     } else {
       console.warn(
@@ -847,8 +876,8 @@ export class UserMemoryContextService {
       status.syncTiersFetched = true;
       syncTiers =
         formatSyncTiersBlock(
-          tiersResult.value.tier0 ?? [],
-          tiersResult.value.tier1 ?? [],
+          tiersResult.value.tier0,
+          tiersResult.value.tier1,
         ) ?? null;
     } else {
       status.errors.syncTiers =
@@ -860,13 +889,42 @@ export class UserMemoryContextService {
     return { goalsOkrs, useCases, syncTiers, status };
   }
 
-  /** Refresh Settings preview cache in background (fire-and-forget). */
-  refreshMemoryPreviewCacheInBackground(): void {
+  /** Queue a background Settings preview refresh when cache is stale/incomplete. */
+  maybeRefreshMemoryPreviewCacheInBackground(cached?: {
+    isFresh: boolean;
+    isIncomplete: boolean;
+    syncTiersFailedAt?: string;
+  }): void {
+    if (
+      cached &&
+      !shouldQueueMemoryPreviewRefresh({
+        isFresh: cached.isFresh,
+        isIncomplete: cached.isIncomplete,
+        syncTiersFailedAt: cached.syncTiersFailedAt,
+        previewRefreshInFlight: this.previewRefreshInFlight,
+      })
+    ) {
+      return;
+    }
+    if (this.previewRefreshInFlight) {
+      return;
+    }
+
+    const userId = getPaprUserId();
+    if (userId && cached?.syncTiersFailedAt) {
+      seedSyncTiersFailureFromCache(userId, cached.syncTiersFailedAt);
+    }
+
+    this.previewRefreshInFlight = true;
     void this.fetchMemoryPreviewForSettings()
       .then(async (fresh) => {
         const { writeMemoryPreviewCache } = await import(
           "./MemoryPreviewCache.js"
         );
+        const syncTiersFailedAt =
+          fresh.status.errors.syncTiers !== undefined
+            ? new Date().toISOString()
+            : null;
         await writeMemoryPreviewCache({
           paprMemory: {
             goalsOkrs: fresh.goalsOkrs,
@@ -874,6 +932,7 @@ export class UserMemoryContextService {
             syncTiers: fresh.syncTiers,
           },
           status: fresh.status,
+          syncTiersFailedAt,
         });
         console.log("[UserMemoryContext] Memory preview cache refreshed");
       })
@@ -882,7 +941,15 @@ export class UserMemoryContextService {
           "[UserMemoryContext] Background memory preview refresh failed:",
           error,
         );
+      })
+      .finally(() => {
+        this.previewRefreshInFlight = false;
       });
+  }
+
+  /** @deprecated Use maybeRefreshMemoryPreviewCacheInBackground instead. */
+  refreshMemoryPreviewCacheInBackground(): void {
+    this.maybeRefreshMemoryPreviewCacheInBackground();
   }
 }
 

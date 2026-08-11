@@ -3,10 +3,11 @@
  */
 
 import * as fs from "fs";
-import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import * as path from "path";
+import { getPaprRoot } from "../../core/utils/paprRoot.js";
 
 import {
+  isLinkOnlyVisibility,
   isPublicCommunityVisibility,
   isTeamSharedVisibility,
   type CommunityCatalog,
@@ -14,7 +15,11 @@ import {
   type CommunityCatalogScope,
 } from "../../core/types/communityCatalog.js";
 import { formatShareLink } from "../../core/utils/cloudShareLink.js";
-import { communityCodeInstallable } from "../../core/utils/shareAudienceModel.js";
+import {
+  communityCodeInstallable,
+  shouldListInCommunity,
+  sharingToAudienceModel,
+} from "../../core/utils/shareAudienceModel.js";
 import { cloudApiFetch } from "../utils/cloudApiClient.js";
 import { getPaprApiKey } from "../utils/keyResolver.js";
 import {
@@ -26,13 +31,16 @@ import {
   getBundleService,
   type CommunityRegistry,
 } from "./BundleService.js";
+import type { CloudSharingSettings } from "./cloudPublishMapping.js";
 import {
   resolveSharingSettings,
   sharingSettingsRequireShareToken,
+  visibilityToAccessMode,
 } from "./cloudPublishMapping.js";
 import { slugifyPublishTitle } from "./cloudPublishDrift.js";
 import { getAppPublishPrefs } from "./cloudPublishPrefs.js";
 import { readAppRequirements } from "./cloudAppRequirements.js";
+import { resolveCatalogEntryTags } from "../../core/utils/catalogTags.js";
 
 async function loadCommunityPlatformForApp(appId: string): Promise<{
   platform: string[];
@@ -48,31 +56,6 @@ async function loadCommunityPlatformForApp(appId: string): Promise<{
   };
 }
 
-async function enrichOwnedCloudPlatformEntries(
-  entries: CommunityCatalogEntry[],
-  ownedAppIds: Set<string>,
-): Promise<CommunityCatalogEntry[]> {
-  return Promise.all(
-    entries.map(async (entry) => {
-      if (
-        entry.source !== "cloud" ||
-        !entry.appId ||
-        !ownedAppIds.has(entry.appId)
-      ) {
-        return entry;
-      }
-      if (
-        entry.platform?.length &&
-        entry.requiresDesktopForFullFunctionality !== undefined
-      ) {
-        return entry;
-      }
-      const platformMeta = await loadCommunityPlatformForApp(entry.appId);
-      return { ...entry, ...platformMeta };
-    }),
-  );
-}
-
 interface CloudCommunityApiEntry {
   appId: string;
   namespaceId?: string;
@@ -83,6 +66,8 @@ interface CloudCommunityApiEntry {
   icon?: string;
   tags?: string[];
   shareUrl?: string | null;
+  shareToken?: string | null;
+  shareLinkEnabled?: boolean;
   codeAccess?: "off" | "install";
   codeInstallable?: boolean;
   visibility?: string;
@@ -107,17 +92,38 @@ interface CloudCommunityApiResponse {
 }
 
 import { isAppOwnedByCurrentUser } from "./appOwnership.js";
+import { getPaprUserId } from "../utils/paprUserId.js";
 import type { MiniApp } from "./AppService.js";
 
 function loadLocalAppMeta(
   paprDir: string,
-): Map<string, { title: string; description: string; icon?: string }> {
-  const meta = new Map<string, { title: string; description: string; icon?: string }>();
+): Map<string, { title: string; description: string; icon?: string; tags?: string[] }> {
+  const meta = new Map<
+    string,
+    { title: string; description: string; icon?: string; tags?: string[] }
+  >();
   try {
     const raw = fs.readFileSync(path.join(paprDir, "data", "apps.json"), "utf8");
     const parsed = JSON.parse(raw) as
-      | Array<{ id: string; title?: string; description?: string; icon?: string; ownerUserId?: string }>
-      | Record<string, { id: string; title?: string; description?: string; icon?: string; ownerUserId?: string }>;
+      | Array<{
+          id: string;
+          title?: string;
+          description?: string;
+          icon?: string;
+          ownerUserId?: string;
+          tags?: string[];
+        }>
+      | Record<
+          string,
+          {
+            id: string;
+            title?: string;
+            description?: string;
+            icon?: string;
+            ownerUserId?: string;
+            tags?: string[];
+          }
+        >;
     const list = Array.isArray(parsed) ? parsed : Object.values(parsed);
     for (const app of list) {
       if (!app.id) continue;
@@ -127,6 +133,7 @@ function loadLocalAppMeta(
         title: app.title?.trim() || app.id.slice(0, 8),
         description: app.description?.trim() || "",
         icon: app.icon,
+        tags: app.tags,
       });
     }
   } catch {
@@ -174,8 +181,65 @@ function mapCatalogRequirements(
   }));
 }
 
-function cloudEntryFromApi(entry: CloudCommunityApiEntry): CommunityCatalogEntry {
+/** Prefer external access link (?t=) over Papr-login app URL when link sharing is on. */
+export function resolveCatalogLiveUrl(input: {
+  shareUrl?: string | null;
+  shareToken?: string | null;
+  visibility?: string;
+  shareLinkEnabled?: boolean;
+  appId?: string;
+  paprDir?: string;
+}): string | null {
+  const baseUrl = input.shareUrl;
+  if (!baseUrl) return null;
+  if (baseUrl.includes("?t=")) {
+    return baseUrl;
+  }
+
+  let token = input.shareToken ?? null;
+  let externalEnabled: boolean | undefined;
+  if (input.shareLinkEnabled === true) {
+    externalEnabled = true;
+  } else if (input.shareLinkEnabled === false) {
+    externalEnabled = false;
+  } else if (
+    input.visibility === "link_read" ||
+    input.visibility === "link_read_write"
+  ) {
+    externalEnabled = true;
+  }
+
+  if (input.appId && input.paprDir) {
+    const prefs = getAppPublishPrefs(input.appId, input.paprDir);
+    const sharing = resolveSharingSettings(prefs);
+    if (sharingSettingsRequireShareToken(sharing)) {
+      externalEnabled = true;
+      token = token ?? prefs.shareToken ?? null;
+    }
+  }
+
+  return formatShareLink(
+    baseUrl,
+    token,
+    visibilityToAccessMode(input.visibility),
+    externalEnabled,
+  );
+}
+
+function cloudEntryFromApi(
+  entry: CloudCommunityApiEntry,
+  paprDir?: string,
+  localAppMeta?: Map<string, { tags?: string[] }>,
+): CommunityCatalogEntry {
   const slug = entry.slug ?? null;
+  const liveUrl = resolveCatalogLiveUrl({
+    shareUrl: entry.shareUrl,
+    shareToken: entry.shareToken,
+    visibility: entry.visibility,
+    shareLinkEnabled: entry.shareLinkEnabled,
+    appId: entry.appId,
+    paprDir,
+  });
   return {
     catalogId: `cloud:${entry.appId}`,
     source: "cloud",
@@ -183,21 +247,50 @@ function cloudEntryFromApi(entry: CloudCommunityApiEntry): CommunityCatalogEntry
     description: entry.description ?? "",
     version: "cloud",
     author: entry.author ?? "Papr Cloud",
-    tags: entry.tags ?? ["cloud"],
+    tags: resolveCatalogEntryTags({
+      tags: entry.tags,
+      manifestTags: entry.appId ? localAppMeta?.get(entry.appId)?.tags : undefined,
+    }),
     icon: entry.icon,
     platform: entry.catalogPlatform,
     requiresDesktopForFullFunctionality: entry.catalogRequiresDesktop,
     appId: entry.appId,
     namespaceId: entry.namespaceId,
     slug,
-    liveUrl: entry.shareUrl ?? null,
+    liveUrl,
     codeInstallable:
       entry.codeAccess === "install" || entry.codeInstallable === true,
-    liveViewable: Boolean(entry.shareUrl),
+    liveViewable: Boolean(liveUrl ?? entry.shareUrl),
     requirements: mapCatalogRequirements(entry.catalogRequirements),
     visibility: entry.visibility,
+    shareLinkEnabled: entry.shareLinkEnabled,
     publisherUserId: entry.publisherUserId,
   };
+}
+
+/**
+ * True only for "Public in Community Apps" — not invite-link or link+sign-in shares.
+ */
+export function isCommunityCatalogListed(input: {
+  visibility?: string;
+  shareLinkEnabled?: boolean;
+  sharing?: Pick<CloudSharingSettings, "loginAccess" | "externalLink">;
+  published?: boolean;
+}): boolean {
+  if (isLinkOnlyVisibility(input.visibility)) {
+    return false;
+  }
+  if (input.shareLinkEnabled === true) {
+    return false;
+  }
+  if (input.sharing) {
+    const model = sharingToAudienceModel(
+      input.sharing.loginAccess,
+      input.sharing.externalLink,
+    );
+    return shouldListInCommunity(model.audience, input.published ?? true);
+  }
+  return isPublicCommunityVisibility(input.visibility);
 }
 
 function buildCatalog(
@@ -271,12 +364,18 @@ async function assertPaprApiKeyForNamespace(namespaceId: string): Promise<void> 
 function teamEntryFromApi(
   item: CloudCommunityApiEntry,
   namespaceId: string,
+  paprDir?: string,
+  localAppMeta?: Map<string, { tags?: string[] }>,
 ): CommunityCatalogEntry {
-  return cloudEntryFromApi({
-    ...item,
-    namespaceId: item.namespaceId ?? namespaceId,
-    visibility: item.visibility ?? "team",
-  });
+  return cloudEntryFromApi(
+    {
+      ...item,
+      namespaceId: item.namespaceId ?? namespaceId,
+      visibility: item.visibility ?? "team",
+    },
+    paprDir,
+    localAppMeta,
+  );
 }
 
 function filterNamespaceCloudEntries(
@@ -310,8 +409,11 @@ export function mergeNamespaceWorkspaceCatalog(input: {
   namespaceId: string;
   ownedAppIds: Set<string>;
 }): CommunityCatalogEntry[] {
+  const localAppMeta = loadLocalAppMeta(input.paprDir);
   const remoteEntries = filterPublicCommunityEntries(
-    input.workspaceRemote.map(cloudEntryFromApi),
+    input.workspaceRemote.map((item) =>
+      cloudEntryFromApi(item, input.paprDir, localAppMeta),
+    ),
     input.paprDir,
     input.ownedAppIds,
     { allowTeam: true },
@@ -346,9 +448,25 @@ function markOwnedEntries(
   entries: CommunityCatalogEntry[],
   ownedAppIds: Set<string>,
 ): CommunityCatalogEntry[] {
-  return entries.map((entry) =>
-    entry.appId && ownedAppIds.has(entry.appId) ? { ...entry, isOwned: true } : entry,
-  );
+  const currentUserId = getPaprUserId()?.trim();
+  return entries.map((entry) => {
+    if (entry.isOwned === true) {
+      return entry;
+    }
+
+    const publisherUserId = entry.publisherUserId?.trim();
+    if (publisherUserId && currentUserId) {
+      return publisherUserId === currentUserId
+        ? { ...entry, isOwned: true }
+        : { ...entry, isOwned: false };
+    }
+
+    if (entry.appId && ownedAppIds.has(entry.appId)) {
+      return { ...entry, isOwned: true };
+    }
+
+    return entry;
+  });
 }
 
 /**
@@ -374,10 +492,17 @@ function shouldIncludeInPublicCommunity(
     if (options?.allowTeam && sharing.loginAccess === "team") {
       return true;
     }
-    return sharing.loginAccess === "public";
+    return isCommunityCatalogListed({
+      visibility: entry.visibility,
+      shareLinkEnabled: entry.shareLinkEnabled,
+      sharing,
+    });
   }
 
-  return isPublicCommunityVisibility(entry.visibility);
+  return isCommunityCatalogListed({
+    visibility: entry.visibility,
+    shareLinkEnabled: entry.shareLinkEnabled,
+  });
 }
 
 function filterPublicCommunityEntries(
@@ -459,6 +584,12 @@ async function buildLocalCloudEntriesForSharing(
     const prefs = getAppPublishPrefs(appId, paprDir);
     const sharing = resolveSharingSettings(prefs);
     if (sharing.loginAccess !== options.loginAccess) continue;
+    if (
+      options.loginAccess === "public" &&
+      !isCommunityCatalogListed({ sharing })
+    ) {
+      continue;
+    }
 
     const config = buildLocalCatalogConfigFromPrefs(
       appId,
@@ -483,7 +614,7 @@ async function buildLocalCloudEntriesForSharing(
           : "Public app on Papr Cloud"),
       version: "cloud",
       author: "You",
-      tags: teamShared ? ["cloud", "team"] : ["cloud", "public"],
+      tags: resolveCatalogEntryTags({ manifestTags: appMeta.tags }),
       icon: appMeta.icon,
       platform: platformMeta.platform,
       requiresDesktopForFullFunctionality:
@@ -496,6 +627,7 @@ async function buildLocalCloudEntriesForSharing(
       liveViewable: true,
       isOwned: true,
       visibility: teamShared ? "team" : "public_read",
+      shareLinkEnabled: sharing.externalLink !== "off",
       requirements:
         fileRequirements.length > 0
           ? fileRequirements
@@ -550,9 +682,12 @@ export class CommunityCatalogService {
     const ossRegistry = await bundleService.fetchCommunityRegistry();
     const ossEntries = ossRegistry.bundles.map(opensourceEntry);
     const ownedAppIds = this.ownedLocalAppIds();
+    const localAppMeta = loadLocalAppMeta(this.paprDir);
 
     const remoteCloud = await fetchRemoteCloudCatalog("/v1/cloud/apps/community");
-    let cloudEntries = remoteCloud.map(cloudEntryFromApi);
+    let cloudEntries = remoteCloud.map((item) =>
+      cloudEntryFromApi(item, this.paprDir, localAppMeta),
+    );
 
     if (cloudEntries.length === 0) {
       cloudEntries = await buildLocalPublicCloudEntries(this.paprDir);
@@ -569,10 +704,6 @@ export class CommunityCatalogService {
     cloudEntries = filterPublicCommunityEntries(
       cloudEntries,
       this.paprDir,
-      ownedAppIds,
-    );
-    cloudEntries = await enrichOwnedCloudPlatformEntries(
-      cloudEntries,
       ownedAppIds,
     );
 
@@ -595,10 +726,16 @@ export class CommunityCatalogService {
 
     const merged: CommunityCatalogEntry[] = [];
     const seen = new Set<string>();
+    const localAppMeta = loadLocalAppMeta(this.paprDir);
 
     for (const remote of responses) {
       for (const item of remote) {
-        const entry = teamEntryFromApi(item, namespaceId);
+        const entry = teamEntryFromApi(
+          item,
+          namespaceId,
+          this.paprDir,
+          localAppMeta,
+        );
         if (entry.namespaceId && entry.namespaceId !== namespaceId) continue;
         if (!isTeamSharedVisibility(entry.visibility)) continue;
         const key = entry.appId ?? entry.catalogId;
@@ -621,6 +758,8 @@ export class CommunityCatalogService {
     const encodedNamespaceId = encodeURIComponent(namespaceId);
     const communityPath = `/v1/cloud/apps/namespace/${encodedNamespaceId}/community`;
 
+    const localAppMeta = loadLocalAppMeta(this.paprDir);
+
     const [dedicatedCommunity, teamRemote, localTeamEntries] = await Promise.all([
       fetchRemoteCloudCatalog(communityPath),
       this.fetchTeamSharedEntries(namespaceId),
@@ -632,7 +771,9 @@ export class CommunityCatalogService {
 
     if (dedicatedCommunity.length > 0) {
       publicEntries = filterPublicCommunityEntries(
-        dedicatedCommunity.map(cloudEntryFromApi),
+        dedicatedCommunity.map((item) =>
+          cloudEntryFromApi(item, this.paprDir, localAppMeta),
+        ),
         this.paprDir,
         ownedAppIds,
         { allowTeam: true },
@@ -641,7 +782,9 @@ export class CommunityCatalogService {
       const globalCloud = await fetchRemoteCloudCatalog("/v1/cloud/apps/community");
       publicEntries = filterPublicCommunityEntries(
         filterNamespaceCloudEntries(
-          globalCloud.map(cloudEntryFromApi),
+          globalCloud.map((item) =>
+            cloudEntryFromApi(item, this.paprDir, localAppMeta),
+          ),
           namespaceId,
         ),
         this.paprDir,
@@ -652,11 +795,8 @@ export class CommunityCatalogService {
     }
 
     const teamEntries = dedupeCloudEntries([...teamRemote, ...localTeamEntries]);
-    const entries = await enrichOwnedCloudPlatformEntries(
-      markOwnedEntries(
-        dedupeCloudEntries([...teamEntries, ...publicEntries]),
-        ownedAppIds,
-      ),
+    const entries = markOwnedEntries(
+      dedupeCloudEntries([...teamEntries, ...publicEntries]),
       ownedAppIds,
     );
 
@@ -695,16 +835,13 @@ export class CommunityCatalogService {
         this.paprDir,
         namespaceId,
       );
-      const entries = await enrichOwnedCloudPlatformEntries(
-        mergeNamespaceWorkspaceCatalog({
-          workspaceRemote,
-          localTeamEntries,
-          paprDir: this.paprDir,
-          namespaceId,
-          ownedAppIds,
-        }),
+      const entries = mergeNamespaceWorkspaceCatalog({
+        workspaceRemote,
+        localTeamEntries,
+        paprDir: this.paprDir,
+        namespaceId,
         ownedAppIds,
-      );
+      });
       catalog = buildCatalog("namespace", entries, { namespaceId });
     } else {
       catalog = await this.fetchNamespaceCommunityFallback(

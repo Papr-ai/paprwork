@@ -35,6 +35,11 @@ import { fileURLToPath } from "url";
 import { initializeAgentService } from "./services/AgentService.js";
 import { getPaprAppsRoot, getPaprRoot, isCloudAgentGatewayMode } from "../core/utils/paprRoot.js";
 import {
+  clearGatewaySyncBusy,
+  readGatewaySyncBusyState,
+  isGatewaySyncBusyGraceActive,
+} from "./services/cloudSync/syncBusyState.js";
+import {
   applyActiveWorkspaceEnv,
   readActiveWorkspacePointer,
 } from "../core/utils/paprWorkspace.js";
@@ -107,7 +112,7 @@ import {
 } from "./services/cloudAppRequirements.js";
 import type { RequiredKeySpec } from "../core/types/bundles.js";
 import { getCloudAppLineageService } from "./services/CloudAppLineageService.js";
-import { getCloudAppChangeMergeService } from "./services/CloudAppChangeMergeService.js";
+import { getCloudAppContributeService } from "./services/CloudAppContributeService.js";
 import { getCloudAppTrackSyncService } from "./services/CloudAppTrackSyncService.js";
 import {
   getAppPublishPrefs,
@@ -343,6 +348,8 @@ async function startGateway(): Promise<void> {
 
     // Bind HTTP early so supervisor health checks succeed while services load.
     // Large chats.db + tool registration can take 60s+ on cold start.
+    // Clear stale busy marker from a previous gateway process (crash mid-upload).
+    clearGatewaySyncBusy();
     let gatewayReady = false;
     const app = express();
     const server = createServer(app);
@@ -381,9 +388,12 @@ async function startGateway(): Promise<void> {
         });
         return;
       }
+      const busy = readGatewaySyncBusyState();
+      const syncBusy = isGatewaySyncBusyGraceActive(busy);
       res.json({
         status: gatewayReady ? "ok" : "starting",
         timestamp: Date.now(),
+        ...(syncBusy ? { syncBusy: true } : {}),
       });
     });
 
@@ -685,6 +695,24 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    app.post("/api/apps/:appId/sync-from-cloud", async (req, res) => {
+      try {
+        const appId = req.params.appId;
+        if (!appId) {
+          res.status(400).json({ error: "appId required" });
+          return;
+        }
+        const { scheduleTursoPullForAppOpen } = await import(
+          "./services/tursoPullScheduler.js"
+        );
+        scheduleTursoPullForAppOpen(appId);
+        res.json({ success: true, scheduled: true });
+      } catch (err) {
+        console.error("[Gateway] /api/apps/sync-from-cloud error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
     app.post("/api/apps/:appId/normalize-databases", async (req, res) => {
       try {
         const appId = req.params.appId;
@@ -823,6 +851,9 @@ async function startGateway(): Promise<void> {
     //  - Bound params required for any user-supplied values (prevents SQL injection)
     //
     // Returns: { changes: number, lastInsertRowid: number }
+    //
+    // Turso push: TursoLinkedDbWatcher schedules debounced push on data.db/WAL
+    // changes — no explicit scheduleTursoPushForJob here (avoids double enqueue).
     // ─────────────────────────────────────────────────────────────────────────
 
     app.post("/api/db/write", async (req, res) => {
@@ -874,10 +905,6 @@ async function startGateway(): Promise<void> {
         console.log(
           `[Gateway] /api/db/write app=${appId} source=${source.alias} changes=${result.changes}`,
         );
-        const syncKey = source.dbId ?? source.jobId ?? source.dbPath;
-        void import("./services/tursoPushScheduler.js").then(({ scheduleTursoPushForJob }) =>
-          scheduleTursoPushForJob(syncKey),
-        );
         res.json(result);
       } catch (err) {
         const e = err as Error & { status?: number };
@@ -890,6 +917,8 @@ async function startGateway(): Promise<void> {
     // ── Mini-app SQLite DDL API ──────────────────────────────────────────────
     // Apps call: fetch('/api/db/exec', { method: 'POST', body: JSON.stringify({ appId, sql }) })
     // Only CREATE TABLE IF NOT EXISTS is allowed (safe schema bootstrapping).
+    //
+    // Turso push: same as /api/db/write — TursoLinkedDbWatcher only.
     // ─────────────────────────────────────────────────────────────────────────
     app.post("/api/db/exec", async (req, res) => {
       try {
@@ -931,10 +960,6 @@ async function startGateway(): Promise<void> {
         await dbRouter.exec(appId, source, sql);
         console.log(
           `[Gateway] /api/db/exec app=${appId} source=${source.alias}`,
-        );
-        const syncKey = source.dbId ?? source.jobId ?? source.dbPath;
-        void import("./services/tursoPushScheduler.js").then(({ scheduleTursoPushForJob }) =>
-          scheduleTursoPushForJob(syncKey),
         );
         res.json({ success: true });
       } catch (err) {
@@ -1093,6 +1118,24 @@ async function startGateway(): Promise<void> {
     });
 
     registerPaprMiniAppSdkRoutes(app);
+
+    app.get("/api/access", async (req, res) => {
+      try {
+        const explicitAppId = req.query["appId"] as string | undefined;
+        const resolved = resolveRequestAppId(req, explicitAppId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
+          return;
+        }
+        const { buildLocalDesktopAccessResponse } = await import(
+          "./services/appRuntime/miniAppAccess.js"
+        );
+        res.json(buildLocalDesktopAccessResponse(resolved.appId));
+      } catch (err) {
+        console.error("[Gateway] /api/access error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
 
     registerAppAgentChatRoutes(app, {
       mode: "desktop",
@@ -1398,6 +1441,8 @@ async function startGateway(): Promise<void> {
       try {
         const body = req.body as {
           autoPublish?: boolean;
+          uploadMode?: import("./services/cloudPublishPrefs.js").CloudUploadModePref;
+          cloudEnabled?: import("./services/cloudPublishPrefs.js").CloudEnabledPref;
           accessMode?: CloudAccessMode;
           loginAccess?: import("./services/cloudSharingSettings.js").CloudLoginAccess;
           externalLink?: import("./services/cloudSharingSettings.js").CloudExternalLink;
@@ -1446,6 +1491,39 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    app.post("/api/cloud/apps/:appId/bootstrap-databases", async (req, res) => {
+      try {
+        const appId = req.params.appId?.trim();
+        if (!appId) {
+          res.status(400).json({ error: "appId is required" });
+          return;
+        }
+        const { finalizePortableCloudAppResources } = await import(
+          "./services/cloudAppLinkedResourcesInstall.js"
+        );
+        await finalizePortableCloudAppResources();
+        const { bootstrapInstalledAppDatabases, buildCloudInstallAgentSetupMessage } =
+          await import("./services/cloudAppInstallBootstrap.js");
+        const bootstrap = await bootstrapInstalledAppDatabases(appId);
+        const appService = getAppService();
+        const app = await appService.getApp(appId);
+        const agentSetupMessage =
+          bootstrap.errors.length > 0 ||
+          !bootstrap.ready ||
+          bootstrap.needsSeed ||
+          bootstrap.warnings.length > 0
+            ? buildCloudInstallAgentSetupMessage({
+                appTitle: app?.title ?? appId,
+                appId,
+                bootstrap,
+              })
+            : undefined;
+        res.json({ bootstrap, agentSetupMessage });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
     app.get("/api/cloud/apps/:appId/requirements", async (req, res) => {
       try {
         const paprDir = getPaprRoot();
@@ -1475,6 +1553,16 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    app.post("/api/cloud/track-sync/pull-on-publish", async (_req, res) => {
+      try {
+        const results =
+          await getCloudAppTrackSyncService().pullTrackAppsOnPublish();
+        res.json({ results });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
     app.post("/api/cloud/track-sync", async (_req, res) => {
       try {
         const results = await getCloudAppTrackSyncService().syncAllTrackApps();
@@ -1495,6 +1583,45 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    app.post("/api/cloud/apps/changes", async (req, res) => {
+      try {
+        const paprApiKey = await getPaprApiKey();
+        if (!paprApiKey) {
+          res.status(401).json({ error: "PAPR_API_KEY not configured. Login with Papr first." });
+          return;
+        }
+
+        const body = req.body as {
+          sourceNamespaceId?: string;
+          sourceSlug?: string;
+          installedAppId?: string;
+          title?: string;
+          description?: string;
+        };
+        if (
+          !body.sourceNamespaceId?.trim() ||
+          !body.sourceSlug?.trim() ||
+          !body.installedAppId?.trim() ||
+          !body.title?.trim() ||
+          !body.description?.trim()
+        ) {
+          res.status(400).json({ error: "Missing required contribute-back fields" });
+          return;
+        }
+
+        const result = await getCloudAppContributeService().propose({
+          sourceNamespaceId: body.sourceNamespaceId.trim(),
+          sourceSlug: body.sourceSlug.trim(),
+          installedAppId: body.installedAppId.trim(),
+          title: body.title.trim(),
+          description: body.description.trim(),
+        });
+        res.json(result);
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
     app.post("/api/cloud/apps/changes/:requestId/approve", async (req, res) => {
       try {
         const paprApiKey = await getPaprApiKey();
@@ -1503,16 +1630,11 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        const request = await getCloudAppChangeMergeService().getChangeRequest(
-          req.params.requestId,
-        );
-        if (!request) {
-          res.status(404).json({ error: "Change request not found" });
-          return;
-        }
-
         const memoryServerBase = getMemoryServerBaseUrl();
-        const targetUrl = `${memoryServerBase}/v1/cloud/apps/changes/${encodeURIComponent(req.params.requestId)}/approve`;
+        const { appendCloudActingUserQuery } = await import("./utils/cloudActingUser.js");
+        const targetUrl = `${memoryServerBase}${appendCloudActingUserQuery(
+          `/v1/cloud/apps/changes/${encodeURIComponent(req.params.requestId)}/approve`,
+        )}`;
         const upstream = await fetch(targetUrl, {
           method: "POST",
           headers: {
@@ -1530,24 +1652,48 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        let mergeResult = null;
-        try {
-          mergeResult = await getCloudAppChangeMergeService().mergeForkIntoSource(
-            request.sourceAppId,
-            request.installedAppId,
-          );
-          mergeResult.requestId = req.params.requestId;
-        } catch (mergeErr) {
-          console.warn(
-            "[Gateway] Change merge after approve:",
-            (mergeErr as Error).message,
-          );
-        }
-
         const parsed = bodyText
           ? (JSON.parse(bodyText) as Record<string, unknown>)
           : {};
-        res.json({ ...parsed, merge: mergeResult });
+        const sourceAppId =
+          typeof parsed.sourceAppId === "string" ? parsed.sourceAppId : undefined;
+
+        let pullResult: { pulled: boolean; error?: string } = { pulled: false };
+        try {
+          const sync = getCloudSyncService();
+          if (sync) {
+            await sync.pullNow();
+            pullResult = { pulled: true };
+            if (sourceAppId) {
+              const { getSyncCoordinator } = await import(
+                "./services/cloudSync/SyncCoordinator.js"
+              );
+              const coordinator = getSyncCoordinator();
+              if (coordinator) {
+                void coordinator
+                  .flushNow(sourceAppId, { trigger: "contribute" })
+                  .catch((flushErr: Error) => {
+                    console.warn(
+                      `[Gateway] Contribute flush failed for ${sourceAppId}:`,
+                      flushErr.message.slice(0, 120),
+                    );
+                  });
+              } else {
+                void sync.pushAppNow(sourceAppId);
+              }
+            } else {
+              void sync.pushNow();
+            }
+          }
+        } catch (pullErr) {
+          pullResult = { pulled: false, error: (pullErr as Error).message };
+          console.warn(
+            "[Gateway] Pull after contribute approve:",
+            pullResult.error,
+          );
+        }
+
+        res.json({ ...parsed, pull: pullResult, sourceAppId });
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }
@@ -1749,13 +1895,23 @@ async function startGateway(): Promise<void> {
 
       try {
         let appContext:
-          | { appId: string; dependentJobIds: string[]; registryDbIds: string[] }
+          | {
+              appId: string;
+              dependentJobIds: string[];
+              registryDbIds: string[];
+              globalAutoUploadEnabled: boolean;
+            }
           | undefined;
         if (appId) {
           const {
             resolveAppDependentJobIds,
             readDataSourceRegistryDbIds,
           } = await import("./services/cloudSync/resolveAppDependentJobs.js");
+          const { isCloudAutoUploadGloballyEnabled } = await import(
+            "./services/cloudUploadMode.js"
+          );
+          // Auto-merge cloud job status writebacks before returning status.
+          await sync.tryAutoReconcileRemoteGit();
           // Reconcile whenever the UI asks for this app — git-clean folders
           // should show green even if mtime-only drift fooled the hash cache.
           await sync.reconcileAppDependentPaths(appId);
@@ -1766,6 +1922,7 @@ async function startGateway(): Promise<void> {
               appId,
             ),
             registryDbIds: readDataSourceRegistryDbIds(getPaprRoot(), appId),
+            globalAutoUploadEnabled: isCloudAutoUploadGloballyEnabled(),
           };
         }
 
@@ -1774,6 +1931,47 @@ async function startGateway(): Promise<void> {
           getPaprAppsRoot(),
           appId,
         );
+
+        let publish = null;
+        if (appId) {
+          const { buildPublishLayerReport } = await import(
+            "./services/cloudSync/webReady.js"
+          );
+          publish = await buildPublishLayerReport(appId, {
+            paprDir: getPaprRoot(),
+            cloudPublishing: sync.getState().cloudPublishing,
+          });
+        }
+
+        let upload = null;
+        let uploadError: {
+          message: string;
+          at: string;
+          retryPending?: boolean;
+        } | null = null;
+        {
+          const { getSyncCoordinator } = await import(
+            "./services/cloudSync/SyncCoordinator.js"
+          );
+          const { buildCoordinatorStatusReport } = await import(
+            "./services/cloudSync/coordinatorStatusReport.js"
+          );
+          const coordinator = getSyncCoordinator();
+          upload = buildCoordinatorStatusReport(coordinator, appId);
+          if (appId) {
+            const coordErr = coordinator?.getFlushError(appId);
+            const syncErr = sync.getManualFlushError(appId);
+            if (coordErr) {
+              uploadError = {
+                message: coordErr.message,
+                at: coordErr.at,
+                retryPending: coordErr.retryPending,
+              };
+            } else if (syncErr) {
+              uploadError = { ...syncErr, retryPending: false };
+            }
+          }
+        }
 
         let cloudLinks = null;
         let fromCache = false;
@@ -1790,9 +1988,12 @@ async function startGateway(): Promise<void> {
           enabled: true,
           github,
           turso,
+          publish,
+          upload,
           cloudLinks,
           appContext,
           cached: fromCache,
+          ...(appId ? { uploadError } : {}),
         });
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
@@ -1811,10 +2012,20 @@ async function startGateway(): Promise<void> {
           : undefined;
       try {
         if (appId) {
-          await sync.pushAppNow(appId);
-        } else {
-          await sync.pushNow();
+          const { getSyncCoordinator } = await import(
+            "./services/cloudSync/SyncCoordinator.js"
+          );
+          const coordinator = getSyncCoordinator();
+          const inFlight = coordinator?.getStatus().activeFlush?.appId === appId;
+          sync.pushAppNowInBackground(appId);
+          res.status(202).json({
+            accepted: true,
+            alreadyInProgress: inFlight,
+            ...sync.getState(),
+          });
+          return;
         }
+        await sync.pushNow();
         res.json({ success: true, ...sync.getState() });
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
@@ -1833,6 +2044,30 @@ async function startGateway(): Promise<void> {
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }
+    });
+
+    app.post("/api/sync/apply-updates", async (_req, res) => {
+      const sync = getCloudSyncService();
+      if (!sync) {
+        res.status(503).json({ error: "Cloud sync not initialized" });
+        return;
+      }
+      try {
+        await sync.applyGitRemoteUpdates();
+        res.json({ success: true, ...sync.getState() });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/sync/dismiss-updates", async (_req, res) => {
+      const sync = getCloudSyncService();
+      if (!sync) {
+        res.status(503).json({ error: "Cloud sync not initialized" });
+        return;
+      }
+      sync.dismissGitRemoteUpdates();
+      res.json({ success: true, ...sync.getState() });
     });
 
     app.post("/api/sync/retry", async (req, res) => {

@@ -78,6 +78,11 @@ export interface AppSettings {
      */
     cloudAutoPublishEnabled: boolean;
     /**
+     * When cloud sync is on, automatically push git/Turso changes to the cloud.
+     * Enabled by default. When false, only Upload now / agent push_cloud_sync upload.
+     */
+    cloudAutoUploadEnabled: boolean;
+    /**
      * Default Papr Memory sharing for new chats and agent writes.
      * "user" = private, "namespace" = workspace team, "org" = organization.
      */

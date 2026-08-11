@@ -60,6 +60,7 @@ export function CloudSyncTab() {
   const cached = readCloudSyncTabSnapshot();
   const [cloudSyncEnabled, setCloudSyncEnabled] = useState(true);
   const [cloudAutoPublishEnabled, setCloudAutoPublishEnabled] = useState(true);
+  const [cloudAutoUploadEnabled, setCloudAutoUploadEnabled] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   /** Any in-flight fetch (initial load or background poll). */
@@ -146,6 +147,7 @@ export function CloudSyncTab() {
             preferences?: {
               cloudSyncEnabled?: boolean;
               cloudAutoPublishEnabled?: boolean;
+              cloudAutoUploadEnabled?: boolean;
             };
           }
         )?.preferences;
@@ -154,6 +156,9 @@ export function CloudSyncTab() {
         }
         if (prefs?.cloudAutoPublishEnabled !== undefined) {
           setCloudAutoPublishEnabled(prefs.cloudAutoPublishEnabled);
+        }
+        if (prefs?.cloudAutoUploadEnabled !== undefined) {
+          setCloudAutoUploadEnabled(prefs.cloudAutoUploadEnabled);
         }
       } catch {
         /* defaults */
@@ -248,6 +253,29 @@ export function CloudSyncTab() {
           </label>
 
           {cloudSyncEnabled ? (
+            <>
+            <label className="cloud-sync-tab__toggle">
+              <input
+                type="checkbox"
+                checked={cloudAutoUploadEnabled}
+                disabled={saving}
+                onChange={(e) => {
+                  void savePreference(
+                    { cloudAutoUploadEnabled: e.target.checked },
+                    setCloudAutoUploadEnabled,
+                    e.target.checked,
+                  );
+                }}
+              />
+              <div>
+                <h4>Auto-upload to cloud</h4>
+                <p>
+                  When on, local app/job/git and Turso changes upload automatically.
+                  When off, use <strong>Upload now</strong> on each app or agent{" "}
+                  <code>push_cloud_sync</code>.
+                </p>
+              </div>
+            </label>
             <label className="cloud-sync-tab__toggle">
               <input
                 type="checkbox"
@@ -270,6 +298,7 @@ export function CloudSyncTab() {
                 </p>
               </div>
             </label>
+            </>
           ) : null}
         </div>
 

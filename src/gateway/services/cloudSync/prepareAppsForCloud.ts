@@ -70,6 +70,9 @@ export async function prepareAppForCloudGitSync(
       "./cloudAppRevisionMarker.js"
     );
     writeAppCloudRevisionMarker(appDir);
+
+    const { writeCloudAppMeta } = await import("./cloudAppMeta.js");
+    await writeCloudAppMeta(paprDir, appId);
   } catch (error) {
     console.warn(
       `[CloudSync] cloud prep skipped for ${appId}:`,

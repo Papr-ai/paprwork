@@ -15,10 +15,6 @@ vi.mock("../src/gateway/services/CloudSyncService.js", () => ({
   getCloudSyncService: vi.fn(),
 }));
 
-vi.mock("../src/gateway/services/TursoSyncBridge.js", () => ({
-  syncTursoAfterCloudRun: vi.fn().mockResolvedValue(undefined),
-}));
-
 import { cloudApiFetch } from "../src/gateway/utils/cloudApiClient.js";
 import { getCloudSyncService } from "../src/gateway/services/CloudSyncService.js";
 

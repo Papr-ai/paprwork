@@ -149,7 +149,6 @@ function coerceArgTypes(args: Record<string, unknown>): Record<string, unknown> 
 
 /**
  * Execute a single tool call using Mastra tools
- 
  */
 async function executeToolCall(
   toolCall: ToolCallAccum,
@@ -158,6 +157,11 @@ async function executeToolCall(
     { execute?: (args: unknown) => Promise<unknown> }
   >,
   apiKeys: string[],
+  toolContext: {
+    chatId: string;
+    jobEnv?: Record<string, string>;
+    delegationJobId?: string;
+  },
 ): Promise<{ toolCallId: string; toolName: string; result: unknown }> {
   const tool = mastraTools[toolCall.toolName];
   if (!tool?.execute) {
@@ -168,7 +172,15 @@ async function executeToolCall(
     };
   }
   try {
-    const rawResult = await tool.execute(coerceArgTypes(toolCall.args));
+    const { runWithToolContext } = await import("../../../core/tools/context.js");
+    const rawResult = await runWithToolContext(
+      toolContext.chatId,
+      () => tool.execute!(coerceArgTypes(toolCall.args)),
+      {
+        jobEnv: toolContext.jobEnv,
+        delegationJobId: toolContext.delegationJobId,
+      },
+    );
 
     // Validate result exists (catch undefined/null from tool crashes/timeouts)
     if (rawResult === undefined || rawResult === null) {
@@ -384,6 +396,11 @@ export async function* createPiCodexStreamWithToolLoop(
   apiKeys: string[],
   maxSteps: number,
   historyTrimBounds?: HistoryTrimBounds,
+  toolContext?: {
+    chatId: string;
+    jobEnv?: Record<string, string>;
+    delegationJobId?: string;
+  },
 ): AsyncGenerator<OurChunk> {
   const context = {
     ...initialContext,
@@ -800,7 +817,12 @@ export async function* createPiCodexStreamWithToolLoop(
       // Stale results from prior turns are compacted before the next model call.
       const toolResults = await Promise.all(
         toolCallsThisTurn.map((tc) =>
-          executeToolCall(tc, mastraTools, apiKeys),
+          executeToolCall(
+            tc,
+            mastraTools,
+            apiKeys,
+            toolContext ?? { chatId: streamOptions.sessionId },
+          ),
         ),
       );
 

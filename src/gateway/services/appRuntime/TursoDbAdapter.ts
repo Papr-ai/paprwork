@@ -17,6 +17,7 @@ import {
   ensureRemoteTableSyncTriggers,
 } from "../tursoSyncLog.js";
 import { jobTursoDatabaseName } from "../tursoDatabaseNaming.js";
+import { shouldSkipMigrationForRemoteLedger } from "../jobs/migrationLedgerPolicy.js";
 import {
   getDatabaseRegistryService,
   tursoNameForRecord,
@@ -487,6 +488,45 @@ export class TursoDbAdapter {
         }
       }),
     );
+  }
+
+  /** Highest applied migration id across all linked sources (for schema gate). */
+  async getMaxAppliedMigrationId(input: {
+    orgId: string;
+    namespaceId: string;
+    userId: string;
+    runtimeAuth: AppRuntimeRouteAuth;
+    config: AppDataSourcesFile;
+  }): Promise<string | null> {
+    let maxId: string | null = null;
+
+    for (const source of input.config.sources) {
+      try {
+        const client = await this.getClientForSource(
+          input.orgId,
+          input.namespaceId,
+          input.userId,
+          input.runtimeAuth,
+          source,
+        );
+        const result = await client.execute(
+          "SELECT id FROM schema_migrations ORDER BY id",
+        );
+        for (const row of result.rows) {
+          const id = String(row.id ?? "");
+          if (!id || shouldSkipMigrationForRemoteLedger(id)) {
+            continue;
+          }
+          if (!maxId || id > maxId) {
+            maxId = id;
+          }
+        }
+      } catch {
+        /* skip source */
+      }
+    }
+
+    return maxId;
   }
 }
 

@@ -19,6 +19,7 @@ import type {
   CloudAppInstallMode,
   CloudAppLineageFile,
 } from "../../core/types/cloudAppLineage.js";
+import type { InstallBootstrapResult } from "./cloudAppInstallBootstrap.js";
 import { serializeCloudAppLineageFile } from "../../core/utils/cloudAppLineage.js";
 import { applyIdRemapsToDirectory } from "../utils/applyIdRemaps.js";
 import { cloudApiFetch } from "../utils/cloudApiClient.js";
@@ -27,6 +28,7 @@ import {
   type AppFile,
   type MiniApp,
 } from "./AppService.js";
+import { ephemeralGitEnv } from "../utils/ephemeralGitEnv.js";
 
 interface MemoryInstallResponse {
   mode: CloudAppInstallMode;
@@ -59,6 +61,10 @@ export interface CloudAppInstallResult {
   sourceSlug: string;
   requirements: RequiredKeySpec[];
   remappedFiles: string[];
+  bootstrap: InstallBootstrapResult;
+  /** Pre-filled agent prompt when bootstrap needs follow-up. */
+  agentSetupMessage?: string;
+  copiedJobIds: string[];
 }
 
 async function runCommand(
@@ -141,10 +147,7 @@ async function cloneAppSource(
   const repoDir = path.join(tempRoot, "repo");
 
   const cloneUrl = authCloneUrl(prepare.cloneUrl, prepare.token);
-  const env = {
-    ...process.env,
-    GIT_TERMINAL_PROMPT: "0",
-  };
+  const env = ephemeralGitEnv();
 
   await runCommand(
     "git",
@@ -275,47 +278,49 @@ export class CloudAppInstallService {
         );
       }
 
-      try {
-        const { installCloudAppLinkedResources } = await import(
-          "./cloudAppLinkedResourcesInstall.js"
-        );
-        const linked = await installCloudAppLinkedResources({
-          repoDir: cloned.repoDir,
-          repoAppDir: cloned.sourceDir,
-          publisherAppId: prepare.source.appId,
-          localAppId: app.id,
-        });
-        if (linked.copiedJobIds.length > 0) {
-          console.log(
-            `[CloudAppInstall] Installed ${linked.copiedJobIds.length} linked job(s) for ${app.id}`,
-          );
-        }
-      } catch (linkedErr) {
-        console.warn(
-          `[CloudAppInstall] Linked job install skipped for ${app.id}:`,
-          (linkedErr as Error).message.slice(0, 160),
+      const { installCloudAppLinkedResources, finalizePortableCloudAppResources } =
+        await import("./cloudAppLinkedResourcesInstall.js");
+      const linked = await installCloudAppLinkedResources({
+        repoDir: cloned.repoDir,
+        repoAppDir: cloned.sourceDir,
+        publisherAppId: prepare.source.appId,
+        localAppId: app.id,
+      });
+      if (linked.copiedJobIds.length > 0) {
+        console.log(
+          `[CloudAppInstall] Installed ${linked.copiedJobIds.length} linked job(s) for ${app.id}`,
         );
       }
 
-      try {
-        const { finalizePortableCloudAppResources } = await import(
-          "./cloudAppLinkedResourcesInstall.js"
-        );
-        await finalizePortableCloudAppResources();
-      } catch (repairErr) {
-        console.warn(
-          `[CloudAppInstall] Portable resource repair skipped:`,
-          (repairErr as Error).message.slice(0, 120),
+      await finalizePortableCloudAppResources();
+
+      const {
+        bootstrapInstalledAppDatabases,
+        buildCloudInstallAgentSetupMessage,
+      } = await import("./cloudAppInstallBootstrap.js");
+      const bootstrap = await bootstrapInstalledAppDatabases(app.id);
+
+      if (bootstrap.errors.length > 0) {
+        throw new Error(
+          `Database bootstrap failed: ${bootstrap.errors.slice(0, 3).join("; ")}`,
         );
       }
 
-      try {
-        const { syncTursoAfterGitPull } = await import("./TursoSyncBridge.js");
-        await syncTursoAfterGitPull();
-      } catch (tursoErr) {
+      const agentSetupMessage =
+        !bootstrap.ready || bootstrap.needsSeed || bootstrap.warnings.length > 0
+          ? buildCloudInstallAgentSetupMessage({
+              appTitle: app.title,
+              appId: app.id,
+              sourceSlug: prepare.source.slug,
+              bootstrap,
+              linkedJobIds: linked.copiedJobIds,
+            })
+          : undefined;
+
+      if (bootstrap.warnings.length > 0) {
         console.warn(
-          `[CloudAppInstall] Turso pull after install skipped:`,
-          (tursoErr as Error).message.slice(0, 120),
+          `[CloudAppInstall] Bootstrap warnings for ${app.id}:`,
+          bootstrap.warnings.slice(0, 3).join(" | "),
         );
       }
 
@@ -328,6 +333,7 @@ export class CloudAppInstallService {
         ...(prepare.mode === "track"
           ? {
               lastSyncedAt: new Date().toISOString(),
+              trackAutoPull: true,
               syncSnapshot: Object.fromEntries(
                 files.map((file) => [
                   file.filename.replace(/\\/g, "/"),
@@ -337,6 +343,19 @@ export class CloudAppInstallService {
             }
           : {}),
       };
+
+      if (prepare.mode === "track") {
+        const { fetchPublishedAppRevision } = await import(
+          "./cloudSync/trackUpstreamRevision.js"
+        );
+        const upstreamRevision = await fetchPublishedAppRevision(
+          prepare.source.namespaceId,
+          prepare.source.slug,
+        );
+        if (upstreamRevision) {
+          lineage.upstreamRevision = upstreamRevision;
+        }
+      }
 
       const paprDir = getPaprRoot();
       const lineagePath = path.join(getPaprAppsRoot(), app.id, "papr-cloud-lineage.json");
@@ -361,6 +380,9 @@ export class CloudAppInstallService {
         sourceSlug: prepare.source.slug,
         requirements,
         remappedFiles,
+        bootstrap,
+        agentSetupMessage,
+        copiedJobIds: linked.copiedJobIds,
       };
     } finally {
       await cloned.cleanup();

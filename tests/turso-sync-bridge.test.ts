@@ -3,13 +3,13 @@ import Database from "better-sqlite3";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { jobTursoDatabaseName, tursoShortNameForChangeInput } from "../src/gateway/services/tursoDatabaseNaming.js";
 import {
   applyPulledTablesToLocalDb,
   buildCreateTableSql,
   ensureLocalDbChangeLogReady,
   filterSyncableTables,
   isSqliteBusyError,
-  jobTursoDatabaseName,
   listUserTables,
   pullTursoToLocalDb,
   pushLocalDbToTurso,
@@ -22,9 +22,6 @@ import {
   toRemoteTableName,
   type LocalTable,
 } from "../src/gateway/services/tursoSyncBridgeCore.js";
-import {
-  shouldPullTursoAfterCloudRun,
-} from "../src/gateway/services/TursoSyncBridge.js";
 import {
   discoverTursoLinkedSources,
   listLinkedJobIdsForTursoSync,
@@ -40,30 +37,21 @@ try {
 }
 
 describe("tursoSyncBridgeCore", () => {
-  it("shouldPullTursoAfterCloudRun defaults on unless explicitly disabled", () => {
-    const prev = process.env.TURSO_PULL_AFTER_CLOUD_RUN;
-    try {
-      delete process.env.TURSO_PULL_AFTER_CLOUD_RUN;
-      expect(shouldPullTursoAfterCloudRun()).toBe(true);
-
-      process.env.TURSO_PULL_AFTER_CLOUD_RUN = "false";
-      expect(shouldPullTursoAfterCloudRun()).toBe(false);
-
-      process.env.TURSO_PULL_AFTER_CLOUD_RUN = "0";
-      expect(shouldPullTursoAfterCloudRun()).toBe(false);
-
-      process.env.TURSO_PULL_AFTER_CLOUD_RUN = "true";
-      expect(shouldPullTursoAfterCloudRun()).toBe(true);
-    } finally {
-      if (prev === undefined) delete process.env.TURSO_PULL_AFTER_CLOUD_RUN;
-      else process.env.TURSO_PULL_AFTER_CLOUD_RUN = prev;
-    }
-  });
-
   it("jobTursoDatabaseName uses first 8 hex chars of job id", () => {
     expect(jobTursoDatabaseName("de1a89d8-1234-5678-abcd-ef0123456789")).toBe(
       "j-de1a89d8",
     );
+  });
+
+  it("tursoShortNameForChangeInput resolves jobId, dbId, or explicit short name", () => {
+    expect(
+      tursoShortNameForChangeInput({ jobId: "de1a89d8-1234-5678-abcd-ef0123456789" }),
+    ).toBe("j-de1a89d8");
+    expect(tursoShortNameForChangeInput({ dbId: "db-deadbeef" })).toBe("d-deadbeef");
+    expect(
+      tursoShortNameForChangeInput({ tursoShortName: "d-custom01" }),
+    ).toBe("d-custom01");
+    expect(tursoShortNameForChangeInput({})).toBeUndefined();
   });
 
   it("per-job DB uses unprefixed table names", () => {

@@ -84,7 +84,8 @@ function runtimeAuthKey(auth: AppRuntimeRouteAuth): string {
   const session = auth.sessionToken ? `s:${auth.sessionToken.slice(0, 12)}` : "";
   const apiKey = auth.paprApiKey ? `k:${auth.paprApiKey.slice(0, 12)}` : "";
   const share = auth.shareToken ?? "";
-  return `${auth.namespaceId}:${auth.slug}:${share}:${session}:${apiKey}`;
+  const visitor = auth.externalUserId ? `u:${auth.externalUserId}` : "";
+  return `${auth.namespaceId}:${auth.slug}:${share}:${session}:${apiKey}:${visitor}`;
 }
 
 function readTimed<T>(cache: Map<string, TimedEntry<T>>, key: string): T | undefined {
@@ -253,6 +254,7 @@ export async function validateCachedAccess(
     paprApiKey: runtimeAuth.paprApiKey,
     sessionToken: runtimeAuth.sessionToken,
     shareToken: runtimeAuth.shareToken,
+    externalUserId: runtimeAuth.externalUserId,
   });
   // Do not negative-cache denials — shared cookies can briefly point at the wrong app.
   if (access !== null) {

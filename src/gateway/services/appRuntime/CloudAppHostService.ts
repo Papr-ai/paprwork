@@ -33,6 +33,7 @@ import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
 import {
   fetchRuntimeDbToken,
   listRuntimeJobs,
+  recordRuntimeTursoDbChanged,
   runRuntimeJob,
   runtimeFetch,
 } from "./memoryRuntimeClient.js";
@@ -76,6 +77,9 @@ import {
 } from "./cloudAppPublishClient.js";
 import { getMiniAppContentType } from "../../utils/miniAppStaticAssets.js";
 import {
+  buildMiniAppAccessResponse,
+} from "./miniAppAccess.js";
+import {
   buildDbCacheKey,
   checkDbRateLimit,
   dbRateLimitKey,
@@ -93,6 +97,14 @@ import {
   resolveCloudAppPreviewMeta,
   resolvePreviewIconSvg,
 } from "./CloudAppPreviewService.js";
+import {
+  PAPR_APP_META_RELATIVE_PATH,
+  readCloudAppMetaFromContent,
+} from "../cloudSync/cloudAppMeta.js";
+import {
+  evaluateCloudAppSchemaGate,
+  injectSchemaGateBanner,
+} from "./cloudAppSchemaGate.js";
 import {
   injectPaprAppRevisionMeta,
   resolvePublishedAppRevision,
@@ -123,6 +135,7 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
     paprApiKey?: string;
     sessionToken?: string;
     shareToken?: string;
+    externalUserId?: string;
   }): Promise<AppAccessContext | null> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -142,6 +155,7 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
         slug: input.slug,
         paprApiKey: input.paprApiKey,
         shareToken: input.shareToken,
+        ...(input.externalUserId ? { external_user_id: input.externalUserId } : {}),
       }),
     });
     if (res.status === 401 || res.status === 403 || res.status === 404 || res.status === 422) {
@@ -251,6 +265,7 @@ export class CloudAppHostService {
       void this.handleInternalDbChanged(req, res),
     );
 
+    app.get("/api/access", (req, res) => void this.handleAccess(req, res));
     app.get("/api/db/schema", (req, res) => this.handleSchema(req, res));
     app.post("/api/db/query", (req, res) => this.handleQuery(req, res));
     app.post("/api/db/batch", (req, res) => this.handleBatchQuery(req, res));
@@ -333,6 +348,7 @@ export class CloudAppHostService {
       paprApiKey: getRequestPaprApiKey(req),
       sessionToken: this.auth.getSessionToken(req),
       shareToken: getShareToken(req, ctx.namespaceId, ctx.slug),
+      externalUserId: this.auth.getExternalUserId(req),
     };
   }
 
@@ -552,10 +568,43 @@ export class CloudAppHostService {
     config: AppDataSourcesFile,
     sourceId: string | undefined,
     appId: string,
+    runtimeAuth: AppRuntimeRouteAuth,
   ): void {
     const target = resolveDbEventTarget(config, sourceId, appId);
     if (target.jobId || target.dbId) {
       publishDbChanged(target);
+      void recordRuntimeTursoDbChanged(runtimeAuth, {
+        ...(target.jobId ? { jobId: target.jobId } : {}),
+        ...(target.dbId ? { dbId: target.dbId } : {}),
+        source: "cloud_app_host",
+      }).catch((err) => {
+        console.warn(
+          "[CloudAppHost] turso-db-changed record failed:",
+          (err as Error).message.slice(0, 120),
+        );
+      });
+    }
+  }
+
+  private async handleAccess(req: Request, res: Response): Promise<void> {
+    try {
+      const requestedAppId = req.query["appId"] as string | undefined;
+      const runtimeAuth = this.buildRuntimeAuth(req);
+      if (!runtimeAuth) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      const trimmedAppId = requestedAppId?.trim() || undefined;
+      const access = await this.resolveAccess(req, trimmedAppId);
+      const loggedIn = Boolean(this.auth.getSessionToken(req));
+      const appId = trimmedAppId ?? access?.appId;
+
+      res.json(
+        buildMiniAppAccessResponse(access, loggedIn, appId),
+      );
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
     }
   }
 
@@ -639,7 +688,7 @@ export class CloudAppHostService {
         });
         if (changed) {
           invalidateDbCacheForApp(runtimeAuth.namespaceId, runtimeAuth.slug);
-          this.publishDbChangedForSource(gateConfig, sourceId, appId);
+          this.publishDbChangedForSource(gateConfig, sourceId, appId, runtimeAuth);
           cached = undefined;
         } else {
           res.setHeader("X-Papr-Db-Cache", "hit");
@@ -726,7 +775,7 @@ export class CloudAppHostService {
         });
         if (changed) {
           invalidateDbCacheForApp(runtimeAuth.namespaceId, runtimeAuth.slug);
-          this.publishDbChangedForSource(config, gateSourceId, appId);
+          this.publishDbChangedForSource(config, gateSourceId, appId, runtimeAuth);
           break;
         }
       }
@@ -816,7 +865,7 @@ export class CloudAppHostService {
       });
       // Bust read micro-cache and emit db-changed so UIs refresh
       invalidateDbCacheForApp(runtimeAuth.namespaceId, runtimeAuth.slug);
-      this.publishDbChangedForSource(config, sourceId, appId);
+      this.publishDbChangedForSource(config, sourceId, appId, runtimeAuth);
       res.json(result);
     } catch (err) {
       const e = err as Error & { status?: number };
@@ -865,7 +914,7 @@ export class CloudAppHostService {
       });
       // Bust read micro-cache and emit db-changed so UIs refresh
       invalidateDbCacheForApp(runtimeAuth.namespaceId, runtimeAuth.slug);
-      this.publishDbChangedForSource(config, sourceId, appId);
+      this.publishDbChangedForSource(config, sourceId, appId, runtimeAuth);
       res.json(result);
     } catch (err) {
       const e = err as Error & { status?: number };
@@ -1297,7 +1346,18 @@ export class CloudAppHostService {
       }
 
       res.setHeader("Cache-Control", "no-cache, must-revalidate");
-      res.json({ revision });
+      const metaFile = await fetchCachedRuntimeRepoFile(
+        runtimeAuth,
+        PAPR_APP_META_RELATIVE_PATH,
+        { bypassFresh },
+      );
+      const meta = metaFile
+        ? readCloudAppMetaFromContent(metaFile.content)
+        : null;
+      res.json({
+        revision,
+        requiredSchemaVersion: meta?.requiredSchemaVersion ?? null,
+      });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -1367,7 +1427,7 @@ export class CloudAppHostService {
         return;
       }
 
-      await this.sendAppFile(req, res, runtimeAuth, requestedPath);
+      await this.sendAppFile(req, res, runtimeAuth, requestedPath, access);
     } catch (err) {
       res.status(500).send((err as Error).message);
     }
@@ -1421,6 +1481,7 @@ export class CloudAppHostService {
     res: Response,
     runtimeAuth: AppRuntimeRouteAuth,
     requestedPath: string,
+    access: AppAccessContext | null = null,
   ): Promise<void> {
     // Browser reload (F5 / hard reload) bypasses SWR so synced changes appear immediately.
     const bypassFresh = shouldBypassRepoFileCache(req.headers);
@@ -1438,6 +1499,9 @@ export class CloudAppHostService {
     let transpiled = false;
 
     if (ext === ".html" && requestedPath === "index.html") {
+      const revision = await resolvePublishedAppRevision(runtimeAuth, {
+        bypassFresh,
+      });
       const [distBundle, distCss] = await Promise.all([
         fetchCachedRuntimeRepoFile(runtimeAuth, "dist/app.js", { bypassFresh }),
         fetchCachedRuntimeRepoFile(runtimeAuth, "dist/app.css", { bypassFresh }),
@@ -1465,11 +1529,31 @@ export class CloudAppHostService {
             : {}),
         });
 
-        const revision = await resolvePublishedAppRevision(runtimeAuth, {
-          bypassFresh,
-        });
         if (revision) {
           content = injectPaprAppRevisionMeta(content, revision);
+        }
+      }
+
+      if (access) {
+        try {
+          const config = await this.loadDataSources(runtimeAuth);
+          const gate = await evaluateCloudAppSchemaGate({
+            turso: this.turso,
+            runtimeAuth,
+            orgId: access.orgId,
+            namespaceId: access.namespaceId,
+            userId: access.userId,
+            config,
+            currentRevision: revision ?? null,
+          });
+          if (gate.blocked && gate.bannerHtml) {
+            content = injectSchemaGateBanner(content, gate.bannerHtml);
+          }
+        } catch (err) {
+          console.warn(
+            "[CloudAppHost] schema gate skipped:",
+            (err as Error).message.slice(0, 120),
+          );
         }
       }
 
@@ -1562,7 +1646,7 @@ export class CloudAppHostService {
         return;
       }
 
-      await this.sendAppFile(req, res, runtimeAuth, requestedPath);
+      await this.sendAppFile(req, res, runtimeAuth, requestedPath, access);
     } catch (err) {
       res.status(500).send((err as Error).message);
     }

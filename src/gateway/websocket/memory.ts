@@ -505,7 +505,11 @@ async function handleGetContextPreview(
     if (cached && !forceRefresh) {
       const needsTierRetry = cached.isIncomplete;
       if (!cached.isFresh || needsTierRetry) {
-        memoryService.refreshMemoryPreviewCacheInBackground();
+        memoryService.maybeRefreshMemoryPreviewCacheInBackground({
+          isFresh: cached.isFresh,
+          isIncomplete: cached.isIncomplete,
+          syncTiersFailedAt: cached.syncTiersFailedAt,
+        });
       }
 
       console.log(
@@ -532,7 +536,7 @@ async function handleGetContextPreview(
 
     if (!forceRefresh) {
       const quickStatus = await memoryService.buildQuickPreviewStatus();
-      memoryService.refreshMemoryPreviewCacheInBackground();
+      memoryService.maybeRefreshMemoryPreviewCacheInBackground();
 
       console.log(
         `[Memory] context-preview fast path (${workspaceFiles.length} workspace files, papr fetch in background)`,
@@ -561,7 +565,9 @@ async function handleGetContextPreview(
     }
 
     console.log("[Memory] context-preview force refresh (blocking remote fetch)");
-    const paprPreview = await memoryService.fetchMemoryPreviewForSettings();
+    const paprPreview = await memoryService.fetchMemoryPreviewForSettings({
+      forceSyncTiers: true,
+    });
     await writeMemoryPreviewCache({
       paprMemory: {
         goalsOkrs: paprPreview.goalsOkrs,
@@ -569,6 +575,9 @@ async function handleGetContextPreview(
         syncTiers: paprPreview.syncTiers,
       },
       status: paprPreview.status,
+      syncTiersFailedAt: paprPreview.status.errors.syncTiers
+        ? new Date().toISOString()
+        : null,
     });
 
     sendResponse(ws, {

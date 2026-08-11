@@ -70,6 +70,7 @@ export function runtimeAuthPayload(
   if (auth.paprApiKey) payload.paprApiKey = auth.paprApiKey;
   if (auth.shareToken) payload.shareToken = auth.shareToken;
   if (auth.sessionToken) payload.sessionToken = auth.sessionToken;
+  if (auth.externalUserId) payload.external_user_id = auth.externalUserId;
   return payload;
 }
 
@@ -464,4 +465,45 @@ export async function streamRuntimeAppAgentChat(
     throw new Error("Runtime app-agent stream returned empty body");
   }
   return parseRuntimeSseStream(res.body);
+}
+
+export interface RuntimeTursoDbChangedInput {
+  jobId?: string;
+  dbId?: string;
+  tursoShortName?: string;
+  tables?: string[];
+  source?: string;
+}
+
+/** Record Turso write — memory server bumps workspace sync-index. */
+export async function recordRuntimeTursoDbChanged(
+  auth: AppRuntimeRouteAuth,
+  input: RuntimeTursoDbChangedInput,
+): Promise<void> {
+  if (!input.jobId?.trim() && !input.dbId?.trim()) {
+    return;
+  }
+
+  const res = await runtimeFetch(
+    `${getMemoryServerBaseUrl()}/v1/cloud/runtime/turso-db-changed`,
+    {
+      method: "POST",
+      headers: runtimeHeaders(auth),
+      body: JSON.stringify({
+        ...runtimeAuthPayload(auth),
+        ...(input.jobId ? { jobId: input.jobId } : {}),
+        ...(input.dbId ? { dbId: input.dbId } : {}),
+        ...(input.tursoShortName ? { tursoShortName: input.tursoShortName } : {}),
+        ...(input.tables ? { tables: input.tables } : {}),
+        ...(input.source ? { source: input.source } : {}),
+      }),
+    },
+    15_000,
+  );
+
+  if (!res.ok) {
+    throw new Error(
+      `Runtime turso-db-changed failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    );
+  }
 }

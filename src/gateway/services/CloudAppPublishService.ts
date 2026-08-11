@@ -34,6 +34,7 @@ import {
 } from "../utils/uniqueAppNaming.js";
 import { writeCloudAppMetadataFile } from "./cloudAppMetadataFile.js";
 import { prepareCatalogIconForPublish } from "../utils/catalogIconForPublish.js";
+import { normalizeCatalogTags } from "../../core/utils/catalogTags.js";
 import { buildMiniApp } from "../utils/miniAppBuild.js";
 import {
   catalogRequirementsForPublish,
@@ -67,14 +68,46 @@ function defaultAppsHost(): string {
 
 function loadAppCatalogMeta(paprDir: string): Map<
   string,
-  { title: string; description: string; icon?: string; createdAt?: string }
+  {
+    title: string;
+    description: string;
+    icon?: string;
+    createdAt?: string;
+    tags?: string[];
+  }
 > {
-  const meta = new Map<string, { title: string; description: string; icon?: string; createdAt?: string }>();
+  const meta = new Map<
+    string,
+    {
+      title: string;
+      description: string;
+      icon?: string;
+      createdAt?: string;
+      tags?: string[];
+    }
+  >();
   try {
     const raw = fs.readFileSync(path.join(paprDir, "data", "apps.json"), "utf8");
     const parsed = JSON.parse(raw) as
-      | Array<{ id: string; title?: string; description?: string; icon?: string; createdAt?: string }>
-      | Record<string, { id: string; title?: string; description?: string; icon?: string; createdAt?: string }>;
+      | Array<{
+          id: string;
+          title?: string;
+          description?: string;
+          icon?: string;
+          createdAt?: string;
+          tags?: string[];
+        }>
+      | Record<
+          string,
+          {
+            id: string;
+            title?: string;
+            description?: string;
+            icon?: string;
+            createdAt?: string;
+            tags?: string[];
+          }
+        >;
     const list = Array.isArray(parsed) ? parsed : Object.values(parsed);
     for (const app of list) {
       if (app.id) {
@@ -83,6 +116,7 @@ function loadAppCatalogMeta(paprDir: string): Map<
           description: app.description?.trim() || "",
           icon: app.icon,
           createdAt: app.createdAt,
+          tags: normalizeCatalogTags(app.tags),
         });
       }
     }
@@ -420,10 +454,11 @@ export class CloudAppPublishService {
     );
     const platformReport = await detectCommunityPlatformForApp(appId);
     console.log(
-      `[CloudPublish] Platform for ${appId}: ${platformReport.platform.join(", ")}` +
+      `[CloudPublish] Local platform scan for ${appId}: ${platformReport.platform.join(", ")}` +
         (platformReport.requiresDesktopForFullFunctionality
           ? " (desktop required for full functionality)"
-          : " (cloud-ready)"),
+          : " (cloud-ready)") +
+        " — memory server recomputes from GitHub repo on publish",
     );
 
     let response: Response | null = null;
@@ -448,8 +483,7 @@ export class CloudAppPublishService {
           ...(appMeta?.title ? { catalogTitle: appMeta.title } : {}),
           ...(appMeta?.description ? { catalogDescription: appMeta.description } : {}),
           ...(catalogIconResult.icon ? { catalogIcon: catalogIconResult.icon } : {}),
-          catalogPlatform: platformReport.platform,
-          catalogRequiresDesktop: platformReport.requiresDesktopForFullFunctionality,
+          ...(appMeta?.tags?.length ? { catalogTags: appMeta.tags } : {}),
         },
       });
 
@@ -499,6 +533,18 @@ export class CloudAppPublishService {
       },
       this.paprDir,
     );
+
+    void import("./CloudAppTrackSyncService.js")
+      .then(({ getCloudAppTrackSyncService }) =>
+        getCloudAppTrackSyncService().pullTrackAppsOnPublish(),
+      )
+      .catch((err: Error) => {
+        console.warn(
+          "[CloudPublish] Track pull-on-publish skipped:",
+          err.message.slice(0, 120),
+        );
+      });
+
     return config;
   }
 
@@ -608,6 +654,38 @@ export class CloudAppPublishService {
     return tursoSources.every((source) => source.status === "synced");
   }
 
+  async isAppVerifiedReadyForCloudLink(appId: string): Promise<boolean> {
+    const { getCloudSyncService } = await import("./CloudSyncService.js");
+    const sync = getCloudSyncService();
+    const github = sync?.getGitHubSyncItemsReport() ?? {
+      workspace: [],
+      apps: [],
+      jobs: [],
+      queuedPaths: [],
+      summary: {
+        synced: 0,
+        pending: 0,
+        outdated: 0,
+        failed: 0,
+        updatesAvailable: 0,
+        total: 0,
+      },
+    };
+    const { buildTursoSyncItemsReport } = await import("./tursoSyncStatus.js");
+    const turso = await buildTursoSyncItemsReport(
+      path.join(this.paprDir, "apps"),
+      appId,
+    );
+    if (!this.isAppReadyForCloudLink(appId, github, turso)) {
+      return false;
+    }
+    const { verifyAppPushConvergence } = await import(
+      "./cloudSync/postPushVerify.js"
+    );
+    const verify = await verifyAppPushConvergence(appId, this.paprDir);
+    return verify.ok;
+  }
+
   async tryAutoPublishSyncedApps(
     github: GitHubSyncItemsReport,
     turso: TursoSyncItemsReport | null,
@@ -634,6 +712,12 @@ export class CloudAppPublishService {
           continue;
         }
         if (!this.isAppReadyForCloudLink(appId, github, turso)) {
+          continue;
+        }
+        if (!(await this.isAppVerifiedReadyForCloudLink(appId))) {
+          console.warn(
+            `[CloudPublish] Skipping auto-publish for ${appId}: post-push verify not passed`,
+          );
           continue;
         }
 

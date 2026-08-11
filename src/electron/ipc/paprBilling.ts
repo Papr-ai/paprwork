@@ -626,6 +626,14 @@ export function registerPaprBillingHandlers(deps: {
       if (!summary.subscriptionObjectId) {
         throw new Error("No active subscription found for this workspace.");
       }
+      if (enabled) {
+        const status = summary.subscriptionStatus;
+        if (status !== "active" && status !== "trialing") {
+          throw new Error(
+            "Metered billing requires an active or trialing subscription.",
+          );
+        }
+      }
 
       await services.runGraphQL(UPDATE_SUBSCRIPTION_METERED_BILLING, {
         input: {

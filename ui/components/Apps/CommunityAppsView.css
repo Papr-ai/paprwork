@@ -308,6 +308,15 @@
   gap: 8px;
   font-size: 12px;
   color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
+.community-card__byline {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .community-card__version {
@@ -626,6 +635,25 @@
 .community-card__badge--fork {
   color: #7c3aed;
   background: color-mix(in srgb, #7c3aed 12%, transparent);
+}
+
+.community-card__badge--share {
+  font-weight: 600;
+}
+
+.community-card__badge--share-team {
+  color: var(--accent, #0071e3);
+  background: color-mix(in srgb, var(--accent, #0071e3) 12%, transparent);
+}
+
+.community-card__badge--share-public {
+  color: #059669;
+  background: color-mix(in srgb, #059669 12%, transparent);
+}
+
+.community-card__badge--share-oss {
+  color: #059669;
+  background: color-mix(in srgb, #059669 12%, transparent);
 }
 
 .community-install-modal__backdrop {

@@ -59,7 +59,8 @@ export const createDatabaseTool = createTool({
     "Every synced table MUST have a PRIMARY KEY (INTEGER or TEXT) — required for cloud sync and row versioning. " +
     "Next: attach_database({ appId, dbId, alias }) so the mini-app can read/write via /api/db/* with sourceId. " +
     "Jobs that fill the DB: create_job({ writeDbIds: [dbId] }). " +
-    "isolation: 'shared' (default) or 'per-user' (separate Turso DB per user).",
+    "isolation: 'shared' (default) or 'per-user' (separate Turso DB per signed-in user). " +
+    "For anonymous public apps use shared DB + owner_session column; for private multi-user use per-user or papr_user_id + GET /api/access isOwner admin.",
   inputSchema: createDatabaseSchema,
   execute: async (input) => {
     const args =

@@ -20,7 +20,7 @@ Use this guide when users ask about running jobs while their Mac is asleep, what
 | Lane | What moves | Cloud writes | Desktop reads (on wake) |
 |------|------------|--------------|-------------------------|
 | **Git** | Apps, `Jobs/`, `data/jobs.json`, `workspace/` | Memory server git writeback after runs | `CloudSync.pullNow()` via heartbeat |
-| **Turso** | Job/app `data.db` user tables | Gateway pull → run → push bookends | `syncTursoAfterCloudRun()` on wake (default **on**; set `TURSO_PULL_AFTER_CLOUD_RUN=false` to disable) |
+| **Turso** | Job/app `data.db` user tables | Gateway pull → run → push bookends; bump `sync-index` Turso DB | Heartbeat polls `sync-index` → scoped pull for changed replicas |
 | **Chat** | Main chat history | Ephemeral job sessions in cloud | `~/.paprwork-v2/chats.db` (local-first, not in git) |
 
 **Published mini-apps** on `apps.papr.ai` read Turso directly — they see DB changes as soon as cloud pushes Turso, without waiting for desktop pull.
@@ -81,9 +81,7 @@ Flow:
 1. Cloud gateway: Turso **pull** before run → local `data.db` in temp workspace
 2. Agent/job writes SQLite during run
 3. Cloud gateway: Turso **push** after run
-4. Desktop wake: `handlePendingCloudRuns()` → `syncTursoAfterCloudRun()` → pulls linked sources into local `$PAPR_HOME/Jobs/{id}/data/data.db`
-
-**Default:** Turso pull on wake is **enabled**. Set `TURSO_PULL_AFTER_CLOUD_RUN=false` on the desktop gateway to disable.
+4. Desktop heartbeat: `syncTursoFromSyncIndex()` polls workspace `sync-index` Turso DB → pulls replicas whose index version advanced
 
 **Published cloud apps:** read Turso live — no desktop pull needed for those UIs.
 
@@ -133,7 +131,7 @@ Flow:
 
 1. **Deploy Cloud Agent Gateway** + set `CLOUD_AGENT_GATEWAY_URL` on memory server
 2. ~~**Playwright in gateway container**~~ — ✅ `Dockerfile.cloud-agent-gateway` (bookworm + Chromium)
-3. ~~**`TURSO_PULL_AFTER_CLOUD_RUN` by default**~~ — ✅ enabled unless `false`
+3. ~~**Turso pull on cloud run wake**~~ — ✅ sync-index heartbeat poll (`syncTursoFromSyncIndex`)
 4. **Sleep/Wiki preflight in cloud path** — memory or gateway must inject same context as `AgentJobExecutor`
 
 ### P1 — Important gaps
@@ -173,6 +171,18 @@ User asks to run something while Mac might be asleep
 └─ Published app should show new data?
     └─ YES → Turso push is enough; app reads cloud DB directly
 ```
+
+---
+
+## Fork install and contribute-back
+
+| Role | Action | Tools |
+|------|--------|-------|
+| **Publisher** | Share with `codeAccess=install` via `publish_cloud_app` | Others install with `install_cloud_app` |
+| **Contributor** | Edit local fork; propose changes | `submit_cloud_app_change` → GitHub PR on owner's papr-work repo |
+| **Owner** | Review incoming PRs | `list_cloud_app_changes` → `resolve_cloud_app_change({ action: "approve"|"reject" })` |
+
+Approve **merges the PR on GitHub** (via Papr GitHub App), then the owner's desktop runs `pullNow()` — there is no copy-from-contributor-folder merge on the owner's machine. Details: `docs/SYNC_CONTRACT.md` §6.
 
 ---
 

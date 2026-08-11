@@ -10,6 +10,8 @@ import {
   computeSyncableTableFingerprintsForPath,
   fingerprintsEqual,
 } from "./tursoTableFingerprint.js";
+import { maxSyncLogId } from "./tursoSyncLog.js";
+import Database from "better-sqlite3";
 
 export const TURSO_SYNC_STATE_FILENAME = ".turso-sync-state.json";
 
@@ -26,9 +28,14 @@ export interface TursoJobPushState {
   lastPushedLogId?: number;
   /** Highest remote _papr_sync_log id applied in last successful pull. */
   lastPulledLogId?: number;
+  /** Remote sync index version for this source's Turso short name (hint cursor). */
+  lastSeenIndexVersion?: number;
   /** When set, Turso push/pull is skipped until the local DB is repaired. */
   quarantinedAt?: string;
   quarantineReason?: string;
+  /** Instant dirty signal from watcher/coordinator (Phase 5 fast path). */
+  dirtyFlag?: boolean;
+  dirtyFlagAt?: string;
 }
 
 export interface TursoSyncStateFile {
@@ -83,12 +90,12 @@ export function readDbMtimeMs(dbPath: string): number | null {
   return maxMtime;
 }
 
-export function resolveTursoPushStateEntry(
+export function resolveTursoPushStateKey(
   syncKey: string,
   dbPath: string,
   state: TursoSyncStateFile,
   alternateKeys: readonly string[] = [],
-): TursoJobPushState | undefined {
+): string | undefined {
   const normalizedPath = path.normalize(dbPath);
   const keys = [
     syncKey,
@@ -97,10 +104,25 @@ export function resolveTursoPushStateEntry(
   for (const key of keys) {
     const entry = state.jobs[key];
     if (entry && path.normalize(entry.dbPath) === normalizedPath) {
-      return entry;
+      return key;
     }
   }
   return undefined;
+}
+
+export function resolveTursoPushStateEntry(
+  syncKey: string,
+  dbPath: string,
+  state: TursoSyncStateFile,
+  alternateKeys: readonly string[] = [],
+): TursoJobPushState | undefined {
+  const stateKey = resolveTursoPushStateKey(
+    syncKey,
+    dbPath,
+    state,
+    alternateKeys,
+  );
+  return stateKey ? state.jobs[stateKey] : undefined;
 }
 
 export function isJobDbDirty(
@@ -143,6 +165,216 @@ export function isJobDbDirty(
     return false;
   }
   return prev.dbMtimeMs === undefined || mtimeMs > prev.dbMtimeMs;
+}
+
+/**
+ * Content-based dirty check — ignores persisted dirtyFlag.
+ * Used by the watcher so WAL/SHM touches do not mark clean DBs dirty.
+ */
+export function hasUnpushedLocalDbChanges(
+  syncKey: string,
+  dbPath: string,
+  state: TursoSyncStateFile,
+  alternateKeys: readonly string[] = [],
+): boolean {
+  if (isJobDbQuarantined(syncKey, state)) {
+    return false;
+  }
+  for (const key of alternateKeys) {
+    if (key !== syncKey && isJobDbQuarantined(key, state)) {
+      return false;
+    }
+  }
+
+  const normalizedPath = path.normalize(dbPath);
+  if (!fs.existsSync(normalizedPath)) {
+    return false;
+  }
+
+  const prev = resolveTursoPushStateEntry(syncKey, dbPath, state, alternateKeys);
+  if (!prev) {
+    return true;
+  }
+
+  const oplogDirty = isLinkedSourceDirtyFastIgnoringFlag(
+    syncKey,
+    dbPath,
+    state,
+    alternateKeys,
+  );
+  if (oplogDirty === true) {
+    return true;
+  }
+  if (oplogDirty === false) {
+    if (prev.tableFingerprints) {
+      const currentFingerprints =
+        computeSyncableTableFingerprintsForPath(normalizedPath);
+      if (currentFingerprints === null) {
+        return true;
+      }
+      return !fingerprintsEqual(currentFingerprints, prev.tableFingerprints);
+    }
+    return false;
+  }
+
+  return isJobDbDirty(syncKey, dbPath, state, alternateKeys);
+}
+
+/** Drop persisted dirtyFlag when oplog/fingerprints show no unpushed changes. */
+export function clearStaleDirtyFlagIfClean(
+  syncKey: string,
+  dbPath: string,
+  paprDir?: string,
+  alternateKeys: readonly string[] = [],
+): boolean {
+  const state = loadTursoSyncState(paprDir);
+  const stateKey = resolveTursoPushStateKey(syncKey, dbPath, state, alternateKeys);
+  if (!stateKey) {
+    return false;
+  }
+  const entry = state.jobs[stateKey];
+  if (!entry?.dirtyFlag) {
+    return false;
+  }
+  if (hasUnpushedLocalDbChanges(syncKey, dbPath, state, alternateKeys)) {
+    return false;
+  }
+  delete entry.dirtyFlag;
+  delete entry.dirtyFlagAt;
+  saveTursoSyncState(state, paprDir);
+  return true;
+}
+
+/** Mark linked source dirty from watcher or job completion (O(1)). */
+export function markDbDirty(
+  syncKey: string,
+  dbPath: string,
+  paprDir?: string,
+): void {
+  const normalizedPath = path.normalize(dbPath);
+  const state = loadTursoSyncState(paprDir);
+  if (!hasUnpushedLocalDbChanges(syncKey, normalizedPath, state)) {
+    clearStaleDirtyFlagIfClean(syncKey, normalizedPath, paprDir);
+    return;
+  }
+
+  const stateKey =
+    resolveTursoPushStateKey(syncKey, normalizedPath, state) ?? syncKey;
+  const existing = state.jobs[stateKey];
+  if (existing?.dirtyFlag === true && existing.dbPath === normalizedPath) {
+    return;
+  }
+  state.jobs[stateKey] = {
+    dbPath: normalizedPath,
+    lastPushAt: existing?.lastPushAt ?? new Date(0).toISOString(),
+    dirtyFlag: true,
+    dirtyFlagAt: new Date().toISOString(),
+    ...(existing?.tableFingerprints
+      ? { tableFingerprints: existing.tableFingerprints }
+      : {}),
+    ...(existing?.lastPushedLogId !== undefined
+      ? { lastPushedLogId: existing.lastPushedLogId }
+      : {}),
+    ...(existing?.lastPulledLogId !== undefined
+      ? { lastPulledLogId: existing.lastPulledLogId }
+      : {}),
+    ...(existing?.lastSeenRemoteVersion !== undefined
+      ? { lastSeenRemoteVersion: existing.lastSeenRemoteVersion }
+      : {}),
+    ...(existing?.lastSeenIndexVersion !== undefined
+      ? { lastSeenIndexVersion: existing.lastSeenIndexVersion }
+      : {}),
+  };
+  saveTursoSyncState(state, paprDir);
+}
+
+export function clearDirtyAfterPush(syncKey: string, paprDir?: string): void {
+  const state = loadTursoSyncState(paprDir);
+  const entry = state.jobs[syncKey];
+  if (!entry) {
+    return;
+  }
+  delete entry.dirtyFlag;
+  delete entry.dirtyFlagAt;
+  saveTursoSyncState(state, paprDir);
+}
+
+export function listDbDirtySyncKeys(paprDir?: string): string[] {
+  const state = loadTursoSyncState(paprDir);
+  return Object.entries(state.jobs)
+    .filter(([, entry]) => entry.dirtyFlag === true)
+    .map(([syncKey]) => syncKey);
+}
+
+/**
+ * Oplog cursor check only — ignores persisted dirtyFlag.
+ * Returns true (dirty), false (clean), or null (needs fingerprint/mtime check).
+ */
+export function isLinkedSourceDirtyFastIgnoringFlag(
+  syncKey: string,
+  dbPath: string,
+  state: TursoSyncStateFile,
+  alternateKeys: readonly string[] = [],
+): boolean | null {
+  if (isJobDbQuarantined(syncKey, state)) {
+    return false;
+  }
+  for (const key of alternateKeys) {
+    if (key !== syncKey && isJobDbQuarantined(key, state)) {
+      return false;
+    }
+  }
+
+  const normalizedPath = path.normalize(dbPath);
+  if (!fs.existsSync(normalizedPath)) {
+    return false;
+  }
+
+  const prev = resolveTursoPushStateEntry(syncKey, dbPath, state, alternateKeys);
+  if (!prev) {
+    return true;
+  }
+
+  const lastPushed = prev.lastPushedLogId ?? 0;
+  let db: Database.Database | undefined;
+  try {
+    db = new Database(normalizedPath, { readonly: true, fileMustExist: true });
+    const maxId = maxSyncLogId(db);
+    if (maxId > lastPushed) {
+      return true;
+    }
+    if (maxId <= lastPushed) {
+      return false;
+    }
+  } catch {
+    return null;
+  } finally {
+    db?.close();
+  }
+
+  return null;
+}
+
+/**
+ * Two-tier dirty check: dirty flag + oplog cursor before full fingerprints.
+ * Returns true (dirty), false (clean), or null (needs full check).
+ */
+export function isLinkedSourceDirtyFast(
+  syncKey: string,
+  dbPath: string,
+  state: TursoSyncStateFile,
+  alternateKeys: readonly string[] = [],
+): boolean | null {
+  const prev = resolveTursoPushStateEntry(syncKey, dbPath, state, alternateKeys);
+  if (prev?.dirtyFlag) {
+    return true;
+  }
+  return isLinkedSourceDirtyFastIgnoringFlag(
+    syncKey,
+    dbPath,
+    state,
+    alternateKeys,
+  );
 }
 
 export function isJobDbQuarantined(
@@ -209,6 +441,9 @@ export function recordTursoPushSuccess(
       ? { lastPulledLogId: existing.lastPulledLogId }
       : {}),
     ...(lastPushedLogId !== undefined ? { lastPushedLogId } : {}),
+    ...(existing?.lastSeenIndexVersion !== undefined
+      ? { lastSeenIndexVersion: existing.lastSeenIndexVersion }
+      : {}),
   };
   saveTursoSyncState(state, paprDir);
 }
@@ -325,6 +560,39 @@ export function recordTursoRemoteVersion(
       : existing?.lastPulledLogId !== undefined
         ? { lastPulledLogId: existing.lastPulledLogId }
         : {}),
+    ...(existing?.lastSeenIndexVersion !== undefined
+      ? { lastSeenIndexVersion: existing.lastSeenIndexVersion }
+      : {}),
+  };
+  saveTursoSyncState(state, paprDir);
+}
+
+/** Record sync index version observed after successful push/pull or index reconcile. */
+export function recordTursoIndexVersion(
+  jobId: string,
+  dbPath: string,
+  version: number,
+  paprDir?: string,
+): void {
+  const state = loadTursoSyncState(paprDir);
+  const existing = state.jobs[jobId];
+  state.jobs[jobId] = {
+    dbPath,
+    lastPushAt: existing?.lastPushAt ?? new Date().toISOString(),
+    ...(existing?.tableFingerprints
+      ? { tableFingerprints: existing.tableFingerprints }
+      : {}),
+    ...(existing?.dbMtimeMs !== undefined ? { dbMtimeMs: existing.dbMtimeMs } : {}),
+    ...(existing?.lastSeenRemoteVersion !== undefined
+      ? { lastSeenRemoteVersion: existing.lastSeenRemoteVersion }
+      : {}),
+    ...(existing?.lastPushedLogId !== undefined
+      ? { lastPushedLogId: existing.lastPushedLogId }
+      : {}),
+    ...(existing?.lastPulledLogId !== undefined
+      ? { lastPulledLogId: existing.lastPulledLogId }
+      : {}),
+    lastSeenIndexVersion: version,
   };
   saveTursoSyncState(state, paprDir);
 }

@@ -22,10 +22,7 @@ import type { StorageManager } from "../StorageManager.js";
 import { getCursorDelegationService } from "./CursorDelegationService.js";
 import { getCloudRuntimeService } from "./CloudRuntimeService.js";
 import { getCloudSyncService } from "../CloudSyncService.js";
-import {
-  syncTursoAfterCloudRun,
-  syncTursoBeforeCloudRun,
-} from "../TursoSyncBridge.js";
+import { syncTursoBeforeCloudRun } from "../TursoSyncBridge.js";
 
 interface CursorStreamOptions {
   allowedToolIds?: string[];
@@ -178,7 +175,6 @@ export async function* streamCursorAgentTurn(
           );
         }
       }
-      await syncTursoAfterCloudRun();
     })();
   }
 }

@@ -181,6 +181,8 @@ Three axes:
 2. externalLink — off | read | read_write
 3. codeAccess — off (view/use live app) | install (Edit the code — Community fork + install_cloud_app)
 
+**Publish access ≠ row isolation.** public_read / share links control who opens the app — not which DB rows they see. For anonymous funnels use owner_session + GET /api/access isOwner admin; for private per-user data use link/team sign-in or create_database({ isolation: "per-user" }).
+
 Set unpublish=true to remove from cloud entirely.
 
 If Cloud Sync is disabled, returns an error with fallbackTool=export_app_bundle — recommend enabling Cloud, then retry.`,

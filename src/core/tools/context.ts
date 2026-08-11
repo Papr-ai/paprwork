@@ -59,6 +59,35 @@ export function getJobToolEnv(): Record<string, string> {
   return context?.jobEnv ?? {};
 }
 
+const JOB_ENV_KEYS = [
+  "PAPR_HOME",
+  "JOB_DIR",
+  "JOB_DB",
+  "APP_DB",
+  "APP_DB_ALIAS",
+  "APP_DB_ID",
+  "PAPR_WRITE_DB_IDS",
+] as const;
+
+/** Collect job-scoped env vars from process.env (cloud sandbox after prepareCloudJobEnvironment). */
+export function collectJobEnvFromProcess(
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const key of JOB_ENV_KEYS) {
+    const value = env[key];
+    if (value) {
+      result[key] = value;
+    }
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (key.startsWith("PAPR_DB_") && value) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 /**
  * Get the current chatId from tool execution context
  */

@@ -7,9 +7,11 @@ import * as fs from "fs";
 import * as path from "path";
 import { getPaprJobsRoot } from "../../core/utils/paprRoot.js";
 import {
+  isBidirectionalWriteAuthority,
   parseDataSourcesFile,
   type AppDataSource,
   type AppDataSourceRole,
+  type WriteAuthority,
 } from "./appDataSources.js";
 import { resolveLinkedSourceDbPath } from "./portableDataSources.js";
 import { getDatabaseRegistryService } from "./DatabaseRegistryService.js";
@@ -22,7 +24,10 @@ export interface TursoLinkedSource {
   dbPath: string;
   alias: string;
   role?: AppDataSourceRole;
+  writeAuthority?: WriteAuthority;
 }
+
+export { isBidirectionalWriteAuthority };
 
 function isSyncableRole(role: AppDataSourceRole | undefined): boolean {
   return role !== "scratch";
@@ -84,6 +89,7 @@ export async function discoverTursoLinkedSources(
         dbPath: path.normalize(resolvedDbPath),
         alias: source.alias,
         role: source.role,
+        ...(source.writeAuthority ? { writeAuthority: source.writeAuthority } : {}),
       };
       const key = sourceKey(linked);
       if (!byKey.has(key)) {

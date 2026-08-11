@@ -24,6 +24,16 @@ export interface AppAccessContext {
   canWrite: boolean;
 }
 
+/** GET /api/access — mini-apps use this to gate admin UI and owner-only flows. */
+export interface MiniAppAccessResponse {
+  mode: AppAccessMode | null;
+  canRead: boolean;
+  canWrite: boolean;
+  loggedIn: boolean;
+  isOwner: boolean;
+  appId?: string;
+}
+
 export interface DbQueryResult {
   rows: Record<string, unknown>[];
   columns: string[];
@@ -66,6 +76,8 @@ export interface AppRuntimeRouteAuth {
   paprApiKey?: string;
   sessionToken?: string;
   shareToken?: string;
+  /** Parse _User.objectId from apps.papr.ai sign-in (same as desktop external_user_id). */
+  externalUserId?: string;
 }
 
 export interface TursoCredentialsProvider {
@@ -85,6 +97,7 @@ export interface AppPublishResolver {
     paprApiKey?: string;
     sessionToken?: string;
     shareToken?: string;
+    externalUserId?: string;
   }): Promise<AppAccessContext | null>;
 }
 

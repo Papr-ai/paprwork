@@ -8,8 +8,13 @@ import type { useCloudPublish } from "../../hooks/useCloudPublish";
 import { useAppCloudSyncStatus } from "../../hooks/useAppCloudSyncStatus";
 import {
   formatWebSyncStatusTooltip,
+  resolvePublishBarStatus,
   webSyncVisualState,
 } from "../../utils/appCloudSyncStatus";
+import {
+  resolveEffectiveAutoUpload,
+  usesGlobalUploadDefault,
+} from "../../utils/appUploadMode";
 import {
   isCodePermission,
   isPermissionAvailable,
@@ -242,9 +247,50 @@ export function MiniAppPublishBar({
   );
   const [compatLoading, setCompatLoading] = useState(false);
   const [needsDesktopAck, setNeedsDesktopAck] = useState(false);
+  const [webSyncActionNotice, setWebSyncActionNotice] = useState<string | null>(
+    null,
+  );
+  const prevMergeRequiredRef = useRef(false);
 
-  const { status: webSyncStatus, loading: webSyncLoading, refreshing: webSyncRefreshing, pushing: webSyncPushing, pulling: webSyncPulling, error: webSyncError, pushNow: webSyncPushNow, pullUpdates: webSyncPullUpdates } =
-    useAppCloudSyncStatus(appId, { enabled: workspaceMode === "preview" });
+  const {
+    status: webSyncStatus,
+    loading: webSyncLoading,
+    refreshing: webSyncRefreshing,
+    pushing: webSyncPushing,
+    pulling: webSyncPulling,
+    applyingUpdates: webSyncApplyingUpdates,
+    error: webSyncError,
+    globalAutoUploadEnabled,
+    pushNow: webSyncPushNow,
+    pullUpdates: webSyncPullUpdates,
+    applyRemoteUpdates: webSyncApplyRemoteUpdates,
+  } = useAppCloudSyncStatus(appId, { enabled: workspaceMode === "preview" });
+
+  useEffect(() => {
+    const mergeRequired = webSyncStatus?.gitRemoteRequiresReview === true;
+    if (mergeRequired && !prevMergeRequiredRef.current) {
+      const headline = webSyncStatus?.gitRemoteReviewHeadline?.trim();
+      setWebSyncActionNotice(
+        headline
+          ? `${headline} — open Web sync to merge before upload.`
+          : "Cloud changes need your approval — open Web sync to merge before upload.",
+      );
+      setWebSyncPopoverOpen(true);
+    }
+    if (!mergeRequired) {
+      setWebSyncActionNotice(null);
+    }
+    prevMergeRequiredRef.current = mergeRequired;
+  }, [
+    webSyncStatus?.gitRemoteRequiresReview,
+    webSyncStatus?.gitRemoteReviewHeadline,
+  ]);
+
+  const autoUploadEnabled = resolveEffectiveAutoUpload(
+    cloud.uploadMode,
+    globalAutoUploadEnabled,
+  );
+  const autoUploadUsesGlobalDefault = usesGlobalUploadDefault(cloud.uploadMode);
 
   useEffect(() => {
     setCompatReport(cloud.compatibility);
@@ -520,14 +566,6 @@ export function MiniAppPublishBar({
     setShareOpen(false);
   };
 
-  const statusDotClass = cloud.live
-    ? cloud.refreshing
-      ? "mini-app-publish-bar__dot mini-app-publish-bar__dot--pending"
-      : "mini-app-publish-bar__dot mini-app-publish-bar__dot--live"
-    : cloud.loading
-      ? "mini-app-publish-bar__dot mini-app-publish-bar__dot--pending"
-      : "mini-app-publish-bar__dot";
-
   const canOpenWebPreview = isTrackCollaborator
     ? !!upstreamPreviewUrl
     : cloud.live && !!cloud.publishedPreviewUrl;
@@ -549,8 +587,18 @@ export function MiniAppPublishBar({
   const webSyncSpinning =
     webSyncPushing ||
     webSyncPulling ||
+    webSyncApplyingUpdates ||
     (webSyncLoading && !webSyncStatus) ||
     webSyncState === "syncing";
+  const publishBarStatus = resolvePublishBarStatus({
+    live: cloud.live,
+    loading: cloud.loading,
+    refreshing: cloud.refreshing,
+    syncEnabled: workspaceMode === "preview",
+    webSyncState,
+    webSyncSpinning,
+    webSyncTooltip,
+  });
   const shareSheetBusy =
     cloud.busy || webSyncPushing || Boolean(shareSyncNotice);
   const shareLinkReady =
@@ -649,7 +697,6 @@ export function MiniAppPublishBar({
     <>
       <div className="mini-app-publish-bar">
         <div className="mini-app-publish-bar__left">
-          <span className={statusDotClass} aria-hidden />
           <div className="mini-app-publish-bar__meta">
             <span className="mini-app-publish-bar__title">{appTitle}</span>
             <CloudCompatibilityBadge
@@ -733,10 +780,11 @@ export function MiniAppPublishBar({
                 Web
               </button>
               <WebSyncStatusDot
-                state={webSyncState}
-                spinning={webSyncSpinning}
-                tooltip={webSyncTooltip}
+                state={publishBarStatus.state}
+                spinning={publishBarStatus.spinning}
+                tooltip={publishBarStatus.tooltip}
                 popoverOpen={webSyncPopoverOpen}
+                interactive={publishBarStatus.interactive}
                 onClick={handleWebSyncDotClick}
               />
             </div>
@@ -744,6 +792,7 @@ export function MiniAppPublishBar({
               ? createPortal(
                   <WebSyncPopover
                     popoverRef={webSyncPopoverRef}
+                    appId={appId}
                     className="mini-app-publish-bar__sync-popover--portal"
                     style={{
                       position: "fixed",
@@ -756,9 +805,15 @@ export function MiniAppPublishBar({
                     error={webSyncError}
                     pushing={webSyncPushing}
                     pulling={webSyncPulling}
+                    applyingUpdates={webSyncApplyingUpdates}
                     syncActionNeeded={webSyncActionNeeded}
+                    autoUploadEnabled={autoUploadEnabled}
+                    autoUploadUsesGlobalDefault={autoUploadUsesGlobalDefault}
+                    autoUploadSaving={cloud.autoUploadSaving}
+                    onAutoUploadChange={(enabled) => void cloud.setAutoUploadEnabled(enabled)}
                     onPushNow={() => void webSyncPushNow()}
                     onPullUpdates={() => void webSyncPullUpdates()}
+                    onApplyRemoteUpdates={() => void webSyncApplyRemoteUpdates()}
                   />,
                   document.body,
                 )
@@ -825,6 +880,35 @@ export function MiniAppPublishBar({
           </button>
         </div>
       </div>
+
+      {webSyncStatus?.gitRemoteRequiresReview &&
+      workspaceMode === "preview" &&
+      webSyncActionNotice ? (
+        <div
+          className="mini-app-publish-bar__action-callout"
+          role="alert"
+          aria-live="polite"
+        >
+          <span className="mini-app-publish-bar__action-callout-text">
+            {webSyncActionNotice}
+          </span>
+          <button
+            type="button"
+            className="mini-app-publish-bar__action-callout-btn"
+            onClick={handleWebSyncDotClick}
+          >
+            Review
+          </button>
+          <button
+            type="button"
+            className="mini-app-publish-bar__action-callout-dismiss"
+            aria-label="Dismiss"
+            onClick={() => setWebSyncActionNotice(null)}
+          >
+            ×
+          </button>
+        </div>
+      ) : null}
 
       {shareOpen ? (
         <ShareSheet title={`Share “${appTitle}”`} onClose={() => setShareOpen(false)}>

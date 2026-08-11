@@ -34,11 +34,22 @@ export interface SyncLogEntry {
   rowPk: unknown[];
 }
 
+/** Collapse oplog to last op per (table, primary key) — reduces redundant push work. */
+export function compactSyncLogEntries(
+  entries: readonly SyncLogEntry[],
+): SyncLogEntry[] {
+  const byKey = new Map<string, SyncLogEntry>();
+  for (const entry of entries) {
+    byKey.set(`${entry.tableName}\0${JSON.stringify(entry.rowPk)}`, entry);
+  }
+  return [...byKey.values()].sort((left, right) => left.id - right.id);
+}
+
 const MUTE_ROW_ID = 1;
 /** Max changelog rows read/applied per batch (loop until exhausted). */
 export const LOG_BATCH_LIMIT = 10_000;
 
-/** Above this pending count, push uses a full bootstrap snapshot instead of delta replay. */
+/** @deprecated No longer triggers bootstrap — kept for log compatibility only. */
 export const LOCAL_LOG_BOOTSTRAP_THRESHOLD = 25_000;
 
 /** Log a warning when the local changelog exceeds this size. */
@@ -146,6 +157,62 @@ async function remoteTriggerExists(remote: Client, name: string): Promise<boolea
   return result.rows.length > 0;
 }
 
+/** Serialize remote _au trigger refresh per table (debounced cloud pushes can overlap). */
+const remoteAuTriggerRefreshLocks = new Map<string, Promise<void>>();
+
+export function isSqliteTriggerAlreadyExistsError(message: string): boolean {
+  return /trigger .+ already exists/i.test(message);
+}
+
+async function refreshRemoteCdcUpdateTrigger(
+  remote: Client,
+  tableName: string,
+  suffix: string,
+  columns: TableColumn[],
+): Promise<void> {
+  const updateSql = buildCdcUpdateTriggerSql(tableName, suffix, columns);
+  if (!updateSql) {
+    return;
+  }
+
+  const lockKey = tableName;
+  const prior = remoteAuTriggerRefreshLocks.get(lockKey);
+  const refreshPromise = (async () => {
+    if (prior) {
+      await prior.catch(() => undefined);
+    }
+
+    const triggerName = `_papr_tr_${suffix}_au`;
+    await remote.execute({
+      sql: `DROP TRIGGER IF EXISTS ${quoteIdent(triggerName)}`,
+      args: [],
+    });
+
+    if (await remoteTriggerExists(remote, triggerName)) {
+      return;
+    }
+
+    try {
+      await remote.execute({ sql: updateSql, args: [] });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (isSqliteTriggerAlreadyExistsError(message)) {
+        return;
+      }
+      throw error;
+    }
+  })();
+
+  remoteAuTriggerRefreshLocks.set(lockKey, refreshPromise);
+  try {
+    await refreshPromise;
+  } finally {
+    if (remoteAuTriggerRefreshLocks.get(lockKey) === refreshPromise) {
+      remoteAuTriggerRefreshLocks.delete(lockKey);
+    }
+  }
+}
+
 function buildTriggerSql(
   tableName: string,
   suffix: string,
@@ -225,23 +292,6 @@ function refreshLocalCdcUpdateTrigger(
   }
   db.exec(`DROP TRIGGER IF EXISTS ${quoteIdent(`_papr_tr_${suffix}_au`)}`);
   db.exec(updateSql);
-}
-
-async function refreshRemoteCdcUpdateTrigger(
-  remote: Client,
-  tableName: string,
-  suffix: string,
-  columns: TableColumn[],
-): Promise<void> {
-  const updateSql = buildCdcUpdateTriggerSql(tableName, suffix, columns);
-  if (!updateSql) {
-    return;
-  }
-  await remote.execute({
-    sql: `DROP TRIGGER IF EXISTS ${quoteIdent(`_papr_tr_${suffix}_au`)}`,
-    args: [],
-  });
-  await remote.execute({ sql: updateSql, args: [] });
 }
 
 export function dropLocalTableSyncTriggers(
@@ -437,7 +487,7 @@ export function warnIfLocalSyncLogLarge(
     console.warn(
       `[TursoSync] Local changelog for ${syncKey} has ${total} entries ` +
         `(warn ≥${LOCAL_LOG_WARN_THRESHOLD}). Bulk reseeds inflate this table; ` +
-        `push will bootstrap when pending exceeds ${LOCAL_LOG_BOOTSTRAP_THRESHOLD}.`,
+        `push replays oplog in ${LOG_BATCH_LIMIT}-row batches (no silent bootstrap).`,
     );
   }
 }

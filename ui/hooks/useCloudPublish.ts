@@ -21,8 +21,11 @@ import {
   patchCloudPublishPrefs,
   publishCloudApp,
   unpublishCloudApp,
+  type CloudPublishPrefs,
   type CloudPublishState,
 } from "../utils/cloudPublishApi";
+import type { CloudUploadModePref } from "../utils/appUploadMode";
+import { uploadModeFromToggle } from "../utils/appUploadMode";
 import type { CloudCompatibilityReport } from "../../src/core/types/cloudAppCompatibility";
 import {
   readCachedCloudPublishState,
@@ -56,6 +59,8 @@ export interface CloudPublishViewModel {
   statusLabel: string;
   appsHost: string;
   compatibility: CloudCompatibilityReport | null;
+  uploadMode: CloudUploadModePref;
+  autoUploadSaving: boolean;
 }
 
 function resolveSharing(state: CloudPublishState | null): {
@@ -154,6 +159,8 @@ function buildViewModel(
       statusParts.length > 0 ? statusParts.join(" · ") : "Not shared",
     appsHost: "apps.papr.ai",
     compatibility: state?.compatibility ?? null,
+    uploadMode: (state?.prefs?.uploadMode ?? "inherit") as CloudUploadModePref,
+    autoUploadSaving: false,
   };
 }
 
@@ -173,6 +180,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
   const [loading, setLoading] = useState(cachedOnMount === null);
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [autoUploadSaving, setAutoUploadSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const hasDisplayedStateRef = useRef(cachedOnMount !== null);
@@ -377,7 +385,41 @@ export function useCloudPublish(appId: string, appTitle?: string) {
     }
   }, []);
 
+  const setAutoUploadEnabled = useCallback(async (enabled: boolean) => {
+    setAutoUploadSaving(true);
+    setError(null);
+    try {
+      const targetAppId = appIdRef.current;
+      const uploadMode = uploadModeFromToggle(enabled);
+      const prefs = await patchCloudPublishPrefs(targetAppId, { uploadMode });
+      if (targetAppId !== appIdRef.current) {
+        return;
+      }
+      setState((prev) => {
+        if (!prev || !publishStateMatchesApp(targetAppId, prev)) {
+          return prev;
+        }
+        const next: CloudPublishState = {
+          ...prev,
+          prefs: { ...prev.prefs, ...prefs } as CloudPublishPrefs,
+        };
+        writeCachedCloudPublishState(targetAppId, next);
+        return next;
+      });
+      setToast(
+        enabled
+          ? "This app will upload changes automatically"
+          : "You'll upload this app manually with Upload now",
+      );
+    } catch (err) {
+      setError((err as Error).message.slice(0, 160));
+    } finally {
+      setAutoUploadSaving(false);
+    }
+  }, []);
+
   const viewModel = buildViewModel(state, loading, refreshing, busy, error, toast);
+  viewModel.autoUploadSaving = autoUploadSaving;
 
   return {
     ...viewModel,
@@ -387,6 +429,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
     unpublish,
     copyLink,
     openInBrowser,
+    setAutoUploadEnabled,
     shareModel: sharingToAudienceModel(
       viewModel.loginAccess,
       viewModel.externalLink,

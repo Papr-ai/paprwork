@@ -20,6 +20,8 @@ const {
   shouldKillProcess,
   parseHealthResponse,
   shouldKillUnhealthyGateway,
+  parseGatewaySyncBusyState,
+  isGatewaySyncBusyGraceActive,
   isValidTransition,
   VALID_STATE_TRANSITIONS,
 } = require("../src/electron/supervisor-logic.cjs");
@@ -300,6 +302,20 @@ describe("parseHealthResponse", () => {
     expect(health).toEqual({ alive: true, ready: false });
   });
 
+  test('syncBusy with status "ok" is ready (grace flag only)', () => {
+    const health = parseHealthResponse(
+      JSON.stringify({ status: "ok", syncBusy: true }),
+    );
+    expect(health).toEqual({ alive: true, ready: true, syncBusy: true });
+  });
+
+  test("syncBusy while still starting is not ready", () => {
+    const health = parseHealthResponse(
+      JSON.stringify({ status: "starting", syncBusy: true }),
+    );
+    expect(health).toEqual({ alive: true, ready: false, syncBusy: true });
+  });
+
   test("invalid JSON is not alive", () => {
     expect(parseHealthResponse("not-json")).toEqual({
       alive: false,
@@ -336,6 +352,16 @@ describe("shouldKillUnhealthyGateway", () => {
     ).toBe(false);
     expect(
       shouldKillUnhealthyGateway(4, health, true, 5).newCount,
+    ).toBe(0);
+  });
+
+  test("syncBusy never triggers kill while gateway was healthy", () => {
+    const health = { alive: true, ready: false, syncBusy: true };
+    expect(
+      shouldKillUnhealthyGateway(10, health, true, 5).shouldKill,
+    ).toBe(false);
+    expect(
+      shouldKillUnhealthyGateway(10, health, true, 5).newCount,
     ).toBe(0);
   });
 

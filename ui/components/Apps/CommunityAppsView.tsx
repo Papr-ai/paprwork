@@ -30,6 +30,11 @@ import {
   writeCommunityCatalogCache,
 } from "../../utils/communityCatalogCache";
 import { isWorkspaceSwitchReloading } from "../../lib/workspaceSwitchReload";
+import {
+  filterCatalogDisplayTags,
+  getCatalogByline,
+  getCatalogShareBadge,
+} from "../../utils/communityCatalogDisplay";
 
 const GATEWAY =
   typeof import.meta !== "undefined" &&
@@ -325,6 +330,33 @@ export function CommunityAppsView({
     void fetchLineage();
   }, [fetchLineage]);
 
+  const openAgentDatabaseSetup = useCallback(
+    async (message: string, appId?: string, appTitle?: string) => {
+      const chatId = await createChat();
+      if (!chatId) return;
+
+      const tabId = createTab("chat", chatId, "App setup");
+      switchToTab(tabId);
+
+      let fullMessage = message;
+      if (appId) {
+        fullMessage +=
+          `\n\nWhen setup is complete, open the app tab (appId: ${appId}` +
+          (appTitle ? `, title: "${appTitle}"` : "") +
+          ").";
+      }
+
+      setTimeout(() => {
+        window.dispatchEvent(
+          new CustomEvent("papr-onboarding-send", {
+            detail: { message: fullMessage },
+          }),
+        );
+      }, 300);
+    },
+    [createChat, createTab, switchToTab],
+  );
+
   const startAgentImport = async (
     entry: OssRegistryEntry,
     wizard: WizardResult | null,
@@ -408,6 +440,12 @@ export function CommunityAppsView({
       const body = (await res.json()) as {
         app?: { id: string; title?: string };
         requirements?: RequiredKeySpec[];
+        bootstrap?: {
+          ready?: boolean;
+          needsSeed?: boolean;
+          warnings?: string[];
+        };
+        agentSetupMessage?: string;
         error?: string;
       };
       if (!res.ok) {
@@ -417,7 +455,25 @@ export function CommunityAppsView({
       const title = body.app?.title ?? entry.name;
       const modeLabel = mode === "track" ? "Linked" : "Forked";
       trackEvent("paprwork_community_app_installed", { app_name: entry.name, app_id: entry.appId } as Record<string, unknown>);
-      setInstallToast(`${modeLabel} "${title}" into Paprwork`);
+
+      const needsFollowUp =
+        Boolean(body.agentSetupMessage) ||
+        body.bootstrap?.needsSeed === true ||
+        (body.bootstrap?.warnings?.length ?? 0) > 0;
+
+      if (needsFollowUp && body.agentSetupMessage) {
+        setInstallToast(
+          `${modeLabel} "${title}" — finishing database setup in chat…`,
+        );
+        void openAgentDatabaseSetup(
+          body.agentSetupMessage,
+          body.app?.id,
+          title,
+        );
+      } else {
+        setInstallToast(`${modeLabel} "${title}" into Paprwork`);
+      }
+
       void loadArtifacts();
       void fetchLineage();
       if (body.app?.id) {
@@ -432,12 +488,17 @@ export function CommunityAppsView({
           });
           return;
         }
-        const tabId = createTab("app", body.app.id, title);
-        switchToTab(tabId);
+        if (!needsFollowUp) {
+          const tabId = createTab("app", body.app.id, title);
+          switchToTab(tabId);
+        }
       }
     } catch (err) {
-      setInstallError(
-        err instanceof Error ? err.message.slice(0, 240) : "Install failed",
+      const message =
+        err instanceof Error ? err.message.slice(0, 240) : "Install failed";
+      setInstallError(message);
+      void openAgentDatabaseSetup(
+        `Community app install for "${entry.name}" failed.\n\nError: ${message}\n\nPlease diagnose linked jobs, data-sources.json, databases.json, and migration files; fix paths; apply migrations; run Turso pull if cloud sync is on; then verify writes work.`,
       );
     } finally {
       setInstallingId(null);
@@ -942,14 +1003,10 @@ function CommunityAppCard({
     );
   };
 
-  const sourceLabel =
-    entry.source === "cloud"
-      ? isTeamSharedVisibility(entry.visibility)
-        ? "Team shared"
-        : "Public"
-      : "Open source";
-
   const showInstall = canInstallCloudCatalogEntry(entry, localAppId);
+  const shareBadge = getCatalogShareBadge(entry);
+  const byline = getCatalogByline(entry);
+  const displayTags = filterCatalogDisplayTags(entry.tags);
 
   return (
     <div className="community-card">
@@ -968,22 +1025,23 @@ function CommunityAppCard({
               {installedForkCount} fork{installedForkCount === 1 ? "" : "s"}
             </span>
           ) : null}
+          {shareBadge ? (
+            <span
+              className={`community-card__badge community-card__badge--share${
+                entry.source === "opensource"
+                  ? " community-card__badge--share-oss"
+                  : isTeamSharedVisibility(entry.visibility)
+                    ? " community-card__badge--share-team"
+                    : " community-card__badge--share-public"
+              }`}
+            >
+              {shareBadge}
+            </span>
+          ) : null}
         </div>
         <p className="community-card__description">{entry.description}</p>
         <div className="community-card__meta">
-          <span className="community-card__version">
-            {entry.source === "cloud" ? "Live" : `v${entry.version}`}
-          </span>
-          <span className="community-card__author">by {entry.author}</span>
-          <span
-            className={
-              entry.source === "cloud"
-                ? "community-card__source-badge community-card__source-badge--cloud"
-                : "community-card__source-badge community-card__source-badge--opensource"
-            }
-          >
-            {sourceLabel}
-          </span>
+          <span className="community-card__byline">{byline}</span>
           <button
             className="community-card__details-toggle"
             onClick={(e) => {
@@ -994,16 +1052,18 @@ function CommunityAppCard({
             {showDetails ? "Less" : "Details"}
           </button>
         </div>
-        <div className="community-card__tags">
-          {entry.tags.map((tag) => (
-            <span key={tag} className="community-card__tag">
-              {tag}
-            </span>
-          ))}
-          {showPlatformBadge ? (
-            <span className="community-card__platform-badge">{platformLabel}</span>
-          ) : null}
-        </div>
+        {displayTags.length > 0 || showPlatformBadge ? (
+          <div className="community-card__tags">
+            {displayTags.map((tag) => (
+              <span key={tag} className="community-card__tag">
+                {tag}
+              </span>
+            ))}
+            {showPlatformBadge ? (
+              <span className="community-card__platform-badge">{platformLabel}</span>
+            ) : null}
+          </div>
+        ) : null}
 
         {showDetails && (
           <div className="community-card__details">
@@ -1037,8 +1097,8 @@ function CommunityAppCard({
               <span className="community-card__detail-value">
                 {entry.source === "cloud"
                   ? entry.codeInstallable
-                    ? "Fork or track from Papr Cloud"
-                    : "Live app only"
+                    ? "Install to edit in Paprwork"
+                    : "Web app only"
                   : "GitHub bundle"}
               </span>
             </div>
@@ -1070,7 +1130,7 @@ function CommunityAppCard({
                 className="community-card__action-btn"
                 onClick={onOpenLive}
               >
-                Open live
+                Open web app
               </button>
             ) : null}
             {showInstall ? (

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   deriveAppCloudSyncStatus,
   formatWebSyncStatusTooltip,
+  resolvePublishBarStatus,
 } from "../ui/utils/appCloudSyncStatus";
 import type { SyncItemsResponse } from "../ui/components/Settings/CloudSyncDetails";
 
@@ -35,7 +36,7 @@ function baseItems(
       ],
       jobs: [],
       queuedPaths: [],
-      summary: { synced: 1, pending: 0, outdated: 0, failed: 0, total: 1 },
+      summary: { synced: 1, pending: 0, outdated: 0, failed: 0, updatesAvailable: 0, total: 1 },
     },
     turso: {
       enabled: true,
@@ -236,6 +237,24 @@ describe("deriveAppCloudSyncStatus", () => {
     expect(status.summaryLine).not.toContain("not uploaded yet");
   });
 
+  it("shows not ready for web when publish layer blocks", () => {
+    const items = baseItems({
+      appId: "app-1",
+      databases: [{ alias: "main", jobId: "job-1", status: "synced" }],
+    });
+    items.publish = {
+      status: "not_web_ready",
+      reason: "turso_pending",
+      detail: "main: pending",
+    };
+
+    const status = deriveAppCloudSyncStatus("app-1", items, "idle");
+    expect(status.overall).toBe("needs_sync");
+    expect(status.chipLabel).toBe("Not ready for web");
+    expect(status.publishStatus).toBe("not_web_ready");
+    expect(status.publishLabel).toContain("main: pending");
+  });
+
   it("formats web sync status tooltip for the status dot", () => {
     const synced = deriveAppCloudSyncStatus(
       "app-1",
@@ -257,5 +276,86 @@ describe("deriveAppCloudSyncStatus", () => {
     expect(formatWebSyncStatusTooltip(null, { error: "offline" })).toBe(
       "Web sync unavailable — offline",
     );
+  });
+
+  it("treats backend metadata-sync flag as auto-integrating job status", () => {
+    const items = baseItems({ appId: "app-1", codeStatus: "outdated" });
+    items.github!.gitUpdatesAvailable = true;
+    items.github!.gitRemoteRequiresReview = false;
+    items.github!.gitRemoteMetadataSync = true;
+    items.github!.gitUpdatesSummary = [
+      "9808dd10 cloud: update job abc status",
+      "e0e4c717 cloud: update job def status",
+    ].join("\n");
+
+    const status = deriveAppCloudSyncStatus("app-1", items, "idle");
+    expect(status.gitRemoteRequiresReview).toBe(false);
+    expect(status.gitRemoteMetadataSync).toBe(true);
+    expect(status.chipLabel).toBe("Syncing job status…");
+  });
+
+  it("passes through gitRemoteReviewHeadline from backend", () => {
+    const items = baseItems({ appId: "app-1", codeStatus: "outdated" });
+    items.github!.gitUpdatesAvailable = true;
+    items.github!.gitRemoteRequiresReview = true;
+    items.github!.gitRemoteReviewHeadline =
+      "1 contributed code merge + 8 cloud job status updates";
+
+    const status = deriveAppCloudSyncStatus("app-1", items, "idle");
+    expect(status.gitRemoteReviewHeadline).toBe(
+      "1 contributed code merge + 8 cloud job status updates",
+    );
+    expect(status.gitRemoteRequiresReview).toBe(true);
+  });
+
+  it("uses action_required visual state when remote code needs review", () => {
+    const items = baseItems({ appId: "app-1", codeStatus: "outdated" });
+    items.github!.gitUpdatesAvailable = true;
+    items.github!.gitRemoteRequiresReview = true;
+    items.github!.gitUpdatesSummary = "abc1234 cloud: update app dashboard";
+
+    const status = deriveAppCloudSyncStatus("app-1", items, "idle");
+    expect(status.gitRemoteRequiresReview).toBe(true);
+    expect(formatWebSyncStatusTooltip(status)).toContain("Action needed");
+  });
+});
+
+describe("resolvePublishBarStatus", () => {
+  it("resolves unified publish bar status from live + sync state", () => {
+    expect(
+      resolvePublishBarStatus({
+        live: false,
+        loading: false,
+        refreshing: false,
+        syncEnabled: false,
+        webSyncState: "disabled",
+        webSyncSpinning: false,
+        webSyncTooltip: "",
+      }).state,
+    ).toBe("disabled");
+
+    expect(
+      resolvePublishBarStatus({
+        live: true,
+        loading: false,
+        refreshing: false,
+        syncEnabled: true,
+        webSyncState: "warn",
+        webSyncSpinning: false,
+        webSyncTooltip: "App code changed locally",
+      }),
+    ).toMatchObject({ state: "warn", interactive: true });
+
+    expect(
+      resolvePublishBarStatus({
+        live: true,
+        loading: false,
+        refreshing: false,
+        syncEnabled: true,
+        webSyncState: "synced",
+        webSyncSpinning: false,
+        webSyncTooltip: "Synced",
+      }).state,
+    ).toBe("synced");
   });
 });

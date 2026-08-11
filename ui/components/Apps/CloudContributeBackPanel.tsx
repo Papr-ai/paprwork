@@ -29,27 +29,32 @@ export function CloudContributeBackPanel({
   const [description, setDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [prUrl, setPrUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const modeLabel = lineage.mode === "track" ? "Tracking upstream" : "Fork";
 
   const submit = async () => {
     if (!description.trim()) {
-      setError("Describe what you changed");
+      setError("Add a short summary of what you changed");
       return;
     }
     setSubmitting(true);
     setError(null);
     setMessage(null);
+    setPrUrl(null);
     try {
-      await submitCloudAppChange({
+      const result = await submitCloudAppChange({
         sourceNamespaceId: lineage.sourceNamespaceId,
         sourceSlug: lineage.sourceSlug,
         installedAppId: lineage.installedAppId,
         title: title.trim(),
         description: description.trim(),
       });
-      setMessage("Change request sent to the owner for review.");
+      setMessage("Your proposal was sent to the app owner for review.");
+      if (result.prUrl) {
+        setPrUrl(result.prUrl);
+      }
       setDescription("");
     } catch (err) {
       setError((err as Error).message.slice(0, 160));
@@ -64,16 +69,13 @@ export function CloudContributeBackPanel({
         {modeLabel} · from cloud
       </p>
       <p className="share-sheet__section-desc">
-        Installed from{" "}
-        <strong>
-          {lineage.sourceSlug} ({lineage.sourceAppId.slice(0, 8)}…)
-        </strong>
-        . Use <strong>Propose</strong> in the bar above to suggest edits to
-        the owner, or pull their updates when tracking upstream.
+        Send your edits back to the original publisher for review. They can
+        accept your changes into the main app or decline without affecting your
+        local copy.
       </p>
 
       <label className="share-sheet__field-label" htmlFor="change-title">
-        Request title
+        Proposal title
       </label>
       <input
         id="change-title"
@@ -84,13 +86,13 @@ export function CloudContributeBackPanel({
       />
 
       <label className="share-sheet__field-label" htmlFor="change-desc">
-        What changed?
+        What did you change?
       </label>
       <textarea
         id="change-desc"
         className="share-sheet__textarea"
         rows={4}
-        placeholder="Describe fixes or features you want the owner to review…"
+        placeholder="Briefly explain the fix or feature you want the owner to review…"
         value={description}
         onChange={(e) => setDescription(e.target.value)}
         disabled={busy || submitting}
@@ -100,6 +102,13 @@ export function CloudContributeBackPanel({
       {message ? (
         <p className="share-sheet__notice share-sheet__notice--success">{message}</p>
       ) : null}
+      {prUrl ? (
+        <p className="share-sheet__footnote">
+          <a className="share-sheet__link-btn" href={prUrl} target="_blank" rel="noreferrer">
+            View proposed changes
+          </a>
+        </p>
+      ) : null}
 
       <button
         type="button"
@@ -107,7 +116,7 @@ export function CloudContributeBackPanel({
         disabled={busy || submitting}
         onClick={() => void submit()}
       >
-        {submitting ? "Sending…" : "Send changes to owner"}
+        {submitting ? "Sending proposal…" : "Send to owner"}
       </button>
     </div>
   );

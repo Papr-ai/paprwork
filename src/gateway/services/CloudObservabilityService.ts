@@ -119,13 +119,22 @@ function filterGitHubReportByApp(
     let pending = 0;
     let outdated = 0;
     let failed = 0;
+    let updatesAvailable = 0;
     for (const item of items) {
       if (item.status === "synced") synced += 1;
       else if (item.status === "pending") pending += 1;
       else if (item.status === "outdated") outdated += 1;
       else if (item.status === "failed") failed += 1;
+      else if (item.status === "updates_available") updatesAvailable += 1;
     }
-    return { synced, pending, outdated, failed, total: items.length };
+    return {
+      synced,
+      pending,
+      outdated,
+      failed,
+      updatesAvailable,
+      total: items.length,
+    };
   };
 
   const combined = [...apps, ...jobs];
@@ -416,6 +425,7 @@ export interface PushCloudSyncResult {
   tables?: string[];
   github?: PushGitScopedResult;
   turso?: TursoPushScopedResult;
+  flush?: import("./cloudSync/flushAppNow.js").FlushAppNowResult;
   syncState: ReturnType<NonNullable<ReturnType<typeof getCloudSyncService>>["getState"]>;
   pushedAt: string;
   durationMs: number;
@@ -462,6 +472,33 @@ export async function pushCloudSync(
   const pushOptions: PushCloudSyncOptions = options ?? {};
   const targets = resolvePushCloudSyncTargets(pushOptions);
   const scope = buildPushCloudSyncScopeLabel(pushOptions);
+
+  if (
+    pushOptions.appId &&
+    targets.includes("github") &&
+    targets.includes("turso")
+  ) {
+    const { getSyncCoordinator } = await import("./cloudSync/SyncCoordinator.js");
+    const coordinator = getSyncCoordinator();
+    const flush = coordinator
+      ? await coordinator.flushNow(pushOptions.appId, { trigger: "manual" })
+      : await (async () => {
+          const { flushAppNow } = await import("./cloudSync/flushAppNow.js");
+          return flushAppNow(sync, pushOptions.appId!, {
+            skipTursoReschedule: true,
+          });
+        })();
+    return {
+      success: true,
+      scope,
+      targets,
+      appId: pushOptions.appId,
+      flush,
+      syncState: sync.getState(),
+      pushedAt: new Date().toISOString(),
+      durationMs: Math.round(performance.now() - startMs),
+    };
+  }
 
   let github: PushGitScopedResult | undefined;
   if (targets.includes("github")) {

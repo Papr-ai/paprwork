@@ -8,17 +8,18 @@ import {
 } from "../../utils/cloudShareLink";
 import "./CloudSyncDetails.css";
 
-type ItemStatus = "synced" | "pending" | "outdated" | "empty" | "unavailable" | "failed" | "quarantined";
+type ItemStatus = "synced" | "pending" | "outdated" | "empty" | "unavailable" | "failed" | "quarantined" | "updates_available";
 
 interface GitHubSyncItem {
   id: string;
   kind: "app" | "job" | "folder";
   label: string;
   relativePath: string;
-  status: "synced" | "pending" | "outdated" | "failed";
+  status: "synced" | "pending" | "outdated" | "failed" | "updates_available";
   lastSyncAt: string | null;
   lastError?: string | null;
   failedAt?: string | null;
+  manualUploadHold?: boolean;
 }
 
 interface GitHubSyncItemsReport {
@@ -26,11 +27,17 @@ interface GitHubSyncItemsReport {
   apps: GitHubSyncItem[];
   jobs: GitHubSyncItem[];
   queuedPaths?: string[];
+  gitUpdatesAvailable?: boolean;
+  gitUpdatesSummary?: string | null;
+  gitRemoteRequiresReview?: boolean;
+  gitRemoteMetadataSync?: boolean;
+  gitRemoteReviewHeadline?: string | null;
   summary: {
     synced: number;
     pending: number;
     outdated: number;
     failed: number;
+    updatesAvailable: number;
     total: number;
   };
 }
@@ -48,6 +55,7 @@ interface TursoSourceSyncItem {
   schemaDrift?: boolean;
   quarantinedAt?: string | null;
   quarantineReason?: string | null;
+  manualUploadHold?: boolean;
 }
 
 interface TursoSyncItemsReport {
@@ -114,17 +122,46 @@ interface CloudLinkSyncReport {
   };
 }
 
+export interface PublishLayerSyncReport {
+  status: "synced" | "republishing" | "not_web_ready" | "drift" | "error";
+  reason?: string;
+  detail?: string;
+}
+
+/** Live upload progress from SyncCoordinator (plain-language). */
+export interface UploadProgressReport {
+  status: "idle" | "uploading" | "waiting" | "failed";
+  label: string;
+  detail?: string;
+  appId?: string;
+  retryPending?: boolean;
+}
+
 export interface SyncItemsResponse {
   enabled: boolean;
   github?: GitHubSyncItemsReport | null;
   turso?: TursoSyncItemsReport | null;
+  publish?: PublishLayerSyncReport | null;
+  upload?: UploadProgressReport | null;
+  uploadError?: {
+    message: string;
+    at: string;
+    retryPending?: boolean;
+  } | null;
   cloudLinks?: CloudLinkSyncReport | null;
   appContext?: {
     appId: string;
     dependentJobIds: string[];
     registryDbIds?: string[];
+    globalAutoUploadEnabled?: boolean;
   };
   reason?: string;
+}
+
+export interface PublishLayerSyncReport {
+  status: "synced" | "republishing" | "not_web_ready" | "drift" | "error";
+  reason?: string;
+  detail?: string;
 }
 
 const LOGIN_ACCESS_LABELS: Record<CloudLoginAccess, string> = {
@@ -167,6 +204,8 @@ function statusMeta(status: ItemStatus): { color: string; label: string } {
       return { color: "#8e8e93", label: "No DB" };
     case "failed":
       return { color: "#ff3b30", label: "Failed" };
+    case "updates_available":
+      return { color: "#007aff", label: "Updates available" };
     case "quarantined":
       return { color: "#ff3b30", label: "Needs repair" };
     default:

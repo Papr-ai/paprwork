@@ -433,6 +433,14 @@ const createAppSchema = z.preprocess(
   z.object({
   title: z.string().min(1),
   description: z.string().optional(),
+  tags: z
+    .array(z.string().min(2).max(24))
+    .min(1)
+    .max(8)
+    .describe(
+      "**REQUIRED:** 1–8 topic tags for Community/Team catalog discovery (e.g. dashboard, gtm, sales, analytics). " +
+        "Lowercase words describing what the app is about — NOT API services, integrations, or key names.",
+    ),
   icon: z
     .string()
     .superRefine((val, ctx) => {
@@ -835,6 +843,9 @@ export const createAppTool = createTool({
       args.description ?? "Created by agent",
       files,
       args.icon,
+      undefined,
+      undefined,
+      args.tags,
     );
 
     let wikiEntity: { entityId: string; created: boolean } | undefined;

@@ -302,6 +302,16 @@ export class PaprMemoryProvider implements IStorageProvider {
         };
       }
 
+      // Papr returns 404 on /compress when the session has no stored messages.
+      // Job sessions often hit this when local SQLite has messages but cloud sync
+      // drifted (marked synced locally while Papr session is still empty).
+      if ((history.total_count ?? 0) === 0) {
+        console.log(
+          `[PaprMemory] Session ${chatId} has no messages on Papr — skipping /compress (local fallback will run)`,
+        );
+        return null;
+      }
+
       // On-demand compress when no cached summary exists
       const response = await this.client.messages.sessions.compress(chatId, {
         maxRetries: 0,

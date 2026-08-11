@@ -3,8 +3,10 @@ import type { StoredMessage } from "../src/gateway/services/storage/IStorageProv
 import {
   buildPaprSyncContent,
   buildPaprSyncStoreBody,
+  isJobSessionChatId,
   measurePaprStoreBodyBytes,
   PAPR_SYNC_MAX_BYTES,
+  resetJobSessionProcessThrottleForTests,
   truncateStringForPaprSync,
 } from "../src/gateway/services/storage/paprSyncPayload.js";
 
@@ -127,5 +129,71 @@ describe("paprSyncPayload", () => {
     expect(body.content).toContain("stored locally");
     expect(body.metadata.customMetadata.syncPayloadTruncated).toBe(true);
     expect(measurePaprStoreBodyBytes(body)).toBeLessThanOrEqual(2_000);
+  });
+
+  test("job session enables process_messages on first sync then throttles", () => {
+    resetJobSessionProcessThrottleForTests();
+
+    const jobId = "793f8eeb-ddd8-4b0d-9671-9e813488c9bf";
+    const chatId1 = `job:${jobId}:${jobId}-1786338017643-a1`;
+    const chatId2 = `job:${jobId}:${jobId}-1786338017644-a1`;
+
+    expect(isJobSessionChatId(chatId1)).toBe(true);
+
+    const message = {
+      id: "msg-job",
+      chat_id: chatId1,
+      role: "user" as const,
+      content: "=== JOB ENVIRONMENT ===",
+      timestamp: "2026-08-10T05:00:23.422Z",
+      sync_status: "sync_pending" as const,
+    };
+
+    expect(
+      buildPaprSyncStoreBody({ chatId: chatId1, message }).process_messages,
+    ).toBe(true);
+    expect(
+      buildPaprSyncStoreBody({ chatId: chatId2, message: { ...message, chat_id: chatId2 } })
+        .process_messages,
+    ).toBe(false);
+    expect(buildPaprSyncStoreBody({ chatId: chatId1, message }).sessionId).toBe(
+      chatId1,
+    );
+  });
+
+  test("human chat ids keep process_messages enabled", () => {
+    const body = buildPaprSyncStoreBody({
+      chatId: "582a2781-8091-474b-9300-d63574006442",
+      message: {
+        id: "msg-human",
+        chat_id: "582a2781-8091-474b-9300-d63574006442",
+        role: "user",
+        content: "hello",
+        timestamp: "2026-08-10T05:00:23.422Z",
+        sync_status: "sync_pending",
+      },
+    });
+
+    expect(body.process_messages).toBe(true);
+  });
+
+  test("processMessages override can re-enable job session processing", () => {
+    const jobId = "793f8eeb-ddd8-4b0d-9671-9e813488c9bf";
+    const chatId = `job:${jobId}:${jobId}-1786338017643-a1`;
+
+    const body = buildPaprSyncStoreBody({
+      chatId,
+      processMessages: true,
+      message: {
+        id: "msg-job",
+        chat_id: chatId,
+        role: "user",
+        content: "force processing",
+        timestamp: "2026-08-10T05:00:23.422Z",
+        sync_status: "sync_pending",
+      },
+    });
+
+    expect(body.process_messages).toBe(true);
   });
 });

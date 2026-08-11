@@ -5,6 +5,8 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { getCloudAppInstallService } from "../../gateway/services/CloudAppInstallService.js";
+import { getCloudAppContributeService } from "../../gateway/services/CloudAppContributeService.js";
+import { getCloudSyncService } from "../../gateway/services/CloudSyncService.js";
 import { cloudApiFetch } from "../../gateway/utils/cloudApiClient.js";
 import {
   requirePaprCloudLogin,
@@ -32,7 +34,7 @@ const submitChangeSchema = z.object({
 });
 
 const listChangesSchema = z.object({
-  status: z.enum(["pending", "approved", "rejected"]).optional(),
+  status: z.enum(["preparing", "pending", "approved", "rejected"]).optional(),
 });
 
 const resolveChangeSchema = z.object({
@@ -71,7 +73,12 @@ Creates a local copy with papr-cloud-lineage.json (fork or track mode). Use subm
           sourceAppId: result.sourceAppId,
           sourceSlug: result.sourceSlug,
           remappedFiles: result.remappedFiles,
-          tip: "Open the app tab to edit locally. Your API keys stay in your Settings — not the owner's.",
+          copiedJobIds: result.copiedJobIds,
+          bootstrap: result.bootstrap,
+          agentSetupMessage: result.agentSetupMessage,
+          tip: result.agentSetupMessage
+            ? "Database setup needs follow-up — use the agentSetupMessage in chat to finish migrations/Turso/seed job."
+            : "Open the app tab to edit locally. Your API keys stay in your Settings — not the owner's.",
         },
         duration: performance.now() - startTime,
         timestamp: new Date().toISOString(),
@@ -91,9 +98,9 @@ Creates a local copy with papr-cloud-lineage.json (fork or track mode). Use subm
 
 export const submitCloudAppChangeTool = createTool({
   id: "submit_cloud_app_change",
-  description: `Submit a contribute-back change request to the owner of a cloud app you forked.
+  description: `Propose contribute-back changes to the upstream app owner (CONTRIBUTOR ONLY — you must have a local fork installed via install_cloud_app).
 
-Owner receives the request and can approve or reject. On approve, fork files merge into your published app locally and cloud sync pushes to papr-work git.`,
+Opens a pull request with your fork's app source, linked Jobs, and migration SQL on the owner's papr-work repo. Returns prUrl, branch, and headSha.`,
   inputSchema: submitChangeSchema,
   execute: async (input) => {
     const args =
@@ -102,17 +109,13 @@ Owner receives the request and can approve or reject. On approve, fork files mer
     const startTime = performance.now();
     try {
       await requirePaprCloudLogin();
-      const response = await cloudApiFetch("/v1/cloud/apps/changes", {
-        method: "POST",
-        body: args,
+      const data = await getCloudAppContributeService().propose({
+        sourceNamespaceId: args.sourceNamespaceId,
+        sourceSlug: args.sourceSlug,
+        installedAppId: args.installedAppId,
+        title: args.title,
+        description: args.description,
       });
-      if (!response.ok) {
-        const body = await response.text();
-        throw new Error(
-          `Change request failed (${response.status}): ${body.slice(0, 200)}`,
-        );
-      }
-      const data = (await response.json()) as Record<string, unknown>;
       return {
         success: true,
         data,
@@ -134,7 +137,7 @@ Owner receives the request and can approve or reject. On approve, fork files mer
 
 export const listCloudAppChangesTool = createTool({
   id: "list_cloud_app_changes",
-  description: `List incoming contribute-back change requests for apps you own (cloud publish owner).`,
+  description: `List incoming contribute-back pull requests for apps you own (OWNER ONLY — published upstream apps).`,
   inputSchema: listChangesSchema,
   execute: async (input) => {
     const args =
@@ -174,7 +177,7 @@ export const listCloudAppChangesTool = createTool({
 
 export const resolveCloudAppChangeTool = createTool({
   id: "resolve_cloud_app_change",
-  description: `Approve or reject an incoming contribute-back change request (owner only).`,
+  description: `Approve or reject an incoming contribute-back PR (OWNER ONLY). Approve merges the GitHub PR and triggers a local sync pull. Use list_cloud_app_changes first to get requestId and prUrl.`,
   inputSchema: resolveChangeSchema,
   execute: async (input) => {
     const args =
@@ -195,6 +198,15 @@ export const resolveCloudAppChangeTool = createTool({
         );
       }
       const data = (await response.json()) as Record<string, unknown>;
+
+      if (args.action === "approve") {
+        const sync = getCloudSyncService();
+        if (sync) {
+          await sync.pullNow();
+          void sync.pushNow();
+        }
+      }
+
       return {
         success: true,
         data,

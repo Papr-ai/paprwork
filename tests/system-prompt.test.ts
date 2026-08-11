@@ -50,9 +50,9 @@ describe('System Prompt Builder', () => {
     test('should explain permission system', () => {
       const prompt = buildSystemPrompt();
       
-      expect(prompt).toContain('Permission System');
-      expect(prompt).toContain('"ask"');
-      expect(prompt).toContain('"always"');
+      expect(prompt).toContain('preloaded-api-key-testing');
+      expect(prompt).toContain('"ask" mode');
+      expect(prompt).toContain('always allow');
     });
 
     test('should list environment keys', () => {
@@ -129,8 +129,8 @@ describe('System Prompt Builder', () => {
     test('should mention permission denials', () => {
       const prompt = buildSystemPrompt();
       
-      expect(prompt).toContain('denied');
-      expect(prompt).toContain('permission');
+      expect(prompt).toContain('Permission Requests');
+      expect(prompt).toContain('Denied');
     });
   });
 
@@ -138,14 +138,15 @@ describe('System Prompt Builder', () => {
     test('should include behavior guidelines', () => {
       const prompt = buildSystemPrompt();
       
-      expect(prompt).toContain('Behavior');
-      expect(prompt).toContain('Guidelines');
+      expect(prompt).toContain('# Agent Behavior');
+      expect(prompt).toContain('create_plan');
     });
 
-    test('should include narration guidelines', () => {
+    test('should include efficiency guidelines', () => {
       const prompt = buildSystemPrompt();
       
-      expect(prompt).toContain('Narration');
+      expect(prompt).toContain('Validation-First');
+      expect(prompt).toContain('Efficiency');
     });
   });
 

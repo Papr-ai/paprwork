@@ -122,17 +122,16 @@ function executeLocalSqlIdempotent(
   }
 }
 
-export function ensureSchemaMigrationsTable(db: Database.Database): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS schema_migrations (
-      id TEXT PRIMARY KEY,
-      applied_at TEXT NOT NULL
-    );
-  `);
-  db.prepare(
-    `INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)`,
-  ).run("0001_baseline", new Date().toISOString());
-}
+import {
+  ensureSchemaMigrationsTable,
+  listAppliedMigrationIdsReadOnly,
+} from "./schemaMigrationsLedger.js";
+
+export {
+  ensureSchemaMigrationsTable,
+  listAppliedMigrationIds,
+  listAppliedMigrationIdsReadOnly,
+} from "./schemaMigrationsLedger.js";
 
 /**
  * Ensure registry database file, migrations folder, and schema_migrations table.
@@ -202,10 +201,7 @@ export async function applyDatabaseMigrations(
     applySqlitePerformancePragmas(db);
     ensureSchemaMigrationsTable(db);
 
-    const rows = db
-      .prepare("SELECT id FROM schema_migrations")
-      .all() as Array<{ id: string }>;
-    const appliedIds = new Set(rows.map((row) => row.id));
+    const appliedIds = new Set(listAppliedMigrationIdsReadOnly(db));
     const appliedNow: string[] = [];
 
     for (const fileName of files) {

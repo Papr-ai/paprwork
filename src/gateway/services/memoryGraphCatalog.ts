@@ -11,6 +11,10 @@ import {
   type WikiNode,
 } from "./KnowledgeGraphWikiService.js";
 import { getPaprUserId } from "../utils/paprUserId.js";
+import {
+  fetchSyncTiersThrottled,
+  SyncTiersBackoffError,
+} from "./syncTiersClient.js";
 
 export const MAX_CATALOG_TIER0 = 20;
 export const MAX_CATALOG_TIER1 = 25;
@@ -35,7 +39,8 @@ export const MAX_PAPR_CATALOG_CHARS = 4500;
 export const CATALOG_WIKI_ITEMS_PER_RAIL = 200;
 export const CATALOG_TIER_ITEMS = 8;
 export const CATALOG_RELATED_ITEMS = 6;
-export const CATALOG_SNAPSHOT_TTL_MS = 5 * 60 * 1000;
+/** Papr tiers change slowly; avoid re-fetching on every new chat bootstrap. */
+export const CATALOG_SNAPSHOT_TTL_MS = 30 * 60 * 1000;
 
 export interface MemoryGraphCatalogSnapshot {
   fetchedAt: number;
@@ -316,17 +321,18 @@ export async function fetchPaprCatalogSnapshot(
   userId: string,
 ): Promise<PaprCatalogSnapshot | null> {
   try {
-    const tiersResult = await client.sync.getTiers(
+    const tiersResult = await fetchSyncTiersThrottled(
+      client,
+      userId,
       {
-        external_user_id: userId,
         max_tier0: MAX_CATALOG_TIER0,
         max_tier1: MAX_CATALOG_TIER1,
         include_embeddings: false,
       },
       { timeout: CATALOG_SYNC_TIERS_TIMEOUT_MS },
     );
-    const tier0 = tiersResult.tier0 ?? [];
-    const tier1 = tiersResult.tier1 ?? [];
+    const tier0 = tiersResult.tier0;
+    const tier1 = tiersResult.tier1;
     if (tier0.length === 0 && tier1.length === 0) {
       return null;
     }
@@ -336,6 +342,10 @@ export async function fetchPaprCatalogSnapshot(
       tier1,
     };
   } catch (error) {
+    if (error instanceof SyncTiersBackoffError) {
+      console.warn("[MemoryGraphCatalog] sync.getTiers skipped (backoff active)");
+      return null;
+    }
     console.warn("[MemoryGraphCatalog] sync.getTiers failed:", error);
     return null;
   }

@@ -904,8 +904,20 @@ export class AgentService {
       });
 
       // Set tool execution context (so tools can access chatId)
-      const { setToolContext } = await import("../../core/tools/context.js");
-      setToolContext(chatId);
+      const { setToolContext, getJobToolEnv, collectJobEnvFromProcess } =
+        await import("../../core/tools/context.js");
+      const priorJobEnv = getJobToolEnv();
+      const mergedJobEnv =
+        Object.keys(priorJobEnv).length > 0
+          ? priorJobEnv
+          : collectJobEnvFromProcess();
+      setToolContext(chatId, {
+        ...(Object.keys(mergedJobEnv).length > 0 ? { jobEnv: mergedJobEnv } : {}),
+      });
+      const piToolContext = {
+        chatId,
+        ...(Object.keys(mergedJobEnv).length > 0 ? { jobEnv: mergedJobEnv } : {}),
+      };
 
       // Get model from session
       const sessionWithModel = session.agent as unknown as {
@@ -1641,6 +1653,7 @@ export class AgentService {
           apiKeys,
           maxSteps,
           piHistoryTrimBounds,
+          piToolContext,
         );
         piWrapUpContext = piContext;
         piWrapUpDeps = {
@@ -3232,9 +3245,11 @@ ${last15.substring(0, 8_000)}`;
       if (isCloudGateway) {
         const cloudSession = await (
           await import("../utils/resolveJobProviderModel.js")
-        ).resolveCloudAgentJobSession({
+        ).resolveCloudAgentJobSessionFromAuthOverride({
           provider: input.provider,
           model: input.model,
+          token: input.authOverride.apiKey,
+          authType: input.authOverride.authType,
         });
         provider = cloudSession.provider;
         model = cloudSession.model;
@@ -3739,9 +3754,11 @@ ${last15.substring(0, 8_000)}`;
     if (isCloudGateway && input.authOverride?.apiKey) {
       const cloudSession = await (
         await import("../utils/resolveJobProviderModel.js")
-      ).resolveCloudAgentJobSession({
+      ).resolveCloudAgentJobSessionFromAuthOverride({
         provider: input.provider,
         model: input.model,
+        token: input.authOverride.apiKey,
+        authType: input.authOverride.authType,
       });
       provider = cloudSession.provider;
       model = cloudSession.model;
@@ -3772,6 +3789,13 @@ ${last15.substring(0, 8_000)}`;
       authType,
       systemPrompt: `${this.systemPrompt}\n\n# Isolated Job Run\n- Session: ${chatId}\n- Keep output concise and actionable.`,
     };
+
+    const { setToolContext, collectJobEnvFromProcess } =
+      await import("../../core/tools/context.js");
+    const jobEnv = collectJobEnvFromProcess();
+    setToolContext(chatId, {
+      ...(Object.keys(jobEnv).length > 0 ? { jobEnv } : {}),
+    });
 
     let thinkingBuffer = "";
     for await (const chunk of this.streamAgent(chatId, input.prompt, config, {

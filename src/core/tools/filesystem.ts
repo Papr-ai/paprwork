@@ -65,6 +65,8 @@ export interface ReadFileOutput {
   content: string;
   size: number;
   encoding: string;
+  /** True when only the first maxSize bytes were returned for an oversized file. */
+  truncated?: boolean;
 }
 
 async function readFile(
@@ -85,19 +87,37 @@ async function readFile(
       };
     }
 
-    // Check file size
-    if (stats.size > maxSize) {
+    // Read file (partial when oversized and no line-based slice requested)
+    let content: string | Buffer;
+    let truncated = false;
+    if (
+      stats.size > maxSize &&
+      offset === undefined &&
+      limit === undefined
+    ) {
+      const handle = await fs.open(filePath, "r");
+      try {
+        const buffer = Buffer.alloc(maxSize);
+        const { bytesRead } = await handle.read(buffer, 0, maxSize, 0);
+        content =
+          encoding === "utf8"
+            ? buffer.subarray(0, bytesRead).toString("utf8")
+            : buffer.subarray(0, bytesRead);
+        truncated = true;
+      } finally {
+        await handle.close();
+      }
+    } else if (stats.size > maxSize) {
       const sizeKB = Math.round(stats.size / 1024);
       const maxKB = Math.round(maxSize / 1024);
       return {
         success: false,
-        error: `File too large: ${sizeKB}KB (max ${maxKB}KB). Use bash with head/tail/grep, or read_file with offset/limit to read in chunks.`,
+        error: `File too large: ${sizeKB}KB (max ${maxKB}KB). Use read_file with offset/limit for line chunks, or bash head/tail for byte ranges.`,
         type: "size_error",
       };
+    } else {
+      content = await fs.readFile(filePath, encoding as BufferEncoding);
     }
-
-    // Read file
-    let content = await fs.readFile(filePath, encoding as BufferEncoding);
 
     // Apply line-based offset/limit if requested
     if (offset !== undefined || limit !== undefined) {
@@ -114,7 +134,14 @@ async function readFile(
       content = (content + metadata) as any;
     }
 
-    const contentStr = content.toString();
+    let contentStr = content.toString();
+    if (truncated) {
+      const sizeKB = Math.round(stats.size / 1024);
+      const maxKB = Math.round(maxSize / 1024);
+      contentStr +=
+        `\n\n[Partial read: first ${maxKB}KB of ${sizeKB}KB total. ` +
+        `Use bash head/tail or read_file offset/limit for more.]`;
+    }
 
     // Return content — cross-turn history keeps file reads full (toolResultTruncation.ts).
     // maxSize already caps disk reads; do not block here or the model never sees content.
@@ -125,6 +152,7 @@ async function readFile(
         content: contentStr,
         size: stats.size,
         encoding,
+        ...(truncated ? { truncated: true } : {}),
       },
     };
   } catch (error) {

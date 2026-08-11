@@ -41,6 +41,7 @@ export interface MemoryPublishRequestFields {
   shareLinkEnabled: boolean;
   codeAccess?: "off" | "install";
   catalogRequirements?: MemoryCatalogRequirementFields[];
+  catalogTags?: string[];
 }
 
 export interface MemoryPublishResponseFields {

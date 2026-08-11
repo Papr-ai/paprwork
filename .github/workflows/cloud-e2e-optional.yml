@@ -1,0 +1,63 @@
+name: Cloud E2E (optional)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 14 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  cloud-e2e:
+    name: Contribute-back + track pull-on-publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rebuild native modules for Electron
+        run: npx @electron/rebuild -f -w better-sqlite3
+
+      - name: Build gateway
+        run: npm run build:gateway
+
+      - name: Start gateway test stack
+        if: secrets.PAPR_API_KEY
+        env:
+          PAPR_API_KEY: ${{ secrets.PAPR_API_KEY }}
+          PAPR_MEMORY_SERVER_URL: ${{ vars.PAPR_MEMORY_SERVER_URL || 'https://memory.papr.ai' }}
+        run: node scripts/test-stack.mjs up
+
+      - name: Run contribute-back E2E
+        if: secrets.PAPR_API_KEY
+        env:
+          PAPR_API_KEY: ${{ secrets.PAPR_API_KEY }}
+          PAPR_MEMORY_SERVER_URL: ${{ vars.PAPR_MEMORY_SERVER_URL || 'https://memory.papr.ai' }}
+        run: npm run test:contribute-back-e2e
+
+      - name: Run track pull-on-publish E2E
+        if: secrets.PAPR_API_KEY
+        env:
+          PAPR_API_KEY: ${{ secrets.PAPR_API_KEY }}
+        run: npm run test:track-pull-on-publish-e2e -- --poll-seconds=60
+
+      - name: Stop test stack
+        if: always() && secrets.PAPR_API_KEY
+        run: node scripts/test-stack.mjs down
+
+      - name: Skip cloud E2E (no API key)
+        if: ${{ !secrets.PAPR_API_KEY }}
+        run: echo "Skipping cloud E2E — configure PAPR_API_KEY repository secret to enable"

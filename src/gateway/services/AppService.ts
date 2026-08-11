@@ -127,6 +127,8 @@ export interface MiniApp {
   namespaceId?: string;
   /** Embedded sub-agent chat bubble (desktop + published web). */
   agentChat?: AppAgentChatConfig;
+  /** Topic tags for Community / Team catalog cards (not API integrations). */
+  tags?: string[];
 }
 
 export interface AppFile {
@@ -484,6 +486,31 @@ export class AppService {
       } catch (err) {
         console.warn(`[AppService] Failed to install default job for app ${appId}:`, err);
       }
+    }
+
+    try {
+      const { getJobsService } = await import("./JobsService.js");
+      const { repairDefaultHomeAppLinkedSources } = await import(
+        "./defaultHomeAppRepair.js"
+      );
+      const jobsService = getJobsService();
+      const repair = await repairDefaultHomeAppLinkedSources({
+        appsDir: this.appsDir,
+        jobExists: (jobId) => jobsService.hasJob(jobId),
+        resolveJobDbPath: (jobId) =>
+          path.join(jobsService.getJobsRootPath(), jobId, "data", "data.db"),
+      });
+      if (
+        repair.prunedSources > 0 ||
+        repair.schemaRepaired > 0 ||
+        repair.dbPathsUpdated > 0
+      ) {
+        console.log(
+          `[AppService] Repaired Home app data-sources: pruned=${repair.prunedSources} schema=${repair.schemaRepaired} dbPaths=${repair.dbPathsUpdated}`,
+        );
+      }
+    } catch (err) {
+      console.warn("[AppService] Home app data-source repair failed:", err);
     }
   }
 
@@ -1376,6 +1403,7 @@ export class AppService {
     icon?: string,
     createdByAgentId?: string,
     createdByAgentName?: string,
+    tags?: string[],
   ): Promise<MiniApp> {
     const now = new Date().toISOString();
     const { ensureUniqueAppTitle } = await import("../utils/uniqueAppNaming.js");
@@ -1412,6 +1440,8 @@ export class AppService {
     }
 
     const scope = readActiveAppWorkspaceScope();
+    const { normalizeCatalogTags } = await import("../../core/utils/catalogTags.js");
+    const normalizedTags = normalizeCatalogTags(tags);
     const app: MiniApp = {
       id: uuidv4(),
       title: uniqueTitle,
@@ -1425,6 +1455,7 @@ export class AppService {
         : {}),
       ...(scope ? withWorkspaceScope({}, scope) : {}),
       ...(resolvedIcon ? { icon: resolvedIcon } : {}),
+      ...(normalizedTags.length > 0 ? { tags: normalizedTags } : {}),
       createdByAgentId,
       createdByAgentName,
     };
@@ -2329,6 +2360,15 @@ export class AppService {
       await this.buildApp(appId);
       await this.runValidation(appId);
       this.scheduleReloadBroadcast(appId, filename);
+
+      const { getSyncCoordinator } = await import("./cloudSync/SyncCoordinator.js");
+      const coordinator = getSyncCoordinator();
+      if (coordinator) {
+        coordinator.markGitDirty(path.join("apps", appId));
+      } else {
+        const { getCloudSyncService } = await import("./CloudSyncService.js");
+        getCloudSyncService()?.enqueueRelativePath(path.join("apps", appId));
+      }
     } catch (error) {
       console.error(`[AppService] Build/validation error for app ${appId}:`, error);
       // Still broadcast on error so UI shows the latest source/build state
@@ -3202,27 +3242,45 @@ export class AppService {
     const { getDatabaseRegistryService } = await import(
       "./DatabaseRegistryService.js"
     );
-    const { resolveReadableRegistryDbPath } = await import(
-      "./resolveRegistryDbPath.js"
-    );
+    const {
+      extractDatabaseSlugFromPath,
+      resolveReadableRegistryDbPath,
+      workspaceRegistryDbPath,
+    } = await import("./resolveRegistryDbPath.js");
     const registry = getDatabaseRegistryService();
     const dataDir = getPaprDataDir();
+    const jobsRoot = getPaprJobsRoot();
 
     return {
       ...workspaceConfig,
       sources: workspaceConfig.sources.map((source) => {
-        if (source.jobId?.trim()) {
-          return source;
-        }
         const record = source.dbId ? registry.getById(source.dbId) : undefined;
         const resolved = resolveReadableRegistryDbPath({
           dbPath: source.dbPath,
           registryPath: record?.localPath,
           dataDir,
         });
-        if (resolved && resolved !== source.dbPath) {
-          return { ...source, dbPath: resolved };
+        if (resolved) {
+          return resolved !== source.dbPath ? { ...source, dbPath: resolved } : source;
         }
+
+        if (source.jobId?.trim()) {
+          const jobPath = path.join(jobsRoot, source.jobId, "data", "data.db");
+          return source.dbPath?.trim() === jobPath
+            ? source
+            : { ...source, dbPath: jobPath };
+        }
+
+        const slug = extractDatabaseSlugFromPath(
+          source.dbPath?.trim() || record?.localPath?.trim() || "",
+        );
+        if (slug) {
+          const canonical = workspaceRegistryDbPath(slug, dataDir);
+          return source.dbPath?.trim() === canonical
+            ? source
+            : { ...source, dbPath: canonical };
+        }
+
         return source;
       }),
     };
@@ -3423,7 +3481,7 @@ export class AppService {
     if (linked.jobId) {
       void import("./tursoPushScheduler.js")
         .then(({ scheduleTursoPushForJob }) =>
-          scheduleTursoPushForJob(linked.jobId!, "completion"),
+          scheduleTursoPushForJob(linked.jobId!, "completion", "completion"),
         )
         .catch(() => undefined);
     }

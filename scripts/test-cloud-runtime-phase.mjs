@@ -69,7 +69,7 @@ async function testHeartbeat() {
     fail("heartbeat pendingCloudRuns", "missing array");
     return;
   }
-  ok(`heartbeat (pending=${body.pendingCloudRuns.length})`);
+  ok(`heartbeat (cloudRuns=${body.pendingCloudRuns.length})`);
 }
 
 async function testSessionsStreamCursor() {

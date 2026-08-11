@@ -1,8 +1,12 @@
 /**
- * Owner panel — incoming contribute-back change requests for a published app.
+ * Owner panel — incoming contribute-back proposals for a published app.
  */
 
 import { useCallback, useEffect, useState } from "react";
+import {
+  buildPrReviewAgentPrompt,
+  openCloudSyncAgentChat,
+} from "../../utils/openCloudSyncAgentChat";
 
 const GATEWAY =
   typeof import.meta !== "undefined" &&
@@ -17,9 +21,11 @@ interface ChangeRequest {
   installedAppId: string;
   title: string;
   description: string;
-  status: "pending" | "approved" | "rejected";
+  status: "preparing" | "pending" | "approved" | "rejected";
   createdAt: string;
   resolvedAt?: string | null;
+  prUrl?: string | null;
+  branch?: string | null;
 }
 
 interface CloudChangeRequestsPanelProps {
@@ -87,37 +93,73 @@ export function CloudChangeRequestsPanel({
 
   return (
     <div className="share-sheet__section share-sheet__changes">
-      <p className="share-sheet__section-title">Change requests</p>
+      <p className="share-sheet__section-title">Suggested updates</p>
       <p className="share-sheet__section-desc">
-        When someone forks your app and sends changes back, they appear here for
-        your review. Approving merges their local fork into your published app.
+        When someone installs your app and sends changes back, their proposal
+        appears here. Review the update, then accept to merge it into your app
+        or decline to close it.
       </p>
 
       {loading ? (
-        <p className="share-sheet__footnote">Loading requests…</p>
+        <p className="share-sheet__footnote">Loading proposals…</p>
       ) : error ? (
         <p className="share-sheet__error">{error}</p>
       ) : pending.length === 0 ? (
-        <p className="share-sheet__footnote">No pending change requests.</p>
+        <p className="share-sheet__footnote">No pending proposals.</p>
       ) : (
         <ul className="share-sheet__changes-list">
           {pending.map((req) => (
             <li key={req.id} className="share-sheet__changes-item">
               <div className="share-sheet__changes-head">
                 <strong>{req.title}</strong>
-                <span className="share-sheet__changes-meta">
-                  fork {req.installedAppId.slice(0, 8)}…
-                </span>
               </div>
               <p className="share-sheet__changes-desc">{req.description}</p>
+              {req.prUrl ? (
+                <p className="share-sheet__changes-meta">
+                  <a
+                    className="share-sheet__link-btn"
+                    href={req.prUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Review proposed changes
+                  </a>
+                </p>
+              ) : (
+                <p className="share-sheet__footnote">
+                  Waiting for change upload to finish…
+                </p>
+              )}
               <div className="share-sheet__changes-actions">
                 <button
                   type="button"
+                  className="share-sheet__secondary-btn"
+                  disabled={busy || !req.prUrl}
+                  onClick={() => {
+                    openCloudSyncAgentChat(
+                      buildPrReviewAgentPrompt({
+                        sourceAppId: req.sourceAppId,
+                        title: req.title,
+                        description: req.description,
+                        prUrl: req.prUrl,
+                      }),
+                    );
+                  }}
+                >
+                  Review with agent
+                </button>
+                <button
+                  type="button"
                   className="share-sheet__primary-btn"
-                  disabled={busy || resolvingId === req.id}
+                  disabled={busy || resolvingId === req.id || !req.prUrl}
+                  title={
+                    req.prUrl
+                      ? "Merge this proposal into your app"
+                      : "Available once the proposal upload completes"
+                  }
                   onClick={() => void resolve(req.id, "approve")}
                 >
-                  Approve
+                  {resolvingId === req.id ? "Working…" : "Accept"}
                 </button>
                 <button
                   type="button"
@@ -125,7 +167,7 @@ export function CloudChangeRequestsPanel({
                   disabled={busy || resolvingId === req.id}
                   onClick={() => void resolve(req.id, "reject")}
                 >
-                  Reject
+                  Decline
                 </button>
               </div>
             </li>
@@ -135,8 +177,8 @@ export function CloudChangeRequestsPanel({
 
       {requests.some((r) => r.status !== "pending") ? (
         <p className="share-sheet__footnote">
-          {requests.filter((r) => r.status === "approved").length} approved ·{" "}
-          {requests.filter((r) => r.status === "rejected").length} rejected
+          {requests.filter((r) => r.status === "approved").length} accepted ·{" "}
+          {requests.filter((r) => r.status === "rejected").length} declined
         </p>
       ) : null}
     </div>

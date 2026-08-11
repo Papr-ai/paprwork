@@ -327,7 +327,7 @@
   animation: pulse-streaming 1.5s ease-in-out infinite;
 }
 
-/* Unread indicator (green static dot) */
+/* Unread indicator (green static dot — chat finished with new response) */
 .tab.tab--unread::before {
   content: '';
   position: absolute;
@@ -340,7 +340,7 @@
   background-color: #10B981; /* Green */
 }
 
-/* Pending refresh indicator (orange static dot) */
+/* Pending refresh (soft periwinkle — split-view updated, chat not fully final) */
 .tab.tab--pending-refresh::before {
   content: '';
   position: absolute;
@@ -350,7 +350,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background-color: #F59E0B; /* Orange */
+  background-color: #8E9CC7; /* Muted periwinkle */
 }
 
 /* Shift icon to make room for dot */
@@ -382,7 +382,7 @@
   }
 
   .tab.tab--pending-refresh::before {
-    background-color: #FBBF24; /* Lighter orange for dark mode */
+    background-color: #A8B4D4; /* Soft lavender for dark mode */
   }
 }
 

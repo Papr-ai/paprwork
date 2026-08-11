@@ -1,0 +1,153 @@
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { PullResult, PushResult } from "../src/gateway/services/tursoSyncBridgeCore.js";
+import type { TursoLinkedSource } from "../src/gateway/services/tursoLinkedSources.js";
+import {
+  isLinkedSourceLocallyDirty,
+  reconcileLinkedSourcesFromCloud,
+  resolveSyncKeysForCloudPull,
+  syncLinkedSourceFromCloud,
+  type TursoCloudSyncBridge,
+} from "../src/gateway/services/tursoSyncSession.js";
+
+const linked: TursoLinkedSource = {
+  appId: "app-1",
+  jobId: "job-abc",
+  dbPath: "/tmp/job/data.db",
+  sourceId: "primary",
+  role: "primary",
+};
+
+const pushResult: PushResult = {
+  status: "pushed",
+  tables: ["items"],
+  syncMode: "delta",
+};
+
+const pullResult: PullResult = {
+  status: "pulled",
+  tables: ["items"],
+  syncMode: "delta",
+};
+
+function makeBridge(overrides?: Partial<TursoCloudSyncBridge>): TursoCloudSyncBridge {
+  return {
+    enabled: true,
+    listLinkedSources: vi.fn(async () => [linked]),
+    pushJob: vi.fn(async () => pushResult),
+    pullJob: vi.fn(async () => pullResult),
+    resolveTursoDatabaseNameForLinked: vi.fn(async () => "j-jobabc"),
+    fetchCredentials: vi.fn(async () => ({
+      tursoUrl: "libsql://example.turso.io",
+      authToken: "token",
+    })),
+    ...overrides,
+  };
+}
+
+vi.mock("../src/gateway/services/tursoSyncBridgeCore.js", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../src/gateway/services/tursoSyncBridgeCore.js")
+  >();
+  return {
+    ...actual,
+    createRemoteClient: vi.fn(() => ({
+      execute: vi.fn(),
+      close: vi.fn(),
+    })),
+    remoteAheadOfLocal: vi.fn(async () => false),
+  };
+});
+
+vi.mock("../src/gateway/services/tursoSyncState.js", () => ({
+  loadTursoSyncState: vi.fn(() => ({ jobs: {} })),
+  isJobDbDirty: vi.fn(() => false),
+  resolveTursoPushStateEntry: vi.fn(() => ({})),
+}));
+
+import { remoteAheadOfLocal } from "../src/gateway/services/tursoSyncBridgeCore.js";
+import { isJobDbDirty } from "../src/gateway/services/tursoSyncState.js";
+
+describe("tursoSyncSession", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isJobDbDirty).mockReturnValue(false);
+    vi.mocked(remoteAheadOfLocal).mockResolvedValue(false);
+  });
+
+  it("resolveSyncKeysForCloudPull scopes by appId", () => {
+    const keys = resolveSyncKeysForCloudPull([linked], { appId: "app-1" });
+    expect(keys).toEqual(["job-abc"]);
+  });
+
+  it("resolveSyncKeysForCloudPull scopes by jobId", () => {
+    const keys = resolveSyncKeysForCloudPull([linked], { jobId: "job-abc" });
+    expect(keys).toEqual(["job-abc"]);
+  });
+
+  it("skips pull when local clean and remote unchanged", async () => {
+    const bridge = makeBridge();
+    const result = await syncLinkedSourceFromCloud(bridge, "job-abc", {
+      trigger: "app_open",
+    });
+
+    expect(result.action).toBe("skipped");
+    expect(result.reason).toBe("remote_unchanged");
+    expect(bridge.pullJob).not.toHaveBeenCalled();
+    expect(bridge.pushJob).not.toHaveBeenCalled();
+  });
+
+  it("pulls when local clean and remote ahead", async () => {
+    vi.mocked(remoteAheadOfLocal).mockResolvedValue(true);
+    const bridge = makeBridge();
+    const result = await syncLinkedSourceFromCloud(bridge, "job-abc");
+
+    expect(result.action).toBe("pulled");
+    expect(bridge.pullJob).toHaveBeenCalledWith("job-abc");
+    expect(bridge.pushJob).not.toHaveBeenCalled();
+  });
+
+  it("pulls when assumeRemoteChanged without remote check", async () => {
+    const bridge = makeBridge();
+    await syncLinkedSourceFromCloud(bridge, "job-abc", {
+      assumeRemoteChanged: true,
+    });
+
+    expect(remoteAheadOfLocal).not.toHaveBeenCalled();
+    expect(bridge.pullJob).toHaveBeenCalledOnce();
+  });
+
+  it("pushes when local dirty (pushJob includes post-pull)", async () => {
+    vi.mocked(isJobDbDirty).mockReturnValue(true);
+    const bridge = makeBridge();
+    const result = await syncLinkedSourceFromCloud(bridge, "job-abc");
+
+    expect(result.action).toBe("pushed");
+    expect(bridge.pushJob).toHaveBeenCalledWith("job-abc");
+    expect(bridge.pullJob).not.toHaveBeenCalled();
+  });
+
+  it("reconcileLinkedSourcesFromCloud returns empty when bridge disabled", async () => {
+    const bridge = makeBridge({ enabled: false });
+    const results = await reconcileLinkedSourcesFromCloud(bridge);
+    expect(results).toEqual([]);
+  });
+
+  it("reconcileLinkedSourcesFromCloud runs scoped sessions", async () => {
+    vi.mocked(remoteAheadOfLocal).mockResolvedValue(true);
+    const bridge = makeBridge();
+    const results = await reconcileLinkedSourcesFromCloud(
+      bridge,
+      { appId: "app-1" },
+      { trigger: "post_cloud_run" },
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.action).toBe("pulled");
+    expect(results[0]?.trigger).toBe("post_cloud_run");
+  });
+
+  it("isLinkedSourceLocallyDirty delegates to fingerprint state", () => {
+    vi.mocked(isJobDbDirty).mockReturnValue(true);
+    expect(isLinkedSourceLocallyDirty(linked)).toBe(true);
+  });
+});

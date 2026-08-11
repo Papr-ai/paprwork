@@ -23,7 +23,16 @@ import chokidar, { type FSWatcher } from "chokidar";
 import { SyncStateManager, STATE_FILENAME, type QueueItem } from "./cloudSync/syncState.js";
 import { CLOUD_REPO_HEAD_RELATIVE_PATH } from "./cloudSync/cloudRepoHeadMarker.js";
 import { buildGitHubSyncItemsReport } from "./cloudSync/syncItemStatus.js";
+import { shouldAutoUploadRelativePath, shouldAutoUploadApp } from "./cloudUploadMode.js";
 import { canReconcilePathAsSynced, loadGitTrackedSubdirPaths } from "./cloudSync/gitPathStatus.js";
+import {
+  mergeRemoteMainIntoLocal,
+  type GitRemoteReconcileResult,
+  classifyIncomingRemoteChanges,
+  formatIncomingRemoteReviewBlockReason,
+  listIncomingRemoteChangedPaths,
+  isNonRetryableCloudPushError,
+} from "./cloudSync/gitRemoteReconcile.js";
 import { GitRunner, probeGitInstalled } from "./cloudSync/gitRunner.js";
 import {
   formatGitSyncSizeLimitMb,
@@ -76,8 +85,13 @@ const GITIGNORE_CONTENT = `# Runtime — rebuilt per environment
 **/*.bak
 **/*.bak.*
 **/*.backup.*
+**/*.backup-*
 **/*.corrupt-*
 **/*corrupt-backup*
+
+# Local sync state — never in git
+data/.db-memory-sync-state.json
+data/.turso-convergence-state.json
 
 # Logs — ephemeral
 **/logs/
@@ -116,6 +130,13 @@ interface SyncState {
   queueTotal: number;
   /** True while auto-republish runs after git push (publish catalog / share links). */
   cloudPublishing: boolean;
+  /** Remote git has commits local lacks — owner must review before merge (§6). */
+  gitUpdatesAvailable: boolean;
+  gitUpdatesSummary: string | null;
+  /** Paths changed on origin/main that local lacks (for per-folder updates_available). */
+  gitRemoteChangedPaths: string[] | null;
+  /** Per-app Upload now errors (background flush). */
+  manualFlushErrors: Record<string, { message: string; at: string }>;
 }
 
 export interface PushGitScopedResult {
@@ -158,7 +179,17 @@ export class CloudSyncService {
     queueRemaining: 0,
     queueTotal: 0,
     cloudPublishing: false,
+    gitUpdatesAvailable: false,
+    gitUpdatesSummary: null,
+    gitRemoteChangedPaths: null,
+    manualFlushErrors: {},
   };
+
+  /** Per-app errors from background Upload now. */
+  private readonly manualFlushErrorMap = new Map<
+    string,
+    { message: string; at: string }
+  >();
 
   /** Apps touched by the latest git push — drives targeted auto-republish. */
   private lastFinalizedAppIds: string[] = [];
@@ -185,7 +216,32 @@ export class CloudSyncService {
       ...this.state,
       queueRemaining: this.syncQueue.length,
       queueTotal: this.queueTotal,
+      manualFlushErrors: Object.fromEntries(this.manualFlushErrorMap.entries()),
     };
+  }
+
+  recordManualFlushError(appId: string, error: Error): void {
+    const message = error.message.slice(0, 500);
+    const at = new Date().toISOString();
+    this.manualFlushErrorMap.set(appId, { message, at });
+    this.state.lastError = message;
+    this.state.status = "error";
+  }
+
+  clearManualFlushError(appId: string): void {
+    this.manualFlushErrorMap.delete(appId);
+    if (this.manualFlushErrorMap.size === 0) {
+      if (this.state.status === "error") {
+        this.state.status = "idle";
+      }
+      this.state.lastError = null;
+    }
+  }
+
+  getManualFlushError(
+    appId: string,
+  ): { message: string; at: string } | null {
+    return this.manualFlushErrorMap.get(appId) ?? null;
   }
 
   /** Pause Phase-2 push queue (e.g. after workspace switch while UI reconnects). */
@@ -200,6 +256,10 @@ export class CloudSyncService {
   }
 
   getGitHubSyncItemsReport() {
+    const remotePaths =
+      this.state.gitRemoteChangedPaths !== null
+        ? new Set(this.state.gitRemoteChangedPaths)
+        : undefined;
     return buildGitHubSyncItemsReport({
       paprDir: this.paprDir,
       syncedItems: this.stateManager.data.syncedItems,
@@ -207,6 +267,11 @@ export class CloudSyncService {
       hasItemChanged: (relativePath) => this.stateManager.hasItemChanged(relativePath),
       deadLetter: this.stateManager.data.deadLetter,
       trackedInGit: loadGitTrackedSubdirPaths(this.paprDir),
+      gitUpdatesAvailable: this.state.gitUpdatesAvailable,
+      gitUpdatesSummary: this.state.gitUpdatesSummary,
+      gitRemoteChangedPaths: remotePaths,
+      shouldAutoUploadPath: (relativePath) =>
+        shouldAutoUploadRelativePath(relativePath, this.paprDir),
     });
   }
 
@@ -473,6 +538,8 @@ export class CloudSyncService {
     if (this.pullTimer) { clearTimeout(this.pullTimer); this.pullTimer = null; }
     if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
     if (this.watcher) { await this.watcher.close(); this.watcher = null; }
+    const { getSyncCoordinator } = await import("./cloudSync/SyncCoordinator.js");
+    getSyncCoordinator()?.stop();
     this.stateManager.save();
     console.log("[CloudSync] Stopped");
   }
@@ -492,16 +559,22 @@ export class CloudSyncService {
   async pushGitNow(options?: {
     appId?: string;
     jobId?: string;
+    skipPostSyncHooks?: boolean;
   }): Promise<PushGitScopedResult> {
-    return this.runExclusiveGitOp(async () => {
-      if (this.pushTimer) {
-        clearTimeout(this.pushTimer);
-        this.pushTimer = null;
-      }
-      await this.ensureRemoteCaughtUp();
+    if (this.pushTimer) {
+      clearTimeout(this.pushTimer);
+      this.pushTimer = null;
+    }
 
-      const appId = options?.appId?.trim();
-      const jobId = options?.jobId?.trim();
+    const appId = options?.appId?.trim();
+    const jobId = options?.jobId?.trim();
+
+    if (!appId && !jobId) {
+      return this.pushGitNowWorkspace(options?.skipPostSyncHooks);
+    }
+
+    return this.runExclusiveGitOp(async () => {
+      await this.ensureRemoteCaughtUp();
 
       if (appId) {
         const { resolveAppCloudSyncRelativePaths } = await import(
@@ -545,7 +618,9 @@ export class CloudSyncService {
         await this.reconcilePathsIfGitClean(relativePaths);
         this.lastFinalizedAppIds = [appId];
         this.stateManager.save();
-        await this.runPostSyncHooks();
+        if (!options?.skipPostSyncHooks) {
+          await this.runPostSyncHooks();
+        }
 
         return {
           pushedPaths,
@@ -595,14 +670,56 @@ export class CloudSyncService {
         };
       }
 
+      return {
+        pushedPaths: [],
+        skippedPaths: [],
+        scope: "workspace",
+      };
+    });
+  }
+
+  /**
+   * Full workspace git push — apps use ordered flush outside the git lock
+   * so Turso → git ordering is preserved (no deadlock with flushAppNow).
+   */
+  private async pushGitNowWorkspace(
+    skipPostSyncHooks?: boolean,
+  ): Promise<PushGitScopedResult> {
+    const pushedPaths: string[] = [];
+
+    await this.runExclusiveGitOp(async () => {
+      await this.ensureRemoteCaughtUp();
       const instantPaths = this.getChangedInstantPaths();
-      const pushedPaths: string[] = [];
       if (instantPaths.length > 0) {
-        await this.commitAndPushPaths(instantPaths, "manual push: workspace and data");
+        await this.commitAndPushPaths(
+          instantPaths,
+          "manual push: workspace and data",
+        );
         pushedPaths.push(...instantPaths);
       }
+    });
 
-      await this.enqueueSubDirs();
+    const appsToFlush: string[] = [];
+    await this.enqueueSubDirs({ collectAppIdsForImmediateFlush: appsToFlush });
+
+    const { flushAutoUploadAppFolderIfNeeded, appsRelativePath } = await import(
+      "./cloudSync/flushQueuedAppFolder.js"
+    );
+
+    for (const appId of appsToFlush) {
+      const relativePath = appsRelativePath(appId);
+      const flushed = await flushAutoUploadAppFolderIfNeeded(
+        this,
+        relativePath,
+        "manual",
+      );
+      if (flushed) {
+        pushedPaths.push(relativePath);
+      }
+    }
+
+    await this.runExclusiveGitOp(async () => {
+      await this.ensureRemoteCaughtUp();
       while (this.syncQueue.length > 0) {
         const item = this.syncQueue.shift()!;
         if (!fs.existsSync(path.join(this.paprDir, item.relativePath))) {
@@ -613,38 +730,109 @@ export class CloudSyncService {
           this.stateManager.markSynced(item.relativePath);
           continue;
         }
-        await this.commitAndPushPaths([item.relativePath], `cloud sync: ${item.relativePath}`);
+
+        const flushed = await flushAutoUploadAppFolderIfNeeded(
+          this,
+          item.relativePath,
+          "manual",
+        );
+        if (flushed) {
+          pushedPaths.push(item.relativePath);
+          continue;
+        }
+
+        await this.commitAndPushPaths(
+          [item.relativePath],
+          `cloud sync: ${item.relativePath}`,
+        );
         pushedPaths.push(item.relativePath);
       }
       this.stateManager.save();
-      await this.finishQueueProcessing();
+    });
 
-      return {
-        pushedPaths,
-        skippedPaths: [],
-        scope: "workspace",
-      };
+    await this.runExclusiveGitOp(async () => {
+      await this.finishQueueProcessing(skipPostSyncHooks);
+    });
+
+    return {
+      pushedPaths,
+      skippedPaths: [],
+      scope: "workspace",
+    };
+  }
+
+  /** Push one mini-app — ordered cross-layer flush via SyncCoordinator (Phase 4+5). */
+  async pushAppNow(appId: string): Promise<void> {
+    const { getSyncCoordinator } = await import("./cloudSync/SyncCoordinator.js");
+    const coordinator = getSyncCoordinator();
+    if (coordinator) {
+      await coordinator.flushNow(appId, { trigger: "manual" });
+      return;
+    }
+    const { flushAppNow } = await import("./cloudSync/flushAppNow.js");
+    await flushAppNow(this, appId, { skipTursoReschedule: true });
+  }
+
+  /**
+   * Non-blocking Upload now for UI — returns immediately; errors via manualFlushErrors.
+   */
+  pushAppNowInBackground(appId: string): void {
+    this.clearManualFlushError(appId);
+    void this.pushAppNow(appId).catch((err: Error) => {
+      console.warn(
+        `[CloudSync] Background Upload now failed for ${appId}:`,
+        err.message.slice(0, 160),
+      );
     });
   }
 
-  /** Push one mini-app and its linked/dependent jobs immediately (skips global queue). */
-  async pushAppNow(appId: string): Promise<void> {
-    await this.pushGitNow({ appId });
-    const bridge = (await import("./TursoSyncBridge.js")).getTursoSyncBridge();
-    if (bridge) {
-      const summary = await bridge.pushAppLinkedSources(appId);
-      if (summary.failed > 0) {
-        const errors = summary.results
-          .filter((result) => result.error)
-          .map((result) => result.error)
-          .join("; ");
-        throw new Error(
-          errors.length > 0
-            ? `Database sync to Turso failed: ${errors}`
-            : "Database sync to Turso failed",
-        );
-      }
+  /** Enqueue a changed app/job folder for legacy git-only sync. */
+  enqueueRelativePath(relativePath: string): void {
+    const normalized = relativePath.replace(/\\/g, "/");
+    if (this.stateManager.isDeadLetter(normalized)) {
+      return;
     }
+    if (!this.stateManager.hasItemChanged(normalized)) {
+      return;
+    }
+    if (!shouldAutoUploadRelativePath(normalized, this.paprDir)) {
+      return;
+    }
+    if (this.syncQueue.some((item) => item.relativePath === normalized)) {
+      return;
+    }
+    this.syncQueue.push({ relativePath: normalized, failures: 0 });
+    this.queueTotal = Math.max(this.queueTotal, this.syncQueue.length);
+    if (!this.queueTimer && this.syncQueue.length > 0) {
+      this.startQueueProcessor();
+    }
+  }
+
+  hasRelativePathChanged(relativePath: string): boolean {
+    return this.stateManager.hasItemChanged(relativePath);
+  }
+
+  markRelativePathSynced(relativePath: string): void {
+    this.stateManager.markSynced(relativePath.replace(/\\/g, "/"));
+    this.stateManager.save();
+  }
+
+  getPaprDir(): string {
+    return this.paprDir;
+  }
+
+  runGit(args: string[], opts?: { timeout?: number }): Promise<string> {
+    return this.git(args, opts);
+  }
+
+  markAppForPostFlushHooks(appId: string): void {
+    this.lastFinalizedAppIds = [appId];
+  }
+
+  async runPostFlushHooks(options?: {
+    skipTursoReschedule?: boolean;
+  }): Promise<void> {
+    await this.runPostSyncHooks(options);
   }
 
   // ── Token management ──────────────────────────────────────────────
@@ -833,6 +1021,9 @@ export class CloudSyncService {
     if (this.state.status === "queuing") {
       return false;
     }
+    if (!shouldAutoUploadRelativePath("workspace", this.paprDir)) {
+      return false;
+    }
     if ((await this.countUnpushedCommits()) > 0) {
       return false;
     }
@@ -842,6 +1033,9 @@ export class CloudSyncService {
       return false;
     }
 
+    console.log(
+      `[CloudSync] Git workspace sync (trigger=watcher) paths=${paths.length}`,
+    );
     return this.commitAndPushPaths(paths, "cloud sync: workspace change");
   }
 
@@ -870,7 +1064,11 @@ export class CloudSyncService {
     return reconciled;
   }
 
-  private async enqueueSubDirs(): Promise<void> {
+  private async enqueueSubDirs(options?: {
+    /** Manual workspace push: collect app IDs for immediate ordered flush */
+    collectAppIdsForImmediateFlush?: string[];
+  }): Promise<void> {
+    console.log("[CloudSync] Git enqueue scan (trigger=startup)");
     let skipped = 0;
     let deadLetterSkipped = 0;
     let reconciled = 0;
@@ -896,6 +1094,31 @@ export class CloudSyncService {
           skipped++;
           continue;
         }
+        if (!shouldAutoUploadRelativePath(relativePath, this.paprDir)) {
+          skipped++;
+          continue;
+        }
+
+        if (parent === "apps") {
+          const appId = entry.name;
+          if (shouldAutoUploadApp(appId, this.paprDir)) {
+            if (options?.collectAppIdsForImmediateFlush) {
+              options.collectAppIdsForImmediateFlush.push(appId);
+              skipped++;
+              continue;
+            }
+            const { getSyncCoordinator } = await import(
+              "./cloudSync/SyncCoordinator.js"
+            );
+            const coordinator = getSyncCoordinator();
+            if (coordinator) {
+              coordinator.scheduleAutoFlush(appId);
+              skipped++;
+              continue;
+            }
+          }
+        }
+
         this.syncQueue.push({ relativePath, failures: 0 });
       }
     }
@@ -941,6 +1164,51 @@ export class CloudSyncService {
 
   private async processQueueItem(): Promise<void> {
     if (this.syncQueue.length === 0) {
+      this.processNextInQueue();
+      return;
+    }
+
+    const nextItem = this.syncQueue[0];
+    const normalizedPath = nextItem.relativePath.replace(/\\/g, "/");
+    const { flushAutoUploadAppFolderIfNeeded } = await import(
+      "./cloudSync/flushQueuedAppFolder.js"
+    );
+    const appMatch = /^apps\/([^/]+)$/.exec(normalizedPath);
+    if (appMatch && shouldAutoUploadApp(appMatch[1], this.paprDir)) {
+      const queueItem = this.syncQueue.shift()!;
+      this.state.status = "queuing";
+
+      try {
+        const flushed = await flushAutoUploadAppFolderIfNeeded(
+          this,
+          queueItem.relativePath,
+          "auto",
+        );
+        if (flushed) {
+          this.state.lastSyncAt = new Date().toISOString();
+          this.state.lastError = null;
+          console.log(
+            `[CloudSync] Ordered flush ${queueItem.relativePath} — ${this.syncQueue.length} remaining`,
+          );
+        } else {
+          this.syncQueue.unshift(queueItem);
+        }
+      } catch (err) {
+        const msg = (err as Error).message ?? String(err);
+        queueItem.failures++;
+        if (queueItem.failures >= MAX_RETRY_FAILURES) {
+          this.stateManager.recordDeadLetter(
+            queueItem.relativePath,
+            msg,
+            queueItem.failures,
+          );
+          this.state.lastError = msg.slice(0, 200);
+        } else {
+          this.syncQueue.unshift(queueItem);
+          this.queuePausedUntilMs = Date.now() + PUSH_RETRY_BASE_MS;
+        }
+      }
+
       this.processNextInQueue();
       return;
     }
@@ -1007,17 +1275,23 @@ export class CloudSyncService {
       });
     } catch (err) {
       const msg = (err as Error).message ?? String(err);
-      this.queuePausedUntilMs = Date.now() + PUSH_RETRY_BASE_MS * 2;
       this.state.lastError = msg.slice(0, 200);
-      console.warn(
-        `[CloudSync] Push backlog blocked queue — retrying in ${PUSH_RETRY_BASE_MS * 2 / 1000}s: ${msg.slice(0, 80)}`,
-      );
+      if (isNonRetryableCloudPushError(msg)) {
+        console.warn(
+          `[CloudSync] Push blocked — owner merge required: ${msg.slice(0, 120)}`,
+        );
+      } else {
+        this.queuePausedUntilMs = Date.now() + PUSH_RETRY_BASE_MS * 2;
+        console.warn(
+          `[CloudSync] Push backlog blocked queue — retrying in ${PUSH_RETRY_BASE_MS * 2 / 1000}s: ${msg.slice(0, 80)}`,
+        );
+      }
     }
 
     this.processNextInQueue();
   }
 
-  private async finishQueueProcessing(): Promise<void> {
+  private async finishQueueProcessing(skipPostSyncHooks?: boolean): Promise<void> {
     console.log("[CloudSync] Queue complete — syncing deletions...");
     this.state.status = "syncing";
     await this.ensureRemoteCaughtUp();
@@ -1028,7 +1302,9 @@ export class CloudSyncService {
     this.state.status = "idle";
     this.stateManager.markFullSyncComplete();
     this.stateManager.save();
-    await this.runPostSyncHooks();
+    if (!skipPostSyncHooks) {
+      await this.runPostSyncHooks();
+    }
   }
 
   // ── Delete detection ──────────────────────────────────────────────
@@ -1056,9 +1332,15 @@ export class CloudSyncService {
     this.pullTimer = setInterval(async () => {
       if (this.isSyncing || this.state.status === "queuing") return;
       if (Date.now() < this.pullBackoffUntilMs) return;
-      if ((await this.countUnpushedCommits()) > 0) return;
-      try { await this.pull(); }
-      catch (err) { console.warn("[CloudSync] Periodic pull failed:", (err as Error).message.slice(0, 100)); }
+      try {
+        await this.tryAutoReconcileRemoteGit();
+        if ((await this.countUnpushedCommits()) > 0) {
+          return;
+        }
+        await this.pull();
+      } catch (err) {
+        console.warn("[CloudSync] Periodic pull failed:", (err as Error).message.slice(0, 100));
+      }
     }, PULL_INTERVAL_MS) as ReturnType<typeof setTimeout>;
 
     console.log(`[CloudSync] Periodic pull every ${PULL_INTERVAL_MS / 60_000} min`);
@@ -1090,6 +1372,9 @@ export class CloudSyncService {
         }
         const body = (await res.json()) as DesktopHeartbeatResponse;
         await this.handlePendingCloudRuns(body);
+        await this.handleSyncIndexReconcile();
+        await this.handleTrackPullOnPublish();
+        await this.handleConvergenceCheck();
       } catch (err) {
         console.warn(
           "[CloudSync] Desktop heartbeat error:",
@@ -1108,7 +1393,7 @@ export class CloudSyncService {
     );
   }
 
-  /** Pull git + Turso when cloud scheduler ran jobs while desktop was asleep. */
+  /** Pull git when cloud scheduler ran jobs while desktop was asleep. Turso via sync-index on heartbeat. */
   private async handlePendingCloudRuns(
     heartbeat: DesktopHeartbeatResponse,
   ): Promise<void> {
@@ -1122,6 +1407,11 @@ export class CloudSyncService {
     );
 
     try {
+      const reconciled = await this.tryAutoReconcileRemoteGit();
+      if (reconciled === "merged") {
+        console.log("[CloudSync] Integrated cloud job runtime metadata after wake");
+        return;
+      }
       await this.pullNow();
     } catch (err) {
       console.warn(
@@ -1129,19 +1419,56 @@ export class CloudSyncService {
         (err as Error).message.slice(0, 120),
       );
     }
+  }
+
+  /** Poll Turso sync-index DB on heartbeat. */
+  private async handleSyncIndexReconcile(): Promise<void> {
+    const { syncTursoFromSyncIndex } = await import("./TursoSyncBridge.js");
 
     try {
-      const { syncTursoAfterCloudRun } = await import("./TursoSyncBridge.js");
-      await syncTursoAfterCloudRun();
+      const summary = await syncTursoFromSyncIndex();
+      if (summary.pulled > 0 || summary.pushed > 0) {
+        console.log(
+          `[CloudSync] Turso sync-index reconcile: pulled=${summary.pulled} pushed=${summary.pushed}`,
+        );
+      }
     } catch (err) {
       console.warn(
-        "[CloudSync] Turso pull after cloud runs failed:",
+        "[CloudSync] Turso sync-index reconcile failed:",
         (err as Error).message.slice(0, 120),
       );
     }
   }
 
-  // ── Push gate + per-item commit ───────────────────────────────────
+  /** Auto-pull track-mode installs when publisher revision changes on apps.papr.ai. */
+  private async handleTrackPullOnPublish(): Promise<void> {
+    try {
+      const { getCloudAppTrackSyncService } = await import(
+        "./CloudAppTrackSyncService.js"
+      );
+      await getCloudAppTrackSyncService().pullTrackAppsOnPublish();
+    } catch (err) {
+      console.warn(
+        "[CloudSync] Track pull-on-publish skipped:",
+        (err as Error).message.slice(0, 120),
+      );
+    }
+  }
+
+  /** Periodic local↔Turso convergence hash check (Phase 4). */
+  private async handleConvergenceCheck(): Promise<void> {
+    try {
+      const { runConvergenceCheckForAllLinkedSources } = await import(
+        "./cloudSync/convergenceChecker.js"
+      );
+      await runConvergenceCheckForAllLinkedSources(this.paprDir);
+    } catch (err) {
+      console.warn(
+        "[CloudSync] Convergence check skipped:",
+        (err as Error).message.slice(0, 120),
+      );
+    }
+  }
 
   /**
    * Never stack local commits — drain to GitHub before creating another commit.
@@ -1163,6 +1490,9 @@ export class CloudSyncService {
         await this.pushMainBranch(timeout);
       } catch (err) {
         const msg = (err as Error).message ?? String(err);
+        if (isNonRetryableCloudPushError(msg)) {
+          throw err;
+        }
         if (attempt >= MAX_PUSH_RETRIES) {
           throw err;
         }
@@ -1411,34 +1741,72 @@ export class CloudSyncService {
     return true;
   }
 
-  private async runPostSyncHooks(): Promise<void> {
-    void import("./tursoPushScheduler.js")
-      .then(({ scheduleTursoPushAllLinked }) => scheduleTursoPushAllLinked())
-      .catch((err: Error) => {
-        console.warn(
-          "[CloudSync] Turso push after git sync failed:",
-          err.message.slice(0, 120),
-        );
-      });
-
+  private async runPostSyncHooks(options?: {
+    skipTursoReschedule?: boolean;
+  }): Promise<void> {
     const syncedAppIds = [...this.lastFinalizedAppIds];
     this.lastFinalizedAppIds = [];
 
+    const { getSyncCoordinator } = await import("./cloudSync/SyncCoordinator.js");
+    const coordinator = getSyncCoordinator();
+    const skipTurso =
+      options?.skipTursoReschedule === true ||
+      (coordinator !== null &&
+        syncedAppIds.length > 0 &&
+        coordinator.shouldSkipTursoRescheduleForApps(syncedAppIds));
+
+    if (!skipTurso) {
+      void import("./tursoPushScheduler.js")
+        .then(({ scheduleTursoPushAllLinked }) =>
+          scheduleTursoPushAllLinked("post_git"),
+        )
+        .catch((err: Error) => {
+          console.warn(
+            "[CloudSync] Turso push after git sync failed:",
+            err.message.slice(0, 120),
+          );
+        });
+    } else if (coordinator) {
+      for (const appId of syncedAppIds) {
+        coordinator.consumeTursoFlushedForApp(appId);
+      }
+      console.log(
+        `[CloudSync] Skipping post-git Turso reschedule (${syncedAppIds.length} app(s) already flushed)`,
+      );
+    }
+
+    const { webReady } = await import("./cloudSync/webReady.js");
+    const webReadyAppIds: string[] = [];
+    for (const appId of syncedAppIds) {
+      const ready = await webReady(appId, this.paprDir);
+      if (ready.ready) {
+        webReadyAppIds.push(appId);
+      } else {
+        console.warn(
+          `[CloudSync] Skipping publish/notify for ${appId}: ${ready.reason ?? "not web-ready"}${ready.detail ? ` — ${ready.detail}` : ""}`,
+        );
+      }
+    }
+
     this.state = { ...this.state, cloudPublishing: true };
     try {
-      await this.tryAutoPublishCloudLinks(syncedAppIds);
+      await this.tryAutoPublishCloudLinks(webReadyAppIds);
     } finally {
       this.state = { ...this.state, cloudPublishing: false };
     }
 
-    void import("./cloudSync/notifySyncedAppRevisions.js")
-      .then(({ notifySyncedAppRevisions }) => notifySyncedAppRevisions(syncedAppIds))
-      .catch((err: Error) => {
-        console.warn(
-          "[CloudSync] App revision notify skipped:",
-          err.message.slice(0, 120),
-        );
-      });
+    if (webReadyAppIds.length > 0) {
+      void import("./cloudSync/notifySyncedAppRevisions.js")
+        .then(({ notifySyncedAppRevisions }) =>
+          notifySyncedAppRevisions(webReadyAppIds),
+        )
+        .catch((err: Error) => {
+          console.warn(
+            "[CloudSync] App revision notify skipped:",
+            err.message.slice(0, 120),
+          );
+        });
+    }
   }
 
   private async hasStagedChanges(): Promise<boolean> {
@@ -1453,6 +1821,13 @@ export class CloudSyncService {
     }
     if (this.tokenCache?.cloneUrl) {
       await this.updateRemoteUrl(this.buildAuthedUrl(this.tokenCache.cloneUrl, token));
+    }
+
+    const preReconcile = await this.tryAutoReconcileRemoteGitInternal();
+    if (preReconcile === "requires_review") {
+      throw new Error(
+        "Remote git has newer commits — review updates before pushing local changes",
+      );
     }
 
     const pushOpts = { timeout: timeoutMs };
@@ -1482,22 +1857,38 @@ export class CloudSyncService {
         return;
       }
 
-      const shouldForce =
+      const rejected =
         msg.includes("rejected") ||
         msg.includes("fetch first") ||
         msg.includes("non-fast-forward");
 
-      if (!shouldForce) {
-        throw err;
+      if (rejected) {
+        const reconciled = await this.tryAutoReconcileRemoteGitInternal();
+        if (reconciled === "merged") {
+          console.log(
+            "[CloudSync] Auto-merged cloud runtime metadata — retrying push",
+          );
+          await this.git(["push", "-u", "origin", "main"], pushOpts);
+          return;
+        }
+
+        console.warn(
+          "[CloudSync] Push rejected — remote ahead; setting updates_available for owner review",
+        );
+        try {
+          await this.refreshGitUpdatesAvailable();
+        } catch (fetchErr) {
+          console.warn(
+            "[CloudSync] fetch after push rejection failed:",
+            (fetchErr as Error).message.slice(0, 120),
+          );
+        }
+        throw new Error(
+          "Remote git has newer commits — review updates before pushing local changes",
+        );
       }
 
-      console.warn(
-        "[CloudSync] Standard push failed — force-with-lease on diverged Papr cloud repo",
-      );
-      await this.git(
-        ["push", "--force-with-lease", "-u", "origin", "main"],
-        pushOpts,
-      );
+      throw err;
     }
   }
 
@@ -1575,6 +1966,33 @@ export class CloudSyncService {
     }
 
     try {
+      const preReconcile = await this.runExclusiveGitOp(async () =>
+        this.tryAutoReconcileRemoteGitInternal(),
+      );
+      if (preReconcile === "requires_review") {
+        const paths = await listIncomingRemoteChangedPaths((args, opts) =>
+          this.git(args, opts),
+        );
+        const summary = await this.git([
+          "log",
+          "--oneline",
+          "-30",
+          "HEAD..origin/main",
+        ]);
+        console.warn(
+          `[CloudSync] Pull blocked — ${formatIncomingRemoteReviewBlockReason(summary, paths)}; awaiting owner review (updates_available)`,
+        );
+        await this.refreshGitUpdatesAvailable();
+        this.state.status = "idle";
+        this.state.lastError = null;
+        this.consecutivePullFailures = 0;
+        this.pullBackoffUntilMs = 0;
+        return;
+      }
+      if (preReconcile === "merged") {
+        console.log("[CloudSync] Pull: pre-merged cloud runtime metadata");
+      }
+
       const output = await this.git(["pull", "--rebase=false", "--ff-only", "origin", "main"]);
       const pullSummary = output.split("\n")[0] ?? "";
       console.log("[CloudSync] Pull:", pullSummary);
@@ -1629,18 +2047,41 @@ export class CloudSyncService {
         normalized.includes("not possible to fast-forward") ||
         normalized.includes("cannot fast-forward");
       if (diverged) {
-        console.warn("[CloudSync] Pull conflict — using local-wins strategy");
-        try {
-          await this.resolveConflictsLocalWins();
+        const reconciled = await this.runExclusiveGitOp(async () =>
+          this.tryAutoReconcileRemoteGitInternal(),
+        );
+        if (reconciled === "merged") {
+          console.log("[CloudSync] Pull: auto-merged cloud runtime metadata");
           this.state.status = "idle";
           this.state.lastSyncAt = new Date().toISOString();
           this.state.lastError = null;
           this.consecutivePullFailures = 0;
           this.pullBackoffUntilMs = 0;
+          try {
+            const { getAppService } = await import("./AppService.js");
+            await getAppService().enforceAppOwnershipIndex();
+          } catch {
+            /* non-fatal */
+          }
           await this.pullTursoLinkedSourcesAfterGitPull();
           return;
+        }
+
+        console.warn(
+          "[CloudSync] Pull blocked — remote has code changes; awaiting owner review (updates_available)",
+        );
+        try {
+          await this.refreshGitUpdatesAvailable();
+          this.state.status = "idle";
+          this.state.lastError = null;
+          this.consecutivePullFailures = 0;
+          this.pullBackoffUntilMs = 0;
+          return;
         } catch (re) {
-          console.error("[CloudSync] Conflict resolution failed:", (re as Error).message.slice(0, 200));
+          console.error(
+            "[CloudSync] Failed to detect remote updates:",
+            (re as Error).message.slice(0, 200),
+          );
         }
       }
 
@@ -1659,43 +2100,137 @@ export class CloudSyncService {
     }
   }
 
-  private async resolveConflictsLocalWins(): Promise<void> {
-    const dirty = (await this.git(["status", "--porcelain"])).trim().length > 0;
-    if (dirty) {
-      await this.git([
-        "stash",
-        "push",
-        "--include-untracked",
-        "-m",
-        "cloud-sync-conflict-resolution",
-      ]);
-    }
-
-    await this.git(["fetch", "origin", "main"]);
-    try {
-      // Preserve both histories. On an actual content conflict, the desktop's
-      // committed version wins while non-conflicting cloud changes are kept.
-      await this.git(["merge", "--no-edit", "-X", "ours", "origin/main"]);
-    } catch (mergeErr) {
-      try { await this.git(["merge", "--abort"]); } catch { /* best effort */ }
-      throw mergeErr;
-    }
-
-    if (dirty) {
-      try {
-        await this.git(["stash", "pop"]);
-      } catch (stashErr) {
-        try {
-          // During stash application, "theirs" is the pre-merge local work.
-          await this.git(["checkout", "--theirs", "."]);
-          await this.git(["stash", "drop"]);
-        } catch {
-          throw stashErr;
-        }
+  /**
+   * Auto-merge cloud runtime metadata (job.json / jobs.json) when remote is ahead.
+   * Code changes on remote still require owner review via applyGitRemoteUpdates().
+   */
+  async tryAutoReconcileRemoteGit(): Promise<GitRemoteReconcileResult> {
+    return this.runExclusiveGitOp(async () => {
+      const token = await this.ensureFreshToken();
+      if (!token) {
+        return "merge_failed";
       }
-    }
+      if (this.tokenCache?.cloneUrl) {
+        await this.updateRemoteUrl(this.buildAuthedUrl(this.tokenCache.cloneUrl, token));
+      }
+      return this.tryAutoReconcileRemoteGitInternal();
+    });
+  }
 
-    console.log("[CloudSync] Diverged histories merged (local wins conflicts)");
+  /** Caller must hold git lock (inside runExclusiveGitOp) or be pushMainBranch. */
+  private async tryAutoReconcileRemoteGitInternal(): Promise<GitRemoteReconcileResult> {
+    try {
+      const classification = await classifyIncomingRemoteChanges((args, opts) =>
+        this.git(args, opts),
+      );
+      if (classification === "not_needed") {
+        return "not_needed";
+      }
+      if (classification === "requires_review") {
+        await this.refreshGitUpdatesAvailable();
+        return "requires_review";
+      }
+
+      console.log(
+        "[CloudSync] Auto-merging cloud runtime metadata (job status writebacks)",
+      );
+      await mergeRemoteMainIntoLocal((args, opts) => this.git(args, opts), {
+        stashMessage: "cloud-sync-auto-reconcile",
+      });
+
+      this.state.gitUpdatesAvailable = false;
+      this.state.gitUpdatesSummary = null;
+      this.state.gitRemoteChangedPaths = null;
+      this.state.lastSyncAt = new Date().toISOString();
+      this.state.lastError = null;
+
+      try {
+        const { getAppService } = await import("./AppService.js");
+        await getAppService().enforceAppOwnershipIndex();
+      } catch {
+        /* non-fatal */
+      }
+
+      await this.pullTursoLinkedSourcesAfterGitPull();
+      console.log("[CloudSync] Auto-merged cloud runtime metadata");
+      return "merged";
+    } catch (err) {
+      console.warn(
+        "[CloudSync] Auto-reconcile failed:",
+        (err as Error).message.slice(0, 120),
+      );
+      try {
+        await this.refreshGitUpdatesAvailable();
+      } catch {
+        /* non-fatal */
+      }
+      return "merge_failed";
+    }
+  }
+
+  /** Owner accepted remote git changes — merge into local (§6). */
+  async applyGitRemoteUpdates(): Promise<void> {
+    return this.runExclusiveGitOp(async () => {
+      const token = await this.ensureFreshToken();
+      if (!token) {
+        throw new Error("No token for git pull");
+      }
+      if (this.tokenCache?.cloneUrl) {
+        await this.updateRemoteUrl(this.buildAuthedUrl(this.tokenCache.cloneUrl, token));
+      }
+
+      await this.git(["fetch", "origin", "main"]);
+      const mergeResult = await mergeRemoteMainIntoLocal((args, opts) => this.git(args, opts), {
+        stashMessage: "cloud-sync-apply-updates",
+      });
+      console.log(
+        `[CloudSync] Merge prep: restored ${mergeResult.restoredMetadataPaths} metadata path(s), ` +
+          `${mergeResult.restoredEphemeralPaths} ephemeral path(s), ` +
+          `stashed ${mergeResult.stashedSourcePaths} source path(s)`,
+      );
+
+      this.state.gitUpdatesAvailable = false;
+      this.state.gitUpdatesSummary = null;
+      this.state.gitRemoteChangedPaths = null;
+      this.state.lastSyncAt = new Date().toISOString();
+      this.state.lastError = null;
+
+      try {
+        const { getAppService } = await import("./AppService.js");
+        await getAppService().enforceAppOwnershipIndex();
+      } catch {
+        /* non-fatal */
+      }
+
+      await this.pullTursoLinkedSourcesAfterGitPull();
+      console.log("[CloudSync] Applied remote git updates");
+    });
+  }
+
+  /** Owner dismissed remote git updates — keep local history; clears updates_available flag. */
+  dismissGitRemoteUpdates(): void {
+    this.state.gitUpdatesAvailable = false;
+    this.state.gitUpdatesSummary = null;
+    this.state.gitRemoteChangedPaths = null;
+  }
+
+  private async refreshGitUpdatesAvailable(): Promise<void> {
+    await this.git(["fetch", "origin", "main"]);
+    const behindRaw = await this.git(["rev-list", "--count", "HEAD..origin/main"]);
+    const behindCount = parseInt(behindRaw.trim(), 10) || 0;
+    if (behindCount === 0) {
+      this.state.gitUpdatesAvailable = false;
+      this.state.gitUpdatesSummary = null;
+      this.state.gitRemoteChangedPaths = null;
+      return;
+    }
+    const paths = await listIncomingRemoteChangedPaths((args, opts) =>
+      this.git(args, opts),
+    );
+    const summary = await this.git(["log", "--oneline", "-30", "HEAD..origin/main"]);
+    this.state.gitUpdatesAvailable = true;
+    this.state.gitUpdatesSummary = summary.trim() || `${behindCount} commit(s) on cloud`;
+    this.state.gitRemoteChangedPaths = paths;
   }
 
   // ── File watcher (small dirs only) ────────────────────────────────
@@ -1787,6 +2322,10 @@ export function initializeCloudSyncService(opts?: {
     void instance.stop();
   }
   instance = new CloudSyncService(opts);
+  void import("./cloudSync/SyncCoordinator.js").then(({ initializeSyncCoordinator }) => {
+    initializeSyncCoordinator(instance!);
+    console.log("[CloudSync] SyncCoordinator ready");
+  });
   return instance;
 }
 
@@ -1800,4 +2339,8 @@ export async function resetCloudSyncServiceForWorkspaceSwitch(): Promise<void> {
   }
   await instance.stop();
   instance = null;
+  const { resetSyncCoordinatorForWorkspaceSwitch } = await import(
+    "./cloudSync/SyncCoordinator.js"
+  );
+  await resetSyncCoordinatorForWorkspaceSwitch();
 }

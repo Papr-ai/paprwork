@@ -27,6 +27,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     defaultHomeAppId: "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c", // Weekly War Room
     cloudSyncEnabled: true,
     cloudAutoPublishEnabled: true,
+    cloudAutoUploadEnabled: true,
     defaultMemoryScope: "user",
   },
   telemetry: {},

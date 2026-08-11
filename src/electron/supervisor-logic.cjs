@@ -30,12 +30,20 @@ function shouldKillProcess(consecutiveFailures, isSuccess, threshold = 3) {
   return { newCount, shouldKill: newCount >= threshold };
 }
 
-/** Parse /health JSON body. Gateway returns { status: "ok" | "starting" | "switching" }. */
+/** Parse /health JSON body. Gateway returns { status: "ok" | "starting" | "switching", syncBusy?: boolean }. */
 function parseHealthResponse(body) {
   try {
     const parsed = JSON.parse(body);
+    const syncBusy = parsed.syncBusy === true;
+    // syncBusy is a grace hint for periodic health (don't SIGKILL during upload).
+    // Once status is "ok", the gateway is ready — do not block startup on syncBusy.
     if (parsed.status === "ok") {
-      return { alive: true, ready: true };
+      return syncBusy
+        ? { alive: true, ready: true, syncBusy: true }
+        : { alive: true, ready: true };
+    }
+    if (syncBusy) {
+      return { alive: true, ready: false, syncBusy: true };
     }
     if (parsed.status === "starting" || parsed.status === "switching") {
       return { alive: true, ready: false };
@@ -59,6 +67,9 @@ function shouldKillUnhealthyGateway(
   if (health.ready) {
     return { newCount: 0, shouldKill: false };
   }
+  if (health.syncBusy) {
+    return { newCount: 0, shouldKill: false };
+  }
   if (health.alive && !health.ready) {
     return { newCount: 0, shouldKill: false };
   }
@@ -67,6 +78,34 @@ function shouldKillUnhealthyGateway(
   }
   const newCount = consecutiveFailures + 1;
   return { newCount, shouldKill: newCount >= threshold };
+}
+
+/** Read gateway sync busy marker written during Upload now / long flush. */
+function parseGatewaySyncBusyState(raw) {
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (
+      typeof parsed?.appId !== "string" ||
+      typeof parsed?.startedAtMs !== "number"
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function isGatewaySyncBusyGraceActive(
+  state,
+  nowMs = Date.now(),
+  maxAgeMs = 15 * 60_000,
+) {
+  if (!state) {
+    return false;
+  }
+  const age = nowMs - state.startedAtMs;
+  return age >= 0 && age < maxAgeMs;
 }
 
 const VALID_STATE_TRANSITIONS = {
@@ -89,6 +128,8 @@ module.exports = {
   shouldKillProcess,
   parseHealthResponse,
   shouldKillUnhealthyGateway,
+  parseGatewaySyncBusyState,
+  isGatewaySyncBusyGraceActive,
   isValidTransition,
   VALID_STATE_TRANSITIONS,
 };

@@ -10,10 +10,14 @@ import {
 } from "../src/gateway/services/tursoSyncBridgeCore.js";
 import {
   countSyncLogSince,
-  LOCAL_LOG_BOOTSTRAP_THRESHOLD,
+  LOG_BATCH_LIMIT,
   maxSyncLogId,
   pruneSyncLogThrough,
 } from "../src/gateway/services/tursoSyncLog.js";
+import {
+  evaluateBulkPullGate,
+  shouldBlockPullWhileLocalDirty,
+} from "../src/gateway/services/tursoPullReconcile.js";
 
 let canUseBetterSqlite = false;
 try {
@@ -75,8 +79,38 @@ describe("turso sync safety", () => {
     },
   );
 
-  it("LOCAL_LOG_BOOTSTRAP_THRESHOLD is above single-batch limit", () => {
-    expect(LOCAL_LOG_BOOTSTRAP_THRESHOLD).toBeGreaterThan(10_000);
+  it("LOG_BATCH_LIMIT fits within practical oplog replay batches", () => {
+    expect(LOG_BATCH_LIMIT).toBe(10_000);
+  });
+
+  it("never allows full pull when local has unpushed changes", () => {
+    expect(
+      evaluateBulkPullGate({
+        force: false,
+        hadLocalUserTables: true,
+        localDirty: true,
+        staleConsumer: false,
+      }).action,
+    ).not.toBe("full_pull");
+
+    expect(
+      evaluateBulkPullGate({
+        force: false,
+        hadLocalUserTables: true,
+        localDirty: true,
+        staleConsumer: true,
+      }),
+    ).toEqual({ action: "skip", reason: "stale_consumer_local_dirty" });
+  });
+
+  it("blocks all pull paths when local dirty (delta, reconcile, full)", () => {
+    expect(
+      shouldBlockPullWhileLocalDirty({
+        force: false,
+        hadLocalUserTables: true,
+        localDirty: true,
+      }),
+    ).toBe(true);
   });
 
   it.skipIf(!canUseBetterSqlite)("backupLocalJobDb restores on failure", () => {

@@ -130,14 +130,18 @@ export function CloudUpstreamBar({
     setSendError(null);
     setSendMessage(null);
     try {
-      await submitCloudAppChange({
+      const result = await submitCloudAppChange({
         sourceNamespaceId: lineage.sourceNamespaceId,
         sourceSlug: lineage.sourceSlug,
         installedAppId: lineage.installedAppId,
         title: title.trim(),
         description: description.trim(),
       });
-      setSendMessage("Change request sent to the owner.");
+      setSendMessage(
+        result.prUrl
+          ? "Proposal sent. The owner can review your changes."
+          : "Proposal sent to the owner.",
+      );
       setDescription("");
       setSendOpen(false);
     } catch (err) {
@@ -211,8 +215,8 @@ export function CloudUpstreamBar({
                     Propose changes to owner
                   </p>
                   <p className="mini-app-publish-bar__send-popover-desc">
-                    Describe what you changed. The owner can review and merge
-                    your edits into the shared app.
+                    Summarize what you changed. The owner can accept your update
+                    into the shared app or decline it.
                   </p>
                   <label
                     className="share-sheet__field-label"

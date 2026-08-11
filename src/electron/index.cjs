@@ -957,6 +957,8 @@ const {
   shouldKillProcess,
   parseHealthResponse,
   shouldKillUnhealthyGateway,
+  parseGatewaySyncBusyState,
+  isGatewaySyncBusyGraceActive,
   isValidTransition,
 } = require("./supervisor-logic.cjs");
 
@@ -990,7 +992,8 @@ class GatewayProcessSupervisor {
     this.CIRCUIT_BREAKER_MAX = 5;
     this.CIRCUIT_BREAKER_WINDOW_MS = 5 * 60 * 1000;
     this.HEALTH_INTERVAL_MS = 10000;
-    this.HEALTH_FAILURE_THRESHOLD = 5;
+    this.HEALTH_FAILURE_THRESHOLD = 8;
+    this.HEALTH_REQUEST_TIMEOUT_MS = 30000;
     this.SILENT_RESTART_THRESHOLD = 2;
     this.BANNER_RESTART_THRESHOLD = 4;
   }
@@ -1493,6 +1496,37 @@ class GatewayProcessSupervisor {
     await this._performRestart();
   }
 
+  _readSyncBusyGraceHealth() {
+    try {
+      const fs = require("fs");
+      const env =
+        typeof this.readActiveWorkspaceEnv === "function"
+          ? this.readActiveWorkspaceEnv()
+          : null;
+      const paprHome = env?.PAPR_HOME;
+      if (!paprHome) {
+        return null;
+      }
+      const busyPath = path.join(
+        paprHome,
+        "data",
+        ".gateway-sync-busy.json",
+      );
+      if (!fs.existsSync(busyPath)) {
+        return null;
+      }
+      const state = parseGatewaySyncBusyState(
+        fs.readFileSync(busyPath, "utf8"),
+      );
+      if (!isGatewaySyncBusyGraceActive(state)) {
+        return null;
+      }
+      return { alive: true, ready: false, syncBusy: true };
+    } catch {
+      return null;
+    }
+  }
+
   _startHealthCheck() {
     this.healthFailures = 0;
     this._stopHealthCheck();
@@ -1505,12 +1539,18 @@ class GatewayProcessSupervisor {
           this._onHealthCheckResult(health);
         });
       });
-      req.on("error", () =>
-        this._onHealthCheckResult({ alive: false, ready: false }),
-      );
-      req.setTimeout(10000, () => {
+      req.on("error", () => {
+        const busyGrace = this._readSyncBusyGraceHealth();
+        this._onHealthCheckResult(
+          busyGrace ?? { alive: false, ready: false },
+        );
+      });
+      req.setTimeout(this.HEALTH_REQUEST_TIMEOUT_MS, () => {
         req.destroy();
-        this._onHealthCheckResult({ alive: false, ready: false });
+        const busyGrace = this._readSyncBusyGraceHealth();
+        this._onHealthCheckResult(
+          busyGrace ?? { alive: false, ready: false },
+        );
       });
     }, this.HEALTH_INTERVAL_MS);
   }
@@ -1546,6 +1586,10 @@ class GatewayProcessSupervisor {
         this.process.kill("SIGKILL");
         // _onProcessExit will handle restart scheduling
       }
+    } else if (health.syncBusy) {
+      console.log(
+        "[Supervisor] Gateway busy uploading (health slow/unreachable — grace active)",
+      );
     } else if (!health.alive && this.hasEverBeenHealthy) {
       console.warn(`[Supervisor] Health check failed (${this.healthFailures}/${this.HEALTH_FAILURE_THRESHOLD})`);
     } else if (health.alive && !health.ready) {

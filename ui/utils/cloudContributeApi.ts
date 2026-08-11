@@ -16,15 +16,24 @@ export interface SubmitCloudAppChangeInput {
   description: string;
 }
 
+export interface SubmitCloudAppChangeResult {
+  id: string;
+  prUrl?: string;
+  prNumber?: number;
+  branch?: string;
+  headSha?: string;
+  status?: string;
+}
+
 export async function submitCloudAppChange(
   input: SubmitCloudAppChangeInput,
-): Promise<{ id?: string }> {
+): Promise<SubmitCloudAppChangeResult> {
   const res = await fetch(`${GATEWAY}/api/cloud/apps/changes`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
-  const body = (await res.json()) as { error?: string; id?: string };
+  const body = (await res.json()) as SubmitCloudAppChangeResult & { error?: string };
   if (!res.ok) {
     throw new Error(body.error ?? `Failed (${res.status})`);
   }

@@ -65,16 +65,6 @@ async function syncAfterCloudRun(jobsService: JobsService): Promise<void> {
   }
 
   await jobsService.reloadJobs();
-
-  try {
-    const { syncTursoAfterCloudRun } = await import("./TursoSyncBridge.js");
-    await syncTursoAfterCloudRun();
-  } catch (err) {
-    console.warn(
-      "[CloudJobRun] Turso pull after cloud run failed:",
-      (err as Error).message.slice(0, 120),
-    );
-  }
 }
 
 export async function runJobInCloud(

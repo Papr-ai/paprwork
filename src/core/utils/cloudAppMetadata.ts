@@ -19,6 +19,8 @@ export interface CloudAppMetadataFile {
   agentChat?: PublicAppAgentChatConfig;
   /** Hidden subagent job for cloud app-agent SSE turns. */
   agentChatJobId?: string;
+  /** Topic tags for Community / Team catalog (published as catalogTags). */
+  tags?: string[];
 }
 
 export const DEFAULT_CLOUD_APP_DESCRIPTION =
@@ -54,6 +56,9 @@ export function parseCloudAppMetadataFile(raw: string): CloudAppMetadataFile | n
       ...(parsed.namespaceId ? { namespaceId: parsed.namespaceId.trim() } : {}),
       ...(parsed.agentChat ? { agentChat: parsed.agentChat } : {}),
       ...(parsed.agentChatJobId ? { agentChatJobId: parsed.agentChatJobId } : {}),
+      ...(Array.isArray(parsed.tags) && parsed.tags.length > 0
+        ? { tags: parsed.tags.map((tag) => String(tag).trim()).filter(Boolean) }
+        : {}),
       updatedAt: parsed.updatedAt ?? new Date().toISOString(),
     };
   } catch {

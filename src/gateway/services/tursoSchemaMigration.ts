@@ -176,7 +176,8 @@ export async function migrateRemoteTableSchemaFromColumns(
     `PRAGMA table_info(${quoteIdent(tableName)})`,
   );
   if (remoteResult.rows.length === 0) {
-    return "unchanged";
+    await onRebuildRequired();
+    return "rebuilt";
   }
 
   const current = remoteResult.rows.map((row) => ({

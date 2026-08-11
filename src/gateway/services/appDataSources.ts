@@ -13,6 +13,15 @@ import Database from "better-sqlite3";
 /** @deprecated Ignored on new links. Parsed only for legacy files. */
 export type AppDataSourceRole = "primary" | "readonly" | "scratch";
 
+/** Who may write rows. Absent = bidirectional (web + desktop). */
+export type WriteAuthority = "bidirectional" | "desktop";
+
+export function isBidirectionalWriteAuthority(
+  writeAuthority?: WriteAuthority,
+): boolean {
+  return writeAuthority !== "desktop";
+}
+
 export interface AppDataSource {
   id: string;
   type: "sqlite";
@@ -26,6 +35,8 @@ export interface AppDataSource {
   linkedAt: string;
   /** @deprecated No longer enforced — all linked sources are read+write for mini-apps. */
   role?: AppDataSourceRole;
+  /** Omit for bidirectional (default) — web forms and desktop sync both write. */
+  writeAuthority?: WriteAuthority;
 }
 
 export interface AppDataSourcesFile {

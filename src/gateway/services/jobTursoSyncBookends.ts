@@ -7,10 +7,11 @@
  */
 
 import type { JobRecord } from "./jobs/types.js";
+import { resolveJobWriteTargets } from "./jobAppDatabase.js";
 import { findLinkedSourceForJob } from "./tursoLinkedSources.js";
 import { getTursoSyncBridge } from "./TursoSyncBridge.js";
-import { scheduleTursoPushForJob } from "./tursoPushScheduler.js";
 import { ensureLocalDbChangeLogReady } from "./tursoSyncBridgeCore.js";
+import { getSyncCoordinator } from "./cloudSync/SyncCoordinator.js";
 
 export function resolveJobTursoSyncKeys(
   job: Pick<JobRecord, "id" | "writeDbIds">,
@@ -28,8 +29,38 @@ export function resolveJobTursoSyncKeys(
   return [...keys];
 }
 
+/** Includes legacy app primary registry dbId when writeDbIds is empty. */
+export async function resolveJobTursoSyncKeysAsync(
+  job: Pick<JobRecord, "id" | "writeDbIds" | "appIds">,
+): Promise<string[]> {
+  const keys = new Set<string>();
+  for (const dbId of job.writeDbIds ?? []) {
+    const trimmed = dbId.trim();
+    if (trimmed) {
+      keys.add(trimmed);
+    }
+  }
+
+  if (keys.size === 0) {
+    try {
+      const targets = await resolveJobWriteTargets(job);
+      for (const target of targets) {
+        keys.add(target.dbId);
+      }
+    } catch {
+      // Registry missing — fall back to job id below.
+    }
+  }
+
+  if (keys.size === 0) {
+    keys.add(job.id);
+  }
+
+  return [...keys];
+}
+
 export async function pullJobTursoBeforeRun(
-  job: Pick<JobRecord, "id" | "writeDbIds" | "name">,
+  job: Pick<JobRecord, "id" | "writeDbIds" | "appIds" | "name">,
   appendLog?: (line: string) => Promise<void>,
 ): Promise<void> {
   const bridge = getTursoSyncBridge();
@@ -37,7 +68,7 @@ export async function pullJobTursoBeforeRun(
     return;
   }
 
-  const syncKeys = resolveJobTursoSyncKeys(job);
+  const syncKeys = await resolveJobTursoSyncKeysAsync(job);
   const sources = await bridge.listLinkedSources();
 
   for (const syncKey of syncKeys) {
@@ -72,17 +103,30 @@ export async function pullJobTursoBeforeRun(
   }
 }
 
-export function scheduleJobTursoPushAfterRun(
-  job: Pick<JobRecord, "id" | "writeDbIds">,
-): void {
-  for (const syncKey of resolveJobTursoSyncKeys(job)) {
-    scheduleTursoPushForJob(syncKey, "completion");
+export async function scheduleJobTursoPushAfterRun(
+  job: Pick<JobRecord, "id" | "writeDbIds" | "appIds">,
+): Promise<void> {
+  const bridge = getTursoSyncBridge();
+  const syncKeys = await resolveJobTursoSyncKeysAsync(job);
+  const coordinator = getSyncCoordinator();
+  const sources = bridge ? await bridge.listLinkedSources(true) : [];
+
+  for (const syncKey of syncKeys) {
+    if (coordinator) {
+      const linked = findLinkedSourceForJob(sources, syncKey);
+      if (linked) {
+        coordinator.markDbDirty(syncKey, linked.dbPath, "completion");
+        continue;
+      }
+    }
+    const { scheduleTursoPushForJob } = await import("./tursoPushScheduler.js");
+    scheduleTursoPushForJob(syncKey, "completion", "completion");
   }
 }
 
 /** Debounced push after job completion — uses writeDbIds sync keys when set. */
 export async function pushJobTursoIfEnabled(
-  job: Pick<JobRecord, "id" | "writeDbIds">,
+  job: Pick<JobRecord, "id" | "writeDbIds" | "appIds">,
 ): Promise<void> {
-  scheduleJobTursoPushAfterRun(job);
+  await scheduleJobTursoPushAfterRun(job);
 }

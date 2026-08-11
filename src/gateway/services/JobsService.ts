@@ -292,7 +292,6 @@ export class JobsService {
   /** Known bundled jobs shipped with Paprwork (Home dashboard). */
   private static readonly BUNDLED_DEFAULT_JOB_IDS = [
     "2cafb2e9-696b-42db-98fa-5d605977123c",
-    "6c840212-9cdc-4b2e-a3ae-951ee2f277a1",
   ] as const;
 
   /**
@@ -789,6 +788,10 @@ export class JobsService {
 
   getJobsRootPath(): string {
     return this.jobsRootDir;
+  }
+
+  hasJob(jobId: string): boolean {
+    return this.jobs.has(jobId);
   }
 
   async getJobPath(jobId: string): Promise<string | null> {

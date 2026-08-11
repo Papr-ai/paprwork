@@ -20,8 +20,15 @@ export type CloudAccessMode =
   | "link_read_write"
   | "public_read";
 
+export type CloudUploadModePref = "auto" | "manual" | "inherit";
+export type CloudEnabledPref = true | false | "inherit";
+
 export interface CloudPublishAppPrefs {
   autoPublish: boolean;
+  /** When false, skip cloud upload for this app. inherit = follow global cloud sync. */
+  cloudEnabled?: CloudEnabledPref;
+  /** auto = push on change; manual = Upload now only; inherit = global cloudAutoUploadEnabled. */
+  uploadMode?: CloudUploadModePref;
   accessMode: CloudAccessMode;
   /** Who can open the app after signing in with Papr. */
   loginAccess?: CloudLoginAccess;

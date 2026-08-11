@@ -14,16 +14,19 @@ import type { JobMigrationSchemaOp } from "../../../core/types/jobMigrations.js"
 import { quoteIdent } from "../tursoSyncBridgeCore.js";
 import {
   ensureSchemaMigrationsTable,
-  localTableHasColumn,
-} from "./databaseMigrations.js";
+  listAppliedMigrationIdsReadOnly,
+} from "../jobs/schemaMigrationsLedger.js";
+import { localTableHasColumn } from "./databaseMigrations.js";
 import {
   listMigrationSqlFiles,
   loadJobMigrationManifest,
   manifestEntryById,
   readMigrationSql,
 } from "./jobMigrationManifest.js";
+import { shouldSkipMigrationForRemoteLedger } from "./migrationLedgerPolicy.js";
 import {
   parseAddColumnStatement,
+  parseCreateIndexStatement,
   splitSqlStatements,
 } from "./migrationSqlHelpers.js";
 
@@ -48,14 +51,7 @@ export interface MigrationLedgerSyncResult {
 }
 
 function listLocalAppliedMigrationIds(localDb: Database.Database): string[] {
-  try {
-    const rows = localDb
-      .prepare("SELECT id FROM schema_migrations ORDER BY id")
-      .all() as Array<{ id: string }>;
-    return rows.map((row) => row.id);
-  } catch {
-    return [];
-  }
+  return listAppliedMigrationIdsReadOnly(localDb);
 }
 
 async function listRemoteAppliedMigrationIds(
@@ -93,7 +89,7 @@ async function remoteTableHasColumn(
   return result.rows.some((row) => String(row.name ?? "") === columnName);
 }
 
-async function remoteTableExists(
+export async function remoteTableExists(
   remote: Client,
   tableName: string,
 ): Promise<boolean> {
@@ -113,6 +109,26 @@ function localTableExists(localDb: Database.Database, tableName: string): boolea
   return row !== undefined;
 }
 
+async function remoteIndexExists(
+  remote: Client,
+  indexName: string,
+): Promise<boolean> {
+  const result = await remote.execute({
+    sql: `SELECT 1 FROM sqlite_master WHERE type='index' AND name = ? LIMIT 1`,
+    args: [indexName],
+  });
+  return result.rows.length > 0;
+}
+
+function localIndexExists(localDb: Database.Database, indexName: string): boolean {
+  const row = localDb
+    .prepare(
+      `SELECT 1 FROM sqlite_master WHERE type='index' AND name = ? LIMIT 1`,
+    )
+    .get(indexName) as { 1: number } | undefined;
+  return row !== undefined;
+}
+
 async function sqlStatementSatisfiedOnRemote(
   remote: Client,
   statement: string,
@@ -123,6 +139,11 @@ async function sqlStatementSatisfiedOnRemote(
       return false;
     }
     return remoteTableHasColumn(remote, addColumn.table, addColumn.column);
+  }
+
+  const createIndex = parseCreateIndexStatement(statement);
+  if (createIndex) {
+    return remoteIndexExists(remote, createIndex.indexName);
   }
 
   const createMatch =
@@ -147,6 +168,11 @@ function sqlStatementSatisfiedOnLocal(
       return false;
     }
     return localTableHasColumn(localDb, addColumn.table, addColumn.column);
+  }
+
+  const createIndex = parseCreateIndexStatement(statement);
+  if (createIndex) {
+    return localIndexExists(localDb, createIndex.indexName);
   }
 
   const createMatch =
@@ -294,7 +320,7 @@ export async function hydrateLocalSchemaMigrationsFromRemote(
     );
     for (const row of result.rows) {
       const id = String(row.id ?? "");
-      if (id.length === 0 || id === "0001_baseline") {
+      if (id.length === 0 || shouldSkipMigrationForRemoteLedger(id)) {
         continue;
       }
       const appliedAt = String(row.applied_at ?? new Date().toISOString());
@@ -323,7 +349,7 @@ export async function reconcileRemoteMigrationLedger(
   const backfilled: string[] = [];
 
   for (const migrationId of migrationIds) {
-    if (migrationId === "0001_baseline.sql") {
+    if (shouldSkipMigrationForRemoteLedger(migrationId)) {
       continue;
     }
     if (remoteApplied.has(migrationId)) {
@@ -358,7 +384,7 @@ export async function reconcileLocalMigrationLedgerFromSchema(
     );
 
     for (const migrationId of migrationIds) {
-      if (migrationId === "0001_baseline.sql") {
+      if (shouldSkipMigrationForRemoteLedger(migrationId)) {
         continue;
       }
       if (applied.has(migrationId)) {

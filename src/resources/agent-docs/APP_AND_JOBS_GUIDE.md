@@ -207,6 +207,7 @@ Publish access and per-user DB isolation are **independent**. A team-visible app
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/api/db/schema?appId=ID` | GET | List linked SQLite tables & columns |
+| `/api/access?appId=ID` | GET | **Caller identity** — `{ mode, isOwner, canRead, canWrite, loggedIn, appId }` for admin UI + query filters |
 | `/api/db/query` | POST | **Read only** — `SELECT` / `WITH ... SELECT` on linked SQLite (INSERT/UPDATE/DELETE → **403**) |
 | `/api/db/write` | POST | **Writes** — `INSERT`, `UPDATE`, `DELETE`, `REPLACE`, `UPSERT` on linked SQLite (`?` + `params` required for values) |
 | `/api/db/exec` | POST | **DDL** — only `CREATE TABLE IF NOT EXISTS ...` (safe schema bootstrap) |
@@ -258,6 +259,7 @@ Build with relative `/api/...` paths — never hardcode `localhost:18789`.
 | `/api/app/backend/:action` | ✅ local subprocess | ✅ Cloud App Host edge subprocess (handlers in `apps/{appId}/backend/`) |
 | `/api/jobs/list`, `/api/jobs/status`, `/api/jobs/run`, `/api/jobs/events` | ✅ | ✅ on `apps.papr.ai` — **including share links** (requires `canRead`) |
 | `/api/bash/run` | ❌ **Disabled for mini-apps** | ❌ **Disabled for mini-apps** |
+| `/api/access` | ✅ always `isOwner: true` | ✅ `isOwner` when publisher signed in |
 | `/api/jobs/create` | ✅ | ❌ **Desktop-only** — create jobs locally; they sync via git |
 | `window.paprAPI` (`chat.open`, `shell`, etc.) | ✅ Electron iframe | ❌ **Desktop-only** — not injected on cloud URLs |
 
@@ -691,6 +693,59 @@ async function loadData() {
 - **`/api/db/write`**: only `INSERT`, `UPDATE`, `DELETE`, `REPLACE`, `UPSERT`; bound parameters required for user-supplied values.
 - **Scoped**: only databases registered via `link_app_data_source` for that specific `appId` are accessible.
 - **No path traversal**: the db path is taken from the stored data-source record, not from the request.
+- **No row-level security**: the gateway runs whatever SQL the app sends. **You** must filter rows (see below).
+
+### Data isolation & owner admin (`GET /api/access`)
+
+**Publish access ≠ data isolation.** `public_read` controls who can open the app — not which rows they see. The platform does not inject `WHERE` clauses.
+
+**Check caller identity at app startup:**
+
+```javascript
+const access = await fetch('/api/access').then(r => r.json());
+// { mode, isOwner, canRead, canWrite, loggedIn, appId }
+```
+
+| Runtime | Typical result |
+|---------|----------------|
+| Desktop Paprwork iframe | `isOwner: true`, `mode: "owner"` |
+| Cloud — publisher signed in | `isOwner: true`, `mode: "owner"` |
+| Cloud — anonymous visitor | `isOwner: false`, `mode: "public_read"` or link modes |
+
+**Pick an isolation pattern when designing schema:**
+
+| Pattern | Use when | Schema | Visitor data | Owner admin |
+|---------|----------|--------|--------------|-------------|
+| **Anonymous / shared funnel** | Public tools, no sign-in (e.g. lead-gen audit) | `owner_session TEXT` — UUID in `localStorage` | `WHERE owner_session = ?` | `access.isOwner` → query all rows; **hide admin tab** when `!isOwner` |
+| **Multi-user (sign-in)** | Per-user private data | `papr_user_id TEXT` or `create_database({ isolation: "per-user" })` | Backend action with server-resolved user id | `access.isOwner` → support / all-rows view |
+
+**Security notes for agents:**
+
+- `owner_session` in `localStorage` is **UX isolation** — not strong security. On `public_read`, a user can run unfiltered `SELECT *` from DevTools. UUID tampering only works if they know another session id (unlikely to guess).
+- For sensitive data: use **`link_read_write` / `team` publish** (sign-in required) and/or **`POST /api/app/backend/:action`** that ignores client-supplied user ids.
+- **Never** show an empty admin panel to visitors — gate UI on `access.isOwner`.
+- Set `owner_session` (and optionally `owner_user_id`) on INSERT in jobs and `/api/db/write` paths.
+
+**Example — anonymous app with owner admin tab:**
+
+```javascript
+const access = await fetch('/api/access').then(r => r.json());
+const sessionId = localStorage.getItem('app_session') ?? crypto.randomUUID();
+
+async function listAudits() {
+  const sql = access.isOwner
+    ? 'SELECT * FROM audits ORDER BY created_at DESC'
+    : 'SELECT * FROM audits WHERE owner_session = ? ORDER BY created_at DESC';
+  const params = access.isOwner ? [] : [sessionId];
+  return fetch('/api/db/query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ appId: APP_ID, sourceId: 'primary', sql, params }),
+  }).then(r => r.json());
+}
+
+if (access.isOwner) renderAdminTab();
+```
 
 ### Full working pattern
 
@@ -2720,6 +2775,30 @@ publish_cloud_app({
 ```
 
 Others discover it in **Community Apps** and install with `install_cloud_app`. Source stays on your private papr-work repo — not exposed in git.
+
+**Contribute-back (fork → owner PR):**
+
+When someone installs your app with `codeAccess=install`, they get a local fork. If they improve it, they propose changes back:
+
+```javascript
+// Contributor (has a fork from install_cloud_app)
+submit_cloud_app_change({
+  sourceNamespaceId: "upstream-namespace-id",
+  sourceSlug: "your-app-slug",
+  installedAppId: "local-fork-app-uuid",
+  title: "Add export button",
+  description: "Adds CSV export to the dashboard",
+})
+// Returns prUrl — a real GitHub PR on the owner's papr-work repo (app + Jobs + migrations)
+```
+
+```javascript
+// Owner (published the upstream app)
+list_cloud_app_changes({ status: "pending" })
+resolve_cloud_app_change({ requestId: "...", action: "approve" })  // merges PR, pulls locally
+```
+
+There is **no local folder merge** on the owner's machine — approve merges the PR on GitHub, then sync pulls. See `docs/SYNC_CONTRACT.md` §6.
 
 If `publish_cloud_app` returns an error (`Cloud Sync is disabled` or `Papr login required`), **recommend enabling Cloud Sync** (Settings → Cloud Sync + Papr sign-in). If the user declines, use the **export fallback** below.
 

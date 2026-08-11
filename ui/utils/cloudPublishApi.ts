@@ -14,6 +14,8 @@ const GATEWAY =
 
 export interface CloudPublishPrefs {
   autoPublish?: boolean;
+  uploadMode?: "auto" | "manual" | "inherit";
+  cloudEnabled?: true | false | "inherit";
   accessMode?: string;
   loginAccess?: CloudLoginAccess;
   externalLink?: CloudExternalLink;

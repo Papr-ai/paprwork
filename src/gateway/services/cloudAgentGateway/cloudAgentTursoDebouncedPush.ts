@@ -13,6 +13,7 @@ import {
 import { notifyCloudDbChangedForTarget } from "./cloudTursoPushHelpers.js";
 
 const DEFAULT_DEBOUNCE_MS = 15_000;
+const DEFAULT_MAX_WAIT_MS = 120_000;
 
 function debounceMs(): number {
   const raw = process.env.CLOUD_AGENT_TURSO_DEBOUNCE_MS;
@@ -21,6 +22,15 @@ function debounceMs(): number {
   }
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_DEBOUNCE_MS;
+}
+
+function maxWaitMs(): number {
+  const raw = process.env.CLOUD_AGENT_TURSO_MAX_WAIT_MS;
+  if (!raw) {
+    return DEFAULT_MAX_WAIT_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_MAX_WAIT_MS;
 }
 
 function normalizePath(filePath: string): string {
@@ -65,6 +75,8 @@ export async function startCloudAgentTursoDebouncedPush(
   }
 
   const pendingTimers = new Map<string, NodeJS.Timeout>();
+  const maxWaitTimers = new Map<string, NodeJS.Timeout>();
+  const firstDirtyAtMs = new Map<string, number>();
   const pushInFlight = new Map<string, Promise<void>>();
   let watcher: FSWatcher | null = null;
   let stopped = false;
@@ -116,9 +128,32 @@ export async function startCloudAgentTursoDebouncedPush(
     }
   }
 
+  function clearMaxWaitTimer(syncKey: string): void {
+    const timer = maxWaitTimers.get(syncKey);
+    if (timer) {
+      clearTimeout(timer);
+      maxWaitTimers.delete(syncKey);
+    }
+  }
+
   function schedulePush(target: TursoBookendTarget): void {
     if (stopped) {
       return;
+    }
+
+    if (!firstDirtyAtMs.has(target.syncKey)) {
+      firstDirtyAtMs.set(target.syncKey, Date.now());
+      const maxWaitTimer = setTimeout(() => {
+        maxWaitTimers.delete(target.syncKey);
+        const debounceTimer = pendingTimers.get(target.syncKey);
+        if (debounceTimer) {
+          clearTimeout(debounceTimer);
+          pendingTimers.delete(target.syncKey);
+        }
+        firstDirtyAtMs.delete(target.syncKey);
+        void executePush(target);
+      }, maxWaitMs());
+      maxWaitTimers.set(target.syncKey, maxWaitTimer);
     }
 
     const existing = pendingTimers.get(target.syncKey);
@@ -128,6 +163,8 @@ export async function startCloudAgentTursoDebouncedPush(
 
     const timer = setTimeout(() => {
       pendingTimers.delete(target.syncKey);
+      clearMaxWaitTimer(target.syncKey);
+      firstDirtyAtMs.delete(target.syncKey);
       void executePush(target);
     }, debounceMs());
 
@@ -162,7 +199,7 @@ export async function startCloudAgentTursoDebouncedPush(
   });
 
   console.log(
-    `[CloudTursoDebouncedPush] Watching ${watchDirs.length} sandbox DB dir(s), debounce=${debounceMs()}ms`,
+    `[CloudTursoDebouncedPush] Watching ${watchDirs.length} sandbox DB dir(s), debounce=${debounceMs()}ms, maxWait=${maxWaitMs()}ms`,
   );
 
   return {
@@ -171,6 +208,11 @@ export async function startCloudAgentTursoDebouncedPush(
         clearTimeout(timer);
       }
       pendingTimers.clear();
+      for (const timer of maxWaitTimers.values()) {
+        clearTimeout(timer);
+      }
+      maxWaitTimers.clear();
+      firstDirtyAtMs.clear();
 
       for (const target of targets) {
         await executePush(target);
@@ -183,6 +225,11 @@ export async function startCloudAgentTursoDebouncedPush(
         clearTimeout(timer);
       }
       pendingTimers.clear();
+      for (const timer of maxWaitTimers.values()) {
+        clearTimeout(timer);
+      }
+      maxWaitTimers.clear();
+      firstDirtyAtMs.clear();
 
       if (watcher) {
         await watcher.close();

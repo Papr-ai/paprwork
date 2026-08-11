@@ -1669,9 +1669,10 @@ print('Write OK')
 **Pass criteria:** ✅ Public app appears in Community tab. Install creates local app + lineage file. Fork badge visible. Owner sees change requests. Agent prefers `publish_cloud_app` with `codeAccess=install`; falls back to export when cloud unavailable.
 
 **Remaining (3F follow-ups):**
-- **Track mode upstream sync** — lineage stored; UI says "automatic sync coming soon"; need pull-on-publish + conflict UI
-- **Git merge on approve** — change request approve currently metadata-only; need diff/merge into publisher repo
+- ~~**Track mode upstream sync**~~ — **Done (2026-08-10):** manual Updates + auto pull-on-publish (`pullTrackAppsOnPublish`, heartbeat + post-publish)
+- ~~**Git merge on approve**~~ — **Done (Phase 3b):** PR on owner papr-work; GitHub App merge + owner `pullNow()`
 - Extend `memory/scripts/cloud/test_cloud_e2e.py` with community/install/change-request paths
+- **Contribute-back E2E green** — `npm run test:contribute-back-e2e` (script exists; needs healthy Keychain + app published to git)
 
 #### Milestone 3C: GKE Agent Sandbox (~5 days)
 
@@ -2028,8 +2029,8 @@ Each milestone has detailed test criteria in §13 above. The gate-check summary:
 | **P0** | Mini-app three-layer runtime | 3E-b | See `docs/MINI_APP_BACKEND_ARCHITECTURE.md` — block bash, allow jobs on share links, edge backend on Cloud App Host |
 | **P0** | Deploy `cloud-app-host.ts` to `apps.papr.ai` | 3E | Code exists; needs Cloud Run + DNS (`scripts/deploy-cloud-app-host.mjs`) |
 | **P0** | Memory server E2E for community/install | 3F | Extend `memory/scripts/cloud/test_cloud_e2e.py` (desktop script exists: `npm run test:cloud-community-install`) |
-| **P1** | Track mode upstream sync | 3F | Lineage + UI done; implement pull-on-publish + optional auto-update for `mode=track` |
-| **P1** | Git merge on change-request approve | 3F | Approve/reject UI works; v1 is metadata-only — need diff/PR into publisher repo |
+| **P1** | ~~Track mode upstream sync~~ | 3F | **Done:** manual Updates + auto pull-on-publish on revision change |
+| **P1** | ~~Git merge on change-request approve~~ | 3F / 3b | **Done:** PR merge via GitHub App; `CloudAppContributeService` + memory routes |
 | **P2** | `appRuntime/DbRouter` | 3E | Local SQLite with Turso fallback when `data.db` missing |
 | **P2** | Settings bulk cloud-link toggle | 3E | Per-app Share sheet works; optional Settings → Apps overview |
 

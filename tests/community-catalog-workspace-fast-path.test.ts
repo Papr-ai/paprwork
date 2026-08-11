@@ -10,6 +10,10 @@ vi.mock("../src/gateway/services/cloudPublishPrefs.js", () => ({
   })),
 }));
 
+vi.mock("../src/gateway/utils/paprUserId.js", () => ({
+  getPaprUserId: vi.fn(() => "user-amir"),
+}));
+
 describe("mergeNamespaceWorkspaceCatalog", () => {
   it("uses workspace rows as primary catalog and adds local-only team apps", () => {
     const localTeam: CommunityCatalogEntry[] = [
@@ -55,5 +59,37 @@ describe("mergeNamespaceWorkspaceCatalog", () => {
     expect(entries.find((entry) => entry.appId === "local-only")?.isOwned).toBe(
       true,
     );
+  });
+
+  it("does not mark teammate team apps as owned when publisherUserId differs", () => {
+    const entries = mergeNamespaceWorkspaceCatalog({
+      workspaceRemote: [
+        {
+          appId: "teammate-app",
+          namespaceId: "ns-1",
+          name: "Teammate App",
+          author: "Shawkat Kabbara",
+          visibility: "team",
+          publisherUserId: "user-shawkat",
+        },
+        {
+          appId: "my-app",
+          namespaceId: "ns-1",
+          name: "My App",
+          author: "Amir Kabbara",
+          visibility: "team",
+          publisherUserId: "user-amir",
+        },
+      ],
+      localTeamEntries: [],
+      paprDir: "/tmp/papr",
+      namespaceId: "ns-1",
+      ownedAppIds: new Set(["teammate-app", "my-app"]),
+    });
+
+    expect(entries.find((entry) => entry.appId === "teammate-app")?.isOwned).toBe(
+      false,
+    );
+    expect(entries.find((entry) => entry.appId === "my-app")?.isOwned).toBe(true);
   });
 });

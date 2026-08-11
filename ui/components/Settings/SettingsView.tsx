@@ -929,42 +929,42 @@ function AboutTab() {
           </div>
         </div>
 
-        {currentVersion === "2.2.7" && (
+        {currentVersion === "2.2.8" && (
           <div className="about-card">
-            <h3>What's New in v2.2.7</h3>
+            <h3>What's New in v2.2.8</h3>
             <ul className="whats-new-list">
               <li className="whats-new-list__item">
-                <strong>Cloud Sync Ready Pipeline</strong>
+                <strong>Sync Architecture V2</strong>
                 <p>
-                  Sync now rebuilds dist and backend bundles, writes per-app
-                  revision markers, and auto-republishes when catalog drift is
-                  detected — one action to update apps.papr.ai.
+                  Unified sync coordinator with per-layer status for Git, Turso,
+                  publish catalog, and edge cache — no more misleading single
+                  &quot;synced&quot; chip.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Community Platform Badges</strong>
+                <strong>Manual Upload Mode</strong>
                 <p>
-                  Community apps show macOS, Windows, and Linux compatibility
-                  badges, plus when desktop is required for full functionality.
+                  Per-app auto vs manual upload — test locally and push to cloud
+                  only when ready with Upload now.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Turso Sync Safety</strong>
+                <strong>Turso Oplog Sync</strong>
                 <p>
-                  Hardened delta sync, migration Turso sync, and safer push/pull
-                  boundaries for linked job databases.
+                  Event-driven delta push/pull with sync sessions, max-wait
+                  debounce, and safer bidirectional row sync.
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Publish & Sharing Fixes</strong>
+                <strong>Contribute-Back & Web Sync UI</strong>
                 <p>
-                  Backend manifest vault keys auto-sync before git push; improved
-                  cloud sharing ACL and publish bar status.
+                  Improved fork/track PR workflow, richer Web Sync popover, and
+                  flush-to-web-ready pipeline for published apps.
                 </p>
               </li>
             </ul>
             <a
-              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.2.7"
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.2.8"
               target="_blank"
               rel="noopener noreferrer"
               className="about-link whats-new-list__link"

@@ -9,6 +9,7 @@ import {
 } from "../src/core/utils/paprAuth0Pkce.js";
 import {
   buildSessionCookie,
+  readCloudAppSessionFromCookie,
   readSessionTokenFromCookie,
   buildShareTokenCookie,
   readShareTokenFromCookie,
@@ -71,11 +72,13 @@ describe("cloudAppHostCookies", () => {
   });
 
   it("round-trips session cookie at site root", () => {
-    const cookie = buildSessionCookie("sess_secret", false);
+    const cookie = buildSessionCookie("sess_secret", false, "visitor-abc");
     expect(cookie).toContain("Path=/");
-    const header = cookie.split(";")[0];
-    const stored = readSessionTokenFromCookie(header.replace("papr_session=", "papr_session="));
-    expect(stored).toBe("sess_secret");
+    const cookiePair = cookie.split(";")[0];
+    const stored = readCloudAppSessionFromCookie(cookiePair);
+    expect(stored?.sessionToken).toBe("sess_secret");
+    expect(stored?.externalUserId).toBe("visitor-abc");
+    expect(readSessionTokenFromCookie(cookiePair)).toBe("sess_secret");
   });
 
   it("clears legacy session cookies at / and /auth", () => {

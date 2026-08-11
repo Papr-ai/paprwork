@@ -117,14 +117,17 @@ export function useAppCloudSyncStatus(
 ): {
   status: AppCloudSyncStatus | null;
   gitSyncEnabled: boolean | null;
+  globalAutoUploadEnabled: boolean;
   loading: boolean;
   refreshing: boolean;
   pushing: boolean;
   pulling: boolean;
+  applyingUpdates: boolean;
   error: string | null;
   refresh: (force?: boolean) => Promise<void>;
   pushNow: () => Promise<void>;
   pullUpdates: () => Promise<void>;
+  applyRemoteUpdates: () => Promise<void>;
 } {
   const active = options?.enabled !== false;
   const initialItems = readInitialSyncItems();
@@ -139,6 +142,8 @@ export function useAppCloudSyncStatus(
   const [syncItems, setSyncItems] = useState<SyncItemsResponse | null>(
     initialItems,
   );
+  const globalAutoUploadEnabled =
+    syncItems?.appContext?.globalAutoUploadEnabled ?? true;
   const [gitSyncEnabled, setGitSyncEnabled] = useState<boolean | null>(() => {
     const git = readCloudSyncTabSnapshot()?.gitStatus as GitSyncStatus | null;
     return git?.enabled ?? null;
@@ -154,6 +159,7 @@ export function useAppCloudSyncStatus(
   const [refreshing, setRefreshing] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [pulling, setPulling] = useState(false);
+  const [applyingUpdates, setApplyingUpdates] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const hasLoadedOnceRef = useRef(initialStatus !== null);
   const refreshInFlightRef = useRef(false);
@@ -226,6 +232,10 @@ export function useAppCloudSyncStatus(
   );
 
   const pushNow = useCallback(async () => {
+    if (status?.gitRemoteRequiresReview) {
+      setError("Merge remote changes first, then upload.");
+      return;
+    }
     setPushing(true);
     setError(null);
     try {
@@ -234,6 +244,30 @@ export function useAppCloudSyncStatus(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ appId }),
       });
+      if (res.status === 202) {
+        const deadline = Date.now() + 15 * 60_000;
+        while (Date.now() < deadline) {
+          await sleep(2_000);
+          const itemsRes = await fetch(
+            `${GATEWAY}/api/sync/items?refresh=1&appId=${encodeURIComponent(appId)}`,
+          );
+          if (!itemsRes.ok) {
+            continue;
+          }
+          const items = (await itemsRes.json()) as SyncItemsResponse;
+          if (items.uploadError?.message && !items.uploadError.retryPending) {
+            throw new Error(items.uploadError.message);
+          }
+          if (items.upload?.status === "failed" && !items.upload.retryPending) {
+            throw new Error(items.upload.detail ?? items.upload.label);
+          }
+          if (items.upload?.status === "idle") {
+            break;
+          }
+        }
+        await refresh(true);
+        return;
+      }
       if (!res.ok) {
         const body = (await res.json()) as { error?: string };
         throw new Error(body.error ?? `Upload failed (${res.status})`);
@@ -244,9 +278,13 @@ export function useAppCloudSyncStatus(
     } finally {
       setPushing(false);
     }
-  }, [refresh, appId]);
+  }, [refresh, appId, status?.gitRemoteRequiresReview]);
 
   const pullUpdates = useCallback(async () => {
+    if (status?.gitRemoteRequiresReview) {
+      setError("Use Merge remote changes — Get updates cannot merge diverged git history.");
+      return;
+    }
     setPulling(true);
     setError(null);
     try {
@@ -264,6 +302,27 @@ export function useAppCloudSyncStatus(
     } finally {
       setPulling(false);
     }
+  }, [refresh, status?.gitRemoteRequiresReview]);
+
+  const applyRemoteUpdates = useCallback(async () => {
+    setApplyingUpdates(true);
+    setError(null);
+    try {
+      const res = await fetch(`${GATEWAY}/api/sync/apply-updates`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const body = (await res.json()) as { error?: string };
+        throw new Error(body.error ?? `Merge failed (${res.status})`);
+      }
+      await refresh(true);
+    } catch (err) {
+      const message = (err as Error).message.slice(0, 160);
+      setError(message);
+    } finally {
+      setApplyingUpdates(false);
+    }
   }, [refresh]);
 
   useEffect(() => {
@@ -274,6 +333,7 @@ export function useAppCloudSyncStatus(
 
     setPushing(false);
     setPulling(false);
+    setApplyingUpdates(false);
     setError(null);
 
     void refresh(false);
@@ -284,6 +344,7 @@ export function useAppCloudSyncStatus(
     const intervalMs =
       pushing ||
       pulling ||
+      applyingUpdates ||
       status?.overall === "uploading" ||
       status?.globallySyncing ||
       status?.cloudPublishing
@@ -293,18 +354,21 @@ export function useAppCloudSyncStatus(
       void refresh();
     }, intervalMs);
     return () => clearInterval(timer);
-  }, [active, refresh, pushing, pulling, status?.overall, status?.globallySyncing, status?.cloudPublishing]);
+  }, [active, refresh, pushing, pulling, applyingUpdates, status?.overall, status?.globallySyncing, status?.cloudPublishing]);
 
   return {
     status,
     gitSyncEnabled,
+    globalAutoUploadEnabled,
     loading,
     refreshing,
     pushing,
     pulling,
+    applyingUpdates,
     error,
     refresh,
     pushNow,
     pullUpdates,
+    applyRemoteUpdates,
   };
 }

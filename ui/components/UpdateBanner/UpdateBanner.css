@@ -7,14 +7,14 @@
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
-  background: rgba(255, 255, 255, 0.88);
+  background: color-mix(in srgb, var(--popover-bg) 92%, transparent);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  border: 1px solid var(--border-color);
   border-radius: 12px;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08), 0 1px 4px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--popover-shadow);
   font-size: 13px;
-  color: var(--text-primary, #1D1D1F);
+  color: var(--text-primary);
   animation: update-banner-slide-in 0.3s ease-out;
   max-width: 380px;
 }
@@ -47,16 +47,18 @@
   flex-basis: 100%;
   font-size: 11px;
   line-height: 1.4;
-  color: var(--text-secondary, #636366);
+  color: var(--text-secondary);
   white-space: normal;
 }
 
 .update-banner__icon {
   font-size: 14px;
   flex-shrink: 0;
+  color: var(--text-primary);
 }
 
 .update-banner__text {
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -69,7 +71,7 @@
 .update-banner__progress {
   width: 60px;
   height: 4px;
-  background: rgba(0, 0, 0, 0.06);
+  background: var(--hover-bg);
   border-radius: 2px;
   overflow: hidden;
   flex-shrink: 0;
@@ -107,7 +109,7 @@
 .update-banner__dismiss {
   background: none;
   border: none;
-  color: var(--text-tertiary, #8E8E93);
+  color: var(--text-tertiary);
   font-size: 16px;
   cursor: pointer;
   padding: 0 2px;
@@ -117,5 +119,5 @@
 }
 
 .update-banner__dismiss:hover {
-  color: var(--text-primary, #1D1D1F);
+  color: var(--text-primary);
 }

@@ -44,6 +44,17 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
   }
 }
 
+const JWT_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
+
+/** Returns true when JWT exp claim is missing or past (with buffer). */
+export function isJwtExpired(token: string): boolean {
+  const payload = decodeJwtPayload(normalizeChatGptOAuthToken(token));
+  if (!payload) return true;
+  const exp = payload.exp;
+  if (typeof exp !== "number") return false;
+  return Date.now() >= exp * 1000 - JWT_EXPIRY_BUFFER_MS;
+}
+
 /** ChatGPT OAuth tokens must carry chatgpt_account_id for pi-ai Codex routes. */
 export function normalizeChatGptOAuthToken(token: string): string {
   const trimmed = token.trim();
@@ -80,6 +91,12 @@ export function resolveOpenAIKeyAuthType(
   const normalized = normalizeChatGptOAuthToken(trimmed);
   const accountId = extractChatGptAccountIdFromToken(normalized);
   if (accountId) {
+    if (isJwtExpired(normalized)) {
+      console.warn(
+        "[ResolveJobProviderModel] OpenAI OAuth token expired — skipping",
+      );
+      return null;
+    }
     return "oauth";
   }
 
@@ -232,10 +249,9 @@ export function resolveDefaultProviderFromVaultEnv(): {
     };
   }
 
-  console.warn(
-    "[ResolveJobProviderModel] No LLM keys in vault env — defaulting to openai/gpt-5-6-sol",
+  throw new Error(
+    "No usable LLM credentials in vault env for cloud agent run (check OpenAI/Anthropic/Google keys)",
   );
-  return { provider: "openai", model: DEFAULT_MODEL_BY_PROVIDER.openai };
 }
 
 function normalizeModelForProvider(provider: Provider, model: string): string {
@@ -310,4 +326,31 @@ export async function resolveCloudAgentJobSession(input: {
   );
 
   return credentials;
+}
+
+/**
+ * Cloud gateway: resolve provider/model using memory-server authOverride token.
+ * Vault env is used only for provider/model defaults — never overwrites the token.
+ */
+export async function resolveCloudAgentJobSessionFromAuthOverride(input: {
+  provider?: Provider;
+  model?: string;
+  token: string;
+  authType: "oauth" | "apiKey";
+}): Promise<CloudAgentCredentials> {
+  const resolved = await resolveJobProviderModel({
+    provider: input.provider,
+    model: input.model,
+  });
+
+  console.log(
+    `[ResolveJobProviderModel] Cloud session (authOverride): ${resolved.provider}/${resolved.model} authType=${input.authType}`,
+  );
+
+  return {
+    provider: resolved.provider,
+    model: resolved.model,
+    token: input.token,
+    authType: input.authType,
+  };
 }

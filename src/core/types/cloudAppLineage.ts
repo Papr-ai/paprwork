@@ -20,6 +20,10 @@ export interface CloudAppLineageFile {
   installedAt: string;
   /** ISO timestamp of last successful upstream sync (track mode). */
   lastSyncedAt?: string;
+  /** Live revision from apps.papr.ai at last sync (track mode). */
+  upstreamRevision?: string;
+  /** Auto-pull when publisher ships a new revision (default true). */
+  trackAutoPull?: boolean;
   /** relative path → sha256 of last synced upstream content */
   syncSnapshot?: Record<string, string>;
 }

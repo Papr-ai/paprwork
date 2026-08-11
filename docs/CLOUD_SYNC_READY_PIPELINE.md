@@ -1,6 +1,11 @@
 # Cloud sync → web ready pipeline
 
+> Sync guarantees and writer authority: [`SYNC_CONTRACT.md`](./SYNC_CONTRACT.md).
+> Implementation phases: [`SYNC_ARCHITECTURE_V2.md`](./SYNC_ARCHITECTURE_V2.md).
+
 Published mini-apps on `apps.papr.ai` depend on three layers staying aligned. Users and agents should only need **Sync now** plus a normal browser refresh — not manual republish, cache tricks, or knowledge of internal artifacts.
+
+**Upload mode:** Apps in **manual** mode (`uploadMode: manual` or global auto-upload off) do not push to git/Turso until **Upload now** — see [`SYNC_CONTRACT.md` §2](./SYNC_CONTRACT.md#upload-mode-auto-vs-manual). Local-only apps (`cloudEnabled: false`) skip cloud layers entirely.
 
 ## Mental model
 

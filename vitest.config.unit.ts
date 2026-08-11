@@ -12,6 +12,7 @@ export default defineConfig({
       "**/dist/**",
       "**/*.d.ts",
       "**/ui/**",
+      "tests/manual/**",
       // Legacy script/manual/live tests (not deterministic vitest suites)
       "tests/agent-performance-scaling.test.ts",
       "tests/bash-tool.test.ts",

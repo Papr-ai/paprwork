@@ -12,7 +12,8 @@ import {
   parseCloudAppLineageFile,
   serializeCloudAppLineageFile,
 } from "../../core/utils/cloudAppLineage.js";
-import { fileContentHash } from "./CloudAppChangeMergeService.js";
+import { fileContentHash } from "../utils/fileContentHash.js";
+import { ephemeralGitEnv } from "../utils/ephemeralGitEnv.js";
 import {
   CLOUD_LINEAGE_FILENAME,
   getCloudAppLineageService,
@@ -22,6 +23,8 @@ import {
   type CloudAppInstallInput,
 } from "./CloudAppInstallService.js";
 import { getAppService } from "./AppService.js";
+import { decideTrackPullAction } from "./cloudSync/trackPullOnPublishLogic.js";
+import { fetchPublishedAppRevision } from "./cloudSync/trackUpstreamRevision.js";
 
 function authCloneUrl(cloneUrl: string, token: string): string {
   const normalized = cloneUrl.replace(/^https:\/\//, "");
@@ -34,6 +37,17 @@ export interface TrackSyncResult {
   conflictFiles: string[];
   skippedFiles: string[];
   lastSyncedAt: string;
+  upstreamRevision?: string | null;
+}
+
+export interface TrackPullOnPublishResult {
+  appId: string;
+  action: "synced" | "skipped" | "error";
+  upstreamRevision?: string | null;
+  liveRevision?: string | null;
+  updatedFiles?: string[];
+  conflictFiles?: string[];
+  error?: string;
 }
 
 function hashContent(content: string): string {
@@ -113,7 +127,7 @@ export class CloudAppTrackSyncService {
 
     try {
       const cloneUrl = authCloneUrl(prepare.cloneUrl, prepare.token);
-      const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+      const env = ephemeralGitEnv();
 
       await runGit(
         ["clone", "--filter=blob:none", "--sparse", cloneUrl, repoDir],
@@ -172,16 +186,23 @@ export class CloudAppTrackSyncService {
       }
 
       const lastSyncedAt = new Date().toISOString();
+      const upstreamRevision = await fetchPublishedAppRevision(
+        lineage.source.namespaceId,
+        lineage.source.slug,
+      );
       await writeLineageFile(appId, this.appsDir, {
         ...lineage,
         schemaVersion: "1.1.0",
         lastSyncedAt,
         syncSnapshot: nextSnapshot,
+        ...(upstreamRevision ? { upstreamRevision } : {}),
       });
 
       try {
-        const { installCloudAppLinkedResources, finalizePortableCloudAppResources } =
-          await import("./cloudAppLinkedResourcesInstall.js");
+        const {
+          installCloudAppLinkedResources,
+          finalizePortableCloudAppResources,
+        } = await import("./cloudAppLinkedResourcesInstall.js");
         const linked = await installCloudAppLinkedResources({
           repoDir,
           repoAppDir: upstreamDir,
@@ -195,11 +216,24 @@ export class CloudAppTrackSyncService {
           );
         }
         await finalizePortableCloudAppResources();
-        const { syncTursoAfterGitPull } = await import("./TursoSyncBridge.js");
-        await syncTursoAfterGitPull();
+        const { bootstrapInstalledAppDatabases } = await import(
+          "./cloudAppInstallBootstrap.js"
+        );
+        const bootstrap = await bootstrapInstalledAppDatabases(appId);
+        if (bootstrap.errors.length > 0) {
+          console.warn(
+            `[CloudTrackSync] Database bootstrap errors for ${appId}:`,
+            bootstrap.errors.slice(0, 2).join("; "),
+          );
+        } else if (bootstrap.warnings.length > 0) {
+          console.warn(
+            `[CloudTrackSync] Database bootstrap warnings for ${appId}:`,
+            bootstrap.warnings.slice(0, 2).join(" | "),
+          );
+        }
       } catch (linkedErr) {
         console.warn(
-          `[CloudTrackSync] Linked job sync skipped for ${appId}:`,
+          `[CloudTrackSync] Linked resource sync failed for ${appId}:`,
           (linkedErr as Error).message.slice(0, 160),
         );
       }
@@ -210,10 +244,80 @@ export class CloudAppTrackSyncService {
         conflictFiles,
         skippedFiles,
         lastSyncedAt,
+        upstreamRevision,
       };
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
     }
+  }
+
+  /**
+   * Poll published revisions and auto-pull track installs when the owner ships.
+   */
+  async pullTrackAppsOnPublish(): Promise<TrackPullOnPublishResult[]> {
+    const index = await getCloudAppLineageService(this.appsDir).buildIndex();
+    const results: TrackPullOnPublishResult[] = [];
+
+    for (const [appId, entry] of Object.entries(index.byAppId)) {
+      if (entry.mode !== "track") {
+        continue;
+      }
+
+      const lineage = await readLineageFile(appId, this.appsDir);
+      if (!lineage) {
+        continue;
+      }
+
+      const liveRevision = await fetchPublishedAppRevision(
+        lineage.source.namespaceId,
+        lineage.source.slug,
+      );
+
+      const decision = decideTrackPullAction({
+        mode: entry.mode,
+        lineage,
+        liveRevision,
+      });
+
+      if (decision.action === "skip") {
+        results.push({
+          appId,
+          action: "skipped",
+          upstreamRevision: lineage.upstreamRevision ?? null,
+          liveRevision,
+        });
+        continue;
+      }
+
+      try {
+        const syncResult = await this.syncTrackApp(appId);
+        results.push({
+          appId,
+          action: "synced",
+          upstreamRevision: syncResult.upstreamRevision ?? liveRevision,
+          liveRevision,
+          updatedFiles: syncResult.updatedFiles,
+          conflictFiles: syncResult.conflictFiles,
+        });
+        if (syncResult.updatedFiles.length > 0 && liveRevision) {
+          console.log(
+            `[CloudTrackSync] Auto-pulled ${appId} after publisher revision ${liveRevision.slice(0, 12)}`,
+          );
+        }
+      } catch (err) {
+        const message = (err as Error).message.slice(0, 160);
+        results.push({
+          appId,
+          action: "error",
+          upstreamRevision: lineage.upstreamRevision ?? null,
+          liveRevision,
+          error: message,
+        });
+        console.warn(`[CloudTrackSync] Auto-pull failed for ${appId}:`, message);
+      }
+    }
+
+    return results;
   }
 
   async syncAllTrackApps(): Promise<TrackSyncResult[]> {

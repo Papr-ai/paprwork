@@ -14,6 +14,11 @@ export function isTeamSharedVisibility(visibility: string | undefined): boolean 
   return visibility === "team" || visibility.startsWith("team_");
 }
 
+/** Unlisted invite-link modes — never in Community Apps catalog. */
+export function isLinkOnlyVisibility(visibility: string | undefined): boolean {
+  return visibility === "link_read" || visibility === "link_read_write";
+}
+
 /** Only `public_read` apps belong in the global Community catalog. */
 export function isPublicCommunityVisibility(visibility: string | undefined): boolean {
   return visibility === "public_read";
@@ -46,12 +51,14 @@ export interface CommunityCatalogEntry {
   codeInstallable: boolean;
   /** Has a live web app URL */
   liveViewable: boolean;
-  /** Local user already owns the publisher app ID */
+  /** Current user published this app (not merely installed a teammate copy) */
   isOwned?: boolean;
   /** Number of local fork/track copies installed from this catalog entry */
   installedForkCount?: number;
   /** Cloud publish visibility (team, public_read, …) when known */
   visibility?: string;
+  /** External invite link enabled (unlisted — not Community Apps listed) */
+  shareLinkEnabled?: boolean;
   /** Publisher Papr user id — used to hide own apps from Shared with me */
   publisherUserId?: string;
 }

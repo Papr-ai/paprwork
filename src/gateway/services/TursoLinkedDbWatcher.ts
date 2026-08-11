@@ -16,10 +16,17 @@ import {
   ensureLocalDbChangeLogReady,
   isSqliteBusyError,
   isTursoLocalDatabaseCorruptError,
+  localDbHasSyncableUserTables,
 } from "./tursoSyncBridgeCore.js";
-import { scheduleTursoPushForJob } from "./tursoPushScheduler.js";
 import { publishDbChanged } from "../utils/publishJobRunEvents.js";
-import { recordTursoPushQuarantine } from "./tursoSyncState.js";
+import {
+  clearStaleDirtyFlagIfClean,
+  hasUnpushedLocalDbChanges,
+  isJobDbQuarantined,
+  loadTursoSyncState,
+  recordTursoPushQuarantine,
+} from "./tursoSyncState.js";
+import { getSyncCoordinator } from "./cloudSync/SyncCoordinator.js";
 
 let watcher: FSWatcher | null = null;
 
@@ -99,7 +106,28 @@ function handleDbChange(changedPath: string): void {
     return;
   }
 
-  scheduleTursoPushForJob(watched.syncKey);
+  const syncState = loadTursoSyncState();
+  if (isJobDbQuarantined(watched.syncKey, syncState)) {
+    return;
+  }
+
+  if (!localDbHasSyncableUserTables(watched.dbPath)) {
+    return;
+  }
+
+  if (!hasUnpushedLocalDbChanges(watched.syncKey, watched.dbPath, syncState)) {
+    clearStaleDirtyFlagIfClean(watched.syncKey, watched.dbPath);
+    return;
+  }
+
+  const coordinator = getSyncCoordinator();
+  if (coordinator) {
+    coordinator.markDbDirty(watched.syncKey, watched.dbPath, "watcher");
+  } else {
+    void import("./tursoPushScheduler.js").then(({ scheduleTursoPushForJob }) => {
+      scheduleTursoPushForJob(watched.syncKey, "normal", "watcher");
+    });
+  }
   publishDbChanged({
     ...(watched.jobId ? { jobId: watched.jobId } : {}),
     ...(watched.dbId ? { dbId: watched.dbId } : {}),

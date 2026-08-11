@@ -147,6 +147,10 @@ export function PaprPlanSection() {
     }
   };
 
+  const canEnableMeteredBilling =
+    summary?.subscriptionStatus === "active" ||
+    summary?.subscriptionStatus === "trialing";
+
   const handleMeteredToggle = async () => {
     if (!summary) return;
     setMeteredSaving(true);
@@ -393,12 +397,22 @@ export function PaprPlanSection() {
                       type="button"
                       className={`papr-plan__toggle-btn ${summary.isMeteredBillingOn ? "papr-plan__toggle-btn--on" : ""}`}
                       onClick={() => void handleMeteredToggle()}
-                      disabled={meteredSaving || !summary.subscriptionObjectId}
+                      disabled={
+                        meteredSaving ||
+                        !summary.subscriptionObjectId ||
+                        (!summary.isMeteredBillingOn && !canEnableMeteredBilling)
+                      }
                       aria-pressed={summary.isMeteredBillingOn}
                     >
                       <span className="papr-plan__toggle-knob" />
                     </button>
                   </div>
+
+                  {!canEnableMeteredBilling && !summary.isMeteredBillingOn && (
+                    <p className="papr-plan__hint">
+                      Subscribe to a paid plan before enabling metered billing.
+                    </p>
+                  )}
 
                   {!summary.stripeCustomerId && (
                     <p className="papr-plan__hint">

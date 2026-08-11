@@ -42,6 +42,12 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
     return `http://${host}:${port}/apps/${appId}/index.html`;
   }, [appId]);
 
+  const gatewayBaseUrl = useMemo(() => {
+    const host = import.meta.env.VITE_GATEWAY_HOST || "localhost";
+    const port = import.meta.env.VITE_GATEWAY_PORT || "18789";
+    return `http://${host}:${port}`;
+  }, []);
+
   const isTrackCollaborator =
     cloudLineage?.mode === "track" &&
     Boolean(cloudLineage.sourceNamespaceId && cloudLineage.sourceSlug);
@@ -58,6 +64,18 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
     viewMode === "published" &&
     ((isTrackCollaborator && !!upstreamPreviewUrl) ||
       (cloud.live && !!cloud.publishedPreviewUrl));
+
+  // Debounced cloud→local Turso pull when opening local preview (scoped to this app).
+  useEffect(() => {
+    if (isPublishedPreview || viewMode !== "local" || !appId) {
+      return;
+    }
+    void fetch(`${gatewayBaseUrl}/api/apps/${appId}/sync-from-cloud`, {
+      method: "POST",
+    }).catch(() => {
+      // Non-blocking — stale data until next sync trigger
+    });
+  }, [appId, gatewayBaseUrl, isPublishedPreview, viewMode]);
 
   const iframeSrc = useMemo(() => {
     if (isPublishedPreview) {

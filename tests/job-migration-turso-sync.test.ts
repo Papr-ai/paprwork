@@ -29,6 +29,13 @@ function createMockRemote(initialColumns: Record<string, string[]>): Client {
       if (sql.includes("CREATE TABLE IF NOT EXISTS _papr_schema_migrations")) {
         return { rows: [], columns: [], rowsAffected: 0 };
       }
+      if (sql.includes("FROM sqlite_master") && sql.includes("type='table'")) {
+        return {
+          rows: [...columnsByTable.keys()].map((name) => ({ name })),
+          columns: ["name"],
+          rowsAffected: 0,
+        };
+      }
       if (sql.startsWith("SELECT id FROM _papr_schema_migrations")) {
         return {
           rows: [...appliedMigrations].map((id) => ({ id })),
@@ -53,6 +60,18 @@ function createMockRemote(initialColumns: Record<string, string[]>): Client {
           rowsAffected: 0,
         };
       }
+      const createTableMatch =
+        /^CREATE TABLE IF NOT EXISTS "([^"]+)" \((.+)\)$/i.exec(sql.trim());
+      if (createTableMatch) {
+        const table = createTableMatch[1]!;
+        if (!columnsByTable.has(table)) {
+          columnsByTable.set(table, new Set(["id"]));
+        }
+        return { rows: [], columns: [], rowsAffected: 0 };
+      }
+      if (/^CREATE INDEX IF NOT EXISTS/i.test(sql.trim())) {
+        return { rows: [], columns: [], rowsAffected: 0 };
+      }
       const addMatch =
         /^ALTER TABLE "([^"]+)" ADD COLUMN "([^"]+)" (.+)$/i.exec(sql.trim());
       if (addMatch) {
@@ -75,36 +94,73 @@ describe("jobMigrationTursoSync", () => {
   it.skipIf(!canUseBetterSqlite)(
     "skips ADD COLUMN on Turso when column already exists (drift sync)",
     async () => {
-    const base = fs.mkdtempSync(path.join(os.tmpdir(), "papr-mig-turso-"));
-    const migrationRoot = path.join(base, "registry");
-    const migrationsDir = path.join(migrationRoot, "migrations");
-    const dbPath = path.join(migrationRoot, "data.db");
-    fs.mkdirSync(migrationsDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(migrationsDir, "0002_add_contact_fields.sql"),
-      "ALTER TABLE audits ADD COLUMN contact_name TEXT;\nALTER TABLE audits ADD COLUMN contact_email TEXT;",
-    );
+      const base = fs.mkdtempSync(path.join(os.tmpdir(), "papr-mig-turso-"));
+      const migrationRoot = path.join(base, "registry");
+      const migrationsDir = path.join(migrationRoot, "migrations");
+      const dbPath = path.join(migrationRoot, "data.db");
+      fs.mkdirSync(migrationsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(migrationsDir, "0002_add_contact_fields.sql"),
+        "ALTER TABLE audits ADD COLUMN contact_name TEXT;\nALTER TABLE audits ADD COLUMN contact_email TEXT;",
+      );
 
-    const localDb = new Database(dbPath);
-    localDb.exec(`
+      const localDb = new Database(dbPath);
+      localDb.exec(`
       CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL);
       INSERT INTO schema_migrations (id, applied_at) VALUES ('0001_baseline', datetime('now'));
       CREATE TABLE audits (id TEXT PRIMARY KEY, company_name TEXT NOT NULL);
     `);
-    localDb.close();
+      localDb.close();
 
-    const remote = createMockRemote({
-      audits: ["id", "company_name", "contact_name", "contact_email"],
-    });
+      const remote = createMockRemote({
+        audits: ["id", "company_name", "contact_name", "contact_email"],
+      });
 
-    const applied = await applyPendingDatabaseMigrationsToTurso(
-      remote,
-      dbPath,
-      migrationRoot,
-    );
+      const applied = await applyPendingDatabaseMigrationsToTurso(
+        remote,
+        dbPath,
+        migrationRoot,
+      );
 
-    expect(applied).toEqual(["0002_add_contact_fields.sql"]);
-    expect(remote.execute).toHaveBeenCalled();
+      expect(applied).toEqual(["0002_add_contact_fields.sql"]);
+      expect(remote.execute).toHaveBeenCalled();
+    },
+  );
+
+  it.skipIf(!canUseBetterSqlite)(
+    "applies CREATE INDEX migration when table already exists on remote",
+    async () => {
+      const base = fs.mkdtempSync(path.join(os.tmpdir(), "papr-mig-turso-"));
+      const migrationRoot = path.join(base, "registry");
+      const migrationsDir = path.join(migrationRoot, "migrations");
+      const dbPath = path.join(migrationRoot, "data.db");
+      fs.mkdirSync(migrationsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(migrationsDir, "0002_social.sql"),
+        `CREATE TABLE IF NOT EXISTS social_posts (post_id TEXT PRIMARY KEY, shop_id TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_posts_shop ON social_posts(shop_id);`,
+      );
+
+      const localDb = new Database(dbPath);
+      localDb.exec(`
+      CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL);
+      INSERT INTO schema_migrations (id, applied_at) VALUES ('0001_baseline', datetime('now'));
+      CREATE TABLE social_posts (post_id TEXT PRIMARY KEY, shop_id TEXT NOT NULL);
+      INSERT INTO schema_migrations (id, applied_at) VALUES ('0002_social.sql', datetime('now'));
+    `);
+      localDb.close();
+
+      const remote = createMockRemote({
+        social_posts: ["post_id", "shop_id"],
+      });
+
+      const applied = await applyPendingDatabaseMigrationsToTurso(
+        remote,
+        dbPath,
+        migrationRoot,
+      );
+
+      expect(applied).toEqual(["0002_social.sql"]);
     },
   );
 

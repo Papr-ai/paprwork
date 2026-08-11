@@ -85,12 +85,21 @@ function cookieSuffix(maxAgeSec: number, secure: boolean, path = "/"): string {
   return `Path=${path}; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${secure ? "; Secure" : ""}`;
 }
 
-export function buildSessionCookie(sessionToken: string, secure: boolean): string {
+export function buildSessionCookie(
+  sessionToken: string,
+  secure: boolean,
+  externalUserId?: string,
+): string {
   const secret = getCookieSigningSecret();
-  const value = encodeSignedJson(
-    { sessionToken, exp: Date.now() + SESSION_MAX_AGE_SEC * 1000 },
-    secret,
-  );
+  const payload: Record<string, unknown> = {
+    sessionToken,
+    exp: Date.now() + SESSION_MAX_AGE_SEC * 1000,
+  };
+  const trimmedUserId = externalUserId?.trim();
+  if (trimmedUserId) {
+    payload.externalUserId = trimmedUserId;
+  }
+  const value = encodeSignedJson(payload, secret);
   // Path=/ is required — Path=/auth only sends the cookie to /auth/* (breaks app routes).
   return `${PAPR_SESSION_COOKIE}=${encodeURIComponent(value)}; ${cookieSuffix(SESSION_MAX_AGE_SEC, secure, "/")}`;
 }
@@ -103,21 +112,40 @@ export function clearLegacySessionCookies(secure: boolean): string[] {
   ];
 }
 
-export function readSessionTokenFromCookie(
+export interface CloudAppSessionCookie {
+  sessionToken: string;
+  externalUserId?: string;
+}
+
+export function readCloudAppSessionFromCookie(
   cookieHeader: string | undefined,
-): string | undefined {
+): CloudAppSessionCookie | undefined {
   if (!cookieHeader) return undefined;
   const secret = getCookieSigningSecret();
   for (const part of cookieHeader.split(";")) {
     const trimmed = part.trim();
     if (!trimmed.startsWith(`${PAPR_SESSION_COOKIE}=`)) continue;
     const raw = decodeURIComponent(trimmed.slice(PAPR_SESSION_COOKIE.length + 1));
-    const parsed = decodeSignedJson<{ sessionToken?: string; exp?: number }>(raw, secret);
+    const parsed = decodeSignedJson<{
+      sessionToken?: string;
+      externalUserId?: string;
+      exp?: number;
+    }>(raw, secret);
     if (!parsed?.sessionToken || typeof parsed.exp !== "number") return undefined;
     if (parsed.exp < Date.now()) return undefined;
-    return parsed.sessionToken;
+    const externalUserId = parsed.externalUserId?.trim();
+    return {
+      sessionToken: parsed.sessionToken,
+      ...(externalUserId ? { externalUserId } : {}),
+    };
   }
   return undefined;
+}
+
+export function readSessionTokenFromCookie(
+  cookieHeader: string | undefined,
+): string | undefined {
+  return readCloudAppSessionFromCookie(cookieHeader)?.sessionToken;
 }
 
 export function clearSessionCookie(secure: boolean): string {

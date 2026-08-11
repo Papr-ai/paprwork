@@ -13,6 +13,7 @@ import {
   resolveAppDependentJobIds,
 } from "./cloudSync/resolveAppDependentJobs.js";
 import { syncAppLinkedResourcesToTarget } from "./copyAppToNamespace.js";
+import { ephemeralGitEnv } from "../utils/ephemeralGitEnv.js";
 
 const UUID_PATTERN =
   /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
@@ -157,7 +158,7 @@ export async function ensureRepoHasLinkedAppResources(input: {
   publisherAppId: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<string[]> {
-  const env = input.env ?? { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+  const env = input.env ?? ephemeralGitEnv();
 
   const seedIds = new Set<string>(await seedJobIdsFromAppDir(input.repoAppDir));
   for (const id of await scanAppDirForJobIdCandidates(input.repoAppDir)) {

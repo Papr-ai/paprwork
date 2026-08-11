@@ -1,5 +1,8 @@
 import type { PushResult } from "../tursoSyncBridgeCore.js";
 import { notifyCloudDbChanged } from "../cloudSync/notifyCloudDbChanged.js";
+import { tursoShortNameForChangeInput } from "../tursoDatabaseNaming.js";
+import { bumpSyncIndexForShortName } from "../tursoSyncIndex.js";
+import { getTursoSyncBridge } from "../TursoSyncBridge.js";
 import { localDbHasSyncableData } from "../tursoSyncState.js";
 import type { TursoBookendTarget } from "./syncJobTursoBookends.js";
 
@@ -33,6 +36,16 @@ export async function notifyCloudDbChangedForTarget(
   if (result.status !== "pushed") {
     return;
   }
+
+  const bridge = getTursoSyncBridge();
+  const shortName = tursoShortNameForChangeInput(target);
+  if (bridge?.enabled && shortName) {
+    await bumpSyncIndexForShortName(
+      (databaseName) => bridge.fetchCredentials(databaseName),
+      shortName,
+    );
+  }
+
   await notifyCloudDbChanged({
     ...(target.jobId ? { jobId: target.jobId } : {}),
     ...(target.dbId ? { dbId: target.dbId } : {}),

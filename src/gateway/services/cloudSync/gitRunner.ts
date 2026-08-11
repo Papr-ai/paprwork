@@ -10,6 +10,7 @@
 
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { ephemeralGitEnv } from "../../utils/ephemeralGitEnv.js";
 
 export interface RunGitOptions {
   cwd?: string;
@@ -51,7 +52,7 @@ function runGitOnce(args: string[], opts: RunGitOptions = {}): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn("git", args, {
       cwd,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      env: ephemeralGitEnv(),
       stdio: ["ignore", "pipe", "pipe"],
     });
 

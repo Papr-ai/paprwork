@@ -499,7 +499,6 @@ export const useTabStore = create<TabState>()((set, get) => ({
             if (autoSwitch) {
               get().switchToTab(parentId);
             } else {
-              // Mark as pending refresh if not auto-switching
               get().setTabPendingRefresh(parentId, true);
             }
             return;
@@ -539,7 +538,6 @@ export const useTabStore = create<TabState>()((set, get) => ({
         if (autoSwitch) {
           get().switchToTab(parentId);
         } else {
-          // Mark as pending refresh if not auto-switching
           get().setTabPendingRefresh(parentId, true);
         }
       },
@@ -872,7 +870,14 @@ export const useTabStore = create<TabState>()((set, get) => ({
       setTabStreaming: (tabId, isStreaming) => {
         set((state) => ({
           tabs: state.tabs.map((t) =>
-            t.id === tabId ? { ...t, isStreaming, hasUnread: false } : t,
+            t.id === tabId
+              ? {
+                  ...t,
+                  isStreaming,
+                  hasUnread: false,
+                  ...(isStreaming ? { pendingRefresh: false } : {}),
+                }
+              : t,
           ),
         }));
       },
@@ -887,7 +892,14 @@ export const useTabStore = create<TabState>()((set, get) => ({
 
         set((state) => ({
           tabs: state.tabs.map((t) =>
-            t.id === tabId ? { ...t, hasUnread, isStreaming: false } : t,
+            t.id === tabId
+              ? {
+                  ...t,
+                  hasUnread,
+                  isStreaming: false,
+                  pendingRefresh: false,
+                }
+              : t,
           ),
         }));
       },
@@ -910,7 +922,13 @@ export const useTabStore = create<TabState>()((set, get) => ({
       markTabAsRead: (tabId) => {
         set((state) => ({
           tabs: state.tabs.map((t) =>
-            t.id === tabId ? { ...t, hasUnread: false, isStreaming: false, pendingRefresh: false } : t,
+            t.id === tabId
+              ? {
+                  ...t,
+                  hasUnread: false,
+                  pendingRefresh: false,
+                }
+              : t,
           ),
         }));
       },

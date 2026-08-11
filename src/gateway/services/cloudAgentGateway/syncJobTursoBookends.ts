@@ -4,16 +4,15 @@ import {
   ensureLocalDbChangeLogReady,
   localDbHasSyncableUserTables,
   pullTursoToLocalDb,
-  pushLocalDbToTurso,
   type PushResult,
 } from "../tursoSyncBridgeCore.js";
-import { remoteNeedsBootstrap } from "../tursoDeltaSync.js";
-import { loadTursoSyncState, localDbHasSyncableData } from "../tursoSyncState.js";
+import { loadTursoSyncState } from "../tursoSyncState.js";
 import { alignMigrationLedgers } from "../jobs/jobMigrationLedgerSync.js";
+import { resolveMigrationRootFromDbPath } from "../jobs/jobMigrationTursoSync.js";
 import {
-  applyPendingDatabaseMigrationsToTurso,
-  resolveMigrationRootFromDbPath,
-} from "../jobs/jobMigrationTursoSync.js";
+  pushLinkedSourceWithDesktopParity,
+  type LinkedSourcePushState,
+} from "../tursoLinkedSourcePush.js";
 
 /** Sync state key — job id or registry dbId (matches TursoSyncBridge linkedSourceSyncKey). */
 export interface TursoBookendTarget {
@@ -26,13 +25,39 @@ export interface TursoBookendTarget {
   dbId?: string;
 }
 
+function credentialsForTarget(target: TursoBookendTarget): {
+  tursoUrl: string;
+  authToken: string;
+} {
+  return {
+    tursoUrl: target.tursoUrl,
+    authToken: target.authToken,
+  };
+}
+
+function pushStateForTarget(
+  syncKey: string,
+  freshLocalDb: boolean,
+): LinkedSourcePushState | undefined {
+  const state = loadTursoSyncState();
+  const sourceState = state.jobs[syncKey];
+  if (!sourceState || freshLocalDb) {
+    return undefined;
+  }
+  return {
+    ...(sourceState.tableFingerprints
+      ? { tableFingerprints: sourceState.tableFingerprints }
+      : {}),
+    ...(sourceState.lastPushedLogId !== undefined
+      ? { lastPushedLogId: sourceState.lastPushedLogId }
+      : {}),
+  };
+}
+
 export async function pullLinkedSourceFromCloud(
   input: TursoBookendTarget,
 ): Promise<void> {
-  const creds = {
-    tursoUrl: input.tursoUrl,
-    authToken: input.authToken,
-  };
+  const creds = credentialsForTarget(input);
   const state = loadTursoSyncState();
   const sourceState = state.jobs[input.syncKey];
   const freshLocalDb = !localDbHasSyncableUserTables(input.dbPath);
@@ -66,65 +91,14 @@ export async function pullLinkedSourceFromCloud(
 export async function pushLinkedSourceToCloud(
   input: TursoBookendTarget,
 ): Promise<PushResult> {
-  const creds = {
-    tursoUrl: input.tursoUrl,
-    authToken: input.authToken,
-  };
-
-  if (fs.existsSync(input.dbPath) && fs.statSync(input.dbPath).size > 0) {
-    const migrationRoot = resolveMigrationRootFromDbPath(input.dbPath);
-    if (migrationRoot) {
-      const migrationRemote = createRemoteClient(creds);
-      try {
-        const applied = await applyPendingDatabaseMigrationsToTurso(
-          migrationRemote,
-          input.dbPath,
-          migrationRoot,
-        );
-        if (applied.length > 0) {
-          console.log(
-            `[CloudTursoBookends] Applied database migrations on Turso for ${input.syncKey}: ${applied.join(", ")}`,
-          );
-        }
-      } finally {
-        migrationRemote.close();
-      }
-    }
-  }
-
-  const state = loadTursoSyncState();
-  const sourceState = state.jobs[input.syncKey];
-  let pushResult = await pushLocalDbToTurso(input.dbPath, creds, {
-    jobId: input.syncKey,
-    ...(sourceState?.tableFingerprints
-      ? { previousFingerprints: sourceState.tableFingerprints }
-      : {}),
-    ...(sourceState?.lastPushedLogId !== undefined
-      ? { lastPushedLogId: sourceState.lastPushedLogId }
-      : {}),
+  const creds = credentialsForTarget(input);
+  const freshLocalDb = !localDbHasSyncableUserTables(input.dbPath);
+  return pushLinkedSourceWithDesktopParity({
+    syncKey: input.syncKey,
+    dbPath: input.dbPath,
+    credentials: creds,
+    state: pushStateForTarget(input.syncKey, freshLocalDb),
   });
-
-  if (localDbHasSyncableData(input.dbPath)) {
-    const verifyRemote = createRemoteClient(creds);
-    try {
-      const stillEmpty = await remoteNeedsBootstrap(verifyRemote);
-      if (stillEmpty) {
-        console.warn(
-          `[CloudTursoBookends] Remote empty after push for ${input.syncKey} — forcing bootstrap`,
-        );
-        pushResult = await pushLocalDbToTurso(input.dbPath, creds, {
-          jobId: input.syncKey,
-          force: true,
-          previousFingerprints: undefined,
-          lastPushedLogId: 0,
-        });
-      }
-    } finally {
-      verifyRemote.close();
-    }
-  }
-
-  return pushResult;
 }
 
 /** @deprecated Use pullLinkedSourceFromCloud — job-owned DB only. */

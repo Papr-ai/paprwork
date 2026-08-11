@@ -18,12 +18,18 @@ import {
   manifestEntryById,
   readMigrationSql,
 } from "./jobMigrationManifest.js";
-import { alignMigrationLedgers } from "./jobMigrationLedgerSync.js";
+import {
+  alignMigrationLedgers,
+  migrationSatisfiedOnRemote,
+  remoteTableExists,
+} from "./jobMigrationLedgerSync.js";
 import {
   isDuplicateColumnError,
   parseAddColumnStatement,
   splitSqlStatements,
 } from "./migrationSqlHelpers.js";
+import { shouldSkipMigrationForRemoteLedger } from "./migrationLedgerPolicy.js";
+import { listAppliedMigrationIdsReadOnly } from "./schemaMigrationsLedger.js";
 
 export const REMOTE_SCHEMA_MIGRATIONS_TABLE = "_papr_schema_migrations";
 
@@ -66,6 +72,9 @@ async function executeRemoteSqlIdempotent(
 ): Promise<void> {
   const addColumn = parseAddColumnStatement(statement);
   if (addColumn) {
+    if (!(await remoteTableExists(remote, addColumn.table))) {
+      return;
+    }
     if (await remoteTableHasColumn(remote, addColumn.table, addColumn.column)) {
       return;
     }
@@ -81,23 +90,15 @@ async function executeRemoteSqlIdempotent(
   }
 }
 
-function listLocalAppliedMigrationIds(localDb: Database.Database): string[] {
-  try {
-    const rows = localDb
-      .prepare("SELECT id FROM schema_migrations ORDER BY id")
-      .all() as Array<{ id: string }>;
-    return rows.map((row) => row.id);
-  } catch {
-    return [];
-  }
-}
-
 async function applySchemaOpToRemote(
   remote: Client,
   op: JobMigrationSchemaOp,
 ): Promise<void> {
   switch (op.kind) {
     case "add_column":
+      if (!(await remoteTableExists(remote, op.table))) {
+        return;
+      }
       if (await remoteTableHasColumn(remote, op.table, op.column)) {
         return;
       }
@@ -115,6 +116,9 @@ async function applySchemaOpToRemote(
       }
       return;
     case "drop_column":
+      if (!(await remoteTableExists(remote, op.table))) {
+        return;
+      }
       await dropRemoteTableSyncTriggers(remote, op.table);
       await remote.execute({
         sql:
@@ -123,6 +127,9 @@ async function applySchemaOpToRemote(
       });
       return;
     case "rename_column":
+      if (!(await remoteTableExists(remote, op.table))) {
+        return;
+      }
       await dropRemoteTableSyncTriggers(remote, op.table);
       await remote.execute({
         sql:
@@ -193,7 +200,7 @@ export async function applyPendingDatabaseMigrationsToTurso(
   const localDb = new Database(localDbPath, { readonly: true });
   let localApplied: string[];
   try {
-    localApplied = listLocalAppliedMigrationIds(localDb);
+    localApplied = listAppliedMigrationIdsReadOnly(localDb);
   } finally {
     localDb.close();
   }
@@ -206,11 +213,21 @@ export async function applyPendingDatabaseMigrationsToTurso(
   const appliedNow: string[] = [];
 
   for (const migrationId of localApplied) {
-    if (migrationId === "0001_baseline") {
+    if (shouldSkipMigrationForRemoteLedger(migrationId)) {
       continue;
     }
     if (remoteApplied.has(migrationId)) {
-      continue;
+      const satisfied = await migrationSatisfiedOnRemote(
+        remote,
+        migrationRoot,
+        migrationId,
+      );
+      if (satisfied) {
+        continue;
+      }
+      console.warn(
+        `[MigrationTurso] Remote ledger lists ${migrationId} but schema is incomplete — re-applying`,
+      );
     }
     await applyMigrationToRemote(remote, migrationRoot, migrationId);
     await recordRemoteMigrationApplied(remote, migrationId);

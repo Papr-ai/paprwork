@@ -2075,15 +2075,50 @@ Content-only apps (no \`/api/db/*\`) **do not** need \`data-sources.json\`. Vali
 - **Cloud eligibility:** \`attach_database\` writes \`data-sources.json\` → Git sync + Turso push follow automatically.
 - **Cloud agent bookends:** Memory \`cloud_agent_run_prepare\` returns \`tursoSources[]\` for each write target; gateway pulls/pushes by \`syncKey\` (dbId).
 
-## Multi-user — three different concepts (do not conflate)
+## Multi-user, owner access, and data isolation (do not conflate)
+
+**Cloud publish access ≠ row-level security.** \`public_read\` / share links control who can **open the app URL** and call \`/api/db/*\` — the platform does **not** filter rows. Your schema + SQL (or backend actions) must isolate data.
+
+### \`GET /api/access\` — who is calling (mini-apps)
+
+Call at startup (desktop + \`apps.papr.ai\`) to gate admin UI and choose query filters:
+
+\`\`\`javascript
+const access = await fetch('/api/access').then(r => r.json());
+// { mode, canRead, canWrite, loggedIn, isOwner, appId }
+// mode: "owner" | "team" | "link_read" | "link_read_write" | "public_read" | null
+\`\`\`
+
+| Runtime | Typical \`access\` |
+|---------|-------------------|
+| **Desktop Paprwork iframe** | \`isOwner: true\`, \`mode: "owner"\` — full read/write |
+| **Cloud — publisher signed in** | \`isOwner: true\`, \`mode: "owner"\` |
+| **Cloud — anonymous / share visitor** | \`isOwner: false\`, \`mode: "public_read"\` or link modes |
+
+**Owner admin:** When \`access.isOwner\`, show an admin view that queries **without** visitor session filters (all rows). Hide the admin tab entirely when \`!access.isOwner\` — do not show an empty admin panel to visitors.
+
+### Two app isolation patterns (pick explicitly)
+
+| Pattern | When | Schema | Visitor queries | Owner admin |
+|---------|------|--------|-----------------|-------------|
+| **A. Anonymous / shared funnel** | Public lead-gen, no sign-in friction | \`owner_session TEXT\` (UUID in \`localStorage\`) on each row | \`WHERE owner_session = ?\` | \`access.isOwner\` → no session filter (or \`owner_user_id\`) |
+| **B. Multi-user (sign-in required)** | Private per-user data | \`papr_user_id TEXT\` or \`create_database({ isolation: "per-user" })\` | Filter by server-resolved user id via **backend action** — not client-supplied id | \`access.isOwner\` → all rows / support tools |
+
+**Pattern A security (important):** \`owner_session\` in \`localStorage\` is **UX isolation**, not cryptography. A motivated user can tamper with session id or run \`SELECT * FROM table\` via DevTools on \`public_read\` apps. UUID guessing is impractical; **unfiltered SQL** is the real risk — use **backend actions** for sensitive reads, or publish as **link/team** (sign-in) instead of \`public_read\`.
+
+**Pattern B (stronger):** Publish with \`link_read_write\` / \`team\` so visitors sign in; identity comes from Papr session. Prefer \`POST /api/app/backend/:action\` that ignores client \`userId\` params and uses server auth.
+
+### Three platform concepts (orthogonal)
 
 | Concept | What it controls | How to implement |
 |---------|------------------|------------------|
-| **Cloud publish access** | Who can open the app URL | Publish settings — NOT row-level data isolation |
-| **Shared DB + \`user_id\` column** | All users see same Turso DB; app filters | Manual schema + \`WHERE user_id = ?\` |
+| **Cloud publish access** | Who can open the app URL | \`publish_cloud_app\` — NOT row isolation |
+| **Shared DB + session/user column** | Same Turso DB; app filters rows | \`owner_session\` (anonymous) or \`papr_user_id\` (signed-in) + \`GET /api/access\` |
 | **Per-user DB isolation** | Separate Turso replica per user | \`create_database({ isolation: "per-user" })\` + \`attach_database\` |
 
 ❌ **Do NOT** conflate cloud publish settings with per-user data isolation.
+❌ **Do NOT** rely on client-side session filters alone for sensitive data on \`public_read\` apps.
+❌ **Do NOT** show owner admin UI to visitors (\`!access.isOwner\`) — hide the tab completely.
 ❌ **Do NOT** use \`$JOB_DB\` for UI-facing tables — use \`PAPR_DB_*\` from \`writeDbIds\`.
 ❌ **Do NOT** expect \`create_job({ appIds })\` to link databases — linking is explicit via \`attach_database\`.
 ❌ **Do NOT** use \`/api/db/query\` for INSERT/UPDATE/DELETE — use \`/api/db/write\` (403 on query for mutations).
@@ -2276,6 +2311,7 @@ Mini-apps **can** persist to linked job SQLite databases. The gateway splits thi
 
 | Endpoint | Allowed SQL |
 |----------|-------------|
+| \`GET /api/access?appId=...\` | Caller \`{ mode, isOwner, canRead, canWrite, loggedIn }\` — gate admin UI + row filters (see Multi-user section) |
 | \`GET /api/db/schema?appId=...\` | List tables/columns for linked sources |
 | \`POST /api/db/query\` | **Only** \`SELECT\` and \`WITH ... SELECT\` |
 | \`POST /api/db/write\` | \`INSERT\`, \`UPDATE\`, \`DELETE\`, \`REPLACE\`, \`UPSERT\` — use \`?\` placeholders and a \`params\` array for any user-supplied values |
@@ -2310,6 +2346,7 @@ When only one DB is linked, \`sourceId\` may be omitted. With multiple linked DB
 
 | Capability | Desktop gateway | Cloud (\`apps.papr.ai\`) |
 |---|---|---|
+| \`/api/access\` | ✅ always \`isOwner: true\` | ✅ \`isOwner\` when publisher signed in |
 | \`/api/db/schema\`, \`/api/db/query\`, \`/api/db/write\`, \`/api/db/exec\` | ✅ SQLite | ✅ Turso — **same endpoints, same app code** |
 | \`/api/db/*\` | ✅ | ✅ on \`apps.papr.ai\` (Turso proxy) |
 | \`/api/app/backend/:action\` | ✅ local subprocess | ✅ Cloud App Host edge subprocess (handlers in \`apps/{appId}/backend/\`) |
@@ -2380,13 +2417,19 @@ await fetch('/api/jobs/run', { method: 'POST', body: JSON.stringify({ jobId: JOB
 - \`get_cloud_app_publish({ appId })\` — read live status, loginAccess, externalLink, **codeAccess**, Community listing, URLs
 - \`publish_cloud_app({ appId, loginAccess?, externalLink?, codeAccess?, unpublish? })\` — publish or update sharing
 - \`install_cloud_app({ namespaceId, slug, mode? })\` — fork/track a cloud app into Paprwork (publisher must set codeAccess=install)
-- \`submit_cloud_app_change\` / \`list_cloud_app_changes\` / \`resolve_cloud_app_change\` — contribute-back workflow
+- \`submit_cloud_app_change\` / \`list_cloud_app_changes\` / \`resolve_cloud_app_change\` — contribute-back PR workflow (see below)
+
+**Contribute-back (fork → owner pull request):**
+- **Contributor** (installed a fork with \`install_cloud_app\`): \`submit_cloud_app_change\` — pushes app source + linked Jobs/migrations to the owner's papr-work repo and opens a GitHub PR. Returns \`prUrl\` when successful.
+- **Owner** (published the upstream app): \`list_cloud_app_changes\` — incoming PRs; \`resolve_cloud_app_change({ requestId, action: "approve"|"reject" })\` — approve merges the PR on GitHub, then sync pulls changes locally. Reject closes the PR.
+- Owner reviewing conflicts: use \`inspect_cloud_repo\` + \`get_cloud_sync_status\` — same as normal git sync review; there is no local folder merge on the owner's machine.
+- Contributors keep syncing their fork normally while a PR is open.
 
 **Cloud observability (debug sync, Turso, GitHub, stuck jobs — NOT Memory API):**
 - \`get_cloud_sync_status({ appId?, jobId?, includeJobLogs? })\` — **start here**: GitHub sync + Turso + publish + heartbeat/pendingCloudRuns + local jobs + GitHub job.json
 - \`query_cloud_turso({ sql, jobId? | tursoDatabase? | appId+alias })\` — read-only SQL on Turso cloud replica
 - \`inspect_cloud_repo({ action: "read"|"list", relativePath?, prefix?, source? })\` — read/list GitHub cloud repo files
-- \`push_cloud_sync({ appId?, alias?, jobId?, tursoDatabase?, tables?, targets?: ['github'|'turso'] })\` — scoped push (prefer \`targets: ['turso']\` + \`appId\` + \`alias\` for DB/migration fixes — avoid full workspace)
+- \`push_cloud_sync({ appId?, alias?, jobId?, tursoDatabase?, tables?, targets?: ['github'|'turso'] })\` — scoped push. **For one app going live on the web, use \`push_cloud_sync({ appId })\` (both layers) or Upload now** — database first, then code. Use \`targets: ['turso']\` only to fix DB/migrations; use \`targets: ['github']\` only for job **code** folders (does **not** update linked databases or refresh the live app link).
 
 **Cloud job debugging:** Job stuck \`pending\` on apps.papr.ai → \`get_cloud_sync_status({ appId, jobId })\` → check \`desktopHeartbeat.desktopAwake\` and \`pendingCloudRuns\`. If desktop asleep, user must wake Paprwork. If sync pending, \`push_cloud_sync({ appId })\` then \`run_job({ jobId })\`.
 

@@ -19,9 +19,9 @@ import {
 import { getTursoSyncBridge } from "./TursoSyncBridge.js";
 import { isJobDbDirty, loadTursoSyncState } from "./tursoSyncState.js";
 import { localRemoteUserSchemaDriftTables } from "./tursoDeltaSync.js";
-import {
-  getDatabaseRegistryService,
+import { getDatabaseRegistryService,
 } from "./DatabaseRegistryService.js";
+import { shouldAutoUploadTursoForApp } from "./cloudUploadMode.js";
 
 export type TursoSourceSyncState =
   | "synced"
@@ -43,6 +43,8 @@ export interface TursoSourceSyncItem {
   schemaDrift?: boolean;
   quarantinedAt?: string | null;
   quarantineReason?: string | null;
+  /** Dirty but auto-upload off — use Upload now. */
+  manualUploadHold?: boolean;
 }
 
 export interface TursoSyncItemsReport {
@@ -160,6 +162,18 @@ function sourceItem(
   const syncKey = linkedSourceSyncKey(source);
   const jobState = pushState.jobs[syncKey];
   const quarantined = Boolean(jobState?.quarantinedAt);
+  const status = resolveTursoSourceStatus(
+    localTableCount,
+    remoteTableCount,
+    dbExists,
+    dirty,
+    quarantined,
+    schemaDrift,
+  );
+  const manualUploadHold =
+    !shouldAutoUploadTursoForApp(source.appId) &&
+    status === "pending" &&
+    dirty;
   return {
     appId: source.appId,
     jobId: syncKey,
@@ -167,19 +181,13 @@ function sourceItem(
     role: source.role ?? "linked",
     dbPath: source.dbPath,
     tursoDatabase: resolveTursoDatabaseLabel(source),
-    status: resolveTursoSourceStatus(
-      localTableCount,
-      remoteTableCount,
-      dbExists,
-      dirty,
-      quarantined,
-      schemaDrift,
-    ),
+    status,
     localTableCount,
     remoteTableCount,
     schemaDrift,
     quarantinedAt: jobState?.quarantinedAt ?? null,
     quarantineReason: jobState?.quarantineReason ?? null,
+    manualUploadHold: manualUploadHold || undefined,
   };
 }
 

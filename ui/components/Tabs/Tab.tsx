@@ -271,10 +271,20 @@ export function Tab({
     );
   };
 
+  const tabStatusClass = isActive
+    ? ""
+    : tab.isStreaming
+      ? "tab--streaming"
+      : tab.hasUnread
+        ? "tab--unread"
+        : tab.pendingRefresh
+          ? "tab--pending-refresh"
+          : "";
+
   return (
     <div
       ref={tabRef}
-      className={`tab ${isActive ? "tab--active" : ""} ${isDragging ? "tab--dragging" : ""} ${dragPosition === "on-top" ? "tab--split-preview" : ""} ${dragPosition ? "tab--drag-over" : ""} ${isMerged ? "tab--merged" : ""} ${tab.isStreaming ? "tab--streaming" : ""} ${tab.hasUnread ? "tab--unread" : ""} ${tab.pendingRefresh ? "tab--pending-refresh" : ""}`}
+      className={`tab ${isActive ? "tab--active" : ""} ${isDragging ? "tab--dragging" : ""} ${dragPosition === "on-top" ? "tab--split-preview" : ""} ${dragPosition ? "tab--drag-over" : ""} ${isMerged ? "tab--merged" : ""} ${tabStatusClass}`}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       draggable
