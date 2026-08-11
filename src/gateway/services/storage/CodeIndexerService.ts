@@ -12,6 +12,7 @@ import { Papr } from '@papr/memory';
 import { buildCodeIndexAddPolicy } from '../../utils/paprMemoryPolicy.js';
 import { paprMemoryScopeSpread } from '../../utils/memoryScopeResolver.js';
 import { getProjectPathInfo } from './codeIndexPaths.js';
+import { parseJsonTolerant } from '../../../core/utils/atomicJsonWrite.js';
 
 export interface CodeFileMetadata {
   file_path: string;
@@ -317,7 +318,12 @@ export class CodeIndexerService {
       };
     }
     
-    const jobJson = JSON.parse(fs.readFileSync(jobJsonPath, 'utf-8'));
+    // Tolerant: a historically torn write can leave trailing bytes after valid
+    // JSON. Recover the parseable prefix instead of failing this file forever.
+    const jobJson =
+      parseJsonTolerant<Record<string, any>>(
+        fs.readFileSync(jobJsonPath, 'utf-8'),
+      ) ?? {};
     
     const metadata: ProjectMetadata = {
       project_id: jobJson.id || jobId,

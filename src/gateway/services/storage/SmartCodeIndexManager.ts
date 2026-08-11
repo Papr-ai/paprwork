@@ -24,6 +24,12 @@ import * as fs from 'fs';
 import { resolvePaprUserDataPath } from '../../../core/utils/paprWorkspace.js';
 import { reportPaprQuotaError } from '../../../core/utils/paprQuota.js';
 
+/**
+ * Max transient failures per file before it is dropped from the index queue.
+ * Prevents a single unparseable file from looping the batch scheduler forever.
+ */
+const MAX_INDEX_ATTEMPTS = 3;
+
 export interface IndexManagerConfig {
   paprDir?: string;
   dataDir?: string;
@@ -435,8 +441,29 @@ export class SmartCodeIndexManager {
           console.error('   ⚠️  Removing from queue (permanent error)');
           this.tracker.dequeueFile(queuedFile.file_path);
         } else {
-          console.error(`   ❌ Failed to index ${queuedFile.file_path}: ${err.message}`);
-          // Keep in queue for transient errors
+          // Transient error: keep in queue, but bound the retries. Without a
+          // cap, a file that always fails (e.g. malformed JSON from the summary
+          // model) is retried every second forever, flooding logs and starving
+          // the rest of the queue.
+          const attempts = this.tracker.recordQueueFailure(
+            queuedFile.file_path,
+            err.message,
+          );
+
+          if (attempts >= MAX_INDEX_ATTEMPTS) {
+            console.error(
+              `   ❌ Failed to index ${queuedFile.file_path}: ${err.message}`,
+            );
+            console.error(
+              `   ⚠️  Giving up after ${attempts} attempts — removing from queue.`,
+            );
+            this.tracker.dequeueFile(queuedFile.file_path);
+          } else {
+            console.error(
+              `   ❌ Failed to index ${queuedFile.file_path} ` +
+                `(attempt ${attempts}/${MAX_INDEX_ATTEMPTS}): ${err.message}`,
+            );
+          }
         }
       }
     }

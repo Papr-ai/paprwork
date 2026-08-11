@@ -5,6 +5,7 @@ import type { ChildProcessWithoutNullStreams } from "child_process";
 import { v4 as uuidv4 } from "uuid";
 import { fileURLToPath } from "url";
 import Database from "better-sqlite3";
+import { writeJsonAtomic } from "../../core/utils/atomicJsonWrite.js";
 import { JobDatabase } from "./jobs/JobDatabase.js";
 import {
   formatJobArchitectureErrors,
@@ -339,10 +340,9 @@ export class JobsService {
 
       try {
         const jobDir = this.getJobDir(jobId);
-        await fs.writeFile(
+        await writeJsonAtomic(
           path.join(jobDir, "job.json"),
-          JSON.stringify(updated, null, 2),
-          "utf8",
+          updated,
         );
         console.log(
           `[JobsService] Synced bundled default job ${jobId} from resources`,
@@ -450,10 +450,9 @@ export class JobsService {
       changed = true;
 
       try {
-        await fs.writeFile(
+        await writeJsonAtomic(
           path.join(this.getJobDir(jobId), "job.json"),
-          JSON.stringify({ ...job, appIds }, null, 2),
-          "utf8",
+          { ...job, appIds },
         );
       } catch {
         // job dir may be missing
@@ -1088,9 +1087,9 @@ export class JobsService {
     await fs.mkdir(path.join(jobDir, "migrations"), { recursive: true });
     await fs.mkdir(path.join(jobDir, "data"), { recursive: true });
     await this.jobDatabase.ensureDatabase(jobDir);
-    await fs.writeFile(
+    await writeJsonAtomic(
       path.join(jobDir, "job.json"),
-      JSON.stringify(job, null, 2),
+      job,
     );
 
     // Write requirements.txt if requirements are specified
@@ -1177,9 +1176,9 @@ export class JobsService {
     await fs.mkdir(path.join(jobDir, "migrations"), { recursive: true });
     await fs.mkdir(path.join(jobDir, "data"), { recursive: true });
     await this.jobDatabase.ensureDatabase(jobDir);
-    await fs.writeFile(
+    await writeJsonAtomic(
       path.join(jobDir, "job.json"),
-      JSON.stringify(job, null, 2),
+      job,
     );
 
     const dbPath = path.join(jobDir, "data", "data.db");
@@ -1356,10 +1355,11 @@ export class JobsService {
       );
     }
     this.jobs.set(jobId, next);
-    await fs.writeFile(
+    // Atomic: status updates race job-config saves. A plain writeFile can leave
+    // trailing bytes from a longer previous payload and corrupt job.json.
+    await writeJsonAtomic(
       path.join(this.getJobDir(jobId), "job.json"),
-      JSON.stringify(next, null, 2),
-      "utf8",
+      next,
     );
     await this.saveJobs();
 
@@ -2283,10 +2283,9 @@ export class JobsService {
         : undefined;
     }
     this.jobs.set(jobId, updated);
-    await fs.writeFile(
+    await writeJsonAtomic(
       path.join(this.getJobDir(jobId), "job.json"),
-      JSON.stringify(updated, null, 2),
-      "utf8",
+      updated,
     );
     await this.saveJobs();
     void this.rebuildGraph();
@@ -2427,10 +2426,9 @@ export class JobsService {
 
         this.jobs.set(jobId, updated);
 
-        await fs.writeFile(
+        await writeJsonAtomic(
           path.join(this.getJobDir(jobId), "job.json"),
-          JSON.stringify(updated, null, 2),
-          "utf8",
+          updated,
         );
 
         needsSave = true;
@@ -2874,10 +2872,9 @@ export class JobsService {
     }
     await this.jobDatabase.ensureDatabase(destination);
     this.jobs.set(job.id, job);
-    await fs.writeFile(
+    await writeJsonAtomic(
       path.join(destination, "job.json"),
-      JSON.stringify(job, null, 2),
-      "utf8",
+      job,
     );
     await this.saveJobs();
     return job;
