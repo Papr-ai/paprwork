@@ -10,6 +10,7 @@ export type PaprQuotaKind =
   | "memories"
   | "storage"
   | "rate_limit"
+  | "subscription"
   | "unknown";
 
 export type PaprQuotaSeverity = "warning" | "exceeded";
@@ -59,6 +60,52 @@ const NON_QUOTA_403_PATTERNS = [
   /authentication/i,
 ];
 
+const SUBSCRIPTION_PATTERNS = [
+  /no active subscription/i,
+  /start your free trial/i,
+  /begin using papr/i,
+];
+
+function looksLikeTechnicalPayload(message: string): boolean {
+  const trimmed = message.trim();
+  return (
+    /^\d{3}\s*[\[{]/.test(trimmed) ||
+    trimmed.startsWith("{") ||
+    trimmed.startsWith("[") ||
+    /"code"\s*:\s*\d{3}/.test(trimmed) ||
+    /"status"\s*:\s*"error"/.test(trimmed)
+  );
+}
+
+function parseEmbeddedJsonMessage(message: string): string | undefined {
+  const trimmed = message.trim();
+  const jsonPart = trimmed.replace(/^\d{3}\s*/, "");
+  if (!jsonPart.startsWith("{") && !jsonPart.startsWith("[")) return undefined;
+
+  try {
+    const parsed = JSON.parse(jsonPart) as Record<string, unknown>;
+    const details = parsed.details;
+    if (details && typeof details === "object") {
+      const detailRecord = details as Record<string, unknown>;
+      if (typeof detailRecord.message === "string" && detailRecord.message.trim()) {
+        return detailRecord.message.trim();
+      }
+      if (typeof detailRecord.error === "string" && detailRecord.error.trim()) {
+        return detailRecord.error.trim();
+      }
+    }
+    if (typeof parsed.message === "string" && parsed.message.trim()) {
+      return parsed.message.trim();
+    }
+    if (typeof parsed.error === "string" && parsed.error.trim()) {
+      return parsed.error.trim();
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
 function extractNestedMessage(error: unknown): string | undefined {
   if (!error || typeof error !== "object") return undefined;
   const record = error as Record<string, unknown>;
@@ -80,15 +127,18 @@ function extractNestedMessage(error: unknown): string | undefined {
 }
 
 export function extractErrorMessage(error: unknown): string {
-  if (typeof error === "string") return error;
-  if (error instanceof Error) {
-    return extractNestedMessage(error) ?? error.message;
-  }
-  if (error && typeof error === "object") {
-    const nested = extractNestedMessage(error);
-    if (nested) return nested;
-  }
-  return String(error ?? "");
+  const raw =
+    typeof error === "string"
+      ? error
+      : error instanceof Error
+        ? (extractNestedMessage(error) ?? error.message)
+        : error && typeof error === "object"
+          ? extractNestedMessage(error)
+          : String(error ?? "");
+
+  if (typeof raw !== "string" || !raw.trim()) return "";
+  const embedded = parseEmbeddedJsonMessage(raw);
+  return embedded ?? raw;
 }
 
 function isLikelyQuotaMessage(message: string): boolean {
@@ -130,6 +180,8 @@ function defaultDetail(kind: PaprQuotaKind): string {
       return "You've used your monthly Papr Memory operations allowance.";
     case "rate_limit":
       return "Papr Memory is rate-limiting requests on your account.";
+    case "subscription":
+      return "Papr Memory couldn't verify an active subscription for this workspace. Chat sync and memory features may be paused until billing is linked.";
     default:
       return "Your Papr Memory plan limit has been reached.";
   }
@@ -145,12 +197,17 @@ function titleForKind(kind: PaprQuotaKind): string {
       return "Operations limit reached";
     case "rate_limit":
       return "Papr Memory rate limited";
+    case "subscription":
+      return "Papr Memory unavailable";
     default:
       return "Papr Memory limit reached";
   }
 }
 
 function classifyKind(message: string): PaprQuotaKind {
+  if (SUBSCRIPTION_PATTERNS.some((pattern) => pattern.test(message))) {
+    return "subscription";
+  }
   if (/storage/i.test(message)) return "storage";
   if (/memory count|memories limit|memory limit|active memories/i.test(message)) {
     return "memories";
@@ -162,6 +219,27 @@ function classifyKind(message: string): PaprQuotaKind {
   return "unknown";
 }
 
+function friendlyDetail(rawMessage: string, kind: PaprQuotaKind): string {
+  if (kind === "subscription") {
+    return defaultDetail("subscription");
+  }
+
+  if (
+    !looksLikeTechnicalPayload(rawMessage) &&
+    rawMessage.length > 0 &&
+    rawMessage.length < 200 &&
+    !rawMessage.includes("dashboard.papr.ai")
+  ) {
+    return rawMessage;
+  }
+
+  if (kind === "unknown") {
+    return `${defaultDetail(kind)} Visit Papr to upgrade your plan or enable metered billing.`;
+  }
+
+  return `${defaultDetail(kind)} Visit Papr to upgrade or enable metered billing.`;
+}
+
 export function parsePaprQuotaError(
   error: unknown,
   source?: string,
@@ -171,14 +249,12 @@ export function parsePaprQuotaError(
   const rawMessage = extractErrorMessage(error).trim();
   const kind = classifyKind(rawMessage);
   const suggestMeteredBilling =
-    /metered billing/i.test(rawMessage) ||
-    kind === "operations" ||
-    kind === "unknown";
+    kind !== "subscription" &&
+    (/metered billing/i.test(rawMessage) ||
+      kind === "operations" ||
+      kind === "unknown");
 
-  const detail =
-    rawMessage.length > 0 && rawMessage.length < 500
-      ? rawMessage
-      : `${defaultDetail(kind)} Open Papr to upgrade or enable metered billing.`;
+  const detail = friendlyDetail(rawMessage, kind);
 
   return {
     kind,

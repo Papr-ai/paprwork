@@ -77,6 +77,28 @@ describe("paprQuota", () => {
     expect(parsePaprQuotaError(error)?.kind).toBe("storage");
   });
 
+  it("parses raw JSON 403 subscription errors into friendly copy", () => {
+    const error = new Error(
+      '403 {"code":403,"status":"error","data":null,"error":"Please visit https://dashboard.papr.ai to start your free trial and begin using Papr.","details":{"error":"No active subscription","message":"Please visit https://dashboard.papr.ai to start your free trial and begin using Papr."}}',
+    );
+    expect(isPaprQuotaError(error)).toBe(true);
+    const status = parsePaprQuotaError(error, "chat-sync");
+    expect(status?.kind).toBe("subscription");
+    expect(status?.title).toBe("Papr Memory unavailable");
+    expect(status?.detail).toContain("couldn't verify");
+    expect(status?.detail).not.toContain('"code"');
+    expect(status?.suggestMeteredBilling).toBe(false);
+  });
+
+  it("never surfaces raw JSON payloads in banner detail", () => {
+    const error = new Error(
+      '403 {"code":403,"status":"error","error":"Interaction limit reached"}',
+    );
+    const status = parsePaprQuotaError(error);
+    expect(status?.detail).not.toMatch(/^\d{3}\s*\{/);
+    expect(status?.detail).not.toContain('"code"');
+  });
+
   it("notifyPaprQuotaStatus forwards to listener", () => {
     const listener = vi.fn();
     setPaprQuotaExceededListener(listener);

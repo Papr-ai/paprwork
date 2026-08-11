@@ -5,6 +5,7 @@ export type PaprQuotaKind =
   | "memories"
   | "storage"
   | "rate_limit"
+  | "subscription"
   | "unknown";
 
 export interface PaprQuotaBannerState {

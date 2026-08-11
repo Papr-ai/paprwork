@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildPlanWarnings,
   getPlanLimitsForTier,
+  hasActivePaprSubscription,
   normalizePlanTier,
   planDisplayName,
   resolvePlanTierForBilling,
@@ -117,5 +118,12 @@ describe("paprPlanLimits", () => {
 
   it("caps usage bars at 100%", () => {
     expect(usageBarPercent(2000, 1000)).toBe(100);
+  });
+
+  it("detects active subscription the same way Settings metered billing does", () => {
+    expect(hasActivePaprSubscription({ subscriptionStatus: "active" })).toBe(true);
+    expect(hasActivePaprSubscription({ subscriptionStatus: "trialing" })).toBe(true);
+    expect(hasActivePaprSubscription({ subscriptionStatus: "past_due" })).toBe(false);
+    expect(hasActivePaprSubscription({ subscriptionStatus: undefined })).toBe(false);
   });
 });

@@ -111,6 +111,8 @@ export interface AppSettings {
     workspaceName?: string;
     /** Last known billing plan label (sidebar + settings; refreshed via getPlanSummary) */
     planName?: string;
+    /** Stripe/Parse subscription lifecycle status (same source as Settings → Plan & usage) */
+    subscriptionStatus?: string;
   };
   compaction: CompactionConfig;
   permissions: PermissionSettings;

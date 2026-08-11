@@ -250,6 +250,14 @@ function isSubscriptionLifecycleStatus(label: string): boolean {
   );
 }
 
+/** Same gate Settings uses before enabling metered billing or treating Stripe as authoritative. */
+export function hasActivePaprSubscription(input: {
+  subscriptionStatus?: string | null;
+}): boolean {
+  const status = input.subscriptionStatus?.trim().toLowerCase();
+  return status === "active" || status === "trialing";
+}
+
 export function usageBarPercent(current: number, limit: number): number {
   if (limit <= 0) return 0;
   return Math.min((current / limit) * 100, 100);
