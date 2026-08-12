@@ -195,6 +195,8 @@ export class AppService {
   private initPromise: Promise<void> | null = null;
   /** PAPR_HOME at last successful initialize — prune must not run after env drift. */
   private loadedPaprRoot: string | null = null;
+  /** Dedupes the prune-skip warning, which listApps() would otherwise repeat. */
+  private lastPruneSkipWarnKey: string | null = null;
   /**
    * Set by cleanup(). Watcher startup is fire-and-forget, so without this a
    * shutdown that lands mid-startup creates watchers *after* cleanup already
@@ -1838,9 +1840,17 @@ export class AppService {
   private async pruneStaleAppEntries(): Promise<boolean> {
     const currentRoot = this.paprRootDir;
     if (this.loadedPaprRoot && currentRoot !== this.loadedPaprRoot) {
-      console.warn(
-        `[AppService] Skipping stale-app prune — PAPR_HOME changed (${this.loadedPaprRoot} → ${currentRoot})`,
-      );
+      // Warn once per root pair. This used to fire only at startup; now that
+      // listApps() prunes too, an unchanged mismatch would repeat on every
+      // call and bury the rest of the output — in CI it truncated the log
+      // before the test summary was printed.
+      const key = `${this.loadedPaprRoot}→${currentRoot}`;
+      if (this.lastPruneSkipWarnKey !== key) {
+        this.lastPruneSkipWarnKey = key;
+        console.warn(
+          `[AppService] Skipping stale-app prune — PAPR_HOME changed (${this.loadedPaprRoot} → ${currentRoot})`,
+        );
+      }
       return false;
     }
 
