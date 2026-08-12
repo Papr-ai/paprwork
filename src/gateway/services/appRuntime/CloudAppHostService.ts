@@ -288,6 +288,7 @@ export class CloudAppHostService {
     // call that works in both runtimes. Without this a published app that
     // references a file 404s on apps.papr.ai.
     app.post("/api/files/url", (req, res) => void this.handleFileUrl(req, res));
+    app.get("/api/files", (req, res) => void this.handleFileList(req, res));
 
     app.get("/:namespaceId/:slug/__papr__/app-revision.json", (req, res) => {
       if (isReservedCloudPathSegment(req.params.namespaceId)) {
@@ -574,6 +575,55 @@ export class CloudAppHostService {
       const { createReadUrl } = await import("../appFiles/appFilesClient.js");
       const { url } = await createReadUrl(decision.appId, decision.objectKey);
       res.json({ location: { kind: "cloud" }, url });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  }
+
+  /**
+   * GET /api/files — list this app's files.
+   *
+   * Read-only on purpose. Uploading from a published cloud app would need the
+   * visitor to hold write access to the owner's storage, which is a different
+   * trust decision than viewing published assets; until that is designed,
+   * cloud is read-only and the desktop remains the write path.
+   */
+  private async handleFileList(req: Request, res: Response): Promise<void> {
+    try {
+      const requestedAppId = req.query["appId"] as string | undefined;
+      const sourceId = req.query["sourceId"] as string | undefined;
+      if (!this.enforceDbRateLimit(req, res, "read")) return;
+
+      const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+      if (!ctx) return;
+      const { runtimeAuth, access, appId } = ctx;
+
+      if (!access.canRead) {
+        await this.respondAccessDenied(req, res, runtimeAuth);
+        return;
+      }
+
+      const config = await this.loadDataSources(runtimeAuth);
+      const result = await this.turso.query({
+        orgId: access.orgId,
+        namespaceId: access.namespaceId,
+        userId: access.userId,
+        runtimeAuth,
+        config,
+        sourceId,
+        sql: `SELECT * FROM app_files WHERE app_id = ? ORDER BY created_at DESC`,
+        params: [appId],
+      });
+
+      const rows = (result?.rows ?? []) as unknown as AppFileRow[];
+      // User-scoped files belong to their uploader — a listing must not reveal
+      // one visitor's files to another, even though both can reach the app.
+      const visible = rows.filter(
+        (row) =>
+          !row.object_key.includes("/users/") ||
+          (access.userId && row.object_key.includes(`/users/${access.userId}/`)),
+      );
+      res.json({ files: visible });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }

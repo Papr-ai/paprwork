@@ -19,6 +19,16 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { open, stat } from "node:fs/promises";
 
+import {
+  DEFAULT_RETRY,
+  backoffDelayMs,
+  shouldRetry,
+  type RetryPolicy,
+} from "./uploadResume.js";
+
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
 /** GCS requires multiples of 256 KiB; 8 MiB balances throughput and retries. */
 export const CHUNK_SIZE = 8 * 1024 * 1024;
 
@@ -37,6 +47,14 @@ export interface UploadOptions {
   onProgress?: (p: UploadProgress) => void;
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
+  /** Overridable so tests do not actually sleep through the backoff. */
+  sleepImpl?: (ms: number) => Promise<void>;
+  retryPolicy?: RetryPolicy;
+  /**
+   * Called whenever GCS confirms a new committed offset, so the caller can
+   * persist it. This is what makes a crash cost seconds instead of gigabytes.
+   */
+  onOffsetCommitted?: (offset: number) => void | Promise<void>;
 }
 
 /**
@@ -105,6 +123,79 @@ async function readChunk(
   }
 }
 
+interface ChunkDeps {
+  fetchImpl: typeof fetch;
+  sleep: (ms: number) => Promise<void>;
+  policy: RetryPolicy;
+}
+
+interface ChunkOutcome {
+  /** GCS finalised the object — 200/201 rather than another 308. */
+  complete: boolean;
+  /** Bytes GCS says it has committed so far. */
+  committed: number;
+}
+
+/**
+ * PUT one chunk, retrying transient failures with backoff.
+ *
+ * A dropped connection throws rather than returning a status, so both paths
+ * have to funnel into the same decision — otherwise the most common failure on
+ * a flaky link (no response at all) would be the one case we do not retry.
+ */
+async function sendChunkWithRetry(
+  opts: UploadOptions,
+  chunk: Buffer,
+  offset: number,
+  total: number,
+  deps: ChunkDeps,
+): Promise<ChunkOutcome> {
+  let attempt = 0;
+
+  for (;;) {
+    attempt += 1;
+    let status: number | null = null;
+
+    try {
+      const res = await deps.fetchImpl(opts.sessionUrl, {
+        method: "PUT",
+        body: new Uint8Array(chunk),
+        headers: {
+          "Content-Length": String(chunk.length),
+          "Content-Range": `bytes ${offset}-${offset + chunk.length - 1}/${total}`,
+        },
+        signal: opts.signal,
+      });
+      status = res.status;
+
+      if (res.status === 200 || res.status === 201) {
+        return { complete: true, committed: total };
+      }
+      if (res.status === 308) {
+        return {
+          complete: false,
+          committed: parseCommittedOffset(res.headers.get("Range")),
+        };
+      }
+
+      if (!shouldRetry(attempt, res.status, deps.policy)) {
+        const text = await res.text().catch(() => "");
+        throw new Error(
+          `Upload chunk failed (${res.status}) at offset ${offset}: ${text.slice(0, 200)}`,
+        );
+      }
+    } catch (err) {
+      // An aborted upload is a decision, not a failure — never retry it.
+      if (opts.signal?.aborted) throw err;
+      // A thrown error with a status we already judged unretryable is final.
+      if (status !== null && !shouldRetry(attempt, status, deps.policy)) throw err;
+      if (!shouldRetry(attempt, null, deps.policy)) throw err;
+    }
+
+    await deps.sleep(backoffDelayMs(attempt, deps.policy));
+  }
+}
+
 /**
  * Upload a file to an existing session URI, resuming from wherever GCS is.
  *
@@ -114,6 +205,8 @@ async function readChunk(
  */
 export async function uploadResumable(opts: UploadOptions): Promise<number> {
   const fetchImpl = opts.fetchImpl ?? fetch;
+  const sleep = opts.sleepImpl ?? defaultSleep;
+  const policy = opts.retryPolicy ?? DEFAULT_RETRY;
   const total = opts.totalBytes;
 
   let offset = await probeOffset(opts.sessionUrl, total, fetchImpl);
@@ -130,31 +223,23 @@ export async function uploadResumable(opts: UploadOptions): Promise<number> {
     const end = Math.min(offset + CHUNK_SIZE, total);
     const chunk = await readChunk(opts.filePath, offset, end - offset);
 
-    const res = await fetchImpl(opts.sessionUrl, {
-      method: "PUT",
-      body: new Uint8Array(chunk),
-      headers: {
-        "Content-Length": String(chunk.length),
-        "Content-Range": `bytes ${offset}-${offset + chunk.length - 1}/${total}`,
-      },
-      signal: opts.signal,
+    // Retry the chunk, never the file. On a 10 GB upload a transient 503 at
+    // 9 GB must cost one 8 MiB chunk, not the whole transfer.
+    const outcome = await sendChunkWithRetry(opts, chunk, offset, total, {
+      fetchImpl,
+      sleep,
+      policy,
     });
 
-    if (res.status === 200 || res.status === 201) {
+    if (outcome.complete) {
       offset = total;
+      await opts.onOffsetCommitted?.(offset);
       break;
     }
-    if (res.status === 308) {
-      // Trust GCS's committed offset rather than assuming the whole chunk
-      // landed — a partially accepted chunk would otherwise leave a gap.
-      const committed = parseCommittedOffset(res.headers.get("Range"));
-      offset = committed > offset ? committed : end;
-    } else {
-      const text = await res.text().catch(() => "");
-      throw new Error(
-        `Upload chunk failed (${res.status}) at offset ${offset}: ${text.slice(0, 200)}`,
-      );
-    }
+    // Trust GCS's committed offset rather than assuming the whole chunk
+    // landed — a partially accepted chunk would otherwise leave a gap.
+    offset = outcome.committed > offset ? outcome.committed : end;
+    await opts.onOffsetCommitted?.(offset);
 
     if (opts.onProgress) {
       const elapsed = (Date.now() - startedAt) / 1000;

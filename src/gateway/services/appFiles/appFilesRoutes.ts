@@ -11,6 +11,8 @@ import type { Express } from "express";
 
 import {
   addFile,
+  commitBrowserUpload,
+  createBrowserTicket,
   ensureSchema,
   listFiles,
   removeFile,
@@ -19,6 +21,7 @@ import {
   type FilesDb,
 } from "./AppFilesService.js";
 import { appUsage } from "./appFilesClient.js";
+import { resolveMiniAppIdFromRequest } from "../../utils/inferMiniAppIdFromRequest.js";
 
 /** Minimal shape of the pieces index.ts already has wired up. */
 export interface AppFilesRouteDeps {
@@ -123,6 +126,92 @@ export function registerAppFilesRoutes(
     }
   });
 
+  /**
+   * Mint a ticket so the browser can PUT bytes straight to object storage.
+   *
+   * The bytes deliberately do not come through here. Relaying a 10 GB upload
+   * would cost the gateway memory or disk proportional to the file and double
+   * the bandwidth — the mistake this whole design exists to avoid.
+   */
+  app.post("/api/files/ticket", async (req, res) => {
+    try {
+      const { appId, sourceId, fileName, sizeBytes, mime, scope, fingerprint } =
+        req.body as {
+          appId?: string;
+          sourceId?: string;
+          fileName?: string;
+          sizeBytes?: number;
+          mime?: string | null;
+          scope?: "app" | "user";
+          fingerprint?: string;
+        };
+
+      const resolved = resolveMiniAppIdFromRequest(appId, req.headers);
+      if (!resolved.appId) {
+        res.status(resolved.status ?? 400).json({ error: resolved.error });
+        return;
+      }
+      if (!fileName || typeof sizeBytes !== "number" || !fingerprint) {
+        res
+          .status(400)
+          .json({ error: "fileName, sizeBytes and fingerprint are required" });
+        return;
+      }
+
+      const db = await dbFor(resolved.appId, sourceId, deps);
+      await ensureSchema(db);
+      res.json(
+        await createBrowserTicket(db, {
+          appId: resolved.appId,
+          fileName,
+          sizeBytes,
+          mime,
+          scope,
+          fingerprint,
+        }),
+      );
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  /** Verify a browser upload once the bytes have landed in storage. */
+  app.post("/api/files/commit", async (req, res) => {
+    try {
+      const { appId, sourceId, id, objectKey, sizeBytes } = req.body as {
+        appId?: string;
+        sourceId?: string;
+        id?: string;
+        objectKey?: string;
+        sizeBytes?: number;
+      };
+
+      const resolved = resolveMiniAppIdFromRequest(appId, req.headers);
+      if (!resolved.appId) {
+        res.status(resolved.status ?? 400).json({ error: resolved.error });
+        return;
+      }
+      if (!id || !objectKey || typeof sizeBytes !== "number") {
+        res
+          .status(400)
+          .json({ error: "id, objectKey and sizeBytes are required" });
+        return;
+      }
+
+      const db = await dbFor(resolved.appId, sourceId, deps);
+      res.json(
+        await commitBrowserUpload(db, {
+          appId: resolved.appId,
+          id,
+          objectKey,
+          sizeBytes,
+        }),
+      );
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
   /** Resolve a file to a readable URL — local path or short-lived signed URL. */
   app.post("/api/files/url", async (req, res) => {
     try {
@@ -131,11 +220,18 @@ export function registerAppFilesRoutes(
         sourceId?: string;
         id?: string;
       };
-      if (!appId || !id) {
-        res.status(400).json({ error: "appId and id are required" });
+      if (!id) {
+        res.status(400).json({ error: "id is required" });
         return;
       }
-      const db = await dbFor(appId, sourceId, deps);
+      // appId is inferred from the requesting app when omitted, so mini-app
+      // code never has to hardcode its own UUID.
+      const resolved = resolveMiniAppIdFromRequest(appId, req.headers);
+      if (!resolved.appId) {
+        res.status(resolved.status ?? 400).json({ error: resolved.error });
+        return;
+      }
+      const db = await dbFor(resolved.appId, sourceId, deps);
       res.json(await resolveFileUrl(db, id));
     } catch (err) {
       fail(res, err);
@@ -146,13 +242,14 @@ export function registerAppFilesRoutes(
     try {
       const appId = req.query.appId as string | undefined;
       const sourceId = req.query.sourceId as string | undefined;
-      if (!appId) {
-        res.status(400).json({ error: "appId is required" });
+      const resolved = resolveMiniAppIdFromRequest(appId, req.headers);
+      if (!resolved.appId) {
+        res.status(resolved.status ?? 400).json({ error: resolved.error });
         return;
       }
-      const db = await dbFor(appId, sourceId, deps);
+      const db = await dbFor(resolved.appId, sourceId, deps);
       await ensureSchema(db);
-      res.json({ files: await listFiles(db, appId) });
+      res.json({ files: await listFiles(db, resolved.appId) });
     } catch (err) {
       fail(res, err);
     }
@@ -165,11 +262,16 @@ export function registerAppFilesRoutes(
         sourceId?: string;
         id?: string;
       };
-      if (!appId || !id) {
-        res.status(400).json({ error: "appId and id are required" });
+      if (!id) {
+        res.status(400).json({ error: "id is required" });
         return;
       }
-      const db = await dbFor(appId, sourceId, deps);
+      const resolved = resolveMiniAppIdFromRequest(appId, req.headers);
+      if (!resolved.appId) {
+        res.status(resolved.status ?? 400).json({ error: resolved.error });
+        return;
+      }
+      const db = await dbFor(resolved.appId, sourceId, deps);
       res.json({ deleted: await removeFile(db, id) });
     } catch (err) {
       fail(res, err);

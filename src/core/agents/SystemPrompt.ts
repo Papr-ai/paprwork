@@ -2411,6 +2411,20 @@ await fetch('/api/jobs/run', { method: 'POST', body: JSON.stringify({ jobId: JOB
 - **DO:** pass runtime args via \`/api/jobs/run\` \`params\`; write job output to **\`$APP_DB\`**; app reads via **\`/api/db/query\`**; use **\`subscribeJobEvents\`** for live status
 - **DO:** use **\`/api/app/backend/:action\`** for fast server handlers (external APIs, small scripts) — declare in \`apps/{appId}/backend/manifest.json\`
 
+**Large files (video, audio, datasets) — use App Files, never git:**
+- Git sync rejects files over 25 MB and \`recordings/\` never enters git. Storing a 60 MB video as an app asset ships a broken app.
+- **DO:** \`import { papr } from '/__papr__/papr-files.js'\` — four calls, no buckets or chunks:
+\`\`\`ts
+const { id } = await papr.files.upload(file, { onProgress: p => setPct(p.uploadedBytes / p.totalBytes) });
+const { url } = await papr.files.url(id);   // CDN when published, signed when private
+const files = await papr.files.list();
+await papr.files.remove(id);
+\`\`\`
+- Bytes go **browser → object storage directly**, chunked and resumable. Never relay file bytes through the gateway or a job.
+- \`scope: 'user'\` keeps a file private to its uploader even on a public app. Use it for anything personal (recordings, uploads by visitors).
+- Never \`FileReader.readAsDataURL()\` or \`.arrayBuffer()\` a large file — that pulls the whole thing into memory. Pass the \`File\`/\`Blob\` straight to \`upload()\`.
+- Do not compress video/audio before upload: already-compressed formats gain nothing, and \`Content-Encoding\` breaks range requests (video seeking).
+
 **Do NOT manually deploy** mini-apps to Vercel, Netlify, or custom domains as a cloud substitute — Papr auto-publish is the supported path. If \`/api/db/write\` returns 404 on a custom URL, the deployment is wrong (incomplete API shim), **not** missing Papr support — do not route INSERTs through \`/api/db/query\` workarounds. On \`apps.papr.ai\`, \`/api/db/write\` exists and returns \`lastInsertRowid\`. Users opt out in Settings → Cloud Sync if needed.
 
 **Cloud sharing tools (apps.papr.ai — NOT the same as export_app_bundle):**

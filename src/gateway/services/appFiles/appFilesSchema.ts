@@ -27,6 +27,19 @@ export interface AppFileRow {
   upload_state: UploadState;
   /** 'private' means "never publish me", even if the app goes public. */
   visibility: FileVisibility;
+  /**
+   * GCS resumable session URI for an upload in flight.
+   *
+   * Persisted rather than held in memory because that is the whole difference
+   * between "resumable" and actually resumable: a session survives a reboot,
+   * a closed laptop and a weekend, but only if we still know its address.
+   * Without this, a laptop dying at 9 GB of 10 means re-sending all 10.
+   */
+  upload_session_uri: string | null;
+  /** Bytes GCS confirmed committed. A hint for UI; GCS remains authoritative. */
+  bytes_uploaded: number;
+  /** Epoch ms after which the session URI is dead and must be re-minted. */
+  session_expires_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -44,13 +57,49 @@ CREATE TABLE IF NOT EXISTS app_files (
   local_path    TEXT,
   upload_state  TEXT NOT NULL DEFAULT 'pending',
   visibility    TEXT NOT NULL DEFAULT 'inherit',
+  upload_session_uri TEXT,
+  bytes_uploaded     INTEGER NOT NULL DEFAULT 0,
+  session_expires_at INTEGER,
   created_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_app_files_sha ON app_files(sha256);
 CREATE INDEX IF NOT EXISTS idx_app_files_state ON app_files(upload_state);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_files_key ON app_files(object_key);
+
+/*
+ * Hashing 10 GB takes minutes and spins fans. After a crash we would otherwise
+ * pay it again just to learn the same answer, so cache by the three things
+ * that change when a file's content changes.
+ */
+CREATE TABLE IF NOT EXISTS app_file_hashes (
+  local_path  TEXT PRIMARY KEY,
+  size_bytes  INTEGER NOT NULL,
+  mtime_ms    INTEGER NOT NULL,
+  sha256      TEXT NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
 `;
+
+/**
+ * Columns added after the table shipped.
+ *
+ * SQLite has no `ADD COLUMN IF NOT EXISTS`, and existing installs already have
+ * `app_files`, so `CREATE TABLE IF NOT EXISTS` alone would silently leave them
+ * on the old shape. Each statement is run individually and its "duplicate
+ * column" error ignored — the only safe way to be idempotent here.
+ */
+export const APP_FILES_MIGRATIONS: readonly string[] = [
+  `ALTER TABLE app_files ADD COLUMN upload_session_uri TEXT`,
+  `ALTER TABLE app_files ADD COLUMN bytes_uploaded INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE app_files ADD COLUMN session_expires_at INTEGER`,
+];
+
+/** True when an ALTER failed only because the column was already there. */
+export function isDuplicateColumnError(err: unknown): boolean {
+  const message = (err as Error)?.message ?? "";
+  return /duplicate column name/i.test(message);
+}
 
 /**
  * Where a file's bytes can be read from right now.
