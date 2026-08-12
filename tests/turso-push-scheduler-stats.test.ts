@@ -24,7 +24,13 @@ vi.mock("../src/gateway/services/TursoSyncBridge.js", () => ({
   getTursoSyncBridge: () => bridgeMock,
 }));
 
-vi.mock("../src/gateway/services/tursoSyncState.js", () => ({
+// Spread the real module instead of listing exports by hand — the two-export
+// version broke as soon as the scheduler reached loadTursoSyncState, with an
+// error naming the mock rather than the missing export.
+vi.mock("../src/gateway/services/tursoSyncState.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../src/gateway/services/tursoSyncState.js")
+  >()),
   recordTursoPushSuccess: vi.fn(),
   recordTursoPushQuarantine: vi.fn(),
 }));
