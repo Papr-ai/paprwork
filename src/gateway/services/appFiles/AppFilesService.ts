@@ -25,6 +25,7 @@ import {
   resolveLocation,
   type AppFileRow,
   type FileLocation,
+  type FileVisibility,
 } from "./appFilesSchema.js";
 import { hashFile, uploadResumable, type UploadProgress } from "./resumableUploader.js";
 import {
@@ -284,6 +285,27 @@ export async function commitBrowserUpload(
     deduped: false,
     verified: commit.verified,
   };
+}
+
+/**
+ * Set the "never publish me" flag on a file.
+ *
+ * Only touches the local column; it does not call the storage API. Publishing
+ * reads this flag and skips the object, so a private file is never made
+ * CDN-public in the first place — which is stronger than making it public and
+ * relying on a later call to undo that.
+ */
+export async function setFilePrivacy(
+  db: FilesDb,
+  id: string,
+  isPrivate: boolean,
+): Promise<{ id: string; visibility: FileVisibility }> {
+  const visibility: FileVisibility = isPrivate ? "private" : "inherit";
+  await db.run(
+    `UPDATE app_files SET visibility = ?, updated_at = ? WHERE id = ?`,
+    [visibility, Date.now(), id],
+  );
+  return { id, visibility };
 }
 
 /** Persist GCS's committed offset so a crash resumes rather than restarts. */

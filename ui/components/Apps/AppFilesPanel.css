@@ -1,0 +1,145 @@
+/**
+ * App Files panel styling — Liquid Glass tokens only, no hardcoded colours,
+ * so the panel follows light/dark and any future theme without edits.
+ */
+
+.app-files {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.app-files__drop {
+  border: 1.5px dashed var(--border-color);
+  border-radius: 12px;
+  padding: 20px 16px;
+  text-align: center;
+  background: var(--background-secondary);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+/* Only a border and tint on drag — no growing or jumping, which reads as a
+   glitch when someone is dragging a file across the window. */
+.app-files__drop--active {
+  border-color: var(--accent-color);
+  background: var(--background-hover);
+}
+
+.app-files__drop-title {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.app-files__drop-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.app-files__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.app-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.app-file:hover {
+  background: var(--background-hover);
+}
+
+.app-file__glyph {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+/* Verified and local — the only state that reads as fully settled. */
+.app-file__glyph--filled {
+  color: var(--accent-color);
+}
+
+.app-file__glyph--slashed {
+  color: var(--error-color, var(--text-secondary));
+}
+
+.app-file__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.app-file__name {
+  font-size: 13px;
+  color: var(--text-color);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-file__meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+  /* Tabular figures stop the progress line jittering as digits change — a
+     number that twitches every 200 ms is hard to read and looks broken. */
+  font-variant-numeric: tabular-nums;
+}
+
+.app-file__private {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.app-file__action {
+  background: none;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.app-file__action:hover:not(:disabled) {
+  background: var(--background-tertiary);
+  color: var(--text-color);
+}
+
+.app-file__action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.app-file__action--danger:hover:not(:disabled) {
+  color: var(--error-color, var(--text-color));
+  border-color: var(--error-color, var(--border-color));
+}
+
+.app-files__empty,
+.app-files__reclaim,
+.app-files__error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.app-files__error {
+  color: var(--error-color, var(--text-color));
+}

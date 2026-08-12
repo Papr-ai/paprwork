@@ -17,6 +17,7 @@ import {
   listFiles,
   removeFile,
   resolveFileUrl,
+  setFilePrivacy,
   evictLocal,
   type FilesDb,
 } from "./AppFilesService.js";
@@ -273,6 +274,37 @@ export function registerAppFilesRoutes(
       }
       const db = await dbFor(resolved.appId, sourceId, deps);
       res.json({ deleted: await removeFile(db, id) });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  /**
+   * Mark a file "never publish me", or undo that.
+   *
+   * The meeting-recording guarantee, as a single switch. Publishing reads this
+   * flag and skips the object entirely, so a private file is never made
+   * CDN-public rather than being made public and un-made later.
+   */
+  app.post("/api/files/visibility", async (req, res) => {
+    try {
+      const { appId, sourceId, id, isPrivate } = req.body as {
+        appId?: string;
+        sourceId?: string;
+        id?: string;
+        isPrivate?: boolean;
+      };
+      if (!id || typeof isPrivate !== "boolean") {
+        res.status(400).json({ error: "id and isPrivate are required" });
+        return;
+      }
+      const resolved = resolveMiniAppIdFromRequest(appId, req.headers);
+      if (!resolved.appId) {
+        res.status(resolved.status ?? 400).json({ error: resolved.error });
+        return;
+      }
+      const db = await dbFor(resolved.appId, sourceId, deps);
+      res.json(await setFilePrivacy(db, id, isPrivate));
     } catch (err) {
       fail(res, err);
     }
