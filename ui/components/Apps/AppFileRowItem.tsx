@@ -1,9 +1,12 @@
 /**
- * One file row: glyph, name, state, and the actions that need a deliberate tap.
+ * One file row.
  *
- * Split from the panel because the row carries the two destructive actions,
- * and they deserve to be read in isolation. Both are explicit and neither is
- * ever triggered by a background process.
+ * At rest: a state dot, a name, a size. That is what someone scans a list for.
+ * Actions appear on hover — three permanent controls per row is noise that
+ * grows with the file count, and the row's own text stops being readable.
+ *
+ * Privacy is a lock toggle rather than a labelled checkbox. It is a state the
+ * file is in, not a form field, and a lock says that in one glyph.
  */
 
 import type { AppFileRow } from "../../../src/gateway/services/appFiles/appFilesSchema";
@@ -12,7 +15,7 @@ import {
   describeFileState,
   formatBytes,
   glyphForFile,
-  formatProgressLine,
+  uploadPercent,
 } from "../../utils/appFilesFormat";
 
 interface AppFileRowItemProps {
@@ -24,15 +27,15 @@ interface AppFileRowItemProps {
 }
 
 /** Four states, four shapes — never colour alone. */
-function StateGlyph({ file }: { file: AppFileRow }) {
+function StateDot({ file }: { file: AppFileRow }) {
   const glyph = glyphForFile(file);
   const label = describeFileState(file);
   return (
     <svg
-      className={`app-file__glyph app-file__glyph--${glyph}`}
-      width="14"
-      height="14"
-      viewBox="0 0 14 14"
+      className={`app-file__dot app-file__dot--${glyph}`}
+      width="8"
+      height="8"
+      viewBox="0 0 8 8"
       fill="none"
       stroke="currentColor"
       strokeWidth="1.5"
@@ -40,13 +43,18 @@ function StateGlyph({ file }: { file: AppFileRow }) {
       aria-label={label}
     >
       <title>{label}</title>
-      <circle
-        cx="7"
-        cy="7"
-        r="5"
-        fill={glyph === "filled" ? "currentColor" : "none"}
-      />
-      {glyph === "slashed" && <line x1="3" y1="11" x2="11" y2="3" />}
+      <circle cx="4" cy="4" r="3" fill={glyph === "filled" ? "currentColor" : "none"} />
+      {glyph === "slashed" && <line x1="1.5" y1="6.5" x2="6.5" y2="1.5" />}
+    </svg>
+  );
+}
+
+function LockIcon({ locked }: { locked: boolean }) {
+  return (
+    <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden>
+      <rect x="3" y="6.5" width="8" height="5.5" rx="1.2" />
+      {/* Open shackle when unlocked: the shape itself carries the state. */}
+      <path d={locked ? "M5 6.5V4.5a2 2 0 0 1 4 0v2" : "M5 6.5V4.5a2 2 0 0 1 4 0"} />
     </svg>
   );
 }
@@ -59,54 +67,60 @@ export function AppFileRowItem({
   onRemove,
 }: AppFileRowItemProps) {
   const isPrivate = file.visibility === "private";
-  const uploading = file.upload_state === "uploading";
+  const percent = uploadPercent(file);
 
   return (
-    <li className="app-file">
-      <StateGlyph file={file} />
+    <li className={`app-file${busy ? " app-file--busy" : ""}`}>
+      <StateDot file={file} />
 
-      <div className="app-file__body">
-        <span className="app-file__name">{file.file_name}</span>
-        <span className="app-file__meta">
-          {uploading
-            ? // Bytes moved, not a bare percentage: on a multi-GB upload the
-              // absolute numbers are what tell the user it is still moving.
-              formatProgressLine(file.bytes_uploaded, file.size_bytes, 0, null)
-            : `${formatBytes(file.size_bytes)} · ${describeFileState(file)}`}
-        </span>
-      </div>
+      <span className="app-file__name" title={file.file_name}>
+        {file.file_name}
+      </span>
 
-      <label className="app-file__private" title="Never publish this file, even if the app is public">
-        <input
-          type="checkbox"
-          checked={isPrivate}
-          disabled={busy}
-          onChange={(e) => onTogglePrivate(e.target.checked)}
-        />
-        Keep private
-      </label>
+      <span className="app-file__size">
+        {percent === null ? formatBytes(file.size_bytes) : `${percent}%`}
+      </span>
 
-      {canEvict(file) && (
+      <div className="app-file__actions">
         <button
           type="button"
-          className="app-file__action"
+          className={`app-file__icon${isPrivate ? " app-file__icon--on" : ""}`}
           disabled={busy}
-          onClick={onEvict}
-          title="Delete the copy on this Mac. The cloud copy is kept."
+          aria-pressed={isPrivate}
+          onClick={() => onTogglePrivate(!isPrivate)}
+          title={isPrivate ? "Private — never published" : "Published with the app"}
         >
-          Free space
+          <LockIcon locked={isPrivate} />
         </button>
-      )}
 
-      <button
-        type="button"
-        className="app-file__action app-file__action--danger"
-        disabled={busy}
-        onClick={onRemove}
-        title="Delete this file everywhere"
-      >
-        Remove
-      </button>
+        {canEvict(file) && (
+          <button
+            type="button"
+            className="app-file__text-action"
+            disabled={busy}
+            onClick={onEvict}
+            title="Delete the copy on this Mac. The cloud copy is kept."
+          >
+            Free
+          </button>
+        )}
+
+        <button
+          type="button"
+          className="app-file__text-action app-file__text-action--danger"
+          disabled={busy}
+          onClick={onRemove}
+          title="Delete everywhere"
+        >
+          Remove
+        </button>
+      </div>
+
+      {/* A hairline that fills. On a multi-GB upload, motion is what says
+          "working" — a number alone reads as frozen between updates. */}
+      {percent !== null && (
+        <span className="app-file__progress" style={{ width: `${percent}%` }} />
+      )}
     </li>
   );
 }

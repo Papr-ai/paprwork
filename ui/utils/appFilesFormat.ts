@@ -107,6 +107,28 @@ export function reclaimableBytes(rows: readonly AppFileRow[]): number {
     .reduce((sum, row) => sum + row.size_bytes, 0);
 }
 
+/** Everything stored, for the one number in the panel header. */
+export function totalBytes(rows: readonly AppFileRow[]): number {
+  return rows.reduce((sum, row) => sum + row.size_bytes, 0);
+}
+
+/**
+ * Whole-percent progress, or null when the file is not uploading.
+ *
+ * Whole numbers on purpose: a decimal that changes several times a second is
+ * harder to read than one that ticks, and carries no more information.
+ *
+ * Never returns 100 for an upload still in flight — showing 100% while the
+ * server is still verifying is the single most common way a progress
+ * indicator lies, and it makes the last seconds feel broken.
+ */
+export function uploadPercent(row: AppFileRow): number | null {
+  if (row.upload_state !== "uploading") return null;
+  if (row.size_bytes <= 0) return 0;
+  const percent = (row.bytes_uploaded / row.size_bytes) * 100;
+  return Math.min(99, Math.floor(percent));
+}
+
 /** True when a file is safe to evict — verified, with a local copy to drop. */
 export function canEvict(row: AppFileRow): boolean {
   return row.upload_state === "verified" && Boolean(row.local_path);

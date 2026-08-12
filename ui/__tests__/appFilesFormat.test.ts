@@ -17,6 +17,8 @@ import {
   formatRate,
   glyphForFile,
   reclaimableBytes,
+  totalBytes,
+  uploadPercent,
 } from "../utils/appFilesFormat";
 
 const GB = 1024 ** 3;
@@ -139,6 +141,54 @@ describe("reclaimableBytes", () => {
 
   it("ignores files already evicted", () => {
     expect(reclaimableBytes([row({ local_path: null })])).toBe(0);
+  });
+});
+
+describe("totalBytes", () => {
+  it("sums everything stored, whatever its state", () => {
+    // The header number answers "how much is here", which includes files
+    // still uploading — excluding them would make the total shrink as an
+    // upload finishes, which is nonsense.
+    const rows = [
+      row({ id: "a", size_bytes: 2 * GB }),
+      row({ id: "b", size_bytes: 3 * GB, upload_state: "uploading" }),
+    ];
+    expect(totalBytes(rows)).toBe(5 * GB);
+  });
+
+  it("is zero for an empty app", () => {
+    expect(totalBytes([])).toBe(0);
+  });
+});
+
+describe("uploadPercent", () => {
+  it("reports whole percent while uploading", () => {
+    expect(
+      uploadPercent(
+        row({ upload_state: "uploading", size_bytes: 100, bytes_uploaded: 42 }),
+      ),
+    ).toBe(42);
+  });
+
+  it("never shows 100% while bytes are still in flight", () => {
+    // The most common way a progress bar lies: sitting at 100% through
+    // verification, making the last seconds feel broken.
+    expect(
+      uploadPercent(
+        row({ upload_state: "uploading", size_bytes: 100, bytes_uploaded: 100 }),
+      ),
+    ).toBe(99);
+  });
+
+  it("returns null for anything not uploading, so the row shows its size", () => {
+    expect(uploadPercent(row())).toBeNull();
+    expect(uploadPercent(row({ upload_state: "failed" }))).toBeNull();
+  });
+
+  it("does not divide by zero on an empty file", () => {
+    expect(
+      uploadPercent(row({ upload_state: "uploading", size_bytes: 0 })),
+    ).toBe(0);
   });
 });
 

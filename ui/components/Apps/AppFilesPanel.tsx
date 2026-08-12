@@ -1,12 +1,17 @@
 /**
- * App Files panel — drop large files here instead of into git.
+ * App Files — store large files with an app instead of in git.
  *
- * Design rules this enforces, from the requirements:
- *   - Zero sharing prompts during upload. Dropping a file uploads it; privacy
- *     is a property you can change afterwards, not a question asked up front.
- *   - Nothing is ever deleted without an explicit tap.
- *   - Honest progress for multi-GB files, so a slow upload is legible as slow
- *     rather than stuck.
+ * One job: drop a file, it is stored. Everything else is secondary and stays
+ * out of sight until needed.
+ *
+ * Two decisions worth naming:
+ *
+ *   - The drop zone only appears when the list is empty or a drag is in
+ *     progress. A permanent dashed box would occupy the panel forever to teach
+ *     something learned once; when files exist, the list itself is the target.
+ *   - Row actions are revealed on hover, like Finder and Mail. Three controls
+ *     on every row is visual noise proportional to file count; at rest the
+ *     list reads as name and size, which is what someone scans for.
  */
 
 import React, { useCallback, useEffect, useState } from "react";
@@ -18,15 +23,11 @@ import {
   setAppFilePrivacy,
   uploadAppFile,
 } from "../../utils/appFilesApi";
-import { formatBytes, reclaimableBytes } from "../../utils/appFilesFormat";
+import { formatBytes, totalBytes } from "../../utils/appFilesFormat";
 import { AppFileRowItem } from "./AppFileRowItem";
 import "./AppFilesPanel.css";
 
-interface AppFilesPanelProps {
-  appId: string;
-}
-
-export function AppFilesPanel({ appId }: AppFilesPanelProps) {
+export function AppFilesPanel({ appId }: { appId: string }) {
   const [files, setFiles] = useState<AppFileRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [dragging, setDragging] = useState(false);
@@ -53,17 +54,16 @@ export function AppFilesPanel({ appId }: AppFilesPanelProps) {
       event.preventDefault();
       setDragging(false);
 
-      // Electron exposes the real path, so the gateway streams from disk and
-      // the renderer never holds the bytes — the only way a 10 GB drop works.
+      // Electron gives the real path, so the gateway streams from disk and the
+      // renderer never holds the bytes — the only way a 10 GB drop works.
       const paths = Array.from(event.dataTransfer.files)
         .map((file) => (file as File & { path?: string }).path)
         .filter((path): path is string => Boolean(path));
 
       if (paths.length === 0) {
-        setError("Could not read the dropped file's location.");
+        setError("Could not read that file's location.");
         return;
       }
-
       for (const path of paths) {
         try {
           await uploadAppFile(appId, path);
@@ -76,7 +76,7 @@ export function AppFilesPanel({ appId }: AppFilesPanelProps) {
     [appId, refresh],
   );
 
-  const withBusy = useCallback(
+  const act = useCallback(
     async (id: string, action: () => Promise<unknown>) => {
       setBusyId(id);
       try {
@@ -91,31 +91,27 @@ export function AppFilesPanel({ appId }: AppFilesPanelProps) {
     [refresh],
   );
 
-  const reclaimable = reclaimableBytes(files);
+  const stored = totalBytes(files);
 
   return (
-    <div className="app-files">
-      <div
-        className={`app-files__drop${dragging ? " app-files__drop--active" : ""}`}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragging(true);
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={(e) => void onDrop(e)}
-      >
-        <p className="app-files__drop-title">Drop files to store them</p>
-        <p className="app-files__drop-hint">
-          Video, audio and datasets of any size. They stay out of git.
-        </p>
-      </div>
+    <section
+      className={`app-files${dragging ? " app-files--dragging" : ""}`}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => void onDrop(e)}
+    >
+      <header className="app-files__head">
+        <h3>Files</h3>
+        {stored > 0 && <span className="app-files__total">{formatBytes(stored)}</span>}
+      </header>
 
       {error && <p className="app-files__error">{error}</p>}
 
-      {loading ? (
-        <p className="app-files__empty">Loading…</p>
-      ) : files.length === 0 ? (
-        <p className="app-files__empty">No files yet.</p>
+      {loading ? null : files.length === 0 ? (
+        <p className="app-files__empty">Drop a file to store it outside git.</p>
       ) : (
         <ul className="app-files__list">
           {files.map((file) => (
@@ -124,27 +120,14 @@ export function AppFilesPanel({ appId }: AppFilesPanelProps) {
               file={file}
               busy={busyId === file.id}
               onTogglePrivate={(isPrivate) =>
-                void withBusy(file.id, () =>
-                  setAppFilePrivacy(appId, file.id, isPrivate),
-                )
+                void act(file.id, () => setAppFilePrivacy(appId, file.id, isPrivate))
               }
-              onEvict={() =>
-                void withBusy(file.id, () => evictAppFile(appId, file.object_key))
-              }
-              onRemove={() =>
-                void withBusy(file.id, () => removeAppFile(appId, file.id))
-              }
+              onEvict={() => void act(file.id, () => evictAppFile(appId, file.object_key))}
+              onRemove={() => void act(file.id, () => removeAppFile(appId, file.id))}
             />
           ))}
         </ul>
       )}
-
-      {reclaimable > 0 && (
-        <p className="app-files__reclaim">
-          Free {formatBytes(reclaimable)} — files stay in the cloud. Use
-          &ldquo;Free space&rdquo; on any file above.
-        </p>
-      )}
-    </div>
+    </section>
   );
 }
