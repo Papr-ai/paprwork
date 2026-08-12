@@ -22,6 +22,7 @@ export interface MemoryPublishSharingFields {
   visibility: CloudAccessMode;
   linkPermission: "read" | "read_write";
   shareLinkEnabled: boolean;
+  requireSignIn?: boolean;
 }
 
 const LOGIN_ACCESS_MODES: readonly CloudLoginAccess[] = [
@@ -117,6 +118,7 @@ export function audienceModelToPublishFields(
       visibility: "public_read",
       linkPermission,
       shareLinkEnabled,
+      ...(model.requireSignIn === true ? { requireSignIn: true } : {}),
     };
   }
 
@@ -137,7 +139,11 @@ export function audienceModelToPublishFields(
 export function resolvePublishFieldsFromPrefs(
   prefs: Pick<
     CloudPublishAppPrefs,
-    "loginAccess" | "externalLink" | "accessMode" | "codeAccess"
+    | "loginAccess"
+    | "externalLink"
+    | "accessMode"
+    | "codeAccess"
+    | "requireSignIn"
   >,
 ): MemoryPublishSharingFields {
   const sharing = resolveSharingSettings(prefs);
@@ -145,6 +151,9 @@ export function resolvePublishFieldsFromPrefs(
     sharing.loginAccess,
     sharing.externalLink,
     prefs.codeAccess ?? "off",
+    {
+      requireSignIn: prefs.requireSignIn,
+    },
   );
   return audienceModelToPublishFields(model, sharing);
 }

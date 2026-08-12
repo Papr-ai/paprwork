@@ -20,6 +20,8 @@ export interface CloudPublishPrefs {
   loginAccess?: CloudLoginAccess;
   externalLink?: CloudExternalLink;
   codeAccess?: CodeAccess;
+  requireSignIn?: boolean;
+  perUserIsolation?: boolean;
 }
 
 export interface CloudPublishState {
@@ -81,6 +83,8 @@ export async function publishCloudApp(
     loginAccess?: CloudLoginAccess;
     externalLink?: CloudExternalLink;
     codeAccess?: CodeAccess;
+    requireSignIn?: boolean;
+    perUserIsolation?: boolean;
     autoPublish?: boolean;
     acknowledgeDesktopOnly?: boolean;
   },

@@ -33,7 +33,11 @@ describe("shareAudienceModel", () => {
 
   it("round-trips public and team", () => {
     const publicModel = sharingToAudienceModel("public", "off");
-    expect(publicModel).toEqual({ audience: "public", permission: "write" });
+    expect(publicModel).toEqual({
+      audience: "public",
+      permission: "write",
+      requireSignIn: false,
+    });
     expect(audienceModelToSharing(publicModel)).toEqual({
       loginAccess: "public",
       externalLink: "off",
@@ -55,6 +59,7 @@ describe("shareAudienceModel", () => {
     ).toEqual({
       audience: "public",
       permission: "edit",
+      requireSignIn: false,
     });
     expect(
       sharingToAudienceModel("team", "off", "install"),
@@ -117,5 +122,22 @@ describe("shareAudienceModel", () => {
     expect(shouldListInCommunity("public", true)).toBe(true);
     expect(shouldListInCommunity("team", true)).toBe(false);
     expect(shouldListInCommunity("public", false)).toBe(false);
+  });
+
+  it("maps public community sign-in requirement", () => {
+    expect(
+      sharingToAudienceModel("public", "off", "off", { requireSignIn: true }),
+    ).toEqual({
+      audience: "public",
+      permission: "write",
+      requireSignIn: true,
+    });
+    expect(
+      sharingToAudienceModel("public", "off", "off", { requireSignIn: false }),
+    ).toEqual({
+      audience: "public",
+      permission: "write",
+      requireSignIn: false,
+    });
   });
 });

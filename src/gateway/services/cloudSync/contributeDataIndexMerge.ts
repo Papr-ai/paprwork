@@ -10,6 +10,8 @@ import * as path from "node:path";
 
 import type { DatabasesRegistryFile, DatabaseRecord } from "../DatabaseRegistryService.js";
 import type { JobRecord } from "../jobs/types.js";
+import { isJobRuntimeOffGit } from "../jobs/jobRuntimeOffGit.js";
+import { toConfigIndexEntry, type JobConfigSlice } from "../jobs/jobRuntimeFields.js";
 import {
   readDataSourceRegistryDbIds,
   resolveAppDependentJobIds,
@@ -107,25 +109,37 @@ export function mergeJobsJsonForContribute(
   dependentJobIds: readonly string[],
   forkAppId: string,
   targetAppId: string,
-): JobRecord[] {
+): Array<JobRecord | JobConfigSlice> {
   const dependent = new Set(dependentJobIds);
   const slice = contributorJobs
     .filter((job) => dependent.has(job.id))
-    .map((job) => remapJobForContribute(job, forkAppId, targetAppId));
+    .map((job) => {
+      const remapped = remapJobForContribute(job, forkAppId, targetAppId);
+      return isJobRuntimeOffGit() ? toConfigIndexEntry(remapped) : remapped;
+    });
 
   if (slice.length === 0) {
     return ownerJobs;
   }
 
-  const byId = new Map(ownerJobs.map((job) => [job.id, job]));
+  const byId = new Map<string, JobRecord | JobConfigSlice>(
+    ownerJobs.map((job) => [
+      job.id,
+      isJobRuntimeOffGit() ? toConfigIndexEntry(job) : job,
+    ]),
+  );
   for (const job of slice) {
     byId.set(job.id, job);
   }
 
-  return [...byId.values()].sort(
-    (a, b) =>
-      new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-  );
+  return [...byId.values()].sort((a, b) => {
+    if (isJobRuntimeOffGit()) {
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    }
+    const aUpdated = (a as JobRecord).updatedAt;
+    const bUpdated = (b as JobRecord).updatedAt;
+    return new Date(bUpdated).getTime() - new Date(aUpdated).getTime();
+  });
 }
 
 function portableDatabaseRecord(record: DatabaseRecord): DatabaseRecord {

@@ -197,12 +197,23 @@ Absolute `dbPath` values are stripped before commit (`scrubAppDataSourcesForGitS
 | Situation | Behavior |
 |-----------|----------|
 | Fast-forward pull | Apply silently |
-| Remote ahead — **cloud runtime metadata only** (`Jobs/*/job.json`, `data/jobs.json`, `data/cloud-repo-head.txt`) | **Auto-merge** on wake, heartbeat, pull, and before push — no owner action |
+| Remote ahead — **cloud runtime metadata only** (`Jobs/*/job.json`, `data/jobs.json`, `data/cloud-repo-head.txt`) | **Auto-merge** on wake, heartbeat, pull, and before push — no owner action *(legacy; disabled when `JOB_RUNTIME_OFF_GIT=1`)* |
+| Remote ahead — **legacy job status only** with `JOB_RUNTIME_OFF_GIT=1` | **Ignored** — runtime arrives via heartbeat `pendingCloudRuns`; git flag cleared without merge |
 | Remote ahead — **app/job source code** or mixed changes | Status: **`updates_available`** — in-app **Merge remote changes** (`POST /api/sync/apply-updates`); then Upload now |
 | Owner / agent accepts (code changes) | Same as merge button — stash, merge `origin/main`, restore local edits |
 | Owner / agent publishes | Upload now / `push_cloud_sync` after review (metadata-only remote no longer blocks) |
 
-Cloud job runs while desktop sleeps write `job.json` status — that is **not** “app code ahead.” Desktop auto-integrates those commits so local app uploads proceed without manual git.
+Cloud job runs while desktop sleeps wrote `job.json` status — that is **not** “app code ahead.” Desktop auto-integrated those commits so local app uploads proceeded without manual git. **Phase 3:** With `JOB_RUNTIME_OFF_GIT=1`, cloud no longer writes job status to git; desktop applies runtime via heartbeat instead and legacy git-only status commits are ignored.
+
+**Job runtime off git (default on; set `JOB_RUNTIME_OFF_GIT=0` for legacy git status):** Git tracks job **definitions** only (`Jobs/{id}/job.json` config fields, config-only `data/jobs.json`). Runtime (`status`, `lastRunAt`, `scheduleState.nextRunAt`, …) lives in gitignored `Jobs/{id}/job.runtime.json` locally. Memory server: `JOB_RUNTIME_GIT_DUAL_WRITE` defaults off. **Bidirectional sync via memory server (Phase 4):**
+
+| Direction | Mechanism |
+|-----------|-----------|
+| Cloud → desktop | Heartbeat `pendingCloudRuns` (`JobRuntimePatch`) |
+| Desktop → cloud | `POST /v1/cloud/runtime/job-runtime/upsert` after local `setJobStatus` |
+| Fresh device hydrate | `GET /v1/cloud/runtime/job-runtime` on gateway startup → LWW merge into local runtime files |
+
+Local status writes do not enqueue git sync. Mongo is authoritative for runtime; git is authoritative for definitions + code.
 
 Agent guidance: when `updates_available` (code on remote), summarize remote changes and ask before pushing local edits.
 

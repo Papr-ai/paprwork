@@ -15,6 +15,8 @@ export interface ProfileData {
   name: string;
   email: string;
   imageUrl: string;
+  /** True when a local photo still needs to be uploaded to Papr. */
+  profileImageSyncPending?: boolean;
 }
 
 export interface PermissionData {

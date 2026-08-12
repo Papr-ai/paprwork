@@ -1379,6 +1379,8 @@ async function startGateway(): Promise<void> {
           loginAccess?: import("./services/cloudSharingSettings.js").CloudLoginAccess;
           externalLink?: import("./services/cloudSharingSettings.js").CloudExternalLink;
           codeAccess?: import("../core/utils/shareAudienceModel.js").CodeAccess;
+          requireSignIn?: boolean;
+          perUserIsolation?: boolean;
           slug?: string;
           autoPublish?: boolean;
           acknowledgeDesktopOnly?: boolean;
@@ -1405,7 +1407,9 @@ async function startGateway(): Promise<void> {
           body.accessMode ||
           body.loginAccess !== undefined ||
           body.externalLink !== undefined ||
-          body.codeAccess !== undefined
+          body.codeAccess !== undefined ||
+          body.requireSignIn !== undefined ||
+          body.perUserIsolation !== undefined
         ) {
           setAppPublishPrefs(req.params.appId, {
             ...(body.accessMode ? { accessMode: body.accessMode } : {}),
@@ -1418,6 +1422,12 @@ async function startGateway(): Promise<void> {
             ...(body.codeAccess !== undefined
               ? { codeAccess: body.codeAccess }
               : {}),
+            ...(body.requireSignIn !== undefined
+              ? { requireSignIn: body.requireSignIn }
+              : {}),
+            ...(body.perUserIsolation !== undefined
+              ? { perUserIsolation: body.perUserIsolation }
+              : {}),
           });
         }
         const config = await getCloudAppPublishService().publishApp(
@@ -1427,6 +1437,8 @@ async function startGateway(): Promise<void> {
             loginAccess: body.loginAccess,
             externalLink: body.externalLink,
             codeAccess: body.codeAccess,
+            requireSignIn: body.requireSignIn,
+            perUserIsolation: body.perUserIsolation,
             slug: body.slug,
           },
         );
@@ -1462,6 +1474,8 @@ async function startGateway(): Promise<void> {
           loginAccess?: import("./services/cloudSharingSettings.js").CloudLoginAccess;
           externalLink?: import("./services/cloudSharingSettings.js").CloudExternalLink;
           codeAccess?: import("../core/utils/shareAudienceModel.js").CodeAccess;
+          requireSignIn?: boolean;
+          perUserIsolation?: boolean;
         };
         const prefs = setAppPublishPrefs(req.params.appId, body);
         invalidateCloudLinkSyncReportCache();
@@ -1925,8 +1939,14 @@ async function startGateway(): Promise<void> {
           const { isCloudAutoUploadGloballyEnabled } = await import(
             "./services/cloudUploadMode.js"
           );
-          // Auto-merge cloud job status writebacks before returning status.
-          await sync.tryAutoReconcileRemoteGit();
+          // Auto-merge legacy cloud job status writebacks before returning status.
+          // Skipped when JOB_RUNTIME_OFF_GIT=1 — runtime arrives via heartbeat patches.
+          const { isJobRuntimeOffGit } = await import(
+            "./services/jobs/jobRuntimeOffGit.js"
+          );
+          if (!isJobRuntimeOffGit()) {
+            await sync.tryAutoReconcileRemoteGit();
+          }
           // Reconcile whenever the UI asks for this app — git-clean folders
           // should show green even if mtime-only drift fooled the hash cache.
           await sync.reconcileAppDependentPaths(appId);

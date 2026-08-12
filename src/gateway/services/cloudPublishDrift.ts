@@ -29,7 +29,9 @@ export function prefsSharingFieldsChanged(
     update.accessMode !== undefined ||
     update.loginAccess !== undefined ||
     update.externalLink !== undefined ||
-    update.codeAccess !== undefined
+    update.codeAccess !== undefined ||
+    update.requireSignIn !== undefined ||
+    update.perUserIsolation !== undefined
   );
 }
 
@@ -162,6 +164,14 @@ export function detectPublishDrift(input: PublishDriftInput): string[] {
 
   if (sharingSettingsRequireShareToken(sharing) && !memory.shareToken && !prefs.shareToken) {
     reasons.push("shareToken:missing");
+  }
+
+  const localRequireSignIn = desired.requireSignIn === true;
+  const memoryRequireSignIn = memory.requireSignIn === true;
+  if (localRequireSignIn !== memoryRequireSignIn) {
+    reasons.push(
+      `requireSignIn:${memoryRequireSignIn ? "true" : "false"}→${localRequireSignIn ? "true" : "false"}`,
+    );
   }
 
   if (localCatalogRequirements !== undefined) {

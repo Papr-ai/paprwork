@@ -9,6 +9,7 @@ import { cloudApiFetch } from "../utils/cloudApiClient.js";
 import { getCloudSyncService } from "./CloudSyncService.js";
 import type { JobRecord } from "./jobs/types.js";
 import type { JobsService } from "./JobsService.js";
+import { isJobRuntimeOffGit } from "./jobs/jobRuntimeOffGit.js";
 import { CLOUD_AGENT_JOB_TIMEOUT_MS } from "../../core/constants/cloudAgentLimits.js";
 
 export type JobRunRuntime = "local" | "cloud";
@@ -51,7 +52,24 @@ async function appendCloudRunLog(
   await fs.appendFile(logPath, `${header}${body}${footer}`, "utf8");
 }
 
-async function syncAfterCloudRun(jobsService: JobsService): Promise<void> {
+async function syncAfterCloudRun(
+  jobsService: JobsService,
+  jobId: string,
+  payload: CloudJobRunApiResponse,
+): Promise<void> {
+  if (isJobRuntimeOffGit()) {
+    await jobsService.applyCloudRunPatch({
+      jobId,
+      status: payload.status,
+      exitCode: payload.exitCode,
+      lastOutput: payload.lastOutput ?? payload.stdout,
+      error: payload.error,
+      recordedAt: new Date().toISOString(),
+      source: "cloud_manual",
+    });
+    return;
+  }
+
   const cloudSync = getCloudSyncService();
   if (cloudSync) {
     try {
@@ -116,7 +134,7 @@ export async function runJobInCloud(
 
   const payload = (await res.json()) as CloudJobRunApiResponse;
   await appendCloudRunLog(jobId, payload);
-  await syncAfterCloudRun(jobsService);
+  await syncAfterCloudRun(jobsService, jobId, payload);
 
   const updated = await jobsService.getJob(jobId);
   if (!updated) {

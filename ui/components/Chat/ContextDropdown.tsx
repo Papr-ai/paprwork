@@ -18,6 +18,7 @@ interface ContextDropdownProps {
   onClose: () => void;
   onSelectArtifact: (artifact: Artifact) => void;
   selectedIds: string[];
+  dropdownRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 export function ContextDropdown({
@@ -26,10 +27,10 @@ export function ContextDropdown({
   onClose,
   onSelectArtifact,
   selectedIds,
+  dropdownRef,
 }: ContextDropdownProps) {
   const { artifacts, loading } = useArtifacts();
   const [searchQuery, setSearchQuery] = useState("");
-  const dropdownRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -43,23 +44,6 @@ export function ContextDropdown({
       : true;
     return matchesSearch && !selectedIds.includes(a.id);
   });
-
-  // Handle click outside
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handleClickOutside = (e: MouseEvent) => {
-      if (
-        dropdownRef.current &&
-        !dropdownRef.current.contains(e.target as Node)
-      ) {
-        onClose();
-      }
-    };
-
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [isOpen, onClose]);
 
   // Focus search input when opened
   useEffect(() => {

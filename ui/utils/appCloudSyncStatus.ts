@@ -251,7 +251,7 @@ function publishDetailLabel(
 ): string {
   switch (status) {
     case "synced":
-      return "Live app matches local code and databases";
+      return detail ?? "Live app matches local code and databases";
     case "republishing":
       return detail ?? "Updating publish catalog…";
     case "not_web_ready":

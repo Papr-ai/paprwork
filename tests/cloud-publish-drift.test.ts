@@ -53,6 +53,27 @@ describe("cloudPublishDrift", () => {
     expect(reasons.some((r) => r.startsWith("slug:"))).toBe(true);
   });
 
+  it("detects requireSignIn drift for public Community apps", () => {
+    const reasons = detectPublishDrift({
+      memory: {
+        enabled: true,
+        visibility: "public_read",
+        slug: "my-app",
+        linkPermission: "read",
+        requireSignIn: false,
+      },
+      prefs: {
+        autoPublish: true,
+        accessMode: "public_read",
+        loginAccess: "public",
+        externalLink: "off",
+        requireSignIn: true,
+      },
+      expectedSlug: "my-app",
+    });
+    expect(reasons).toContain("requireSignIn:false→true");
+  });
+
   it("returns no drift when memory matches local prefs", () => {
     const reasons = detectPublishDrift({
       memory: {

@@ -20,6 +20,7 @@ interface ModelPickerDropdownProps {
   onSelect: (model: AIModel) => void;
   onOpenSettings: () => void;
   onOpenSettingsModels: () => void;
+  dropdownRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 function ModelPickerRow({
@@ -123,6 +124,7 @@ export function ModelPickerDropdown({
   onSelect,
   onOpenSettings,
   onOpenSettingsModels,
+  dropdownRef,
 }: ModelPickerDropdownProps): React.ReactElement {
   const [showLocal, setShowLocal] = useState(false);
 
@@ -171,7 +173,10 @@ export function ModelPickerDropdown({
   };
 
   return (
-    <div className="model-picker-dropdown model-picker-dropdown--simple">
+    <div
+      ref={dropdownRef}
+      className="model-picker-dropdown model-picker-dropdown--simple"
+    >
       {pickerModels.map((model) => renderModel(model, true))}
 
       <div className="model-picker-divider" role="separator" />

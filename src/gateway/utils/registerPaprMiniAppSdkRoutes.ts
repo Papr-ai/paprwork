@@ -29,7 +29,7 @@ async function serveSdkFile(
       return;
     }
     res.setHeader("Content-Type", "application/javascript; charset=utf-8");
-    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.setHeader("Cache-Control", "public, max-age=60");
     res.send(result.code);
   } catch (err) {
     res.status(500).send((err as Error).message);
@@ -43,6 +43,9 @@ export function registerPaprMiniAppSdkRoutes(app: Express): void {
   app.get("/__papr__/papr-auth-guard.js", (req, res) =>
     serveSdkFile("papr-auth-guard.ts", req, res),
   );
+  app.get("/__papr__/papr-auth-ui.js", (req, res) =>
+    serveSdkFile("papr-auth-ui.ts", req, res),
+  );
   app.get("/__papr__/papr-version-check.js", (req, res) =>
     serveSdkFile("papr-version-check.ts", req, res),
   );
@@ -53,5 +56,11 @@ export function registerPaprMiniAppSdkRoutes(app: Express): void {
   // import that behaves identically on desktop and apps.papr.ai.
   app.get("/__papr__/papr-files.js", (req, res) =>
     serveSdkFile("papr-files.ts", req, res),
+  );
+  app.get("/__papr__/papr-markdown.js", (req, res) =>
+    serveSdkFile("papr-markdown.ts", req, res),
+  );
+  app.get("/__papr__/papr-agent-chat-plan.js", (req, res) =>
+    serveSdkFile("papr-agent-chat-plan.ts", req, res),
   );
 }

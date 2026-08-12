@@ -1,16 +1,22 @@
 #!/usr/bin/env node
 /**
- * E2E: cloud job-run git writeback + Turso boundary (live GitHub).
+ * E2E: job runtime off git — Mongo + heartbeat + desktop upsert; no git status churn.
  *
- * Ensures a bash test job exists in the user's Papr cloud repo, runs it via
- * POST /v1/cloud/runtime/job-run, then verifies jobs.json was updated on GitHub.
+ * When JOB_RUNTIME_OFF_GIT=1 on memory server (JOB_RUNTIME_GIT_DUAL_WRITE=0):
+ * - Cloud job-run → runtime in Mongo + heartbeat pendingCloudRuns
+ * - Desktop upsert → POST /v1/cloud/runtime/job-runtime/upsert + GET list
+ * - GitHub data/jobs.json and Jobs/{id}/job.json stay config-only (no lastRunAt/status)
+ * - No new "cloud: update job … status" commits on remote
  *
  * Usage:
- *   PAPR_API_KEY=sk-... node scripts/test-cloud-job-writeback-e2e.mjs
- *   node scripts/test-cloud-job-writeback-e2e.mjs --memory=https://memory.papr.ai
+ *   PAPR_API_KEY=sk-... PAPR_MEMORY_SERVER_URL=http://127.0.0.1:8000 \
+ *     node scripts/test-cloud-job-writeback-e2e.mjs
+ *
+ *   node scripts/test-cloud-job-writeback-e2e.mjs --memory=http://127.0.0.1:8000
+ *   node scripts/test-cloud-job-writeback-e2e.mjs --expect-git-writeback
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -21,8 +27,36 @@ const memoryBase = (
   "https://memory.papr.ai"
 ).replace(/\/$/, "");
 
+const expectGitWriteback =
+  args.includes("--expect-git-writeback") ||
+  process.env.JOB_RUNTIME_GIT_DUAL_WRITE === "1" ||
+  process.env.JOB_RUNTIME_GIT_DUAL_WRITE === "true";
+
+const runtimeOffGit =
+  process.env.JOB_RUNTIME_OFF_GIT === "1" ||
+  process.env.JOB_RUNTIME_OFF_GIT === "true" ||
+  args.includes("--runtime-off-git") ||
+  !expectGitWriteback;
+
 const TEST_JOB_ID = "e2e-cloud-writeback";
 const MARKER_PREFIX = "WRITEBACK_E2E_OK";
+const DESKTOP_MARKER_PREFIX = "DESKTOP_UPSERT_E2E";
+
+const RUNTIME_FIELD_KEYS = new Set([
+  "status",
+  "updatedAt",
+  "lastRunAt",
+  "completedAt",
+  "exitCode",
+  "error",
+  "lastOutput",
+  "scheduleState",
+  "currentExecutionId",
+  "lastExecutionId",
+  "currentAttempt",
+  "maxAttempts",
+  "nextRetryAt",
+]);
 
 function loadApiKey() {
   if (process.env.PAPR_API_KEY) return process.env.PAPR_API_KEY;
@@ -53,6 +87,11 @@ function ok(label) {
 function fail(label, detail) {
   failed += 1;
   console.error(`❌ ${label}: ${detail}`);
+}
+
+function recordHasRuntimeFields(record) {
+  if (!record || typeof record !== "object") return false;
+  return [...RUNTIME_FIELD_KEYS].some((key) => record[key] !== undefined);
 }
 
 async function memoryFetch(path, { method = "GET", body = null } = {}) {
@@ -98,9 +137,9 @@ function parseOwnerRepo(cloneUrl) {
   return { owner, repo };
 }
 
-async function githubGetFile({ token, owner, repo, path }) {
+async function githubGetFile({ token, owner, repo, path: filePath }) {
   const res = await fetch(
-    `https://api.github.com/repos/${owner}/${repo}/contents/${path}`,
+    `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`,
     {
       headers: {
         Authorization: `token ${token}`,
@@ -111,19 +150,27 @@ async function githubGetFile({ token, owner, repo, path }) {
   );
   if (res.status === 404) return null;
   if (!res.ok) {
-    throw new Error(`GitHub GET ${path} failed (${res.status})`);
+    throw new Error(`GitHub GET ${filePath} failed (${res.status})`);
   }
   return res.json();
 }
 
-async function githubPutFile({ token, owner, repo, path, content, message, sha }) {
+async function githubPutFile({
+  token,
+  owner,
+  repo,
+  path: filePath,
+  content,
+  message,
+  sha,
+}) {
   const body = {
     message,
     content: Buffer.from(content, "utf8").toString("base64"),
   };
   if (sha) body.sha = sha;
   const res = await fetch(
-    `https://api.github.com/repos/${owner}/${repo}/contents/${path}`,
+    `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`,
     {
       method: "PUT",
       headers: {
@@ -136,13 +183,43 @@ async function githubPutFile({ token, owner, repo, path, content, message, sha }
     },
   );
   if (!res.ok) {
-    throw new Error(`GitHub PUT ${path} failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
+    throw new Error(
+      `GitHub PUT ${filePath} failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    );
   }
   return res.json();
 }
 
-async function ensureTestJob({ token, owner, repo }) {
-  const marker = `${MARKER_PREFIX}_${Date.now()}`;
+async function githubListCommitsSince({ token, owner, repo, sinceIso }) {
+  const url = new URL(`https://api.github.com/repos/${owner}/${repo}/commits`);
+  url.searchParams.set("since", sinceIso);
+  url.searchParams.set("per_page", "30");
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `token ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (!res.ok) {
+    throw new Error(`GitHub commits list failed (${res.status})`);
+  }
+  return res.json();
+}
+
+function parseJobsList(raw) {
+  if (!raw?.content) return { jobs: [], sha: raw?.sha ?? null };
+  const jobs = JSON.parse(Buffer.from(raw.content, "base64").toString("utf8"));
+  const list = Array.isArray(jobs) ? jobs : Object.values(jobs);
+  return { jobs: list, sha: raw.sha };
+}
+
+function parseGithubJsonFile(raw) {
+  if (!raw?.content) return null;
+  return JSON.parse(Buffer.from(raw.content, "base64").toString("utf8"));
+}
+
+async function ensureTestJob({ token, owner, repo, marker }) {
   const jobsPath = "data/jobs.json";
   const existing = await githubGetFile({ token, owner, repo, path: jobsPath });
   let jobs = [];
@@ -158,14 +235,34 @@ async function ensureTestJob({ token, owner, repo }) {
     name: "Cloud Writeback E2E",
     type: "bash",
     command: `echo ${marker}`,
-    status: "idle",
+    appIds: ["__standalone__"],
     createdAt: now,
-    updatedAt: now,
   };
   if (jobIndex >= 0) {
-    jobs[jobIndex] = { ...jobs[jobIndex], ...testJob };
+    const prev = jobs[jobIndex];
+    jobs[jobIndex] = {
+      ...prev,
+      ...testJob,
+      ...(runtimeOffGit
+        ? Object.fromEntries(
+            [...RUNTIME_FIELD_KEYS].map((key) => [key, undefined]),
+          )
+        : {
+            status: "idle",
+            updatedAt: now,
+          }),
+    };
+    if (runtimeOffGit) {
+      for (const key of RUNTIME_FIELD_KEYS) {
+        delete jobs[jobIndex][key];
+      }
+    }
   } else {
-    jobs.push(testJob);
+    jobs.push(
+      runtimeOffGit
+        ? testJob
+        : { ...testJob, status: "idle", updatedAt: now },
+    );
   }
 
   await githubPutFile({
@@ -174,8 +271,33 @@ async function ensureTestJob({ token, owner, repo }) {
     repo,
     path: jobsPath,
     content: `${JSON.stringify(jobs, null, 2)}\n`,
-    message: "e2e: ensure cloud writeback test job",
+    message: "e2e: ensure cloud writeback test job index",
     sha: existing?.sha,
+  });
+
+  const jobJsonPath = `Jobs/${TEST_JOB_ID}/job.json`;
+  const jobJsonExisting = await githubGetFile({
+    token,
+    owner,
+    repo,
+    path: jobJsonPath,
+  });
+  const configOnlyJob = {
+    id: TEST_JOB_ID,
+    name: "Cloud Writeback E2E",
+    type: "bash",
+    command: `echo ${marker}`,
+    appIds: ["__standalone__"],
+    createdAt: now,
+  };
+  await githubPutFile({
+    token,
+    owner,
+    repo,
+    path: jobJsonPath,
+    content: `${JSON.stringify(configOnlyJob, null, 2)}\n`,
+    message: "e2e: ensure config-only job.json",
+    sha: jobJsonExisting?.sha,
   });
 
   const jobDirPath = `Jobs/${TEST_JOB_ID}/README.md`;
@@ -203,14 +325,16 @@ async function findJobSummary() {
   return res.data.jobs?.find((j) => j.id === TEST_JOB_ID) ?? null;
 }
 
-async function pollWriteback(marker, previousLastRunAt, timeoutMs = 90_000) {
+async function pollRuntimeSummary(marker, previousLastRunAt, timeoutMs = 90_000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const job = await findJobSummary();
     if (
       job?.lastRunAt &&
       job.lastRunAt !== previousLastRunAt &&
-      (job.lastOutput?.includes(marker) || job.lastOutput?.includes(MARKER_PREFIX))
+      (job.lastOutput?.includes(marker) ||
+        job.lastOutput?.includes(MARKER_PREFIX) ||
+        job.lastOutput?.includes(DESKTOP_MARKER_PREFIX))
     ) {
       return job;
     }
@@ -219,17 +343,183 @@ async function pollWriteback(marker, previousLastRunAt, timeoutMs = 90_000) {
   return null;
 }
 
-console.log(`\nCloud job writeback E2E → ${memoryBase}\n`);
+function assertHeartbeatPatch(patch, marker) {
+  if (!patch?.jobId || patch.jobId !== TEST_JOB_ID) {
+    fail("heartbeat patch jobId", JSON.stringify(patch).slice(0, 120));
+    return false;
+  }
+  if (!patch.recordedAt) {
+    fail("heartbeat patch recordedAt", "missing");
+    return false;
+  }
+  if (!patch.status) {
+    fail("heartbeat patch status", "missing");
+    return false;
+  }
+  if (!patch.lastRunAt) {
+    fail("heartbeat patch lastRunAt", "missing");
+    return false;
+  }
+  if (
+    !patch.lastOutput?.includes(marker) &&
+    !patch.lastOutput?.includes(MARKER_PREFIX) &&
+    !patch.lastOutput?.includes(DESKTOP_MARKER_PREFIX)
+  ) {
+    fail(
+      "heartbeat patch lastOutput",
+      `expected marker in ${patch.lastOutput?.slice(0, 80)}`,
+    );
+    return false;
+  }
+  ok(`heartbeat patch status=${patch.status} lastRunAt=${patch.lastRunAt}`);
+  return true;
+}
+
+async function assertGitHasNoRuntimeChurn({
+  token,
+  owner,
+  repo,
+  gitLastRunAtBefore,
+  label,
+}) {
+  const ghAfter = parseJobsList(
+    await githubGetFile({ token, owner, repo, path: "data/jobs.json" }),
+  );
+  const ghJobAfter = ghAfter.jobs.find((j) => j?.id === TEST_JOB_ID);
+
+  if (runtimeOffGit && !expectGitWriteback) {
+    if (recordHasRuntimeFields(ghJobAfter)) {
+      fail(
+        `${label}: jobs.json runtime fields`,
+        `found runtime keys on index entry: ${JSON.stringify(ghJobAfter).slice(0, 160)}`,
+      );
+    } else {
+      ok(`${label}: GitHub data/jobs.json is config-only`);
+    }
+
+    const gitGainedRuntime =
+      ghJobAfter?.lastRunAt &&
+      ghJobAfter.lastRunAt !== gitLastRunAtBefore &&
+      ghJobAfter?.lastOutput?.includes(MARKER_PREFIX);
+    if (gitGainedRuntime) {
+      fail(
+        `${label}: git runtime churn`,
+        "jobs.json gained lastRunAt/lastOutput but JOB_RUNTIME_GIT_DUAL_WRITE is off",
+      );
+    }
+
+    const perJobRaw = await githubGetFile({
+      token,
+      owner,
+      repo,
+      path: `Jobs/${TEST_JOB_ID}/job.json`,
+    });
+    const perJob = parseGithubJsonFile(perJobRaw);
+    if (perJob && recordHasRuntimeFields(perJob)) {
+      fail(
+        `${label}: Jobs/{id}/job.json runtime fields`,
+        JSON.stringify(perJob).slice(0, 160),
+      );
+    } else if (perJob) {
+      ok(`${label}: GitHub Jobs/{id}/job.json is config-only`);
+    }
+  } else if (ghJobAfter?.lastRunAt && ghJobAfter?.lastOutput?.includes(MARKER_PREFIX)) {
+    ok(`${label}: GitHub raw jobs.json confirms dual-write`);
+  } else if (expectGitWriteback) {
+    fail(
+      `${label}: GitHub raw jobs.json`,
+      "missing lastRunAt/lastOutput on test job",
+    );
+  }
+}
+
+async function assertNoCloudStatusWritebackCommits({
+  token,
+  owner,
+  repo,
+  sinceIso,
+  label,
+}) {
+  if (!runtimeOffGit || expectGitWriteback) {
+    return;
+  }
+  const commits = await githubListCommitsSince({ token, owner, repo, sinceIso });
+  const statusCommits = commits.filter((commit) => {
+    const msg = commit?.commit?.message ?? "";
+    return (
+      /cloud:\s*update job/i.test(msg) &&
+      (msg.includes(TEST_JOB_ID) || msg.includes("e2e-cloud-writeback"))
+    );
+  });
+  if (statusCommits.length > 0) {
+    fail(
+      `${label}: no cloud status git commits`,
+      statusCommits.map((c) => c.commit.message.split("\n")[0]).join("; "),
+    );
+  } else {
+    ok(`${label}: no new cloud job status writeback commits on GitHub`);
+  }
+}
+
+function checkLocalPaprGitignore() {
+  const paprHome = process.env.PAPR_HOME ?? join(homedir(), "Papr");
+  const gitignorePath = join(paprHome, ".gitignore");
+  if (!existsSync(gitignorePath)) {
+    ok("local ~/Papr/.gitignore not present (cloud sync not initialized yet)");
+    return;
+  }
+  const content = readFileSync(gitignorePath, "utf8");
+  if (content.includes("Jobs/*/job.runtime.json") || content.includes("job.runtime.json")) {
+    ok("local ~/Papr/.gitignore excludes job.runtime.json");
+  } else {
+    fail(
+      "local ~/Papr/.gitignore",
+      "missing Jobs/*/job.runtime.json — runtime could be pushed to git",
+    );
+  }
+  if (content.includes("data/job-runs.jsonl")) {
+    ok("local ~/Papr/.gitignore excludes data/job-runs.jsonl");
+  } else {
+    fail("local ~/Papr/.gitignore", "missing data/job-runs.jsonl");
+  }
+}
+
+console.log(`\nCloud job runtime E2E → ${memoryBase}`);
+console.log(
+  `  runtimeOffGit=${runtimeOffGit} expectGitWriteback=${expectGitWriteback}\n`,
+);
+
+const testStartedAt = new Date().toISOString();
 
 try {
+  checkLocalPaprGitignore();
+
+  const listProbe = await memoryFetch("/v1/cloud/runtime/job-runtime");
+  if (listProbe.status === 404) {
+    fail(
+      "memory server Phase 4 routes",
+      "GET /job-runtime returned 404 — restart memory server with latest code",
+    );
+  } else if (listProbe.status === 200) {
+    ok("memory server exposes GET /v1/cloud/runtime/job-runtime");
+  } else {
+    fail("memory server Phase 4 routes", `${listProbe.status} ${listProbe.text.slice(0, 120)}`);
+  }
+
   const { token, cloneUrl } = await getRepoToken();
   const { owner, repo } = parseOwnerRepo(cloneUrl);
   ok(`repo token (${owner}/${repo})`);
 
+  const ghBefore = parseJobsList(
+    await githubGetFile({ token, owner, repo, path: "data/jobs.json" }),
+  );
+  const ghJobBefore = ghBefore.jobs.find((j) => j?.id === TEST_JOB_ID);
+  const gitLastRunAtBefore = ghJobBefore?.lastRunAt ?? null;
+
   const before = await findJobSummary();
   const previousLastRunAt = before?.lastRunAt ?? null;
 
-  const marker = await ensureTestJob({ token, owner, repo });
+  const marker = await ensureTestJob({ token, owner, repo, marker: `${MARKER_PREFIX}_${Date.now()}` });
   ok(`test job synced (${TEST_JOB_ID})`);
 
   const runRes = await memoryFetch("/v1/cloud/runtime/job-run", {
@@ -252,28 +542,124 @@ try {
     }
   }
 
-  const updated = await pollWriteback(marker, previousLastRunAt);
+  const updated = await pollRuntimeSummary(marker, previousLastRunAt);
   if (updated) {
-    ok(`GitHub writeback lastRunAt=${updated.lastRunAt}`);
-    ok(`GitHub writeback lastOutput=${(updated.lastOutput ?? "").slice(0, 80)}`);
+    ok(`runtime summary lastRunAt=${updated.lastRunAt}`);
+    ok(`runtime summary lastOutput=${(updated.lastOutput ?? "").slice(0, 80)}`);
   } else {
     fail(
-      "GitHub writeback",
-      "jobs.json lastRunAt/lastOutput not updated within timeout — deploy latest memory server",
+      "runtime summary (Mongo/API)",
+      "GET /jobs lastRunAt/lastOutput not updated — is JOB_RUNTIME_OFF_GIT=1 on memory server?",
     );
   }
 
-  const ghJobs = await githubGetFile({ token, owner, repo, path: "data/jobs.json" });
-  if (ghJobs?.content) {
-    const parsed = JSON.parse(Buffer.from(ghJobs.content, "base64").toString("utf8"));
-    const list = Array.isArray(parsed) ? parsed : Object.values(parsed);
-    const ghJob = list.find((j) => j?.id === TEST_JOB_ID);
-    if (ghJob?.lastRunAt && ghJob?.lastOutput?.includes(MARKER_PREFIX)) {
-      ok("GitHub raw jobs.json confirms writeback");
+  const heartbeatRes = await memoryFetch("/v1/cloud/runtime/heartbeat", {
+    method: "POST",
+    body: {},
+  });
+  if (heartbeatRes.status !== 200) {
+    fail("heartbeat", `${heartbeatRes.status} ${heartbeatRes.text.slice(0, 200)}`);
+  } else {
+    ok(`heartbeat desktopAwake=${heartbeatRes.data.desktopAwake}`);
+    const pending = heartbeatRes.data.pendingCloudRuns ?? [];
+    const patch = pending.find((p) => p?.jobId === TEST_JOB_ID);
+    if (patch) {
+      assertHeartbeatPatch(patch, marker);
+    } else if (pending.length === 0) {
+      ok("heartbeat pendingCloudRuns empty (patch may have been drained on prior ping)");
     } else {
-      fail("GitHub raw jobs.json", "missing lastRunAt/lastOutput on test job");
+      fail(
+        "heartbeat pendingCloudRuns",
+        `no patch for ${TEST_JOB_ID} in ${pending.length} item(s)`,
+      );
     }
   }
+
+  await assertGitHasNoRuntimeChurn({
+    token,
+    owner,
+    repo,
+    gitLastRunAtBefore,
+    label: "after cloud job-run",
+  });
+  await assertNoCloudStatusWritebackCommits({
+    token,
+    owner,
+    repo,
+    sinceIso: testStartedAt,
+    label: "after cloud job-run",
+  });
+
+  const desktopMarker = `${DESKTOP_MARKER_PREFIX}_${Date.now()}`;
+  const desktopRecordedAt = new Date().toISOString();
+  const upsertRes = await memoryFetch("/v1/cloud/runtime/job-runtime/upsert", {
+    method: "POST",
+    body: {
+      jobId: TEST_JOB_ID,
+      status: "completed",
+      recordedAt: desktopRecordedAt,
+      lastRunAt: desktopRecordedAt,
+      completedAt: desktopRecordedAt,
+      exitCode: 0,
+      lastOutput: desktopMarker,
+      source: "desktop",
+      jobName: "Cloud Writeback E2E",
+    },
+  });
+
+  if (upsertRes.status !== 200) {
+    fail(
+      "desktop upsert",
+      `${upsertRes.status} ${upsertRes.text.slice(0, 300)}`,
+    );
+  } else if (upsertRes.data.accepted !== true) {
+    fail("desktop upsert accepted", JSON.stringify(upsertRes.data).slice(0, 200));
+  } else {
+    ok(`desktop upsert accepted recordedAt=${upsertRes.data.recordedAt}`);
+  }
+
+  const listRes = await memoryFetch("/v1/cloud/runtime/job-runtime");
+  if (listRes.status !== 200) {
+    fail("GET job-runtime list", `${listRes.status} ${listRes.text.slice(0, 200)}`);
+  } else {
+    const patches = listRes.data.patches ?? [];
+    const desktopPatch = patches.find(
+      (p) => p?.jobId === TEST_JOB_ID && p?.lastOutput?.includes(desktopMarker),
+    );
+    if (desktopPatch) {
+      ok(`GET job-runtime list contains desktop patch (${desktopPatch.status})`);
+    } else {
+      fail(
+        "GET job-runtime list",
+        `no patch with ${desktopMarker} among ${patches.length} patch(es)`,
+      );
+    }
+  }
+
+  const desktopSummary = await pollRuntimeSummary(desktopMarker, updated?.lastRunAt ?? previousLastRunAt, 30_000);
+  if (desktopSummary?.lastOutput?.includes(desktopMarker)) {
+    ok(`runtime summary reflects desktop upsert (${desktopSummary.lastOutput.slice(0, 60)}…)`);
+  } else {
+    fail(
+      "runtime summary after desktop upsert",
+      "GET /jobs did not show desktop marker",
+    );
+  }
+
+  await assertGitHasNoRuntimeChurn({
+    token,
+    owner,
+    repo,
+    gitLastRunAtBefore,
+    label: "after desktop upsert",
+  });
+  await assertNoCloudStatusWritebackCommits({
+    token,
+    owner,
+    repo,
+    sinceIso: testStartedAt,
+    label: "after desktop upsert",
+  });
 } catch (err) {
   fail("unexpected", err.message);
 }

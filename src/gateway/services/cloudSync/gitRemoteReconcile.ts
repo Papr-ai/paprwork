@@ -4,8 +4,12 @@
  * Cloud agent runs commit Jobs/{id}/job.json and data/jobs.json while the desktop
  * sleeps. That must not block app code upload or require manual merge — only
  * remote changes to app/job source code need owner review (SYNC_CONTRACT §6).
+ *
+ * When JOB_RUNTIME_OFF_GIT=1, job runtime is delivered via heartbeat patches —
+ * legacy job.json / jobs.json status writebacks are ignored (not auto-merged).
  */
 
+import { isJobRuntimeOffGit } from "../jobs/jobRuntimeOffGit.js";
 import { isLocalOnlyCloudSyncArtifact } from "./gitSyncLimits.js";
 
 export type GitRemoteReconcileResult =
@@ -34,6 +38,16 @@ export function normalizeGitPath(relativePath: string): string {
 /** Paths cloud runtime writebacks touch — safe to auto-merge without owner review. */
 export function isCloudRuntimeMetadataGitPath(relativePath: string): boolean {
   const normalized = normalizeGitPath(relativePath);
+  if (isJobRuntimeOffGit()) {
+    // Runtime off git: only repo markers auto-merge; job definitions are config, not status metadata.
+    if (normalized === "data/cloud-repo-head.txt") {
+      return true;
+    }
+    if (/^apps\/[^/]+\/\.papr-cloud-revision$/.test(normalized)) {
+      return true;
+    }
+    return false;
+  }
   if (normalized === "data/jobs.json") {
     return true;
   }
@@ -46,10 +60,31 @@ export function isCloudRuntimeMetadataGitPath(relativePath: string): boolean {
   return /^Jobs\/[^/]+\/job\.json$/.test(normalized);
 }
 
+/** Legacy cloud status writeback paths (ignored when JOB_RUNTIME_OFF_GIT=1). */
+export function isLegacyJobRuntimeGitPath(relativePath: string): boolean {
+  const normalized = normalizeGitPath(relativePath);
+  return (
+    normalized === "data/jobs.json" ||
+    /^Jobs\/[^/]+\/job\.json$/.test(normalized)
+  );
+}
+
+export function areLegacyJobRuntimeGitPathsOnly(
+  relativePaths: readonly string[],
+): boolean {
+  if (relativePaths.length === 0) {
+    return false;
+  }
+  return relativePaths.every(isLegacyJobRuntimeGitPath);
+}
+
 /** App or job source files on remote — require owner review when changed. */
 export function isRemoteAppOrJobSourceGitPath(relativePath: string): boolean {
   const normalized = normalizeGitPath(relativePath);
   if (isCloudRuntimeMetadataGitPath(normalized)) {
+    return false;
+  }
+  if (isJobRuntimeOffGit() && isLegacyJobRuntimeGitPath(normalized)) {
     return false;
   }
   if (/^apps\/[^/]+\/.+/.test(normalized)) {
@@ -108,6 +143,22 @@ export async function classifyIncomingRemoteChanges(
     await runGit(["log", "--oneline", "-30", "HEAD..origin/main"])
   ).trim();
   const paths = await listIncomingRemoteChangedPaths(runGit);
+  if (isJobRuntimeOffGit()) {
+    if (
+      paths.length > 0 &&
+      areLegacyJobRuntimeGitPathsOnly(paths) &&
+      !hasRemoteAppOrJobSourceChanges(paths)
+    ) {
+      return "not_needed";
+    }
+    if (
+      paths.length === 0 &&
+      summary &&
+      isCloudJobStatusWritebackSummary(summary)
+    ) {
+      return "not_needed";
+    }
+  }
   if (paths.length > 0) {
     if (areCloudRuntimeMetadataOnlyChanges(paths)) {
       return "runtime_metadata_only";
@@ -127,13 +178,50 @@ export async function classifyIncomingRemoteChanges(
   return "requires_review";
 }
 
-export function parsePorcelainChangedPaths(porcelain: string): string[] {
+export interface PorcelainChangedEntry {
+  path: string;
+  untracked: boolean;
+}
+
+export function parsePorcelainEntries(porcelain: string): PorcelainChangedEntry[] {
   return porcelain
     .trimEnd()
     .split("\n")
     .map((line) => line.trimEnd())
     .filter((line) => line.length > 3)
-    .map((line) => normalizeGitPath(line.slice(3)));
+    .map((line) => {
+      const path = normalizeGitPath(line.slice(3));
+      const indexStatus = line[0] ?? " ";
+      const worktreeStatus = line[1] ?? " ";
+      return {
+        path,
+        untracked: indexStatus === "?" && worktreeStatus === "?",
+      };
+    });
+}
+
+export function parsePorcelainChangedPaths(porcelain: string): string[] {
+  return parsePorcelainEntries(porcelain).map((entry) => entry.path);
+}
+
+/** git restore only works on tracked paths; untracked ephemerals need git clean. */
+export function splitRestorePathsForRemoteMerge(
+  restoreBeforeMerge: readonly string[],
+  entries: readonly PorcelainChangedEntry[],
+): { trackedRestorePaths: string[]; untrackedCleanPaths: string[] } {
+  const untrackedPaths = new Set(
+    entries.filter((entry) => entry.untracked).map((entry) => entry.path),
+  );
+  const trackedRestorePaths: string[] = [];
+  const untrackedCleanPaths: string[] = [];
+  for (const relativePath of restoreBeforeMerge) {
+    if (untrackedPaths.has(relativePath)) {
+      untrackedCleanPaths.push(relativePath);
+    } else {
+      trackedRestorePaths.push(relativePath);
+    }
+  }
+  return { trackedRestorePaths, untrackedCleanPaths };
 }
 
 /** Local-only sync state — discard before merge; remote merge is authoritative for metadata. */
@@ -200,6 +288,23 @@ async function restoreWorktreePaths(
     await runGitWithIndexRetry(runGit, [
       "restore",
       "--worktree",
+      "--",
+      ...chunk.map(toLiteralPathspec),
+    ]);
+  }
+}
+
+async function cleanUntrackedPaths(
+  runGit: RunGitFn,
+  paths: readonly string[],
+): Promise<void> {
+  if (paths.length === 0) {
+    return;
+  }
+  for (const chunk of chunkPaths(paths, 40)) {
+    await runGitWithIndexRetry(runGit, [
+      "clean",
+      "-fd",
       "--",
       ...chunk.map(toLiteralPathspec),
     ]);
@@ -328,6 +433,18 @@ export function inferGitRemoteReviewState(opts: {
   }
   const paths = opts.remoteChangedPaths ?? [];
   const summary = opts.gitUpdatesSummary;
+  if (isJobRuntimeOffGit()) {
+    if (paths.length > 0) {
+      if (hasRemoteAppOrJobSourceChanges(paths)) {
+        return { requiresReview: true, metadataSync: false };
+      }
+      return { requiresReview: false, metadataSync: false };
+    }
+    if (summary && isCloudJobStatusWritebackSummary(summary)) {
+      return { requiresReview: false, metadataSync: false };
+    }
+    return { requiresReview: true, metadataSync: false };
+  }
   if (
     summary &&
     isCloudJobStatusWritebackSummary(summary) &&
@@ -385,10 +502,14 @@ export async function mergeRemoteMainIntoLocal(
 ): Promise<MergeRemoteMainResult> {
   const stashMessage = options?.stashMessage ?? "cloud-sync-auto-reconcile";
   const porcelain = await runGit(["status", "--porcelain"]);
-  const dirtyPaths = parsePorcelainChangedPaths(porcelain);
+  const porcelainEntries = parsePorcelainEntries(porcelain);
+  const dirtyPaths = porcelainEntries.map((entry) => entry.path);
 
   const { restoreBeforeMerge, stashBeforeMerge } =
     categorizeWorkingTreePathsForRemoteMerge(dirtyPaths);
+
+  const { trackedRestorePaths, untrackedCleanPaths } =
+    splitRestorePathsForRemoteMerge(restoreBeforeMerge, porcelainEntries);
 
   let restoredMetadataPaths = 0;
   let restoredEphemeralPaths = 0;
@@ -400,13 +521,22 @@ export async function mergeRemoteMainIntoLocal(
     }
   }
 
-  if (restoreBeforeMerge.length > 0) {
-    await restoreWorktreePaths(runGit, restoreBeforeMerge);
+  if (untrackedCleanPaths.length > 0) {
+    await cleanUntrackedPaths(runGit, untrackedCleanPaths);
+  }
+  if (trackedRestorePaths.length > 0) {
+    await restoreWorktreePaths(runGit, trackedRestorePaths);
   }
 
   const stashedSourcePaths = stashBeforeMerge.length;
+  const untrackedPathSet = new Set(
+    porcelainEntries.filter((entry) => entry.untracked).map((entry) => entry.path),
+  );
+  const trackedStashPaths = stashBeforeMerge.filter(
+    (relativePath) => !untrackedPathSet.has(relativePath),
+  );
   let didStash = false;
-  if (stashBeforeMerge.length > 0) {
+  if (trackedStashPaths.length > 0) {
     // Path-scoped stash — stashing 200+ job.json files overwhelms the git index.
     await runGitWithIndexRetry(runGit, [
       "stash",
@@ -414,7 +544,7 @@ export async function mergeRemoteMainIntoLocal(
       "-m",
       stashMessage,
       "--",
-      ...stashBeforeMerge.map(toLiteralPathspec),
+      ...trackedStashPaths.map(toLiteralPathspec),
     ]);
     didStash = true;
   }

@@ -76,6 +76,18 @@ import {
   computeInitialNextRunAt,
   computeMisfireSkipNextRunAt,
 } from "./jobs/scheduleEngine.js";
+import {
+  JOB_RUNTIME_FILE_NAME,
+  jobRecordToRuntimePatch,
+  mergeJobConfigAndRuntime,
+  parseJobStatus,
+  parseMonolithicJobJson,
+  recordHasRuntimeFields,
+  splitJobRecord,
+  toConfigIndexEntry,
+} from "./jobs/jobRuntimeFields.js";
+import { isJobRuntimeOffGit } from "./jobs/jobRuntimeOffGit.js";
+import type { JobRuntimePatch } from "../types/cloudRuntime.js";
 export type {
   CreateJobInput,
   JobDelivery,
@@ -339,12 +351,7 @@ export class JobsService {
       changed = true;
 
       try {
-        const jobDir = this.getJobDir(jobId);
-        await fs.writeFile(
-          path.join(jobDir, "job.json"),
-          JSON.stringify(updated, null, 2),
-          "utf8",
-        );
+        await this.persistJobRecord(updated);
         console.log(
           `[JobsService] Synced bundled default job ${jobId} from resources`,
         );
@@ -386,6 +393,10 @@ export class JobsService {
     await fs.mkdir(this.jobsRootDir, { recursive: true });
     await fs.mkdir(path.dirname(this.jobsIndexPath), { recursive: true });
     await this.loadJobs(); // Load existing jobs FIRST
+    if (isJobRuntimeOffGit()) {
+      await this.migrateAndHydrateJobRuntimeFiles();
+      await this.hydrateJobRuntimeFromCloud();
+    }
     await this.backfillJobAppIds();
     await this.rebuildIndexIfCorrupted(); // Safety net: recover jobs on disk but missing from index
     await this.pruneStaleJobEntries(); // Remove index entries whose folders were deleted (e.g. bash rm)
@@ -468,11 +479,7 @@ export class JobsService {
       changed = true;
 
       try {
-        await fs.writeFile(
-          path.join(this.getJobDir(jobId), "job.json"),
-          JSON.stringify({ ...job, appIds }, null, 2),
-          "utf8",
-        );
+        await this.persistJobRecord({ ...job, appIds });
       } catch {
         // job dir may be missing
       }
@@ -740,6 +747,9 @@ export class JobsService {
   async reloadJobs(): Promise<void> {
     console.log("[JobsService] Reloading jobs from disk...");
     await this.loadJobs();
+    if (isJobRuntimeOffGit()) {
+      await this.hydrateJobsFromRuntimeFiles();
+    }
     await this.rebuildIndexIfCorrupted();
     await this.pruneStaleJobEntries();
     console.log(`[JobsService] Reloaded ${this.jobs.size} jobs from disk`);
@@ -761,15 +771,21 @@ export class JobsService {
     // Create new save promise
     this.saveLock = (async () => {
       try {
-        const list = Array.from(this.jobs.values()).sort(
-          (a, b) =>
-            new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-        );
+        const list = Array.from(this.jobs.values())
+          .sort(
+            (a, b) =>
+              new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+          )
+          .map((job) =>
+            isJobRuntimeOffGit() ? toConfigIndexEntry(job) : job,
+          );
         const data = JSON.stringify(list, null, 2);
-        
+
         // Use timestamp + random suffix to ensure unique temp file
-        const tmpPath = this.jobsIndexPath + `.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        
+        const tmpPath =
+          this.jobsIndexPath +
+          `.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
         await fs.writeFile(tmpPath, data, "utf8");
         await fs.rename(tmpPath, this.jobsIndexPath);
       } finally {
@@ -780,6 +796,243 @@ export class JobsService {
 
     // Wait for this save to complete
     await this.saveLock;
+  }
+
+  private async persistJobRecord(job: JobRecord): Promise<void> {
+    const jobDir = this.getJobDir(job.id);
+    await fs.mkdir(jobDir, { recursive: true });
+    if (isJobRuntimeOffGit()) {
+      const { config, runtime } = splitJobRecord(job);
+      await fs.writeFile(
+        path.join(jobDir, "job.json"),
+        JSON.stringify(config, null, 2),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(jobDir, JOB_RUNTIME_FILE_NAME),
+        JSON.stringify(runtime, null, 2),
+        "utf8",
+      );
+      return;
+    }
+    await fs.writeFile(
+      path.join(jobDir, "job.json"),
+      JSON.stringify(job, null, 2),
+      "utf8",
+    );
+  }
+
+  /**
+   * Merge gitignored runtime files into in-memory jobs (runtime-off-git reload path).
+   */
+  private async hydrateJobsFromRuntimeFiles(): Promise<void> {
+    for (const jobId of this.jobs.keys()) {
+      const merged = await this.readMergedJobRecordFromDisk(jobId);
+      if (merged) {
+        this.jobs.set(jobId, merged);
+      }
+    }
+  }
+
+  private async readMergedJobRecordFromDisk(
+    jobId: string,
+  ): Promise<JobRecord | null> {
+    const jobDir = path.join(this.jobsRootDir, jobId);
+    const jobJsonPath = path.join(jobDir, "job.json");
+    const runtimePath = path.join(jobDir, JOB_RUNTIME_FILE_NAME);
+
+    let raw: Record<string, unknown>;
+    try {
+      raw = JSON.parse(
+        await fs.readFile(jobJsonPath, "utf8"),
+      ) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+
+    let runtimeRaw: Partial<JobRecord> | null = null;
+    try {
+      runtimeRaw = JSON.parse(
+        await fs.readFile(runtimePath, "utf8"),
+      ) as Partial<JobRecord>;
+    } catch {
+      // no runtime file yet
+    }
+
+    const { config, runtime } = parseMonolithicJobJson(raw);
+    const mergedRuntime = { ...runtime, ...runtimeRaw };
+    const configBase = {
+      ...config,
+      id: jobId,
+      name: typeof config.name === "string" ? config.name : jobId,
+      type: (config.type as JobType) ?? "bash",
+      appIds: Array.isArray(config.appIds)
+        ? config.appIds
+        : [STANDALONE_APP_ID],
+      createdAt:
+        typeof config.createdAt === "string"
+          ? config.createdAt
+          : new Date().toISOString(),
+    };
+
+    return mergeJobConfigAndRuntime(configBase, mergedRuntime);
+  }
+
+  /**
+   * Split monolithic job.json into config + gitignored runtime files; hydrate memory from disk.
+   */
+  private async migrateAndHydrateJobRuntimeFiles(): Promise<void> {
+    let migrated = 0;
+    try {
+      const dirs = await fs.readdir(this.jobsRootDir);
+      for (const dirName of dirs) {
+        const jobDir = path.join(this.jobsRootDir, dirName);
+        try {
+          const stat = await fs.stat(jobDir);
+          if (!stat.isDirectory()) continue;
+        } catch {
+          continue;
+        }
+
+        const jobJsonPath = path.join(jobDir, "job.json");
+        const runtimePath = path.join(jobDir, JOB_RUNTIME_FILE_NAME);
+        let raw: Record<string, unknown>;
+        try {
+          raw = JSON.parse(
+            await fs.readFile(jobJsonPath, "utf8"),
+          ) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+
+        const jobId =
+          typeof raw.id === "string" && raw.id.length > 0 ? raw.id : dirName;
+        let runtimeRaw: Partial<JobRecord> | null = null;
+        try {
+          runtimeRaw = JSON.parse(
+            await fs.readFile(runtimePath, "utf8"),
+          ) as Partial<JobRecord>;
+        } catch {
+          // no runtime file yet
+        }
+
+        const { config, runtime } = parseMonolithicJobJson(raw);
+        const mergedRuntime = { ...runtime, ...runtimeRaw };
+        const needsSplit = recordHasRuntimeFields(raw);
+
+        const configBase = {
+          ...config,
+          id: jobId,
+          name: typeof config.name === "string" ? config.name : jobId,
+          type: (config.type as JobType) ?? "bash",
+          appIds: Array.isArray(config.appIds)
+            ? config.appIds
+            : [STANDALONE_APP_ID],
+          createdAt:
+            typeof config.createdAt === "string"
+              ? config.createdAt
+              : new Date().toISOString(),
+        };
+
+        const merged = mergeJobConfigAndRuntime(configBase, mergedRuntime);
+        this.jobs.set(jobId, merged);
+
+        if (needsSplit || !runtimeRaw) {
+          await this.persistJobRecord(merged);
+          if (needsSplit) migrated++;
+        }
+      }
+    } catch (err) {
+      console.warn(
+        "[JobsService] Job runtime migration skipped:",
+        (err as Error).message.slice(0, 120),
+      );
+    }
+
+    if (migrated > 0) {
+      await this.saveJobs();
+      console.log(
+        `[JobsService] Split runtime from job.json for ${migrated} job(s)`,
+      );
+    }
+  }
+
+  /**
+   * Apply cloud runtime patch from heartbeat (LWW on recordedAt vs local updatedAt).
+   */
+  async applyCloudRunPatch(patch: JobRuntimePatch): Promise<JobRecord | null> {
+    const job = this.jobs.get(patch.jobId);
+    if (!job) {
+      console.warn(
+        `[JobsService] Ignoring cloud patch for unknown job: ${patch.jobId}`,
+      );
+      return null;
+    }
+
+    const recordedAt = patch.recordedAt?.trim() || new Date().toISOString();
+    const patchMs = new Date(recordedAt).getTime();
+    const localMs = new Date(job.updatedAt).getTime();
+    if (
+      Number.isFinite(patchMs) &&
+      Number.isFinite(localMs) &&
+      patchMs <= localMs
+    ) {
+      return null;
+    }
+
+    const status = parseJobStatus(patch.status);
+    const updates: Partial<JobRecord> = {};
+    if (patch.lastRunAt !== undefined) updates.lastRunAt = patch.lastRunAt;
+    if (patch.completedAt !== undefined) updates.completedAt = patch.completedAt;
+    if (patch.exitCode !== undefined) updates.exitCode = patch.exitCode;
+    if (patch.error !== undefined) updates.error = patch.error ?? undefined;
+    if (patch.lastOutput !== undefined) updates.lastOutput = patch.lastOutput;
+    if (patch.scheduleState !== undefined) {
+      updates.scheduleState = patch.scheduleState;
+    }
+
+    return this.setJobStatus(job.id, status, updates, {
+      updatedAt: recordedAt,
+      fromCloudPatch: true,
+    });
+  }
+
+  /**
+   * Pull newer runtime patches from Mongo on startup (multi-device hydration).
+   */
+  private async hydrateJobRuntimeFromCloud(): Promise<void> {
+    if (!isJobRuntimeOffGit()) {
+      return;
+    }
+    try {
+      const { fetchCloudJobRuntimePatches } = await import(
+        "./jobs/jobRuntimeCloudUpload.js"
+      );
+      const patches = await fetchCloudJobRuntimePatches();
+      if (patches.length === 0) {
+        return;
+      }
+      let applied = 0;
+      for (const patch of patches) {
+        if (!this.jobs.has(patch.jobId)) {
+          continue;
+        }
+        const result = await this.applyCloudRunPatch(patch);
+        if (result) {
+          applied += 1;
+        }
+      }
+      if (applied > 0) {
+        console.log(
+          `[JobsService] Hydrated ${applied} job runtime patch(es) from cloud`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        "[JobsService] Cloud runtime hydrate failed:",
+        (err as Error).message.slice(0, 120),
+      );
+    }
   }
 
   private getJobDir(jobId: string): string {
@@ -1155,12 +1408,8 @@ export class JobsService {
     await fs.mkdir(path.join(jobDir, "migrations"), { recursive: true });
     await fs.mkdir(path.join(jobDir, "data"), { recursive: true });
     await this.jobDatabase.ensureDatabase(jobDir);
-    await fs.writeFile(
-      path.join(jobDir, "job.json"),
-      JSON.stringify(job, null, 2),
-    );
-
-    // Write requirements.txt if requirements are specified
+    this.jobs.set(id, job);
+    await this.persistJobRecord(job);
     if (input.requirements && input.requirements.length > 0) {
       await fs.writeFile(
         path.join(jobDir, "requirements.txt"),
@@ -1244,10 +1493,7 @@ export class JobsService {
     await fs.mkdir(path.join(jobDir, "migrations"), { recursive: true });
     await fs.mkdir(path.join(jobDir, "data"), { recursive: true });
     await this.jobDatabase.ensureDatabase(jobDir);
-    await fs.writeFile(
-      path.join(jobDir, "job.json"),
-      JSON.stringify(job, null, 2),
-    );
+    await this.persistJobRecord(job);
 
     const dbPath = path.join(jobDir, "data", "data.db");
 
@@ -1385,12 +1631,13 @@ export class JobsService {
     jobId: string,
     status: JobStatus,
     updates: Partial<JobRecord> = {},
+    options?: { updatedAt?: string; fromCloudPatch?: boolean },
   ): Promise<JobRecord> {
     const existing = this.jobs.get(jobId);
     if (!existing) {
       throw new Error(`Job not found: ${jobId}`);
     }
-    const now = new Date().toISOString();
+    const now = options?.updatedAt ?? new Date().toISOString();
     const next: JobRecord = {
       ...existing,
       ...updates,
@@ -1401,8 +1648,8 @@ export class JobsService {
       status === "failed" ||
       status === "cancelled"
         ? {
-            completedAt: now,
-            lastRunAt: existing.lastRunAt ?? now,
+            completedAt: updates.completedAt ?? now,
+            lastRunAt: updates.lastRunAt ?? existing.lastRunAt ?? now,
             // Clear retry tracking on terminal states (if not overridden by updates)
             currentAttempt: updates.currentAttempt,
             maxAttempts: updates.maxAttempts,
@@ -1421,22 +1668,32 @@ export class JobsService {
         currentIdempotencyKey: undefined,
       };
     }
-    if (next.schedule?.enabled) {
+    if (
+      next.schedule?.enabled &&
+      !options?.fromCloudPatch &&
+      updates.scheduleState === undefined
+    ) {
       next.scheduleState = this.computeScheduleState(
         next.schedule,
         next.scheduleState,
       );
     }
     this.jobs.set(jobId, next);
-    await fs.writeFile(
-      path.join(this.getJobDir(jobId), "job.json"),
-      JSON.stringify(next, null, 2),
-      "utf8",
-    );
+    await this.persistJobRecord(next);
     await this.saveJobs();
 
     // Broadcast job status change to all connected WebSocket clients (including mini-apps)
     this.broadcastJobStatus(next);
+
+    if (isJobRuntimeOffGit() && !options?.fromCloudPatch) {
+      void import("./jobs/jobRuntimeCloudUpload.js")
+        .then(({ uploadJobRuntimePatch }) =>
+          uploadJobRuntimePatch(jobRecordToRuntimePatch(next, "desktop")),
+        )
+        .catch(() => {
+          /* non-fatal */
+        });
+    }
 
     // Auto-trigger downstream jobs that depend on this job with autoTrigger enabled
     if (status === "completed" || status === "failed") {
@@ -2390,11 +2647,7 @@ export class JobsService {
         : undefined;
     }
     this.jobs.set(jobId, updated);
-    await fs.writeFile(
-      path.join(this.getJobDir(jobId), "job.json"),
-      JSON.stringify(updated, null, 2),
-      "utf8",
-    );
+    await this.persistJobRecord(updated);
     await this.saveJobs();
     void this.rebuildGraph();
     if (updates.schedule !== undefined) {
@@ -2534,11 +2787,7 @@ export class JobsService {
 
         this.jobs.set(jobId, updated);
 
-        await fs.writeFile(
-          path.join(this.getJobDir(jobId), "job.json"),
-          JSON.stringify(updated, null, 2),
-          "utf8",
-        );
+        await this.persistJobRecord(updated);
 
         needsSave = true;
       }
@@ -2981,11 +3230,7 @@ export class JobsService {
     }
     await this.jobDatabase.ensureDatabase(destination);
     this.jobs.set(job.id, job);
-    await fs.writeFile(
-      path.join(destination, "job.json"),
-      JSON.stringify(job, null, 2),
-      "utf8",
-    );
+    await this.persistJobRecord(job);
     await this.saveJobs();
     return job;
   }

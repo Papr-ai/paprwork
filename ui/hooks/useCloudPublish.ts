@@ -281,6 +281,12 @@ export function useCloudPublish(appId: string, appTitle?: string) {
       setError(null);
       try {
         const { sharing, codeAccess } = audienceModelToPublishPrefs(model);
+        const requireSignIn =
+          model.audience === "public"
+            ? model.requireSignIn === true
+            : model.audience === "link"
+              ? model.requireSignIn !== false
+              : undefined;
         const needsCloudPublish =
           model.permission !== "edit" || model.audience !== "private";
 
@@ -289,6 +295,8 @@ export function useCloudPublish(appId: string, appTitle?: string) {
           const result = await publishCloudApp(targetAppId, {
             ...sharing,
             codeAccess,
+            requireSignIn,
+            perUserIsolation: model.perUserIsolation,
             acknowledgeDesktopOnly: options?.acknowledgeDesktopOnly,
           });
           applyPublishState(targetAppId, result);
@@ -434,6 +442,14 @@ export function useCloudPublish(appId: string, appTitle?: string) {
       viewModel.loginAccess,
       viewModel.externalLink,
       viewModel.codeAccess,
+      {
+        requireSignIn: state?.prefs?.requireSignIn,
+        perUserIsolation: state?.prefs?.perUserIsolation,
+      },
     ),
+    sharePrefs: {
+      requireSignIn: state?.prefs?.requireSignIn,
+      perUserIsolation: state?.prefs?.perUserIsolation,
+    },
   };
 }

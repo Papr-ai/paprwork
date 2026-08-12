@@ -8,10 +8,10 @@
   left: 0;
   width: 320px;
   max-height: 400px;
-  background: #1e1e1e;
-  border: 1px solid #3e3e3e;
+  background: var(--popover-bg);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--popover-shadow);
   z-index: 1000;
   display: flex;
   flex-direction: column;
@@ -20,7 +20,7 @@
 
 .chat-history-search {
   padding: 8px;
-  border-bottom: 1px solid #3e3e3e;
+  border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
 }
 
@@ -28,21 +28,21 @@
   width: 100%;
   padding: 6px 10px;
   font-size: 13px;
-  border: 1px solid #3e3e3e;
+  border: 1px solid var(--border-color);
   border-radius: 6px;
-  background: #2a2a2a;
-  color: #e0e0e0;
+  background: var(--background-secondary);
+  color: var(--text-primary);
   outline: none;
   transition: all 0.15s ease;
 }
 
 .chat-history-search-input:focus {
-  border-color: #4a9eff;
-  background: #252525;
+  border-color: var(--primary-color);
+  background: var(--background-tertiary);
 }
 
 .chat-history-search-input::placeholder {
-  color: #666;
+  color: var(--text-tertiary);
 }
 
 .chat-history-list {
@@ -50,18 +50,25 @@
   flex: 1;
 }
 
+.chat-history-empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
 .chat-history-group {
   padding: 8px 0;
 }
 
 .chat-history-group:not(:last-child) {
-  border-bottom: 1px solid #3e3e3e;
+  border-bottom: 1px solid var(--border-color);
 }
 
 .chat-history-group-label {
   font-size: 11px;
   font-weight: 600;
-  color: #888;
+  color: var(--text-secondary);
   padding: 4px 12px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -79,7 +86,7 @@
 }
 
 .chat-history-item:hover {
-  background: #2a2a2a;
+  background: var(--popover-bg-hover);
 }
 
 .chat-history-item-content {
@@ -92,7 +99,7 @@
 .chat-history-item-title {
   flex: 1;
   font-size: 13px;
-  color: #e0e0e0;
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -100,6 +107,6 @@
 
 .chat-history-item-time {
   font-size: 11px;
-  color: #888;
+  color: var(--text-secondary);
   flex-shrink: 0;
 }

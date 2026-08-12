@@ -15,8 +15,13 @@ vi.mock("../src/gateway/services/CloudSyncService.js", () => ({
   getCloudSyncService: vi.fn(),
 }));
 
+vi.mock("../src/gateway/services/jobs/jobRuntimeOffGit.js", () => ({
+  isJobRuntimeOffGit: vi.fn().mockReturnValue(false),
+}));
+
 import { cloudApiFetch } from "../src/gateway/utils/cloudApiClient.js";
 import { getCloudSyncService } from "../src/gateway/services/CloudSyncService.js";
+import { isJobRuntimeOffGit } from "../src/gateway/services/jobs/jobRuntimeOffGit.js";
 
 const tmpRoots: string[] = [];
 
@@ -34,11 +39,16 @@ function makeJob(overrides: Partial<JobRecord> = {}): JobRecord {
   };
 }
 
-function makeJobsService(job: JobRecord): JobsService {
+function makeJobsService(
+  job: JobRecord,
+  extras: Partial<JobsService> = {},
+): JobsService {
   return {
     getJob: vi.fn().mockResolvedValue(job),
     reloadJobs: vi.fn().mockResolvedValue(undefined),
+    applyCloudRunPatch: vi.fn().mockResolvedValue(job),
     getLogs: vi.fn(),
+    ...extras,
   } as unknown as JobsService;
 }
 
@@ -59,6 +69,7 @@ describe("runJobInCloud", () => {
       pushNow: vi.fn().mockResolvedValue(undefined),
       pullNow: vi.fn().mockResolvedValue(undefined),
     } as unknown as ReturnType<typeof getCloudSyncService>);
+    vi.mocked(isJobRuntimeOffGit).mockReturnValue(false);
   });
 
   it("pushes git, calls memory job-run API, appends logs, and reloads job", async () => {
@@ -103,6 +114,44 @@ describe("runJobInCloud", () => {
     expect(logs).toContain("Cloud run");
     expect(logs).toContain("cloud output");
     expect(updated).toEqual(job);
+  });
+
+  it("applies cloud patch instead of git pull when JOB_RUNTIME_OFF_GIT", async () => {
+    vi.mocked(isJobRuntimeOffGit).mockReturnValue(true);
+
+    const job = makeJob();
+    const applyCloudRunPatch = vi.fn().mockResolvedValue({
+      ...job,
+      status: "completed",
+    });
+    const service = makeJobsService(job, { applyCloudRunPatch });
+
+    vi.mocked(cloudApiFetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          jobId: job.id,
+          status: "completed",
+          exitCode: 0,
+          stdout: "cloud output\n",
+          stderr: "",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    await runJobInCloud(service, job.id);
+
+    expect(applyCloudRunPatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobId: job.id,
+        status: "completed",
+        exitCode: 0,
+        source: "cloud_manual",
+      }),
+    );
+    const cloudSync = getCloudSyncService();
+    expect(cloudSync?.pullNow).not.toHaveBeenCalled();
+    expect(service.reloadJobs).not.toHaveBeenCalled();
   });
 
   it("uses longer timeout for agent jobs", async () => {

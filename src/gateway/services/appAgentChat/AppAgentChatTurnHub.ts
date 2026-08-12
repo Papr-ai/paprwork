@@ -9,6 +9,7 @@ interface TurnChannel {
   listeners: Set<(event: AppAgentChatSseEvent) => void>;
   done: boolean;
   error?: string;
+  cancel?: () => void;
 }
 
 export class AppAgentChatTurnHub {
@@ -58,6 +59,31 @@ export class AppAgentChatTurnHub {
 
   isDone(turnId: string): boolean {
     return this.turns.get(turnId)?.done ?? false;
+  }
+
+  registerCancel(turnId: string, cancel: () => void): void {
+    const channel = this.turns.get(turnId);
+    if (channel) {
+      channel.cancel = cancel;
+    }
+  }
+
+  cancelTurn(turnId: string): boolean {
+    const channel = this.turns.get(turnId);
+    if (!channel || channel.done) {
+      return false;
+    }
+    channel.cancel?.();
+    channel.done = true;
+    const event: AppAgentChatSseEvent = {
+      type: "app-agent:turn-done",
+      data: { turnId, assistantText: "", shouldRefreshApp: false, stopped: true },
+    };
+    channel.events.push(event);
+    for (const listener of channel.listeners) {
+      listener(event);
+    }
+    return true;
   }
 
   removeTurn(turnId: string): void {

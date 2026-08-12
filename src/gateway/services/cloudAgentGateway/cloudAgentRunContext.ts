@@ -24,6 +24,11 @@ import {
 } from "./syncJobTursoBookends.js";
 import { reconcileCloudProviderAuth } from "./resolveCloudProviderAuth.js";
 import type { CloudAgentRunRequest, CloudLinkedSource, CloudTursoSource } from "./types.js";
+import {
+  resolveCloudAgentChatId,
+  resolveCloudAppAgentStreamOverrides,
+  resolveCloudUserDataPath,
+} from "./cloudAppAgentSession.js";
 import { getJobsService } from "../JobsService.js";
 import {
   AgentJobExecutor,
@@ -41,6 +46,7 @@ export interface CloudRunHandle {
 
 interface CloudRunEnvSnapshot {
   previousPaprHome?: string;
+  previousPaprUserData?: string;
   previousHome?: string;
   previousJobDir?: string;
   previousJobDb?: string;
@@ -131,6 +137,7 @@ export function resolveTursoBookendTargets(
 function captureCloudRunEnv(): CloudRunEnvSnapshot {
   return {
     previousPaprHome: process.env.PAPR_HOME,
+    previousPaprUserData: process.env.PAPR_USER_DATA,
     previousHome: process.env.HOME,
     previousJobDir: process.env.JOB_DIR,
     previousJobDb: process.env.JOB_DB,
@@ -158,6 +165,8 @@ function applyVaultKeys(
 async function restoreCloudRunEnv(snapshot: CloudRunEnvSnapshot): Promise<void> {
   if (snapshot.previousPaprHome === undefined) delete process.env.PAPR_HOME;
   else process.env.PAPR_HOME = snapshot.previousPaprHome;
+  if (snapshot.previousPaprUserData === undefined) delete process.env.PAPR_USER_DATA;
+  else process.env.PAPR_USER_DATA = snapshot.previousPaprUserData;
   if (snapshot.previousHome === undefined) delete process.env.HOME;
   else process.env.HOME = snapshot.previousHome;
   if (snapshot.previousJobDir === undefined) delete process.env.JOB_DIR;
@@ -281,7 +290,11 @@ export async function beginCloudAgentRun(
     }
   }
 
+  const userDataPath = resolveCloudUserDataPath(runRoot);
+  await fs.mkdir(userDataPath, { recursive: true });
+
   process.env.PAPR_HOME = paprHome;
+  process.env.PAPR_USER_DATA = userDataPath;
   if (request.orgId) {
     process.env.PAPR_ORG_ID = request.orgId;
   }
@@ -296,6 +309,7 @@ export async function beginCloudAgentRun(
     await startCloudAgentTursoDebouncedPush(tursoTargets);
   await reinitializeWorkspaceServicesForCloudRun({
     paprApiKey: request.paprApiKey,
+    userDataPath,
   });
   await prepareCloudJobEnvironment(request.jobId);
 
@@ -400,6 +414,9 @@ export async function resolveCloudAgentJobStreamInput(
   jobId: string;
   runId: string;
   prompt: string;
+  chatId: string;
+  streamUserMessage: string;
+  systemPromptOverride?: string;
   provider: Provider;
   model?: string;
   allowedToolIds?: string[];
@@ -449,13 +466,24 @@ export async function resolveCloudAgentJobStreamInput(
   const provider = session.provider ?? llmAuth.provider;
   const model = session.model ?? request.model;
 
+  const appAgentOverrides = await resolveCloudAppAgentStreamOverrides(request);
+  const chatId = appAgentOverrides?.chatId ?? resolveCloudAgentChatId(request);
+
   return {
     jobId: session.jobId,
     runId: session.runId,
     prompt: session.prompt,
+    chatId,
+    streamUserMessage: appAgentOverrides?.userMessage ?? session.prompt,
+    ...(appAgentOverrides?.systemPrompt
+      ? { systemPromptOverride: appAgentOverrides.systemPrompt }
+      : {}),
     provider,
     model,
-    allowedToolIds: session.allowedToolIds ?? request.allowedToolIds,
+    allowedToolIds:
+      appAgentOverrides?.allowedToolIds ??
+      session.allowedToolIds ??
+      request.allowedToolIds,
     maxTurns: session.maxTurns ?? request.maxTurns,
     authOverride: {
       apiKey: llmAuth.token,

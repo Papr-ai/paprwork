@@ -21,7 +21,11 @@ import {
   syncRuntimeVaultKeys,
 } from "./memoryRuntimeClient.js";
 import { fetchCachedRuntimeRepoFile } from "./cloudAppHostCache.js";
-import { sanitizeReturnToPath } from "./cloudAppHostCookies.js";
+import {
+  resolveCloudAuthReturnToPath,
+  resolveCloudAuthReturnToFromRequest,
+  cloudAppRootPath,
+} from "./cloudAppHostCookies.js";
 
 function escapeHtml(value: string): string {
   return value
@@ -45,7 +49,7 @@ export async function loadPublishedAppRequirements(
 }
 
 function appRootPath(namespaceId: string, slug: string): string {
-  return `/${namespaceId}/${slug}/`;
+  return cloudAppRootPath(namespaceId, slug);
 }
 
 function setupPath(namespaceId: string, slug: string): string {
@@ -181,9 +185,10 @@ export class CloudAppHostCredentialService {
       return true;
     }
 
-    const returnTo = sanitizeReturnToPath(
-      req.originalUrl.split("?")[0] ?? req.originalUrl,
-    );
+    const returnTo = resolveCloudAuthReturnToFromRequest(req, {
+      namespaceId: runtimeAuth.namespaceId,
+      slug: runtimeAuth.slug,
+    });
     const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}&start=1`;
 
     if (!runtimeAuth.sessionToken) {
@@ -227,10 +232,10 @@ export class CloudAppHostCredentialService {
       return true;
     }
 
-    const returnTo = sanitizeReturnToPath(
-      req.headers.referer?.split("?")[0] ??
-        appRootPath(runtimeAuth.namespaceId, runtimeAuth.slug),
-    );
+    const returnTo = resolveCloudAuthReturnToFromRequest(req, {
+      namespaceId: runtimeAuth.namespaceId,
+      slug: runtimeAuth.slug,
+    });
     const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}&start=1`;
 
     if (!runtimeAuth.sessionToken) {
@@ -267,10 +272,11 @@ export class CloudAppHostCredentialService {
     const missingNames = getMissingUserKeyNames(requirements, vaultKeys);
     const missing = userKeys.filter((spec) => missingNames.includes(spec.name));
 
-    const returnTo = sanitizeReturnToPath(
+    const returnTo = resolveCloudAuthReturnToPath(
       typeof req.query.returnTo === "string"
         ? req.query.returnTo
         : appRootPath(runtimeAuth.namespaceId, runtimeAuth.slug),
+      { namespaceId: runtimeAuth.namespaceId, slug: runtimeAuth.slug },
     );
 
     if (missing.length === 0) {
@@ -358,16 +364,23 @@ export class CloudAppHostCredentialService {
   private async handleSetupForm(req: Request, res: Response): Promise<void> {
     const runtimeAuth = this.resolveRuntimeAuth(req);
     if (!runtimeAuth?.sessionToken) {
-      res.redirect(302, `/auth/login?returnTo=${encodeURIComponent(req.originalUrl)}&start=1`);
+      const returnTo = resolveCloudAuthReturnToFromRequest(req, runtimeAuth
+        ? { namespaceId: runtimeAuth.namespaceId, slug: runtimeAuth.slug }
+        : undefined);
+      res.redirect(
+        302,
+        `/auth/login?returnTo=${encodeURIComponent(returnTo)}&start=1`,
+      );
       return;
     }
 
     const requirements = await loadPublishedAppRequirements(runtimeAuth);
     const userKeys = getUserCredentialKeys(requirements);
-    const returnTo = sanitizeReturnToPath(
+    const returnTo = resolveCloudAuthReturnToPath(
       typeof req.body?.returnTo === "string"
         ? req.body.returnTo
         : appRootPath(runtimeAuth.namespaceId, runtimeAuth.slug),
+      { namespaceId: runtimeAuth.namespaceId, slug: runtimeAuth.slug },
     );
 
     const keys: Array<{ name: string; value: string }> = [];

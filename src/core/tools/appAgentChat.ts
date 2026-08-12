@@ -151,7 +151,7 @@ export const enableAppAgentChatTool = createTool({
         await jobsService.updateJob(existing.id, {
           appIds: [args.appId],
           command:
-            "Embedded app assistant turn. Full conversation prompt is passed via runtime params.prompt.",
+            "Embedded app assistant turn. Pass the user's message via runtimeParams.prompt; conversation history is loaded from the warm sandbox chats.db.",
         });
       } else {
         const cloudJob = await jobsService.createJob({
@@ -160,7 +160,7 @@ export const enableAppAgentChatTool = createTool({
           subAgentId: args.subAgentId,
           appIds: [args.appId],
           command:
-            "Embedded app assistant turn. Full conversation prompt is passed via runtime params.prompt.",
+            "Embedded app assistant turn. Pass the user's message via runtimeParams.prompt; conversation history is loaded from the warm sandbox chats.db.",
           maxTurns: 20,
         });
         agentChat.cloudJobId = cloudJob.id;

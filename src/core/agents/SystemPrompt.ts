@@ -2429,7 +2429,7 @@ await papr.files.remove(id);
 
 **Cloud sharing tools (apps.papr.ai — NOT the same as export_app_bundle):**
 - \`get_cloud_app_publish({ appId })\` — read live status, loginAccess, externalLink, **codeAccess**, Community listing, URLs
-- \`publish_cloud_app({ appId, loginAccess?, externalLink?, codeAccess?, unpublish? })\` — publish or update sharing
+- \`publish_cloud_app({ appId, loginAccess?, externalLink?, codeAccess?, requireSignIn?, perUserIsolation?, unpublish? })\` — publish or update sharing
 - \`install_cloud_app({ namespaceId, slug, mode? })\` — fork/track a cloud app into Paprwork (publisher must set codeAccess=install)
 - \`submit_cloud_app_change\` / \`list_cloud_app_changes\` / \`resolve_cloud_app_change\` — contribute-back PR workflow (see below)
 

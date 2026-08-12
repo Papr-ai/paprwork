@@ -35,29 +35,29 @@ jobs:
         run: npm run build:gateway
 
       - name: Start gateway test stack
-        if: secrets.PAPR_API_KEY
+        if: ${{ secrets.PAPR_API_KEY != '' }}
         env:
           PAPR_API_KEY: ${{ secrets.PAPR_API_KEY }}
           PAPR_MEMORY_SERVER_URL: ${{ vars.PAPR_MEMORY_SERVER_URL || 'https://memory.papr.ai' }}
         run: node scripts/test-stack.mjs up
 
       - name: Run contribute-back E2E
-        if: secrets.PAPR_API_KEY
+        if: ${{ secrets.PAPR_API_KEY != '' }}
         env:
           PAPR_API_KEY: ${{ secrets.PAPR_API_KEY }}
           PAPR_MEMORY_SERVER_URL: ${{ vars.PAPR_MEMORY_SERVER_URL || 'https://memory.papr.ai' }}
         run: npm run test:contribute-back-e2e
 
       - name: Run track pull-on-publish E2E
-        if: secrets.PAPR_API_KEY
+        if: ${{ secrets.PAPR_API_KEY != '' }}
         env:
           PAPR_API_KEY: ${{ secrets.PAPR_API_KEY }}
         run: npm run test:track-pull-on-publish-e2e -- --poll-seconds=60
 
       - name: Stop test stack
-        if: always() && secrets.PAPR_API_KEY
+        if: ${{ always() && secrets.PAPR_API_KEY != '' }}
         run: node scripts/test-stack.mjs down
 
       - name: Skip cloud E2E (no API key)
-        if: ${{ !secrets.PAPR_API_KEY }}
+        if: ${{ secrets.PAPR_API_KEY == '' }}
         run: echo "Skipping cloud E2E — configure PAPR_API_KEY repository secret to enable"

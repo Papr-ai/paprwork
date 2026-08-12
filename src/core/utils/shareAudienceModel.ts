@@ -13,8 +13,32 @@ export type CodeAccess = "off" | "install";
 export interface ShareAudienceModel {
   audience: ShareAudience;
   permission: SharePermission;
-  /** Link sharing only: true = Papr sign-in required (default), false = token-only */
+  /**
+   * Link: true = Papr sign-in required (default), false = token-only.
+   * Public Community: false = anonymous OK (default), true = sign-in required.
+   */
   requireSignIn?: boolean;
+  /** Separate Turso DB per signed-in user (registry DBs only). */
+  perUserIsolation?: boolean;
+}
+
+export interface SharingToAudienceModelOptions {
+  requireSignIn?: boolean;
+  perUserIsolation?: boolean;
+}
+
+/** Whether the share model requires Papr sign-in at the platform gate. */
+export function audienceRequiresSignIn(model: ShareAudienceModel): boolean {
+  if (model.audience === "team" || model.audience === "private") {
+    return true;
+  }
+  if (model.audience === "public") {
+    return model.requireSignIn === true;
+  }
+  if (model.audience === "link") {
+    return model.requireSignIn !== false;
+  }
+  return false;
 }
 
 export function permissionToCodeAccess(permission: SharePermission): CodeAccess {
@@ -29,6 +53,7 @@ export function sharingToAudienceModel(
   loginAccess: CloudLoginAccess,
   externalLink: CloudExternalLink,
   codeAccess: CodeAccess = "off",
+  options?: SharingToAudienceModelOptions,
 ): ShareAudienceModel {
   const editPermission = codeAccessToPermission(codeAccess);
   if (editPermission) {
@@ -39,7 +64,14 @@ export function sharingToAudienceModel(
       return { audience: "link", permission: "edit", requireSignIn: true };
     }
     if (loginAccess === "public") {
-      return { audience: "public", permission: "edit" };
+      return {
+        audience: "public",
+        permission: "edit",
+        requireSignIn: options?.requireSignIn ?? false,
+        ...(options?.perUserIsolation !== undefined
+          ? { perUserIsolation: options.perUserIsolation }
+          : {}),
+      };
     }
     if (loginAccess === "team") {
       return { audience: "team", permission: "edit" };
@@ -62,7 +94,14 @@ export function sharingToAudienceModel(
     };
   }
   if (loginAccess === "public") {
-    return { audience: "public", permission: "write" };
+    return {
+      audience: "public",
+      permission: "write",
+      requireSignIn: options?.requireSignIn ?? false,
+      ...(options?.perUserIsolation !== undefined
+        ? { perUserIsolation: options.perUserIsolation }
+        : {}),
+    };
   }
   if (loginAccess === "team") {
     return { audience: "team", permission: "write" };

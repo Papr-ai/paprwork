@@ -117,6 +117,7 @@ describe("webReady", () => {
       git: null,
       turso: { ok: true, sources: [], errors: [] },
       errors: [],
+      warnings: [],
     });
 
     vi.mocked(loadConvergenceStateForApp).mockReturnValue(null);
@@ -175,6 +176,7 @@ describe("webReady", () => {
       git: null,
       turso: { ok: true, sources: [], errors: [] },
       errors: [],
+      warnings: [],
     });
 
     vi.mocked(loadConvergenceStateForApp).mockReturnValue(null);
@@ -226,6 +228,7 @@ describe("buildPublishLayerReport", () => {
       git: null,
       turso: { ok: true, sources: [], errors: [] },
       errors: [],
+      warnings: [],
     });
 
     vi.mocked(loadConvergenceStateForApp).mockReturnValue({

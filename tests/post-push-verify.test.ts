@@ -1,8 +1,12 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import {
   assertAppPushVerified,
   verifyAppPushConvergence,
   verifyGitRemoteSha,
+  verifyGitAppSubtreeWithRetry,
   verifyTursoConvergenceForApp,
 } from "../src/gateway/services/cloudSync/postPushVerify.js";
 import { publishedAppRevisionJsonUrl } from "../src/gateway/services/cloudSync/trackUpstreamRevision.js";
@@ -105,6 +109,56 @@ describe("verifyGitRemoteShaWithRetry", () => {
       delayMs: 1,
     });
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("verifyGitAppSubtreeWithRetry", () => {
+  it("passes when app tree matches even if workspace HEAD diverges", async () => {
+    const git = async (args: string[]): Promise<string> => {
+      if (args[0] === "rev-parse" && args[1] === "HEAD:apps/app-1") {
+        return "tree-match\n";
+      }
+      if (args[0] === "rev-parse" && args[1] === "origin/main:apps/app-1") {
+        return "tree-match\n";
+      }
+      if (args[0] === "rev-parse" && args[1] === "HEAD") {
+        return "local-head\n";
+      }
+      if (args[0] === "rev-parse" && args[1] === "origin/main") {
+        return "remote-head\n";
+      }
+      return "";
+    };
+
+    const result = await verifyGitAppSubtreeWithRetry(git, "app-1");
+    expect(result.ok).toBe(true);
+    expect(result.workspaceHeadMismatch).toBe(true);
+    expect(result.appPath).toBe("apps/app-1");
+  });
+
+  it("fails when app tree differs on remote", async () => {
+    const git = async (args: string[]): Promise<string> => {
+      if (args[0] === "rev-parse" && args[1] === "HEAD:apps/app-1") {
+        return "tree-local\n";
+      }
+      if (args[0] === "rev-parse" && args[1] === "origin/main:apps/app-1") {
+        return "tree-remote\n";
+      }
+      if (args[0] === "rev-parse" && args[1] === "HEAD") {
+        return "same\n";
+      }
+      if (args[0] === "rev-parse" && args[1] === "origin/main") {
+        return "same\n";
+      }
+      return "";
+    };
+
+    const result = await verifyGitAppSubtreeWithRetry(git, "app-1", {
+      maxAttempts: 1,
+      delayMs: 1,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("apps/app-1");
   });
 });
 
@@ -242,6 +296,37 @@ describe("verifyAppPushConvergence", () => {
     expect(result.ok).toBe(false);
     expect(result.errors.some((entry) => entry.startsWith("Turso:"))).toBe(true);
     expect(result.git).toBeNull();
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("passes git verify when app tree matches despite workspace HEAD drift", async () => {
+    const paprDir = fs.mkdtempSync(path.join(os.tmpdir(), "papr-verify-"));
+    fs.mkdirSync(path.join(paprDir, ".git"));
+
+    const git = async (args: string[]): Promise<string> => {
+      if (args[0] === "rev-parse" && args[1] === "HEAD:apps/app-1") {
+        return "tree-same\n";
+      }
+      if (args[0] === "rev-parse" && args[1] === "origin/main:apps/app-1") {
+        return "tree-same\n";
+      }
+      if (args[0] === "rev-parse" && args[1] === "HEAD") {
+        return "local-head\n";
+      }
+      if (args[0] === "rev-parse" && args[1] === "origin/main") {
+        return "remote-head\n";
+      }
+      return "";
+    };
+
+    try {
+      const result = await verifyAppPushConvergence("app-1", paprDir, git);
+      expect(result.ok).toBe(true);
+      expect(result.warnings.length).toBeGreaterThan(0);
+      expect(result.warnings[0]).toContain("Workspace git catching up");
+    } finally {
+      fs.rmSync(paprDir, { recursive: true, force: true });
+    }
   });
 });
 

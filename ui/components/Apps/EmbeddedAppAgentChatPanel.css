@@ -48,6 +48,23 @@
   line-height: 1.45;
 }
 
+.embedded-app-agent-chat__bubble .markdown-content {
+  font-size: 13px;
+}
+
+.embedded-app-agent-chat__streaming {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0;
+}
+
+.embedded-app-agent-chat__streaming .thinking-card,
+.embedded-app-agent-chat__streaming .working-card,
+.embedded-app-agent-chat__streaming .exploring-card {
+  margin: 4px 0;
+}
+
 .embedded-app-agent-chat__message--assistant .embedded-app-agent-chat__bubble {
   background: rgba(0, 0, 0, 0.04);
   align-self: flex-start;
@@ -127,6 +144,10 @@
 .embedded-app-agent-chat__send:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.embedded-app-agent-chat__send--stop {
+  background: #ff3b30;
 }
 
 @media (prefers-color-scheme: dark) {

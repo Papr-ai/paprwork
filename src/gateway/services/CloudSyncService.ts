@@ -30,9 +30,12 @@ import {
   type GitRemoteReconcileResult,
   classifyIncomingRemoteChanges,
   formatIncomingRemoteReviewBlockReason,
+  inferGitRemoteReviewState,
   listIncomingRemoteChangedPaths,
   isNonRetryableCloudPushError,
 } from "./cloudSync/gitRemoteReconcile.js";
+import { applyPendingCloudRunPatches } from "./cloudSync/applyPendingCloudRunPatches.js";
+import { isJobRuntimeOffGit } from "./jobs/jobRuntimeOffGit.js";
 import { GitRunner, probeGitInstalled } from "./cloudSync/gitRunner.js";
 import {
   describeOversizedSkip,
@@ -111,6 +114,10 @@ data/.turso-convergence-state.json
 # Sync state (local only — machine-specific Turso cursors)
 ${STATE_FILENAME}
 data/.turso-sync-state.json
+
+# Job runtime — local + memory heartbeat only, never git
+Jobs/*/job.runtime.json
+data/job-runs.jsonl
 `;
 
 interface RepoTokenResponse {
@@ -1402,6 +1409,30 @@ export class CloudSyncService {
       return;
     }
 
+    const { isJobRuntimeOffGit } = await import("./jobs/jobRuntimeOffGit.js");
+    if (isJobRuntimeOffGit()) {
+      const { getJobsService } = await import("./JobsService.js");
+      const jobsService = getJobsService();
+      const { applied, needsGitFallback } = await applyPendingCloudRunPatches(
+        pending,
+        { jobsService },
+      );
+
+      if (applied > 0) {
+        console.log(
+          `[CloudSync] Applied ${applied} cloud job runtime patch(es) via heartbeat`,
+        );
+      }
+
+      if (!needsGitFallback) {
+        return;
+      }
+
+      console.warn(
+        "[CloudSync] Cloud patch missing scheduleState.nextRunAt — falling back to git pull",
+      );
+    }
+
     console.log(
       `[CloudSync] ${pending.length} cloud job run(s) while away — syncing workspace`,
     );
@@ -2098,8 +2129,9 @@ export class CloudSyncService {
   }
 
   /**
-   * Auto-merge cloud runtime metadata (job.json / jobs.json) when remote is ahead.
-   * Code changes on remote still require owner review via applyGitRemoteUpdates().
+   * Auto-merge cloud runtime metadata when remote is ahead (legacy path).
+   * When JOB_RUNTIME_OFF_GIT=1, job status writebacks are ignored — runtime
+   * arrives via desktop heartbeat patches instead.
    */
   async tryAutoReconcileRemoteGit(): Promise<GitRemoteReconcileResult> {
     return this.runExclusiveGitOp(async () => {
@@ -2121,6 +2153,11 @@ export class CloudSyncService {
         this.git(args, opts),
       );
       if (classification === "not_needed") {
+        if (isJobRuntimeOffGit()) {
+          this.state.gitUpdatesAvailable = false;
+          this.state.gitUpdatesSummary = null;
+          this.state.gitRemoteChangedPaths = null;
+        }
         return "not_needed";
       }
       if (classification === "requires_review") {
@@ -2225,8 +2262,22 @@ export class CloudSyncService {
       this.git(args, opts),
     );
     const summary = await this.git(["log", "--oneline", "-30", "HEAD..origin/main"]);
+    const summaryTrimmed = summary.trim() || null;
+    if (isJobRuntimeOffGit()) {
+      const review = inferGitRemoteReviewState({
+        gitUpdatesAvailable: true,
+        remoteChangedPaths: paths,
+        gitUpdatesSummary: summaryTrimmed,
+      });
+      if (!review.requiresReview) {
+        this.state.gitUpdatesAvailable = false;
+        this.state.gitUpdatesSummary = null;
+        this.state.gitRemoteChangedPaths = null;
+        return;
+      }
+    }
     this.state.gitUpdatesAvailable = true;
-    this.state.gitUpdatesSummary = summary.trim() || `${behindCount} commit(s) on cloud`;
+    this.state.gitUpdatesSummary = summaryTrimmed ?? `${behindCount} commit(s) on cloud`;
     this.state.gitRemoteChangedPaths = paths;
   }
 
@@ -2300,7 +2351,25 @@ export class CloudSyncService {
   }
 
   private ensureGitignore(): void {
-    fs.writeFileSync(path.join(this.paprDir, ".gitignore"), GITIGNORE_CONTENT, "utf-8");
+    const gitignorePath = path.join(this.paprDir, ".gitignore");
+    if (!fs.existsSync(gitignorePath)) {
+      fs.writeFileSync(gitignorePath, GITIGNORE_CONTENT, "utf-8");
+      return;
+    }
+    const existing = fs.readFileSync(gitignorePath, "utf-8");
+    const requiredRuntimeLines = [
+      "# Job runtime — local + memory heartbeat only, never git",
+      "Jobs/*/job.runtime.json",
+      "data/job-runs.jsonl",
+    ];
+    const missingRuntime = requiredRuntimeLines.some(
+      (line) => !line.startsWith("#") && !existing.includes(line),
+    );
+    if (!missingRuntime) {
+      return;
+    }
+    const appendix = ["", ...requiredRuntimeLines, ""].join("\n");
+    fs.writeFileSync(gitignorePath, `${existing.trimEnd()}\n${appendix}`, "utf-8");
   }
 }
 

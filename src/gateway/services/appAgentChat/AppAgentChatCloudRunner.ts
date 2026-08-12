@@ -4,14 +4,12 @@
 
 import { v4 as uuidv4 } from "uuid";
 import type {
-  AppAgentChatMessage,
   AppAgentChatSession,
   AppAgentChatSseEvent,
 } from "../../../core/types/appAgentChat.js";
 import { APP_AGENT_FILE_WRITE_TOOL_IDS } from "../../../core/types/appAgentChat.js";
 import type { AppRuntimeRouteAuth } from "../appRuntime/types.js";
 import { streamRuntimeAppAgentChat } from "../appRuntime/memoryRuntimeClient.js";
-import { buildCloudTurnPrompt } from "./appAgentChatPrompt.js";
 import { mapGatewayStreamToAppAgentEvents } from "./mapGatewayStreamToAppAgentEvents.js";
 import type { AppAgentChatSessionStore } from "./AppAgentChatSessionStore.js";
 
@@ -21,6 +19,7 @@ export interface AppAgentChatCloudTurnInput {
   userMessage: string;
   cloudJobId: string;
   onEvent: (event: AppAgentChatSseEvent) => void;
+  signal?: AbortSignal;
 }
 
 export interface AppAgentChatCloudTurnResult {
@@ -48,22 +47,14 @@ export class AppAgentChatCloudRunner {
       timestamp: new Date().toISOString(),
     });
 
-    const session = (await this.sessionStore.getSession(input.session.id)) ?? input.session;
-    const history = session.messages.slice(0, -1);
-
-    const prompt = buildCloudTurnPrompt({
-      history,
-      userMessage,
-    });
-
     const memoryStream = await streamRuntimeAppAgentChat(input.runtimeAuth, {
       sessionId: input.session.id,
       appId: input.session.appId,
       subAgentId: input.session.subAgentId,
       userMessage,
-      prompt,
+      prompt: userMessage,
       jobId: input.cloudJobId,
-      history: history.map(toStreamHistoryMessage),
+      signal: input.signal,
     });
 
     let assistantText = "";
@@ -132,11 +123,4 @@ export class AppAgentChatCloudRunner {
 
     return { turnId, assistantText: trimmed, shouldRefreshApp };
   }
-}
-
-function toStreamHistoryMessage(message: AppAgentChatMessage): {
-  role: AppAgentChatMessage["role"];
-  content: string;
-} {
-  return { role: message.role, content: message.content };
 }

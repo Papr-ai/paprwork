@@ -63,7 +63,7 @@ import { CloudAppHostCredentialService } from "./CloudAppHostCredentialService.j
 import {
   buildShareTokenCookie,
   readShareTokenFromCookie,
-  sanitizeReturnToPath,
+  resolveCloudAuthReturnToFromRequest,
 } from "./cloudAppHostCookies.js";
 import {
   ensurePublishedAppRootTrailingSlash,
@@ -461,10 +461,13 @@ export class CloudAppHostService {
       sessionToken,
     );
 
-    const returnTo = sanitizeReturnToPath(req.originalUrl.split("?")[0] ?? req.originalUrl);
+    const returnTo = resolveCloudAuthReturnToFromRequest(req, {
+      namespaceId: runtimeAuth.namespaceId,
+      slug: runtimeAuth.slug,
+    });
     const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}&start=1`;
 
-    if (!resolved || visibilityRequiresPaprLogin(resolved.visibility)) {
+    if (!resolved || visibilityRequiresPaprLogin(resolved.visibility, resolved.requireSignIn)) {
       if (options.html) {
         await this.sendShareGatePreview(req, res, runtimeAuth);
         return;
@@ -641,6 +644,21 @@ export class CloudAppHostService {
     const runtimeAuth = (await enrichRuntimeAuthWithPaprApiKey(baseAuth)) ?? baseAuth;
     const access = await validateCachedAccess(this.deps.publishResolver, runtimeAuth);
     if (!access) return null;
+
+    if (access.mode === "public_read" && !runtimeAuth.sessionToken) {
+      const resolved = await resolvePublishedApp(
+        runtimeAuth.namespaceId,
+        runtimeAuth.slug,
+        runtimeAuth.sessionToken,
+      );
+      if (
+        resolved &&
+        visibilityRequiresPaprLogin(resolved.visibility, resolved.requireSignIn)
+      ) {
+        return null;
+      }
+    }
+
     if (appId && access.appId !== appId) {
       return null;
     }
@@ -1247,9 +1265,10 @@ export class CloudAppHostService {
   }
 
   private respondJobRunSignInRequired(req: Request, res: Response): void {
-    const returnTo = sanitizeReturnToPath(
-      req.originalUrl.split("?")[0] ?? req.originalUrl,
-    );
+    const runtimeAuth = this.buildRuntimeAuth(req);
+    const returnTo = resolveCloudAuthReturnToFromRequest(req, runtimeAuth
+      ? { namespaceId: runtimeAuth.namespaceId, slug: runtimeAuth.slug }
+      : undefined);
     res.status(403).json({
       error:
         "Sign in to Papr to run agent jobs from this app. Invite links can use the app UI and backend actions, but AI jobs require a Papr account.",
@@ -1578,7 +1597,10 @@ export class CloudAppHostService {
       publicBaseUrl,
       canReadRepo: access?.canRead === true,
     });
-    const returnTo = sanitizeReturnToPath(req.originalUrl.split("?")[0] ?? req.originalUrl);
+    const returnTo = resolveCloudAuthReturnToFromRequest(req, {
+      namespaceId: runtimeAuth.namespaceId,
+      slug: runtimeAuth.slug,
+    });
     const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}&start=1`;
     const hasSession = Boolean(runtimeAuth.sessionToken);
     const published = await resolvePublishedApp(

@@ -1,0 +1,44 @@
+[
+  {
+    "name": "interval_initial",
+    "fn": "computeInitialNextRunAt",
+    "schedule": { "enabled": true, "intervalMs": 60000 },
+    "anchor": "2025-06-01T12:00:00.000Z",
+    "expectAfterAnchorMs": 60000
+  },
+  {
+    "name": "interval_following",
+    "fn": "computeFollowingNextRunAt",
+    "schedule": { "enabled": true, "intervalMs": 300000 },
+    "anchor": "2025-06-01T12:00:00.000Z",
+    "expectAfterAnchorMs": 300000
+  },
+  {
+    "name": "misfire_skip_interval",
+    "fn": "computeMisfireSkipNextRunAt",
+    "schedule": { "enabled": true, "intervalMs": 5000 },
+    "anchor": "2025-06-01T12:00:00.000Z",
+    "expectAfterAnchorMs": 5000
+  },
+  {
+    "name": "cron_initial_future",
+    "fn": "computeInitialNextRunAt",
+    "schedule": { "enabled": true, "cron": "0 13 * * *" },
+    "anchor": "2025-06-01T12:00:00.000Z",
+    "expectDefined": true
+  },
+  {
+    "name": "cron_following_strictly_after",
+    "fn": "computeFollowingNextRunAt",
+    "schedule": { "enabled": true, "cron": "* * * * *" },
+    "anchor": "2025-06-01T12:00:00.000Z",
+    "expectStrictlyAfterAnchor": true
+  },
+  {
+    "name": "at_time_initial",
+    "fn": "computeInitialNextRunAt",
+    "schedule": { "enabled": true, "atTime": "2025-12-01T08:00:00.000Z" },
+    "anchor": "2025-06-01T12:00:00.000Z",
+    "expectIso": "2025-12-01T08:00:00.000Z"
+  }
+]

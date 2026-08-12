@@ -11,16 +11,23 @@ interface ContextPillsProps {
   artifacts: Artifact[];
   onRemove: (id: string) => void;
   onAddClick: () => void;
+  addButtonRef?: React.RefObject<HTMLButtonElement | null>;
 }
 
 export function ContextPills({
   artifacts,
   onRemove,
   onAddClick,
+  addButtonRef,
 }: ContextPillsProps) {
   return (
     <div className="context-pills">
-      <button className="context-pill context-pill--add" onClick={onAddClick}>
+      <button
+        ref={addButtonRef}
+        type="button"
+        className="context-pill context-pill--add"
+        onClick={onAddClick}
+      >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
           <path
             d="M12 5v14M5 12h14"

@@ -431,6 +431,7 @@ export async function streamRuntimeAppAgentChat(
     prompt: string;
     jobId: string;
     history?: Array<{ role: "user" | "assistant"; content: string }>;
+    signal?: AbortSignal;
   },
 ): Promise<AsyncIterable<GatewayStreamRawEvent>> {
   const res = await fetch(
@@ -438,6 +439,7 @@ export async function streamRuntimeAppAgentChat(
     {
       method: "POST",
       headers: runtimeHeaders(auth),
+      signal: input.signal,
       body: JSON.stringify({
         ...runtimeAuthPayload(auth),
         sessionId: input.sessionId,

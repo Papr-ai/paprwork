@@ -10,6 +10,11 @@ import {
   readProfileSidebarCache,
   writeProfileSidebarCache,
 } from "../utils/profileSidebarCache";
+import {
+  isProfileImagePendingSync,
+  resolveDisplayProfileImage,
+} from "../utils/profileImageSyncCore.js";
+import { retryPendingProfileImageSync } from "../utils/profileImageSync.js";
 
 interface ProfileState {
   name: string;
@@ -35,6 +40,7 @@ interface ProfileState {
 const cached = readProfileSidebarCache();
 
 let refreshInFlight: Promise<void> | null = null;
+let profileImageRetryInFlight: Promise<void> | null = null;
 
 function persistProfileSnapshot(state: {
   name: string;
@@ -56,6 +62,12 @@ async function fetchProfileContext(): Promise<{
   organizationName: string;
   namespaceName: string;
   workspaceName: string;
+  pendingImageSync?: {
+    localImageUrl: string;
+    profileImageSyncPending: boolean;
+    name: string;
+    email: string;
+  };
 }> {
   const sidebarCache = readProfileSidebarCache();
   if (isWorkspaceSwitchReloading() && sidebarCache) {
@@ -76,12 +88,16 @@ async function fetchProfileContext(): Promise<{
       name?: string;
       email?: string;
       imageUrl?: string;
+      profileImageSyncPending?: boolean;
     };
   };
 
   let name = settingsData?.profile?.name ?? "";
   let email = settingsData?.profile?.email ?? "";
-  let imageUrl = settingsData?.profile?.imageUrl ?? "";
+  const localImageUrl = settingsData?.profile?.imageUrl ?? "";
+  const profileImageSyncPending =
+    settingsData?.profile?.profileImageSyncPending === true;
+  let imageUrl = localImageUrl;
   // Keep last-known plan from sidebar cache until billing refresh succeeds.
   let plan = sidebarCache?.plan ?? "";
   let organizationName = "";
@@ -89,8 +105,24 @@ async function fetchProfileContext(): Promise<{
   let workspaceName = "";
 
   const loginStatus = await window.electronAPI.papr.checkLoginStatus();
+  const pendingImageSync = isProfileImagePendingSync(
+    localImageUrl,
+    profileImageSyncPending,
+  )
+    ? { localImageUrl, profileImageSyncPending, name, email }
+    : undefined;
+
   if (!loginStatus.success || !loginStatus.isLoggedIn) {
-    return { name, email, imageUrl, plan, organizationName, namespaceName, workspaceName };
+    return {
+      name,
+      email,
+      imageUrl,
+      plan,
+      organizationName,
+      namespaceName,
+      workspaceName,
+      pendingImageSync,
+    };
   }
 
   const [paprProfileResult, planResult, orgsResult] = await Promise.all([
@@ -109,12 +141,11 @@ async function fetchProfileContext(): Promise<{
     const paprProfile = paprProfileResult.profile;
     if (!name) name = paprProfile.displayName?.trim() || "";
     if (!email) email = paprProfile.email || "";
-    const cloudImage = paprProfile.profileImage?.trim();
-    if (cloudImage) {
-      imageUrl = cloudImage;
-    } else if (!imageUrl) {
-      imageUrl = "";
-    }
+    imageUrl = resolveDisplayProfileImage(
+      localImageUrl,
+      paprProfile.profileImage ?? "",
+      profileImageSyncPending,
+    );
     const profilePlan = paprProfile.planName?.trim();
     if (profilePlan) {
       plan = profilePlan;
@@ -156,7 +187,52 @@ async function fetchProfileContext(): Promise<{
     }
   }
 
-  return { name, email, imageUrl, plan, organizationName, namespaceName, workspaceName };
+  return {
+    name,
+    email,
+    imageUrl,
+    plan,
+    organizationName,
+    namespaceName,
+    workspaceName,
+    pendingImageSync,
+  };
+}
+
+async function maybeRetryPendingProfileImageSync(
+  name: string,
+  email: string,
+  localImageUrl: string,
+  profileImageSyncPending: boolean,
+  setProfileImage: (cloudUrl: string) => void,
+): Promise<void> {
+  if (!isProfileImagePendingSync(localImageUrl, profileImageSyncPending)) {
+    return;
+  }
+  if (profileImageRetryInFlight) {
+    await profileImageRetryInFlight;
+    return;
+  }
+
+  profileImageRetryInFlight = (async () => {
+    try {
+      const result = await retryPendingProfileImageSync(
+        name,
+        email,
+        localImageUrl,
+        profileImageSyncPending,
+      );
+      if (result.cloudUrl) {
+        setProfileImage(result.cloudUrl);
+      }
+    } catch (err) {
+      console.warn("[ProfileStore] Pending profile photo sync failed:", err);
+    } finally {
+      profileImageRetryInFlight = null;
+    }
+  })();
+
+  await profileImageRetryInFlight;
 }
 
 export const useProfileStore = create<ProfileState>((set, get) => ({
@@ -179,9 +255,23 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
 
     refreshInFlight = (async () => {
       try {
-        const snapshot = await fetchProfileContext();
+        const { pendingImageSync, ...snapshot } = await fetchProfileContext();
         set({ ...snapshot, loaded: true });
         persistProfileSnapshot(snapshot);
+
+        if (pendingImageSync) {
+          void maybeRetryPendingProfileImageSync(
+            pendingImageSync.name,
+            pendingImageSync.email,
+            pendingImageSync.localImageUrl,
+            pendingImageSync.profileImageSyncPending,
+            (cloudUrl) => {
+              const next = { ...get(), imageUrl: cloudUrl };
+              set({ imageUrl: cloudUrl });
+              persistProfileSnapshot(next);
+            },
+          );
+        }
       } catch (err) {
         console.error("[ProfileStore] Load error:", err);
         set({ loaded: true });

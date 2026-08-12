@@ -54,7 +54,12 @@ describe("flushAppNow", () => {
       failed: 0,
       results: [],
     });
-    mockVerifyAppPushConvergence.mockResolvedValue({ ok: true, errors: [] });
+    mockVerifyAppPushConvergence.mockResolvedValue({
+      ok: true,
+      errors: [],
+      warnings: [],
+      turso: { ok: true, sources: [], errors: [] },
+    });
     mockAssertAppPushVerified.mockResolvedValue(undefined);
     mockRunConvergenceCheckForApp.mockResolvedValue(undefined);
     mockWebReady.mockResolvedValue({ ready: true });

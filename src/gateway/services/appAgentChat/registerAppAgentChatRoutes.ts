@@ -300,6 +300,16 @@ export function registerAppAgentChatRoutes(
       const turnId = uuidv4();
       turnHub.createTurn(turnId);
 
+      const cloudAbort = new AbortController();
+      turnHub.registerCancel(turnId, () => {
+        cloudAbort.abort();
+        if (deps.mode === "desktop") {
+          void import("../AgentService.js").then(({ getAgentService }) =>
+            getAgentService().stopStreaming(`app-agent:${sessionId}`),
+          );
+        }
+      });
+
       void (async () => {
         const onEvent = (event: import("../../../core/types/appAgentChat.js").AppAgentChatSseEvent) => {
           turnHub.publish(turnId, event);
@@ -364,6 +374,7 @@ export function registerAppAgentChatRoutes(
               userMessage: message,
               cloudJobId: cloudConfig.cloudJobId,
               onEvent,
+              signal: cloudAbort.signal,
             });
           }
         } catch (err) {
@@ -393,6 +404,16 @@ export function registerAppAgentChatRoutes(
 
     const cleanup = streamTurnEvents(res, turnId, turnHub);
     req.on("close", cleanup);
+  });
+
+  app.post("/api/app-agent/sessions/:sessionId/turns/:turnId/cancel", (req, res) => {
+    const { turnId } = req.params;
+    const cancelled = turnHub.cancelTurn(turnId);
+    if (!cancelled) {
+      res.status(404).json({ error: "Turn not found or already finished" });
+      return;
+    }
+    res.json({ success: true, turnId });
   });
 
   if (deps.mode === "cloud") {

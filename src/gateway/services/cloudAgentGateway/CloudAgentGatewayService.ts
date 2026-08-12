@@ -1,4 +1,5 @@
 import { getAgentService } from "../AgentService.js";
+import { resolveCloudAgentChatId } from "./cloudAppAgentSession.js";
 import {
   beginCloudAgentRun,
   resolveCloudAgentJobStreamInput,
@@ -24,7 +25,7 @@ export class CloudAgentGatewayService {
   }
 
   async runAgentJob(request: CloudAgentRunRequest): Promise<CloudAgentRunResponse> {
-    const chatId = `job:${request.jobId}:${request.runId}`;
+    const chatId = resolveCloudAgentChatId(request);
     try {
       const result = await withCloudAgentRunContext(request, async () => {
         const agentService = getAgentService();
@@ -68,7 +69,7 @@ export class CloudAgentGatewayService {
   private async *streamOneShotRun(
     request: CloudAgentRunRequest,
   ): AsyncGenerator<Record<string, unknown>> {
-    const chatId = `job:${request.jobId}:${request.runId}`;
+    const chatId = resolveCloudAgentChatId(request);
 
     yield {
       type: "session-meta",
@@ -110,7 +111,7 @@ export class CloudAgentGatewayService {
   ): AsyncGenerator<Record<string, unknown>> {
     const sessionId = request.workspaceSessionId as string;
     const cache = getCloudAgentSessionCache();
-    const chatId = `job:${request.jobId}:${request.runId}`;
+    const chatId = resolveCloudAgentChatId(request);
 
     yield {
       type: "session-meta",
@@ -156,10 +157,22 @@ export class CloudAgentGatewayService {
     let exitCode = 0;
     const agentService = getAgentService();
     const streamInput = await resolveCloudAgentJobStreamInput(request);
-    const { session: _session, appendLog, ...jobSession } = streamInput;
+    const {
+      session: _session,
+      appendLog,
+      prompt: _prompt,
+      streamUserMessage,
+      chatId,
+      systemPromptOverride,
+      ...jobSession
+    } = streamInput;
 
     for await (const chunk of agentService.streamIsolatedJobSessionForCloud({
       ...jobSession,
+      prompt: streamInput.prompt,
+      chatId,
+      userMessage: streamUserMessage,
+      ...(systemPromptOverride ? { systemPromptOverride } : {}),
       appendLog,
     })) {
       if (chunk.type === "error") {

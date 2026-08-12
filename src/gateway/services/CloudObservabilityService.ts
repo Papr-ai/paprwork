@@ -20,6 +20,8 @@ import {
 import { GitRunner } from "./cloudSync/gitRunner.js";
 import { buildCloudLinkSyncReport } from "./cloudPublishStatus.js";
 import { getJobsService } from "./JobsService.js";
+import { isJobRuntimeOffGit } from "./jobs/jobRuntimeOffGit.js";
+import { stripRuntimeForGit } from "./jobs/jobRuntimeFields.js";
 import { getTursoSyncBridge } from "./TursoSyncBridge.js";
 import type { TursoPushScopedResult } from "./TursoSyncBridge.js";
 import type { PushGitScopedResult } from "./CloudSyncService.js";
@@ -726,7 +728,7 @@ async function buildJobsSection(input: {
   );
 
   let githubRecords: CloudSyncStatusReport["jobs"]["githubRecords"] = [];
-  if (appId) {
+  if (appId && !isJobRuntimeOffGit()) {
     const dependentJobIds = resolveAppDependentJobIds(getPaprRoot(), appId);
     githubRecords = await Promise.all(
       dependentJobIds.slice(0, 20).map(async (dependentJobId) => {
@@ -740,6 +742,21 @@ async function buildJobsSection(input: {
         }
       }),
     );
+  } else if (appId && isJobRuntimeOffGit()) {
+    const dependentJobIds = resolveAppDependentJobIds(getPaprRoot(), appId);
+    githubRecords = dependentJobIds.slice(0, 20).map((dependentJobId) => {
+      const relativePath = `Jobs/${dependentJobId}/job.json`;
+      const job = jobs.find((entry) => entry.id === dependentJobId);
+      if (!job) {
+        return { jobId: dependentJobId, relativePath, found: false };
+      }
+      return {
+        jobId: dependentJobId,
+        relativePath,
+        found: true,
+        record: stripRuntimeForGit(job) as unknown as Record<string, unknown>,
+      };
+    });
   }
 
   return { local, githubRecords };

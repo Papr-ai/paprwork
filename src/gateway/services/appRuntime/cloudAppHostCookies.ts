@@ -3,7 +3,12 @@
  */
 
 import * as crypto from "crypto";
-import { ensurePublishedAppRootTrailingSlash } from "../../../core/utils/cloudAppPath.js";
+import {
+  ensurePublishedAppRootTrailingSlash,
+  publishedAppBaseHref,
+} from "../../../core/utils/cloudAppPath.js";
+
+const NON_BROWSABLE_RETURN_TO_PREFIXES = ["/api/", "/auth/", "/__papr__/"] as const;
 
 export const PAPR_SESSION_COOKIE = "papr_session";
 export const PAPR_AUTH_PENDING_COOKIE = "papr_auth_pending";
@@ -246,6 +251,60 @@ export function sanitizeReturnToPath(returnTo: string | undefined): string {
   if (returnTo.startsWith("//")) return "/";
   if (returnTo.includes("://")) return "/";
   return returnTo;
+}
+
+export function isBrowsableCloudReturnToPath(path: string): boolean {
+  const normalized = sanitizeReturnToPath(path.split("?")[0]);
+  if (normalized === "/") {
+    return false;
+  }
+  for (const prefix of NON_BROWSABLE_RETURN_TO_PREFIXES) {
+    if (normalized === prefix.slice(0, -1) || normalized.startsWith(prefix)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function cloudAppRootPath(namespaceId: string, slug: string): string {
+  return publishedAppBaseHref(namespaceId, slug);
+}
+
+export function resolveCloudAuthReturnToPath(
+  candidate: string | undefined,
+  fallback?: { namespaceId?: string; slug?: string },
+): string {
+  const sanitized = sanitizeReturnToPath(candidate?.split("?")[0]);
+  if (isBrowsableCloudReturnToPath(sanitized)) {
+    return ensurePublishedAppRootTrailingSlash(sanitized);
+  }
+  if (fallback?.namespaceId && fallback.slug) {
+    return cloudAppRootPath(fallback.namespaceId, fallback.slug);
+  }
+  return "/";
+}
+
+export function resolveCloudAuthReturnToFromRequest(
+  req: {
+    originalUrl?: string;
+    headers?: { referer?: string };
+  },
+  fallback?: { namespaceId?: string; slug?: string },
+): string {
+  const referer = req.headers?.referer;
+  if (referer) {
+    try {
+      const refPath = new URL(referer).pathname;
+      if (isBrowsableCloudReturnToPath(refPath)) {
+        return ensurePublishedAppRootTrailingSlash(refPath);
+      }
+    } catch {
+      /* ignore malformed referer */
+    }
+  }
+
+  const fromUrl = req.originalUrl?.split("?")[0];
+  return resolveCloudAuthReturnToPath(fromUrl, fallback);
 }
 
 export function stripShareTokenFromPath(originalUrl: string): string {

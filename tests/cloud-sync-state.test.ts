@@ -14,6 +14,10 @@ describe("shouldExcludePathFromContentHash", () => {
     expect(shouldExcludePathFromContentHash("data/cloud-repo-head.txt")).toBe(true);
     expect(shouldExcludePathFromContentHash("apps/x/linked-databases.json")).toBe(true);
     expect(shouldExcludePathFromContentHash("apps/x/src/App.tsx")).toBe(false);
+    expect(shouldExcludePathFromContentHash("Jobs/job-1/job.runtime.json")).toBe(
+      true,
+    );
+    expect(shouldExcludePathFromContentHash("data/job-runs.jsonl")).toBe(true);
   });
 
   it("excludes local-only backup artifacts", () => {

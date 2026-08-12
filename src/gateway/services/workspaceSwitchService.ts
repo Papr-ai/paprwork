@@ -242,6 +242,7 @@ async function runPostMigrationPathRepairIfNeeded(input?: {
 /** Phased init after pointer reset — yields between phases so /health stays responsive. */
 async function initializeWorkspaceServicesPhased(input?: {
   paprApiKey?: string;
+  userDataPath?: string;
   runPostMigrationPathRepair?: boolean;
   scopePaprHome?: string;
   onPhase?: (phase: WorkspaceSwitchPhase) => void;
@@ -263,6 +264,7 @@ async function initializeWorkspaceServicesPhased(input?: {
   await initializeAgentService({
     mode: paprApiKey ? "hybrid" : "local",
     paprApiKey,
+    userDataPath: input?.userDataPath,
     openaiApiKey: undefined,
   });
   if (input?.isStale?.()) {
@@ -304,6 +306,7 @@ async function initializeWorkspaceServicesPhased(input?: {
 /** Full reset + reinit (tests, migration flows that need synchronous completion). */
 export async function reinitializeWorkspaceServices(input?: {
   paprApiKey?: string;
+  userDataPath?: string;
   runPostMigrationPathRepair?: boolean;
   scopePaprHome?: string;
   onPhase?: (phase: WorkspaceSwitchPhase) => void;

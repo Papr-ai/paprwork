@@ -47,7 +47,9 @@ export async function buildPublishLayerReport(
 
   const ready = await webReady(appId, options?.paprDir);
   if (ready.ready) {
-    return { status: "synced" };
+    return ready.detail
+      ? { status: "synced", detail: ready.detail }
+      : { status: "synced" };
   }
 
   if (ready.reason === "convergence_drift") {
@@ -149,6 +151,13 @@ export async function webReady(
       ready: false,
       reason: "convergence_drift",
       detail: `Drift in ${convergence.driftTables.join(", ")}`,
+    };
+  }
+
+  if (verify.warnings.length > 0) {
+    return {
+      ready: true,
+      detail: verify.warnings[0],
     };
   }
 

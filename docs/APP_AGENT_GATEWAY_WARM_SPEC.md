@@ -142,7 +142,9 @@ Proxy to `POST /internal/agent/stream` with those fields. Pipe SSE back unchange
 
 **Per-turn `runId`:** New id each message (isolated turn bookkeeping). **`workspaceSessionId`** must stay stable for workspace reuse.
 
-**History:** App Host still sends `history[]` in prompt; LLM `chatId` remains `job:{jobId}:{runId}` per turn.
+**LLM `chatId`:** `app-agent:{workspaceSessionId}` (stable across turns). Tool results and `get_full_tool_result` read from `{runRoot}/user-data/chats.db`.
+
+**History:** Prior turns load from sandbox `chats.db` via stable chat id. App Host sends only the new user message in `runtimeParams.prompt` (not a full history block).
 
 ---
 

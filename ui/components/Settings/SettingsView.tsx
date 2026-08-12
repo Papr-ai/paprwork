@@ -16,6 +16,11 @@ import { DatabasesTab } from "./DatabasesTab";
 import { WorkspaceMigrationTab } from "./WorkspaceMigrationTab";
 import { PaprLoginSection } from "./PaprLoginSection";
 import { resizeProfilePhoto } from "../../utils/profilePhoto";
+import {
+  persistProfileFields,
+  resolveDisplayProfileImage,
+  syncProfileImageToCloud,
+} from "../../utils/profileImageSync";
 import { useChat } from "../../hooks/useChat";
 import { useTabs } from "../../hooks/useTabs";
 import { startPlatformFeedbackChat } from "../../utils/startPlatformFeedbackChat";
@@ -214,7 +219,12 @@ function ProfileTab() {
       try {
         const response = await gateway.send("settings:get");
         const data = response.data as {
-          profile?: { name?: string; email?: string; imageUrl?: string };
+          profile?: {
+            name?: string;
+            email?: string;
+            imageUrl?: string;
+            profileImageSyncPending?: boolean;
+          };
         };
 
         const loginStatus = await window.electronAPI.papr.checkLoginStatus();
@@ -226,23 +236,27 @@ function ProfileTab() {
           }
         }
 
+        const localImageUrl = data?.profile?.imageUrl ?? "";
+        const profileImageSyncPending =
+          data?.profile?.profileImageSyncPending === true;
+
         if (paprResponse.success && paprResponse.profile) {
           setPaprProfile(paprResponse.profile);
-          
-          // Pre-fill manual profile fields if empty
+
+          const resolvedImage = resolveDisplayProfileImage(
+            localImageUrl,
+            paprResponse.profile.profileImage ?? "",
+            profileImageSyncPending,
+          );
+
           if (data?.profile) {
             setName(data.profile.name ?? paprResponse.profile.displayName ?? "");
             setEmail(data.profile.email ?? paprResponse.profile.email ?? "");
-            setImageUrl(
-              data.profile.imageUrl?.trim() ||
-                paprResponse.profile.profileImage?.trim() ||
-                "",
-            );
+            setImageUrl(resolvedImage);
           } else {
-            // No manual profile yet - use Papr profile as defaults
             setName(paprResponse.profile.displayName ?? "");
             setEmail(paprResponse.profile.email ?? "");
-            setImageUrl(paprResponse.profile.profileImage ?? "");
+            setImageUrl(resolvedImage);
           }
         } else if (data?.profile) {
           // No Papr profile - use manual profile only
@@ -260,8 +274,21 @@ function ProfileTab() {
 
     // Listen for auth success to reload profile
     const handleAuthSuccess = () => {
-      console.log('[ProfileTab] Auth success - reloading profile');
+      console.log("[ProfileTab] Auth success - reloading profile");
       void (async () => {
+        const settingsResponse = await gateway.send("settings:get");
+        const settingsData = settingsResponse.data as {
+          profile?: {
+            name?: string;
+            email?: string;
+            imageUrl?: string;
+            profileImageSyncPending?: boolean;
+          };
+        };
+        const localImageUrl = settingsData?.profile?.imageUrl ?? "";
+        const profileImageSyncPending =
+          settingsData?.profile?.profileImageSyncPending === true;
+
         const refreshResult = await window.electronAPI.papr.refreshProfile();
         const response =
           refreshResult.success && refreshResult.profile
@@ -269,9 +296,22 @@ function ProfileTab() {
             : await window.electronAPI.papr.getProfile();
         if (response.success && response.profile) {
           setPaprProfile(response.profile);
-          setName(response.profile.displayName ?? "");
-          setEmail(response.profile.email ?? "");
-          setImageUrl(response.profile.profileImage ?? "");
+          setName(
+            settingsData?.profile?.name ??
+              response.profile.displayName ??
+              "",
+          );
+          setEmail(
+            settingsData?.profile?.email ?? response.profile.email ?? "",
+          );
+          setImageUrl(
+            resolveDisplayProfileImage(
+              localImageUrl,
+              response.profile.profileImage ?? "",
+              profileImageSyncPending,
+            ),
+          );
+          void profileStore.loadProfile({ force: true });
         }
       })();
     };
@@ -293,7 +333,11 @@ function ProfileTab() {
     email: string;
     imageUrl: string;
   }) => {
-    await gateway.send("settings:save-profile", fields);
+    const hasImage = Boolean(fields.imageUrl.trim());
+    await persistProfileFields({
+      ...fields,
+      profileImageSyncPending: hasImage,
+    });
     profileStore.setProfile(fields);
 
     const loginStatus = await window.electronAPI.papr.checkLoginStatus();
@@ -301,29 +345,36 @@ function ProfileTab() {
       return;
     }
 
-    const syncResult = await window.electronAPI.papr.syncProfile({
-      name: fields.name,
-      email: fields.email,
-      imageUrl: fields.imageUrl,
-    });
+    const syncResult = await syncProfileImageToCloud(fields);
 
     if (!syncResult.success) {
       console.warn("[ProfileTab] Cloud profile sync failed:", syncResult.error);
+      await persistProfileFields({
+        ...fields,
+        profileImageSyncPending: hasImage,
+      });
       return;
     }
 
-    if (syncResult.syncedImageUrl) {
-      const cloudUrl = syncResult.syncedImageUrl;
-      await gateway.send("settings:save-profile", {
+    if (syncResult.cloudUrl) {
+      const cloudUrl = syncResult.cloudUrl;
+      await persistProfileFields({
         ...fields,
         imageUrl: cloudUrl,
+        profileImageSyncPending: false,
       });
       profileStore.setProfile({ imageUrl: cloudUrl });
       setImageUrl(cloudUrl);
       setPaprProfile((current) =>
         current ? { ...current, profileImage: cloudUrl } : current,
       );
+      return;
     }
+
+    await persistProfileFields({
+      ...fields,
+      profileImageSyncPending: false,
+    });
   };
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -956,10 +1007,11 @@ function AboutTab() {
                 </p>
               </li>
               <li className="whats-new-list__item">
-                <strong>Contribute-Back & Web Sync UI</strong>
+                <strong>Cloud Apps & Sharing</strong>
                 <p>
-                  Improved fork/track PR workflow, richer Web Sync popover, and
-                  flush-to-web-ready pipeline for published apps.
+                  Embedded app agent chat on cloud, require-sign-in and per-user
+                  database isolation, profile photo cloud sync, and friendlier
+                  subscription error banners.
                 </p>
               </li>
             </ul>

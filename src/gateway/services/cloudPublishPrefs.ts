@@ -42,6 +42,10 @@ export interface CloudPublishAppPrefs {
   liveLinkPermission?: "read" | "read_write";
   /** API keys the app needs — mirrored from requirements.json for quick reads. */
   credentialRequirements?: RequiredKeySpec[];
+  /** Public Community apps: require Papr sign-in before opening (default false). */
+  requireSignIn?: boolean;
+  /** When true, linked registry DBs use per-user Turso isolation. */
+  perUserIsolation?: boolean;
   lastAutoPublishAttemptAt?: string;
   lastAutoPublishError?: string;
 }

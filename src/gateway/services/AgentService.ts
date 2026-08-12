@@ -3733,12 +3733,15 @@ ${last15.substring(0, 8_000)}`;
     jobId: string;
     runId: string;
     prompt: string;
+    chatId: string;
+    userMessage: string;
     provider: Provider;
     model?: string;
     allowedToolIds?: string[];
     maxTurns?: number;
     authOverride: { apiKey: string; authType: "oauth" | "apiKey" };
     paprApiKey?: string;
+    systemPromptOverride?: string;
     appendLog?: (line: string) => Promise<void>;
   }): AsyncGenerator<StreamChunk & { chatId: string }> {
     if (!this.initialized) {
@@ -3787,13 +3790,18 @@ ${last15.substring(0, 8_000)}`;
       `[AgentService] Resolved job provider/model: ${provider}/${model}`,
     );
 
-    const chatId = `job:${input.jobId}:${input.runId}`;
+    const chatId = input.chatId;
+    const isolatedRunNote = input.systemPromptOverride
+      ? `- App-agent session: ${chatId}`
+      : `- Session: ${chatId}`;
     const config: AgentConfigInternal = {
       provider,
       model,
       apiKey,
       authType,
-      systemPrompt: `${this.systemPrompt}\n\n# Isolated Job Run\n- Session: ${chatId}\n- Keep output concise and actionable.`,
+      systemPrompt:
+        input.systemPromptOverride ??
+        `${this.systemPrompt}\n\n# Isolated Job Run\n${isolatedRunNote}\n- Keep output concise and actionable.`,
     };
 
     const { setToolContext, collectJobEnvFromProcess } =
@@ -3804,7 +3812,7 @@ ${last15.substring(0, 8_000)}`;
     });
 
     let thinkingBuffer = "";
-    for await (const chunk of this.streamAgent(chatId, input.prompt, config, {
+    for await (const chunk of this.streamAgent(chatId, input.userMessage, config, {
       allowedToolIds: input.allowedToolIds,
       maxSteps: input.maxTurns,
     })) {
@@ -4663,6 +4671,7 @@ export function resetAgentServiceSingletonForTests(): void {
  */
 export async function initializeAgentService(config: {
   mode: "local" | "papr" | "hybrid";
+  userDataPath?: string;
   paprApiKey?: string;
   openaiApiKey?: string;
 }): Promise<AgentService> {

@@ -13,6 +13,7 @@ import "./ChatHistoryDropdown.css";
 
 interface ChatHistoryDropdownProps {
   onClose: () => void;
+  dropdownRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 // Group chats by date
@@ -99,6 +100,7 @@ function formatRelativeTime(dateString: string): string {
 
 export const ChatHistoryDropdown: React.FC<ChatHistoryDropdownProps> = ({
   onClose,
+  dropdownRef,
 }) => {
   const { chats } = useChatStore();
   const { createTab } = useTabStore();
@@ -131,7 +133,7 @@ export const ChatHistoryDropdown: React.FC<ChatHistoryDropdownProps> = ({
   };
 
   return (
-    <div className="chat-history-dropdown">
+    <div className="chat-history-dropdown" ref={dropdownRef}>
       <div className="chat-history-search">
         <input
           type="text"
@@ -145,14 +147,7 @@ export const ChatHistoryDropdown: React.FC<ChatHistoryDropdownProps> = ({
 
       <div className="chat-history-list">
         {Object.keys(groupedChats).length === 0 ? (
-          <div
-            style={{
-              padding: "20px",
-              textAlign: "center",
-              color: "#666",
-              fontSize: "13px",
-            }}
-          >
+          <div className="chat-history-empty">
             {searchQuery ? "No chats found" : "No chat history yet"}
           </div>
         ) : (

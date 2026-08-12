@@ -57,6 +57,12 @@ const SQLITE_HASH_IGNORED_SUFFIXES = [".db-shm", ".db-wal", ".db"] as const;
 export function shouldExcludePathFromContentHash(relativePath: string): boolean {
   const normalized = relativePath.replace(/\\/g, "/");
   if (
+    normalized.endsWith("/job.runtime.json") ||
+    normalized === "data/job-runs.jsonl"
+  ) {
+    return true;
+  }
+  if (
     HASH_IGNORED_RELATIVE_SUFFIXES.some(
       (suffix) => normalized === suffix || normalized.endsWith(`/${suffix}`),
     )

@@ -8,6 +8,13 @@
  *   <script type="module" src="/__papr__/papr-agent-chat.js"></script>
  */
 
+import { renderMarkdownToHtml } from "./papr-markdown.js";
+import {
+  parsePlanFromToolResult,
+  renderPlanCardHtml,
+  type PlanData,
+} from "./papr-agent-chat-plan.js";
+
 export interface PublicAppAgentChatConfig {
   enabled: boolean;
   subAgentId: string;
@@ -27,12 +34,15 @@ interface ToolCallActivity {
   name: string;
   args?: Record<string, unknown>;
   status?: "pending" | "success" | "error";
+  result?: unknown;
 }
 
 interface TurnActivity {
   thinking: string;
   thinkingStreaming: boolean;
   toolCalls: ToolCallActivity[];
+  plans: PlanData[];
+  startedAt: number;
 }
 
 export interface OpenAppAgentChatOptions {
@@ -40,6 +50,8 @@ export interface OpenAppAgentChatOptions {
 }
 
 let openPanelHandler: ((options?: OpenAppAgentChatOptions) => void) | null = null;
+
+const SESSION_STORAGE_KEY = "papr-agent-chat-session";
 
 function formatToolLabel(toolName: string, args?: Record<string, unknown>, running = true): string {
   const prefix = running ? "Using" : "Used";
@@ -66,7 +78,21 @@ function formatToolLabel(toolName: string, args?: Record<string, unknown>, runni
   return `${prefix} ${readable}`;
 }
 
-const SESSION_STORAGE_KEY = "papr-app-agent-session";
+function setMessageMarkdown(el: HTMLElement, content: string): void {
+  const contentEl = el.querySelector(".papr-agent-chat-msg__content");
+  if (contentEl) {
+    contentEl.innerHTML = renderMarkdownToHtml(content);
+    return;
+  }
+  el.innerHTML = `<div class="papr-agent-chat-msg__content">${renderMarkdownToHtml(content)}</div>`;
+}
+
+function getLastToolActivity(toolCalls: ToolCallActivity[]): string {
+  if (toolCalls.length === 0) return "Working";
+  const last = toolCalls[toolCalls.length - 1];
+  const running = (last.status ?? "pending") === "pending";
+  return formatToolLabel(last.name, last.args, running);
+}
 
 function resolveAppIdFromPath(): string | null {
   const match = window.location.pathname.match(/\/apps\/([0-9a-f-]{36})\//i);
@@ -233,6 +259,7 @@ function createBubbleStyles(): void {
     }
     .papr-agent-chat-bubble--left { left: 24px; }
     .papr-agent-chat-bubble--right { right: 24px; }
+    .papr-agent-chat-bubble--hidden { display: none !important; }
     .papr-agent-chat-panel {
       position: fixed;
       z-index: 99998;
@@ -253,6 +280,21 @@ function createBubbleStyles(): void {
     .papr-agent-chat-panel--left { left: 24px; }
     .papr-agent-chat-panel--right { right: 24px; }
     .papr-agent-chat-panel--open { display: flex; }
+    .papr-agent-chat-panel--expanded {
+      top: 0;
+      bottom: 0;
+      max-height: 100vh;
+      width: min(440px, 42vw);
+      border-radius: 0;
+    }
+    .papr-agent-chat-panel--expanded.papr-agent-chat-panel--right {
+      right: 0;
+      left: auto;
+    }
+    .papr-agent-chat-panel--expanded.papr-agent-chat-panel--left {
+      left: 0;
+      right: auto;
+    }
     .papr-agent-chat-panel__header {
       padding: 12px 14px;
       font-weight: 600;
@@ -261,7 +303,33 @@ function createBubbleStyles(): void {
       justify-content: space-between;
       align-items: center;
       flex-shrink: 0;
+      gap: 8px;
     }
+    .papr-agent-chat-panel__header-title {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .papr-agent-chat-panel__header-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+    .papr-agent-chat-panel__icon-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      color: inherit;
+      opacity: 0.7;
+      padding: 4px 6px;
+      border-radius: 6px;
+    }
+    .papr-agent-chat-panel__icon-btn:hover { opacity: 1; background: rgba(0,0,0,0.05); }
     .papr-agent-chat-panel__messages {
       flex: 1;
       overflow-y: auto;
@@ -274,9 +342,114 @@ function createBubbleStyles(): void {
       max-width: 92%;
       padding: 8px 12px;
       border-radius: 12px;
-      white-space: pre-wrap;
       word-break: break-word;
     }
+    .papr-agent-chat-msg__content {
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    .papr-agent-chat-msg__content p {
+      margin: 0 0 0.65em;
+    }
+    .papr-agent-chat-msg__content p:last-child {
+      margin-bottom: 0;
+    }
+    .papr-agent-chat-msg__content h1,
+    .papr-agent-chat-msg__content h2,
+    .papr-agent-chat-msg__content h3 {
+      margin: 0.75em 0 0.35em;
+      font-weight: 600;
+      line-height: 1.3;
+    }
+    .papr-agent-chat-msg__content h1 { font-size: 1.25rem; }
+    .papr-agent-chat-msg__content h2 { font-size: 1.1rem; }
+    .papr-agent-chat-msg__content h3 { font-size: 1rem; }
+    .papr-agent-chat-msg__content ul,
+    .papr-agent-chat-msg__content ol {
+      margin: 0.35em 0 0.65em;
+      padding-left: 1.25rem;
+    }
+    .papr-agent-chat-msg__content li {
+      margin: 0.2em 0;
+    }
+    .papr-agent-chat-msg__content strong {
+      font-weight: 600;
+    }
+    .papr-agent-chat-msg__content code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.9em;
+      padding: 0.1em 0.35em;
+      border-radius: 4px;
+      background: rgba(0,0,0,0.06);
+    }
+    .papr-agent-chat-msg__content a {
+      color: #007aff;
+      text-decoration: none;
+    }
+    .papr-agent-chat-msg__content a:hover {
+      text-decoration: underline;
+    }
+    .papr-agent-chat-msg__content blockquote {
+      margin: 0.5em 0;
+      padding-left: 0.75em;
+      border-left: 3px solid rgba(0,0,0,0.12);
+      color: #555;
+    }
+    .papr-md-pre {
+      margin: 0.5em 0;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: rgba(0,0,0,0.06);
+      overflow-x: auto;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .papr-md-pre code { background: none; padding: 0; }
+    .papr-md-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0.5em 0;
+      font-size: 12px;
+    }
+    .papr-md-table th, .papr-md-table td {
+      border: 1px solid rgba(0,0,0,0.1);
+      padding: 6px 8px;
+      text-align: left;
+    }
+    .papr-md-table th { background: rgba(0,0,0,0.04); font-weight: 600; }
+    .papr-agent-chat-plan {
+      border: 1px solid rgba(0,0,0,0.08);
+      border-radius: 10px;
+      overflow: hidden;
+      margin: 6px 0;
+      background: rgba(0,0,0,0.02);
+    }
+    .papr-agent-chat-plan__header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      padding: 8px 10px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      text-align: left;
+    }
+    .papr-agent-chat-plan__chevron { font-size: 10px; transition: transform 0.2s; }
+    .papr-agent-chat-plan__chevron--collapsed { transform: rotate(-90deg); }
+    .papr-agent-chat-plan__title { flex: 1; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .papr-agent-chat-plan__progress { font-size: 11px; color: #666; }
+    .papr-agent-chat-plan__bar { width: 48px; height: 4px; background: rgba(0,0,0,0.08); border-radius: 2px; overflow: hidden; }
+    .papr-agent-chat-plan__bar span { display: block; height: 100%; background: #007aff; }
+    .papr-agent-chat-plan__steps { padding: 0 10px 8px; }
+    .papr-agent-chat-plan__steps--collapsed { display: none; }
+    .papr-agent-chat-plan__step { display: flex; gap: 8px; font-size: 12px; padding: 3px 0; }
+    .papr-agent-chat-plan__step-icon { width: 14px; flex-shrink: 0; text-align: center; }
+    .papr-agent-chat-plan__step--completed .papr-agent-chat-plan__step-desc { opacity: 0.6; text-decoration: line-through; }
+    .papr-agent-chat-working__timer { margin-left: auto; font-size: 11px; color: #888; font-weight: 400; }
+    .papr-agent-chat-panel__send--stop { background: #ff3b30; }
     .papr-agent-chat-msg--user {
       align-self: flex-end;
       background: #007aff;
@@ -314,11 +487,19 @@ function createBubbleStyles(): void {
       border: none;
       background: transparent;
       font: inherit;
-      font-size: 12px;
+      font-size: 13px;
       font-weight: 600;
       color: #555;
       cursor: pointer;
       text-align: left;
+    }
+    .papr-agent-chat-thinking__chevron {
+      font-size: 10px;
+      transition: transform 0.2s ease;
+      flex-shrink: 0;
+    }
+    .papr-agent-chat-thinking__chevron--collapsed {
+      transform: rotate(-90deg);
     }
     .papr-agent-chat-thinking__header--streaming {
       background: linear-gradient(90deg, rgba(0,122,255,0.08), rgba(88,86,214,0.08));
@@ -340,11 +521,35 @@ function createBubbleStyles(): void {
       overflow: hidden;
     }
     .papr-agent-chat-working__header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
       padding: 8px 10px;
-      font-size: 12px;
+      font-size: 13px;
       font-weight: 600;
       color: #555;
       border-bottom: 1px solid rgba(0,0,0,0.06);
+      cursor: pointer;
+      user-select: none;
+    }
+    .papr-agent-chat-working__chevron {
+      font-size: 10px;
+      transition: transform 0.2s ease;
+      flex-shrink: 0;
+    }
+    .papr-agent-chat-working__chevron--collapsed {
+      transform: rotate(-90deg);
+    }
+    .papr-agent-chat-working__label-secondary {
+      font-weight: 400;
+      color: #777;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .papr-agent-chat-working__body--collapsed,
+    .papr-agent-chat-working__list--collapsed {
+      display: none !important;
     }
     .papr-agent-chat-working__list {
       display: flex;
@@ -412,7 +617,16 @@ function createBubbleStyles(): void {
       .papr-agent-chat-thinking__header,
       .papr-agent-chat-working__header { color: #bbb; }
       .papr-agent-chat-thinking__body { color: #ccc; }
+      .papr-agent-chat-working__label-secondary { color: #999; }
       .papr-agent-chat-tool { color: #ddd; border-color: rgba(255,255,255,0.06); }
+      .papr-agent-chat-msg__content code {
+        background: rgba(255,255,255,0.08);
+      }
+      .papr-agent-chat-msg__content blockquote {
+        border-color: rgba(255,255,255,0.15);
+        color: #bbb;
+      }
+      .papr-agent-chat-msg__content a { color: #64b5ff; }
       .papr-agent-chat-panel__input {
         background: rgba(255,255,255,0.06);
         color: #f5f5f7;
@@ -444,6 +658,7 @@ async function streamTurn(
   message: string,
   handlers: {
     onTurnStart?: () => void;
+    onTurnId?: (turnId: string) => void;
     onThinkingDelta: (text: string) => void;
     onDelta: (text: string) => void;
     onToolCall: (input: {
@@ -455,8 +670,9 @@ async function streamTurn(
       toolCallId?: string;
       toolName: string;
       success: boolean;
+      result?: unknown;
     }) => void;
-    onDone: (input: { shouldRefreshApp: boolean }) => void;
+    onDone: (input: { shouldRefreshApp: boolean; stopped?: boolean }) => void;
     onError: (error: string) => void;
   },
 ): Promise<void> {
@@ -471,11 +687,17 @@ async function streamTurn(
     throw new Error(body.error ?? `Send failed (${postRes.status})`);
   }
   const { turnId } = (await postRes.json()) as { turnId: string };
+  handlers.onTurnId?.(turnId);
 
   await new Promise<void>((resolve, reject) => {
     const source = new EventSource(
       `/api/app-agent/sessions/${sessionId}/stream?turnId=${encodeURIComponent(turnId)}`,
     );
+
+    const finish = (): void => {
+      source.close();
+      resolve();
+    };
 
     source.addEventListener("app-agent:turn-start", () => {
       handlers.onTurnStart?.();
@@ -527,12 +749,14 @@ async function streamTurn(
         const data = JSON.parse((event as MessageEvent).data) as {
           toolCallId?: string;
           toolName?: string;
+          result?: unknown;
         };
         if (data.toolName) {
           handlers.onToolResult({
             toolCallId: data.toolCallId,
             toolName: data.toolName,
             success: true,
+            result: data.result,
           });
         }
       } catch {
@@ -562,13 +786,16 @@ async function streamTurn(
       try {
         const data = JSON.parse((event as MessageEvent).data) as {
           shouldRefreshApp?: boolean;
+          stopped?: boolean;
         };
-        handlers.onDone({ shouldRefreshApp: Boolean(data.shouldRefreshApp) });
+        handlers.onDone({
+          shouldRefreshApp: Boolean(data.shouldRefreshApp),
+          stopped: Boolean(data.stopped),
+        });
       } catch {
         handlers.onDone({ shouldRefreshApp: false });
       }
-      source.close();
-      resolve();
+      finish();
     });
 
     source.addEventListener("app-agent:error", (event) => {
@@ -578,14 +805,22 @@ async function streamTurn(
       } catch {
         handlers.onError("Assistant error");
       }
-      source.close();
+      finish();
       reject(new Error("Assistant error"));
     });
 
     source.onerror = () => {
-      source.close();
-      resolve();
+      finish();
     };
+  });
+
+  return turnId;
+}
+
+async function cancelTurn(sessionId: string, turnId: string): Promise<void> {
+  await fetch(`/api/app-agent/sessions/${sessionId}/turns/${turnId}/cancel`, {
+    method: "POST",
+    credentials: "same-origin",
   });
 }
 
@@ -611,8 +846,11 @@ function mountWidget(
   panel.className = `papr-agent-chat-panel papr-agent-chat-panel--${side}`;
   panel.innerHTML = `
     <div class="papr-agent-chat-panel__header">
-      <span>${config.bubbleLabel ?? "App assistant"}</span>
-      <button type="button" aria-label="Close" style="background:none;border:none;cursor:pointer;font-size:18px;line-height:1;color:inherit;">×</button>
+      <span class="papr-agent-chat-panel__header-title">${config.bubbleLabel ?? "App assistant"}</span>
+      <div class="papr-agent-chat-panel__header-actions">
+        <button type="button" class="papr-agent-chat-panel__icon-btn papr-agent-chat-panel__expand" aria-label="Expand panel" title="Expand">⤢</button>
+        <button type="button" class="papr-agent-chat-panel__icon-btn papr-agent-chat-panel__close" aria-label="Close">×</button>
+      </div>
     </div>
     <div class="papr-agent-chat-panel__messages"></div>
     <div class="papr-agent-chat-panel__composer">
@@ -624,17 +862,47 @@ function mountWidget(
   const messagesEl = panel.querySelector(".papr-agent-chat-panel__messages") as HTMLDivElement;
   const inputEl = panel.querySelector(".papr-agent-chat-panel__input") as HTMLTextAreaElement;
   const sendBtn = panel.querySelector(".papr-agent-chat-panel__send") as HTMLButtonElement;
-  const closeBtn = panel.querySelector("button");
+  const closeBtn = panel.querySelector(".papr-agent-chat-panel__close") as HTMLButtonElement;
+  const expandBtn = panel.querySelector(".papr-agent-chat-panel__expand") as HTMLButtonElement;
+
+  let expanded = false;
+  let activeTurnId: string | null = null;
+  let turnTimerInterval: ReturnType<typeof setInterval> | null = null;
+  let elapsedSeconds = 0;
+
+  expandBtn.addEventListener("click", () => {
+    expanded = !expanded;
+    panel.classList.toggle("papr-agent-chat-panel--expanded", expanded);
+    expandBtn.textContent = expanded ? "⤡" : "⤢";
+    expandBtn.title = expanded ? "Collapse" : "Expand";
+    expandBtn.setAttribute("aria-label", expanded ? "Collapse panel" : "Expand panel");
+  });
 
   let turnActivity: TurnActivity | null = null;
+  let completedActivity: TurnActivity | null = null;
+  let streamingAssistantId: string | null = null;
   let thinkingCollapsed = true;
+  let workingCollapsed = true;
+  let completedWorkingCollapsed = true;
   const thinkingPhrase = "Thinking…";
 
-  const renderActivity = (container: HTMLElement): void => {
-    if (!turnActivity) return;
-    const hasThinking = turnActivity.thinking.length > 0;
-    const hasTools = turnActivity.toolCalls.length > 0;
-    if (!hasThinking && !hasTools) return;
+  const renderActivity = (
+    container: HTMLElement,
+    activity: TurnActivity | null,
+    options: { live: boolean; sendingNow: boolean; collapsed: boolean },
+  ): void => {
+    if (!activity) return;
+    const hasThinking = activity.thinking.length > 0;
+    const hasTools = activity.toolCalls.length > 0;
+    const hasPlans = activity.plans.length > 0;
+    const showWaiting =
+      options.live &&
+      options.sendingNow &&
+      !hasThinking &&
+      !hasTools &&
+      !hasPlans;
+
+    if (!hasThinking && !hasTools && !hasPlans && !showWaiting) return;
 
     const activityEl = document.createElement("div");
     activityEl.className = "papr-agent-chat-activity";
@@ -646,19 +914,26 @@ function mountWidget(
       const headerBtn = document.createElement("button");
       headerBtn.type = "button";
       headerBtn.className = `papr-agent-chat-thinking__header${
-        turnActivity.thinkingStreaming ? " papr-agent-chat-thinking__header--streaming" : ""
+        activity.thinkingStreaming ? " papr-agent-chat-thinking__header--streaming" : ""
       }`;
-      headerBtn.textContent = turnActivity.thinkingStreaming
-        ? thinkingPhrase
-        : `Thought process (${turnActivity.thinking.length > 80 ? "…" : ""})`;
+      headerBtn.innerHTML = `
+        <span class="papr-agent-chat-thinking__chevron${
+          thinkingCollapsed ? " papr-agent-chat-thinking__chevron--collapsed" : ""
+        }">▼</span>
+        <span>${
+          activity.thinkingStreaming
+            ? thinkingPhrase
+            : "Thought process"
+        }</span>
+      `;
       headerBtn.addEventListener("click", () => {
         thinkingCollapsed = !thinkingCollapsed;
-        bodyEl.hidden = thinkingCollapsed;
+        renderMessages();
       });
 
       const bodyEl = document.createElement("div");
       bodyEl.className = "papr-agent-chat-thinking__body";
-      bodyEl.textContent = turnActivity.thinking;
+      bodyEl.textContent = activity.thinking;
       bodyEl.hidden = thinkingCollapsed;
 
       thinkingEl.appendChild(headerBtn);
@@ -666,17 +941,68 @@ function mountWidget(
       activityEl.appendChild(thinkingEl);
     }
 
-    if (hasTools) {
+    if (showWaiting || hasTools || hasPlans) {
       const workingEl = document.createElement("div");
       workingEl.className = "papr-agent-chat-working";
-      const header = document.createElement("div");
+      const lastActivity = hasTools
+        ? getLastToolActivity(activity.toolCalls)
+        : activity.plans[activity.plans.length - 1]?.title ?? "Working";
+      const isRunning =
+        options.live &&
+        (options.sendingNow ||
+          activity.thinkingStreaming ||
+          activity.toolCalls.some((t) => t.status === "pending" || !t.status));
+      const header = document.createElement("button");
+      header.type = "button";
       header.className = "papr-agent-chat-working__header";
-      header.textContent = "Working";
-      workingEl.appendChild(header);
+      header.innerHTML = `
+        <span class="papr-agent-chat-working__chevron${
+          options.collapsed ? " papr-agent-chat-working__chevron--collapsed" : ""
+        }">▼</span>
+        <span>${isRunning ? "Working" : "Finished Working"}</span>
+        ${
+          options.collapsed
+            ? `<span class="papr-agent-chat-working__label-secondary">${showWaiting ? "Starting…" : lastActivity}</span>`
+            : ""
+        }
+        ${options.live && elapsedSeconds > 0 ? `<span class="papr-agent-chat-working__timer">${elapsedSeconds}s</span>` : ""}
+      `;
 
       const list = document.createElement("div");
-      list.className = "papr-agent-chat-working__list";
-      for (const tool of turnActivity.toolCalls) {
+      list.className = `papr-agent-chat-working__list${
+        options.collapsed ? " papr-agent-chat-working__list--collapsed" : ""
+      }`;
+
+      header.addEventListener("click", () => {
+        if (options.live) {
+          workingCollapsed = !workingCollapsed;
+        } else {
+          completedWorkingCollapsed = !completedWorkingCollapsed;
+        }
+        renderMessages();
+      });
+
+      workingEl.appendChild(header);
+
+      if (hasPlans) {
+        for (const plan of activity.plans) {
+          const planWrap = document.createElement("div");
+          planWrap.innerHTML = renderPlanCardHtml(plan, options.collapsed);
+          const planEl = planWrap.firstElementChild;
+          if (planEl) {
+            const planHeader = planEl.querySelector(".papr-agent-chat-plan__header");
+            planHeader?.addEventListener("click", () => {
+              const steps = planEl.querySelector(".papr-agent-chat-plan__steps");
+              const chevron = planEl.querySelector(".papr-agent-chat-plan__chevron");
+              steps?.classList.toggle("papr-agent-chat-plan__steps--collapsed");
+              chevron?.classList.toggle("papr-agent-chat-plan__chevron--collapsed");
+            });
+            list.appendChild(planEl);
+          }
+        }
+      }
+
+      for (const tool of activity.toolCalls) {
         const row = document.createElement("div");
         const status = tool.status ?? "pending";
         row.className = `papr-agent-chat-tool papr-agent-chat-tool--${status}`;
@@ -693,28 +1019,52 @@ function mountWidget(
         row.appendChild(badge);
         list.appendChild(row);
       }
-      workingEl.appendChild(list);
+
+      if (hasTools || hasPlans) {
+        workingEl.appendChild(list);
+      }
       activityEl.appendChild(workingEl);
     }
 
     container.appendChild(activityEl);
   };
 
+  const pruneEmptyAssistantMessages = (): void => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const msg = messages[i];
+      if (msg.role === "assistant" && !msg.content.trim()) {
+        messages.splice(i, 1);
+      }
+    }
+  };
+
   const renderMessages = (): void => {
     messagesEl.innerHTML = "";
-    if (messages.length === 0 && config.welcomeMessage) {
-      const welcome = document.createElement("div");
-      welcome.className = "papr-agent-chat-msg papr-agent-chat-msg--assistant";
-      welcome.textContent = config.welcomeMessage;
-      messagesEl.appendChild(welcome);
-    }
     for (const msg of messages) {
+      if (msg.role === "assistant" && !msg.content.trim()) {
+        if (msg.id === streamingAssistantId && sending) {
+          continue;
+        }
+        continue;
+      }
       const el = document.createElement("div");
       el.className = `papr-agent-chat-msg papr-agent-chat-msg--${msg.role}`;
-      el.textContent = msg.content;
+      setMessageMarkdown(el, msg.content);
       messagesEl.appendChild(el);
     }
-    renderActivity(messagesEl);
+    if (turnActivity) {
+      renderActivity(messagesEl, turnActivity, {
+        live: true,
+        sendingNow: sending,
+        collapsed: workingCollapsed,
+      });
+    } else if (completedActivity && !sending) {
+      renderActivity(messagesEl, completedActivity, {
+        live: false,
+        sendingNow: false,
+        collapsed: completedWorkingCollapsed,
+      });
+    }
     messagesEl.scrollTop = messagesEl.scrollHeight;
   };
 
@@ -737,7 +1087,11 @@ function mountWidget(
     }
     const history = await loadSessionMessages(sessionId);
     if (history.length > 0) {
+      const welcome = messages.find((m) => m.id === "welcome");
       messages.splice(0, messages.length, ...history);
+      if (welcome && !messages.some((m) => m.id === "welcome")) {
+        messages.unshift(welcome);
+      }
     }
   };
 
@@ -789,6 +1143,7 @@ function mountWidget(
   const setOpen = (next: boolean) => {
     open = next;
     panel.classList.toggle("papr-agent-chat-panel--open", open);
+    bubble.classList.toggle("papr-agent-chat-bubble--hidden", open);
     if (open) {
       void hydrateSessionHistory()
         .catch(() => undefined)
@@ -802,7 +1157,58 @@ function mountWidget(
     }
   };
 
+  const setSendingUi = (active: boolean): void => {
+    sending = active;
+    sendBtn.disabled = false;
+    sendBtn.textContent = active ? "Stop" : "Send";
+    sendBtn.classList.toggle("papr-agent-chat-panel__send--stop", active);
+    inputEl.disabled = active;
+  };
+
+  const startTurnTimer = (): void => {
+    elapsedSeconds = 0;
+    if (turnTimerInterval) clearInterval(turnTimerInterval);
+    turnTimerInterval = setInterval(() => {
+      elapsedSeconds += 1;
+      const timerEl = messagesEl.querySelector(".papr-agent-chat-working__timer");
+      if (timerEl) {
+        timerEl.textContent = `${elapsedSeconds}s`;
+      } else if (turnActivity) {
+        renderMessages();
+      }
+    }, 1000);
+  };
+
+  const stopTurnTimer = (): void => {
+    if (turnTimerInterval) {
+      clearInterval(turnTimerInterval);
+      turnTimerInterval = null;
+    }
+  };
+
+  const upsertPlan = (plan: PlanData): void => {
+    if (!turnActivity) return;
+    const idx = turnActivity.plans.findIndex((p) => p.planId === plan.planId);
+    if (idx >= 0) {
+      turnActivity.plans[idx] = plan;
+    } else {
+      turnActivity.plans.push(plan);
+    }
+  };
+
   const sendMessage = async (prefilled?: string): Promise<void> => {
+    if (sending && activeTurnId && sessionId) {
+      await cancelTurn(sessionId, activeTurnId);
+      activeTurnId = null;
+      stopTurnTimer();
+      setSendingUi(false);
+      turnActivity = null;
+      streamingAssistantId = null;
+      pruneEmptyAssistantMessages();
+      renderMessages();
+      return;
+    }
+
     const text = (prefilled ?? inputEl.value).trim();
     if (!text || sending) return;
 
@@ -813,8 +1219,9 @@ function mountWidget(
     }
 
     sending = true;
-    sendBtn.disabled = true;
+    setSendingUi(true);
     inputEl.value = "";
+    completedActivity = null;
 
     try {
       if (!sessionId) {
@@ -825,9 +1232,19 @@ function mountWidget(
       renderMessages();
 
       const assistantId = `a-${Date.now()}`;
+      streamingAssistantId = assistantId;
       messages.push({ id: assistantId, role: "assistant", content: "" });
-      turnActivity = { thinking: "", thinkingStreaming: false, toolCalls: [] };
+      turnActivity = {
+        thinking: "",
+        thinkingStreaming: false,
+        toolCalls: [],
+        plans: [],
+        startedAt: Date.now(),
+      };
       thinkingCollapsed = true;
+      workingCollapsed = true;
+      completedWorkingCollapsed = true;
+      startTurnTimer();
       renderMessages();
 
       const assistantIndex = messages.findIndex((m) => m.id === assistantId);
@@ -844,9 +1261,20 @@ function mountWidget(
       };
 
       await streamTurn(sessionId, text, {
+        onTurnId: (id) => {
+          activeTurnId = id;
+        },
         onTurnStart: () => {
-          turnActivity = { thinking: "", thinkingStreaming: false, toolCalls: [] };
-          renderMessages();
+          if (!turnActivity) {
+            turnActivity = {
+              thinking: "",
+              thinkingStreaming: false,
+              toolCalls: [],
+              plans: [],
+              startedAt: Date.now(),
+            };
+            renderMessages();
+          }
         },
         onThinkingDelta: (delta) => {
           if (!turnActivity) return;
@@ -875,29 +1303,65 @@ function mountWidget(
           });
           renderMessages();
         },
-        onToolResult: ({ toolCallId, toolName, success }) => {
+        onToolResult: ({ toolCallId, toolName, success, result }) => {
           if (!turnActivity) return;
           const idx = findToolIndex(toolCallId, toolName);
           if (idx >= 0) {
             turnActivity.toolCalls[idx] = {
               ...turnActivity.toolCalls[idx],
               status: success ? "success" : "error",
+              result,
             };
-            renderMessages();
           }
+          const plan = parsePlanFromToolResult(toolName, result);
+          if (plan) {
+            upsertPlan(plan);
+          }
+          renderMessages();
         },
-        onDone: ({ shouldRefreshApp }) => {
+        onDone: ({ shouldRefreshApp, stopped }) => {
           if (turnActivity) {
             turnActivity.thinkingStreaming = false;
+            completedActivity = {
+              thinking: turnActivity.thinking,
+              thinkingStreaming: false,
+              toolCalls: [...turnActivity.toolCalls],
+              plans: [...turnActivity.plans],
+              startedAt: turnActivity.startedAt,
+            };
+            completedWorkingCollapsed = true;
           }
           turnActivity = null;
+          streamingAssistantId = null;
+          activeTurnId = null;
+          stopTurnTimer();
+          setSendingUi(false);
+          pruneEmptyAssistantMessages();
           renderMessages();
-          if (shouldRefreshApp) {
+          if (sessionId) {
+            void loadSessionMessages(sessionId)
+              .then((history) => {
+                if (history.length > 0) {
+                  const welcome = messages.find((m) => m.id === "welcome");
+                  messages.splice(0, messages.length, ...history);
+                  if (welcome && !messages.some((m) => m.id === "welcome")) {
+                    messages.unshift(welcome);
+                  }
+                  renderMessages();
+                }
+              })
+              .catch(() => undefined);
+          }
+          if (shouldRefreshApp && !stopped) {
             window.setTimeout(() => location.reload(), 1500);
           }
         },
         onError: (error) => {
           turnActivity = null;
+          streamingAssistantId = null;
+          activeTurnId = null;
+          stopTurnTimer();
+          setSendingUi(false);
           if (assistantIndex >= 0 && !messages[assistantIndex].content) {
             messages[assistantIndex].content = error;
             renderMessages();
@@ -908,10 +1372,10 @@ function mountWidget(
       });
     } catch (err) {
       turnActivity = null;
+      activeTurnId = null;
+      stopTurnTimer();
+      setSendingUi(false);
       appendStatus((err as Error).message);
-    } finally {
-      sending = false;
-      sendBtn.disabled = false;
     }
   };
 
@@ -949,6 +1413,14 @@ function mountWidget(
 
   document.body.appendChild(panel);
   document.body.appendChild(bubble);
+
+  if (config.welcomeMessage?.trim()) {
+    messages.push({
+      id: "welcome",
+      role: "assistant",
+      content: config.welcomeMessage.trim(),
+    });
+  }
   renderMessages();
 
   return () => {

@@ -14,6 +14,7 @@ import {
   mergeRemoteMainIntoLocal,
   type RunGitFn,
 } from "../src/gateway/services/cloudSync/gitRemoteReconcile.js";
+import { verifyGitAppSubtreeWithRetry } from "../src/gateway/services/cloudSync/postPushVerify.js";
 
 const gitEnv = {
   ...process.env,
@@ -245,5 +246,125 @@ describe.skipIf(!hasGit())("git remote reconcile (real git)", () => {
       fs.readFileSync(path.join(desktopDir, "Jobs", "job-0", "job.json"), "utf8"),
     ) as { status: string };
     expect(sampleJob.status).toBe("completed");
+  });
+
+  it("auto-merges when untracked ephemeral dirs are dirty (backups, .npm)", async () => {
+    const jobId = "job-ephemeral";
+    const jobDir = path.join(desktopDir, "Jobs", jobId);
+    fs.mkdirSync(jobDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(jobDir, "job.json"),
+      JSON.stringify({ status: "idle" }),
+      "utf8",
+    );
+    git(desktopDir, ["add", `Jobs/${jobId}/job.json`]);
+    git(desktopDir, ["commit", "-m", "seed job"]);
+    git(desktopDir, ["push", "origin", "main"]);
+
+    git(cloudDir, ["fetch", "origin", "main"]);
+    git(cloudDir, ["reset", "--hard", "origin/main"]);
+    fs.writeFileSync(
+      path.join(cloudDir, "Jobs", jobId, "job.json"),
+      JSON.stringify({ status: "completed" }),
+      "utf8",
+    );
+    git(cloudDir, ["add", `Jobs/${jobId}/job.json`]);
+    git(cloudDir, ["commit", "-m", `cloud: update job ${jobId} status`]);
+    git(cloudDir, ["push", "origin", "main"]);
+
+    const appDir = path.join(desktopDir, "apps", "app-ephemeral");
+    fs.mkdirSync(appDir, { recursive: true });
+    fs.writeFileSync(path.join(appDir, "index.html"), "<p>local</p>", "utf8");
+    git(desktopDir, ["add", "apps/app-ephemeral/index.html"]);
+    git(desktopDir, ["commit", "-m", "local app change"]);
+
+    fs.mkdirSync(path.join(desktopDir, "backups", "recovery"), { recursive: true });
+    fs.writeFileSync(
+      path.join(desktopDir, "backups", "recovery", "snapshot.txt"),
+      "local-only",
+      "utf8",
+    );
+    fs.mkdirSync(path.join(desktopDir, ".npm", "cache"), { recursive: true });
+    fs.writeFileSync(
+      path.join(desktopDir, ".npm", "cache", "package.tgz"),
+      "cache",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(desktopDir, "Jobs", jobId, "job.json"),
+      JSON.stringify({ status: "running" }),
+      "utf8",
+    );
+    fs.mkdirSync(path.join(desktopDir, "data"), { recursive: true });
+    fs.writeFileSync(
+      path.join(desktopDir, "data", ".turso-convergence-state.json"),
+      JSON.stringify({ pending: true }),
+      "utf8",
+    );
+
+    git(desktopDir, ["fetch", "origin", "main"]);
+    const runGit = makeRunGit(desktopDir);
+
+    expect(await classifyIncomingRemoteChanges(runGit)).toBe(
+      "runtime_metadata_only",
+    );
+
+    await mergeRemoteMainIntoLocal(runGit, {
+      stashMessage: "test-untracked-ephemeral",
+    });
+
+    expect(fs.existsSync(path.join(desktopDir, "backups"))).toBe(false);
+    expect(fs.existsSync(path.join(desktopDir, ".npm"))).toBe(false);
+
+    const mergedJob = JSON.parse(
+      fs.readFileSync(path.join(desktopDir, "Jobs", jobId, "job.json"), "utf8"),
+    ) as { status: string };
+    expect(mergedJob.status).toBe("completed");
+    expect(fs.existsSync(path.join(desktopDir, "apps", "app-ephemeral", "index.html"))).toBe(
+      true,
+    );
+  });
+
+  it("app subtree verify passes when workspace HEAD diverges but app tree matches", async () => {
+    const appId = "app-subtree";
+    const appDir = path.join(desktopDir, "apps", appId);
+    fs.mkdirSync(appDir, { recursive: true });
+    fs.writeFileSync(path.join(appDir, "index.html"), "<p>v1</p>", "utf8");
+    git(desktopDir, ["add", `apps/${appId}/index.html`]);
+    git(desktopDir, ["commit", "-m", "seed app"]);
+    git(desktopDir, ["push", "origin", "main"]);
+
+    git(cloudDir, ["fetch", "origin", "main"]);
+    git(cloudDir, ["reset", "--hard", "origin/main"]);
+    const jobDir = path.join(cloudDir, "Jobs", "job-subtree");
+    fs.mkdirSync(jobDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(jobDir, "job.json"),
+      JSON.stringify({ status: "completed" }),
+      "utf8",
+    );
+    git(cloudDir, ["add", `Jobs/job-subtree/job.json`]);
+    git(cloudDir, ["commit", "-m", "cloud: update job job-subtree status"]);
+    git(cloudDir, ["push", "origin", "main"]);
+
+    fs.mkdirSync(path.join(desktopDir, "data"), { recursive: true });
+    fs.writeFileSync(
+      path.join(desktopDir, "data", "jobs.json"),
+      JSON.stringify([{ id: "job-subtree", status: "running" }]),
+      "utf8",
+    );
+    git(desktopDir, ["add", "data/jobs.json"]);
+    git(desktopDir, ["commit", "-m", "local jobs index only"]);
+
+    git(desktopDir, ["fetch", "origin", "main"]);
+    const runGit = makeRunGit(desktopDir);
+    await mergeRemoteMainIntoLocal(runGit, {
+      stashMessage: "test-app-subtree-verify",
+    });
+
+    const verify = await verifyGitAppSubtreeWithRetry(runGit, appId);
+    expect(verify.ok).toBe(true);
+    expect(verify.localTreeSha).toBe(verify.remoteTreeSha);
+    expect(verify.workspaceHeadMismatch).toBe(true);
   });
 });

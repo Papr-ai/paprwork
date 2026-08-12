@@ -62,6 +62,20 @@ describe("cloudSharingSettings", () => {
         loginAccess: "public",
         externalLink: "off",
         accessMode: "public_read",
+        codeAccess: "off",
+        requireSignIn: true,
+      }),
+    ).toEqual({
+      visibility: "public_read",
+      linkPermission: "read_write",
+      shareLinkEnabled: false,
+      requireSignIn: true,
+    });
+    expect(
+      resolvePublishFieldsFromPrefs({
+        loginAccess: "public",
+        externalLink: "off",
+        accessMode: "public_read",
         codeAccess: "install",
       }),
     ).toEqual({

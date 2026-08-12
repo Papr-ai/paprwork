@@ -32,6 +32,12 @@ export interface GitVerifyResult {
   localHead: string;
   remoteHead: string;
   error?: string;
+  /** App-scoped verify: git path under repo root (e.g. apps/{id}). */
+  appPath?: string;
+  localTreeSha?: string;
+  remoteTreeSha?: string;
+  /** True when repo HEAD diverges but app subtree still matches on remote. */
+  workspaceHeadMismatch?: boolean;
 }
 
 export interface TursoSourceVerifyResult {
@@ -54,6 +60,7 @@ export interface AppPushVerifyResult {
   git: GitVerifyResult | null;
   turso: TursoVerifyResult;
   errors: string[];
+  warnings: string[];
 }
 
 function listLocalAppliedMigrationIds(localDb: Database.Database): string[] {
@@ -300,6 +307,126 @@ export async function verifyGitRemoteShaWithRetry(
   return lastResult;
 }
 
+function gitAppSubtreePath(appId: string): string {
+  return `apps/${appId}`;
+}
+
+async function readGitTreeSha(
+  git: GitVerifyFn,
+  revisionPath: string,
+): Promise<string | null> {
+  try {
+    return (await git(["rev-parse", revisionPath])).trim();
+  } catch {
+    return null;
+  }
+}
+
+/** Confirm this app's folder on origin/main matches local (not whole-repo HEAD). */
+async function verifyGitAppSubtreeOnce(
+  git: GitVerifyFn,
+  appId: string,
+): Promise<GitVerifyResult> {
+  const appPath = gitAppSubtreePath(appId);
+  try {
+    await git(["fetch", "origin", "main"]);
+    const localTreeSha = await readGitTreeSha(git, `HEAD:${appPath}`);
+    if (!localTreeSha) {
+      return {
+        ok: false,
+        localHead: "",
+        remoteHead: "",
+        appPath,
+        error: `Local app path missing: ${appPath}`,
+      };
+    }
+
+    const remoteTreeSha = await readGitTreeSha(git, `origin/main:${appPath}`);
+    if (!remoteTreeSha) {
+      return {
+        ok: false,
+        localHead: "",
+        remoteHead: "",
+        appPath,
+        localTreeSha,
+        error: `Remote app path missing: ${appPath}`,
+      };
+    }
+
+    const localHead = (await git(["rev-parse", "HEAD"])).trim();
+    const remoteHead = (await git(["rev-parse", "origin/main"])).trim();
+    const workspaceHeadMismatch = localHead !== remoteHead;
+
+    if (localTreeSha !== remoteTreeSha) {
+      return {
+        ok: false,
+        localHead,
+        remoteHead,
+        appPath,
+        localTreeSha,
+        remoteTreeSha,
+        workspaceHeadMismatch,
+        error:
+          `App ${appPath} tree local (${localTreeSha.slice(0, 8)}) != ` +
+          `remote (${remoteTreeSha.slice(0, 8)})`,
+      };
+    }
+
+    return {
+      ok: true,
+      localHead,
+      remoteHead,
+      appPath,
+      localTreeSha,
+      remoteTreeSha,
+      workspaceHeadMismatch,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      localHead: "",
+      remoteHead: "",
+      appPath,
+      error: (err as Error).message.slice(0, 160),
+    };
+  }
+}
+
+/** Retry transient app-tree != remote races after back-to-back pushes. */
+export async function verifyGitAppSubtreeWithRetry(
+  git: GitVerifyFn,
+  appId: string,
+  options?: { maxAttempts?: number; delayMs?: number },
+): Promise<GitVerifyResult> {
+  const maxAttempts = options?.maxAttempts ?? GIT_VERIFY_RETRY_ATTEMPTS;
+  const delayMs = options?.delayMs ?? GIT_VERIFY_RETRY_DELAY_MS;
+
+  let lastResult: GitVerifyResult = {
+    ok: false,
+    localHead: "",
+    remoteHead: "",
+    appPath: gitAppSubtreePath(appId),
+    error: "Git app verify did not run",
+  };
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    lastResult = await verifyGitAppSubtreeOnce(git, appId);
+    if (lastResult.ok) {
+      return lastResult;
+    }
+    const treeMismatch =
+      lastResult.localTreeSha &&
+      lastResult.remoteTreeSha &&
+      lastResult.localTreeSha !== lastResult.remoteTreeSha;
+    if (!treeMismatch || attempt >= maxAttempts) {
+      return lastResult;
+    }
+    await sleepMs(delayMs * attempt);
+  }
+
+  return lastResult;
+}
+
 /** Turso convergence for one app — migrations + table counts per linked alias. */
 export async function verifyTursoConvergenceForApp(
   appId: string,
@@ -368,12 +495,25 @@ export async function verifyAppPushConvergence(
   const root = paprDir ?? getPaprRoot();
   const appsRoot = path.join(root, "apps");
   const errors: string[] = [];
+  const warnings: string[] = [];
 
   let gitResult: GitVerifyResult | null = null;
   if (!options?.skipGit && fs.existsSync(path.join(root, ".git"))) {
-    gitResult = await verifyGitRemoteShaWithRetry(resolveGitFn(root, git));
+    gitResult = await verifyGitAppSubtreeWithRetry(
+      resolveGitFn(root, git),
+      appId,
+    );
     if (!gitResult.ok && gitResult.error) {
       errors.push(`Git: ${gitResult.error}`);
+    } else if (
+      gitResult.ok &&
+      gitResult.workspaceHeadMismatch &&
+      gitResult.localHead &&
+      gitResult.remoteHead
+    ) {
+      warnings.push(
+        `Workspace git catching up (HEAD ${gitResult.localHead.slice(0, 8)} != origin/main ${gitResult.remoteHead.slice(0, 8)}); app code verified on remote`,
+      );
     }
   }
 
@@ -387,6 +527,7 @@ export async function verifyAppPushConvergence(
     git: gitResult,
     turso: tursoResult,
     errors,
+    warnings,
   };
 }
 

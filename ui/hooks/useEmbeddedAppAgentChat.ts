@@ -14,6 +14,18 @@ export interface EmbeddedChatToolCall {
   toolName: string;
   args?: Record<string, unknown>;
   status: "pending" | "success" | "error";
+  result?: unknown;
+}
+
+export interface EmbeddedChatPlan {
+  planId: string;
+  title: string;
+  steps: Array<{
+    id: string;
+    description: string;
+    status: "pending" | "in_progress" | "completed" | "skipped";
+  }>;
+  deleted?: boolean;
 }
 
 export interface UseEmbeddedAppAgentChatOptions {
@@ -37,6 +49,8 @@ export function useEmbeddedAppAgentChat({
   const [thinking, setThinking] = useState("");
   const [thinkingStreaming, setThinkingStreaming] = useState(false);
   const [toolCalls, setToolCalls] = useState<EmbeddedChatToolCall[]>([]);
+  const [plans, setPlans] = useState<EmbeddedChatPlan[]>([]);
+  const activeTurnIdRef = useRef<string | null>(null);
   const initialSentRef = useRef(false);
   const base = getGatewayHttpBase();
 
@@ -46,6 +60,7 @@ export function useEmbeddedAppAgentChat({
       setThinking("");
       setThinkingStreaming(false);
       setToolCalls([]);
+      setPlans([]);
       setError(null);
 
       const userMsg: EmbeddedChatMessage = {
@@ -74,6 +89,7 @@ export function useEmbeddedAppAgentChat({
           throw new Error(body.error ?? `Send failed (${postRes.status})`);
         }
         const { turnId } = (await postRes.json()) as { turnId: string };
+        activeTurnIdRef.current = turnId;
 
         await new Promise<void>((resolve, reject) => {
           const source = new EventSource(
@@ -150,25 +166,52 @@ export function useEmbeddedAppAgentChat({
             }
           });
 
-          const markTool = (toolName: string | undefined, status: "success" | "error") => {
+          const markTool = (
+            toolCallId: string | undefined,
+            toolName: string | undefined,
+            status: "success" | "error",
+            result?: unknown,
+          ) => {
             if (!toolName) return;
             setToolCalls((prev) => {
-              const idx = prev.findIndex(
-                (t) => t.toolName === toolName && t.status === "pending",
-              );
+              const idx = toolCallId
+                ? prev.findIndex((t) => t.toolCallId === toolCallId)
+                : prev.findIndex(
+                    (t) => t.toolName === toolName && t.status === "pending",
+                  );
               if (idx < 0) return prev;
               const next = [...prev];
-              next[idx] = { ...next[idx], status };
+              next[idx] = { ...next[idx], status, result };
               return next;
             });
+            if (result !== undefined && toolName) {
+              void import("../components/Chat/PlanCard.js").then(({ parsePlanFromToolResult }) => {
+                const plan = parsePlanFromToolResult(
+                  toolName,
+                  typeof result === "string" ? result : JSON.stringify(result),
+                );
+                if (!plan) return;
+                setPlans((prev) => {
+                  const existing = prev.findIndex((p) => p.planId === plan.planId);
+                  if (existing >= 0) {
+                    const next = [...prev];
+                    next[existing] = plan;
+                    return next;
+                  }
+                  return [...prev, plan];
+                });
+              });
+            }
           };
 
           source.addEventListener("app-agent:tool-result", (event) => {
             try {
               const data = JSON.parse((event as MessageEvent).data) as {
+                toolCallId?: string;
                 toolName?: string;
+                result?: unknown;
               };
-              markTool(data.toolName, "success");
+              markTool(data.toolCallId, data.toolName, "success", data.result);
             } catch {
               /* ignore */
             }
@@ -177,9 +220,10 @@ export function useEmbeddedAppAgentChat({
           source.addEventListener("app-agent:tool-error", (event) => {
             try {
               const data = JSON.parse((event as MessageEvent).data) as {
+                toolCallId?: string;
                 toolName?: string;
               };
-              markTool(data.toolName, "error");
+              markTool(data.toolCallId, data.toolName, "error");
             } catch {
               /* ignore */
             }
@@ -250,10 +294,24 @@ export function useEmbeddedAppAgentChat({
         setThinking("");
         setThinkingStreaming(false);
         setToolCalls([]);
+        setPlans([]);
+        activeTurnIdRef.current = null;
       }
     },
     [base, onAppRefresh],
   );
+
+  const stopTurn = useCallback(async () => {
+    if (!sessionId || !activeTurnIdRef.current) return;
+    try {
+      await fetch(
+        `${base}/api/app-agent/sessions/${sessionId}/turns/${activeTurnIdRef.current}/cancel`,
+        { method: "POST" },
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [base, sessionId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -318,10 +376,14 @@ export function useEmbeddedAppAgentChat({
 
   const sendMessage = useCallback(
     async (text: string) => {
-      if (!sessionId || sending) return;
+      if (!sessionId) return;
+      if (sending) {
+        await stopTurn();
+        return;
+      }
       await streamTurn(sessionId, text.trim());
     },
-    [sessionId, sending, streamTurn],
+    [sessionId, sending, streamTurn, stopTurn],
   );
 
   return {
@@ -333,6 +395,8 @@ export function useEmbeddedAppAgentChat({
     thinking,
     thinkingStreaming,
     toolCalls,
+    plans,
     sendMessage,
+    stopTurn,
   };
 }

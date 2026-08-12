@@ -17,6 +17,10 @@ import {
   buildAuthPendingCookie,
   readAuthPendingCookie,
   sanitizeReturnToPath,
+  isBrowsableCloudReturnToPath,
+  resolveCloudAuthReturnToPath,
+  resolveCloudAuthReturnToFromRequest,
+  cloudAppRootPath,
   getSessionCookieDiagnostics,
   clearLegacySessionCookies,
 } from "../src/gateway/services/appRuntime/cloudAppHostCookies.js";
@@ -143,6 +147,33 @@ describe("cloudAppHostCookies", () => {
     expect(sanitizeReturnToPath("https://evil.com")).toBe("/");
     expect(sanitizeReturnToPath("//evil.com")).toBe("/");
   });
+
+  it("rejects API and auth paths as return targets", () => {
+    expect(isBrowsableCloudReturnToPath("/api/app-agent/sessions/abc")).toBe(false);
+    expect(isBrowsableCloudReturnToPath("/auth/callback")).toBe(false);
+    expect(isBrowsableCloudReturnToPath("/ns/my-app/")).toBe(true);
+  });
+
+  it("resolves auth returnTo to app root when API path is provided", () => {
+    expect(
+      resolveCloudAuthReturnToPath("/api/app-agent/sessions/sess-1/warm", {
+        namespaceId: "ns1",
+        slug: "demo-app",
+      }),
+    ).toBe("/ns1/demo-app/");
+    expect(cloudAppRootPath("ns1", "demo-app")).toBe("/ns1/demo-app/");
+  });
+
+  it("prefers referer app page over API originalUrl", () => {
+    const returnTo = resolveCloudAuthReturnToFromRequest(
+      {
+        originalUrl: "/api/app-agent/sessions/sess-1/messages",
+        headers: { referer: "https://apps.papr.ai/ns1/demo-app/" },
+      },
+      { namespaceId: "ns1", slug: "demo-app" },
+    );
+    expect(returnTo).toBe("/ns1/demo-app/");
+  });
 });
 
 describe("cloudAppPublishClient visibility helpers", () => {
@@ -150,6 +181,7 @@ describe("cloudAppPublishClient visibility helpers", () => {
     expect(visibilityRequiresPaprLogin("private")).toBe(true);
     expect(visibilityRequiresPaprLogin("team")).toBe(true);
     expect(visibilityRequiresPaprLogin("public_read")).toBe(false);
+    expect(visibilityRequiresPaprLogin("public_read", true)).toBe(true);
   });
 
   it("flags share-link modes", () => {

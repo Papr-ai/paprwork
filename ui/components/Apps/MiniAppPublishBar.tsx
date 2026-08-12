@@ -114,6 +114,7 @@ function formatShareSelectionSummary(
   audience: ShareAudience,
   permission: SharePermission,
   requireSignIn: boolean,
+  perUserIsolation: boolean,
 ): string {
   const accessLabel =
     ACCESS_OPTIONS.find((option) => option.value === audience)?.label ?? audience;
@@ -124,10 +125,37 @@ function formatShareSelectionSummary(
     PERMISSION_OPTIONS.find((option) => option.value === permission)?.label ??
     permission;
   const parts = [accessLabel, permissionLabel];
-  if (audience === "link") {
+  if (audience === "link" || audience === "public") {
     parts.push(requireSignIn ? "Sign-in required" : "No sign-in required");
   }
+  if (
+    perUserIsolation &&
+    (audience === "team" ||
+      ((audience === "link" || audience === "public") && requireSignIn))
+  ) {
+    parts.push("Per-user data");
+  }
   return parts.join(" · ");
+}
+
+function sharePrefsOptions(cloud: CloudPublishControls): {
+  requireSignIn?: boolean;
+  perUserIsolation?: boolean;
+} {
+  return {
+    requireSignIn: cloud.sharePrefs?.requireSignIn,
+    perUserIsolation: cloud.sharePrefs?.perUserIsolation,
+  };
+}
+
+function requireSignInFromModel(model: ShareAudienceModel): boolean {
+  if (model.audience === "public") {
+    return model.requireSignIn === true;
+  }
+  if (model.audience === "link") {
+    return model.requireSignIn !== false;
+  }
+  return true;
 }
 
 interface ShareSheetProps {
@@ -230,6 +258,7 @@ export function MiniAppPublishBar({
   const [audience, setAudience] = useState<ShareAudience>("private");
   const [permission, setPermission] = useState<SharePermission>("write");
   const [requireSignIn, setRequireSignIn] = useState(true);
+  const [perUserIsolation, setPerUserIsolation] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | undefined>(
     cloudLineage?.lastSyncedAt,
   );
@@ -308,10 +337,12 @@ export function MiniAppPublishBar({
       cloud.loginAccess,
       cloud.externalLink,
       cloud.codeAccess,
+      sharePrefsOptions(cloud),
     );
     setAudience(model.audience);
     setPermission(model.permission);
-    setRequireSignIn(model.requireSignIn !== false);
+    setRequireSignIn(requireSignInFromModel(model));
+    setPerUserIsolation(model.perUserIsolation === true);
   }, [appId]); // eslint-disable-line react-hooks/exhaustive-deps -- cloud.* read only on app switch
 
   useEffect(() => {
@@ -339,16 +370,20 @@ export function MiniAppPublishBar({
       cloud.loginAccess,
       cloud.externalLink,
       cloud.codeAccess,
+      sharePrefsOptions(cloud),
     );
     setAudience(model.audience);
     setPermission(model.permission);
-    setRequireSignIn(model.requireSignIn !== false);
+    setRequireSignIn(requireSignInFromModel(model));
+    setPerUserIsolation(model.perUserIsolation === true);
   }, [
     appId,
     shareOpen,
     cloud.loginAccess,
     cloud.externalLink,
     cloud.codeAccess,
+    cloud.sharePrefs?.requireSignIn,
+    cloud.sharePrefs?.perUserIsolation,
   ]);
 
   useEffect(() => {
@@ -416,21 +451,47 @@ export function MiniAppPublishBar({
     }
   }, [workspaceMode]);
 
+  const buildShareModel = (
+    nextAudience: ShareAudience,
+    nextPermission: SharePermission,
+    nextRequireSignIn: boolean,
+    nextPerUserIsolation: boolean,
+  ): ShareAudienceModel => {
+    const signInApplies = nextAudience === "link" || nextAudience === "public";
+    const isolationApplies =
+      nextAudience === "team" ||
+      (signInApplies && nextRequireSignIn);
+    return {
+      audience: nextAudience,
+      permission: nextPermission,
+      ...(signInApplies ? { requireSignIn: nextRequireSignIn } : {}),
+      ...(isolationApplies ? { perUserIsolation: nextPerUserIsolation } : {}),
+    };
+  };
+
   const applySharing = async (
     nextAudience: ShareAudience,
     nextPermission: SharePermission,
     nextRequireSignIn = requireSignIn,
+    nextPerUserIsolation = perUserIsolation,
   ): Promise<{ published: boolean }> => {
     setAudience(nextAudience);
     setPermission(nextPermission);
-    if (nextAudience === "link") {
+    if (nextAudience === "link" || nextAudience === "public") {
       setRequireSignIn(nextRequireSignIn);
     }
-    const model: ShareAudienceModel = {
-      audience: nextAudience,
-      permission: nextPermission,
-      requireSignIn: nextAudience === "link" ? nextRequireSignIn : undefined,
-    };
+    if (
+      nextAudience === "team" ||
+      ((nextAudience === "link" || nextAudience === "public") && nextRequireSignIn)
+    ) {
+      setPerUserIsolation(nextPerUserIsolation);
+    }
+    const model = buildShareModel(
+      nextAudience,
+      nextPermission,
+      nextRequireSignIn,
+      nextPerUserIsolation,
+    );
     if (!isPermissionAvailable(nextAudience, nextPermission)) {
       return { published: false };
     }
@@ -457,12 +518,16 @@ export function MiniAppPublishBar({
     cloud.loginAccess,
     cloud.externalLink,
     cloud.codeAccess,
+    sharePrefsOptions(cloud),
   );
+  const appliedRequireSignIn = requireSignInFromModel(appliedModel);
+  const appliedPerUserIsolation = appliedModel.perUserIsolation === true;
   const hasSharingDraftChanges =
     audience !== appliedModel.audience ||
     permission !== appliedModel.permission ||
-    (audience === "link" &&
-      requireSignIn !== (appliedModel.requireSignIn !== false));
+    ((audience === "link" || audience === "public") &&
+      requireSignIn !== appliedRequireSignIn) ||
+    perUserIsolation !== appliedPerUserIsolation;
 
   const pickAudience = (nextAudience: ShareAudience) => {
     let nextPermission = permission;
@@ -473,6 +538,10 @@ export function MiniAppPublishBar({
     setPermission(nextPermission);
     if (nextAudience === "link") {
       setRequireSignIn(true);
+      setPerUserIsolation(true);
+    } else if (nextAudience === "public") {
+      setRequireSignIn(false);
+      setPerUserIsolation(false);
     }
   };
 
@@ -482,8 +551,13 @@ export function MiniAppPublishBar({
   };
 
   const saveSharingSettings = () => {
-    void applySharing(audience, permission, requireSignIn);
+    void applySharing(audience, permission, requireSignIn, perUserIsolation);
   };
+
+  const showSignInToggle = audience === "link" || audience === "public";
+  const showPerUserIsolationToggle =
+    audience === "team" ||
+    ((audience === "link" || audience === "public") && requireSignIn);
 
   const openCloudInstallHelp = () => {
     setShareOpen(false);
@@ -611,6 +685,7 @@ export function MiniAppPublishBar({
     audience,
     permission,
     requireSignIn,
+    perUserIsolation,
   );
   const shareSyncBanner = (() => {
     if (shareSyncNotice) {
@@ -654,7 +729,12 @@ export function MiniAppPublishBar({
     try {
       let published = cloud.live;
       if (hasSharingDraftChanges || !cloud.live) {
-        const result = await applySharing(audience, permission, requireSignIn);
+        const result = await applySharing(
+          audience,
+          permission,
+          requireSignIn,
+          perUserIsolation,
+        );
         published = published || result.published;
       }
       if (!published) {
@@ -1026,8 +1106,7 @@ export function MiniAppPublishBar({
                 ))}
               </ul>
               
-              {/* Sign-in toggle for link sharing */}
-              {audience === "link" ? (
+              {showSignInToggle ? (
                 <div className="share-sheet__toggle-row">
                   <label className="share-sheet__toggle-label">
                     <input
@@ -1035,15 +1114,46 @@ export function MiniAppPublishBar({
                       checked={requireSignIn}
                       onChange={(event) => {
                         if (shareSheetBusy) return;
-                        setRequireSignIn(event.target.checked);
+                        const checked = event.target.checked;
+                        setRequireSignIn(checked);
+                        if (checked) {
+                          setPerUserIsolation(true);
+                        } else {
+                          setPerUserIsolation(false);
+                        }
                       }}
                     />
                     <span>Require Papr sign-in</span>
                   </label>
                   <p className="share-sheet__toggle-hint">
-                    {requireSignIn 
-                      ? "Viewers must sign in with a Papr account"
-                      : "Anyone with the link can open it without an account"}
+                    {requireSignIn
+                      ? audience === "public"
+                        ? "Visitors must sign in to Papr before using this Community app"
+                        : "Viewers must sign in with a Papr account"
+                      : audience === "public"
+                        ? "Anyone can discover and open this app without an account"
+                        : "Anyone with the link can open it without an account"}
+                  </p>
+                </div>
+              ) : null}
+
+              {showPerUserIsolationToggle ? (
+                <div className="share-sheet__toggle-row">
+                  <label className="share-sheet__toggle-label">
+                    <input
+                      type="checkbox"
+                      checked={perUserIsolation}
+                      onChange={(event) => {
+                        if (shareSheetBusy) return;
+                        setPerUserIsolation(event.target.checked);
+                      }}
+                    />
+                    <span>Per-user isolation &amp; personalization</span>
+                  </label>
+                  <p className="share-sheet__toggle-hint">
+                    {perUserIsolation
+                      ? "Each signed-in user gets their own private database copy on the web"
+                      : "All signed-in users share the same database"}
                   </p>
                 </div>
               ) : null}

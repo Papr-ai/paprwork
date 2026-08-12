@@ -357,6 +357,8 @@ export class CloudAppPublishService {
       loginAccess?: CloudSharingSettings["loginAccess"];
       externalLink?: CloudSharingSettings["externalLink"];
       codeAccess?: CodeAccess;
+      requireSignIn?: boolean;
+      perUserIsolation?: boolean;
       slug?: string;
     },
   ): Promise<CloudPublishConfig> {
@@ -377,6 +379,14 @@ export class CloudAppPublishService {
 
     const codeAccess: CodeAccess =
       options?.codeAccess ?? prefs.codeAccess ?? "off";
+    const requireSignIn =
+      options?.requireSignIn !== undefined
+        ? options.requireSignIn
+        : prefs.requireSignIn;
+    const perUserIsolation =
+      options?.perUserIsolation !== undefined
+        ? options.perUserIsolation
+        : prefs.perUserIsolation;
     const sharing = resolveSharingSettings({
       loginAccess: options?.loginAccess ?? prefs.loginAccess,
       externalLink: options?.externalLink ?? prefs.externalLink,
@@ -387,7 +397,15 @@ export class CloudAppPublishService {
       externalLink: sharing.externalLink,
       accessMode: options?.accessMode ?? prefs.accessMode,
       codeAccess,
+      requireSignIn,
     });
+
+    if (perUserIsolation !== undefined) {
+      const { applyPerUserIsolationForApp } = await import(
+        "./cloudAppPerUserIsolation.js"
+      );
+      await applyPerUserIsolationForApp(appId, perUserIsolation, this.paprDir);
+    }
 
     const { requirements: credentialRequirements } =
       await ensureAppRequirementsSyncedWithBackend(this.paprDir, appId);
@@ -477,6 +495,11 @@ export class CloudAppPublishService {
           visibility: publishFields.visibility,
           linkPermission: publishFields.linkPermission,
           shareLinkEnabled: publishFields.shareLinkEnabled,
+          ...(publishFields.visibility === "public_read"
+            ? { requireSignIn: publishFields.requireSignIn === true }
+            : publishFields.requireSignIn
+              ? { requireSignIn: true }
+              : {}),
           codeAccess,
           ...(credentialRequirements.length > 0
             ? {
@@ -528,6 +551,8 @@ export class CloudAppPublishService {
         loginAccess: sharing.loginAccess,
         externalLink: sharing.externalLink,
         codeAccess,
+        requireSignIn: publishFields.requireSignIn ?? false,
+        ...(perUserIsolation !== undefined ? { perUserIsolation } : {}),
         liveLinkPermission: publishFields.linkPermission,
         shareToken:
           sharingSettingsRequireShareToken(sharing) && config.shareToken

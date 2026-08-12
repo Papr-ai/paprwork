@@ -39,6 +39,7 @@ export interface MemoryPublishRequestFields {
   visibility: CloudAccessMode;
   linkPermission: "read" | "read_write";
   shareLinkEnabled: boolean;
+  requireSignIn?: boolean;
   codeAccess?: "off" | "install";
   catalogRequirements?: MemoryCatalogRequirementFields[];
   catalogTags?: string[];
@@ -49,6 +50,7 @@ export interface MemoryPublishResponseFields {
   slug?: string;
   visibility?: string;
   linkPermission?: string;
+  requireSignIn?: boolean;
   codeAccess?: "off" | "install";
   enabled?: boolean;
   shareUrl?: string;

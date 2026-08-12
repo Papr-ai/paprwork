@@ -414,7 +414,6 @@ async function testMemoryStream(ctx, sessionId) {
     return;
   }
 
-  const prompt = `USER: ${E2E_USER_MESSAGE}`;
   const res = await readFetchSse(`${memoryBase}/v1/cloud/apps/runtime/app-agent/stream`, {
     method: "POST",
     headers: {
@@ -425,7 +424,7 @@ async function testMemoryStream(ctx, sessionId) {
     body: {
       ...appAgentBaseBody(ctx, sessionId),
       userMessage: E2E_USER_MESSAGE,
-      prompt,
+      prompt: E2E_USER_MESSAGE,
     },
   });
 
@@ -436,6 +435,14 @@ async function testMemoryStream(ctx, sessionId) {
 
   check("stream → 200", res.status === 200, res.text.slice(0, 300));
   check("SSE data events", res.events.length > 0, `events=${res.events.length}`);
+
+  const expectedChatId = `app-agent:${sessionId}`;
+  const meta = res.events.find((ev) => ev.type === "session-meta");
+  if (meta?.chatId) {
+    check("session-meta chatId", meta.chatId === expectedChatId, meta.chatId);
+  } else {
+    skip("session-meta chatId", "no session-meta in SSE — deploy gateway with app-agent chatId fix");
+  }
 
   const combined = res.events
     .map((ev) => {
