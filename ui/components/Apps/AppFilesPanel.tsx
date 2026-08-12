@@ -110,7 +110,12 @@ export function AppFilesPanel({ appId }: { appId: string }) {
 
       {error && <p className="app-files__error">{error}</p>}
 
-      {loading ? null : files.length === 0 ? (
+      {loading ? (
+        // Never render an empty box. If the gateway is slow or down this
+        // state can persist, and a panel with only a heading looks broken
+        // rather than busy.
+        <p className="app-files__empty">Loading…</p>
+      ) : files.length === 0 ? (
         <p className="app-files__empty">Drop a file to store it outside git.</p>
       ) : (
         <ul className="app-files__list">

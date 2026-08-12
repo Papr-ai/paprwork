@@ -22,6 +22,14 @@ async function call<T>(path: string, body?: unknown): Promise<T> {
     const detail = await res.text().catch(() => "");
     throw new Error(detail.slice(0, 200) || `Request failed (${res.status})`);
   }
+  // A 200 carrying HTML means the SPA fallback answered instead of the API —
+  // the gateway is still booting, or its routes are not registered yet.
+  // Without this check res.json() throws "Unexpected token <", which sends
+  // whoever debugs it looking for a JSON bug that does not exist.
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    throw new Error("Gateway is still starting — try again in a moment.");
+  }
   return (await res.json()) as T;
 }
 
