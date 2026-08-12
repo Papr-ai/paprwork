@@ -438,6 +438,11 @@ export class CloudAppPublishService {
       );
     }
 
+    // Resolve App Files before talking to the publish API. If an asset would
+    // ship broken this throws with the file named, so the author fixes it
+    // instead of a visitor discovering it.
+    await this.publishAppFiles(appId);
+
     await writeCloudAppMetadataFile(this.paprDir, appId);
 
     const appDir = path.join(this.paprDir, "apps", appId);
@@ -548,7 +553,75 @@ export class CloudAppPublishService {
     return config;
   }
 
+  /**
+   * Make the app's publishable objects CDN-readable.
+   *
+   * Throws when an asset cannot be served, which aborts the publish before the
+   * API call — that is the point. An app with a broken asset should not go
+   * live, and the author should be told which file and why.
+   */
+  private async publishAppFiles(appId: string): Promise<void> {
+    const { readAppFileRows } = await import("./appFiles/publishAssetReader.js");
+    const rows = readAppFileRows(this.paprDir, appId);
+    if (rows.length === 0) return;
+
+    const { applyPublishVisibility } = await import(
+      "./appFiles/publishAssetSync.js"
+    );
+    const { setVisibility } = await import("./appFiles/appFilesClient.js");
+
+    const { plan, result } = await applyPublishVisibility(
+      appId,
+      rows,
+      setVisibility,
+    );
+    console.log(
+      `[CloudPublish] App Files for ${appId}: ${result.flipped.length} public, ` +
+        `${plan.toKeepPrivate.length} kept private`,
+    );
+  }
+
+  /**
+   * Return the app's objects to private.
+   *
+   * Best-effort: an app must always be able to come down. A stranded public
+   * object is logged loudly because it is a leak, but it cannot block the
+   * unpublish it would otherwise be blocking.
+   */
+  private async revokeAppFiles(appId: string): Promise<void> {
+    try {
+      const { readAppFileRows } = await import(
+        "./appFiles/publishAssetReader.js"
+      );
+      const rows = readAppFileRows(this.paprDir, appId);
+      if (rows.length === 0) return;
+
+      const { revokePublishVisibility } = await import(
+        "./appFiles/publishAssetSync.js"
+      );
+      const { setVisibility } = await import("./appFiles/appFilesClient.js");
+
+      const result = await revokePublishVisibility(appId, rows, setVisibility);
+      if (result.failed.length > 0) {
+        console.error(
+          `[CloudPublish] ${result.failed.length} object(s) for ${appId} are STILL PUBLIC after unpublish: ` +
+            result.failed.map((f) => f.objectKey).join(", "),
+        );
+      } else if (result.flipped.length > 0) {
+        console.log(
+          `[CloudPublish] Made ${result.flipped.length} App Files object(s) private for ${appId}`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        `[CloudPublish] App Files revoke failed for ${appId} — objects may remain public:`,
+        (error as Error).message,
+      );
+    }
+  }
+
   async unpublishApp(appId: string): Promise<void> {
+    await this.revokeAppFiles(appId);
     const response = await cloudApiFetch(
       `/v1/cloud/apps/publish/${encodeURIComponent(appId)}`,
       { method: "DELETE" },
