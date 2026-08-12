@@ -20,6 +20,24 @@ describe("scanMiniAppCloudCompatibility", () => {
     expect(report.requiresAcknowledgement).toBe(false);
   });
 
+  it("treats App Files as cloud-compatible, not desktop-only", () => {
+    // An app referencing a large asset used to have no signal here at all. The
+    // cloud host now serves /api/files/url, so file usage must not push an app
+    // toward desktop-only — and the author should be told it will work.
+    const files = new Map<string, string>([
+      [
+        "video.js",
+        `const r = await fetch('/api/files/url', {
+  method: 'POST',
+  body: JSON.stringify({ id }),
+});`,
+      ],
+    ]);
+    const report = buildCloudCompatibilityReport(scanMiniAppCloudCompatibility(files));
+    expect(report.level).toBe("cloud-ready");
+    expect(report.cloudWorks.join(" ")).toContain("App Files");
+  });
+
   it("flags localhost gateway as desktop-only", () => {
     const files = new Map<string, string>([
       [

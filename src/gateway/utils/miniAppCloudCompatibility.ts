@@ -91,6 +91,17 @@ const APP_PATTERNS: PatternRule[] = [
     message: "Uses cloud-compatible /api/db/* endpoints.",
     remediation: "",
   },
+  {
+    // App Files resolve through the cloud host too, so referencing a large
+    // asset no longer makes an app desktop-only. Without this rule the scanner
+    // stays silent about file usage and an author cannot tell whether their
+    // 60 MB video will survive publishing.
+    category: "cloud-files",
+    severity: "info",
+    pattern: /['"`]\/api\/files(\/|['"`])/,
+    message: "Uses cloud-compatible App Files (/api/files/*).",
+    remediation: "",
+  },
 ];
 
 const JOB_PATTERNS: PatternRule[] = [
@@ -274,6 +285,11 @@ export function buildCloudCompatibilityReport(
 
   if (cloudDb) {
     cloudWorks.push("Dashboard and read-only data via /api/db/* on apps.papr.ai");
+  }
+  if (findings.some((f) => f.category === "cloud-files")) {
+    cloudWorks.push(
+      "Large files via App Files — published assets serve from CDN, private ones stay signed",
+    );
   }
   if (level === "cloud-ready") {
     cloudWorks.push("Core UI should work on apps.papr.ai without Paprwork desktop");

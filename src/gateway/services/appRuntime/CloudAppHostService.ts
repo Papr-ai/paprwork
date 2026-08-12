@@ -11,6 +11,7 @@ import type {
   AppRuntimeRouteAuth,
   TursoCredentialsProvider,
 } from "./types.js";
+import type { AppFileRow } from "../appFiles/appFilesSchema.js";
 import { TursoDbAdapter } from "./TursoDbAdapter.js";
 import { getJobEventHub } from "../JobEventHub.js";
 import { publishDbChanged } from "../../utils/publishJobRunEvents.js";
@@ -283,6 +284,10 @@ export class CloudAppHostService {
     app.post("/api/credentials/client-keys", (req, res) =>
       void this.handleClientKeys(req, res),
     );
+    // Same path and body as the desktop gateway, so `papr.files.url(id)` is one
+    // call that works in both runtimes. Without this a published app that
+    // references a file 404s on apps.papr.ai.
+    app.post("/api/files/url", (req, res) => void this.handleFileUrl(req, res));
 
     app.get("/:namespaceId/:slug/__papr__/app-revision.json", (req, res) => {
       if (isReservedCloudPathSegment(req.params.namespaceId)) {
@@ -493,6 +498,84 @@ export class CloudAppHostService {
       res.status(403).send("Forbidden");
     } else {
       res.status(403).json({ error: "Forbidden" });
+    }
+  }
+
+  /**
+   * POST /api/files/url — resolve one App Files id to a URL a browser can use.
+   *
+   * Mirrors the desktop route so mini-app code is identical in both runtimes.
+   * The difference is what can be returned: the desktop may hand back a local
+   * path, whereas the cloud has no filesystem and must answer with a CDN URL
+   * (published, app-scoped) or a short-lived signed URL (everything else).
+   *
+   * All of the judgement lives in `resolveCloudFileUrl`, which is pure and
+   * tested exhaustively; this method only fetches the row and acts.
+   */
+  private async handleFileUrl(req: Request, res: Response): Promise<void> {
+    try {
+      const { appId: requestedAppId, sourceId, id } = req.body as {
+        appId?: string;
+        sourceId?: string;
+        id?: string;
+      };
+      if (!id) {
+        res.status(400).json({ error: "id is required" });
+        return;
+      }
+
+      if (!this.enforceDbRateLimit(req, res, "read")) return;
+
+      const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+      if (!ctx) return;
+      const { runtimeAuth, access, appId } = ctx;
+
+      const config = await this.loadDataSources(runtimeAuth);
+      const result = await this.turso.query({
+        orgId: access.orgId,
+        namespaceId: access.namespaceId,
+        userId: access.userId,
+        runtimeAuth,
+        config,
+        sourceId,
+        sql: "SELECT * FROM app_files WHERE id = ? LIMIT 1",
+        params: [id],
+      });
+
+      // Turso hands back untyped rows; app_files is our own schema, so the
+      // shape is known even though the adapter cannot express it.
+      const row = (result?.rows?.[0] ?? null) as unknown as AppFileRow | null;
+      const { resolveCloudFileUrl, buildCdnUrl } = await import(
+        "../appFiles/cloudFileUrl.js"
+      );
+
+      const decision = resolveCloudFileUrl(row, {
+        requestedAppId: appId,
+        canRead: access.canRead,
+        // A logged-out visitor on a public app has no user identity. Normalise
+        // to null so ownership comparisons cannot accidentally match "".
+        userId: access.userId || null,
+        isPublished: true,
+      });
+
+      if (decision.kind === "deny") {
+        res.status(decision.status).json({ error: decision.reason });
+        return;
+      }
+
+      if (decision.kind === "cdn") {
+        res.json({
+          location: { kind: "cloud" },
+          url: buildCdnUrl(decision.objectKey),
+        });
+        return;
+      }
+
+      const { createReadUrl } = await import("../appFiles/appFilesClient.js");
+      const { url } = await createReadUrl(decision.appId, decision.objectKey);
+      res.json({ location: { kind: "cloud" }, url });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
     }
   }
 
