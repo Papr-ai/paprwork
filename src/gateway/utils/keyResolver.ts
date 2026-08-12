@@ -84,9 +84,16 @@ async function requestKeysViaIPC(
     // Vitest's forks pool connects one too, and routes anything we post into its
     // own RPC deserializer, which calls Buffer.from() on our plain object,
     // throws ERR_INVALID_ARG_TYPE, and kills the whole run with a stack that
-    // names vitest internals rather than this line. Under test there is no main
-    // process to answer, so fail fast and let callers fall back to env vars.
-    if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    // names vitest internals rather than this line.
+    //
+    // Only refuse when we would post to the REAL process — that is vitest's
+    // channel. An injected ipcProcess is a test double with its own send/on,
+    // which is how the IPC flow itself is tested; blocking that made those
+    // tests resolve undefined instead of exercising the path they cover.
+    if (
+      ipcProcess === process &&
+      (process.env.VITEST || process.env.NODE_ENV === "test")
+    ) {
       reject(new Error("IPC not available - running under test"));
       return;
     }
