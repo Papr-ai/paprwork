@@ -82,6 +82,66 @@ export async function resolvePaprApiKeyFromKeychain(cwd = process.cwd()) {
   }
 }
 
+/**
+ * Read Parse session + user id from Papr Work secure storage (Electron subprocess).
+ * @returns {Promise<{ sessionToken: string, userId: string, displayName?: string, profileImage?: string, source: string } | null>}
+ */
+export async function resolvePaprSessionFromKeychain(cwd = process.cwd()) {
+  const electronBin = join(cwd, "node_modules", ".bin", "electron");
+  const helper = join(cwd, "scripts", "lib", "read-papr-session-keychain.mjs");
+
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+
+  try {
+    const { stdout } = await execFileAsync(electronBin, [helper], {
+      cwd,
+      env,
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    const parsed = JSON.parse(stdout.trim());
+    if (!parsed.sessionToken?.trim() || !parsed.userId?.trim()) {
+      return null;
+    }
+    return {
+      sessionToken: parsed.sessionToken.trim(),
+      userId: parsed.userId.trim(),
+      displayName: parsed.displayName?.trim() || undefined,
+      profileImage: parsed.profileImage?.trim() || undefined,
+      source: "keychain",
+    };
+  } catch (error) {
+    const err = /** @type {NodeJS.ErrnoException & { code?: number | string }} */ (
+      error
+    );
+    if (err.code === 2) {
+      return null;
+    }
+    const detail = err instanceof Error ? err.message : String(err);
+    console.warn(`[testEnv] Session keychain lookup failed: ${detail}`);
+    return null;
+  }
+}
+
+/**
+ * Resolve Papr Parse session for profile sync E2E (env vars or keychain).
+ * @returns {Promise<{ sessionToken: string, userId: string, displayName?: string, profileImage?: string, source: string } | null>}
+ */
+export async function resolvePaprSessionCredentials(cwd = process.cwd()) {
+  loadEnvLocal(cwd);
+  const envToken = process.env.PAPR_SESSION_TOKEN?.trim();
+  const envUserId = process.env.PAPR_USER_ID?.trim();
+  if (envToken && envUserId) {
+    return {
+      sessionToken: envToken,
+      userId: envUserId,
+      source: "env",
+    };
+  }
+  return resolvePaprSessionFromKeychain(cwd);
+}
+
 /** @returns {Promise<{ key: string, source: string } | null>} */
 export async function resolvePaprApiKey(cwd = process.cwd()) {
   loadEnvLocal(cwd);

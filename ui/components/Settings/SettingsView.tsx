@@ -213,6 +213,58 @@ function ProfileTab() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const profileStore = useProfileStore();
 
+  const applyProfileState = (
+    data: {
+      profile?: {
+        name?: string;
+        email?: string;
+        imageUrl?: string;
+        profileImageSyncPending?: boolean;
+      };
+    } | undefined,
+    paprResponse: {
+      success: boolean;
+      profile?: {
+        userId: string;
+        email: string;
+        displayName?: string;
+        profileImage?: string;
+        authenticatedAt: string;
+      };
+    },
+  ) => {
+    const localImageUrl = data?.profile?.imageUrl ?? "";
+    const profileImageSyncPending =
+      data?.profile?.profileImageSyncPending === true;
+
+    if (paprResponse.success && paprResponse.profile) {
+      setPaprProfile(paprResponse.profile);
+
+      const resolvedImage = resolveDisplayProfileImage(
+        localImageUrl,
+        paprResponse.profile.profileImage ?? "",
+        profileImageSyncPending,
+      );
+
+      if (data?.profile) {
+        setName(data.profile.name ?? paprResponse.profile.displayName ?? "");
+        setEmail(data.profile.email ?? paprResponse.profile.email ?? "");
+        setImageUrl(resolvedImage);
+      } else {
+        setName(paprResponse.profile.displayName ?? "");
+        setEmail(paprResponse.profile.email ?? "");
+        setImageUrl(resolvedImage);
+      }
+      return;
+    }
+
+    if (data?.profile) {
+      setName(data.profile.name ?? "");
+      setEmail(data.profile.email ?? "");
+      setImageUrl(data.profile.imageUrl ?? "");
+    }
+  };
+
   // Load profile on mount
   useEffect(() => {
     (async () => {
@@ -227,45 +279,22 @@ function ProfileTab() {
           };
         };
 
-        const loginStatus = await window.electronAPI.papr.checkLoginStatus();
-        let paprResponse = await window.electronAPI.papr.getProfile();
-        if (loginStatus.success && loginStatus.isLoggedIn) {
-          const refreshResult = await window.electronAPI.papr.refreshProfile();
-          if (refreshResult.success && refreshResult.profile) {
-            paprResponse = refreshResult;
-          }
-        }
-
-        const localImageUrl = data?.profile?.imageUrl ?? "";
-        const profileImageSyncPending =
-          data?.profile?.profileImageSyncPending === true;
-
-        if (paprResponse.success && paprResponse.profile) {
-          setPaprProfile(paprResponse.profile);
-
-          const resolvedImage = resolveDisplayProfileImage(
-            localImageUrl,
-            paprResponse.profile.profileImage ?? "",
-            profileImageSyncPending,
-          );
-
-          if (data?.profile) {
-            setName(data.profile.name ?? paprResponse.profile.displayName ?? "");
-            setEmail(data.profile.email ?? paprResponse.profile.email ?? "");
-            setImageUrl(resolvedImage);
-          } else {
-            setName(paprResponse.profile.displayName ?? "");
-            setEmail(paprResponse.profile.email ?? "");
-            setImageUrl(resolvedImage);
-          }
-        } else if (data?.profile) {
-          // No Papr profile - use manual profile only
-          setName(data.profile.name ?? "");
-          setEmail(data.profile.email ?? "");
-          setImageUrl(data.profile.imageUrl ?? "");
-        }
-
+        const paprResponse = await window.electronAPI.papr.getProfile();
+        applyProfileState(data, paprResponse);
         setLoaded(true);
+
+        // Refresh from Parse in background — do not block Settings UI on cloud latency.
+        const loginStatus = await window.electronAPI.papr.checkLoginStatus();
+        if (!loginStatus.success || !loginStatus.isLoggedIn) {
+          return;
+        }
+
+        void window.electronAPI.papr.refreshProfile().then((refreshResult) => {
+          if (!refreshResult.success || !refreshResult.profile) {
+            return;
+          }
+          applyProfileState(data, refreshResult);
+        });
       } catch (err) {
         console.error("[ProfileTab] Load error:", err);
         setLoaded(true);
@@ -285,34 +314,22 @@ function ProfileTab() {
             profileImageSyncPending?: boolean;
           };
         };
-        const localImageUrl = settingsData?.profile?.imageUrl ?? "";
-        const profileImageSyncPending =
-          settingsData?.profile?.profileImageSyncPending === true;
 
-        const refreshResult = await window.electronAPI.papr.refreshProfile();
-        const response =
-          refreshResult.success && refreshResult.profile
-            ? refreshResult
-            : await window.electronAPI.papr.getProfile();
-        if (response.success && response.profile) {
-          setPaprProfile(response.profile);
-          setName(
-            settingsData?.profile?.name ??
-              response.profile.displayName ??
-              "",
-          );
-          setEmail(
-            settingsData?.profile?.email ?? response.profile.email ?? "",
-          );
-          setImageUrl(
-            resolveDisplayProfileImage(
-              localImageUrl,
-              response.profile.profileImage ?? "",
-              profileImageSyncPending,
-            ),
-          );
-          void profileStore.loadProfile({ force: true });
+        const cachedResponse = await window.electronAPI.papr.getProfile();
+        if (cachedResponse.success && cachedResponse.profile) {
+          applyProfileState(settingsData, cachedResponse);
         }
+
+        void window.electronAPI.papr.refreshProfile().then((refreshResult) => {
+          const response =
+            refreshResult.success && refreshResult.profile
+              ? refreshResult
+              : cachedResponse;
+          if (response.success && response.profile) {
+            applyProfileState(settingsData, response);
+            void profileStore.loadProfile({ force: true });
+          }
+        });
       })();
     };
 

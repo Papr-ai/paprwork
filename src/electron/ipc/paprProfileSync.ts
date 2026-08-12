@@ -23,11 +23,79 @@ interface ParseFileUploadResult {
   name: string;
 }
 
-interface ParseProfileImageInput {
-  file: {
-    __type: "File";
-    name: string;
-    url: string;
+/** Parse File pointer — matches papr-dev-platform SettingsModal / userProfile.d.ts */
+export interface ParseProfileImageFilePointer {
+  __type: "File";
+  name: string;
+  url: string;
+}
+
+/** GraphQL profileimage input — same shape as papr-dev-platform updateUserProfile */
+export interface ParseProfileImageInput {
+  file: ParseProfileImageFilePointer;
+}
+
+export function buildParseProfileImageInput(
+  name: string,
+  url: string,
+): ParseProfileImageInput {
+  return {
+    file: {
+      __type: "File",
+      name: name.trim(),
+      url: url.trim(),
+    },
+  };
+}
+
+export function buildUpdateUserProfileGraphQLInput(
+  userId: string,
+  fields: {
+    displayName?: string;
+    fullname?: string;
+    profileImage?: ParseProfileImageFilePointer;
+  },
+): { id: string; fields: Record<string, unknown> } {
+  const fieldsInput: Record<string, unknown> = {};
+
+  if (fields.fullname?.trim()) {
+    fieldsInput.fullname = fields.fullname.trim();
+  }
+  if (fields.displayName?.trim()) {
+    fieldsInput.displayName = fields.displayName.trim();
+  }
+  if (fields.profileImage?.name && fields.profileImage.url) {
+    fieldsInput.profileimage = buildParseProfileImageInput(
+      fields.profileImage.name,
+      fields.profileImage.url,
+    );
+  }
+
+  return { id: userId, fields: fieldsInput };
+}
+
+export function parseParseProfileImageFileName(url: string): string | undefined {
+  try {
+    const fileName = new URL(url.trim()).pathname.split("/").pop()?.trim();
+    return fileName || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function parseParseProfileImageFromUrl(
+  url: string,
+): ParseProfileImageFilePointer | undefined {
+  const trimmedUrl = url.trim();
+  const name = parseParseProfileImageFileName(trimmedUrl);
+  if (!name) {
+    return undefined;
+  }
+
+  return {
+    __type: "File",
+    name,
+    url: trimmedUrl,
   };
 }
 
@@ -64,6 +132,9 @@ const UPDATE_USER_DETAILS = `
   }
 `;
 
+const PARSE_GRAPHQL_TIMEOUT_MS = 90_000;
+const PARSE_FILE_UPLOAD_TIMEOUT_MS = 60_000;
+
 async function parseGraphQL(
   sessionToken: string,
   query: string,
@@ -71,6 +142,7 @@ async function parseGraphQL(
 ): Promise<Record<string, unknown>> {
   const response = await fetch(PARSE_GRAPHQL_URL, {
     method: "POST",
+    signal: AbortSignal.timeout(PARSE_GRAPHQL_TIMEOUT_MS),
     headers: {
       "Content-Type": "application/json",
       "X-Parse-Application-Id": PARSE_APP_ID,
@@ -165,6 +237,7 @@ export async function uploadProfileImageToParse(
     `${PARSE_SERVER_URL}/files/${encodeURIComponent(sanitizedFileName)}`,
     {
       method: "POST",
+      signal: AbortSignal.timeout(PARSE_FILE_UPLOAD_TIMEOUT_MS),
       headers: {
         "X-Parse-Application-Id": PARSE_APP_ID,
         "X-Parse-Session-Token": sessionToken,
@@ -193,24 +266,12 @@ export async function updateParseUserProfile(
   fields: {
     displayName?: string;
     fullname?: string;
-    profileImage?: ParseProfileImageInput;
+    profileImage?: ParseProfileImageFilePointer;
   },
 ): Promise<{ profileImageUrl?: string }> {
-  const input: Record<string, unknown> = {
-    id: userId,
-  };
-
-  if (fields.fullname?.trim()) {
-    input.fullname = fields.fullname.trim();
-  }
-  if (fields.displayName?.trim()) {
-    input.displayName = fields.displayName.trim();
-  }
-  if (fields.profileImage) {
-    input.profileimage = fields.profileImage;
-  }
-
-  const data = await parseGraphQL(sessionToken, UPDATE_USER_DETAILS, { input });
+  const data = await parseGraphQL(sessionToken, UPDATE_USER_DETAILS, {
+    input: buildUpdateUserProfileGraphQLInput(userId, fields),
+  });
   const user = (data.updateUser as { user?: { profileimage?: { url?: string } } })
     ?.user;
 
@@ -239,7 +300,7 @@ export async function syncProfileToParse(
 ): Promise<SyncProfileToParseResult> {
   const trimmedName = input.name?.trim();
   const imageUrl = input.imageUrl?.trim() ?? "";
-  let profileImage: ParseProfileImageInput | undefined;
+  let profileImage: ParseProfileImageFilePointer | undefined;
   let syncedImageUrl: string | undefined;
 
   if (imageUrl && isDataUrl(imageUrl)) {
@@ -249,14 +310,13 @@ export async function syncProfileToParse(
       input.userId,
     );
     profileImage = {
-      file: {
-        __type: "File",
-        name: uploaded.name,
-        url: uploaded.url,
-      },
+      __type: "File",
+      name: uploaded.name,
+      url: uploaded.url,
     };
     syncedImageUrl = uploaded.url;
   } else if (imageUrl && isRemoteProfileImageUrl(imageUrl)) {
+    profileImage = parseParseProfileImageFromUrl(imageUrl);
     syncedImageUrl = imageUrl;
   }
 

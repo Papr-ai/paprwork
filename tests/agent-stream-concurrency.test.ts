@@ -15,10 +15,10 @@ describe("AgentStreamConcurrencyGate", () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  test("defaults to three streams after replay-buffer memory hardening", () => {
+  test("defaults to six concurrent agent streams", () => {
     const gate = new AgentStreamConcurrencyGate();
-    expect(DEFAULT_AGENT_STREAM_MAX_CONCURRENT).toBe(3);
-    expect(gate.getStats().maxConcurrent).toBe(3);
+    expect(DEFAULT_AGENT_STREAM_MAX_CONCURRENT).toBe(6);
+    expect(gate.getStats().maxConcurrent).toBe(6);
   });
 
   test("allows two foreground streams", async () => {

@@ -8,6 +8,8 @@ import {
   resolveDisplayProfileImage,
 } from "./profileImageSyncCore.js";
 
+export { isProfileImagePendingSync, resolveDisplayProfileImage };
+
 export interface ProfileImageCloudSyncInput {
   name: string;
   email: string;

@@ -2361,6 +2361,9 @@ app.whenReady().then(async () => {
       settingsStorage.getPaprProfile()?.userId ?? "",
     PAPRWORK_APP_VERSION: app.getVersion(),
     PAPRWORK_IS_PACKAGED: app.isPackaged ? "true" : "false",
+    // Packaged app has no .env.local — keep in sync with DEFAULT_AGENT_STREAM_MAX_CONCURRENT.
+    AGENT_STREAM_MAX_CONCURRENT:
+      process.env.AGENT_STREAM_MAX_CONCURRENT ?? "6",
   };
   if (
     gatewayEnv.PAPR_API_KEY &&

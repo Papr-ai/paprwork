@@ -1,6 +1,6 @@
 /** Global concurrency gate for user chats, embedded agents, and jobs. */
 
-export const DEFAULT_AGENT_STREAM_MAX_CONCURRENT = 3;
+export const DEFAULT_AGENT_STREAM_MAX_CONCURRENT = 6;
 export const AGENT_STREAM_ACQUIRE_TIMEOUT_MS = 5_000;
 export const BACKGROUND_AGENT_STREAM_ACQUIRE_TIMEOUT_MS = 120_000;
 
