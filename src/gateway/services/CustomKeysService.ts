@@ -87,6 +87,11 @@ export class CustomKeysService {
    * Wait for IPC channel to be ready (Gateway might start before IPC is established)
    */
   private async waitForIpc(): Promise<void> {
+    // No Electron main process under test — polling here would just burn the
+    // full timeout before every suite that touches key lookup.
+    if (process.env.VITEST || process.env.NODE_ENV === "test") {
+      return;
+    }
     while (this.ipcWaitAttempts < this.MAX_IPC_WAIT_ATTEMPTS) {
       if (typeof process.send === "function" && process.connected === true) {
         console.log(
@@ -110,6 +115,16 @@ export class CustomKeysService {
    * Check if IPC channel is available and connected
    */
   private checkIpcAvailable(): boolean {
+    // A live IPC channel does not mean the parent is the Electron main process.
+    // Vitest's forks pool also connects one, and it routes anything we post into
+    // its own RPC deserializer — which tries Buffer.from() on our plain object,
+    // throws, and takes down the whole test run with an error that names vitest
+    // internals rather than this call. Keys come from the environment under
+    // test, so there is nothing to ask the main process for.
+    if (process.env.VITEST || process.env.NODE_ENV === "test") {
+      return false;
+    }
+
     // Check if process.send exists (means we were spawned with IPC)
     const hasSend = typeof process.send === "function";
     // Check if IPC channel is connected (will be false if disconnected)

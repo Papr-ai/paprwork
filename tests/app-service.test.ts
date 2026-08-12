@@ -2,27 +2,49 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
+import { randomUUID } from "crypto";
 import { AppService } from "../src/gateway/services/AppService.js";
 
 describe("AppService", () => {
   let originalHome: string | undefined;
+  let originalPaprHome: string | undefined;
   let testHomeDir: string;
   let appService: AppService;
 
   beforeEach(async () => {
     originalHome = process.env.HOME;
-    testHomeDir = path.join(os.tmpdir(), `paprwork-v2-app-service-${Date.now()}`);
+    originalPaprHome = process.env.PAPR_HOME;
+    // Date.now() collides when two tests start in the same millisecond, which
+    // silently shares one workspace between them.
+    testHomeDir = path.join(
+      os.tmpdir(),
+      `paprwork-v2-app-service-${process.pid}-${randomUUID()}`,
+    );
     process.env.HOME = testHomeDir;
-    await fs.mkdir(testHomeDir, { recursive: true });
+    // HOME alone is not enough. getPaprRoot() prefers the active-workspace
+    // pointer read from the developer's REAL home, and syncs PAPR_HOME to it —
+    // so without this the suite creates apps in the user's live workspace
+    // instead of a temp dir, and listApps() returns hundreds of real apps.
+    process.env.PAPR_HOME = path.join(testHomeDir, "Papr");
+    await fs.mkdir(path.join(testHomeDir, "Papr"), { recursive: true });
     appService = new AppService();
     await appService.initialize();
   });
 
   afterEach(async () => {
+    // Stop watchers and pending timers before the temp dir goes away. Without
+    // this, chokidar keeps firing on deleted paths and the debounced reload
+    // broadcast outlives the test run.
+    appService.cleanup();
     if (originalHome === undefined) {
       delete process.env.HOME;
     } else {
       process.env.HOME = originalHome;
+    }
+    if (originalPaprHome === undefined) {
+      delete process.env.PAPR_HOME;
+    } else {
+      process.env.PAPR_HOME = originalPaprHome;
     }
     await fs.rm(testHomeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   });
@@ -149,7 +171,9 @@ describe("AppService", () => {
 
     expect(favorited?.favorite).toBe(true);
     expect(appPath).toContain(created.id);
-    expect(deleted).toBe(true);
+    // deleteApp returns DeleteAppResult (it may also need to unpublish from
+    // cloud), not a bare boolean.
+    expect(deleted.deleted).toBe(true);
     expect(afterDelete).toBeNull();
   });
 

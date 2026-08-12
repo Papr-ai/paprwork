@@ -80,6 +80,17 @@ async function requestKeysViaIPC(
       return;
     }
 
+    // A live IPC channel does not mean the parent is the Electron main process.
+    // Vitest's forks pool connects one too, and routes anything we post into its
+    // own RPC deserializer, which calls Buffer.from() on our plain object,
+    // throws ERR_INVALID_ARG_TYPE, and kills the whole run with a stack that
+    // names vitest internals rather than this line. Under test there is no main
+    // process to answer, so fail fast and let callers fall back to env vars.
+    if (process.env.VITEST || process.env.NODE_ENV === "test") {
+      reject(new Error("IPC not available - running under test"));
+      return;
+    }
+
     const reqId = `keys-${++requestId}`;
     const timeout = setTimeout(() => {
       cleanup();

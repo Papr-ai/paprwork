@@ -195,6 +195,12 @@ export class AppService {
   private initPromise: Promise<void> | null = null;
   /** PAPR_HOME at last successful initialize — prune must not run after env drift. */
   private loadedPaprRoot: string | null = null;
+  /**
+   * Set by cleanup(). Watcher startup is fire-and-forget, so without this a
+   * shutdown that lands mid-startup creates watchers *after* cleanup already
+   * closed the set — they then outlive the service with nothing tracking them.
+   */
+  private disposed = false;
 
   /** Coalesce rapid multi-file agent edits into one rebuild + reload. */
   private static readonly FILE_CHANGE_DEBOUNCE_MS = 800;
@@ -1861,6 +1867,7 @@ export class AppService {
   private broadcastAppListUpdated(): void {
     import("../websocket/index.js")
       .then(({ broadcast }) => {
+        if (typeof broadcast !== "function") return;
         broadcast({ type: "app:list-updated" });
       })
       .catch(() => {
@@ -1870,6 +1877,13 @@ export class AppService {
 
   async listApps(): Promise<MiniApp[]> {
     await this.initialize();
+
+    // Prune here, not only at startup. initialize() early-returns once it has
+    // run, so a folder removed after boot (agent `rm -rf`, external delete,
+    // failed sync) stayed listed until the app restarted — the user clicks a
+    // mini-app that no longer exists. listApps is the read path where that
+    // ghost entry surfaces, so it is where the index gets reconciled.
+    await this.pruneStaleAppEntries();
 
     const activeScope = readActiveAppWorkspaceScope();
     const owned: MiniApp[] = [];
@@ -2265,6 +2279,7 @@ export class AppService {
    * Watch a specific app directory for file changes
    */
   private async watchApp(appId: string): Promise<void> {
+    if (this.disposed) return;
     const appPath = path.join(this.appsDir, appId);
 
     // Check if directory exists before watching
@@ -2273,6 +2288,8 @@ export class AppService {
     } catch {
       return; // Directory doesn't exist yet
     }
+    // Re-check after the await: cleanup() may have run while we were resolving.
+    if (this.disposed) return;
 
     // Don't create duplicate watchers
     if (this.watchers.has(appId)) {
@@ -2301,7 +2318,14 @@ export class AppService {
       });
 
       watcher.on("error", (error) => {
-        console.error(`[AppService] Watcher error for app ${appId}:`, error);
+        // Log the message, not the object. Watcher errors carry non-cloneable
+        // fields (fs handles, syscall metadata); passing the raw object to a
+        // reporter that serializes stdout across a process boundary throws
+        // inside the serializer and takes down the whole run.
+        console.error(
+          `[AppService] Watcher error for app ${appId}:`,
+          (error as Error)?.message ?? String(error),
+        );
         this.watchers.delete(appId);
       });
 
@@ -3032,13 +3056,17 @@ export class AppService {
 
     import("../websocket/index.js")
       .then(({ broadcast }) => {
+        if (typeof broadcast !== "function") return;
         broadcast({
           type: "app:validation-result",
           data: result,
         });
       })
       .catch((error) => {
-        console.warn("[AppService] Failed to broadcast validation:", error);
+        console.warn(
+          "[AppService] Failed to broadcast validation:",
+          (error as Error)?.message ?? String(error),
+        );
       });
   }
 
@@ -3048,6 +3076,7 @@ export class AppService {
   private broadcastFileChange(appId: string, filename: string): void {
     import("../websocket/index.js")
       .then(({ broadcast }) => {
+        if (typeof broadcast !== "function") return;
         broadcast({
           type: "app:file-changed",
           data: { appId, filename, timestamp: Date.now() },
@@ -3057,7 +3086,10 @@ export class AppService {
         );
       })
       .catch((error) => {
-        console.warn("[AppService] Failed to broadcast file change:", error);
+        console.warn(
+          "[AppService] Failed to broadcast file change:",
+          (error as Error)?.message ?? String(error),
+        );
         // Non-fatal - file was still written successfully
       });
   }
@@ -3630,6 +3662,7 @@ export class AppService {
    * Cleanup: stop all file watchers
    */
   cleanup(): void {
+    this.disposed = true;
     console.log(`[AppService] Cleaning up ${this.watchers.size} watchers`);
     
     for (const [_appId, watcher] of this.watchers.entries()) {
@@ -3641,6 +3674,14 @@ export class AppService {
       clearTimeout(timer);
     }
     this.debounceTimers.clear();
+
+    // Reload broadcasts fire up to 1.5s after the last edit. Leaving them armed
+    // kept the process alive past shutdown and, under vitest, let a worker post
+    // messages after the pool closed — surfacing as an unrelated IPC crash.
+    for (const timer of this.reloadBroadcastTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.reloadBroadcastTimers.clear();
   }
 }
 
