@@ -1,0 +1,187 @@
+/**
+ * App Files panel.
+ *
+ * Deliberately matches MiniAppDataSourcesPanel's frame — same radius, padding,
+ * border and header type. They sit adjacent in the sidebar, so any difference
+ * would read as an inconsistency rather than a distinction.
+ *
+ * Tokens only. Every colour here follows light/dark automatically.
+ */
+
+.app-files {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  /* Border colour is the only drag affordance, so the transition carries it. */
+  transition: border-color 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* The whole panel is the drop target — a dedicated dashed box would occupy
+   permanent space to teach something learned once. */
+.app-files--dragging {
+  border-color: var(--accent-color);
+}
+
+.app-files__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.app-files__head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* One number, quiet. Storage totals are reference, not headline. */
+.app-files__total {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.app-files__empty,
+.app-files__error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.app-files__error {
+  color: var(--error-color);
+}
+
+.app-files__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.app-file {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 4px;
+  border-radius: 6px;
+}
+
+.app-file:hover {
+  background: var(--background-hover);
+}
+
+.app-file--busy {
+  opacity: 0.55;
+}
+
+.app-file__dot {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+/* Verified and local — the only fully settled state, so the only accented one. */
+.app-file__dot--filled {
+  color: var(--accent-color);
+}
+
+.app-file__dot--slashed {
+  color: var(--error-color);
+}
+
+.app-file__name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-file__size {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  /* Tabular figures stop the number jittering as digits change. */
+  font-variant-numeric: tabular-nums;
+}
+
+.app-file__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Shared button reset first, so the state rules below can override it.
+   Ordering matters here: these are all single-class selectors, so the last
+   matching declaration wins. */
+.app-file__icon,
+.app-file__text-action {
+  background: none;
+  border: none;
+  padding: 3px 5px;
+  border-radius: 5px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  /* Hidden until intent. Opacity rather than display, so the row never
+     reflows on hover. */
+  opacity: 0;
+  transition:
+    opacity 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    color 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.app-file__icon {
+  display: flex;
+  align-items: center;
+}
+
+/* Focus-within matters as much as hover: without it these controls would be
+   completely unreachable by keyboard. */
+.app-file:hover .app-file__icon,
+.app-file:hover .app-file__text-action,
+.app-file:focus-within .app-file__icon,
+.app-file:focus-within .app-file__text-action {
+  opacity: 1;
+}
+
+/* A private file must read as private at rest. A state you have to hover to
+   discover is not a state the user can trust. */
+.app-file__icon--on {
+  opacity: 1;
+  color: var(--accent-color);
+}
+
+.app-file__icon:hover:not(:disabled),
+.app-file__text-action:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.app-file__text-action--danger:hover:not(:disabled) {
+  color: var(--error-color);
+}
+
+.app-file__icon:disabled,
+.app-file__text-action:disabled {
+  cursor: default;
+}
+
+/* Hairline along the row's bottom edge. Motion is what says "working" on a
+   multi-GB upload; a percentage alone reads as frozen between updates. */
+.app-file__progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 1.5px;
+  border-radius: 1px;
+  background: var(--accent-color);
+  transition: width 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}

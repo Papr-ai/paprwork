@@ -13,6 +13,7 @@ import { WorkspaceCodeEditor } from "./WorkspaceCodeEditor";
 import { WorkspaceDbPreview } from "./WorkspaceDbPreview";
 import { WorkspaceFileTree } from "./WorkspaceFileTree";
 import { MiniAppDataSourcesPanel } from "./MiniAppDataSourcesPanel";
+import { AppFilesPanel } from "./AppFilesPanel";
 import { MiniAppCodeSearch } from "./MiniAppCodeSearch";
 import "./MiniAppFilesView.css";
 import "./WorkspaceCodeEditor.css";
@@ -122,6 +123,11 @@ export function MiniAppFilesView({ appId }: MiniAppFilesViewProps) {
 
         <div className="mini-app-files__tree">
           <MiniAppDataSourcesPanel appId={appId} />
+
+          {/* Beside data sources rather than in the file tree: App Files are
+              attached storage, not source code, and must never look like
+              something git carries. */}
+          <AppFilesPanel appId={appId} />
 
           {appGroup.length === 0 && jobGroups.length === 0 && !workspace.loadingTree ? (
             <p className="mini-app-files__empty">No files found.</p>

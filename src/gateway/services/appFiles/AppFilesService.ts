@@ -18,13 +18,22 @@ import {
   type AppFileScope,
 } from "./appFilesClient.js";
 import {
+  APP_FILES_MIGRATIONS,
   APP_FILES_SCHEMA,
+  isDuplicateColumnError,
   isEvictable,
   resolveLocation,
   type AppFileRow,
   type FileLocation,
+  type FileVisibility,
 } from "./appFilesSchema.js";
 import { hashFile, uploadResumable, type UploadProgress } from "./resumableUploader.js";
+import {
+  SESSION_TTL_MS,
+  isHashCacheValid,
+  planResume,
+  type CachedHash,
+} from "./uploadResume.js";
 
 /** Minimal database surface, so this service is testable without a real DB. */
 export interface FilesDb {
@@ -57,6 +66,258 @@ export interface AddFileResult {
 
 export async function ensureSchema(db: FilesDb): Promise<void> {
   await db.exec(APP_FILES_SCHEMA);
+
+  // Installs that predate durable resume already have `app_files`, so the
+  // CREATE above is a no-op for them and the new columns must be added
+  // explicitly. SQLite has no `ADD COLUMN IF NOT EXISTS`, so the only
+  // idempotent form is to attempt each and swallow "already exists".
+  for (const statement of APP_FILES_MIGRATIONS) {
+    try {
+      await db.exec(statement);
+    } catch (err) {
+      if (!isDuplicateColumnError(err)) throw err;
+    }
+  }
+}
+
+/**
+ * SHA-256 of a file, reusing the cached value when the file is untouched.
+ *
+ * Hashing 10 GB is minutes of CPU and a spun-up fan. Paying that twice — once
+ * on the first attempt and again on the retry after a crash — is the single
+ * biggest avoidable cost in a large upload.
+ *
+ * Correctness does not rest on this: the server verifies the stored object's
+ * size and MD5 at commit time regardless, so a stale cache costs a failed
+ * commit, not a corrupt file.
+ */
+export async function hashFileCached(
+  db: FilesDb,
+  filePath: string,
+  info: { size: number; mtimeMs: number },
+): Promise<string> {
+  const cached = (
+    await db.all<CachedHash>(
+      `SELECT size_bytes, mtime_ms, sha256 FROM app_file_hashes WHERE local_path = ?`,
+      [filePath],
+    )
+  )[0];
+
+  if (isHashCacheValid(cached, info)) return cached.sha256;
+
+  const sha256 = await hashFile(filePath);
+  await db.run(
+    `INSERT INTO app_file_hashes (local_path, size_bytes, mtime_ms, sha256, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(local_path) DO UPDATE SET
+       size_bytes = excluded.size_bytes,
+       mtime_ms   = excluded.mtime_ms,
+       sha256     = excluded.sha256,
+       updated_at = excluded.updated_at`,
+    [filePath, info.size, Math.floor(info.mtimeMs), sha256, Date.now()],
+  );
+  return sha256;
+}
+
+/**
+ * Resume an upload that was interrupted, without re-sending what GCS has.
+ *
+ * This is the payoff for persisting the session URI: a laptop that died at
+ * 9 GB of 10 resumes at 9 GB. Returns null when there is nothing usable to
+ * resume from, leaving the caller to start a fresh ticket.
+ */
+export async function resumeUpload(
+  db: FilesDb,
+  id: string,
+  options: { onProgress?: (p: UploadProgress) => void; signal?: AbortSignal } = {},
+): Promise<AddFileResult | null> {
+  const row = await getFile(db, id);
+  if (!row || !row.local_path) return null;
+
+  const plan = planResume(row);
+  if (plan.kind === "done") {
+    return {
+      id: row.id,
+      objectKey: row.object_key,
+      sha256: row.sha256,
+      sizeBytes: row.size_bytes,
+      deduped: false,
+      verified: true,
+    };
+  }
+  if (plan.kind === "restart") return null;
+
+  await uploadResumable({
+    sessionUrl: plan.sessionUri,
+    filePath: row.local_path,
+    totalBytes: row.size_bytes,
+    onProgress: options.onProgress,
+    signal: options.signal,
+    onOffsetCommitted: (offset) => recordProgress(db, row.object_key, offset),
+  });
+
+  const commit = await commitUpload(row.app_id, row.object_key, row.size_bytes);
+  await markState(db, row.object_key, commit.verified ? "verified" : "failed");
+
+  return {
+    id: row.id,
+    objectKey: row.object_key,
+    sha256: row.sha256,
+    sizeBytes: row.size_bytes,
+    deduped: false,
+    verified: commit.verified,
+  };
+}
+
+export interface BrowserTicketArgs {
+  appId: string;
+  fileName: string;
+  sizeBytes: number;
+  mime?: string | null;
+  scope?: AppFileScope;
+  /**
+   * Cheap content fingerprint from the browser (head + tail + size).
+   *
+   * Not a full SHA-256: WebCrypto cannot stream a digest, so hashing a 10 GB
+   * file in a tab would mean holding it in memory. The server derives the real
+   * object key itself and verifies MD5 at commit, so this only needs to be
+   * stable and collision-resistant enough to dedupe.
+   */
+  fingerprint: string;
+}
+
+export interface BrowserTicket {
+  id: string;
+  objectKey: string;
+  uploadUrl: string | null;
+  alreadyExists: boolean;
+  sha256: string;
+}
+
+/**
+ * Mint an upload ticket for a browser to PUT against directly.
+ *
+ * The row is written before any bytes move, so an upload abandoned halfway is
+ * visible as `uploading` rather than vanishing — and the session URI is stored
+ * so it can be resumed for the next 7 days.
+ */
+export async function createBrowserTicket(
+  db: FilesDb,
+  args: BrowserTicketArgs,
+): Promise<BrowserTicket> {
+  const scope = args.scope ?? "app";
+  const ticket = await requestUploadTicket({
+    appId: args.appId,
+    sha256: args.fingerprint,
+    sizeBytes: args.sizeBytes,
+    fileName: args.fileName,
+    mime: args.mime ?? undefined,
+    scope,
+  });
+
+  const now = Date.now();
+  const id = randomUUID();
+  await db.run(
+    `INSERT INTO app_files
+       (id, app_id, object_key, sha256, size_bytes, mime, file_name, scope,
+        local_path, upload_state, visibility, upload_session_uri,
+        bytes_uploaded, session_expires_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'inherit', ?, 0, ?, ?, ?)
+     ON CONFLICT(object_key) DO UPDATE SET
+       upload_session_uri = excluded.upload_session_uri,
+       session_expires_at = excluded.session_expires_at,
+       updated_at         = excluded.updated_at`,
+    [
+      id,
+      args.appId,
+      ticket.object_key,
+      args.fingerprint,
+      args.sizeBytes,
+      args.mime ?? null,
+      args.fileName,
+      scope,
+      ticket.already_exists ? "verified" : "uploading",
+      ticket.upload_url ?? null,
+      now + SESSION_TTL_MS,
+      now,
+      now,
+    ],
+  );
+
+  // On conflict the insert kept the original row, so report that row's id —
+  // returning a fresh uuid would hand the caller an id that does not exist.
+  const existing = (
+    await db.all<{ id: string }>(
+      `SELECT id FROM app_files WHERE object_key = ?`,
+      [ticket.object_key],
+    )
+  )[0];
+
+  return {
+    id: existing?.id ?? id,
+    objectKey: ticket.object_key,
+    uploadUrl: ticket.already_exists ? null : (ticket.upload_url ?? null),
+    alreadyExists: Boolean(ticket.already_exists),
+    sha256: args.fingerprint,
+  };
+}
+
+/**
+ * Confirm a browser-uploaded object, after the server checks the stored bytes.
+ *
+ * Verification is server-side on purpose: the client saying "I sent it all" is
+ * not evidence, and a truncated upload that reported success would be worse
+ * than a failed one.
+ */
+export async function commitBrowserUpload(
+  db: FilesDb,
+  args: { appId: string; id: string; objectKey: string; sizeBytes: number },
+): Promise<AddFileResult> {
+  const commit = await commitUpload(args.appId, args.objectKey, args.sizeBytes);
+  await markState(db, args.objectKey, commit.verified ? "verified" : "failed");
+
+  const row = await getFile(db, args.id);
+  return {
+    id: args.id,
+    objectKey: args.objectKey,
+    sha256: row?.sha256 ?? "",
+    sizeBytes: args.sizeBytes,
+    deduped: false,
+    verified: commit.verified,
+  };
+}
+
+/**
+ * Set the "never publish me" flag on a file.
+ *
+ * Only touches the local column; it does not call the storage API. Publishing
+ * reads this flag and skips the object, so a private file is never made
+ * CDN-public in the first place — which is stronger than making it public and
+ * relying on a later call to undo that.
+ */
+export async function setFilePrivacy(
+  db: FilesDb,
+  id: string,
+  isPrivate: boolean,
+): Promise<{ id: string; visibility: FileVisibility }> {
+  const visibility: FileVisibility = isPrivate ? "private" : "inherit";
+  await db.run(
+    `UPDATE app_files SET visibility = ?, updated_at = ? WHERE id = ?`,
+    [visibility, Date.now(), id],
+  );
+  return { id, visibility };
+}
+
+/** Persist GCS's committed offset so a crash resumes rather than restarts. */
+async function recordProgress(
+  db: FilesDb,
+  objectKey: string,
+  bytesUploaded: number,
+): Promise<void> {
+  await db.run(
+    `UPDATE app_files SET bytes_uploaded = ?, updated_at = ? WHERE object_key = ?`,
+    [bytesUploaded, Date.now(), objectKey],
+  );
 }
 
 /**
@@ -74,7 +335,7 @@ export async function addFile(
 ): Promise<AddFileResult> {
   const info = await stat(args.filePath);
   const sizeBytes = info.size;
-  const sha256 = await hashFile(args.filePath);
+  const sha256 = await hashFileCached(db, args.filePath, info);
   const fileName = args.fileName ?? basename(args.filePath);
   const scope = args.scope ?? "app";
 
@@ -121,6 +382,17 @@ export async function addFile(
     throw new Error("Server returned no upload URL for a new object");
   }
 
+  // Persist the session URI *before* sending a byte. If the process dies
+  // mid-upload, this row is the only thing that makes the difference between
+  // resuming at 9 GB and re-sending 10.
+  await db.run(
+    `UPDATE app_files
+        SET upload_session_uri = ?, session_expires_at = ?, bytes_uploaded = 0,
+            updated_at = ?
+      WHERE object_key = ?`,
+    [ticket.upload_url, now + SESSION_TTL_MS, now, ticket.object_key],
+  );
+
   try {
     await uploadResumable({
       sessionUrl: ticket.upload_url,
@@ -128,8 +400,12 @@ export async function addFile(
       totalBytes: sizeBytes,
       onProgress: args.onProgress,
       signal: args.signal,
+      onOffsetCommitted: (offset) =>
+        recordProgress(db, ticket.object_key, offset),
     });
   } catch (err) {
+    // 'failed' is a resumable state, not a dead end: the session URI stays on
+    // the row so resumeUpload() can pick it up for the next 7 days.
     await markState(db, ticket.object_key, "failed");
     throw err;
   }
@@ -156,6 +432,18 @@ async function markState(
   objectKey: string,
   state: AppFileRow["upload_state"],
 ): Promise<void> {
+  // Drop the session URI once verified: it is spent, and leaving it on the row
+  // invites a pointless resume attempt against a finished object.
+  if (state === "verified") {
+    await db.run(
+      `UPDATE app_files
+          SET upload_state = ?, upload_session_uri = NULL,
+              session_expires_at = NULL, updated_at = ?
+        WHERE object_key = ?`,
+      [state, Date.now(), objectKey],
+    );
+    return;
+  }
   await db.run(
     `UPDATE app_files SET upload_state = ?, updated_at = ? WHERE object_key = ?`,
     [state, Date.now(), objectKey],

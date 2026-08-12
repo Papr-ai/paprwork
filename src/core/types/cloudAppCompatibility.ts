@@ -8,7 +8,8 @@ export type CloudCompatibilityCategory =
   | "job-create"
   | "job-trigger"
   | "absolute-path"
-  | "cloud-db";
+  | "cloud-db"
+  | "cloud-files";
 
 export interface CloudCompatibilityFinding {
   category: CloudCompatibilityCategory;

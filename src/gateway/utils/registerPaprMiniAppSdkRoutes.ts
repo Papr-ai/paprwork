@@ -49,4 +49,9 @@ export function registerPaprMiniAppSdkRoutes(app: Express): void {
   app.get("/__papr__/papr-agent-chat.js", (req, res) =>
     serveSdkFile("papr-agent-chat.ts", req, res),
   );
+  // Served from the same place in both runtimes, so `papr.files.*` is one
+  // import that behaves identically on desktop and apps.papr.ai.
+  app.get("/__papr__/papr-files.js", (req, res) =>
+    serveSdkFile("papr-files.ts", req, res),
+  );
 }
