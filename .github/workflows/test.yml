@@ -29,8 +29,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Rebuild native modules for Electron
-        run: npx @electron/rebuild -f -w better-sqlite3
+      # The test tier runs under plain Node, not Electron. Rebuilding
+      # better-sqlite3 for Electron's ABI here made it unloadable in vitest
+      # ("Module did not self-register" / ERR_DLOPEN_FAILED), which failed every
+      # jobs-e2e test. That was invisible until now because the run aborted
+      # before jobs-e2e was reached. Build against the Node that runs the tests.
+      - name: Rebuild native modules for Node
+        run: npm rebuild better-sqlite3
 
       - name: Run CI sequential tier
         run: npm run test:sequential -- --tier=ci
