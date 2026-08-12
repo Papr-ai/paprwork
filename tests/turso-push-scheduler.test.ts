@@ -360,7 +360,13 @@ describe("tursoPushScheduler permanent skip integration", () => {
       expect(state.jobs[dbId]?.dirtyFlag).toBe(true);
       expect(isJobDbDirty(dbId, dbPath, state)).toBe(true);
 
-      vi.doMock("../src/core/utils/paprRoot.js", () => ({
+      // Spread the real module rather than listing exports by hand. The
+      // hand-written version omitted getPaprDataDir, so anything reaching it
+      // failed with "No export is defined on the mock" — a confusing error that
+      // points at the mock instead of the missing name. Only the roots need
+      // redirecting; everything else derives from them.
+      vi.doMock("../src/core/utils/paprRoot.js", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../src/core/utils/paprRoot.js")>()),
         getPaprRoot: () => tmpPapr,
         getPaprAppsRoot: () => path.join(tmpPapr, "apps"),
       }));

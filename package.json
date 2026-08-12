@@ -42,7 +42,7 @@
     "check:loc": "tsx scripts/check-max-lines.ts",
     "docs:update-papr-paths": "node scripts/update-docs-papr-paths.mjs",
     "check": "npm run type-check && npm run format:check && npm run lint && npm run check:loc",
-    "test": "vitest run --project unit-backend --project unit-ui --project integration --reporter=verbose",
+    "test": "vitest run --project unit-backend --project unit-ui --project integration --reporter=dot --silent",
     "test:stack": "node scripts/test-stack.mjs",
     "test:stack:smoke": "node scripts/test-stack.mjs smoke",
     "test:stack:smoke:full": "node scripts/test-stack.mjs smoke --full",

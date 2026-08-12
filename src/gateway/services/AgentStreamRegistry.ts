@@ -268,6 +268,7 @@ export class AgentStreamRegistry {
       ws,
     } = params;
 
+    let previousStreamStopped: Promise<void> = Promise.resolve();
     const existingRequestId = this.requestIdByChatId.get(chatId);
     if (existingRequestId) {
       const existing = this.streamsByRequestId.get(existingRequestId);
@@ -275,8 +276,10 @@ export class AgentStreamRegistry {
         console.warn(
           `[AgentStreamRegistry] Chat ${chatId} already streaming (${existingRequestId}), cancelling before new stream`,
         );
-        void import("./AgentService.js").then(({ getAgentService }) =>
-          getAgentService().stopStreaming(chatId),
+        // Abort the old controller before the replacement registers its own.
+        // Otherwise a delayed dynamic import can accidentally abort the new stream.
+        previousStreamStopped = import("./AgentService.js").then(
+          ({ getAgentService }) => getAgentService().stopStreaming(chatId),
         );
         this.cancelStream(chatId, STREAM_REPLACED_REASON);
       }
@@ -296,7 +299,23 @@ export class AgentStreamRegistry {
     this.streamsByRequestId.set(requestId, entry);
     this.requestIdByChatId.set(chatId, requestId);
 
-    void this.runStream(entry, userMessage, config, focusContext, attachments);
+    void previousStreamStopped
+      .then(() =>
+        this.runStream(entry, userMessage, config, focusContext, attachments),
+      )
+      .catch((error) => {
+        console.error(
+          `[AgentStreamRegistry] Failed to stop previous stream for ${chatId}:`,
+          error,
+        );
+        return this.runStream(
+          entry,
+          userMessage,
+          config,
+          focusContext,
+          attachments,
+        );
+      });
   }
 
   private async runStream(

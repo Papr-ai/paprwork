@@ -425,17 +425,25 @@ export class AgentService {
     const skipConcurrencyGate =
       options?._isContextCompressRetry === true ||
       options?._isSilentRetry === true;
-    let concurrencyAcquired = false;
+    let concurrencyLease:
+      | import("./agent/agentStreamConcurrency.js").AgentStreamConcurrencyLease
+      | undefined;
+
+    // Register ownership before waiting so stop/replacement can abort a queued stream.
+    this.sessionManager.setAbortController(chatId, abortController);
+    this.sessionManager.setStreaming(chatId, true);
+
     if (!skipConcurrencyGate) {
       const { getAgentStreamConcurrencyGate } = await import(
         "./agent/agentStreamConcurrency.js"
       );
       try {
-        await getAgentStreamConcurrencyGate().acquire(
+        const priority = chatId.startsWith("job:") ? "background" : "foreground";
+        concurrencyLease = await getAgentStreamConcurrencyGate().acquire(
           chatId,
           abortController.signal,
+          priority,
         );
-        concurrencyAcquired = true;
       } catch (concurrencyError) {
         const message =
           concurrencyError instanceof Error
@@ -444,6 +452,7 @@ export class AgentService {
         console.warn(
           `[AgentService] Concurrency gate rejected stream for ${chatId}: ${message}`,
         );
+        this.sessionManager.clearStreamingStateIfOwner(chatId, abortController);
         yield {
           type: "error",
           chatId,
@@ -456,9 +465,6 @@ export class AgentService {
         return;
       }
     }
-
-    this.sessionManager.setAbortController(chatId, abortController);
-    this.sessionManager.setStreaming(chatId, true);
     clearInFlightToolResults(chatId);
 
     // Track response state for error recovery
@@ -2215,11 +2221,11 @@ export class AgentService {
       }
       await persistIncompleteAssistant({ asAbort: true });
 
-      if (concurrencyAcquired) {
+      if (concurrencyLease) {
         const { getAgentStreamConcurrencyGate } = await import(
           "./agent/agentStreamConcurrency.js"
         );
-        getAgentStreamConcurrencyGate().release(chatId);
+        getAgentStreamConcurrencyGate().release(concurrencyLease);
       }
 
       // Only clear session state if this stream still owns the abort controller.
