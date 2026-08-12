@@ -35,7 +35,7 @@ import {
 } from "./cloudSync/gitRemoteReconcile.js";
 import { GitRunner, probeGitInstalled } from "./cloudSync/gitRunner.js";
 import {
-  formatGitSyncSizeLimitMb,
+  describeOversizedSkip,
   isTooLargeForGitSync,
 } from "./cloudSync/gitSyncLimits.js";
 import { cloudApiFetch, waitForPaprApiKey } from "../utils/cloudApiClient.js";
@@ -1631,10 +1631,7 @@ export class CloudSyncService {
       return;
     }
 
-    const limit = formatGitSyncSizeLimitMb();
-    console.warn(
-      `[CloudSync] Skipping ${oversized.length} file(s) over ${limit} (use Papr Memory for large docs): ${oversized.slice(0, 5).join(", ")}${oversized.length > 5 ? "…" : ""}`,
-    );
+    console.warn(`[CloudSync] ${describeOversizedSkip(oversized)}`);
     await this.git(["reset", "HEAD", "--", ...oversized]);
   }
 
