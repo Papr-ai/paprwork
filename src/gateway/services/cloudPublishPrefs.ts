@@ -12,6 +12,7 @@ import type {
   CloudExternalLink,
   CloudLoginAccess,
 } from "./cloudSharingSettings.js";
+import { readDerivedFromFile } from "./cloudSync/jsonFileCache.js";
 
 export type CloudAccessMode =
   | "private"
@@ -84,17 +85,32 @@ export function saveCloudPublishPrefs(
   fs.writeFileSync(filePath, JSON.stringify(prefs, null, 2), "utf8");
 }
 
+/**
+ * Read-only prefs lookup used on sync hot paths (once per app per queue scan).
+ * Writers keep using loadCloudPublishPrefs so mutations always see fresh state.
+ */
 export function getAppPublishPrefs(
   appId: string,
   paprDir?: string,
 ): CloudPublishAppPrefs {
-  const prefs = loadCloudPublishPrefs(paprDir);
-  return (
-    prefs.apps[appId] ?? {
-      autoPublish: true,
-      accessMode: "private",
-    }
+  const prefs = readDerivedFromFile<CloudPublishPrefsFile>(
+    prefsPath(paprDir),
+    "cloudPublishPrefs",
+    (raw) => {
+      const parsed = JSON.parse(raw) as CloudPublishPrefsFile;
+      return parsed.apps && typeof parsed.apps === "object"
+        ? parsed
+        : { apps: {} };
+    },
+    { apps: {} },
   );
+  const entry = prefs.apps[appId];
+  return entry
+    ? { ...entry }
+    : {
+        autoPublish: true,
+        accessMode: "private",
+      };
 }
 
 export function setAppPublishPrefs(

@@ -2,10 +2,10 @@
  * Resolve job folders that belong to a mini-app for cloud sync.
  */
 
-import * as fs from "fs";
 import * as path from "path";
 import { parseDataSourcesFile } from "../appDataSources.js";
 import { jobBelongsToApp, STANDALONE_APP_ID } from "../jobs/appIds.js";
+import { readDerivedFromFile } from "./jsonFileCache.js";
 
 interface JobIndexEntry {
   id: string;
@@ -20,66 +20,74 @@ interface JobJsonEntry {
   runtimeCalls?: string[];
 }
 
-function readJobsIndex(paprDir: string): JobIndexEntry[] {
-  try {
-    const raw = fs.readFileSync(path.join(paprDir, "data", "jobs.json"), "utf8");
-    const parsed = JSON.parse(raw) as { jobs?: JobIndexEntry[] } | JobIndexEntry[];
-    return Array.isArray(parsed) ? parsed : parsed.jobs ?? [];
-  } catch {
-    return [];
-  }
+const NO_JOB_IDS: readonly string[] = Object.freeze([]);
+const NO_JOBS_INDEX: readonly JobIndexEntry[] = Object.freeze([]);
+
+function readJobsIndex(paprDir: string): readonly JobIndexEntry[] {
+  return readDerivedFromFile(
+    path.join(paprDir, "data", "jobs.json"),
+    "jobsIndex",
+    (raw) => {
+      const parsed = JSON.parse(raw) as { jobs?: JobIndexEntry[] } | JobIndexEntry[];
+      return Object.freeze(Array.isArray(parsed) ? parsed : parsed.jobs ?? []);
+    },
+    NO_JOBS_INDEX,
+  );
 }
 
 function readJobJson(paprDir: string, jobId: string): JobJsonEntry | null {
-  const jobJsonPath = path.join(paprDir, "Jobs", jobId, "job.json");
-  try {
-    return JSON.parse(fs.readFileSync(jobJsonPath, "utf8")) as JobJsonEntry;
-  } catch {
-    return null;
-  }
+  return readDerivedFromFile<JobJsonEntry | null>(
+    path.join(paprDir, "Jobs", jobId, "job.json"),
+    "jobJson",
+    (raw) => JSON.parse(raw) as JobJsonEntry,
+    null,
+  );
 }
 
 function readAgentChatJobId(paprDir: string, appId: string): string | null {
-  const metadataPath = path.join(paprDir, "apps", appId, "metadata.json");
-  try {
-    const raw = fs.readFileSync(metadataPath, "utf8");
-    const parsed = JSON.parse(raw) as { agentChatJobId?: string };
-    const jobId = parsed.agentChatJobId?.trim();
-    return jobId && jobId.length > 0 ? jobId : null;
-  } catch {
-    return null;
-  }
+  return readDerivedFromFile<string | null>(
+    path.join(paprDir, "apps", appId, "metadata.json"),
+    "agentChatJobId",
+    (raw) => {
+      const parsed = JSON.parse(raw) as { agentChatJobId?: string };
+      const jobId = parsed.agentChatJobId?.trim();
+      return jobId && jobId.length > 0 ? jobId : null;
+    },
+    null,
+  );
 }
 
-function readDataSourceJobIds(paprDir: string, appId: string): string[] {
-  const dataSourcesPath = path.join(paprDir, "apps", appId, "data-sources.json");
-  try {
-    const raw = fs.readFileSync(dataSourcesPath, "utf8");
-    const config = parseDataSourcesFile(raw);
-    return config.sources
-      .map((source) => source.jobId)
-      .filter((id): id is string => typeof id === "string" && id.length > 0);
-  } catch {
-    return [];
-  }
+function readDataSourceJobIds(paprDir: string, appId: string): readonly string[] {
+  return readDerivedFromFile<readonly string[]>(
+    path.join(paprDir, "apps", appId, "data-sources.json"),
+    "dataSourceJobIds",
+    (raw) =>
+      Object.freeze(
+        parseDataSourcesFile(raw)
+          .sources.map((source) => source.jobId)
+          .filter((id): id is string => typeof id === "string" && id.length > 0),
+      ),
+    NO_JOB_IDS,
+  );
 }
 
 /** Registry dbIds linked in app data-sources (require databases.json on web). */
 export function readDataSourceRegistryDbIds(paprDir: string, appId: string): string[] {
-  const dataSourcesPath = path.join(paprDir, "apps", appId, "data-sources.json");
-  try {
-    const raw = fs.readFileSync(dataSourcesPath, "utf8");
-    const config = parseDataSourcesFile(raw);
-    const dbIds = new Set<string>();
-    for (const source of config.sources) {
-      if (source.dbId?.trim()) {
-        dbIds.add(source.dbId.trim());
+  const cached = readDerivedFromFile<readonly string[]>(
+    path.join(paprDir, "apps", appId, "data-sources.json"),
+    "dataSourceRegistryDbIds",
+    (raw) => {
+      const dbIds = new Set<string>();
+      for (const source of parseDataSourcesFile(raw).sources) {
+        if (source.dbId?.trim()) {
+          dbIds.add(source.dbId.trim());
+        }
       }
-    }
-    return [...dbIds].sort();
-  } catch {
-    return [];
-  }
+      return Object.freeze([...dbIds].sort());
+    },
+    NO_JOB_IDS,
+  );
+  return [...cached];
 }
 
 /** Git-relative paths to upload so apps.papr.ai can serve this app. */
