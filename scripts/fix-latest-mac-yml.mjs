@@ -10,11 +10,16 @@
  */
 
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, statSync, renameSync } from "node:fs";
 import { join } from "node:path";
 
 const artifactsDir = process.argv[2] ?? "artifacts";
 const ymlPath = join(artifactsDir, "latest-mac.yml");
+
+/** GitHub Releases CDN uses dots instead of spaces in download URLs (Papr Work → Papr.Work). */
+function toReleaseAssetName(localName) {
+  return localName.replace(/^Papr Work/, "Papr.Work");
+}
 
 function sha512Base64(filePath) {
   const hash = createHash("sha512");
@@ -67,10 +72,16 @@ if (zips.length === 0) {
 const version = parseVersionFromZip(zips[0]);
 const files = zips.map((name) => {
   const fullPath = join(artifactsDir, name);
+  const releaseName = toReleaseAssetName(name);
+  if (releaseName !== name) {
+    const releasePath = join(artifactsDir, releaseName);
+    renameSync(fullPath, releasePath);
+  }
+  const assetPath = join(artifactsDir, releaseName);
   return {
-    url: name,
-    sha512: sha512Base64(fullPath),
-    size: statSync(fullPath).size,
+    url: releaseName,
+    sha512: sha512Base64(assetPath),
+    size: statSync(assetPath).size,
   };
 });
 
