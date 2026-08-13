@@ -11,6 +11,8 @@ import { ContentArea } from "./components/Layout/ContentArea";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
 import { AuthWall } from "./components/Auth/AuthWall";
 import { KeyPermissionModal } from "./components/Permissions/KeyPermissionModal";
+import { PlatformConnectModal } from "./components/Platforms/PlatformConnectModal";
+import { initPlatformConnectListener } from "./components/Platforms/platformConnectStore";
 import { useChat } from "./hooks/useChat";
 import { useTabs } from "./hooks/useTabs";
 import { useTabStore } from "./stores/tabStore";
@@ -402,6 +404,7 @@ export function App() {
     initPaprQuotaListener();
     initJobLiveLogsListener();
     initSubagentJobStore();
+    initPlatformConnectListener();
   }, []);
 
   // Mini-apps: window.paprAPI.invoke('chat.open', ...) → main → preload → papr-chat-open
@@ -502,6 +505,7 @@ export function App() {
       {activeRequest && !claimedByChat && (
         <KeyPermissionModal request={activeRequest} onResponse={respond} />
       )}
+      <PlatformConnectModal />
       <CommandPalette
         isOpen={commandPaletteOpen}
         onClose={() => setCommandPaletteOpen(false)}

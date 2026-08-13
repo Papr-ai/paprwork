@@ -1215,7 +1215,7 @@ export class CloudAppHostService {
   private async handleJobStatus(req: Request, res: Response): Promise<void> {
     try {
       const jobId = req.params.jobId;
-      if (!jobId) {
+      if (!jobId || typeof jobId !== "string" || !jobId.trim()) {
         res.status(400).json({ error: "jobId is required" });
         return;
       }

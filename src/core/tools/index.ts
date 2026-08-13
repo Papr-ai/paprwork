@@ -22,6 +22,7 @@ import { recipeTools } from "./recipes.js";
 import { keyManagementTools } from "./keyManagement.js";
 import { chatHistoryTools } from "./chatHistory.js";
 import { connectorsTools } from "./connectors.js";
+import { connectPlatformTool } from "./platformConnect.js";
 import { codeIndexTools } from "./codeIndex.js";
 import { cloudPublishTools } from "./cloudPublish.js";
 import { cloudInstallTools } from "./cloudInstall.js";
@@ -69,6 +70,7 @@ export const allTools = [
   ...recipeTools,
   ...chatHistoryTools,
   ...connectorsTools,
+  connectPlatformTool,
   ...codeIndexTools,
   ...cloudPublishTools,
   ...cloudInstallTools,
@@ -100,7 +102,7 @@ export const toolsByCategory = {
   keyManagement: keyManagementTools,
   recipes: recipeTools,
   chatHistory: chatHistoryTools,
-  connectors: connectorsTools,
+  connectors: [...connectorsTools, connectPlatformTool],
   codeIndex: codeIndexTools,
   cloudPublish: cloudPublishTools,
   cloudInstall: cloudInstallTools,
@@ -235,6 +237,7 @@ export { planningTools, createPlanTool, updatePlanTool, deletePlanTool } from ".
 export { writeRecipeTool, readRecipeTool, evaluateRunTool, listEvaluationsTool } from "./recipes.js";
 export { chatHistoryTools, getFullToolResultTool } from "./chatHistory.js";
 export { connectorsTools, provisionServiceTool } from "./connectors.js";
+export { connectPlatformTool } from "./platformConnect.js";
 export {
   codeIndexTools,
   getProjectCodeOverviewTool,

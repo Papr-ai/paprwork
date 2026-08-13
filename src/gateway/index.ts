@@ -2768,6 +2768,10 @@ async function startGateway(): Promise<void> {
     
     if (!isCloudAgentGatewayMode()) {
       getJobsScheduler().start();
+      
+      // Start session keeper for Connected Platforms
+      const { getSessionKeeperService } = await import("./services/platforms/SessionKeeperService.js");
+      getSessionKeeperService().start();
     }
     
     // Start code indexing after a delay (non-blocking)

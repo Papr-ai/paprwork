@@ -1,0 +1,221 @@
+/**
+ * ConnectedPlatformsTab Styles
+ */
+
+.connected-platforms-tab {
+  padding: 0;
+}
+
+.connected-platforms-header {
+  margin-bottom: 24px;
+}
+
+.connected-platforms-header h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 8px 0;
+  color: var(--color-text-primary);
+}
+
+.connected-platforms-description {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.connected-platforms-loading {
+  padding: 40px;
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+.connected-platforms-error {
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  background: var(--color-error-bg, rgba(239, 68, 68, 0.1));
+  border: 1px solid var(--color-error, #ef4444);
+  border-radius: 8px;
+  color: var(--color-error, #ef4444);
+  font-size: 14px;
+}
+
+.connected-platforms-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.connected-platform-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  transition: border-color 0.15s ease;
+}
+
+.connected-platform-card:hover {
+  border-color: var(--color-border-hover, var(--color-border));
+}
+
+.connected-platform-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.connected-platform-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.connected-platform-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.connected-platform-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.connected-platform-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.connected-platform-details {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-text-tertiary);
+}
+
+.connected-platform-detail-separator {
+  color: var(--color-text-tertiary);
+  opacity: 0.5;
+}
+
+.connected-platform-error-text {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--color-error, #ef4444);
+}
+
+.connected-platform-notes {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--color-text-tertiary);
+  font-style: italic;
+}
+
+.connected-platform-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 16px;
+}
+
+.connected-platform-btn {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.connected-platform-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.connected-platform-btn-primary {
+  background: var(--color-primary, #3b82f6);
+  color: white;
+}
+
+.connected-platform-btn-primary:hover:not(:disabled) {
+  background: var(--color-primary-hover, #2563eb);
+}
+
+.connected-platform-btn-secondary {
+  background: var(--color-bg-tertiary, rgba(0, 0, 0, 0.05));
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border);
+}
+
+.connected-platform-btn-secondary:hover:not(:disabled) {
+  background: var(--color-bg-hover, rgba(0, 0, 0, 0.08));
+}
+
+.connected-platform-btn-danger {
+  background: transparent;
+  color: var(--color-error, #ef4444);
+  border: 1px solid var(--color-error, #ef4444);
+}
+
+.connected-platform-btn-danger:hover:not(:disabled) {
+  background: var(--color-error-bg, rgba(239, 68, 68, 0.1));
+}
+
+/* Footer / How it works */
+.connected-platforms-footer {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid var(--color-border);
+}
+
+.connected-platforms-footer h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 12px 0;
+  color: var(--color-text-primary);
+}
+
+.connected-platforms-steps {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.8;
+}
+
+.connected-platforms-steps code {
+  background: var(--color-bg-tertiary, rgba(0, 0, 0, 0.05));
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+
+/* Dark mode adjustments */
+@media (prefers-color-scheme: dark) {
+  .connected-platform-card {
+    background: var(--color-bg-secondary, rgba(255, 255, 255, 0.05));
+  }
+
+  .connected-platform-btn-secondary {
+    background: var(--color-bg-tertiary, rgba(255, 255, 255, 0.08));
+  }
+
+  .connected-platform-btn-secondary:hover:not(:disabled) {
+    background: var(--color-bg-hover, rgba(255, 255, 255, 0.12));
+  }
+
+  .connected-platforms-steps code {
+    background: var(--color-bg-tertiary, rgba(255, 255, 255, 0.08));
+  }
+}

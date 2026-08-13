@@ -708,13 +708,21 @@ export class CustomKeysStorage {
     };
 
     if (target.scope === "org" && target.organizationId !== this.activeOrganizationId) {
-      await fs.mkdir(path.dirname(this.orgKeysFile(target.organizationId!)), {
-        recursive: true,
-      });
-      const orgKeys = await this.loadOrgKeysForOrganization(target.organizationId!);
-      orgKeys.set(id, key);
-      dedupeCustomKeysByName(orgKeys);
-      await this.persistOrgKeysForOrganization(target.organizationId!, orgKeys);
+      // Special case: if storing to _shared org vault (but not active org),
+      // also update this.sharedKeys so findKeyByName can find it
+      if (target.organizationId === CustomKeysStorage.SHARED_ORG_ID) {
+        this.sharedKeys.set(id, key);
+        dedupeCustomKeysByName(this.sharedKeys);
+        await this.saveSharedKeys();
+      } else {
+        await fs.mkdir(path.dirname(this.orgKeysFile(target.organizationId!)), {
+          recursive: true,
+        });
+        const orgKeys = await this.loadOrgKeysForOrganization(target.organizationId!);
+        orgKeys.set(id, key);
+        dedupeCustomKeysByName(orgKeys);
+        await this.persistOrgKeysForOrganization(target.organizationId!, orgKeys);
+      }
     } else {
       const targetMap = this.getTargetMap(target.scope, target.organizationId);
       targetMap.set(id, key);

@@ -1,6 +1,6 @@
 {
   "name": "paprwork",
-  "version": "2.2.8",
+  "version": "2.2.9",
   "description": "AI-powered desktop assistant - Rebuilt with TypeScript and Mastra",
   "main": "./src/electron/main.cjs",
   "type": "module",
@@ -60,6 +60,7 @@
     "test:llm-streaming": "tsx tests/llm-streaming.test.ts",
     "test:jobs-e2e": "node scripts/test-jobs-e2e.mjs",
     "test:jobs-advanced": "node scripts/test-jobs-advanced.mjs",
+    "test:platform-connect": "node scripts/test-platform-connect-e2e.mjs",
     "test:independent-databases": "vitest run tests/independent-databases.test.ts tests/database-promotion.test.ts tests/app-backend-database.test.ts tests/job-events-sse-filter.test.ts tests/cloud-papr-path.test.ts --project unit-backend",
     "test:independent-databases-e2e": "node --import tsx scripts/test-independent-databases-e2e.mjs",
     "migrate:databases-registry": "node --import tsx scripts/migrate-databases-registry.mjs",

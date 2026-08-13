@@ -60,6 +60,7 @@ export type SettingsTab =
   | "keys"
   | "cloud"
   | "databases"
+  | "platforms"
   | "profile"
   | "permissions"
   | "privacy"

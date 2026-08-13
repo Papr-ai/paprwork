@@ -13,6 +13,7 @@ import { AIModelsTab } from "./AIModelsTab";
 import { IntegrationKeysTab } from "./IntegrationKeysTab";
 import { CloudSyncTab } from "./CloudSyncTab";
 import { DatabasesTab } from "./DatabasesTab";
+import { ConnectedPlatformsTab } from "./ConnectedPlatformsTab";
 import { WorkspaceMigrationTab } from "./WorkspaceMigrationTab";
 import { PaprLoginSection } from "./PaprLoginSection";
 import { resizeProfilePhoto } from "../../utils/profilePhoto";
@@ -79,6 +80,17 @@ const SETTINGS_NAV: SettingsNavItem[] = [
         <ellipse cx="12" cy="5" rx="9" ry="3" />
         <path d="M3 5v6c0 1.66 4 3 9 3s9-1.34 9-3V5" />
         <path d="M3 11v6c0 1.66 4 3 9 3s9-1.34 9-3v-6" />
+      </svg>
+    ),
+  },
+  {
+    id: "platforms",
+    label: "Social Login",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z" />
+        <rect width="4" height="12" x="2" y="9" />
+        <circle cx="4" cy="4" r="2" />
       </svg>
     ),
   },
@@ -186,6 +198,7 @@ export function SettingsView() {
           {activeTab === "keys" && <IntegrationKeysTab />}
           {activeTab === "cloud" && <CloudSyncTab />}
           {activeTab === "databases" && <DatabasesTab />}
+          {activeTab === "platforms" && <ConnectedPlatformsTab />}
           {activeTab === "migration" && <WorkspaceMigrationTab />}
           {activeTab === "profile" && <ProfileTab />}
           {activeTab === "permissions" && <PermissionsTab />}
@@ -996,6 +1009,44 @@ function AboutTab() {
             </button>
           </div>
         </div>
+
+        {currentVersion === "2.2.9" && (
+          <div className="about-card">
+            <h3>What's New in v2.2.9</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Connected Platforms</strong>
+                <p>
+                  New Social Login settings tab — connect LinkedIn, Instagram,
+                  Reddit, Facebook, TikTok, and X with one click. Sessions stay
+                  fresh in the background for job automation.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Cloud Job Status</strong>
+                <p>
+                  Faster job polling on cloud mini-apps — single-job status
+                  lookup instead of loading the full jobs list.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Sync Performance</strong>
+                <p>
+                  Auto-upload checks no longer block the gateway during cloud
+                  sync, keeping chat and tools responsive.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.2.9"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
 
         {currentVersion === "2.2.8" && (
           <div className="about-card">

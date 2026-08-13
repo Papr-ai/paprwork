@@ -1,0 +1,258 @@
+/**
+ * Platform Connect Modal Styles
+ *
+ * Branded modal for platform connection requests from the agent.
+ * Uses Papr brand colors and liquid glass aesthetic.
+ */
+
+.platform-connect-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.platform-connect-modal {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.95) 0%,
+    rgba(248, 250, 252, 0.98) 100%
+  );
+  border-radius: 24px;
+  padding: 32px;
+  width: 400px;
+  max-width: 90vw;
+  box-shadow:
+    0 25px 50px -12px rgba(0, 0, 0, 0.25),
+    0 0 0 1px rgba(255, 255, 255, 0.1);
+  animation: slideUp 0.3s ease-out;
+  text-align: center;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .platform-connect-modal {
+    background: linear-gradient(
+      135deg,
+      rgba(30, 30, 35, 0.98) 0%,
+      rgba(25, 25, 30, 0.99) 100%
+    );
+    box-shadow:
+      0 25px 50px -12px rgba(0, 0, 0, 0.5),
+      0 0 0 1px rgba(255, 255, 255, 0.1);
+  }
+}
+
+/* Platform icon */
+.platform-icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 20px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+}
+
+.platform-icon svg {
+  color: white;
+  width: 32px;
+  height: 32px;
+}
+
+/* Content */
+.platform-title {
+  font-size: 24px;
+  font-weight: 600;
+  margin: 0 0 8px;
+  color: #1a1a2e;
+}
+
+@media (prefers-color-scheme: dark) {
+  .platform-title {
+    color: #f0f0f5;
+  }
+}
+
+.platform-description {
+  font-size: 15px;
+  color: #64748b;
+  margin: 0 0 20px;
+  line-height: 1.5;
+}
+
+@media (prefers-color-scheme: dark) {
+  .platform-description {
+    color: #94a3b8;
+  }
+}
+
+/* Reason from agent */
+.platform-reason {
+  background: rgba(99, 102, 241, 0.08);
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin-bottom: 24px;
+  text-align: left;
+}
+
+@media (prefers-color-scheme: dark) {
+  .platform-reason {
+    background: rgba(99, 102, 241, 0.15);
+  }
+}
+
+.reason-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6366f1;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.reason-text {
+  font-size: 14px;
+  color: #475569;
+  line-height: 1.4;
+}
+
+@media (prefers-color-scheme: dark) {
+  .reason-text {
+    color: #cbd5e1;
+  }
+}
+
+/* Error state */
+.platform-error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  color: #dc2626;
+}
+
+@media (prefers-color-scheme: dark) {
+  .platform-error {
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+  }
+}
+
+/* Actions */
+.platform-connect-actions {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.platform-connect-actions .btn {
+  flex: 1;
+  padding: 14px 20px;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: none;
+}
+
+.platform-connect-actions .btn-secondary {
+  background: rgba(0, 0, 0, 0.05);
+  color: #64748b;
+}
+
+.platform-connect-actions .btn-secondary:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  .platform-connect-actions .btn-secondary {
+    background: rgba(255, 255, 255, 0.08);
+    color: #94a3b8;
+  }
+
+  .platform-connect-actions .btn-secondary:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.12);
+  }
+}
+
+.platform-connect-actions .btn-connect {
+  color: white;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.platform-connect-actions .btn-connect:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+}
+
+.platform-connect-actions .btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Connecting spinner */
+.connecting-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Footer */
+.platform-connect-footer {
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.5;
+  margin: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .platform-connect-footer {
+    color: #64748b;
+  }
+}
