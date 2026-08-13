@@ -25,6 +25,11 @@ async function setupService(): Promise<JobsService> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "papr-jobs-test-"));
   tmpRoots.push(root);
   process.env.HOME = root;
+  // HOME alone is not enough: getPaprRoot() prefers ~/Papr/.active-workspace.json
+  // (read from the REAL home) and re-syncs PAPR_HOME from it. Without this the
+  // suite created hundreds of job folders in the developer's live workspace.
+  process.env.PAPR_HOME = path.join(root, "Papr");
+  await fs.mkdir(process.env.PAPR_HOME, { recursive: true });
   resetAppServiceSingletonForTests();
   resetJobsServiceSingletonForTests();
   const service = new JobsService();

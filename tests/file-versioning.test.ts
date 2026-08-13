@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 /**
  * Test file versioning for mini-apps and jobs.
@@ -10,20 +11,10 @@ import os from "os";
  * We test the AppService and JobsService version methods directly.
  */
 
-let tmpDir: string;
-let origHome: string;
-
-beforeEach(async () => {
-  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "papr-version-test-"));
-  origHome = os.homedir;
-  // Override homedir to use our temp directory
-  (os as { homedir: () => string }).homedir = () => tmpDir;
-});
-
-afterEach(async () => {
-  (os as { homedir: () => string }).homedir = () => origHome;
-  await fs.rm(tmpDir, { recursive: true, force: true });
-});
+// Patching os.homedir alone leaked ~300 fixture apps into the real workspace
+// on 2026-08-12 — getPaprRoot() prefers ~/Papr/.active-workspace.json and
+// re-syncs PAPR_HOME from it. useIsolatedPaprWorkspace neutralises all paths.
+const workspace = useIsolatedPaprWorkspace("papr-version-test");
 
 describe("AppService file versioning", () => {
   it("should save a version before overwriting a file", async () => {
@@ -203,7 +194,7 @@ describe("Job file versioning (saveJobFileVersion helper)", () => {
     // Test the saveJobFileVersion helper from appJobs.ts directly
     // by creating the version structure manually (same format the helper uses)
     const jobId = "test-job-123";
-    const jobDir = path.join(tmpDir, "Papr", "jobs", jobId);
+    const jobDir = path.join(workspace.paprHome, "jobs", jobId);
     await fs.mkdir(jobDir, { recursive: true });
 
     const scriptPath = path.join(jobDir, "script.py");

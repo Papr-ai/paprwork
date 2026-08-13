@@ -6,6 +6,7 @@
  * Cloud agent gateway: per-run clone mounted at PAPR_HOME
  */
 
+import fs from "fs";
 import os from "os";
 import path from "path";
 import {
@@ -30,12 +31,54 @@ export function getPaprRoot(): string {
   // Cloud agent runs use ephemeral PAPR_HOME clones — no desktop pointer file.
   if (isCloudAgentGatewayMode() || !pointer?.paprHome) {
     if (override) {
-      return path.resolve(override);
+      return assertNotLeakingIntoRealWorkspace(path.resolve(override));
     }
-    return getPaprBaseDir();
+    return assertNotLeakingIntoRealWorkspace(getPaprBaseDir());
   }
 
-  return path.resolve(pointer.paprHome);
+  return assertNotLeakingIntoRealWorkspace(path.resolve(pointer.paprHome));
+}
+
+/**
+ * Under vitest, a workspace root outside the OS temp dir means a test is about
+ * to write into the developer's REAL workspace. On 2026-08-12 this silently
+ * created ~305 fixture apps and 462 job folders in a live workspace because
+ * suites patched only `os.homedir`, while getPaprRoot() prefers the
+ * .active-workspace.json pointer read from the real home.
+ *
+ * Fail loudly instead. Tests must use tests/setup/isolatedWorkspace.ts.
+ */
+function assertNotLeakingIntoRealWorkspace(resolvedRoot: string): string {
+  if (!process.env.VITEST && process.env.NODE_ENV !== "test") {
+    return resolvedRoot;
+  }
+  if (process.env.PAPR_ALLOW_REAL_WORKSPACE_IN_TESTS === "1") {
+    return resolvedRoot;
+  }
+
+  const tmpRoot = path.resolve(fs.realpathSync.native(os.tmpdir()));
+  let candidate = path.resolve(resolvedRoot);
+  try {
+    // macOS /var/folders is a symlink to /private/var/folders — compare real paths.
+    candidate = path.resolve(fs.realpathSync.native(candidate));
+  } catch {
+    /* not created yet — compare the literal path */
+  }
+
+  if (candidate === tmpRoot || candidate.startsWith(`${tmpRoot}${path.sep}`)) {
+    return resolvedRoot;
+  }
+
+  throw new Error(
+    `[paprRoot] Refusing to use a real Papr workspace during tests: ${candidate}\n` +
+      `Tests must not write to the developer's live workspace.\n` +
+      `Fix: import { useIsolatedPaprWorkspace } from "../tests/setup/isolatedWorkspace.js" ` +
+      `and call it in your describe block.\n` +
+      `Patching os.homedir alone is NOT enough — getPaprRoot() prefers ` +
+      `~/Papr/.active-workspace.json and re-syncs PAPR_HOME from it.\n` +
+      `Escape hatch (only for tests that intentionally read the real workspace): ` +
+      `PAPR_ALLOW_REAL_WORKSPACE_IN_TESTS=1`,
+  );
 }
 
 export function getPaprJobsRoot(): string {

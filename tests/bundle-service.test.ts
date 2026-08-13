@@ -24,6 +24,11 @@ async function createWorkspace(): Promise<{
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "papr-bundle-test-"));
   tmpRoots.push(root);
   process.env.HOME = root;
+  // HOME alone is not enough: getPaprRoot() prefers ~/Papr/.active-workspace.json
+  // (read from the REAL home) and re-syncs PAPR_HOME from it, so without this
+  // every createApp/createJob below lands in the developer's live workspace.
+  process.env.PAPR_HOME = path.join(root, "Papr");
+  await fs.mkdir(process.env.PAPR_HOME, { recursive: true });
   const appService = new AppService();
   const jobsService = new JobsService();
   await appService.initialize();
