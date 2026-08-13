@@ -33,6 +33,7 @@ import { resolveDbEventTarget } from "../../utils/resolveDbEventTarget.js";
 import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
 import {
   fetchRuntimeDbToken,
+  getRuntimeJobStatus,
   listRuntimeJobs,
   recordRuntimeTursoDbChanged,
   runRuntimeJob,
@@ -237,8 +238,7 @@ export class CloudAppHostService {
           return null;
         }
         try {
-          const { jobs } = await listRuntimeJobs(runtimeAuth);
-          const job = jobs.find((entry) => entry.id === jobId);
+          const job = await getRuntimeJobStatus(runtimeAuth, jobId);
           if (!job) {
             return null;
           }
@@ -247,6 +247,7 @@ export class CloudAppHostService {
             name: job.name,
             status: job.status ?? "unknown",
             completedAt: job.completedAt,
+            lastOutput: job.lastOutput,
           };
         } catch {
           return null;
@@ -1225,8 +1226,7 @@ export class CloudAppHostService {
         return;
       }
 
-      const { jobs } = await listRuntimeJobs(runtimeAuth);
-      const job = jobs.find((entry) => entry.id === jobId);
+      const job = await getRuntimeJobStatus(runtimeAuth, jobId);
       if (!job) {
         res.status(404).json({ error: `Job not found: ${jobId}` });
         return;

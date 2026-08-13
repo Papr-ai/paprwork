@@ -268,6 +268,7 @@ export interface RuntimeJobSummary {
   status?: string;
   lastRunAt?: string;
   completedAt?: string;
+  lastOutput?: string;
 }
 
 /** Run a synced job in cloud sandbox (GKE or process fallback on memory server). */
@@ -323,6 +324,34 @@ export async function listRuntimeJobs(
     );
   }
   return (await res.json()) as { jobs: RuntimeJobSummary[]; count: number };
+}
+
+/** Fetch one job status from the app owner's git-synced workspace. */
+export async function getRuntimeJobStatus(
+  auth: AppRuntimeRouteAuth,
+  jobId: string,
+): Promise<RuntimeJobSummary | null> {
+  const res = await runtimeFetch(
+    `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/job-status`,
+    {
+      method: "POST",
+      headers: runtimeHeaders(auth),
+      body: JSON.stringify({
+        ...runtimeAuthPayload(auth),
+        jobId,
+      }),
+    },
+  );
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(
+      `Runtime job-status failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    );
+  }
+  const payload = (await res.json()) as { job: RuntimeJobSummary };
+  return payload.job;
 }
 
 /** Desktop gateway alive ping — cloud scheduler defers when heartbeat is fresh. */

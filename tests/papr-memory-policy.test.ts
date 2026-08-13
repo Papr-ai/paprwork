@@ -33,13 +33,14 @@ describe("paprMemoryPolicy", () => {
     });
   });
 
-  it("buildCodeIndexAddPolicy uses code domain vector-only (no graph)", () => {
+  it("buildCodeIndexAddPolicy disables graph and holographic transform", () => {
     const policy = buildCodeIndexAddPolicy("schema-abc");
     expect(policy.transform_embedding).toEqual({
-      mode: "auto",
-      domain_id: "code",
+      mode: "none",
     });
-    expect(policy.graph).toBeUndefined();
+    expect(policy.graph).toEqual({
+      mode: "none",
+    });
   });
 
   it("buildSearchPolicy defaults code category searches to code domain", () => {
