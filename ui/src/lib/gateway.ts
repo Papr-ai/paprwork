@@ -296,7 +296,16 @@ class GatewayClient {
         if (response.success) {
           resolve(response);
         } else {
-          const error = new Error(response.error || "Unknown error");
+          // A handler that sets success: false without an error string used to
+          // surface as a bare "Unknown error" with no way to tell which
+          // request failed. Include the message type and any response data.
+          const error = new Error(
+            response.error ||
+              `Request "${type}" failed without an error message` +
+                (response.data
+                  ? ` (data: ${JSON.stringify(response.data).slice(0, 200)})`
+                  : ""),
+          );
           console.error(
             `[Gateway] Request failed - Type: ${type}, Error:`,
             error,

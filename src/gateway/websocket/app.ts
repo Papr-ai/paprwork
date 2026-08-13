@@ -278,11 +278,17 @@ export async function setupAppHandlers(
         const result = await appService.deleteApp(payload.appId, {
           unpublishFromCloud: payload.unpublishFromCloud === true,
         });
+        // requiresUnpublishConfirm is a valid negotiated response, not a
+        // failure. The client transport rejects the promise whenever
+        // success is false (with "Unknown error", since no error string is
+        // set), so marking it false made the Delete button appear to do
+        // nothing and surfaced a bogus retry error. Only a genuinely absent
+        // or failed delete is success: false.
         ws.send(
           JSON.stringify({
             id: message.id,
             type: "app:delete:response",
-            success: result.deleted,
+            success: result.deleted || result.requiresUnpublishConfirm === true,
             data: result,
           }),
         );

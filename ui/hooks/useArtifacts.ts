@@ -208,14 +208,24 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
         const data = response.data as {
           deleted?: boolean;
           requiresUnpublishConfirm?: boolean;
+          shareUrl?: string | null;
         };
+        // Server says the app is live on the web. This is NOT an error — the
+        // caller must re-prompt and retry with unpublishFromCloud: true. The
+        // local publish cache goes stale (deleted/unpublished elsewhere), so
+        // AppsView cannot reliably pre-detect this before calling.
         if (data?.requiresUnpublishConfirm) {
-          throw new Error("Published app requires unpublish confirmation");
+          return {
+            deleted: false,
+            requiresUnpublishConfirm: true,
+            shareUrl: data.shareUrl ?? null,
+          };
         }
         if (data?.deleted === false) {
           throw new Error(`Failed to delete ${type}`);
         }
         removeArtifact(id);
+        return { deleted: true };
       } catch (err) {
         const message =
           err instanceof Error ? err.message : `Failed to delete ${type}`;
