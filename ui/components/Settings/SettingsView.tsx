@@ -1010,6 +1010,51 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.3.0" && (
+          <div className="about-card">
+            <h3>What's New in v2.3.0</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Telegram Connected Platform</strong>
+                <p>
+                  Connect Telegram Web alongside LinkedIn, Instagram, Reddit,
+                  Facebook, TikTok, and X — sessions stay fresh for job
+                  automation.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Playwright Auto-Install</strong>
+                <p>
+                  Browser tools and Social Login now auto-download Chromium on
+                  first use — no manual setup step required.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Published App Delete Fix</strong>
+                <p>
+                  Deleting a published mini-app now unpublishes from cloud first
+                  with clear progress and reliable timeouts.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Cloud Sync Reliability</strong>
+                <p>
+                  Job ownership cache invalidates immediately when apps or jobs
+                  are linked or unlinked — upload mode stays accurate.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.3.0"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.2.9" && (
           <div className="about-card">
             <h3>What's New in v2.2.9</h3>
