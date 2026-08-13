@@ -12,6 +12,7 @@ import {
   invalidateJobOwnerIndex,
   shouldAutoUploadJobFolder,
 } from "../src/gateway/services/cloudUploadMode.js";
+import { notifyJobOwnershipChanged } from "../src/gateway/services/cloudSync/jobOwnershipInvalidation.js";
 
 const tempDirs: string[] = [];
 
@@ -149,5 +150,40 @@ describe("cloud sync hot path caching", () => {
     const paprDir = makeWorkspace(2, 2);
     expect(shouldAutoUploadJobFolder("job-0", paprDir)).toBe(true);
     expect(shouldAutoUploadJobFolder("job-unknown", paprDir)).toBe(true);
+  });
+
+  it("rebuilds ownership immediately after notifyJobOwnershipChanged", () => {
+    const paprDir = makeWorkspace(2, 1);
+    fs.writeFileSync(
+      path.join(paprDir, "data", "cloud-publish-prefs.json"),
+      JSON.stringify({
+        apps: {
+          "app-0": { uploadMode: "manual", cloudEnabled: true, autoPublish: false, accessMode: "private" },
+          "app-1": { uploadMode: "auto", cloudEnabled: true, autoPublish: false, accessMode: "private" },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(paprDir, "data", "jobs.json"),
+      JSON.stringify({
+        jobs: [{ id: "job-0", name: "job-0", appIds: ["app-0"] }],
+      }),
+    );
+
+    expect(shouldAutoUploadJobFolder("job-0", paprDir)).toBe(false);
+
+    fs.writeFileSync(
+      path.join(paprDir, "data", "jobs.json"),
+      JSON.stringify({
+        jobs: [{ id: "job-0", name: "job-0", appIds: ["app-1"] }],
+      }),
+    );
+
+    // Stale owner index still maps job-0 → app-0 (manual).
+    expect(shouldAutoUploadJobFolder("job-0", paprDir)).toBe(false);
+
+    notifyJobOwnershipChanged(paprDir);
+
+    expect(shouldAutoUploadJobFolder("job-0", paprDir)).toBe(true);
   });
 });

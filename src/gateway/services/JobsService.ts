@@ -22,7 +22,12 @@ import {
   getPaprAppsRoot,
   getPaprDataDir,
   getPaprJobsRoot,
+  getPaprRoot,
 } from "../../core/utils/paprRoot.js";
+import {
+  jobUpdateAffectsOwnership,
+  notifyJobOwnershipChanged,
+} from "./cloudSync/jobOwnershipInvalidation.js";
 import {
   resolveJobWriteTargets,
   validateWriteDbIdsExist,
@@ -487,6 +492,7 @@ export class JobsService {
 
     if (changed) {
       await this.saveJobs();
+      notifyJobOwnershipChanged(getPaprRoot());
       console.log("[JobsService] Backfilled appIds on legacy jobs");
     }
   }
@@ -1433,6 +1439,7 @@ export class JobsService {
 
     this.jobs.set(id, job);
     await this.saveJobs();
+    notifyJobOwnershipChanged(getPaprRoot());
     void this.rebuildGraph();
 
     if (job.schedule?.enabled) {
@@ -1514,6 +1521,7 @@ export class JobsService {
 
     this.jobs.set(job.id, job);
     await this.saveJobs();
+    notifyJobOwnershipChanged(getPaprRoot());
     console.log(`[JobsService] Installed default job: ${job.id} - ${job.name}`);
     return { installed: true, dbPath };
   }
@@ -2649,6 +2657,9 @@ export class JobsService {
     this.jobs.set(jobId, updated);
     await this.persistJobRecord(updated);
     await this.saveJobs();
+    if (jobUpdateAffectsOwnership(updates)) {
+      notifyJobOwnershipChanged(getPaprRoot());
+    }
     void this.rebuildGraph();
     if (updates.schedule !== undefined) {
       void import("./JobsScheduler.js")
@@ -2711,6 +2722,7 @@ export class JobsService {
     // Remove from index
     this.jobs.delete(jobId);
     await this.saveJobs();
+    notifyJobOwnershipChanged(getPaprRoot());
     void this.rebuildGraph();
 
     // Optionally remove the job directory (scripts, logs, scratch db)

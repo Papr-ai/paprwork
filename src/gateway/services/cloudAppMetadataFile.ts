@@ -19,6 +19,7 @@ import {
   type AppAgentChatConfig,
 } from "../../core/types/appAgentChat.js";
 import { resolveAppAgentChatForMetadataWrite } from "./appAgentChat/appAgentChatPersistence.js";
+import { notifyJobOwnershipChanged } from "./cloudSync/jobOwnershipInvalidation.js";
 
 export interface CloudAppRegistryEntry {
   id: string;
@@ -110,4 +111,5 @@ export async function writeCloudAppMetadataFile(
   const tmpPath = `${metadataPath}.tmp-${process.pid}`;
   await fs.writeFile(tmpPath, serializeCloudAppMetadataFile(metadata), "utf8");
   await fs.rename(tmpPath, metadataPath);
+  notifyJobOwnershipChanged(paprDir);
 }

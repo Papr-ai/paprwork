@@ -30,6 +30,13 @@ function readGlobalAutoUploadDisabled(settingsPath: string): boolean {
   );
 }
 
+function cloudSettingsPathForRoot(paprDir?: string): string {
+  if (paprDir) {
+    return path.join(paprDir, "data", "settings.json");
+  }
+  return defaultCloudSettingsPath();
+}
+
 /** Whether automatic git/Turso push is enabled globally (default ON). */
 export function isCloudAutoUploadGloballyEnabled(
   settingsPath: string = defaultCloudSettingsPath(),
@@ -40,7 +47,10 @@ export function isCloudAutoUploadGloballyEnabled(
   return !readGlobalAutoUploadDisabled(settingsPath);
 }
 
-function resolveUploadMode(prefs: CloudPublishAppPrefs): "auto" | "manual" {
+function resolveUploadMode(
+  prefs: CloudPublishAppPrefs,
+  paprDir?: string,
+): "auto" | "manual" {
   const mode = prefs.uploadMode ?? "inherit";
   if (mode === "manual") {
     return "manual";
@@ -48,7 +58,9 @@ function resolveUploadMode(prefs: CloudPublishAppPrefs): "auto" | "manual" {
   if (mode === "auto") {
     return "auto";
   }
-  return isCloudAutoUploadGloballyEnabled() ? "auto" : "manual";
+  return isCloudAutoUploadGloballyEnabled(cloudSettingsPathForRoot(paprDir))
+    ? "auto"
+    : "manual";
 }
 
 function isCloudEnabledForApp(prefs: CloudPublishAppPrefs): boolean {
@@ -64,7 +76,7 @@ export function shouldAutoUploadApp(appId: string, paprDir?: string): boolean {
   if (!isCloudEnabledForApp(prefs)) {
     return false;
   }
-  return resolveUploadMode(prefs) === "auto";
+  return resolveUploadMode(prefs, paprDir) === "auto";
 }
 
 /**
@@ -152,7 +164,7 @@ export function shouldAutoUploadJobFolder(
   const root = paprDir ?? getPaprRoot();
   const owners = listAppIdsOwningJob(root, jobId);
   if (owners.length === 0) {
-    return isCloudAutoUploadGloballyEnabled();
+    return isCloudAutoUploadGloballyEnabled(cloudSettingsPathForRoot(root));
   }
   return owners.every((appId) => shouldAutoUploadApp(appId, root));
 }
@@ -177,5 +189,5 @@ export function shouldAutoUploadRelativePath(
     return shouldAutoUploadJobFolder(jobId, root);
   }
 
-  return isCloudAutoUploadGloballyEnabled();
+  return isCloudAutoUploadGloballyEnabled(cloudSettingsPathForRoot(root));
 }

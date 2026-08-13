@@ -41,6 +41,7 @@ import {
   getPaprJobsRoot,
   getPaprRoot,
 } from "../../core/utils/paprRoot.js";
+import { notifyJobOwnershipChanged } from "./cloudSync/jobOwnershipInvalidation.js";
 import { scanAppCodeForJobDatabaseReferences } from "./appCodeDataSourceDiscovery.js";
 import {
   sanitizeMiniAppIcon,
@@ -1546,6 +1547,7 @@ export class AppService {
 
     this.apps.set(app.id, app);
     await this.saveApps();
+    notifyJobOwnershipChanged(this.paprRootDir);
 
     // Start watching the new app directory for changes
     await this.watchApp(app.id);
@@ -1815,6 +1817,7 @@ export class AppService {
 
     this.apps.delete(id);
     await this.saveApps();
+    notifyJobOwnershipChanged(this.paprRootDir);
 
     this.broadcastAppListUpdated();
 
@@ -3412,6 +3415,7 @@ export class AppService {
       serializeDataSourcesFile(config),
       "utf8",
     );
+    notifyJobOwnershipChanged(this.paprRootDir);
 
     if (previousSources) {
       const normalizePath = (p: string) => path.normalize(p);
