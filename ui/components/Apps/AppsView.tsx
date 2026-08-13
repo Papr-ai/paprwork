@@ -220,8 +220,30 @@ export function AppsView() {
       return;
     }
 
-    if (confirm("Are you sure you want to delete this app?")) {
-      await deleteArtifact(id, "app");
+    if (!confirm("Are you sure you want to delete this app?")) {
+      return;
+    }
+
+    try {
+      const result = await deleteArtifact(id, "app");
+      // The cached publish state can be stale or absent (e.g. apps published by
+      // a background sync, or a cache cleared on reinstall). In that case the
+      // first delete comes back as requiresUnpublishConfirm instead of
+      // deleting — re-prompt here rather than silently doing nothing.
+      if (result?.requiresUnpublishConfirm) {
+        const title = allApps.find((a) => a.id === id)?.title ?? "This app";
+        const where = result.shareUrl ? `\n${result.shareUrl}\n` : "";
+        if (
+          !confirm(
+            `“${title}” is published to the web.${where}\nDeleting will remove it from this workspace AND unpublish it from apps.papr.ai.\n\nContinue?`,
+          )
+        ) {
+          return;
+        }
+        await deleteArtifact(id, "app", { unpublishFromCloud: true });
+      }
+    } catch {
+      /* useArtifacts sets error */
     }
   };
 

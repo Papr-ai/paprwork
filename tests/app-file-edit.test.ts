@@ -1,7 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { promises as fs } from "fs";
-import path from "path";
-import os from "os";
+import { describe, it, expect } from "vitest";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 import {
   applyExactStringReplacement,
   countOccurrences,
@@ -95,19 +93,11 @@ describe("exactStringReplace", () => {
 });
 
 describe("AppService.updateAppFile", () => {
-  let tmpDir: string;
-  let origHome: string;
-
-  beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "papr-app-edit-test-"));
-    origHome = os.homedir;
-    (os as { homedir: () => string }).homedir = () => tmpDir;
-  });
-
-  afterEach(async () => {
-    (os as { homedir: () => string }).homedir = () => origHome;
-    await fs.rm(tmpDir, { recursive: true, force: true });
-  });
+  // Patching os.homedir alone is NOT enough — getPaprRoot() prefers
+  // ~/Papr/.active-workspace.json from the REAL home and re-syncs PAPR_HOME
+  // from it, so this suite used to create "Concurrent Edit App_N" fixtures in
+  // the developer's live workspace.
+  useIsolatedPaprWorkspace("papr-app-edit-test");
 
   it("serializes concurrent edits to the same file", async () => {
     const { AppService } = await import(

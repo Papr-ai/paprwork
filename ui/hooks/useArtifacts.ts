@@ -199,23 +199,45 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
           type === "document" ? "document:delete" : "app:delete";
         const payloadKey = type === "document" ? "documentId" : "appId";
 
-        const response = await gateway.send(messageType, {
-          [payloadKey]: id,
-          ...(type === "app" && options?.unpublishFromCloud
-            ? { unpublishFromCloud: true }
-            : {}),
-        });
+        // Deleting an app is not a local-only operation: the server checks
+        // cloud publish status, and an unpublish additionally flips every
+        // published App Files object to private one-by-one, then calls
+        // DELETE /v1/cloud/apps/publish. Each of those uses cloudApiFetch,
+        // whose own timeout is 60s — already twice the 30s default here, so
+        // a single slow request guaranteed a spurious "Request timeout" in
+        // the UI while the delete kept running server-side.
+        // Matches the 90s budget app:list already uses.
+        const response = await gateway.send(
+          messageType,
+          {
+            [payloadKey]: id,
+            ...(type === "app" && options?.unpublishFromCloud
+              ? { unpublishFromCloud: true }
+              : {}),
+          },
+          { timeoutMs: 90_000 },
+        );
         const data = response.data as {
           deleted?: boolean;
           requiresUnpublishConfirm?: boolean;
+          shareUrl?: string | null;
         };
+        // Server says the app is live on the web. This is NOT an error — the
+        // caller must re-prompt and retry with unpublishFromCloud: true. The
+        // local publish cache goes stale (deleted/unpublished elsewhere), so
+        // AppsView cannot reliably pre-detect this before calling.
         if (data?.requiresUnpublishConfirm) {
-          throw new Error("Published app requires unpublish confirmation");
+          return {
+            deleted: false,
+            requiresUnpublishConfirm: true,
+            shareUrl: data.shareUrl ?? null,
+          };
         }
         if (data?.deleted === false) {
           throw new Error(`Failed to delete ${type}`);
         }
         removeArtifact(id);
+        return { deleted: true };
       } catch (err) {
         const message =
           err instanceof Error ? err.message : `Failed to delete ${type}`;

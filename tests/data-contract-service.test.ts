@@ -9,6 +9,7 @@ import { getDataContractService } from "../src/gateway/services/DataContractServ
 
 describe("DataContractService", () => {
   let originalHome: string | undefined;
+  let originalPaprHome: string | undefined;
   let testHomeDir: string;
   let appService: AppService;
 
@@ -16,12 +17,16 @@ describe("DataContractService", () => {
     resetAppServiceSingletonForTests();
     resetJobsServiceSingletonForTests();
     originalHome = process.env.HOME;
+    originalPaprHome = process.env.PAPR_HOME;
     testHomeDir = path.join(
       os.tmpdir(),
       `paprwork-contract-svc-${Date.now()}`,
     );
     process.env.HOME = testHomeDir;
-    await fs.mkdir(testHomeDir, { recursive: true });
+    // HOME alone is not enough: getPaprRoot() prefers ~/Papr/.active-workspace.json
+    // (read from the REAL home) and re-syncs PAPR_HOME from it.
+    process.env.PAPR_HOME = path.join(testHomeDir, "Papr");
+    await fs.mkdir(path.join(testHomeDir, "Papr"), { recursive: true });
     appService = new AppService();
     await appService.initialize();
   });
@@ -34,6 +39,11 @@ describe("DataContractService", () => {
       delete process.env.HOME;
     } else {
       process.env.HOME = originalHome;
+    }
+    if (originalPaprHome === undefined) {
+      delete process.env.PAPR_HOME;
+    } else {
+      process.env.PAPR_HOME = originalPaprHome;
     }
     try {
       await fs.rm(testHomeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });

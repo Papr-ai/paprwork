@@ -23,10 +23,22 @@ describe("Agent Attribution Tracking", () => {
   let documentService: DocumentService;
   let appService: AppService;
   let planService: PlanService;
+  let originalHome: string | undefined;
+  let originalPaprHome: string | undefined;
 
   beforeEach(async () => {
     // Clean up test directory
     await fs.remove(TEST_DATA_PATH);
+
+    // AppService/DocumentService/PlanService all resolve paths via getPaprRoot(),
+    // which prefers ~/Papr/.active-workspace.json from the REAL home. Without
+    // redirecting HOME *and* PAPR_HOME this suite wrote apps, documents and
+    // plans into the developer's live workspace.
+    originalHome = process.env.HOME;
+    originalPaprHome = process.env.PAPR_HOME;
+    process.env.HOME = TEST_DATA_PATH;
+    process.env.PAPR_HOME = path.join(TEST_DATA_PATH, "Papr");
+    await fs.ensureDir(path.join(TEST_DATA_PATH, "Papr"));
 
     // Initialize services
     storageProvider = new LocalStorageProvider(TEST_DATA_PATH);
@@ -49,6 +61,11 @@ describe("Agent Attribution Tracking", () => {
     // Clean up
     storageProvider.close();
     planService.close();
+    appService.cleanup?.();
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalPaprHome === undefined) delete process.env.PAPR_HOME;
+    else process.env.PAPR_HOME = originalPaprHome;
     await fs.remove(TEST_DATA_PATH);
   });
 
