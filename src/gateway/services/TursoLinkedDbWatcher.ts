@@ -81,12 +81,37 @@ async function rebuildWatchDirs(appsRootDir: string): Promise<string[]> {
   return dataDirs;
 }
 
+/**
+ * Coalesce bursts of data.db / -wal / -shm writes into one evaluation.
+ *
+ * Each evaluation opens the SQLite file and fingerprints every syncable table,
+ * so a busy job writing in a loop could otherwise pin the gateway event loop
+ * and starve /health and the WebSocket heartbeat.
+ */
+const CHANGE_DEBOUNCE_MS = 750;
+
+const pendingChangeTimers = new Map<string, NodeJS.Timeout>();
+
 function handleDbChange(changedPath: string): void {
   const watched = resolveJobIdForDbFileChange(changedPath, dbDirToSource);
   if (!watched) {
     return;
   }
 
+  const pending = pendingChangeTimers.get(watched.syncKey);
+  if (pending) {
+    clearTimeout(pending);
+  }
+
+  const timer = setTimeout(() => {
+    pendingChangeTimers.delete(watched.syncKey);
+    evaluateDbChange(watched);
+  }, CHANGE_DEBOUNCE_MS);
+  timer.unref?.();
+  pendingChangeTimers.set(watched.syncKey, timer);
+}
+
+function evaluateDbChange(watched: WatchedDbDir): void {
   try {
     ensureLocalDbChangeLogReady(watched.dbPath);
   } catch (error) {
@@ -183,6 +208,10 @@ export async function refreshTursoLinkedDbWatcher(
 }
 
 export async function stopTursoLinkedDbWatcher(): Promise<void> {
+  for (const timer of pendingChangeTimers.values()) {
+    clearTimeout(timer);
+  }
+  pendingChangeTimers.clear();
   if (watcher) {
     await watcher.close();
     watcher = null;
