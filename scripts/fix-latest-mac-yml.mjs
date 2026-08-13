@@ -23,13 +23,31 @@ function sha512Base64(filePath) {
 }
 
 function findMacZips(dir) {
-  return readdirSync(dir)
-    .filter((name) => name.endsWith("-mac.zip"))
-    .sort((a, b) => {
-      const aArm = a.includes("arm64") ? 0 : 1;
-      const bArm = b.includes("arm64") ? 0 : 1;
-      return aArm - bArm || a.localeCompare(b);
-    });
+  const all = readdirSync(dir).filter((name) => name.endsWith("-mac.zip"));
+  // Prefer Papr.Work over Papr-Work when both exist (electron-builder naming drift)
+  const byArch = new Map();
+  for (const name of all) {
+    const archKey = name.includes("arm64") ? "arm64" : "x64";
+    const score = name.startsWith("Papr.Work")
+      ? 2
+      : name.startsWith("Papr-Work")
+        ? 1
+        : 0;
+    const existing = byArch.get(archKey);
+    const existingScore = existing?.startsWith("Papr.Work")
+      ? 2
+      : existing?.startsWith("Papr-Work")
+        ? 1
+        : 0;
+    if (!existing || score > existingScore) {
+      byArch.set(archKey, name);
+    }
+  }
+  return [...byArch.values()].sort((a, b) => {
+    const aArm = a.includes("arm64") ? 0 : 1;
+    const bArm = b.includes("arm64") ? 0 : 1;
+    return aArm - bArm || a.localeCompare(b);
+  });
 }
 
 function parseVersionFromZip(name) {

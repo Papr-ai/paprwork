@@ -23,6 +23,21 @@ import {
 let playwrightInstallAttempted = false;
 
 /**
+ * Check if an error indicates Playwright package or browser is missing
+ */
+function isPlaywrightMissingError(errorMessage: string): boolean {
+  return (
+    errorMessage.includes("Cannot find package") ||
+    errorMessage.includes("Cannot find module") ||
+    errorMessage.includes("Executable doesn't exist") ||
+    errorMessage.includes("browserType.launch") ||
+    errorMessage.includes("not found") ||
+    errorMessage.includes("PLAYWRIGHT") ||
+    errorMessage.includes("ENOENT")
+  );
+}
+
+/**
  * Load Playwright with auto-installation if browser not found
  */
 async function loadPlaywright(): Promise<typeof import("playwright")> {
@@ -38,19 +53,14 @@ async function loadPlaywright(): Promise<typeof import("playwright")> {
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     
-    // Check if it's a "browser not found" error
-    if (
-      !playwrightInstallAttempted &&
-      (errorMessage.includes("Executable doesn't exist") ||
-        errorMessage.includes("browserType.launch") ||
-        errorMessage.includes("not found") ||
-        errorMessage.includes("PLAYWRIGHT"))
-    ) {
-      console.log("[PlatformSessionService] Playwright browsers not found, installing Chromium...");
+    // Check if it's a Playwright-related error we can auto-fix
+    if (!playwrightInstallAttempted && isPlaywrightMissingError(errorMessage)) {
+      console.log("[PlatformSessionService] Playwright not found, installing Chromium...");
+      console.log("[PlatformSessionService] Error was:", errorMessage);
       playwrightInstallAttempted = true;
 
       try {
-        // Install only Chromium (faster than all browsers)
+        // Install Chromium browser (this also installs playwright-core if needed)
         execSync("npx playwright install chromium", {
           stdio: "inherit",
           timeout: 5 * 60 * 1000, // 5 minute timeout for download
@@ -95,6 +105,7 @@ interface PlatformSessionStore {
 const STORE_VERSION = 1;
 const CONNECT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes for user to log in
 const REFRESH_TIMEOUT_MS = 60 * 1000; // 60 seconds for headless refresh (some sites are slow)
+const NAVIGATION_TIMEOUT_MS = 60 * 1000; // 60 seconds for page navigation (social sites are slow)
 const POLL_INTERVAL_MS = 1000; // Check URL every second during connect
 
 /**
@@ -286,7 +297,10 @@ export class PlatformSessionService {
       }
 
       const page = await this.activeContext.newPage();
-      await page.goto(config.loginUrl, { waitUntil: "domcontentloaded" });
+      await page.goto(config.loginUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: NAVIGATION_TIMEOUT_MS,
+      });
 
       // Wait for user to complete login (poll for success URL)
       const startTime = Date.now();
@@ -661,7 +675,10 @@ export class PlatformSessionService {
 
       const page = await this.activeContext.newPage();
       const targetUrl = url || config.homeUrl;
-      await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
+      await page.goto(targetUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: NAVIGATION_TIMEOUT_MS,
+      });
 
       // Check if we're still logged in
       const currentUrl = page.url();

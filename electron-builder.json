@@ -24,6 +24,8 @@
     "src/electron/preload.cjs",
     "src/electron/ipc/**/*.cjs",
     "src/resources/**/*",
+    "node_modules/playwright/**/*",
+    "node_modules/playwright-core/**/*",
     "package.json"
   ],
   "asarUnpack": [

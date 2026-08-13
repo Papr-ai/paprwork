@@ -1,6 +1,6 @@
 {
   "name": "paprwork",
-  "version": "2.3.1",
+  "version": "2.3.2",
   "description": "AI-powered desktop assistant - Rebuilt with TypeScript and Mastra",
   "main": "./src/electron/main.cjs",
   "type": "module",
@@ -222,7 +222,6 @@
     "jsdom": "^28.0.0",
     "oxfmt": "^0.13.0",
     "oxlint": "^0.13.0",
-    "playwright": "^1.40.0",
     "shx": "^0.3.4",
     "tsx": "^4.7.0",
     "typescript": "^5.9.3",

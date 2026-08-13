@@ -1010,6 +1010,51 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.3.2" && (
+          <div className="about-card">
+            <h3>What's New in v2.3.2</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Playwright in Packaged App</strong>
+                <p>
+                  Browser tools and Social Login now include Playwright in
+                  production builds — fixes &quot;Cannot find package
+                  playwright&quot; errors.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Playwright Auto-Install</strong>
+                <p>
+                  If the package or Chromium binary is missing, the app
+                  auto-installs on first use instead of failing silently.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Mac Auto-Update Fix</strong>
+                <p>
+                  Release pipeline now verifies latest-mac.yml zip URLs match
+                  uploaded artifacts — no more 404 on update download.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Social Login Timeouts</strong>
+                <p>
+                  Longer navigation timeouts for platform connect and session
+                  refresh on slow networks.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.3.2"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.3.1" && (
           <div className="about-card">
             <h3>What's New in v2.3.1</h3>

@@ -78,12 +78,60 @@ async function requestBrowserPermission(action: string): Promise<void> {
   }
 }
 
+/**
+ * Check if an error indicates Playwright package or browser is missing
+ */
+function isPlaywrightMissingError(errorMessage: string): boolean {
+  return (
+    errorMessage.includes("Cannot find package") ||
+    errorMessage.includes("Cannot find module") ||
+    errorMessage.includes("Executable doesn't exist") ||
+    errorMessage.includes("browserType.launch") ||
+    errorMessage.includes("not found") ||
+    errorMessage.includes("PLAYWRIGHT") ||
+    errorMessage.includes("ENOENT") ||
+    errorMessage.includes("timed out")
+  );
+}
+
 async function getBrowserSession(): Promise<BrowserSessionState> {
   if (browserSession) {
     return browserSession;
   }
 
-  const module = await import("playwright");
+  // Wrap entire import + launch in try-catch for auto-install
+  let module: typeof import("playwright");
+  let browser: Browser;
+
+  try {
+    module = await import("playwright");
+  } catch (importError) {
+    const errorMessage =
+      importError instanceof Error ? importError.message : String(importError);
+
+    if (!playwrightInstallAttempted && isPlaywrightMissingError(errorMessage)) {
+      console.log("[Browser Tool] Playwright not found, installing Chromium...");
+      console.log("[Browser Tool] Error was:", errorMessage);
+      playwrightInstallAttempted = true;
+
+      try {
+        execSync("npx playwright install chromium", {
+          stdio: "inherit",
+          timeout: 5 * 60 * 1000,
+        });
+        console.log("[Browser Tool] Chromium installed successfully");
+        module = await import("playwright");
+      } catch (installError) {
+        console.error("[Browser Tool] Failed to install Playwright:", installError);
+        throw new Error(
+          "Playwright browser not installed. Please run: npx playwright install chromium",
+        );
+      }
+    } else {
+      throw importError;
+    }
+  }
+
   const launchOptions: Parameters<typeof module.chromium.launch>[0] = {
     headless: true,
   };
@@ -96,7 +144,6 @@ async function getBrowserSession(): Promise<BrowserSessionState> {
   }
 
   // Try to launch, auto-install on failure
-  let browser: Browser;
   try {
     browser = await Promise.race([
       module.chromium.launch(launchOptions),
@@ -117,14 +164,7 @@ async function getBrowserSession(): Promise<BrowserSessionState> {
       launchError instanceof Error ? launchError.message : String(launchError);
 
     // Check if it's a browser not found error and we haven't tried installing yet
-    if (
-      !playwrightInstallAttempted &&
-      (errorMessage.includes("Executable doesn't exist") ||
-        errorMessage.includes("browserType.launch") ||
-        errorMessage.includes("not found") ||
-        errorMessage.includes("PLAYWRIGHT") ||
-        errorMessage.includes("timed out"))
-    ) {
+    if (!playwrightInstallAttempted && isPlaywrightMissingError(errorMessage)) {
       console.log(
         "[Browser Tool] Playwright browsers not found, installing Chromium...",
       );
