@@ -182,11 +182,10 @@ describe("Vault API models alignment", () => {
     "utf-8",
   );
 
-  it("groups keys by vault audience scope when pushing", () => {
-    expect(vaultContent).toContain("normalizeIntegrationKeyVaultAudience");
-    expect(vaultContent).toContain("buildCloudVaultRequestBody");
-    expect(vaultContent).toContain("keyPairsByScope");
-    expect(vaultContent).toContain("cloudScope");
+  it("sends per-key shareScope when pushing", () => {
+    expect(vaultContent).toContain("mapCustomKeyMetadataToVaultEntry");
+    expect(vaultContent).toContain("shareScope");
+    expect(vaultContent).toContain("per-key shareScope");
   });
 
   it("sends keys array with name and value", () => {

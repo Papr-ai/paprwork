@@ -2250,10 +2250,18 @@ export class AgentService {
   }
 
   /**
-   * Stop streaming for a specific chat
+   * Stop streaming for a specific chat.
+   * Also releases the concurrency lease immediately so a new stream can start.
    */
   async stopStreaming(chatId: string): Promise<void> {
     await this.sessionManager.abortSession(chatId);
+    // Release concurrency lease immediately so replacement streams don't queue.
+    // The generator's finally block will also call release(), but that's a no-op
+    // if the lease was already released (token won't match).
+    const { getAgentStreamConcurrencyGate } = await import(
+      "./agent/agentStreamConcurrency.js"
+    );
+    getAgentStreamConcurrencyGate().forceReleaseByChatId(chatId);
   }
 
   private static readonly SUMMARIZE_MESSAGE_THRESHOLD = 40;

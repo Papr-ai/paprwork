@@ -67,7 +67,7 @@ jobs:
           security find-identity -v "$KEYCHAIN_PATH"
 
       - name: Build Mac distributables
-        run: npx electron-builder --mac --arm64 --x64 --publish always
+        run: npx electron-builder --mac --arm64 --x64 --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -87,6 +87,7 @@ jobs:
           path: |
             release/*.pkg
             release/*.zip
+            release/latest-mac.yml
           if-no-files-found: error
           retention-days: 5
 
@@ -115,7 +116,7 @@ jobs:
           VITE_REQUIRE_PAPR_AUTH: true
 
       - name: Build Windows distributables
-        run: npx electron-builder --win --publish always
+        run: npx electron-builder --win --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -123,7 +124,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-builds
-          path: release/*.exe
+          path: |
+            release/*.exe
+            release/latest.yml
           if-no-files-found: error
           retention-days: 5
 
@@ -147,7 +150,7 @@ jobs:
           VITE_REQUIRE_PAPR_AUTH: true
 
       - name: Build Linux distributables
-        run: npx electron-builder --linux --publish always
+        run: npx electron-builder --linux --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -158,6 +161,7 @@ jobs:
           path: |
             release/*.AppImage
             release/*.deb
+            release/latest-linux.yml
           if-no-files-found: error
           retention-days: 5
 
@@ -173,6 +177,17 @@ jobs:
 
       - name: List release files
         run: ls -lhR artifacts/
+
+      - name: Verify auto-update metadata
+        run: |
+          set -euo pipefail
+          for file in latest-mac.yml latest.yml latest-linux.yml; do
+            if [ ! -f "artifacts/${file}" ]; then
+              echo "::error::Missing ${file} in merged artifacts — Mac auto-update will break"
+              exit 1
+            fi
+            echo "✓ ${file} ($(wc -c < "artifacts/${file}") bytes)"
+          done
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

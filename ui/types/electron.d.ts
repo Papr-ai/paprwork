@@ -145,6 +145,11 @@ export interface ElectronAPI {
       success: boolean;
       error?: string;
     }>;
+    /** Verify a manual authentication code (fallback when callback fails) */
+    verifyManualCode: (code: string) => Promise<{
+      success: boolean;
+      error?: string;
+    }>;
     getProfile: () => Promise<{
       success: boolean;
       profile?: {

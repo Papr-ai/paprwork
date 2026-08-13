@@ -144,6 +144,54 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
     if (isOpen) loadArtifacts();
   }, [isOpen, loadArtifacts]);
 
+  // Helper to render app icon based on type (data URL, SVG, emoji, or fallback)
+  const renderAppIcon = useCallback((icon: string | undefined, title: string) => {
+    const fallbackIcon = (
+      <svg className="cmd-palette__app-orb-icon" width="12" height="12" viewBox="0 0 24 24" fill="none">
+        <defs>
+          <linearGradient id="cmd-papr-blue-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#00D4FF" />
+            <stop offset="100%" stopColor="#0066FF" />
+          </linearGradient>
+        </defs>
+        <rect x="3" y="3" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
+        <rect x="14" y="3" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
+        <rect x="3" y="14" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
+        <rect x="14" y="14" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
+      </svg>
+    );
+
+    if (!icon) return fallbackIcon;
+
+    const trimmed = icon.trim();
+
+    // Data URLs or HTTP URLs — render as <img>
+    if (trimmed.startsWith("data:image/") || trimmed.startsWith("http")) {
+      return (
+        <img
+          className="cmd-palette__app-orb-icon cmd-palette__app-orb-icon--image"
+          src={icon}
+          alt={title}
+          draggable={false}
+        />
+      );
+    }
+
+    // SVG markup — use dangerouslySetInnerHTML
+    if (trimmed.startsWith("<svg") || trimmed.startsWith("<")) {
+      return <span className="cmd-palette__app-orb-icon" dangerouslySetInnerHTML={{ __html: icon }} />;
+    }
+
+    // Check if it's a valid emoji
+    const isEmoji = trimmed.length <= 4 && /[\p{Emoji}]/u.test(trimmed);
+    if (isEmoji) {
+      return <span className="cmd-palette__app-orb-icon" style={{ fontSize: "14px" }}>{icon}</span>;
+    }
+
+    // Plain text or invalid — use fallback
+    return fallbackIcon;
+  }, []);
+
   // Build dynamic app commands from artifacts store
   const appCommands: CommandItem[] = useMemo(
     () =>
@@ -157,26 +205,11 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
           entityId: app.id,
           icon: (
             <span className="cmd-palette__app-orb">
-              {app.icon ? (
-                <span className="cmd-palette__app-orb-icon" dangerouslySetInnerHTML={{ __html: app.icon }} />
-              ) : (
-                <svg className="cmd-palette__app-orb-icon" width="12" height="12" viewBox="0 0 24 24" fill="none">
-                  <defs>
-                    <linearGradient id="cmd-papr-blue-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                      <stop offset="0%" stopColor="#00D4FF" />
-                      <stop offset="100%" stopColor="#0066FF" />
-                    </linearGradient>
-                  </defs>
-                  <rect x="3" y="3" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
-                  <rect x="14" y="3" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
-                  <rect x="3" y="14" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
-                  <rect x="14" y="14" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
-                </svg>
-              )}
+              {renderAppIcon(app.icon, app.title || "Untitled App")}
             </span>
           ),
         })),
-    [artifacts],
+    [artifacts, renderAppIcon],
   );
 
   // Filter commands + apps based on query

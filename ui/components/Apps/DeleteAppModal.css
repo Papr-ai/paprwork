@@ -1,0 +1,300 @@
+/**
+ * DeleteAppModal Styles - Dangerous action confirmation modal
+ */
+
+.delete-app-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  animation: deleteModalBackdropIn 150ms ease;
+}
+
+@keyframes deleteModalBackdropIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.delete-app-modal {
+  width: 90%;
+  max-width: 480px;
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--glass-bg, rgba(30, 30, 30, 0.98));
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border, var(--border));
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4),
+              0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+  animation: deleteModalSlideIn 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes deleteModalSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.delete-app-modal__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.delete-app-modal__icon {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(239, 68, 68, 0.15);
+  border-radius: 10px;
+  color: #ef4444;
+}
+
+.delete-app-modal__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.delete-app-modal__warning {
+  margin: 0 0 20px;
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.delete-app-modal__warning strong {
+  color: var(--text-primary);
+}
+
+/* Summary section */
+.delete-app-modal__summary {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--glass-border, var(--border));
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
+.delete-app-modal__summary-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 12px;
+}
+
+.delete-app-modal__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.delete-app-modal__item--always {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.delete-app-modal__item-icon {
+  font-size: 14px;
+  opacity: 0.8;
+}
+
+.delete-app-modal__url {
+  display: block;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+  word-break: break-all;
+}
+
+/* Checkbox options */
+.delete-app-modal__option {
+  display: flex;
+  gap: 10px;
+  padding: 10px 0;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.delete-app-modal__option:last-child {
+  border-bottom: none;
+}
+
+.delete-app-modal__option--nested {
+  padding-left: 24px;
+}
+
+.delete-app-modal__option input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: #ef4444;
+  cursor: pointer;
+}
+
+.delete-app-modal__option-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.delete-app-modal__option-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.delete-app-modal__option-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+}
+
+/* Job list */
+.delete-app-modal__job-list {
+  margin-top: 8px;
+  padding-left: 22px;
+}
+
+.delete-app-modal__job {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.delete-app-modal__job-name {
+  color: var(--text-secondary);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.delete-app-modal__job-type {
+  color: var(--text-tertiary);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.delete-app-modal__job-turso {
+  color: #60a5fa;
+  font-size: 11px;
+}
+
+/* Confirmation input */
+.delete-app-modal__confirm {
+  margin-bottom: 20px;
+}
+
+.delete-app-modal__confirm-label {
+  display: block;
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.delete-app-modal__confirm-label strong {
+  color: var(--text-primary);
+  font-family: var(--font-mono, monospace);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.delete-app-modal__input {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--input-bg, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--glass-border, var(--border));
+  border-radius: 10px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: var(--font-body);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+  box-sizing: border-box;
+}
+
+.delete-app-modal__input:focus {
+  outline: none;
+  border-color: #ef4444;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
+}
+
+.delete-app-modal__input::placeholder {
+  color: var(--text-tertiary);
+}
+
+/* Actions */
+.delete-app-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.delete-app-modal__cancel {
+  padding: 8px 18px;
+  background: transparent;
+  border: 1px solid var(--glass-border, var(--border));
+  border-radius: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.delete-app-modal__cancel:hover {
+  background: var(--hover);
+  color: var(--text-primary);
+}
+
+.delete-app-modal__delete {
+  padding: 8px 20px;
+  background: #ef4444;
+  border: none;
+  border-radius: 10px;
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 150ms ease, box-shadow 150ms ease, opacity 150ms ease;
+}
+
+.delete-app-modal__delete:hover:not(:disabled) {
+  background: #dc2626;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(239, 68, 68, 0.3);
+}
+
+.delete-app-modal__delete:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

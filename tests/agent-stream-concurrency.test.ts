@@ -115,4 +115,47 @@ describe("AgentStreamConcurrencyGate", () => {
     expect(gate.getStats().waitingCount).toBe(0);
     gate.release(first);
   });
+
+  test("forceReleaseByChatId immediately frees a slot for replacement", async () => {
+    process.env.AGENT_STREAM_MAX_CONCURRENT = "1";
+    const gate = new AgentStreamConcurrencyGate();
+    const first = await gate.acquire("chat-a");
+    expect(gate.getStats().activeCount).toBe(1);
+
+    // Force release (simulates stopStreaming being called)
+    const released = gate.forceReleaseByChatId("chat-a");
+    expect(released).toBe(true);
+    expect(gate.getStats().activeCount).toBe(0);
+
+    // New stream can now acquire immediately
+    const second = await gate.acquire("chat-a");
+    expect(gate.getStats().activeCount).toBe(1);
+
+    // Original release is a no-op (token mismatch)
+    gate.release(first);
+    expect(gate.getStats().activeCount).toBe(1);
+    gate.release(second);
+    expect(gate.getStats().activeCount).toBe(0);
+  });
+
+  test("forceReleaseByChatId drains waiting queue", async () => {
+    process.env.AGENT_STREAM_MAX_CONCURRENT = "1";
+    const gate = new AgentStreamConcurrencyGate();
+    await gate.acquire("chat-a");
+
+    // Queue a replacement
+    let admitted = false;
+    const replacement = gate.acquire("chat-a").then((lease) => {
+      admitted = true;
+      return lease;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(admitted).toBe(false);
+
+    // Force release should drain queue and admit the replacement
+    gate.forceReleaseByChatId("chat-a");
+    const second = await replacement;
+    expect(admitted).toBe(true);
+    gate.release(second);
+  });
 });

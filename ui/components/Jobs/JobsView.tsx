@@ -42,10 +42,12 @@ export function JobsView() {
     error,
     runJob,
     stopJob,
+    deleteJob,
     loadLogs,
     logsByJobId,
     defaultModel,
   } = useJobs();
+  const [deleteConfirm, setDeleteConfirm] = useState<{ jobId: string; jobName: string } | null>(null);
   const { createChat } = useChat();
   const { createTab, switchToTab } = useTabStore();
   const artifacts = useArtifactsStore((s) => s.artifacts);
@@ -125,6 +127,20 @@ export function JobsView() {
       });
     },
     [createChat, createTab, switchToTab, logsByJobId],
+  );
+
+  const handleDeleteJob = useCallback(
+    async (jobId: string) => {
+      setDeleteConfirm(null);
+      await deleteJob(jobId, true);
+      if (expandedJobId === jobId) {
+        setExpandedJobId(null);
+      }
+      if (workflowSelectedJobId === jobId) {
+        setWorkflowSelectedJobId(null);
+      }
+    },
+    [deleteJob, expandedJobId, workflowSelectedJobId],
   );
 
   useEffect(() => {
@@ -473,6 +489,12 @@ export function JobsView() {
                   >
                     Diagnose
                   </button>
+                  <button
+                    className="jv2-wf-action-btn jv2-wf-action-btn--danger"
+                    onClick={() => setDeleteConfirm({ jobId: job.id, jobName: job.name })}
+                  >
+                    Delete
+                  </button>
                 </>
               )}
             </div>
@@ -604,6 +626,12 @@ export function JobsView() {
                 onClick={() => handleDiagnose(job)}
               >
                 Diagnose
+              </button>
+              <button
+                className="jv2-wf-action-btn jv2-wf-action-btn--danger"
+                onClick={() => setDeleteConfirm({ jobId: job.id, jobName: job.name })}
+              >
+                Delete
               </button>
             </>
           )}
@@ -896,6 +924,34 @@ export function JobsView() {
             </div>
           </div>
         </>
+      )}
+
+      {/* Delete confirmation modal */}
+      {deleteConfirm && (
+        <div className="jv2-modal-overlay" onClick={() => setDeleteConfirm(null)}>
+          <div className="jv2-modal" onClick={(e) => e.stopPropagation()}>
+            <h3 className="jv2-modal-title">Delete Job</h3>
+            <p className="jv2-modal-text">
+              Are you sure you want to delete <strong>{deleteConfirm.jobName}</strong>?
+              This will remove the job and all its files (scripts, logs, local database).
+              Any Turso cloud database for this job will also be deleted.
+            </p>
+            <div className="jv2-modal-actions">
+              <button
+                className="jv2-modal-btn"
+                onClick={() => setDeleteConfirm(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="jv2-modal-btn jv2-modal-btn--danger"
+                onClick={() => void handleDeleteJob(deleteConfirm.jobId)}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

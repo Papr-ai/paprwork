@@ -56,6 +56,21 @@ export class AgentStreamConcurrencyGate {
     };
   }
 
+  /**
+   * Force-release any lease for a specific chatId.
+   * Use when stopping a stream to immediately free the slot for a replacement.
+   */
+  forceReleaseByChatId(chatId: string): boolean {
+    const existing = this.active.get(chatId);
+    if (!existing) return false;
+    this.active.delete(chatId);
+    console.log(
+      `[AgentStreamConcurrency] Force-released lease for ${chatId}`,
+    );
+    this.drainQueue();
+    return true;
+  }
+
   async acquire(
     chatId: string,
     signal?: AbortSignal,

@@ -191,14 +191,42 @@ export interface ValidationIssue {
 export interface DeleteAppOptions {
   /** When true, unpublish from cloud before deleting local files. Required if app is live on apps.papr.ai. */
   unpublishFromCloud?: boolean;
+  /** When true, also delete jobs that are exclusively linked to this app. */
+  deleteLinkedJobs?: boolean;
+  /** When true, also delete Turso cloud databases for deleted jobs. */
+  deleteTursoDatabases?: boolean;
+  /** When true, user has reviewed all deletion details and confirmed. */
+  confirmed?: boolean;
+}
+
+export interface LinkedJobInfo {
+  id: string;
+  name: string;
+  type: string; // JobType at runtime, but we use string for flexibility
+  hasTursoDb?: boolean;
+}
+
+export interface DeleteAppPreview {
+  appId: string;
+  appTitle: string;
+  /** Whether app is published to the web */
+  isPublished: boolean;
+  shareUrl?: string | null;
+  /** Jobs that are exclusively linked to this app */
+  linkedJobs: LinkedJobInfo[];
+  /** Number of Turso cloud databases that would be deleted */
+  tursoDbCount: number;
 }
 
 export interface DeleteAppResult {
   deleted: boolean;
   unpublished?: boolean;
-  requiresUnpublishConfirm?: boolean;
-  shareUrl?: string | null;
-  appTitle?: string;
+  /** Preview info for deletion confirmation UI */
+  preview?: DeleteAppPreview;
+  /** Number of jobs that were deleted */
+  deletedJobCount?: number;
+  /** Number of Turso databases that were deleted */
+  deletedTursoDbCount?: number;
 }
 
 export interface ValidationResult {
@@ -1753,6 +1781,7 @@ export class AppService {
       return { deleted: false };
     }
 
+    // Check cloud publish status
     let cloudStatus: { published: boolean; shareUrl: string | null } = {
       published: false,
       shareUrl: null,
@@ -1761,13 +1790,6 @@ export class AppService {
       const { getCloudAppPublishService } = await import(
         "./CloudAppPublishService.js"
       );
-      // This is a network round-trip to the memory server, and cloudApiFetch
-      // allows itself 60s. When it ran long, the whole delete blocked behind
-      // it and the UI reported "Request timeout" even though nothing had
-      // failed. The check is only an optimisation to decide whether to ask
-      // the user for unpublish confirmation, so cap it well under the
-      // client's budget and treat a slow answer as "not published" —
-      // matching the existing behaviour when the request errors.
       cloudStatus = await withTimeout(
         getCloudAppPublishService().getCloudPublishStatus(id),
         CLOUD_PUBLISH_STATUS_TIMEOUT_MS,
@@ -1780,14 +1802,80 @@ export class AppService {
       );
     }
 
-    if (cloudStatus.published && options?.unpublishFromCloud !== true) {
+    // Check for exclusively linked jobs and Turso databases
+    let exclusiveJobs: LinkedJobInfo[] = [];
+    let tursoDbCount = 0;
+    try {
+      const { getJobsService } = await import("./JobsService.js");
+      const jobsService = getJobsService();
+      const graph = await jobsService.getJobGraph();
+      
+      if (graph) {
+        const thisAppJobIds = new Set(graph.appLinks[id]?.jobIds ?? []);
+        
+        // Find jobs that are ONLY linked to this app
+        const jobIdsInOtherApps = new Set<string>();
+        for (const [appId, link] of Object.entries(graph.appLinks)) {
+          if (appId !== id) {
+            for (const jobId of link.jobIds) {
+              jobIdsInOtherApps.add(jobId);
+            }
+          }
+        }
+        
+        const exclusiveJobIds = [...thisAppJobIds].filter(
+          (jobId) => !jobIdsInOtherApps.has(jobId)
+        );
+        
+        if (exclusiveJobIds.length > 0) {
+          const allJobs = await jobsService.listJobs();
+          
+          // Check for Turso databases
+          let tursoLinkedJobIds: string[] = [];
+          try {
+            const { getTursoSyncBridge } = await import("./TursoSyncBridge.js");
+            const bridge = getTursoSyncBridge();
+            if (bridge) {
+              tursoLinkedJobIds = await bridge.listJobIdsForTursoSync();
+            }
+          } catch {
+            // Turso not configured
+          }
+          
+          exclusiveJobs = exclusiveJobIds
+            .map((jobId): LinkedJobInfo | null => {
+              const job = allJobs.find((j) => j.id === jobId);
+              if (!job) return null;
+              const hasTursoDb = tursoLinkedJobIds.includes(jobId);
+              if (hasTursoDb) tursoDbCount++;
+              return { id: job.id, name: job.name, type: job.type as string, hasTursoDb };
+            })
+            .filter((j): j is LinkedJobInfo => j !== null);
+        }
+      }
+    } catch (error) {
+      console.warn(
+        `[AppService] Could not check linked jobs for ${id}:`,
+        (error as Error).message,
+      );
+    }
+
+    // If user hasn't confirmed, return preview for the deletion modal
+    if (!options?.confirmed) {
       return {
         deleted: false,
-        requiresUnpublishConfirm: true,
-        shareUrl: cloudStatus.shareUrl,
-        appTitle: app.title,
+        preview: {
+          appId: id,
+          appTitle: app.title,
+          isPublished: cloudStatus.published,
+          shareUrl: cloudStatus.shareUrl,
+          linkedJobs: exclusiveJobs,
+          tursoDbCount,
+        },
       };
     }
+
+    // --- User has confirmed, proceed with deletion ---
 
     let unpublished = false;
     if (cloudStatus.published && options?.unpublishFromCloud === true) {
@@ -1796,6 +1884,49 @@ export class AppService {
       );
       await getCloudAppPublishService().unpublishApp(id);
       unpublished = true;
+    }
+
+    // Delete linked jobs and their Turso databases if requested
+    let deletedJobCount = 0;
+    let deletedTursoDbCount = 0;
+    if (options?.deleteLinkedJobs && exclusiveJobs.length > 0) {
+      try {
+        const { getJobsService } = await import("./JobsService.js");
+        const jobsService = getJobsService();
+        
+        // Get Turso bridge for database cleanup
+        let tursoSyncBridge: Awaited<ReturnType<typeof import("./TursoSyncBridge.js").getTursoSyncBridge>> | null = null;
+        if (options?.deleteTursoDatabases) {
+          try {
+            const { getTursoSyncBridge } = await import("./TursoSyncBridge.js");
+            tursoSyncBridge = getTursoSyncBridge();
+          } catch {
+            // Turso not configured
+          }
+        }
+        
+        for (const job of exclusiveJobs) {
+          // Delete Turso database first (if requested and exists)
+          if (options?.deleteTursoDatabases && job.hasTursoDb && tursoSyncBridge) {
+            try {
+              const deleted = await tursoSyncBridge.deleteJobTursoDatabase(job.id);
+              if (deleted) deletedTursoDbCount++;
+            } catch (error) {
+              console.warn(`[AppService] Could not delete Turso DB for job ${job.id}:`, error);
+            }
+          }
+          
+          // Delete the job
+          await jobsService.deleteJob(job.id, true);
+          deletedJobCount++;
+        }
+        console.log(`[AppService] Deleted ${deletedJobCount} jobs and ${deletedTursoDbCount} Turso DBs for app: ${id}`);
+      } catch (error) {
+        console.error(
+          `[AppService] Error deleting linked jobs for ${id}:`,
+          error,
+        );
+      }
     }
 
     const { removeAppPublishPrefs } = await import("./cloudPublishPrefs.js");
@@ -1829,7 +1960,7 @@ export class AppService {
     }).catch(() => {});
 
     console.log(`[AppService] Deleted app: ${id}`);
-    return { deleted: true, unpublished };
+    return { deleted: true, unpublished, deletedJobCount, deletedTursoDbCount };
   }
 
   /**

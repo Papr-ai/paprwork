@@ -3325,7 +3325,7 @@ export function initializePaprLoginIPC(
 
       if (!useDeepLinkOnly) {
         try {
-          redirectUri = await startPaprAuthCallbackServer(async (params) => {
+          redirectUri = await startPaprAuthCallbackServer(async (params, verificationCode) => {
             const oauthError = params.get("error");
             if (oauthError) {
               notifyLoginError(
@@ -3338,6 +3338,13 @@ export function initializePaprLoginIPC(
               return;
             }
             try {
+              // Store verification code with OAuth params for manual entry fallback
+              const { storeVerificationCode } = await import("./paprAuthCallbackServer.js");
+              storeVerificationCode(verificationCode, {
+                code: params.get("code"),
+                state: params.get("state"),
+              });
+
               await completePaprAuthCallback(
                 params.get("code"),
                 params.get("state"),
@@ -3488,6 +3495,52 @@ export function initializePaprLoginIPC(
       return {
         success: false,
         error: error instanceof Error ? error.message : "Logout failed",
+      };
+    }
+  });
+
+  // Verify manual code — fallback when automatic callback fails
+  ipcMain.handle("papr:verify-manual-code", async (_event, code: string) => {
+    try {
+      if (!code || typeof code !== "string") {
+        return { success: false, error: "Invalid code format" };
+      }
+
+      const { verifyCode } = await import("./paprAuthCallbackServer.js");
+      const result = verifyCode(code);
+
+      if (!result.valid || !result.sessionData) {
+        return {
+          success: false,
+          error: "Invalid or expired code. Please try signing in again.",
+        };
+      }
+
+      // The sessionData contains the OAuth code and state from the original callback
+      const sessionData = result.sessionData as { code?: string; state?: string };
+      if (!sessionData.code || !sessionData.state) {
+        return {
+          success: false,
+          error: "Session data incomplete. Please try signing in again.",
+        };
+      }
+
+      console.log("[PaprLogin] Manual code verified, completing auth callback");
+
+      // Complete the OAuth flow with the stored code and state
+      await completePaprAuthCallback(
+        sessionData.code,
+        sessionData.state,
+        customKeysStorage,
+        settingsStorage,
+      );
+
+      return { success: true };
+    } catch (error) {
+      console.error("[PaprLogin] Manual code verification failed:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Verification failed",
       };
     }
   });

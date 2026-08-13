@@ -1603,6 +1603,23 @@ export class CloudSyncService {
       .filter((filePath) => paths.some((prefix) => this.pathMatchesPrefix(filePath, prefix)));
   }
 
+  /**
+   * Detect files staged for deletion (exist in index but not working tree).
+   * Used as a safety check to prevent accidental mass deletions from uninitialized working tree.
+   */
+  private async detectStagedDeletions(): Promise<string[]> {
+    try {
+      // git diff --cached --diff-filter=D shows only deleted files
+      const deleted = await this.git(["diff", "--cached", "--diff-filter=D", "--name-only"]);
+      if (!deleted) {
+        return [];
+      }
+      return deleted.split("\n").filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
   private async amendRepoHeadMarkerIntoLatestCommit(): Promise<void> {
     try {
       const headSha = (await this.git(["rev-parse", "HEAD"])).trim();
@@ -1698,6 +1715,25 @@ export class CloudSyncService {
     ];
     await this.git(["add", "--", ...stagePaths]);
     await this.unstageOversizedFiles();
+
+    // SAFETY: Detect accidental mass deletions (e.g., empty workspace after clone)
+    const deletedFiles = await this.detectStagedDeletions();
+    if (deletedFiles.length > 5) {
+      console.error(
+        `[CloudSync] SAFETY BLOCK: Refusing to commit ${deletedFiles.length} file deletions. ` +
+        `This may indicate an uninitialized working tree. First 5: ${deletedFiles.slice(0, 5).join(", ")}`,
+      );
+      await this.git(["reset", "HEAD", "--", ...stagePaths]);
+      // Try to restore working tree from HEAD
+      try {
+        await this.git(["checkout", "HEAD", "--", "."]);
+        console.log("[CloudSync] Restored working tree from HEAD to prevent data loss");
+      } catch {
+        /* empty repo or other issue */
+      }
+      return false;
+    }
+
     const stagedFiles = await this.getStagedFilesUnder(changedPaths);
     if (stagedFiles.length === 0) {
       const reconciled = await this.reconcilePathsIfGitClean(changedPaths);
@@ -1946,6 +1982,20 @@ export class CloudSyncService {
         fs.cpSync(path.join(tempDir, ".git"), path.join(this.paprDir, ".git"), { recursive: true });
       }
       fs.rmSync(tempDir, { recursive: true, force: true });
+
+      // CRITICAL: Restore working tree from cloned HEAD to prevent accidental deletions.
+      // Without this, the empty workspace scaffold would be committed as "delete all files"
+      // because git sees files in HEAD but not in working tree as deletions.
+      try {
+        await this.git(["checkout", "HEAD", "--", "."]);
+        console.log("[CloudSync] Restored working tree from cloned HEAD");
+      } catch (checkoutErr) {
+        // If checkout fails (e.g., empty repo), continue — no files to restore
+        console.log(
+          "[CloudSync] Working tree checkout skipped:",
+          (checkoutErr as Error).message.slice(0, 100),
+        );
+      }
     } catch (err) {
       fs.rmSync(tempDir, { recursive: true, force: true });
       throw err;
@@ -2153,6 +2203,27 @@ export class CloudSyncService {
         this.git(args, opts),
       );
       if (classification === "not_needed") {
+        // Check if remote is actually ahead — if so, merge the legacy commits
+        // even though they're "not_needed" (ignorable) so git history is linear.
+        const behindRaw = await this.git([
+          "rev-list",
+          "--count",
+          "HEAD..origin/main",
+        ]);
+        const behindCount = parseInt(behindRaw.trim(), 10) || 0;
+        if (behindCount > 0) {
+          console.log(
+            `[CloudSync] Auto-merging ${behindCount} legacy job status commit(s) to linearize history`,
+          );
+          await mergeRemoteMainIntoLocal((args, opts) => this.git(args, opts), {
+            stashMessage: "cloud-sync-auto-reconcile-legacy",
+          });
+          this.state.gitUpdatesAvailable = false;
+          this.state.gitUpdatesSummary = null;
+          this.state.gitRemoteChangedPaths = null;
+          this.state.lastSyncAt = new Date().toISOString();
+          return "merged";
+        }
         if (isJobRuntimeOffGit()) {
           this.state.gitUpdatesAvailable = false;
           this.state.gitUpdatesSummary = null;
@@ -2189,9 +2260,10 @@ export class CloudSyncService {
       console.log("[CloudSync] Auto-merged cloud runtime metadata");
       return "merged";
     } catch (err) {
+      const errMsg = (err as Error).message;
       console.warn(
         "[CloudSync] Auto-reconcile failed:",
-        (err as Error).message.slice(0, 120),
+        errMsg.length > 300 ? errMsg.slice(0, 300) + "..." : errMsg,
       );
       try {
         await this.refreshGitUpdatesAvailable();

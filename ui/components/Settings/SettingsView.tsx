@@ -1010,6 +1010,50 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.3.1" && (
+          <div className="about-card">
+            <h3>What's New in v2.3.1</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Cloud Sync Safety</strong>
+                <p>
+                  Fixes a critical bug where switching namespace could wipe
+                  cloud data. Adds safety checks before git push.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Smarter App Delete</strong>
+                <p>
+                  New delete modal shows linked jobs, Turso databases, and
+                  publish status — type the app name to confirm.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Auth Reliability</strong>
+                <p>
+                  Dynamic localhost ports, manual 6-digit code fallback, and
+                  faster feedback when browser sign-in fails.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Job Delete + Turso Cleanup</strong>
+                <p>
+                  Delete jobs from the Jobs view with optional Turso cloud
+                  database removal.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.3.1"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.3.0" && (
           <div className="about-card">
             <h3>What's New in v2.3.0</h3>

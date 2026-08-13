@@ -233,6 +233,14 @@
   height: 12px;
 }
 
+/* Image icons (PNG/JPG data URLs or HTTP URLs) */
+.cmd-palette__app-orb-icon--image {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
 @media (prefers-color-scheme: dark) {
   .cmd-palette__app-orb {
     /* Dark mode: dark droplet PNG */

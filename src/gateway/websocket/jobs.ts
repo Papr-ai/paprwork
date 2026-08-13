@@ -81,6 +81,7 @@ interface JobLogsPayload {
 interface DeleteJobPayload {
   jobId: string;
   deleteFiles?: boolean;
+  deleteTursoDb?: boolean;
 }
 
 interface UpdateJobPayload {
@@ -233,8 +234,9 @@ export async function setupJobsHandlers(
         const result = await jobsService.deleteJob(
           payload.jobId,
           payload.deleteFiles ?? false,
+          payload.deleteTursoDb ?? false,
         );
-        sendResponse(ws, { id: message.id, success: true, data: result });
+        sendResponse(ws, { id: message.id, success: true, data: { deleted: true, ...result } });
         break;
       }
       case "jobs:logs": {

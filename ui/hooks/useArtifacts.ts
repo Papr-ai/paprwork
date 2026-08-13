@@ -190,7 +190,12 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
     async (
       id: string,
       type: "document" | "app",
-      options?: { unpublishFromCloud?: boolean },
+      options?: {
+        unpublishFromCloud?: boolean;
+        deleteLinkedJobs?: boolean;
+        deleteTursoDatabases?: boolean;
+        confirmed?: boolean;
+      },
     ) => {
       setError(null);
 
@@ -211,33 +216,44 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
           messageType,
           {
             [payloadKey]: id,
-            ...(type === "app" && options?.unpublishFromCloud
-              ? { unpublishFromCloud: true }
-              : {}),
+            ...(type === "app" ? {
+              unpublishFromCloud: options?.unpublishFromCloud ?? false,
+              deleteLinkedJobs: options?.deleteLinkedJobs ?? false,
+              deleteTursoDatabases: options?.deleteTursoDatabases ?? false,
+              confirmed: options?.confirmed ?? false,
+            } : {}),
           },
           { timeoutMs: 90_000 },
         );
         const data = response.data as {
           deleted?: boolean;
-          requiresUnpublishConfirm?: boolean;
-          shareUrl?: string | null;
+          preview?: {
+            appId: string;
+            appTitle: string;
+            isPublished: boolean;
+            shareUrl?: string | null;
+            linkedJobs: Array<{ id: string; name: string; type: string; hasTursoDb?: boolean }>;
+            tursoDbCount: number;
+          };
+          deletedJobCount?: number;
+          deletedTursoDbCount?: number;
         };
-        // Server says the app is live on the web. This is NOT an error — the
-        // caller must re-prompt and retry with unpublishFromCloud: true. The
-        // local publish cache goes stale (deleted/unpublished elsewhere), so
-        // AppsView cannot reliably pre-detect this before calling.
-        if (data?.requiresUnpublishConfirm) {
+        // Server returned a preview for the deletion modal
+        if (data?.preview) {
           return {
             deleted: false,
-            requiresUnpublishConfirm: true,
-            shareUrl: data.shareUrl ?? null,
+            preview: data.preview,
           };
         }
         if (data?.deleted === false) {
           throw new Error(`Failed to delete ${type}`);
         }
         removeArtifact(id);
-        return { deleted: true };
+        return { 
+          deleted: true, 
+          deletedJobCount: data.deletedJobCount,
+          deletedTursoDbCount: data.deletedTursoDbCount,
+        };
       } catch (err) {
         const message =
           err instanceof Error ? err.message : `Failed to delete ${type}`;

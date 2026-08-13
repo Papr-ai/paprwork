@@ -1,9 +1,15 @@
 /**
  * OAuth Callback Server - Temporary HTTP server for OAuth callbacks
  * Handles OAuth redirect callbacks for OpenAI and Claude
+ *
+ * Features:
+ * - Dynamic port selection (tries multiple ports if primary is busy)
+ * - Automatic timeout and cleanup
+ * - Custom success/error pages
  */
 
 import http from "http";
+import net from "net";
 import { URL } from "url";
 
 export interface CallbackServerOptions {
@@ -13,34 +19,111 @@ export interface CallbackServerOptions {
   hostname?: string; // Hostname to bind to (default: "127.0.0.1")
   successHtml?: string; // Custom success page HTML
   onCallback?: (params: URLSearchParams) => void;
+  maxPortAttempts?: number; // Number of ports to try (default: 10)
+}
+
+/**
+ * Check if a port is available for binding
+ */
+async function isPortAvailable(
+  port: number,
+  hostname: string = "127.0.0.1",
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once("error", () => resolve(false));
+    server.once("listening", () => {
+      server.close();
+      resolve(true);
+    });
+    server.listen(port, hostname);
+  });
+}
+
+/**
+ * Find an available port starting from the given port
+ */
+export async function findAvailablePort(
+  startPort: number,
+  hostname: string = "127.0.0.1",
+  maxAttempts: number = 10,
+): Promise<number> {
+  for (let i = 0; i < maxAttempts; i++) {
+    const port = startPort + i;
+    if (await isPortAvailable(port, hostname)) {
+      return port;
+    }
+    console.log(`[OAuthCallback] Port ${port} is busy, trying next...`);
+  }
+  throw new Error(
+    `No available ports found in range ${startPort}-${startPort + maxAttempts - 1}`,
+  );
 }
 
 export class OAuthCallbackServer {
   private server: http.Server | null = null;
-  private port: number;
+  private requestedPort: number;
+  private actualPort: number | null = null;
   private timeout: number;
   private callbackPath: string;
   private hostname: string;
   private successHtml?: string;
   private timeoutHandle: NodeJS.Timeout | null = null;
   private onCallback?: (params: URLSearchParams) => void;
+  private maxPortAttempts: number;
 
   constructor(options: CallbackServerOptions) {
-    this.port = options.port;
+    this.requestedPort = options.port;
     this.timeout = options.timeout || 60000; // 1 minute default
     this.callbackPath = options.callbackPath || "/auth/callback";
     this.hostname = options.hostname || "127.0.0.1";
     this.successHtml = options.successHtml;
     this.onCallback = options.onCallback;
+    this.maxPortAttempts = options.maxPortAttempts || 10;
   }
 
   /**
-   * Start the callback server
+   * Get the actual port the server is running on (may differ from requested if that was busy)
+   */
+  getPort(): number | null {
+    return this.actualPort;
+  }
+
+  /**
+   * Get the full callback URL
+   */
+  getCallbackUrl(): string | null {
+    if (!this.actualPort) return null;
+    return `http://${this.hostname}:${this.actualPort}${this.callbackPath}`;
+  }
+
+  /**
+   * Start the callback server with dynamic port selection
    */
   async start(): Promise<void> {
     if (this.server) {
       throw new Error("Callback server already running");
     }
+
+    // Find an available port (dynamic port selection)
+    try {
+      this.actualPort = await findAvailablePort(
+        this.requestedPort,
+        this.hostname,
+        this.maxPortAttempts,
+      );
+      if (this.actualPort !== this.requestedPort) {
+        console.log(
+          `[OAuthCallback] Primary port ${this.requestedPort} busy, using ${this.actualPort}`,
+        );
+      }
+    } catch (portError) {
+      throw new Error(
+        `Failed to find available port: ${portError instanceof Error ? portError.message : String(portError)}`,
+      );
+    }
+
+    const port = this.actualPort;
 
     return new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => {
@@ -53,7 +136,7 @@ export class OAuthCallbackServer {
           }
 
           // Parse query parameters
-          const url = new URL(req.url, `http://localhost:${this.port}`);
+          const url = new URL(req.url, `http://localhost:${port}`);
           const params = url.searchParams;
 
           // Check for error
@@ -181,9 +264,9 @@ export class OAuthCallbackServer {
         reject(error);
       });
 
-      this.server.listen(this.port, this.hostname, () => {
+      this.server.listen(port, this.hostname, () => {
         console.log(
-          `[OAuthCallback] Listening on http://${this.hostname}:${this.port}${this.callbackPath}`,
+          `[OAuthCallback] Listening on http://${this.hostname}:${port}${this.callbackPath}`,
         );
 
         // Set timeout to auto-close

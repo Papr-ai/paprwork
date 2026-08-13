@@ -255,7 +255,10 @@ export function categorizeWorkingTreePathsForRemoteMerge(paths: readonly string[
   for (const relativePath of paths) {
     if (
       isCloudRuntimeMetadataGitPath(relativePath) ||
-      isEphemeralLocalSyncStatePath(relativePath)
+      isEphemeralLocalSyncStatePath(relativePath) ||
+      // When JOB_RUNTIME_OFF_GIT=1, legacy job status paths (Jobs/*/job.json, data/jobs.json)
+      // contain only runtime data locally — discard local changes, take remote.
+      (isJobRuntimeOffGit() && isLegacyJobRuntimeGitPath(relativePath))
     ) {
       restoreBeforeMerge.push(relativePath);
     } else {
@@ -438,7 +441,10 @@ export function inferGitRemoteReviewState(opts: {
       if (hasRemoteAppOrJobSourceChanges(paths)) {
         return { requiresReview: true, metadataSync: false };
       }
-      return { requiresReview: false, metadataSync: false };
+      // Even metadata-only paths need review if gitUpdatesAvailable is true —
+      // auto-merge already failed or wasn't possible, user must resolve manually.
+      // Returning false here would leave UI showing "Get updates" when push is blocked.
+      return { requiresReview: true, metadataSync: false };
     }
     if (summary && isCloudJobStatusWritebackSummary(summary)) {
       return { requiresReview: false, metadataSync: false };
@@ -537,6 +543,12 @@ export async function mergeRemoteMainIntoLocal(
   );
   let didStash = false;
   if (trackedStashPaths.length > 0) {
+    const pathspecs = trackedStashPaths.map(toLiteralPathspec);
+    console.log(
+      `[MergeRemote] Stashing ${trackedStashPaths.length} paths:`,
+      trackedStashPaths.slice(0, 5).join(", ") +
+        (trackedStashPaths.length > 5 ? ` ... and ${trackedStashPaths.length - 5} more` : ""),
+    );
     // Path-scoped stash — stashing 200+ job.json files overwhelms the git index.
     await runGitWithIndexRetry(runGit, [
       "stash",
@@ -544,7 +556,7 @@ export async function mergeRemoteMainIntoLocal(
       "-m",
       stashMessage,
       "--",
-      ...trackedStashPaths.map(toLiteralPathspec),
+      ...pathspecs,
     ]);
     didStash = true;
   }

@@ -2377,6 +2377,18 @@ const deleteAppSchema = z.object({
     .describe(
       "Set true when deleting a published app to also remove it from apps.papr.ai. Required if the app is live on the web.",
     ),
+  deleteLinkedJobs: z
+    .boolean()
+    .optional()
+    .describe("Set true to also delete jobs that are exclusively linked to this app."),
+  deleteTursoDatabases: z
+    .boolean()
+    .optional()
+    .describe("Set true to also delete Turso cloud databases for the deleted jobs."),
+  confirmed: z
+    .boolean()
+    .optional()
+    .describe("Set true after confirming with the user. Required to actually perform the deletion."),
 });
 
 type DeleteAppArgs = z.infer<typeof deleteAppSchema>;
@@ -2385,7 +2397,13 @@ export const deleteAppTool = createTool({
   id: "delete_app",
   description: `Delete a mini-app by id. Removes the app from $PAPR_HOME/data/apps.json, deletes its app folder under appsRoot, and notifies the UI.
 
-If the app is published to the web, you MUST set unpublishFromCloud: true (after confirming with the user) so it is taken offline on apps.papr.ai.
+**Two-step flow:**
+1. First call WITHOUT confirmed: Returns a preview of what will be deleted (linked jobs, Turso DBs, published status)
+2. After confirming with user, call WITH confirmed: true and the appropriate options
+
+If the app is published to the web, set unpublishFromCloud: true.
+If the app has linked jobs, set deleteLinkedJobs: true to also delete them.
+If jobs have Turso cloud databases, set deleteTursoDatabases: true to delete those too.
 
 **Prefer this over bash/rm** when removing an app: deleting files only leaves stale entries in the apps list until the registry is reconciled.`,
   inputSchema: deleteAppSchema,
@@ -2398,17 +2416,34 @@ If the app is published to the web, you MUST set unpublishFromCloud: true (after
     await appService.initialize();
     const result = await appService.deleteApp(args.appId, {
       unpublishFromCloud: args.unpublishFromCloud === true,
+      deleteLinkedJobs: args.deleteLinkedJobs === true,
+      deleteTursoDatabases: args.deleteTursoDatabases === true,
+      confirmed: args.confirmed === true,
     });
-    if (result.requiresUnpublishConfirm) {
+    // Return preview for confirmation
+    if (result.preview) {
+      const preview = result.preview;
+      const items: string[] = [`App: "${preview.appTitle}"`];
+      if (preview.isPublished) {
+        items.push(`Published at: ${preview.shareUrl ?? "apps.papr.ai"}`);
+      }
+      if (preview.linkedJobs.length > 0) {
+        items.push(`Linked jobs (${preview.linkedJobs.length}): ${preview.linkedJobs.map(j => j.name).join(", ")}`);
+      }
+      if (preview.tursoDbCount > 0) {
+        items.push(`Turso cloud databases: ${preview.tursoDbCount}`);
+      }
       return {
         success: false,
-        error: `App "${result.appTitle ?? args.appId}" is published${
-          result.shareUrl ? ` at ${result.shareUrl}` : ""
-        }. Ask the user to confirm, then call delete_app again with unpublishFromCloud: true to remove it locally and unpublish from the web.`,
+        error: `Confirm deletion with user. What will be deleted:\n${items.join("\n")}\n\nAfter confirmation, call delete_app again with confirmed: true and appropriate options (unpublishFromCloud, deleteLinkedJobs, deleteTursoDatabases).`,
         data: {
-          requiresUnpublishConfirm: true,
-          shareUrl: result.shareUrl ?? null,
-          appId: args.appId,
+          preview: true,
+          appId: preview.appId,
+          appTitle: preview.appTitle,
+          isPublished: preview.isPublished,
+          shareUrl: preview.shareUrl ?? null,
+          linkedJobs: preview.linkedJobs,
+          tursoDbCount: preview.tursoDbCount,
         },
         duration: performance.now() - startTime,
         timestamp: new Date().toISOString(),
@@ -2428,6 +2463,8 @@ If the app is published to the web, you MUST set unpublishFromCloud: true (after
         deleted: true,
         appId: args.appId,
         unpublished: result.unpublished === true,
+        deletedJobCount: result.deletedJobCount ?? 0,
+        deletedTursoDbCount: result.deletedTursoDbCount ?? 0,
       },
       duration: performance.now() - startTime,
       timestamp: new Date().toISOString(),

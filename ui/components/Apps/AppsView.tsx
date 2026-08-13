@@ -11,6 +11,7 @@ import { AppCard } from "./AppCard";
 import { CommunityAppsView } from "./CommunityAppsView";
 import { CreateAppModal } from "./CreateAppModal";
 import { CopyAppModal } from "./CopyAppModal";
+import { DeleteAppModal } from "./DeleteAppModal";
 import { usePaprNamespace } from "../../hooks/usePaprNamespace";
 import "./AppsView.css";
 import type { Artifact } from "../../stores/artifactsStore";
@@ -98,6 +99,14 @@ export function AppsView() {
   const [publishRevision, setPublishRevision] = useState(0);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [copyAppTarget, setCopyAppTarget] = useState<Artifact | null>(null);
+  const [deletePreview, setDeletePreview] = useState<{
+    appId: string;
+    appTitle: string;
+    isPublished: boolean;
+    shareUrl?: string | null;
+    linkedJobs: Array<{ id: string; name: string; type: string; hasTursoDb?: boolean }>;
+    tursoDbCount: number;
+  } | null>(null);
   const [otherNamespaceCount, setOtherNamespaceCount] = useState(0);
   const [otherOrganizationCount, setOtherOrganizationCount] = useState(0);
   const [currentOrganizationId, setCurrentOrganizationId] = useState<string | null>(
@@ -202,46 +211,31 @@ export function AppsView() {
   };
 
   const handleDelete = async (id: string) => {
-    const isPublished = publishedIds.has(id);
-    const shareUrl = readCachedCloudPublishState(id)?.shareUrl;
-
-    if (isPublished) {
-      const message = shareUrl
-        ? `“${allApps.find((a) => a.id === id)?.title ?? "This app"}” is published at:\n${shareUrl}\n\nDeleting will remove it from this workspace AND unpublish it from the web.\n\nContinue?`
-        : `This app is published to the web.\n\nDeleting will remove it locally AND unpublish it from apps.papr.ai.\n\nContinue?`;
-      if (!confirm(message)) {
-        return;
-      }
-      try {
-        await deleteArtifact(id, "app", { unpublishFromCloud: true });
-      } catch {
-        /* useArtifacts sets error */
-      }
-      return;
-    }
-
-    if (!confirm("Are you sure you want to delete this app?")) {
-      return;
-    }
-
     try {
+      // First call to get the deletion preview
       const result = await deleteArtifact(id, "app");
-      // The cached publish state can be stale or absent (e.g. apps published by
-      // a background sync, or a cache cleared on reinstall). In that case the
-      // first delete comes back as requiresUnpublishConfirm instead of
-      // deleting — re-prompt here rather than silently doing nothing.
-      if (result?.requiresUnpublishConfirm) {
-        const title = allApps.find((a) => a.id === id)?.title ?? "This app";
-        const where = result.shareUrl ? `\n${result.shareUrl}\n` : "";
-        if (
-          !confirm(
-            `“${title}” is published to the web.${where}\nDeleting will remove it from this workspace AND unpublish it from apps.papr.ai.\n\nContinue?`,
-          )
-        ) {
-          return;
-        }
-        await deleteArtifact(id, "app", { unpublishFromCloud: true });
+      if (result?.preview) {
+        // Show the deletion modal with the preview
+        setDeletePreview(result.preview);
       }
+    } catch {
+      /* useArtifacts sets error */
+    }
+  };
+
+  const handleConfirmDelete = async (options: {
+    deleteLinkedJobs: boolean;
+    deleteTursoDatabases: boolean;
+    unpublishFromCloud: boolean;
+  }) => {
+    if (!deletePreview) return;
+    
+    try {
+      await deleteArtifact(deletePreview.appId, "app", {
+        ...options,
+        confirmed: true,
+      });
+      setDeletePreview(null);
     } catch {
       /* useArtifacts sets error */
     }
@@ -701,6 +695,12 @@ export function AppsView() {
           void loadArtifacts();
           setPublishRevision((value) => value + 1);
         }}
+      />
+      <DeleteAppModal
+        isOpen={deletePreview !== null}
+        preview={deletePreview}
+        onClose={() => setDeletePreview(null)}
+        onConfirm={handleConfirmDelete}
       />
     </div>
   );

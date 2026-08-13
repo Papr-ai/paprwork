@@ -226,6 +226,20 @@ export function useJobs() {
     return updated;
   }, []);
 
+  const deleteJob = useCallback(
+    async (jobId: string, deleteFiles = true, deleteTursoDb = true) => {
+      setError(null);
+      const response = await gateway.send("jobs:delete", { jobId, deleteFiles, deleteTursoDb });
+      const result = response.data as { deleted: boolean; tursoDbDeleted?: boolean };
+      if (result.deleted) {
+        setJobs((prev) => prev.filter((job) => job.id !== jobId));
+        void loadGraph();
+      }
+      return result;
+    },
+    [loadGraph],
+  );
+
   useEffect(() => {
     void loadJobs(false);
     void loadGraph();
@@ -304,6 +318,7 @@ export function useJobs() {
     createScheduledJob,
     runJob,
     stopJob,
+    deleteJob,
     loadLogs,
   };
 }

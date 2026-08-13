@@ -160,22 +160,41 @@
   line-height: 1.5;
 }
 
+.auth-wall-refresh-section {
+  margin-top: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
 .auth-wall-refresh-button {
-  margin-top: 16px;
-  padding: 10px 24px;
-  font-size: 14px;
-  font-weight: 500;
-  color: #0080FF;
-  background: rgba(0, 128, 255, 0.1);
-  border: 1px solid rgba(0, 128, 255, 0.3);
-  border-radius: 8px;
+  padding: 12px 28px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  background: #0080FF;
+  border: none;
+  border-radius: 10px;
   cursor: pointer;
   transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 128, 255, 0.3);
 }
 
 .auth-wall-refresh-button:hover {
-  background: rgba(0, 128, 255, 0.15);
-  border-color: rgba(0, 128, 255, 0.5);
+  background: #0066cc;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 128, 255, 0.4);
+}
+
+.auth-wall-refresh-button:active {
+  transform: translateY(0);
+}
+
+.auth-wall-refresh-hint {
+  font-size: 12px;
+  color: var(--text-tertiary, #8e8e93);
+  margin: 0;
 }
 
 .auth-wall-spinner {
@@ -337,6 +356,105 @@
 /* ============================================
    Responsive Design
    ============================================ */
+
+/* Manual Code Entry */
+.auth-wall-manual-code {
+  margin-top: 32px;
+  padding-top: 24px;
+  width: 100%;
+  max-width: 320px;
+}
+
+.auth-wall-manual-code-divider {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.auth-wall-manual-code-divider::before,
+.auth-wall-manual-code-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border-secondary, rgba(0, 0, 0, 0.1));
+}
+
+.auth-wall-manual-code-divider span {
+  font-size: 12px;
+  color: var(--text-tertiary, #8e8e93);
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.auth-wall-manual-code-hint {
+  font-size: 13px;
+  color: var(--text-secondary, #636366);
+  margin: 0 0 12px;
+  text-align: center;
+  line-height: 1.4;
+}
+
+.auth-wall-manual-code-input-row {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+.auth-wall-manual-code-input {
+  width: 120px;
+  padding: 12px 16px;
+  font-size: 18px;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  text-align: center;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  border: 2px solid var(--border-secondary, rgba(0, 0, 0, 0.15));
+  border-radius: 10px;
+  background: var(--background-primary, #fff);
+  color: var(--text-primary, #1c1c1e);
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.auth-wall-manual-code-input:focus {
+  border-color: #0080FF;
+  box-shadow: 0 0 0 3px rgba(0, 128, 255, 0.15);
+}
+
+.auth-wall-manual-code-input::placeholder {
+  color: var(--text-tertiary, #c7c7cc);
+  font-weight: 400;
+}
+
+.auth-wall-manual-code-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.auth-wall-verify-button {
+  padding: 12px 20px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  background: #0080FF;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.auth-wall-verify-button:hover:not(:disabled) {
+  background: #0066cc;
+}
+
+.auth-wall-verify-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
 @media (max-width: 1024px) {
   .auth-wall--split {

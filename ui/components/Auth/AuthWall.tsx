@@ -45,6 +45,9 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showRefresh, setShowRefresh] = useState(false);
+  const [showManualCode, setShowManualCode] = useState(false);
+  const [manualCode, setManualCode] = useState("");
+  const [isVerifyingCode, setIsVerifyingCode] = useState(false);
   const [setupRequest, setSetupRequest] = useState<OrgNamespaceSetupRequest | null>(null);
   const authWallViewedTracked = useRef(false);
   const waitingForCallbackTracked = useRef(false);
@@ -152,19 +155,33 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
     };
   }, [handleAuthenticated]);
 
-  // Show helpful message if auth takes too long (deep link may not have fired)
+  // Show helpful options progressively as auth takes longer
   useEffect(() => {
     if (!isAuthenticating) return;
 
-    const timeout = setTimeout(() => {
-      trackAuthWallStep("login_timeout");
+    // Show "Check again" button after 5 seconds (fast feedback)
+    const refreshTimeout = setTimeout(() => {
       setShowRefresh(true);
-      setError(
-        "Sign-in is taking longer than expected. When your browser asks to open Papr Work, click Open or Allow, then switch back here and tap Check again.",
-      );
-    }, 90_000);
+    }, 5_000);
 
-    return () => clearTimeout(timeout);
+    // Show manual code option after 10 seconds
+    const manualCodeTimeout = setTimeout(() => {
+      setShowManualCode(true);
+    }, 10_000);
+
+    // Show helpful hint after 20 seconds
+    const hintTimeout = setTimeout(() => {
+      trackAuthWallStep("login_timeout");
+      setError(
+        "If you completed sign-in but nothing happened, use the verification code shown in your browser.",
+      );
+    }, 20_000);
+
+    return () => {
+      clearTimeout(refreshTimeout);
+      clearTimeout(manualCodeTimeout);
+      clearTimeout(hintTimeout);
+    };
   }, [isAuthenticating]);
 
   const handleAuth = async (mode: PaprLoginMode) => {
@@ -217,6 +234,44 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
     void checkAuthentication({ fromPoll: true });
   };
 
+  const handleManualCodeSubmit = async () => {
+    const cleanCode = manualCode.replace(/[^A-Z0-9]/gi, "").toUpperCase();
+    if (cleanCode.length !== 6) {
+      setError("Please enter a valid 6-character code");
+      return;
+    }
+
+    trackAuthWallStep("manual_code_submitted");
+    setIsVerifyingCode(true);
+    setError(null);
+
+    try {
+      const result = await window.electronAPI.papr.verifyManualCode(cleanCode);
+      if (result.success) {
+        trackAuthWallStep("manual_code_success");
+        await handleAuthenticated();
+      } else {
+        trackAuthWallStep("manual_code_failed", { error: result.error });
+        setError(result.error || "Invalid code. Please check and try again.");
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Failed to verify code";
+      trackAuthWallStep("manual_code_error", { error: errorMsg });
+      setError(errorMsg);
+    } finally {
+      setIsVerifyingCode(false);
+    }
+  };
+
+  const formatCodeInput = (value: string): string => {
+    // Remove non-alphanumeric, uppercase, and format as XXX-XXX
+    const clean = value.replace(/[^A-Z0-9]/gi, "").toUpperCase().slice(0, 6);
+    if (clean.length > 3) {
+      return `${clean.slice(0, 3)}-${clean.slice(3)}`;
+    }
+    return clean;
+  };
+
   if (isLoading) {
     return (
       <div className="auth-wall auth-wall--loading">
@@ -257,20 +312,58 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
             <div className="auth-wall-waiting">
               <div className="auth-wall-spinner" />
               <p className="auth-wall-status">
-                Return to Papr Work — we&apos;ll detect login automatically
+                Complete sign-in in your browser
               </p>
               <p className="auth-wall-hint">
-                Complete sign-in or sign-up in your browser, then switch back to this app.
+                When finished, your browser may ask to open Papr Work.
+                Click <strong>Open</strong> or <strong>Allow</strong> to continue.
               </p>
 
               {showRefresh && (
-                <button
-                  type="button"
-                  className="auth-wall-refresh-button"
-                  onClick={handleRefresh}
-                >
-                  Already signed in? Check again
-                </button>
+                <div className="auth-wall-refresh-section">
+                  <button
+                    type="button"
+                    className="auth-wall-refresh-button"
+                    onClick={handleRefresh}
+                  >
+                    I&apos;ve signed in — Check now
+                  </button>
+                </div>
+              )}
+
+              {showManualCode && (
+                <div className="auth-wall-manual-code">
+                  <div className="auth-wall-manual-code-divider">
+                    <span>or enter verification code</span>
+                  </div>
+                  <p className="auth-wall-manual-code-hint">
+                    Look for a 6-character code on the sign-in success page in your browser
+                  </p>
+                  <div className="auth-wall-manual-code-input-row">
+                    <input
+                      type="text"
+                      className="auth-wall-manual-code-input"
+                      placeholder="ABC-123"
+                      value={manualCode}
+                      onChange={(e) => setManualCode(formatCodeInput(e.target.value))}
+                      maxLength={7}
+                      disabled={isVerifyingCode}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          void handleManualCodeSubmit();
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="auth-wall-verify-button"
+                      onClick={() => void handleManualCodeSubmit()}
+                      disabled={isVerifyingCode || manualCode.replace(/-/g, "").length !== 6}
+                    >
+                      {isVerifyingCode ? "Verifying..." : "Verify"}
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
           ) : (

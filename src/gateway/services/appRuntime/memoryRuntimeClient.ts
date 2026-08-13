@@ -155,17 +155,31 @@ export async function fetchRuntimeVaultKeyNames(
 
 export async function syncRuntimeVaultKeys(
   auth: AppRuntimeRouteAuth,
-  keys: Array<{ name: string; value: string }>,
+  keys: Array<{
+    name: string;
+    value: string;
+    shareScope?: "user" | "namespace" | "org";
+    clientAccess?: "server" | "client";
+    permission?: string;
+  }>,
 ): Promise<{ synced: number }> {
   if (!auth.sessionToken) {
     throw new Error("Sign in required to save credentials");
   }
+  const vaultKeys = keys.map((key) => ({
+    name: key.name,
+    value: key.value,
+    shareScope: key.shareScope ?? "user",
+    clientAccess: key.clientAccess ?? "server",
+    permission: key.permission ?? "always_allow",
+    source: "manual",
+  }));
   const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/vault/sync`,
     {
       method: "POST",
       headers: runtimeHeaders(auth),
-      body: JSON.stringify(buildCloudVaultRequestBody(keys, auth.namespaceId ? "namespace" : "user")),
+      body: JSON.stringify(buildCloudVaultRequestBody(vaultKeys, "user")),
     },
   );
   if (!res.ok) {

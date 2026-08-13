@@ -2701,7 +2701,8 @@ export class JobsService {
   async deleteJob(
     jobId: string,
     deleteFiles = false,
-  ): Promise<{ id: string; name: string }> {
+    deleteTursoDb = false,
+  ): Promise<{ id: string; name: string; tursoDbDeleted?: boolean }> {
     const job = this.jobs.get(jobId);
     if (!job) {
       throw new Error(`Job not found: ${jobId}`);
@@ -2718,6 +2719,23 @@ export class JobsService {
       "./databasePromotion.js"
     );
     await preserveJobLinkedDatabasesBeforeDelete(jobId);
+
+    // Delete Turso cloud database if requested
+    let tursoDbDeleted = false;
+    if (deleteTursoDb) {
+      try {
+        const { getTursoSyncBridge } = await import("./TursoSyncBridge.js");
+        const bridge = getTursoSyncBridge();
+        if (bridge) {
+          tursoDbDeleted = await bridge.deleteJobTursoDatabase(jobId);
+          if (tursoDbDeleted) {
+            console.log(`[JobsService] Deleted Turso database for job: ${jobId}`);
+          }
+        }
+      } catch (error) {
+        console.warn(`[JobsService] Could not delete Turso database for ${jobId}:`, error);
+      }
+    }
 
     // Remove from index
     this.jobs.delete(jobId);
