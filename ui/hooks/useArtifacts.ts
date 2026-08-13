@@ -199,12 +199,24 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
           type === "document" ? "document:delete" : "app:delete";
         const payloadKey = type === "document" ? "documentId" : "appId";
 
-        const response = await gateway.send(messageType, {
-          [payloadKey]: id,
-          ...(type === "app" && options?.unpublishFromCloud
-            ? { unpublishFromCloud: true }
-            : {}),
-        });
+        // Deleting an app is not a local-only operation: the server checks
+        // cloud publish status, and an unpublish additionally flips every
+        // published App Files object to private one-by-one, then calls
+        // DELETE /v1/cloud/apps/publish. Each of those uses cloudApiFetch,
+        // whose own timeout is 60s — already twice the 30s default here, so
+        // a single slow request guaranteed a spurious "Request timeout" in
+        // the UI while the delete kept running server-side.
+        // Matches the 90s budget app:list already uses.
+        const response = await gateway.send(
+          messageType,
+          {
+            [payloadKey]: id,
+            ...(type === "app" && options?.unpublishFromCloud
+              ? { unpublishFromCloud: true }
+              : {}),
+          },
+          { timeoutMs: 90_000 },
+        );
         const data = response.data as {
           deleted?: boolean;
           requiresUnpublishConfirm?: boolean;

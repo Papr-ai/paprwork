@@ -88,6 +88,36 @@ export const DEFAULT_HOME_APP_ID = "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+/**
+ * Budget for the pre-delete cloud publish check. cloudApiFetch allows itself
+ * 60s, which exceeded the client's request timeout and surfaced as a bogus
+ * "Request timeout" in the Apps UI. Deleting must stay responsive, so give the
+ * check a short window and fall back to "not published".
+ */
+const CLOUD_PUBLISH_STATUS_TIMEOUT_MS = 8_000;
+
+/** Reject with a descriptive error if `promise` outlives `ms`. */
+async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Timed out after ${ms}ms: ${label}`)),
+          ms,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export interface MiniAppCloudLineage {
   mode: "fork" | "track";
   sourceAppId: string;
@@ -1729,7 +1759,18 @@ export class AppService {
       const { getCloudAppPublishService } = await import(
         "./CloudAppPublishService.js"
       );
-      cloudStatus = await getCloudAppPublishService().getCloudPublishStatus(id);
+      // This is a network round-trip to the memory server, and cloudApiFetch
+      // allows itself 60s. When it ran long, the whole delete blocked behind
+      // it and the UI reported "Request timeout" even though nothing had
+      // failed. The check is only an optimisation to decide whether to ask
+      // the user for unpublish confirmation, so cap it well under the
+      // client's budget and treat a slow answer as "not published" —
+      // matching the existing behaviour when the request errors.
+      cloudStatus = await withTimeout(
+        getCloudAppPublishService().getCloudPublishStatus(id),
+        CLOUD_PUBLISH_STATUS_TIMEOUT_MS,
+        `cloud publish status for ${id}`,
+      );
     } catch (error) {
       console.warn(
         `[AppService] Could not check cloud publish status for ${id}:`,
