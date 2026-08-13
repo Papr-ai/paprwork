@@ -7,6 +7,7 @@
 
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
+import { execSync } from "node:child_process";
 import type { Browser, BrowserContext, Cookie } from "playwright";
 import { getPaprDataDir, getPaprRoot } from "../../../core/utils/paprRoot.js";
 import { getCustomKeysService } from "../CustomKeysService.js";
@@ -17,6 +18,58 @@ import {
   getAllPlatformIds,
   getPlatformKeyName,
 } from "./platformRegistry.js";
+
+// Track if we've already tried installing Playwright
+let playwrightInstallAttempted = false;
+
+/**
+ * Load Playwright with auto-installation if browser not found
+ */
+async function loadPlaywright(): Promise<typeof import("playwright")> {
+  try {
+    const pw = await import("playwright");
+    // Quick check if chromium is available by checking if executable exists
+    const executablePath = pw.chromium.executablePath();
+    // If executablePath returns empty or the file doesn't exist, we need to install
+    if (!executablePath) {
+      throw new Error("Chromium executable not found");
+    }
+    return pw;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    
+    // Check if it's a "browser not found" error
+    if (
+      !playwrightInstallAttempted &&
+      (errorMessage.includes("Executable doesn't exist") ||
+        errorMessage.includes("browserType.launch") ||
+        errorMessage.includes("not found") ||
+        errorMessage.includes("PLAYWRIGHT"))
+    ) {
+      console.log("[PlatformSessionService] Playwright browsers not found, installing Chromium...");
+      playwrightInstallAttempted = true;
+
+      try {
+        // Install only Chromium (faster than all browsers)
+        execSync("npx playwright install chromium", {
+          stdio: "inherit",
+          timeout: 5 * 60 * 1000, // 5 minute timeout for download
+        });
+        console.log("[PlatformSessionService] Chromium installed successfully");
+
+        // Retry import
+        return await import("playwright");
+      } catch (installError) {
+        console.error("[PlatformSessionService] Failed to install Playwright:", installError);
+        throw new Error(
+          "Playwright browser not installed. Please run: npx playwright install chromium"
+        );
+      }
+    }
+
+    throw error;
+  }
+}
 
 export type PlatformStatus =
   | "connected"
@@ -41,7 +94,7 @@ interface PlatformSessionStore {
 
 const STORE_VERSION = 1;
 const CONNECT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes for user to log in
-const REFRESH_TIMEOUT_MS = 30 * 1000; // 30 seconds for headless refresh
+const REFRESH_TIMEOUT_MS = 60 * 1000; // 60 seconds for headless refresh (some sites are slow)
 const POLL_INTERVAL_MS = 1000; // Check URL every second during connect
 
 /**
@@ -210,7 +263,7 @@ export class PlatformSessionService {
       const profilePath = this.getProfilePath(platformId);
       await fs.mkdir(profilePath, { recursive: true });
 
-      const playwright = await import("playwright");
+      const playwright = await loadPlaywright();
       this.activeBrowser = await playwright.chromium.launch({
         headless: false,
         args: ["--disable-blink-features=AutomationControlled"],
@@ -392,7 +445,7 @@ export class PlatformSessionService {
       }
 
       // Launch headless browser for refresh
-      const playwright = await import("playwright");
+      const playwright = await loadPlaywright();
       this.activeBrowser = await playwright.chromium.launch({
         headless: true,
         args: ["--disable-blink-features=AutomationControlled"],
@@ -409,7 +462,7 @@ export class PlatformSessionService {
       const page = await this.activeContext.newPage();
 
       // Navigate to trigger cookie refresh
-      await page.goto(config.loginUrl.replace("/login", ""), {
+      await page.goto(config.homeUrl, {
         waitUntil: "domcontentloaded",
         timeout: REFRESH_TIMEOUT_MS,
       });
@@ -591,7 +644,7 @@ export class PlatformSessionService {
     console.log(`[PlatformSessionService] Opening authenticated browser for ${platformId}`);
 
     try {
-      const playwright = await import("playwright");
+      const playwright = await loadPlaywright();
       this.activeBrowser = await playwright.chromium.launch({
         headless: false, // Visible browser for agent to see/interact
         args: ["--disable-blink-features=AutomationControlled"],
@@ -607,7 +660,7 @@ export class PlatformSessionService {
       await this.activeContext.addCookies(existingCookies);
 
       const page = await this.activeContext.newPage();
-      const targetUrl = url || config.loginUrl.replace("/login", "");
+      const targetUrl = url || config.homeUrl;
       await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
 
       // Check if we're still logged in

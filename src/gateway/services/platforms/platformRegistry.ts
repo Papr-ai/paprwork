@@ -37,6 +37,8 @@ export interface PlatformConfig {
   name: string;
   /** URL to open for login */
   loginUrl: string;
+  /** URL to navigate to for session refresh (logged-in home page) */
+  homeUrl: string;
   /** Pattern that indicates successful login (user is on authenticated page) */
   successUrlPattern: RegExp;
   /** Cookie names required for API access */
@@ -66,13 +68,15 @@ export type PlatformId =
   | "reddit"
   | "facebook"
   | "tiktok"
-  | "twitter";
+  | "twitter"
+  | "telegram";
 
 export const PLATFORM_REGISTRY: Record<PlatformId, PlatformConfig> = {
   linkedin: {
     id: "linkedin",
     name: "LinkedIn",
     loginUrl: "https://www.linkedin.com/login",
+    homeUrl: "https://www.linkedin.com/feed/",
     successUrlPattern: /linkedin\.com\/(feed|in\/|mynetwork|messaging)/,
     requiredCookies: ["li_at", "JSESSIONID"],
     keyPrefix: "LINKEDIN",
@@ -98,6 +102,7 @@ export const PLATFORM_REGISTRY: Record<PlatformId, PlatformConfig> = {
     id: "instagram",
     name: "Instagram",
     loginUrl: "https://www.instagram.com/accounts/login/",
+    homeUrl: "https://www.instagram.com/",
     successUrlPattern: /instagram\.com\/?($|\/[^accounts])/,
     requiredCookies: ["sessionid", "csrftoken"],
     keyPrefix: "INSTAGRAM",
@@ -121,6 +126,7 @@ export const PLATFORM_REGISTRY: Record<PlatformId, PlatformConfig> = {
     id: "reddit",
     name: "Reddit",
     loginUrl: "https://www.reddit.com/login/",
+    homeUrl: "https://www.reddit.com/",
     successUrlPattern: /reddit\.com\/?($|\/r\/|\/user\/)/,
     requiredCookies: ["reddit_session", "token_v2"],
     keyPrefix: "REDDIT",
@@ -144,6 +150,7 @@ export const PLATFORM_REGISTRY: Record<PlatformId, PlatformConfig> = {
     id: "facebook",
     name: "Facebook",
     loginUrl: "https://www.facebook.com/login/",
+    homeUrl: "https://www.facebook.com/",
     successUrlPattern: /facebook\.com\/?($|\/[^login])/,
     requiredCookies: ["c_user", "xs"],
     keyPrefix: "FACEBOOK",
@@ -167,6 +174,7 @@ export const PLATFORM_REGISTRY: Record<PlatformId, PlatformConfig> = {
     id: "tiktok",
     name: "TikTok",
     loginUrl: "https://www.tiktok.com/login",
+    homeUrl: "https://www.tiktok.com/foryou",
     successUrlPattern: /tiktok\.com\/(foryou|following|@)/,
     requiredCookies: ["sessionid", "sid_tt"],
     keyPrefix: "TIKTOK",
@@ -190,6 +198,7 @@ export const PLATFORM_REGISTRY: Record<PlatformId, PlatformConfig> = {
     id: "twitter",
     name: "X / Twitter",
     loginUrl: "https://x.com/i/flow/login",
+    homeUrl: "https://x.com/home",
     successUrlPattern: /x\.com\/(home|explore|notifications)/,
     requiredCookies: ["auth_token", "ct0"],
     keyPrefix: "TWITTER",
@@ -210,6 +219,32 @@ export const PLATFORM_REGISTRY: Record<PlatformId, PlatformConfig> = {
       maxActionDelayMs: 3000,
       notes:
         "X has daily tweet read limits (varies by subscription). Follow churn (follow then unfollow) triggers restrictions. Duplicate content is penalized.",
+    },
+  },
+  telegram: {
+    id: "telegram",
+    name: "Telegram",
+    loginUrl: "https://web.telegram.org/a/",
+    homeUrl: "https://web.telegram.org/a/",
+    successUrlPattern: /web\.telegram\.org\/a\/#?(-?\d+|@\w+)?$/,
+    requiredCookies: ["stel_ssid", "stel_token"],
+    keyPrefix: "TELEGRAM",
+    refreshIntervalMs: 60 * 60 * 1000, // 1 hour
+    sessionDurationDays: 180, // Telegram sessions last long
+    cookieDomain: ".telegram.org",
+    rotatesTokens: false,
+    notes:
+      "Telegram Web requires phone number + code verification. Sessions are tied to device. Use the 'A' version (web.telegram.org/a/) for better automation support.",
+    rateLimits: {
+      dailyViews: 500, // Channel/chat views
+      dailyMessages: 200, // Messages - Telegram is lenient for messages
+      dailyConnections: 50, // New chats/group joins - stricter
+      dailyPosts: 100, // Channel posts/group messages
+      hourlyActions: 100, // Total actions per hour
+      minActionDelayMs: 500, // 0.5-2 seconds between actions
+      maxActionDelayMs: 2000,
+      notes:
+        "Telegram has flood wait limits that auto-adjust. If you hit limits, you'll get temporary blocks (seconds to hours). Avoid adding strangers to groups en masse.",
     },
   },
 

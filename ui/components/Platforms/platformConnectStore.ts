@@ -15,7 +15,8 @@ export type PlatformId =
   | "reddit"
   | "facebook"
   | "tiktok"
-  | "twitter";
+  | "twitter"
+  | "telegram";
 
 export interface PlatformConnectRequest {
   platform: PlatformId;

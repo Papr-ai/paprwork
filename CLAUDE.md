@@ -4539,4 +4539,47 @@ npm run test:cloud-app-host -- --app-id=<throwaway-uuid> --host=http://localhost
 
 ---
 
+### Enhancement 55: Playwright Auto-Installation ✅ IMPLEMENTED
+**Added:** 2026-08-12
+**Problem:** Users getting "Cannot find package 'playwright'" or "Executable doesn't exist" errors when using browser tools or Social Login features. Playwright browsers need to be separately installed after the npm package is installed.
+**Solution:** Auto-install Chromium browser on first use when not found:
+1. Both `PlatformSessionService` (Social Login) and `browser.ts` (agent browser tools) now wrap Playwright loading in `loadPlaywright()` / try-catch
+2. On "browser not found" errors, automatically run `npx playwright install chromium`
+3. Installation is attempted only once per session (`playwrightInstallAttempted` flag)
+4. 5-minute timeout for download to complete
+5. On success, retry the Playwright operation; on failure, show clear manual install instructions
+**Implementation:**
+```typescript
+// PlatformSessionService.ts
+async function loadPlaywright(): Promise<typeof import("playwright")> {
+  try {
+    const pw = await import("playwright");
+    return pw;
+  } catch (error) {
+    if (!playwrightInstallAttempted && isPlaywrightError(error)) {
+      console.log("[PlatformSessionService] Installing Chromium...");
+      playwrightInstallAttempted = true;
+      execSync("npx playwright install chromium", { timeout: 5 * 60 * 1000 });
+      return await import("playwright");
+    }
+    throw error;
+  }
+}
+
+// browser.ts - Similar pattern in getBrowserSession()
+```
+**Files Changed:**
+- `src/gateway/services/platforms/PlatformSessionService.ts` — Added `loadPlaywright()` helper with auto-install
+- `src/core/tools/browser.ts` — Added auto-install on browser launch failure
+**Impact:**
+- **Before:** Users had to manually run `npx playwright install chromium` after cryptic errors
+- **After:** First use auto-installs (takes ~30-60 seconds), subsequent uses work instantly ✅
+- **Fallback:** If auto-install fails, shows clear manual instructions
+**User Experience:**
+- First Social Login connect → "Installing Chromium..." (once) → Browser opens → Works
+- First agent `browser_navigate` → "Installing Chromium..." (once) → Page loads → Works
+**Related:** Issue 39 (Playwright Missing in Windows Builds - ASAR unpacking)
+
+---
+
 **This file is living documentation. Update it as we learn and make decisions.**

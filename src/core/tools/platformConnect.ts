@@ -19,13 +19,14 @@ const PLATFORM_IDS = [
   "facebook",
   "tiktok",
   "twitter",
+  "telegram",
 ] as const;
 
 type PlatformId = (typeof PLATFORM_IDS)[number];
 
 export const connectPlatformTool = createTool({
   id: "connect_platform",
-  description: `Check status or manage connections for social platforms (LinkedIn, Instagram, Reddit, Facebook, TikTok, Twitter).
+  description: `Check status or manage connections for social platforms (LinkedIn, Instagram, Reddit, Facebook, TikTok, Twitter, Telegram).
 
 Use this to:
 - Check if a platform is connected: action="status"

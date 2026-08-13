@@ -270,7 +270,7 @@ connect_platform({ platform: "linkedin", action: "connect" })
 // Cookies are captured automatically and stored in keychain
 \`\`\`
 
-**Supported platforms:** \`linkedin\`, \`instagram\`, \`reddit\`, \`facebook\`, \`tiktok\`, \`twitter\`
+**Supported platforms:** \`linkedin\`, \`instagram\`, \`reddit\`, \`facebook\`, \`tiktok\`, \`twitter\`, \`telegram\`
 
 **How it works:**
 1. \`connect_platform({ action: "status" })\` - Check if platform is connected
@@ -325,14 +325,16 @@ browser_navigate({ url: "https://www.linkedin.com/messaging/" })
 | Facebook | FACEBOOK_ |
 | TikTok | TIKTOK_ |
 | X/Twitter | TWITTER_ |
+| Telegram | TELEGRAM_ |
 
 **For X/Twitter:** The \`bird\` CLI tool is often easier - it auto-reads browser cookies. Use \`bird check\` to verify auth.
+**For Telegram:** Uses web.telegram.org (version A). Sessions are tied to device and last ~6 months.
 
 **Rate Limits (use by default, override only if use case warrants it):**
 - Use \`connect_platform({ action: "get_rate_limits" })\` to see limits for any platform
 - **Strictest:** LinkedIn (80 views/day, 3-8s delays) - aggressive automation detection
 - **Moderate:** Instagram, Facebook (200-500 views/day, 2-5s delays)
-- **More lenient:** Reddit, TikTok, X/Twitter (500-1000 views/day, 2-5s delays)
+- **More lenient:** Reddit, TikTok, X/Twitter, Telegram (500-1000 views/day, 0.5-3s delays)
 
 **Important:** All platforms can shadow-ban accounts. When overriding defaults, inform user of risks.
 

@@ -1,9 +1,13 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
+import { execSync } from "node:child_process";
 import type { Browser, Page } from "playwright";
 import { isCloudAgentGatewayMode } from "../utils/paprRoot.js";
 import { getApiKeysForSanitization, sanitizeToolOutput } from "./security.js";
 import { wrapUntrustedContent } from "./contentProvenance.js";
+
+// Track if we've already tried installing Playwright browsers
+let playwrightInstallAttempted = false;
 
 interface BrowserSessionState {
   browser: Browser;
@@ -90,20 +94,62 @@ async function getBrowserSession(): Promise<BrowserSessionState> {
       "--disable-dev-shm-usage",
     ];
   }
-  const browser = await Promise.race([
-    module.chromium.launch(launchOptions),
-    new Promise<never>((_, reject) => {
-      setTimeout(
-        () =>
-          reject(
-            new Error(
-              `Chromium launch timed out after ${CHROMIUM_LAUNCH_MS / 1000}s. Run: npx playwright install chromium`,
+
+  // Try to launch, auto-install on failure
+  let browser: Browser;
+  try {
+    browser = await Promise.race([
+      module.chromium.launch(launchOptions),
+      new Promise<never>((_, reject) => {
+        setTimeout(
+          () =>
+            reject(
+              new Error(
+                `Chromium launch timed out after ${CHROMIUM_LAUNCH_MS / 1000}s`,
+              ),
             ),
-          ),
-        CHROMIUM_LAUNCH_MS,
+          CHROMIUM_LAUNCH_MS,
+        );
+      }),
+    ]);
+  } catch (launchError) {
+    const errorMessage =
+      launchError instanceof Error ? launchError.message : String(launchError);
+
+    // Check if it's a browser not found error and we haven't tried installing yet
+    if (
+      !playwrightInstallAttempted &&
+      (errorMessage.includes("Executable doesn't exist") ||
+        errorMessage.includes("browserType.launch") ||
+        errorMessage.includes("not found") ||
+        errorMessage.includes("PLAYWRIGHT") ||
+        errorMessage.includes("timed out"))
+    ) {
+      console.log(
+        "[Browser Tool] Playwright browsers not found, installing Chromium...",
       );
-    }),
-  ]);
+      playwrightInstallAttempted = true;
+
+      try {
+        // Install only Chromium (faster than all browsers)
+        execSync("npx playwright install chromium", {
+          stdio: "inherit",
+          timeout: 5 * 60 * 1000, // 5 minute timeout for download
+        });
+        console.log("[Browser Tool] Chromium installed successfully");
+
+        // Retry launch
+        browser = await module.chromium.launch(launchOptions);
+      } catch (installError) {
+        console.error("[Browser Tool] Failed to install Playwright:", installError);
+        throw new Error(
+          "Playwright browser not installed. Please run: npx playwright install chromium",
+        );
+      }
+    } else {
+      throw launchError;
+    }
+  }
   const context = await browser.newContext();
   const page = await context.newPage();
   const consoleLogs: BrowserConsoleLog[] = [];
