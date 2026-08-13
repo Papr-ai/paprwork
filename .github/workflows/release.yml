@@ -189,6 +189,26 @@ jobs:
             echo "✓ ${file} ($(wc -c < "artifacts/${file}") bytes)"
           done
 
+      - name: Fix latest-mac.yml zip URLs
+        run: node scripts/fix-latest-mac-yml.mjs artifacts
+
+      - name: Verify Mac yml URLs match zip artifacts
+        run: |
+          set -euo pipefail
+          node -e "
+          const fs = require('fs');
+          const yml = fs.readFileSync('artifacts/latest-mac.yml', 'utf8');
+          const urls = [...yml.matchAll(/^\\s+- url: (.+)$/gm)].map(m => m[1]);
+          const assets = fs.readdirSync('artifacts');
+          for (const url of urls) {
+            if (!assets.includes(url)) {
+              console.error('::error::latest-mac.yml references missing asset:', url);
+              process.exit(1);
+            }
+          }
+          console.log('✓ latest-mac.yml URLs match artifacts');
+          "
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:

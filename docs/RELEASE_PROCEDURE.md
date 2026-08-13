@@ -45,7 +45,8 @@ Watch: **Actions → Release** (triggered by the tag).
 The workflow now:
 - Builds Mac/Windows/Linux with `--publish never` (local artifacts only)
 - Collects `latest-mac.yml`, `latest.yml`, `latest-linux.yml` into artifacts
-- **Fails the job** if any metadata file is missing
+- **Rewrites `latest-mac.yml` URLs** to match actual `Papr.Work-*-mac.zip` files (`fix-latest-mac-yml.mjs`)
+- **Fails the job** if yml URLs don't match zip artifacts on disk
 - Creates/updates the GitHub release with all binaries + metadata in one step
 
 ### 4. Optional: edit release notes after CI
@@ -69,6 +70,7 @@ npm run verify:release -- v2.x.y
 | `gh release create v2.x.y` before tag CI completes | Breaks electron-builder metadata upload; was the v2.3.0 bug |
 | Skip the version bump commit | Tag builds wrong version |
 | Manually upload only `.pkg`/`.exe` without yml | Auto-updater needs `latest-mac.yml` |
+| Trust electron-builder yml URLs without verifying | yml may say `Papr-Work-*` while zips are `Papr.Work-*` → 404 |
 
 ---
 

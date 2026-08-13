@@ -62,6 +62,23 @@ async function main() {
   const macYmlUrl = `https://github.com/${repo}/releases/download/${tag}/latest-mac.yml`;
   if (await headOk(macYmlUrl)) {
     console.log(`✓ latest-mac.yml downloadable from CDN`);
+    const ymlText = await (await fetch(macYmlUrl)).text();
+    const ymlUrls = [...ymlText.matchAll(/^\s+- url: (.+)$/gm)].map((m) => m[1]);
+    for (const url of ymlUrls) {
+      if (assetNames.has(url)) {
+        console.log(`✓ yml url exists on release: ${url}`);
+      } else {
+        console.error(`✗ latest-mac.yml references missing asset: ${url}`);
+        failed = true;
+      }
+      const downloadUrl = `https://github.com/${repo}/releases/download/${tag}/${url}`;
+      if (await headOk(downloadUrl)) {
+        console.log(`✓ downloadable: ${url}`);
+      } else {
+        console.error(`✗ 404 on CDN: ${url}`);
+        failed = true;
+      }
+    }
   } else {
     console.error(`✗ latest-mac.yml not downloadable from CDN`);
     failed = true;
