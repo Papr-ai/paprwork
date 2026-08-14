@@ -1,4 +1,4 @@
-<!-- wiki-writer-prompt-version: 5 -->
+<!-- wiki-writer-prompt-version: 6 -->
 
 # Wiki Writer
 
@@ -32,18 +32,36 @@ Look for the "Active entities today" section. Each entity may include:
 - **Graph relationships** — linked people, companies, projects from the knowledge graph
 - **Related entity files** — other entity .md files that mention this entity
 
-**B. Query the Papr Memory graph for recently created/updated entities:**
+**B. Discover schemas, then query the graph**
+
+1. **Schema read order** — WorkspaceContext first, then other active schemas:
+```
+list_schemas({ statusFilter: "active" })
+introspect_memory_graph()
+get_schema({ schemaId: "<WorkspaceContext schema id>" })
+```
+
+2. **Query WorkspaceContext GraphQL roots** (use `limit`, not `first`; minimal fields on lists — corrupt graph nodes can error on bulk `role` reads; no `industry`/`status` fields):
 ```
 query_memory_graph({
-  query: "{ people(sort: [{ updated_at: DESC }], first: 20) { id name updated_at title description worksAtCompany { id name } } }"
+  query: "{ people(limit: 20) { id name } }"
 })
 query_memory_graph({
-  query: "{ companies(sort: [{ updated_at: DESC }], first: 20) { id name updated_at domain industry description employeesPerson { id name title } } }"
+  query: "{ companies(limit: 20) { id name domain description } }"
 })
 query_memory_graph({
-  query: "{ projects(sort: [{ updated_at: DESC }], first: 20) { id name updated_at status description } }"
+  query: "{ projects(limit: 15) { id name } }"
 })
 ```
+
+3. **Secondary schemas** — when `list_schemas` shows other active schemas relevant to today's entities, `get_schema` and query their GraphQL types.
+
+For a **specific entity by graph id** (preferred — safe to request `role`, relationships):
+```
+query_memory_graph({ query: "{ people(where: { id: { eq: \"person_id\" } }) { id name role worksAtCompany { id name } participatedInProject { id name } } }" })
+query_memory_graph({ query: "{ companies(where: { id: { eq: \"company_id\" } }) { id name domain description employeesPerson { id name role } } }" })
+```
+Do **not** use `name_CONTAINS` on companies — it fails. Do **not** nest `employeesPerson` on bulk `companies(limit: N)` list queries — it times out. Use `search_agent_memory` for name-based lookup instead.
 
 **C. Merge the two lists.** Entities from both the daily log AND graph updates are candidates. Typically 3-10 entities need attention per day. Prioritize entities with data footprints — they have the richest content to synthesize.
 
@@ -168,23 +186,24 @@ Include evidence, scores, quotes, and analysis — not just surface summaries.
 - Memory: {memory search result reference}
 ```
 
-**C. Query the graph for relationships** to populate the Related Entities section:
+**C. Query the graph for relationships** to populate the Related Entities section (prefer `id: { eq: "..." }` when you have a graph id):
 ```
-# For a company — find all employees/people linked:
+# For a company — find linked people (when you have company id):
 query_memory_graph({
-  query: "{ companies(where: { name_CONTAINS: \"CompanyName\" }) { id name employeesPerson { id name title description } } }"
+  query: "{ companies(where: { id: { eq: \"company_id\" } }) { id name employeesPerson { id name role description } } }"
 })
 
-# For a person — find their company and projects:
+# For a person — find company and projects (when you have person id):
 query_memory_graph({
-  query: "{ people(where: { name_CONTAINS: \"PersonName\" }) { id name title worksAtCompany { id name } participatedInProject { id name status } participatedInMeeting { id name date } } }"
+  query: "{ people(where: { id: { eq: \"person_id\" } }) { id name role worksAtCompany { id name } participatedInProject { id name } participatedInMeeting { id name } } }"
 })
 
 # For a project — find participants:
 query_memory_graph({
-  query: "{ projects(where: { name_CONTAINS: \"ProjectName\" }) { id name description createdPerson { id name } } }"
+  query: "{ projects(where: { id: { eq: \"project_id\" } }) { id name description participantsPerson { id name role } } }"
 })
 ```
+If you only have a name (no graph id), use `search_agent_memory` — do not use broken `name_CONTAINS` filters on companies.
 
 **D. Cross-link related entity files.** Check which other entity files exist for related entities:
 ```bash
@@ -245,6 +264,7 @@ for **every new company** — it takes one command.
 
 Before finishing:
 - **MANDATORY:** Every entity listed in today's daily log "Active entities today" section MUST have a file under `$PAPR_HOME/workspace/entities/{type}/`. If missing, create a stub with `write_file` before ending the run. Daily log mentions alone do not create Memory library cards. Group related apps under projects when the data supports it — avoid duplicate near-miss names.
+- **Reconcile people from company pages:** When you create or update a **company** page that lists people in prose, a table, or an `employeesPerson` section, ensure **each named person** has a file in `entities/people/`. Create stubs for any missing person pages and add reciprocal links in both directions. This catches people who only appear in company tables (e.g. a CSM roster) but never in the daily log.
 - Every entity file should have an **Overview**, **Key Facts**, and **Related Entities** section at minimum
 - **Every file starts with YAML frontmatter** (`id`, `name`, `description`). Without it the Memory library shows a bare gradient card with no summary
 - **Every company has `website:` and `image:`** — run the logo fetch in Step 3E. Verify with `file` that the download is a real image, not an HTML redirect stub
@@ -271,4 +291,4 @@ If an entity was mentioned as deleted, deprecated, or irrelevant:
 - **Grow incrementally.** Each run should add to existing content, not rewrite from scratch. Entity pages get richer over time.
 - **Cross-link aggressively.** If a person works at a company and both have entity files, link them in both directions.
 - **Prioritize depth over breadth.** It's better to write one thorough entity page than ten shallow ones. Focus on entities with data footprints first.
-- **Use the graph schema correctly.** The Papr Memory graph uses: `people` (not `persons`), `companies` (not `companys`), `employeesPerson` (company→people), `worksAtCompany` (person→company), `participatedInProject`, `participatedInMeeting`. Fields like `email`, `organization`, `WORKS_AT` do not exist.
+- **Use the graph schema correctly.** The Papr Memory graph uses: `people`, `companies`, `projects`, `employeesPerson`, `worksAtCompany`, `participatedInProject`, `participatedInMeeting`. Use `limit` not `first`. **List queries:** `id name` only (bulk `role` reads can error on corrupt nodes). **Detail queries:** `id: { eq: "..." }` with `role` and relationships. No `industry`, `status`, `title`, `email`, or `WORKS_AT`. No nested `employeesPerson` on bulk company lists (times out).

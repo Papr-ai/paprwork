@@ -26,6 +26,39 @@ export function shouldSkipMigrationForRemoteLedger(migrationId: string): boolean
   return isMigrationLedgerMarker(migrationId);
 }
 
+/** Lexicographic max executable migration id (excludes ledger-only markers). */
+export function maxExecutableMigrationId(
+  migrationIds: readonly string[],
+): string | null {
+  let maxId: string | null = null;
+  for (const id of migrationIds) {
+    if (!id || shouldSkipMigrationForRemoteLedger(id)) {
+      continue;
+    }
+    if (!maxId || id > maxId) {
+      maxId = id;
+    }
+  }
+  return maxId;
+}
+
+/** Git/Turso schema gate — null when only baseline ledger markers apply. */
+export function requiredSchemaVersionFromMigrationIds(
+  migrationIds: readonly string[],
+): string | null {
+  return maxExecutableMigrationId(migrationIds);
+}
+
+/** Normalize app-meta requiredSchemaVersion (handles legacy baseline-only values). */
+export function normalizeRequiredSchemaVersion(
+  required: string | null | undefined,
+): string | null {
+  if (!required || shouldSkipMigrationForRemoteLedger(required)) {
+    return null;
+  }
+  return required;
+}
+
 async function migrationOpsFromRoot(
   migrationRoot: string,
   migrationId: string,

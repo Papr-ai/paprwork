@@ -7,6 +7,7 @@ import * as path from "path";
 import Database from "better-sqlite3";
 import { discoverTursoLinkedSources } from "../tursoLinkedSources.js";
 import { listAppliedMigrationIdsReadOnly } from "../jobs/schemaMigrationsLedger.js";
+import { requiredSchemaVersionFromMigrationIds } from "../jobs/migrationLedgerPolicy.js";
 import {
   distBundleRevisionHash,
   PAPR_APP_CLOUD_REVISION_PATH,
@@ -17,7 +18,7 @@ export const PAPR_APP_META_RELATIVE_PATH = "__papr__/app-meta.json";
 export interface CloudAppMetaFile {
   schemaVersion: "1.0.0";
   distRevision: string;
-  /** Highest applied migration id across linked DBs (lexicographic max). */
+  /** Highest executable migration id across linked DBs (excludes baseline markers). */
   requiredSchemaVersion: string | null;
   updatedAt: string;
 }
@@ -64,8 +65,7 @@ export async function buildCloudAppMeta(
   return {
     schemaVersion: "1.0.0",
     distRevision,
-    requiredSchemaVersion:
-      migrationIds.length > 0 ? [...migrationIds].sort().at(-1) ?? null : null,
+    requiredSchemaVersion: requiredSchemaVersionFromMigrationIds(migrationIds),
     updatedAt: new Date().toISOString(),
   };
 }

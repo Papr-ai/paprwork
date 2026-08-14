@@ -119,6 +119,22 @@
   font-style: italic;
 }
 
+.connected-platform-waiting-info {
+  margin-top: 8px;
+  padding: 12px;
+  background: var(--color-info-bg, rgba(59, 130, 246, 0.1));
+  border: 1px solid var(--color-info, #3b82f6);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--color-text-primary);
+  line-height: 1.5;
+}
+
+.connected-platform-waiting-note {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
 .connected-platform-actions {
   display: flex;
   align-items: center;
@@ -199,6 +215,12 @@
   border-radius: 4px;
   font-family: var(--font-mono, monospace);
   font-size: 12px;
+}
+
+.connected-platforms-note {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
 }
 
 /* Dark mode adjustments */

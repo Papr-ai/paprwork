@@ -1,10 +1,11 @@
 /**
- * Cloud App Host — serve prior bundle when Turso schema is behind git bundle.
+ * Cloud App Host — schema readiness vs git bundle (revision pin only; no user banner).
  */
 
 import type { TursoDbAdapter } from "./TursoDbAdapter.js";
 import type { AppRuntimeRouteAuth } from "./types.js";
 import type { AppDataSourcesFile } from "../appDataSources.js";
+import { normalizeRequiredSchemaVersion } from "../jobs/migrationLedgerPolicy.js";
 import {
   readCloudAppMetaFromContent,
   type CloudAppMetaFile,
@@ -38,7 +39,6 @@ export interface SchemaGateResult {
   requiredSchemaVersion: string | null;
   remoteSchemaVersion: string | null;
   pinnedRevision: string | null;
-  bannerHtml: string | null;
 }
 
 export async function evaluateCloudAppSchemaGate(input: {
@@ -58,13 +58,13 @@ export async function evaluateCloudAppSchemaGate(input: {
     ? readCloudAppMetaFromContent(metaFile.content)
     : null;
 
-  if (!meta?.requiredSchemaVersion) {
+  const required = normalizeRequiredSchemaVersion(meta?.requiredSchemaVersion);
+  if (!required) {
     return {
       blocked: false,
       requiredSchemaVersion: null,
       remoteSchemaVersion: null,
       pinnedRevision: null,
-      bannerHtml: null,
     };
   }
 
@@ -76,7 +76,6 @@ export async function evaluateCloudAppSchemaGate(input: {
     config: input.config,
   });
 
-  const required = meta.requiredSchemaVersion;
   const satisfied =
     remoteSchemaVersion !== null && remoteSchemaVersion >= required;
 
@@ -87,7 +86,6 @@ export async function evaluateCloudAppSchemaGate(input: {
       requiredSchemaVersion: required,
       remoteSchemaVersion,
       pinnedRevision: null,
-      bannerHtml: null,
     };
   }
 
@@ -97,7 +95,7 @@ export async function evaluateCloudAppSchemaGate(input: {
   );
   const pinRevision =
     existingPin ??
-    (input.currentRevision ? input.currentRevision : meta.distRevision);
+    (input.currentRevision ? input.currentRevision : meta!.distRevision);
 
   if (input.currentRevision && !existingPin) {
     setPinnedBundleRevision(
@@ -112,17 +110,5 @@ export async function evaluateCloudAppSchemaGate(input: {
     requiredSchemaVersion: required,
     remoteSchemaVersion,
     pinnedRevision: pinRevision,
-    bannerHtml:
-      '<div style="position:fixed;top:0;left:0;right:0;z-index:9999;background:#7c2d12;color:#fff;padding:10px 16px;font:14px/1.4 system-ui;text-align:center">Database syncing… This app will refresh automatically when data is ready.</div>',
   };
-}
-
-export function injectSchemaGateBanner(html: string, bannerHtml: string): string {
-  if (html.includes("<body")) {
-    return html.replace(/<body([^>]*)>/i, `<body$1>${bannerHtml}`);
-  }
-  if (html.includes("</body>")) {
-    return html.replace("</body>", `${bannerHtml}\n</body>`);
-  }
-  return bannerHtml + html;
 }

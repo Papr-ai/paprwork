@@ -64,7 +64,10 @@ export interface ReloadWorkspaceSwitchOptions {
 
 /** True while tabs/stores are being reset and reloaded for a workspace switch. */
 export function isWorkspaceSwitchReloading(): boolean {
-  return workspaceSwitchReloading;
+  // Also block persistence while waiting for gateway switch-complete — otherwise
+  // ensureSettingsTab() triggers a debounced save that can overwrite the target
+  // workspace's SQLite tab rows with only the Settings tab before restore runs.
+  return workspaceSwitchReloading || awaitingSwitchTabRecovery !== null;
 }
 
 /** Test hook — reset coalescing state between unit tests. */

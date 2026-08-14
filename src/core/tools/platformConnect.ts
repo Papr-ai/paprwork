@@ -30,36 +30,56 @@ export const connectPlatformTool = createTool({
 
 Use this to:
 - Check if a platform is connected: action="status"
-- Trigger a connection flow (opens browser for user login): action="connect"
-- Disconnect a platform (removes stored cookies): action="disconnect"
-- Force refresh a session: action="refresh"
+- **Automate with agent browser tools: action="prepare_browser"** (injects session cookies, then use browser_snapshot/browser_navigate)
+- Ask user to connect: action="request_connect"
+- Open a visible window for the user: action="browse" (NOT for agent automation)
+- Disconnect / refresh sessions
 
 IMPORTANT:
-- The "connect" action opens a browser window where the user must log in manually
-- Cookies are stored securely in the keychain as integration keys (e.g., LINKEDIN_LI_AT)
-- Jobs can access these via \${LINKEDIN_LI_AT} substitution
-- Sessions refresh automatically in the background
-- For X/Twitter, the "bird" CLI tool is often easier (auto-reads browser cookies)`,
+- Social Login stores session cookies in keychain (e.g. LINKEDIN_LI_AT)
+- **For reading feeds/messages:** prepare_browser → browser_snapshot (do NOT use bird CLI unless prepare_browser fails)
+- browse opens a separate visible window the agent CANNOT control
+- Jobs access cookies via \${LINKEDIN_LI_AT} substitution`,
 
   inputSchema: z.object({
     platform: z
       .enum(PLATFORM_IDS)
       .describe("The social platform to connect to"),
     action: z
-      .enum(["status", "connect", "disconnect", "refresh", "get_cookies", "browse", "get_rate_limits", "request_connect"])
+      .enum([
+        "status",
+        "connect",
+        "disconnect",
+        "refresh",
+        "get_cookies",
+        "browse",
+        "prepare_browser",
+        "get_rate_limits",
+        "request_connect",
+      ])
       .default("status")
       .describe(
-        "Action to perform: status (check connection), connect (open login directly), disconnect (remove), refresh (force session refresh), get_cookies (get cookies for CDP injection), browse (open authenticated browser window), get_rate_limits (get safe automation limits), request_connect (show branded modal to user - PREFERRED for asking user to connect)",
+        "Action: status, connect, disconnect, refresh, prepare_browser (inject session into agent browser — USE THIS for automation), browse (visible window for user only), get_rate_limits, request_connect",
       ),
     reason: z
       .string()
       .optional()
       .describe("For request_connect: explain why you need this platform connected (shown to user in modal)"),
+    url: z
+      .string()
+      .url()
+      .optional()
+      .describe("For prepare_browser: optional starting URL (defaults to platform home)"),
   }),
 
   execute: async (inputData): Promise<ToolResult> => {
     const args = (inputData as { context?: typeof inputData }).context || inputData;
-    const { platform, action, reason } = args as { platform: PlatformId; action: string; reason?: string };
+    const { platform, action, reason, url } = args as {
+      platform: PlatformId;
+      action: string;
+      reason?: string;
+      url?: string;
+    };
     const startTime = performance.now();
 
     try {
@@ -292,11 +312,71 @@ IMPORTANT:
           };
         }
 
-        case "browse": {
-          // Open a visible authenticated browser using the stored session
-          const result = await sessionService.openAuthenticatedBrowser(platform);
+        case "prepare_browser": {
+          const currentStatus = await sessionService.getStatus(platform);
+          if (currentStatus.status !== "connected") {
+            return {
+              success: false,
+              data: {
+                platform: config.name,
+                platformId: platform,
+                status: currentStatus.status,
+                message: `${config.name} is not connected. Use action="request_connect" first.`,
+              },
+              duration: performance.now() - startTime,
+              timestamp: new Date().toISOString(),
+            };
+          }
+
+          const { preparePlatformBrowserSession } = await import("./browser.js");
+          const result = await preparePlatformBrowserSession(platform, url);
           const r = config.rateLimits;
-          
+
+          return {
+            success: result.success,
+            data: {
+              platform: config.name,
+              platformId: platform,
+              url: result.url,
+              title: result.title,
+              message: result.message,
+              error: result.error,
+              nextSteps: result.success
+                ? [
+                    "browser_snapshot — read current page",
+                    "browser_navigate — go to specific pages (session persists)",
+                    "browser_test_script — extract structured data",
+                  ]
+                : currentStatus.status === "connected"
+                  ? [
+                      "Try connect_platform action=\"refresh\" first",
+                      "If Settings shows Connected, retry prepare_browser — do NOT request_connect",
+                    ]
+                  : ["connect_platform action=\"request_connect\" only if Settings shows Not connected"],
+              rateLimits: result.success
+                ? {
+                    dailyViews: r.dailyViews,
+                    dailyMessages: r.dailyMessages,
+                    dailyConnections: r.dailyConnections,
+                    dailyPosts: r.dailyPosts,
+                    hourlyActions: r.hourlyActions,
+                    actionDelay: `${r.minActionDelayMs / 1000}-${r.maxActionDelayMs / 1000}s`,
+                  }
+                : undefined,
+              rateLimitWarning: result.success
+                ? `Stay within ${r.dailyViews} views/day. Wait ${r.minActionDelayMs / 1000}-${r.maxActionDelayMs / 1000}s between actions.`
+                : undefined,
+            },
+            duration: performance.now() - startTime,
+            timestamp: new Date().toISOString(),
+          };
+        }
+
+        case "browse": {
+          // Visible browser for the USER — agent browser_* tools cannot attach to this window
+          const result = await sessionService.openAuthenticatedBrowser(platform, url);
+          const r = config.rateLimits;
+
           return {
             success: result.success,
             data: {
@@ -305,7 +385,7 @@ IMPORTANT:
               message: result.message,
               error: result.error,
               hint: result.success
-                ? "Browser window is now open and authenticated. The user can interact with it directly, or you can describe what you see and guide them."
+                ? "This opens a visible window for the user. For agent automation, use action=\"prepare_browser\" instead, then browser_snapshot/browser_navigate."
                 : undefined,
               // Always include rate limits when browsing
               rateLimits: result.success ? {
@@ -352,14 +432,30 @@ IMPORTANT:
         }
 
         case "request_connect": {
+          const currentStatus = await sessionService.getStatus(platform);
+          if (currentStatus.status === "connected") {
+            return {
+              success: true,
+              data: {
+                platform: config.name,
+                platformId: platform,
+                status: "already_connected",
+                message: `${config.name} is already connected. Use action="prepare_browser" to start browsing.`,
+                expiresAt: currentStatus.expiresAt,
+                lastRefreshedAt: currentStatus.lastRefreshedAt,
+              },
+              duration: performance.now() - startTime,
+              timestamp: new Date().toISOString(),
+            };
+          }
+
           // Show branded modal to user requesting connection
-          // This broadcasts to the UI which shows the PlatformConnectModal
           const { broadcast } = await import(
             "../../gateway/websocket/index.js"
           );
-          
+
           const requestId = crypto.randomUUID();
-          
+
           broadcast({
             type: "platform:connect-request",
             data: {

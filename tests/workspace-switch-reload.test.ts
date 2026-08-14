@@ -6,6 +6,7 @@ import {
   reloadUiForWorkspaceSwitch,
   resetWorkspaceReloadForTests,
   attachWorkspaceSwitchBroadcastListener,
+  isWorkspaceSwitchReloading,
 } from "../ui/lib/workspaceSwitchReload";
 
 const gatewaySendMock = vi.fn(async (type: string) => {
@@ -240,6 +241,27 @@ describe("reloadUiForWorkspaceSwitch", () => {
     expect(
       useTabStore.getState().tabs.some((tab) => tab.title === "Saved chat"),
     ).toBe(true);
+  });
+
+  it("waitForGateway keeps persistence blocked until switch-complete restores tabs", async () => {
+    vi.useFakeTimers();
+    stubWindowForReload();
+    attachWorkspaceSwitchBroadcastListener();
+
+    const reloadPromise = reloadUiForWorkspaceSwitch({ waitForGateway: true });
+    await reloadPromise;
+
+    expect(isWorkspaceSwitchReloading()).toBe(true);
+
+    window.dispatchEvent(
+      new CustomEvent("gateway-broadcast", {
+        detail: { type: "workspace:switch-complete", data: {} },
+      }),
+    );
+    await vi.runAllTimersAsync();
+    await Promise.resolve();
+
+    expect(isWorkspaceSwitchReloading()).toBe(false);
   });
 
   it("waitForGateway clears stale tabs and loads new workspace tabs only after switch-complete", async () => {

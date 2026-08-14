@@ -5,11 +5,13 @@
  * Shows platform info and a "Connect" button that opens the browser login flow.
  */
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import type { PlatformId } from "./platformConnectStore";
 import { usePlatformConnectStore } from "./platformConnectStore";
 import { gateway } from "../../src/lib/gateway";
 import "./PlatformConnectModal.css";
+
+type ConnectPhase = "idle" | "opening" | "waiting" | "connected";
 
 // SVG icons for each platform
 const PLATFORM_ICONS: Record<PlatformId, React.ReactNode> = {
@@ -54,7 +56,6 @@ const PLATFORM_INFO: Record<
   PlatformId,
   { name: string; color: string; description: string }
 > = {
-  // Social
   linkedin: {
     name: "LinkedIn",
     color: "#0A66C2",
@@ -94,34 +95,121 @@ const PLATFORM_INFO: Record<
 
 export function PlatformConnectModal() {
   const { activeRequest, clearRequest } = usePlatformConnectStore();
-  const [isConnecting, setIsConnecting] = useState(false);
+  const [phase, setPhase] = useState<ConnectPhase>("idle");
   const [error, setError] = useState<string | null>(null);
+
+  const dismissIfConnected = useCallback(
+    (platformId: PlatformId, status: string) => {
+      if (activeRequest?.platform === platformId && status === "connected") {
+        setPhase("connected");
+        setTimeout(() => clearRequest(), 800);
+      }
+    },
+    [activeRequest?.platform, clearRequest],
+  );
+
+  // If already connected when modal opens, dismiss immediately
+  useEffect(() => {
+    if (!activeRequest) {
+      setPhase("idle");
+      setError(null);
+      return;
+    }
+
+    void (async () => {
+      try {
+        const response = await gateway.send("platform:get-status", {
+          platformId: activeRequest.platform,
+        });
+        const data = response.data as { status?: string } | undefined;
+        if (data?.status === "connected") {
+          clearRequest();
+        }
+      } catch {
+        // Show modal — user can connect manually
+      }
+    })();
+  }, [activeRequest, clearRequest]);
+
+  // Listen for connection success (fixes typo: was platform:status-change)
+  useEffect(() => {
+    const handleStatusChange = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail.type !== "platform:status-changed" || !detail.data) return;
+      const { platformId, status } = detail.data as {
+        platformId: PlatformId;
+        status: string;
+      };
+      dismissIfConnected(platformId, status);
+    };
+
+    window.addEventListener("gateway-broadcast", handleStatusChange);
+    return () => window.removeEventListener("gateway-broadcast", handleStatusChange);
+  }, [dismissIfConnected]);
 
   if (!activeRequest) return null;
 
   const platformInfo = PLATFORM_INFO[activeRequest.platform];
+  const isBusy = phase === "opening" || phase === "waiting";
 
   const handleConnect = async () => {
-    setIsConnecting(true);
+    setPhase("opening");
     setError(null);
 
     try {
-      // Call the gateway to start the connection flow
       const response = await gateway.send("platform:connect", {
         platformId: activeRequest.platform,
       });
 
-      if (response.success) {
-        // Connection flow started - browser will open
-        // The modal will be dismissed when the connection completes
-        // via the platform:status-change broadcast
-      } else {
+      const data = response.data as {
+        status?: string;
+        waitingForConfirmation?: boolean;
+      };
+
+      if (data?.status === "connected") {
+        setPhase("connected");
+        setTimeout(() => clearRequest(), 800);
+        return;
+      }
+
+      if (data?.waitingForConfirmation) {
+        setPhase("waiting");
+        return;
+      }
+
+      if (!response.success) {
         setError(response.error || "Failed to start connection");
-        setIsConnecting(false);
+        setPhase("idle");
+      } else {
+        setPhase("waiting");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Connection failed");
-      setIsConnecting(false);
+      setPhase("idle");
+    }
+  };
+
+  const handleCheckNow = async () => {
+    setPhase("opening");
+    setError(null);
+
+    try {
+      const response = await gateway.send("platform:confirm-login", {
+        platformId: activeRequest.platform,
+      });
+      const data = response.data as { status?: string; error?: string };
+
+      if (data?.status === "connected") {
+        setPhase("connected");
+        setTimeout(() => clearRequest(), 800);
+        return;
+      }
+
+      setError(data?.error || response.error || "Still waiting for login in Chrome");
+      setPhase("waiting");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Check failed");
+      setPhase("waiting");
     }
   };
 
@@ -135,7 +223,6 @@ export function PlatformConnectModal() {
         className="platform-connect-modal"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Platform icon and info */}
         <div className="platform-connect-content">
           <div
             className="platform-icon"
@@ -144,9 +231,7 @@ export function PlatformConnectModal() {
             {PLATFORM_ICONS[activeRequest.platform]}
           </div>
 
-          <h2 className="platform-title">
-            Connect to {platformInfo.name}
-          </h2>
+          <h2 className="platform-title">Connect to {platformInfo.name}</h2>
 
           <p className="platform-description">{platformInfo.description}</p>
 
@@ -157,40 +242,67 @@ export function PlatformConnectModal() {
             </div>
           )}
 
+          {phase === "waiting" && (
+            <div className="platform-waiting-note">
+              Log in using <strong>Chrome</strong> if needed — we detect it automatically.
+            </div>
+          )}
+
+          {phase === "connected" && (
+            <div className="platform-success">Connected successfully!</div>
+          )}
+
           {error && <div className="platform-error">{error}</div>}
         </div>
 
-        {/* Actions */}
         <div className="platform-connect-actions">
           <button
             className="btn btn-secondary"
             onClick={handleSkip}
-            disabled={isConnecting}
+            disabled={phase === "connected"}
           >
             Not now
           </button>
-          <button
-            className="btn btn-connect"
-            onClick={handleConnect}
-            disabled={isConnecting}
-            style={{ backgroundColor: platformInfo.color }}
-          >
-            {isConnecting ? (
-              <>
-                <span className="connecting-spinner" />
-                Opening browser...
-              </>
-            ) : (
-              <>Connect {platformInfo.name}</>
-            )}
-          </button>
+
+          {phase === "waiting" ? (
+            <button
+              className="btn btn-connect"
+              onClick={handleCheckNow}
+              disabled={phase === "opening"}
+              style={{ backgroundColor: platformInfo.color }}
+            >
+              {phase === "opening" ? (
+                <>
+                  <span className="connecting-spinner" />
+                  Checking...
+                </>
+              ) : (
+                "Check now"
+              )}
+            </button>
+          ) : (
+            <button
+              className="btn btn-connect"
+              onClick={handleConnect}
+              disabled={isBusy || phase === "connected"}
+              style={{ backgroundColor: platformInfo.color }}
+            >
+              {phase === "opening" ? (
+                <>
+                  <span className="connecting-spinner" />
+                  Opening Chrome...
+                </>
+              ) : phase === "connected" ? (
+                "Connected!"
+              ) : (
+                <>Connect {platformInfo.name}</>
+              )}
+            </button>
+          )}
         </div>
 
-        {/* Footer note */}
         <p className="platform-connect-footer">
-          A browser window will open for you to log in securely.
-          <br />
-          Your credentials are never stored — only session cookies.
+          Opens Chrome for login. Your credentials are never stored — only session cookies.
         </p>
       </div>
     </div>

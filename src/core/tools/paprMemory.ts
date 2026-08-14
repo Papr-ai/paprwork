@@ -17,6 +17,10 @@ import {
 import { getCurrentChatId } from "./context.js";
 import { getPaprClient, handlePaprToolError, isPaprNotFoundError } from "./paprClient.js";
 import { assertValidWikiGraphQLSelection } from "../../gateway/services/wikiGraphqlUtils.js";
+import {
+  buildGraphReadOrderNote,
+  listSchemasForGraphRead,
+} from "../utils/memoryGraphSchemaRead.js";
 
 const memoryReadAclToolFields = {
   readAcl: z
@@ -731,6 +735,7 @@ export const listSchemasTool = createTool({
   id: "list_schemas",
   description:
     "List KNOWLEDGE GRAPH schemas (user-created entity/relationship schemas). Returns schemas with node types and relationships. " +
+    "WorkspaceContext is the primary schema for wiki/sleep reads — query its GraphQL types first. " +
     "Use get_schema to fetch full details (node types, relationships, properties) for a specific schema. " +
     "⚠️ NOTE: For signal domains (vector/transform policy), use list_signal_domains instead.",
   inputSchema: listSchemasSchema,
@@ -908,13 +913,16 @@ export const introspectMemoryGraphTool = createTool({
   id: "introspect_memory_graph",
   description:
     "Discover the PAPR Memory knowledge graph schema via GraphQL introspection. " +
-    "Returns available types, fields, and relationships. Call this BEFORE query_memory_graph " +
-    "to understand the schema structure. Omit typeName for an overview, or provide a specific " +
+    "Returns schema read order (WorkspaceContext first, then other active schemas), available types, fields, and relationships. " +
+    "Call this BEFORE query_memory_graph to understand the schema structure. Omit typeName for an overview, or provide a specific " +
     "type name for detailed field info.",
   inputSchema: introspectMemoryGraphSchema,
   execute: async (args) => {
     try {
       const client = await getPaprClient();
+      const schemasForRead = await listSchemasForGraphRead(client);
+      const readOrderNote = buildGraphReadOrderNote(schemasForRead);
+
       const response = (await client.graphql.query({
         body: { query: INTROSPECTION_QUERY },
       })) as { data?: { __schema?: { queryType?: { name: string }; mutationType?: { name: string } | null; types?: GraphQLIntrospectionType[] } } };
@@ -945,6 +953,10 @@ export const introspectMemoryGraphTool = createTool({
         return {
           success: true,
           data: {
+            readOrder: {
+              note: readOrderNote,
+              schemas: schemasForRead,
+            },
             type: target.name,
             kind: target.kind,
             description: target.description,
@@ -974,6 +986,10 @@ export const introspectMemoryGraphTool = createTool({
       return {
         success: true,
         data: {
+          readOrder: {
+            note: readOrderNote,
+            schemas: schemasForRead,
+          },
           queryType: schema.queryType?.name,
           mutationType: schema.mutationType?.name,
           typeCount: userTypes.length,

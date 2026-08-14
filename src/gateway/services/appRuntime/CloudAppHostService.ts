@@ -103,9 +103,9 @@ import {
   PAPR_APP_META_RELATIVE_PATH,
   readCloudAppMetaFromContent,
 } from "../cloudSync/cloudAppMeta.js";
+import { normalizeRequiredSchemaVersion } from "../jobs/migrationLedgerPolicy.js";
 import {
   evaluateCloudAppSchemaGate,
-  injectSchemaGateBanner,
 } from "./cloudAppSchemaGate.js";
 import {
   injectPaprAppRevisionMeta,
@@ -1508,7 +1508,9 @@ export class CloudAppHostService {
         : null;
       res.json({
         revision,
-        requiredSchemaVersion: meta?.requiredSchemaVersion ?? null,
+        requiredSchemaVersion: normalizeRequiredSchemaVersion(
+          meta?.requiredSchemaVersion,
+        ),
       });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -1692,7 +1694,7 @@ export class CloudAppHostService {
       if (access) {
         try {
           const config = await this.loadDataSources(runtimeAuth);
-          const gate = await evaluateCloudAppSchemaGate({
+          await evaluateCloudAppSchemaGate({
             turso: this.turso,
             runtimeAuth,
             orgId: access.orgId,
@@ -1701,9 +1703,6 @@ export class CloudAppHostService {
             config,
             currentRevision: revision ?? null,
           });
-          if (gate.blocked && gate.bannerHtml) {
-            content = injectSchemaGateBanner(content, gate.bannerHtml);
-          }
         } catch (err) {
           console.warn(
             "[CloudAppHost] schema gate skipped:",

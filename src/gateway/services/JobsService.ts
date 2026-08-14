@@ -36,6 +36,7 @@ import {
   type AppDataContract,
   validateJobAgainstAppDatabase,
 } from "./jobs/jobDatabaseArchitectureValidation.js";
+import { resolveBundledResourcesDir } from "../../core/utils/bundledResourcesPath.js";
 
 // ESM compatibility: get __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -212,14 +213,11 @@ export class JobsService {
    */
   private async installDefaultJobs(): Promise<void> {
     try {
-      // Path to bundled default jobs (in dist after build)
-      // __dirname is dist/gateway/services/ so we need to go up 2 levels to reach dist/
-      const defaultJobsDir = path.join(__dirname, "..", "..", "resources", "default-jobs");
-      
-      // Check if default jobs directory exists
-      try {
-        await fs.access(defaultJobsDir);
-      } catch {
+      const defaultJobsDir = await resolveBundledResourcesDir(
+        __dirname,
+        "resources/default-jobs",
+      );
+      if (!defaultJobsDir) {
         console.log("[JobsService] No default jobs directory found, skipping installation");
         return;
       }
@@ -316,13 +314,13 @@ export class JobsService {
    * Skips architecture validation — bundle is the source of truth for these jobs.
    */
   private async syncBundledDefaultJobs(): Promise<void> {
-    const defaultJobsDir = path.join(
+    const defaultJobsDir = await resolveBundledResourcesDir(
       __dirname,
-      "..",
-      "..",
-      "resources",
-      "default-jobs",
+      "resources/default-jobs",
     );
+    if (!defaultJobsDir) {
+      return;
+    }
 
     let changed = false;
     for (const jobId of JobsService.BUNDLED_DEFAULT_JOB_IDS) {

@@ -32,7 +32,9 @@
     "node_modules/esbuild/**",
     "node_modules/@esbuild/**",
     "node_modules/playwright/**",
-    "node_modules/playwright-core/**"
+    "node_modules/playwright-core/**",
+    "dist/resources/default-apps/**",
+    "dist/resources/default-jobs/**"
   ],
   "mac": {
     "category": "public.app-category.productivity",

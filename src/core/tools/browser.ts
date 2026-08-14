@@ -94,6 +94,107 @@ function isPlaywrightMissingError(errorMessage: string): boolean {
   );
 }
 
+const PLATFORM_NAVIGATION_TIMEOUT_MS = 60_000;
+
+export interface PlatformBrowserPrepareResult {
+  success: boolean;
+  url: string;
+  title: string;
+  message: string;
+  error?: string;
+}
+
+/**
+ * Inject stored Social Login cookies into the agent's headless browser and verify auth.
+ * Call this before browser_navigate / browser_snapshot on a connected platform.
+ */
+export async function preparePlatformBrowserSession(
+  platformId: string,
+  targetUrl?: string,
+): Promise<PlatformBrowserPrepareResult> {
+  const { getPlatformSessionService } = await import(
+    "../../gateway/services/platforms/PlatformSessionService.js"
+  );
+  const { getPlatformConfig } = await import(
+    "../../gateway/services/platforms/platformRegistry.js"
+  );
+  type PlatformId = import("../../gateway/services/platforms/platformRegistry.js").PlatformId;
+
+  const sessionService = getPlatformSessionService();
+  await sessionService.initialize();
+
+  const config = getPlatformConfig(platformId);
+  if (!config) {
+    return {
+      success: false,
+      url: "",
+      title: "",
+      message: `Unknown platform: ${platformId}`,
+      error: `Unknown platform: ${platformId}`,
+    };
+  }
+
+  const status = await sessionService.getStatus(platformId as PlatformId);
+  if (status.status !== "connected") {
+    return {
+      success: false,
+      url: "",
+      title: "",
+      message: `${config.name} is not connected.`,
+      error: `Status: ${status.status}. Use connect_platform request_connect or Settings → Social Login.`,
+    };
+  }
+
+  const cookies = await sessionService.getSessionCookiesForBrowser(platformId as PlatformId);
+  if (cookies.length === 0) {
+    return {
+      success: false,
+      url: "",
+      title: "",
+      message: `No session cookies found for ${config.name}.`,
+      error: "Reconnect via Settings → Social Login.",
+    };
+  }
+
+  const session = await getBrowserSession();
+  await session.page.context().addCookies(cookies);
+
+  const destination = targetUrl ?? config.homeUrl;
+  await session.page.goto(destination, {
+    waitUntil: "domcontentloaded",
+    timeout: PLATFORM_NAVIGATION_TIMEOUT_MS,
+  });
+
+  const currentUrl = session.page.url();
+  const title = await session.page.title();
+
+  const authenticated = config.successUrlPattern.test(currentUrl);
+  const loggedOut =
+    !authenticated &&
+    (/\/login(?:\/|$|\?)/i.test(currentUrl) ||
+      /\/signin(?:\/|$|\?)/i.test(currentUrl) ||
+      /\/checkpoint(?:\/|$|\?)/i.test(currentUrl));
+
+  if (loggedOut) {
+    return {
+      success: false,
+      url: currentUrl,
+      title,
+      message: `${config.name} session expired — redirected to login.`,
+      error: "Reconnect via Settings → Social Login.",
+    };
+  }
+
+  return {
+    success: true,
+    url: currentUrl,
+    title,
+    message:
+      `Authenticated browser ready for ${config.name}. ` +
+      `Use browser_snapshot to read the page, browser_navigate for other URLs.`,
+  };
+}
+
 async function getBrowserSession(): Promise<BrowserSessionState> {
   if (browserSession) {
     return browserSession;

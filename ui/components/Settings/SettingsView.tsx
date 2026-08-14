@@ -1010,6 +1010,52 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.3.3" && (
+          <div className="about-card">
+            <h3>What's New in v2.3.3</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Packaged Install Fix</strong>
+                <p>
+                  Default home dashboard and bundled jobs now install correctly
+                  in production builds — resources unpacked from ASAR so fresh
+                  installs get the full experience.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Social Login Automation</strong>
+                <p>
+                  New prepare_browser action injects your LinkedIn, Instagram,
+                  or X session into agent browser tools for feed and messaging
+                  automation.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Connected Platforms UI</strong>
+                <p>
+                  Improved Social Login tab with session status, refresh, and
+                  clearer connect flows when the agent needs a platform.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Wiki Entity Rails</strong>
+                <p>
+                  Memory wiki now surfaces meetings, decisions, ideas, and
+                  workflows alongside projects, people, and companies.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.3.3"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.3.2" && (
           <div className="about-card">
             <h3>What's New in v2.3.2</h3>

@@ -80,6 +80,10 @@ export const WIKI_TYPE_META: Record<
   insight: { label: "Insight", glyph: "◇", color: "#06b6d4" },
   task: { label: "Task", glyph: "■", color: "#f97316" },
   entity: { label: "Entity", glyph: "◆", color: "#a855f7" },
+  meeting: { label: "Meeting", glyph: "◉", color: "#a855f7" },
+  decision: { label: "Decision", glyph: "◈", color: "#ef4444" },
+  idea: { label: "Idea", glyph: "✦", color: "#eab308" },
+  workflow: { label: "Workflow", glyph: "↻", color: "#0ea5e9" },
   // SleepV2 entity wiki types
   app: { label: "App", glyph: "◆", color: "#3b82f6" },
   company: { label: "Company", glyph: "▲", color: "#ec4899" },
@@ -90,6 +94,10 @@ export const WIKI_TYPE_META: Record<
   companies: { label: "Company", glyph: "▲", color: "#ec4899" },
   learnings: { label: "Learning", glyph: "★", color: "#14b8a6" },
   collections: { label: "Collection", glyph: "◇", color: "#8b5cf6" },
+  meetings: { label: "Meeting", glyph: "◉", color: "#a855f7" },
+  decisions: { label: "Decision", glyph: "◈", color: "#ef4444" },
+  ideas: { label: "Idea", glyph: "✦", color: "#eab308" },
+  workflows: { label: "Workflow", glyph: "↻", color: "#0ea5e9" },
   people: { label: "Person", glyph: "●", color: "#10b981" },
   projects: { label: "Project", glyph: "◼", color: "#0080FF" },
 };

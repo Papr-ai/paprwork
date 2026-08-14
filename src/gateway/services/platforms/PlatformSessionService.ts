@@ -2,12 +2,19 @@
  * Platform Session Service
  *
  * Manages browser profiles, cookie extraction, and session storage for social platforms.
- * Uses Playwright with persistent browser contexts for each platform.
+ *
+ * Connection flow (Chrome preferred):
+ * 1. Try reading cookies from Chrome immediately (works if already logged in)
+ * 2. If missing, open Chrome for login (OAuth works normally)
+ * 3. Poll Chrome's cookie database until session appears
+ * 4. Fall back to Playwright-controlled browser if Chrome isn't installed
  */
 
+import { existsSync } from "node:fs";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import { execSync } from "node:child_process";
+import { exec, execSync } from "node:child_process";
+import { promisify } from "node:util";
 import type { Browser, BrowserContext, Cookie } from "playwright";
 import { getPaprDataDir, getPaprRoot } from "../../../core/utils/paprRoot.js";
 import { getCustomKeysService } from "../CustomKeysService.js";
@@ -18,6 +25,48 @@ import {
   getAllPlatformIds,
   getPlatformKeyName,
 } from "./platformRegistry.js";
+
+const execAsync = promisify(exec);
+const CHROME_COOKIE_POLL_MS = 10_000; // 10s — each read can trigger a macOS keychain prompt
+const CHROME_COOKIE_CACHE_MS = 20_000;
+
+function isChromeInstalled(): boolean {
+  if (process.platform === "darwin") {
+    return existsSync("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+  }
+  if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA ?? "";
+    const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
+    return (
+      existsSync(join(localAppData, "Google", "Chrome", "Application", "chrome.exe")) ||
+      existsSync(join(programFiles, "Google", "Chrome", "Application", "chrome.exe"))
+    );
+  }
+  try {
+    execSync("which google-chrome || which google-chrome-stable", { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function openInChrome(url: string): Promise<void> {
+  if (process.platform === "darwin") {
+    await execAsync(`open -a "Google Chrome" "${url}"`);
+    return;
+  }
+  if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA ?? "";
+    const chromePath = join(localAppData, "Google", "Chrome", "Application", "chrome.exe");
+    if (existsSync(chromePath)) {
+      await execAsync(`"${chromePath}" "${url}"`);
+      return;
+    }
+    await execAsync(`start chrome "${url}"`);
+    return;
+  }
+  await execAsync(`google-chrome "${url}" || google-chrome-stable "${url}" || xdg-open "${url}"`);
+}
 
 // Track if we've already tried installing Playwright
 let playwrightInstallAttempted = false;
@@ -119,6 +168,13 @@ export class PlatformSessionService {
   private activeBrowser: Browser | null = null;
   private activeContext: BrowserContext | null = null;
   private connectingPlatform: PlatformId | null = null;
+  private cookiePollTimers = new Map<PlatformId, ReturnType<typeof setInterval>>();
+  private cookiePollStartedAt = new Map<PlatformId, number>();
+  private chromeCookieCache: {
+    platformId: PlatformId;
+    cookies: Map<string, string>;
+    fetchedAt: number;
+  } | null = null;
 
   constructor() {
     this.storePath = join(getPaprDataDir(), "platform-sessions.json");
@@ -244,9 +300,11 @@ export class PlatformSessionService {
   }
 
   /**
-   * Connect to a platform - opens browser window for user to log in
+   * Connect to a platform.
+   * Chrome path: auto-extract if already logged in, otherwise open Chrome and poll.
+   * Fallback: Playwright-controlled browser when Chrome isn't installed.
    */
-  async connect(platformId: PlatformId): Promise<PlatformSessionState> {
+  async connect(platformId: PlatformId): Promise<PlatformSessionState & { waitingForConfirmation?: boolean }> {
     if (!this.initialized) await this.initialize();
 
     const config = getPlatformConfig(platformId);
@@ -270,94 +328,367 @@ export class PlatformSessionService {
     console.log(`[PlatformSessionService] Starting connect flow for ${platformId}`);
 
     try {
-      // Launch browser with persistent profile (visible for user login)
-      const profilePath = this.getProfilePath(platformId);
-      await fs.mkdir(profilePath, { recursive: true });
-
-      const playwright = await loadPlaywright();
-      this.activeBrowser = await playwright.chromium.launch({
-        headless: false,
-        args: ["--disable-blink-features=AutomationControlled"],
-      });
-
-      this.activeContext = await this.activeBrowser.newContext({
-        userAgent:
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        viewport: { width: 1280, height: 800 },
-      });
-
-      // Load existing cookies if any (for re-auth)
-      const existingCookiesPath = join(profilePath, "cookies.json");
-      try {
-        const cookiesData = await fs.readFile(existingCookiesPath, "utf-8");
-        const cookies = JSON.parse(cookiesData) as Cookie[];
-        await this.activeContext.addCookies(cookies);
-      } catch {
-        // No existing cookies - fresh login
+      if (isChromeInstalled()) {
+        return await this.connectViaChrome(platformId, config);
       }
 
-      const page = await this.activeContext.newPage();
-      await page.goto(config.loginUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: NAVIGATION_TIMEOUT_MS,
-      });
-
-      // Wait for user to complete login (poll for success URL)
-      const startTime = Date.now();
-      let loggedIn = false;
-
-      while (Date.now() - startTime < CONNECT_TIMEOUT_MS) {
-        const currentUrl = page.url();
-        if (config.successUrlPattern.test(currentUrl)) {
-          loggedIn = true;
-          console.log(`[PlatformSessionService] Login detected for ${platformId}`);
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-      }
-
-      if (!loggedIn) {
-        throw new Error(
-          "Login timed out. Please try again and complete the login within 5 minutes.",
-        );
-      }
-
-      // Extract and store cookies
-      await this.extractAndStoreCookies(platformId, config);
-
-      // Save all cookies for persistent profile
-      const allCookies = await this.activeContext.cookies();
-      await fs.writeFile(existingCookiesPath, JSON.stringify(allCookies, null, 2));
-
-      // Update state
-      const now = new Date();
-      const expiresAt = new Date(
-        now.getTime() + config.sessionDurationDays * 24 * 60 * 60 * 1000,
-      );
-
-      this.store.sessions[platformId] = {
-        platformId,
-        status: "connected",
-        connectedAt: now.toISOString(),
-        lastRefreshedAt: now.toISOString(),
-        expiresAt: expiresAt.toISOString(),
-      };
-      await this.saveStore();
-
-      console.log(`[PlatformSessionService] Successfully connected ${platformId}`);
-      return this.store.sessions[platformId];
+      console.log(`[PlatformSessionService] Chrome not installed, using Playwright fallback for ${platformId}`);
+      return await this.connectViaPlaywright(platformId, config);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[PlatformSessionService] Connect failed for ${platformId}:`, errorMessage);
+      this.connectingPlatform = null;
 
       return {
         platformId,
         status: "disconnected",
         error: errorMessage,
       };
+    }
+  }
+
+  /**
+   * Manual "Check now" while waiting for Chrome login to complete.
+   */
+  async confirmLogin(platformId: PlatformId): Promise<PlatformSessionState> {
+    if (!this.initialized) await this.initialize();
+
+    const config = getPlatformConfig(platformId);
+    if (!config) {
+      this.connectingPlatform = null;
+      return {
+        platformId,
+        status: "disconnected",
+        error: `Unknown platform: ${platformId}`,
+      };
+    }
+
+    try {
+      const extracted = await this.tryExtractRequiredCookiesFromChrome(config);
+      if (!extracted.success) {
+        throw new Error(
+          extracted.missing.length > 0
+            ? `Still missing cookies: ${extracted.missing.join(", ")}. Log in using Chrome, then try again.`
+            : `No cookies found for ${config.name}. Log in using Chrome, then try again.`,
+        );
+      }
+
+      await this.storeRequiredCookies(platformId, config, extracted.cookies);
+      this.stopChromeCookiePolling(platformId);
+      const state = await this.markConnected(platformId, config);
+      console.log(`[PlatformSessionService] Successfully connected ${platformId} via manual check`);
+      return state;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`[PlatformSessionService] Confirm login failed for ${platformId}:`, errorMessage);
+
+      return {
+        platformId,
+        status: "connecting",
+        error: errorMessage,
+      };
+    }
+  }
+
+  private async connectViaChrome(
+    platformId: PlatformId,
+    config: PlatformConfig,
+  ): Promise<PlatformSessionState & { waitingForConfirmation?: boolean }> {
+    const extracted = await this.tryExtractRequiredCookiesFromChrome(config);
+    if (extracted.success) {
+      await this.storeRequiredCookies(platformId, config, extracted.cookies);
+      this.connectingPlatform = null;
+      const state = await this.markConnected(platformId, config);
+      console.log(`[PlatformSessionService] Connected ${platformId} using existing Chrome session`);
+      return state;
+    }
+
+    await openInChrome(config.loginUrl);
+    console.log(`[PlatformSessionService] Opened ${config.loginUrl} in Chrome`);
+    this.startChromeCookiePolling(platformId, config);
+
+    return {
+      platformId,
+      status: "connecting",
+      waitingForConfirmation: true,
+    };
+  }
+
+  private async connectViaPlaywright(
+    platformId: PlatformId,
+    config: PlatformConfig,
+  ): Promise<PlatformSessionState> {
+    const profilePath = this.getProfilePath(platformId);
+    await fs.mkdir(profilePath, { recursive: true });
+
+    const playwright = await loadPlaywright();
+
+    let browserType: "chrome" | "chromium" = "chromium";
+    if (isChromeInstalled()) {
+      browserType = "chrome";
+    }
+
+    const userDataDir = join(profilePath, "browser-data");
+    await fs.mkdir(userDataDir, { recursive: true });
+
+    this.activeContext = await playwright.chromium.launchPersistentContext(userDataDir, {
+      headless: false,
+      channel: browserType === "chrome" ? "chrome" : undefined,
+      args: [
+        "--disable-blink-features=AutomationControlled",
+        "--disable-features=IsolateOrigins,site-per-process",
+      ],
+      viewport: { width: 1280, height: 900 },
+      ...(browserType === "chromium" && {
+        userAgent:
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      }),
+    });
+
+    const page = this.activeContext.pages()[0] || (await this.activeContext.newPage());
+    await page.goto(config.loginUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: NAVIGATION_TIMEOUT_MS,
+    });
+
+    const startTime = Date.now();
+    let loggedIn = false;
+
+    while (Date.now() - startTime < CONNECT_TIMEOUT_MS) {
+      const currentUrl = page.url();
+      if (config.successUrlPattern.test(currentUrl)) {
+        loggedIn = true;
+        console.log(`[PlatformSessionService] Login detected for ${platformId}`);
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    }
+
+    if (!loggedIn) {
+      throw new Error(
+        "Login timed out. Please try again and complete the login within 5 minutes.",
+      );
+    }
+
+    try {
+      await this.extractAndStoreCookies(platformId, config);
+
+      const allCookies = await this.activeContext.cookies();
+      await fs.writeFile(join(profilePath, "cookies.json"), JSON.stringify(allCookies, null, 2));
+
+      this.connectingPlatform = null;
+      return this.markConnected(platformId, config);
     } finally {
       await this.closeBrowser();
-      this.connectingPlatform = null;
+    }
+  }
+
+  private startChromeCookiePolling(platformId: PlatformId, config: PlatformConfig): void {
+    this.stopChromeCookiePolling(platformId);
+    this.cookiePollStartedAt.set(platformId, Date.now());
+
+    const poll = async (): Promise<void> => {
+      const startedAt = this.cookiePollStartedAt.get(platformId) ?? Date.now();
+      if (Date.now() - startedAt > CONNECT_TIMEOUT_MS) {
+        this.stopChromeCookiePolling(platformId);
+        this.connectingPlatform = null;
+        return;
+      }
+
+      try {
+        const extracted = await this.tryExtractRequiredCookiesFromChrome(config, {
+          useCache: true,
+        });
+        if (!extracted.success) return;
+
+        await this.storeRequiredCookies(platformId, config, extracted.cookies);
+        this.stopChromeCookiePolling(platformId);
+        this.connectingPlatform = null;
+        const state = await this.markConnected(platformId, config);
+        await this.broadcastStatusChange(state);
+        console.log(`[PlatformSessionService] Auto-detected Chrome login for ${platformId}`);
+      } catch (error) {
+        console.warn(`[PlatformSessionService] Chrome cookie poll failed for ${platformId}:`, error);
+      }
+    };
+
+    void poll();
+    const timer = setInterval(() => {
+      void poll();
+    }, CHROME_COOKIE_POLL_MS);
+    this.cookiePollTimers.set(platformId, timer);
+  }
+
+  private stopChromeCookiePolling(platformId: PlatformId): void {
+    const timer = this.cookiePollTimers.get(platformId);
+    if (timer) {
+      clearInterval(timer);
+      this.cookiePollTimers.delete(platformId);
+    }
+    this.cookiePollStartedAt.delete(platformId);
+  }
+
+  private async broadcastStatusChange(state: PlatformSessionState): Promise<void> {
+    const { broadcast } = await import("../../websocket/index.js");
+    broadcast({
+      type: "platform:status-changed",
+      data: state,
+    });
+  }
+
+  private async markConnected(
+    platformId: PlatformId,
+    config: PlatformConfig,
+  ): Promise<PlatformSessionState> {
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + config.sessionDurationDays * 24 * 60 * 60 * 1000);
+
+    this.store.sessions[platformId] = {
+      platformId,
+      status: "connected",
+      connectedAt: now.toISOString(),
+      lastRefreshedAt: now.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+    };
+    await this.saveStore();
+    return this.store.sessions[platformId];
+  }
+
+  private getChromeCookieUrls(config: PlatformConfig): string[] {
+    const bareDomain = config.cookieDomain.replace(/^\./, "");
+    const urls: string[] = [config.homeUrl, config.loginUrl];
+
+    for (const domain of config.additionalDomains ?? []) {
+      const bare = domain.replace(/^\./, "");
+      urls.push(`https://www.${bare}/`, `https://${bare}/`);
+    }
+
+    // www subdomain before bare domain — session cookies are often www-scoped
+    urls.push(`https://www.${bareDomain}/`, `https://${bareDomain}/`);
+
+    return [...new Set(urls)];
+  }
+
+  private hasRequiredCookies(
+    cookies: Map<string, string>,
+    requiredCookies: string[],
+  ): boolean {
+    return requiredCookies.every((name) =>
+      [...cookies.keys()].some((key) => key.toLowerCase() === name.toLowerCase()),
+    );
+  }
+
+  private async tryExtractRequiredCookiesFromChrome(
+    config: PlatformConfig,
+    options?: { useCache?: boolean },
+  ): Promise<{ success: boolean; cookies: Record<string, string>; missing: string[] }> {
+    const allCookies = await this.extractCookiesFromChrome(config, {
+      requiredCookies: config.requiredCookies,
+      useCache: options?.useCache,
+    });
+    const cookies: Record<string, string> = {};
+    const missing: string[] = [];
+
+    for (const cookieName of config.requiredCookies) {
+      const cookie = allCookies.find((c) => c.name.toLowerCase() === cookieName.toLowerCase());
+      if (cookie?.value) {
+        cookies[cookieName] = cookie.value;
+      } else {
+        missing.push(cookieName);
+      }
+    }
+
+    return {
+      success: missing.length === 0,
+      cookies,
+      missing,
+    };
+  }
+
+  private async storeRequiredCookies(
+    platformId: PlatformId,
+    config: PlatformConfig,
+    cookies: Record<string, string>,
+  ): Promise<void> {
+    const keysService = getCustomKeysService();
+    const existingKeys = await keysService.listKeys();
+
+    for (const [cookieName, cookieValue] of Object.entries(cookies)) {
+      const keyName = getPlatformKeyName(platformId, cookieName);
+      const existing = existingKeys.find((k) => k.name === keyName);
+      if (existing) {
+        await keysService.deleteKey(keyName);
+      }
+
+      await keysService.addKey({
+        name: keyName,
+        value: cookieValue,
+        description: `${config.name} session cookie (auto-managed by Social Login)`,
+        permission: "always",
+        orgScope: "all",
+      });
+    }
+  }
+
+  /**
+   * Extract cookies from Chrome's database for a platform.
+   * Tries URLs in priority order and stops once required cookies are found
+   * to minimize macOS keychain prompts (each read may ask for "Chrome Safe Storage").
+   */
+  private async extractCookiesFromChrome(
+    config: PlatformConfig,
+    options?: { requiredCookies?: string[]; useCache?: boolean },
+  ): Promise<Array<{ name: string; value: string }>> {
+    const requiredCookies = options?.requiredCookies ?? [];
+
+    if (options?.useCache && this.chromeCookieCache?.platformId === config.id) {
+      const age = Date.now() - this.chromeCookieCache.fetchedAt;
+      if (age < CHROME_COOKIE_CACHE_MS) {
+        return [...this.chromeCookieCache.cookies.entries()].map(([name, value]) => ({
+          name,
+          value,
+        }));
+      }
+    }
+
+    try {
+      const { getCookiesPromised } = await import("chrome-cookies-secure");
+      const merged = new Map<string, string>();
+
+      for (const url of this.getChromeCookieUrls(config)) {
+        if (requiredCookies.length > 0 && this.hasRequiredCookies(merged, requiredCookies)) {
+          break;
+        }
+
+        try {
+          const cookies = await getCookiesPromised(url, "object");
+          for (const [name, value] of Object.entries(cookies)) {
+            merged.set(name, String(value));
+          }
+        } catch (urlError) {
+          console.warn(`[PlatformSessionService] Cookie read failed for ${url}:`, urlError);
+        }
+      }
+
+      if (options?.useCache) {
+        this.chromeCookieCache = {
+          platformId: config.id as PlatformId,
+          cookies: merged,
+          fetchedAt: Date.now(),
+        };
+      }
+
+      const cookieArray = [...merged.entries()].map(([name, value]) => ({ name, value }));
+      console.log(
+        `[PlatformSessionService] Extracted ${cookieArray.length} cookies from Chrome for ${config.name}`,
+      );
+      return cookieArray;
+    } catch (error) {
+      console.error("[PlatformSessionService] Failed to extract Chrome cookies:", error);
+      throw new Error(
+        `Failed to read Chrome cookies. Make sure Chrome is installed and you're logged into ${config.name}. ` +
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
@@ -377,6 +708,8 @@ export class PlatformSessionService {
     }
 
     console.log(`[PlatformSessionService] Disconnecting ${platformId}`);
+    this.stopChromeCookiePolling(platformId);
+    this.chromeCookieCache = null;
 
     try {
       // Delete cookies from keychain
@@ -446,19 +779,28 @@ export class PlatformSessionService {
     console.log(`[PlatformSessionService] Refreshing session for ${platformId}`);
 
     try {
-      const profilePath = this.getProfilePath(platformId);
-      const cookiesPath = join(profilePath, "cookies.json");
+      if (isChromeInstalled()) {
+        const extracted = await this.tryExtractRequiredCookiesFromChrome(config);
+        if (extracted.success) {
+          await this.storeRequiredCookies(platformId, config, extracted.cookies);
+          const now = new Date();
+          this.store.sessions[platformId] = {
+            ...this.store.sessions[platformId],
+            lastRefreshedAt: now.toISOString(),
+            status: "connected",
+            error: undefined,
+          };
+          await this.saveStore();
+          console.log(`[PlatformSessionService] Refreshed ${platformId} from Chrome cookies`);
+          return this.store.sessions[platformId];
+        }
+      }
 
-      // Load existing cookies
-      let existingCookies: Cookie[] = [];
-      try {
-        const cookiesData = await fs.readFile(cookiesPath, "utf-8");
-        existingCookies = JSON.parse(cookiesData) as Cookie[];
-      } catch {
+      const existingCookies = await this.loadCookiesForPlaywright(platformId, config);
+      if (existingCookies.length === 0) {
         throw new Error("No stored cookies found. Please reconnect.");
       }
 
-      // Launch headless browser for refresh
       const playwright = await loadPlaywright();
       this.activeBrowser = await playwright.chromium.launch({
         headless: true,
@@ -494,9 +836,10 @@ export class PlatformSessionService {
       // Extract fresh cookies
       await this.extractAndStoreCookies(platformId, config);
 
-      // Save updated cookies
+      // Save updated cookies for Playwright fallback flows
+      const profilePath = this.getProfilePath(platformId);
       const allCookies = await this.activeContext.cookies();
-      await fs.writeFile(cookiesPath, JSON.stringify(allCookies, null, 2));
+      await fs.writeFile(join(profilePath, "cookies.json"), JSON.stringify(allCookies, null, 2));
 
       // Update state
       const now = new Date();
@@ -526,6 +869,59 @@ export class PlatformSessionService {
     } finally {
       await this.closeBrowser();
     }
+  }
+
+  /**
+   * Load session cookies for agent browser automation (keychain or saved profile).
+   */
+  async getSessionCookiesForBrowser(platformId: PlatformId): Promise<Cookie[]> {
+    if (!this.initialized) await this.initialize();
+    const config = getPlatformConfig(platformId);
+    if (!config) {
+      throw new Error(`Unknown platform: ${platformId}`);
+    }
+    return this.loadCookiesForPlaywright(platformId, config);
+  }
+
+  /**
+   * Load cookies for Playwright from saved profile or keychain
+   */
+  private async loadCookiesForPlaywright(
+    platformId: PlatformId,
+    config: PlatformConfig,
+  ): Promise<Cookie[]> {
+    const profilePath = this.getProfilePath(platformId);
+    const cookiesPath = join(profilePath, "cookies.json");
+
+    try {
+      const cookiesData = await fs.readFile(cookiesPath, "utf-8");
+      const parsed = JSON.parse(cookiesData) as Cookie[];
+      if (parsed.length > 0) return parsed;
+    } catch {
+      // Fall back to keychain
+    }
+
+    const keysService = getCustomKeysService();
+    const cookies: Cookie[] = [];
+
+    for (const cookieName of config.requiredCookies) {
+      const keyName = getPlatformKeyName(platformId, cookieName);
+      const value = await keysService.getKeyByName(keyName);
+      if (!value) return [];
+
+      cookies.push({
+        name: cookieName,
+        value,
+        domain: config.cookieDomain,
+        path: "/",
+        expires: -1,
+        httpOnly: true,
+        secure: true,
+        sameSite: "Lax",
+      });
+    }
+
+    return cookies;
   }
 
   /**
@@ -629,26 +1025,12 @@ export class PlatformSessionService {
     }
 
     // Check if we have stored cookies
-    const profilePath = this.getProfilePath(platformId);
-    const cookiesPath = join(profilePath, "cookies.json");
-
-    let existingCookies: Cookie[] = [];
-    try {
-      const cookiesData = await fs.readFile(cookiesPath, "utf-8");
-      existingCookies = JSON.parse(cookiesData) as Cookie[];
-    } catch {
+    const existingCookies = await this.loadCookiesForPlaywright(platformId, config);
+    if (existingCookies.length === 0) {
       return {
         success: false,
         message: `No stored session for ${config.name}. Use action="connect" first.`,
         error: "No stored cookies found",
-      };
-    }
-
-    if (existingCookies.length === 0) {
-      return {
-        success: false,
-        message: `No cookies found for ${config.name}. Use action="connect" first.`,
-        error: "Empty cookie jar",
       };
     }
 

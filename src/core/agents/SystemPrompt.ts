@@ -277,7 +277,27 @@ connect_platform({ platform: "linkedin", action: "connect" })
 2. \`connect_platform({ action: "request_connect", reason: "To fetch your messages" })\` - **PREFERRED:** Shows branded modal to user
 3. Sessions refresh automatically in the background (no manual Chrome Manager needed!)
 4. Jobs access cookies via \`\${LINKEDIN_LI_AT}\`, \`\${INSTAGRAM_SESSIONID}\`, etc.
-5. \`connect_platform({ action: "browse" })\` - Open authenticated browser window directly!
+5. \`connect_platform({ action: "prepare_browser" })\` — inject session into agent browser, then use browser_* tools
+
+**Reading a connected account (agent automation — USE THIS):**
+\`\`\`typescript
+// 1. Check connected
+connect_platform({ platform: "linkedin", action: "status" })
+
+// 2. Inject stored session into YOUR browser tools (headless Playwright)
+connect_platform({ platform: "linkedin", action: "prepare_browser" })
+// Optional: prepare_browser with url for a specific page
+
+// 3. Read/interact — session persists in the same browser session
+browser_snapshot({})
+browser_navigate({ url: "https://www.linkedin.com/messaging/" })
+browser_test_script({ script: "..." })
+\`\`\`
+
+**Do NOT:**
+- Use \`browser_navigate\` to linkedin.com without \`prepare_browser\` first — you'll be logged out
+- Use \`browse\` for agent automation — that's a visible window for the user only, agent tools can't attach
+- Jump to bird CLI / custom Playwright jobs when Social Login is already connected
 
 **Asking user to connect (preferred flow):**
 \`\`\`typescript
@@ -296,25 +316,13 @@ if (status.data.status !== "connected") {
 }
 \`\`\`
 
-**Opening an authenticated browser (preferred method):**
+**Visible browser for the user (NOT agent automation):**
 \`\`\`typescript
-// Opens a visible browser window already logged into LinkedIn
+// Opens a window on the user's screen — they interact with it; you cannot browser_snapshot it
 connect_platform({ platform: "linkedin", action: "browse" })
-// Browser opens at linkedin.com, fully authenticated with user's session
-// User can interact with it directly, or you can guide them
 \`\`\`
 
-**Alternative: Cookie injection into Cursor browser tools:**
-\`\`\`typescript
-// 1. Get cookies in CDP format
-const result = connect_platform({ platform: "linkedin", action: "get_cookies" })
-
-// 2. Inject into browser using CDP
-browser_cdp({ method: "Network.setCookies", params: { cookies: result.data.cookies } })
-
-// 3. Now browser_navigate to linkedin.com will be authenticated
-browser_navigate({ url: "https://www.linkedin.com/messaging/" })
-\`\`\`
+**Fallback for X/Twitter only:** If prepare_browser fails, \`bird\` CLI can read timeline via stored cookies.
 
 **Supported platforms:**
 | Platform | Key prefix |
@@ -327,7 +335,6 @@ browser_navigate({ url: "https://www.linkedin.com/messaging/" })
 | X/Twitter | TWITTER_ |
 | Telegram | TELEGRAM_ |
 
-**For X/Twitter:** The \`bird\` CLI tool is often easier - it auto-reads browser cookies. Use \`bird check\` to verify auth.
 **For Telegram:** Uses web.telegram.org (version A). Sessions are tied to device and last ~6 months.
 
 **Rate Limits (use by default, override only if use case warrants it):**

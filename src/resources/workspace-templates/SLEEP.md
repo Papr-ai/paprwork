@@ -1,4 +1,4 @@
-<!-- sleep-prompt-version: 13 -->
+<!-- sleep-prompt-version: 15 -->
 
 # Sleep Cycle
 
@@ -65,6 +65,45 @@ search_agent_memory({
 })
 ```
 
+**F. Entity sweep (discovery before footprinting)**
+
+Entity discovery must happen **before** you build data footprints in the daily log. Use all of these:
+
+1. **Discover graph schemas (read order)** — WorkspaceContext is primary; other active schemas are secondary:
+```
+list_schemas({ statusFilter: "active" })
+introspect_memory_graph()
+```
+`introspect_memory_graph()` returns `readOrder.schemas` with WorkspaceContext first. Use `get_schema({ schemaId: "..." })` on the primary schema to see node types (Person, Company, Project, etc.).
+
+2. **Query WorkspaceContext GraphQL roots first** — use `limit` (not `first`). Use **minimal fields on list queries** (`id`, `name` only) — some Person nodes have corrupt `role`/`description` fields that error on bulk reads. Fetch details per entity with `id: { eq: "..." }`.
+```
+query_memory_graph({ query: "{ people(limit: 30) { id name } }" })
+query_memory_graph({ query: "{ companies(limit: 30) { id name domain description } }" })
+query_memory_graph({ query: "{ projects(limit: 15) { id name } }" })
+```
+
+3. **Query secondary schemas when relevant** — if `list_schemas` shows other active schemas (e.g. code indexing), call `get_schema` and query their GraphQL types when the daily activity involves that domain.
+
+4. **Semantic search** for people, companies, and projects mentioned recently:
+```
+search_agent_memory({
+  query: "people companies projects organizations stakeholders that came up recently in chats jobs or meetings",
+  maxResults: 15
+})
+```
+
+5. **Grep chat exports** for email domains and @-handles (often surfaces people companies miss):
+```bash
+grep -rohE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "$PAPR_HOME/Chats"/*.txt 2>/dev/null | sort -u | head -30
+grep -rohE '@[A-Za-z0-9._-]+' "$PAPR_HOME/Chats"/*.txt 2>/dev/null | sort -u | head -30
+```
+
+6. **Scan existing entity wiki files** for cross-references:
+```bash
+find "$PAPR_HOME/workspace/entities" -name '*.md' -type f 2>/dev/null | head -50
+```
+
 ### 2. Analyze & connect patterns
 
 From the gathered context, identify:
@@ -74,6 +113,7 @@ From the gathered context, identify:
 - Brand or identity updates
 - Mistakes to avoid or lessons learned
 - Job/app automation that changed how the user works
+- **People and organizations that appeared** — every named person, their org, and role if stated
 
 ### 3. Synthesize and cross-reference
 
@@ -121,38 +161,36 @@ Finally, write today's summary:
 Include:
 - **Activity summary** — what happened across chats, jobs, apps
 - **Key decisions or insights** — what was decided, learned, or changed
-- **Active entities today** — list people, companies, projects that came up in today's activity. For each entity, include a **data footprint** so Wiki Writer knows where to dig deeper. This is the roadmap Wiki Writer follows.
+- **Active entities today** — list every person, company, and project that came up. **Discovery first, footprint second:**
 
-  **How to build the data footprint for each entity:**
+  **Step A — Build the candidate list** from Step 1F + Step 2 (graph, memory search, chat grep, existing entity files). Do not skip entities just because you have not scanned job databases yet.
 
-  1. **Scan all job databases** for mentions (generic — works for any app/job):
+  **Step B — For each candidate**, add a brief activity summary. When a **company** is active, also list its **people as separate entities** (employees, contacts, CSMs, founders mentioned in connection with that company).
+
+  **Step C — Build the data footprint** (optional enrichment, not a gate). Only after the entity is on the list:
+
+  1. **Scan job databases** for mentions (works for any app/job):
   ```bash
   # List all job databases
   for db in $PAPR_HOME/Jobs/*/data/data.db; do
     job_dir=$(dirname $(dirname "$db"))
     job_id=$(basename "$job_dir")
     for table in $(sqlite3 "$db" ".tables" 2>/dev/null); do
-      # Check text columns for entity name (case-insensitive)
-      count=$(sqlite3 "$db" "SELECT COUNT(*) FROM \"$table\" WHERE CAST(\"$table\".* AS TEXT) LIKE '%EntityName%'" 2>/dev/null || echo 0)
-      # If count > 0, record: job_id, table, count
+      cols=$(sqlite3 "$db" "PRAGMA table_info('$table');" 2>/dev/null | cut -d'|' -f2)
+      for col in $cols; do
+        count=$(sqlite3 "$db" "SELECT COUNT(*) FROM \"$table\" WHERE CAST(\"$col\" AS TEXT) LIKE '%EntityName%' COLLATE NOCASE" 2>/dev/null)
+        # If count > 0, record: job_id, table, column, count
+      done
     done
   done
   ```
-  Note: The SQL above is pseudo-code. In practice, iterate over each column:
-  ```bash
-  # For each table, get columns and search each text/json column
-  cols=$(sqlite3 "$db" "PRAGMA table_info('$table');" 2>/dev/null | cut -d'|' -f2)
-  for col in $cols; do
-    count=$(sqlite3 "$db" "SELECT COUNT(*) FROM \"$table\" WHERE CAST(\"$col\" AS TEXT) LIKE '%EntityName%' COLLATE NOCASE" 2>/dev/null)
-  done
-  ```
 
-  2. **Query the Papr Memory graph** for relationships:
+  2. **Query the Papr Memory graph** for relationships (use known id when possible; otherwise list + memory search):
   ```
-  # For a company entity:
-  query_memory_graph({ query: "{ companies(where: { name_CONTAINS: \"EntityName\" }) { id name employeesPerson { id name title } } }" })
-  # For a person entity:
-  query_memory_graph({ query: "{ people(where: { name_CONTAINS: \"EntityName\" }) { id name title worksAtCompany { id name } } }" })
+  # When you have a graph id:
+  query_memory_graph({ query: "{ people(where: { id: { eq: \"person_id\" } }) { id name role worksAtCompany { id name } } }" })
+  query_memory_graph({ query: "{ companies(where: { id: { eq: \"company_id\" } }) { id name employeesPerson { id name role } } }" })
+  # Do NOT use name_CONTAINS on companies — it fails. Use search_agent_memory for name lookup instead.
   ```
 
   3. **Scan existing entity files** for cross-references:
@@ -166,9 +204,12 @@ Include:
     - Data sources: job `<job_id>` "<job_name>" — table1 (N rows), table2 (M rows)
     - Graph: N people linked (employeesPerson), relationships: [list]
     - Related entity files: people/person-slug.md, companies/company-slug.md
+    - Confidence: 0.5–1.0 (use 0.5 when only chat mention, no structured data yet)
   ```
 
-  If no job databases contain data for an entity, just note the activity summary — not every entity will have a data footprint. The footprint is for entities where structured data exists beyond chat mentions.
+  **Rules:**
+  - **Always list the entity** even when no job database or graph footprint exists. Thin evidence is valid — note `Confidence: 0.5` and what was mentioned.
+  - The footprint enriches Wiki Writer; it is not permission to omit an entity from the daily log.
 - **What to watch tomorrow** — open items, follow-ups, things to track
 
 Use `add_agent_memory` to persist the daily log to Papr Memory. **Graph indexing is automatic** — `add_agent_memory` uses `mode: auto` with the WorkspaceContext schema, so people, companies, projects, and meetings mentioned in the log are extracted into the knowledge graph without extra steps.

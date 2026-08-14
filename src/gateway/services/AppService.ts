@@ -74,6 +74,7 @@ import {
   AppWorkspaceAssignError,
   type AssignAppToWorkspaceResult,
 } from "./appWorkspaceAssignment.js";
+import { resolveBundledResourcesDir } from "../../core/utils/bundledResourcesPath.js";
 
 export { CopyAppError, type CopyAppToNamespaceResult, AppWorkspaceAssignError, type AssignAppToWorkspaceResult };
 
@@ -386,14 +387,11 @@ export class AppService {
    */
   private async installDefaultApps(): Promise<void> {
     try {
-      // Path to bundled default apps (in dist after build)
-      // __dirname is dist/gateway/services/ so we need to go up 2 levels to reach dist/
-      const defaultAppsDir = path.join(__dirname, "..", "..", "resources", "default-apps");
-      
-      // Check if default apps directory exists (may not exist in dev mode before first build)
-      try {
-        await fs.access(defaultAppsDir);
-      } catch {
+      const defaultAppsDir = await resolveBundledResourcesDir(
+        __dirname,
+        "resources/default-apps",
+      );
+      if (!defaultAppsDir) {
         console.log("[AppService] No default apps directory found, skipping installation");
         return;
       }

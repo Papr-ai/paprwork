@@ -58,7 +58,6 @@ function checkPreBuildFiles() {
     'src/electron/main.cjs',
     'src/electron/supervisor-logic.cjs',
     'src/electron/preload.cjs',
-    'src/electron/ipc/pythonDeps.cjs',
     'electron-builder.json',
     'package.json'
   ];
@@ -96,7 +95,13 @@ function checkBuilderConfig() {
     'src/electron/supervisor-logic.cjs',
     'src/electron/preload.cjs',
     'src/electron/ipc/**/*.cjs',
+    'src/resources/**/*',
     'package.json'
+  ];
+
+  const requiredAsarUnpack = [
+    'dist/resources/default-apps/**',
+    'dist/resources/default-jobs/**',
   ];
   
   let allIncluded = true;
@@ -106,6 +111,16 @@ function checkBuilderConfig() {
       success(`Included: ${pattern}`);
     } else {
       error(`Missing: ${pattern}`);
+      allIncluded = false;
+    }
+  }
+
+  info('Checking asarUnpack array...');
+  for (const pattern of requiredAsarUnpack) {
+    if (config.asarUnpack?.includes(pattern)) {
+      success(`Unpacked: ${pattern}`);
+    } else {
+      error(`Missing from asarUnpack: ${pattern}`);
       allIncluded = false;
     }
   }
@@ -280,7 +295,12 @@ function checkAsarContents(appPath) {
       'src/electron/index.cjs',
       'src/electron/main.cjs',
       'src/electron/preload.cjs',
-      'src/electron/ipc/pythonDeps.cjs'
+      'src/resources/workspace-templates/SLEEP.md',
+    ];
+
+    const requiredUnpackedDirs = [
+      'dist/resources/default-apps/home-dashboard/app-id.txt',
+      'dist/resources/default-jobs',
     ];
     
     let allIncluded = true;
@@ -291,6 +311,17 @@ function checkAsarContents(appPath) {
         success(`Found in ASAR: ${file}`);
       } else {
         error(`Missing from ASAR: ${file}`);
+        allIncluded = false;
+      }
+    }
+
+    const unpackedRoot = asarPath.replace('app.asar', 'app.asar.unpacked');
+    for (const relPath of requiredUnpackedDirs) {
+      const fullPath = join(unpackedRoot, relPath);
+      if (existsSync(fullPath)) {
+        success(`Found unpacked: ${relPath}`);
+      } else {
+        error(`Missing from app.asar.unpacked: ${relPath}`);
         allIncluded = false;
       }
     }

@@ -7,6 +7,7 @@
  */
 
 import { create } from "zustand";
+import { gateway } from "../../src/lib/gateway";
 
 export type PlatformId =
   // Social
@@ -38,29 +39,50 @@ export const usePlatformConnectStore = create<PlatformConnectState>((set) => ({
   clearRequest: () => set({ activeRequest: null }),
 }));
 
+async function isPlatformAlreadyConnected(platformId: PlatformId): Promise<boolean> {
+  try {
+    const response = await gateway.send("platform:get-status", { platformId });
+    const data = response.data as { status?: string } | undefined;
+    return data?.status === "connected";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Initialize listener for platform connection requests from gateway.
  * Call once at app root.
  */
 export function initPlatformConnectListener(): void {
-  // Listen for gateway broadcasts
   const handleBroadcast = (event: Event) => {
     const customEvent = event as CustomEvent;
     const message = customEvent.detail;
 
-    // Handle connection request from agent
     if (message.type === "platform:connect-request") {
+      const platformId = message.data.platformId as PlatformId;
       console.log("[PlatformConnectStore] Connection request:", message.data);
-      usePlatformConnectStore.getState().setActiveRequest({
-        platform: message.data.platformId,
-        reason: message.data.reason,
-        requestId: message.data.requestId || crypto.randomUUID(),
-      });
+
+      void (async () => {
+        if (await isPlatformAlreadyConnected(platformId)) {
+          console.log(
+            `[PlatformConnectStore] ${platformId} already connected — skipping modal`,
+          );
+          return;
+        }
+
+        usePlatformConnectStore.getState().setActiveRequest({
+          platform: platformId,
+          reason: message.data.reason,
+          requestId: message.data.requestId || crypto.randomUUID(),
+        });
+      })();
     }
 
-    // Handle connection success - dismiss modal
-    if (message.type === "platform:status-change") {
-      const { platformId, status } = message.data;
+    if (message.type === "platform:status-changed") {
+      const { platformId, status } = message.data as {
+        platformId: PlatformId;
+        status: string;
+      };
       const activeRequest = usePlatformConnectStore.getState().activeRequest;
 
       if (activeRequest?.platform === platformId && status === "connected") {

@@ -2306,6 +2306,8 @@ async function applyActiveNamespaceSwitch(input: {
     const win = BrowserWindow.getAllWindows()[0];
     if (win) {
       win.webContents.send("papr:namespace-changed", {
+        organizationId: input.organizationId,
+        parseOrganizationId: input.organizationId,
         namespaceId: input.namespaceId,
         namespaceName: input.namespaceName,
       });

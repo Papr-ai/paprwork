@@ -80,9 +80,56 @@ const ENTITY_DIR_CONFIG: Record<string, { railTitle: string; singular: string }>
   apps:        { railTitle: "Apps",        singular: "app" },
   people:      { railTitle: "People",      singular: "person" },
   companies:   { railTitle: "Companies",   singular: "company" },
+  meetings:    { railTitle: "Meetings",    singular: "meeting" },
+  decisions:   { railTitle: "Decisions",   singular: "decision" },
+  ideas:       { railTitle: "Ideas",       singular: "idea" },
+  workflows:   { railTitle: "Workflows",   singular: "workflow" },
   learnings:   { railTitle: "Learnings",   singular: "learning" },
   collections: { railTitle: "Collections", singular: "collection" },
 };
+
+const ENTITY_RAIL_ORDER = [
+  "collection",
+  "project",
+  "app",
+  "company",
+  "person",
+  "meeting",
+  "decision",
+  "idea",
+  "workflow",
+  "learning",
+] as const;
+
+/** Resolve rail metadata for a folder under workspace/entities/. */
+export function resolveEntityDirConfig(
+  dirName: string,
+): { railTitle: string; singular: string } {
+  const known = ENTITY_DIR_CONFIG[dirName];
+  if (known) {
+    return known;
+  }
+
+  const singular = dirName.endsWith("s") ? dirName.slice(0, -1) : dirName;
+  const railTitle =
+    singular.charAt(0).toUpperCase() + singular.slice(1) +
+    (singular.endsWith("s") ? "" : "s");
+
+  return { railTitle, singular };
+}
+
+function railTitleForSingular(singular: string): string {
+  const fromConfig = Object.values(ENTITY_DIR_CONFIG).find(
+    (cfg) => cfg.singular === singular,
+  );
+  if (fromConfig) {
+    return fromConfig.railTitle;
+  }
+  return (
+    singular.charAt(0).toUpperCase() + singular.slice(1) +
+    (singular.endsWith("s") ? "" : "s")
+  );
+}
 
 function parseEntityFrontmatter(content: string): Record<string, unknown> {
   const match = content.match(/^---\n([\s\S]*?)\n---/);
@@ -241,8 +288,7 @@ function readEntityFilesSync(): { nodes: EntityFileNode[]; rails: WikiRail[]; ty
   if (!fs.existsSync(getEntitiesDir())) return { nodes, rails: [], typeCounts };
 
   for (const typeDir of fs.readdirSync(getEntitiesDir())) {
-    const cfg = ENTITY_DIR_CONFIG[typeDir];
-    if (!cfg) continue;
+    const cfg = resolveEntityDirConfig(typeDir);
     const dirPath = path.join(getEntitiesDir(), typeDir);
     if (!fs.statSync(dirPath).isDirectory()) continue;
     for (const file of fs.readdirSync(dirPath)) {
@@ -291,15 +337,23 @@ function readEntityFilesSync(): { nodes: EntityFileNode[]; rails: WikiRail[]; ty
 
   nodes.sort((a, b) => b.relationships.length - a.relationships.length);
 
-  const TYPE_ORDER = ["collection", "project", "app", "company", "person", "learning"];
   const grouped = new Map<string, EntityFileNode[]>();
-  for (const n of nodes) { const l = grouped.get(n.type) ?? []; l.push(n); grouped.set(n.type, l); }
-  const rails: WikiRail[] = TYPE_ORDER
-    .filter((t) => grouped.has(t))
-    .map((t) => ({
-      title: Object.values(ENTITY_DIR_CONFIG).find((c) => c.singular === t)!.railTitle,
-      items: grouped.get(t) ?? [],
-    }));
+  for (const n of nodes) {
+    const list = grouped.get(n.type) ?? [];
+    list.push(n);
+    grouped.set(n.type, list);
+  }
+
+  const knownOrder = ENTITY_RAIL_ORDER.filter((t) => grouped.has(t));
+  const extraTypes = [...grouped.keys()]
+    .filter((t) => !ENTITY_RAIL_ORDER.includes(t as (typeof ENTITY_RAIL_ORDER)[number]))
+    .sort((a, b) => a.localeCompare(b));
+  const railTypeOrder = [...knownOrder, ...extraTypes];
+
+  const rails: WikiRail[] = railTypeOrder.map((t) => ({
+    title: railTitleForSingular(t),
+    items: grouped.get(t) ?? [],
+  }));
 
   return { nodes, rails, typeCounts };
 }
@@ -1136,7 +1190,7 @@ async function _fetchWikiEntityBase(wikiType: string, id: string, label?: string
       relGrouped.set(n.type, l);
     }
     const rails: WikiRail[] = [...relGrouped.entries()].map(([type, items]) => ({
-      title: Object.values(ENTITY_DIR_CONFIG).find((c) => c.singular === type)?.railTitle ?? type,
+      title: railTitleForSingular(type),
       items,
     }));
     console.log(`[Wiki] Entity (file): ${entityNode.id} → ${edges.length} edges, ${rails.length} rails (${related.length} connected)`);

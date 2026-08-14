@@ -43,6 +43,7 @@ import {
   resetSkillServiceForWorkspaceSwitch,
 } from "./SkillService.js";
 import {
+  getWorkspaceService,
   initializeWorkspaceService,
   resetWorkspaceServiceForWorkspaceSwitch,
 } from "./WorkspaceService.js";
@@ -211,6 +212,9 @@ async function resetPathBoundSingletons(): Promise<void> {
 
 async function initializePathBoundServices(): Promise<void> {
   await initializeWorkspaceService();
+  // Built-in agent jobs are scoped to the active namespace's jobs.json.
+  await getWorkspaceService().ensureSleepJob();
+  await getWorkspaceService().ensureWikiWriterJob();
   await initializeDocumentService();
   await initializeSkillService();
   await initializeSubAgentService();

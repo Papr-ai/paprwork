@@ -89,6 +89,7 @@ export function ConnectedPlatformsTab() {
   const [platforms, setPlatforms] = useState<PlatformInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [waitingForLogin, setWaitingForLogin] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
 
   const loadPlatforms = useCallback(async () => {
@@ -123,6 +124,15 @@ export function ConnectedPlatformsTab() {
         );
         setActionLoading(null);
         
+        // Remove from waiting list if connected
+        if (statusData.status === "connected" || statusData.status === "disconnected") {
+          setWaitingForLogin((prev) => {
+            const next = new Set(prev);
+            next.delete(statusData.platformId);
+            return next;
+          });
+        }
+        
         // Also reload to get fresh data
         setTimeout(() => loadPlatforms(), 500);
       }
@@ -141,14 +151,80 @@ export function ConnectedPlatformsTab() {
     setError(null);
 
     try {
-      await gateway.send("platform:connect", { platformId });
-      // Result will come via broadcast, but reload to be safe
-      setTimeout(() => loadPlatforms(), 1000);
+      const response = await gateway.send("platform:connect", { platformId });
+      const data = response.data as {
+        waitingForConfirmation?: boolean;
+        status?: string;
+      };
+
+      if (data?.status === "connected") {
+        await loadPlatforms();
+        setActionLoading(null);
+        return;
+      }
+
+      // If waiting for Chrome login, show check-now UI while background polling runs
+      if (data?.waitingForConfirmation) {
+        setWaitingForLogin((prev) => new Set(prev).add(platformId));
+        // Update local state to show connecting
+        setPlatforms((prev) =>
+          prev.map((p) =>
+            p.id === platformId
+              ? { ...p, status: { ...p.status, status: "connecting" as PlatformStatus } }
+              : p
+          )
+        );
+      }
+      setActionLoading(null);
     } catch (err) {
       console.error(`[ConnectedPlatformsTab] Failed to connect ${platformId}:`, err);
       setError(err instanceof Error ? err.message : "Failed to connect");
       setActionLoading(null);
     }
+  };
+
+  const handleConfirmLogin = async (platformId: string) => {
+    setActionLoading(platformId);
+    setError(null);
+
+    try {
+      const response = await gateway.send("platform:confirm-login", { platformId });
+      const data = response.data as PlatformSessionState;
+      
+      if (data?.status === "connected") {
+        // Success! Remove from waiting list
+        setWaitingForLogin((prev) => {
+          const next = new Set(prev);
+          next.delete(platformId);
+          return next;
+        });
+      } else if (data?.error) {
+        setError(data.error);
+      }
+      
+      await loadPlatforms();
+    } catch (err) {
+      console.error(`[ConnectedPlatformsTab] Failed to confirm login ${platformId}:`, err);
+      setError(err instanceof Error ? err.message : "Failed to confirm login");
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleCancelLogin = (platformId: string) => {
+    setWaitingForLogin((prev) => {
+      const next = new Set(prev);
+      next.delete(platformId);
+      return next;
+    });
+    // Reset status to disconnected
+    setPlatforms((prev) =>
+      prev.map((p) =>
+        p.id === platformId
+          ? { ...p, status: { ...p.status, status: "disconnected" as PlatformStatus } }
+          : p
+      )
+    );
   };
 
   const handleDisconnect = async (platformId: string) => {
@@ -212,6 +288,7 @@ export function ConnectedPlatformsTab() {
           const isConnected = status.status === "connected";
           const needsReauth =
             status.status === "expired" || status.status === "needs_reauth";
+          const isWaitingForLogin = waitingForLogin.has(platform.id);
 
           return (
             <div key={platform.id} className="connected-platform-card">
@@ -226,7 +303,7 @@ export function ConnectedPlatformsTab() {
                       className="connected-platform-status-dot"
                       style={{ backgroundColor: getStatusColor(status.status) }}
                     />
-                    {getStatusLabel(status.status)}
+                    {isWaitingForLogin ? "Checking Chrome for login..." : getStatusLabel(status.status)}
                   </span>
                 </div>
 
@@ -242,13 +319,23 @@ export function ConnectedPlatformsTab() {
                   </div>
                 )}
 
-                {status.error && (
+                {isWaitingForLogin && (
+                  <div className="connected-platform-waiting-info">
+                    <strong>Log in using Chrome</strong> if you aren't already.
+                    <br />
+                    <span className="connected-platform-waiting-note">
+                      We check Chrome automatically every few seconds. Google sign-in and 2FA work normally.
+                    </span>
+                  </div>
+                )}
+
+                {status.error && !isWaitingForLogin && (
                   <div className="connected-platform-error-text">
                     {status.error}
                   </div>
                 )}
 
-                {platform.notes && !isConnected && (
+                {platform.notes && !isConnected && !isWaitingForLogin && (
                   <div className="connected-platform-notes">
                     {platform.notes}
                   </div>
@@ -275,7 +362,7 @@ export function ConnectedPlatformsTab() {
                   </>
                 )}
 
-                {needsReauth && (
+                {needsReauth && !isWaitingForLogin && (
                   <button
                     className="connected-platform-btn connected-platform-btn-primary"
                     onClick={() => handleConnect(platform.id)}
@@ -285,7 +372,7 @@ export function ConnectedPlatformsTab() {
                   </button>
                 )}
 
-                {status.status === "disconnected" && (
+                {status.status === "disconnected" && !isWaitingForLogin && (
                   <button
                     className="connected-platform-btn connected-platform-btn-primary"
                     onClick={() => handleConnect(platform.id)}
@@ -295,12 +382,31 @@ export function ConnectedPlatformsTab() {
                   </button>
                 )}
 
-                {status.status === "connecting" && (
+                {isWaitingForLogin && (
+                  <>
+                    <button
+                      className="connected-platform-btn connected-platform-btn-primary"
+                      onClick={() => handleConfirmLogin(platform.id)}
+                      disabled={isLoading}
+                    >
+                      {isLoading ? "Checking..." : "Check now"}
+                    </button>
+                    <button
+                      className="connected-platform-btn connected-platform-btn-secondary"
+                      onClick={() => handleCancelLogin(platform.id)}
+                      disabled={isLoading}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                )}
+
+                {status.status === "connecting" && !isWaitingForLogin && (
                   <button
                     className="connected-platform-btn connected-platform-btn-secondary"
                     disabled
                   >
-                    Waiting for login...
+                    Opening browser...
                   </button>
                 )}
               </div>
@@ -312,12 +418,15 @@ export function ConnectedPlatformsTab() {
       <div className="connected-platforms-footer">
         <h3>How it works</h3>
         <ol className="connected-platforms-steps">
-          <li>Click <strong>Connect</strong> to open a login window</li>
-          <li>Log in to your account (2FA supported)</li>
-          <li>Session cookies are securely stored in your keychain</li>
-          <li>Sessions refresh automatically in the background</li>
-          <li>Use in jobs with <code>{"${PLATFORM_COOKIE_NAME}"}</code> substitution</li>
+          <li>Click <strong>Connect</strong> — if you're already logged into Chrome, it connects instantly</li>
+          <li>Otherwise Chrome opens — log in normally (Google, 2FA, etc.)</li>
+          <li>Papr Work reads cookies from Chrome and stores them securely</li>
+          <li>Session Keeper re-reads Chrome periodically to keep cookies fresh</li>
+          <li>No Chrome? We fall back to a built-in browser window instead</li>
         </ol>
+        <p className="connected-platforms-note">
+          <strong>Note:</strong> Chrome is required for the preferred login flow. Safari-only users get the Playwright fallback.
+        </p>
       </div>
     </div>
   );

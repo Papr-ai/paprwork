@@ -11,7 +11,9 @@ import type { MemoryAddPolicy } from "@papr/memory/resources/shared.js";
 import { getPaprClient } from "../../core/tools/paprClient.js";
 import { buildAddPolicy } from "./paprMemoryPolicy.js";
 
-const WORKSPACE_CONTEXT_SCHEMA_NAME = "WorkspaceContext";
+import { WORKSPACE_CONTEXT_SCHEMA_NAME } from "../../core/utils/memoryGraphSchemaRead.js";
+
+export { WORKSPACE_CONTEXT_SCHEMA_NAME };
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 let cachedSchemaId: string | undefined;

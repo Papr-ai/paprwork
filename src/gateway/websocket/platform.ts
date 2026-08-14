@@ -108,39 +108,59 @@ export async function setupPlatformHandlers(
         const sessionService = getPlatformSessionService();
         await sessionService.initialize();
 
-        // This opens a browser window for the user to log in
-        // It may take a few minutes, so we send a "connecting" status first
+        // This opens the login URL in the user's default browser
+        // Returns immediately with waitingForConfirmation: true
+        const result = await sessionService.connect(payload.platformId);
+        
         sendResponse(ws, {
           id: message.id,
           success: true,
           data: {
-            platformId: payload.platformId,
-            status: "connecting",
-            message: `Opening ${config.name} login page. Please log in to continue.`,
+            ...result,
+            message:
+              result.status === "connected"
+                ? `Connected to ${config.name}`
+                : result.waitingForConfirmation
+                  ? `Checking Chrome for ${config.name}. If needed, log in there — we'll detect it automatically.`
+                  : result.error || `Connecting to ${config.name}`,
           },
         });
+        break;
+      }
 
-        // Actually perform the connect (this blocks until user logs in or timeout)
-        try {
-          const result = await sessionService.connect(payload.platformId);
-          
-          // Broadcast the result to all connected clients
-          const { broadcast } = await import("./index.js");
-          broadcast({
-            type: "platform:status-changed",
-            data: result,
-          });
-        } catch (error) {
-          const { broadcast } = await import("./index.js");
-          broadcast({
-            type: "platform:status-changed",
-            data: {
-              platformId: payload.platformId,
-              status: "disconnected",
-              error: error instanceof Error ? error.message : String(error),
-            },
-          });
+      case "platform:confirm-login": {
+        // Manual "Check now" while waiting for Chrome login
+        const payload = message.payload as PlatformConnectPayload;
+        if (!payload.platformId) {
+          sendError(ws, message.id, "platformId is required");
+          return;
         }
+
+        const config = getPlatformConfig(payload.platformId);
+        if (!config) {
+          sendError(ws, message.id, `Unknown platform: ${payload.platformId}`);
+          return;
+        }
+
+        const sessionService = getPlatformSessionService();
+        await sessionService.initialize();
+
+        // Extract cookies from Chrome and store them
+        const result = await sessionService.confirmLogin(payload.platformId);
+        
+        sendResponse(ws, {
+          id: message.id,
+          success: result.status === "connected",
+          error: result.status === "connected" ? undefined : result.error,
+          data: result,
+        });
+
+        // Broadcast the result to all connected clients
+        const { broadcast } = await import("./index.js");
+        broadcast({
+          type: "platform:status-changed",
+          data: result,
+        });
         break;
       }
 

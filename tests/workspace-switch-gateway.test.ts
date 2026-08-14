@@ -43,6 +43,21 @@ describe("workspace switch gateway handler", () => {
     expect(initIdx).toBeGreaterThan(resetIdx);
   });
 
+  it("ensures sleep and wiki writer jobs after workspace reinit", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/workspaceSwitchService.ts"),
+      "utf-8",
+    );
+
+    const initFn = content.slice(
+      content.indexOf("async function initializePathBoundServices"),
+      content.indexOf("async function runPostMigrationPathRepairIfNeeded"),
+    );
+
+    expect(initFn).toContain("await getWorkspaceService().ensureSleepJob()");
+    expect(initFn).toContain("await getWorkspaceService().ensureWikiWriterJob()");
+  });
+
   it("yields during resetPathBoundSingletons for /health responsiveness", () => {
     const content = fs.readFileSync(
       path.join(SRC, "src/gateway/services/workspaceSwitchService.ts"),
