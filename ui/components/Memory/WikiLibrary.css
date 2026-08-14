@@ -601,6 +601,19 @@
   font-size: 11px;
 }
 
+/* website / linkedin pills are anchors — keep pill shape, add affordance. */
+.wiki-entity__pill--link {
+  color: #fff;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.wiki-entity__pill--link:hover {
+  background: rgba(0, 0, 0, 0.45);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
 .wiki-entity__meta-row .wiki-btn--secondary {
   padding: 4px 12px;
   font-size: 12px;
@@ -1578,6 +1591,14 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+/* Brand marks (companies, apps): letterbox the logo instead of cropping it,
+   and sit it on a light plate since most favicons assume a white background. */
+.wiki-card__art-img--logo {
+  object-fit: contain;
+  padding: 18%;
+  background: #fff;
+  image-rendering: -webkit-optimize-contrast;
 }
 .wiki-entity__hero-img {
   position: absolute;

@@ -1,4 +1,4 @@
-<!-- wiki-writer-prompt-version: 4 -->
+<!-- wiki-writer-prompt-version: 5 -->
 
 # Wiki Writer
 
@@ -109,7 +109,21 @@ If the file exists, read it and **merge new information** — don't overwrite ex
 
 **B. Use this template for new entity files:**
 
+Start every file with YAML frontmatter. The Memory wiki UI reads these keys to
+render cards — without frontmatter a card falls back to a plain gradient tile.
+
 ```markdown
+---
+id: {slug}
+name: {Entity Name}
+description: One-line summary shown on the card.
+status: active
+image: ../assets/{type}/{slug}.png
+website: https://example.com
+linkedin: https://www.linkedin.com/company/example/
+updated_at: YYYY-MM-DD
+---
+
 # {Entity Name}
 
 > One-line summary of who/what this entity is.
@@ -189,11 +203,51 @@ grep -rl "EntityName" $PAPR_HOME/workspace/entities/ 2>/dev/null
 ```
 Update those files too — add a reciprocal link back to the current entity.
 
+**E. Fetch a logo/avatar and profile links (companies and people).**
+
+A card with a real logo is dramatically more useful than a gradient tile. Do this
+for **every new company** — it takes one command.
+
+1. **Find the official domain.** If you don't already know it, use `web_search`
+   (e.g. `"Acme Corp official website"`). Prefer the company's own domain over
+   directory sites like Crunchbase or LinkedIn. Record it as `website:`.
+
+2. **Download the logo** into the shared assets folder. Use `-L`: the endpoint
+   **301-redirects**, and without it you silently save an HTML stub instead of an image.
+   ```bash
+   mkdir -p $PAPR_HOME/workspace/entities/assets/companies
+   curl -sL -o $PAPR_HOME/workspace/entities/assets/companies/{slug}.png \
+     "https://www.google.com/s2/favicons?domain={domain}&sz=256"
+   file $PAPR_HOME/workspace/entities/assets/companies/{slug}.png   # verify: "PNG image data, 256 x 256"
+   ```
+   - Some sites return a **JPEG** despite the `.png` name — check `file` output and
+     rename to `.jpg` so the MIME type is correct.
+   - Some sites only publish a 16×16 favicon. That's their asset, not a fetch error —
+     it will look soft when scaled. Accept it or supply a better image manually.
+   - Keep images under 256KB; larger files are skipped by the wiki reader.
+
+3. **Reference it in frontmatter** with a path relative to the entity file:
+   ```yaml
+   image: ../assets/companies/{slug}.png
+   website: https://acme.com
+   linkedin: https://www.linkedin.com/company/acme/
+   ```
+   The wiki service inlines this file as a data URI at read time, so relative paths
+   work — do **not** paste base64 into the markdown yourself.
+
+4. **People:** set `linkedin:` when you have a verified profile URL. Only use a URL
+   you've actually seen in a source — **never guess a slug from someone's name**, it
+   will link to a stranger. For `image:`, use `../assets/people/{slug}.jpg` only if the
+   user supplied a photo; LinkedIn CDN URLs are signed, expire within hours, and
+   scraping them violates LinkedIn's terms.
+
 ### Step 4: Quality checks
 
 Before finishing:
 - **MANDATORY:** Every entity listed in today's daily log "Active entities today" section MUST have a file under `$PAPR_HOME/workspace/entities/{type}/`. If missing, create a stub with `write_file` before ending the run. Daily log mentions alone do not create Memory library cards. Group related apps under projects when the data supports it — avoid duplicate near-miss names.
 - Every entity file should have an **Overview**, **Key Facts**, and **Related Entities** section at minimum
+- **Every file starts with YAML frontmatter** (`id`, `name`, `description`). Without it the Memory library shows a bare gradient card with no summary
+- **Every company has `website:` and `image:`** — run the logo fetch in Step 3E. Verify with `file` that the download is a real image, not an HTML redirect stub
 - **Related Entities** should have working relative links to actual files (verify the files exist before linking)
 - Scores, metrics, and quotes should include the source (which job/table/chat they came from)
 - Don't leave placeholder text — if you don't have data for a section, omit it
