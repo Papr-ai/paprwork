@@ -7,16 +7,16 @@
 
 import type Papr from "@papr/memory";
 import { getPaprWorkspaceDir } from "../../core/utils/paprRoot.js";
-import { getPaprClient, isPaprNotFoundError } from "../../core/tools/paprClient.js";
+import {
+  getPaprClient,
+  isPaprNotFoundError,
+} from "../../core/tools/paprClient.js";
 import {
   getMemoryScopeContext,
   paprMemorySearchScopeSpread,
 } from "../utils/memoryScopeResolver.js";
 import { buildMemorySearchScopeFields } from "../../core/utils/memoryScope.js";
-import {
-  isWikiRailExcluded,
-  pickWikiLabel,
-} from "./wikiGraphHelpers.js";
+import { isWikiRailExcluded, pickWikiLabel } from "./wikiGraphHelpers.js";
 import { syncWikiGraphEntity } from "./wikiGraphEntitySync.js";
 import {
   graphqlNameContainsWhere,
@@ -73,18 +73,23 @@ function setCachedWikiHomeRemote(result: WikiHomeResult): void {
   };
 }
 
-function getEntitiesDir(): string { return path.join(getPaprWorkspaceDir(), "entities"); }
+function getEntitiesDir(): string {
+  return path.join(getPaprWorkspaceDir(), "entities");
+}
 
-const ENTITY_DIR_CONFIG: Record<string, { railTitle: string; singular: string }> = {
-  projects:    { railTitle: "Projects",    singular: "project" },
-  apps:        { railTitle: "Apps",        singular: "app" },
-  people:      { railTitle: "People",      singular: "person" },
-  companies:   { railTitle: "Companies",   singular: "company" },
-  meetings:    { railTitle: "Meetings",    singular: "meeting" },
-  decisions:   { railTitle: "Decisions",   singular: "decision" },
-  ideas:       { railTitle: "Ideas",       singular: "idea" },
-  workflows:   { railTitle: "Workflows",   singular: "workflow" },
-  learnings:   { railTitle: "Learnings",   singular: "learning" },
+const ENTITY_DIR_CONFIG: Record<
+  string,
+  { railTitle: string; singular: string }
+> = {
+  projects: { railTitle: "Projects", singular: "project" },
+  apps: { railTitle: "Apps", singular: "app" },
+  people: { railTitle: "People", singular: "person" },
+  companies: { railTitle: "Companies", singular: "company" },
+  meetings: { railTitle: "Meetings", singular: "meeting" },
+  decisions: { railTitle: "Decisions", singular: "decision" },
+  ideas: { railTitle: "Ideas", singular: "idea" },
+  workflows: { railTitle: "Workflows", singular: "workflow" },
+  learnings: { railTitle: "Learnings", singular: "learning" },
   collections: { railTitle: "Collections", singular: "collection" },
 };
 
@@ -102,9 +107,10 @@ const ENTITY_RAIL_ORDER = [
 ] as const;
 
 /** Resolve rail metadata for a folder under workspace/entities/. */
-export function resolveEntityDirConfig(
-  dirName: string,
-): { railTitle: string; singular: string } {
+export function resolveEntityDirConfig(dirName: string): {
+  railTitle: string;
+  singular: string;
+} {
   const known = ENTITY_DIR_CONFIG[dirName];
   if (known) {
     return known;
@@ -112,7 +118,8 @@ export function resolveEntityDirConfig(
 
   const singular = dirName.endsWith("s") ? dirName.slice(0, -1) : dirName;
   const railTitle =
-    singular.charAt(0).toUpperCase() + singular.slice(1) +
+    singular.charAt(0).toUpperCase() +
+    singular.slice(1) +
     (singular.endsWith("s") ? "" : "s");
 
   return { railTitle, singular };
@@ -126,7 +133,8 @@ function railTitleForSingular(singular: string): string {
     return fromConfig.railTitle;
   }
   return (
-    singular.charAt(0).toUpperCase() + singular.slice(1) +
+    singular.charAt(0).toUpperCase() +
+    singular.slice(1) +
     (singular.endsWith("s") ? "" : "s")
   );
 }
@@ -141,12 +149,27 @@ function parseEntityFrontmatter(content: string): Record<string, unknown> {
   let inList = false;
   for (const line of lines) {
     const listItem = line.match(/^  - (.+)$/);
-    if (listItem && inList) { currentList.push(listItem[1].trim()); continue; }
-    if (inList) { result[currentKey] = currentList; inList = false; currentList = []; }
+    if (listItem && inList) {
+      currentList.push(listItem[1].trim());
+      continue;
+    }
+    if (inList) {
+      result[currentKey] = currentList;
+      inList = false;
+      currentList = [];
+    }
     const kv = line.match(/^(\w[\w_]*): (.+)$/);
-    if (kv) { result[kv[1]] = kv[2].trim().replace(/^["']|["']$/g, ""); currentKey = ""; continue; }
+    if (kv) {
+      result[kv[1]] = kv[2].trim().replace(/^["']|["']$/g, "");
+      currentKey = "";
+      continue;
+    }
     const listStart = line.match(/^(\w[\w_]*):\s*$/);
-    if (listStart) { currentKey = listStart[1]; inList = true; currentList = []; }
+    if (listStart) {
+      currentKey = listStart[1];
+      inList = true;
+      currentList = [];
+    }
   }
   if (inList) result[currentKey] = currentList;
   return result;
@@ -165,6 +188,9 @@ const IMAGE_MIME_BY_EXT: Record<string, string> = {
 /** Max on-disk size for an inlined entity image (256KB). Larger files are skipped
  *  rather than bloating every wiki home payload. */
 const MAX_ENTITY_IMAGE_BYTES = 256 * 1024;
+const MAX_ENTITY_HERO_BYTES = 1024 * 1024;
+const MAX_MEDIA_UPLOAD_BYTES = 12 * 1024 * 1024;
+const EDITABLE_MEDIA_TYPES = new Set(["company", "person"]);
 
 /**
  * Resolve an entity `image:` frontmatter value into something the renderer can use.
@@ -178,7 +204,11 @@ const MAX_ENTITY_IMAGE_BYTES = 256 * 1024;
  * disk and inlined as a base64 data URI. Paths are constrained to the entities
  * directory so a malicious .md cannot exfiltrate arbitrary files.
  */
-export function resolveEntityImage(raw: unknown, entityDir: string): string | null {
+export function resolveEntityImage(
+  raw: unknown,
+  entityDir: string,
+  maxBytes = MAX_ENTITY_IMAGE_BYTES,
+): string | null {
   if (typeof raw !== "string") return null;
   const value = raw.trim();
   if (!value) return null;
@@ -194,7 +224,7 @@ export function resolveEntityImage(raw: unknown, entityDir: string): string | nu
     }
     if (!fs.existsSync(abs)) return null;
     const stat = fs.statSync(abs);
-    if (!stat.isFile() || stat.size > MAX_ENTITY_IMAGE_BYTES) return null;
+    if (!stat.isFile() || stat.size > maxBytes) return null;
     const mime = IMAGE_MIME_BY_EXT[path.extname(abs).toLowerCase()];
     if (!mime) return null;
     return `data:${mime};base64,${fs.readFileSync(abs).toString("base64")}`;
@@ -225,12 +255,22 @@ function cleanYamlScalar(value: string): string {
 }
 
 function parseYamlListBlock(content: string, key: string): string[] {
-  const match = content.match(new RegExp(`^${key}:\\n([\\s\\S]*?)(?=^\\w[\\w_]*:|^---|(?![\\s\\S]))`, "m"));
+  const match = content.match(
+    new RegExp(
+      `^${key}:\\n([\\s\\S]*?)(?=^\\w[\\w_]*:|^---|(?![\\s\\S]))`,
+      "m",
+    ),
+  );
   if (!match) return [];
-  return match[1].split(/^  - /m).map((item) => item.trim()).filter(Boolean);
+  return match[1]
+    .split(/^  - /m)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
-function parseEntityRelationships(content: string): Array<{ type: string; target: string; context?: string }> {
+function parseEntityRelationships(
+  content: string,
+): Array<{ type: string; target: string; context?: string }> {
   const rels: Array<{ type: string; target: string; context?: string }> = [];
   const seen = new Set<string>();
   for (const item of parseYamlListBlock(content, "relationships")) {
@@ -243,12 +283,18 @@ function parseEntityRelationships(content: string): Array<{ type: string; target
     const key = `${type}::${targetId}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    rels.push({ type, target: targetId, context: ctx ? cleanYamlScalar(ctx[1]) : undefined });
+    rels.push({
+      type,
+      target: targetId,
+      context: ctx ? cleanYamlScalar(ctx[1]) : undefined,
+    });
   }
   return rels;
 }
 
-function parseEntityEvidence(content: string): Array<{ date: string; source: string; summary: string }> {
+function parseEntityEvidence(
+  content: string,
+): Array<{ date: string; source: string; summary: string }> {
   const evidence: Array<{ date: string; source: string; summary: string }> = [];
   const seen = new Set<string>();
   for (const item of parseYamlListBlock(content, "evidence")) {
@@ -282,7 +328,11 @@ export interface EntityFileNode extends WikiNode {
   evidence: Array<{ date: string; source: string; summary: string }>;
 }
 
-function readEntityFilesSync(): { nodes: EntityFileNode[]; rails: WikiRail[]; typeCounts: Record<string, number> } {
+function readEntityFilesSync(): {
+  nodes: EntityFileNode[];
+  rails: WikiRail[];
+  typeCounts: Record<string, number>;
+} {
   const nodes: EntityFileNode[] = [];
   const typeCounts: Record<string, number> = {};
   if (!fs.existsSync(getEntitiesDir())) return { nodes, rails: [], typeCounts };
@@ -302,11 +352,18 @@ function readEntityFilesSync(): { nodes: EntityFileNode[]; rails: WikiRail[]; ty
         const evidence = parseEntityEvidence(content);
         const id = String(fm.id || file.replace(".md", ""));
         const resolvedImage = resolveEntityImage(fm.image, dirPath);
+        const resolvedHero = resolveEntityImage(
+          fm.hero_image,
+          dirPath,
+          MAX_ENTITY_HERO_BYTES,
+        );
         nodes.push({
           id: `${cfg.singular}/${id}`,
           type: cfg.singular,
           label: String(fm.name || id),
-          description: String(fm.description || sections["Context & Background"] || "").slice(0, 300),
+          description: String(
+            fm.description || sections["Context & Background"] || "",
+          ).slice(0, 300),
           props: {
             ...(fm.status ? { status: String(fm.status) } : {}),
             ...(fm.confidence ? { confidence: String(fm.confidence) } : {}),
@@ -318,6 +375,7 @@ function readEntityFilesSync(): { nodes: EntityFileNode[]; rails: WikiRail[]; ty
             // `image` is resolved to a data URI so it renders without a static
             // file server (entity assets live outside the app bundle).
             ...(resolvedImage ? { image: resolvedImage } : {}),
+            ...(resolvedHero ? { hero_image: resolvedHero } : {}),
             ...(fm.role ? { role: String(fm.role) } : {}),
             ...(fm.title ? { title: String(fm.title) } : {}),
             ...(fm.website ? { website: String(fm.website) } : {}),
@@ -346,7 +404,10 @@ function readEntityFilesSync(): { nodes: EntityFileNode[]; rails: WikiRail[]; ty
 
   const knownOrder = ENTITY_RAIL_ORDER.filter((t) => grouped.has(t));
   const extraTypes = [...grouped.keys()]
-    .filter((t) => !ENTITY_RAIL_ORDER.includes(t as (typeof ENTITY_RAIL_ORDER)[number]))
+    .filter(
+      (t) =>
+        !ENTITY_RAIL_ORDER.includes(t as (typeof ENTITY_RAIL_ORDER)[number]),
+    )
     .sort((a, b) => a.localeCompare(b));
   const railTypeOrder = [...knownOrder, ...extraTypes];
 
@@ -377,7 +438,6 @@ export function searchLocalWikiEntities(query: string): WikiNode[] {
     );
   });
 }
-
 
 export interface WikiNode {
   id: string;
@@ -555,15 +615,33 @@ const SEARCH_RAIL_QUERIES: Array<{
   railTitle: string;
 }> = [
   { query: "goals and objectives", wikiType: "goal", railTitle: "Your goals" },
-  { query: "projects and initiatives", wikiType: "project", railTitle: "Projects" },
-  { query: "people contacts stakeholders", wikiType: "person", railTitle: "People" },
-  { query: "memories notes conversations", wikiType: "memory", railTitle: "Recent memories" },
-  { query: "insights decisions learnings", wikiType: "insight", railTitle: "Insights" },
+  {
+    query: "projects and initiatives",
+    wikiType: "project",
+    railTitle: "Projects",
+  },
+  {
+    query: "people contacts stakeholders",
+    wikiType: "person",
+    railTitle: "People",
+  },
+  {
+    query: "memories notes conversations",
+    wikiType: "memory",
+    railTitle: "Recent memories",
+  },
+  {
+    query: "insights decisions learnings",
+    wikiType: "insight",
+    railTitle: "Insights",
+  },
   { query: "tasks action items todos", wikiType: "task", railTitle: "Tasks" },
 ];
 
 function isConversationBatchMemory(record: Record<string, unknown>): boolean {
-  const content = asString(record.content ?? record.title ?? record.description);
+  const content = asString(
+    record.content ?? record.title ?? record.description,
+  );
   const batchId = asString(record.batch_id);
   const sessionId = asString(record.session_id);
   if (batchId || sessionId) return true;
@@ -576,7 +654,8 @@ function isConversationBatchMemory(record: Record<string, unknown>): boolean {
 
 function asString(value: unknown): string {
   if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "number" || typeof value === "boolean")
+    return String(value);
   return "";
 }
 
@@ -681,17 +760,15 @@ function normalizeNode(
 }
 
 function inferWikiTypeFromRecord(record: Record<string, unknown>): string {
-  const label = asString(record.label ?? record.type ?? record.node_type).toLowerCase();
+  const label = asString(
+    record.label ?? record.type ?? record.node_type,
+  ).toLowerCase();
   if (label.includes("goal") || record.target_date) return "goal";
   if (label.includes("person") || (record.role && record.name)) return "person";
   if (label.includes("project") || record.type === "project") return "project";
   if (label.includes("insight") || record.confidence) return "insight";
   if (label.includes("task") || record.task_name) return "task";
-  if (
-    label.includes("memory") ||
-    record.memory_category ||
-    record.content
-  ) {
+  if (label.includes("memory") || record.memory_category || record.content) {
     return "memory";
   }
   return "entity";
@@ -879,9 +956,10 @@ function pickFeatured(rails: WikiRail[]): WikiNode | null {
   return rails[0]?.items[0] ?? null;
 }
 
-function buildRailsFromItems(
-  grouped: Map<string, WikiNode[]>,
-): { rails: WikiRail[]; typeCounts: Record<string, number> } {
+function buildRailsFromItems(grouped: Map<string, WikiNode[]>): {
+  rails: WikiRail[];
+  typeCounts: Record<string, number>;
+} {
   const rails: WikiRail[] = [];
   const typeCounts: Record<string, number> = {};
 
@@ -1007,8 +1085,13 @@ async function fetchWikiHomeFromSearch(client: Papr): Promise<{
   }
 
   const result = buildRailsFromItems(grouped);
-  const totalItems = result.rails.reduce((sum, rail) => sum + rail.items.length, 0);
-  console.log(`[Wiki] Search loaded ${totalItems} items across ${result.rails.length} rails`);
+  const totalItems = result.rails.reduce(
+    (sum, rail) => sum + rail.items.length,
+    0,
+  );
+  console.log(
+    `[Wiki] Search loaded ${totalItems} items across ${result.rails.length} rails`,
+  );
   return result;
 }
 
@@ -1112,7 +1195,8 @@ export async function fetchWikiHome(options?: {
       rails: [],
       typeCounts: {},
       configured: false,
-      error: "Connect Papr in Settings → AI Models to browse your knowledge graph.",
+      error:
+        "Connect Papr in Settings → AI Models to browse your knowledge graph.",
     };
   }
 
@@ -1120,7 +1204,10 @@ export async function fetchWikiHome(options?: {
   const searchResult = await fetchWikiHomeFromSearch(client);
 
   const rails = mergeWikiRails(graphqlResult.rails, searchResult.rails);
-  const typeCounts = { ...searchResult.typeCounts, ...graphqlResult.typeCounts };
+  const typeCounts = {
+    ...searchResult.typeCounts,
+    ...graphqlResult.typeCounts,
+  };
   const searchFallback = searchResult.rails.length > 0;
   const featured = pickFeatured(rails);
 
@@ -1146,12 +1233,17 @@ export async function fetchWikiHome(options?: {
   return result;
 }
 
-async function _fetchWikiEntityBase(wikiType: string, id: string, label?: string): Promise<WikiEntityResult> {
+async function _fetchWikiEntityBase(
+  wikiType: string,
+  id: string,
+  label?: string,
+): Promise<WikiEntityResult> {
   // PRIMARY: Check entity .md files first
   const { nodes: entityNodes } = readEntityFilesSync();
   // Match by full id (type/slug) or just slug
   const entityNode = entityNodes.find(
-    (n) => n.id === id || n.id === `${wikiType}/${id}` || n.id.endsWith(`/${id}`)
+    (n) =>
+      n.id === id || n.id === `${wikiType}/${id}` || n.id.endsWith(`/${id}`),
   );
   if (entityNode) {
     const edges: WikiEdge[] = entityNode.relationships.map((r) => ({
@@ -1172,28 +1264,36 @@ async function _fetchWikiEntityBase(wikiType: string, id: string, label?: string
       if (connectedIds.has(other.id)) continue;
       // Check if other entity's relationships point to this entity
       const pointsHere = other.relationships.some(
-        (r) => r.target === entityNode.id || r.target.endsWith(`/${entitySlug}`)
+        (r) =>
+          r.target === entityNode.id || r.target.endsWith(`/${entitySlug}`),
       );
       // Check if other entity's body/description mentions this entity
-      const mentionsLabel = (other.markdownBody ?? "").toLowerCase().includes(entityLabel)
-        || (other.description ?? "").toLowerCase().includes(entityLabel);
+      const mentionsLabel =
+        (other.markdownBody ?? "").toLowerCase().includes(entityLabel) ||
+        (other.description ?? "").toLowerCase().includes(entityLabel);
       if (pointsHere || mentionsLabel) {
         connectedIds.add(other.id);
       }
     }
 
-    const related = entityNodes.filter((n) => connectedIds.has(n.id) && n.id !== entityNode.id);
+    const related = entityNodes.filter(
+      (n) => connectedIds.has(n.id) && n.id !== entityNode.id,
+    );
     const relGrouped = new Map<string, WikiNode[]>();
     for (const n of related) {
       const l = relGrouped.get(n.type) ?? [];
       l.push(n);
       relGrouped.set(n.type, l);
     }
-    const rails: WikiRail[] = [...relGrouped.entries()].map(([type, items]) => ({
-      title: railTitleForSingular(type),
-      items,
-    }));
-    console.log(`[Wiki] Entity (file): ${entityNode.id} → ${edges.length} edges, ${rails.length} rails (${related.length} connected)`);
+    const rails: WikiRail[] = [...relGrouped.entries()].map(
+      ([type, items]) => ({
+        title: railTitleForSingular(type),
+        items,
+      }),
+    );
+    console.log(
+      `[Wiki] Entity (file): ${entityNode.id} → ${edges.length} edges, ${rails.length} rails (${related.length} connected)`,
+    );
 
     return { node: entityNode, edges, rails };
   }
@@ -1201,7 +1301,12 @@ async function _fetchWikiEntityBase(wikiType: string, id: string, label?: string
   // FALLBACK: Neo4j / Qdrant
   const config = ENTITY_CONFIGS.find((c) => c.wikiType === wikiType);
   if (!config) {
-    return { node: null, edges: [], rails: [], error: `Unknown entity type: ${wikiType}` };
+    return {
+      node: null,
+      edges: [],
+      rails: [],
+      error: `Unknown entity type: ${wikiType}`,
+    };
   }
 
   let client: Papr;
@@ -1224,21 +1329,24 @@ async function _fetchWikiEntityBase(wikiType: string, id: string, label?: string
           `[Wiki] Skipping GraphQL entity load — invalid id (${wikiType}/${id})`,
         );
       } else {
-      const data = await runGraphQL(
-        client,
-        selection,
-        `${config.graphqlPlural}:${id}`,
-      );
-      if (data) {
-        const rows = data[config.graphqlPlural];
-        if (Array.isArray(rows) && rows.length > 0) {
-          const record = rows[0] as Record<string, unknown>;
-          const synced = await syncWikiGraphEntity(client, record, wikiType);
-          const node = normalizeNode(synced.record, wikiType);
-          const { edges, rails } = extractEdgesAndRails(synced.record, node.id);
-          return { node, edges, rails };
+        const data = await runGraphQL(
+          client,
+          selection,
+          `${config.graphqlPlural}:${id}`,
+        );
+        if (data) {
+          const rows = data[config.graphqlPlural];
+          if (Array.isArray(rows) && rows.length > 0) {
+            const record = rows[0] as Record<string, unknown>;
+            const synced = await syncWikiGraphEntity(client, record, wikiType);
+            const node = normalizeNode(synced.record, wikiType);
+            const { edges, rails } = extractEdgesAndRails(
+              synced.record,
+              node.id,
+            );
+            return { node, edges, rails };
+          }
         }
-      }
       }
     } catch (error) {
       console.warn(
@@ -1304,9 +1412,10 @@ export async function fetchWikiEntity(
   ]);
 
   // Merge graph-discovered entities into existing rails
-  const mergedRails = graphRails.length > 0
-    ? mergeWikiRails(result.rails, graphRails)
-    : result.rails;
+  const mergedRails =
+    graphRails.length > 0
+      ? mergeWikiRails(result.rails, graphRails)
+      : result.rails;
 
   return {
     ...result,
@@ -1328,14 +1437,16 @@ async function _fetchRelatedMemories(node: WikiNode): Promise<any[]> {
       enable_agentic_graph: false,
     });
     const { memories } = parseSearchPayload(response);
-    return memories.map(m => ({
-      id: asString(m.id),
-      content: asString(m.content),
-      category: asString(m.category),
-      source: asString(m.source),
-      createdAt: asString(m.created_at),
-      chatId: asString(m.chat_id),
-    })).filter(m => m.id && m.content);
+    return memories
+      .map((m) => ({
+        id: asString(m.id),
+        content: asString(m.content),
+        category: asString(m.category),
+        source: asString(m.source),
+        createdAt: asString(m.created_at),
+        chatId: asString(m.chat_id),
+      }))
+      .filter((m) => m.id && m.content);
   } catch (e) {
     console.warn("[Wiki] Failed to fetch related memories:", e);
     return [];
@@ -1355,25 +1466,37 @@ async function _fetchGraphConnectedEntities(
     // --- Graph queries: best-effort, entity files are the primary source ---
     // Some Person nodes in the graph have corrupted fields that cause errors,
     // so we use safe queries (id-only for nested relationships) and tolerate failures.
-    const graphType = entityType === "person" ? "people"
-      : entityType === "company" ? "companies"
-      : entityType === "project" ? "projects"
-      : entityType === "goal" ? "goals"
-      : null;
+    const graphType =
+      entityType === "person"
+        ? "people"
+        : entityType === "company"
+          ? "companies"
+          : entityType === "project"
+            ? "projects"
+            : entityType === "goal"
+              ? "goals"
+              : null;
 
     if (graphType && nameWhere) {
       // For companies: get connection count, then fetch person IDs individually
       if (entityType === "company") {
         // Safe query: only get totalCount (no nested name fields that could error)
         const countQuery = `${graphType}(where: ${nameWhere}, limit: 1) { id name employeesPersonConnection { totalCount edges { node { id } } } }`;
-        const data = await runGraphQL(client, countQuery, `connected-company-people`);
+        const data = await runGraphQL(
+          client,
+          countQuery,
+          `connected-company-people`,
+        );
         if (data) {
           const records = (data[graphType] as Record<string, unknown>[]) ?? [];
           if (records.length > 0) {
-            const conn = (records[0] as Record<string, unknown>).employeesPersonConnection as {
-              totalCount?: number;
-              edges?: Array<{ node: { id: string } }>;
-            } | undefined;
+            const conn = (records[0] as Record<string, unknown>)
+              .employeesPersonConnection as
+              | {
+                  totalCount?: number;
+                  edges?: Array<{ node: { id: string } }>;
+                }
+              | undefined;
             if (conn?.edges) {
               // Got person IDs — look up their names from entity files (reliable)
               const { nodes: entityNodes } = readEntityFilesSync();
@@ -1381,8 +1504,9 @@ async function _fetchGraphConnectedEntities(
               for (const edge of conn.edges) {
                 if (!edge.node?.id) continue;
                 // Try to find this person in entity files by graph ID or name
-                const entityMatch = entityNodes.find((n) =>
-                  n.type === "person" && (n.props.graph_id === edge.node.id)
+                const entityMatch = entityNodes.find(
+                  (n) =>
+                    n.type === "person" && n.props.graph_id === edge.node.id,
                 );
                 if (entityMatch) {
                   personNodes.push(entityMatch);
@@ -1390,14 +1514,24 @@ async function _fetchGraphConnectedEntities(
               }
               // Also try fetching names directly (may fail on corrupt nodes, that's OK)
               const nameQuery = `${graphType}(where: ${nameWhere}, limit: 1) { employeesPerson { id name } }`;
-              const nameData = await runGraphQL(client, nameQuery, `connected-company-people-names`);
+              const nameData = await runGraphQL(
+                client,
+                nameQuery,
+                `connected-company-people-names`,
+              );
               if (nameData) {
-                const recs = (nameData[graphType] as Record<string, unknown>[]) ?? [];
+                const recs =
+                  (nameData[graphType] as Record<string, unknown>[]) ?? [];
                 if (recs.length > 0) {
-                  const people = (recs[0] as Record<string, unknown>).employeesPerson as Record<string, unknown>[] | undefined;
+                  const people = (recs[0] as Record<string, unknown>)
+                    .employeesPerson as Record<string, unknown>[] | undefined;
                   if (people) {
                     for (const p of people) {
-                      if (p.id && p.name && !personNodes.some((n) => n.id === String(p.id))) {
+                      if (
+                        p.id &&
+                        p.name &&
+                        !personNodes.some((n) => n.id === String(p.id))
+                      ) {
                         personNodes.push(normalizeNode(p, "person"));
                       }
                     }
@@ -1423,7 +1557,10 @@ async function _fetchGraphConnectedEntities(
         if (data) {
           const records = (data[graphType] as Record<string, unknown>[]) ?? [];
           if (records.length > 0) {
-            const { rails: directRails } = extractEdgesAndRails(records[0], node.id);
+            const { rails: directRails } = extractEdgesAndRails(
+              records[0],
+              node.id,
+            );
             allRails.push(...directRails);
           }
         }
@@ -1432,7 +1569,7 @@ async function _fetchGraphConnectedEntities(
 
     // Deduplicate and filter out entities already shown
     const existingIds = new Set(
-      existingRails.flatMap((r) => r.items.map((i) => i.id))
+      existingRails.flatMap((r) => r.items.map((i) => i.id)),
     );
     const result = allRails
       .map((rail) => ({
@@ -1440,14 +1577,15 @@ async function _fetchGraphConnectedEntities(
         items: rail.items.filter((i) => !existingIds.has(i.id)),
       }))
       .filter((rail) => rail.items.length > 0);
-    console.log(`[Wiki] Graph connected entities: ${result.reduce((s, r) => s + r.items.length, 0)} items across ${result.length} rails`);
+    console.log(
+      `[Wiki] Graph connected entities: ${result.reduce((s, r) => s + r.items.length, 0)} items across ${result.length} rails`,
+    );
     return result;
   } catch (e) {
     console.warn("[Wiki] Graph connected entities lookup failed:", e);
     return [];
   }
 }
-
 
 export async function searchWiki(query: string): Promise<WikiSearchResult> {
   const trimmed = query.trim();
@@ -1624,6 +1762,131 @@ No decisions or insights captured yet.
   return { id, filePath, created: true };
 }
 
+export type WikiEntityMediaKind = "image" | "hero_image";
+
+export interface UpdateWikiEntityMediaInput {
+  type: string;
+  id: string;
+  kind: WikiEntityMediaKind;
+  dataUrl?: string | null;
+}
+
+function yamlMediaValue(
+  content: string,
+  key: WikiEntityMediaKind,
+  value: string | null,
+): string {
+  const frontmatter = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!frontmatter) throw new Error("Entity file has no YAML frontmatter");
+  const line = new RegExp(`^${key}:.*$`, "m");
+  let yaml = frontmatter[1];
+  if (value) {
+    yaml = line.test(yaml)
+      ? yaml.replace(line, `${key}: ${value}`)
+      : `${yaml}\n${key}: ${value}`;
+  } else {
+    yaml = yaml
+      .replace(line, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trimEnd();
+  }
+  return content.replace(frontmatter[0], `---\n${yaml}\n---`);
+}
+
+function parseImageDataUrl(dataUrl: string): { mime: string; bytes: Buffer } {
+  const match = dataUrl.match(
+    /^data:(image\/(?:png|jpeg|webp|gif|svg\+xml));base64,([A-Za-z0-9+/=\s]+)$/i,
+  );
+  if (!match) throw new Error("Use a PNG, JPEG, WebP, GIF, or SVG image");
+  const bytes = Buffer.from(match[2].replace(/\s/g, ""), "base64");
+  if (!bytes.length || bytes.length > MAX_MEDIA_UPLOAD_BYTES)
+    throw new Error("Image must be smaller than 12 MB");
+  return { mime: match[1].toLowerCase(), bytes };
+}
+
+/** Save/remove a company logo, person avatar, or company/person hero image. */
+export async function updateWikiEntityMedia(
+  input: UpdateWikiEntityMediaInput,
+): Promise<{ path: string | null }> {
+  const rawType = input.type.toLowerCase();
+  const type =
+    rawType === "companies"
+      ? "company"
+      : rawType === "people"
+        ? "person"
+        : rawType;
+  if (!EDITABLE_MEDIA_TYPES.has(type))
+    throw new Error("Media uploads are supported for companies and people");
+  if (input.kind !== "image" && input.kind !== "hero_image")
+    throw new Error("Invalid media kind");
+  const id = input.id.includes("/") ? input.id.split("/").pop()! : input.id;
+  if (!/^[a-z0-9][a-z0-9-]{0,79}$/i.test(id))
+    throw new Error("Invalid entity id");
+  const plural = type === "company" ? "companies" : "people";
+  const entityDir = path.join(getEntitiesDir(), plural);
+  const entityPath = path.join(entityDir, `${id}.md`);
+  if (!fs.existsSync(entityPath)) throw new Error("Entity file not found");
+  const assetsDir = path.join(getEntitiesDir(), "assets", plural);
+  fs.mkdirSync(assetsDir, { recursive: true });
+  const prefix = input.kind === "hero_image" ? `${id}-hero` : id;
+  for (const ext of [".svg", ".webp", ".png", ".jpg", ".jpeg"]) {
+    const old = path.join(assetsDir, `${prefix}${ext}`);
+    if (fs.existsSync(old)) fs.unlinkSync(old);
+  }
+  let relative: string | null = null;
+  if (input.dataUrl) {
+    const { mime, bytes } = parseImageDataUrl(input.dataUrl);
+    let output: Buffer;
+    let ext: string;
+    if (mime === "image/svg+xml" && input.kind === "image") {
+      const text = bytes.toString("utf8");
+      if (
+        !/<svg[\s>]/i.test(text) ||
+        /<script|on\w+\s*=|javascript:|(?:href|src)\s*=\s*['"]https?:/i.test(
+          text,
+        )
+      )
+        throw new Error("Unsafe SVG content");
+      output = bytes;
+      ext = ".svg";
+    } else {
+      const sharp = (await import("sharp")).default;
+      const width = input.kind === "hero_image" ? 1920 : 512;
+      const height = input.kind === "hero_image" ? 768 : 512;
+      output = await sharp(bytes, { animated: false })
+        .rotate()
+        .resize(width, height, {
+          fit: input.kind === "hero_image" ? "cover" : "inside",
+          withoutEnlargement: true,
+        })
+        .webp({ quality: input.kind === "hero_image" ? 82 : 88 })
+        .toBuffer();
+      ext = ".webp";
+    }
+    const outputLimit =
+      input.kind === "hero_image"
+        ? MAX_ENTITY_HERO_BYTES
+        : MAX_ENTITY_IMAGE_BYTES;
+    if (output.length > outputLimit)
+      throw new Error(
+        input.kind === "hero_image"
+          ? "Processed hero is too large"
+          : "Processed logo or photo is too large",
+      );
+    const target = path.join(assetsDir, `${prefix}${ext}`);
+    fs.writeFileSync(target, output);
+    relative = `../assets/${plural}/${prefix}${ext}`;
+  }
+  const content = fs.readFileSync(entityPath, "utf8");
+  fs.writeFileSync(
+    entityPath,
+    yamlMediaValue(content, input.kind, relative),
+    "utf8",
+  );
+  clearWikiHomeRemoteCache();
+  return { path: relative };
+}
+
 export async function addWikiType(
   typeName: string,
   icon: string,
@@ -1651,13 +1914,13 @@ export async function addWikiType(
     min_confidence: 0.5
 `;
       // Append under entity_types
-      const updated = config.replace(
-        /^(entity_types:)/m,
-        `$1${entry}`,
-      );
+      const updated = config.replace(/^(entity_types:)/m, `$1${entry}`);
       // If replace didn't work (no entity_types key), just append
       if (updated === config) {
-        fs.appendFileSync(configPath, `\n${typeName}:\n  icon: "${icon}"\n  description: "${description}"\n`);
+        fs.appendFileSync(
+          configPath,
+          `\n${typeName}:\n  icon: "${icon}"\n  description: "${description}"\n`,
+        );
       } else {
         fs.writeFileSync(configPath, updated, "utf-8");
       }
