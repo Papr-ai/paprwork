@@ -19,9 +19,15 @@ import { promisify } from "util";
 
 const execAsync = promisify(exec);
 
-function workspaceDir(): string { return getPaprWorkspaceDir(); }
-function workspaceFile(): string { return path.join(getPaprWorkspaceDir(), "workspace.md"); }
-function workspaceMemoryDir(): string { return path.join(getPaprWorkspaceDir(), "memory"); }
+function workspaceDir(): string {
+  return getPaprWorkspaceDir();
+}
+function workspaceFile(): string {
+  return path.join(getPaprWorkspaceDir(), "workspace.md");
+}
+function workspaceMemoryDir(): string {
+  return path.join(getPaprWorkspaceDir(), "memory");
+}
 
 const WRITABLE_WORKSPACE_FILES = new Set([
   "MEMORY.md",
@@ -86,7 +92,7 @@ function assertPathUnderWorkspace(filePath: string): void {
 
 export async function setupMemoryHandlers(
   ws: WebSocket,
-  message: WSMessage
+  message: WSMessage,
 ): Promise<void> {
   try {
     if (message.type === "memory:get-workspace") {
@@ -119,6 +125,8 @@ export async function setupMemoryHandlers(
       await handleWikiCreateEntity(ws, message);
     } else if (message.type === "memory:wiki-add-type") {
       await handleWikiAddType(ws, message);
+    } else if (message.type === "memory:wiki-update-media") {
+      await handleWikiUpdateMedia(ws, message);
     } else {
       sendError(ws, message.id, `Unknown memory message type: ${message.type}`);
     }
@@ -132,7 +140,7 @@ export async function setupMemoryHandlers(
  */
 async function handleGetWorkspace(
   ws: WebSocket,
-  message: WSMessage
+  message: WSMessage,
 ): Promise<void> {
   try {
     // Ensure workspace directory exists
@@ -177,7 +185,7 @@ This file helps AI agents understand your current work context.
  */
 async function handleSaveWorkspace(
   ws: WebSocket,
-  message: WSMessage
+  message: WSMessage,
 ): Promise<void> {
   try {
     const { content } = message.payload as { content: string };
@@ -217,7 +225,7 @@ interface MemoryOpenFolderPayload {
  */
 async function handleOpenFolder(
   ws: WebSocket,
-  message: WSMessage
+  message: WSMessage,
 ): Promise<void> {
   try {
     const { folderPath, target } = message.payload as MemoryOpenFolderPayload;
@@ -267,7 +275,7 @@ async function handleOpenFolder(
  */
 async function handleChatStats(
   ws: WebSocket,
-  message: WSMessage
+  message: WSMessage,
 ): Promise<void> {
   try {
     // TODO: Query chats.db for statistics
@@ -302,9 +310,7 @@ async function handleChatStats(
 
         // Get last indexed (most recent message timestamp)
         const lastRow = db
-          .prepare(
-            "SELECT MAX(timestamp) as last_timestamp FROM messages"
-          )
+          .prepare("SELECT MAX(timestamp) as last_timestamp FROM messages")
           .get() as { last_timestamp: string | null };
         if (lastRow.last_timestamp) {
           stats.last_indexed_at = lastRow.last_timestamp;
@@ -331,7 +337,7 @@ async function handleChatStats(
  */
 async function handleListWorkspaceFiles(
   ws: WebSocket,
-  message: WSMessage
+  message: WSMessage,
 ): Promise<void> {
   try {
     // Ensure workspace directory exists
@@ -371,9 +377,8 @@ async function handleReadContextFile(
     }
 
     if (fileName === "IDENTITY.md" || fileName.startsWith("IDENTITY")) {
-      const { seedIdentityAboutFromProfile } = await import(
-        "../services/identityAboutSeed.js"
-      );
+      const { seedIdentityAboutFromProfile } =
+        await import("../services/identityAboutSeed.js");
       await seedIdentityAboutFromProfile();
     }
 
@@ -409,7 +414,8 @@ async function handleWriteContextFile(
   message: WSMessage,
 ): Promise<void> {
   try {
-    const payload = message.payload as { fileName?: string; content?: string } | undefined;
+    const payload = message.payload as
+      { fileName?: string; content?: string } | undefined;
     const fileName = payload?.fileName?.trim();
     const content = payload?.content;
 
@@ -464,21 +470,17 @@ async function handleGetContextPreview(
     const payload = message.payload as { forceRefresh?: boolean } | undefined;
     const forceRefresh = payload?.forceRefresh === true;
 
-    const { getWorkspaceService } = await import(
-      "../services/WorkspaceService.js"
-    );
-    const { getUserMemoryContextService } = await import(
-      "../services/UserMemoryContextService.js"
-    );
-    const { readMemoryPreviewCache, writeMemoryPreviewCache } = await import(
-      "../services/MemoryPreviewCache.js"
-    );
+    const { getWorkspaceService } =
+      await import("../services/WorkspaceService.js");
+    const { getUserMemoryContextService } =
+      await import("../services/UserMemoryContextService.js");
+    const { readMemoryPreviewCache, writeMemoryPreviewCache } =
+      await import("../services/MemoryPreviewCache.js");
 
     const workspaceService = getWorkspaceService();
     await workspaceService.initialize();
-    const { seedIdentityAboutFromProfile } = await import(
-      "../services/identityAboutSeed.js"
-    );
+    const { seedIdentityAboutFromProfile } =
+      await import("../services/identityAboutSeed.js");
     await seedIdentityAboutFromProfile();
     const ctx = await workspaceService.loadWorkspaceContext();
 
@@ -564,7 +566,9 @@ async function handleGetContextPreview(
       return;
     }
 
-    console.log("[Memory] context-preview force refresh (blocking remote fetch)");
+    console.log(
+      "[Memory] context-preview force refresh (blocking remote fetch)",
+    );
     const paprPreview = await memoryService.fetchMemoryPreviewForSettings({
       forceSyncTiers: true,
     });
@@ -641,9 +645,8 @@ async function handleUploadAttachment(
       return;
     }
 
-    const { uploadAttachmentToMemory } = await import(
-      "../services/AttachmentMemoryUpload.js"
-    );
+    const { uploadAttachmentToMemory } =
+      await import("../services/AttachmentMemoryUpload.js");
 
     console.log("[Memory] Uploading attachment to Papr Memory:", {
       filePath: payload.filePath,
@@ -680,9 +683,8 @@ async function handleWikiHome(
 ): Promise<void> {
   try {
     const payload = message.payload as { forceRefresh?: boolean } | undefined;
-    const { fetchWikiHome } = await import(
-      "../services/KnowledgeGraphWikiService.js"
-    );
+    const { fetchWikiHome } =
+      await import("../services/KnowledgeGraphWikiService.js");
     const data = await fetchWikiHome({
       forceRefresh: payload?.forceRefresh === true,
     });
@@ -698,21 +700,15 @@ async function handleWikiEntity(
 ): Promise<void> {
   try {
     const payload = message.payload as
-      | { type?: string; id?: string; label?: string }
-      | undefined;
+      { type?: string; id?: string; label?: string } | undefined;
     if (!payload?.type || !payload?.id) {
       sendError(ws, message.id, "Missing type or id");
       return;
     }
 
-    const { fetchWikiEntity } = await import(
-      "../services/KnowledgeGraphWikiService.js"
-    );
-    const data = await fetchWikiEntity(
-      payload.type,
-      payload.id,
-      payload.label,
-    );
+    const { fetchWikiEntity } =
+      await import("../services/KnowledgeGraphWikiService.js");
+    const data = await fetchWikiEntity(payload.type, payload.id, payload.label);
     sendResponse(ws, { id: message.id, success: true, data });
   } catch (error) {
     sendError(ws, message.id, error as Error);
@@ -725,9 +721,8 @@ async function handleWikiSearch(
 ): Promise<void> {
   try {
     const payload = message.payload as { query?: string } | undefined;
-    const { searchWiki } = await import(
-      "../services/KnowledgeGraphWikiService.js"
-    );
+    const { searchWiki } =
+      await import("../services/KnowledgeGraphWikiService.js");
     const data = await searchWiki(payload?.query ?? "");
     sendResponse(ws, { id: message.id, success: true, data });
   } catch (error) {
@@ -740,18 +735,19 @@ async function handleWikiCreateEntity(
   message: WSMessage,
 ): Promise<void> {
   try {
-    const payload = message.payload as {
-      type?: string;
-      name?: string;
-      description?: string;
-    } | undefined;
+    const payload = message.payload as
+      | {
+          type?: string;
+          name?: string;
+          description?: string;
+        }
+      | undefined;
     if (!payload?.type || !payload?.name) {
       sendError(ws, message.id, "Missing type or name");
       return;
     }
-    const { createWikiEntity } = await import(
-      "../services/KnowledgeGraphWikiService.js"
-    );
+    const { createWikiEntity } =
+      await import("../services/KnowledgeGraphWikiService.js");
     const data = await createWikiEntity(
       payload.type,
       payload.name,
@@ -763,23 +759,55 @@ async function handleWikiCreateEntity(
   }
 }
 
+async function handleWikiUpdateMedia(
+  ws: WebSocket,
+  message: WSMessage,
+): Promise<void> {
+  try {
+    const payload = message.payload as
+      | {
+          type?: string;
+          id?: string;
+          kind?: "image" | "hero_image";
+          dataUrl?: string | null;
+        }
+      | undefined;
+    if (!payload?.type || !payload.id || !payload.kind) {
+      sendError(ws, message.id, "Missing type, id, or media kind");
+      return;
+    }
+    const { updateWikiEntityMedia } =
+      await import("../services/KnowledgeGraphWikiService.js");
+    const data = await updateWikiEntityMedia({
+      type: payload.type,
+      id: payload.id,
+      kind: payload.kind,
+      dataUrl: payload.dataUrl,
+    });
+    sendResponse(ws, { id: message.id, success: true, data });
+  } catch (error) {
+    sendError(ws, message.id, error as Error);
+  }
+}
+
 async function handleWikiAddType(
   ws: WebSocket,
   message: WSMessage,
 ): Promise<void> {
   try {
-    const payload = message.payload as {
-      typeName?: string;
-      icon?: string;
-      description?: string;
-    } | undefined;
+    const payload = message.payload as
+      | {
+          typeName?: string;
+          icon?: string;
+          description?: string;
+        }
+      | undefined;
     if (!payload?.typeName) {
       sendError(ws, message.id, "Missing typeName");
       return;
     }
-    const { addWikiType } = await import(
-      "../services/KnowledgeGraphWikiService.js"
-    );
+    const { addWikiType } =
+      await import("../services/KnowledgeGraphWikiService.js");
     const data = await addWikiType(
       payload.typeName,
       payload.icon ?? "📌",
@@ -796,7 +824,7 @@ async function handleWikiAddType(
  */
 async function handleListSchemas(
   ws: WebSocket,
-  message: WSMessage
+  message: WSMessage,
 ): Promise<void> {
   try {
     const { getApiKey } = await import("../../gateway/utils/keyResolver.js");
@@ -812,22 +840,29 @@ async function handleListSchemas(
     }
 
     const Papr = (await import("@papr/memory")).default;
-    const client = new Papr({ xAPIKey: apiKey, maxRetries: 2, timeout: 30_000 });
+    const client = new Papr({
+      xAPIKey: apiKey,
+      maxRetries: 2,
+      timeout: 30_000,
+    });
 
     const payload = message.payload as { statusFilter?: string } | undefined;
     const response = await client.schemas.list({
-      status_filter: payload?.statusFilter as "draft" | "active" | "deprecated" | "archived" | undefined,
+      status_filter: payload?.statusFilter as
+        "draft" | "active" | "deprecated" | "archived" | undefined,
     });
 
-    const responseData = response as { data?: Array<{
-      id?: string;
-      name?: string;
-      description?: string;
-      status?: string;
-      version?: string;
-      node_types?: Array<{ name?: string }> | Record<string, unknown>;
-      relationship_types?: Array<{ name?: string }> | Record<string, unknown>;
-    }> };
+    const responseData = response as {
+      data?: Array<{
+        id?: string;
+        name?: string;
+        description?: string;
+        status?: string;
+        version?: string;
+        node_types?: Array<{ name?: string }> | Record<string, unknown>;
+        relationship_types?: Array<{ name?: string }> | Record<string, unknown>;
+      }>;
+    };
 
     const schemas = (responseData.data ?? []).map((schema) => {
       const nodeTypes = Array.isArray(schema.node_types)
@@ -860,7 +895,11 @@ async function handleListSchemas(
     sendResponse(ws, {
       id: message.id,
       success: true,
-      data: { schemas: [], error: error instanceof Error ? error.message : "Failed to list schemas" },
+      data: {
+        schemas: [],
+        error:
+          error instanceof Error ? error.message : "Failed to list schemas",
+      },
     });
   }
 }
