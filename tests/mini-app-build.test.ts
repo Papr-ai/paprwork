@@ -25,6 +25,38 @@ describe("buildMiniApp", () => {
     await fs.rm(TEST_DIR, { recursive: true, force: true });
   });
 
+  it("removes .dist-staging after a FAILED build", async () => {
+    // A build failure previously skipped staging cleanup, leaving
+    // .dist-staging/ inside the app directory where source scans pick it up.
+    await writeFile(
+      "app.ts",
+      `import './missing-module-that-does-not-exist.js';\nconsole.info('x');\n`,
+    );
+
+    const result = await buildMiniApp(TEST_DIR);
+
+    expect(result.success).toBe(false);
+    expect(result.errors.length).toBeGreaterThan(0);
+
+    const staging = path.join(TEST_DIR, ".dist-staging");
+    await expect(fs.access(staging)).rejects.toThrow();
+  });
+
+  it("preserves source files when a build fails", async () => {
+    // Source files are user-authored and must survive a failed build;
+    // only dist/ is derived output.
+    await writeFile("app.ts", `import './nope.js';\n`);
+    await writeFile("style.css", `body { color: red; }\n`);
+    await writeFile("index.html", `<!doctype html><html></html>`);
+
+    const result = await buildMiniApp(TEST_DIR);
+    expect(result.success).toBe(false);
+
+    for (const f of ["app.ts", "style.css", "index.html"]) {
+      await expect(fs.access(path.join(TEST_DIR, f))).resolves.toBeUndefined();
+    }
+  });
+
   it("returns legacy: true when no ES module entry exists", async () => {
     await writeFile("index.html", "<html></html>");
     await writeFile("script.js", "alert('hello')");
