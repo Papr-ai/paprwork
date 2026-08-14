@@ -92,6 +92,18 @@ function typeGlyphSvg(type: string): string | null {
   return null;
 }
 
+/** Types whose image is a brand mark (letterboxed) rather than cover art. */
+function isLogoType(type: string): boolean {
+  return type === "company" || type === "companies" || type === "app" || type === "apps";
+}
+
+/** Entity props that hold URLs and should render as clickable pills, not raw text. */
+const LINK_PROP_KEYS = new Set(["website", "linkedin"]);
+const LINK_PROP_LABELS: Record<string, string> = {
+  website: "Website",
+  linkedin: "LinkedIn",
+};
+
 function PosterCard({ node, onClick }: { node: WikiNode; onClick: () => void }) {
   const meta = wikiTypeMeta(node.type);
   const props = node.props ?? {};
@@ -102,7 +114,14 @@ function PosterCard({ node, onClick }: { node: WikiNode; onClick: () => void }) 
     <article className="wiki-card poster" onClick={onClick}>
       <div className="wiki-card__art">
         {image ? (
-          <img className="wiki-card__art-img" src={image} alt={node.label} />
+          // Company marks are logos, not photography — contain them on a neutral
+          // backdrop instead of cropping to fill like a cover image.
+          <img
+            className={`wiki-card__art-img${isLogoType(node.type) ? " wiki-card__art-img--logo" : ""}`}
+            src={image}
+            alt={node.label}
+            loading="lazy"
+          />
         ) : (
           <div className="wiki-card__gradient"
             style={{ background: `linear-gradient(135deg, ${meta.color}, color-mix(in srgb, ${meta.color} 70%, #000))` }} />
@@ -841,9 +860,29 @@ function WikiEntityPage({ node, rails, relatedMemories, allNodes, loading, error
             </div>
             <h1>{node.label}</h1>
             <div className="wiki-entity__meta-row">
-              {Object.entries(props).filter(([key]) => key !== "image").map(([key, value]) => (
-                <span key={key} className="wiki-entity__pill">{key}: {String(value)}</span>
-              ))}
+              {Object.entries(props)
+                .filter(([key]) => key !== "image")
+                .map(([key, value]) => {
+                  const text = String(value);
+                  // website / linkedin are URLs — render them clickable instead of
+                  // dumping the raw href into a text pill.
+                  if (LINK_PROP_KEYS.has(key) && /^https?:\/\//i.test(text)) {
+                    return (
+                      <a
+                        key={key}
+                        className="wiki-entity__pill wiki-entity__pill--link"
+                        href={text}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      >
+                        {key === "linkedin" ? "in" : "↗"} {LINK_PROP_LABELS[key] ?? key}
+                      </a>
+                    );
+                  }
+                  return (
+                    <span key={key} className="wiki-entity__pill">{key}: {text}</span>
+                  );
+                })}
             </div>
           </div>
         </div>

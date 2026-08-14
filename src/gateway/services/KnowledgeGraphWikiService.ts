@@ -105,6 +105,58 @@ function parseEntityFrontmatter(content: string): Record<string, unknown> {
   return result;
 }
 
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+};
+
+/** Max on-disk size for an inlined entity image (256KB). Larger files are skipped
+ *  rather than bloating every wiki home payload. */
+const MAX_ENTITY_IMAGE_BYTES = 256 * 1024;
+
+/**
+ * Resolve an entity `image:` frontmatter value into something the renderer can use.
+ *
+ * The wiki UI renders `props.image` directly into an `<img src>`. Entity assets live
+ * under `$PAPR_HOME/workspace/entities/assets/...`, which is outside any static route,
+ * so a relative path like `../assets/companies/acme.png` resolves to nothing in the
+ * renderer and the card silently falls back to a gradient placeholder.
+ *
+ * Absolute URLs and data URIs pass through untouched. Relative paths are read from
+ * disk and inlined as a base64 data URI. Paths are constrained to the entities
+ * directory so a malicious .md cannot exfiltrate arbitrary files.
+ */
+export function resolveEntityImage(raw: unknown, entityDir: string): string | null {
+  if (typeof raw !== "string") return null;
+  const value = raw.trim();
+  if (!value) return null;
+  if (/^(https?:|data:)/i.test(value)) return value;
+
+  try {
+    const entitiesRoot = path.resolve(getEntitiesDir());
+    const abs = path.resolve(entityDir, value);
+    // Containment check — never read outside the entities tree.
+    if (abs !== entitiesRoot && !abs.startsWith(entitiesRoot + path.sep)) {
+      console.warn(`[Wiki] Ignoring out-of-tree entity image: ${value}`);
+      return null;
+    }
+    if (!fs.existsSync(abs)) return null;
+    const stat = fs.statSync(abs);
+    if (!stat.isFile() || stat.size > MAX_ENTITY_IMAGE_BYTES) return null;
+    const mime = IMAGE_MIME_BY_EXT[path.extname(abs).toLowerCase()];
+    if (!mime) return null;
+    return `data:${mime};base64,${fs.readFileSync(abs).toString("base64")}`;
+  } catch (err) {
+    console.warn(`[Wiki] Failed to resolve entity image ${value}:`, err);
+    return null;
+  }
+}
+
 function parseMarkdownSections(content: string): Record<string, string> {
   const sections: Record<string, string> = {};
   const body = content.replace(/^---[\s\S]*?---\n/, "");
@@ -203,6 +255,7 @@ function readEntityFilesSync(): { nodes: EntityFileNode[]; rails: WikiRail[]; ty
         const relationships = parseEntityRelationships(content);
         const evidence = parseEntityEvidence(content);
         const id = String(fm.id || file.replace(".md", ""));
+        const resolvedImage = resolveEntityImage(fm.image, dirPath);
         nodes.push({
           id: `${cfg.singular}/${id}`,
           type: cfg.singular,
@@ -215,6 +268,14 @@ function readEntityFilesSync(): { nodes: EntityFileNode[]; rails: WikiRail[]; ty
             ...(fm.updated_at ? { updated_at: String(fm.updated_at) } : {}),
             ...(fm.kind ? { kind: String(fm.kind) } : {}),
             ...(fm.app_id ? { app_id: String(fm.app_id) } : {}),
+            // Visual + link identity — company logos, person avatars, profile links.
+            // `image` is resolved to a data URI so it renders without a static
+            // file server (entity assets live outside the app bundle).
+            ...(resolvedImage ? { image: resolvedImage } : {}),
+            ...(fm.role ? { role: String(fm.role) } : {}),
+            ...(fm.title ? { title: String(fm.title) } : {}),
+            ...(fm.website ? { website: String(fm.website) } : {}),
+            ...(fm.linkedin ? { linkedin: String(fm.linkedin) } : {}),
           },
           markdownBody,
           sections,
