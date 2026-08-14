@@ -1298,9 +1298,11 @@ function WikiEntityPage({
   error?: string;
   onBack: () => void;
   onPick: (n: WikiNode) => void;
-  onMediaUpdated: (n: WikiNode) => void;
+  onMediaUpdated?: (n: WikiNode) => void;
 }) {
   const meta = node ? wikiTypeMeta(node.type) : null;
+  const [mediaBusy, setMediaBusy] = useState(false);
+  const [mediaError, setMediaError] = useState<string | null>(null);
 
   if (loading && !node)
     return (
@@ -1327,8 +1329,6 @@ function WikiEntityPage({
   const evidence = node.evidence ?? [];
   const props = node.props ?? {};
   const canEditMedia = node.type === "company" || node.type === "person";
-  const [mediaBusy, setMediaBusy] = useState(false);
-  const [mediaError, setMediaError] = useState<string | null>(null);
   const updateMedia = async (kind: "image" | "hero_image", file?: File) => {
     setMediaBusy(true);
     setMediaError(null);
@@ -1347,7 +1347,7 @@ function WikiEntityPage({
         { timeoutMs: 30_000 },
       );
       const updated = (fresh.data as WikiEntityData | undefined)?.node;
-      if (updated) onMediaUpdated(normalizeWikiNode(updated));
+      if (updated) onMediaUpdated?.(normalizeWikiNode(updated));
     } catch (err) {
       setMediaError(
         err instanceof Error ? err.message : "Could not update image",
@@ -1891,6 +1891,10 @@ export function WikiLibrary({
             error={entityError}
             onBack={clearFocus}
             onPick={handlePick}
+            onMediaUpdated={(updated) => {
+              setFocus(updated);
+              void loadHome({ silent: true, forceRefresh: true });
+            }}
           />
         ) : contextFocus ? (
           <ContextFilePage
