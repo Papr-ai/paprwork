@@ -68,6 +68,30 @@ export function MemoryView() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  useEffect(() => {
+    const onSwitchStart = () => {
+      setFocusLabel(null);
+      setOnBack(null);
+      try {
+        sessionStorage.removeItem("memory-view-focus");
+      } catch {
+        /* noop */
+      }
+    };
+    const onSwitchComplete = () => {
+      setRefreshToken((t) => t + 1);
+    };
+    window.addEventListener("papr-workspace-switch-start", onSwitchStart);
+    window.addEventListener("papr-workspace-switch-complete", onSwitchComplete);
+    return () => {
+      window.removeEventListener("papr-workspace-switch-start", onSwitchStart);
+      window.removeEventListener(
+        "papr-workspace-switch-complete",
+        onSwitchComplete,
+      );
+    };
+  }, []);
+
   const handleRefresh = useCallback(() => {
     setRefreshToken((t) => t + 1);
   }, []);

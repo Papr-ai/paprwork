@@ -850,93 +850,6 @@ async function relocateTopLevelDir(input: {
   return false;
 }
 
-/**
- * Merge per-app source trees when the active workspace has registry scaffolds
- * (metadata.json) but no index.html. Sources: prior migration target, flat ~/Papr/apps.
- */
-export async function repairIncompleteAppSources(input: {
-  targetPaprHome: string;
-}): Promise<{ repairedAppIds: string[]; sourceRoots: string[] }> {
-  const targetAppsDir = path.join(input.targetPaprHome, "apps");
-  if (!pathHasContents(targetAppsDir)) {
-    return { repairedAppIds: [], sourceRoots: [] };
-  }
-
-  const sourceRoots: string[] = [];
-  const record = readLegacyMigrationRecord();
-  if (record?.targetPaprHome) {
-    const recordApps = path.join(record.targetPaprHome, "apps");
-    if (
-      path.normalize(recordApps) !== path.normalize(targetAppsDir) &&
-      pathHasContents(recordApps)
-    ) {
-      sourceRoots.push(recordApps);
-    }
-  }
-
-  const legacyApps = path.join(getPaprBaseDir(), "apps");
-  if (
-    path.normalize(legacyApps) !== path.normalize(targetAppsDir) &&
-    pathHasContents(legacyApps)
-  ) {
-    sourceRoots.push(legacyApps);
-  }
-
-  for (const workspacePath of await listOrgNamespaceWorkspacePaths()) {
-    const otherApps = path.join(workspacePath, "apps");
-    if (
-      path.normalize(otherApps) !== path.normalize(targetAppsDir) &&
-      pathHasContents(otherApps) &&
-      !sourceRoots.some((root) => path.normalize(root) === path.normalize(otherApps))
-    ) {
-      sourceRoots.push(otherApps);
-    }
-  }
-
-  if (sourceRoots.length === 0) {
-    return { repairedAppIds: [], sourceRoots: [] };
-  }
-
-  const repairedAppIds: string[] = [];
-  for (const entry of listVisibleEntries(targetAppsDir)) {
-    const targetAppDir = path.join(targetAppsDir, entry);
-    let targetStat;
-    try {
-      targetStat = await fsPromises.stat(targetAppDir);
-    } catch {
-      continue;
-    }
-    if (!targetStat.isDirectory()) {
-      continue;
-    }
-    if (await appDirHasIndexHtml(targetAppDir)) {
-      continue;
-    }
-
-    for (const sourceRoot of sourceRoots) {
-      const sourceAppDir = path.join(sourceRoot, entry);
-      try {
-        const sourceStat = await fsPromises.stat(sourceAppDir);
-        if (!sourceStat.isDirectory()) {
-          continue;
-        }
-      } catch {
-        continue;
-      }
-      if (!(await appDirHasIndexHtml(sourceAppDir))) {
-        continue;
-      }
-      await mergeLegacyDirIntoTarget(sourceAppDir, targetAppDir);
-      if (await appDirHasIndexHtml(targetAppDir)) {
-        repairedAppIds.push(entry);
-      }
-      break;
-    }
-  }
-
-  return { repairedAppIds, sourceRoots };
-}
-
 export interface LegacyWorkspaceMigrationRunResult {
   flatLayout: LegacyWorkspaceMigrationRecord | null;
   relocated: { relocatedPaths: string[]; relocatedUserDataFiles: string[] } | null;
@@ -1014,13 +927,6 @@ export async function runLegacyWorkspaceDataMigration(input: {
     targetUserDataPath: input.targetUserDataPath,
   });
 
-  let repair = { repairedAppIds: [] as string[], sourceRoots: [] as string[] };
-  if (!unmigratedFlat) {
-    repair = await repairIncompleteAppSources({
-      targetPaprHome: input.targetPaprHome,
-    });
-  }
-
   let userDataFiles: string[] | null = null;
   if (!unmigratedFlat) {
     userDataFiles = await migrateLegacyUserDataRuntime({
@@ -1043,8 +949,8 @@ export async function runLegacyWorkspaceDataMigration(input: {
     flatLayout,
     relocated,
     namespaceRelocated,
-    repairedAppIds: repair.repairedAppIds,
-    repairedAppSourceRoots: repair.sourceRoots,
+    repairedAppIds: [],
+    repairedAppSourceRoots: [],
     userDataFiles,
   };
 }
@@ -1375,15 +1281,24 @@ export function ensureActiveWorkspaceEnvSynced(): ActiveWorkspacePointer | null 
 
   const pointerHome = path.resolve(pointer.paprHome);
   const envHome = process.env.PAPR_HOME?.trim();
-  if (!envHome || path.resolve(envHome) === pointerHome) {
+  const envOrg = process.env.PAPR_ORG_ID?.trim();
+  const envNs = process.env.PAPR_NAMESPACE_ID?.trim();
+  const homeMatches =
+    envHome !== undefined &&
+    envHome.length > 0 &&
+    path.resolve(envHome) === pointerHome;
+  const orgMatches = envOrg === pointer.organizationId;
+  const nsMatches = envNs === pointer.namespaceId;
+
+  if (homeMatches && orgMatches && nsMatches) {
     lastStaleEnvWarnKey = null;
     return pointer;
   }
 
-  const warnKey = `${path.resolve(envHome)}|${pointerHome}`;
+  const warnKey = `${envHome ?? ""}|${envOrg ?? ""}|${envNs ?? ""}|${pointerHome}|${pointer.organizationId}|${pointer.namespaceId}`;
   if (lastStaleEnvWarnKey !== warnKey) {
     console.warn(
-      `[PaprWorkspace] Syncing stale PAPR_HOME (${path.resolve(envHome)}) to active workspace (${pointerHome})`,
+      `[PaprWorkspace] Syncing stale workspace env (home=${envHome ?? "unset"}, org=${envOrg ?? "unset"}, ns=${envNs ?? "unset"}) to active pointer (${pointerHome}, org=${pointer.organizationId}, ns=${pointer.namespaceId})`,
     );
     lastStaleEnvWarnKey = warnKey;
   }

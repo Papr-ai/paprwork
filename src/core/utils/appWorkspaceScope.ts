@@ -102,8 +102,10 @@ export function mergeAppWorkspaceFields(
   diskFields: AppWorkspaceFields,
 ): AppWorkspaceFields {
   return {
-    organizationId: indexFields.organizationId?.trim() || diskFields.organizationId?.trim(),
-    namespaceId: indexFields.namespaceId?.trim() || diskFields.namespaceId?.trim(),
+    organizationId:
+      diskFields.organizationId?.trim() || indexFields.organizationId?.trim(),
+    namespaceId:
+      diskFields.namespaceId?.trim() || indexFields.namespaceId?.trim(),
   };
 }
 

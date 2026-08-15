@@ -25,6 +25,13 @@ import {
   getAllPlatformIds,
   getPlatformKeyName,
 } from "./platformRegistry.js";
+import {
+  type ChromePuppeteerCookie,
+  buildPlaywrightCookiesFromKeychainValues,
+  chromePuppeteerToPlaywright,
+  hasRequiredPlaywrightCookies,
+  repairPlaywrightCookieDomains,
+} from "./platformCookieUtils.js";
 
 const execAsync = promisify(exec);
 const CHROME_COOKIE_POLL_MS = 10_000; // 10s — each read can trigger a macOS keychain prompt
@@ -373,7 +380,12 @@ export class PlatformSessionService {
         );
       }
 
-      await this.storeRequiredCookies(platformId, config, extracted.cookies);
+      await this.persistChromeSession(
+        platformId,
+        config,
+        extracted.cookies,
+        await this.extractPlaywrightCookiesFromChrome(config),
+      );
       this.stopChromeCookiePolling(platformId);
       const state = await this.markConnected(platformId, config);
       console.log(`[PlatformSessionService] Successfully connected ${platformId} via manual check`);
@@ -396,7 +408,12 @@ export class PlatformSessionService {
   ): Promise<PlatformSessionState & { waitingForConfirmation?: boolean }> {
     const extracted = await this.tryExtractRequiredCookiesFromChrome(config);
     if (extracted.success) {
-      await this.storeRequiredCookies(platformId, config, extracted.cookies);
+      await this.persistChromeSession(
+        platformId,
+        config,
+        extracted.cookies,
+        await this.extractPlaywrightCookiesFromChrome(config),
+      );
       this.connectingPlatform = null;
       const state = await this.markConnected(platformId, config);
       console.log(`[PlatformSessionService] Connected ${platformId} using existing Chrome session`);
@@ -501,7 +518,12 @@ export class PlatformSessionService {
         });
         if (!extracted.success) return;
 
-        await this.storeRequiredCookies(platformId, config, extracted.cookies);
+        await this.persistChromeSession(
+        platformId,
+        config,
+        extracted.cookies,
+        await this.extractPlaywrightCookiesFromChrome(config),
+      );
         this.stopChromeCookiePolling(platformId);
         this.connectingPlatform = null;
         const state = await this.markConnected(platformId, config);
@@ -552,6 +574,83 @@ export class PlatformSessionService {
     };
     await this.saveStore();
     return this.store.sessions[platformId];
+  }
+
+  private async writeCookiesJson(
+    platformId: PlatformId,
+    cookies: Cookie[],
+  ): Promise<void> {
+    const profilePath = this.getProfilePath(platformId);
+    await fs.mkdir(profilePath, { recursive: true });
+    await fs.writeFile(
+      join(profilePath, "cookies.json"),
+      JSON.stringify(cookies, null, 2),
+    );
+  }
+
+  private getChromeCookieNames(config: PlatformConfig): string[] {
+    return [...config.requiredCookies, ...(config.optionalCookies ?? [])];
+  }
+
+  /**
+   * Extract Playwright-ready cookies from Chrome with real host_key domains.
+   */
+  private async extractPlaywrightCookiesFromChrome(
+    config: PlatformConfig,
+  ): Promise<Cookie[]> {
+    const { getCookiesPromised } = await import("chrome-cookies-secure");
+    const wantedNames = new Set(
+      this.getChromeCookieNames(config).map((name) => name.toLowerCase()),
+    );
+    const merged = new Map<string, Cookie>();
+
+    for (const url of this.getChromeCookieUrls(config)) {
+      if (
+        hasRequiredPlaywrightCookies(
+          [...merged.values()],
+          config.requiredCookies,
+        )
+      ) {
+        break;
+      }
+
+      try {
+        const raw = (await getCookiesPromised(
+          url,
+          "puppeteer",
+        )) as ChromePuppeteerCookie[];
+        for (const rawCookie of raw) {
+          if (!wantedNames.has(rawCookie.name.toLowerCase())) continue;
+          if (!merged.has(rawCookie.name)) {
+            merged.set(rawCookie.name, chromePuppeteerToPlaywright(rawCookie));
+          }
+        }
+      } catch (urlError) {
+        console.warn(
+          `[PlatformSessionService] Playwright cookie read failed for ${url}:`,
+          urlError,
+        );
+      }
+    }
+
+    return [...merged.values()];
+  }
+
+  private async persistChromeSession(
+    platformId: PlatformId,
+    config: PlatformConfig,
+    cookieValues: Record<string, string>,
+    playwrightCookies?: Cookie[],
+  ): Promise<void> {
+    await this.storeRequiredCookies(platformId, config, cookieValues);
+
+    const cookiesToPersist =
+      playwrightCookies ??
+      buildPlaywrightCookiesFromKeychainValues(config, cookieValues);
+
+    if (cookiesToPersist.length > 0) {
+      await this.writeCookiesJson(platformId, cookiesToPersist);
+    }
   }
 
   private getChromeCookieUrls(config: PlatformConfig): string[] {
@@ -782,7 +881,12 @@ export class PlatformSessionService {
       if (isChromeInstalled()) {
         const extracted = await this.tryExtractRequiredCookiesFromChrome(config);
         if (extracted.success) {
-          await this.storeRequiredCookies(platformId, config, extracted.cookies);
+          await this.persistChromeSession(
+        platformId,
+        config,
+        extracted.cookies,
+        await this.extractPlaywrightCookiesFromChrome(config),
+      );
           const now = new Date();
           this.store.sessions[platformId] = {
             ...this.store.sessions[platformId],
@@ -896,32 +1000,52 @@ export class PlatformSessionService {
     try {
       const cookiesData = await fs.readFile(cookiesPath, "utf-8");
       const parsed = JSON.parse(cookiesData) as Cookie[];
-      if (parsed.length > 0) return parsed;
+      if (parsed.length > 0) {
+        const keysService = getCustomKeysService();
+        const keychainValues: Record<string, string> = {};
+        for (const cookieName of config.requiredCookies) {
+          const keyName = getPlatformKeyName(platformId, cookieName);
+          const value = await keysService.getKeyByName(keyName);
+          if (value) {
+            keychainValues[cookieName] = value;
+          }
+        }
+
+        const { cookies: repaired, repaired: wasRepaired } =
+          repairPlaywrightCookieDomains(parsed, config, keychainValues);
+        if (wasRepaired) {
+          await this.writeCookiesJson(platformId, repaired);
+          console.log(
+            `[PlatformSessionService] Repaired cookie domains for ${platformId}`,
+          );
+        }
+        return repaired;
+      }
     } catch {
       // Fall back to keychain
     }
 
     const keysService = getCustomKeysService();
-    const cookies: Cookie[] = [];
+    const values: Record<string, string> = {};
 
-    for (const cookieName of config.requiredCookies) {
+    for (const cookieName of [
+      ...config.requiredCookies,
+      ...(config.optionalCookies ?? []),
+    ]) {
       const keyName = getPlatformKeyName(platformId, cookieName);
       const value = await keysService.getKeyByName(keyName);
-      if (!value) return [];
-
-      cookies.push({
-        name: cookieName,
-        value,
-        domain: config.cookieDomain,
-        path: "/",
-        expires: -1,
-        httpOnly: true,
-        secure: true,
-        sameSite: "Lax",
-      });
+      if (value) {
+        values[cookieName] = value;
+      }
     }
 
-    return cookies;
+    for (const cookieName of config.requiredCookies) {
+      if (!values[cookieName]) {
+        return [];
+      }
+    }
+
+    return buildPlaywrightCookiesFromKeychainValues(config, values);
   }
 
   /**

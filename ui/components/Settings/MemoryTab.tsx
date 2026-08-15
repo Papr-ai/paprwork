@@ -428,6 +428,30 @@ export function MemoryTab() {
     void loadPreview(false);
   }, []);
 
+  useEffect(() => {
+    const onWorkspaceSwitchStart = () => {
+      setPreview(null);
+      setDetail(null);
+    };
+    const onWorkspaceSwitch = () => {
+      setPreview(null);
+      setDetail(null);
+      void loadPreview(true, { silent: true });
+    };
+    window.addEventListener("papr-workspace-switch-start", onWorkspaceSwitchStart);
+    window.addEventListener("papr-workspace-switch-complete", onWorkspaceSwitch);
+    return () => {
+      window.removeEventListener(
+        "papr-workspace-switch-start",
+        onWorkspaceSwitchStart,
+      );
+      window.removeEventListener(
+        "papr-workspace-switch-complete",
+        onWorkspaceSwitch,
+      );
+    };
+  }, []);
+
   const checkPaprLogin = async () => {
     try {
       const result = await window.electronAPI.papr.checkLoginStatus();

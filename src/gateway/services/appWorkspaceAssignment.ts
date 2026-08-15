@@ -11,7 +11,6 @@ import {
 } from "../../core/utils/appWorkspaceScope.js";
 import {
   getPaprBaseDir,
-  repairIncompleteAppSources,
   resolveOrgNamespaceWorkspacePath,
 } from "../../core/utils/paprWorkspace.js";
 import type { MiniApp } from "./AppService.js";
@@ -304,14 +303,11 @@ async function ensureTargetHasAppBundle(input: {
   );
 
   if (!(await appDirHasRunnableBundle(targetAppDir))) {
-    const copied = await copyAppBundleIntoTarget(
+    await copyAppBundleIntoTarget(
       effectiveSourceHome,
       input.targetHome,
       input.appId,
     );
-    if (!copied) {
-      await repairIncompleteAppSources({ targetPaprHome: input.targetHome });
-    }
   }
 
   if (!(await appDirHasRunnableBundle(targetAppDir))) {

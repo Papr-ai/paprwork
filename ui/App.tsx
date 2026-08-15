@@ -44,6 +44,7 @@ import {
   parseWorkspaceKeyFromSwitchEvent,
   reloadUiForWorkspaceSwitch,
 } from "./lib/workspaceSwitchReload";
+import { buildWorkspaceUiCacheKey } from "./lib/workspaceUiCache";
 import { useProfileStore } from "./stores/profileStore";
 
 type ChatOpenPayload = {
@@ -251,8 +252,23 @@ export function App() {
 
   // Reload workspace-scoped UI after Papr login (namespace may differ from boot state)
   useEffect(() => {
-    const handleLoginSuccess = () => {
-      void reloadUiForWorkspaceSwitch();
+    const handleLoginSuccess = async () => {
+      let targetWorkspaceKey: string | undefined;
+      try {
+        const workspace = await window.electronAPI.papr.getActiveWorkspace();
+        if (workspace.success && workspace.pointer) {
+          targetWorkspaceKey = buildWorkspaceUiCacheKey(
+            workspace.pointer.organizationId,
+            workspace.pointer.namespaceId,
+          );
+        }
+      } catch {
+        /* noop */
+      }
+      void reloadUiForWorkspaceSwitch({
+        waitForGateway: true,
+        targetWorkspaceKey,
+      });
     };
     window.electronAPI?.papr?.onLoginSuccess(handleLoginSuccess);
     return () => {

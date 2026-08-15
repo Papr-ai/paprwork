@@ -1,5 +1,6 @@
 /**
  * DeleteAppModal Styles - Dangerous action confirmation modal
+ * Uses theme CSS variables for light/dark mode support
  */
 
 .delete-app-modal__backdrop {
@@ -9,7 +10,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.6);
+  background: color-mix(in srgb, var(--text-primary) 40%, transparent);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
   animation: deleteModalBackdropIn 150ms ease;
@@ -25,14 +26,14 @@
   max-width: 480px;
   max-height: 90vh;
   overflow-y: auto;
-  background: var(--glass-bg, rgba(30, 30, 30, 0.98));
+  background: var(--popover-bg, var(--glass-bg));
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--glass-border, var(--border));
+  border: 1px solid var(--glass-border, var(--border-color));
   border-radius: 16px;
   padding: 24px;
-  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4),
-              0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+  box-shadow: var(--shadow-3);
+  color: var(--text-primary);
   animation: deleteModalSlideIn 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
@@ -60,9 +61,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(239, 68, 68, 0.15);
+  background: color-mix(in srgb, var(--error-color) 15%, transparent);
   border-radius: 10px;
-  color: #ef4444;
+  color: var(--error-color);
 }
 
 .delete-app-modal__title {
@@ -86,8 +87,8 @@
 
 /* Summary section */
 .delete-app-modal__summary {
-  background: rgba(0, 0, 0, 0.2);
-  border: 1px solid var(--glass-border, var(--border));
+  background: var(--background-secondary);
+  border: 1px solid var(--border-color);
   border-radius: 12px;
   padding: 16px;
   margin-bottom: 20px;
@@ -112,7 +113,7 @@
 }
 
 .delete-app-modal__item--always {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .delete-app-modal__item-icon {
@@ -134,7 +135,7 @@
   gap: 10px;
   padding: 10px 0;
   cursor: pointer;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .delete-app-modal__option:last-child {
@@ -149,7 +150,7 @@
   width: 16px;
   height: 16px;
   margin: 2px 0 0;
-  accent-color: #ef4444;
+  accent-color: var(--error-color);
   cursor: pointer;
 }
 
@@ -197,7 +198,7 @@
 
 .delete-app-modal__job-type {
   color: var(--text-tertiary);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--background-tertiary);
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 10px;
@@ -205,7 +206,7 @@
 }
 
 .delete-app-modal__job-turso {
-  color: #60a5fa;
+  color: var(--accent-color);
   font-size: 11px;
 }
 
@@ -224,7 +225,7 @@
 .delete-app-modal__confirm-label strong {
   color: var(--text-primary);
   font-family: var(--font-mono, monospace);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--background-tertiary);
   padding: 1px 5px;
   border-radius: 4px;
 }
@@ -232,8 +233,8 @@
 .delete-app-modal__input {
   width: 100%;
   padding: 10px 14px;
-  background: var(--input-bg, rgba(0, 0, 0, 0.2));
-  border: 1px solid var(--glass-border, var(--border));
+  background: var(--background-secondary);
+  border: 1px solid var(--border-color);
   border-radius: 10px;
   color: var(--text-primary);
   font-size: 14px;
@@ -244,8 +245,8 @@
 
 .delete-app-modal__input:focus {
   outline: none;
-  border-color: #ef4444;
-  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
+  border-color: var(--error-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--error-color) 15%, transparent);
 }
 
 .delete-app-modal__input::placeholder {
@@ -262,7 +263,7 @@
 .delete-app-modal__cancel {
   padding: 8px 18px;
   background: transparent;
-  border: 1px solid var(--glass-border, var(--border));
+  border: 1px solid var(--border-color);
   border-radius: 10px;
   color: var(--text-secondary);
   font-size: 13px;
@@ -278,20 +279,21 @@
 
 .delete-app-modal__delete {
   padding: 8px 20px;
-  background: #ef4444;
+  background: var(--error-color);
   border: none;
   border-radius: 10px;
-  color: white;
+  color: #fff;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: transform 150ms ease, box-shadow 150ms ease, opacity 150ms ease;
+  transition: transform 150ms ease, box-shadow 150ms ease, opacity 150ms ease,
+    background 150ms ease;
 }
 
 .delete-app-modal__delete:hover:not(:disabled) {
-  background: #dc2626;
+  background: color-mix(in srgb, var(--error-color) 85%, #000);
   transform: translateY(-1px);
-  box-shadow: 0 4px 16px rgba(239, 68, 68, 0.3);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--error-color) 30%, transparent);
 }
 
 .delete-app-modal__delete:disabled {

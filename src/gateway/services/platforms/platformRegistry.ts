@@ -51,6 +51,12 @@ export interface PlatformConfig {
   sessionDurationDays: number;
   /** Domain to extract cookies from */
   cookieDomain: string;
+  /** Per-cookie Playwright domain when rebuilding from keychain (host_key from Chrome) */
+  cookieDomainOverrides?: Record<string, string>;
+  /** Extra session cookies to capture from Chrome (not required for connect status) */
+  optionalCookies?: string[];
+  /** Landing URL before homeUrl during prepare_browser (avoids redirect loops) */
+  prepareNavigationUrl?: string;
   /** Optional: Additional domains to check for cookies */
   additionalDomains?: string[];
   /** Whether this platform rotates tokens (needs more frequent refresh) */
@@ -79,10 +85,16 @@ export const PLATFORM_REGISTRY: Record<PlatformId, PlatformConfig> = {
     homeUrl: "https://www.linkedin.com/feed/",
     successUrlPattern: /linkedin\.com\/(feed|in\/|mynetwork|messaging)/,
     requiredCookies: ["li_at", "JSESSIONID"],
+    optionalCookies: ["bcookie", "bscookie", "liap", "lang", "lidc"],
     keyPrefix: "LINKEDIN",
     refreshIntervalMs: 5 * 60 * 1000, // 5 minutes (LinkedIn rotates tokens)
     sessionDurationDays: 45,
     cookieDomain: ".linkedin.com",
+    cookieDomainOverrides: {
+      li_at: ".linkedin.com",
+      JSESSIONID: ".www.linkedin.com",
+    },
+    prepareNavigationUrl: "https://www.linkedin.com/",
     rotatesTokens: true,
     notes:
       "LinkedIn rotates session tokens frequently. The session keeper refreshes every 5 minutes to capture new tokens.",

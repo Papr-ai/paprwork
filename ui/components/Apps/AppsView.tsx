@@ -116,16 +116,33 @@ export function AppsView() {
   const [catalogRefreshToken, setCatalogRefreshToken] = useState(0);
 
   useEffect(() => {
-    const onWorkspaceChanged = () => {
-      void loadArtifacts();
+    const onWorkspaceSwitchComplete = () => {
+      void loadArtifacts({ forceRefresh: true });
       setPublishRevision((value) => value + 1);
       setCatalogRefreshToken((token) => token + 1);
     };
-    window.addEventListener("papr-namespace-changed", onWorkspaceChanged);
-    window.addEventListener("papr-organization-changed", onWorkspaceChanged);
+    const onWorkspaceSwitchStart = () => {
+      setCatalogRefreshToken((token) => token + 1);
+    };
+    window.addEventListener(
+      "papr-workspace-switch-complete",
+      onWorkspaceSwitchComplete,
+    );
+    window.addEventListener("papr-workspace-switch-start", onWorkspaceSwitchStart);
+    window.addEventListener("papr-workspace-artifacts-ready", onWorkspaceSwitchComplete);
     return () => {
-      window.removeEventListener("papr-namespace-changed", onWorkspaceChanged);
-      window.removeEventListener("papr-organization-changed", onWorkspaceChanged);
+      window.removeEventListener(
+        "papr-workspace-switch-complete",
+        onWorkspaceSwitchComplete,
+      );
+      window.removeEventListener(
+        "papr-workspace-switch-start",
+        onWorkspaceSwitchStart,
+      );
+      window.removeEventListener(
+        "papr-workspace-artifacts-ready",
+        onWorkspaceSwitchComplete,
+      );
     };
   }, [loadArtifacts]);
 

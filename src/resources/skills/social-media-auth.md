@@ -26,6 +26,24 @@ connect_platform({ platform: "linkedin", action: "refresh" })
 
 Sessions refresh automatically in the background - no manual Chrome Manager jobs needed!
 
+## Reading connected accounts (agent — browser first)
+
+When the agent needs to read feeds, messages, or profiles from a connected platform:
+
+```typescript
+connect_platform({ platform: "linkedin", action: "status" })
+connect_platform({ platform: "linkedin", action: "prepare_browser" })
+browser_snapshot({})
+browser_navigate({ url: "https://www.linkedin.com/messaging/" })
+```
+
+**Do NOT:**
+- Call LinkedIn Voyager / internal GraphQL / REST APIs via bash/curl with `${LINKEDIN_*}` cookies
+- Reverse-engineer `/voyager/api/` endpoints — query IDs go stale and LinkedIn returns 302 bot blocks
+- Use bird CLI for LinkedIn (bird is X/Twitter only)
+
+If `prepare_browser` fails: try `action: "refresh"` once, retry — then stop and tell the user. Do not keep probing.
+
 ## Cookie Key Names
 
 Use these in job commands with `${KEY_NAME}` substitution:

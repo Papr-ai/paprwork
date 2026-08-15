@@ -29,6 +29,7 @@ import {
   shouldShowMemorySetupPanel,
 } from "../../utils/memoryWorkspaceHealth";
 import { MemorySetupPanel } from "./MemorySetupPanel";
+import { getActiveWorkspaceUiCacheKey } from "../../lib/workspaceUiCache";
 import "./WikiLibrary.css";
 
 interface WorkspaceFilePreview {
@@ -39,7 +40,14 @@ interface WorkspaceFilePreview {
   rawLength: number;
 }
 
-const FOCUS_CACHE_KEY = "memory-view-focus";
+const FOCUS_CACHE_KEY_PREFIX = "memory-view-focus";
+
+function getFocusCacheKey(): string {
+  const workspaceKey = getActiveWorkspaceUiCacheKey();
+  return workspaceKey
+    ? `${FOCUS_CACHE_KEY_PREFIX}:${workspaceKey}`
+    : FOCUS_CACHE_KEY_PREFIX;
+}
 
 function fileLabel(name: string): string {
   return name
@@ -1680,7 +1688,7 @@ export function WikiLibrary({
   const clearFocus = useCallback(() => {
     setFocus(null);
     try {
-      sessionStorage.removeItem(FOCUS_CACHE_KEY);
+      sessionStorage.removeItem(getFocusCacheKey());
     } catch {
       /* noop */
     }
@@ -1770,7 +1778,7 @@ export function WikiLibrary({
       // Cache to sessionStorage
       try {
         sessionStorage.setItem(
-          FOCUS_CACHE_KEY,
+          getFocusCacheKey(),
           JSON.stringify({ type: node.type, id: node.id, label: node.label }),
         );
       } catch {
@@ -1797,7 +1805,7 @@ export function WikiLibrary({
           // Update cache with enriched node
           try {
             sessionStorage.setItem(
-              FOCUS_CACHE_KEY,
+              getFocusCacheKey(),
               JSON.stringify({
                 type: enriched.type,
                 id: enriched.id,
@@ -1822,13 +1830,33 @@ export function WikiLibrary({
     [onFocusChange, clearFocus],
   );
 
+  const resetLibraryForWorkspaceSwitch = useCallback(() => {
+    setHome(null);
+    setHomeLoading(true);
+    setHomeLoadError(null);
+    setFocus(null);
+    setContextFocus(null);
+    setEntityRails([]);
+    setEntityRelatedMemories([]);
+    setEntityLoading(false);
+    setEntityError(undefined);
+    setContextFiles([]);
+    setOnboardingPending(false);
+    onFocusChange?.(null, null);
+    try {
+      sessionStorage.removeItem(getFocusCacheKey());
+    } catch {
+      /* noop */
+    }
+  }, [onFocusChange]);
+
   // Initial load + restore cached focus
   useEffect(() => {
     void loadHome();
     void loadContext();
-    // Restore cached entity focus
+    // Restore cached entity focus for this workspace only
     try {
-      const cached = sessionStorage.getItem(FOCUS_CACHE_KEY);
+      const cached = sessionStorage.getItem(getFocusCacheKey());
       if (cached) {
         const parsed = JSON.parse(cached) as Partial<WikiNode>;
         if (parsed?.id && parsed?.type && parsed?.label) {
@@ -1839,6 +1867,25 @@ export function WikiLibrary({
       /* noop */
     }
   }, []);
+
+  useEffect(() => {
+    const onSwitchStart = () => {
+      resetLibraryForWorkspaceSwitch();
+    };
+    const onSwitchComplete = () => {
+      void loadHome({ forceRefresh: true });
+      void loadContext();
+    };
+    window.addEventListener("papr-workspace-switch-start", onSwitchStart);
+    window.addEventListener("papr-workspace-switch-complete", onSwitchComplete);
+    return () => {
+      window.removeEventListener("papr-workspace-switch-start", onSwitchStart);
+      window.removeEventListener(
+        "papr-workspace-switch-complete",
+        onSwitchComplete,
+      );
+    };
+  }, [resetLibraryForWorkspaceSwitch, loadHome, loadContext]);
 
   useEffect(() => {
     const unsubscribe = gateway.onConnectionChange((connected) => {

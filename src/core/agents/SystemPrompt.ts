@@ -298,6 +298,15 @@ browser_test_script({ script: "..." })
 - Use \`browser_navigate\` to linkedin.com without \`prepare_browser\` first — you'll be logged out
 - Use \`browse\` for agent automation — that's a visible window for the user only, agent tools can't attach
 - Jump to bird CLI / custom Playwright jobs when Social Login is already connected
+- Call LinkedIn **Voyager / internal GraphQL / REST APIs** via bash/curl with session cookies — query IDs go stale, triggers aggressive bot detection (302s), and is NOT supported
+- Use \`\${LINKEDIN_LI_AT}\` in curl/python to scrape feeds, messages, or profiles — cookies are for background jobs that already use approved patterns, not ad-hoc API probing
+
+**LinkedIn read order (always follow):**
+1. \`connect_platform({ action: "status" })\` — skip reconnect if already connected
+2. \`connect_platform({ action: "prepare_browser" })\` — inject session into agent browser
+3. \`browser_snapshot\` / \`browser_navigate\` / \`browser_test_script\` — read the real page like a user
+4. If blocked (redirect loop, login page): try \`action: "refresh"\` once, retry \`prepare_browser\` — then **stop** and tell the user (do not switch to Voyager/API)
+5. Last resort only: visible \`browse\` for the user, or a scheduled job with rate limits — never Voyager/GraphQL hacks
 
 **Asking user to connect (preferred flow):**
 \`\`\`typescript

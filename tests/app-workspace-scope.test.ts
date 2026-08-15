@@ -70,15 +70,15 @@ describe("appWorkspaceScope", () => {
     ).toBe(false);
   });
 
-  it("merges index and disk workspace fields with index winning", () => {
+  it("merges index and disk workspace fields with disk winning", () => {
     expect(
       mergeAppWorkspaceFields(
         { organizationId: "org-index", namespaceId: "ns-index" },
         { organizationId: "org-disk", namespaceId: "ns-disk" },
       ),
     ).toEqual({
-      organizationId: "org-index",
-      namespaceId: "ns-index",
+      organizationId: "org-disk",
+      namespaceId: "ns-disk",
     });
   });
 

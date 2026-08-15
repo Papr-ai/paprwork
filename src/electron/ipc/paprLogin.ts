@@ -2268,18 +2268,21 @@ async function applyActiveNamespaceSwitch(input: {
       workspaceId,
     );
     apiKey = resolved.apiKey;
+  }
 
-    const workspaceResult = await notifyGatewayWorkspaceSwitch({
-      organizationId: input.organizationId,
-      namespaceId: input.namespaceId,
-      namespaceName: input.namespaceName,
-      paprApiKey: apiKey,
-    });
-    if (!workspaceResult.success) {
-      throw new Error(
-        workspaceResult.error ?? "Gateway workspace switch failed",
-      );
-    }
+  // Pointer file can match before gateway services/env do (e.g. partial switch or
+  // API-key-only refresh). Always run a full gateway switch so team apps, memory,
+  // and path-bound singletons reload for the target org/namespace.
+  const workspaceResult = await notifyGatewayWorkspaceSwitch({
+    organizationId: input.organizationId,
+    namespaceId: input.namespaceId,
+    namespaceName: input.namespaceName,
+    paprApiKey: apiKey,
+  });
+  if (!workspaceResult.success) {
+    throw new Error(
+      workspaceResult.error ?? "Gateway workspace switch failed",
+    );
   }
 
   await persistNamespaceApiKeys(
@@ -2296,11 +2299,6 @@ async function applyActiveNamespaceSwitch(input: {
   });
 
   invalidateKeyCache("PAPR_API_KEY");
-
-  // When pointer already matched, gateway was not reloaded — push key + reinit storage.
-  if (pointerMatches) {
-    await notifyGatewayPaprApiKeyUpdate(apiKey);
-  }
 
   if (input.notifyRenderer !== false) {
     const win = BrowserWindow.getAllWindows()[0];
@@ -2521,26 +2519,6 @@ async function syncNamespaceApiKeyIfNeeded(input: {
     ) {
       return;
     }
-  }
-
-  if (
-    pointer?.organizationId === input.organizationId &&
-    pointer?.namespaceId === choice.namespaceId
-  ) {
-    await refreshActiveNamespaceApiKey({
-      customKeysStorage: input.customKeysStorage,
-      settingsStorage: input.settingsStorage,
-      organizationId: input.organizationId,
-      namespaceId: choice.namespaceId,
-      namespaceName: choice.namespaceName,
-    });
-    input.settingsStorage.setPaprProfile({
-      ...input.settingsStorage.getPaprProfile()!,
-      organizationId: input.organizationId,
-      activeNamespaceId: choice.namespaceId,
-      activeNamespaceName: choice.namespaceName,
-    });
-    return;
   }
 
   await applyActiveNamespaceSwitch({

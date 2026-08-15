@@ -10,7 +10,6 @@ import {
   readActiveWorkspacePointer,
   relocateMisplacedLegacyMigration,
   relocateMisplacedNamespaceContent,
-  repairIncompleteAppSources,
   resolveOrgNamespaceUserDataPath,
   resolveOrgNamespaceWorkspacePath,
   runLegacyWorkspaceDataMigration,
@@ -517,46 +516,6 @@ describe("papr workspace hierarchy", () => {
     ).resolves.toBeUndefined();
     await expect(
       fs.access(path.join(pointer.paprHome, "apps", "legacy-app", "app.ts")),
-    ).resolves.toBeUndefined();
-  });
-
-  it("repairs incomplete apps from a prior migration target namespace", async () => {
-    const baseDir = path.join(tempHome, "Papr");
-    const wrongHome = resolveOrgNamespaceWorkspacePath("org-a", "ns-wrong");
-    const correctHome = resolveOrgNamespaceWorkspacePath("org-a", "ns-correct");
-
-    await fs.mkdir(path.join(wrongHome, "apps", "app-1"), { recursive: true });
-    await fs.writeFile(
-      path.join(wrongHome, "apps", "app-1", "index.html"),
-      "<html>app</html>",
-      "utf8",
-    );
-    await fs.mkdir(path.join(correctHome, "apps", "app-1"), { recursive: true });
-    await fs.writeFile(
-      path.join(correctHome, "apps", "app-1", "metadata.json"),
-      JSON.stringify({ title: "App 1" }),
-      "utf8",
-    );
-
-    await fs.writeFile(
-      path.join(baseDir, LEGACY_MIGRATION_FILENAME),
-      JSON.stringify({
-        migratedAt: new Date().toISOString(),
-        organizationId: "org-a",
-        namespaceId: "ns-wrong",
-        targetPaprHome: wrongHome,
-        movedPaths: ["apps"],
-      }),
-      "utf8",
-    );
-
-    const repaired = await repairIncompleteAppSources({
-      targetPaprHome: correctHome,
-    });
-
-    expect(repaired.repairedAppIds).toEqual(["app-1"]);
-    await expect(
-      fs.access(path.join(correctHome, "apps", "app-1", "index.html")),
     ).resolves.toBeUndefined();
   });
 

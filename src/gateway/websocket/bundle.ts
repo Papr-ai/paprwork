@@ -70,9 +70,8 @@ export async function setupBundleHandlers(
       case "bundle:fetch-community-catalog": {
         const { getCommunityCatalogService, clearNamespaceCommunityCatalogCache } =
           await import("../services/CommunityCatalogService.js");
-        const { readActiveWorkspacePointer } = await import(
-          "../../core/utils/paprWorkspace.js"
-        );
+        const { ensureActiveWorkspaceEnvSynced, readActiveWorkspacePointer } =
+          await import("../../core/utils/paprWorkspace.js");
         const payload = message.payload as
           | {
               scope?: "global" | "namespace";
@@ -86,6 +85,7 @@ export async function setupBundleHandlers(
         }
         let namespaceId = payload?.namespaceId;
         if (scope === "namespace") {
+          ensureActiveWorkspaceEnvSynced();
           const activeNamespaceId =
             process.env.PAPR_NAMESPACE_ID?.trim() ??
             readActiveWorkspacePointer()?.namespaceId;

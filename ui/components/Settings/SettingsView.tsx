@@ -1010,6 +1010,50 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.3.4" && (
+          <div className="about-card">
+            <h3>What's New in v2.3.4</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Workspace Switch Reload</strong>
+                <p>
+                  Switching org or namespace now restores tabs, chats, apps, and
+                  Memory focus per workspace instead of mixing state across teams.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Social Login Cookie Fix</strong>
+                <p>
+                  Improved Playwright cookie injection from Chrome and keychain —
+                  prepare_browser sessions stay logged in reliably.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Community Apps Scoping</strong>
+                <p>
+                  Community catalog respects workspace assignment so apps from
+                  other teams no longer appear in the wrong namespace.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Memory Wiki Per-Workspace</strong>
+                <p>
+                  Wiki library focus and setup state are cached per workspace for
+                  faster context switching.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.3.4"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.3.3" && (
           <div className="about-card">
             <h3>What's New in v2.3.3</h3>

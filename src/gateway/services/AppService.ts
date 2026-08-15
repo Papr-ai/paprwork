@@ -48,8 +48,10 @@ import {
   validateMiniAppIcon,
 } from "../../core/utils/miniAppIconValidation.js";
 import {
+  isAppAssignedToWorkspace,
   isAppAwaitingAssignmentInWorkspace,
   isAppWorkspaceUnassigned,
+  isBundledDefaultAppId,
   mergeAppWorkspaceFields,
   readActiveAppWorkspaceScope,
   readAppWorkspaceFieldsFromDisk,
@@ -733,8 +735,9 @@ export class AppService {
     await this.loadApps(); // Load existing apps FIRST
     await this.enforceAppOwnershipIndex(); // Drop foreign apps before recovery
     await this.rebuildIndexIfCorrupted(); // Safety net: check for missing apps
+    await this.pruneStrayWorkspaceAppCopies(); // Drop migration copies assigned elsewhere
     await this.backfillAppAgentChatFromDisk(); // Sidecar + registry from metadata/registry
-    await this.backfillAppWorkspaceScope(); // Apps on disk in this namespace must have org/ns
+    await this.backfillAppWorkspaceScope(); // Stamp org/ns only for truly unassigned apps
     await this.repairRecoveredAppEntries(); // Fix legacy "Recovered" labels from metadata.json
     await this.syncBundledDefaultAppRegistry(); // Keep prebuilt apps (Home) in sync with bundled metadata
     await this.pruneStaleAppEntries(); // Index entries whose folders were removed (e.g. bash rm)
@@ -1149,7 +1152,25 @@ export class AppService {
           appId,
         );
 
-        const scope = readActiveAppWorkspaceScope();
+        const diskFields = await readAppWorkspaceFieldsFromDisk(appDir);
+        const activeScope = readActiveAppWorkspaceScope();
+        if (
+          activeScope &&
+          !isAppWorkspaceUnassigned(diskFields) &&
+          !isAppAssignedToWorkspace(diskFields, activeScope)
+        ) {
+          console.warn(
+            `[AppService] Skipped recovering app assigned to another workspace: ${appId}`,
+          );
+          continue;
+        }
+
+        const recoveryScope = !isAppWorkspaceUnassigned(diskFields)
+          ? {
+              organizationId: diskFields.organizationId!.trim(),
+              namespaceId: diskFields.namespaceId!.trim(),
+            }
+          : activeScope;
 
         const recoveredApp: MiniApp = {
           id: appId,
@@ -1161,7 +1182,7 @@ export class AppService {
           ...(getPaprUserId()?.trim()
             ? { ownerUserId: getPaprUserId()!.trim() }
             : {}),
-          ...(scope ? withWorkspaceScope({}, scope) : {}),
+          ...(recoveryScope ? withWorkspaceScope({}, recoveryScope) : {}),
           ...(icon ? { icon } : {}),
           ...(hydration.agentChat ? { agentChat: hydration.agentChat } : {}),
         };
@@ -1286,7 +1307,7 @@ export class AppService {
 
   /**
    * Apps stored under the active org/namespace workspace belong to that workspace.
-   * Index rebuilds can strip organizationId/namespaceId — restore so listApps shows them.
+   * Only stamp org/ns when both index and metadata are unassigned.
    */
   private async backfillAppWorkspaceScope(): Promise<void> {
     const scope = readActiveAppWorkspaceScope();
@@ -1330,6 +1351,66 @@ export class AppService {
         await writeCloudAppMetadataFile(this.paprRootDir, app.id).catch(() => {});
       }
     }
+  }
+
+  /**
+   * Remove app folders/index rows that belong to another org/namespace but were
+   * copied into this workspace during legacy migration.
+   */
+  private async pruneStrayWorkspaceAppCopies(): Promise<void> {
+    const scope = readActiveAppWorkspaceScope();
+    if (!scope) {
+      return;
+    }
+
+    const toRemove: string[] = [];
+    for (const [appId, app] of this.apps.entries()) {
+      if (isBundledDefaultAppId(appId)) {
+        continue;
+      }
+      if (!(await this.appDirHasContent(appId))) {
+        continue;
+      }
+
+      const appDir = path.join(this.appsDir, appId);
+      const workspaceFields = mergeAppWorkspaceFields(
+        app,
+        await readAppWorkspaceFieldsFromDisk(appDir),
+      );
+      if (isAppWorkspaceUnassigned(workspaceFields)) {
+        continue;
+      }
+      if (isAppAssignedToWorkspace(workspaceFields, scope)) {
+        continue;
+      }
+
+      toRemove.push(appId);
+    }
+
+    if (toRemove.length === 0) {
+      return;
+    }
+
+    for (const appId of toRemove) {
+      this.apps.delete(appId);
+      this.unwatchApp(appId);
+      const { removeAppPublishPrefs } = await import("./cloudPublishPrefs.js");
+      removeAppPublishPrefs(appId, this.paprRootDir);
+      try {
+        await fs.rm(path.join(this.appsDir, appId), { recursive: true, force: true });
+      } catch (error) {
+        console.warn(
+          `[AppService] Failed to delete stray app folder ${appId}:`,
+          (error as Error).message,
+        );
+      }
+      console.log(
+        `[AppService] Removed stray app copy from workspace ${scope.organizationId}/${scope.namespaceId}: ${appId}`,
+      );
+    }
+
+    await this.saveApps();
+    this.broadcastAppListUpdated();
   }
 
   private async saveApps(): Promise<void> {
@@ -2071,11 +2152,8 @@ export class AppService {
     const activeScope = readActiveAppWorkspaceScope();
     const owned: MiniApp[] = [];
     for (const app of this.apps.values()) {
-      const needsDiskOwnership = !app.ownerUserId?.trim();
-      const needsDiskWorkspace =
-        !app.organizationId?.trim() || !app.namespaceId?.trim();
-
       const appDir = path.join(this.appsDir, app.id);
+      const needsDiskOwnership = !app.ownerUserId?.trim();
       const hints = needsDiskOwnership
         ? await readAppDiskOwnershipHints(appDir, app.id)
         : undefined;
@@ -2083,21 +2161,15 @@ export class AppService {
         continue;
       }
 
-      const merged = needsDiskWorkspace
-        ? {
-            ...app,
-            ...mergeAppWorkspaceFields(
-              app,
-              await readAppWorkspaceFieldsFromDisk(appDir),
-            ),
-          }
-        : app;
-
-      if (!shouldShowAppInMyApps(app.id, merged, activeScope)) {
+      const workspaceFields = mergeAppWorkspaceFields(
+        app,
+        await readAppWorkspaceFieldsFromDisk(appDir),
+      );
+      if (!shouldShowAppInMyApps(app.id, workspaceFields, activeScope)) {
         continue;
       }
 
-      owned.push(merged);
+      owned.push({ ...app, ...workspaceFields });
     }
 
     return owned.sort(

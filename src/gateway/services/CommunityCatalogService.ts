@@ -94,13 +94,32 @@ interface CloudCommunityApiResponse {
 import { isAppOwnedByCurrentUser } from "./appOwnership.js";
 import { getPaprUserId } from "../utils/paprUserId.js";
 import type { MiniApp } from "./AppService.js";
+import {
+  isAppAssignedToWorkspace,
+  isBundledDefaultAppId,
+  readActiveAppWorkspaceScope,
+  type AppWorkspaceFields,
+} from "../../core/utils/appWorkspaceScope.js";
 
 function loadLocalAppMeta(
   paprDir: string,
-): Map<string, { title: string; description: string; icon?: string; tags?: string[] }> {
+): Map<
+  string,
+  AppWorkspaceFields & {
+    title: string;
+    description: string;
+    icon?: string;
+    tags?: string[];
+  }
+> {
   const meta = new Map<
     string,
-    { title: string; description: string; icon?: string; tags?: string[] }
+    AppWorkspaceFields & {
+      title: string;
+      description: string;
+      icon?: string;
+      tags?: string[];
+    }
   >();
   try {
     const raw = fs.readFileSync(path.join(paprDir, "data", "apps.json"), "utf8");
@@ -112,6 +131,8 @@ function loadLocalAppMeta(
           icon?: string;
           ownerUserId?: string;
           tags?: string[];
+          organizationId?: string;
+          namespaceId?: string;
         }>
       | Record<
           string,
@@ -122,6 +143,8 @@ function loadLocalAppMeta(
             icon?: string;
             ownerUserId?: string;
             tags?: string[];
+            organizationId?: string;
+            namespaceId?: string;
           }
         >;
     const list = Array.isArray(parsed) ? parsed : Object.values(parsed);
@@ -134,6 +157,8 @@ function loadLocalAppMeta(
         description: app.description?.trim() || "",
         icon: app.icon,
         tags: app.tags,
+        organizationId: app.organizationId,
+        namespaceId: app.namespaceId,
       });
     }
   } catch {
@@ -579,8 +604,23 @@ async function buildLocalCloudEntriesForSharing(
 ): Promise<CommunityCatalogEntry[]> {
   const meta = loadLocalAppMeta(paprDir);
   const entries: CommunityCatalogEntry[] = [];
+  const catalogScope =
+    options.namespaceId?.trim() && process.env.PAPR_ORG_ID?.trim()
+      ? {
+          organizationId: process.env.PAPR_ORG_ID.trim(),
+          namespaceId: options.namespaceId.trim(),
+        }
+      : readActiveAppWorkspaceScope();
 
   for (const [appId, appMeta] of meta) {
+    if (
+      catalogScope &&
+      !isBundledDefaultAppId(appId) &&
+      !isAppAssignedToWorkspace(appMeta, catalogScope)
+    ) {
+      continue;
+    }
+
     const prefs = getAppPublishPrefs(appId, paprDir);
     const sharing = resolveSharingSettings(prefs);
     if (sharing.loginAccess !== options.loginAccess) continue;

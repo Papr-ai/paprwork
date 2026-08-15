@@ -10,6 +10,7 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import type { ToolResult } from "../types/index.js";
+import { getPlaywrightCookieDomain } from "../../gateway/services/platforms/platformCookieUtils.js";
 
 const PLATFORM_IDS = [
   // Social
@@ -37,9 +38,11 @@ Use this to:
 
 IMPORTANT:
 - Social Login stores session cookies in keychain (e.g. LINKEDIN_LI_AT)
-- **For reading feeds/messages:** prepare_browser → browser_snapshot (do NOT use bird CLI unless prepare_browser fails)
+- **For reading feeds/messages/profiles:** ALWAYS prepare_browser → browser_snapshot/browser_navigate FIRST
+- Do NOT use LinkedIn Voyager/internal GraphQL/REST via bash/curl — stale queryIds, 302 bot blocks, high account risk
+- Do NOT use bird CLI for LinkedIn; bird is X/Twitter fallback only after prepare_browser fails
 - browse opens a separate visible window the agent CANNOT control
-- Jobs access cookies via \${LINKEDIN_LI_AT} substitution`,
+- Jobs access cookies via \${LINKEDIN_LI_AT} substitution for approved scheduled scripts — not ad-hoc API scraping in chat`,
 
   inputSchema: z.object({
     platform: z
@@ -263,7 +266,7 @@ IMPORTANT:
                 cookies.push({
                   name: cookieName,
                   value,
-                  domain: config.cookieDomain,
+                  domain: getPlaywrightCookieDomain(config, cookieName),
                   path: "/",
                   secure: true,
                   httpOnly: true,

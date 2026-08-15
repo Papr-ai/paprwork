@@ -157,13 +157,24 @@ export async function preparePlatformBrowserSession(
   }
 
   const session = await getBrowserSession();
-  await session.page.context().addCookies(cookies);
+  const context = session.page.context();
+  await context.clearCookies();
+  await context.addCookies(cookies);
 
   const destination = targetUrl ?? config.homeUrl;
-  await session.page.goto(destination, {
+  const landingUrl = config.prepareNavigationUrl ?? destination;
+
+  await session.page.goto(landingUrl, {
     waitUntil: "domcontentloaded",
     timeout: PLATFORM_NAVIGATION_TIMEOUT_MS,
   });
+
+  if (destination !== landingUrl) {
+    await session.page.goto(destination, {
+      waitUntil: "domcontentloaded",
+      timeout: PLATFORM_NAVIGATION_TIMEOUT_MS,
+    });
+  }
 
   const currentUrl = session.page.url();
   const title = await session.page.title();
@@ -176,12 +187,15 @@ export async function preparePlatformBrowserSession(
       /\/checkpoint(?:\/|$|\?)/i.test(currentUrl));
 
   if (loggedOut) {
+    const cookieDomains = cookies.map((c) => `${c.name}@${c.domain}`).join(", ");
     return {
       success: false,
       url: currentUrl,
       title,
       message: `${config.name} session expired — redirected to login.`,
-      error: "Reconnect via Settings → Social Login.",
+      error:
+        `Reconnect via Settings → Social Login, or try connect_platform action="refresh" then prepare_browser again. ` +
+        `Injected cookies: ${cookieDomains}. Do NOT fall back to Voyager/GraphQL API calls.`,
     };
   }
 
@@ -235,6 +249,7 @@ async function getBrowserSession(): Promise<BrowserSessionState> {
 
   const launchOptions: Parameters<typeof module.chromium.launch>[0] = {
     headless: true,
+    args: ["--disable-blink-features=AutomationControlled"],
   };
   if (isCloudAgentGatewayMode() || process.env.PLAYWRIGHT_DOCKER === "1") {
     launchOptions.args = [
@@ -291,7 +306,12 @@ async function getBrowserSession(): Promise<BrowserSessionState> {
       throw launchError;
     }
   }
-  const context = await browser.newContext();
+  const context = await browser.newContext({
+    userAgent:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    viewport: { width: 1280, height: 900 },
+    locale: "en-US",
+  });
   const page = await context.newPage();
   const consoleLogs: BrowserConsoleLog[] = [];
   const networkLogs: BrowserNetworkLog[] = [];

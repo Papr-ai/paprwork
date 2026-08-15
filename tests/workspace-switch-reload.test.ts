@@ -116,7 +116,7 @@ describe("reloadUiForWorkspaceSwitch", () => {
     expect(reloadEvents).toHaveLength(1);
   });
 
-  it("loads tabs from SQLite before chat:list validation", async () => {
+  it("loads workspace entities before SQLite tab restore", async () => {
     vi.useFakeTimers();
     stubWindowForReload();
 
@@ -167,9 +167,9 @@ describe("reloadUiForWorkspaceSwitch", () => {
     const tabsIndex = callOrder.indexOf("app:load_tabs");
     const chatIndex = callOrder.indexOf("chat:list");
     expect(tabsIndex).toBeGreaterThanOrEqual(0);
-    expect(chatIndex).toBeGreaterThan(tabsIndex);
+    expect(chatIndex).toBeGreaterThanOrEqual(0);
+    expect(tabsIndex).toBeGreaterThan(chatIndex);
 
-    await vi.advanceTimersByTimeAsync(500);
     expect(useChatStore.getState().chats).toHaveLength(1);
   });
 

@@ -5,6 +5,7 @@
 import { useCallback, useEffect } from "react";
 import { useArtifactsStore, type Artifact } from "../stores/artifactsStore";
 import { gateway } from "../src/lib/gateway";
+import { isWorkspaceSwitchReloading } from "../lib/workspaceSwitchReload";
 import {
   getActiveWorkspaceUiCacheKey,
   writeWorkspaceUiCache,
@@ -60,7 +61,12 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
   }, []);
 
   // Apps use a fast stale-while-refresh path; other views load both kinds.
-  const loadArtifacts = useCallback(async () => {
+  const loadArtifacts = useCallback(async (options?: { forceRefresh?: boolean }) => {
+    const forceRefresh = options?.forceRefresh === true;
+    if (!forceRefresh && isWorkspaceSwitchReloading()) {
+      return;
+    }
+
     const cached = useArtifactsStore.getState().artifacts;
     const hasCachedApps = cached.some((item) => item.type === "app");
     const blockForLoad = scope === "all" || !hasCachedApps;
@@ -323,7 +329,7 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
   // Background refresh after workspace switch (cache already hydrated).
   useEffect(() => {
     const onArtifactsReady = () => {
-      void loadArtifacts();
+      void loadArtifacts({ forceRefresh: true });
     };
     window.addEventListener("papr-workspace-artifacts-ready", onArtifactsReady);
     window.addEventListener("papr-workspace-switch-complete", onArtifactsReady);
@@ -343,7 +349,7 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
         | { type?: string }
         | undefined;
       if (detail?.type === "app:list-updated") {
-        void loadArtifacts();
+        void loadArtifacts({ forceRefresh: true });
       }
     };
     window.addEventListener("gateway-broadcast", handler);

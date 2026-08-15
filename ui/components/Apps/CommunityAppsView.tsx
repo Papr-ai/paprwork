@@ -224,7 +224,7 @@ export function CommunityAppsView({
       const forceRefresh = options?.forceRefresh === true;
       const isStale = options?.isStale ?? (() => false);
 
-      if (isWorkspaceSwitchReloading()) {
+      if (!forceRefresh && isWorkspaceSwitchReloading()) {
         return;
       }
 
@@ -236,7 +236,7 @@ export function CommunityAppsView({
         return;
       }
 
-      if (cached) {
+      if (cached && (!namespaceId || cached.namespaceId === namespaceId)) {
         setCatalog(cached);
         setLoading(false);
         setRefreshing(true);
@@ -293,13 +293,32 @@ export function CommunityAppsView({
   }, [loadCatalog]);
 
   useEffect(() => {
-    const onSwitchComplete = (): void => {
-      void loadCatalog();
+    const onSwitchStart = (): void => {
+      setCatalog(null);
+      setLoading(true);
+      setRefreshing(false);
+      setError(null);
     };
+    const onSwitchComplete = (): void => {
+      void loadCatalog({ forceRefresh: true });
+    };
+    window.addEventListener("papr-workspace-switch-start", onSwitchStart);
     window.addEventListener("papr-workspace-switch-complete", onSwitchComplete);
-    return () =>
-      window.removeEventListener("papr-workspace-switch-complete", onSwitchComplete);
+    return () => {
+      window.removeEventListener("papr-workspace-switch-start", onSwitchStart);
+      window.removeEventListener(
+        "papr-workspace-switch-complete",
+        onSwitchComplete,
+      );
+    };
   }, [loadCatalog]);
+
+  useEffect(() => {
+    setCatalog(null);
+    setLoading(true);
+    setRefreshing(false);
+    setError(null);
+  }, [namespaceId]);
 
   useEffect(() => {
     if (refreshToken > 0) {

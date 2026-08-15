@@ -186,6 +186,13 @@ async function resetPathBoundSingletons(): Promise<void> {
   await abortAllActiveAgentStreams();
   await yieldEventLoop();
 
+  const { clearWikiHomeRemoteCache } = await import(
+    "./KnowledgeGraphWikiService.js"
+  );
+  clearWikiHomeRemoteCache();
+  const { clearMemoryPreviewCache } = await import("./MemoryPreviewCache.js");
+  await clearMemoryPreviewCache();
+
   resetCommunityCatalogServiceForWorkspaceSwitch();
   resetPlanServiceForWorkspaceSwitch();
   resetSkillServiceForWorkspaceSwitch();

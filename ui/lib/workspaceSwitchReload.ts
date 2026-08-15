@@ -9,18 +9,19 @@
  */
 
 import { resetChatListCache } from "../hooks/useChat";
-import { useArtifactsStore } from "../stores/artifactsStore";
+import { useArtifactsStore, type Artifact } from "../stores/artifactsStore";
 import { useChatStore } from "../stores/chatStore";
 import { useSubAgentsStore } from "../stores/subAgentsStore";
 import { useTabStore } from "../stores/tabStore";
 import { gateway } from "../src/lib/gateway";
 import type { ChatMetadata } from "../types/chat";
 import { clearCloudPublishCache } from "../utils/cloudPublishCache";
+import { clearCommunityCatalogCache } from "../utils/communityCatalogCache";
 import {
   applyPersistedAppStateToTabStore,
   fetchPersistedAppStateFromGateway,
   normalizeTabHierarchy,
-  reconcileChatTabsInStore,
+  type WorkspaceEntityIdSets,
 } from "./persistedAppState";
 import { ensureSettingsTab } from "./ensureSettingsTab";
 import { resetDefaultChatTabGuardForTests } from "./ensureDefaultChatTab";
@@ -143,10 +144,10 @@ function hydrateWorkspaceFromCache(targetKey: string): boolean {
     history: cached.history,
     historyIndex: cached.historyIndex,
   });
-  useArtifactsStore.getState().setArtifacts(cached.artifacts);
+  // Artifacts always reload from gateway — cache is tabs-only to avoid wrong My Apps / team apps.
   setActiveWorkspaceUiCacheKey(targetKey);
   console.log(
-    `[WorkspaceSwitch] Hydrated UI from cache (${cached.tabs.length} tabs, ${cached.artifacts.length} artifacts)`,
+    `[WorkspaceSwitch] Hydrated tab bar from cache (${cached.tabs.length} tabs)`,
   );
   return true;
 }
@@ -162,12 +163,14 @@ function clearLegacyGlobalTabCache(): void {
 /** Restore tab bar from workspace SQLite. Returns count of non-settings tabs loaded/applied. */
 async function loadTabsForWorkspaceWithRetry(
   targetWorkspaceKey?: string,
+  entityIds?: WorkspaceEntityIdSets,
 ): Promise<number> {
   for (let attempt = 0; attempt < TABS_LOAD_MAX_ATTEMPTS; attempt += 1) {
     try {
       const snapshot = await fetchPersistedAppStateFromGateway();
       if (snapshot) {
         applyPersistedAppStateToTabStore(snapshot, {
+          ...entityIds,
           emptyActiveTabFallback: "none",
         });
         if (targetWorkspaceKey) {
@@ -209,6 +212,76 @@ function countNonSettingsTabs(
   return tabs.filter((tab) => tab.type !== "settings").length;
 }
 
+/** Load workspace apps/documents into artifacts store (My Apps + tab validation). */
+async function loadArtifactsForWorkspaceWithRetry(): Promise<boolean> {
+  for (let attempt = 0; attempt < CHAT_LIST_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const [docsResult, appsResult] = await Promise.allSettled([
+        gateway.send("document:list"),
+        gateway.send("app:list", {}, { timeoutMs: 90_000 }),
+      ]);
+
+      const documents =
+        docsResult.status === "fulfilled"
+          ? ((docsResult.value.data as Artifact[]) ?? [])
+          : [];
+      const apps =
+        appsResult.status === "fulfilled"
+          ? ((appsResult.value.data as Artifact[]) ?? [])
+          : [];
+
+      if (docsResult.status === "fulfilled" || appsResult.status === "fulfilled") {
+        useArtifactsStore.getState().setArtifacts([...documents, ...apps]);
+        return true;
+      }
+    } catch (error) {
+      if (attempt === CHAT_LIST_MAX_ATTEMPTS - 1) {
+        console.error("[WorkspaceSwitch] Failed to reload artifacts:", error);
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, CHAT_LIST_RETRY_MS));
+  }
+  return false;
+}
+
+function buildEntityIdSetsFromStores(): WorkspaceEntityIdSets {
+  const chats = useChatStore.getState().chats;
+  const artifacts = useArtifactsStore.getState().artifacts;
+  return {
+    validChatIds: new Set(chats.map((chat) => chat.id)),
+    validAppIds: new Set(
+      artifacts.filter((item) => item.type === "app").map((item) => item.id),
+    ),
+    validDocumentIds: new Set(
+      artifacts
+        .filter((item) => item.type === "document")
+        .map((item) => item.id),
+    ),
+  };
+}
+
+/** Load entities from gateway, then restore tabs pruned to the active workspace. */
+async function restoreWorkspaceTabsAndEntities(
+  generation: number,
+  targetWorkspaceKey?: string,
+): Promise<number> {
+  if (generation !== workspaceReloadGeneration) {
+    return 0;
+  }
+
+  await Promise.all([
+    loadArtifactsForWorkspaceWithRetry(),
+    loadChatsForWorkspaceWithRetry(),
+  ]);
+
+  if (generation !== workspaceReloadGeneration) {
+    return 0;
+  }
+
+  const entityIds = buildEntityIdSetsFromStores();
+  return loadTabsForWorkspaceWithRetry(targetWorkspaceKey, entityIds);
+}
+
 /** Load workspace tabs from SQLite once gateway AppStateStorage is on the new workspace. */
 async function applyWorkspaceTabsAfterGatewayReady(
   generation: number,
@@ -222,7 +295,10 @@ async function applyWorkspaceTabsAfterGatewayReady(
 
   const targetWorkspaceKey = reloadTargetWorkspaceKeyByGeneration.get(generation);
 
-  const loaded = await loadTabsForWorkspaceWithRetry(targetWorkspaceKey);
+  const loaded = await restoreWorkspaceTabsAndEntities(
+    generation,
+    targetWorkspaceKey,
+  );
   awaitingSwitchTabRecovery = null;
   if (generation !== workspaceReloadGeneration) {
     return;
@@ -233,7 +309,6 @@ async function applyWorkspaceTabsAfterGatewayReady(
       `[WorkspaceSwitch] Restored ${loaded} workspace tab(s) after gateway switch complete`,
     );
   }
-  scheduleBackgroundChatValidation(generation);
 }
 
 function scheduleSwitchTabLoadFallback(generation: number): void {
@@ -291,18 +366,6 @@ async function loadChatsForWorkspaceWithRetry(): Promise<Set<string>> {
   return validChatIds;
 }
 
-function scheduleBackgroundChatValidation(generation: number): void {
-  void (async () => {
-    const validChatIds = await loadChatsForWorkspaceWithRetry();
-    if (generation !== workspaceReloadGeneration) {
-      return;
-    }
-    if (validChatIds.size > 0) {
-      reconcileChatTabsInStore(validChatIds);
-    }
-  })();
-}
-
 async function runReloadForGeneration(generation: number): Promise<void> {
   if (generation !== workspaceReloadGeneration) {
     return;
@@ -356,9 +419,11 @@ export function attachWorkspaceSwitchBroadcastListener(): void {
   window.addEventListener("gateway-broadcast", ((event: CustomEvent) => {
     const detail = event.detail as { type?: string; data?: unknown };
     if (detail?.type === "workspace:switch-complete") {
-      void applyWorkspaceTabsAfterGatewayReady(workspaceReloadGeneration);
-      scheduleDeferredWorkspaceWarmup();
-      window.dispatchEvent(new CustomEvent("papr-workspace-switch-complete"));
+      void (async () => {
+        await applyWorkspaceTabsAfterGatewayReady(workspaceReloadGeneration);
+        scheduleDeferredWorkspaceWarmup();
+        window.dispatchEvent(new CustomEvent("papr-workspace-switch-complete"));
+      })();
     }
     if (detail?.type === "workspace:switch-phase") {
       const phase =
@@ -368,7 +433,7 @@ export function attachWorkspaceSwitchBroadcastListener(): void {
           ? String((detail.data as { phase: string }).phase)
           : undefined;
       if (phase === "artifacts") {
-        void applyWorkspaceTabsAfterGatewayReady(workspaceReloadGeneration);
+        void loadArtifactsForWorkspaceWithRetry();
         window.dispatchEvent(new CustomEvent("papr-workspace-artifacts-ready"));
       }
     }
@@ -386,9 +451,13 @@ async function reloadUiForWorkspaceSwitchInner(
     attachWorkspaceSwitchBroadcastListener();
     clearLegacyGlobalTabCache();
     clearCloudPublishCache();
+    clearCommunityCatalogCache();
     resetDefaultChatTabGuardForTests();
 
     snapshotCurrentWorkspaceToCache();
+    if (targetWorkspaceKey) {
+      setActiveWorkspaceUiCacheKey(targetWorkspaceKey);
+    }
 
     useSubAgentsStore.getState().resetForWorkspaceSwitch();
     resetChatListCache();
@@ -397,6 +466,7 @@ async function reloadUiForWorkspaceSwitchInner(
     window.dispatchEvent(new CustomEvent("papr-community-catalog-refresh"));
 
     const hydratedFromCache =
+      !waitForGateway &&
       targetWorkspaceKey !== undefined &&
       hydrateWorkspaceFromCache(targetWorkspaceKey);
 
@@ -411,6 +481,9 @@ async function reloadUiForWorkspaceSwitchInner(
         history: [],
         historyIndex: -1,
       });
+    } else {
+      // Tabs came from cache — still reload apps/docs from the new workspace.
+      useArtifactsStore.getState().resetForWorkspaceSwitch();
     }
 
     if (waitForGateway) {
@@ -419,7 +492,10 @@ async function reloadUiForWorkspaceSwitchInner(
       );
       scheduleSwitchTabLoadFallback(generation);
     } else {
-      const tabsLoaded = await loadTabsForWorkspaceWithRetry(targetWorkspaceKey);
+      const tabsLoaded = await restoreWorkspaceTabsAndEntities(
+        generation,
+        targetWorkspaceKey,
+      );
       if (generation !== workspaceReloadGeneration) {
         return;
       }
@@ -430,7 +506,6 @@ async function reloadUiForWorkspaceSwitchInner(
         );
       } else {
         awaitingSwitchTabRecovery = null;
-        scheduleBackgroundChatValidation(generation);
       }
     }
 

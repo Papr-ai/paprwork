@@ -318,8 +318,8 @@ export function applyPersistedAppStateToTabStore(
   }
 }
 
-/** Drop chat tabs whose entityId is not in the workspace chat list. */
-export function reconcileChatTabsInStore(validChatIds: Set<string>): void {
+/** Drop entity tabs whose entityId is not in the active workspace lists. */
+export function reconcileEntityTabsInStore(valid: WorkspaceEntityIdSets): void {
   const { activeTabId, tabs, splitRatio, splitRatios, history, historyIndex } =
     useTabStore.getState();
   const activeTab = activeTabId
@@ -336,13 +336,18 @@ export function reconcileChatTabsInStore(validChatIds: Set<string>): void {
     historyIndex,
   };
   applyPersistedAppStateToTabStore(snapshot, {
-    validChatIds,
+    ...valid,
     emptyActiveTabFallback: "none",
   });
 
   if (stayOnSettings) {
     ensureSettingsTab({ section: "profile" });
   }
+}
+
+/** Drop chat tabs whose entityId is not in the workspace chat list. */
+export function reconcileChatTabsInStore(validChatIds: Set<string>): void {
+  reconcileEntityTabsInStore({ validChatIds });
 }
 
 /** Load tabs + navigation state for the active workspace from gateway SQLite. */

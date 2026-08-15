@@ -62,10 +62,25 @@ export class WorkspaceService {
   private workspaceDir: string;
   private memoryDir: string;
   private initialized = false;
+  private initializedWorkspaceDir: string | null = null;
 
   constructor() {
     this.workspaceDir = getPaprWorkspaceDir();
     this.memoryDir = path.join(this.workspaceDir, "memory");
+  }
+
+  private refreshWorkspacePathsIfNeeded(): void {
+    const currentDir = getPaprWorkspaceDir();
+    if (this.workspaceDir === currentDir) {
+      return;
+    }
+    console.warn(
+      `[WorkspaceService] Workspace path changed (${this.workspaceDir} -> ${currentDir}); refreshing`,
+    );
+    this.workspaceDir = currentDir;
+    this.memoryDir = path.join(this.workspaceDir, "memory");
+    this.initialized = false;
+    this.initializedWorkspaceDir = null;
   }
 
   /** Get the workspace directory path */
@@ -78,7 +93,10 @@ export class WorkspaceService {
    * Safe to call multiple times (idempotent).
    */
   async initialize(): Promise<void> {
-    if (this.initialized) return;
+    this.refreshWorkspacePathsIfNeeded();
+    if (this.initialized && this.initializedWorkspaceDir === this.workspaceDir) {
+      return;
+    }
 
     // Create workspace directory structure
     await fs.mkdir(this.workspaceDir, { recursive: true });
@@ -127,6 +145,7 @@ export class WorkspaceService {
     await seedIdentityAboutFromProfile();
 
     this.initialized = true;
+    this.initializedWorkspaceDir = this.workspaceDir;
     console.log(
       `[WorkspaceService] Workspace initialized at ${this.workspaceDir}`,
     );
@@ -137,6 +156,7 @@ export class WorkspaceService {
    * Applies per-file and total truncation limits.
    */
   async loadWorkspaceContext(): Promise<WorkspaceContext> {
+    this.refreshWorkspacePathsIfNeeded();
     const files: WorkspaceFile[] = [];
     let totalChars = 0;
 
