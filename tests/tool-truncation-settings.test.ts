@@ -21,6 +21,7 @@ import {
   DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS,
   mergeToolResultTruncationSettings,
 } from "../src/core/types/toolResultTruncationSettings.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 afterEach(() => {
   setToolResultTruncationSettings({ ...DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS });
@@ -29,6 +30,9 @@ afterEach(() => {
 const longContent = "y".repeat(20_000);
 
 describe("tool truncation settings wiring", () => {
+  // Keeps fixtures out of the developer's real ~/Papr workspace.
+  useIsolatedPaprWorkspace("tool-truncation-settings");
+
   test("defaults match legacy exported constants", () => {
     expect(DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS.aggressiveMaxChars).toBe(
       HISTORY_TOOL_RESULT_MAX_CHARS,

@@ -22,6 +22,7 @@ vi.mock("../src/gateway/services/jobs/jobRuntimeOffGit.js", () => ({
 import { cloudApiFetch } from "../src/gateway/utils/cloudApiClient.js";
 import { getCloudSyncService } from "../src/gateway/services/CloudSyncService.js";
 import { isJobRuntimeOffGit } from "../src/gateway/services/jobs/jobRuntimeOffGit.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 const tmpRoots: string[] = [];
 
@@ -60,6 +61,9 @@ afterEach(async () => {
 });
 
 describe("runJobInCloud", () => {
+  // Keeps fixtures out of the developer's real ~/Papr workspace.
+  useIsolatedPaprWorkspace("cloud-job-run");
+
   beforeEach(async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "papr-cloud-job-run-"));
     tmpRoots.push(root);

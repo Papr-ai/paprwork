@@ -11,6 +11,9 @@ import {
 } from "../src/gateway/utils/appBackendScaffold.js";
 
 describe("AppBackendService (local)", () => {
+  // Keeps fixtures out of the developer's real ~/Papr workspace.
+  useIsolatedPaprWorkspace("app-backend-local");
+
   let tempRoot: string;
 
   afterEach(async () => {
@@ -287,3 +290,5 @@ json.dump({
     expect(payload.active).toBe("billing");
   });
 });
+
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";

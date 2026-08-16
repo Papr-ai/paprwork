@@ -40,8 +40,12 @@ import {
   resetTursoPushQueueForTests,
   scheduleTursoPushForJob,
 } from "../src/gateway/services/tursoPushScheduler.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 describe("tursoPushScheduler stats", () => {
+  // Keeps fixtures out of the developer's real ~/Papr workspace.
+  useIsolatedPaprWorkspace("turso-push-scheduler-stats");
+
   beforeEach(() => {
     vi.clearAllMocks();
     resetTursoPushQueueForTests();

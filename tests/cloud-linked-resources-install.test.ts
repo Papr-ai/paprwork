@@ -6,8 +6,12 @@ import { randomUUID } from "crypto";
 import { syncAppLinkedResourcesToTarget } from "../src/gateway/services/copyAppToNamespace.js";
 import { runPostMigrationPathRepair } from "../src/gateway/services/postMigrationPathRepair.js";
 import { repairWorkspacePortableDataSources } from "../src/gateway/services/portableDataSources.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 describe("cloud linked resources (install/sync)", () => {
+  // Keeps fixtures out of the developer's real ~/Papr workspace.
+  useIsolatedPaprWorkspace("cloud-linked-resources-install");
+
   let sourceHome: string;
   let targetHome: string;
   let publisherAppId: string;

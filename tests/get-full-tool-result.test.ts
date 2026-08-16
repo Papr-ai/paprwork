@@ -7,8 +7,12 @@ import {
   getStorageManager,
   resetStorageManagerSingleton,
 } from "../src/gateway/services/StorageManager.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 describe("StorageManager singleton", () => {
+  // Keeps fixtures out of the developer's real ~/Papr workspace.
+  useIsolatedPaprWorkspace("get-full-tool-result");
+
   beforeEach(async () => {
     resetAgentServiceSingletonForTests();
     await resetStorageManagerSingleton();

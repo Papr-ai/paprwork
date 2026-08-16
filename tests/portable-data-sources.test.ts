@@ -7,8 +7,12 @@ import {
 import type { AppDataSourcesFile } from "../src/gateway/services/appDataSources.js";
 import { resetDatabaseRegistryForWorkspaceSwitch } from "../src/gateway/services/DatabaseRegistryService.js";
 import { getPaprJobsRoot } from "../src/core/utils/paprRoot.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 describe("portableDataSources", () => {
+  // Keeps fixtures out of the developer's real ~/Papr workspace.
+  useIsolatedPaprWorkspace("portable-data-sources");
+
   it("scrubDataSourcesForPortableSync clears dbPath but keeps dbId", () => {
     const config: AppDataSourcesFile = {
       sources: [

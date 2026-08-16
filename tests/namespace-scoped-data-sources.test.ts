@@ -9,8 +9,12 @@ import {
   resolveJobLinkedSourceForWorkspace,
 } from "../src/gateway/services/appDataSources.js";
 import { scanLegacyPathHealth } from "../src/gateway/services/legacyPathHealthScan.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 describe("namespace-scoped job-linked data sources", () => {
+  // Keeps fixtures out of the developer's real ~/Papr workspace.
+  useIsolatedPaprWorkspace("namespace-scoped-data-sources");
+
   it("resolves dbPath from active workspace Jobs tree when job exists locally", () => {
     const tempRoot = path.join(os.tmpdir(), `papr-ns-scope-${Date.now()}`);
     const activeHome = path.join(tempRoot, "orgs", "my-org", "namespaces", "my-ns");

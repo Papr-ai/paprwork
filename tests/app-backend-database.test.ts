@@ -13,8 +13,12 @@ import {
   dbTursoDatabaseName,
   jobTursoDatabaseName,
 } from "../src/gateway/services/tursoDatabaseNaming.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 describe("resolveTursoDatabaseNameForSource", () => {
+  // Keeps fixtures out of the developer's real ~/Papr workspace.
+  useIsolatedPaprWorkspace("app-backend-database");
+
   it("falls back to jobTursoDatabaseName when registry empty", () => {
     const source: AppDataSource = {
       id: "j1:main",

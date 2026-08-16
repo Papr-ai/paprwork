@@ -36,8 +36,12 @@ import {
   resolveJobWriteTargets,
   validateWriteDbIdsExist,
 } from "../src/gateway/services/jobAppDatabase.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 describe("job write database resolution", () => {
+  // Keeps fixtures out of the developer's real ~/Papr workspace.
+  useIsolatedPaprWorkspace("job-app-database");
+
   beforeEach(() => {
     initialize.mockReset();
     getPrimaryDataSource.mockReset();
