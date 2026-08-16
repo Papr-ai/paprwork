@@ -12,10 +12,12 @@ import type { CloudSyncService } from "../CloudSyncService.js";
 import type { TursoPushTrigger } from "../tursoPushScheduler.js";
 import { scheduleTursoPushForJob } from "../tursoPushScheduler.js";
 import { shouldAutoUploadApp } from "../cloudUploadMode.js";
+import { listAppLinkedSyncKeys } from "../tursoLinkedSources.js";
 import {
   clearStaleDirtyFlagIfClean,
   hasUnpushedLocalDbChanges,
   listDbDirtySyncKeys,
+  listDbDirtySyncKeysForApp,
   loadTursoSyncState,
   markDbDirty as persistDbDirty,
 } from "../tursoSyncState.js";
@@ -352,7 +354,10 @@ export class SyncCoordinator {
 
   getStatus(appId?: string): SyncCoordinatorStatus {
     const paprDir = this.sync.getPaprDir();
-    const dbDirtySyncKeys = listDbDirtySyncKeys(paprDir);
+    const workspaceDirtyKeys = listDbDirtySyncKeys(paprDir);
+    const dbDirtySyncKeys = appId
+      ? listDbDirtySyncKeysForApp(listAppLinkedSyncKeys(appId, paprDir), paprDir)
+      : workspaceDirtyKeys;
     const gitDirtyAppIds: string[] = [];
 
     const appsDir = path.join(paprDir, "apps");
@@ -386,6 +391,12 @@ export class SyncCoordinator {
 
     const queuedFlushAppIds = this.flushQueue.map((item) => item.appId);
     const flushErrors = Object.fromEntries(this.flushErrors.entries());
+    const inFlightAppIds = [
+      ...new Set([
+        ...this.activeFlushes.keys(),
+        ...(this.currentFlushAppId ? [this.currentFlushAppId] : []),
+      ]),
+    ];
 
     return {
       activeFlush,
@@ -393,12 +404,9 @@ export class SyncCoordinator {
         ? gitDirtyAppIds.filter((id) => id === appId)
         : gitDirtyAppIds,
       dbDirtySyncKeys,
-      inFlightAppIds: [
-        ...new Set([
-          ...this.activeFlushes.keys(),
-          ...(this.currentFlushAppId ? [this.currentFlushAppId] : []),
-        ]),
-      ],
+      inFlightAppIds: appId
+        ? inFlightAppIds.filter((id) => id === appId)
+        : inFlightAppIds,
       queuedFlushAppIds: appId
         ? queuedFlushAppIds.filter((id) => id === appId)
         : queuedFlushAppIds,

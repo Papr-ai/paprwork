@@ -1567,8 +1567,14 @@
   padding: 8px 10px;
   border-radius: 8px;
   border: 1px solid var(--border-color);
-  background: var(--bg-primary);
+  background: var(--input-bg, var(--bg-secondary));
+  color: var(--text-primary);
   font-size: 12px;
+  font-family: inherit;
+}
+
+.share-sheet__cred-input::placeholder {
+  color: var(--text-tertiary);
 }
 
 .share-sheet__cred-input--wide {
@@ -1579,8 +1585,10 @@
   padding: 8px 10px;
   border-radius: 8px;
   border: 1px solid var(--border-color);
-  background: var(--bg-primary);
+  background: var(--input-bg, var(--bg-secondary));
+  color: var(--text-primary);
   font-size: 12px;
+  font-family: inherit;
 }
 
 .cloud-compat-badge {

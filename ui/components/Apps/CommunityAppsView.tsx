@@ -1003,8 +1003,8 @@ function CommunityAppCard({
     return (
       <svg
         className="community-card__orb-icon"
-        width="36"
-        height="36"
+        width="44"
+        height="44"
         viewBox="0 0 24 24"
         fill="none"
       >
@@ -1029,7 +1029,11 @@ function CommunityAppCard({
 
   return (
     <div className="community-card">
-      <div className="community-card__orb">{renderIcon()}</div>
+      <div className="community-card__preview">
+        <div className="community-card__orb">
+          <div className="community-card__orb-inner">{renderIcon()}</div>
+        </div>
+      </div>
 
       <div className="community-card__content">
         <div className="community-card__title-row">

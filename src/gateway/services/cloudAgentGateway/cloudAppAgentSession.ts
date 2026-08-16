@@ -8,6 +8,10 @@ import {
   DEFAULT_APP_AGENT_CHAT_TOOL_IDS,
   filterEmbeddedAppAgentToolIds,
 } from "../../../core/types/appAgentChat.js";
+import {
+  isWorkspaceChatJob,
+  workspaceChatSessionId,
+} from "../../../core/constants/workspaceChatJob.js";
 import type { CloudAgentRunRequest } from "./types.js";
 import { getJobsService } from "../JobsService.js";
 import { getAppService } from "../AppService.js";
@@ -21,6 +25,9 @@ export function isCloudAppAgentWarmSession(request: CloudAgentRunRequest): boole
 /** Stable chat id for warm app-agent turns; per-run id for one-shot cloud jobs. */
 export function resolveCloudAgentChatId(request: CloudAgentRunRequest): string {
   if (isCloudAppAgentWarmSession(request) && request.workspaceSessionId) {
+    if (isWorkspaceChatJob(request.jobId)) {
+      return workspaceChatSessionId(request.workspaceSessionId);
+    }
     return `app-agent:${request.workspaceSessionId}`;
   }
   return `job:${request.jobId}:${request.runId}`;

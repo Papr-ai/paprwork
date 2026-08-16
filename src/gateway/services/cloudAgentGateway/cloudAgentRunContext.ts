@@ -29,6 +29,7 @@ import {
   resolveCloudAppAgentStreamOverrides,
   resolveCloudUserDataPath,
 } from "./cloudAppAgentSession.js";
+import { resolveCloudWorkspaceChatStreamOverrides } from "./cloudWorkspaceChatSession.js";
 import { getJobsService } from "../JobsService.js";
 import {
   AgentJobExecutor,
@@ -467,16 +468,21 @@ export async function resolveCloudAgentJobStreamInput(
   const model = session.model ?? request.model;
 
   const appAgentOverrides = await resolveCloudAppAgentStreamOverrides(request);
-  const chatId = appAgentOverrides?.chatId ?? resolveCloudAgentChatId(request);
+  const workspaceChatOverrides =
+    appAgentOverrides == null
+      ? await resolveCloudWorkspaceChatStreamOverrides(request)
+      : null;
+  const streamOverrides = appAgentOverrides ?? workspaceChatOverrides;
+  const chatId = streamOverrides?.chatId ?? resolveCloudAgentChatId(request);
 
   return {
     jobId: session.jobId,
     runId: session.runId,
     prompt: session.prompt,
     chatId,
-    streamUserMessage: appAgentOverrides?.userMessage ?? session.prompt,
-    ...(appAgentOverrides?.systemPrompt
-      ? { systemPromptOverride: appAgentOverrides.systemPrompt }
+    streamUserMessage: streamOverrides?.userMessage ?? session.prompt,
+    ...(streamOverrides?.systemPrompt
+      ? { systemPromptOverride: streamOverrides.systemPrompt }
       : {}),
     provider,
     model,

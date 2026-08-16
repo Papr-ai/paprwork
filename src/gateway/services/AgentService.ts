@@ -232,6 +232,18 @@ export class AgentService {
     this.initialized = true;
   }
 
+  isInitialized(): boolean {
+    return this.initialized;
+  }
+
+  /** Main Pen system prompt — used by Papr Web workspace-chat cloud sessions. */
+  getDefaultSystemPrompt(): string {
+    if (!this.initialized) {
+      throw new Error("AgentService not initialized");
+    }
+    return this.systemPrompt;
+  }
+
   /**
    * Lazy-load API keys (only called on first message)
    * This ensures ZERO keychain popups on app startup

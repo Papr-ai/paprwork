@@ -1,17 +1,39 @@
 const Data = {
   APP_ID: 'bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c',
-  DEFAULT_JOB_ID: '2cafb2e9-696b-42db-98fa-5d605977123c',
-  getSrcId() {
-    const jobId = (typeof App !== 'undefined' && App.JOB_ID) ? App.JOB_ID : this.DEFAULT_JOB_ID;
+  LEGACY_JOB_ID: '2cafb2e9-696b-42db-98fa-5d605977123c',
+  _jobId: null,
+  async resolveJobId() {
+    if (this._jobId) return this._jobId;
+    if (typeof App !== 'undefined' && App.JOB_ID) {
+      this._jobId = App.JOB_ID;
+      return this._jobId;
+    }
+    try {
+      const r = await fetch('default-job-id.txt');
+      if (r.ok) {
+        const id = (await r.text()).trim();
+        if (id) {
+          this._jobId = id;
+          return id;
+        }
+      }
+    } catch (e) { /* bundled file added on install */ }
+    this._jobId = this.LEGACY_JOB_ID;
+    return this._jobId;
+  },
+  async getSrcId() {
+    const jobId = await this.resolveJobId();
     const short = jobId.slice(0, 8);
     return `${jobId}:Daily Brief Generator (${short})`;
   },
   async query(sql) {
     const r = await fetch('/api/db/query', { method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({appId:this.APP_ID, sourceId:this.getSrcId(), sql})
+      body: JSON.stringify({ appId: this.APP_ID, sql })
     });
-    return (await r.json())?.rows || [];
+    const data = await r.json();
+    if (!r.ok) throw new Error(data?.error || 'Database query failed');
+    return data?.rows || [];
   },
   async load(date) {
     try {

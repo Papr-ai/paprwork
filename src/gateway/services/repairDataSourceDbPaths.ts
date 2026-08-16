@@ -8,16 +8,9 @@
 
 import { existsSync } from "fs";
 import path from "path";
-import { getPaprBaseDir } from "../../core/utils/paprWorkspace.js";
-import { getPaprDataDir, getPaprRoot } from "../../core/utils/paprRoot.js";
+import { getPaprDataDir } from "../../core/utils/paprRoot.js";
 import type { AppDataSourcesFile, AppDataSource } from "./appDataSources.js";
-import {
-  ensureRegistryDbInWorkspace,
-  extractDatabaseSlugFromPath,
-  findRegistryDbInOrgNamespaces,
-  resolveReadableRegistryDbPath,
-  workspaceRegistryDbPath,
-} from "./resolveRegistryDbPath.js";
+import { resolveReadableRegistryDbPath } from "./resolveRegistryDbPath.js";
 
 export interface JobDatabasePathResolver {
   getJobDatabasePath(jobId: string): Promise<string | null> | string | null;
@@ -55,35 +48,12 @@ async function repairRegistryBackedSource(
   const registry = getDatabaseRegistryService();
   const record = source.dbId ? registry.getById(source.dbId) : undefined;
   const dataDir = getPaprDataDir();
-  const paprBase = getPaprBaseDir();
-  const activePaprHome = getPaprRoot();
 
-  let resolved = resolveReadableRegistryDbPath({
+  const resolved = resolveReadableRegistryDbPath({
     dbPath: source.dbPath,
     registryPath: record?.localPath,
     dataDir,
   });
-
-  if (!resolved && storedPath.length > 0) {
-    const slug = extractDatabaseSlugFromPath(storedPath);
-    if (slug) {
-      const targetPath = workspaceRegistryDbPath(slug, dataDir);
-      const siblingPath = await findRegistryDbInOrgNamespaces({
-        paprBase,
-        activePaprHome,
-        slug,
-      });
-      if (
-        siblingPath &&
-        (await ensureRegistryDbInWorkspace({
-          sourcePath: siblingPath,
-          targetPath,
-        }))
-      ) {
-        resolved = targetPath;
-      }
-    }
-  }
 
   if (!resolved || pathsEqual(resolved, storedPath)) {
     return source;

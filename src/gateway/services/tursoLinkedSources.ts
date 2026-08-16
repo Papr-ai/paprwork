@@ -16,6 +16,7 @@ import {
 import { resolveLinkedSourceDbPath } from "./portableDataSources.js";
 import { getDatabaseRegistryService } from "./DatabaseRegistryService.js";
 import { jobTursoDatabaseName } from "./tursoDatabaseNaming.js";
+import { isTursoStateDbPathInWorkspace } from "./tursoSyncState.js";
 
 export interface TursoLinkedSource {
   appId: string;
@@ -82,6 +83,10 @@ export async function discoverTursoLinkedSources(
         continue;
       }
 
+      if (!isTursoStateDbPathInWorkspace(resolvedDbPath)) {
+        continue;
+      }
+
       const linked: TursoLinkedSource = {
         appId: entry.name,
         ...(source.jobId ? { jobId: source.jobId } : {}),
@@ -113,6 +118,47 @@ function isSyncableSource(source: AppDataSource): boolean {
 
 export function linkedSourceSyncKey(source: TursoLinkedSource): string {
   return source.dbId ?? source.jobId ?? path.normalize(source.dbPath);
+}
+
+/** Sync keys (+ alternates) for Turso-linked sources declared by one app. */
+export function listAppLinkedSyncKeys(
+  appId: string,
+  paprDir: string,
+): Set<string> {
+  const keys = new Set<string>();
+  const dataSourcesPath = path.join(paprDir, "apps", appId, "data-sources.json");
+  let raw: string;
+  try {
+    raw = fs.readFileSync(dataSourcesPath, "utf8");
+  } catch {
+    return keys;
+  }
+
+  let config;
+  try {
+    config = parseDataSourcesFile(raw);
+  } catch {
+    return keys;
+  }
+
+  for (const source of config.sources) {
+    if (!isSyncableSource(source)) {
+      continue;
+    }
+    const syncKey = source.dbId ?? source.jobId;
+    if (!syncKey) {
+      continue;
+    }
+    keys.add(syncKey);
+    if (source.jobId && source.jobId !== syncKey) {
+      keys.add(source.jobId);
+    }
+    if (source.dbId && source.dbId !== syncKey) {
+      keys.add(source.dbId);
+    }
+  }
+
+  return keys;
 }
 
 /** Other sync-state keys for the same linked DB (registry dbId vs job UUID). */

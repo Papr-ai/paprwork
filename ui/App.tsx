@@ -42,8 +42,10 @@ import { shouldShowOnboarding } from "./utils/onboardingState";
 import {
   attachWorkspaceSwitchBroadcastListener,
   parseWorkspaceKeyFromSwitchEvent,
+  parseWorkspaceSwitchLabels,
   reloadUiForWorkspaceSwitch,
 } from "./lib/workspaceSwitchReload";
+import { WorkspaceSwitchOverlay } from "./components/Layout/WorkspaceSwitchOverlay";
 import { buildWorkspaceUiCacheKey } from "./lib/workspaceUiCache";
 import { useProfileStore } from "./stores/profileStore";
 
@@ -234,12 +236,14 @@ export function App() {
   useEffect(() => {
     attachWorkspaceSwitchBroadcastListener();
     const onWorkspaceChanged = (event: Event) => {
-      const targetWorkspaceKey = parseWorkspaceKeyFromSwitchEvent(
-        (event as CustomEvent).detail,
-      );
+      const detail = (event as CustomEvent).detail;
+      const targetWorkspaceKey = parseWorkspaceKeyFromSwitchEvent(detail);
+      const { organizationName, namespaceName } = parseWorkspaceSwitchLabels(detail);
       void reloadUiForWorkspaceSwitch({
         waitForGateway: true,
         targetWorkspaceKey,
+        organizationName,
+        namespaceName,
       });
     };
     window.addEventListener("papr-namespace-changed", onWorkspaceChanged);
@@ -254,6 +258,8 @@ export function App() {
   useEffect(() => {
     const handleLoginSuccess = async () => {
       let targetWorkspaceKey: string | undefined;
+      let organizationName: string | undefined;
+      let namespaceName: string | undefined;
       try {
         const workspace = await window.electronAPI.papr.getActiveWorkspace();
         if (workspace.success && workspace.pointer) {
@@ -261,6 +267,8 @@ export function App() {
             workspace.pointer.organizationId,
             workspace.pointer.namespaceId,
           );
+          organizationName = workspace.pointer.organizationName;
+          namespaceName = workspace.pointer.namespaceName;
         }
       } catch {
         /* noop */
@@ -268,6 +276,8 @@ export function App() {
       void reloadUiForWorkspaceSwitch({
         waitForGateway: true,
         targetWorkspaceKey,
+        organizationName,
+        namespaceName,
       });
     };
     window.electronAPI?.papr?.onLoginSuccess(handleLoginSuccess);
@@ -507,6 +517,7 @@ export function App() {
 
   return (
     <>
+      <WorkspaceSwitchOverlay />
       <AppLayout
         sidebar={<Sidebar onToggleCollapse={toggleSidebarCollapsed} />}
         sidebarCollapsed={sidebarCollapsed}

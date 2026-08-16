@@ -1,11 +1,11 @@
 {
   "version": 1,
   "enforceOnFailure": false,
-  "primarySource": "Daily Brief Generator (2cafb2e9)",
+  "primarySource": "Daily Brief Generator",
   "tables": {
     "briefs": {
       "requiredColumns": ["date", "brief_json"],
-      "writers": ["2cafb2e9-696b-42db-98fa-5d605977123c"],
+      "writers": [],
       "readers": ["bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c"]
     }
   }

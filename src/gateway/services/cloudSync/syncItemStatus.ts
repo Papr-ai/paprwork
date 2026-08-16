@@ -130,6 +130,11 @@ function resolveItemStatus(
     // Already on GitHub — stale background queue entries must not show as pending.
     return "synced";
   }
+  if (trackedInGit?.has(relativePath) && !changed) {
+    // Tracked in git with a clean working tree — synced even if sync-state was never written
+    // (common after workspace switch, state reset, or while another folder uploads).
+    return "synced";
+  }
   if (queuedPaths.has(relativePath)) {
     return "pending";
   }

@@ -77,6 +77,14 @@ import {
   type AssignAppToWorkspaceResult,
 } from "./appWorkspaceAssignment.js";
 import { resolveBundledResourcesDir } from "../../core/utils/bundledResourcesPath.js";
+import {
+  buildDailyBriefDataSource,
+  DEFAULT_HOME_APP_ID,
+  findHomeDailyBriefJobIdInRegistry,
+  resolveOrAllocateHomeDailyBriefJobId,
+  type BundledDefaultJobDef,
+} from "./defaultHomeBundle.js";
+import type { JobRecord } from "./jobs/types.js";
 
 export { CopyAppError, type CopyAppToNamespaceResult, AppWorkspaceAssignError, type AssignAppToWorkspaceResult };
 
@@ -85,8 +93,7 @@ export type { AppDataSource, AppDataSourceRole, AppDataSourcesFile };
 /** Written by rebuildIndexIfCorrupted when metadata.json was not read (legacy). */
 export const RECOVERED_INDEX_DESCRIPTION = "Recovered app (index was corrupted)";
 
-/** Bundled home dashboard — stable id across installs (see default-apps/home-dashboard/app-id.txt). */
-export const DEFAULT_HOME_APP_ID = "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c";
+export { DEFAULT_HOME_APP_ID };
 
 // ESM compatibility: get __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -542,7 +549,9 @@ export class AppService {
    * JobsService has been fully initialized.
    */
   async installPendingDefaultJobs(): Promise<void> {
-    if (this.pendingDefaultJobs.length === 0) return;
+    if (this.pendingDefaultJobs.length === 0) {
+      return;
+    }
 
     const pending = [...this.pendingDefaultJobs];
     this.pendingDefaultJobs = [];
@@ -554,30 +563,44 @@ export class AppService {
         console.warn(`[AppService] Failed to install default job for app ${appId}:`, err);
       }
     }
+  }
 
+  /**
+   * Idempotent startup repair for the bundled Home app in the active namespace.
+   * Rewrites foreign dbPath pointers and persists default-job-id.txt — no file copies.
+   */
+  async repairHomeAndWorkspaceOnStartup(): Promise<void> {
     try {
       const { getJobsService } = await import("./JobsService.js");
+      const jobsService = getJobsService();
+      const allJobs = await jobsService.listJobs();
+
       const { repairDefaultHomeAppLinkedSources } = await import(
         "./defaultHomeAppRepair.js"
       );
-      const jobsService = getJobsService();
-      const repair = await repairDefaultHomeAppLinkedSources({
+      const homeRepair = await repairDefaultHomeAppLinkedSources({
         appsDir: this.appsDir,
+        workspaceRoot: getPaprRoot(),
         jobExists: (jobId) => jobsService.hasJob(jobId),
         resolveJobDbPath: (jobId) =>
           path.join(jobsService.getJobsRootPath(), jobId, "data", "data.db"),
+        findLinkedDailyBriefJobId: () =>
+          findHomeDailyBriefJobIdInRegistry(allJobs),
       });
-      if (
-        repair.prunedSources > 0 ||
-        repair.schemaRepaired > 0 ||
-        repair.dbPathsUpdated > 0
-      ) {
+
+      const totalRepairs =
+        homeRepair.prunedSources +
+        homeRepair.schemaRepaired +
+        homeRepair.dbPathsUpdated +
+        homeRepair.jobIdPersisted;
+
+      if (totalRepairs > 0) {
         console.log(
-          `[AppService] Repaired Home app data-sources: pruned=${repair.prunedSources} schema=${repair.schemaRepaired} dbPaths=${repair.dbPathsUpdated}`,
+          `[AppService] Startup home repair: dbPaths=${homeRepair.dbPathsUpdated} jobId=${homeRepair.jobIdPersisted} pruned=${homeRepair.prunedSources} schema=${homeRepair.schemaRepaired}`,
         );
       }
     } catch (err) {
-      console.warn("[AppService] Home app data-source repair failed:", err);
+      console.warn("[AppService] Startup home repair failed:", err);
     }
   }
 
@@ -588,24 +611,31 @@ export class AppService {
   ): Promise<void> {
     const jobDefPath = path.join(sourceDir, "default-job.json");
     const jobDefContent = await fs.readFile(jobDefPath, "utf-8");
-    const jobDef = JSON.parse(jobDefContent) as {
-      id: string;
-      name: string;
-      type: string;
-      command?: string;
-      schedule?: Record<string, unknown>;
-      retries?: Record<string, unknown>;
-      outputMode?: string;
-      memoryPolicy?: string;
-    };
+    const jobDef = JSON.parse(jobDefContent) as BundledDefaultJobDef;
 
     const { getJobsService } = await import("./JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
 
+    const allJobs = await jobsService.listJobs();
+    const jobId = await resolveOrAllocateHomeDailyBriefJobId({
+      appDir: targetDir,
+      jobExists: (id) => jobsService.hasJob(id),
+      findLinkedJobId: () => findHomeDailyBriefJobIdInRegistry(allJobs),
+    });
+
     const { installed, dbPath } = await jobsService.installDefaultJob(
       {
-        ...(jobDef as Parameters<typeof jobsService.installDefaultJob>[0]),
+        id: jobId,
+        name: jobDef.name,
+        type: jobDef.type,
+        command: jobDef.command,
+        schedule: jobDef.schedule,
+        retries: jobDef.retries,
+        outputMode: jobDef.outputMode as JobRecord["outputMode"] | undefined,
+        memoryPolicy: jobDef.memoryPolicy as JobRecord["memoryPolicy"] | undefined,
+        provider: jobDef.provider,
+        model: jobDef.model,
         appIds: [appId],
       },
       [
@@ -617,34 +647,55 @@ export class AppService {
       ],
     );
 
-    // Update data-sources.json with the resolved dbPath
     const dataSourcesPath = path.join(targetDir, "data-sources.json");
     try {
       const dsContent = await fs.readFile(dataSourcesPath, "utf-8");
       const config = parseDataSourcesFile(dsContent);
+      const nextSource = buildDailyBriefDataSource(jobId, dbPath);
 
       let updated = false;
-      for (const ds of config.sources) {
-        if (ds.jobId === jobDef.id && (!ds.dbPath || ds.dbPath === "")) {
-          ds.dbPath = dbPath;
-          updated = true;
+      const kept = (config.sources ?? []).filter((ds) => {
+        if (!ds.tables?.includes("briefs")) {
+          return true;
         }
+        if (ds.jobId && ds.jobId !== jobId) {
+          updated = true;
+          return false;
+        }
+        return true;
+      });
+
+      const briefIndex = kept.findIndex(
+        (ds) => ds.jobId === jobId || ds.tables?.includes("briefs"),
+      );
+      if (briefIndex >= 0) {
+        kept[briefIndex] = {
+          ...kept[briefIndex],
+          ...nextSource,
+          dbPath,
+        };
+        updated = true;
+      } else {
+        kept.unshift(nextSource);
+        updated = true;
       }
 
       if (updated) {
         await fs.writeFile(
           dataSourcesPath,
-          serializeDataSourcesFile(config),
+          serializeDataSourcesFile({ ...config, sources: kept }),
           "utf8",
         );
-        console.log(`[AppService] Linked data-source dbPath for app ${appId} → ${dbPath}`);
+        console.log(
+          `[AppService] Linked Daily Brief data-source for app ${appId} → ${dbPath}`,
+        );
       }
     } catch (dsErr) {
       console.warn(`[AppService] Could not update data-sources.json for ${appId}:`, dsErr);
     }
 
     if (installed) {
-      console.log(`[AppService] Installed default job ${jobDef.id} for app ${appId}`);
+      console.log(`[AppService] Installed default job ${jobId} for app ${appId}`);
     }
   }
 
@@ -3529,47 +3580,64 @@ export class AppService {
     const { getDatabaseRegistryService } = await import(
       "./DatabaseRegistryService.js"
     );
-    const {
-      extractDatabaseSlugFromPath,
-      resolveReadableRegistryDbPath,
-      workspaceRegistryDbPath,
-    } = await import("./resolveRegistryDbPath.js");
+    const { isReadableDbFile } = await import("./resolveRegistryDbPath.js");
+    const { resolveLinkedSourceDbPath } = await import(
+      "./portableDataSources.js"
+    );
     const registry = getDatabaseRegistryService();
-    const dataDir = getPaprDataDir();
     const jobsRoot = getPaprJobsRoot();
+    const appDir = path.join(this.appsDir, appId);
+
+    try {
+      const linkedRaw = await fs.readFile(
+        path.join(appDir, "linked-databases.json"),
+        "utf8",
+      );
+      registry.mergeFromRegistryFile(linkedRaw);
+    } catch {
+      /* app may predate linked-databases.json */
+    }
+
+    const sources = await Promise.all(
+      workspaceConfig.sources.map(async (source) => {
+        const registryRecord = source.dbId
+          ? registry.getById(source.dbId)
+          : undefined;
+        const resolvedPath = await resolveLinkedSourceDbPath({
+          dbPath: source.dbPath,
+          dbId: source.dbId,
+          jobId: source.jobId,
+          jobsRoot,
+          registryLabel: registryRecord?.label ?? source.alias,
+        });
+
+        if (!resolvedPath?.trim()) {
+          return source;
+        }
+
+        if (source.dbId && isReadableDbFile(resolvedPath)) {
+          const existing = registry.getById(source.dbId);
+          if (existing && !isReadableDbFile(existing.localPath)) {
+            await registry.updateLocalPath(source.dbId, resolvedPath);
+          } else if (!existing) {
+            await registry.register({
+              dbId: source.dbId,
+              localPath: resolvedPath,
+              label: registryRecord?.label ?? source.alias,
+              tursoShortName: registryRecord?.tursoShortName,
+            });
+          }
+        }
+
+        return source.dbPath?.trim() === resolvedPath
+          ? source
+          : { ...source, dbPath: resolvedPath };
+      }),
+    );
 
     return {
       ...workspaceConfig,
-      sources: workspaceConfig.sources.map((source) => {
-        const record = source.dbId ? registry.getById(source.dbId) : undefined;
-        const resolved = resolveReadableRegistryDbPath({
-          dbPath: source.dbPath,
-          registryPath: record?.localPath,
-          dataDir,
-        });
-        if (resolved) {
-          return resolved !== source.dbPath ? { ...source, dbPath: resolved } : source;
-        }
-
-        if (source.jobId?.trim()) {
-          const jobPath = path.join(jobsRoot, source.jobId, "data", "data.db");
-          return source.dbPath?.trim() === jobPath
-            ? source
-            : { ...source, dbPath: jobPath };
-        }
-
-        const slug = extractDatabaseSlugFromPath(
-          source.dbPath?.trim() || record?.localPath?.trim() || "",
-        );
-        if (slug) {
-          const canonical = workspaceRegistryDbPath(slug, dataDir);
-          return source.dbPath?.trim() === canonical
-            ? source
-            : { ...source, dbPath: canonical };
-        }
-
-        return source;
-      }),
+      sources,
     };
   }
 

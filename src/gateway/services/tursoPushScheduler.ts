@@ -4,10 +4,15 @@
 
 import { getPaprAppsRoot } from "../../core/utils/paprRoot.js";
 import { discoverTursoLinkedSources, findLinkedSourceForJob, linkedSourceSyncKey } from "./tursoLinkedSources.js";
+import {
+  canPerformWorkspaceDbWrite,
+  getWorkspaceWriteGeneration,
+} from "./workspaceWriteGuard.js";
 import { getTursoSyncBridge, type TursoSyncBridge } from "./TursoSyncBridge.js";
 import {
   clearDirtyAfterPush,
   isJobDbQuarantined,
+  isTursoStateDbPathInWorkspace,
   loadTursoSyncState,
   recordTursoPushQuarantine,
   recordTursoPushSuccess,
@@ -319,6 +324,18 @@ async function executePushForJob(
 
   const resolvedSyncKey = linkedSourceSyncKey(linked);
 
+  if (
+    !canPerformWorkspaceDbWrite(
+      getWorkspaceWriteGeneration(),
+      linked.dbPath,
+      `turso push ${resolvedSyncKey}`,
+    )
+  ) {
+    clearDirtyTracking(syncKey);
+    clearPushSchedulerJob(syncKey, linked.dbPath, resolvedSyncKey);
+    return;
+  }
+
   if (!(await bridge.linkedSourceNeedsPush(linked))) {
     clearPushSchedulerJob(syncKey, linked.dbPath, resolvedSyncKey);
     return;
@@ -507,6 +524,14 @@ export function scheduleTursoPushForJob(
     return;
   }
 
+  const syncEntry = syncState.jobs[jobId];
+  if (
+    syncEntry?.dbPath &&
+    !isTursoStateDbPathInWorkspace(syncEntry.dbPath)
+  ) {
+    return;
+  }
+
   if (trigger !== "manual" && isInPushFailureBackoff(jobId)) {
     return;
   }
@@ -604,6 +629,15 @@ export async function pushDirtyLinkedJobsOnStartup(
     return;
   }
 
+  const { getPaprRoot } = await import("../../core/utils/paprRoot.js");
+  const { pruneTursoSyncStateForWorkspace } = await import("./tursoSyncState.js");
+  const pruned = pruneTursoSyncStateForWorkspace(getPaprRoot());
+  if (pruned > 0) {
+    console.log(
+      `[TursoPushScheduler] Pruned ${pruned} stale sync-state row(s) for active workspace`,
+    );
+  }
+
   const root = appsRootDir ?? bridge.getAppsRootDir() ?? defaultAppsRoot();
   await enqueueDirtyLinkedJobs(root, "startup");
 }
@@ -665,9 +699,8 @@ export async function awaitTursoPushQueueForTests(): Promise<void> {
   throw new Error("Turso push queue did not drain in time");
 }
 
-/** Test hook — flush queue state between tests. */
-export function resetTursoPushQueueForTests(): void {
-  resetTursoPushSchedulerStatsForTests();
+/** Drop debounced/queued pushes (e.g. before org/namespace workspace switch). */
+export function cancelAllScheduledTursoPushes(reason = "workspace switch"): void {
   for (const timer of jobTimers.values()) {
     clearTimeout(timer);
   }
@@ -683,12 +716,19 @@ export function resetTursoPushQueueForTests(): void {
   }
   pushQueue.length = 0;
   queuedJobIds.clear();
-  pushInFlightSyncKeys.clear();
   pushFailureBackoffUntilMs.clear();
   lastMaxWaitLogAtMs.clear();
   queueProcessing = false;
   rateLimitUntilMs = 0;
   rateLimitBackoffMs = DEFAULT_RATE_LIMIT_BACKOFF_MS;
+  console.log(`[TursoPushScheduler] Cancelled scheduled Turso pushes (${reason})`);
+}
+
+/** Test hook — flush queue state between tests. */
+export function resetTursoPushQueueForTests(): void {
+  resetTursoPushSchedulerStatsForTests();
+  cancelAllScheduledTursoPushes("test reset");
+  pushInFlightSyncKeys.clear();
 }
 
 /** Test hook — inspect max-wait state. */

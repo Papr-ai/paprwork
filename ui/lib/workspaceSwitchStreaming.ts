@@ -1,10 +1,17 @@
 /**
- * Detect active agent streams before org/namespace workspace switch (in-memory only).
+ * Detect active agent streams and running jobs before org/namespace workspace switch.
  */
 
 import { activeStreamRequests, untrackActiveStream } from "./agentStreamRecovery";
 import { useChatStore } from "../stores/chatStore";
 import { gateway } from "../src/lib/gateway";
+
+export interface ActiveJobForSwitch {
+  id: string;
+  name: string;
+  type: string;
+  status: string;
+}
 
 /** Chat ids with an in-flight or UI-visible agent stream. */
 export function getActiveStreamChatIds(): string[] {
@@ -42,6 +49,17 @@ export function hasActiveAgentStreams(): boolean {
   return getActiveStreamChatIds().length > 0;
 }
 
+export async function fetchActiveJobsForWorkspaceSwitch(): Promise<
+  ActiveJobForSwitch[]
+> {
+  const response = await gateway.send("jobs:active-list", {});
+  if (!response.success || !response.data) {
+    return [];
+  }
+  const data = response.data as { jobs?: ActiveJobForSwitch[] };
+  return Array.isArray(data.jobs) ? data.jobs : [];
+}
+
 /** Stop gateway streams and clear local streaming UI for the given chats. */
 export async function abortActiveAgentStreams(
   chatIds: string[] = getActiveStreamChatIds(),
@@ -73,28 +91,81 @@ export async function abortActiveAgentStreams(
   }
 }
 
+export async function stopActiveJobsForWorkspaceSwitch(): Promise<void> {
+  await gateway.send("jobs:stop-all", {
+    reason: "Job stopped — workspace switch",
+  });
+}
+
+function formatActiveJobsPrompt(jobs: ActiveJobForSwitch[]): string {
+  if (jobs.length === 0) {
+    return "";
+  }
+  if (jobs.length === 1) {
+    return `1 job is still running (${jobs[0].name})`;
+  }
+  const preview = jobs
+    .slice(0, 3)
+    .map((job) => job.name)
+    .join(", ");
+  const suffix = jobs.length > 3 ? ` and ${jobs.length - 3} more` : "";
+  return `${jobs.length} jobs are still running (${preview}${suffix})`;
+}
+
+function buildWorkspaceSwitchConfirmMessage(
+  streamCount: number,
+  activeJobs: ActiveJobForSwitch[],
+): string {
+  const parts: string[] = [];
+
+  if (streamCount > 0) {
+    parts.push(
+      streamCount === 1
+        ? "An agent is still working in your chats"
+        : `${streamCount} agents are still working in your chats`,
+    );
+  }
+
+  const jobPrompt = formatActiveJobsPrompt(activeJobs);
+  if (jobPrompt) {
+    parts.push(jobPrompt);
+  }
+
+  return (
+    `${parts.join(".\n")}.\n\n` +
+    "Switching workspace will stop active responses and running jobs.\n\n" +
+    "Switch anyway?"
+  );
+}
+
 /**
- * If streams are active, confirm with the user and abort them before switching.
+ * If streams or jobs are active, confirm with the user and stop them before switching.
  * Returns true when switching should proceed.
  */
 export async function confirmAndAbortStreamsForWorkspaceSwitch(): Promise<boolean> {
-  const ids = getActiveStreamChatIds();
-  if (ids.length === 0) {
+  const [streamIds, activeJobs] = await Promise.all([
+    Promise.resolve(getActiveStreamChatIds()),
+    fetchActiveJobsForWorkspaceSwitch(),
+  ]);
+
+  if (streamIds.length === 0 && activeJobs.length === 0) {
     return true;
   }
 
-  const label =
-    ids.length === 1
-      ? "An agent is still working"
-      : `${ids.length} agents are still working`;
-
   const proceed = window.confirm(
-    `${label} in your chats. Switching workspace will stop active responses.\n\nSwitch anyway?`,
+    buildWorkspaceSwitchConfirmMessage(streamIds.length, activeJobs),
   );
   if (!proceed) {
     return false;
   }
 
-  await abortActiveAgentStreams(ids);
+  await Promise.all([
+    streamIds.length > 0
+      ? abortActiveAgentStreams(streamIds)
+      : Promise.resolve(),
+    activeJobs.length > 0
+      ? stopActiveJobsForWorkspaceSwitch()
+      : Promise.resolve(),
+  ]);
   return true;
 }

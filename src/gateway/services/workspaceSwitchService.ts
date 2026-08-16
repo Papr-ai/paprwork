@@ -34,6 +34,7 @@ import {
   initializeCloudSyncService,
   resetCloudSyncServiceForWorkspaceSwitch,
 } from "./CloudSyncService.js";
+import { bumpWorkspaceWriteGeneration } from "./workspaceWriteGuard.js";
 import {
   initializePlanService,
   resetPlanServiceForWorkspaceSwitch,
@@ -185,6 +186,7 @@ async function abortAllActiveAgentStreams(): Promise<void> {
 async function resetPathBoundSingletons(): Promise<void> {
   await abortAllActiveAgentStreams();
   await yieldEventLoop();
+  await pauseWorkspaceSwitchWriters();
 
   const { clearWikiHomeRemoteCache } = await import(
     "./KnowledgeGraphWikiService.js"
@@ -337,6 +339,50 @@ async function restartCloudSyncIfEnabled(): Promise<void> {
   await cloudSync.initialize();
 }
 
+/** Stop path-bound writers before PAPR_HOME changes (avoids cross-workspace leaks). */
+async function pauseWorkspaceSwitchWriters(): Promise<void> {
+  const { stopTursoLinkedDbWatcher } = await import("./TursoLinkedDbWatcher.js");
+  await stopTursoLinkedDbWatcher();
+
+  const { getJobsScheduler } = await import("./JobsScheduler.js");
+  getJobsScheduler().stop();
+
+  if (getCloudSyncService()) {
+    await resetCloudSyncServiceForWorkspaceSwitch();
+  } else {
+    const { resetSyncCoordinatorForWorkspaceSwitch } = await import(
+      "./cloudSync/SyncCoordinator.js"
+    );
+    await resetSyncCoordinatorForWorkspaceSwitch();
+  }
+
+  const { cancelAllScheduledTursoPushes } = await import("./tursoPushScheduler.js");
+  cancelAllScheduledTursoPushes();
+
+  const { resetCloudAppPublishServiceForWorkspaceSwitch } = await import(
+    "./CloudAppPublishService.js"
+  );
+  resetCloudAppPublishServiceForWorkspaceSwitch();
+}
+
+const WORKSPACE_SWITCH_JOB_STOP_REASON =
+  "Job stopped — workspace switch in progress";
+
+/** Stop in-flight jobs while the active workspace pointer still targets the outgoing namespace. */
+async function stopActiveJobsBeforeWorkspaceSwitch(): Promise<void> {
+  const { getJobsService } = await import("./JobsService.js");
+  const jobsService = getJobsService();
+  const active = jobsService.listActiveJobs();
+  if (active.length === 0) {
+    return;
+  }
+
+  console.log(
+    `[WorkspaceSwitch] Stopping ${active.length} active job(s) before switch`,
+  );
+  await jobsService.stopAllJobs(WORKSPACE_SWITCH_JOB_STOP_REASON);
+}
+
 async function refreshTursoForWorkspaceSwitch(): Promise<void> {
   if (process.env.TURSO_SYNC_ENABLED === "false") {
     return;
@@ -451,6 +497,9 @@ async function finishWorkspaceSwitchInBackground(
 
     getCustomKeysService().invalidateCache();
 
+    const { getJobsScheduler } = await import("./JobsScheduler.js");
+    getJobsScheduler().start();
+
     broadcast({ type: "app:list-updated" });
 
     setSwitchStatus({ active: false, phase: "complete" });
@@ -494,7 +543,24 @@ export async function switchActiveWorkspace(
 
   try {
     await cancelActiveAgentStreamsQuick();
+    await stopActiveJobsBeforeWorkspaceSwitch();
+    bumpWorkspaceWriteGeneration("workspace switch started");
+    await pauseWorkspaceSwitchWriters();
     const pointer = await activateWorkspacePointer(input);
+
+    if (process.env.TURSO_SYNC_ENABLED !== "false") {
+      const { getPaprRoot } = await import("../../core/utils/paprRoot.js");
+      const { pruneTursoSyncStateForWorkspace } = await import(
+        "./tursoSyncState.js"
+      );
+      const pruned = pruneTursoSyncStateForWorkspace(getPaprRoot());
+      if (pruned > 0) {
+        console.log(
+          `[WorkspaceSwitch] Pruned ${pruned} stale Turso sync-state row(s) for active workspace`,
+        );
+      }
+    }
+
     // Point tab SQLite at the new workspace before renderer reload can load tabs.
     resetAppStateStorageSingleton();
     if (input.paprApiKey) {

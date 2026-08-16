@@ -6,6 +6,11 @@ import * as fs from "fs";
 import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import * as path from "path";
 import { cloudApiFetch } from "../utils/cloudApiClient.js";
+import {
+  canPerformWorkspaceWrite,
+  getWorkspaceWriteGeneration,
+  WorkspaceWriteBlockedError,
+} from "./workspaceWriteGuard.js";
 import { isCloudAutoPublishGloballyEnabled } from "./cloudAutoPublishSettings.js";
 import {
   getAppPublishPrefs,
@@ -236,11 +241,25 @@ function parsePublishConfig(
 }
 
 export class CloudAppPublishService {
-  private readonly paprDir: string;
+  private readonly boundPaprDir: string;
+  private readonly boundWriteGeneration: number;
   private autoPublishInFlight = false;
 
   constructor(paprDir?: string) {
-    this.paprDir = paprDir ?? getPaprRoot();
+    this.boundPaprDir = paprDir ?? getPaprRoot();
+    this.boundWriteGeneration = getWorkspaceWriteGeneration();
+  }
+
+  private get paprDir(): string {
+    return this.boundPaprDir;
+  }
+
+  private isWriteAllowed(context: string): boolean {
+    return canPerformWorkspaceWrite(
+      this.boundWriteGeneration,
+      this.paprDir,
+      context,
+    );
   }
 
   private async fetchMemoryPublishResponse(
@@ -362,6 +381,9 @@ export class CloudAppPublishService {
       slug?: string;
     },
   ): Promise<CloudPublishConfig> {
+    if (!this.isWriteAllowed(`publishApp ${appId}`)) {
+      throw new WorkspaceWriteBlockedError(`Blocked publishApp ${appId}`);
+    }
     const prefs = getAppPublishPrefs(appId, this.paprDir);
     const catalogMeta = loadAppCatalogMeta(this.paprDir);
     const appMeta = catalogMeta.get(appId);
@@ -486,6 +508,11 @@ export class CloudAppPublishService {
 
     let response: Response | null = null;
     let lastBody = "";
+    if (!this.isWriteAllowed(`publishApp ${appId} memory API`)) {
+      throw new WorkspaceWriteBlockedError(
+        `Blocked publishApp ${appId} memory API`,
+      );
+    }
     for (const slug of slugCandidates) {
       response = await cloudApiFetch("/v1/cloud/apps/publish", {
         method: "POST",
@@ -792,6 +819,9 @@ export class CloudAppPublishService {
     if (!isCloudAutoPublishGloballyEnabled()) {
       return;
     }
+    if (!this.isWriteAllowed("auto-publish scan")) {
+      return;
+    }
     if (this.autoPublishInFlight) {
       return;
     }
@@ -850,6 +880,9 @@ export class CloudAppPublishService {
         }
 
         try {
+          if (!this.isWriteAllowed(`auto-publish ${appId}`)) {
+            continue;
+          }
           const published = await this.publishApp(appId);
           setAppPublishPrefs(
             appId,
@@ -895,4 +928,9 @@ export function getCloudAppPublishService(): CloudAppPublishService {
     instance = new CloudAppPublishService();
   }
   return instance;
+}
+
+/** Drop stale publish client bound to the previous workspace. */
+export function resetCloudAppPublishServiceForWorkspaceSwitch(): void {
+  instance = null;
 }

@@ -280,7 +280,7 @@ export class VaultSyncService {
 
       if (missingLocally.length > 0) {
         console.log(
-          `[VaultSync] Found ${missingLocally.length} vault keys not in local keychain: ${missingLocally.join(", ")}`,
+          `[VaultSync] Found ${missingLocally.length} vault key(s) not in local keychain (names omitted from logs)`,
         );
         // We log but don't auto-add — values aren't available from list endpoint.
         // The user would need to re-add them or we'd need a resolve endpoint for pull.

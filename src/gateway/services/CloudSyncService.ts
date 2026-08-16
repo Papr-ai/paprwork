@@ -44,6 +44,10 @@ import {
 import { cloudApiFetch, waitForPaprApiKey } from "../utils/cloudApiClient.js";
 import type { DesktopHeartbeatResponse } from "../types/cloudRuntime.js";
 import { getPaprRoot } from "../../core/utils/paprRoot.js";
+import {
+  canPerformWorkspaceWrite,
+  getWorkspaceWriteGeneration,
+} from "./workspaceWriteGuard.js";
 import { buildCloudReposRequestBody } from "../../core/utils/cloudReposScope.js";
 
 const INSTANT_DIRS = ["workspace", "data"];
@@ -89,6 +93,7 @@ const GITIGNORE_CONTENT = `# Runtime — rebuilt per environment
 **/*.bak.*
 **/*.backup.*
 **/*.backup-*
+**/*.sync-backup-*
 **/*.corrupt-*
 **/*corrupt-backup*
 
@@ -137,6 +142,8 @@ interface SyncState {
   queueTotal: number;
   /** True while auto-republish runs after git push (publish catalog / share links). */
   cloudPublishing: boolean;
+  /** App ids currently being republished (subset of cloudPublishing). */
+  cloudPublishingAppIds: string[];
   /** Remote git has commits local lacks — owner must review before merge (§6). */
   gitUpdatesAvailable: boolean;
   gitUpdatesSummary: string | null;
@@ -169,13 +176,30 @@ export class CloudSyncService {
   private repoIdentityChanged = false;
   /** Prevents duplicate runBackgroundInit / heartbeat timers on repeated initialize(). */
   private backgroundInitStarted = false;
+  /** Set on stop() — aborts in-flight queue processing and post-sync hooks. */
+  private stopped = false;
+  /** Workspace this instance was created for (never follows getPaprRoot() mid-flight). */
+  private readonly boundPaprDir: string;
+  /** Generation when this instance was created — stale after workspace switch. */
+  private readonly boundWriteGeneration: number;
   private syncQueue: QueueItem[] = [];
   private queueTotal = 0;
   private stateManager: SyncStateManager;
   private readonly gitRunner = new GitRunner();
 
   private get paprDir(): string {
-    return getPaprRoot();
+    return this.boundPaprDir;
+  }
+
+  private isWriteContextValid(context: string): boolean {
+    if (this.stopped) {
+      return false;
+    }
+    return canPerformWorkspaceWrite(
+      this.boundWriteGeneration,
+      this.paprDir,
+      context,
+    );
   }
 
   private state: SyncState = {
@@ -186,6 +210,7 @@ export class CloudSyncService {
     queueRemaining: 0,
     queueTotal: 0,
     cloudPublishing: false,
+    cloudPublishingAppIds: [],
     gitUpdatesAvailable: false,
     gitUpdatesSummary: null,
     gitRemoteChangedPaths: null,
@@ -215,7 +240,9 @@ export class CloudSyncService {
   }) {
     this.pushDebounceMs = opts?.pushDebounceMs ?? 15_000;
     this.queueIntervalMs = opts?.queueIntervalMs ?? 5_000;
-    this.stateManager = new SyncStateManager(this.paprDir);
+    this.boundPaprDir = getPaprRoot();
+    this.boundWriteGeneration = getWorkspaceWriteGeneration();
+    this.stateManager = new SyncStateManager(this.boundPaprDir);
   }
 
   getState(): SyncState {
@@ -225,6 +252,10 @@ export class CloudSyncService {
       queueTotal: this.queueTotal,
       manualFlushErrors: Object.fromEntries(this.manualFlushErrorMap.entries()),
     };
+  }
+
+  isCloudPublishingForApp(appId: string): boolean {
+    return this.state.cloudPublishingAppIds.includes(appId);
   }
 
   recordManualFlushError(appId: string, error: Error): void {
@@ -540,6 +571,10 @@ export class CloudSyncService {
 
   async stop(): Promise<void> {
     console.log("[CloudSync] Stopping...");
+    this.stopped = true;
+    this.syncQueue = [];
+    this.queueTotal = 0;
+    this.lastFinalizedAppIds = [];
     if (this.pushTimer) { clearTimeout(this.pushTimer); this.pushTimer = null; }
     if (this.queueTimer) { clearTimeout(this.queueTimer); this.queueTimer = null; }
     if (this.pullTimer) { clearTimeout(this.pullTimer); this.pullTimer = null; }
@@ -568,6 +603,9 @@ export class CloudSyncService {
     jobId?: string;
     skipPostSyncHooks?: boolean;
   }): Promise<PushGitScopedResult> {
+    if (this.stopped || !this.isWriteContextValid("pushGitNow")) {
+      return { pushedPaths: [], skippedPaths: [], scope: "workspace" };
+    }
     if (this.pushTimer) {
       clearTimeout(this.pushTimer);
       this.pushTimer = null;
@@ -1149,6 +1187,10 @@ export class CloudSyncService {
   }
 
   private processNextInQueue(): void {
+    if (this.stopped || !this.isWriteContextValid("cloud sync queue")) {
+      this.syncQueue = [];
+      return;
+    }
     if (this.syncQueue.length === 0) {
       void this.finishQueueProcessing().catch((err: Error) => {
         console.warn("[CloudSync] Queue finalize failed:", err.message.slice(0, 200));
@@ -1170,6 +1212,10 @@ export class CloudSyncService {
   }
 
   private async processQueueItem(): Promise<void> {
+    if (this.stopped || !this.isWriteContextValid("cloud sync queue item")) {
+      this.syncQueue = [];
+      return;
+    }
     if (this.syncQueue.length === 0) {
       this.processNextInQueue();
       return;
@@ -1299,6 +1345,13 @@ export class CloudSyncService {
   }
 
   private async finishQueueProcessing(skipPostSyncHooks?: boolean): Promise<void> {
+    if (this.stopped || !this.isWriteContextValid("cloud sync finalize")) {
+      console.warn(
+        "[CloudSync] Skipping queue finalize — workspace switch or stale sync instance",
+      );
+      this.syncQueue = [];
+      return;
+    }
     console.log("[CloudSync] Queue complete — syncing deletions...");
     this.state.status = "syncing";
     await this.ensureRemoteCaughtUp();
@@ -1687,6 +1740,9 @@ export class CloudSyncService {
     paths: readonly string[],
     label: string,
   ): Promise<boolean> {
+    if (this.stopped || !this.isWriteContextValid(label)) {
+      return false;
+    }
     if (paths.length === 0) {
       return false;
     }
@@ -1808,6 +1864,12 @@ export class CloudSyncService {
   private async runPostSyncHooks(options?: {
     skipTursoReschedule?: boolean;
   }): Promise<void> {
+    if (this.stopped || !this.isWriteContextValid("cloud sync post-hooks")) {
+      console.warn(
+        "[CloudSync] Skipping post-sync hooks — workspace switch or stale sync instance",
+      );
+      return;
+    }
     const syncedAppIds = [...this.lastFinalizedAppIds];
     this.lastFinalizedAppIds = [];
 
@@ -1852,11 +1914,19 @@ export class CloudSyncService {
       }
     }
 
-    this.state = { ...this.state, cloudPublishing: true };
+    this.state = {
+      ...this.state,
+      cloudPublishing: true,
+      cloudPublishingAppIds: [...webReadyAppIds],
+    };
     try {
       await this.tryAutoPublishCloudLinks(webReadyAppIds);
     } finally {
-      this.state = { ...this.state, cloudPublishing: false };
+      this.state = {
+        ...this.state,
+        cloudPublishing: false,
+        cloudPublishingAppIds: [],
+      };
     }
 
     if (webReadyAppIds.length > 0) {
@@ -2433,6 +2503,8 @@ export class CloudSyncService {
       "# Job runtime — local + memory heartbeat only, never git",
       "Jobs/*/job.runtime.json",
       "data/job-runs.jsonl",
+      "# Turso sync safety snapshots — local only",
+      "**/*.sync-backup-*",
     ];
     const missingRuntime = requiredRuntimeLines.some(
       (line) => !line.startsWith("#") && !existing.includes(line),

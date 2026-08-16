@@ -871,17 +871,23 @@ export class CommunityCatalogService {
 
     let catalog: CommunityCatalog;
     if (workspaceRemote.length > 0) {
-      const localTeamEntries = await buildLocalTeamSharedCloudEntries(
-        this.paprDir,
-        namespaceId,
-      );
-      const entries = mergeNamespaceWorkspaceCatalog({
-        workspaceRemote,
-        localTeamEntries,
-        paprDir: this.paprDir,
-        namespaceId,
+      const [teamRemote, localTeamEntries] = await Promise.all([
+        this.fetchTeamSharedEntries(namespaceId),
+        buildLocalTeamSharedCloudEntries(this.paprDir, namespaceId),
+      ]);
+      const entries = markOwnedEntries(
+        dedupeCloudEntries([
+          ...mergeNamespaceWorkspaceCatalog({
+            workspaceRemote,
+            localTeamEntries,
+            paprDir: this.paprDir,
+            namespaceId,
+            ownedAppIds,
+          }),
+          ...teamRemote,
+        ]),
         ownedAppIds,
-      });
+      );
       catalog = buildCatalog("namespace", entries, { namespaceId });
     } else {
       catalog = await this.fetchNamespaceCommunityFallback(

@@ -114,10 +114,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
       refreshProfile: () => ipcRenderer.invoke("papr:refresh-profile"),
       syncProfile: (input) => ipcRenderer.invoke("papr:sync-profile", input),
       getActiveWorkspace: () => ipcRenderer.invoke("papr:get-active-workspace"),
-      detectLegacyFlatMigration: () =>
-        ipcRenderer.invoke("papr:detect-legacy-flat-migration"),
-      runConsentLegacyMigration: (input) =>
-        ipcRenderer.invoke("papr:run-consent-legacy-migration", input),
       
       // Listen for successful login (via deep link callback)
       onLoginSuccess: (callback) => {
@@ -321,6 +317,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   chatAttachments: {
     save: (input) => ipcRenderer.invoke("chat:save-attachment", input),
+    readPreview: (input) =>
+      ipcRenderer.invoke("chat:read-attachment-preview", input),
   },
 
   // App metadata

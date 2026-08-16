@@ -37,6 +37,10 @@ import {
   validateJobAgainstAppDatabase,
 } from "./jobs/jobDatabaseArchitectureValidation.js";
 import { resolveBundledResourcesDir } from "../../core/utils/bundledResourcesPath.js";
+import {
+  canPerformWorkspaceWrite,
+  getWorkspaceWriteGeneration,
+} from "./workspaceWriteGuard.js";
 
 // ESM compatibility: get __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -63,6 +67,7 @@ function truncateForTelemetryHint(raw: string | undefined, maxLen: number): stri
   return `${oneLine.slice(0, Math.max(0, maxLen - 1))}…`;
 }
 import type {
+  ActiveJobSummary,
   CreateJobInput,
   JobGraph,
   JobGraphAppLink,
@@ -95,6 +100,7 @@ import {
 import { isJobRuntimeOffGit } from "./jobs/jobRuntimeOffGit.js";
 import type { JobRuntimePatch } from "../types/cloudRuntime.js";
 export type {
+  ActiveJobSummary,
   CreateJobInput,
   JobDelivery,
   JobDependency,
@@ -127,6 +133,9 @@ export class JobsService {
   private initialized: boolean;
   private initPromise: Promise<void> | null = null;
   private saveLock: Promise<void> | null = null; // Prevent concurrent saves
+  /** Workspace bound at initialize — disk writes never follow getPaprRoot() mid-flight. */
+  private boundPaprDir: string | null = null;
+  private boundWriteGeneration: number | null = null;
 
   constructor() {
     const homeDir = os.homedir();
@@ -148,21 +157,45 @@ export class JobsService {
   }
 
   private get jobsRootDir(): string {
-    return getPaprJobsRoot();
+    return this.boundPaprDir
+      ? path.join(this.boundPaprDir, "Jobs")
+      : getPaprJobsRoot();
   }
 
   private get jobsIndexPath(): string {
-    return path.join(getPaprDataDir(), "jobs.json");
+    return this.boundPaprDir
+      ? path.join(this.boundPaprDir, "data", "jobs.json")
+      : path.join(getPaprDataDir(), "jobs.json");
   }
 
   private get graphPath(): string {
-    return path.join(getPaprDataDir(), "job-graph.json");
+    return this.boundPaprDir
+      ? path.join(this.boundPaprDir, "data", "job-graph.json")
+      : path.join(getPaprDataDir(), "job-graph.json");
+  }
+
+  private bindWorkspaceWriteContext(): void {
+    this.boundPaprDir = getPaprRoot();
+    this.boundWriteGeneration = getWorkspaceWriteGeneration();
+  }
+
+  private isWriteContextValid(context: string): boolean {
+    if (this.boundPaprDir === null || this.boundWriteGeneration === null) {
+      return true;
+    }
+    return canPerformWorkspaceWrite(
+      this.boundWriteGeneration,
+      this.boundPaprDir,
+      context,
+    );
   }
 
   /** Reload index from disk after PAPR_HOME changes (cloud agent gateway). */
   async resetForWorkspaceReload(): Promise<void> {
     this.initialized = false;
     this.jobs.clear();
+    this.boundPaprDir = null;
+    this.boundWriteGeneration = null;
   }
 
   private async migrateLegacyIfNeeded(): Promise<void> {
@@ -304,70 +337,101 @@ export class JobsService {
     }
   }
 
-  /** Known bundled jobs shipped with Paprwork (Home dashboard). */
-  private static readonly BUNDLED_DEFAULT_JOB_IDS = [
-    "2cafb2e9-696b-42db-98fa-5d605977123c",
-  ] as const;
+  /** Hidden agent job for Papr Web workspace chat (main Pen parity). */
+  private async installWorkspaceChatJob(): Promise<void> {
+    try {
+      const { buildWorkspaceChatJobRecord } = await import(
+        "../../core/constants/workspaceChatJob.js"
+      );
+      await this.installDefaultJob({
+        ...buildWorkspaceChatJobRecord(),
+        hidden: true,
+        workspaceChatJob: true,
+      } as Partial<import("./jobs/types.js").JobRecord> & {
+        id: string;
+        name: string;
+        type: import("./jobs/types.js").JobType;
+      });
+    } catch (error) {
+      console.warn("[JobsService] Failed to install workspace-chat job:", error);
+    }
+  }
 
   /**
-   * Sync command/appIds from bundled default-jobs/ for prebuilt jobs already on disk.
-   * Skips architecture validation — bundle is the source of truth for these jobs.
+   * Sync Home Daily Brief agent prompt from bundled default-job.json.
+   * Each workspace owns its own job UUID — match by Home app link + job name.
    */
-  private async syncBundledDefaultJobs(): Promise<void> {
-    const defaultJobsDir = await resolveBundledResourcesDir(
+  private async syncHomeDailyBriefFromBundle(): Promise<void> {
+    const bundledAppsDir = await resolveBundledResourcesDir(
       __dirname,
-      "resources/default-jobs",
+      "resources/default-apps/home-dashboard",
     );
-    if (!defaultJobsDir) {
+    if (!bundledAppsDir) {
       return;
     }
 
-    let changed = false;
-    for (const jobId of JobsService.BUNDLED_DEFAULT_JOB_IDS) {
-      const job = this.jobs.get(jobId);
-      if (!job) continue;
-
-      const bundledPath = path.join(defaultJobsDir, jobId, "job.json");
-      let bundled: JobRecord;
-      try {
-        bundled = JSON.parse(await fs.readFile(bundledPath, "utf8")) as JobRecord;
-      } catch {
-        continue;
-      }
-
-      const nextCommand = bundled.command?.trim();
-      const nextAppIds = bundled.appIds?.length ? bundled.appIds : job.appIds;
-      const commandChanged = Boolean(nextCommand && nextCommand !== job.command);
-      const appIdsChanged =
-        JSON.stringify(nextAppIds ?? []) !== JSON.stringify(job.appIds ?? []);
-
-      if (!commandChanged && !appIdsChanged) continue;
-
-      const updated: JobRecord = {
-        ...job,
-        ...(commandChanged && nextCommand ? { command: nextCommand } : {}),
-        ...(appIdsChanged ? { appIds: nextAppIds } : {}),
-        updatedAt: new Date().toISOString(),
-      };
-
-      this.jobs.set(jobId, updated);
-      changed = true;
-
-      try {
-        await this.persistJobRecord(updated);
-        console.log(
-          `[JobsService] Synced bundled default job ${jobId} from resources`,
-        );
-      } catch (err) {
-        console.warn(
-          `[JobsService] Could not write synced job ${jobId}:`,
-          err instanceof Error ? err.message : err,
-        );
-      }
+    const jobDefPath = path.join(bundledAppsDir, "default-job.json");
+    let bundledDef: { command?: string; appIds?: string[]; name?: string };
+    try {
+      bundledDef = JSON.parse(
+        await fs.readFile(jobDefPath, "utf8"),
+      ) as typeof bundledDef;
+    } catch {
+      return;
     }
 
-    if (changed) {
+    const { findHomeDailyBriefJobIdInRegistry, DEFAULT_HOME_APP_ID } =
+      await import("./defaultHomeBundle.js");
+    const { normalizePortableJobPrompt } = await import(
+      "./jobs/normalizePortableJobPrompt.js"
+    );
+
+    const jobId = findHomeDailyBriefJobIdInRegistry(this.jobs.values());
+    if (!jobId) {
+      return;
+    }
+
+    const job = this.jobs.get(jobId);
+    if (!job) {
+      return;
+    }
+
+    const nextCommand = bundledDef.command?.trim();
+    if (!nextCommand) {
+      return;
+    }
+
+    const normalizedCommand = normalizePortableJobPrompt(nextCommand);
+    const nextAppIds = bundledDef.appIds?.length
+      ? bundledDef.appIds
+      : [DEFAULT_HOME_APP_ID];
+    const commandChanged = normalizedCommand !== (job.command ?? "");
+    const appIdsChanged =
+      JSON.stringify(nextAppIds) !== JSON.stringify(job.appIds ?? []);
+
+    if (!commandChanged && !appIdsChanged) {
+      return;
+    }
+
+    const updated: JobRecord = {
+      ...job,
+      ...(commandChanged ? { command: normalizedCommand } : {}),
+      ...(appIdsChanged ? { appIds: nextAppIds } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.jobs.set(jobId, updated);
+    try {
+      await this.persistJobRecord(updated);
       await this.saveJobs();
+      console.log(
+        `[JobsService] Synced Home Daily Brief job ${jobId} from bundled default-job.json`,
+      );
+    } catch (err) {
+      console.warn(
+        `[JobsService] Could not sync Home Daily Brief job ${jobId}:`,
+        err instanceof Error ? err.message : err,
+      );
     }
   }
 
@@ -392,6 +456,7 @@ export class JobsService {
     if (this.initialized) {
       return;
     }
+    this.bindWorkspaceWriteContext();
     await this.migrateLegacyIfNeeded();
     await fs.mkdir(this.jobsRootDir, { recursive: true });
     await fs.mkdir(path.dirname(this.jobsIndexPath), { recursive: true });
@@ -403,8 +468,9 @@ export class JobsService {
     await this.backfillJobAppIds();
     await this.rebuildIndexIfCorrupted(); // Safety net: recover jobs on disk but missing from index
     await this.pruneStaleJobEntries(); // Remove index entries whose folders were deleted (e.g. bash rm)
-    await this.installDefaultJobs(); // Then install defaults (won't overwrite existing)
-    await this.syncBundledDefaultJobs(); // Patch prebuilt jobs (Home) from bundle
+    await this.installDefaultJobs(); // Optional extra bundled jobs (Home uses default-job.json)
+    await this.installWorkspaceChatJob();
+    await this.syncHomeDailyBriefFromBundle(); // Patch Home Daily Brief prompt from bundle
     await this.backfillJobAppIds();
 
     // Initialize run history
@@ -767,6 +833,9 @@ export class JobsService {
   }
 
   private async saveJobs(): Promise<void> {
+    if (!this.isWriteContextValid("jobs.json save")) {
+      return;
+    }
     // Wait for any in-flight save to complete
     if (this.saveLock) {
       await this.saveLock;
@@ -803,6 +872,9 @@ export class JobsService {
   }
 
   private async persistJobRecord(job: JobRecord): Promise<void> {
+    if (!this.isWriteContextValid(`job record ${job.id}`)) {
+      return;
+    }
     const jobDir = this.getJobDir(job.id);
     await fs.mkdir(jobDir, { recursive: true });
     if (isJobRuntimeOffGit()) {
@@ -1242,6 +1314,10 @@ export class JobsService {
         edges,
       };
 
+      if (!this.isWriteContextValid("job-graph.json save")) {
+        return;
+      }
+
       await fs.mkdir(path.dirname(this.graphPath), { recursive: true });
       await fs.writeFile(
         this.graphPath,
@@ -1478,6 +1554,13 @@ export class JobsService {
       return { installed: false, dbPath };
     }
 
+    const { normalizePortableJobPrompt } = await import(
+      "./jobs/normalizePortableJobPrompt.js"
+    );
+    const normalizedCommand = jobDef.command
+      ? normalizePortableJobPrompt(jobDef.command)
+      : jobDef.command;
+
     const now = new Date().toISOString();
     const job: JobRecord = {
       status: "pending",
@@ -1488,6 +1571,7 @@ export class JobsService {
       outputMode: "natural",
       memoryPolicy: "none",
       ...jobDef,
+      ...(normalizedCommand ? { command: normalizedCommand } : {}),
       createdAt: jobDef.createdAt || now,
       updatedAt: now,
     };
@@ -1593,6 +1677,9 @@ export class JobsService {
   }
 
   private async appendLog(jobId: string, line: string): Promise<void> {
+    if (!this.isWriteContextValid(`job log ${jobId}`)) {
+      return;
+    }
     const logPath = this.getJobLogPath(jobId);
     const stamped = `[${new Date().toISOString()}] ${line}\n`;
     try {
@@ -2896,37 +2983,70 @@ export class JobsService {
     }
   }
 
-  /**
-   * Stop all running jobs (called on graceful shutdown).
-   * Kills processes and marks as cancelled.
-   */
-  async stopAllJobs(): Promise<void> {
-    const running = Array.from(this.running.entries());
+  /** Jobs with an in-flight run (process-backed or agent/subagent). */
+  listActiveJobs(): ActiveJobSummary[] {
+    return [...this.jobs.values()]
+      .filter(
+        (job) =>
+          job.status === "running" || job.status === "waiting_permission",
+      )
+      .map((job) => ({
+        id: job.id,
+        name: job.name,
+        type: job.type,
+        status: job.status,
+      }));
+  }
 
-    if (running.length === 0) {
+  /**
+   * Stop all running jobs (graceful shutdown or workspace switch).
+   * Kills tracked child processes and marks every active job cancelled
+   * (including agent jobs that have no ChildProcess entry).
+   */
+  async stopAllJobs(
+    reason = "Job stopped due to app shutdown",
+  ): Promise<{ stoppedCount: number }> {
+    const activeJobs = this.listActiveJobs();
+    const runningProcesses = Array.from(this.running.entries());
+
+    if (activeJobs.length === 0 && runningProcesses.length === 0) {
       console.log("[JobsService] No running jobs to stop");
-      return;
+      return { stoppedCount: 0 };
     }
 
-    console.log(`[JobsService] Stopping ${running.length} running job(s)...`);
+    console.log(
+      `[JobsService] Stopping ${Math.max(activeJobs.length, runningProcesses.length)} active job(s)...`,
+    );
 
-    for (const [jobId, proc] of running) {
+    for (const [jobId, proc] of runningProcesses) {
       try {
-        console.log(`[JobsService] Stopping job ${jobId}`);
+        console.log(`[JobsService] Stopping job process ${jobId}`);
         proc.kill("SIGTERM");
         this.running.delete(jobId);
-
-        await this.setJobStatus(jobId, "cancelled", {
-          error: "Job stopped due to app shutdown",
-          completedAt: new Date().toISOString(),
-          currentExecutionId: undefined,
-        });
       } catch (error) {
-        console.error(`[JobsService] Failed to stop job ${jobId}:`, error);
+        console.error(`[JobsService] Failed to kill job process ${jobId}:`, error);
       }
     }
 
-    console.log("[JobsService] All running jobs stopped");
+    let stoppedCount = 0;
+    for (const job of activeJobs) {
+      try {
+        await this.appendLog(job.id, reason);
+        await this.setJobStatus(job.id, "cancelled", {
+          error: reason,
+          exitCode: -1,
+          completedAt: new Date().toISOString(),
+          currentExecutionId: undefined,
+          waitingPermissionKeys: undefined,
+        });
+        stoppedCount += 1;
+      } catch (error) {
+        console.error(`[JobsService] Failed to stop job ${job.id}:`, error);
+      }
+    }
+
+    console.log(`[JobsService] Stopped ${stoppedCount} job(s)`);
+    return { stoppedCount };
   }
 
   async getLogs(jobId: string, maxBytes = 20000): Promise<string> {

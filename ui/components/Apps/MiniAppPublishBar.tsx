@@ -663,6 +663,7 @@ export function MiniAppPublishBar({
     webSyncPulling ||
     webSyncApplyingUpdates ||
     (webSyncLoading && !webSyncStatus) ||
+    (webSyncRefreshing && webSyncStatus?.overall !== "uploading") ||
     webSyncState === "syncing";
   const publishBarStatus = resolvePublishBarStatus({
     live: cloud.live,
@@ -882,6 +883,7 @@ export function MiniAppPublishBar({
                     }}
                     status={webSyncStatus}
                     loading={webSyncLoading && !webSyncStatus}
+                    refreshing={webSyncRefreshing}
                     error={webSyncError}
                     pushing={webSyncPushing}
                     pulling={webSyncPulling}

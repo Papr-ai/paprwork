@@ -154,6 +154,9 @@ export interface SyncItemsResponse {
     dependentJobIds: string[];
     registryDbIds?: string[];
     globalAutoUploadEnabled?: boolean;
+    /** App has an active Papr cloud share link (enabled + shareUrl). */
+    publishLive?: boolean;
+    publishedAt?: string | null;
   };
   reason?: string;
 }

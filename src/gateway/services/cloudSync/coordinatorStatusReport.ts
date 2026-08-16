@@ -36,7 +36,7 @@ export function buildCoordinatorStatusReport(
       null)
     : Object.values(raw.flushErrors)[0] ?? null;
 
-  if (raw.activeFlush) {
+  if (raw.activeFlush && (!appId || raw.activeFlush.appId === appId)) {
     return {
       status: "uploading",
       label: "Updating for the web…",
@@ -56,7 +56,7 @@ export function buildCoordinatorStatusReport(
 
   if (appId && raw.queuedFlushAppIds.includes(appId) && !raw.inFlightAppIds.includes(appId)) {
     return {
-      status: "uploading",
+      status: "waiting",
       label: "Queued for upload…",
       detail: "Other apps are uploading first.",
       appId,
@@ -78,6 +78,7 @@ export function buildCoordinatorStatusReport(
   const gitDirtyForApp = appId
     ? raw.gitDirtyAppIds.includes(appId)
     : raw.gitDirtyAppIds.length > 0;
+  // getStatus(appId) already scopes dbDirtySyncKeys to this app when appId is set.
   const dbDirty = raw.dbDirtySyncKeys.length > 0;
 
   if (gitDirtyForApp || dbDirty) {

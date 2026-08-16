@@ -22,7 +22,6 @@ import {
   notifyGatewayPaprApiKeyUpdate,
   registerPaprWorkspaceHandlers,
 } from "./paprWorkspace.js";
-import { registerPaprLegacyMigrationHandlers } from "./paprLegacyMigration.js";
 import {
   startPaprAuthCallbackServer,
   stopPaprAuthCallbackServer,
@@ -1329,6 +1328,16 @@ async function syncActiveWorkspaceOrganization(
     organizationId: orgChanged ? namespaceOrgId : profile.organizationId,
   });
 
+  await syncProfileToGatewaySettings(
+    profile.email,
+    profile.userId!,
+    profile.displayName,
+    profile.profileImage,
+    orgChanged ? namespaceOrgId : profile.organizationId,
+    active.workspaceId,
+    active.workspaceName,
+  );
+
   if (orgChanged) {
     console.log(
       `[PaprLogin] Synced profile to workspace ${active.workspaceName} namespace org ${namespaceOrgId}`,
@@ -2298,6 +2307,16 @@ async function applyActiveNamespaceSwitch(input: {
     activeNamespaceName: input.namespaceName,
   });
 
+  await syncProfileToGatewaySettings(
+    input.profile.email,
+    input.profile.userId!,
+    input.profile.displayName,
+    input.profile.profileImage,
+    input.organizationId,
+    input.profile.workspaceId,
+    input.profile.workspaceName,
+  );
+
   invalidateKeyCache("PAPR_API_KEY");
 
   if (input.notifyRenderer !== false) {
@@ -3042,16 +3061,6 @@ export function initializePaprLoginIPC(
   trackLoginEvent = options?.trackLoginEvent;
   void restorePkceFromDisk();
   registerPaprWorkspaceHandlers();
-  registerPaprLegacyMigrationHandlers({
-    resolvePaprApiKey: async () => {
-      try {
-        const key = await customKeysStorage.getKey("PAPR_API_KEY");
-        return key?.trim() || undefined;
-      } catch {
-        return undefined;
-      }
-    },
-  });
   // Check if user is already logged in
   ipcMain.handle("papr:check-login-status", async () => {
     try {

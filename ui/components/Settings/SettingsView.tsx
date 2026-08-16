@@ -14,7 +14,6 @@ import { IntegrationKeysTab } from "./IntegrationKeysTab";
 import { CloudSyncTab } from "./CloudSyncTab";
 import { DatabasesTab } from "./DatabasesTab";
 import { ConnectedPlatformsTab } from "./ConnectedPlatformsTab";
-import { WorkspaceMigrationTab } from "./WorkspaceMigrationTab";
 import { PaprLoginSection } from "./PaprLoginSection";
 import { resizeProfilePhoto } from "../../utils/profilePhoto";
 import {
@@ -91,17 +90,6 @@ const SETTINGS_NAV: SettingsNavItem[] = [
         <path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z" />
         <rect width="4" height="12" x="2" y="9" />
         <circle cx="4" cy="4" r="2" />
-      </svg>
-    ),
-  },
-  {
-    id: "migration",
-    label: "Migration",
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M12 3v12" />
-        <path d="m8 11 4 4 4-4" />
-        <path d="M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" />
       </svg>
     ),
   },
@@ -199,7 +187,6 @@ export function SettingsView() {
           {activeTab === "cloud" && <CloudSyncTab />}
           {activeTab === "databases" && <DatabasesTab />}
           {activeTab === "platforms" && <ConnectedPlatformsTab />}
-          {activeTab === "migration" && <WorkspaceMigrationTab />}
           {activeTab === "profile" && <ProfileTab />}
           {activeTab === "permissions" && <PermissionsTab />}
           {activeTab === "privacy" && <PrivacyTab />}
@@ -1009,6 +996,57 @@ function AboutTab() {
             </button>
           </div>
         </div>
+
+        {currentVersion === "2.3.5" && (
+          <div className="about-card">
+            <h3>What's New in v2.3.5</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Workspace Switch Overlay</strong>
+                <p>
+                  Switching org or namespace shows a phased progress overlay so
+                  you know tabs, apps, and sync are reloading safely.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Write Guard During Switch</strong>
+                <p>
+                  Cloud, Turso, and job writes are blocked mid-switch so data
+                  from the old workspace cannot leak into the new one.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Per-Workspace Home Bundle</strong>
+                <p>
+                  Each workspace gets its own Daily Brief job and Home dashboard
+                  data sources instead of sharing one fixed job ID.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Migration Verifier Fix</strong>
+                <p>
+                  SQL migration parsing accepts drop-and-recreate patterns and
+                  stops failing on unverifiable statements.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Turso Sync Scoping</strong>
+                <p>
+                  Turso push state and linked DB watchers are scoped per workspace
+                  for cleaner multi-team switching.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.3.5"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
 
         {currentVersion === "2.3.4" && (
           <div className="about-card">

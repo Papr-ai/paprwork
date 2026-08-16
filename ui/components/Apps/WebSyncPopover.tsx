@@ -8,6 +8,7 @@ import type {
   AppCloudSyncStatus,
   WebSyncVisualState,
 } from "../../utils/appCloudSyncStatus";
+import { formatLastUploadedAt } from "../../utils/appCloudSyncStatus";
 import {
   buildMergeReviewAgentPrompt,
   openCloudSyncAgentChat,
@@ -18,6 +19,7 @@ export interface WebSyncPopoverProps {
   status: AppCloudSyncStatus | null;
   appId?: string;
   loading?: boolean;
+  refreshing?: boolean;
   error: string | null;
   pushing: boolean;
   pulling: boolean;
@@ -91,6 +93,7 @@ export function WebSyncPopover({
   status,
   appId,
   loading = false,
+  refreshing = false,
   error,
   pushing,
   pulling,
@@ -107,9 +110,10 @@ export function WebSyncPopover({
   className,
   style,
 }: WebSyncPopoverProps) {
-  const busy = pushing || pulling || applyingUpdates || loading || autoUploadSaving;
+  const busy = pushing || pulling || applyingUpdates || loading || refreshing || autoUploadSaving;
   const remoteReviewNeeded = status?.gitRemoteRequiresReview === true;
   const metadataSync = status?.gitRemoteMetadataSync === true;
+  const activelyUploading = status?.overall === "uploading";
   const showMergeReview = remoteReviewNeeded && !metadataSync;
   const showAutoUploadToggle =
     onAutoUploadChange != null &&
@@ -157,7 +161,15 @@ export function WebSyncPopover({
         ? summarizeRemoteCommits(status.gitUpdatesSummary)
         : null;
   const showHeadline =
-    !showMergeReview && !metadataSync && status.summaryLine.trim().length > 0;
+    !showMergeReview &&
+    !metadataSync &&
+    (refreshing && !activelyUploading
+      ? true
+      : status.summaryLine.trim().length > 0);
+  const headlineText =
+    refreshing && !activelyUploading
+      ? "Checking for updates…"
+      : status.summaryLine;
 
   const statusRows: Array<{ key: string; icon: string; label: string; detail: string }> =
     [];
@@ -216,7 +228,12 @@ export function WebSyncPopover({
     });
   }
 
-  if (status.uploadStatus && status.uploadStatus !== "idle" && status.uploadLabel) {
+  if (
+    status.uploadStatus &&
+    status.uploadStatus !== "idle" &&
+    status.uploadStatus !== "waiting" &&
+    status.uploadLabel
+  ) {
     const uploadText = status.uploadDetail
       ? `${status.uploadLabel} — ${status.uploadDetail}`
       : status.uploadLabel;
@@ -274,7 +291,7 @@ export function WebSyncPopover({
           ) : null}
         </div>
       ) : showHeadline ? (
-        <p className="mini-app-publish-bar__sync-popover-summary">{status.summaryLine}</p>
+        <p className="mini-app-publish-bar__sync-popover-summary">{headlineText}</p>
       ) : null}
 
       <div className="mini-app-publish-bar__sync-popover-scroll">
@@ -317,7 +334,9 @@ export function WebSyncPopover({
           </ul>
         ) : allSynced ? (
           <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--ok">
-            Everything matches the web.
+            {status.lastUploadedAt
+              ? `Last uploaded ${formatLastUploadedAt(status.lastUploadedAt) ?? "recently"}.`
+              : "Everything matches the web."}
           </p>
         ) : null}
         {error ? <p className="mini-app-publish-bar__sync-popover-error">{error}</p> : null}

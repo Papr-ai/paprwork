@@ -2220,7 +2220,9 @@ app.whenReady().then(async () => {
       paprProfile.userId,
       paprProfile.displayName,
       paprProfile.profileImage,
-      paprProfile.activeNamespaceName,
+      paprProfile.organizationId,
+      paprProfile.workspaceId,
+      paprProfile.workspaceName,
     );
   }
 
@@ -2294,11 +2296,13 @@ app.whenReady().then(async () => {
       if (!pointer?.paprHome || !pointer?.userDataPath) {
         return {};
       }
+      const workspaceId = settingsStorage.getPaprProfile()?.workspaceId?.trim();
       return {
         PAPR_HOME: pointer.paprHome,
         PAPR_USER_DATA: pointer.userDataPath,
         PAPR_ORG_ID: pointer.organizationId,
         PAPR_NAMESPACE_ID: pointer.namespaceId,
+        ...(workspaceId ? { PAPR_WORKSPACE_ID: workspaceId } : {}),
       };
     } catch {
       return {};

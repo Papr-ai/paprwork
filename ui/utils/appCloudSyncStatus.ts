@@ -73,11 +73,33 @@ export type AppCloudPublishStatus =
   | "drift"
   | "error";
 
+export function formatLastUploadedAt(isoStr: string | null | undefined): string | null {
+  if (!isoStr) {
+    return null;
+  }
+  const diff = Date.now() - new Date(isoStr).getTime();
+  if (Number.isNaN(diff)) {
+    return null;
+  }
+  if (diff < 60_000) {
+    return "just now";
+  }
+  if (diff < 3_600_000) {
+    return `${Math.floor(diff / 60_000)}m ago`;
+  }
+  if (diff < 86_400_000) {
+    return `${Math.floor(diff / 3_600_000)}h ago`;
+  }
+  return `${Math.floor(diff / 86_400_000)}d ago`;
+}
+
 export interface AppCloudSyncStatus {
   overall: AppCloudSyncOverall;
   codeStatus: AppCloudCodeStatus;
   codePhase: AppCloudItemPhase;
   codeLabel: string;
+  /** Most recent git upload timestamp for this app's code folder. */
+  lastUploadedAt: string | null;
   dependentJobs: AppCloudJobStatus[];
   hasDependentJobs: boolean;
   syncedJobCount: number;
@@ -111,6 +133,8 @@ export interface AppCloudSyncStatus {
   /** e.g. "1 contributed code merge + 8 cloud job status updates" */
   gitRemoteReviewHeadline: string | null;
   codeLastError?: string | null;
+  /** App has an active Papr cloud share link — local git/Turso lag should not block UI. */
+  publishLive?: boolean;
 }
 
 const GIT_ACTIVE_STATUSES = new Set([
@@ -284,7 +308,10 @@ function buildSummaryLine(opts: {
   totalJobCount: number;
   dbPending: number;
   registryNeedsSync: boolean;
-  isUploading: boolean;
+  isActivelyUploading: boolean;
+  isChecking: boolean;
+  overall: AppCloudSyncOverall;
+  lastUploadedAt: string | null;
   publishStatus?: AppCloudPublishStatus;
   publishDetail?: string | null;
   gitRemoteRequiresReview?: boolean;
@@ -296,7 +323,10 @@ function buildSummaryLine(opts: {
     totalJobCount,
     dbPending,
     registryNeedsSync,
-    isUploading,
+    isActivelyUploading,
+    isChecking,
+    overall,
+    lastUploadedAt,
     publishStatus,
     publishDetail,
     gitRemoteRequiresReview,
@@ -310,7 +340,11 @@ function buildSummaryLine(opts: {
     return "Merge cloud changes before upload";
   }
 
-  if (isUploading) {
+  if (isChecking && !isActivelyUploading) {
+    return "Checking for updates…";
+  }
+
+  if (isActivelyUploading) {
     if (totalJobCount > 0) {
       return `Uploading app and jobs (${syncedJobCount}/${totalJobCount} already on web)…`;
     }
@@ -340,7 +374,22 @@ function buildSummaryLine(opts: {
     parts.push(publishDetailLabel(publishStatus, publishDetail ?? null));
   }
   if (parts.length === 0) {
-    return "Everything for this app matches the web";
+    if (overall === "synced") {
+      const relative = formatLastUploadedAt(lastUploadedAt);
+      return relative
+        ? `Last uploaded ${relative}`
+        : "Everything for this app matches the web";
+    }
+    if (overall === "uploading") {
+      return "Uploading app to the web…";
+    }
+    if (overall === "needs_sync") {
+      if (publishStatus === "error") {
+        return publishDetailLabel("error", publishDetail ?? null);
+      }
+      return "Some changes still need to sync to the web";
+    }
+    return "Checking web sync status…";
   }
   return parts.join(" · ");
 }
@@ -353,11 +402,11 @@ export function deriveAppCloudSyncStatus(
     dependentJobIds?: readonly string[];
     registryDbIds?: readonly string[];
     isUploading?: boolean;
-    cloudPublishing?: boolean;
+    refreshing?: boolean;
   },
 ): AppCloudSyncStatus {
   const isUploading = options?.isUploading === true;
-  const cloudPublishing = options?.cloudPublishing === true;
+  const refreshing = options?.refreshing === true;
 
   if (!items?.enabled) {
     return {
@@ -365,6 +414,7 @@ export function deriveAppCloudSyncStatus(
       codeStatus: "unknown",
       codePhase: "changed",
       codeLabel: "Cloud sync is off",
+      lastUploadedAt: null,
       dependentJobs: [],
       hasDependentJobs: false,
       syncedJobCount: 0,
@@ -504,42 +554,71 @@ export function deriveAppCloudSyncStatus(
 
   const codePhaseDisplay =
     isUploading && codePhase !== "synced" ? "uploading" : codePhase;
-  const codeLabel = codeDetail(
+  let codeLabel = codeDetail(
     codePhaseDisplay,
     codeStatus,
     githubItem?.manualUploadHold,
     githubItem?.lastError,
   );
 
+  const publishLive = items.appContext?.publishLive === true;
+  const publishedAt = items.appContext?.publishedAt ?? null;
+
   const publishStatus: AppCloudPublishStatus =
-    items.publish?.status ??
-    (cloudPublishing ? "republishing" : "synced");
+    items.publish?.status ?? "synced";
   const publishDetail = items.publish?.detail ?? null;
   const publishLabel = publishDetailLabel(publishStatus, publishDetail);
+  const cloudPublishing = publishStatus === "republishing";
+  const publishLayerSynced =
+    publishLive && publishStatus === "synced" && !cloudPublishing;
   const publishBlocksWeb =
-    publishStatus === "not_web_ready" ||
     publishStatus === "drift" ||
-    publishStatus === "error";
+    publishStatus === "error" ||
+    (publishStatus === "not_web_ready" && !publishLive);
 
   const uploadStatus = items.upload?.status;
   const uploadLabel = items.upload?.label ?? null;
   const uploadDetail = items.upload?.detail ?? null;
   const uploadRetryPending = items.upload?.retryPending ?? false;
   const coordinatorUploading = uploadStatus === "uploading";
+  const coordinatorWaiting = uploadStatus === "waiting";
   const coordinatorFailed = uploadStatus === "failed";
+  const coordinatorAffectsUi =
+    !publishLayerSynced &&
+    (coordinatorUploading || coordinatorWaiting || coordinatorFailed);
 
-  const anyUploading =
+  const isActivelyUploading =
     isUploading ||
-    coordinatorUploading ||
-    uploadRetryPending ||
+    (coordinatorUploading && !publishLayerSynced) ||
     codePhaseDisplay === "uploading" ||
     dependentJobs.some((job) => job.phase === "uploading");
 
+  let displayCodePhase = codePhaseDisplay;
+  let displayRegistryPhase = registryPhase;
+  let displayRegistryLabel = registryLabel;
+  let displayRegistryNeedsSync = registryNeedsSync;
+
+  if (publishLive && !isActivelyUploading) {
+    if (codePhase === "not_uploaded" && codeStatus === "pending") {
+      displayCodePhase = "synced";
+      codeLabel = "App code is on the web";
+    }
+    if (registryPhase === "not_uploaded") {
+      displayRegistryPhase = "synced";
+      displayRegistryLabel = "Registry on the web";
+      displayRegistryNeedsSync = false;
+    }
+  }
+
+  const isChecking = refreshing && !isActivelyUploading;
+  const lastUploadedAt = githubItem?.lastSyncAt ?? publishedAt ?? null;
+
   const needsSync =
     codePhase === "changed" ||
-    codePhase === "not_uploaded" ||
+    (codePhase === "not_uploaded" && !publishLive) ||
     codeStatus === "failed" ||
-    coordinatorFailed ||
+    (coordinatorFailed && !publishLayerSynced) ||
+    (coordinatorWaiting && !publishLayerSynced) ||
     dependentJobs.some(
       (job) =>
         job.phase === "changed" ||
@@ -547,26 +626,26 @@ export function deriveAppCloudSyncStatus(
         job.status === "failed",
     ) ||
     dbPending > 0 ||
-    registryNeedsSync;
+    displayRegistryNeedsSync;
 
   let overall: AppCloudSyncOverall = "unknown";
-  if (anyUploading) {
+  if (isActivelyUploading) {
     overall = "uploading";
   } else if (
     gitRemoteRequiresReview ||
     needsSync ||
     publishBlocksWeb ||
-    codePhaseDisplay === "changed" ||
-    codePhaseDisplay === "not_uploaded"
+    displayCodePhase === "changed" ||
+    (displayCodePhase === "not_uploaded" && !publishLive)
   ) {
     overall = "needs_sync";
-  } else if (gitRemoteMetadataSync) {
-    overall = "uploading";
   } else if (
-    codePhaseDisplay === "synced" &&
+    displayCodePhase === "synced" &&
     dependentJobs.every((job) => job.phase === "synced") &&
     dbPending === 0 &&
-    !registryNeedsSync
+    !displayRegistryNeedsSync &&
+    (!coordinatorWaiting || publishLayerSynced) &&
+    (!(coordinatorFailed && !uploadRetryPending) || publishLayerSynced)
   ) {
     overall = "synced";
   }
@@ -599,18 +678,23 @@ export function deriveAppCloudSyncStatus(
       (totalJobCount > 0
         ? `Needs sync (${syncedJobCount}/${totalJobCount})`
         : "Needs sync");
-  } else if (overall === "unknown") chipLabel = "Sync status unknown";
+  } else if (overall === "unknown") {
+    chipLabel = "Sync status unknown";
+  }
 
   const summaryLine =
     overall === "unknown"
       ? "Could not determine web sync status — open for details"
       : buildSummaryLine({
-          codePhase: codePhaseDisplay,
+          codePhase: displayCodePhase,
           syncedJobCount,
           totalJobCount,
           dbPending,
-          registryNeedsSync,
-          isUploading: anyUploading,
+          registryNeedsSync: displayRegistryNeedsSync,
+          isActivelyUploading,
+          isChecking,
+          overall,
+          lastUploadedAt,
           publishStatus,
           publishDetail,
           gitRemoteRequiresReview,
@@ -620,8 +704,9 @@ export function deriveAppCloudSyncStatus(
   return {
     overall,
     codeStatus,
-    codePhase: codePhaseDisplay,
+    codePhase: displayCodePhase,
     codeLabel,
+    lastUploadedAt,
     dependentJobs,
     hasDependentJobs,
     syncedJobCount,
@@ -630,24 +715,25 @@ export function deriveAppCloudSyncStatus(
     databases,
     hasLinkedDatabases,
     hasRegistryDatabases,
-    registryPhase,
-    registryLabel,
+    registryPhase: displayRegistryPhase,
+    registryLabel: displayRegistryLabel,
     chipLabel,
     globallySyncing,
     cloudPublishing,
     publishStatus,
     publishLabel,
     publishDetail,
-    uploadStatus,
-    uploadLabel,
-    uploadDetail,
-    uploadRetryPending,
+    uploadStatus: coordinatorAffectsUi ? uploadStatus : undefined,
+    uploadLabel: coordinatorAffectsUi ? uploadLabel : null,
+    uploadDetail: coordinatorAffectsUi ? uploadDetail : null,
+    uploadRetryPending: coordinatorAffectsUi ? uploadRetryPending : undefined,
     gitUpdatesAvailable,
     gitUpdatesSummary,
     gitRemoteRequiresReview,
     gitRemoteMetadataSync,
     gitRemoteReviewHeadline,
     codeLastError: githubItem?.lastError ?? null,
+    publishLive,
   };
 }
 
@@ -670,7 +756,12 @@ export function formatWebSyncStatusTooltip(
       ? `Web sync unavailable — ${options.error}`
       : "Web sync unavailable";
   }
-  if (options.loading || !status) return "Checking what's on the web…";
+  if (options.loading || !status) {
+    return "Checking what's on the web…";
+  }
+  if (options.refreshing && status.overall !== "uploading") {
+    return "Checking for updates…";
+  }
   if (status.gitRemoteRequiresReview) {
     return "Action needed — merge cloud changes before upload";
   }
@@ -697,10 +788,14 @@ export function webSyncVisualState(
 ): WebSyncVisualState {
   if (options.error) return "error";
   if (options.loading || !status) return "loading";
+  if (options.refreshing && status.overall !== "uploading" && !options.pushing) {
+    return "loading";
+  }
   if (status.overall === "disabled") return "disabled";
   if (status.codeStatus === "failed") return "error";
   if (status.gitRemoteRequiresReview) return "action_required";
   if (options.pushing || status.overall === "uploading") return "syncing";
+  if (status.overall === "synced") return "synced";
   if (
     status.publishStatus === "not_web_ready" ||
     status.publishStatus === "drift" ||
@@ -708,7 +803,6 @@ export function webSyncVisualState(
   ) {
     return "warn";
   }
-  if (status.overall === "synced") return "synced";
   if (status.overall === "needs_sync" || status.overall === "unknown") {
     return "warn";
   }

@@ -28,7 +28,12 @@ const App = {
       const w = bar.style.width; bar.style.width = '0%'; requestAnimationFrame(() => bar.style.width = w);
     }), 80);
   },
-  JOB_ID: '2cafb2e9-696b-42db-98fa-5d605977123c',
+  JOB_ID: null,
+  async resolveJobId() {
+    if (this.JOB_ID) return this.JOB_ID;
+    this.JOB_ID = await Data.resolveJobId();
+    return this.JOB_ID;
+  },
   async generateRealBrief() {
     const btn = document.getElementById('gen-real-brief-btn');
     if (!btn) return;
@@ -37,10 +42,11 @@ const App = {
     btn.innerHTML = '<div class="spinner"></div>Generating...';
     
     try {
+      const jobId = await this.resolveJobId();
       let response = await fetch('/api/jobs/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId: this.JOB_ID, wait: true })
+        body: JSON.stringify({ jobId, wait: false })
       });
       
       // Job doesn't exist — ask the agent to set it up
@@ -56,29 +62,42 @@ const App = {
       }
       
       const result = await response.json();
-      
-      if (response.ok && result.status === 'completed') {
-        btn.innerHTML = 'Generated! Reloading...';
-        setTimeout(() => {
-          this.dates = [];
-          this.init();
-        }, 1000);
-      } else {
-        console.error('Brief generation failed:', result);
-        btn.innerHTML = 'Failed — Try Chat';
-        btn.disabled = false;
-        setTimeout(() => {
-          btn.innerHTML = 'Generate My Real Brief';
-          btn.disabled = false;
-        }, 3000);
+      if (!response.ok && response.status !== 409) {
+        throw new Error(result?.error || 'Failed to start brief job');
       }
+
+      btn.innerHTML = '<div class="spinner"></div>Working...';
+      const deadline = Date.now() + 5 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const statusRes = await fetch(`/api/jobs/status/${jobId}`);
+        if (!statusRes.ok) continue;
+        const job = await statusRes.json();
+        if (job.status === 'completed') {
+          btn.innerHTML = 'Generated! Reloading...';
+          setTimeout(() => {
+            this.dates = [];
+            this.init();
+          }, 800);
+          return;
+        }
+        if (job.status === 'failed') {
+          throw new Error(job.error || 'Brief job failed');
+        }
+      }
+      throw new Error('Brief generation is taking longer than expected');
     } catch (error) {
       console.error('Failed to generate brief:', error);
-      btn.innerHTML = 'Error — Try Chat';
+      btn.innerHTML = 'Opening chat...';
+      try {
+        window.paprAPI.invoke('chat.open', {
+          message: `My Home dashboard brief failed: ${(error && error.message) || error}. Please fix the Daily Brief Generator job and data source link.`
+        });
+      } catch (e) { /* paprAPI may not be available */ }
       setTimeout(() => {
         btn.innerHTML = 'Generate My Real Brief';
         btn.disabled = false;
-      }, 3000);
+      }, 2500);
     }
   },
   renderSampleDataBanner() {

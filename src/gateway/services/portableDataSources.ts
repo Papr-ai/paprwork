@@ -11,15 +11,19 @@ import fs from "fs/promises";
 import path from "path";
 import { getPaprDataDir, getPaprRoot } from "../../core/utils/paprRoot.js";
 import {
+  canonicalJobDatabasePath,
+  isPathWithinWorkspace,
   parseDataSourcesFile,
   serializeDataSourcesFile,
   type AppDataSourcesFile,
 } from "./appDataSources.js";
 import {
   extractDatabaseSlugFromPath,
+  isReadableDbFile,
   resolveReadableRegistryDbPath,
   workspaceRegistryDbPath,
 } from "./resolveRegistryDbPath.js";
+import { slugifyDatabaseAlias } from "./appDataSources.js";
 
 /** True when dbPath is set but not readable on this machine. */
 export function isUnreadableDbPath(dbPath: string | undefined): boolean {
@@ -136,14 +140,65 @@ export async function repairRegistryLocalPathsOnDisk(): Promise<number> {
 }
 
 /**
+ * Point job-owned registry entries at this workspace's Jobs/{id}/data/data.db
+ * when git sync left a foreign absolute localPath (same job id, wrong namespace).
+ */
+export async function repairJobOwnedRegistryLocalPaths(
+  jobsRoot: string,
+): Promise<number> {
+  const { initializeDatabaseRegistry } = await import(
+    "./DatabaseRegistryService.js"
+  );
+  const registry = await initializeDatabaseRegistry();
+  const workspaceRoot = getPaprRoot();
+  let repairs = 0;
+
+  for (const record of registry.listActive()) {
+    const ownerJobId = record.ownerJobId?.trim();
+    if (!ownerJobId) {
+      continue;
+    }
+
+    const canonical = canonicalJobDatabasePath(jobsRoot, ownerJobId);
+    if (!existsSync(canonical)) {
+      continue;
+    }
+
+    const stored = record.localPath?.trim() ?? "";
+    if (
+      stored.length > 0 &&
+      path.normalize(stored) === path.normalize(canonical)
+    ) {
+      continue;
+    }
+
+    const storedForeign =
+      stored.length > 0 && !isPathWithinWorkspace(stored, workspaceRoot);
+    const storedMissing = stored.length > 0 && !existsSync(stored);
+
+    if (storedForeign || storedMissing || stored.length === 0) {
+      await registry.updateLocalPath(record.dbId, canonical);
+      repairs += 1;
+    }
+  }
+
+  return repairs;
+}
+
+/**
  * Repair data-sources.json + registry for the active workspace.
  * Run after cloud install or git pull before Turso sync.
  */
 export async function repairWorkspacePortableDataSources(): Promise<{
   registryRepairs: number;
+  jobRegistryRepairs: number;
   dataSourceRepairs: number;
 }> {
   const registryRepairs = await repairRegistryLocalPathsOnDisk();
+  const { getPaprJobsRoot } = await import("../../core/utils/paprRoot.js");
+  const jobRegistryRepairs = await repairJobOwnedRegistryLocalPaths(
+    getPaprJobsRoot(),
+  );
 
   const { runGlobalDataSourcePathRepair } = await import(
     "./dataSourcePathRepairScan.js"
@@ -154,6 +209,7 @@ export async function repairWorkspacePortableDataSources(): Promise<{
 
   return {
     registryRepairs,
+    jobRegistryRepairs,
     dataSourceRepairs: scan.repairCount,
   };
 }
@@ -167,6 +223,8 @@ export async function resolveLinkedSourceDbPath(input: {
   dbId?: string;
   jobId?: string;
   jobsRoot: string;
+  /** Registry or linked-databases label when dbPath was scrubbed for portable sync. */
+  registryLabel?: string;
 }): Promise<string | null> {
   const stored = input.dbPath?.trim() ?? "";
   if (stored && existsSync(stored)) {
@@ -207,5 +265,14 @@ export async function resolveLinkedSourceDbPath(input: {
     return workspaceRegistryDbPath(slug, dataDir);
   }
 
-  return stored || null;
+  const label = input.registryLabel?.trim() || record?.label?.trim() || "";
+  if (label) {
+    const fromLabel = slugifyDatabaseAlias(label);
+    const candidate = workspaceRegistryDbPath(fromLabel, dataDir);
+    if (isReadableDbFile(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
 }

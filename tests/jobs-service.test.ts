@@ -10,6 +10,12 @@ import {
   resetAppServiceSingletonForTests,
 } from "../src/gateway/services/AppService.js";
 import { resetJobsServiceSingletonForTests } from "../src/gateway/services/JobsService.js";
+import { bumpWorkspaceWriteGeneration } from "../src/gateway/services/workspaceWriteGuard.js";
+import { WORKSPACE_CHAT_JOB_ID } from "../src/core/constants/workspaceChatJob.js";
+
+function userVisibleJobs(jobs: Awaited<ReturnType<JobsService["listJobs"]>>) {
+  return jobs.filter((job) => job.id !== WORKSPACE_CHAT_JOB_ID);
+}
 
 const tmpRoots: string[] = [];
 
@@ -41,7 +47,7 @@ describe("JobsService", () => {
   test("creates and lists jobs", async () => {
     const service = await setupService();
     await service.createJob({ name: "Build docs", appIds: [STANDALONE_APP_ID], type: "shell", command: "echo hi" });
-    const jobs = await service.listJobs();
+    const jobs = userVisibleJobs(await service.listJobs());
     expect(jobs).toHaveLength(1);
     expect(jobs[0].name).toBe("Build docs");
   });
@@ -76,7 +82,7 @@ describe("JobsService", () => {
     expect(dbStat.isFile()).toBe(true);
   });
 
-  test("createJob auto-links database to linked mini-app", async () => {
+  test("createJob does not auto-link scratch database (use attach_database)", async () => {
     const service = await setupService();
     const appService = getAppService();
     await appService.initialize();
@@ -92,9 +98,7 @@ describe("JobsService", () => {
     });
 
     const sources = await appService.listAppDataSources(app.id);
-    expect(sources).toHaveLength(1);
-    expect(sources[0]?.alias).toBe("Data Sync");
-    expect(sources[0]?.role).toBe("primary");
+    expect(sources).toHaveLength(0);
   });
 
   test("runs agent jobs via executor immediate path", async () => {
@@ -336,5 +340,58 @@ describe("JobsService index corruption recovery", () => {
     expect(chatJob?.type).toBe("subagent");
     expect(chatJob?.appIds).toEqual([app.id]);
     expect(chatJob?.subAgentId).toBe("agent-test");
+  });
+
+  test("listActiveJobs and stopAllJobs cancel jobs without tracked child processes", async () => {
+    const service = await setupService();
+    const job = await service.createJob({
+      name: "Long agent job",
+      appIds: [STANDALONE_APP_ID],
+      type: "agent",
+      command: "Analyze data",
+    });
+    await service.upsertJob({
+      ...job,
+      status: "running",
+      updatedAt: new Date().toISOString(),
+    });
+
+    expect(service.listActiveJobs()).toEqual([
+      {
+        id: job.id,
+        name: "Long agent job",
+        type: "agent",
+        status: "running",
+      },
+    ]);
+
+    const result = await service.stopAllJobs("stopped for test");
+    expect(result.stoppedCount).toBe(1);
+
+    const refreshed = await service.getJob(job.id);
+    expect(refreshed?.status).toBe("cancelled");
+    expect(refreshed?.error).toBe("stopped for test");
+  });
+
+  test("saveJobs skips disk writes after workspace write generation bump", async () => {
+    const service = await setupService();
+    const job = await service.createJob({
+      name: "Guarded job",
+      appIds: [STANDALONE_APP_ID],
+      type: "shell",
+      command: "echo hi",
+    });
+    const indexPath = path.join(process.env.PAPR_HOME!, "data", "jobs.json");
+    const before = await fs.readFile(indexPath, "utf8");
+
+    bumpWorkspaceWriteGeneration("test switch");
+    await service.upsertJob({
+      ...job,
+      status: "running",
+      updatedAt: new Date().toISOString(),
+    });
+
+    const after = await fs.readFile(indexPath, "utf8");
+    expect(after).toBe(before);
   });
 });

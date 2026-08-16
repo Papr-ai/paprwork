@@ -3,6 +3,8 @@ import {
   deriveAppCloudSyncStatus,
   formatWebSyncStatusTooltip,
   resolvePublishBarStatus,
+  webSyncVisualState,
+  type AppCloudSyncStatus,
 } from "../ui/utils/appCloudSyncStatus";
 import type { SyncItemsResponse } from "../ui/components/Settings/CloudSyncDetails";
 
@@ -74,6 +76,67 @@ describe("deriveAppCloudSyncStatus", () => {
     );
     expect(status.overall).toBe("synced");
     expect(status.chipLabel).toBe("Synced");
+    expect(status.summaryLine).toContain("Last uploaded");
+    expect(status.lastUploadedAt).toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  it("reports synced when app is live on web but git sync-state lags", () => {
+    const items = baseItems({ appId: "app-1", codeStatus: "pending" });
+    items.appContext = {
+      appId: "app-1",
+      dependentJobIds: [],
+      publishLive: true,
+      publishedAt: "2026-02-01T12:00:00.000Z",
+    };
+    items.publish = {
+      status: "synced",
+      detail: "Live on the web — local git sync is catching up",
+    };
+
+    const status = deriveAppCloudSyncStatus("app-1", items, "idle");
+    expect(status.overall).toBe("synced");
+    expect(status.codePhase).toBe("synced");
+    expect(status.codeLabel).toBe("App code is on the web");
+    expect(status.registryLabel).not.toContain("not on web");
+    expect(status.chipLabel).toBe("Synced");
+    expect(status.lastUploadedAt).toBe("2026-02-01T12:00:00.000Z");
+    expect(webSyncVisualState(status)).toBe("synced");
+  });
+
+  it("shows green dot when live app has background coordinator upload", () => {
+    const items = baseItems({ appId: "app-1", codeStatus: "pending" });
+    items.appContext = {
+      appId: "app-1",
+      dependentJobIds: [],
+      publishLive: true,
+    };
+    items.publish = {
+      status: "synced",
+      detail: "Live on the web — local git sync is catching up",
+    };
+    items.upload = {
+      status: "uploading",
+      label: "Upload in progress…",
+      detail: "Usually under a minute.",
+      appId: "app-1",
+    };
+
+    const status = deriveAppCloudSyncStatus("app-1", items, "idle");
+    expect(status.overall).toBe("synced");
+    expect(status.summaryLine).toBe("Everything for this app matches the web");
+    expect(status.uploadStatus).toBeUndefined();
+    expect(webSyncVisualState(status)).toBe("synced");
+  });
+
+  it("does not claim everything matches when needs_sync with no detail parts", () => {
+    const items = baseItems({ appId: "app-1", codeStatus: "synced" });
+    items.upload = { status: "waiting", label: "Queued for upload…" };
+
+    const status = deriveAppCloudSyncStatus("app-1", items, "idle");
+    expect(status.overall).toBe("needs_sync");
+    expect(status.summaryLine).not.toContain("Everything for this app matches");
+    expect(status.summaryLine).toContain("Some changes still need to sync");
+    expect(webSyncVisualState(status)).toBe("warn");
   });
 
   it("reports needs_sync when app code was never uploaded", () => {
@@ -97,6 +160,22 @@ describe("deriveAppCloudSyncStatus", () => {
       "idle",
     );
     expect(status.overall).toBe("needs_sync");
+  });
+
+  it("reports needs_sync when coordinator upload is waiting but turso looks synced", () => {
+    const items = baseItems({
+      appId: "app-1",
+      databases: [{ alias: "main", jobId: "job-1", status: "synced" }],
+    });
+    items.upload = {
+      status: "waiting",
+      label: "Changes waiting to upload",
+      detail: "Database changes are waiting to sync to the web.",
+    };
+
+    const status = deriveAppCloudSyncStatus("app-1", items, "idle");
+    expect(status.overall).toBe("needs_sync");
+    expect(status.uploadStatus).toBe("waiting");
   });
 
   it("reports needs_sync (not uploading) when app is queued but not actively pushing", () => {
@@ -237,6 +316,42 @@ describe("deriveAppCloudSyncStatus", () => {
     expect(status.summaryLine).not.toContain("not uploaded yet");
   });
 
+  it("shows green dot when overall is synced even if publish layer still not_web_ready", () => {
+    const synced = deriveAppCloudSyncStatus(
+      "app-1",
+      baseItems({ appId: "app-1" }),
+      "idle",
+    );
+    const withStalePublish: AppCloudSyncStatus = {
+      ...synced,
+      overall: "synced",
+      publishStatus: "not_web_ready",
+      summaryLine: "Everything for this app matches the web",
+    };
+    expect(webSyncVisualState(withStalePublish)).toBe("synced");
+  });
+
+  it("stays synced on web when live app has local turso lag", () => {
+    const items = baseItems({
+      appId: "app-1",
+      databases: [{ alias: "main", jobId: "job-1", status: "synced" }],
+    });
+    items.appContext = {
+      appId: "app-1",
+      dependentJobIds: [],
+      publishLive: true,
+    };
+    items.publish = {
+      status: "not_web_ready",
+      reason: "turso_pending",
+      detail: "main: pending",
+    };
+
+    const status = deriveAppCloudSyncStatus("app-1", items, "idle");
+    expect(status.overall).toBe("synced");
+    expect(webSyncVisualState(status)).toBe("synced");
+  });
+
   it("shows not ready for web when publish layer blocks", () => {
     const items = baseItems({
       appId: "app-1",
@@ -279,7 +394,7 @@ describe("deriveAppCloudSyncStatus", () => {
   });
 
   it("treats backend metadata-sync flag as auto-integrating job status", () => {
-    const items = baseItems({ appId: "app-1", codeStatus: "outdated" });
+    const items = baseItems({ appId: "app-1", codeStatus: "synced" });
     items.github!.gitUpdatesAvailable = true;
     items.github!.gitRemoteRequiresReview = false;
     items.github!.gitRemoteMetadataSync = true;
@@ -292,6 +407,8 @@ describe("deriveAppCloudSyncStatus", () => {
     expect(status.gitRemoteRequiresReview).toBe(false);
     expect(status.gitRemoteMetadataSync).toBe(true);
     expect(status.chipLabel).toBe("Syncing job status…");
+    expect(status.overall).toBe("synced");
+    expect(status.summaryLine).toContain("Syncing cloud job status");
   });
 
   it("passes through gitRemoteReviewHeadline from backend", () => {
@@ -317,6 +434,49 @@ describe("deriveAppCloudSyncStatus", () => {
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");
     expect(status.gitRemoteRequiresReview).toBe(true);
     expect(formatWebSyncStatusTooltip(status)).toContain("Action needed");
+  });
+
+  it("shows checking copy while refreshing without an active upload", () => {
+    const status = deriveAppCloudSyncStatus(
+      "app-1",
+      baseItems({ appId: "app-1" }),
+      "idle",
+      { refreshing: true },
+    );
+    expect(status.overall).toBe("synced");
+    expect(status.summaryLine).toBe("Checking for updates…");
+    expect(formatWebSyncStatusTooltip(status, { refreshing: true })).toBe(
+      "Checking for updates…",
+    );
+  });
+
+  it("does not report uploading when coordinator is only waiting", () => {
+    const items = baseItems({ appId: "app-1", codeStatus: "outdated" });
+    items.github!.apps[0]!.lastSyncAt = "2026-01-01T00:00:00.000Z";
+    items.upload = {
+      status: "waiting",
+      label: "Changes waiting to upload",
+      detail: "App file changes are waiting to upload.",
+    };
+
+    const status = deriveAppCloudSyncStatus("app-1", items, "idle");
+    expect(status.overall).toBe("needs_sync");
+    expect(status.summaryLine).toContain("app code changed locally");
+    expect(status.summaryLine).not.toContain("Uploading");
+  });
+
+  it("reports uploading only when coordinator is actively uploading", () => {
+    const items = baseItems({ appId: "app-1", codeStatus: "outdated" });
+    items.github!.apps[0]!.lastSyncAt = "2026-01-01T00:00:00.000Z";
+    items.upload = {
+      status: "uploading",
+      label: "Upload in progress…",
+      detail: "Usually under a minute.",
+    };
+
+    const status = deriveAppCloudSyncStatus("app-1", items, "idle");
+    expect(status.overall).toBe("uploading");
+    expect(status.summaryLine).toContain("Uploading app to the web");
   });
 });
 

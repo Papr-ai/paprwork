@@ -21,6 +21,22 @@ describe("buildCoordinatorStatusReport", () => {
     expect(report?.label).toContain("Updating");
   });
 
+  it("returns idle when another app is actively flushing", () => {
+    const sync = {
+      getPaprDir: () => "/tmp/papr",
+      enqueueRelativePath: () => undefined,
+      hasRelativePathChanged: () => false,
+      markRelativePathSynced: () => undefined,
+    } as unknown as CloudSyncService;
+
+    const coordinator = new SyncCoordinator(sync);
+    (coordinator as unknown as { activeProgress: { appId: string; startedAt: number } }).activeProgress =
+      { appId: "other-app", startedAt: Date.now() };
+
+    const report = buildCoordinatorStatusReport(coordinator, "app-1");
+    expect(report?.status).toBe("idle");
+  });
+
   it("returns waiting copy when app has local changes", () => {
     const sync = {
       getPaprDir: () => "/tmp/papr",
@@ -42,6 +58,51 @@ describe("buildCoordinatorStatusReport", () => {
     const report = buildCoordinatorStatusReport(coordinator, "app-1");
     expect(report?.status).toBe("waiting");
     expect(report?.label).toContain("waiting");
+  });
+
+  it("does not report db waiting for another app's dirty database", () => {
+    const sync = {
+      getPaprDir: () => "/tmp/papr",
+      enqueueRelativePath: () => undefined,
+      hasRelativePathChanged: () => false,
+      markRelativePathSynced: () => undefined,
+    } as unknown as CloudSyncService;
+
+    const coordinator = new SyncCoordinator(sync);
+    vi.spyOn(coordinator, "getStatus").mockReturnValue({
+      activeFlush: null,
+      gitDirtyAppIds: [],
+      dbDirtySyncKeys: [],
+      inFlightAppIds: [],
+      queuedFlushAppIds: [],
+      flushErrors: {},
+    });
+
+    const report = buildCoordinatorStatusReport(coordinator, "app-1");
+    expect(report?.status).toBe("idle");
+  });
+
+  it("returns waiting copy when app is queued but not in flight", () => {
+    const sync = {
+      getPaprDir: () => "/tmp/papr",
+      enqueueRelativePath: () => undefined,
+      hasRelativePathChanged: () => false,
+      markRelativePathSynced: () => undefined,
+    } as unknown as CloudSyncService;
+
+    const coordinator = new SyncCoordinator(sync);
+    vi.spyOn(coordinator, "getStatus").mockReturnValue({
+      activeFlush: null,
+      gitDirtyAppIds: [],
+      dbDirtySyncKeys: [],
+      inFlightAppIds: [],
+      queuedFlushAppIds: ["app-1"],
+      flushErrors: {},
+    });
+
+    const report = buildCoordinatorStatusReport(coordinator, "app-1");
+    expect(report?.status).toBe("waiting");
+    expect(report?.label).toContain("Queued");
   });
 
   it("returns failed copy when flush error is exhausted", () => {

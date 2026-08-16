@@ -26,6 +26,13 @@ import {
 import { ensureSettingsTab } from "./ensureSettingsTab";
 import { resetDefaultChatTabGuardForTests } from "./ensureDefaultChatTab";
 import {
+  beginWorkspaceSwitchOverlay,
+  endWorkspaceSwitchOverlay,
+  resetWorkspaceSwitchOverlayForTests,
+  setWorkspaceSwitchOverlayPhase,
+  type WorkspaceSwitchOverlayPhase,
+} from "./workspaceSwitchOverlay";
+import {
   buildWorkspaceUiCacheKey,
   clearWorkspaceUiCacheForTests,
   getActiveWorkspaceUiCacheKey,
@@ -52,6 +59,10 @@ let workspaceSwitchReloading = false;
 let awaitingSwitchTabRecovery: number | null = null;
 const reloadWaitForGatewayByGeneration = new Map<number, boolean>();
 const reloadTargetWorkspaceKeyByGeneration = new Map<number, string>();
+const reloadLabelsByGeneration = new Map<
+  number,
+  { organizationName?: string; namespaceName?: string }
+>();
 
 export interface ReloadWorkspaceSwitchOptions {
   /**
@@ -61,6 +72,8 @@ export interface ReloadWorkspaceSwitchOptions {
   waitForGateway?: boolean;
   /** Target workspace for cache hydration (orgId:namespaceId). */
   targetWorkspaceKey?: string;
+  organizationName?: string;
+  namespaceName?: string;
 }
 
 /** True while tabs/stores are being reset and reloaded for a workspace switch. */
@@ -80,9 +93,13 @@ export function resetWorkspaceReloadForTests(): void {
   awaitingSwitchTabRecovery = null;
   reloadWaitForGatewayByGeneration.clear();
   reloadTargetWorkspaceKeyByGeneration.clear();
+  reloadLabelsByGeneration.clear();
   clearWorkspaceUiCacheForTests();
   resetDefaultChatTabGuardForTests();
+  resetWorkspaceSwitchOverlayForTests();
 }
+
+export { parseWorkspaceSwitchLabels } from "./workspaceSwitchOverlay";
 
 /** Parse org/namespace ids from papr org/namespace switch DOM events. */
 export function parseWorkspaceKeyFromSwitchEvent(
@@ -388,6 +405,12 @@ export async function reloadUiForWorkspaceSwitch(
   if (options?.targetWorkspaceKey) {
     reloadTargetWorkspaceKeyByGeneration.set(generation, options.targetWorkspaceKey);
   }
+  if (options?.organizationName || options?.namespaceName) {
+    reloadLabelsByGeneration.set(generation, {
+      organizationName: options.organizationName,
+      namespaceName: options.namespaceName,
+    });
+  }
   awaitingSwitchTabRecovery = waitForGateway ? generation : null;
 
   workspaceReloadChain = workspaceReloadChain
@@ -422,8 +445,12 @@ export function attachWorkspaceSwitchBroadcastListener(): void {
       void (async () => {
         await applyWorkspaceTabsAfterGatewayReady(workspaceReloadGeneration);
         scheduleDeferredWorkspaceWarmup();
+        endWorkspaceSwitchOverlay();
         window.dispatchEvent(new CustomEvent("papr-workspace-switch-complete"));
       })();
+    }
+    if (detail?.type === "workspace:switch-error") {
+      endWorkspaceSwitchOverlay();
     }
     if (detail?.type === "workspace:switch-phase") {
       const phase =
@@ -432,6 +459,13 @@ export function attachWorkspaceSwitchBroadcastListener(): void {
         "phase" in detail.data
           ? String((detail.data as { phase: string }).phase)
           : undefined;
+      if (
+        phase === "core" ||
+        phase === "artifacts" ||
+        phase === "services"
+      ) {
+        setWorkspaceSwitchOverlayPhase(phase as WorkspaceSwitchOverlayPhase);
+      }
       if (phase === "artifacts") {
         void loadArtifactsForWorkspaceWithRetry();
         window.dispatchEvent(new CustomEvent("papr-workspace-artifacts-ready"));
@@ -447,6 +481,8 @@ async function reloadUiForWorkspaceSwitchInner(
   workspaceSwitchReloading = true;
   window.dispatchEvent(new CustomEvent("papr-workspace-switch-start"));
   const targetWorkspaceKey = reloadTargetWorkspaceKeyByGeneration.get(generation);
+  const labels = reloadLabelsByGeneration.get(generation);
+  beginWorkspaceSwitchOverlay(labels);
   try {
     attachWorkspaceSwitchBroadcastListener();
     clearLegacyGlobalTabCache();

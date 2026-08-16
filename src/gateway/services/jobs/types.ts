@@ -15,6 +15,14 @@ export type JobStatus =
   | "failed"
   | "cancelled";
 
+/** Lightweight summary for workspace-switch preflight and stop-all. */
+export interface ActiveJobSummary {
+  id: string;
+  name: string;
+  type: JobType;
+  status: JobStatus;
+}
+
 export interface JobRecord {
   id: string;
   name: string;

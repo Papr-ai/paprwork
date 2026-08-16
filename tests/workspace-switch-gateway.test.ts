@@ -22,8 +22,29 @@ describe("workspace switch gateway handler", () => {
     );
 
     expect(switchFn).toContain("cancelActiveAgentStreamsQuick");
+    expect(switchFn).toContain("stopActiveJobsBeforeWorkspaceSwitch");
+    expect(switchFn).toContain("bumpWorkspaceWriteGeneration");
+    expect(switchFn).toMatch(
+      /stopActiveJobsBeforeWorkspaceSwitch\(\)[\s\S]*bumpWorkspaceWriteGeneration[\s\S]*pauseWorkspaceSwitchWriters\(\)[\s\S]*activateWorkspacePointer/,
+    );
     expect(switchFn).not.toMatch(/await resetPathBoundSingletons\(\)/);
     expect(switchFn).toContain("void finishWorkspaceSwitchInBackground");
+  });
+
+  it("invalidates in-flight writers and publish client before pointer change", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/workspaceSwitchService.ts"),
+      "utf-8",
+    );
+
+    const pauseFn = content.slice(
+      content.indexOf("async function pauseWorkspaceSwitchWriters"),
+      content.indexOf("const WORKSPACE_SWITCH_JOB_STOP_REASON"),
+    );
+
+    expect(pauseFn).toContain("resetCloudSyncServiceForWorkspaceSwitch");
+    expect(pauseFn).toContain("cancelAllScheduledTursoPushes");
+    expect(pauseFn).toContain("resetCloudAppPublishServiceForWorkspaceSwitch");
   });
 
   it("runs resetPathBoundSingletons in background before phased reinit", () => {
@@ -41,6 +62,20 @@ describe("workspace switch gateway handler", () => {
     const initIdx = bgFn.indexOf("await initializeWorkspaceServicesPhased");
     expect(resetIdx).toBeGreaterThan(-1);
     expect(initIdx).toBeGreaterThan(resetIdx);
+  });
+
+  it("restarts job scheduler after background workspace reinit", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/workspaceSwitchService.ts"),
+      "utf-8",
+    );
+
+    const bgFn = content.slice(
+      content.indexOf("async function finishWorkspaceSwitchInBackground"),
+      content.indexOf("export async function switchActiveWorkspace"),
+    );
+
+    expect(bgFn).toContain("getJobsScheduler().start()");
   });
 
   it("ensures sleep and wiki writer jobs after workspace reinit", () => {

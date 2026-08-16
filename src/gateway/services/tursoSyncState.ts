@@ -252,6 +252,9 @@ export function markDbDirty(
   paprDir?: string,
 ): void {
   const normalizedPath = path.normalize(dbPath);
+  if (!shouldPersistTursoStateForDbPath(normalizedPath, paprDir, "dirty mark")) {
+    return;
+  }
   const state = loadTursoSyncState(paprDir);
   if (!hasUnpushedLocalDbChanges(syncKey, normalizedPath, state)) {
     clearStaleDirtyFlagIfClean(syncKey, normalizedPath, paprDir);
@@ -299,11 +302,99 @@ export function clearDirtyAfterPush(syncKey: string, paprDir?: string): void {
   saveTursoSyncState(state, paprDir);
 }
 
+/** True when a Turso state entry belongs to the active workspace tree. */
+export function isTursoStateDbPathInWorkspace(
+  dbPath: string,
+  paprDir?: string,
+): boolean {
+  const root = path.resolve(paprDir ?? getPaprRoot());
+  const normalized = path.resolve(dbPath);
+  return normalized === root || normalized.startsWith(`${root}${path.sep}`);
+}
+
+/** Block sync-state writes during workspace-switch races or foreign data-sources paths. */
+function shouldPersistTursoStateForDbPath(
+  dbPath: string,
+  paprDir: string | undefined,
+  context: string,
+): boolean {
+  if (isTursoStateDbPathInWorkspace(dbPath, paprDir)) {
+    return true;
+  }
+  console.warn(
+    `[TursoSync] Ignoring sync-state ${context} for DB outside active workspace: ${dbPath}`,
+  );
+  return false;
+}
+
+/**
+ * Drop sync-state rows for other workspaces / missing DB files and clear stale dirty flags.
+ * Called on workspace switch so dirty signals do not leak across namespaces.
+ */
+export function pruneTursoSyncStateForWorkspace(paprDir?: string): number {
+  const root = paprDir ?? getPaprRoot();
+  const state = loadTursoSyncState(root);
+  let changed = 0;
+
+  for (const [syncKey, entry] of Object.entries(state.jobs)) {
+    if (
+      !isTursoStateDbPathInWorkspace(entry.dbPath, root) ||
+      !fs.existsSync(entry.dbPath)
+    ) {
+      delete state.jobs[syncKey];
+      changed += 1;
+      continue;
+    }
+
+    if (
+      entry.dirtyFlag &&
+      !hasUnpushedLocalDbChanges(syncKey, entry.dbPath, state)
+    ) {
+      delete entry.dirtyFlag;
+      delete entry.dirtyFlagAt;
+      changed += 1;
+    }
+  }
+
+  if (changed > 0) {
+    saveTursoSyncState(state, root);
+  }
+  return changed;
+}
+
 export function listDbDirtySyncKeys(paprDir?: string): string[] {
-  const state = loadTursoSyncState(paprDir);
-  return Object.entries(state.jobs)
-    .filter(([, entry]) => entry.dirtyFlag === true)
-    .map(([syncKey]) => syncKey);
+  const root = paprDir ?? getPaprRoot();
+  const state = loadTursoSyncState(root);
+  const dirty: string[] = [];
+
+  for (const [syncKey, entry] of Object.entries(state.jobs)) {
+    if (!entry.dirtyFlag) {
+      continue;
+    }
+    if (!isTursoStateDbPathInWorkspace(entry.dbPath, root)) {
+      continue;
+    }
+    if (!fs.existsSync(entry.dbPath)) {
+      continue;
+    }
+    if (!hasUnpushedLocalDbChanges(syncKey, entry.dbPath, state)) {
+      clearStaleDirtyFlagIfClean(syncKey, entry.dbPath, root);
+      continue;
+    }
+    dirty.push(syncKey);
+  }
+
+  return dirty;
+}
+
+/** Filter workspace-scoped dirty sync keys to those linked from one mini-app. */
+export function listDbDirtySyncKeysForApp(
+  linkedSyncKeys: ReadonlySet<string>,
+  paprDir?: string,
+): string[] {
+  return listDbDirtySyncKeys(paprDir).filter((syncKey) =>
+    linkedSyncKeys.has(syncKey),
+  );
 }
 
 /**
@@ -391,6 +482,11 @@ export function recordTursoPushQuarantine(
   paprDir?: string,
 ): void {
   const normalizedPath = path.normalize(dbPath);
+  if (
+    !shouldPersistTursoStateForDbPath(normalizedPath, paprDir, "quarantine")
+  ) {
+    return;
+  }
   const state = loadTursoSyncState(paprDir);
   const existing = state.jobs[jobId];
   state.jobs[jobId] = {
@@ -424,6 +520,9 @@ export function recordTursoPushSuccess(
   lastPushedLogId?: number,
 ): void {
   const normalizedPath = path.normalize(dbPath);
+  if (!shouldPersistTursoStateForDbPath(normalizedPath, paprDir, "push success")) {
+    return;
+  }
   const fingerprints =
     tableFingerprints ?? computeSyncableTableFingerprintsForPath(normalizedPath);
 
@@ -540,6 +639,9 @@ export function recordTursoRemoteVersion(
     lastPulledLogId?: number;
   },
 ): void {
+  if (!shouldPersistTursoStateForDbPath(dbPath, paprDir, "remote version")) {
+    return;
+  }
   const state = loadTursoSyncState(paprDir);
   const existing = state.jobs[jobId];
   state.jobs[jobId] = {
@@ -574,6 +676,9 @@ export function recordTursoIndexVersion(
   version: number,
   paprDir?: string,
 ): void {
+  if (!shouldPersistTursoStateForDbPath(dbPath, paprDir, "index version")) {
+    return;
+  }
   const state = loadTursoSyncState(paprDir);
   const existing = state.jobs[jobId];
   state.jobs[jobId] = {

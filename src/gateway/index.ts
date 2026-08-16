@@ -207,7 +207,9 @@ async function initializeServices(): Promise<void> {
 
     // Now that JobsService is ready, install any default jobs deferred by AppService
     const { getAppService } = await import("./services/AppService.js");
-    await getAppService().installPendingDefaultJobs();
+    const appService = getAppService();
+    await appService.installPendingDefaultJobs();
+    await appService.repairHomeAndWorkspaceOnStartup();
 
     console.log("[Gateway] Initializing SkillService...");
     await initializeSkillService();
@@ -782,8 +784,15 @@ async function startGateway(): Promise<void> {
         );
         res.json({ ...result, source: source.alias });
       } catch (err) {
+        const message = (err as Error).message;
         console.error("[Gateway] /api/db/query error:", err);
-        res.status(500).json({ error: (err as Error).message });
+        const status =
+          message.includes("Turso fallback is unavailable") ||
+          message.includes("Local database not found") ||
+          message.includes("No data sources linked")
+            ? 503
+            : 500;
+        res.status(status).json({ error: message });
       }
     });
     // ── Mini-app batch read API ─────────────────────────────────────────────
@@ -1929,6 +1938,8 @@ async function startGateway(): Promise<void> {
               dependentJobIds: string[];
               registryDbIds: string[];
               globalAutoUploadEnabled: boolean;
+              publishLive: boolean;
+              publishedAt: string | null;
             }
           | undefined;
         if (appId) {
@@ -1950,6 +1961,21 @@ async function startGateway(): Promise<void> {
           // Reconcile whenever the UI asks for this app — git-clean folders
           // should show green even if mtime-only drift fooled the hash cache.
           await sync.reconcileAppDependentPaths(appId);
+          let publishLive = false;
+          let publishedAt: string | null = null;
+          try {
+            const { getCloudAppPublishService } = await import(
+              "./services/CloudAppPublishService.js"
+            );
+            const publishService = getCloudAppPublishService();
+            if (publishService) {
+              const cfg = await publishService.getPublishConfig(appId);
+              publishLive = cfg.enabled === true && !!cfg.shareUrl;
+              publishedAt = cfg.publishedAt;
+            }
+          } catch {
+            /* publish lookup optional for sync status */
+          }
           appContext = {
             appId,
             dependentJobIds: resolveAppDependentJobIds(
@@ -1958,6 +1984,8 @@ async function startGateway(): Promise<void> {
             ),
             registryDbIds: readDataSourceRegistryDbIds(getPaprRoot(), appId),
             globalAutoUploadEnabled: isCloudAutoUploadGloballyEnabled(),
+            publishLive,
+            publishedAt,
           };
         }
 
@@ -1974,7 +2002,8 @@ async function startGateway(): Promise<void> {
           );
           publish = await buildPublishLayerReport(appId, {
             paprDir: getPaprRoot(),
-            cloudPublishing: sync.getState().cloudPublishing,
+            cloudPublishing: sync.isCloudPublishingForApp(appId),
+            publishLive: appContext?.publishLive === true,
           });
         }
 

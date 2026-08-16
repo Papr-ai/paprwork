@@ -168,20 +168,23 @@ export function useAppCloudSyncStatus(
     if (syncItems) {
       return deriveAppCloudSyncStatus(appId, syncItems, gitGlobalStatus, {
         isUploading: pushing,
-        cloudPublishing,
+        refreshing,
       });
     }
     return null;
-  }, [appId, syncItems, gitGlobalStatus, pushing, cloudPublishing]);
+  }, [appId, syncItems, gitGlobalStatus, pushing, refreshing]);
 
   const refresh = useCallback(
     async (force = false) => {
       if (!active || refreshInFlightRef.current) return;
       refreshInFlightRef.current = true;
+      const isBackgroundRefresh = hasLoadedOnceRef.current && !force;
       try {
         setError(null);
         if (!hasLoadedOnceRef.current) {
           setLoading(true);
+        } else if (isBackgroundRefresh) {
+          setRefreshing(true);
         }
 
         const git = await waitForGitSyncReady();
@@ -226,6 +229,7 @@ export function useAppCloudSyncStatus(
       } finally {
         refreshInFlightRef.current = false;
         setLoading(false);
+        setRefreshing(false);
       }
     },
     [active, appId],
@@ -346,15 +350,15 @@ export function useAppCloudSyncStatus(
       pulling ||
       applyingUpdates ||
       status?.overall === "uploading" ||
-      status?.globallySyncing ||
-      status?.cloudPublishing
+      status?.publishStatus === "republishing" ||
+      status?.globallySyncing
         ? 3_000
         : 25_000;
     const timer = setInterval(() => {
       void refresh();
     }, intervalMs);
     return () => clearInterval(timer);
-  }, [active, refresh, pushing, pulling, applyingUpdates, status?.overall, status?.globallySyncing, status?.cloudPublishing]);
+  }, [active, refresh, pushing, pulling, applyingUpdates, status?.overall, status?.publishStatus, status?.globallySyncing]);
 
   return {
     status,

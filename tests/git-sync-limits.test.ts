@@ -11,6 +11,9 @@ describe("gitSyncLimits", () => {
     expect(isLocalOnlyCloudSyncArtifact("data.db.corrupt-1785826750.bak")).toBe(true);
     expect(isLocalOnlyCloudSyncArtifact("apps.json.corrupt-123")).toBe(true);
     expect(isLocalOnlyCloudSyncArtifact("data.db.corrupt-backup-2026")).toBe(true);
+    expect(isLocalOnlyCloudSyncArtifact("data.db.sync-backup-1786575688502")).toBe(
+      true,
+    );
     expect(isLocalOnlyCloudSyncArtifact("icon.svg")).toBe(false);
     expect(isLocalOnlyCloudSyncArtifact("guide.pdf")).toBe(false);
   });

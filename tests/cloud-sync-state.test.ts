@@ -31,6 +31,11 @@ describe("shouldExcludePathFromContentHash", () => {
         "Jobs/job-1/data/data.db.corrupt-backup-2026-04-01T12-00-00",
       ),
     ).toBe(true);
+    expect(
+      shouldExcludePathFromContentHash(
+        "data/databases/joe-coffee-intelligence/data.db.sync-backup-1786575688502",
+      ),
+    ).toBe(true);
     expect(shouldExcludePathFromContentHash("data/apps.json.corrupt-1234567890")).toBe(
       true,
     );

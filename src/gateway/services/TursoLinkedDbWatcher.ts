@@ -23,6 +23,7 @@ import {
   clearStaleDirtyFlagIfClean,
   hasUnpushedLocalDbChanges,
   isJobDbQuarantined,
+  isTursoStateDbPathInWorkspace,
   loadTursoSyncState,
   recordTursoPushQuarantine,
 } from "./tursoSyncState.js";
@@ -112,6 +113,10 @@ function handleDbChange(changedPath: string): void {
 }
 
 function evaluateDbChange(watched: WatchedDbDir): void {
+  if (!isTursoStateDbPathInWorkspace(watched.dbPath)) {
+    return;
+  }
+
   try {
     ensureLocalDbChangeLogReady(watched.dbPath);
   } catch (error) {

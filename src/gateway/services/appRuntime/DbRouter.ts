@@ -164,8 +164,13 @@ export class DbRouter {
 
     const client = await getTursoClientForSource(source);
     if (!client) {
+      const pathHint = source.dbPath?.trim()
+        ? source.dbPath
+        : source.dbId
+          ? `(unresolved dbId ${source.dbId})`
+          : "(no dbPath configured)";
       throw new Error(
-        `Local database not found at ${source.dbPath} and Turso fallback is unavailable. ` +
+        `Local database not found at ${pathHint} and Turso fallback is unavailable. ` +
           "Sign in to Papr or run the linked job on this machine first.",
       );
     }

@@ -8,6 +8,10 @@
 import * as fs from "fs";
 import * as path from "path";
 import { mergeCloudActingUserBody } from "../utils/cloudActingUser.js";
+import {
+  canPerformWorkspaceDbWrite,
+  getWorkspaceWriteGeneration,
+} from "./workspaceWriteGuard.js";
 import { getPaprApiKey } from "../utils/keyResolver.js";
 import { publishDbChanged } from "../utils/publishJobRunEvents.js";
 import {
@@ -475,6 +479,16 @@ export class TursoSyncBridge {
   ): Promise<PushResult> {
     const dbPath = linked.dbPath;
     const syncKey = linkedSourceSyncKey(linked);
+    const writeGeneration = getWorkspaceWriteGeneration();
+    if (
+      !canPerformWorkspaceDbWrite(
+        writeGeneration,
+        dbPath,
+        `turso bridge push ${syncKey}`,
+      )
+    ) {
+      return { status: "skipped", tables: [], reason: "workspace_switch" };
+    }
     const alternateKeys = linkedSourceAlternateKeys(linked);
     const databaseName = await this.resolveTursoDatabaseNameForLinked(linked);
     const creds = credentials ?? (await this.fetchCredentials(databaseName));
@@ -544,6 +558,16 @@ export class TursoSyncBridge {
       );
 
       const repairBootstrap = pushOptions?.force === true;
+
+      if (
+        !canPerformWorkspaceDbWrite(
+          writeGeneration,
+          dbPath,
+          `turso bridge remote push ${syncKey}`,
+        )
+      ) {
+        return { status: "skipped", tables: [], reason: "workspace_switch" };
+      }
 
       let result = await pushLocalDbToTurso(dbPath, creds, {
         jobId: syncKey,

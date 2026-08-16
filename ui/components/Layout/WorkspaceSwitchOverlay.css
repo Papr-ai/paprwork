@@ -1,0 +1,82 @@
+.workspace-switch-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--bg-primary, #0f0f12) 72%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+.workspace-switch-overlay__panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(420px, 100%);
+  padding: 28px 24px;
+  border-radius: var(--r-lg, 16px);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  background: color-mix(in srgb, var(--bg-secondary, #1c1c1e) 92%, transparent);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+  text-align: center;
+}
+
+.workspace-switch-overlay__spinner {
+  width: 32px;
+  height: 32px;
+  border: 2px solid var(--border-color, rgba(255, 255, 255, 0.12));
+  border-top-color: var(--accent-color, #007aff);
+  border-radius: 50%;
+  animation: workspace-switch-spin 0.8s linear infinite;
+}
+
+.workspace-switch-overlay__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary, #fff);
+}
+
+.workspace-switch-overlay__target {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.72));
+}
+
+.workspace-switch-overlay__phase {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.72));
+}
+
+.workspace-switch-overlay__steps {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workspace-switch-overlay__step {
+  width: 28px;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-secondary, #999) 24%, transparent);
+}
+
+.workspace-switch-overlay__step--active {
+  background: var(--accent-color, #007aff);
+}
+
+.workspace-switch-overlay__step--done {
+  background: color-mix(in srgb, var(--accent-color, #007aff) 55%, transparent);
+}
+
+@keyframes workspace-switch-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

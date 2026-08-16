@@ -39,7 +39,12 @@ export interface PublishLayerReport {
 
 export async function buildPublishLayerReport(
   appId: string,
-  options?: { paprDir?: string; cloudPublishing?: boolean },
+  options?: {
+    paprDir?: string;
+    cloudPublishing?: boolean;
+    /** App has an active Papr cloud share link (enabled + shareUrl). */
+    publishLive?: boolean;
+  },
 ): Promise<PublishLayerReport> {
   if (options?.cloudPublishing) {
     return { status: "republishing", detail: "Updating publish catalog…" };
@@ -50,6 +55,19 @@ export async function buildPublishLayerReport(
     return ready.detail
       ? { status: "synced", detail: ready.detail }
       : { status: "synced" };
+  }
+
+  if (
+    options?.publishLive &&
+    (ready.reason === "git_pending" || ready.reason === "git_failed")
+  ) {
+    return {
+      status: "synced",
+      detail:
+        ready.reason === "git_pending"
+          ? "Live on the web — local git sync is catching up"
+          : (ready.detail ?? "Live on the web"),
+    };
   }
 
   if (ready.reason === "convergence_drift") {

@@ -12,16 +12,27 @@ import {
   serializeDataSourcesFile,
   type AppDataSource,
 } from "./appDataSources.js";
+import {
+  buildDailyBriefDataSource,
+  DEFAULT_HOME_APP_ID,
+  readHomeDailyBriefJobIdFromAppDir,
+  resolveHomeDailyBriefJobId,
+  shouldRewriteDailyBriefDbPath,
+  writeHomeDailyBriefJobIdToAppDir,
+} from "./defaultHomeBundle.js";
 import { ensureSchemaMigrationsTable } from "./jobs/schemaMigrationsLedger.js";
 
-export const DEFAULT_HOME_APP_ID = "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c";
-export const DEFAULT_HOME_DAILY_BRIEF_JOB_ID =
-  "2cafb2e9-696b-42db-98fa-5d605977123c";
+export {
+  DEFAULT_HOME_APP_ID,
+  DEFAULT_HOME_DAILY_BRIEF_JOB_ID,
+  LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID,
+} from "./defaultHomeBundle.js";
 
 export interface DefaultHomeAppRepairResult {
   prunedSources: number;
   schemaRepaired: number;
   dbPathsUpdated: number;
+  jobIdPersisted: number;
 }
 
 function upgradeSchemaMigrationsIfReadable(dbPath: string): boolean {
@@ -42,16 +53,20 @@ function upgradeSchemaMigrationsIfReadable(dbPath: string): boolean {
 
 export async function repairDefaultHomeAppLinkedSources(params: {
   appsDir: string;
+  workspaceRoot: string;
   jobExists: (jobId: string) => boolean;
   resolveJobDbPath: (jobId: string) => string;
+  findLinkedDailyBriefJobId?: () => string | undefined;
 }): Promise<DefaultHomeAppRepairResult> {
   const result: DefaultHomeAppRepairResult = {
     prunedSources: 0,
     schemaRepaired: 0,
     dbPathsUpdated: 0,
+    jobIdPersisted: 0,
   };
 
-  const dsPath = path.join(params.appsDir, DEFAULT_HOME_APP_ID, "data-sources.json");
+  const appDir = path.join(params.appsDir, DEFAULT_HOME_APP_ID);
+  const dsPath = path.join(appDir, "data-sources.json");
   let raw: string;
   try {
     raw = await fs.readFile(dsPath, "utf-8");
@@ -66,17 +81,55 @@ export async function repairDefaultHomeAppLinkedSources(params: {
     return result;
   }
 
+  const jobIdFromFile = await readHomeDailyBriefJobIdFromAppDir(appDir);
+  const dailyBriefJobId = resolveHomeDailyBriefJobId({
+    appDir,
+    jobIdFromFile,
+    jobExists: params.jobExists,
+    findLinkedJobId: params.findLinkedDailyBriefJobId,
+  });
+
+  if (dailyBriefJobId && jobIdFromFile !== dailyBriefJobId) {
+    await writeHomeDailyBriefJobIdToAppDir(appDir, dailyBriefJobId);
+    result.jobIdPersisted += 1;
+  }
+
   const kept: AppDataSource[] = [];
   for (const source of config.sources ?? []) {
     const jobId = source.jobId?.trim();
+
+    // Cloud/git sync can leave a stub row (briefs table, empty jobId/dbPath).
+    // Treat it as broken — replace with a fully linked Daily Brief source.
+    if (
+      dailyBriefJobId &&
+      source.tables?.includes("briefs") &&
+      jobId !== dailyBriefJobId
+    ) {
+      const dbPath = params.resolveJobDbPath(dailyBriefJobId);
+      kept.push(
+        buildDailyBriefDataSource(
+          dailyBriefJobId,
+          existsSync(dbPath) ? dbPath : "",
+        ),
+      );
+      result.dbPathsUpdated += 1;
+      continue;
+    }
+
     if (jobId && !params.jobExists(jobId)) {
       result.prunedSources += 1;
       continue;
     }
 
-    if (jobId && (!source.dbPath || source.dbPath.trim() === "")) {
+    if (jobId) {
       const resolved = params.resolveJobDbPath(jobId);
-      if (resolved && existsSync(resolved)) {
+      if (
+        shouldRewriteDailyBriefDbPath({
+          storedDbPath: source.dbPath,
+          resolvedDbPath: resolved,
+          workspaceRoot: params.workspaceRoot,
+        })
+      ) {
         source.dbPath = resolved;
         result.dbPathsUpdated += 1;
       }
@@ -90,26 +143,29 @@ export async function repairDefaultHomeAppLinkedSources(params: {
     kept.push(source);
   }
 
-  const hasDailyBrief = kept.some(
-    (source) => source.jobId === DEFAULT_HOME_DAILY_BRIEF_JOB_ID,
-  );
-  if (!hasDailyBrief && params.jobExists(DEFAULT_HOME_DAILY_BRIEF_JOB_ID)) {
-    const dbPath = params.resolveJobDbPath(DEFAULT_HOME_DAILY_BRIEF_JOB_ID);
-    kept.unshift({
-      id: `${DEFAULT_HOME_DAILY_BRIEF_JOB_ID}:Daily Brief Generator (${DEFAULT_HOME_DAILY_BRIEF_JOB_ID.slice(0, 8)})`,
-      type: "sqlite",
-      jobId: DEFAULT_HOME_DAILY_BRIEF_JOB_ID,
-      alias: `Daily Brief Generator (${DEFAULT_HOME_DAILY_BRIEF_JOB_ID.slice(0, 8)})`,
-      dbPath: existsSync(dbPath) ? dbPath : "",
-      tables: ["briefs"],
-      linkedAt: new Date().toISOString(),
-    });
+  const hasDailyBrief =
+    dailyBriefJobId !== undefined &&
+    kept.some(
+      (source) =>
+        source.jobId === dailyBriefJobId &&
+        source.tables?.includes("briefs"),
+    );
+
+  if (!hasDailyBrief && dailyBriefJobId) {
+    const dbPath = params.resolveJobDbPath(dailyBriefJobId);
+    kept.unshift(
+      buildDailyBriefDataSource(
+        dailyBriefJobId,
+        existsSync(dbPath) ? dbPath : "",
+      ),
+    );
     result.dbPathsUpdated += 1;
   }
 
   const changed =
     result.prunedSources > 0 ||
     result.dbPathsUpdated > 0 ||
+    result.jobIdPersisted > 0 ||
     kept.length !== (config.sources?.length ?? 0);
 
   if (changed) {

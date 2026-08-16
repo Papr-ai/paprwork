@@ -198,29 +198,13 @@ export interface ElectronAPI {
       success: boolean;
       pointer?: {
         organizationId: string;
+        organizationName?: string;
         namespaceId: string;
         namespaceName?: string;
         paprHome: string;
         userDataPath: string;
         activatedAt?: string;
       };
-      error?: string;
-    }>;
-    detectLegacyFlatMigration: () => Promise<{
-      success: boolean;
-      needsUserConsent?: boolean;
-      entries?: string[];
-      error?: string;
-    }>;
-    runConsentLegacyMigration: (input: {
-      organizationId: string;
-      namespaceId: string;
-      organizationName?: string;
-      namespaceName?: string;
-      paprApiKey?: string;
-    }) => Promise<{
-      success: boolean;
-      movedEntries?: string[];
       error?: string;
     }>;
     onLoginSuccess: (callback: (data: { email: string; name?: string; userId?: string }) => void) => void;
@@ -447,6 +431,10 @@ export interface ElectronAPI {
       mimeType: string;
       dataBase64: string;
     }) => Promise<{ success: boolean; filePath?: string; error?: string }>;
+    readPreview: (input: {
+      filePath: string;
+      mimeType?: string;
+    }) => Promise<{ success: boolean; dataUrl?: string; error?: string }>;
   };
 
   // App metadata

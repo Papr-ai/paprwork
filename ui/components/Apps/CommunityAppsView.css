@@ -186,10 +186,10 @@
   to { transform: rotate(360deg); }
 }
 
-/* Grid */
+/* Grid — match My Apps (.apps-view__grid) */
 .community-apps__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 20px;
 }
 
@@ -217,12 +217,22 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.30);
 }
 
-/* Orb with droplet PNG background */
+/* Preview area — match AppCard (.app-card__preview) */
+.community-card__preview {
+  width: 100%;
+  height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+}
+
+/* Orb with droplet PNG background — match AppCard (.app-card__orb) */
 .community-card__orb {
   position: relative;
   isolation: isolate;
-  width: 72px;
-  height: 72px;
+  width: 110px;
+  height: 110px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -232,7 +242,6 @@
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
-  margin: 24px auto 0;
   transition: transform 220ms var(--ease, cubic-bezier(.2,.8,.2,1));
 }
 
@@ -240,19 +249,19 @@
 .community-card__orb::after {
   content: "";
   position: absolute;
-  bottom: -6px;
+  bottom: -8px;
   left: 50%;
   transform: translateX(-50%);
   width: 70%;
-  height: 10px;
+  height: 12px;
   border-radius: 50%;
   background: radial-gradient(
     ellipse,
-    rgba(100, 180, 255, 0.18) 0%,
-    rgba(100, 180, 255, 0.09) 40%,
+    rgba(100, 180, 255, 0.2) 0%,
+    rgba(100, 180, 255, 0.1) 40%,
     transparent 70%
   );
-  filter: blur(5px);
+  filter: blur(6px);
   pointer-events: none;
   z-index: -1;
 }
@@ -267,11 +276,13 @@
 }
 
 .community-card__orb-inner {
-  display: none;
-}
-
-.community-card__orb-highlight {
-  display: none;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(55, 65, 88, 0.78);
+  z-index: 1;
 }
 
 /* Content */
@@ -284,7 +295,7 @@
 }
 
 .community-card__title {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
   margin: 0;
@@ -352,22 +363,26 @@
   text-transform: uppercase;
 }
 
-/* Orb icon (custom SVG/emoji from registry) */
+/* Orb icon (custom SVG/emoji from registry) — match AppCard (.app-card__orb-icon) */
 .community-card__orb-icon {
-  width: 36px;
-  height: 36px;
+  width: 56px;
+  height: 56px;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
   font-size: 28px;
   line-height: 1;
+  white-space: nowrap;
+  text-overflow: clip;
   position: relative;
   z-index: 1;
 }
 
 .community-card__orb-icon svg {
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
 }
 
 /* Pre-rendered droplet PNG / data-URI icons */
@@ -590,8 +605,16 @@
   }
 
   /* White icons in dark mode */
+  .community-card__orb-icon svg {
+    color: white;
+  }
+
   .community-card__orb-icon svg rect {
     stroke: white !important;
+  }
+
+  .community-card__orb-inner {
+    color: rgba(210, 218, 232, 0.88);
   }
 
   .community-card__orb:has(.community-card__orb-icon--image) {

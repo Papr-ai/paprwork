@@ -213,6 +213,24 @@ export async function setupJobsHandlers(
         sendResponse(ws, { id: message.id, success: true, data: job });
         break;
       }
+      case "jobs:active-list": {
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: { jobs: jobsService.listActiveJobs() },
+        });
+        break;
+      }
+      case "jobs:stop-all": {
+        const payload = (message.payload ?? {}) as { reason?: string };
+        const reason =
+          typeof payload.reason === "string" && payload.reason.trim()
+            ? payload.reason.trim()
+            : "Job stopped — workspace switch";
+        const result = await jobsService.stopAllJobs(reason);
+        sendResponse(ws, { id: message.id, success: true, data: result });
+        break;
+      }
       case "jobs:update": {
         const payload = message.payload as UpdateJobPayload;
         const { jobId, ...updates } = payload;

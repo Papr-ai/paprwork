@@ -17,6 +17,7 @@ export function isLocalOnlyCloudSyncArtifact(baseName: string): boolean {
   if (lower.includes(".bak.")) return true;
   if (lower.includes(".backup.")) return true;
   if (lower.includes(".backup-")) return true;
+  if (lower.includes(".sync-backup-")) return true;
   if (lower.includes(".corrupt-")) return true;
   if (lower.includes("corrupt-backup")) return true;
   return false;
