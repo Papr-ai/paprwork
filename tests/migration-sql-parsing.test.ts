@@ -196,6 +196,28 @@ describe("migration SQL parsing", () => {
       db.close();
     });
 
+    // Drop-and-recreate: per-statement the DROP looks unsatisfied because the
+    // index exists again. Only the migration's final state matters.
+    it.skipIf(!canUseBetterSqlite)("accepts DROP followed by CREATE of the same index", async () => {
+      const dir = await writeMigration(
+        "0006_fix_turso_period_index.sql",
+        "-- Fix drift: verifier understands CREATE TABLE; a DROP could not be checked\n" +
+          "DROP INDEX IF EXISTS idx_hist_period;\n" +
+          "CREATE INDEX IF NOT EXISTS idx_hist_period ON assessment_history(period, csm);",
+      );
+      const db = new Database(":memory:");
+      db.exec("CREATE TABLE assessment_history (csm TEXT, period TEXT)");
+      db.exec("CREATE INDEX idx_hist_period ON assessment_history(period, csm)");
+
+      const result = await verifyMigrationOnLocal(
+        db,
+        dir,
+        "0006_fix_turso_period_index.sql",
+      );
+      expect(result.satisfied).toBe(true);
+      db.close();
+    });
+
     it.skipIf(!canUseBetterSqlite)("reports a DROP as unsatisfied while the object still exists", async () => {
       const dir = await writeMigration(
         "0007_drop_old.sql",

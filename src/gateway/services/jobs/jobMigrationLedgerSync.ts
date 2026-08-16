@@ -58,6 +58,56 @@ function describeOp(op: JobMigrationSchemaOp): string {
   return collapsed.length > 120 ? `${collapsed.slice(0, 117)}…` : collapsed;
 }
 
+/** Name of the table/index a statement creates, for supersede detection. */
+function createdObject(
+  op: JobMigrationSchemaOp,
+): { objectType: "table" | "index"; name: string } | null {
+  if (op.kind !== "sql") {
+    return null;
+  }
+  const table = parseCreateTableStatement(op.statement);
+  if (table) {
+    return { objectType: "table", name: table.table };
+  }
+  const index = parseCreateIndexStatement(op.statement);
+  if (index) {
+    return { objectType: "index", name: index.indexName };
+  }
+  return null;
+}
+
+/**
+ * Drop-and-recreate is a normal migration shape:
+ *
+ *   DROP INDEX IF EXISTS idx_a;
+ *   CREATE INDEX idx_a ON t (a, b);
+ *
+ * Checked per statement the DROP looks unsatisfied, because the object exists
+ * again by the time we verify. Only the final state matters, so ignore a DROP
+ * that a later statement in the same migration re-creates.
+ */
+function isSupersededDrop(
+  ops: readonly JobMigrationSchemaOp[],
+  index: number,
+): boolean {
+  const op = ops[index];
+  if (op.kind !== "sql") {
+    return false;
+  }
+  const drop = parseDropStatement(op.statement);
+  if (!drop) {
+    return false;
+  }
+  return ops.slice(index + 1).some((later) => {
+    const created = createdObject(later);
+    return (
+      created !== null &&
+      created.objectType === drop.objectType &&
+      created.name === drop.name
+    );
+  });
+}
+
 function warnUnverifiable(
   migrationRoot: string,
   migrationId: string,
@@ -344,7 +394,11 @@ export async function verifyMigrationOnRemote(
   }
 
   const unverifiable: string[] = [];
-  for (const op of ops) {
+  for (let i = 0; i < ops.length; i += 1) {
+    const op = ops[i];
+    if (isSupersededDrop(ops, i)) {
+      continue;
+    }
     const check = await schemaOpSatisfiedOnRemote(remote, op);
     if (check === "unsatisfied") {
       return { satisfied: false, unverifiable };
@@ -378,7 +432,11 @@ export async function verifyMigrationOnLocal(
   }
 
   const unverifiable: string[] = [];
-  for (const op of ops) {
+  for (let i = 0; i < ops.length; i += 1) {
+    const op = ops[i];
+    if (isSupersededDrop(ops, i)) {
+      continue;
+    }
     const check = schemaOpSatisfiedOnLocal(localDb, op);
     if (check === "unsatisfied") {
       return { satisfied: false, unverifiable };
