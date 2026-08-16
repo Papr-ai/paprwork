@@ -41,6 +41,7 @@ import {
   canPerformWorkspaceWrite,
   getWorkspaceWriteGeneration,
 } from "./workspaceWriteGuard.js";
+import { isWorkspaceChatJob } from "../../core/constants/workspaceChatJob.js";
 
 // ESM compatibility: get __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -1188,7 +1189,7 @@ export class JobsService {
       jobs = jobs.filter((j) => jobBelongsToApp(j.appIds, filter.appId!));
     }
 
-    return jobs;
+    return jobs.filter((job) => !isWorkspaceChatJob(job.id));
   }
 
   /** Returns sorted list of distinct folder labels across all jobs. */

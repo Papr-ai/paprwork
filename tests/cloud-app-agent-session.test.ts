@@ -5,6 +5,7 @@ import {
   resolveCloudAppAgentUserMessage,
   resolveCloudUserDataPath,
 } from "../src/gateway/services/cloudAgentGateway/cloudAppAgentSession.js";
+import { isWorkspaceChatJob } from "../src/core/constants/workspaceChatJob.js";
 import type { CloudAgentRunRequest } from "../src/gateway/services/cloudAgentGateway/types.js";
 
 function baseRequest(
@@ -49,6 +50,20 @@ describe("cloudAppAgentSession helpers", () => {
         }),
       ),
     ).toBe("app-agent:sess-uuid");
+  });
+
+  it("uses stable workspace-chat id for Papr Web warm sessions", () => {
+    expect(isWorkspaceChatJob("workspace-chat")).toBe(true);
+    expect(
+      resolveCloudAgentChatId(
+        baseRequest({
+          workspaceSessionId: "web-chat-1",
+          keepWorkspaceWarm: true,
+          jobId: "workspace-chat",
+          runId: "run-y",
+        }),
+      ),
+    ).toBe("workspace-chat:web-chat-1");
   });
 
   it("uses per-run job chat id for one-shot cloud jobs", () => {

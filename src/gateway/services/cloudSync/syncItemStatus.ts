@@ -6,6 +6,7 @@ import * as fs from "fs";
 import * as path from "path";
 import type { DeadLetterItem, PersistedSyncState } from "./syncState.js";
 import { inferGitRemoteReviewState, summarizeIncomingRemoteGitLog } from "./gitRemoteReconcile.js";
+import { isWorkspaceChatJob } from "../../../core/constants/workspaceChatJob.js";
 
 export type GitHubItemSyncState =
   | "synced"
@@ -304,6 +305,7 @@ function buildJobItems(
 ): GitHubSyncItem[] {
   const names = loadJobNames(paprDir);
   return listJobIds(paprDir)
+    .filter((id) => !isWorkspaceChatJob(id))
     .map((id) => {
       const relativePath = path.join("Jobs", id);
       const dead = deadLetter?.[relativePath];

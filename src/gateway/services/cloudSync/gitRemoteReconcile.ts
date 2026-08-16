@@ -9,8 +9,36 @@
  * legacy job.json / jobs.json status writebacks are ignored (not auto-merged).
  */
 
+import { WORKSPACE_CHAT_JOB_ID } from "../../../core/constants/workspaceChatJob.js";
 import { isJobRuntimeOffGit } from "../jobs/jobRuntimeOffGit.js";
 import { isLocalOnlyCloudSyncArtifact } from "./gitSyncLimits.js";
+
+const WORKSPACE_CHAT_JOBS_PREFIX = `Jobs/${WORKSPACE_CHAT_JOB_ID}/`;
+
+/** Papr Web hidden agent job — cloud-managed infrastructure, never owner-reviewed. */
+export function isWorkspaceChatInfrastructureGitPath(relativePath: string): boolean {
+  const normalized = normalizeGitPath(relativePath);
+  return (
+    normalized === `Jobs/${WORKSPACE_CHAT_JOB_ID}/job.json` ||
+    normalized.startsWith(WORKSPACE_CHAT_JOBS_PREFIX)
+  );
+}
+
+/** Remote diff is only workspace-chat scaffold + jobs index — safe to auto-merge silently. */
+export function areWorkspaceChatInfrastructureOnlyChanges(
+  relativePaths: readonly string[],
+): boolean {
+  if (relativePaths.length === 0) {
+    return false;
+  }
+  return relativePaths.every((relativePath) => {
+    const normalized = normalizeGitPath(relativePath);
+    return (
+      isWorkspaceChatInfrastructureGitPath(normalized) ||
+      normalized === "data/jobs.json"
+    );
+  });
+}
 
 export type GitRemoteReconcileResult =
   | "not_needed"
@@ -38,6 +66,9 @@ export function normalizeGitPath(relativePath: string): string {
 /** Paths cloud runtime writebacks touch — safe to auto-merge without owner review. */
 export function isCloudRuntimeMetadataGitPath(relativePath: string): boolean {
   const normalized = normalizeGitPath(relativePath);
+  if (isWorkspaceChatInfrastructureGitPath(normalized)) {
+    return true;
+  }
   if (isJobRuntimeOffGit()) {
     // Runtime off git: only repo markers auto-merge; job definitions are config, not status metadata.
     if (normalized === "data/cloud-repo-head.txt") {
@@ -143,6 +174,12 @@ export async function classifyIncomingRemoteChanges(
     await runGit(["log", "--oneline", "-30", "HEAD..origin/main"])
   ).trim();
   const paths = await listIncomingRemoteChangedPaths(runGit);
+  if (
+    paths.length > 0 &&
+    areWorkspaceChatInfrastructureOnlyChanges(paths)
+  ) {
+    return "runtime_metadata_only";
+  }
   if (isJobRuntimeOffGit()) {
     if (
       paths.length > 0 &&
@@ -157,6 +194,13 @@ export async function classifyIncomingRemoteChanges(
       isCloudJobStatusWritebackSummary(summary)
     ) {
       return "not_needed";
+    }
+    if (
+      paths.length === 0 &&
+      summary &&
+      isCloudWorkspaceChatInfrastructureSummary(summary)
+    ) {
+      return "runtime_metadata_only";
     }
   }
   if (paths.length > 0) {
@@ -333,6 +377,20 @@ export function isCloudJobStatusWritebackLine(line: string): boolean {
   return /^[0-9a-f]{7,40}\s+cloud:\s+update job .+ status$/i.test(line.trim());
 }
 
+/** Single commit line: Papr Web workspace-chat infrastructure scaffold (auto-merge). */
+export function isCloudWorkspaceChatInfrastructureLine(line: string): boolean {
+  return /^[0-9a-f]{7,40}\s+cloud:\s+(add workspace-chat|scaffold workspace-chat)/i.test(
+    line.trim(),
+  );
+}
+
+export function isCloudInfrastructureAutoMergeLine(line: string): boolean {
+  return (
+    isCloudJobStatusWritebackLine(line) ||
+    isCloudWorkspaceChatInfrastructureLine(line)
+  );
+}
+
 /** Single commit line: owner merged contributed app code on GitHub. */
 export function isContribMergeCommitLine(line: string): boolean {
   return /^[0-9a-f]{7,40}\s+contrib:/i.test(line.trim());
@@ -345,6 +403,15 @@ export function isCloudJobStatusWritebackSummary(summary: string): boolean {
     return false;
   }
   return lines.every((line) => isCloudJobStatusWritebackLine(line));
+}
+
+/** True when git log is Papr Web workspace-chat scaffold only (auto-merge). */
+export function isCloudWorkspaceChatInfrastructureSummary(summary: string): boolean {
+  const lines = parseIncomingRemoteGitLogLines(summary);
+  if (lines.length === 0) {
+    return false;
+  }
+  return lines.every((line) => isCloudWorkspaceChatInfrastructureLine(line));
 }
 
 export interface IncomingRemoteGitLogSummary {
@@ -366,7 +433,7 @@ export function summarizeIncomingRemoteGitLog(
   let contribCount = 0;
   let otherCount = 0;
   for (const line of lines) {
-    if (isCloudJobStatusWritebackLine(line)) {
+    if (isCloudInfrastructureAutoMergeLine(line)) {
       jobStatusCount += 1;
     } else if (isContribMergeCommitLine(line)) {
       contribCount += 1;
@@ -438,15 +505,31 @@ export function inferGitRemoteReviewState(opts: {
   const summary = opts.gitUpdatesSummary;
   if (isJobRuntimeOffGit()) {
     if (paths.length > 0) {
+      if (areWorkspaceChatInfrastructureOnlyChanges(paths)) {
+        return { requiresReview: false, metadataSync: true };
+      }
+      if (
+        areLegacyJobRuntimeGitPathsOnly(paths) &&
+        !hasRemoteAppOrJobSourceChanges(paths)
+      ) {
+        return { requiresReview: false, metadataSync: false };
+      }
       if (hasRemoteAppOrJobSourceChanges(paths)) {
         return { requiresReview: true, metadataSync: false };
+      }
+      if (areCloudRuntimeMetadataOnlyChanges(paths)) {
+        return { requiresReview: false, metadataSync: true };
       }
       // Even metadata-only paths need review if gitUpdatesAvailable is true —
       // auto-merge already failed or wasn't possible, user must resolve manually.
       // Returning false here would leave UI showing "Get updates" when push is blocked.
       return { requiresReview: true, metadataSync: false };
     }
-    if (summary && isCloudJobStatusWritebackSummary(summary)) {
+    if (
+      summary &&
+      (isCloudJobStatusWritebackSummary(summary) ||
+        isCloudWorkspaceChatInfrastructureSummary(summary))
+    ) {
       return { requiresReview: false, metadataSync: false };
     }
     return { requiresReview: true, metadataSync: false };

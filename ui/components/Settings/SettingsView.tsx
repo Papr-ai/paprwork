@@ -997,6 +997,43 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.3.6" && (
+          <div className="about-card">
+            <h3>What's New in v2.3.6</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Silent Papr Web Sync</strong>
+                <p>
+                  Cloud workspace-chat infrastructure merges in the background —
+                  no more confusing &quot;Merge remote changes&quot; on your apps.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Hidden Infrastructure Job</strong>
+                <p>
+                  The Papr Web Main Agent job no longer appears in Jobs or Cloud
+                  Sync — it&apos;s managed automatically by the platform.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Papr Web Chat Routing</strong>
+                <p>
+                  Cloud agent sessions correctly route workspace-chat turns to the
+                  main Pen instead of mini-app agent handlers.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.3.6"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.3.5" && (
           <div className="about-card">
             <h3>What's New in v2.3.5</h3>

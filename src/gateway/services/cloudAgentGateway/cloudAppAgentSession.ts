@@ -75,6 +75,10 @@ export async function resolveCloudAppAgentStreamOverrides(
     return null;
   }
 
+  if (isWorkspaceChatJob(request.jobId)) {
+    return null;
+  }
+
   const jobsService = getJobsService();
   const appService = getAppService();
   const subAgentService = getSubAgentService();

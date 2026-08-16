@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   areCloudRuntimeMetadataOnlyChanges,
   areLegacyJobRuntimeGitPathsOnly,
+  areWorkspaceChatInfrastructureOnlyChanges,
   categorizeWorkingTreePathsForRemoteMerge,
   classifyIncomingRemoteChanges,
   inferGitRemoteReviewState,
@@ -10,6 +11,8 @@ import {
   isNonRetryableCloudPushError,
   isCloudJobStatusWritebackSummary,
   isCloudRuntimeMetadataGitPath,
+  isCloudWorkspaceChatInfrastructureLine,
+  isWorkspaceChatInfrastructureGitPath,
   parseGitNameOnlyOutput,
   parsePorcelainChangedPaths,
   parsePorcelainEntries,
@@ -170,6 +173,97 @@ describe("JOB_RUNTIME_OFF_GIT=1", () => {
     await expect(classifyIncomingRemoteChanges(runGit)).resolves.toBe(
       "not_needed",
     );
+  });
+
+  it("auto-merges workspace-chat infrastructure without owner review", async () => {
+    const runGit: RunGitFn = async (args) => {
+      if (args[0] === "fetch") {
+        return "";
+      }
+      if (args[0] === "rev-list") {
+        return "3\n";
+      }
+      if (args[0] === "diff") {
+        return [
+          "Jobs/workspace-chat/job.json",
+          "Jobs/workspace-chat/code/.gitkeep",
+          "Jobs/workspace-chat/migrations/0001_baseline.sql",
+          "data/jobs.json",
+        ].join("\n");
+      }
+      if (args[0] === "log") {
+        return [
+          "228fddd cloud: scaffold workspace-chat job folder",
+          "83b5948 cloud: add workspace-chat agent job for Papr Web",
+        ].join("\n");
+      }
+      return "";
+    };
+
+    await expect(classifyIncomingRemoteChanges(runGit)).resolves.toBe(
+      "runtime_metadata_only",
+    );
+  });
+
+  it("does not require review for workspace-chat-only remote paths", () => {
+    expect(
+      inferGitRemoteReviewState({
+        gitUpdatesAvailable: true,
+        remoteChangedPaths: [
+          "Jobs/workspace-chat/job.json",
+          "Jobs/workspace-chat/code/.gitkeep",
+          "data/jobs.json",
+        ],
+        gitUpdatesSummary:
+          "228fddd cloud: scaffold workspace-chat job folder",
+      }),
+    ).toEqual({ requiresReview: false, metadataSync: true });
+  });
+});
+
+describe("workspace-chat cloud infrastructure", () => {
+  it("treats workspace-chat job folder as cloud runtime metadata", () => {
+    expect(isWorkspaceChatInfrastructureGitPath("Jobs/workspace-chat/job.json")).toBe(
+      true,
+    );
+    expect(
+      isWorkspaceChatInfrastructureGitPath(
+        "Jobs/workspace-chat/migrations/0001_baseline.sql",
+      ),
+    ).toBe(true);
+    expect(isCloudRuntimeMetadataGitPath("Jobs/workspace-chat/code/.gitkeep")).toBe(
+      true,
+    );
+    expect(isCloudRuntimeMetadataGitPath("Jobs/other-job/scraper.py")).toBe(false);
+  });
+
+  it("detects workspace-chat-only remote diffs", () => {
+    expect(
+      areWorkspaceChatInfrastructureOnlyChanges([
+        "Jobs/workspace-chat/job.json",
+        "Jobs/workspace-chat/data/.gitkeep",
+        "data/jobs.json",
+      ]),
+    ).toBe(true);
+    expect(
+      areWorkspaceChatInfrastructureOnlyChanges([
+        "Jobs/workspace-chat/job.json",
+        "apps/home/index.html",
+      ]),
+    ).toBe(false);
+  });
+
+  it("recognizes cloud scaffold commit messages", () => {
+    expect(
+      isCloudWorkspaceChatInfrastructureLine(
+        "228fddd cloud: scaffold workspace-chat job folder",
+      ),
+    ).toBe(true);
+    expect(
+      isCloudWorkspaceChatInfrastructureLine(
+        "83b5948 cloud: add workspace-chat agent job for Papr Web",
+      ),
+    ).toBe(true);
   });
 });
 

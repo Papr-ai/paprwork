@@ -467,12 +467,12 @@ export async function resolveCloudAgentJobStreamInput(
   const provider = session.provider ?? llmAuth.provider;
   const model = session.model ?? request.model;
 
-  const appAgentOverrides = await resolveCloudAppAgentStreamOverrides(request);
-  const workspaceChatOverrides =
-    appAgentOverrides == null
-      ? await resolveCloudWorkspaceChatStreamOverrides(request)
+  const workspaceChatOverrides = await resolveCloudWorkspaceChatStreamOverrides(request);
+  const appAgentOverrides =
+    workspaceChatOverrides == null
+      ? await resolveCloudAppAgentStreamOverrides(request)
       : null;
-  const streamOverrides = appAgentOverrides ?? workspaceChatOverrides;
+  const streamOverrides = workspaceChatOverrides ?? appAgentOverrides;
   const chatId = streamOverrides?.chatId ?? resolveCloudAgentChatId(request);
 
   return {
