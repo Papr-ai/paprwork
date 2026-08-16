@@ -3,6 +3,7 @@ import path from "path";
 import { promises as fs } from "fs";
 import { afterEach, describe, expect, test } from "vitest";
 import { SkillService } from "../src/gateway/services/SkillService.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 const tmpRoots: string[] = [];
 
@@ -22,6 +23,10 @@ async function setupService(): Promise<SkillService> {
 }
 
 describe("SkillService", () => {
+  // Redirects HOME/PAPR_HOME to a temp dir so fixtures never land in
+  // the developer's real ~/Papr workspace.
+  useIsolatedPaprWorkspace("skill-service");
+
   test("preloads baseline skills for all users", async () => {
     const service = await setupService();
     const listed = await service.listSkills();

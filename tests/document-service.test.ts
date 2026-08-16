@@ -1,33 +1,22 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test } from "vitest";
 import path from "path";
-import os from "os";
 import { promises as fs } from "fs";
 import { DocumentService } from "../src/gateway/services/DocumentService.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 describe("DocumentService", () => {
-  let originalHome: string | undefined;
+  // Owns HOME, os.homedir and the workspace pointer, so fixtures never land in
+  // the developer's real ~/Papr. Setting process.env.HOME alone was not enough
+  // — DocumentService resolves its paths via os.homedir().
+  const workspace = useIsolatedPaprWorkspace("document-service");
+
   let testHomeDir: string;
   let documentService: DocumentService;
 
   beforeEach(async () => {
-    originalHome = process.env.HOME;
-    testHomeDir = path.join(
-      os.tmpdir(),
-      `paprwork-v2-document-service-${Date.now()}`,
-    );
-    process.env.HOME = testHomeDir;
-    await fs.mkdir(testHomeDir, { recursive: true });
+    testHomeDir = workspace.homeDir;
     documentService = new DocumentService();
     await documentService.initialize();
-  });
-
-  afterEach(async () => {
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
-    await fs.rm(testHomeDir, { recursive: true, force: true });
   });
 
   test("creates and retrieves documents", async () => {

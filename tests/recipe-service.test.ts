@@ -3,10 +3,15 @@ import { RecipeService } from "../src/gateway/services/jobs/RecipeService.js";
 import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 const TEST_JOB_ID = "test-recipe-job-" + Date.now();
-const JOBS_ROOT = path.join(os.homedir(), "Papr", "jobs");
-const JOB_DIR = path.join(JOBS_ROOT, TEST_JOB_ID);
+
+// Resolved lazily inside hooks: os.homedir() at module scope is evaluated at
+// import time, before useIsolatedPaprWorkspace can redirect HOME, so the paths
+// would point at the developer's real ~/Papr.
+const jobsRoot = () => path.join(os.homedir(), "Papr", "jobs");
+const jobDir = () => path.join(jobsRoot(), TEST_JOB_ID);
 
 const SAMPLE_RECIPE = `# Execution Recipe: Test Job
 
@@ -40,15 +45,19 @@ A log of all DMs sent with poster username, post title, and DM content.
 `;
 
 describe("RecipeService", () => {
+  // Must come first: its beforeEach redirects HOME/PAPR_HOME to a temp dir
+  // before the hooks below resolve any paths.
+  useIsolatedPaprWorkspace("recipe-service");
+
   let service: RecipeService;
 
   beforeEach(async () => {
     service = new RecipeService();
-    await fs.mkdir(JOB_DIR, { recursive: true });
+    await fs.mkdir(jobDir(), { recursive: true });
   });
 
   afterEach(async () => {
-    await fs.rm(JOB_DIR, { recursive: true, force: true });
+    await fs.rm(jobDir(), { recursive: true, force: true });
   });
 
   describe("Recipe CRUD", () => {
