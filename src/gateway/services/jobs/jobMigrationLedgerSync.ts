@@ -27,10 +27,52 @@ import { shouldSkipMigrationForRemoteLedger } from "./migrationLedgerPolicy.js";
 import {
   parseAddColumnStatement,
   parseCreateIndexStatement,
+  parseCreateTableStatement,
+  parseDropStatement,
   splitSqlStatements,
 } from "./migrationSqlHelpers.js";
 
 export const REMOTE_SCHEMA_MIGRATIONS_TABLE = "_papr_schema_migrations";
+
+/**
+ * Outcome of checking one schema op.
+ *
+ * `unknown` = the statement is a shape we cannot introspect. Treating it as
+ * `unsatisfied` makes verification fail permanently, so callers warn instead.
+ */
+type SchemaOpCheck = "satisfied" | "unsatisfied" | "unknown";
+
+export interface MigrationVerification {
+  satisfied: boolean;
+  /** Statements we could not introspect — surfaced as warnings, never failures. */
+  unverifiable: string[];
+}
+
+function toCheck(value: boolean): SchemaOpCheck {
+  return value ? "satisfied" : "unsatisfied";
+}
+
+function describeOp(op: JobMigrationSchemaOp): string {
+  const raw = op.kind === "sql" ? op.statement : `${op.kind} ${op.table}`;
+  const collapsed = raw.replace(/\s+/g, " ").trim();
+  return collapsed.length > 120 ? `${collapsed.slice(0, 117)}…` : collapsed;
+}
+
+function warnUnverifiable(
+  migrationRoot: string,
+  migrationId: string,
+  target: string,
+  unverifiable: readonly string[],
+): void {
+  if (unverifiable.length === 0) {
+    return;
+  }
+  console.warn(
+    `[MigrationLedger] ${migrationId} (${migrationRoot}): ` +
+      `${unverifiable.length} statement(s) could not be verified on ${target} ` +
+      `and were treated as satisfied: ${unverifiable.join(" | ")}`,
+  );
+}
 
 async function ensureRemoteSchemaMigrationsTable(
   remote: Client,
@@ -132,83 +174,102 @@ function localIndexExists(localDb: Database.Database, indexName: string): boolea
 async function sqlStatementSatisfiedOnRemote(
   remote: Client,
   statement: string,
-): Promise<boolean> {
+): Promise<SchemaOpCheck> {
   const addColumn = parseAddColumnStatement(statement);
   if (addColumn) {
     if (!(await remoteTableExists(remote, addColumn.table))) {
-      return false;
+      return "unsatisfied";
     }
-    return remoteTableHasColumn(remote, addColumn.table, addColumn.column);
+    return toCheck(
+      await remoteTableHasColumn(remote, addColumn.table, addColumn.column),
+    );
   }
 
   const createIndex = parseCreateIndexStatement(statement);
   if (createIndex) {
-    return remoteIndexExists(remote, createIndex.indexName);
+    return toCheck(await remoteIndexExists(remote, createIndex.indexName));
   }
 
-  const createMatch =
-    /^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(
-      statement.trim(),
-    );
-  if (createMatch) {
-    const table = createMatch[1] ?? createMatch[2] ?? createMatch[3];
-    return table ? remoteTableExists(remote, table) : false;
+  const createTable = parseCreateTableStatement(statement);
+  if (createTable) {
+    return toCheck(await remoteTableExists(remote, createTable.table));
   }
 
-  return false;
+  // DROP is satisfied when the object is gone (mirrors the drop_column op).
+  const drop = parseDropStatement(statement);
+  if (drop) {
+    const exists =
+      drop.objectType === "table"
+        ? await remoteTableExists(remote, drop.name)
+        : await remoteIndexExists(remote, drop.name);
+    return toCheck(!exists);
+  }
+
+  // Statement shape we cannot introspect (INSERT, UPDATE, VIEW, TRIGGER, …).
+  // Report unknown so callers can warn instead of failing the whole sync.
+  return "unknown";
 }
 
 function sqlStatementSatisfiedOnLocal(
   localDb: Database.Database,
   statement: string,
-): boolean {
+): SchemaOpCheck {
   const addColumn = parseAddColumnStatement(statement);
   if (addColumn) {
     if (!localTableExists(localDb, addColumn.table)) {
-      return false;
+      return "unsatisfied";
     }
-    return localTableHasColumn(localDb, addColumn.table, addColumn.column);
+    return toCheck(
+      localTableHasColumn(localDb, addColumn.table, addColumn.column),
+    );
   }
 
   const createIndex = parseCreateIndexStatement(statement);
   if (createIndex) {
-    return localIndexExists(localDb, createIndex.indexName);
+    return toCheck(localIndexExists(localDb, createIndex.indexName));
   }
 
-  const createMatch =
-    /^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(
-      statement.trim(),
-    );
-  if (createMatch) {
-    const table = createMatch[1] ?? createMatch[2] ?? createMatch[3];
-    return table ? localTableExists(localDb, table) : false;
+  const createTable = parseCreateTableStatement(statement);
+  if (createTable) {
+    return toCheck(localTableExists(localDb, createTable.table));
   }
 
-  return false;
+  const drop = parseDropStatement(statement);
+  if (drop) {
+    const exists =
+      drop.objectType === "table"
+        ? localTableExists(localDb, drop.name)
+        : localIndexExists(localDb, drop.name);
+    return toCheck(!exists);
+  }
+
+  return "unknown";
 }
 
 async function schemaOpSatisfiedOnRemote(
   remote: Client,
   op: JobMigrationSchemaOp,
-): Promise<boolean> {
+): Promise<SchemaOpCheck> {
   switch (op.kind) {
     case "add_column":
       if (!(await remoteTableExists(remote, op.table))) {
-        return false;
+        return "unsatisfied";
       }
-      return remoteTableHasColumn(remote, op.table, op.column);
+      return toCheck(await remoteTableHasColumn(remote, op.table, op.column));
     case "drop_column":
       if (!(await remoteTableExists(remote, op.table))) {
-        return true;
+        return "satisfied";
       }
-      return !(await remoteTableHasColumn(remote, op.table, op.column));
+      return toCheck(
+        !(await remoteTableHasColumn(remote, op.table, op.column)),
+      );
     case "rename_column":
       if (!(await remoteTableExists(remote, op.table))) {
-        return false;
+        return "unsatisfied";
       }
-      return (
+      return toCheck(
         (await remoteTableHasColumn(remote, op.table, op.to)) &&
-        !(await remoteTableHasColumn(remote, op.table, op.from))
+          !(await remoteTableHasColumn(remote, op.table, op.from)),
       );
     case "sql":
       return sqlStatementSatisfiedOnRemote(remote, op.statement);
@@ -218,25 +279,25 @@ async function schemaOpSatisfiedOnRemote(
 function schemaOpSatisfiedOnLocal(
   localDb: Database.Database,
   op: JobMigrationSchemaOp,
-): boolean {
+): SchemaOpCheck {
   switch (op.kind) {
     case "add_column":
       if (!localTableExists(localDb, op.table)) {
-        return false;
+        return "unsatisfied";
       }
-      return localTableHasColumn(localDb, op.table, op.column);
+      return toCheck(localTableHasColumn(localDb, op.table, op.column));
     case "drop_column":
       if (!localTableExists(localDb, op.table)) {
-        return true;
+        return "satisfied";
       }
-      return !localTableHasColumn(localDb, op.table, op.column);
+      return toCheck(!localTableHasColumn(localDb, op.table, op.column));
     case "rename_column":
       if (!localTableExists(localDb, op.table)) {
-        return false;
+        return "unsatisfied";
       }
-      return (
+      return toCheck(
         localTableHasColumn(localDb, op.table, op.to) &&
-        !localTableHasColumn(localDb, op.table, op.from)
+          !localTableHasColumn(localDb, op.table, op.from),
       );
     case "sql":
       return sqlStatementSatisfiedOnLocal(localDb, op.statement);
@@ -264,21 +325,71 @@ async function migrationOpsFromRoot(
   }));
 }
 
+/**
+ * Verify a migration against Turso.
+ *
+ * `unverifiable` lists statements we cannot introspect. Those must NOT fail the
+ * migration: an unrecognized statement means "no opinion", not "broken schema".
+ * Failing closed here wedges cloud sync permanently, since the verdict can
+ * never change no matter how many times sync retries.
+ */
+export async function verifyMigrationOnRemote(
+  remote: Client,
+  migrationRoot: string,
+  migrationId: string,
+): Promise<MigrationVerification> {
+  const ops = await migrationOpsFromRoot(migrationRoot, migrationId);
+  if (!ops || ops.length === 0) {
+    return { satisfied: false, unverifiable: [] };
+  }
+
+  const unverifiable: string[] = [];
+  for (const op of ops) {
+    const check = await schemaOpSatisfiedOnRemote(remote, op);
+    if (check === "unsatisfied") {
+      return { satisfied: false, unverifiable };
+    }
+    if (check === "unknown") {
+      unverifiable.push(describeOp(op));
+    }
+  }
+
+  warnUnverifiable(migrationRoot, migrationId, "Turso", unverifiable);
+  return { satisfied: true, unverifiable };
+}
+
 export async function migrationSatisfiedOnRemote(
   remote: Client,
   migrationRoot: string,
   migrationId: string,
 ): Promise<boolean> {
+  const result = await verifyMigrationOnRemote(remote, migrationRoot, migrationId);
+  return result.satisfied;
+}
+
+export async function verifyMigrationOnLocal(
+  localDb: Database.Database,
+  migrationRoot: string,
+  migrationId: string,
+): Promise<MigrationVerification> {
   const ops = await migrationOpsFromRoot(migrationRoot, migrationId);
   if (!ops || ops.length === 0) {
-    return false;
+    return { satisfied: false, unverifiable: [] };
   }
+
+  const unverifiable: string[] = [];
   for (const op of ops) {
-    if (!(await schemaOpSatisfiedOnRemote(remote, op))) {
-      return false;
+    const check = schemaOpSatisfiedOnLocal(localDb, op);
+    if (check === "unsatisfied") {
+      return { satisfied: false, unverifiable };
+    }
+    if (check === "unknown") {
+      unverifiable.push(describeOp(op));
     }
   }
-  return true;
+
+  warnUnverifiable(migrationRoot, migrationId, "local", unverifiable);
+  return { satisfied: true, unverifiable };
 }
 
 export async function migrationSatisfiedOnLocal(
@@ -286,16 +397,8 @@ export async function migrationSatisfiedOnLocal(
   migrationRoot: string,
   migrationId: string,
 ): Promise<boolean> {
-  const ops = await migrationOpsFromRoot(migrationRoot, migrationId);
-  if (!ops || ops.length === 0) {
-    return false;
-  }
-  for (const op of ops) {
-    if (!schemaOpSatisfiedOnLocal(localDb, op)) {
-      return false;
-    }
-  }
-  return true;
+  const result = await verifyMigrationOnLocal(localDb, migrationRoot, migrationId);
+  return result.satisfied;
 }
 
 /** Copy Turso migration ledger into local schema_migrations (INSERT OR IGNORE). */
