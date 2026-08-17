@@ -4,6 +4,7 @@ import os from "os";
 import type { ChildProcess } from "child_process";
 import { v4 as uuidv4 } from "uuid";
 import { fileURLToPath } from "url";
+import Database from "better-sqlite3";
 import { writeJsonAtomic, parseJsonTolerant } from "../../core/utils/atomicJsonWrite.js";
 import { JobDatabase } from "./jobs/JobDatabase.js";
 import {

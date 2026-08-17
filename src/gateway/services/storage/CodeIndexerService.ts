@@ -15,6 +15,26 @@ import { getProjectPathInfo } from './codeIndexPaths.js';
 import { resolveMiniAppDisplayName } from './codeIndexMetadata.js';
 import { parseJsonTolerant } from '../../../core/utils/atomicJsonWrite.js';
 
+interface JobJsonMetadata {
+  id?: string;
+  name?: string;
+  type?: "python" | "node" | "subagent";
+  status?: string;
+  folder?: string;
+  command?: string;
+  retries?: { maxAttempts?: number };
+  maxAttempts?: number;
+  retentionDays?: number;
+  outputMode?: string;
+  memoryPolicy?: string;
+  maxTurns?: number;
+  exitCode?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  lastRunAt?: string;
+  dependsOn?: Array<{ jobId: string; onStatus?: string }>;
+}
+
 export interface CodeFileMetadata {
   file_path: string;
   file_name: string;
@@ -320,7 +340,7 @@ export class CodeIndexerService {
     }
     
     const jobJsonRaw = fs.readFileSync(jobJsonPath, 'utf-8');
-    const jobJson = parseJsonTolerant<Record<string, unknown>>(jobJsonRaw);
+    const jobJson = parseJsonTolerant<JobJsonMetadata>(jobJsonRaw);
     if (!jobJson) {
       return {
         project_id: jobId,

@@ -800,21 +800,26 @@ export async function* createPiCodexStreamWithToolLoop(
       }
       
       // HARD LIMIT: Check total tool calls (not just steps)
-      // Even if agent makes multiple tool calls per step, we enforce a hard limit
-      const MAX_TOTAL_TOOL_CALLS = maxSteps * 2; // Allow 2x maxSteps as absolute maximum
+      // Budget must account for PARALLEL tool calls. The agent is explicitly
+      // told to batch independent calls, so a single step can spend 5-10 calls.
+      const MAX_PARALLEL_CALLS_PER_STEP = 10;
+      const MAX_TOTAL_TOOL_CALLS = maxSteps * MAX_PARALLEL_CALLS_PER_STEP;
       if (totalToolCalls >= MAX_TOTAL_TOOL_CALLS) {
         console.error(
           `[PiCodexToolLoop] 🛑 HARD LIMIT: ${totalToolCalls} tool calls exceeds maximum (${MAX_TOTAL_TOOL_CALLS}). ` +
           `Forcing stop to prevent infinite loops.`
         );
-        
-        // Add a system instruction to force a response
-        context.messages.push({
-          role: "user",
-          content: `[SYSTEM: You've made ${totalToolCalls} tool calls, which exceeds the maximum limit of ${MAX_TOTAL_TOOL_CALLS}. You MUST stop making tool calls and provide your final response now. Summarize what you've learned and respond to the user.]`,
-        } as any);
-        
-        continue stepLoop;
+
+        yield {
+          type: "text-delta",
+          text:
+            `\n\n---\n\n⚠️ **Turn stopped early — tool-call budget reached** ` +
+            `(${totalToolCalls}/${MAX_TOTAL_TOOL_CALLS} tool calls).\n\n` +
+            `This task is **not finished**. Parallel tool calls consume this budget ` +
+            `faster than step count suggests. Send "continue" to resume from here.\n`,
+        };
+
+        break stepLoop;
       }
       
       // Execute all tools in parallel — full results preserved for this turn.
@@ -877,13 +882,15 @@ export async function* createPiCodexStreamWithToolLoop(
           `Breaking tool loop and forcing final response.`
         );
         
-        // Add a system instruction as the last tool result to force a response
-        context.messages.push({
-          role: "user",
-          content: `[SYSTEM: You've made ${step} tool calls. You MUST provide your final response now. Do not make any more tool calls. Summarize your findings and respond to the user.]`,
-        } as any);
-        
-        continue stepLoop;
+        yield {
+          type: "text-delta",
+          text:
+            `\n\n---\n\n⚠️ **Turn stopped early — step limit reached** ` +
+            `(${step}/${maxSteps} steps).\n\n` +
+            `This task is **not finished**. Send "continue" to resume from here.\n`,
+        };
+
+        break stepLoop;
       } else if (step >= STEP_WARNING_THRESHOLD) {
         // At 90+ steps, warn the model
         console.warn(
