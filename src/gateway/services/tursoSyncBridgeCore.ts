@@ -637,7 +637,53 @@ export function applyPulledTablesToLocalDb(
   writeTablesToLocalDb(localDb, tables);
 }
 
+/**
+ * Fold the WAL back into the main DB file, then drop the sidecars.
+ *
+ * NEVER unlink a non-empty `-wal` directly: it contains committed pages that are
+ * not yet in the main file, so deleting it silently discards data AND leaves
+ * readers hitting SQLITE_IOERR ("disk I/O error") because `-shm` is gone. In a
+ * mini-app that surfaces as an empty list — indistinguishable from data loss.
+ *
+ * A TRUNCATE checkpoint writes every WAL page into the main file and removes the
+ * sidecars itself, which is the safe way to reach the same "no sidecars" state.
+ * If another process holds the DB we leave the sidecars alone rather than
+ * corrupting them — a live `-wal` is always safer than a deleted one.
+ */
 function cleanupSqliteSidecars(dbPath: string): void {
+  const walPath = dbPath + "-wal";
+  let walSize = 0;
+  try {
+    walSize = fs.statSync(walPath).size;
+  } catch {
+    walSize = 0;
+  }
+
+  if (walSize > 0) {
+    let db: Database.Database | null = null;
+    try {
+      db = new Database(dbPath);
+      db.pragma("wal_checkpoint(TRUNCATE)");
+    } catch {
+      // DB locked or unreadable — keep sidecars intact; deleting them here is
+      // what previously destroyed committed rows.
+      return;
+    } finally {
+      try {
+        db?.close();
+      } catch {
+        /* already closed */
+      }
+    }
+
+    // Checkpoint failed to drain the WAL (concurrent reader) — leave it alone.
+    try {
+      if (fs.statSync(walPath).size > 0) return;
+    } catch {
+      /* wal already gone — checkpoint removed it */
+    }
+  }
+
   for (const suffix of ["-wal", "-shm"]) {
     try {
       fs.unlinkSync(dbPath + suffix);

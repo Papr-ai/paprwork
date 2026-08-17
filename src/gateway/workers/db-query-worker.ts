@@ -31,11 +31,33 @@ export interface DbWorkerResponse {
 
 // ── Handler ───────────────────────────────────────────────────────────────
 
+/**
+ * Open a SQLite database, tolerating a missing/stale -shm sidecar.
+ *
+ * A WAL-mode database needs a writable -shm shared-memory file even for READS.
+ * If -shm is deleted or unwritable (backup tooling copying data.db without its
+ * sidecars, permissions, restore-in-place), a readonly open fails with
+ * SQLITE_IOERR — surfaced to mini-apps as a bare "disk I/O error". The app then
+ * renders an empty list, which looks like data loss but is purely an open failure.
+ *
+ * Fix: retry read-write once so SQLite can recreate -shm, then continue. We never
+ * silently swallow real corruption — SQLITE_CORRUPT still propagates.
+ */
+function openDb(dbPath: string, readonly: boolean): Database.Database {
+  try {
+    return new Database(dbPath, { readonly, fileMustExist: true });
+  } catch (err) {
+    const code = (err as { code?: string }).code ?? "";
+    const recoverable =
+      readonly && (code === "SQLITE_IOERR" || code === "SQLITE_CANTOPEN" || code === "SQLITE_READONLY");
+    if (!recoverable) throw err;
+    // Read-write open lets SQLite rebuild the -shm sidecar from the -wal.
+    return new Database(dbPath, { readonly: false, fileMustExist: true });
+  }
+}
+
 function handle(req: DbWorkerRequest): DbWorkerResponse {
-  const db = new Database(req.dbPath, {
-    readonly: req.readonly ?? req.type !== "write",
-    fileMustExist: true,
-  });
+  const db = openDb(req.dbPath, req.readonly ?? req.type !== "write");
 
   try {
     switch (req.type) {
