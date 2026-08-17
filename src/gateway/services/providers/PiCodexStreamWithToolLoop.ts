@@ -32,8 +32,8 @@ import {
 } from "../agent/compactToolResults.js";
 import {
   checkPiStreamMemory,
-  describePiStreamMemoryLimits,
-  getPiProcessBackstopBytes,
+  PI_PROCESS_MEMORY_BACKSTOP_BYTES,
+  PI_STREAM_MEMORY_BUDGET_BYTES,
 } from "./piStreamMemoryLimits.js";
 import { truncateToolResultForModelContext } from "../agent/toolResultTruncation.js";
 import {
@@ -460,13 +460,12 @@ export async function* createPiCodexStreamWithToolLoop(
     if (memoryCheck.overStreamBudget || memoryCheck.overProcessBackstop) {
       const streamMb = Math.round(memoryCheck.streamDelta / 1024 / 1024);
       const heapMb = Math.round(memoryCheck.heapUsed / 1024 / 1024);
-      const budgetMb = Math.round(memoryCheck.streamBudget / 1024 / 1024);
-      const backstopMb = Math.round(getPiProcessBackstopBytes() / 1024 / 1024);
+      const budgetMb = Math.round(PI_STREAM_MEMORY_BUDGET_BYTES / 1024 / 1024);
+      const backstopMb = Math.round(PI_PROCESS_MEMORY_BACKSTOP_BYTES / 1024 / 1024);
       console.error(
         `[PiCodexToolLoop] 🚨 CRITICAL: Stream memory budget exceeded — ` +
           `stream +${streamMb}MB (limit ${budgetMb}MB), process heap ${heapMb}MB ` +
-          `(backstop ${backstopMb}MB, gcConfirmed=${memoryCheck.confirmedAfterGc}). ` +
-          `Limits: ${describePiStreamMemoryLimits()}. Aborting this stream.`,
+          `(backstop ${backstopMb}MB). Aborting this stream.`,
       );
       yield {
         type: "error",
@@ -478,11 +477,8 @@ export async function* createPiCodexStreamWithToolLoop(
             memoryCheck.overProcessBackstop
               ? "The agent service is under heavy load (too many parallel tasks). " +
                 "Try again shortly, restart the app, or stagger scheduled agent jobs."
-              : `This task buffered too much tool output in one turn ` +
-                `(+${streamMb} MB, limit ${budgetMb} MB). This is about the SIZE of ` +
-                `tool results in this turn, not the length of the conversation. ` +
-                `Retry with fewer/smaller tool calls — write bulky output to a file ` +
-                `and read back only a summary, and avoid re-fetching large results.`,
+              : "This agent task used too much memory (heavy tool use or long reasoning). " +
+                "Start a fresh chat or simplify the task, then try again.",
         },
       };
       break;
@@ -800,26 +796,21 @@ export async function* createPiCodexStreamWithToolLoop(
       }
       
       // HARD LIMIT: Check total tool calls (not just steps)
-      // Budget must account for PARALLEL tool calls. The agent is explicitly
-      // told to batch independent calls, so a single step can spend 5-10 calls.
-      const MAX_PARALLEL_CALLS_PER_STEP = 10;
-      const MAX_TOTAL_TOOL_CALLS = maxSteps * MAX_PARALLEL_CALLS_PER_STEP;
+      // Even if agent makes multiple tool calls per step, we enforce a hard limit
+      const MAX_TOTAL_TOOL_CALLS = maxSteps * 2; // Allow 2x maxSteps as absolute maximum
       if (totalToolCalls >= MAX_TOTAL_TOOL_CALLS) {
         console.error(
           `[PiCodexToolLoop] 🛑 HARD LIMIT: ${totalToolCalls} tool calls exceeds maximum (${MAX_TOTAL_TOOL_CALLS}). ` +
           `Forcing stop to prevent infinite loops.`
         );
-
-        yield {
-          type: "text-delta",
-          text:
-            `\n\n---\n\n⚠️ **Turn stopped early — tool-call budget reached** ` +
-            `(${totalToolCalls}/${MAX_TOTAL_TOOL_CALLS} tool calls).\n\n` +
-            `This task is **not finished**. Parallel tool calls consume this budget ` +
-            `faster than step count suggests. Send "continue" to resume from here.\n`,
-        };
-
-        break stepLoop;
+        
+        // Add a system instruction to force a response
+        context.messages.push({
+          role: "user",
+          content: `[SYSTEM: You've made ${totalToolCalls} tool calls, which exceeds the maximum limit of ${MAX_TOTAL_TOOL_CALLS}. You MUST stop making tool calls and provide your final response now. Summarize what you've learned and respond to the user.]`,
+        } as any);
+        
+        continue stepLoop;
       }
       
       // Execute all tools in parallel — full results preserved for this turn.
@@ -882,15 +873,13 @@ export async function* createPiCodexStreamWithToolLoop(
           `Breaking tool loop and forcing final response.`
         );
         
-        yield {
-          type: "text-delta",
-          text:
-            `\n\n---\n\n⚠️ **Turn stopped early — step limit reached** ` +
-            `(${step}/${maxSteps} steps).\n\n` +
-            `This task is **not finished**. Send "continue" to resume from here.\n`,
-        };
-
-        break stepLoop;
+        // Add a system instruction as the last tool result to force a response
+        context.messages.push({
+          role: "user",
+          content: `[SYSTEM: You've made ${step} tool calls. You MUST provide your final response now. Do not make any more tool calls. Summarize your findings and respond to the user.]`,
+        } as any);
+        
+        continue stepLoop;
       } else if (step >= STEP_WARNING_THRESHOLD) {
         // At 90+ steps, warn the model
         console.warn(
