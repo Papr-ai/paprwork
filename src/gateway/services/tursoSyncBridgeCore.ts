@@ -399,11 +399,77 @@ async function readRemoteForeignKeyRefs(
     .filter((name): name is string => name !== null && knownLocalNames.has(name));
 }
 
+/**
+ * Keep the local PRIMARY KEY when the incoming remote schema has none.
+ *
+ * A pull rebuilds the local table from the remote definition, which is right
+ * for columns and rows but wrong for a constraint the remote has *lost*. Once
+ * a remote table is PK-less, every pull strips the local PK too, and the next
+ * push copies that back up — the degradation becomes self-sustaining, and no
+ * single run looks like the culprit.
+ *
+ * The visible damage is not a sync error. `INSERT ... ON CONFLICT(id)` needs a
+ * PRIMARY KEY or UNIQUE constraint, so a job that upserts fails outright with
+ * "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint" —
+ * and, until it does, duplicate rows accumulate unchecked.
+ *
+ * Preferring the local PK is safe in the only direction that matters: adding
+ * back a constraint the table was declared with cannot lose data, while
+ * dropping one silently admits duplicates. A genuine intentional PK change
+ * still goes through planSchemaMigration, which rebuilds explicitly.
+ */
+function preserveLocalPrimaryKey(
+  localDb: Database.Database,
+  table: LocalTable,
+): LocalTable {
+  if (table.columns.some((col) => col.primaryKey)) {
+    return table;
+  }
+
+  let localColumns: TableColumn[];
+  try {
+    localColumns = readTableSchema(localDb, table.name);
+  } catch {
+    return table;
+  }
+
+  const localPk = localColumns.filter((col) => col.primaryKey);
+  if (localPk.length === 0) {
+    return table;
+  }
+
+  // Only reinstate a key whose columns all still exist remotely; a PK naming a
+  // dropped column would make the rebuilt table unopenable.
+  const incoming = new Set(table.columns.map((col) => col.name));
+  if (!localPk.every((col) => incoming.has(col.name))) {
+    return table;
+  }
+
+  const pkNames = new Set(localPk.map((col) => col.name));
+  console.warn(
+    `[TursoSync] Remote "${table.name}" has no PRIMARY KEY but local declares ` +
+      `(${[...pkNames].join(", ")}). Keeping the local key — a PK-less rebuild ` +
+      `breaks ON CONFLICT upserts and admits duplicate rows.`,
+  );
+
+  return {
+    ...table,
+    columns: table.columns.map((col) =>
+      pkNames.has(col.name) ? { ...col, primaryKey: true } : col,
+    ),
+    // Drop the remote CREATE TABLE text: it encodes the PK-less shape we are
+    // deliberately overriding, and buildCreateTableSql prefers it when present.
+    createSql: undefined,
+  };
+}
+
 export function writeTablesToLocalDb(
   localDb: Database.Database,
   tables: LocalTable[],
 ): void {
-  const writable = tables.filter((table) => table.columns.length > 0);
+  const writable = tables
+    .filter((table) => table.columns.length > 0)
+    .map((table) => preserveLocalPrimaryKey(localDb, table));
   if (writable.length === 0) {
     return;
   }

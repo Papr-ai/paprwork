@@ -22,6 +22,7 @@ import {
   type FilesDb,
 } from "./AppFilesService.js";
 import { appUsage } from "./appFilesClient.js";
+import { resolveFilesSource, type FilesSourceRef } from "./resolveFilesSource.js";
 import { resolveMiniAppIdFromRequest } from "../../utils/inferMiniAppIdFromRequest.js";
 
 /** Minimal shape of the pieces index.ts already has wired up. */
@@ -45,6 +46,12 @@ export interface AppFilesRouteDeps {
     params?: unknown[],
   ) => Promise<{ changes: number }>;
   dbExec?: (appId: string, source: unknown, sql: string) => Promise<unknown>;
+  /**
+   * All sources linked to an app, used only to break a tie when no sourceId
+   * was given. Optional so existing callers and tests keep compiling; without
+   * it the resolver simply rethrows the ambiguity error as before.
+   */
+  listSources?: (appId: string) => Promise<FilesSourceRef[]>;
 }
 
 /** Adapt the gateway's db plumbing to the small surface the service needs. */
@@ -53,8 +60,11 @@ async function dbFor(
   sourceId: string | undefined,
   deps: AppFilesRouteDeps,
 ): Promise<FilesDb> {
-  const readSource = await deps.resolveSource(appId, sourceId, undefined, "read");
-  const writeSource = await deps.resolveSource(appId, sourceId, undefined, "write");
+  // App Files picks its own home when the caller did not name one — see
+  // resolveFilesSource. The generic resolver would 400 here for any app with
+  // more than one linked database.
+  const readSource = await resolveFilesSource(appId, sourceId, "read", deps);
+  const writeSource = await resolveFilesSource(appId, sourceId, "write", deps);
   return {
     async exec(sql: string) {
       // Schema creation goes through the write path; exec is optional in some

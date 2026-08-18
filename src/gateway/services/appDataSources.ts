@@ -206,13 +206,43 @@ export function inferPrimaryAlias(sources: AppDataSource[]): string | undefined 
   return sources.length === 1 ? sources[0]?.alias : undefined;
 }
 
+/**
+ * Find a linked source by unique id or by alias.
+ *
+ * Ids are matched before aliases, and matched exhaustively, because the two
+ * namespaces are not equally trustworthy. An id is unique by construction; an
+ * alias is a display name that can repeat — linking the same job twice, or two
+ * jobs whose names collide, leaves several sources answering to one alias.
+ *
+ * The previous single `.find()` treated both namespaces as interchangeable and
+ * returned whichever matched first. When an alias was duplicated that made the
+ * result depend on array order: an app could read an empty database while its
+ * data sat in the duplicate, with nothing anywhere reporting a problem. Empty
+ * results are the hardest failure to trace, because they look like "no data
+ * yet" rather than a bug.
+ *
+ * A duplicate alias is still resolved rather than rejected — throwing would
+ * break working apps at read time for a mistake made at link time — but the
+ * choice is now stable and it is reported loudly enough to find.
+ */
 export function findDataSource(
   config: AppDataSourcesFile,
   sourceId: string,
 ): AppDataSource | undefined {
-  return config.sources.find(
-    (s) => s.id === sourceId || s.alias === sourceId,
-  );
+  const byId = config.sources.find((s) => s.id === sourceId);
+  if (byId) {
+    return byId;
+  }
+
+  const byAlias = config.sources.filter((s) => s.alias === sourceId);
+  if (byAlias.length > 1) {
+    console.warn(
+      `[AppDataSources] Alias "${sourceId}" matches ${byAlias.length} linked sources ` +
+        `(${byAlias.map((s) => s.id).join(", ")}). Using the first. ` +
+        `Pass a source id instead — aliases are display names and are not unique.`,
+    );
+  }
+  return byAlias[0];
 }
 
 /** Extract the main table name from SQL (used by validation helpers). */
