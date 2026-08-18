@@ -280,6 +280,27 @@ function buildCdcUpdateTriggerSql(
   );
 }
 
+/**
+ * Recreate the CDC update trigger atomically.
+ *
+ * The DROP and CREATE used to be two separate db.exec() calls. Because the
+ * update trigger is created WITHOUT `IF NOT EXISTS` (its body depends on the
+ * current column set, so it must be replaced rather than skipped), an
+ * interruption or a concurrent sync between the two statements could leave a
+ * SECOND `_papr_tr_<suffix>_au` row in sqlite_master. SQLite then refuses to
+ * parse the schema at all:
+ *
+ *   malformed database schema (_papr_tr_investors_au)
+ *     - trigger "_papr_tr_investors_au" already exists
+ *
+ * Every query against that database fails, and mini-apps render an empty list —
+ * indistinguishable from data loss.
+ *
+ * Wrapping both statements in a single transaction makes the swap atomic: it
+ * either fully applies or fully rolls back, so a duplicate can never be
+ * committed. This mirrors the guards the remote path already has
+ * (see refreshRemoteCdcUpdateTrigger).
+ */
 function refreshLocalCdcUpdateTrigger(
   db: Database.Database,
   tableName: string,
@@ -290,8 +311,22 @@ function refreshLocalCdcUpdateTrigger(
   if (!updateSql) {
     return;
   }
-  db.exec(`DROP TRIGGER IF EXISTS ${quoteIdent(`_papr_tr_${suffix}_au`)}`);
-  db.exec(updateSql);
+  const triggerName = `_papr_tr_${suffix}_au`;
+  const swap = db.transaction(() => {
+    db.exec(`DROP TRIGGER IF EXISTS ${quoteIdent(triggerName)}`);
+    db.exec(updateSql);
+  });
+  try {
+    swap();
+  } catch (error) {
+    // Another writer won the race and already recreated an equivalent trigger.
+    // The transaction rolled back, so the schema is still valid — leave it be.
+    const message = error instanceof Error ? error.message : String(error);
+    if (isSqliteTriggerAlreadyExistsError(message)) {
+      return;
+    }
+    throw error;
+  }
 }
 
 export function dropLocalTableSyncTriggers(
