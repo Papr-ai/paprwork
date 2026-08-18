@@ -124,12 +124,58 @@ function createSyncMuteTableSql(): string {
   );
 }
 
+/**
+ * Clear a leaked sync-mute depth left behind by a previous process.
+ *
+ * `depth` is a re-entrancy counter stored IN the database, but it only ever
+ * describes work happening inside a live process. withSyncMuted() decrements
+ * it in a finally block — which never runs if the process is killed, crashes,
+ * or the DB write fails mid-scope. The non-zero value then survives on disk
+ * forever.
+ *
+ * Every CDC trigger is guarded by `depth = 0`, so a leaked depth silently
+ * disables change capture for the whole database: local writes still succeed,
+ * but nothing is queued for Turso, and the next cloud pull overwrites the row
+ * with the stale remote value. To the user, edits "don't save" — they persist
+ * locally, then get reverted by sync.
+ *
+ * Nothing legitimately holds a mute across process boundaries, so any depth
+ * observed at startup is by definition stale. Reset it once, when the
+ * infrastructure is first ensured for this connection.
+ */
+function resetLeakedSyncMuteDepth(db: Database.Database): void {
+  const row = db
+    .prepare(
+      `SELECT depth FROM ${quoteIdent(SYNC_MUTE_TABLE)} WHERE id = ${MUTE_ROW_ID}`,
+    )
+    .get() as { depth?: number } | undefined;
+  const depth = Number(row?.depth ?? 0);
+  if (!Number.isFinite(depth) || depth === 0) {
+    return;
+  }
+  db.exec(
+    `UPDATE ${quoteIdent(SYNC_MUTE_TABLE)} SET depth = 0 WHERE id = ${MUTE_ROW_ID}`,
+  );
+  console.warn(
+    `[tursoSyncLog] cleared leaked sync mute depth (${depth}) — CDC was disabled, ` +
+      `local edits would not have synced. Likely a process exit inside withSyncMuted().`,
+  );
+}
+
+/** Connections that already had their leaked mute depth cleared. */
+const muteDepthCheckedDbs = new WeakSet<Database.Database>();
+
 export function ensureLocalSyncInfrastructure(db: Database.Database): void {
   db.exec(createSyncLogTableSql());
   db.exec(createSyncMuteTableSql());
   db.exec(
     `INSERT OR IGNORE INTO ${quoteIdent(SYNC_MUTE_TABLE)} (id, depth) VALUES (${MUTE_ROW_ID}, 0)`,
   );
+  // Once per connection: a mute can never legitimately outlive a process.
+  if (!muteDepthCheckedDbs.has(db)) {
+    muteDepthCheckedDbs.add(db);
+    resetLeakedSyncMuteDepth(db);
+  }
 }
 
 export async function ensureRemoteSyncInfrastructure(remote: Client): Promise<void> {
@@ -403,6 +449,11 @@ export async function ensureRemoteTableSyncTriggers(
   return true;
 }
 
+/** Never let the counter go negative — a stuck-negative depth also breaks CDC. */
+const MUTE_RELEASE_SQL =
+  `UPDATE ${quoteIdent(SYNC_MUTE_TABLE)} SET depth = MAX(depth - 1, 0) ` +
+  `WHERE id = ${MUTE_ROW_ID}`;
+
 export function withSyncMuted<T>(db: Database.Database, fn: () => T): T {
   ensureLocalSyncInfrastructure(db);
   db.exec(
@@ -411,9 +462,12 @@ export function withSyncMuted<T>(db: Database.Database, fn: () => T): T {
   try {
     return fn();
   } finally {
-    db.exec(
-      `UPDATE ${quoteIdent(SYNC_MUTE_TABLE)} SET depth = depth - 1 WHERE id = ${MUTE_ROW_ID}`,
-    );
+    // Must not throw: an error here would leak the mute and silently disable CDC.
+    try {
+      db.exec(MUTE_RELEASE_SQL);
+    } catch (error) {
+      console.error("[tursoSyncLog] failed to release sync mute", error);
+    }
   }
 }
 
@@ -428,9 +482,12 @@ export async function withSyncMutedAsync<T>(
   try {
     return await fn();
   } finally {
-    db.exec(
-      `UPDATE ${quoteIdent(SYNC_MUTE_TABLE)} SET depth = depth - 1 WHERE id = ${MUTE_ROW_ID}`,
-    );
+    // Must not throw: an error here would leak the mute and silently disable CDC.
+    try {
+      db.exec(MUTE_RELEASE_SQL);
+    } catch (error) {
+      console.error("[tursoSyncLog] failed to release sync mute", error);
+    }
   }
 }
 
