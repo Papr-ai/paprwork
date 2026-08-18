@@ -7,21 +7,60 @@
  * `INSERT ... ON CONFLICT(id)` failed with "ON CONFLICT clause does not match
  * any PRIMARY KEY or UNIQUE constraint", and duplicate rows piled up until
  * they did.
+ *
+ * Uses `node:sqlite` rather than the vendored better-sqlite3, which is built
+ * for Electron's ABI and cannot load under plain vitest — same approach as
+ * tests/cdc-trigger-atomic-refresh.test.ts.
  */
 
 import { describe, expect, it } from "vitest";
-import Database from "better-sqlite3";
+import { createRequire } from "node:module";
 
 import {
   writeTablesToLocalDb,
   type LocalTable,
 } from "../../../src/gateway/services/tursoSyncBridgeCore.js";
 
-function pkColumns(db: Database.Database, table: string): string[] {
-  const rows = db
-    .prepare(`SELECT name, pk FROM pragma_table_info(?)`)
-    .all(table) as Array<{ name: string; pk: number }>;
+// Required rather than imported: Vite tries to resolve a bare `node:sqlite`
+// import and fails. Same approach as tests/cdc-trigger-atomic-refresh.test.ts.
+const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
+  DatabaseSync: new (path: string) => unknown;
+};
+
+/**
+ * `node:sqlite` exposes exec/prepare but not the two better-sqlite3 helpers
+ * the sync code uses: `.pragma()` and `.transaction()`. Bridging them here
+ * keeps the test running the real implementation rather than a
+ * reimplementation of it, which is the only version worth asserting against.
+ */
+function openDb(): any {
+  const db = new DatabaseSync(":memory:") as any;
+  db.pragma = (statement: string) => db.exec(`PRAGMA ${statement}`);
+  db.transaction = (fn: (...args: unknown[]) => unknown) =>
+    (...args: unknown[]) => {
+      db.exec("BEGIN");
+      try {
+        const result = fn(...args);
+        db.exec("COMMIT");
+        return result;
+      } catch (err) {
+        db.exec("ROLLBACK");
+        throw err;
+      }
+    };
+  return db;
+}
+
+function pkColumns(db: any, table: string): string[] {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+    name: string;
+    pk: number;
+  }>;
   return rows.filter((row) => row.pk > 0).map((row) => row.name);
+}
+
+function count(db: any, table: string): number {
+  return Number((db.prepare(`SELECT COUNT(*) n FROM ${table}`).get() as any).n);
 }
 
 /** Remote shape after the PK was lost upstream: names and types only. */
@@ -38,7 +77,7 @@ function pklessRemote(name: string, rows: unknown[][] = []): LocalTable {
 
 describe("writeTablesToLocalDb — primary key preservation", () => {
   it("keeps the local PK when the incoming remote schema has none", () => {
-    const db = new Database(":memory:");
+    const db = openDb();
     db.exec(`CREATE TABLE events (id TEXT PRIMARY KEY, title TEXT)`);
 
     writeTablesToLocalDb(db, [pklessRemote("events", [["a", "One"]])]);
@@ -47,7 +86,7 @@ describe("writeTablesToLocalDb — primary key preservation", () => {
   });
 
   it("keeps upserts working, so ON CONFLICT does not fail after a pull", () => {
-    const db = new Database(":memory:");
+    const db = openDb();
     db.exec(`CREATE TABLE events (id TEXT PRIMARY KEY, title TEXT)`);
 
     writeTablesToLocalDb(db, [pklessRemote("events", [["a", "One"]])]);
@@ -66,11 +105,11 @@ describe("writeTablesToLocalDb — primary key preservation", () => {
       title: string;
     };
     expect(row.title).toBe("Updated");
-    expect(db.prepare(`SELECT COUNT(*) n FROM events`).get()).toEqual({ n: 1 });
+    expect(count(db, "events")).toBe(1);
   });
 
   it("respects the remote PK when the remote declares one", () => {
-    const db = new Database(":memory:");
+    const db = openDb();
     db.exec(`CREATE TABLE events (id TEXT PRIMARY KEY, title TEXT)`);
 
     writeTablesToLocalDb(db, [
@@ -89,7 +128,7 @@ describe("writeTablesToLocalDb — primary key preservation", () => {
   });
 
   it("leaves genuinely key-less tables alone", () => {
-    const db = new Database(":memory:");
+    const db = openDb();
     db.exec(`CREATE TABLE events (id TEXT, title TEXT)`);
 
     writeTablesToLocalDb(db, [pklessRemote("events")]);
@@ -98,7 +137,7 @@ describe("writeTablesToLocalDb — primary key preservation", () => {
   });
 
   it("does not reinstate a PK whose column the remote dropped", () => {
-    const db = new Database(":memory:");
+    const db = openDb();
     db.exec(`CREATE TABLE events (legacy_id TEXT PRIMARY KEY, title TEXT)`);
 
     // A PK naming a column that no longer exists would be invalid DDL.
@@ -109,11 +148,11 @@ describe("writeTablesToLocalDb — primary key preservation", () => {
   });
 
   it("creates tables that do not exist locally yet", () => {
-    const db = new Database(":memory:");
+    const db = openDb();
 
     expect(() =>
       writeTablesToLocalDb(db, [pklessRemote("fresh", [["a", "One"]])]),
     ).not.toThrow();
-    expect(db.prepare(`SELECT COUNT(*) n FROM fresh`).get()).toEqual({ n: 1 });
+    expect(count(db, "fresh")).toBe(1);
   });
 });
