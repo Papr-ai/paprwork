@@ -238,16 +238,27 @@ export const papr = {
       });
     },
 
-    /** Resolve a file id to something a browser can load. */
+    /**
+     * Resolve a file id to something a browser can load.
+     *
+     * A local file resolves to a *filesystem path*, which no browser can
+     * fetch — `<audio src="/Users/...">` resolves against the origin and 404s.
+     * So local files are returned as a gateway URL that streams the bytes,
+     * and cloud files as their signed URL. Callers get one usable src either
+     * way and never have to branch on where the file happens to live.
+     */
     async url(id: string): Promise<{ url: string; location: string }> {
       const res = await api<{ url?: string; location: { kind: string; path?: string } }>(
         "/api/files/url",
         { id },
       );
-      return {
-        url: res.url ?? res.location.path ?? "",
-        location: res.location.kind,
-      };
+      if (res.location.kind === "local") {
+        return {
+          url: `/api/files/content?id=${encodeURIComponent(id)}`,
+          location: "local",
+        };
+      }
+      return { url: res.url ?? "", location: res.location.kind };
     },
 
     /** Every file this app can see. */

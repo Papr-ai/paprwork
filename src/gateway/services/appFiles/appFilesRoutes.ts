@@ -17,6 +17,7 @@ import {
   listFiles,
   removeFile,
   resolveFileUrl,
+  retryPendingUploads,
   setFilePrivacy,
   evictLocal,
   type FilesDb,
@@ -337,6 +338,79 @@ export function registerAppFilesRoutes(
       }
       const db = await dbFor(appId, sourceId, deps);
       res.json({ evicted: await evictLocal(db, objectKey) });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  /**
+   * Stream a locally-stored file to the browser.
+   *
+   * `resolveFileUrl` returns a filesystem path for local files, which is the
+   * right answer for a job that reads bytes and useless to a browser: an
+   * `<audio src="/Users/...">` resolves against the origin and 404s. This is
+   * the one place that gap can be closed, because only the gateway can read
+   * the disk.
+   *
+   * Range requests are honoured so audio and video can seek. Without them a
+   * player must download a 900 MB recording before it can jump to the middle.
+   */
+  app.get("/api/files/content", async (req, res) => {
+    try {
+      const appId = req.query.appId as string | undefined;
+      const id = req.query.id as string | undefined;
+      const sourceId = req.query.sourceId as string | undefined;
+      if (!id) {
+        res.status(400).json({ error: "id is required" });
+        return;
+      }
+      const resolved = resolveMiniAppIdFromRequest(appId, req.headers);
+      if (!resolved.appId) {
+        res.status(resolved.status ?? 400).json({ error: resolved.error });
+        return;
+      }
+
+      const db = await dbFor(resolved.appId, sourceId, deps);
+      const { location } = await resolveFileUrl(db, id);
+      if (location.kind !== "local") {
+        // Cloud files are served by a signed URL, and unavailable ones have no
+        // bytes anywhere. Neither belongs on this path.
+        res.status(404).json({
+          error:
+            location.kind === "cloud"
+              ? "File is in cloud storage — use /api/files/url for a signed URL"
+              : "File has no local copy",
+        });
+        return;
+      }
+
+      res.sendFile(location.path);
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  /**
+   * Upload files registered while cloud storage was unreachable.
+   *
+   * Files added during an outage are `pending` with a local copy only. Without
+   * a retry they stay that way indefinitely — the app keeps working off local
+   * disk and the durability nobody re-checks never arrives.
+   */
+  app.post("/api/files/retry-pending", async (req, res) => {
+    try {
+      const { appId, sourceId } = req.body as {
+        appId?: string;
+        sourceId?: string;
+      };
+      const resolved = resolveMiniAppIdFromRequest(appId, req.headers);
+      if (!resolved.appId) {
+        res.status(resolved.status ?? 400).json({ error: resolved.error });
+        return;
+      }
+      const db = await dbFor(resolved.appId, sourceId, deps);
+      await ensureSchema(db);
+      res.json(await retryPendingUploads(db, resolved.appId));
     } catch (err) {
       fail(res, err);
     }

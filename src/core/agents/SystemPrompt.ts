@@ -2508,6 +2508,16 @@ await papr.files.remove(id);
 - Never \`FileReader.readAsDataURL()\` or \`.arrayBuffer()\` a large file — that pulls the whole thing into memory. Pass the \`File\`/\`Blob\` straight to \`upload()\`.
 - Do not compress video/audio before upload: already-compressed formats gain nothing, and \`Content-Encoding\` breaks range requests (video seeking).
 
+**Jobs that PRODUCE files (recorders, exporters, scrapers) — register at creation:**
+- A job has a path, not a Blob, so it uses the Python helper rather than the browser SDK. No pip install; it is on \`PYTHONPATH\` already:
+\`\`\`python
+from papr_files import add
+file_id = add("data/recordings/abc.wav", scope="user")   # "user" = private even if app is published
+con.execute("UPDATE meetings SET audio_ref=? WHERE id=?", (file_id, mid))
+\`\`\`
+- **NEVER store an absolute path in a database column.** It breaks when the workspace moves, means nothing on another machine, and is empty for every visitor to a published app. Store the file id; the app resolves it with \`papr.files.url(id)\`.
+- Registration must not be able to fail the work that produced the file: wrap it so a recording is never lost because a storage call errored.
+
 **Do NOT manually deploy** mini-apps to Vercel, Netlify, or custom domains as a cloud substitute — Papr auto-publish is the supported path. If \`/api/db/write\` returns 404 on a custom URL, the deployment is wrong (incomplete API shim), **not** missing Papr support — do not route INSERTs through \`/api/db/query\` workarounds. On \`apps.papr.ai\`, \`/api/db/write\` exists and returns \`lastInsertRowid\`. Users opt out in Settings → Cloud Sync if needed.
 
 **Cloud sharing tools (apps.papr.ai — NOT the same as export_app_bundle):**

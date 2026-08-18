@@ -9,6 +9,7 @@
 import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
 import { stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
 
 import {
   commitUpload,
@@ -321,6 +322,81 @@ async function recordProgress(
 }
 
 /**
+ * Register a file that exists on disk when cloud storage cannot be reached.
+ *
+ * The object key is derived from the content hash using the same shape the
+ * server would mint, so when the upload is retried the ticket resolves to this
+ * same object and dedupe still works — no orphan and no duplicate.
+ *
+ * State is `pending`, not `failed`: nothing has been attempted yet, and
+ * `failed` is reserved for an upload that started and broke. The distinction
+ * matters to whoever reads this row later trying to understand what happened.
+ */
+async function addFileLocally(
+  db: FilesDb,
+  args: {
+    appId: string;
+    filePath: string;
+    fileName: string;
+    mime?: string;
+    scope: AppFileScope;
+    sha256: string;
+    sizeBytes: number;
+    reason: string;
+  },
+): Promise<AddFileResult> {
+  console.warn(
+    `[AppFiles] Cloud storage unavailable (${args.reason}). ` +
+      `Registered "${args.fileName}" locally — upload will be retried.`,
+  );
+
+  const now = Date.now();
+  const id = randomUUID();
+  const objectKey = `local/${args.appId}/${args.sha256}`;
+
+  await db.run(
+    `INSERT INTO app_files
+       (id, app_id, object_key, sha256, size_bytes, mime, file_name, scope,
+        local_path, upload_state, visibility, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'inherit', ?, ?)
+     ON CONFLICT(object_key) DO UPDATE SET
+       local_path = excluded.local_path,
+       updated_at = excluded.updated_at`,
+    [
+      id,
+      args.appId,
+      objectKey,
+      args.sha256,
+      args.sizeBytes,
+      args.mime ?? null,
+      args.fileName,
+      args.scope,
+      args.filePath,
+      now,
+      now,
+    ],
+  );
+
+  // On conflict the original row survived, so return its id — handing back a
+  // fresh uuid would give the caller an id that resolves to nothing.
+  const existing = (
+    await db.all<{ id: string }>(
+      `SELECT id FROM app_files WHERE object_key = ?`,
+      [objectKey],
+    )
+  )[0];
+
+  return {
+    id: existing?.id ?? id,
+    objectKey,
+    sha256: args.sha256,
+    sizeBytes: args.sizeBytes,
+    deduped: false,
+    verified: false,
+  };
+}
+
+/**
  * Store a local file in App Files.
  *
  * Order matters here. We hash first so the key is content-addressed, which
@@ -339,14 +415,37 @@ export async function addFile(
   const fileName = args.fileName ?? basename(args.filePath);
   const scope = args.scope ?? "app";
 
-  const ticket = await requestUploadTicket({
-    appId: args.appId,
-    sha256,
-    sizeBytes,
-    fileName,
-    mime: args.mime,
-    scope,
-  });
+  let ticket: Awaited<ReturnType<typeof requestUploadTicket>>;
+  try {
+    ticket = await requestUploadTicket({
+      appId: args.appId,
+      sha256,
+      sizeBytes,
+      fileName,
+      mime: args.mime,
+      scope,
+    });
+  } catch (err) {
+    // Cloud storage is unreachable, but the bytes are already on this disk.
+    // Refusing the registration would leave the caller holding a path — the
+    // exact fragile reference App Files exists to replace — because of an
+    // outage that has nothing to do with the file.
+    //
+    // Record it locally instead. The row is real, the id is durable, and the
+    // upload is retried later by resumeUpload. Offline-first is the honest
+    // model here: the local copy was always the primary read path, and the
+    // cloud copy is durability.
+    return addFileLocally(db, {
+      appId: args.appId,
+      filePath: args.filePath,
+      fileName,
+      mime: args.mime,
+      scope,
+      sha256,
+      sizeBytes,
+      reason: (err as Error).message,
+    });
+  }
 
   const now = Date.now();
   const id = randomUUID();
@@ -513,4 +612,68 @@ export async function removeFile(db: FilesDb, id: string): Promise<boolean> {
   await deleteObject(row.app_id, row.object_key);
   await db.run(`DELETE FROM app_files WHERE id = ?`, [id]);
   return true;
+}
+
+/**
+ * Upload files that were registered while cloud storage was unreachable.
+ *
+ * Without this, `addFileLocally` would be a trap rather than a fallback: the
+ * row stays `pending` forever, the app keeps working off the local copy, and
+ * the durability everyone assumes they have never actually arrives. The
+ * failure would only surface on the day the local copy is gone.
+ *
+ * Safe to call repeatedly. Each file goes through the normal `addFile` path,
+ * which is content-addressed, so a file that did reach storage in the meantime
+ * dedupes instead of uploading twice.
+ */
+export async function retryPendingUploads(
+  db: FilesDb,
+  appId: string,
+): Promise<{ uploaded: number; stillPending: number; skipped: number }> {
+  const pending = await db.all<AppFileRow>(
+    `SELECT * FROM app_files
+      WHERE app_id = ? AND upload_state = 'pending' AND local_path IS NOT NULL
+      ORDER BY created_at ASC`,
+    [appId],
+  );
+
+  let uploaded = 0;
+  let stillPending = 0;
+  let skipped = 0;
+
+  for (const row of pending) {
+    // The local copy is the only source of bytes for a pending row. If it is
+    // gone there is nothing to upload, and retrying would fail every time.
+    if (!row.local_path || !existsSync(row.local_path)) {
+      skipped += 1;
+      continue;
+    }
+
+    try {
+      const result = await addFile(db, {
+        appId,
+        filePath: row.local_path,
+        fileName: row.file_name,
+        mime: row.mime ?? undefined,
+        scope: row.scope,
+      });
+      if (result.verified) {
+        // The retry wrote a row under the server's real object key. Drop the
+        // local/ placeholder so the file is not listed twice.
+        if (result.objectKey !== row.object_key) {
+          await db.run(`DELETE FROM app_files WHERE object_key = ?`, [
+            row.object_key,
+          ]);
+        }
+        uploaded += 1;
+      } else {
+        stillPending += 1;
+      }
+    } catch {
+      // Still unreachable. Leave the row exactly as it is and try again later.
+      stillPending += 1;
+    }
+  }
+
+  return { uploaded, stillPending, skipped };
 }
