@@ -27,10 +27,11 @@ import {
   stopPaprAuthCallbackServer,
 } from "./paprAuthCallbackServer.js";
 import {
-  cacheNamespacesForOrg,
-  getCachedNamespaces,
-  readPaprWorkspaceCache,
-  writePaprWorkspaceCache,
+  clearPaprWorkspaceCache,
+  readCachedNamespaces,
+  readCachedWorkspaces,
+  writeCachedNamespaces,
+  writeCachedWorkspaces,
   type CachedWorkspace,
 } from "./paprWorkspaceCache.js";
 import {
@@ -38,6 +39,7 @@ import {
   sendWorkspaceInvite,
 } from "./paprWorkspaceTeam.js";
 import { registerPaprBillingHandlers } from "./paprBilling.js";
+import { coalesce, parseFetch } from "./parseTransport.js";
 import * as crypto from "crypto";
 import path from "node:path";
 import { getPaprDataDir } from "../../core/utils/paprRoot.js";
@@ -673,68 +675,46 @@ type ParseGraphQLJson = {
   [key: string]: ParseGraphQLJson | ParseGraphQLJson[] | string | number | boolean | null | undefined;
 };
 
-function isTransientParseError(error: unknown): boolean {
-  const msg = error instanceof Error ? error.message : String(error);
-  const cause = error instanceof Error && "cause" in error ? String(error.cause) : "";
-  const combined = `${msg} ${cause}`;
-  return (
-    combined.includes("Invalid server state") ||
-    combined.includes("ECONNRESET") ||
-    combined.includes("fetch failed") ||
-    combined.includes("ETIMEDOUT") ||
-    combined.includes("503") ||
-    combined.includes("502") ||
-    /Parse GraphQL error: 5\d\d/.test(combined)
-  );
-}
-
 // ─── Parse GraphQL Client ──────────────────────────────────────
 
+/**
+ * Run a Parse GraphQL operation.
+ *
+ * Connection pooling, timeouts, jittered retry and circuit breaking all live in
+ * `parseTransport`, shared with the profile-sync client so both compete for the
+ * same bounded set of sockets rather than each opening its own.
+ */
 async function parseGraphQL(
   sessionToken: string,
   query: string,
   variables: Record<string, unknown>,
+  options: { maxAttempts?: number } = {},
 ): Promise<ParseGraphQLJson> {
-  let lastError: unknown;
-  const maxAttempts = 4;
+  const response = await parseFetch(PARSE_GRAPHQL_URL, {
+    method: "POST",
+    maxAttempts: options.maxAttempts,
+    headers: {
+      "Content-Type": "application/json",
+      "X-Parse-Application-Id": PARSE_APP_ID,
+      "X-Parse-Session-Token": sessionToken,
+    },
+    body: JSON.stringify({ query, variables }),
+  });
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      const response = await fetch(PARSE_GRAPHQL_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Parse-Application-Id": PARSE_APP_ID,
-          "X-Parse-Session-Token": sessionToken,
-        },
-        body: JSON.stringify({ query, variables }),
-      });
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`Parse GraphQL error: ${response.status} ${text}`);
-      }
-
-      const result = (await response.json()) as { data?: Record<string, unknown>; errors?: unknown[] };
-      if (result.errors) {
-        throw new Error(`GraphQL errors: ${JSON.stringify(result.errors)}`);
-      }
-
-      return (result.data ?? {}) as ParseGraphQLJson;
-    } catch (error) {
-      lastError = error;
-      if (!isTransientParseError(error) || attempt === maxAttempts) {
-        throw error;
-      }
-      const delayMs = 300 * 2 ** (attempt - 1);
-      console.warn(
-        `[PaprLogin] Transient Parse error (attempt ${attempt}/${maxAttempts}), retrying in ${delayMs}ms...`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Parse GraphQL error: ${response.status} ${text}`);
   }
 
-  throw lastError;
+  const result = (await response.json()) as {
+    data?: Record<string, unknown>;
+    errors?: unknown[];
+  };
+  if (result.errors) {
+    throw new Error(`GraphQL errors: ${JSON.stringify(result.errors)}`);
+  }
+
+  return (result.data ?? {}) as ParseGraphQLJson;
 }
 
 // ─── GraphQL Mutations (matching papr-dev-platform) ────────────
@@ -1245,13 +1225,24 @@ async function fetchUserWorkspaces(
     };
   };
 
+  const edges = data.workspace_followers?.edges ?? [];
   const workspaces: UserWorkspaceOption[] = [];
-  for (const edge of data.workspace_followers?.edges ?? []) {
+  const skipped: string[] = [];
+
+  for (const edge of edges) {
     const node = edge.node;
 
     const workspace = node?.workspace;
     const organization = workspace?.organization;
     if (!node?.objectId || !workspace?.objectId || !organization?.objectId || !organization.name) {
+      // A membership row that fails these checks disappears from the switcher
+      // with no trace, which makes "my workspace is missing" impossible to
+      // diagnose from logs. Record why it was dropped.
+      skipped.push(
+        `${workspace?.workspace_name ?? workspace?.objectId ?? "unknown"} ` +
+          `(follower=${node?.objectId ?? "none"}, org=${organization?.objectId ?? "none"}, ` +
+          `orgName=${JSON.stringify(organization?.name ?? null)})`,
+      );
       continue;
     }
 
@@ -1291,6 +1282,17 @@ async function fetchUserWorkspaces(
 
   workspaces.sort((a, b) =>
     workspaceDisplayName(a).localeCompare(workspaceDisplayName(b)),
+  );
+
+  if (skipped.length > 0) {
+    console.warn(
+      `[PaprLogin] Dropped ${skipped.length} of ${edges.length} workspace membership ` +
+        `rows (incomplete organization data): ${skipped.join("; ")}`,
+    );
+  }
+  console.log(
+    `[PaprLogin] Parse returned ${edges.length} workspace membership rows, ` +
+      `kept ${workspaces.length}: ${workspaces.map(workspaceDisplayName).join(", ") || "none"}`,
   );
 
   return workspaces;
@@ -1379,16 +1381,20 @@ async function fetchUserWorkspacesWithRefresh(
   customKeysStorage: CustomKeysStorage,
   settingsStorage: SettingsStorage,
 ): Promise<UserWorkspaceOption[]> {
-  const graphql: GraphQLExecutor = (query, variables) =>
-    parseGraphQLWithRefresh(
-      profile.sessionToken!,
-      query,
-      variables,
-      customKeysStorage,
-      settingsStorage,
-    );
+  // This is a three-query fan-out (workspaces, owned orgs, developer org) and
+  // several callers can want it at once; they share one pass.
+  return coalesce(`parse:workspaces:${profile.userId}`, () => {
+    const graphql: GraphQLExecutor = (query, variables) =>
+      parseGraphQLWithRefresh(
+        profile.sessionToken!,
+        query,
+        variables,
+        customKeysStorage,
+        settingsStorage,
+      );
 
-  return fetchUserWorkspaces(profile.userId!, graphql);
+    return fetchUserWorkspaces(profile.userId!, graphql);
+  });
 }
 
 type PaprProfile = NonNullable<ReturnType<SettingsStorage["getPaprProfile"]>>;
@@ -2069,6 +2075,14 @@ interface OrgNamespaceListItem {
   environmentType?: string;
 }
 
+/**
+ * The user the workspace cache belongs to. Reads and writes are scoped by this,
+ * so a cache written before a logout is never served to the next account.
+ */
+function cacheUserId(settingsStorage: SettingsStorage): string {
+  return settingsStorage.getPaprProfile()?.userId ?? "";
+}
+
 async function fetchOrgNamespaces(
   sessionToken: string,
   organizationId: string,
@@ -2115,12 +2129,25 @@ async function fetchOrgNamespaces(
 
   // Compare against what was cached BEFORE overwriting, so a background refresh
   // that discovers new/removed namespaces can wake the renderer up.
-  const previousCacheEntries = getCachedNamespaces(organizationId) ?? [];
+  const userId = cacheUserId(settingsStorage);
+  const previousCacheEntries = readCachedNamespaces(userId, organizationId)?.data ?? [];
   const changed =
     namespaceListSignature(previousCacheEntries) !==
     namespaceListSignature(nextCacheEntries);
 
-  cacheNamespacesForOrg(organizationId, nextCacheEntries);
+  // An empty result on top of a populated cache is almost always a partial
+  // failure upstream, not a real deletion. Overwriting here made the cache
+  // flip empty/populated on every pass, and each flip notified the renderer,
+  // which forced another refresh — load grew while Parse was degraded.
+  if (nextCacheEntries.length === 0 && previousCacheEntries.length > 0) {
+    console.warn(
+      `[PaprLogin] Namespace fetch for org ${organizationId} returned nothing; ` +
+        `keeping ${previousCacheEntries.length} cached entries`,
+    );
+    return previousCacheEntries.map((entry) => ({ ...entry }));
+  }
+
+  writeCachedNamespaces(userId, organizationId, nextCacheEntries);
 
   if (changed) {
     console.log(
@@ -2140,11 +2167,42 @@ async function fetchOrgNamespaces(
  * Without this, a background refresh rewrites the cache but the UI keeps showing
  * the stale list until a manual reload, so one bad cache write sticks forever.
  */
-function notifyWorkspaceCacheUpdated(): void {
+/**
+ * Minimum gap between cache-updated notifications.
+ *
+ * The renderer responds to this event with a full profile reload (profile +
+ * plan + workspace list), and that reload itself triggers the background
+ * refreshes that can emit this event. Throttling caps the cycle: even if the
+ * cache keeps changing, the renderer is woken at most once per window.
+ */
+const WORKSPACE_CACHE_NOTIFY_INTERVAL_MS = 15_000;
+
+let lastWorkspaceCacheNotifyAt = 0;
+let pendingWorkspaceCacheNotify: NodeJS.Timeout | null = null;
+
+function sendWorkspaceCacheUpdated(): void {
+  lastWorkspaceCacheNotifyAt = Date.now();
   const win = BrowserWindow.getAllWindows()[0];
   if (win && !win.isDestroyed()) {
     win.webContents.send("papr:workspace-cache-updated");
   }
+}
+
+function notifyWorkspaceCacheUpdated(): void {
+  if (pendingWorkspaceCacheNotify) return;
+
+  const elapsed = Date.now() - lastWorkspaceCacheNotifyAt;
+  if (elapsed >= WORKSPACE_CACHE_NOTIFY_INTERVAL_MS) {
+    sendWorkspaceCacheUpdated();
+    return;
+  }
+
+  // Trailing edge: coalesce the burst into one notification.
+  pendingWorkspaceCacheNotify = setTimeout(() => {
+    pendingWorkspaceCacheNotify = null;
+    sendWorkspaceCacheUpdated();
+  }, WORKSPACE_CACHE_NOTIFY_INTERVAL_MS - elapsed);
+  pendingWorkspaceCacheNotify.unref?.();
 }
 
 /** Stable signature for namespace cache change detection (order-insensitive). */
@@ -2216,6 +2274,16 @@ interface WorkspaceNamespaceGroup {
  * cache-updated event) would multiply that fan-out by the number of callers.
  */
 const backgroundNamespaceRefreshes = new Set<string>();
+
+/**
+ * Guard for the cache-first workspace refresh.
+ *
+ * `papr:list-organizations` answers from disk cache and refreshes behind it.
+ * Every profile reload calls it, so without this guard a burst of reloads each
+ * started its own Parse fan-out (workspaces + owned orgs + developer org +
+ * namespaces) against an origin that was already struggling.
+ */
+let backgroundWorkspaceRefreshRunning = false;
 
 function refreshOrgNamespacesInBackground(
   sessionToken: string,
@@ -3533,6 +3601,10 @@ export function initializePaprLoginIPC(
       await clearPersistedPkceState();
 
       settingsStorage.clearPaprProfile();
+      // The workspace cache is keyed by user, so a stale one would be ignored
+      // anyway — but leaving another account's workspace names on disk after a
+      // logout is not something to rely on scoping alone to hide.
+      clearPaprWorkspaceCache();
       await clearPaprUserIdFromGatewaySettings();
       try {
         const { clearMemoryPreviewCache } = await import(
@@ -3644,20 +3716,27 @@ export function initializePaprLoginIPC(
         }
 
         const forceRefresh = options?.forceRefresh === true;
-        const cached = forceRefresh ? null : getCachedNamespaces(organizationId);
+        const cached = forceRefresh
+          ? null
+          : readCachedNamespaces(cacheUserId(settingsStorage), organizationId);
         if (cached) {
-          void fetchOrgNamespaces(
-            profile.sessionToken,
-            organizationId,
-            customKeysStorage,
-            settingsStorage,
-          ).catch((error) => {
-            console.warn("[PaprLogin] Background namespace refresh failed:", error);
-          });
+          // Only chase a refresh once the entry is past its freshness window.
+          // Refreshing on every cache hit is what turned a routine settings
+          // render into a burst of Parse traffic.
+          if (cached.isStale) {
+            void fetchOrgNamespaces(
+              profile.sessionToken,
+              organizationId,
+              customKeysStorage,
+              settingsStorage,
+            ).catch((error) => {
+              console.warn("[PaprLogin] Background namespace refresh failed:", error);
+            });
+          }
 
           return {
             success: true,
-            namespaces: cached,
+            namespaces: cached.data,
             activeNamespaceId: profile.activeNamespaceId,
             parseOrganizationId: organizationId,
             fromCache: true,
@@ -3706,14 +3785,13 @@ export function initializePaprLoginIPC(
         const sessionToken = profile.sessionToken;
         const forceRefresh = options?.forceRefresh === true;
 
-        let workspaces: CachedWorkspace[] = readPaprWorkspaceCache()?.workspaces ?? [];
-        if (forceRefresh || workspaces.length === 0) {
+        const refreshWorkspaceCache = async (): Promise<CachedWorkspace[]> => {
           const fetched = await fetchUserWorkspacesWithRefresh(
             profile,
             customKeysStorage,
             settingsStorage,
           );
-          workspaces = fetched.map(
+          const rows = fetched.map(
             (workspace): CachedWorkspace => ({
               id: workspace.workspaceId,
               name: workspaceDisplayName(workspace),
@@ -3724,7 +3802,27 @@ export function initializePaprLoginIPC(
               defaultNamespaceId: workspace.defaultNamespaceId,
             }),
           );
-          writePaprWorkspaceCache({ workspaces });
+          writeCachedWorkspaces(profile.userId, rows);
+          return rows;
+        };
+
+        const cachedWorkspaces = forceRefresh
+          ? null
+          : readCachedWorkspaces(profile.userId);
+        let workspaces: CachedWorkspace[];
+
+        if (!cachedWorkspaces) {
+          workspaces = await refreshWorkspaceCache();
+        } else {
+          workspaces = cachedWorkspaces.data;
+          // Stale but usable: answer from cache so the picker stays instant, and
+          // repair the cache behind it. Serving a non-empty list forever without
+          // ever re-checking is how a wrong workspace list became permanent.
+          if (cachedWorkspaces.isStale) {
+            void refreshWorkspaceCache().catch((error) => {
+              console.warn("[PaprLogin] Background workspace refresh failed:", error);
+            });
+          }
         }
 
         const workspaceFilter = options?.workspaceId?.trim();
@@ -3802,15 +3900,19 @@ export function initializePaprLoginIPC(
                 organizationName,
               };
 
-              const cached = forceRefresh ? null : getCachedNamespaces(organizationId);
+              const cached = forceRefresh
+                ? null
+                : readCachedNamespaces(profile.userId, organizationId);
               if (cached) {
-                refreshOrgNamespacesInBackground(
-                  sessionToken,
-                  organizationId,
-                  customKeysStorage,
-                  settingsStorage,
-                );
-                return { ...base, namespaces: cached };
+                if (cached.isStale) {
+                  refreshOrgNamespacesInBackground(
+                    sessionToken,
+                    organizationId,
+                    customKeysStorage,
+                    settingsStorage,
+                  );
+                }
+                return { ...base, namespaces: cached.data };
               }
 
               try {
@@ -3872,8 +3974,8 @@ export function initializePaprLoginIPC(
         return { success: false, error: "Not logged in" };
       }
 
-      const diskCache = readPaprWorkspaceCache();
-      const cachedWorkspaces = diskCache?.workspaces ?? [];
+      const diskCache = readCachedWorkspaces(profile.userId);
+      const cachedWorkspaces = diskCache?.data ?? [];
 
       const buildResponse = (
         workspaces: UserWorkspaceOption[],
@@ -3902,64 +4004,88 @@ export function initializePaprLoginIPC(
       };
 
       if (cachedWorkspaces.length > 0) {
-        void fetchUserWorkspacesWithRefresh(profile, customKeysStorage, settingsStorage)
-          .then(async (workspaces) => {
-            const workspacesChanged =
-              workspaceListSignature(
-                cachedWorkspaces.map((workspace) => ({
-                  workspaceId: workspace.id,
-                  organizationId: workspace.organizationId,
-                  workspaceName: workspace.workspaceName ?? workspace.name,
-                })),
-              ) !== workspaceListSignature(workspaces);
-
-            writePaprWorkspaceCache({
-              workspaces: workspaces.map(
-                (workspace): CachedWorkspace => ({
-                  id: workspace.workspaceId,
-                  name: workspaceDisplayName(workspace),
-                  role: workspace.role,
-                  organizationId: workspace.organizationId,
-                  organizationName: workspace.organizationName,
-                  workspaceName: workspace.workspaceName,
-                  defaultNamespaceId: workspace.defaultNamespaceId,
-                }),
-              ),
-            });
-
-            if (workspacesChanged) {
-              console.log(
-                `[PaprLogin] Workspace cache changed ` +
-                  `(${cachedWorkspaces.length} -> ${workspaces.length}); notifying renderer`,
-              );
-              notifyWorkspaceCacheUpdated();
-            }
-
-            const active = await syncActiveWorkspaceOrganization(
-              profile,
-              workspaces,
-              settingsStorage,
-              customKeysStorage,
-            );
-            if (active?.organizationId && profile.sessionToken) {
-              try {
-                const namespaces = await fetchOrgNamespaces(
-                  profile.sessionToken,
-                  active.organizationId,
-                  customKeysStorage,
-                  settingsStorage,
+        // Refresh only once the cache is past its freshness window. This handler
+        // is called on every profile load, and refreshing unconditionally is
+        // what let a routine render fan out into repeated Parse round trips.
+        if (diskCache?.isStale && !backgroundWorkspaceRefreshRunning) {
+          backgroundWorkspaceRefreshRunning = true;
+          void fetchUserWorkspacesWithRefresh(profile, customKeysStorage, settingsStorage)
+            .then(async (workspaces) => {
+              // Same reasoning as the namespace cache: an empty list on top of a
+              // populated one means the fetch degraded, not that the user lost
+              // every workspace. Writing it would blank the switcher.
+              if (workspaces.length === 0) {
+                console.warn(
+                  `[PaprLogin] Workspace refresh returned nothing; keeping ` +
+                    `${cachedWorkspaces.length} cached workspaces`,
                 );
-                console.log(
-                  `[PaprLogin] Prefetched ${namespaces.length} namespaces for org ${active.organizationId}`,
-                );
-              } catch (error) {
-                console.warn("[PaprLogin] Background namespace prefetch failed:", error);
+                return;
               }
-            }
-          })
-          .catch((error) => {
-            console.warn("[PaprLogin] Background workspace refresh failed:", error);
-          });
+
+              const workspacesChanged =
+                workspaceListSignature(
+                  cachedWorkspaces.map((workspace) => ({
+                    workspaceId: workspace.id,
+                    organizationId: workspace.organizationId,
+                    workspaceName: workspace.workspaceName ?? workspace.name,
+                  })),
+                ) !== workspaceListSignature(workspaces);
+
+              writeCachedWorkspaces(
+                profile.userId,
+                workspaces.map(
+                  (workspace): CachedWorkspace => ({
+                    id: workspace.workspaceId,
+                    name: workspaceDisplayName(workspace),
+                    role: workspace.role,
+                    organizationId: workspace.organizationId,
+                    organizationName: workspace.organizationName,
+                    workspaceName: workspace.workspaceName,
+                    defaultNamespaceId: workspace.defaultNamespaceId,
+                  }),
+                ),
+              );
+
+              if (workspacesChanged) {
+                console.log(
+                  `[PaprLogin] Workspace cache changed ` +
+                    `(${cachedWorkspaces.length} -> ${workspaces.length}); notifying renderer`,
+                );
+                notifyWorkspaceCacheUpdated();
+              }
+
+              const active = await syncActiveWorkspaceOrganization(
+                profile,
+                workspaces,
+                settingsStorage,
+                customKeysStorage,
+              );
+              if (active?.organizationId && profile.sessionToken) {
+                try {
+                  const namespaces = await fetchOrgNamespaces(
+                    profile.sessionToken,
+                    active.organizationId,
+                    customKeysStorage,
+                    settingsStorage,
+                  );
+                  console.log(
+                    `[PaprLogin] Prefetched ${namespaces.length} namespaces for org ${active.organizationId}`,
+                  );
+                } catch (error) {
+                  console.warn(
+                    "[PaprLogin] Background namespace prefetch failed:",
+                    error,
+                  );
+                }
+              }
+            })
+            .catch((error) => {
+              console.warn("[PaprLogin] Background workspace refresh failed:", error);
+            })
+            .finally(() => {
+              backgroundWorkspaceRefreshRunning = false;
+            });
+        }
 
         const workspacesFromCache: UserWorkspaceOption[] = cachedWorkspaces.map(
           (workspace) => ({
@@ -3990,8 +4116,9 @@ export function initializePaprLoginIPC(
         settingsStorage,
       );
 
-      writePaprWorkspaceCache({
-        workspaces: workspaces.map(
+      writeCachedWorkspaces(
+        profile.userId,
+        workspaces.map(
           (workspace): CachedWorkspace => ({
             id: workspace.workspaceId,
             name: workspaceDisplayName(workspace),
@@ -4002,7 +4129,7 @@ export function initializePaprLoginIPC(
             defaultNamespaceId: workspace.defaultNamespaceId,
           }),
         ),
-      });
+      );
 
       const selected = workspaces.find((workspace) => workspace.isSelected);
       const activeWorkspaceId =

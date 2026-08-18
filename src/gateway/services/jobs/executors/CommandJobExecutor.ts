@@ -14,6 +14,7 @@ import {
   requireJobWriteTargets,
 } from "../../jobAppDatabase.js";
 import { STANDALONE_APP_ID } from "../appIds.js";
+import { jobSdkEnv } from "../jobSdkEnv.js";
 
 export class CommandJobExecutor implements IJobExecutor {
   private supportedTypes: Set<JobType>;
@@ -74,10 +75,14 @@ export class CommandJobExecutor implements IJobExecutor {
       (id) => id !== STANDALONE_APP_ID,
     );
 
+    const nvmEnv = this.getNvmEnv();
+
     const env: NodeJS.ProcessEnv = {
-      ...this.getNvmEnv(),
+      ...nvmEnv,
       JOB_DIR: params.jobDir,
       JOB_DB: jobDbPath,
+      // `from papr_files import add` without vendoring the helper per job.
+      ...jobSdkEnv(nvmEnv.PYTHONPATH ?? process.env.PYTHONPATH),
       ...(writeTargets.length > 0
         ? jobWriteDatabaseEnv(writeTargets, linkedAppId)
         : {}),

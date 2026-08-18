@@ -3,6 +3,8 @@
  * Mirrors papr-dev-platform SettingsModal + parse-file-upload flow.
  */
 
+import { coalesce, parseFetch } from "./parseTransport.js";
+
 const PARSE_GRAPHQL_URL =
   process.env.PARSE_GRAPHQL_URL || "https://server.papr.ai/graphql";
 const PARSE_SERVER_URL =
@@ -132,17 +134,17 @@ const UPDATE_USER_DETAILS = `
   }
 `;
 
-const PARSE_GRAPHQL_TIMEOUT_MS = 90_000;
 const PARSE_FILE_UPLOAD_TIMEOUT_MS = 60_000;
 
 async function parseGraphQL(
   sessionToken: string,
   query: string,
   variables: Record<string, unknown>,
+  options: { maxAttempts?: number } = {},
 ): Promise<Record<string, unknown>> {
-  const response = await fetch(PARSE_GRAPHQL_URL, {
+  const response = await parseFetch(PARSE_GRAPHQL_URL, {
     method: "POST",
-    signal: AbortSignal.timeout(PARSE_GRAPHQL_TIMEOUT_MS),
+    maxAttempts: options.maxAttempts,
     headers: {
       "Content-Type": "application/json",
       "X-Parse-Application-Id": PARSE_APP_ID,
@@ -198,6 +200,15 @@ export async function fetchParseUserProfile(
   sessionToken: string,
   userId: string,
 ): Promise<ParseUserProfileDetails> {
+  // Several renderer triggers (app mount, sidebar, Settings profile tab) refresh
+  // the profile at once; they should share one round trip.
+  return coalesce(`parse:user:${userId}`, () => fetchParseUserProfileUncached(sessionToken, userId));
+}
+
+async function fetchParseUserProfileUncached(
+  sessionToken: string,
+  userId: string,
+): Promise<ParseUserProfileDetails> {
   const data = await parseGraphQL(sessionToken, GET_USER_DETAILS, { userId });
   const user = data.user as
     | {
@@ -233,11 +244,12 @@ export async function uploadProfileImageToParse(
     "_",
   );
 
-  const response = await fetch(
+  const response = await parseFetch(
     `${PARSE_SERVER_URL}/files/${encodeURIComponent(sanitizedFileName)}`,
     {
       method: "POST",
-      signal: AbortSignal.timeout(PARSE_FILE_UPLOAD_TIMEOUT_MS),
+      timeoutMs: PARSE_FILE_UPLOAD_TIMEOUT_MS,
+      maxAttempts: 1,
       headers: {
         "X-Parse-Application-Id": PARSE_APP_ID,
         "X-Parse-Session-Token": sessionToken,
@@ -269,9 +281,13 @@ export async function updateParseUserProfile(
     profileImage?: ParseProfileImageFilePointer;
   },
 ): Promise<{ profileImageUrl?: string }> {
-  const data = await parseGraphQL(sessionToken, UPDATE_USER_DETAILS, {
-    input: buildUpdateUserProfileGraphQLInput(userId, fields),
-  });
+  const data = await parseGraphQL(
+    sessionToken,
+    UPDATE_USER_DETAILS,
+    { input: buildUpdateUserProfileGraphQLInput(userId, fields) },
+    // Mutation — do not replay it on a transport error.
+    { maxAttempts: 1 },
+  );
   const user = (data.updateUser as { user?: { profileimage?: { url?: string } } })
     ?.user;
 

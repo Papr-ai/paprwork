@@ -1,5 +1,25 @@
 /**
  * Disk cache for Papr workspaces + namespaces (instant Settings load).
+ *
+ * The rules below are the ones a previous version of this cache broke, each of
+ * which stranded a user in a single workspace with no way out but deleting the
+ * file by hand:
+ *
+ *   1. Store what the server returned, verbatim. Dedupe and display naming are
+ *      applied on read, so a bug in either is a display bug we fix with a
+ *      deploy rather than permanent data loss on disk.
+ *   2. Scope to a user. The path is global, so an unlabelled cache serves the
+ *      previous account's workspaces after a logout and login.
+ *   3. Stamp each section with its fetch time and expose the age, so callers
+ *      can refresh stale data instead of treating any non-empty list as
+ *      authoritative forever.
+ *   4. Never let an upstream failure shrink the cache to nothing.
+ *   5. Write atomically. A half-written file parses as corrupt, and a corrupt
+ *      file reads as "no cache", silently discarding everything.
+ *
+ * Writes are synchronous and only the main process touches this file, so a
+ * read-modify-write cannot interleave and no lock is needed. The atomic rename
+ * is for crashes mid-write, not for concurrency.
  */
 
 import fs from "node:fs";
@@ -22,12 +42,28 @@ export interface CachedWorkspace {
   defaultNamespaceId?: string;
 }
 
-export interface PaprWorkspaceCacheFile {
-  version: 2;
-  updatedAt: string;
-  workspaces: CachedWorkspace[];
-  namespacesByOrgId: Record<string, CachedNamespace[]>;
+interface CachedNamespaceEntry {
+  fetchedAt: string;
+  namespaces: CachedNamespace[];
 }
+
+export interface PaprWorkspaceCacheFile {
+  version: 3;
+  /** Owner of this cache. A mismatch is a miss, never a fallback. */
+  userId: string;
+  workspacesFetchedAt: string;
+  /** Rows exactly as fetched. Deduped on read, never on write. */
+  workspaces: CachedWorkspace[];
+  namespacesByOrgId: Record<string, CachedNamespaceEntry>;
+}
+
+export const WORKSPACE_CACHE_VERSION = 3;
+
+/** Below this age, serve without triggering a refresh. */
+export const CACHE_FRESH_MS = 5 * 60_000;
+
+/** Above this age, treat as a miss — too old to show even briefly. */
+export const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
 
 const CACHE_FILENAME = "papr-workspace-cache.json";
 
@@ -36,91 +72,312 @@ function getCachePath(): string {
   return path.join(getPaprBaseDir(), "data", CACHE_FILENAME);
 }
 
-export function readPaprWorkspaceCache(): PaprWorkspaceCacheFile | null {
+function ageOf(fetchedAt: string | undefined): number {
+  const timestamp = fetchedAt ? Date.parse(fetchedAt) : Number.NaN;
+  return Number.isFinite(timestamp)
+    ? Math.max(0, Date.now() - timestamp)
+    : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * The stored file for this user, or null when there is nothing usable: no file,
+ * corrupt JSON, an older schema, or a cache belonging to a different account.
+ */
+function readForUser(userId: string): PaprWorkspaceCacheFile | null {
+  if (!userId) return null;
+
+  let parsed: PaprWorkspaceCacheFile;
   try {
-    const raw = fs.readFileSync(getCachePath(), "utf8");
-    const parsed = JSON.parse(raw) as PaprWorkspaceCacheFile;
-    if (parsed.version !== 2 || !Array.isArray(parsed.workspaces)) {
-      return null;
-    }
-    // Dedupe on read too, so caches written by older builds are cleaned up
-    // without requiring the user to log out and back in.
-    return { ...parsed, workspaces: dedupeCachedWorkspaces(parsed.workspaces) };
+    parsed = JSON.parse(
+      fs.readFileSync(getCachePath(), "utf8"),
+    ) as PaprWorkspaceCacheFile;
   } catch {
     return null;
   }
+
+  // Pre-v3 files carry no userId, so they cannot be attributed to an account.
+  // Discarding them costs one refetch and closes the cross-account leak.
+  if (parsed?.version !== WORKSPACE_CACHE_VERSION) return null;
+  if (!Array.isArray(parsed.workspaces)) return null;
+  if (!parsed.userId || parsed.userId !== userId) return null;
+
+  return {
+    ...parsed,
+    namespacesByOrgId: parsed.namespacesByOrgId ?? {},
+  };
+}
+
+function persist(next: PaprWorkspaceCacheFile): void {
+  const target = getCachePath();
+  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(tmp, JSON.stringify(next, null, 2), "utf8");
+    fs.renameSync(tmp, target);
+  } catch (error) {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      // Best effort — a stray temp file is harmless.
+    }
+    // A cache write failing must not break login or workspace switching.
+    console.warn("[PaprWorkspaceCache] Failed to write cache:", error);
+  }
+}
+
+/**
+ * Drop namespace entries past the usable age.
+ *
+ * Pruning by workspace membership would be wrong: a workspace can host several
+ * organizations, and the switcher caches namespaces for orgs that never appear
+ * as any workspace's primary org. Age is the only bound that cannot delete a
+ * still-reachable org.
+ */
+function pruneNamespaces(
+  entries: Record<string, CachedNamespaceEntry>,
+): Record<string, CachedNamespaceEntry> {
+  const kept: Record<string, CachedNamespaceEntry> = {};
+  for (const [orgId, entry] of Object.entries(entries)) {
+    if (!entry?.namespaces?.length) continue;
+    if (ageOf(entry.fetchedAt) > CACHE_MAX_AGE_MS) continue;
+    kept[orgId] = entry;
+  }
+  return kept;
+}
+
+/**
+ * The workspace name with Parse display artifacts removed, or null when nothing
+ * meaningful is left. A placeholder name cannot tell two rows apart.
+ */
+function meaningfulWorkspaceName(workspace: CachedWorkspace): string | null {
+  const raw = (workspace.workspaceName ?? workspace.name ?? "").trim();
+  // Parse renders the viewer's own workspace as "<orgName> (you)", and orgName is
+  // itself often literally "null" for personal workspaces.
+  const name = raw.replace(/\s*\(you\)\s*$/i, "").trim().toLowerCase();
+  if (!name || name === "null" || name === "undefined" || name === "workspace") {
+    return null;
+  }
+  return name;
+}
+
+/** Prefer a real name over "Workspace"/"null"/empty when collapsing rows. */
+function workspaceNameScore(workspace: CachedWorkspace): number {
+  const name = workspace.name?.trim().toLowerCase();
+  if (!name || name === "null" || name === "undefined") return 0;
+  if (name === "workspace") return 1;
+  return 2;
+}
+
+/** Org + namespace a row resolves to. Rows without a namespace stand alone. */
+function workspaceScopeKey(workspace: CachedWorkspace): string {
+  return workspace.defaultNamespaceId
+    ? `${workspace.organizationId ?? ""}::${workspace.defaultNamespaceId}`
+    : `id::${workspace.id}`;
 }
 
 /**
  * Collapse workspaces that resolve to the same org + namespace.
  *
  * Duplicate provisioning (and older builds that created a workspace on every
- * login) can leave several workspace rows pointing at one namespace. They are
- * indistinguishable to the user and make the switcher look broken, so keep the
- * best-named entry per org/namespace pair.
+ * login) can leave several workspace rows pointing at one namespace. Those are
+ * indistinguishable to the user and make the switcher look broken.
+ *
+ * Org + namespace alone is not enough to call two rows duplicates, though.
+ * `resolveNamespaceOrganizationId` maps every workspace where the user owns a
+ * non-matching org onto their single developer org, so genuinely different
+ * workspaces reach this function sharing an organizationId *and* a
+ * defaultNamespaceId. Keying on just those erased all but one, which is how a
+ * user ends up pinned to one workspace with nothing to switch to.
+ *
+ * So within a scope: rows with distinct real names are kept, and placeholder-named
+ * rows are absorbed into the named ones (or collapsed among themselves if no row
+ * in the scope has a real name).
+ *
+ * This runs on read only. The stored rows stay untouched, so a mistake here
+ * hides a workspace until the next deploy instead of destroying it on disk.
  */
 export function dedupeCachedWorkspaces(
   workspaces: CachedWorkspace[],
 ): CachedWorkspace[] {
-  const byScope = new Map<string, CachedWorkspace>();
+  /** scope → (name → best row), preserving first-seen order at both levels. */
+  const scopes = new Map<string, Map<string, CachedWorkspace>>();
+  const placeholders = new Map<string, CachedWorkspace>();
 
   for (const workspace of workspaces) {
-    // Entries without a namespace are not interchangeable — keep them by id.
-    const scopeKey = workspace.defaultNamespaceId
-      ? `${workspace.organizationId ?? ""}::${workspace.defaultNamespaceId}`
-      : `id::${workspace.id}`;
+    const scope = workspaceScopeKey(workspace);
+    const name = meaningfulWorkspaceName(workspace);
 
-    const existing = byScope.get(scopeKey);
-    if (!existing) {
-      byScope.set(scopeKey, workspace);
+    if (!name) {
+      const existing = placeholders.get(scope);
+      if (!existing || workspaceNameScore(workspace) > workspaceNameScore(existing)) {
+        placeholders.set(scope, workspace);
+      }
       continue;
     }
 
-    // Prefer the entry with a real name over "Workspace"/"null"/empty.
-    const score = (candidate: CachedWorkspace): number => {
-      const name = candidate.name?.trim().toLowerCase();
-      if (!name || name === "null" || name === "undefined") return 0;
-      if (name === "workspace") return 1;
-      return 2;
-    };
+    let named = scopes.get(scope);
+    if (!named) {
+      named = new Map<string, CachedWorkspace>();
+      scopes.set(scope, named);
+    }
 
-    if (score(workspace) > score(existing)) {
-      byScope.set(scopeKey, workspace);
+    const existing = named.get(name);
+    if (!existing || workspaceNameScore(workspace) > workspaceNameScore(existing)) {
+      named.set(name, workspace);
     }
   }
 
-  return [...byScope.values()];
+  const result: CachedWorkspace[] = [];
+  const emitted = new Set<string>();
+
+  // Walk the original order so the output is stable for callers and the UI.
+  for (const workspace of workspaces) {
+    const scope = workspaceScopeKey(workspace);
+    const named = scopes.get(scope);
+
+    if (!named) {
+      // Scope has no real name anywhere — emit the single best placeholder.
+      const placeholder = placeholders.get(scope);
+      if (placeholder && !emitted.has(scope)) {
+        emitted.add(scope);
+        result.push(placeholder);
+      }
+      continue;
+    }
+
+    const name = meaningfulWorkspaceName(workspace);
+    // Placeholder rows in a scope that has named rows are duplicates of them.
+    if (!name) continue;
+
+    const key = `${scope}::${name}`;
+    if (emitted.has(key)) continue;
+    emitted.add(key);
+    const best = named.get(name);
+    if (best) result.push(best);
+  }
+
+  return result;
 }
 
-export function writePaprWorkspaceCache(input: {
-  workspaces: CachedWorkspace[];
-  namespacesByOrgId?: Record<string, CachedNamespace[]>;
-}): void {
-  const existing = readPaprWorkspaceCache();
-  const next: PaprWorkspaceCacheFile = {
-    version: 2,
-    updatedAt: new Date().toISOString(),
-    workspaces: dedupeCachedWorkspaces(input.workspaces),
-    namespacesByOrgId: {
-      ...(existing?.namespacesByOrgId ?? {}),
-      ...(input.namespacesByOrgId ?? {}),
-    },
+export interface CachedRead<T> {
+  data: T;
+  ageMs: number;
+  /** Usable now, but a refresh should be kicked off. */
+  isStale: boolean;
+}
+
+/**
+ * Cached workspaces for this user, deduped for display, or null when there is
+ * nothing usable to show.
+ */
+export function readCachedWorkspaces(
+  userId: string,
+): CachedRead<CachedWorkspace[]> | null {
+  const file = readForUser(userId);
+  if (!file || file.workspaces.length === 0) return null;
+
+  const ageMs = ageOf(file.workspacesFetchedAt);
+  if (ageMs > CACHE_MAX_AGE_MS) return null;
+
+  return {
+    data: dedupeCachedWorkspaces(file.workspaces),
+    ageMs,
+    isStale: ageMs > CACHE_FRESH_MS,
   };
-
-  const dir = path.dirname(getCachePath());
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(getCachePath(), JSON.stringify(next, null, 2), "utf8");
 }
 
-export function getCachedNamespaces(orgId: string): CachedNamespace[] | null {
-  const cache = readPaprWorkspaceCache();
-  const list = cache?.namespacesByOrgId?.[orgId];
-  return list?.length ? list : null;
-}
+export function writeCachedWorkspaces(
+  userId: string,
+  workspaces: CachedWorkspace[],
+): void {
+  if (!userId) return;
+  const existing = readForUser(userId);
+  const existingCount = existing?.workspaces.length ?? 0;
 
-export function cacheNamespacesForOrg(orgId: string, namespaces: CachedNamespace[]): void {
-  writePaprWorkspaceCache({
-    workspaces: readPaprWorkspaceCache()?.workspaces ?? [],
-    namespacesByOrgId: { [orgId]: namespaces },
+  // Losing every workspace is nearly always a partial upstream failure rather
+  // than the user leaving all of them, and persisting it empties the switcher
+  // with no way back. A smaller-but-non-empty list can be a real membership
+  // change, so that one is logged and accepted rather than pinning the user to
+  // rows they no longer belong to.
+  if (workspaces.length === 0 && existingCount > 0) {
+    console.warn(
+      `[PaprWorkspaceCache] Refusing to replace ${existingCount} cached ` +
+        `workspaces with an empty list`,
+    );
+    return;
+  }
+  if (existingCount > 0 && workspaces.length < existingCount) {
+    console.log(
+      `[PaprWorkspaceCache] Workspace count fell from ${existingCount} to ` +
+        `${workspaces.length}; accepting as a membership change`,
+    );
+  }
+
+  persist({
+    version: WORKSPACE_CACHE_VERSION,
+    userId,
+    workspacesFetchedAt: new Date().toISOString(),
+    workspaces,
+    namespacesByOrgId: pruneNamespaces(existing?.namespacesByOrgId ?? {}),
   });
+}
+
+export function readCachedNamespaces(
+  userId: string,
+  orgId: string,
+): CachedRead<CachedNamespace[]> | null {
+  const entry = readForUser(userId)?.namespacesByOrgId?.[orgId];
+  if (!entry?.namespaces?.length) return null;
+
+  const ageMs = ageOf(entry.fetchedAt);
+  if (ageMs > CACHE_MAX_AGE_MS) return null;
+
+  return {
+    data: entry.namespaces.map((namespace) => ({ ...namespace })),
+    ageMs,
+    isStale: ageMs > CACHE_FRESH_MS,
+  };
+}
+
+export function writeCachedNamespaces(
+  userId: string,
+  orgId: string,
+  namespaces: CachedNamespace[],
+): void {
+  if (!userId || !orgId) return;
+  const existing = readForUser(userId);
+
+  // Same reasoning as workspaces: an empty namespace list on top of a populated
+  // one is a failed fetch, not a deletion.
+  const existingCount = existing?.namespacesByOrgId?.[orgId]?.namespaces.length ?? 0;
+  if (namespaces.length === 0 && existingCount > 0) {
+    console.warn(
+      `[PaprWorkspaceCache] Refusing to replace ${existingCount} cached ` +
+        `namespaces for org ${orgId} with an empty list`,
+    );
+    return;
+  }
+
+  persist({
+    version: WORKSPACE_CACHE_VERSION,
+    userId,
+    workspacesFetchedAt: existing?.workspacesFetchedAt ?? new Date(0).toISOString(),
+    workspaces: existing?.workspaces ?? [],
+    namespacesByOrgId: {
+      ...pruneNamespaces(existing?.namespacesByOrgId ?? {}),
+      [orgId]: { fetchedAt: new Date().toISOString(), namespaces },
+    },
+  });
+}
+
+/** Drop the cache entirely — used on logout so the next account starts clean. */
+export function clearPaprWorkspaceCache(): void {
+  const target = getCachePath();
+  try {
+    if (!fs.existsSync(target)) return;
+    fs.rmSync(target, { force: true });
+    console.log("[PaprWorkspaceCache] Cleared");
+  } catch (error) {
+    console.warn("[PaprWorkspaceCache] Failed to clear cache:", error);
+  }
 }

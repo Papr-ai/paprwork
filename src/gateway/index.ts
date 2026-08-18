@@ -936,6 +936,16 @@ async function startGateway(): Promise<void> {
         dbRouter.query(appId, source as never, sql, params) as never,
       dbWrite: (appId, source, sql, params) =>
         dbRouter.write(appId, source as never, sql, params) as never,
+      // Lets App Files choose a home when the caller named no sourceId.
+      // Ids are returned rather than aliases because aliases are not unique —
+      // a duplicated job link yields two sources sharing one alias.
+      listSources: async (appId) => {
+        const config = await getAppService().getDataSourcesConfig(appId);
+        return config.sources.map((source) => ({
+          id: source.id,
+          alias: source.alias,
+        }));
+      },
     });
 
     // ── Mini-app SQLite DDL API ──────────────────────────────────────────────

@@ -72,4 +72,47 @@ describe("dedupeCachedWorkspaces", () => {
   it("handles an empty list", () => {
     expect(dedupeCachedWorkspaces([])).toEqual([]);
   });
+
+  // resolveNamespaceOrganizationId maps every workspace where the user owns a
+  // non-matching org onto their single developer org, so distinct workspaces
+  // arrive sharing an organizationId and defaultNamespaceId. Collapsing those
+  // left the switcher with one row and no way out of it.
+  it("keeps differently named workspaces that resolve to the same developer org", () => {
+    const result = dedupeCachedWorkspaces([
+      workspace("ws-sqa", "SQA Service", "ns-dev", "org-dev"),
+      workspace("ws-papr", "papr-ai", "ns-dev", "org-dev"),
+    ]);
+
+    expect(result.map((entry) => entry.name)).toEqual(["SQA Service", "papr-ai"]);
+  });
+
+  it("still absorbs placeholder rows into a named row in the same scope", () => {
+    const result = dedupeCachedWorkspaces([
+      workspace("a", "Workspace", "ns-1"),
+      workspace("b", "papr-ai", "ns-1"),
+      workspace("c", "null (you)", "ns-1"),
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe("papr-ai");
+  });
+
+  it("collapses repeats of the same name but keeps the other workspace", () => {
+    const result = dedupeCachedWorkspaces([
+      workspace("a1", "Papr", "ns-1"),
+      workspace("a2", "Papr", "ns-1"),
+      workspace("b1", "Acme", "ns-1"),
+    ]);
+
+    expect(result.map((entry) => entry.name)).toEqual(["Papr", "Acme"]);
+  });
+
+  it("treats names differing only by the (you) suffix as the same workspace", () => {
+    const result = dedupeCachedWorkspaces([
+      workspace("a", "Acme", "ns-1"),
+      workspace("b", "Acme (you)", "ns-1"),
+    ]);
+
+    expect(result).toHaveLength(1);
+  });
 });
