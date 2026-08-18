@@ -339,6 +339,57 @@ async function resolveWorkspaceRole(
   return self?.user.role ?? "member";
 }
 
+/**
+ * Short-lived cache for the read-only plan summary.
+ *
+ * Every profile load asks for this, and building it costs two Parse queries plus
+ * two dashboard.papr.ai calls (Stripe subscription + usage metrics). Plans do not
+ * change second to second, so a brief cache removes almost all of that traffic
+ * without the UI ever looking stale. Billing mutations invalidate it explicitly.
+ */
+const PLAN_SUMMARY_TTL_MS = 60_000;
+
+let planSummaryCache:
+  | { key: string; expiresAt: number; summary: PaprPlanSummary }
+  | null = null;
+let planSummaryInFlight: { key: string; promise: Promise<PaprPlanSummary> } | null =
+  null;
+
+function invalidatePlanSummaryCache(): void {
+  planSummaryCache = null;
+}
+
+/** Plan summary for read paths: cached, and concurrent callers share one build. */
+async function getPlanSummaryCached(
+  services: BillingServices,
+): Promise<PaprPlanSummary> {
+  const profile = requireLoggedInProfile(services.settingsStorage);
+  const key = `${profile.workspaceId}:${profile.organizationId}`;
+
+  if (planSummaryCache?.key === key && planSummaryCache.expiresAt > Date.now()) {
+    return planSummaryCache.summary;
+  }
+  if (planSummaryInFlight?.key === key) {
+    return planSummaryInFlight.promise;
+  }
+
+  const promise = buildPlanSummary(services)
+    .then((summary) => {
+      planSummaryCache = {
+        key,
+        expiresAt: Date.now() + PLAN_SUMMARY_TTL_MS,
+        summary,
+      };
+      return summary;
+    })
+    .finally(() => {
+      planSummaryInFlight = null;
+    });
+
+  planSummaryInFlight = { key, promise };
+  return promise;
+}
+
 async function buildPlanSummary(services: BillingServices): Promise<PaprPlanSummary> {
   const profile = requireLoggedInProfile(services.settingsStorage);
 
@@ -548,7 +599,7 @@ export function registerPaprBillingHandlers(deps: {
 
   ipcMain.handle("papr:get-plan-summary", async () => {
     try {
-      const summary = await buildPlanSummary(services);
+      const summary = await getPlanSummaryCached(services);
       persistPlanSummaryToProfile(deps.settingsStorage, summary);
       return { success: true, summary };
     } catch (error) {
@@ -653,6 +704,7 @@ export function registerPaprBillingHandlers(deps: {
         },
       });
 
+      invalidatePlanSummaryCache();
       return { success: true, enabled };
     } catch (error) {
       return {

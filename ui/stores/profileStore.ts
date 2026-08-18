@@ -25,7 +25,15 @@ interface ProfileState {
   namespaceName: string;
   workspaceName: string;
   loaded: boolean;
-  loadProfile: (options?: { force?: boolean }) => Promise<void>;
+  loadProfile: (options?: {
+    force?: boolean;
+    /**
+     * Skip the refresh if one completed very recently. For background triggers
+     * (workspace cache rewrites) where staleness is cheap — never for user
+     * actions like switching org, which must be reflected immediately.
+     */
+    throttle?: boolean;
+  }) => Promise<void>;
   setProfile: (profile: {
     name?: string;
     email?: string;
@@ -41,6 +49,10 @@ const cached = readProfileSidebarCache();
 
 let refreshInFlight: Promise<void> | null = null;
 let profileImageRetryInFlight: Promise<void> | null = null;
+
+/** Shortest gap between background (throttled) refreshes. */
+const MIN_FORCED_REFRESH_INTERVAL_MS = 10_000;
+let lastRefreshAt = 0;
 
 function persistProfileSnapshot(state: {
   name: string;
@@ -248,9 +260,21 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
   loadProfile: async (options) => {
     const force = options?.force === true;
     if (!force && get().loaded) return;
+
+    // Join the running refresh rather than queueing another one behind it.
+    // Previously a forced call awaited the in-flight promise and then started a
+    // second pass, so N concurrent workspace events produced N full refreshes
+    // (profile + plan + workspace list) instead of one.
     if (refreshInFlight) {
       await refreshInFlight;
-      if (!force) return;
+      return;
+    }
+
+    if (
+      options?.throttle === true &&
+      Date.now() - lastRefreshAt < MIN_FORCED_REFRESH_INTERVAL_MS
+    ) {
+      return;
     }
 
     refreshInFlight = (async () => {
@@ -276,6 +300,7 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
         console.error("[ProfileStore] Load error:", err);
         set({ loaded: true });
       } finally {
+        lastRefreshAt = Date.now();
         refreshInFlight = null;
       }
     })();

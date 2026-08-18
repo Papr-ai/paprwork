@@ -54,6 +54,13 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
       void loadProfile({ force: true });
     };
 
+    // The workspace cache is rewritten by background Parse refreshes, and the
+    // reload this triggers is what starts those refreshes. Throttling it keeps
+    // the two from driving each other.
+    const refreshFromCacheUpdate = () => {
+      void loadProfile({ force: true, throttle: true });
+    };
+
     window.addEventListener("papr-auth-success", refresh);
     window.addEventListener("papr-logout-success", refresh);
     window.addEventListener("papr-organization-changed", refresh);
@@ -63,7 +70,7 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
     window.electronAPI.papr.onLogoutSuccess(refresh);
     window.electronAPI.papr.onOrganizationChanged(refresh);
     window.electronAPI.papr.onNamespaceChanged(refresh);
-    window.electronAPI.papr.onWorkspaceCacheUpdated(refresh);
+    window.electronAPI.papr.onWorkspaceCacheUpdated(refreshFromCacheUpdate);
 
     return () => {
       window.removeEventListener("papr-auth-success", refresh);
@@ -75,7 +82,9 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
       window.electronAPI.papr.removeLogoutSuccessListener(refresh);
       window.electronAPI.papr.removeOrganizationChangedListener(refresh);
       window.electronAPI.papr.removeNamespaceChangedListener(refresh);
-      window.electronAPI.papr.removeWorkspaceCacheUpdatedListener(refresh);
+      window.electronAPI.papr.removeWorkspaceCacheUpdatedListener(
+        refreshFromCacheUpdate,
+      );
     };
   }, [loadProfile]);
 
