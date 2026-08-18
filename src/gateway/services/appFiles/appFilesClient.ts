@@ -89,10 +89,16 @@ export async function commitUpload(
 export async function createReadUrl(
   appId: string,
   objectKey: string,
+  options: { download?: boolean; fileName?: string } = {},
 ): Promise<{ url: string; expiresInSeconds: number }> {
   const res = await post<{ url: string; expires_in_seconds: number }>(
     "/v1/files/read-url",
-    { app_id: appId, object_key: objectKey },
+    {
+      app_id: appId,
+      object_key: objectKey,
+      download: options.download ?? false,
+      file_name: options.fileName,
+    }
   );
   return { url: res.url, expiresInSeconds: res.expires_in_seconds };
 }

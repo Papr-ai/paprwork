@@ -2,7 +2,8 @@
  * MiniAppFilesView — folder tree, syntax-highlighted editor, and DB preview.
  */
 
-import React, { useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import type { AppFileRow } from "../../../src/gateway/services/appFiles/appFilesSchema";
 import {
   detectWorkspaceLanguage,
   isBinaryWorkspaceFile,
@@ -14,6 +15,7 @@ import { WorkspaceDbPreview } from "./WorkspaceDbPreview";
 import { WorkspaceFileTree } from "./WorkspaceFileTree";
 import { MiniAppDataSourcesPanel } from "./MiniAppDataSourcesPanel";
 import { AppFilesPanel } from "./AppFilesPanel";
+import { AppFilePreview } from "./AppFilePreview";
 import { MiniAppCodeSearch } from "./MiniAppCodeSearch";
 import "./MiniAppFilesView.css";
 import "./WorkspaceCodeEditor.css";
@@ -57,6 +59,7 @@ function JobIcon() {
 
 export function MiniAppFilesView({ appId }: MiniAppFilesViewProps) {
   const workspace = useAppWorkspace(appId);
+  const [selectedAppFile, setSelectedAppFile] = useState<AppFileRow | null>(null);
 
   const language = workspace.selected
     ? detectWorkspaceLanguage(workspace.selected.path)
@@ -118,7 +121,10 @@ export function MiniAppFilesView({ appId }: MiniAppFilesViewProps) {
         <MiniAppCodeSearch
           appId={appId}
           jobs={jobGroups}
-          onOpenHit={(target) => void workspace.openTarget(target)}
+          onOpenHit={(target) => {
+            setSelectedAppFile(null);
+            void workspace.openTarget(target);
+          }}
         />
 
         <div className="mini-app-files__tree">
@@ -127,7 +133,11 @@ export function MiniAppFilesView({ appId }: MiniAppFilesViewProps) {
           {/* Beside data sources rather than in the file tree: App Files are
               attached storage, not source code, and must never look like
               something git carries. */}
-          <AppFilesPanel appId={appId} />
+          <AppFilesPanel
+            appId={appId}
+            selectedId={selectedAppFile?.id ?? null}
+            onSelect={setSelectedAppFile}
+          />
 
           {appGroup.length === 0 && jobGroups.length === 0 && !workspace.loadingTree ? (
             <p className="mini-app-files__empty">No files found.</p>
@@ -149,7 +159,10 @@ export function MiniAppFilesView({ appId }: MiniAppFilesViewProps) {
                 scope="app"
                 appId={appId}
                 selectedKey={workspace.selectedKey}
-                onSelect={(target) => void workspace.openTarget(target)}
+                onSelect={(target) => {
+                  setSelectedAppFile(null);
+                  void workspace.openTarget(target);
+                }}
               />
             </section>
           ) : null}
@@ -177,7 +190,10 @@ export function MiniAppFilesView({ appId }: MiniAppFilesViewProps) {
                 appId={appId}
                 jobId={job.jobId}
                 selectedKey={workspace.selectedKey}
-                onSelect={(target) => void workspace.openTarget(target)}
+                onSelect={(target) => {
+                  setSelectedAppFile(null);
+                  void workspace.openTarget(target);
+                }}
               />
             </section>
           ))}
@@ -185,7 +201,9 @@ export function MiniAppFilesView({ appId }: MiniAppFilesViewProps) {
       </aside>
 
       <section className="mini-app-files__editor">
-        {!workspace.selected ? (
+        {selectedAppFile ? (
+          <AppFilePreview appId={appId} file={selectedAppFile} />
+        ) : !workspace.selected ? (
           <div className="mini-app-files__placeholder">
             <p>Select a file to view or edit its source.</p>
             <p className="mini-app-files__placeholder-sub">

@@ -27,7 +27,15 @@ import { formatBytes, totalBytes } from "../../utils/appFilesFormat";
 import { AppFileRowItem } from "./AppFileRowItem";
 import "./AppFilesPanel.css";
 
-export function AppFilesPanel({ appId }: { appId: string }) {
+export function AppFilesPanel({
+  appId,
+  selectedId,
+  onSelect,
+}: {
+  appId: string;
+  selectedId: string | null;
+  onSelect: (file: AppFileRow) => void;
+}) {
   const [files, setFiles] = useState<AppFileRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [dragging, setDragging] = useState(false);
@@ -124,6 +132,8 @@ export function AppFilesPanel({ appId }: { appId: string }) {
               key={file.id}
               file={file}
               busy={busyId === file.id}
+              selected={selectedId === file.id}
+              onSelect={() => onSelect(file)}
               onTogglePrivate={(isPrivate) =>
                 void act(file.id, () => setAppFilePrivacy(appId, file.id, isPrivate))
               }

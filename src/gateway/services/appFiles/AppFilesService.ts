@@ -570,13 +570,17 @@ export async function getFile(db: FilesDb, id: string): Promise<AppFileRow | nul
 export async function resolveFileUrl(
   db: FilesDb,
   id: string,
+  options: { download?: boolean } = {},
 ): Promise<{ location: FileLocation; url?: string }> {
   const row = await getFile(db, id);
   if (!row) throw Object.assign(new Error(`File ${id} not found`), { status: 404 });
 
   const location = resolveLocation(row);
   if (location.kind === "cloud") {
-    const { url } = await createReadUrl(row.app_id, row.object_key);
+    const { url } = await createReadUrl(row.app_id, row.object_key, {
+      download: options.download,
+      fileName: row.file_name,
+    });
     return { location, url };
   }
   return { location };
