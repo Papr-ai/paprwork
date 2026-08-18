@@ -65,6 +65,7 @@ certificate.*
 # Local data exports (personal snapshots, not app source)
 batch.json
 data_snapshot.json
+papr-members-*.csv
 
 # Python
 __pycache__/

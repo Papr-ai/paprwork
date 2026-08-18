@@ -60,13 +60,18 @@ import {
 } from "../../core/telemetry/paprLoginSteps.js";
 import {
   deriveProvisioningDefaults,
+  isProvisioningDeferred,
   isProvisioningSetupRequired,
   resolveProvisioningPlan,
   sanitizeProvisioningName,
   DEFAULT_NAMESPACE_NAME,
   type ProvisioningNameDefaults,
+  type WorkspaceOrganizationState,
 } from "../../core/papr/provisioningDefaults.js";
-import { UPDATE_WORKSPACE_ORG } from "../../core/papr/paprLoginGraphql.js";
+import {
+  GET_WORKSPACE_ORG_CLAIM_STATE,
+  UPDATE_WORKSPACE_ORG,
+} from "../../core/papr/paprLoginGraphql.js";
 
 /**
  * Sync Papr profile fields to gateway settings file so the gateway process
@@ -1696,7 +1701,9 @@ async function assessProvisioningNeeds(
     workspaceId = await getSelectedWorkspaceId(sessionToken, userId);
   }
 
-  let workspaceHasOrganization = Boolean(workspaceInfo.organizationId);
+  let workspaceOrganization: WorkspaceOrganizationState = workspaceInfo.organizationId
+    ? "present"
+    : "absent";
   let workspaceOrgHasDefaultNamespace = false;
 
   if (workspaceId) {
@@ -1707,7 +1714,7 @@ async function assessProvisioningNeeds(
         workspaceId,
       );
       if (resolved) {
-        workspaceHasOrganization = true;
+        workspaceOrganization = "present";
         workspaceOrgHasDefaultNamespace = Boolean(resolved.defaultNamespaceId);
       } else if (workspaceInfo.organizationId) {
         const defaultNs = await resolveDefaultNamespaceForOrg(
@@ -1717,12 +1724,19 @@ async function assessProvisioningNeeds(
         workspaceOrgHasDefaultNamespace = Boolean(defaultNs);
       }
     } catch (error) {
-      console.warn("[PaprLogin] assessProvisioningNeeds workspace lookup failed:", error);
+      // A failed lookup is not evidence that the workspace has no org, and
+      // guessing "absent" here is what repointed shared workspaces at new orgs.
+      console.error(
+        "[PaprLogin] assessProvisioningNeeds workspace lookup failed, deferring provisioning:",
+        error,
+      );
+      workspaceOrganization = "unknown";
     }
   }
 
   let developerOrgId: string | undefined;
   let developerOrgHasDefaultNamespace = false;
+  let developerOrgLookupFailed = false;
   try {
     developerOrgId = await fetchUserDeveloperOrganizationId(sessionToken, userId);
     if (developerOrgId) {
@@ -1730,16 +1744,28 @@ async function assessProvisioningNeeds(
       developerOrgHasDefaultNamespace = Boolean(defaultNs);
     }
   } catch (error) {
-    console.warn("[PaprLogin] assessProvisioningNeeds developer org lookup failed:", error);
+    console.error(
+      "[PaprLogin] assessProvisioningNeeds developer org lookup failed, deferring provisioning:",
+      error,
+    );
+    developerOrgLookupFailed = true;
   }
 
   const plan = resolveProvisioningPlan({
     workspaceId,
-    workspaceHasOrganization,
+    workspaceOrganization,
     workspaceOrgHasDefaultNamespace,
     developerOrgId,
     developerOrgHasDefaultNamespace,
+    developerOrgLookupFailed,
   });
+
+  if (isProvisioningDeferred(plan)) {
+    console.warn(
+      `[PaprLogin] Provisioning deferred for workspace ${workspaceId ?? "(none)"}: ` +
+        `organization state could not be verified.`,
+    );
+  }
 
   const defaults = deriveProvisioningDefaults({
     email,
@@ -1773,76 +1799,93 @@ async function provisionOrGetApiKey(
 
   // 1. Resolve namespace org for selected workspace (team org or developer org)
   if (workspaceId) {
+    // Only the lookup is guarded: a failure here is not evidence that the
+    // workspace is unclaimed, so falling through would create a duplicate org
+    // and repoint a workspace that already belongs to someone.
+    let resolved: Awaited<ReturnType<typeof resolveNamespaceOrganizationForWorkspace>>;
     try {
-      const resolved = await resolveNamespaceOrganizationForWorkspace(
+      resolved = await resolveNamespaceOrganizationForWorkspace(
         sessionToken,
         userId,
         workspaceId,
       );
-      if (resolved) {
-        console.log(
-          `[PaprLogin] Workspace ${workspaceId} → namespace org "${resolved.organizationName}" (${resolved.organizationId})`,
-        );
-        if (resolved.defaultNamespaceId) {
-          return await resolveOrgApiKey(
-            sessionToken,
-            userId,
-            resolved.organizationId,
-            resolved.defaultNamespaceId,
-            "default",
-            workspaceId,
-          );
-        }
+    } catch (wsErr) {
+      console.error("[PaprLogin] Workspace org lookup failed:", wsErr);
+      throw new Error(
+        `Could not verify whether workspace ${workspaceId} already belongs to an organization. ` +
+          `Refusing to provision a new one. Please try signing in again.`,
+      );
+    }
 
-        console.log(
-          `[PaprLogin] Namespace org ${resolved.organizationId} has no default namespace — creating one`,
-        );
-        return await createNamespaceAndKey(
+    if (resolved) {
+      console.log(
+        `[PaprLogin] Workspace ${workspaceId} → namespace org "${resolved.organizationName}" (${resolved.organizationId})`,
+      );
+      if (resolved.defaultNamespaceId) {
+        return await resolveOrgApiKey(
           sessionToken,
           userId,
           resolved.organizationId,
-          orgName,
+          resolved.defaultNamespaceId,
+          "default",
           workspaceId,
-          namespaceName,
         );
       }
 
       console.log(
-        `[PaprLogin] Workspace ${workspaceId} has no organization — creating new org`,
+        `[PaprLogin] Namespace org ${resolved.organizationId} has no default namespace — creating one`,
       );
-    } catch (wsErr) {
-      console.warn("[PaprLogin] Workspace org lookup failed:", wsErr);
-    }
-  }
-
-  // 2. Fallback: user.organization_id (developer org without a linked workspace)
-  try {
-    const developerOrgId = await fetchUserDeveloperOrganizationId(sessionToken, userId);
-    if (developerOrgId) {
-      console.log(`[PaprLogin] User developer org: ${developerOrgId}`);
-      const defaultNs = await resolveDefaultNamespaceForOrg(sessionToken, developerOrgId);
-      if (defaultNs) {
-        return await resolveOrgApiKey(
-          sessionToken,
-          userId,
-          developerOrgId,
-          defaultNs.namespaceId,
-          defaultNs.namespaceName,
-          workspaceId ?? "",
-        );
-      }
-      console.log("[PaprLogin] Developer org has no default namespace — creating one");
       return await createNamespaceAndKey(
         sessionToken,
         userId,
-        developerOrgId,
+        resolved.organizationId,
         orgName,
-        workspaceId ?? "",
+        workspaceId,
         namespaceName,
       );
     }
+
+    console.log(
+      `[PaprLogin] Workspace ${workspaceId} has no organization — creating new org`,
+    );
+  }
+
+  // 2. Fallback: user.organization_id (developer org without a linked workspace)
+  let developerOrgId: string | undefined;
+  try {
+    developerOrgId = await fetchUserDeveloperOrganizationId(sessionToken, userId);
   } catch (devOrgErr) {
-    console.warn("[PaprLogin] Developer org lookup failed:", devOrgErr);
+    // Same reasoning as the workspace lookup: an unreadable developer org must
+    // not turn into a second org for the same user.
+    console.error("[PaprLogin] Developer org lookup failed:", devOrgErr);
+    throw new Error(
+      "Could not verify whether you already have an organization. " +
+        "Refusing to provision a new one. Please try signing in again.",
+    );
+  }
+
+  if (developerOrgId) {
+    console.log(`[PaprLogin] User developer org: ${developerOrgId}`);
+    const defaultNs = await resolveDefaultNamespaceForOrg(sessionToken, developerOrgId);
+    if (defaultNs) {
+      return await resolveOrgApiKey(
+        sessionToken,
+        userId,
+        developerOrgId,
+        defaultNs.namespaceId,
+        defaultNs.namespaceName,
+        workspaceId ?? "",
+      );
+    }
+    console.log("[PaprLogin] Developer org has no default namespace — creating one");
+    return await createNamespaceAndKey(
+      sessionToken,
+      userId,
+      developerOrgId,
+      orgName,
+      workspaceId ?? "",
+      namespaceName,
+    );
   }
 
   // 3. No org on workspace — full provisioning (new org + namespace + key)
@@ -1855,6 +1898,74 @@ async function provisionOrGetApiKey(
   );
 }
 
+/**
+ * Refuse to claim a workspace that already belongs to someone.
+ *
+ * Called before the org is created, so a claimed workspace leaves no orphan org
+ * behind. Three signals, any of which blocks the claim:
+ *   - the workspace already points at an organization
+ *   - another organization points back at the workspace
+ *   - the workspace has more than one member, so it is shared
+ */
+async function assertWorkspaceClaimable(
+  sessionToken: string,
+  workspaceId: string,
+): Promise<void> {
+  const data = (await parseGraphQL(sessionToken, GET_WORKSPACE_ORG_CLAIM_STATE, {
+    workspaceId,
+  })) as {
+    workSpace?: {
+      workspace_name?: string;
+      memberCount?: number;
+      followerCount?: number;
+      organization?: { objectId?: string; name?: string };
+    };
+  };
+
+  const workspace = data.workSpace;
+  const existingOrgId = workspace?.organization?.objectId;
+
+  if (existingOrgId) {
+    throw new Error(
+      `Workspace ${workspaceId} already belongs to organization ${existingOrgId}. ` +
+        `Refusing to repoint it.`,
+    );
+  }
+
+  const memberCount = workspace?.memberCount ?? 0;
+  if (memberCount > 1) {
+    throw new Error(
+      `Workspace ${workspaceId} has ${memberCount} members, so it is shared. ` +
+        `Its organization reads as empty, which usually means this account is ` +
+        `missing the workspace role rather than that the workspace is unclaimed. ` +
+        `Refusing to claim it.`,
+    );
+  }
+
+  const claimingOrgs = await fetchWorkspaceOrganizationsWithSession(sessionToken, workspaceId);
+  if (claimingOrgs.length > 0) {
+    throw new Error(
+      `Workspace ${workspaceId} is already claimed by ${claimingOrgs.length} organization(s): ` +
+        `${claimingOrgs.map((org) => org.id).join(", ")}. Refusing to create another.`,
+    );
+  }
+}
+
+async function fetchWorkspaceOrganizationsWithSession(
+  sessionToken: string,
+  workspaceId: string,
+): Promise<Array<{ id: string; name: string }>> {
+  const data = (await parseGraphQL(sessionToken, GET_WORKSPACE_ORGANIZATIONS, {
+    workspaceId,
+  })) as {
+    organizations?: { edges?: Array<{ node: { objectId: string; name?: string } }> };
+  };
+
+  return (data.organizations?.edges ?? [])
+    .map((edge) => ({ id: edge.node.objectId, name: edge.node.name?.trim() || "" }))
+    .filter((org) => org.id);
+}
+
 async function provisionNewOrgNamespace(
   sessionToken: string,
   userId: string,
@@ -1863,6 +1974,10 @@ async function provisionNewOrgNamespace(
   namespaceName: string,
 ): Promise<ProvisionResult> {
   console.log("[PaprLogin] Full provisioning: org + namespace + API key...");
+
+  if (workspaceId) {
+    await assertWorkspaceClaimable(sessionToken, workspaceId);
+  }
 
   if (!workspaceId) {
     try {
@@ -1917,10 +2032,24 @@ async function provisionNewOrgNamespace(
   console.log(`[PaprLogin] Created organization: ${orgId}`);
 
   if (workspaceId) {
-    await parseGraphQL(sessionToken, UPDATE_WORKSPACE_ORG, {
+    // Re-read between the claim check and the write: another client may have
+    // linked an org in between, and losing that pointer is unrecoverable.
+    const claimState = (await parseGraphQL(sessionToken, GET_WORKSPACE_ORG_CLAIM_STATE, {
       workspaceId,
-      organizationId: orgId,
-    });
+    })) as { workSpace?: { organization?: { objectId?: string } } };
+    const currentOrgId = claimState.workSpace?.organization?.objectId;
+
+    if (currentOrgId && currentOrgId !== orgId) {
+      console.error(
+        `[PaprLogin] Workspace ${workspaceId} was linked to organization ${currentOrgId} ` +
+          `while provisioning ${orgId} — leaving the existing pointer untouched.`,
+      );
+    } else {
+      await parseGraphQL(sessionToken, UPDATE_WORKSPACE_ORG, {
+        workspaceId,
+        organizationId: orgId,
+      });
+    }
   }
 
   return await createNamespaceAndKey(

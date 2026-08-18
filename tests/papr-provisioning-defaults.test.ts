@@ -3,6 +3,7 @@ import {
   DEFAULT_NAMESPACE_NAME,
   deriveDefaultOrgName,
   deriveProvisioningDefaults,
+  isProvisioningDeferred,
   isProvisioningSetupRequired,
   resolveProvisioningPlan,
   sanitizeProvisioningName,
@@ -73,7 +74,7 @@ describe("resolveProvisioningPlan", () => {
   it("skips setup when workspace org already has a default namespace", () => {
     const plan = resolveProvisioningPlan({
       workspaceId: "ws-1",
-      workspaceHasOrganization: true,
+      workspaceOrganization: "present",
       workspaceOrgHasDefaultNamespace: true,
       developerOrgId: "dev-org",
       developerOrgHasDefaultNamespace: false,
@@ -86,7 +87,7 @@ describe("resolveProvisioningPlan", () => {
   it("requires namespace setup when workspace org exists without a namespace", () => {
     const plan = resolveProvisioningPlan({
       workspaceId: "ws-1",
-      workspaceHasOrganization: true,
+      workspaceOrganization: "present",
       workspaceOrgHasDefaultNamespace: false,
       developerOrgId: "dev-org",
       developerOrgHasDefaultNamespace: true,
@@ -102,8 +103,9 @@ describe("resolveProvisioningPlan", () => {
   it("requires org and namespace for brand-new users", () => {
     const plan = resolveProvisioningPlan({
       workspaceId: "ws-1",
-      workspaceHasOrganization: false,
+      workspaceOrganization: "absent",
       workspaceOrgHasDefaultNamespace: false,
+      developerOrgHasDefaultNamespace: false,
     });
 
     expect(plan).toEqual({
@@ -111,6 +113,35 @@ describe("resolveProvisioningPlan", () => {
       needsOrg: true,
       needsNamespace: true,
     });
+  });
+
+  it("defers when the workspace organization could not be read", () => {
+    const plan = resolveProvisioningPlan({
+      workspaceId: "ws-1",
+      workspaceOrganization: "unknown",
+      workspaceOrgHasDefaultNamespace: false,
+      developerOrgHasDefaultNamespace: false,
+    });
+
+    expect(plan).toEqual({
+      kind: "deferred",
+      needsOrg: false,
+      needsNamespace: false,
+    });
+    expect(isProvisioningSetupRequired(plan)).toBe(false);
+    expect(isProvisioningDeferred(plan)).toBe(true);
+  });
+
+  it("defers rather than creating a second org when the developer org lookup fails", () => {
+    const plan = resolveProvisioningPlan({
+      workspaceOrganization: "absent",
+      workspaceOrgHasDefaultNamespace: false,
+      developerOrgHasDefaultNamespace: false,
+      developerOrgLookupFailed: true,
+    });
+
+    expect(plan.kind).toBe("deferred");
+    expect(isProvisioningDeferred(plan)).toBe(true);
   });
 });
 
