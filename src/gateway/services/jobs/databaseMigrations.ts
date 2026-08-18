@@ -180,6 +180,7 @@ export async function applyDatabaseMigrations(
 ): Promise<string[]> {
   const migrationsDir = path.join(migrationRoot, "migrations");
   await fs.mkdir(migrationsDir, { recursive: true });
+  await fs.mkdir(path.dirname(dbPath), { recursive: true });
 
   const files = (await fs.readdir(migrationsDir))
     .filter((name) => name.endsWith(".sql"))

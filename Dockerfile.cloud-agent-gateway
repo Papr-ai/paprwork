@@ -52,5 +52,7 @@ RUN node -e "\
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/dist ./dist
+# Agent prompts reference src/resources/agent-docs; runtime image only ships dist/.
+RUN mkdir -p /app/src && ln -sf ../dist/resources /app/src/resources
 EXPOSE 8080
 CMD ["node", "dist/gateway/cloud-agent-gateway.js"]

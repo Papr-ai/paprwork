@@ -56,7 +56,7 @@ function memoryPublishPayload(
 describe("cloud publish ACL regression (GTM / public community)", () => {
   it("UI: Public in Community + Can edit code → read_write on same public URL", () => {
     const model = sharingToAudienceModel("public", "off", "install");
-    expect(model).toEqual({ audience: "public", permission: "edit" });
+    expect(model).toEqual({ audience: "public", permission: "edit", requireSignIn: false });
     expect(liveLinkPermissionForAudienceModel(model)).toBe("read_write");
 
     expect(memoryPublishPayload(GTM_PREFS)).toEqual({
@@ -138,9 +138,10 @@ describe("cloud publish ACL regression (GTM / public community)", () => {
         codeAccess: "install",
       }),
     ).toEqual({
-      visibility: "public_read",
+      visibility: "link_read_write",
       linkPermission: "read_write",
       shareLinkEnabled: true,
+      requireSignIn: true,
     });
   });
 

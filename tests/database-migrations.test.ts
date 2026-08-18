@@ -87,4 +87,31 @@ describe("databaseMigrations", () => {
       );
     },
   );
+
+  test.skipIf(!canUseBetterSqlite)(
+    "creates missing data/ parent before opening job scratch db",
+    async () => {
+      const base = fs.mkdtempSync(path.join(os.tmpdir(), "papr-job-mig-"));
+      const migrationRoot = path.join(base, "Jobs", "wiki-writer-id");
+      const dbPath = path.join(migrationRoot, "data", "data.db");
+      fs.mkdirSync(migrationRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(migrationRoot, "job.json"),
+        JSON.stringify({ id: "wiki-writer-id", name: "Wiki Writer" }),
+      );
+
+      const applied = await applyDatabaseMigrations(migrationRoot, dbPath);
+      expect(applied).toEqual([]);
+
+      expect(fs.existsSync(path.dirname(dbPath))).toBe(true);
+      const db = new Database(dbPath, { readonly: true });
+      const tables = db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_migrations'",
+        )
+        .all() as Array<{ name: string }>;
+      db.close();
+      expect(tables.map((row) => row.name)).toContain("schema_migrations");
+    },
+  );
 });

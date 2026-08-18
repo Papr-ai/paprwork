@@ -160,6 +160,12 @@ async function applyMigrationToRemote(
 
   const sql = await readMigrationSql(migrationRoot, migrationId);
   if (!sql) {
+    if (await migrationSatisfiedOnRemote(remote, migrationRoot, migrationId)) {
+      console.warn(
+        `[MigrationTurso] ${migrationId} SQL file missing but remote schema already satisfied — skipping replay`,
+      );
+      return;
+    }
     throw new Error(`Migration SQL missing for ${migrationId}`);
   }
   for (const statement of splitSqlStatements(sql)) {

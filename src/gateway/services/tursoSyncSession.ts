@@ -21,6 +21,8 @@ import {
   resolveTursoPushStateEntry,
   recordTursoIndexVersion,
 } from "./tursoSyncState.js";
+import { readAppHasPendingLocalUpload } from "./cloudSync/pendingLocalUploads.js";
+import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import {
   loadSyncIndexSnapshot,
 } from "./tursoSyncIndex.js";
@@ -200,6 +202,9 @@ export async function syncLinkedSourceFromCloud(
 
   const resolvedKey = linkedSourceSyncKey(linked);
   const localDirty = isLinkedSourceLocallyDirty(linked);
+  const pendingLocalGitUpload =
+    linked.appId !== undefined &&
+    readAppHasPendingLocalUpload(linked.appId, getPaprRoot());
 
   if (localDirty) {
     try {
@@ -233,6 +238,19 @@ export async function syncLinkedSourceFromCloud(
       action: "skipped",
       trigger,
       reason: "remote_unchanged",
+    };
+  }
+
+  if (pendingLocalGitUpload) {
+    console.log(
+      `[TursoSync] Skipping cloud→local pull for ${resolvedKey} — ` +
+        `app has pending local git upload (Upload now first)`,
+    );
+    return {
+      syncKey: resolvedKey,
+      action: "skipped",
+      trigger,
+      reason: "pending_local_git_upload",
     };
   }
 

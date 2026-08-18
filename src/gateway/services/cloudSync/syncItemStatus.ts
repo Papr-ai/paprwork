@@ -5,7 +5,11 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { DeadLetterItem, PersistedSyncState } from "./syncState.js";
-import { inferGitRemoteReviewState, summarizeIncomingRemoteGitLog } from "./gitRemoteReconcile.js";
+import {
+  formatDivergedGitHistoryHeadline,
+  inferGitRemoteReviewState,
+  summarizeIncomingRemoteGitLog,
+} from "./gitRemoteReconcile.js";
 import { isWorkspaceChatJob } from "../../../core/constants/workspaceChatJob.js";
 
 export type GitHubItemSyncState =
@@ -371,6 +375,9 @@ export function buildGitHubSyncItemsReport(opts: {
   gitUpdatesAvailable?: boolean;
   gitUpdatesSummary?: string | null;
   gitRemoteChangedPaths?: ReadonlySet<string>;
+  gitHistoryDiverged?: boolean;
+  gitLocalAheadCount?: number;
+  gitRemoteBehindCount?: number;
   shouldAutoUploadPath?: (relativePath: string) => boolean;
 }): GitHubSyncItemsReport {
   const queuedSet = new Set(opts.queuedPaths);
@@ -381,12 +388,23 @@ export function buildGitHubSyncItemsReport(opts: {
     gitUpdatesAvailable,
     remoteChangedPaths: remotePaths ? [...remotePaths] : null,
     gitUpdatesSummary: opts.gitUpdatesSummary,
+    gitHistoryDiverged: opts.gitHistoryDiverged,
   });
   const reviewHeadline = gitUpdatesAvailable
-    ? summarizeIncomingRemoteGitLog(
-        opts.gitUpdatesSummary,
-        remotePaths ? [...remotePaths] : undefined,
-      ).headline
+    ? opts.gitHistoryDiverged &&
+      opts.gitLocalAheadCount !== undefined &&
+      opts.gitRemoteBehindCount !== undefined
+      ? `${formatDivergedGitHistoryHeadline(
+          opts.gitLocalAheadCount,
+          opts.gitRemoteBehindCount,
+        )} — ${summarizeIncomingRemoteGitLog(
+          opts.gitUpdatesSummary,
+          remotePaths ? [...remotePaths] : undefined,
+        ).headline}`
+      : summarizeIncomingRemoteGitLog(
+          opts.gitUpdatesSummary,
+          remotePaths ? [...remotePaths] : undefined,
+        ).headline
     : null;
   const workspace = buildFolderItems(
     opts.paprDir,

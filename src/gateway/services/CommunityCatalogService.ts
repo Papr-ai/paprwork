@@ -1,5 +1,5 @@
 /**
- * Unified Community catalog — open-source bundles + Papr Cloud public apps.
+ * Unified Community catalog — Papr Cloud public apps (+ workspace-scoped entries).
  */
 
 import * as fs from "fs";
@@ -27,10 +27,6 @@ import {
   paprApiKeyMatchesNamespace,
   parsePaprApiKeyScope,
 } from "../../core/utils/paprApiKey.js";
-import {
-  getBundleService,
-  type CommunityRegistry,
-} from "./BundleService.js";
 import type { CloudSharingSettings } from "./cloudPublishMapping.js";
 import {
   resolveSharingSettings,
@@ -167,28 +163,6 @@ function loadLocalAppMeta(
   return meta;
 }
 
-function opensourceEntry(
-  bundle: CommunityRegistry["bundles"][number],
-): CommunityCatalogEntry {
-  return {
-    catalogId: `oss:${bundle.bundleId}`,
-    source: "opensource",
-    name: bundle.name,
-    description: bundle.description,
-    version: bundle.version,
-    author: bundle.author,
-    tags: bundle.tags,
-    icon: bundle.icon,
-    platform: bundle.platform,
-    requirements: bundle.requirements,
-    minPaprworkVersion: bundle.minPaprworkVersion,
-    bundleId: bundle.bundleId,
-    path: bundle.path,
-    codeInstallable: true,
-    liveViewable: false,
-  };
-}
-
 function mapCatalogRequirements(
   items?: CloudCommunityApiEntry["catalogRequirements"],
 ): CommunityCatalogEntry["requirements"] {
@@ -299,6 +273,7 @@ function cloudEntryFromApi(
 export function isCommunityCatalogListed(input: {
   visibility?: string;
   shareLinkEnabled?: boolean;
+  liveUrl?: string | null;
   sharing?: Pick<CloudSharingSettings, "loginAccess" | "externalLink">;
   published?: boolean;
 }): boolean {
@@ -306,6 +281,9 @@ export function isCommunityCatalogListed(input: {
     return false;
   }
   if (input.shareLinkEnabled === true) {
+    return false;
+  }
+  if (input.liveUrl?.includes("?t=")) {
     return false;
   }
   if (input.sharing) {
@@ -513,13 +491,18 @@ function shouldIncludeInPublicCommunity(
   }
 
   if (entry.appId && ownedAppIds.has(entry.appId)) {
-    const sharing = resolveSharingSettings(getAppPublishPrefs(entry.appId, paprDir));
+    const prefs = getAppPublishPrefs(entry.appId, paprDir);
+    const sharing = resolveSharingSettings({
+      ...prefs,
+      shareToken: prefs.shareToken,
+    });
     if (options?.allowTeam && sharing.loginAccess === "team") {
       return true;
     }
     return isCommunityCatalogListed({
       visibility: entry.visibility,
       shareLinkEnabled: entry.shareLinkEnabled,
+      liveUrl: entry.liveUrl,
       sharing,
     });
   }
@@ -527,6 +510,7 @@ function shouldIncludeInPublicCommunity(
   return isCommunityCatalogListed({
     visibility: entry.visibility,
     shareLinkEnabled: entry.shareLinkEnabled,
+    liveUrl: entry.liveUrl,
   });
 }
 
@@ -718,9 +702,6 @@ export class CommunityCatalogService {
       return { ...cached.catalog, fromCache: true };
     }
 
-    const bundleService = getBundleService();
-    const ossRegistry = await bundleService.fetchCommunityRegistry();
-    const ossEntries = ossRegistry.bundles.map(opensourceEntry);
     const ownedAppIds = this.ownedLocalAppIds();
     const localAppMeta = loadLocalAppMeta(this.paprDir);
 
@@ -747,7 +728,8 @@ export class CommunityCatalogService {
       ownedAppIds,
     );
 
-    const catalog = buildCatalog("global", [...cloudEntries, ...ossEntries]);
+    // Community Apps tab is cloud-publish only. OSS paprwork-community-apps is deprecated.
+    const catalog = buildCatalog("global", cloudEntries);
     globalCatalogCache = { fetchedAt: Date.now(), catalog };
     return catalog;
   }

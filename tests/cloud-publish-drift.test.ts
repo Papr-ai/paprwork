@@ -6,6 +6,7 @@ import {
   resolveShareTokenForConfig,
   slugifyPublishTitle,
 } from "../src/gateway/services/cloudPublishDrift.js";
+import { resolveUniquePublishSlug } from "../src/gateway/utils/uniqueAppNaming.js";
 
 describe("cloudPublishDrift", () => {
   it("slugifyPublishTitle derives audit-workbench from title", () => {
@@ -30,6 +31,37 @@ describe("cloudPublishDrift", () => {
     });
     expect(reasons.some((r) => r.startsWith("visibility:"))).toBe(true);
     expect(reasons).toContain("shareToken:missing");
+  });
+
+  it("no slug drift when memory slug matches resolveUniquePublishSlug", () => {
+    const appId = "65b7eb05-5ec0-47da-918a-c63e64916f1e";
+    const slugCatalog = [
+      {
+        appId,
+        title: "Talent Assessment_1",
+        createdAt: "2026-08-15T17:39:23.735Z",
+        memorySlug: "talent-assessment-1-1",
+      },
+    ];
+    const expectedSlug = resolveUniquePublishSlug(appId, slugCatalog);
+    expect(expectedSlug).toBe("talent-assessment-1-1");
+
+    const reasons = detectPublishDrift({
+      memory: {
+        enabled: true,
+        visibility: "team",
+        slug: "talent-assessment-1-1",
+        linkPermission: "read_write",
+      },
+      prefs: {
+        autoPublish: true,
+        accessMode: "team",
+        loginAccess: "team",
+        externalLink: "off",
+      },
+      expectedSlug,
+    });
+    expect(reasons.some((r) => r.startsWith("slug:"))).toBe(false);
   });
 
   it("detects slug drift from e2e test pollution", () => {

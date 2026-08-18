@@ -12,7 +12,11 @@ import {
   listUserTables,
   openWritableLocalJobDb,
 } from "../tursoSyncBridgeCore.js";
-import { discoverTursoLinkedSources, linkedSourceSyncKey } from "../tursoLinkedSources.js";
+import {
+  discoverTursoLinkedSources,
+  linkedSourceSyncKey,
+  type TursoLinkedSource,
+} from "../tursoLinkedSources.js";
 import { jobTursoDatabaseName } from "../tursoDatabaseNaming.js";
 import { getDatabaseRegistryService } from "../DatabaseRegistryService.js";
 import {
@@ -69,6 +73,26 @@ export function saveConvergenceState(
   const statePath = resolveConvergenceStatePath(paprDir);
   fs.mkdirSync(path.dirname(statePath), { recursive: true });
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
+}
+
+/** Clear cached drift after Turso push/pull proved local and remote match. */
+export function markConvergenceVerifiedForLinkedSource(
+  linked: TursoLinkedSource,
+  paprDir?: string,
+): void {
+  const syncKey = linkedSourceSyncKey(linked);
+  const state = loadConvergenceState(paprDir);
+  const now = new Date().toISOString();
+  state.sources[syncKey] = {
+    syncKey,
+    appId: linked.appId,
+    alias: linked.alias,
+    lastCheckedAt: now,
+    lastVerifiedAt: now,
+    ok: true,
+    driftTables: [],
+  };
+  saveConvergenceState(state, paprDir);
 }
 
 export function loadConvergenceStateForApp(

@@ -52,7 +52,11 @@ describe("OAuth provider funnel telemetry", () => {
     "connect_clicked",
     "flow_started",
     "keychain_token_found",
+    "cli_install_started",
+    "cli_install_failed",
     "terminal_opened",
+    "manual_setup_clicked",
+    "paste_field_shown",
     "paste_token_submitted",
     "connected",
   ];

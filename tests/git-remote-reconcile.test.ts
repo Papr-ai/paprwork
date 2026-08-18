@@ -5,8 +5,10 @@ import {
   areWorkspaceChatInfrastructureOnlyChanges,
   categorizeWorkingTreePathsForRemoteMerge,
   classifyIncomingRemoteChanges,
+  formatDivergedGitHistoryHeadline,
   inferGitRemoteReviewState,
   isEphemeralLocalSyncStatePath,
+  isGitHistoryDiverged,
   isLegacyJobRuntimeGitPath,
   isNonRetryableCloudPushError,
   isCloudJobStatusWritebackSummary,
@@ -21,6 +23,23 @@ import {
 } from "../src/gateway/services/cloudSync/gitRemoteReconcile.js";
 
 const RUNTIME_OFF_GIT_ENV = "JOB_RUNTIME_OFF_GIT";
+
+function mockRevListCount(
+  args: string[],
+  behind: number,
+  ahead: number,
+): string | undefined {
+  if (args[0] !== "rev-list" || args[1] !== "--count") {
+    return undefined;
+  }
+  if (args[2] === "HEAD..origin/main") {
+    return `${behind}\n`;
+  }
+  if (args[2] === "origin/main..HEAD") {
+    return `${ahead}\n`;
+  }
+  return `${behind}\n`;
+}
 
 function withLegacyJobRuntimeGit(on: boolean, fn: () => void): void {
   const previousValue = process.env[RUNTIME_OFF_GIT_ENV];
@@ -159,7 +178,8 @@ describe("JOB_RUNTIME_OFF_GIT=1", () => {
         return "";
       }
       if (args[0] === "rev-list") {
-        return "2\n";
+        const rev = mockRevListCount(args, 2, 0);
+        return rev ?? "0\n";
       }
       if (args[0] === "diff") {
         return "Jobs/abc/job.json\ndata/jobs.json\n";
@@ -180,8 +200,9 @@ describe("JOB_RUNTIME_OFF_GIT=1", () => {
       if (args[0] === "fetch") {
         return "";
       }
-      if (args[0] === "rev-list") {
-        return "3\n";
+      const rev = mockRevListCount(args, 3, 0);
+      if (rev !== undefined) {
+        return rev;
       }
       if (args[0] === "diff") {
         return [
@@ -218,6 +239,67 @@ describe("JOB_RUNTIME_OFF_GIT=1", () => {
           "228fddd cloud: scaffold workspace-chat job folder",
       }),
     ).toEqual({ requiresReview: false, metadataSync: true });
+  });
+
+  it("requires review for workspace-chat-only remote paths when history diverged", () => {
+    expect(
+      inferGitRemoteReviewState({
+        gitUpdatesAvailable: true,
+        gitHistoryDiverged: true,
+        remoteChangedPaths: [
+          "Jobs/workspace-chat/job.json",
+          "Jobs/workspace-chat/code/.gitkeep",
+          "data/jobs.json",
+        ],
+        gitUpdatesSummary:
+          "228fddd cloud: scaffold workspace-chat job folder",
+      }),
+    ).toEqual({ requiresReview: true, metadataSync: false });
+  });
+
+  it("classifies diverged workspace-chat history as requires_review", async () => {
+    const runGit: RunGitFn = async (args) => {
+      if (args[0] === "fetch") {
+        return "";
+      }
+      const rev = mockRevListCount(args, 3, 1);
+      if (rev !== undefined) {
+        return rev;
+      }
+      if (args[0] === "diff") {
+        return [
+          "Jobs/workspace-chat/job.json",
+          "Jobs/workspace-chat/code/.gitkeep",
+          "data/jobs.json",
+        ].join("\n");
+      }
+      if (args[0] === "log") {
+        return "228fddd cloud: scaffold workspace-chat job folder\n";
+      }
+      return "";
+    };
+
+    await expect(classifyIncomingRemoteChanges(runGit)).resolves.toBe(
+      "requires_review",
+    );
+  });
+});
+
+describe("git history divergence", () => {
+  it("detects diverged history when both ahead and behind are positive", () => {
+    expect(isGitHistoryDiverged(1, 3)).toBe(true);
+    expect(isGitHistoryDiverged(0, 3)).toBe(false);
+    expect(isGitHistoryDiverged(1, 0)).toBe(false);
+    expect(isGitHistoryDiverged(0, 0)).toBe(false);
+  });
+
+  it("formats diverged history headline", () => {
+    expect(formatDivergedGitHistoryHeadline(1, 3)).toBe(
+      "Diverged git history (1 local commit, 3 cloud commits)",
+    );
+    expect(formatDivergedGitHistoryHeadline(2, 1)).toBe(
+      "Diverged git history (2 local commits, 1 cloud commit)",
+    );
   });
 });
 
@@ -417,7 +499,8 @@ describe("classifyIncomingRemoteChanges (legacy git runtime)", () => {
           return "";
         }
         if (args[0] === "rev-list" && args[1] === "--count") {
-          return "3\n";
+          const rev = mockRevListCount(args, 3, 0);
+          return rev ?? "0\n";
         }
         if (args[0] === "diff" && args.includes("HEAD...origin/main")) {
           return "Jobs/abc/job.json\ndata/jobs.json\n";
@@ -443,7 +526,8 @@ describe("classifyIncomingRemoteChanges (legacy git runtime)", () => {
           return "";
         }
         if (args[0] === "rev-list") {
-          return "2\n";
+          const rev = mockRevListCount(args, 2, 0);
+          return rev ?? "0\n";
         }
         if (args[0] === "diff") {
           return "\n";
@@ -467,7 +551,8 @@ describe("classifyIncomingRemoteChanges (legacy git runtime)", () => {
           return "";
         }
         if (args[0] === "rev-list") {
-          return "5\n";
+          const rev = mockRevListCount(args, 5, 0);
+          return rev ?? "0\n";
         }
         if (args[0] === "diff") {
           return "Jobs/a/job.json\ndata/jobs.json\ndata/cloud-repo-head.txt\n";
@@ -582,6 +667,10 @@ describe("isEphemeralLocalSyncStatePath", () => {
     expect(isEphemeralLocalSyncStatePath("data/.turso-convergence-state.json")).toBe(
       true,
     );
+    expect(isEphemeralLocalSyncStatePath("data/.legacy-home-job-migration.json")).toBe(
+      true,
+    );
+    expect(isEphemeralLocalSyncStatePath("data/.gateway-sync-busy.json")).toBe(true);
     expect(isEphemeralLocalSyncStatePath("apps/demo/index.html")).toBe(false);
   });
 });

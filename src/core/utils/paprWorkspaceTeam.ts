@@ -127,3 +127,69 @@ export async function fetchWorkspaceMembers(
     .map(normalizeMember)
     .filter((member): member is WorkspaceMember => member !== null);
 }
+
+const PARSE_GRAPHQL_URL =
+  process.env.PARSE_GRAPHQL_URL ?? "https://server.papr.ai/graphql";
+const PARSE_APP_ID =
+  process.env.PARSE_APP_ID ?? "671e705a-f735-4ec0-8474-15899a475440";
+
+interface NamespaceWorkspaceGraphQLResponse {
+  data?: {
+    namespace?: {
+      objectId?: string;
+      organization?: {
+        workspace?: { objectId?: string };
+        workSpace?: { objectId?: string };
+      };
+    };
+  };
+  errors?: unknown[];
+}
+
+/** Resolve Papr workspace id from a namespace id (cloud app host + team apps). */
+export async function resolveWorkspaceIdForNamespace(
+  sessionToken: string,
+  namespaceId: string,
+): Promise<string | null> {
+  const trimmedNamespaceId = namespaceId.trim();
+  if (!trimmedNamespaceId) {
+    return null;
+  }
+
+  const response = await fetch(PARSE_GRAPHQL_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Parse-Application-Id": PARSE_APP_ID,
+      "X-Parse-Session-Token": sessionToken,
+    },
+    body: JSON.stringify({
+      query: `
+        query GetNamespaceWorkspace($namespaceId: ID!) {
+          namespace(id: $namespaceId) {
+            objectId
+            organization {
+              workspace { objectId }
+              workSpace { objectId }
+            }
+          }
+        }
+      `,
+      variables: { namespaceId: trimmedNamespaceId },
+    }),
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const json = (await response.json()) as NamespaceWorkspaceGraphQLResponse;
+  if (json.errors?.length) {
+    return null;
+  }
+
+  const org = json.data?.namespace?.organization;
+  const workspaceId =
+    org?.workspace?.objectId?.trim() || org?.workSpace?.objectId?.trim();
+  return workspaceId || null;
+}

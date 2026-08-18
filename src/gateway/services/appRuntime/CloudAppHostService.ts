@@ -80,7 +80,13 @@ import {
 import { getMiniAppContentType } from "../../utils/miniAppStaticAssets.js";
 import {
   buildMiniAppAccessResponse,
+  mergeVerifiedCallerJobParams,
 } from "./miniAppAccess.js";
+import {
+  assertMiniAppMembersAccess,
+  listMiniAppMembers,
+  MiniAppMembersError,
+} from "./miniAppMembers.js";
 import {
   buildDbCacheKey,
   checkDbRateLimit,
@@ -268,6 +274,7 @@ export class CloudAppHostService {
     );
 
     app.get("/api/access", (req, res) => void this.handleAccess(req, res));
+    app.get("/api/members", (req, res) => void this.handleMembers(req, res));
     app.get("/api/db/schema", (req, res) => this.handleSchema(req, res));
     app.post("/api/db/query", (req, res) => this.handleQuery(req, res));
     app.post("/api/db/batch", (req, res) => this.handleBatchQuery(req, res));
@@ -751,11 +758,56 @@ export class CloudAppHostService {
       const access = await this.resolveAccess(req, trimmedAppId);
       const loggedIn = Boolean(this.auth.getSessionToken(req));
       const appId = trimmedAppId ?? access?.appId;
+      const email = loggedIn ? this.auth.getSessionEmail(req) : undefined;
 
       res.json(
-        buildMiniAppAccessResponse(access, loggedIn, appId),
+        buildMiniAppAccessResponse(access, loggedIn, appId, { email }),
       );
     } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  }
+
+  private async handleMembers(req: Request, res: Response): Promise<void> {
+    try {
+      const requestedAppId = req.query["appId"] as string | undefined;
+      const runtimeAuth = this.buildRuntimeAuth(req);
+      if (!runtimeAuth) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      const trimmedAppId = requestedAppId?.trim() || undefined;
+      const access = await this.resolveAccess(req, trimmedAppId);
+      const loggedIn = Boolean(this.auth.getSessionToken(req));
+      const sessionToken = this.auth.getSessionToken(req);
+
+      try {
+        assertMiniAppMembersAccess(loggedIn, access);
+      } catch (err) {
+        if (err instanceof MiniAppMembersError) {
+          res.status(err.status).json({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+
+      if (!sessionToken) {
+        res.status(401).json({ error: "Sign in with Papr to list workspace members." });
+        return;
+      }
+
+      const namespaceId = access?.namespaceId ?? runtimeAuth.namespaceId;
+      const result = await listMiniAppMembers({
+        sessionToken,
+        namespaceId,
+      });
+      res.json(result);
+    } catch (err) {
+      if (err instanceof MiniAppMembersError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
       res.status(500).json({ error: (err as Error).message });
     }
   }
@@ -1349,7 +1401,10 @@ export class CloudAppHostService {
 
       const jobInput = {
         jobId: body.jobId,
-        params: body.params,
+        params: mergeVerifiedCallerJobParams(body.params, Boolean(this.auth.getSessionToken(req)), {
+          userId: access.userId,
+          email: this.auth.getSessionEmail(req),
+        }),
         timeoutMs: body.timeoutMs,
       };
 

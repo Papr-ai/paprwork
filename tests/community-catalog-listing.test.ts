@@ -58,6 +58,15 @@ describe("isCommunityCatalogListed", () => {
     ).toBe(false);
   });
 
+  it("excludes entries whose live URL contains an invite token", () => {
+    expect(
+      isCommunityCatalogListed({
+        visibility: "public_read",
+        liveUrl: "https://apps.papr.ai/ns/my-app/?t=secret",
+      }),
+    ).toBe(false);
+  });
+
   it("excludes link audience even when loginAccess is public", () => {
     expect(
       isCommunityCatalogListed({
@@ -102,6 +111,24 @@ describe("shouldIncludeInPublicCommunity — link-only apps", () => {
     const entry = cloudEntry({
       visibility: "public_read",
       shareLinkEnabled: true,
+      isOwned: true,
+    });
+    expect(shouldIncludeInPublicCommunity(entry, paprDir, ownedAppIds)).toBe(
+      false,
+    );
+  });
+
+  it("excludes stale public_read memory rows when local prefs say invite link", () => {
+    getAppPublishPrefs.mockReturnValue({
+      loginAccess: "public",
+      externalLink: "read",
+      accessMode: "link_read",
+      shareToken: "abc123",
+    });
+
+    const entry = cloudEntry({
+      visibility: "public_read",
+      shareLinkEnabled: false,
       isOwned: true,
     });
     expect(shouldIncludeInPublicCommunity(entry, paprDir, ownedAppIds)).toBe(

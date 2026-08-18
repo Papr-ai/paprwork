@@ -31,7 +31,27 @@ export interface MiniAppAccessResponse {
   canWrite: boolean;
   loggedIn: boolean;
   isOwner: boolean;
+  /** Papr user id — present when loggedIn; server-resolved, not client-supplied. */
+  userId?: string;
+  /** Convenience for admin UIs — present when loggedIn and email is known. */
+  email?: string;
   appId?: string;
+}
+
+/** GET /api/members — Papr workspace roster for role assignment UIs. */
+export interface MiniAppWorkspaceMember {
+  userId: string;
+  email: string;
+  displayName: string;
+  role: string;
+  profileImageUrl?: string;
+}
+
+export interface MiniAppMembersResponse {
+  workspaceId: string;
+  workspaceName?: string;
+  namespaceId?: string;
+  members: MiniAppWorkspaceMember[];
 }
 
 export interface DbQueryResult {

@@ -463,6 +463,7 @@ export class JobsService {
     await fs.mkdir(this.jobsRootDir, { recursive: true });
     await fs.mkdir(path.dirname(this.jobsIndexPath), { recursive: true });
     await this.loadJobs(); // Load existing jobs FIRST
+    await this.migrateLegacyHomeDailyBriefJobIfNeeded();
     if (isJobRuntimeOffGit()) {
       await this.migrateAndHydrateJobRuntimeFiles();
       await this.hydrateJobRuntimeFromCloud();
@@ -497,6 +498,33 @@ export class JobsService {
    * Infer appIds for legacy jobs missing the field (data-sources + folder title match).
    * Jobs with no linkage get STANDALONE_APP_ID.
    */
+  private async migrateLegacyHomeDailyBriefJobIfNeeded(): Promise<void> {
+    try {
+      const { migrateLegacyHomeDailyBriefJobIfNeeded } = await import(
+        "./migrateLegacyHomeDailyBriefJob.js"
+      );
+      const result = await migrateLegacyHomeDailyBriefJobIfNeeded({
+        paprDir: getPaprRoot(),
+        appsDir: getPaprAppsRoot(),
+        jobsRoot: this.jobsRootDir,
+        jobs: this.jobs,
+        saveJobs: () => this.saveJobs(),
+        persistJobRecord: (job) => this.persistJobRecord(job),
+      });
+      if (result.migrated && result.fromJobId && result.toJobId) {
+        notifyJobOwnershipChanged(getPaprRoot());
+        console.log(
+          `[JobsService] Migrated legacy Home Daily Brief job ${result.fromJobId} → ${result.toJobId}`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        "[JobsService] Legacy Home Daily Brief migration failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
   private async backfillJobAppIds(): Promise<void> {
     let changed = false;
     const jobIdToAppIds = new Map<string, Set<string>>();
@@ -2049,6 +2077,7 @@ export class JobsService {
       swift: "echo 'swift job scaffold is ready'",
     };
     const jobDir = this.getJobDir(job.id);
+    await this.jobDatabase.ensureJobDirScaffold(jobDir);
     const appliedMigrations = await this.jobDatabase.applyMigrations(jobDir);
 
     const { resolveJobWriteTargets } = await import("./jobAppDatabase.js");

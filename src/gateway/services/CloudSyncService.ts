@@ -26,6 +26,10 @@ import { buildGitHubSyncItemsReport } from "./cloudSync/syncItemStatus.js";
 import { shouldAutoUploadRelativePath, shouldAutoUploadApp } from "./cloudUploadMode.js";
 import { canReconcilePathAsSynced, loadGitTrackedSubdirPaths } from "./cloudSync/gitPathStatus.js";
 import {
+  formatPendingUploadDeferReason,
+  listPendingUploadRelativePaths,
+} from "./cloudSync/pendingLocalUploads.js";
+import {
   mergeRemoteMainIntoLocal,
   type GitRemoteReconcileResult,
   classifyIncomingRemoteChanges,
@@ -57,6 +61,10 @@ import {
   getWorkspaceWriteGeneration,
 } from "./workspaceWriteGuard.js";
 import { buildCloudReposRequestBody } from "../../core/utils/cloudReposScope.js";
+import {
+  miniAppDistRelativePaths,
+  patchWorkspaceGitignoreIfNeeded,
+} from "./cloudSync/workspaceGitignore.js";
 
 const INSTANT_DIRS = ["workspace", "data"];
 const QUEUED_DIRS = ["apps", "Jobs"];
@@ -132,6 +140,8 @@ recordings/
 # Local sync state — never in git
 data/.db-memory-sync-state.json
 data/.turso-convergence-state.json
+data/.legacy-home-job-migration.json
+data/.gateway-sync-busy.json
 
 # Logs — ephemeral
 **/logs/
@@ -181,6 +191,10 @@ interface SyncState {
   gitUpdatesSummary: string | null;
   /** Paths changed on origin/main that local lacks (for per-folder updates_available). */
   gitRemoteChangedPaths: string[] | null;
+  /** Local and remote both have unique commits — merge review required (§6). */
+  gitHistoryDiverged: boolean;
+  gitLocalAheadCount: number;
+  gitRemoteBehindCount: number;
   /** Per-app Upload now errors (background flush). */
   manualFlushErrors: Record<string, { message: string; at: string }>;
 }
@@ -248,6 +262,9 @@ export class CloudSyncService {
     gitUpdatesAvailable: false,
     gitUpdatesSummary: null,
     gitRemoteChangedPaths: null,
+    gitHistoryDiverged: false,
+    gitLocalAheadCount: 0,
+    gitRemoteBehindCount: 0,
     manualFlushErrors: {},
   };
 
@@ -342,6 +359,9 @@ export class CloudSyncService {
       gitUpdatesAvailable: this.state.gitUpdatesAvailable,
       gitUpdatesSummary: this.state.gitUpdatesSummary,
       gitRemoteChangedPaths: remotePaths,
+      gitHistoryDiverged: this.state.gitHistoryDiverged,
+      gitLocalAheadCount: this.state.gitLocalAheadCount,
+      gitRemoteBehindCount: this.state.gitRemoteBehindCount,
       shouldAutoUploadPath: (relativePath) =>
         shouldAutoUploadRelativePath(relativePath, this.paprDir),
     });
@@ -567,7 +587,14 @@ export class CloudSyncService {
       }
       await this.updateRemoteUrl(cloneUrl);
       if (!this.repoIdentityChanged) {
-        await this.pull();
+        const deferPull = await this.shouldDeferGitPull();
+        if (deferPull.defer) {
+          console.log(
+            `[CloudSync] Startup pull deferred — ${deferPull.reason ?? "local work pending"}`,
+          );
+        } else {
+          await this.pull();
+        }
       }
     }
 
@@ -589,10 +616,15 @@ export class CloudSyncService {
     await this.recoverUnpushedBacklogIfNeeded();
     await this.ensureRemoteCaughtUp();
 
-    const instantPaths = this.getChangedInstantPaths();
-    if (instantPaths.length > 0) {
-      await this.commitAndPushPaths(instantPaths, "cloud sync: workspace and data");
-    }
+    await this.runExclusiveGitOp(async () => {
+      const instantPaths = this.getChangedInstantPaths();
+      if (instantPaths.length > 0) {
+        await this.commitAndPushPaths(
+          instantPaths,
+          "cloud sync: workspace and data",
+        );
+      }
+    });
 
     await this.enqueueSubDirs();
     if (this.syncQueue.length === 0) {
@@ -1097,25 +1129,27 @@ export class CloudSyncService {
   }
 
   private async syncWorkspaceIfChanged(): Promise<boolean> {
-    if (this.state.status === "queuing") {
-      return false;
-    }
-    if (!shouldAutoUploadRelativePath("workspace", this.paprDir)) {
-      return false;
-    }
-    if ((await this.countUnpushedCommits()) > 0) {
-      return false;
-    }
+    return this.runExclusiveGitOp(async () => {
+      if (this.state.status === "queuing") {
+        return false;
+      }
+      if (!shouldAutoUploadRelativePath("workspace", this.paprDir)) {
+        return false;
+      }
+      if ((await this.countUnpushedCommits()) > 0) {
+        return false;
+      }
 
-    const paths = this.getChangedInstantPaths();
-    if (paths.length === 0) {
-      return false;
-    }
+      const paths = this.getChangedInstantPaths();
+      if (paths.length === 0) {
+        return false;
+      }
 
-    console.log(
-      `[CloudSync] Git workspace sync (trigger=watcher) paths=${paths.length}`,
-    );
-    return this.commitAndPushPaths(paths, "cloud sync: workspace change");
+      console.log(
+        `[CloudSync] Git workspace sync (trigger=watcher) paths=${paths.length}`,
+      );
+      return this.commitAndPushPaths(paths, "cloud sync: workspace change");
+    });
   }
 
   // ── Phase 2: queued sub-dirs ──────────────────────────────────────
@@ -1427,10 +1461,11 @@ export class CloudSyncService {
       if (this.isSyncing || this.state.status === "queuing") return;
       if (Date.now() < this.pullBackoffUntilMs) return;
       try {
-        await this.tryAutoReconcileRemoteGit();
-        if ((await this.countUnpushedCommits()) > 0) {
+        const deferPull = await this.shouldDeferGitPull();
+        if (deferPull.defer) {
           return;
         }
+        await this.tryAutoReconcileRemoteGit();
         await this.pull();
       } catch (err) {
         console.warn("[CloudSync] Periodic pull failed:", (err as Error).message.slice(0, 100));
@@ -1528,6 +1563,14 @@ export class CloudSyncService {
     );
 
     try {
+      const deferPull = await this.shouldDeferGitPull();
+      if (deferPull.defer) {
+        console.log(
+          `[CloudSync] Pull deferred after cloud runs — ${deferPull.reason ?? "local work pending"}`,
+        );
+        return;
+      }
+
       const reconciled = await this.tryAutoReconcileRemoteGit();
       if (reconciled === "merged") {
         console.log("[CloudSync] Integrated cloud job runtime metadata after wake");
@@ -1806,7 +1849,7 @@ export class CloudSyncService {
         path.join("apps", appId),
       ),
     ];
-    await this.stageFiltered(stagePaths);
+    await this.stageFiltered(stagePaths, preparedAppIds);
     await this.unstageOversizedFiles();
 
     // SAFETY: Detect accidental mass deletions (e.g., empty workspace after clone)
@@ -2063,6 +2106,27 @@ export class CloudSyncService {
     }
   }
 
+  /** Defer cloud→local git pull while local app/job edits or commits are not on GitHub yet. */
+  private async shouldDeferGitPull(): Promise<{ defer: boolean; reason?: string }> {
+    const unpushed = await this.countUnpushedCommits();
+    if (unpushed > 0) {
+      return { defer: true, reason: `${unpushed} unpushed commit(s)` };
+    }
+
+    const pendingPaths = listPendingUploadRelativePaths(
+      this.paprDir,
+      this.stateManager,
+    );
+    if (pendingPaths.length > 0) {
+      return {
+        defer: true,
+        reason: formatPendingUploadDeferReason(pendingPaths),
+      };
+    }
+
+    return { defer: false };
+  }
+
   private async countUnpushedCommits(): Promise<number> {
     try {
       const count = await this.git(["rev-list", "--count", "origin/main..HEAD"]);
@@ -2141,6 +2205,14 @@ export class CloudSyncService {
   }
 
   private async pull(): Promise<void> {
+    const deferPull = await this.shouldDeferGitPull();
+    if (deferPull.defer) {
+      console.log(
+        `[CloudSync] Pull skipped — ${deferPull.reason ?? "local work pending"}; push local changes first`,
+      );
+      return;
+    }
+
     console.log("[CloudSync] Pulling latest...");
     this.state.status = "syncing";
 
@@ -2306,6 +2378,14 @@ export class CloudSyncService {
   /** Caller must hold git lock (inside runExclusiveGitOp) or be pushMainBranch. */
   private async tryAutoReconcileRemoteGitInternal(): Promise<GitRemoteReconcileResult> {
     try {
+      const deferPull = await this.shouldDeferGitPull();
+      if (deferPull.defer) {
+        console.log(
+          `[CloudSync] Auto-reconcile deferred — ${deferPull.reason ?? "local work pending"}`,
+        );
+        return "not_needed";
+      }
+
       const classification = await classifyIncomingRemoteChanges((args, opts) =>
         this.git(args, opts),
       );
@@ -2325,16 +2405,12 @@ export class CloudSyncService {
           await mergeRemoteMainIntoLocal((args, opts) => this.git(args, opts), {
             stashMessage: "cloud-sync-auto-reconcile-legacy",
           });
-          this.state.gitUpdatesAvailable = false;
-          this.state.gitUpdatesSummary = null;
-          this.state.gitRemoteChangedPaths = null;
+          this.clearGitRemoteUpdateFlags();
           this.state.lastSyncAt = new Date().toISOString();
           return "merged";
         }
         if (isJobRuntimeOffGit()) {
-          this.state.gitUpdatesAvailable = false;
-          this.state.gitUpdatesSummary = null;
-          this.state.gitRemoteChangedPaths = null;
+          this.clearGitRemoteUpdateFlags();
         }
         return "not_needed";
       }
@@ -2350,9 +2426,7 @@ export class CloudSyncService {
         stashMessage: "cloud-sync-auto-reconcile",
       });
 
-      this.state.gitUpdatesAvailable = false;
-      this.state.gitUpdatesSummary = null;
-      this.state.gitRemoteChangedPaths = null;
+      this.clearGitRemoteUpdateFlags();
       this.state.lastSyncAt = new Date().toISOString();
       this.state.lastError = null;
 
@@ -2402,9 +2476,7 @@ export class CloudSyncService {
           `stashed ${mergeResult.stashedSourcePaths} source path(s)`,
       );
 
-      this.state.gitUpdatesAvailable = false;
-      this.state.gitUpdatesSummary = null;
-      this.state.gitRemoteChangedPaths = null;
+      this.clearGitRemoteUpdateFlags();
       this.state.lastSyncAt = new Date().toISOString();
       this.state.lastError = null;
 
@@ -2422,19 +2494,31 @@ export class CloudSyncService {
 
   /** Owner dismissed remote git updates — keep local history; clears updates_available flag. */
   dismissGitRemoteUpdates(): void {
+    this.clearGitRemoteUpdateFlags();
+  }
+
+  private clearGitRemoteUpdateFlags(): void {
     this.state.gitUpdatesAvailable = false;
     this.state.gitUpdatesSummary = null;
     this.state.gitRemoteChangedPaths = null;
+    this.state.gitHistoryDiverged = false;
+    this.state.gitLocalAheadCount = 0;
+    this.state.gitRemoteBehindCount = 0;
   }
 
   private async refreshGitUpdatesAvailable(): Promise<void> {
     await this.git(["fetch", "origin", "main"]);
     const behindRaw = await this.git(["rev-list", "--count", "HEAD..origin/main"]);
     const behindCount = parseInt(behindRaw.trim(), 10) || 0;
+    const aheadRaw = await this.git(["rev-list", "--count", "origin/main..HEAD"]);
+    const aheadCount = parseInt(aheadRaw.trim(), 10) || 0;
+    const diverged = aheadCount > 0 && behindCount > 0;
+    this.state.gitHistoryDiverged = diverged;
+    this.state.gitLocalAheadCount = aheadCount;
+    this.state.gitRemoteBehindCount = behindCount;
+
     if (behindCount === 0) {
-      this.state.gitUpdatesAvailable = false;
-      this.state.gitUpdatesSummary = null;
-      this.state.gitRemoteChangedPaths = null;
+      this.clearGitRemoteUpdateFlags();
       return;
     }
     const paths = await listIncomingRemoteChangedPaths((args, opts) =>
@@ -2442,16 +2526,15 @@ export class CloudSyncService {
     );
     const summary = await this.git(["log", "--oneline", "-30", "HEAD..origin/main"]);
     const summaryTrimmed = summary.trim() || null;
-    if (isJobRuntimeOffGit()) {
+    if (isJobRuntimeOffGit() && !diverged) {
       const review = inferGitRemoteReviewState({
         gitUpdatesAvailable: true,
         remoteChangedPaths: paths,
         gitUpdatesSummary: summaryTrimmed,
+        gitHistoryDiverged: diverged,
       });
       if (!review.requiresReview) {
-        this.state.gitUpdatesAvailable = false;
-        this.state.gitUpdatesSummary = null;
-        this.state.gitRemoteChangedPaths = null;
+        this.clearGitRemoteUpdateFlags();
         return;
       }
     }
@@ -2536,21 +2619,10 @@ export class CloudSyncService {
       return;
     }
     const existing = fs.readFileSync(gitignorePath, "utf-8");
-    const requiredRuntimeLines = [
-      "# Job runtime — local + memory heartbeat only, never git",
-      "Jobs/*/job.runtime.json",
-      "data/job-runs.jsonl",
-      "# Turso sync safety snapshots — local only",
-      "**/*.sync-backup-*",
-    ];
-    const missingRuntime = requiredRuntimeLines.some(
-      (line) => !line.startsWith("#") && !existing.includes(line),
-    );
-    if (!missingRuntime) {
-      return;
+    const { content, changed } = patchWorkspaceGitignoreIfNeeded(existing);
+    if (changed) {
+      fs.writeFileSync(gitignorePath, content, "utf-8");
     }
-    const appendix = ["", ...requiredRuntimeLines, ""].join("\n");
-    fs.writeFileSync(gitignorePath, `${existing.trimEnd()}\n${appendix}`, "utf-8");
   }
 
   // ── Repo hygiene ──────────────────────────────────────────────────
@@ -2562,7 +2634,10 @@ export class CloudSyncService {
    * bypasses ignore rules for already-tracked files, which is how 47 SQLite
    * databases and 78 `.bak` blobs ended up in one user's history (253 GB).
    */
-  private async stageFiltered(stagePaths: string[]): Promise<void> {
+  private async stageFiltered(
+    stagePaths: string[],
+    forceMiniAppDistForAppIds: readonly string[] = [],
+  ): Promise<void> {
     const { allowed, rejected } = partitionStagePaths(this.paprDir, stagePaths);
     if (rejected.length > 0) {
       console.warn(
@@ -2573,8 +2648,17 @@ export class CloudSyncService {
             .join(", "),
       );
     }
-    if (allowed.length === 0) return;
-    await this.git(["add", "--", ...allowed]);
+    if (allowed.length > 0) {
+      await this.git(["add", "--", ...allowed]);
+    }
+
+    const distPaths = miniAppDistRelativePaths(
+      this.paprDir,
+      forceMiniAppDistForAppIds,
+    );
+    if (distPaths.length > 0) {
+      await this.git(["add", "-f", "--", ...distPaths]);
+    }
   }
 
   /**

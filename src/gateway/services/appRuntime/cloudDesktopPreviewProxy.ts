@@ -87,6 +87,8 @@ export function getCloudPreviewContextForApi(req: Request): CloudRouteContext | 
 }
 
 const PROXYABLE_API_PREFIXES = [
+  "/api/access",
+  "/api/members",
   "/api/db/",
   "/api/bash/run",
   "/api/app/backend/",

@@ -7,6 +7,7 @@ import type {
   AmplitudeEvents,
   BaseEventProperties,
 } from "../../src/core/telemetry/events";
+import { mergeTelemetryEnvelope } from "../../src/core/telemetry/telemetryProductContext";
 
 let isInitialized = false;
 let initPromise: Promise<void> | null = null;
@@ -14,6 +15,16 @@ let installId: string | null = null;
 let paprUserIdCached: string | null = null;
 let appVersionCached = "";
 let httpBase = "";
+
+const PENDING_EVENT_MAX = 100;
+
+type PendingTelemetryEvent = {
+  event_name: string;
+  properties?: Record<string, unknown>;
+  timestamp: number;
+};
+
+const pendingEvents: PendingTelemetryEvent[] = [];
 
 function gatewayOrigin(): string {
   const host = import.meta.env.VITE_GATEWAY_HOST || "localhost";
@@ -31,6 +42,49 @@ function resolveHttpBase(): string {
   return gatewayOrigin();
 }
 
+export function resolveRendererPlatform(): "darwin" | "win32" | "linux" {
+  if (typeof navigator === "undefined") {
+    return "linux";
+  }
+  const platform = navigator.platform.toLowerCase();
+  if (platform.includes("mac") || platform.includes("darwin")) {
+    return "darwin";
+  }
+  if (platform.includes("win")) {
+    return "win32";
+  }
+  return "linux";
+}
+
+function buildRendererEventProperties(
+  properties?: Record<string, unknown>,
+): Record<string, unknown> {
+  return mergeTelemetryEnvelope(
+    {
+      ...(properties ?? {}),
+      client: "paprwork-renderer",
+      app_version: appVersionCached,
+      platform: resolveRendererPlatform(),
+    },
+    { isPackaged: import.meta.env.PROD },
+  );
+}
+
+function enqueuePendingEvent(event: PendingTelemetryEvent): void {
+  if (pendingEvents.length >= PENDING_EVENT_MAX) {
+    pendingEvents.shift();
+  }
+  pendingEvents.push(event);
+}
+
+async function flushPendingEvents(): Promise<void> {
+  if (!isInitialized || !installId || pendingEvents.length === 0) {
+    return;
+  }
+  const batch = pendingEvents.splice(0, pendingEvents.length);
+  await postEvents(batch);
+}
+
 /**
  * Initialize renderer telemetry (proxy path only).
  */
@@ -42,6 +96,7 @@ export async function initializeAmplitudeBrowser(
 ): Promise<void> {
   if (!enabled) {
     console.log("[Telemetry] Renderer: disabled");
+    pendingEvents.length = 0;
     return;
   }
   if (!anonymousInstallId) {
@@ -50,10 +105,12 @@ export async function initializeAmplitudeBrowser(
   }
   if (isInitialized) {
     setTelemetryPaprUserId(paprUserId ?? null);
+    await flushPendingEvents();
     return;
   }
   if (initPromise) {
     await initPromise;
+    await flushPendingEvents();
     return;
   }
 
@@ -68,6 +125,7 @@ export async function initializeAmplitudeBrowser(
         `[Telemetry] Renderer proxy → ${httpBase}/api/telemetry/events` +
           (paprUserId ? ` (identified: ${paprUserId.substring(0, 8)}…)` : " (anonymous)"),
       );
+      await flushPendingEvents();
     } finally {
       initPromise = null;
     }
@@ -97,7 +155,7 @@ async function postEvents(
         events: events.map((e) => ({
           event_name: e.event_name,
           properties: {
-            ...(e.properties ?? {}),
+            ...buildRendererEventProperties(e.properties),
             ...(paprUserIdCached ? { papr_account_id: paprUserIdCached } : {}),
           },
           user_id: userId,
@@ -136,66 +194,43 @@ export function setTelemetryPaprUserId(paprUserId: string | null): void {
 }
 
 /**
- * Track an event (renderer side).
+ * Track an event (renderer side). Events before init are queued and flushed once ready.
  */
 export function trackEvent(
   eventName: keyof typeof AmplitudeEvents | string,
   properties?: BaseEventProperties,
 ): void {
+  const payload = properties as Record<string, unknown> | undefined;
+  const event: PendingTelemetryEvent = {
+    event_name: String(eventName),
+    properties: payload,
+    timestamp: Date.now(),
+  };
+
   if (!isInitialized || !installId) {
+    enqueuePendingEvent(event);
     return;
   }
-  void postEvents([
-    {
-      event_name: String(eventName),
-      properties: {
-        ...(properties as Record<string, unknown> | undefined),
-        client: "paprwork-renderer",
-        app_version: appVersionCached,
-      },
-      timestamp: Date.now(),
-    },
-  ]);
+
+  void postEvents([event]);
 }
 
 /**
  * Best-effort user properties (forwarded as a named event for the proxy).
  */
 export function setUserProperties(properties: Record<string, unknown>): void {
-  if (!isInitialized || !installId) {
-    return;
-  }
-  void postEvents([
-    {
-      event_name: "paprwork_renderer_user_properties",
-      properties: {
-        ...properties,
-        client: "paprwork-renderer",
-        app_version: appVersionCached,
-      },
-    },
-  ]);
+  trackEvent("paprwork_renderer_user_properties", properties as BaseEventProperties);
 }
 
 export function incrementUserProperty(propertyName: string, delta = 1): void {
-  if (!isInitialized || !installId) {
-    return;
-  }
-  void postEvents([
-    {
-      event_name: "paprwork_renderer_counter",
-      properties: {
-        counter_key: propertyName,
-        counter_delta: delta,
-        client: "paprwork-renderer",
-        app_version: appVersionCached,
-      },
-    },
-  ]);
+  trackEvent("paprwork_renderer_counter", {
+    counter_key: propertyName,
+    counter_delta: delta,
+  } as unknown as BaseEventProperties);
 }
 
 export async function flushEvents(): Promise<void> {
-  /* no client-side queue */
+  await flushPendingEvents();
 }
 
 export async function shutdownAmplitude(): Promise<void> {
@@ -203,4 +238,16 @@ export async function shutdownAmplitude(): Promise<void> {
   installId = null;
   paprUserIdCached = null;
   httpBase = "";
+  pendingEvents.length = 0;
+}
+
+/** Test-only reset for renderer telemetry state. */
+export function __resetTelemetryForTests(): void {
+  isInitialized = false;
+  initPromise = null;
+  installId = null;
+  paprUserIdCached = null;
+  appVersionCached = "";
+  httpBase = "";
+  pendingEvents.length = 0;
 }

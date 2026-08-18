@@ -25,6 +25,17 @@ type OAuthTelemetryTracker = (
   properties?: Record<string, unknown>,
 ) => void;
 
+type OAuthStartTelemetryOptions = {
+  source?: string;
+};
+
+function resolveOAuthTelemetrySource(source?: string): string {
+  if (source === "onboarding" || source === "settings") {
+    return source;
+  }
+  return "unknown";
+}
+
 let oauthTokenStorage: OAuthTokenStorage | null = null;
 let customKeysStorage: CustomKeysStorage | null = null;
 let openaiOAuthService: OpenAIOAuthService | null = null;
@@ -349,11 +360,14 @@ export async function initializeOAuthIPC(
   claudeOAuthService = new ClaudeOAuthService();
 
   // OpenAI OAuth handlers
-  ipcMain.handle("auth:openai:start-oauth", async () => {
+  ipcMain.handle(
+    "auth:openai:start-oauth",
+    async (_event, options?: OAuthStartTelemetryOptions) => {
+      const telemetrySource = resolveOAuthTelemetrySource(options?.source);
     try {
       console.log("[OAuth IPC] Starting OpenAI OAuth flow");
       oauthFlowStartedAt.set("openai", Date.now());
-      trackOAuthStep("openai", "flow_started");
+      trackOAuthStep("openai", "flow_started", { source: telemetrySource });
 
       // Stop any existing server
       const existingServer = activeServers.get("openai");
@@ -493,17 +507,20 @@ export async function initializeOAuthIPC(
   // Flow: (1) check existing credentials, (2) ensure CLI installed, (3) open
   // a real terminal window with the command, (4) UI shows paste field for
   // user to copy token from terminal and paste it.
-  ipcMain.handle("auth:claude:start-oauth", async () => {
+  ipcMain.handle(
+    "auth:claude:start-oauth",
+    async (_event, options?: OAuthStartTelemetryOptions) => {
+      const telemetrySource = resolveOAuthTelemetrySource(options?.source);
     try {
       console.log("[OAuth IPC] Starting Claude OAuth flow");
       oauthFlowStartedAt.set("anthropic", Date.now());
-      trackOAuthStep("anthropic", "flow_started");
+      trackOAuthStep("anthropic", "flow_started", { source: telemetrySource });
 
       // Step 0: Check for existing token in Keychain / credential files
       const existingToken = await claudeSetupTokenService!.readTokenFromCLIStorage();
       if (existingToken) {
         console.log("[OAuth IPC] Found existing Claude token in CLI storage");
-        trackOAuthStep("anthropic", "keychain_token_found");
+        trackOAuthStep("anthropic", "keychain_token_found", { source: telemetrySource });
         const tokenInput = {
           provider: "anthropic" as const,
           accessToken: existingToken,
@@ -512,6 +529,7 @@ export async function initializeOAuthIPC(
         };
         await persistOAuthConnection("anthropic", tokenInput, {
           flow_source: "keychain",
+          source: telemetrySource,
         });
         return { success: true, source: "keychain" };
       }
@@ -520,15 +538,16 @@ export async function initializeOAuthIPC(
       const isInstalled = await claudeSetupTokenService!.isClaudeCLIInstalled();
       if (!isInstalled) {
         console.log("[OAuth IPC] Claude CLI not found, installing...");
-        trackOAuthStep("anthropic", "cli_install_started");
+        trackOAuthStep("anthropic", "cli_install_started", { source: telemetrySource });
         const installResult = await claudeSetupTokenService!.installClaudeCLI();
         if (!installResult.success) {
           console.error("[OAuth IPC] Failed to install Claude CLI:", installResult.error);
           const message = "Could not install Claude CLI. Use Manual Setup instead.";
           trackOAuthStep("anthropic", "cli_install_failed", {
+            source: telemetrySource,
             error: installResult.error,
           });
-          trackOAuthFailed("anthropic", message, { stage: "start" });
+          trackOAuthFailed("anthropic", message, { stage: "start", source: telemetrySource });
           sendOAuthStatus("anthropic", "error", message);
           return { success: false, error: "CLI install failed", fallback: "manual" };
         }
@@ -555,20 +574,24 @@ export async function initializeOAuthIPC(
         console.error("[OAuth IPC] Failed to open terminal:", termErr);
       }
 
-      trackOAuthStep("anthropic", "terminal_opened", { terminal_opened: terminalOpened });
+      trackOAuthStep("anthropic", "terminal_opened", {
+        source: telemetrySource,
+        terminal_opened: terminalOpened,
+      });
 
       return { success: true, source: "terminal-opened", terminalOpened };
     } catch (error) {
       console.error("[OAuth IPC] Failed to start Claude OAuth:", error);
       const message = error instanceof Error ? error.message : "Start OAuth failed";
-      trackOAuthFailed("anthropic", message, { stage: "start" });
+      trackOAuthFailed("anthropic", message, { stage: "start", source: telemetrySource });
       sendOAuthStatus("anthropic", "error", message);
       return {
         success: false,
         error: message,
       };
     }
-  });
+  },
+  );
 
   ipcMain.handle("auth:claude:get-status", async () => {
     try {
@@ -632,14 +655,52 @@ export async function initializeOAuthIPC(
     }
   });
 
+  ipcMain.handle(
+    "auth:claude:try-sync-from-storage",
+    async (_event, options?: OAuthStartTelemetryOptions) => {
+      const telemetrySource = resolveOAuthTelemetrySource(options?.source);
+      try {
+        const token = await claudeSetupTokenService!.readTokenFromCLIStorage();
+        if (!token) {
+          return { success: false, reason: "not_found" as const };
+        }
+
+        if (!oauthFlowStartedAt.has("anthropic")) {
+          oauthFlowStartedAt.set("anthropic", Date.now());
+        }
+
+        const tokenInput = {
+          provider: "anthropic" as const,
+          accessToken: token,
+          refreshToken: token,
+          expiresIn: 365 * 24 * 60 * 60,
+        };
+
+        await persistOAuthConnection("anthropic", tokenInput, {
+          flow_source: "keychain",
+          source: telemetrySource,
+        });
+
+        return { success: true };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Sync failed";
+        return { success: false, reason: "error" as const, error: message };
+      }
+    },
+  );
+
   // Claude OAuth: Paste token (alternative to full OAuth flow)
-  ipcMain.handle("auth:claude:paste-token", async (_event, token: string) => {
+  ipcMain.handle(
+    "auth:claude:paste-token",
+    async (_event, token: string, options?: OAuthStartTelemetryOptions) => {
+      const telemetrySource = resolveOAuthTelemetrySource(options?.source);
     try {
       console.log("[OAuth IPC] Pasting Claude OAuth token");
       if (!oauthFlowStartedAt.has("anthropic")) {
         oauthFlowStartedAt.set("anthropic", Date.now());
       }
       trackOAuthStep("anthropic", "paste_token_submitted", {
+        source: telemetrySource,
         stage: "paste",
         flow_source: "paste",
       });
@@ -674,6 +735,7 @@ export async function initializeOAuthIPC(
       await persistOAuthConnection("anthropic", tokenInput, {
         flow_source: "paste",
         stage: "paste",
+        source: telemetrySource,
       });
 
       console.log("[OAuth IPC] Claude OAuth token stored successfully");

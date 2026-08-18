@@ -76,12 +76,13 @@ describe("cloudAppHostCookies", () => {
   });
 
   it("round-trips session cookie at site root", () => {
-    const cookie = buildSessionCookie("sess_secret", false, "visitor-abc");
+    const cookie = buildSessionCookie("sess_secret", false, "visitor-abc", "dev@papr.ai");
     expect(cookie).toContain("Path=/");
     const cookiePair = cookie.split(";")[0];
     const stored = readCloudAppSessionFromCookie(cookiePair);
     expect(stored?.sessionToken).toBe("sess_secret");
     expect(stored?.externalUserId).toBe("visitor-abc");
+    expect(stored?.email).toBe("dev@papr.ai");
     expect(readSessionTokenFromCookie(cookiePair)).toBe("sess_secret");
   });
 

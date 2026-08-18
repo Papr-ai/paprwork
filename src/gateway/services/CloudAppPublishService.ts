@@ -184,18 +184,6 @@ async function buildPublishSlugCatalogForApp(
   return entries;
 }
 
-function slugifyTitle(title: string): string {
-  return slugifyPublishTitle(title);
-}
-
-function expectedSlugForApp(
-  appId: string,
-  catalogMeta: Map<string, { title: string; description: string; icon?: string }>,
-): string {
-  const appMeta = catalogMeta.get(appId);
-  return slugifyTitle(appMeta?.title ?? appId.slice(0, 8));
-}
-
 function buildConfigFromMemory(
   appId: string,
   data: PublishApiResponse | null,
@@ -280,6 +268,16 @@ export class CloudAppPublishService {
     return (await response.json()) as PublishApiResponse;
   }
 
+  /** Same slug resolution as publishApp — avoids false drift on disambiguated slugs. */
+  private async resolveExpectedPublishSlug(appId: string): Promise<string> {
+    const slugCatalog = await buildPublishSlugCatalogForApp(
+      appId,
+      this.paprDir,
+      (targetAppId) => this.fetchMemoryPublishResponse(targetAppId),
+    );
+    return resolveUniquePublishSlug(appId, slugCatalog);
+  }
+
   async republishIfPublished(appId: string): Promise<CloudPublishConfig | null> {
     const memory = await this.fetchMemoryPublishResponse(appId);
     if (!memory?.enabled) {
@@ -298,8 +296,7 @@ export class CloudAppPublishService {
         return { published: false, shareUrl: null };
       }
       const prefs = getAppPublishPrefs(appId, this.paprDir);
-      const catalogMeta = loadAppCatalogMeta(this.paprDir);
-      const expectedSlug = expectedSlugForApp(appId, catalogMeta);
+      const expectedSlug = await this.resolveExpectedPublishSlug(appId);
       const config = buildConfigFromMemory(
         appId,
         data,
@@ -334,10 +331,9 @@ export class CloudAppPublishService {
 
   async getPublishConfig(appId: string): Promise<CloudPublishConfig> {
     try {
-      const catalogMeta = loadAppCatalogMeta(this.paprDir);
-      const expectedSlug = expectedSlugForApp(appId, catalogMeta);
       const prefs = getAppPublishPrefs(appId, this.paprDir);
       const data = await this.fetchMemoryPublishResponse(appId);
+      const expectedSlug = await this.resolveExpectedPublishSlug(appId);
       const localCatalogRequirements =
         await this.resolveLocalCatalogRequirements(appId);
 
@@ -864,7 +860,7 @@ export class CloudAppPublishService {
           continue;
         }
 
-        const expectedSlug = expectedSlugForApp(appId, catalogMeta);
+        const expectedSlug = await this.resolveExpectedPublishSlug(appId);
         const localCatalogRequirements =
           await this.resolveLocalCatalogRequirements(appId);
         const drift = detectPublishDrift({

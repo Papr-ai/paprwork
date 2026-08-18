@@ -19,11 +19,12 @@ import {
   getLegacyPaprMisrouteBlockReason,
   resolvePaprAgentPath,
 } from "../utils/paprAgentPaths.js";
+import { resolveBundledResourceReadPath } from "../utils/resolveBundledResourcePath.js";
 import { resolveEditFileTarget } from "../utils/resolveEditFileTarget.js";
 
-/** Resolve ~ and rewrite legacy ~/Papr/apps → active org/namespace paths (reads/searches). */
+/** Resolve ~, Papr workspace paths, and cloud bundled agent-docs (src/resources → dist/resources). */
 function expandPath(filePath: string): string {
-  return resolvePaprAgentPath(filePath);
+  return resolveBundledResourceReadPath(resolvePaprAgentPath(filePath));
 }
 
 // ========================================

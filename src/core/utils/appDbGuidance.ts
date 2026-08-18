@@ -7,7 +7,7 @@ export const APP_DB_QUICK_REFERENCE =
   "- create_database → attach_database({ appId, dbId, alias }) → app uses sourceId on /api/db/*\n" +
   "- Mini-app reads: POST /api/db/query with { appId, sourceId, sql, params }\n" +
   "- Mini-app writes: POST /api/db/write with { appId, sourceId, sql, params } — all linked DBs are writable\n" +
-  "- Mini-app identity: GET /api/access → { isOwner, mode, canRead, canWrite } — gate admin UI; owner queries all rows\n" +
+  "- Mini-app identity: GET /api/access → { isOwner, mode, canRead, canWrite, userId?, email? } — gate admin UI; map userId to roles\n" +
   "- Anonymous apps: owner_session column + localStorage UUID; multi-user: sign-in + papr_user_id or isolation: per-user\n" +
   "- App backend: sourceId on manifest action or params.sourceId → PAPR_DB_* env vars; Python papr_db.connect(\"alias\")\n" +
   "- Jobs: create_job({ writeDbIds: [dbId] }) → PAPR_DB_{ALIAS} env vars for job scripts\n" +

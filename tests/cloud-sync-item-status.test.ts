@@ -76,4 +76,27 @@ describe("resolveGitHubItemSyncStatus", () => {
     });
     expect(report.apps.length).toBe(0);
   });
+
+  it("requires merge review when git history diverged even for metadata-only remote paths", () => {
+    const report = buildGitHubSyncItemsReport({
+      paprDir: "/tmp/unused",
+      syncedItems: {},
+      queuedPaths: [],
+      hasItemChanged: () => false,
+      gitUpdatesAvailable: true,
+      gitHistoryDiverged: true,
+      gitLocalAheadCount: 1,
+      gitRemoteBehindCount: 3,
+      gitUpdatesSummary: "228fddd cloud: scaffold workspace-chat job folder",
+      gitRemoteChangedPaths: new Set([
+        "Jobs/workspace-chat/job.json",
+        "data/jobs.json",
+      ]),
+    });
+    expect(report.gitRemoteRequiresReview).toBe(true);
+    expect(report.gitRemoteMetadataSync).toBeUndefined();
+    expect(report.gitRemoteReviewHeadline).toBe(
+      "Diverged git history (1 local commit, 3 cloud commits) — 1 cloud job status update",
+    );
+  });
 });

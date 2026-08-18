@@ -59,21 +59,24 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // OAuth API
   oauth: {
     openai: {
-      startOAuth: () => ipcRenderer.invoke("auth:openai:start-oauth"),
+      startOAuth: (options) => ipcRenderer.invoke("auth:openai:start-oauth", options),
       getStatus: () => ipcRenderer.invoke("auth:openai:get-status"),
       disconnect: () => ipcRenderer.invoke("auth:openai:disconnect"),
     },
     claude: {
-      startOAuth: () => ipcRenderer.invoke("auth:claude:start-oauth"),
+      startOAuth: (options) => ipcRenderer.invoke("auth:claude:start-oauth", options),
       getStatus: () => ipcRenderer.invoke("auth:claude:get-status"),
       disconnect: () => ipcRenderer.invoke("auth:claude:disconnect"),
-      pasteToken: (token) => ipcRenderer.invoke("auth:claude:paste-token", token),
+      pasteToken: (token, options) =>
+        ipcRenderer.invoke("auth:claude:paste-token", token, options),
+      trySyncFromStorage: (options) =>
+        ipcRenderer.invoke("auth:claude:try-sync-from-storage", options),
       getToken: () => ipcRenderer.invoke("auth:claude:get-token"),
     },
     // Generic paste token that maps providers correctly
-    pasteToken: (provider, token) => {
+    pasteToken: (provider, token, options) => {
       const channel = provider === "anthropic" ? "auth:claude:paste-token" : `auth:${provider}:paste-token`;
-      return ipcRenderer.invoke(channel, token);
+      return ipcRenderer.invoke(channel, token, options);
     },
     // Push-based auth status from main process (no polling needed)
     onAuthStatus: (callback) => {

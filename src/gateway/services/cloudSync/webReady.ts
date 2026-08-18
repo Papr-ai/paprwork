@@ -7,7 +7,10 @@ import { getPaprRoot } from "../../../core/utils/paprRoot.js";
 import { getCloudSyncService } from "../CloudSyncService.js";
 import { verifyAppPushConvergence } from "./postPushVerify.js";
 import { buildTursoSyncItemsReport } from "../tursoSyncStatus.js";
-import { loadConvergenceStateForApp } from "./convergenceChecker.js";
+import {
+  loadConvergenceStateForApp,
+  runConvergenceCheckForApp,
+} from "./convergenceChecker.js";
 
 export type WebReadyBlockReason =
   | "schema_drift"
@@ -163,13 +166,18 @@ export async function webReady(
     };
   }
 
-  const convergence = loadConvergenceStateForApp(appId, root);
-  if (convergence?.driftTables && convergence.driftTables.length > 0) {
-    return {
-      ready: false,
-      reason: "convergence_drift",
-      detail: `Drift in ${convergence.driftTables.join(", ")}`,
-    };
+  const cachedConvergence = loadConvergenceStateForApp(appId, root);
+  if (cachedConvergence?.driftTables && cachedConvergence.driftTables.length > 0) {
+    // Cached drift may be stale (e.g. after all_tables_unchanged push). Re-verify live.
+    const refreshed = await runConvergenceCheckForApp(appId, appsRoot, root);
+    const driftTables = refreshed.flatMap((entry) => entry.driftTables);
+    if (driftTables.length > 0) {
+      return {
+        ready: false,
+        reason: "convergence_drift",
+        detail: `Drift in ${driftTables.join(", ")}`,
+      };
+    }
   }
 
   if (verify.warnings.length > 0) {

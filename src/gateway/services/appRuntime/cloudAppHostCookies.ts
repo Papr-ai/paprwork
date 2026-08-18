@@ -94,6 +94,7 @@ export function buildSessionCookie(
   sessionToken: string,
   secure: boolean,
   externalUserId?: string,
+  email?: string,
 ): string {
   const secret = getCookieSigningSecret();
   const payload: Record<string, unknown> = {
@@ -103,6 +104,10 @@ export function buildSessionCookie(
   const trimmedUserId = externalUserId?.trim();
   if (trimmedUserId) {
     payload.externalUserId = trimmedUserId;
+  }
+  const trimmedEmail = email?.trim();
+  if (trimmedEmail) {
+    payload.email = trimmedEmail;
   }
   const value = encodeSignedJson(payload, secret);
   // Path=/ is required — Path=/auth only sends the cookie to /auth/* (breaks app routes).
@@ -120,6 +125,7 @@ export function clearLegacySessionCookies(secure: boolean): string[] {
 export interface CloudAppSessionCookie {
   sessionToken: string;
   externalUserId?: string;
+  email?: string;
 }
 
 export function readCloudAppSessionFromCookie(
@@ -134,14 +140,17 @@ export function readCloudAppSessionFromCookie(
     const parsed = decodeSignedJson<{
       sessionToken?: string;
       externalUserId?: string;
+      email?: string;
       exp?: number;
     }>(raw, secret);
     if (!parsed?.sessionToken || typeof parsed.exp !== "number") return undefined;
     if (parsed.exp < Date.now()) return undefined;
     const externalUserId = parsed.externalUserId?.trim();
+    const email = parsed.email?.trim();
     return {
       sessionToken: parsed.sessionToken,
       ...(externalUserId ? { externalUserId } : {}),
+      ...(email ? { email } : {}),
     };
   }
   return undefined;

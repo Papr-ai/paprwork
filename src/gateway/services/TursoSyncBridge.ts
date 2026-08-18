@@ -17,7 +17,9 @@ import { publishDbChanged } from "../utils/publishJobRunEvents.js";
 import {
   getPaprAppsRoot,
   getPaprJobsRoot,
+  getPaprRoot,
 } from "../../core/utils/paprRoot.js";
+import { readAppHasPendingLocalUpload } from "./cloudSync/pendingLocalUploads.js";
 import {
   discoverTursoLinkedSources,
   findLinkedSourceForJob,
@@ -496,17 +498,27 @@ export class TursoSyncBridge {
     const stateBeforePush = loadTursoSyncState();
     const localDirty = isJobDbDirty(syncKey, dbPath, stateBeforePush, alternateKeys);
     const bidirectional = isBidirectionalWriteAuthority(linked.writeAuthority);
+    const pendingLocalGitUpload =
+      linked.appId !== undefined &&
+      readAppHasPendingLocalUpload(linked.appId, getPaprRoot());
     let dbBackup: LocalJobDbBackup | undefined;
 
     try {
       // Bidirectional (default): merge remote via delta+LWW before push so web rows survive.
-      // Desktop-only sources skip pre-push pull when local is dirty (local wins).
-      const shouldPreMergePull = !localDirty || bidirectional;
+      // Skip pre-push pull while git code/migrations for this app are still local-only —
+      // remote Turso may lag behind unpushed schema and would clobber local agent work.
+      const shouldPreMergePull =
+        (!localDirty || bidirectional) && !pendingLocalGitUpload;
       if (shouldPreMergePull) {
         dbBackup = backupLocalJobDb(dbPath);
         await this.pullJob(syncKey, creds, {
           ...(localDirty && bidirectional ? { mergeWhileLocalDirty: true } : {}),
         });
+      } else if (pendingLocalGitUpload) {
+        console.log(
+          `[TursoSyncBridge] Skipping pre-push pull for ${syncKey} — ` +
+            `app has pending local git upload (push code first)`,
+        );
       } else {
         console.log(
           `[TursoSyncBridge] Skipping pre-push pull for ${syncKey} — ` +
@@ -665,6 +677,12 @@ export class TursoSyncBridge {
           result.lastPushedLogId,
         );
 
+        void import("./cloudSync/convergenceChecker.js").then(
+          ({ markConvergenceVerifiedForLinkedSource }) => {
+            markConvergenceVerifiedForLinkedSource(linked, getPaprRoot());
+          },
+        );
+
         void bumpSyncIndexForShortName(
           (shortName) => this.fetchCredentials(shortName),
           databaseName,
@@ -749,6 +767,12 @@ export class TursoSyncBridge {
           ledgerRemote.close();
         }
       }
+
+      void import("./cloudSync/convergenceChecker.js").then(
+        ({ markConvergenceVerifiedForLinkedSource }) => {
+          markConvergenceVerifiedForLinkedSource(linked, getPaprRoot());
+        },
+      );
 
       const target: { jobId?: string; dbId?: string } = {};
       if (linked.jobId) {

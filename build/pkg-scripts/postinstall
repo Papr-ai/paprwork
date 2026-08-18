@@ -3,6 +3,16 @@
 # Post-install script for Papr Work PKG installer
 # Opens the app after installation completes
 
+APP_PATH="/Applications/Papr Work.app"
+
+# PKG installs as root; Squirrel ShipIt auto-updates need the user to own the bundle.
+if [ -d "$APP_PATH" ]; then
+  CONSOLE_USER="$(stat -f "%Su" /dev/console 2>/dev/null || true)"
+  if [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
+    chown -R "$CONSOLE_USER:staff" "$APP_PATH"
+  fi
+fi
+
 # Wait a moment for installation to fully complete
 sleep 1
 

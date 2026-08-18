@@ -47,3 +47,24 @@ export function paprUserScope(): { external_user_id: string } | Record<string, n
   const userId = getPaprUserId();
   return userId ? { external_user_id: userId } : {};
 }
+
+/** Caller identity for GET /api/access and verified job params on desktop. */
+export function getPaprCallerIdentity(): { userId?: string; email?: string } {
+  const userId = getPaprUserId();
+  try {
+    const settingsPath = path.join(getPaprDataDir(), "settings.json");
+    const raw = fs.readFileSync(settingsPath, "utf-8");
+    const settings = JSON.parse(raw) as {
+      paprProfile?: { userId?: string; email?: string };
+      profile?: { paprUserId?: string };
+    };
+    const email = settings.paprProfile?.email?.trim() || undefined;
+    const profileUserId = settings.paprProfile?.userId?.trim();
+    return {
+      userId: userId ?? profileUserId,
+      email,
+    };
+  } catch {
+    return userId ? { userId } : {};
+  }
+}

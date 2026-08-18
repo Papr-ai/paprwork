@@ -10,7 +10,7 @@
  * - Users can skip/dismiss at any point
  */
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { INTENT_PROMPTS, INTENT_LABELS } from "../../constants/onboardingMessages";
 import { useTabs } from "../../hooks/useTabs";
 import { useChat } from "../../hooks/useChat";
@@ -29,6 +29,30 @@ import {
 } from "../../utils/onboardingState";
 import { ProviderBrandIcon } from "../Settings/ProviderBrandIcon";
 import "./OnboardingView.css";
+
+function countOnboardingProgress(state: OnboardingState): number {
+  let count = 0;
+  if (state.paprConnected) count++;
+  if (state.modelConnected) count++;
+  if (state.intent) count++;
+  if (state.firstChatSent) count++;
+  if (state.firstResultCreated) count++;
+  return count;
+}
+
+function trackOnboardingCompleted(
+  state: OnboardingState,
+  startedAtMs: number,
+  reason: "skipped" | "intent_selected" | "explore",
+): void {
+  trackEvent("paprwork_onboarding_completed", {
+    reason,
+    phase_at_exit: state.phase,
+    intent: state.intent,
+    time_spent_seconds: Math.max(0, Math.round((Date.now() - startedAtMs) / 1000)),
+    steps_completed: countOnboardingProgress(state),
+  } as Record<string, unknown>);
+}
 
 const INTENT_ICONS: Record<string, React.ReactNode> = {
   explore: (
@@ -68,6 +92,7 @@ export function OnboardingView() {
   const [checkingKeys, setCheckingKeys] = useState(true);
   const [paprLoggedIn, setPaprLoggedIn] = useState(false);
   const [checkingPapr, setCheckingPapr] = useState(true);
+  const onboardingStartedAtRef = useRef(Date.now());
 
   // Check if user has any AI model key configured
   const hasModelKey = keys.some(
@@ -146,6 +171,12 @@ export function OnboardingView() {
   useEffect(() => {
     trackEvent("paprwork_onboarding_started", { phase: state.phase } as Record<string, unknown>);
   }, []);
+
+  useEffect(() => {
+    trackEvent("paprwork_onboarding_step_viewed", {
+      step_name: state.phase,
+    } as Record<string, unknown>);
+  }, [state.phase]);
 
   const sendInNewChat = useCallback(
     async (message: string): Promise<boolean> => {
@@ -235,6 +266,7 @@ export function OnboardingView() {
         step_name: "choose_intent",
         intent: intentKey,
       } as Record<string, unknown>);
+      trackOnboardingCompleted(next, onboardingStartedAtRef.current, "explore");
 
       setTimeout(() => {
         dismissOnboarding();
@@ -254,6 +286,7 @@ export function OnboardingView() {
       step_name: "choose_intent",
       intent: intentKey,
     } as Record<string, unknown>);
+    trackOnboardingCompleted(next, onboardingStartedAtRef.current, "intent_selected");
 
     // Auto-dismiss after sending — user is now in the chat doing real work
     setTimeout(() => {
@@ -264,6 +297,7 @@ export function OnboardingView() {
 
   const handleSkip = () => {
     trackEvent("paprwork_onboarding_skipped", { phase: state.phase } as Record<string, unknown>);
+    trackOnboardingCompleted(state, onboardingStartedAtRef.current, "skipped");
     dismissOnboarding();
     window.dispatchEvent(new CustomEvent("papr-onboarding-changed"));
   };

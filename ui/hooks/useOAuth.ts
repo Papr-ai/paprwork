@@ -29,6 +29,10 @@ export interface UseOAuthOptions {
   source?: OAuthProviderSource;
 }
 
+export interface OAuthStartOptions {
+  source?: OAuthProviderSource;
+}
+
 function trackActivationModelConnected(provider: "openai" | "anthropic"): void {
   const keyName = provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
   if (!localStorage.getItem("papr-activation-model-connected")) {
@@ -110,7 +114,7 @@ export function useOAuth(
       cleanupRef.current = removeListener || null;
 
       // Start the OAuth flow
-      const result = await oauthAPI.startOAuth();
+      const result = await oauthAPI.startOAuth({ source });
 
       if (!result.success) {
         throw new Error(result.error || "OAuth flow failed");

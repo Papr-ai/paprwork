@@ -1864,13 +1864,8 @@ function setupAutoUpdater() {
 
     fastKillChildProcessesForUpdate();
 
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) {
-        win.destroy();
-      }
-    }
-
-    // Brief delay so the OS releases native module file handles before ShipIt runs.
+    // quitAndInstall must perform the quit itself. Pre-destroying windows on macOS
+    // hides the UI while the process stays alive in the dock, which can block ShipIt.
     setTimeout(() => {
       autoUpdater.quitAndInstall(false, true);
     }, 300);
@@ -2532,6 +2527,11 @@ app.on("window-all-closed", () => {
 });
 
 app.on("activate", async () => {
+  if (isInstallingUpdate) {
+    console.log("[Electron] Ignoring dock activate during update install");
+    return;
+  }
+
   // macOS: Re-create window when dock icon clicked and no windows open
   if (mainWindow === null) {
     await createMainWindow();

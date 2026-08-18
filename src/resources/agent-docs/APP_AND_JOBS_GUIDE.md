@@ -207,7 +207,8 @@ Publish access and per-user DB isolation are **independent**. A team-visible app
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/api/db/schema?appId=ID` | GET | List linked SQLite tables & columns |
-| `/api/access?appId=ID` | GET | **Caller identity** — `{ mode, isOwner, canRead, canWrite, loggedIn, appId }` for admin UI + query filters |
+| `/api/access?appId=ID` | GET | **Caller identity** — `{ mode, isOwner, canRead, canWrite, loggedIn, userId?, email?, appId }` — server-resolved when signed in; map `userId` to roles |
+| `/api/members?appId=ID` | GET | **Workspace roster** — `{ workspaceId, namespaceId?, members: [{ userId, email, displayName, role }] }` — requires Papr sign-in + app read access; use for role pickers (same `userId` as `/api/access`) |
 | `/api/db/query` | POST | **Read only** — `SELECT` / `WITH ... SELECT` on linked SQLite (INSERT/UPDATE/DELETE → **403**) |
 | `/api/db/write` | POST | **Writes** — `INSERT`, `UPDATE`, `DELETE`, `REPLACE`, `UPSERT` on linked SQLite (`?` + `params` required for values) |
 | `/api/db/exec` | POST | **DDL** — only `CREATE TABLE IF NOT EXISTS ...` (safe schema bootstrap) |
@@ -703,21 +704,46 @@ async function loadData() {
 
 ```javascript
 const access = await fetch('/api/access').then(r => r.json());
-// { mode, isOwner, canRead, canWrite, loggedIn, appId }
+// { mode, isOwner, canRead, canWrite, loggedIn, userId?, email?, appId }
+// userId + email are server-resolved when loggedIn — use userId for per-user roles
 ```
 
 | Runtime | Typical result |
 |---------|----------------|
-| Desktop Paprwork iframe | `isOwner: true`, `mode: "owner"` |
-| Cloud — publisher signed in | `isOwner: true`, `mode: "owner"` |
-| Cloud — anonymous visitor | `isOwner: false`, `mode: "public_read"` or link modes |
+| Desktop Paprwork iframe | `isOwner: true`, `mode: "owner"` — may include `userId` when Papr is signed in |
+| Cloud — publisher signed in | `isOwner: true`, `mode: "owner"`, `userId` set |
+| Cloud — team member signed in | `isOwner: false`, `mode: "team"`, `userId` set — **distinct per teammate** |
+| Cloud — anonymous visitor | `isOwner: false`, `loggedIn: false` — no `userId` / `email` |
+
+**Per-user roles (multi-user team apps):** Store a `roles` table keyed by Papr `userId` (from `/api/access`, not client input). At startup:
+
+```javascript
+const access = await fetch('/api/access').then(r => r.json());
+const role = access.loggedIn && access.userId
+  ? await lookupRole(access.userId)  // your app table: user_id → role
+  : null;
+```
+
+**Role assignment UI:** Call `GET /api/members` for a dropdown of real workspace members (`userId`, `email`, `displayName`, `role`). Requires Papr sign-in — do not free-type emails that may not exist in the workspace.
+
+```javascript
+const { members } = await fetch('/api/members').then(r => r.json());
+// members[].userId matches access.userId from /api/access
+```
+
+**Verified identity in jobs:** `POST /api/jobs/run` injects server env vars that override any client params:
+
+- `PAPR_CALLER_USER_ID` — Papr user id (when caller is signed in)
+- `PAPR_CALLER_EMAIL` — when email is known
+
+Jobs should use these for authorization — never trust a user id passed in the request body.
 
 **Pick an isolation pattern when designing schema:**
 
 | Pattern | Use when | Schema | Visitor data | Owner admin |
 |---------|----------|--------|--------------|-------------|
 | **Anonymous / shared funnel** | Public tools, no sign-in (e.g. lead-gen audit) | `owner_session TEXT` — UUID in `localStorage` | `WHERE owner_session = ?` | `access.isOwner` → query all rows; **hide admin tab** when `!isOwner` |
-| **Multi-user (sign-in)** | Per-user private data | `papr_user_id TEXT` or `create_database({ isolation: "per-user" })` | Backend action with server-resolved user id | `access.isOwner` → support / all-rows view |
+| **Multi-user (sign-in)** | Per-user private data or scoped team roles | `papr_user_id TEXT` or `create_database({ isolation: "per-user" })` | Use `access.userId` from `/api/access` or backend action — not client-supplied id | `access.isOwner` → support / all-rows view |
 
 **Security notes for agents:**
 

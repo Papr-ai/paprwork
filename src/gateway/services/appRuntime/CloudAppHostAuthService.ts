@@ -66,6 +66,10 @@ export class CloudAppHostAuthService {
     return readCloudAppSessionFromCookie(req.headers.cookie)?.externalUserId;
   }
 
+  getSessionEmail(req: Request): string | undefined {
+    return readCloudAppSessionFromCookie(req.headers.cookie)?.email;
+  }
+
   private handleStatus(req: Request, res: Response): void {
     const sessionToken = this.getSessionToken(req);
     const diagnostics = getSessionCookieDiagnostics(req.headers.cookie);
@@ -205,7 +209,7 @@ export class CloudAppHostAuthService {
       for (const clearCookie of clearLegacySessionCookies(secure)) {
         res.append("Set-Cookie", clearCookie);
       }
-      res.append("Set-Cookie", buildSessionCookie(claims.sessionToken, secure, claims.objectId));
+      res.append("Set-Cookie", buildSessionCookie(claims.sessionToken, secure, claims.objectId, claims.email));
       res.append("Set-Cookie", clearAuthPendingCookie(secure));
       // 200 + client redirect: browsers reliably persist Set-Cookie vs 302 OAuth chains.
       res.status(200).setHeader("Content-Type", "text/html; charset=utf-8");

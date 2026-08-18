@@ -29,6 +29,16 @@ export class JobDatabase {
     }
   }
 
+  /**
+   * Ensure standard job folder layout exists before run/migrations.
+   * Jobs indexed via synced jobs.json may have job.json only (no data/ yet).
+   */
+  async ensureJobDirScaffold(jobDir: string): Promise<string> {
+    await fs.mkdir(path.join(jobDir, "code"), { recursive: true });
+    await fs.mkdir(path.join(jobDir, "logs"), { recursive: true });
+    return this.ensureDatabase(jobDir);
+  }
+
   async ensureDatabase(jobDir: string): Promise<string> {
     const dataDir = path.join(jobDir, "data");
     await fs.mkdir(dataDir, { recursive: true });

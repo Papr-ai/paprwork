@@ -85,6 +85,22 @@ describe("cloudSharingSettings", () => {
     });
   });
 
+  it("maps public login plus external read link to link visibility (not community)", () => {
+    expect(
+      resolvePublishFieldsFromPrefs({
+        loginAccess: "public",
+        externalLink: "read",
+        accessMode: "link_read",
+        codeAccess: "off",
+      }),
+    ).toEqual({
+      visibility: "link_read",
+      linkPermission: "read",
+      shareLinkEnabled: true,
+      requireSignIn: true,
+    });
+  });
+
   it("does not stack overflow for public login plus external read_write link", () => {
     expect(() =>
       sharingSettingsToPublishFields({
@@ -98,9 +114,10 @@ describe("cloudSharingSettings", () => {
         externalLink: "read_write",
       }),
     ).toEqual({
-      visibility: "public_read",
+      visibility: "link_read_write",
       linkPermission: "read_write",
       shareLinkEnabled: true,
+      requireSignIn: true,
     });
   });
 

@@ -4,7 +4,10 @@
  */
 
 import type { CommunityCatalogEntry } from "../../src/core/types/communityCatalog";
-import { isTeamSharedVisibility } from "../../src/core/types/communityCatalog";
+import {
+  isLinkOnlyVisibility,
+  isTeamSharedVisibility,
+} from "../../src/core/types/communityCatalog";
 import { formatCatalogDisplayTags } from "../../src/core/utils/catalogTags";
 
 /** Tags shown on cards — human labels from publish metadata, no internal markers. */
@@ -19,6 +22,13 @@ export function getCatalogShareBadge(entry: CommunityCatalogEntry): string | nul
   }
   if (isTeamSharedVisibility(entry.visibility)) {
     return "Team app";
+  }
+  if (
+    isLinkOnlyVisibility(entry.visibility) ||
+    entry.shareLinkEnabled === true ||
+    entry.liveUrl?.includes("?t=")
+  ) {
+    return "Invite link";
   }
   if (entry.visibility === "public_read") {
     return "Public app";

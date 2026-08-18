@@ -54,7 +54,7 @@ export function visibilityRequiresPaprLogin(
   if (visibility === "private" || visibility === "team") {
     return true;
   }
-  if (visibility === "public_read" && requireSignIn === true) {
+  if (requireSignIn === true) {
     return true;
   }
   return false;

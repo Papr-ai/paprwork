@@ -170,6 +170,11 @@ export async function classifyIncomingRemoteChanges(
   if (behindCount === 0) {
     return "not_needed";
   }
+  const aheadRaw = await runGit(["rev-list", "--count", "origin/main..HEAD"]);
+  const aheadCount = parseInt(aheadRaw.trim(), 10) || 0;
+  if (isGitHistoryDiverged(aheadCount, behindCount)) {
+    return "requires_review";
+  }
   const summary = (
     await runGit(["log", "--oneline", "-30", "HEAD..origin/main"])
   ).trim();
@@ -285,6 +290,12 @@ export function isEphemeralLocalSyncStatePath(relativePath: string): boolean {
     return true;
   }
   if (normalized === "data/.turso-convergence-state.json") {
+    return true;
+  }
+  if (normalized === "data/.legacy-home-job-migration.json") {
+    return true;
+  }
+  if (normalized === "data/.gateway-sync-busy.json") {
     return true;
   }
   return false;
@@ -478,6 +489,25 @@ export function summarizeIncomingRemoteGitLog(
   };
 }
 
+/** Local and remote both have unique commits — ff-only pull/push cannot proceed silently. */
+export function isGitHistoryDiverged(
+  aheadCount: number,
+  behindCount: number,
+): boolean {
+  return aheadCount > 0 && behindCount > 0;
+}
+
+export function formatDivergedGitHistoryHeadline(
+  aheadCount: number,
+  behindCount: number,
+): string {
+  const localPart =
+    aheadCount === 1 ? "1 local commit" : `${aheadCount} local commits`;
+  const remotePart =
+    behindCount === 1 ? "1 cloud commit" : `${behindCount} cloud commits`;
+  return `Diverged git history (${localPart}, ${remotePart})`;
+}
+
 export function formatIncomingRemoteReviewBlockReason(
   summary: string | null | undefined,
   remotePaths: readonly string[],
@@ -497,9 +527,14 @@ export function inferGitRemoteReviewState(opts: {
   gitUpdatesAvailable: boolean;
   remoteChangedPaths: readonly string[] | null | undefined;
   gitUpdatesSummary: string | null | undefined;
+  /** Local and remote both have unique commits — owner must merge manually. */
+  gitHistoryDiverged?: boolean;
 }): { requiresReview: boolean; metadataSync: boolean } {
   if (!opts.gitUpdatesAvailable) {
     return { requiresReview: false, metadataSync: false };
+  }
+  if (opts.gitHistoryDiverged === true) {
+    return { requiresReview: true, metadataSync: false };
   }
   const paths = opts.remoteChangedPaths ?? [];
   const summary = opts.gitUpdatesSummary;
@@ -653,9 +688,13 @@ export async function mergeRemoteMainIntoLocal(
   if (didStash) {
     try {
       await runGitWithIndexRetry(runGit, ["stash", "pop"]);
-    } catch {
-      await runGit(["checkout", "--theirs", "."]);
-      await runGit(["stash", "drop"]);
+    } catch (err) {
+      // Never discard stashed app/job source with checkout --theirs — that silently
+      // destroys in-progress local edits when stash pop conflicts after metadata merge.
+      throw new Error(
+        `Auto-merge aborted: could not restore stashed local changes (${(err as Error).message}). ` +
+          "Run git stash list && git stash pop manually after resolving conflicts.",
+      );
     }
   }
 

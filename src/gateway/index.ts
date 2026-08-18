@@ -1080,6 +1080,11 @@ async function startGateway(): Promise<void> {
             }
           }
         }
+        const { mergeVerifiedCallerJobParams } = await import(
+          "./services/appRuntime/miniAppAccess.js"
+        );
+        const { getPaprCallerIdentity } = await import("./utils/paprUserId.js");
+        const verifiedParams = mergeVerifiedCallerJobParams(params, true, getPaprCallerIdentity());
         const jobsService = getJobsService();
         const job = await jobsService.getJob(jobId);
         if (!job) {
@@ -1088,7 +1093,7 @@ async function startGateway(): Promise<void> {
         }
         if (wait) {
           try {
-            const result = await jobsService.runJob(jobId, params);
+            const result = await jobsService.runJob(jobId, verifiedParams);
             res.json({
               jobId,
               status: result.status,
@@ -1117,7 +1122,7 @@ async function startGateway(): Promise<void> {
             throw runErr;
           }
         } else {
-          jobsService.runJob(jobId, params).catch((err: unknown) => {
+          jobsService.runJob(jobId, verifiedParams).catch((err: unknown) => {
             if (isExpectedJobRunCollision(err)) {
               const note =
                 err instanceof JobsService.DependencyRunningError
@@ -1154,9 +1159,75 @@ async function startGateway(): Promise<void> {
         const { buildLocalDesktopAccessResponse } = await import(
           "./services/appRuntime/miniAppAccess.js"
         );
-        res.json(buildLocalDesktopAccessResponse(resolved.appId));
+        const { getPaprCallerIdentity } = await import("./utils/paprUserId.js");
+        res.json(buildLocalDesktopAccessResponse(resolved.appId, getPaprCallerIdentity()));
       } catch (err) {
         console.error("[Gateway] /api/access error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.get("/api/members", async (req, res) => {
+      try {
+        const explicitAppId = req.query["appId"] as string | undefined;
+        const resolved = resolveRequestAppId(req, explicitAppId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
+          return;
+        }
+        void resolved;
+
+        const { getApiKey } = await import("./utils/keyResolver.js");
+        const { getPaprWorkspaceId, getGatewayPaprProfile } = await import(
+          "./utils/paprGatewayProfile.js"
+        );
+        const { readActiveWorkspacePointer } = await import(
+          "../core/utils/paprWorkspace.js"
+        );
+        const {
+          listMiniAppMembers,
+        } = await import("./services/appRuntime/miniAppMembers.js");
+
+        const sessionToken = await getApiKey("PAPR_SESSION_TOKEN");
+        if (!sessionToken) {
+          res.status(401).json({
+            error: "Sign in with Papr to list workspace members.",
+          });
+          return;
+        }
+
+        const workspaceId = getPaprWorkspaceId();
+        if (!workspaceId) {
+          res.status(503).json({
+            error:
+              "No Papr workspace id is available. Sign out and sign in again to refresh workspace metadata.",
+          });
+          return;
+        }
+
+        const pointer = readActiveWorkspacePointer();
+        const profile = getGatewayPaprProfile();
+        const namespaceId =
+          process.env.PAPR_NAMESPACE_ID?.trim() || pointer?.namespaceId;
+
+        const result = await listMiniAppMembers({
+          sessionToken,
+          workspaceId,
+          workspaceName: profile.paprWorkspaceName,
+          namespaceId,
+        });
+        res.json(result);
+      } catch (err) {
+        if (
+          err instanceof Error &&
+          err.name === "MiniAppMembersError" &&
+          "status" in err &&
+          typeof err.status === "number"
+        ) {
+          res.status(err.status).json({ error: err.message });
+          return;
+        }
+        console.error("[Gateway] /api/members error:", err);
         res.status(500).json({ error: (err as Error).message });
       }
     });

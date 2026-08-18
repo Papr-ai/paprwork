@@ -91,7 +91,7 @@ export interface ElectronAPI {
   // OAuth API
   oauth: {
     openai: {
-      startOAuth: () => Promise<{
+      startOAuth: (options?: { source?: "settings" | "onboarding" | "unknown" }) => Promise<{
         success: boolean;
         url?: string;
         error?: string;
@@ -106,11 +106,13 @@ export interface ElectronAPI {
       disconnect: () => Promise<{ success: boolean; error?: string }>;
     };
     claude: {
-      startOAuth: () => Promise<{
+      startOAuth: (options?: { source?: "settings" | "onboarding" | "unknown" }) => Promise<{
         success: boolean;
         url?: string;
         error?: string;
         source?: string;
+        terminalOpened?: boolean;
+        fallback?: string;
       }>;
       getStatus: () => Promise<{
         connected: boolean;
@@ -121,8 +123,19 @@ export interface ElectronAPI {
       }>;
       disconnect: () => Promise<{ success: boolean; error?: string }>;
       getToken: () => Promise<{ success: boolean; token?: string; error?: string }>;
+      trySyncFromStorage: (options?: {
+        source?: "settings" | "onboarding" | "unknown";
+      }) => Promise<{
+        success: boolean;
+        reason?: "not_found" | "error";
+        error?: string;
+      }>;
     };
-    pasteToken: (provider: string, token: string) => Promise<{ success: boolean; error?: string }>;
+    pasteToken: (
+      provider: string,
+      token: string,
+      options?: { source?: "settings" | "onboarding" | "unknown" },
+    ) => Promise<{ success: boolean; error?: string }>;
     onAuthStatus?: (callback: (data: { provider: string; status: string; error?: string }) => void) => (() => void) | undefined;
   };
 

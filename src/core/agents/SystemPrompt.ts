@@ -2164,7 +2164,8 @@ Call at startup (desktop + \`apps.papr.ai\`) to gate admin UI and choose query f
 
 \`\`\`javascript
 const access = await fetch('/api/access').then(r => r.json());
-// { mode, canRead, canWrite, loggedIn, isOwner, appId }
+// { mode, canRead, canWrite, loggedIn, isOwner, userId?, email?, appId }
+// userId + email are server-resolved when loggedIn — use userId for per-user roles
 // mode: "owner" | "team" | "link_read" | "link_read_write" | "public_read" | null
 \`\`\`
 
@@ -2181,11 +2182,13 @@ const access = await fetch('/api/access').then(r => r.json());
 | Pattern | When | Schema | Visitor queries | Owner admin |
 |---------|------|--------|-----------------|-------------|
 | **A. Anonymous / shared funnel** | Public lead-gen, no sign-in friction | \`owner_session TEXT\` (UUID in \`localStorage\`) on each row | \`WHERE owner_session = ?\` | \`access.isOwner\` → no session filter (or \`owner_user_id\`) |
-| **B. Multi-user (sign-in required)** | Private per-user data | \`papr_user_id TEXT\` or \`create_database({ isolation: "per-user" })\` | Filter by server-resolved user id via **backend action** — not client-supplied id | \`access.isOwner\` → all rows / support tools |
+| **B. Multi-user (sign-in required)** | Private per-user data or team roles (manager / IC) | \`papr_user_id TEXT\` or \`create_database({ isolation: "per-user" })\` | Use \`access.userId\` from \`GET /api/access\` or backend action — not client-supplied id | \`access.isOwner\` → all rows / support tools |
 
 **Pattern A security (important):** \`owner_session\` in \`localStorage\` is **UX isolation**, not cryptography. A motivated user can tamper with session id or run \`SELECT * FROM table\` via DevTools on \`public_read\` apps. UUID guessing is impractical; **unfiltered SQL** is the real risk — use **backend actions** for sensitive reads, or publish as **link/team** (sign-in) instead of \`public_read\`.
 
-**Pattern B (stronger):** Publish with \`link_read_write\` / \`team\` so visitors sign in; identity comes from Papr session. Prefer \`POST /api/app/backend/:action\` that ignores client \`userId\` params and uses server auth.
+**Pattern B (stronger):** Publish with \`link_read_write\` / \`team\` so visitors sign in; identity comes from Papr session via \`GET /api/access\` (\`access.userId\`). Prefer \`POST /api/app/backend/:action\` or jobs with \`PAPR_CALLER_USER_ID\` — never trust client \`userId\` params.
+
+**Role assignment:** Use \`GET /api/members\` for admin pickers — returns real workspace members keyed by \`userId\` (not free-text email). Flag roster rows whose \`userId\` is missing from \`members\`.
 
 ### Three platform concepts (orthogonal)
 
@@ -2390,7 +2393,8 @@ Mini-apps **can** persist to linked job SQLite databases. The gateway splits thi
 
 | Endpoint | Allowed SQL |
 |----------|-------------|
-| \`GET /api/access?appId=...\` | Caller \`{ mode, isOwner, canRead, canWrite, loggedIn }\` — gate admin UI + row filters (see Multi-user section) |
+| \`GET /api/access?appId=...\` | Caller \`{ mode, isOwner, canRead, canWrite, loggedIn, userId?, email? }\` — gate admin UI + row filters (see Multi-user section) |
+| \`GET /api/members?appId=...\` | Workspace roster \`{ members: [{ userId, email, displayName, role }] }\` — role pickers; requires sign-in (same \`userId\` as access) |
 | \`GET /api/db/schema?appId=...\` | List tables/columns for linked sources |
 | \`POST /api/db/query\` | **Only** \`SELECT\` and \`WITH ... SELECT\` |
 | \`POST /api/db/write\` | \`INSERT\`, \`UPDATE\`, \`DELETE\`, \`REPLACE\`, \`UPSERT\` — use \`?\` placeholders and a \`params\` array for any user-supplied values |

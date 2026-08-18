@@ -24,6 +24,8 @@ export type OAuthProviderStep =
   | "cli_install_started"
   | "cli_install_failed"
   | "terminal_opened"
+  | "manual_setup_clicked"
+  | "paste_field_shown"
   | "paste_token_submitted";
 
 export const OPENAI_OAUTH_STEP_EVENT = "paprwork_openai_oauth_step" as const;

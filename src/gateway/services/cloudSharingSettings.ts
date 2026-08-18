@@ -73,7 +73,10 @@ export function accessModeToSharingSettings(
 export function sharingSettingsToAccessMode(
   settings: CloudSharingSettings,
 ): CloudAccessMode {
-  if (settings.externalLink !== "off" && settings.loginAccess === "none") {
+  if (settings.externalLink !== "off") {
+    if (settings.loginAccess === "team") {
+      return "team";
+    }
     return settings.externalLink === "read_write" ? "link_read_write" : "link_read";
   }
   if (settings.loginAccess === "public") {
@@ -96,18 +99,20 @@ export function audienceModelToPublishFields(
   if (model.audience === "link") {
     const linkPermission = liveLinkPermissionForAudienceModel(model);
     const loginAccess = actualSharing?.loginAccess ?? sharing.loginAccess;
-    if (model.requireSignIn !== false && loginAccess !== "none") {
+    const linkVisibility =
+      linkPermission === "read_write" ? "link_read_write" : "link_read";
+    if (loginAccess === "team") {
       return {
-        visibility: loginAccess === "team" ? "team" : "public_read",
+        visibility: "team",
         linkPermission,
         shareLinkEnabled: externalLink !== "off",
       };
     }
     return {
-      visibility:
-        linkPermission === "read_write" ? "link_read_write" : "link_read",
+      visibility: linkVisibility,
       linkPermission,
       shareLinkEnabled: true,
+      ...(model.requireSignIn !== false ? { requireSignIn: true } : {}),
     };
   }
 
@@ -206,6 +211,7 @@ export function resolveSharingSettings(input: {
   loginAccess?: CloudLoginAccess;
   externalLink?: CloudExternalLink;
   accessMode?: CloudAccessMode;
+  shareToken?: string;
 }): CloudSharingSettings {
   if (input.loginAccess !== undefined || input.externalLink !== undefined) {
     return {
@@ -213,7 +219,15 @@ export function resolveSharingSettings(input: {
       externalLink: normalizeExternalLink(input.externalLink),
     };
   }
-  return accessModeToSharingSettings(input.accessMode ?? "private");
+  const fromAccessMode = accessModeToSharingSettings(input.accessMode ?? "private");
+  if (
+    input.accessMode === "public_read" &&
+    input.shareToken?.trim() &&
+    fromAccessMode.externalLink === "off"
+  ) {
+    return { loginAccess: "public", externalLink: "read" };
+  }
+  return fromAccessMode;
 }
 
 export function sharingSettingsSummary(settings: CloudSharingSettings): string {
