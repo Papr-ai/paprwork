@@ -30,6 +30,7 @@ import {
   clearPaprWorkspaceCache,
   readCachedNamespaces,
   readCachedWorkspaces,
+  resolveAuthoritativeWorkspaceId,
   writeCachedNamespaces,
   writeCachedWorkspaces,
   type CachedWorkspace,
@@ -1357,12 +1358,26 @@ async function syncActiveWorkspaceOrganization(
   settingsStorage: SettingsStorage,
   customKeysStorage: CustomKeysStorage,
 ): Promise<UserWorkspaceOption | undefined> {
-  const activeWorkspaceId =
+  const requestedWorkspaceId =
     profile.workspaceId ||
     workspaces.find((workspace) => workspace.isSelected)?.workspaceId ||
     workspaces[0]?.workspaceId;
-  if (!activeWorkspaceId) {
+  if (!requestedWorkspaceId) {
     return undefined;
+  }
+
+  // The stored pointer can name a duplicate the switcher no longer shows, which
+  // leaves billing and the team list on a one-member shell while the list shows
+  // the real workspace. Route it through the same ranking so both agree, and so
+  // the write below heals the stored value.
+  const activeWorkspaceId = resolveAuthoritativeWorkspaceId(
+    workspaces.map(toCachedWorkspace),
+    requestedWorkspaceId,
+  );
+  if (activeWorkspaceId !== requestedWorkspaceId) {
+    console.log(
+      `[PaprLogin] Remapped active workspace ${requestedWorkspaceId} → ${activeWorkspaceId} (duplicate of the same org + namespace)`,
+    );
   }
 
   const active = workspaces.find((workspace) => workspace.workspaceId === activeWorkspaceId);
