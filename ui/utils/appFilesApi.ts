@@ -33,11 +33,52 @@ async function call<T>(path: string, body?: unknown): Promise<T> {
   return (await res.json()) as T;
 }
 
+export type AppFileLocation =
+  | { kind: "local"; path: string }
+  | { kind: "cloud"; objectKey: string }
+  | { kind: "unavailable"; reason: string };
+
 export async function listAppFiles(appId: string): Promise<AppFileRow[]> {
   const body = await call<{ files: AppFileRow[] }>(
     `/api/files?appId=${encodeURIComponent(appId)}`,
   );
   return body.files ?? [];
+}
+
+export function appFileContentUrl(appId: string, id: string, download = false): string {
+  const suffix = download ? "&download=1" : "";
+  return `${GATEWAY}/api/files/content?appId=${encodeURIComponent(appId)}&id=${encodeURIComponent(id)}${suffix}`;
+}
+
+export async function resolveAppFileUrl(
+  appId: string,
+  id: string,
+  download = false,
+): Promise<{ location: AppFileLocation; url?: string }> {
+  return call(`/api/files/url`, { appId, id, download });
+}
+
+/** Download without buffering multi-GB files in the renderer. */
+export async function downloadAppFile(appId: string, file: AppFileRow): Promise<void> {
+  const resolved = await resolveAppFileUrl(appId, file.id, true);
+  const href =
+    resolved.location.kind === "local"
+      ? appFileContentUrl(appId, file.id, true)
+      : resolved.url;
+  if (!href) {
+    const reason = resolved.location.kind === "unavailable"
+      ? resolved.location.reason
+      : "No readable copy is available.";
+    throw new Error(reason);
+  }
+
+  const anchor = document.createElement("a");
+  anchor.href = href;
+  anchor.download = file.file_name;
+  anchor.rel = "noopener";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
 }
 
 export async function uploadAppFile(

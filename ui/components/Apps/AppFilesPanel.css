@@ -74,8 +74,14 @@
   border-radius: 6px;
 }
 
-.app-file:hover {
+.app-file:hover,
+.app-file--selected {
   background: var(--background-hover);
+}
+
+.app-file:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
 }
 
 .app-file--busy {

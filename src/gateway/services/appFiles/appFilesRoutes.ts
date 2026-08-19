@@ -14,6 +14,7 @@ import {
   commitBrowserUpload,
   createBrowserTicket,
   ensureSchema,
+  getFile,
   listFiles,
   removeFile,
   resolveFileUrl,
@@ -227,10 +228,11 @@ export function registerAppFilesRoutes(
   /** Resolve a file to a readable URL — local path or short-lived signed URL. */
   app.post("/api/files/url", async (req, res) => {
     try {
-      const { appId, sourceId, id } = req.body as {
+      const { appId, sourceId, id, download } = req.body as {
         appId?: string;
         sourceId?: string;
         id?: string;
+        download?: boolean;
       };
       if (!id) {
         res.status(400).json({ error: "id is required" });
@@ -244,7 +246,7 @@ export function registerAppFilesRoutes(
         return;
       }
       const db = await dbFor(resolved.appId, sourceId, deps);
-      res.json(await resolveFileUrl(db, id));
+      res.json(await resolveFileUrl(db, id, { download }));
     } catch (err) {
       fail(res, err);
     }
@@ -371,6 +373,7 @@ export function registerAppFilesRoutes(
       }
 
       const db = await dbFor(resolved.appId, sourceId, deps);
+      const row = await getFile(db, id);
       const { location } = await resolveFileUrl(db, id);
       if (location.kind !== "local") {
         // Cloud files are served by a signed URL, and unavailable ones have no
@@ -384,7 +387,11 @@ export function registerAppFilesRoutes(
         return;
       }
 
-      res.sendFile(location.path);
+      if (req.query.download === "1") {
+        res.download(location.path, row?.file_name || "download");
+      } else {
+        res.sendFile(location.path);
+      }
     } catch (err) {
       fail(res, err);
     }

@@ -21,6 +21,8 @@ import {
 interface AppFileRowItemProps {
   file: AppFileRow;
   busy: boolean;
+  selected: boolean;
+  onSelect: () => void;
   onTogglePrivate: (isPrivate: boolean) => void;
   onEvict: () => void;
   onRemove: () => void;
@@ -62,6 +64,8 @@ function LockIcon({ locked }: { locked: boolean }) {
 export function AppFileRowItem({
   file,
   busy,
+  selected,
+  onSelect,
   onTogglePrivate,
   onEvict,
   onRemove,
@@ -70,7 +74,19 @@ export function AppFileRowItem({
   const percent = uploadPercent(file);
 
   return (
-    <li className={`app-file${busy ? " app-file--busy" : ""}`}>
+    <li
+      className={`app-file${busy ? " app-file--busy" : ""}${selected ? " app-file--selected" : ""}`}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-selected={selected}
+    >
       <StateDot file={file} />
 
       <span className="app-file__name" title={file.file_name}>
@@ -87,7 +103,10 @@ export function AppFileRowItem({
           className={`app-file__icon${isPrivate ? " app-file__icon--on" : ""}`}
           disabled={busy}
           aria-pressed={isPrivate}
-          onClick={() => onTogglePrivate(!isPrivate)}
+          onClick={(event) => {
+            event.stopPropagation();
+            onTogglePrivate(!isPrivate);
+          }}
           title={isPrivate ? "Private — never published" : "Published with the app"}
         >
           <LockIcon locked={isPrivate} />
@@ -98,7 +117,10 @@ export function AppFileRowItem({
             type="button"
             className="app-file__text-action"
             disabled={busy}
-            onClick={onEvict}
+            onClick={(event) => {
+              event.stopPropagation();
+              onEvict();
+            }}
             title="Delete the copy on this Mac. The cloud copy is kept."
           >
             Free
@@ -109,7 +131,10 @@ export function AppFileRowItem({
           type="button"
           className="app-file__text-action app-file__text-action--danger"
           disabled={busy}
-          onClick={onRemove}
+          onClick={(event) => {
+            event.stopPropagation();
+            onRemove();
+          }}
           title="Delete everywhere"
         >
           Remove
