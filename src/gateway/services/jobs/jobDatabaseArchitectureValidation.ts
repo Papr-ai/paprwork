@@ -121,11 +121,30 @@ export function validateJobAgainstAppDatabase(
   }
 
   try {
-    const tables = new Set(
-      (db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table','view')").all() as Array<{ name: string }>).map(
-        (row) => row.name.toLowerCase(),
-      ),
-    );
+    let tables: Set<string>;
+    try {
+      tables = new Set(
+        (db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table','view')").all() as Array<{ name: string }>).map(
+          (row) => row.name.toLowerCase(),
+        ),
+      );
+    } catch (error) {
+      // new Database() only opens a file handle — SQLite does not read the
+      // header until the first statement. A non-SQLite or corrupt file
+      // therefore throws HERE (SQLITE_NOTADB), not at open. Left uncaught this
+      // escapes as a raw SqliteError, which the scheduler does not recognise as
+      // an architecture failure, so it never advances nextRunAt and retries the
+      // job several times per second forever.
+      return [
+        {
+          rule: "primary-database-unopenable",
+          severity: "error",
+          message: `Cannot read primary app database at ${input.databasePath}: ${(error as Error).message}`,
+          remediation:
+            "The linked file is not a valid SQLite database. Re-link the job with link_app_data_source({ appId, jobId }), or recreate the database with create_database.",
+        },
+      ];
+    }
     const created = names(CREATED_TABLE, text);
     const referenced = names(TABLE_REFERENCE, text);
     const columnsByTable = referencedColumns(text);

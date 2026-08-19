@@ -38,6 +38,7 @@ import {
   readSyncLogSince,
   remoteSyncLogExists,
   warnIfLocalSyncLogLarge,
+  withRemoteSyncMuted,
   withSyncMuted,
   withSyncMutedAsync,
 } from "./tursoSyncLog.js";
@@ -833,7 +834,12 @@ async function pushAllPendingDeltas(
       break;
     }
 
-    const batchTouched = await pushDeltaToRemote(localDb, remote, batch);
+    // Muted: the row writes are ours. The changelog is mirrored explicitly
+    // below (one entry per genuine local change) instead of being regenerated
+    // by remote CDC, which would duplicate every row we just wrote.
+    const batchTouched = await withRemoteSyncMuted(remote, () =>
+      pushDeltaToRemote(localDb, remote, batch),
+    );
     for (const tableName of batchTouched) {
       touchedSet.add(tableName);
     }
@@ -1048,9 +1054,14 @@ export async function pushLocalDbToTurso(
     }
 
     if (bootstrap) {
-      const syncedRemote = await syncTablesToRemote(
-        remote,
-        tableNames.map((name) => readLocalTable(localDb, name)),
+      // Muted: a full snapshot is OUR write, not a cloud-side user edit. Without
+      // the mute every replaced row is re-captured by remote CDC and replayed on
+      // the next sync (changelog amplification → oversized batches → failures).
+      const syncedRemote = await withRemoteSyncMuted(remote, () =>
+        syncTablesToRemote(
+          remote,
+          tableNames.map((name) => readLocalTable(localDb, name)),
+        ),
       );
       await ensureRemoteSyncInfrastructure(remote);
       for (const tableName of tableNames) {
@@ -1106,17 +1117,23 @@ export async function pushLocalDbToTurso(
     ];
     if (tablesNeedingSchema.length > 0) {
       await ensureRemoteSyncInfrastructure(remote);
-      for (const tableName of tablesNeedingSchema) {
-        await prepareRemoteTableForSync(remote, localDb, tableName);
-      }
+      // Schema migration rebuilds tables server-side (copy rows into a new
+      // shape). Muted so the rebuild is not mistaken for user edits.
+      await withRemoteSyncMuted(remote, async () => {
+        for (const tableName of tablesNeedingSchema) {
+          await prepareRemoteTableForSync(remote, localDb, tableName);
+        }
+      });
     }
 
     // Safety net: delta path must not touch rows on tables that do not exist remotely yet.
     if (!bootstrap && missingOnRemote.length > 0) {
       await ensureRemoteSyncInfrastructure(remote);
-      for (const tableName of missingOnRemote) {
-        await prepareRemoteTableForSync(remote, localDb, tableName);
-      }
+      await withRemoteSyncMuted(remote, async () => {
+        for (const tableName of missingOnRemote) {
+          await prepareRemoteTableForSync(remote, localDb, tableName);
+        }
+      });
     }
 
     if (pendingEntries.length > 0 || pendingLogCount > 0) {
@@ -1159,9 +1176,13 @@ export async function pushLocalDbToTurso(
     await ensureRemoteSyncInfrastructure(remote);
     const snapshotTables =
       tablesNeedingSchema.length > 0 ? tablesNeedingSchema : changed;
-    const syncedRemote = await syncTablesToRemote(
-      remote,
-      snapshotTables.map((name) => readLocalTable(localDb, name)),
+    // Muted for the same reason as bootstrap: this is a platform-owned
+    // reconciliation write, not a cloud-side user edit.
+    const syncedRemote = await withRemoteSyncMuted(remote, () =>
+      syncTablesToRemote(
+        remote,
+        snapshotTables.map((name) => readLocalTable(localDb, name)),
+      ),
     );
     for (const tableName of snapshotTables) {
       const columns = readTableSchema(localDb, tableName);

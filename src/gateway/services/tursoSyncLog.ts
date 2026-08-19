@@ -186,6 +186,62 @@ export async function ensureRemoteSyncInfrastructure(remote: Client): Promise<vo
   );
 }
 
+/**
+ * Never let the counter go negative — a stuck-negative depth also breaks CDC.
+ *
+ * Built lazily: this module and tursoSyncBridgeCore import each other, so at
+ * module-evaluation time `quoteIdent` may not be initialised yet. A top-level
+ * template literal here throws "quoteIdent is not a function" and takes the
+ * whole import graph down.
+ */
+function muteReleaseSql(): string {
+  return (
+    `UPDATE ${quoteIdent(SYNC_MUTE_TABLE)} SET depth = MAX(depth - 1, 0) ` +
+    `WHERE id = ${MUTE_ROW_ID}`
+  );
+}
+
+const REMOTE_MUTE_RELEASE_ATTEMPTS = 3;
+
+/**
+ * Suppress Turso CDC while Paprwork applies its own snapshot/delta/schema writes.
+ * Genuine local changes are mirrored explicitly after the muted write. Without
+ * this guard, every platform upsert is captured as a new cloud-side change and
+ * the next sync replays it again, creating an unbounded feedback loop.
+ */
+export async function withRemoteSyncMuted<T>(
+  remote: Client,
+  fn: () => Promise<T>,
+): Promise<T> {
+  await ensureRemoteSyncInfrastructure(remote);
+  await remote.execute(
+    `UPDATE ${quoteIdent(SYNC_MUTE_TABLE)} SET depth = depth + 1 WHERE id = ${MUTE_ROW_ID}`,
+  );
+  try {
+    return await fn();
+  } finally {
+    let released = false;
+    for (let attempt = 1; attempt <= REMOTE_MUTE_RELEASE_ATTEMPTS; attempt += 1) {
+      try {
+        await remote.execute(muteReleaseSql());
+        released = true;
+        break;
+      } catch (error) {
+        if (attempt === REMOTE_MUTE_RELEASE_ATTEMPTS) {
+          console.error("[tursoSyncLog] failed to release remote sync mute", error);
+        } else {
+          await new Promise((resolve) => setTimeout(resolve, attempt * 100));
+        }
+      }
+    }
+    if (!released) {
+      console.error(
+        "[tursoSyncLog] remote CDC may remain muted; next sync must repair the mute depth",
+      );
+    }
+  }
+}
+
 function triggerExists(db: Database.Database, name: string): boolean {
   const row = db
     .prepare(
@@ -449,11 +505,6 @@ export async function ensureRemoteTableSyncTriggers(
   return true;
 }
 
-/** Never let the counter go negative — a stuck-negative depth also breaks CDC. */
-const MUTE_RELEASE_SQL =
-  `UPDATE ${quoteIdent(SYNC_MUTE_TABLE)} SET depth = MAX(depth - 1, 0) ` +
-  `WHERE id = ${MUTE_ROW_ID}`;
-
 export function withSyncMuted<T>(db: Database.Database, fn: () => T): T {
   ensureLocalSyncInfrastructure(db);
   db.exec(
@@ -464,7 +515,7 @@ export function withSyncMuted<T>(db: Database.Database, fn: () => T): T {
   } finally {
     // Must not throw: an error here would leak the mute and silently disable CDC.
     try {
-      db.exec(MUTE_RELEASE_SQL);
+      db.exec(muteReleaseSql());
     } catch (error) {
       console.error("[tursoSyncLog] failed to release sync mute", error);
     }
@@ -484,7 +535,7 @@ export async function withSyncMutedAsync<T>(
   } finally {
     // Must not throw: an error here would leak the mute and silently disable CDC.
     try {
-      db.exec(MUTE_RELEASE_SQL);
+      db.exec(muteReleaseSql());
     } catch (error) {
       console.error("[tursoSyncLog] failed to release sync mute", error);
     }
@@ -667,10 +718,41 @@ export const REMOTE_LOG_COMPACT_MIN_ENTRIES = 1_000;
  * insurance for consumers not yet tracked in sync state (e.g. a second device). */
 export const REMOTE_LOG_RETENTION_DAYS = 7;
 
+/**
+ * Hard ceiling on remote changelog size. Above this the retention floor is
+ * waived for entries at or below the watermark.
+ *
+ * The 7-day floor assumes the log only grows from real user edits. Amplified
+ * churn (schema reconcile + snapshot replays) can add tens of thousands of
+ * same-day entries, which the floor refuses to touch — so the log grows without
+ * bound, every pull drags the whole backlog, and pushes fail on oversized
+ * requests. Entries below the watermark are already pushed AND pulled, so
+ * dropping them loses nothing; stale consumers still detect the gap through
+ * compacted_through_id and full-resync.
+ */
+export const REMOTE_LOG_HARD_CEILING = 25_000;
+
 export interface RemoteLogCompactionResult {
   compacted: boolean;
   throughId?: number;
   reason?: string;
+  /** True when the retention floor was waived because of the hard ceiling. */
+  ceilingOverride?: boolean;
+}
+
+/** Total rows in the remote changelog (undefined when unreadable). */
+export async function readRemoteSyncLogCount(
+  remote: Client,
+): Promise<number | undefined> {
+  try {
+    const result = await remote.execute(
+      `SELECT COUNT(*) AS count FROM ${quoteIdent(SYNC_LOG_TABLE)}`,
+    );
+    const count = Number(result.rows[0]?.count);
+    return Number.isFinite(count) ? count : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -736,9 +818,29 @@ export async function compactRemoteSyncLog(
         `WHERE id <= ? AND changed_at <= datetime('now', ?)`,
       args: [watermarkId, `-${retentionDays} days`],
     });
-    const boundary = Number(boundaryResult.rows[0]?.boundary ?? 0);
+    let boundary = Number(boundaryResult.rows[0]?.boundary ?? 0);
+    let ceilingOverride = false;
+
     if (!Number.isFinite(boundary) || boundary <= compactedThrough) {
-      return { compacted: false, reason: "retention_floor" };
+      // Nothing is old enough to retire. Normally correct — but a log that has
+      // blown past the hard ceiling is pathological (amplified churn, not user
+      // edits) and will keep degrading every sync. Everything at or below the
+      // watermark has already been pushed and pulled, so retire it anyway.
+      const logCount = await readRemoteSyncLogCount(remote);
+      if (logCount === undefined || logCount < REMOTE_LOG_HARD_CEILING) {
+        return { compacted: false, reason: "retention_floor" };
+      }
+      boundary = watermarkId;
+      ceilingOverride = true;
+      console.warn(
+        `[tursoSyncLog] remote changelog at ${logCount} entries exceeds ceiling ` +
+          `${REMOTE_LOG_HARD_CEILING}; waiving ${retentionDays}-day retention and ` +
+          `compacting through id ${boundary}. Usually means platform writes were ` +
+          `recaptured by remote CDC (see withRemoteSyncMuted).`,
+      );
+      if (boundary <= compactedThrough) {
+        return { compacted: false, reason: "retention_floor" };
+      }
     }
     await ensureRemoteCompactionMeta(remote);
     // Marker first, then delete, in one atomic batch: a consumer must never
@@ -759,7 +861,11 @@ export async function compactRemoteSyncLog(
       ],
       "write",
     );
-    return { compacted: true, throughId: boundary };
+    return {
+      compacted: true,
+      throughId: boundary,
+      ...(ceilingOverride ? { ceilingOverride: true } : {}),
+    };
   } catch {
     return { compacted: false, reason: "error" };
   }
