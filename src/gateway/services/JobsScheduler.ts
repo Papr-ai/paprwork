@@ -212,9 +212,26 @@ export class JobsScheduler {
             );
             const err =
               error instanceof Error ? error : new Error(String(error));
-            const isArchitectureValidationFailure = err.message.includes(
-              "Job architecture validation failed",
-            );
+            // A corrupt/non-SQLite linked database throws SQLITE_NOTADB from
+            // deep inside validation. That is a permanent configuration fault,
+            // not a transient run failure: if the schedule is not advanced the
+            // job stays due and relaunches on every tick (several times per
+            // second), starving the gateway. Treat it like an architecture
+            // failure so nextRunAt moves forward.
+            const isUnusableDatabase =
+              (error as { code?: string })?.code === "SQLITE_NOTADB" ||
+              /file is not a database|database disk image is malformed|malformed database schema/i.test(
+                err.message,
+              );
+            const isArchitectureValidationFailure =
+              err.message.includes("Job architecture validation failed") ||
+              isUnusableDatabase;
+            if (isUnusableDatabase) {
+              console.error(
+                `[JobsScheduler] Job ${job.id} is linked to an unusable database — ` +
+                  `advancing schedule to stop retry storm. Re-link or recreate the database.`,
+              );
+            }
             if (isArchitectureValidationFailure) {
               const latest = await jobsService.getJob(job.id);
               if (latest?.schedule?.enabled && latest.schedule) {
