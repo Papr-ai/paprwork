@@ -48,13 +48,14 @@ export function graphqlStringEq(field: string, value: string): string | null {
   return `${field}: { eq: "${escapeGraphQL(safe)}" }`;
 }
 
-/** Aura GraphQL list filters use `field_CONTAINS`, not `{ field: { contains } }`. */
+/** Memory GraphQL uses StringScalarFilters: `{ name: { contains: "..." } }`. */
 export function graphqlNameContainsWhere(label: string): string | null {
   const safe = sanitizeGraphQLFilterValue(label);
   if (!safe) {
     return null;
   }
-  return `{ name_CONTAINS: "${escapeGraphQL(safe)}" }`;
+  // StringScalarFilters nested form — name_CONTAINS is not a valid *Where field.
+  return `{ name: { contains: "${escapeGraphQL(safe)}" } }`;
 }
 
 /** Validate an inline selection set fragment before wrapping in `{ ... }`. */
@@ -66,9 +67,11 @@ export function assertValidWikiGraphQLSelection(query: string): void {
   if (/^\s*(mutation|subscription)\b/i.test(trimmed)) {
     throw new Error("Wiki GraphQL supports read queries only");
   }
-  if (/:\s*\{\s*contains\s*:/i.test(trimmed)) {
-    throw new Error("Use field_CONTAINS instead of nested contains filters");
-  }
+  // NOTE: nested `{ contains: "..." }` is the CORRECT server syntax.
+  // The memory GraphQL API exposes StringScalarFilters { eq, in, contains,
+  // startsWith, endsWith }, so `where: { name: { contains: "Dria" } }` is valid
+  // and `name_CONTAINS` does NOT exist on *Where types. A previous guard here
+  // rejected the valid form and pushed callers toward a field that 400s.
   if (/[\r\n]/.test(trimmed)) {
     throw new Error("GraphQL selection must not contain raw newlines");
   }

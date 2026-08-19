@@ -18,6 +18,9 @@ vi.mock("../src/core/tools/paprClient.js", () => ({
 
 vi.mock("../src/gateway/utils/paprUserId.js", () => ({
   paprUserScope: vi.fn(() => ({ external_user_id: "user-test-1" })),
+  getPaprUserId: vi.fn(() => "user-test-1"),
+  getPaprCallerIdentity: vi.fn(() => ({ userId: "user-test-1" })),
+  invalidatePaprUserIdCache: vi.fn(),
 }));
 
 describe("papr memory feedback", () => {
