@@ -13,6 +13,29 @@ export const GET_NAMESPACE_API_KEYS = `
   }
 `;
 
+/**
+ * Everything needed to decide whether a workspace may be claimed by a new org.
+ *
+ * memberCount is a plain field on WorkSpace, so it survives the ACL filtering
+ * that can null out the organization pointer for a member who is missing the
+ * workspace role. A shared workspace must never be repointed during one user's
+ * provisioning, even when its organization reads as null.
+ */
+export const GET_WORKSPACE_ORG_CLAIM_STATE = `
+  query GetWorkspaceOrgClaimState($workspaceId: ID!) {
+    workSpace(id: $workspaceId) {
+      objectId
+      workspace_name
+      memberCount
+      followerCount
+      organization {
+        objectId
+        name
+      }
+    }
+  }
+`;
+
 export const UPDATE_WORKSPACE_ORG = `
   mutation UpdateWorkspaceOrganization(
     $workspaceId: ID!,

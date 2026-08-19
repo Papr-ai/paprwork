@@ -142,14 +142,27 @@ export function sanitizeProvisioningName(
 export type ProvisioningPlanKind =
   | "none"
   | "namespace_only"
-  | "org_and_namespace";
+  | "org_and_namespace"
+  | "deferred";
+
+/**
+ * Whether the selected workspace already belongs to an organization.
+ *
+ * "unknown" matters: a member whose role grant is missing gets the organization
+ * pointer stripped by ACL, which is indistinguishable from a workspace that
+ * genuinely has no org. Treating that as "absent" is what caused shared
+ * workspaces to be repointed at a brand new personal org.
+ */
+export type WorkspaceOrganizationState = "present" | "absent" | "unknown";
 
 export interface ProvisioningPlanInput {
   workspaceId?: string;
-  workspaceHasOrganization: boolean;
+  workspaceOrganization: WorkspaceOrganizationState;
   workspaceOrgHasDefaultNamespace: boolean;
   developerOrgId?: string;
   developerOrgHasDefaultNamespace: boolean;
+  /** True when the developer org lookup errored, so `developerOrgId` proves nothing. */
+  developerOrgLookupFailed?: boolean;
 }
 
 export interface ProvisioningPlan {
@@ -160,7 +173,13 @@ export interface ProvisioningPlan {
 
 /** Pure decision tree mirroring provisionOrGetApiKey — easy to unit test. */
 export function resolveProvisioningPlan(input: ProvisioningPlanInput): ProvisioningPlan {
-  if (input.workspaceId && input.workspaceHasOrganization) {
+  if (input.workspaceId && input.workspaceOrganization === "unknown") {
+    // Fail closed. Creating an org here would claim a workspace that may
+    // already belong to someone else's organization.
+    return { kind: "deferred", needsOrg: false, needsNamespace: false };
+  }
+
+  if (input.workspaceId && input.workspaceOrganization === "present") {
     if (input.workspaceOrgHasDefaultNamespace) {
       return { kind: "none", needsOrg: false, needsNamespace: false };
     }
@@ -174,9 +193,19 @@ export function resolveProvisioningPlan(input: ProvisioningPlanInput): Provision
     return { kind: "namespace_only", needsOrg: false, needsNamespace: true };
   }
 
+  if (input.developerOrgLookupFailed) {
+    // The user may already own an org we simply could not read.
+    return { kind: "deferred", needsOrg: false, needsNamespace: false };
+  }
+
   return { kind: "org_and_namespace", needsOrg: true, needsNamespace: true };
 }
 
 export function isProvisioningSetupRequired(plan: ProvisioningPlan): boolean {
-  return plan.kind !== "none";
+  return plan.kind !== "none" && plan.kind !== "deferred";
+}
+
+/** True when workspace state could not be read and provisioning must not run. */
+export function isProvisioningDeferred(plan: ProvisioningPlan): boolean {
+  return plan.kind === "deferred";
 }
