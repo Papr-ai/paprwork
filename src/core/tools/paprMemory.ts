@@ -316,7 +316,8 @@ export interface SearchAgentMemoryToolResult {
   searchId: string | null;
   memoryCount: number;
   nodeCount: number;
-  data: SearchResponse;
+  /** Raw SDK payload — a TOON string when response_format="toon". */
+  data: SearchResponse | string;
   /** Agent-visible reminder — include literal searchId for submit_memory_feedback */
   _memoryFeedbackReminder: string;
 }
@@ -343,12 +344,76 @@ function buildMemoryFeedbackReminder(
   );
 }
 
+/**
+ * TOON responses arrive as a plain string in `data` (not a SearchResult object), so
+ * `response.data?.memories` and `response.search_id` are both undefined. Recover the
+ * counters from the TOON envelope: `memories[#25]:` / `nodes[#3]:` / `search_id: <uuid>`.
+ */
+function parseToonEnvelope(toon: string): {
+  searchId: string | null;
+  memoryCount: number;
+  nodeCount: number;
+} {
+  const countOf = (key: string): number => {
+    const match = toon.match(new RegExp(`${key}\\[#(\\d+)\\]`));
+    return match ? Number.parseInt(match[1]!, 10) : 0;
+  };
+  const idMatch = toon.match(/^\s*search_id:\s*"?([0-9a-fA-F-]{36})"?/m);
+
+  return {
+    searchId: idMatch?.[1] ?? null,
+    memoryCount: countOf("memories"),
+    nodeCount: countOf("nodes"),
+  };
+}
+
 export function formatSearchMemoryResponse(
-  response: SearchResponse,
+  response: SearchResponse | string,
+  headers?: Headers | Record<string, string>,
 ): SearchAgentMemoryToolResult {
-  const memoryCount = response.data?.memories?.length ?? 0;
-  const nodeCount = response.data?.nodes?.length ?? 0;
-  const searchId = response.search_id ?? null;
+  const structured: SearchResponse =
+    typeof response === "string" ? {} : response;
+  let memoryCount = structured.data?.memories?.length ?? 0;
+  let nodeCount = structured.data?.nodes?.length ?? 0;
+  let searchId = structured.search_id ?? null;
+
+  // Preferred path: server sets X-Search-Id / X-Memory-Count / X-Node-Count on TOON responses.
+  if (headers) {
+    const get = (name: string): string | null =>
+      headers instanceof Headers
+        ? headers.get(name)
+        : (headers[name] ?? headers[name.toLowerCase()] ?? null);
+
+    const headerSearchId = get("X-Search-Id");
+    if (!searchId && headerSearchId) searchId = headerSearchId;
+
+    const headerMemoryCount = get("X-Memory-Count");
+    if (memoryCount === 0 && headerMemoryCount) {
+      memoryCount = Number.parseInt(headerMemoryCount, 10) || 0;
+    }
+
+    const headerNodeCount = get("X-Node-Count");
+    if (nodeCount === 0 && headerNodeCount) {
+      nodeCount = Number.parseInt(headerNodeCount, 10) || 0;
+    }
+  }
+
+  // TOON responses are text/plain, so the SDK hands back the raw string as the whole
+  // response body (not { data: SearchResult }). Recover counters from the TOON envelope.
+  // Also handles a { data: "<toon>" } shape defensively.
+  const toonBody =
+    typeof response === "string"
+      ? response
+      : typeof structured.data === "string"
+        ? (structured.data as unknown as string)
+        : null;
+
+  if (toonBody !== null) {
+    const parsed = parseToonEnvelope(toonBody);
+    if (!searchId) searchId = parsed.searchId;
+    if (memoryCount === 0) memoryCount = parsed.memoryCount;
+    if (nodeCount === 0) nodeCount = parsed.nodeCount;
+  }
 
   return {
     success: true,
@@ -678,7 +743,13 @@ export const searchAgentMemoryTool = createTool({
           : {}),
       });
       const formatted = formatSearchMemoryResponse(response);
-      if (formatted.searchId !== null && formatted.memoryCount === 0) {
+      // Only auto-submit low-relevance feedback when the server genuinely returned
+      // nothing. memoryCount is now recovered from the TOON envelope, so a parse
+      // failure must NOT be mistaken for a zero-result search — that would train
+      // the ranker down on every successful query.
+      const isGenuinelyEmpty =
+        formatted.memoryCount === 0 && formatted.nodeCount === 0;
+      if (formatted.searchId !== null && isGenuinelyEmpty) {
         void submitEmptySearchFeedback(client, formatted.searchId);
       }
       return formatted;
