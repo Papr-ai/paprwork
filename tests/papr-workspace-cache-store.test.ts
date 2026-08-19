@@ -99,6 +99,25 @@ describe("workspace cache persistence", () => {
     expect(readCachedWorkspaces(USER)).toBeNull();
   });
 
+  // v3 rows predate memberCount/isOrgPrimary, so serving them would collapse
+  // duplicate workspaces by arrival order and keep picking the wrong one.
+  it("ignores a v3 file, whose rows cannot rank duplicates", () => {
+    fs.mkdirSync(path.dirname(cacheFilePath()), { recursive: true });
+    fs.writeFileSync(
+      cacheFilePath(),
+      JSON.stringify({
+        version: 3,
+        userId: USER,
+        workspacesFetchedAt: new Date().toISOString(),
+        workspaces: [workspace("a", "Papr")],
+        namespacesByOrgId: {},
+      }),
+      "utf8",
+    );
+
+    expect(readCachedWorkspaces(USER)).toBeNull();
+  });
+
   it("treats a corrupt file as a miss and recovers on the next write", () => {
     fs.mkdirSync(path.dirname(cacheFilePath()), { recursive: true });
     fs.writeFileSync(cacheFilePath(), "{ truncated", "utf8");

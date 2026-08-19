@@ -40,6 +40,13 @@ export interface CachedWorkspace {
   organizationName?: string;
   workspaceName?: string;
   defaultNamespaceId?: string;
+  /**
+   * Members per the server. Undefined when the row predates this field, which
+   * ranks below any known count when collapsing duplicates.
+   */
+  memberCount?: number;
+  /** This row is the workspace its own organization points at. */
+  isOrgPrimary?: boolean;
 }
 
 interface CachedNamespaceEntry {
@@ -48,7 +55,7 @@ interface CachedNamespaceEntry {
 }
 
 export interface PaprWorkspaceCacheFile {
-  version: 3;
+  version: 4;
   /** Owner of this cache. A mismatch is a miss, never a fallback. */
   userId: string;
   workspacesFetchedAt: string;
@@ -57,7 +64,13 @@ export interface PaprWorkspaceCacheFile {
   namespacesByOrgId: Record<string, CachedNamespaceEntry>;
 }
 
-export const WORKSPACE_CACHE_VERSION = 3;
+/**
+ * Bumped to 4 when rows gained `memberCount` and `isOrgPrimary`. A v3 row has
+ * neither, so every duplicate in a scope would rank equal and the collapse would
+ * fall back to arrival order — the bug this data exists to fix. Discarding those
+ * files costs one refetch and makes the fix apply on first launch.
+ */
+export const WORKSPACE_CACHE_VERSION = 4;
 
 /** Below this age, serve without triggering a refresh. */
 export const CACHE_FRESH_MS = 5 * 60_000;
@@ -95,8 +108,9 @@ function readForUser(userId: string): PaprWorkspaceCacheFile | null {
     return null;
   }
 
-  // Pre-v3 files carry no userId, so they cannot be attributed to an account.
-  // Discarding them costs one refetch and closes the cross-account leak.
+  // Pre-v3 files carry no userId, so they cannot be attributed to an account,
+  // and v3 rows lack the fields that pick between duplicate workspaces.
+  // Discarding either costs one refetch.
   if (parsed?.version !== WORKSPACE_CACHE_VERSION) return null;
   if (!Array.isArray(parsed.workspaces)) return null;
   if (!parsed.userId || parsed.userId !== userId) return null;
@@ -168,6 +182,48 @@ function workspaceNameScore(workspace: CachedWorkspace): number {
   return 2;
 }
 
+/**
+ * How strong a claim a row has to be *the* workspace for its scope, best first.
+ *
+ * Duplicate provisioning leaves several workspaces sharing a name, org and
+ * namespace, and only one of them is the one the team actually uses. Keeping
+ * whichever arrived first picked a one-member shell over a 601-member workspace,
+ * so the switcher showed the right name attached to the wrong id and the team
+ * list came back with only the viewer in it.
+ *
+ * Ordered by how hard each signal is to corrupt:
+ *   1. The organization's own `workspace` pointer — the org naming its
+ *      authoritative workspace. Not derived from the viewer's session.
+ *   2. `memberCount` — computed server-side from real membership, and a plain
+ *      field, so it survives the ACL filtering that hides `organization`.
+ *   3. Name quality, to keep the existing preference for a real label.
+ *
+ * `isSelected` is deliberately absent. The buggy client wrote that flag onto
+ * whichever duplicate it had already picked, so it can confirm the wrong row.
+ */
+function workspaceAuthorityRank(workspace: CachedWorkspace): number[] {
+  return [
+    workspace.isOrgPrimary === true ? 1 : 0,
+    // Below any known count, so a readable 1 outranks an unreadable unknown.
+    typeof workspace.memberCount === "number" ? workspace.memberCount : -1,
+    workspaceNameScore(workspace),
+  ];
+}
+
+/** True when `candidate` is a strictly better representative than `existing`. */
+function isStrongerWorkspace(
+  candidate: CachedWorkspace,
+  existing: CachedWorkspace,
+): boolean {
+  const left = workspaceAuthorityRank(candidate);
+  const right = workspaceAuthorityRank(existing);
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] !== right[i]) return left[i] > right[i];
+  }
+  // Fully tied — keep the row already held so output stays first-seen stable.
+  return false;
+}
+
 /** Org + namespace a row resolves to. Rows without a namespace stand alone. */
 function workspaceScopeKey(workspace: CachedWorkspace): string {
   return workspace.defaultNamespaceId
@@ -191,7 +247,8 @@ function workspaceScopeKey(workspace: CachedWorkspace): string {
  *
  * So within a scope: rows with distinct real names are kept, and placeholder-named
  * rows are absorbed into the named ones (or collapsed among themselves if no row
- * in the scope has a real name).
+ * in the scope has a real name). Where several rows do share a name, the survivor
+ * is chosen by `workspaceAuthorityRank` rather than arrival order.
  *
  * This runs on read only. The stored rows stay untouched, so a mistake here
  * hides a workspace until the next deploy instead of destroying it on disk.
@@ -209,7 +266,7 @@ export function dedupeCachedWorkspaces(
 
     if (!name) {
       const existing = placeholders.get(scope);
-      if (!existing || workspaceNameScore(workspace) > workspaceNameScore(existing)) {
+      if (!existing || isStrongerWorkspace(workspace, existing)) {
         placeholders.set(scope, workspace);
       }
       continue;
@@ -222,7 +279,7 @@ export function dedupeCachedWorkspaces(
     }
 
     const existing = named.get(name);
-    if (!existing || workspaceNameScore(workspace) > workspaceNameScore(existing)) {
+    if (!existing || isStrongerWorkspace(workspace, existing)) {
       named.set(name, workspace);
     }
   }
