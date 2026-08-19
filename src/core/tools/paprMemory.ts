@@ -1078,6 +1078,98 @@ const deleteMemorySchema = z.object({
   memoryId: z.string().min(1).describe("The memory ID to delete"),
 });
 
+const updateMemorySchema = z.object({
+  memoryId: z.string().min(1).describe("The memory ID to update (from search results or add response)"),
+  content: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Replacement content. Omit to leave the existing content unchanged."),
+  metadata: z
+    .record(z.string(), z.any())
+    .optional()
+    .describe(
+      "Metadata fields to update, e.g. { topics: ['fundraising'], hierarchical_structures: 'business/finance' }.",
+    ),
+});
+
+const addMemoryBatchSchema = z.object({
+  memories: z
+    .array(
+      z.object({
+        content: z.string().min(1).describe("Memory content"),
+        category: z
+          .enum(["preference", "task", "goal", "fact", "context", "skills", "learning"])
+          .optional()
+          .describe("Memory category. 'preference' is user-only; 'skills'/'learning' are assistant-only."),
+        role: z
+          .enum(["user", "assistant"])
+          .optional()
+          .describe("REQUIRED when category is set — the server 422s on category without role."),
+        topics: z.array(z.string()).optional().describe("Topic tags for this item"),
+      }),
+    )
+    .min(1)
+    .max(50)
+    .describe("Memory items to write in one request (max 50)."),
+  skipBackgroundProcessing: z
+    .boolean()
+    .optional()
+    .describe("Skip async graph/embedding enrichment for faster writes. Default false."),
+  batchSize: z
+    .number()
+    .int()
+    .min(1)
+    .max(50)
+    .optional()
+    .describe("Server-side chunk size for processing."),
+});
+
+const getBatchStatusSchema = z.object({
+  batchId: z.string().min(1).describe("batch_id returned by add_agent_memory_batch"),
+});
+
+const submitMemoryFeedbackBatchSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        searchId: z.string().min(1).describe("searchId from a prior search_agent_memory response"),
+        feedbackType: z
+          .enum([
+            "thumbs_up",
+            "thumbs_down",
+            "rating",
+            "correction",
+            "report",
+            "copy_action",
+            "save_action",
+            "create_document",
+            "memory_relevance",
+            "answer_quality",
+          ])
+          .describe("Type of feedback for this search"),
+        feedbackScore: z.number().min(1).max(5).optional().describe("1-5 score for rating/memory_relevance"),
+        feedbackText: z.string().optional().describe("Explanation, especially for correction/report"),
+        citedMemoryIds: z.array(z.string()).optional().describe("Memory IDs that were useful or irrelevant"),
+        citedNodeIds: z.array(z.string()).optional().describe("Graph node IDs cited, if any"),
+        feedbackSource: z
+          .enum(["inline", "post_query", "session_end", "memory_citation", "answer_panel"])
+          .optional()
+          .describe("Where the feedback originated. Default: inline."),
+      }),
+    )
+    .min(1)
+    .max(50)
+    .describe("Feedback items to submit in one request (max 50)."),
+});
+
+const getMemoryFeedbackSchema = z.object({
+  feedbackId: z
+    .string()
+    .min(1)
+    .describe("feedback_id returned by submit_memory_feedback"),
+});
+
 const submitMemoryFeedbackSchema = z.object({
   searchId: z
     .string()
@@ -1234,6 +1326,175 @@ export const deleteMemoryTool = createTool({
         data: response,
         message: `Memory ${args.memoryId} deleted successfully`
       };
+    } catch (error) {
+      handlePaprToolError(error);
+    }
+  },
+});
+
+export const updateMemoryTool = createTool({
+  id: "update_memory",
+  description:
+    "Update an existing memory item in place by ID — corrects a fact WITHOUT creating a duplicate. " +
+    "Prefer this over add_agent_memory when a stored value changed (e.g. a revised total, status, or owner); " +
+    "re-adding creates near-duplicate memories that degrade retrieval ranking. " +
+    "Use delete_memory only when the memory should no longer exist at all.",
+  inputSchema: updateMemorySchema,
+  execute: async (args) => {
+    try {
+      if (args.content === undefined && args.metadata === undefined) {
+        throw new Error(
+          "update_memory requires at least one of `content` or `metadata`.",
+        );
+      }
+      const client = await getPaprClient();
+      const response = await client.memory.update(args.memoryId, {
+        ...(args.content !== undefined ? { content: args.content } : {}),
+        ...(args.metadata !== undefined
+          ? { metadata: args.metadata as Record<string, unknown> }
+          : {}),
+      } as Parameters<typeof client.memory.update>[1]);
+
+      return {
+        success: true,
+        memoryId: args.memoryId,
+        data: response,
+        message: `Memory ${args.memoryId} updated in place (no duplicate created)`,
+      };
+    } catch (error) {
+      handlePaprToolError(error);
+    }
+  },
+});
+
+export const addAgentMemoryBatchTool = createTool({
+  id: "add_agent_memory_batch",
+  description:
+    "Write multiple memory items in ONE request. Use whenever you are storing 3+ related items " +
+    "(entity backfills, a set of tasks, imported records) — far cheaper than looping add_agent_memory. " +
+    "Applies the same WorkspaceContext graph schema and ACL scope as add_agent_memory. " +
+    "Returns a batch_id; poll get_memory_batch_status to confirm all writes landed.",
+  inputSchema: addMemoryBatchSchema,
+  execute: async (args) => {
+    try {
+      const client = await getPaprClient();
+      const { buildPaprMemoryWriteScope } = await import(
+        "../../gateway/utils/memoryScopeResolver.js"
+      );
+
+      // Batch items inherit the chat's default Team/Org scope. For per-user ACLs,
+      // use add_agent_memory (which accepts shareWithUserIds / readAcl) instead.
+      const resolvedChatId = resolveConversationId(getCurrentChatId() ?? undefined);
+      const addPolicy = await buildAgentMemoryAddPolicy({});
+      const memoryScope = await buildPaprMemoryWriteScope({
+        chatId: resolvedChatId,
+        addPolicy,
+      });
+
+      const response = await client.memory.addBatch({
+        memories: args.memories.map((m) => ({
+          content: m.content,
+          metadata: {
+            ...(m.role ? { role: m.role } : {}),
+            ...(m.category ? { category: m.category } : {}),
+            ...(m.topics ? { topics: m.topics } : {}),
+            ...(resolvedChatId ? { customMetadata: { chatId: resolvedChatId } } : {}),
+          },
+        })) as Parameters<typeof client.memory.addBatch>[0]["memories"],
+        ...(args.skipBackgroundProcessing !== undefined
+          ? { skip_background_processing: args.skipBackgroundProcessing }
+          : {}),
+        ...(args.batchSize !== undefined ? { batch_size: args.batchSize } : {}),
+        ...(memoryScope.external_user_id
+          ? { external_user_id: memoryScope.external_user_id }
+          : {}),
+        ...(memoryScope.namespace_id
+          ? { namespace_id: memoryScope.namespace_id }
+          : {}),
+        ...(memoryScope.policy ? { policy: memoryScope.policy } : {}),
+      } as Parameters<typeof client.memory.addBatch>[0]);
+
+      const raw = response as unknown as Record<string, unknown>;
+      return {
+        success: true,
+        requested: args.memories.length,
+        batchId: (raw.batch_id as string | undefined) ?? null,
+        data: response,
+        _statusReminder:
+          "Writes are processed asynchronously. If a later search cannot find these items, " +
+          "call get_memory_batch_status with the returned batchId before assuming the write failed.",
+      };
+    } catch (error) {
+      handlePaprToolError(error);
+    }
+  },
+});
+
+export const getMemoryBatchStatusTool = createTool({
+  id: "get_memory_batch_status",
+  description:
+    "Check processing status of an add_agent_memory_batch write. Memory writes are asynchronous " +
+    "(embedding + graph extraction + Parse persistence), so use this to distinguish a SLOW write " +
+    "from a FAILED one before retrying or reporting an error.",
+  inputSchema: getBatchStatusSchema,
+  execute: async (args) => {
+    try {
+      const client = await getPaprClient();
+      const response = await client.memory.retrieveBatchStatus(args.batchId);
+      return { success: true, batchId: args.batchId, data: response };
+    } catch (error) {
+      handlePaprToolError(error);
+    }
+  },
+});
+
+export const submitMemoryFeedbackBatchTool = createTool({
+  id: "submit_memory_feedback_batch",
+  description:
+    "Submit retrieval feedback for MULTIPLE searches in one request. Use at the end of a session " +
+    "when several searches are being rated together, instead of calling submit_memory_feedback repeatedly.",
+  inputSchema: submitMemoryFeedbackBatchSchema,
+  execute: async (args) => {
+    try {
+      const client = await getPaprClient();
+      const { paprUserScope } = await import("../../gateway/utils/paprUserId.js");
+      const scope = paprUserScope();
+
+      const response = await client.feedback.submitBatch({
+        feedback_items: args.items.map((item) => ({
+          search_id: item.searchId,
+          ...scope,
+          feedbackData: {
+            feedbackSource: item.feedbackSource ?? "inline",
+            feedbackType: item.feedbackType,
+            ...(item.citedMemoryIds ? { citedMemoryIds: item.citedMemoryIds } : {}),
+            ...(item.citedNodeIds ? { citedNodeIds: item.citedNodeIds } : {}),
+            ...(item.feedbackText ? { feedbackText: item.feedbackText } : {}),
+            ...(item.feedbackScore !== undefined
+              ? { feedbackScore: item.feedbackScore }
+              : {}),
+          },
+        })) as Parameters<typeof client.feedback.submitBatch>[0]["feedback_items"],
+      });
+
+      return { success: true, submitted: args.items.length, data: response };
+    } catch (error) {
+      handlePaprToolError(error);
+    }
+  },
+});
+
+export const getMemoryFeedbackTool = createTool({
+  id: "get_memory_feedback",
+  description:
+    "Fetch a previously submitted feedback record by feedback_id. Use to verify feedback was " +
+    "persisted server-side, or to inspect what was recorded for a given search.",
+  inputSchema: getMemoryFeedbackSchema,
+  execute: async (args) => {
+    try {
+      const client = await getPaprClient();
+      const response = await client.feedback.getByID(args.feedbackId);
+      return { success: true, feedbackId: args.feedbackId, data: response };
     } catch (error) {
       handlePaprToolError(error);
     }
@@ -1416,9 +1677,14 @@ export const listSignalDomainsTool = createTool({
 
 export const paprMemoryTools = [
   addAgentMemoryTool,
+  addAgentMemoryBatchTool,
+  getMemoryBatchStatusTool,
+  updateMemoryTool,
   listNamespaceUsersTool,
   searchAgentMemoryTool,
   submitMemoryFeedbackTool,
+  submitMemoryFeedbackBatchTool,
+  getMemoryFeedbackTool,
   registerSchemaTool,
   updateSchemaTool,
   listSchemasTool,

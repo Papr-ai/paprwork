@@ -159,8 +159,13 @@ export {
 } from "./paprWorkspace.js";
 export {
   addAgentMemoryTool,
+  addAgentMemoryBatchTool,
+  getMemoryBatchStatusTool,
+  updateMemoryTool,
   searchAgentMemoryTool,
   submitMemoryFeedbackTool,
+  submitMemoryFeedbackBatchTool,
+  getMemoryFeedbackTool,
   registerSchemaTool,
   updateSchemaTool,
   listSchemasTool,
