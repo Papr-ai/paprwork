@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   dedupeCachedWorkspaces,
+  resolveAuthoritativeWorkspaceId,
   type CachedWorkspace,
 } from "../src/electron/ipc/paprWorkspaceCache.js";
 
@@ -204,5 +205,56 @@ describe("dedupeCachedWorkspaces", () => {
       expect(result).toHaveLength(1);
       expect(result[0].id).toBe("qDgAdi2eMf");
     });
+  });
+});
+
+describe("resolveAuthoritativeWorkspaceId", () => {
+  /** The live papr-ai shape: typo duplicates plus the real 601-member row. */
+  function paprAiRows(): CachedWorkspace[] {
+    const duplicate = (id: string): CachedWorkspace => ({
+      ...workspace(id, "Papr", "85ZIB7mD1V"),
+      memberCount: 1,
+    });
+    return [
+      { ...workspace("7I5tUcLunV", "null (you)", "85ZIB7mD1V"), memberCount: 1 },
+      duplicate("eZpxfyPoG2"),
+      duplicate("gWjcH8KOFA"),
+      {
+        ...workspace("qDgAdi2eMf", "Papr", "85ZIB7mD1V"),
+        memberCount: 601,
+        isOrgPrimary: true,
+      },
+      { ...workspace("3UsTzFx1oe", "Sqaservices", "HyQU6FnQW3", "rrM3uysMYw"), memberCount: 6 },
+    ];
+  }
+
+  it("remaps a stale pointer at a discarded duplicate onto the real workspace", () => {
+    expect(resolveAuthoritativeWorkspaceId(paprAiRows(), "eZpxfyPoG2")).toBe(
+      "qDgAdi2eMf",
+    );
+  });
+
+  it("leaves a pointer that already names the surviving row alone", () => {
+    expect(resolveAuthoritativeWorkspaceId(paprAiRows(), "qDgAdi2eMf")).toBe(
+      "qDgAdi2eMf",
+    );
+  });
+
+  it("remaps an absorbed placeholder row onto the named survivor", () => {
+    expect(resolveAuthoritativeWorkspaceId(paprAiRows(), "7I5tUcLunV")).toBe(
+      "qDgAdi2eMf",
+    );
+  });
+
+  it("does not move a pointer across org + namespace scopes", () => {
+    expect(resolveAuthoritativeWorkspaceId(paprAiRows(), "3UsTzFx1oe")).toBe(
+      "3UsTzFx1oe",
+    );
+  });
+
+  it("returns ids absent from the list unchanged", () => {
+    expect(resolveAuthoritativeWorkspaceId(paprAiRows(), "notInList")).toBe(
+      "notInList",
+    );
   });
 });

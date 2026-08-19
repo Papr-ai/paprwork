@@ -316,6 +316,54 @@ export function dedupeCachedWorkspaces(
   return result;
 }
 
+/**
+ * The id the switcher will actually show for whichever duplicate group
+ * `workspaceId` falls into.
+ *
+ * The switcher renders deduped rows, but the *active* workspace is resolved
+ * separately from the raw list — `profile.workspaceId` first, then the selected
+ * row. A profile written by an older build points at whichever duplicate that
+ * build happened to pick, so it can name a row that dedupe now discards. The
+ * list then shows the 601-member workspace while billing and the team list stay
+ * on a one-member shell, which reads as "we're pointing at the wrong org".
+ *
+ * Mapping the stored pointer through the same ranking keeps the two in step and
+ * lets the stale value heal itself on next load. Ids that survive dedupe, and
+ * ids absent from the list, are returned unchanged.
+ */
+export function resolveAuthoritativeWorkspaceId(
+  workspaces: CachedWorkspace[],
+  workspaceId: string,
+): string {
+  const target = workspaces.find((workspace) => workspace.id === workspaceId);
+  if (!target) return workspaceId;
+
+  const survivors = dedupeCachedWorkspaces(workspaces);
+  if (survivors.some((workspace) => workspace.id === workspaceId)) {
+    return workspaceId;
+  }
+
+  const scope = workspaceScopeKey(target);
+  const inScope = survivors.filter(
+    (workspace) => workspaceScopeKey(workspace) === scope,
+  );
+  if (inScope.length === 0) return workspaceId;
+
+  // A placeholder row is absorbed without naming an absorber, so fall back to
+  // the whole scope when no survivor shares its name.
+  const name = meaningfulWorkspaceName(target);
+  const sameName = name
+    ? inScope.filter((workspace) => meaningfulWorkspaceName(workspace) === name)
+    : [];
+  const candidates = sameName.length > 0 ? sameName : inScope;
+
+  let best = candidates[0]!;
+  for (const candidate of candidates) {
+    if (isStrongerWorkspace(candidate, best)) best = candidate;
+  }
+  return best.id;
+}
+
 export interface CachedRead<T> {
   data: T;
   ageMs: number;
