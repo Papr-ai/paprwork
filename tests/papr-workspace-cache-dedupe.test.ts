@@ -115,4 +115,94 @@ describe("dedupeCachedWorkspaces", () => {
 
     expect(result).toHaveLength(1);
   });
+
+  // Duplicate provisioning leaves several same-named workspaces in one scope and
+  // only one is the workspace the team uses. Keeping the first-seen row picked a
+  // one-member shell, so the switcher showed "Papr" pointing at the wrong id and
+  // the team list came back with only the viewer in it.
+  describe("choosing between duplicates of the same name", () => {
+    it("keeps the workspace its organization points at", () => {
+      const result = dedupeCachedWorkspaces([
+        { ...workspace("shell", "Papr", "ns-1"), memberCount: 1 },
+        { ...workspace("real", "Papr", "ns-1"), memberCount: 601, isOrgPrimary: true },
+      ]);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe("real");
+    });
+
+    it("falls back to member count when neither row is org primary", () => {
+      const result = dedupeCachedWorkspaces([
+        { ...workspace("shell", "Papr", "ns-1"), memberCount: 1 },
+        { ...workspace("real", "Papr", "ns-1"), memberCount: 601 },
+      ]);
+
+      expect(result.map((entry) => entry.id)).toEqual(["real"]);
+    });
+
+    // The org pointer is the org naming its own authoritative workspace, so it
+    // outranks a headcount that duplicate rows can inflate.
+    it("prefers the org primary row over a larger non-primary one", () => {
+      const result = dedupeCachedWorkspaces([
+        { ...workspace("big", "Papr", "ns-1"), memberCount: 900 },
+        { ...workspace("primary", "Papr", "ns-1"), memberCount: 601, isOrgPrimary: true },
+      ]);
+
+      expect(result[0].id).toBe("primary");
+    });
+
+    it("ranks a known member count above an unreadable one", () => {
+      const result = dedupeCachedWorkspaces([
+        workspace("unknown", "Papr", "ns-1"),
+        { ...workspace("known", "Papr", "ns-1"), memberCount: 1 },
+      ]);
+
+      expect(result[0].id).toBe("known");
+    });
+
+    it("keeps first-seen order when no row has a stronger claim", () => {
+      const result = dedupeCachedWorkspaces([
+        workspace("first", "Papr", "ns-1"),
+        workspace("second", "Papr", "ns-1"),
+      ]);
+
+      expect(result[0].id).toBe("first");
+    });
+
+    it("applies the same ranking to placeholder-only scopes", () => {
+      const result = dedupeCachedWorkspaces([
+        { ...workspace("shell", "null (you)", "ns-1"), memberCount: 1 },
+        { ...workspace("real", "null (you)", "ns-1"), memberCount: 601, isOrgPrimary: true },
+      ]);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe("real");
+    });
+
+    // The live papr-ai rows: five typo-slug duplicates with one member each
+    // alongside the 601-member workspace the org actually points at.
+    it("picks the real papr-ai workspace out of its typo duplicates", () => {
+      const duplicate = (id: string): CachedWorkspace => ({
+        ...workspace(id, "Papr", "85ZIB7mD1V"),
+        memberCount: 1,
+      });
+
+      const result = dedupeCachedWorkspaces([
+        { ...workspace("7I5tUcLunV", "null (you)", "85ZIB7mD1V"), memberCount: 1 },
+        duplicate("eZpxfyPoG2"),
+        duplicate("gWjcH8KOFA"),
+        duplicate("8iYWy5F10q"),
+        duplicate("tDu6TjHL3x"),
+        {
+          ...workspace("qDgAdi2eMf", "Papr", "85ZIB7mD1V"),
+          memberCount: 601,
+          isOrgPrimary: true,
+        },
+        duplicate("9RSVXV8mEJ"),
+      ]);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe("qDgAdi2eMf");
+    });
+  });
 });

@@ -875,10 +875,20 @@ const GET_USER_WORKSPACES = `
           workspace {
             objectId
             workspace_name
+            # Server-computed, and a plain field rather than a pointer, so it
+            # survives the ACL filtering that can strip the organization. It is
+            # the only signal that reliably separates a shared workspace from a
+            # one-member duplicate of the same name.
+            memberCount
             organization {
               objectId
               name
               logoUrl
+              # The org's own authoritative workspace. Duplicate workspaces share
+              # a name, org and namespace, so this is what tells them apart.
+              workspace {
+                objectId
+              }
               default_namespace {
                 objectId
                 name
@@ -1031,6 +1041,31 @@ interface UserWorkspaceOption {
   isSelected: boolean;
   role: string;
   defaultNamespaceId?: string;
+  /** Members on the workspace per the server. Undefined when unreadable. */
+  memberCount?: number;
+  /** This row is the workspace its own organization points at. */
+  isOrgPrimary?: boolean;
+}
+
+/**
+ * The cache row for a fetched workspace.
+ *
+ * Single conversion for all three write sites: they had drifted apart before,
+ * and a field missing from one of them is a cache that silently loses it on the
+ * next refresh through that path.
+ */
+function toCachedWorkspace(workspace: UserWorkspaceOption): CachedWorkspace {
+  return {
+    id: workspace.workspaceId,
+    name: workspaceDisplayName(workspace),
+    role: workspace.role,
+    organizationId: workspace.organizationId,
+    organizationName: workspace.organizationName,
+    workspaceName: workspace.workspaceName,
+    defaultNamespaceId: workspace.defaultNamespaceId,
+    memberCount: workspace.memberCount,
+    isOrgPrimary: workspace.isOrgPrimary,
+  };
 }
 
 interface OwnedOrgInfo {
@@ -1219,9 +1254,11 @@ async function fetchUserWorkspaces(
           workspace?: {
             objectId?: string;
             workspace_name?: string;
+            memberCount?: number;
             organization?: {
               objectId?: string;
               name?: string;
+              workspace?: { objectId?: string };
               default_namespace?: { objectId?: string; name?: string };
             };
           };
@@ -1273,6 +1310,13 @@ async function fetchUserWorkspaces(
       );
     }
 
+    // An owned org appears in ownedOrgByWorkspaceId keyed by the workspace its
+    // own pointer references, so membership there means the same thing as the
+    // pointer we now select. Checking both covers orgs the user does not own.
+    const isOrgPrimary =
+      organization.workspace?.objectId === workspace.objectId ||
+      context.ownedOrgByWorkspaceId.has(workspace.objectId);
+
     workspaces.push({
       followerId: node.objectId,
       workspaceId: workspace.objectId,
@@ -1282,6 +1326,9 @@ async function fetchUserWorkspaces(
       isSelected: node.isSelected === true,
       role: ownedOrgIds.has(namespaceOrgId) ? "owner" : "member",
       defaultNamespaceId,
+      memberCount:
+        typeof workspace.memberCount === "number" ? workspace.memberCount : undefined,
+      isOrgPrimary,
     });
   }
 
@@ -3920,17 +3967,7 @@ export function initializePaprLoginIPC(
             customKeysStorage,
             settingsStorage,
           );
-          const rows = fetched.map(
-            (workspace): CachedWorkspace => ({
-              id: workspace.workspaceId,
-              name: workspaceDisplayName(workspace),
-              role: workspace.role,
-              organizationId: workspace.organizationId,
-              organizationName: workspace.organizationName,
-              workspaceName: workspace.workspaceName,
-              defaultNamespaceId: workspace.defaultNamespaceId,
-            }),
-          );
+          const rows = fetched.map(toCachedWorkspace);
           writeCachedWorkspaces(profile.userId, rows);
           return rows;
         };
@@ -4160,20 +4197,7 @@ export function initializePaprLoginIPC(
                   })),
                 ) !== workspaceListSignature(workspaces);
 
-              writeCachedWorkspaces(
-                profile.userId,
-                workspaces.map(
-                  (workspace): CachedWorkspace => ({
-                    id: workspace.workspaceId,
-                    name: workspaceDisplayName(workspace),
-                    role: workspace.role,
-                    organizationId: workspace.organizationId,
-                    organizationName: workspace.organizationName,
-                    workspaceName: workspace.workspaceName,
-                    defaultNamespaceId: workspace.defaultNamespaceId,
-                  }),
-                ),
-              );
+              writeCachedWorkspaces(profile.userId, workspaces.map(toCachedWorkspace));
 
               if (workspacesChanged) {
                 console.log(
@@ -4226,6 +4250,8 @@ export function initializePaprLoginIPC(
             isSelected: workspace.id === profile.workspaceId,
             role: workspace.role ?? "member",
             defaultNamespaceId: workspace.defaultNamespaceId,
+            memberCount: workspace.memberCount,
+            isOrgPrimary: workspace.isOrgPrimary,
           }),
         );
 
@@ -4245,20 +4271,7 @@ export function initializePaprLoginIPC(
         settingsStorage,
       );
 
-      writeCachedWorkspaces(
-        profile.userId,
-        workspaces.map(
-          (workspace): CachedWorkspace => ({
-            id: workspace.workspaceId,
-            name: workspaceDisplayName(workspace),
-            role: workspace.role,
-            organizationId: workspace.organizationId,
-            organizationName: workspace.organizationName,
-            workspaceName: workspace.workspaceName,
-            defaultNamespaceId: workspace.defaultNamespaceId,
-          }),
-        ),
-      );
+      writeCachedWorkspaces(profile.userId, workspaces.map(toCachedWorkspace));
 
       const selected = workspaces.find((workspace) => workspace.isSelected);
       const activeWorkspaceId =
