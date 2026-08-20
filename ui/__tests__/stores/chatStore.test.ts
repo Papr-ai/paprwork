@@ -268,6 +268,52 @@ describe("ChatStore", () => {
     });
   });
 
+  // ── Stream Recovery Reason ──────────────────────────────────────
+
+  describe("Stream Recovery Reason", () => {
+    it("should default to a connection reason so the original banner copy wins", () => {
+      initChat("chat-1");
+
+      useChatStore.getState().setNeedsStreamRecovery("chat-1", true);
+
+      const state = useChatStore.getState().getChatState("chat-1");
+      expect(state.needsStreamRecovery).toBe(true);
+      expect(state.streamRecoveryReason).toBe("connection");
+    });
+
+    it("should record a rate limit reason when the provider ran out of capacity", () => {
+      initChat("chat-1");
+
+      useChatStore.getState().setNeedsStreamRecovery("chat-1", true, "rateLimit");
+
+      const state = useChatStore.getState().getChatState("chat-1");
+      expect(state.needsStreamRecovery).toBe(true);
+      expect(state.streamRecoveryReason).toBe("rateLimit");
+    });
+
+    it("should clear the reason once recovery is no longer needed", () => {
+      initChat("chat-1");
+
+      useChatStore.getState().setNeedsStreamRecovery("chat-1", true, "rateLimit");
+      useChatStore.getState().setNeedsStreamRecovery("chat-1", false);
+
+      const state = useChatStore.getState().getChatState("chat-1");
+      expect(state.needsStreamRecovery).toBe(false);
+      expect(state.streamRecoveryReason).toBeUndefined();
+    });
+
+    it("should not leak a rate limit reason into other chats", () => {
+      initChat("chat-1");
+      initChat("chat-2");
+
+      useChatStore.getState().setNeedsStreamRecovery("chat-1", true, "rateLimit");
+
+      expect(
+        useChatStore.getState().getChatState("chat-2").streamRecoveryReason,
+      ).toBeUndefined();
+    });
+  });
+
   // ── Unread & Read State ─────────────────────────────────────────
 
   describe("Unread & Read State", () => {

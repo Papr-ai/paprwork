@@ -87,6 +87,15 @@ export interface AppSettings {
      * "user" = private, "namespace" = workspace team, "org" = organization.
      */
     defaultMemoryScope?: "user" | "namespace" | "org";
+    /**
+     * Which credential to use when a provider has both OAuth and an API key.
+     * Key resolution prefers OAuth by default, so this is the only way to reach
+     * a Platform API key (and its separate rate limits) without disconnecting
+     * the subscription. Unset means OAuth, matching the historical default.
+     */
+    providerAuthPreference?: Partial<
+      Record<"openai" | "anthropic", "oauth" | "apiKey">
+    >;
   };
   /** Anonymous install id for telemetry correlation only; not derived from user data. */
   telemetry: {

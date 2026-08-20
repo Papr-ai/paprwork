@@ -318,6 +318,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.invoke("telemetry:set-enabled", enabled),
   },
 
+  providerAuth: {
+    getPreference: (provider) =>
+      ipcRenderer.invoke("provider-auth:get-preference", provider),
+    setPreference: (provider, preference) =>
+      ipcRenderer.invoke("provider-auth:set-preference", provider, preference),
+  },
+
   chatAttachments: {
     save: (input) => ipcRenderer.invoke("chat:save-attachment", input),
     readPreview: (input) =>

@@ -3,6 +3,7 @@ import {
   clearKeyCache,
   getApiKeys,
   getPaprApiKey,
+  preserveEnvKeyBeforeOverwrite,
 } from "../src/gateway/utils/keyResolver.js";
 import type {
   RequestKeysMessage,
@@ -32,10 +33,13 @@ describe("keyResolver IPC flow", () => {
   const originalPaprOrg = process.env.PAPR_ORG_ID;
   const originalPaprNamespace = process.env.PAPR_NAMESPACE_ID;
 
+  const originalAnthropicKey = process.env.ANTHROPIC_API_KEY;
+
   beforeEach(() => {
     clearKeyCache();
     delete process.env.OPENAI_API_KEY;
     delete process.env.PAPR_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
   });
 
   afterEach(() => {
@@ -44,6 +48,8 @@ describe("keyResolver IPC flow", () => {
     else process.env.PAPR_ORG_ID = originalPaprOrg;
     if (originalPaprNamespace === undefined) delete process.env.PAPR_NAMESPACE_ID;
     else process.env.PAPR_NAMESPACE_ID = originalPaprNamespace;
+    if (originalAnthropicKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = originalAnthropicKey;
   });
 
   test("uses process.env in development mode", async () => {
@@ -53,6 +59,29 @@ describe("keyResolver IPC flow", () => {
     const keys = await getApiKeys(["OPENAI_API_KEY"]);
 
     expect(keys.OPENAI_API_KEY).toBe("env-dev-key");
+  });
+
+  test("ignores an OAuth token sitting in a provider's API key env var", async () => {
+    // The pi-ai OAuth path assigns the OAuth token to ANTHROPIC_API_KEY, and an
+    // OAuth token is never a valid Platform key.
+    process.env.NODE_ENV = "development";
+    process.env.ANTHROPIC_API_KEY = "sk-ant-oat01-not-a-platform-key";
+
+    const keys = await getApiKeys(["ANTHROPIC_API_KEY"]);
+
+    expect(keys.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
+  test("recovers the real API key after the OAuth path overwrites env", async () => {
+    process.env.NODE_ENV = "development";
+    process.env.ANTHROPIC_API_KEY = "sk-ant-api03-real-platform-key";
+
+    preserveEnvKeyBeforeOverwrite("ANTHROPIC_API_KEY");
+    process.env.ANTHROPIC_API_KEY = "sk-ant-oat01-oauth-token";
+
+    const keys = await getApiKeys(["ANTHROPIC_API_KEY"]);
+
+    expect(keys.ANTHROPIC_API_KEY).toBe("sk-ant-api03-real-platform-key");
   });
 
   test("requests keys via IPC in production and caches response", async () => {

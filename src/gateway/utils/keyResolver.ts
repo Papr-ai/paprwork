@@ -40,6 +40,35 @@ interface IpcProcessLike {
 const IPC_KEY_RESOLVE_TIMEOUT_MS = 15_000;
 const PAPR_API_KEY_RETRY_COOLDOWN_MS = 3_000;
 
+/**
+ * Real Platform keys that the OAuth path overwrote in process.env.
+ *
+ * pi-ai reads its credential from process.env, so an OAuth turn assigns the
+ * OAuth token to ANTHROPIC_API_KEY / OPENAI_API_KEY for the rest of the process.
+ * Without the original stashed here, switching a provider back to its API key
+ * would resolve that OAuth token instead of the user's real key.
+ */
+const overwrittenEnvKeys: Record<string, string> = {};
+
+/**
+ * OAuth access tokens are not Platform API keys — sending one to the Platform
+ * API fails or bills against the wrong quota, so never resolve one as a key.
+ */
+function isOAuthShapedToken(value: string): boolean {
+  return value.startsWith("sk-ant-oat") || value.startsWith("sk-ant-ort");
+}
+
+/**
+ * Call before assigning an OAuth token to a provider's API-key env var so the
+ * real key stays resolvable. No-op unless it would discard a genuine key.
+ */
+export function preserveEnvKeyBeforeOverwrite(keyName: string): void {
+  const current = process.env[keyName];
+  if (!current || isOAuthShapedToken(current)) return;
+  if (overwrittenEnvKeys[keyName]) return;
+  overwrittenEnvKeys[keyName] = current;
+}
+
 let paprApiKeyIpcInFlight: Promise<string | undefined> | null = null;
 let paprApiKeyUnavailableUntil = 0;
 
@@ -148,11 +177,16 @@ export async function getApiKeys(
     // Development: use process.env (from .env.local)
     console.log("[KeyResolver] Development mode - using process.env");
     for (const keyName of keyNames) {
-      const value = process.env[keyName];
-      if (value) {
-        keys[keyName] = value;
-        console.log(`[KeyResolver]   ✓ ${keyName} found in env`);
+      const value = overwrittenEnvKeys[keyName] ?? process.env[keyName];
+      if (!value) continue;
+      if (isOAuthShapedToken(value)) {
+        console.warn(
+          `[KeyResolver]   ✗ Ignoring ${keyName} — holds an OAuth token, not a Platform API key`,
+        );
+        continue;
       }
+      keys[keyName] = value;
+      console.log(`[KeyResolver]   ✓ ${keyName} found in env`);
     }
     return keys;
   }

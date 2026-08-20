@@ -1127,7 +1127,7 @@ export function useAgent() {
               );
               setSending(chatId, false);
               setConnectionPaused(chatId, false);
-              setNeedsStreamRecovery(chatId, true);
+              setNeedsStreamRecovery(chatId, true, "rateLimit");
               setError(null);
 
               const streamingMessageId =
