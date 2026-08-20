@@ -92,6 +92,8 @@ describe("paprPlanLimits", () => {
       {
         memoriesCount: 2400,
         storageCount: storageLimitToBytes("1GB") * 0.95,
+        memoryStorageCount: storageLimitToBytes("1GB") * 0.95,
+        appStorageCount: 0,
         miniInteractionCount: 1000,
       },
       limits,
@@ -108,12 +110,32 @@ describe("paprPlanLimits", () => {
       {
         memoriesCount: 2400,
         storageCount: storageLimitToBytes("1GB") * 0.95,
+        memoryStorageCount: storageLimitToBytes("1GB") * 0.95,
+        appStorageCount: 0,
         miniInteractionCount: 1000,
       },
       limits,
     );
     expect(warnings.memoriesNearLimit).toBe(true);
     expect(warnings.operationsExceeded).toBe(true);
+  });
+
+  it("counts app files against the same storage allowance as memory", () => {
+    // The bug this guards: uploaded recordings used the plan's storage but
+    // were invisible in Settings, so the bar never moved and never warned.
+    const limits = getPlanLimitsForTier("developer");
+    const half = storageLimitToBytes("1GB") * 0.5;
+    const warnings = buildPlanWarnings(
+      {
+        memoriesCount: 10,
+        storageCount: half + half,
+        memoryStorageCount: half,
+        appStorageCount: half,
+        miniInteractionCount: 10,
+      },
+      limits,
+    );
+    expect(warnings.storageExceeded).toBe(true);
   });
 
   it("caps usage bars at 100%", () => {
