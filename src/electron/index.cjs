@@ -1275,8 +1275,18 @@ class GatewayProcessSupervisor {
           const oauthStorage = getOAuthTokenStorage();
 
           if (oauthStorage) {
+            // The gateway prefers OAuth whenever a token is present, so honouring
+            // an "API key" choice means withholding the token here. Sending it and
+            // filtering downstream would silently lose to that precedence.
+            const prefersApiKey = (provider) =>
+              settings?.getProviderAuthPreference?.(provider) === "apiKey";
+
             const openaiToken = oauthStorage.getTokenByProvider("openai");
-            if (openaiToken && !oauthStorage.isTokenExpired(openaiToken)) {
+            if (prefersApiKey("openai")) {
+              console.log(
+                "[Electron]   ↷ OpenAI OAuth withheld — user chose API key",
+              );
+            } else if (openaiToken && !oauthStorage.isTokenExpired(openaiToken)) {
               oauthTokens.openai = {
                 accessToken: openaiToken.accessToken,
                 expiresAt: openaiToken.expiresAt,
@@ -1285,7 +1295,11 @@ class GatewayProcessSupervisor {
             }
 
             const claudeToken = oauthStorage.getTokenByProvider("anthropic");
-            if (claudeToken && !oauthStorage.isTokenExpired(claudeToken)) {
+            if (prefersApiKey("anthropic")) {
+              console.log(
+                "[Electron]   ↷ Claude OAuth withheld — user chose API key",
+              );
+            } else if (claudeToken && !oauthStorage.isTokenExpired(claudeToken)) {
               console.log(`[Electron]   Claude OAuth token details: length=${claudeToken.accessToken.length}, prefix=${claudeToken.accessToken.substring(0, 30)}...`);
               oauthTokens.anthropic = {
                 accessToken: claudeToken.accessToken,
@@ -2206,6 +2220,47 @@ app.whenReady().then(async () => {
   }
 
   ipcMain.handle("app:get-version", () => app.getVersion());
+
+  // Which credential to use when a provider has both OAuth and an API key.
+  // Lives in main because main decides which tokens the gateway ever sees.
+  ipcMain.handle("provider-auth:get-preference", (_event, provider) => {
+    if (provider !== "openai" && provider !== "anthropic") {
+      throw new TypeError(`Unsupported provider: ${provider}`);
+    }
+    return { preference: settingsStorage.getProviderAuthPreference(provider) };
+  });
+
+  ipcMain.handle(
+    "provider-auth:set-preference",
+    (_event, provider, preference) => {
+      if (provider !== "openai" && provider !== "anthropic") {
+        throw new TypeError(`Unsupported provider: ${provider}`);
+      }
+      if (preference !== "oauth" && preference !== "apiKey") {
+        throw new TypeError(`Unsupported preference: ${preference}`);
+      }
+      settingsStorage.setProviderAuthPreference(provider, preference);
+      // The gateway caches keys and OAuth tokens per provider, so drop the stale
+      // entry or it keeps using the credential the user just switched away from.
+      if (supervisor?.getProcess() && !supervisor.getProcess().killed) {
+        try {
+          supervisor.getProcess().send({
+            type: "INVALIDATE_KEY_CACHE",
+            keyName:
+              provider === "anthropic"
+                ? "ANTHROPIC_API_KEY"
+                : "OPENAI_API_KEY",
+          });
+        } catch (error) {
+          console.warn(
+            "[Electron] Could not invalidate gateway key cache:",
+            error.message,
+          );
+        }
+      }
+      return { success: true, preference };
+    },
+  );
 
   // Backfill gateway settings with Papr user id before telemetry + gateway spawn
   const paprProfile = settingsStorage.getPaprProfile();

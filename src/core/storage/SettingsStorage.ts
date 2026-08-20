@@ -178,6 +178,29 @@ export class SettingsStorage {
   }
 
   /**
+   * Which credential the user picked for a provider that has both OAuth and an
+   * API key. Defaults to "oauth" because key resolution has always preferred it.
+   */
+  getProviderAuthPreference(
+    provider: "openai" | "anthropic",
+  ): "oauth" | "apiKey" {
+    return this.store.get(
+      `preferences.providerAuthPreference.${provider}`,
+      "oauth",
+    ) as "oauth" | "apiKey";
+  }
+
+  setProviderAuthPreference(
+    provider: "openai" | "anthropic",
+    preference: "oauth" | "apiKey",
+  ): void {
+    this.store.set(
+      `preferences.providerAuthPreference.${provider}`,
+      preference,
+    );
+  }
+
+  /**
    * Stable random id per install for anonymous DAU-style metrics only.
    */
   getOrCreateTelemetryInstallId(): string {

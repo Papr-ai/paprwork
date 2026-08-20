@@ -46,6 +46,12 @@ export interface ChatMessage extends CoreMessage {
   sequence?: SequenceItem[];
 }
 
+/**
+ * Why the turn stopped and is offering Resume. The banner copy differs: a dropped
+ * gateway is our problem to explain, a provider rate limit is the user's to wait out.
+ */
+export type StreamRecoveryReason = "connection" | "rateLimit";
+
 export interface ChatState {
   messages: ChatMessage[];
   isLoading: boolean;
@@ -55,6 +61,8 @@ export interface ChatState {
   connectionPaused?: boolean;
   /** Auto-resume failed — user can tap Continue to retry stream recovery */
   needsStreamRecovery?: boolean;
+  /** Defaults to "connection" when unset, matching the original recovery banner. */
+  streamRecoveryReason?: StreamRecoveryReason;
   hasUnread: boolean;
   draftMessage?: string; // Persisted draft message for this chat
   lastSelectedModelId?: string; // Last model user chose for this chat

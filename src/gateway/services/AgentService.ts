@@ -1361,6 +1361,11 @@ export class AgentService {
                 await import("../utils/resolveJobProviderModel.js")
               ).normalizeChatGptOAuthToken(token)
             : token;
+        // This env var doubles as the Platform API key, so keep the real one
+        // recoverable for when the user switches this provider to API key mode.
+        (
+          await import("../utils/keyResolver.js")
+        ).preserveEnvKeyBeforeOverwrite(envKey);
         process.env[envKey] = piToken;
         console.log(`[AgentService] Set ${envKey} in process.env (length: ${piToken.length})`);
 

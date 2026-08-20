@@ -437,6 +437,16 @@ export interface ElectronAPI {
     ) => Promise<{ success: boolean; enabled: boolean }>;
   };
 
+  providerAuth: {
+    getPreference: (
+      provider: "openai" | "anthropic",
+    ) => Promise<{ preference: "oauth" | "apiKey" }>;
+    setPreference: (
+      provider: "openai" | "anthropic",
+      preference: "oauth" | "apiKey",
+    ) => Promise<{ success: boolean; preference: "oauth" | "apiKey" }>;
+  };
+
   chatAttachments: {
     save: (input: {
       chatId: string;

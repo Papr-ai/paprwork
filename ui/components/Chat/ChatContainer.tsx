@@ -150,6 +150,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   const isSending = chatState?.isSending ?? false;
   const connectionPaused = chatState?.connectionPaused ?? false;
   const needsStreamRecovery = chatState?.needsStreamRecovery ?? false;
+  const streamRecoveryReason = chatState?.streamRecoveryReason ?? "connection";
 
   const error = useChatStore((state) => state.error);
 
@@ -824,7 +825,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       {needsStreamRecovery && (
         <div className="stream-recovery-banner">
           <span className="stream-recovery-banner__message">
-            Connection restored, but the agent response may be incomplete.
+            {streamRecoveryReason === "rateLimit"
+              ? `${selectedModel.name} hit the provider's rate limit, so the reply never started. Wait a moment and tap Resume, or switch to another model.`
+              : "Connection restored, but the agent response may be incomplete."}
           </span>
           <button
             type="button"

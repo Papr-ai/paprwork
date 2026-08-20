@@ -11,6 +11,7 @@ import type {
   ChatState,
   StreamingState,
   SequenceItem,
+  StreamRecoveryReason,
 } from "../types/chat";
 import type { MemoryAudience } from "../constants/memoryScope";
 import type { ToolCall } from "../types/core";
@@ -53,7 +54,11 @@ interface ChatStore {
   setLoading: (loading: boolean) => void;
   setSending: (chatId: string, sending: boolean) => void;
   setConnectionPaused: (chatId: string, paused: boolean) => void;
-  setNeedsStreamRecovery: (chatId: string, needs: boolean) => void;
+  setNeedsStreamRecovery: (
+    chatId: string,
+    needs: boolean,
+    reason?: StreamRecoveryReason,
+  ) => void;
   setError: (error: string | null) => void;
 
   // Parallel chat state management
@@ -420,7 +425,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       return { chatStates: newChatStates };
     }),
 
-  setNeedsStreamRecovery: (chatId, needs) =>
+  setNeedsStreamRecovery: (chatId, needs, reason = "connection") =>
     set((state) => {
       const chatState = state.chatStates.get(chatId);
       if (!chatState) return state;
@@ -429,7 +434,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       newChatStates.set(chatId, {
         ...chatState,
         needsStreamRecovery: needs,
-        ...(needs ? { connectionPaused: false } : {}),
+        ...(needs
+          ? { connectionPaused: false, streamRecoveryReason: reason }
+          : { streamRecoveryReason: undefined }),
       });
 
       return { chatStates: newChatStates };

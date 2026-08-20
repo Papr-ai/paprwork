@@ -75,6 +75,12 @@ export interface AgentConfigInternal extends AgentConfig {
   apiKey: string; // Fetched internally via IPC, never sent over network
   /** When OAuth is used for openai/anthropic; used to route to pi-ai vs AI SDK */
   authType?: "oauth" | "apiKey";
+  /**
+   * Credential generation `apiKey` was resolved under. Sessions reuse a resolved
+   * credential for their lifetime, so this lets them detect that the user changed
+   * auth mode or keys and re-resolve instead of using the old one.
+   */
+  authEpoch?: number;
 }
 
 /**

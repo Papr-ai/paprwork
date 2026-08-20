@@ -46,7 +46,10 @@ export function OAuthSection({
   const { status, loading, startOAuthLogin, disconnect } = useOAuth(provider, {
     source: oauthSource,
   });
+  // Persisted in the main process: it decides which credential the gateway ever
+  // sees, so this is the mode the agent actually runs on, not just which form shows.
   const [useApiKey, setUseApiKey] = useState(false);
+  const [authPrefLoaded, setAuthPrefLoaded] = useState(false);
   const [showPasteToken, setShowPasteToken] = useState(false);
   const [pasteMode, setPasteMode] = useState<PasteMode>("idle");
   const [prevTimedOut, setPrevTimedOut] = useState(false);
@@ -143,6 +146,40 @@ export function OAuthSection({
   }, [status.timedOut, status.error, status.connected, status.showPasteField, provider]);
 
 
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result =
+          await window.electronAPI?.providerAuth?.getPreference(provider);
+        if (!cancelled && result?.preference === "apiKey") {
+          setUseApiKey(true);
+        }
+      } catch (error) {
+        console.error("Failed to load provider auth preference:", error);
+      } finally {
+        if (!cancelled) setAuthPrefLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [provider]);
+
+  const handleToggleAuthMode = async () => {
+    const next = !useApiKey;
+    setUseApiKey(next);
+    try {
+      await window.electronAPI?.providerAuth?.setPreference(
+        provider,
+        next ? "apiKey" : "oauth",
+      );
+    } catch (error) {
+      console.error("Failed to save provider auth preference:", error);
+      setUseApiKey(!next);
+    }
+  };
+
   // Check if API key already exists when switching to API key mode
   React.useEffect(() => {
     if (useApiKey) {
@@ -207,10 +244,20 @@ export function OAuthSection({
     <div className="oauth-card">
       <div className="oauth-card__header">
         <h3>{title}</h3>
-        {status.connected && (
-          <span className="oauth-badge oauth-badge--connected">
-            ✓ Connected
-          </span>
+        {/* In API key mode the OAuth token is deliberately unused, so showing it
+            as connected is what made the switch look like it hadn't applied. */}
+        {useApiKey ? (
+          apiKeySaved && (
+            <span className="oauth-badge oauth-badge--connected">
+              ✓ Using API key
+            </span>
+          )
+        ) : (
+          status.connected && (
+            <span className="oauth-badge oauth-badge--connected">
+              ✓ Connected
+            </span>
+          )
         )}
       </div>
 
@@ -469,7 +516,8 @@ export function OAuthSection({
         </span>
         <button
           className="oauth-toggle-switch"
-          onClick={() => setUseApiKey(!useApiKey)}
+          onClick={() => void handleToggleAuthMode()}
+          disabled={!authPrefLoaded}
           aria-label="Toggle between OAuth and API Key"
         >
           <span className={`oauth-toggle-slider ${useApiKey ? 'right' : 'left'}`} />
