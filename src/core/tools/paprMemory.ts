@@ -719,30 +719,41 @@ export const searchAgentMemoryTool = createTool({
       const chosenProvider = args.rerankingProvider ?? "cohere";
       const chosenModel = args.rerankingModel ?? (chosenProvider === "cohere" ? "rerank-v3.5" : undefined);
 
-      const response = await client.memory.search({
-        query: args.query!,
-        ...(memorySearchScope.external_user_id
-          ? { external_user_id: memorySearchScope.external_user_id }
-          : {}),
-        ...(memorySearchScope.search_acl
-          ? { search_acl: memorySearchScope.search_acl }
-          : {}),
-        max_memories: args.maxMemories ?? 20,
-        max_nodes: 20,
-        enable_agentic_graph: true,
-        reranking_config: {
-          reranking_enabled: chosenProvider !== "none",
-          reranking_provider: chosenProvider,
-          ...(chosenModel ? { reranking_model: chosenModel } : {}),
-          ...(args.rerankingDomainId ? { domain_id: args.rerankingDomainId } : {}),
-        },
-        response_format: "toon",
-        ...(searchPolicy ? { policy: searchPolicy } : {}),
-        ...(Object.keys(searchMetadata).length > 0
-          ? { metadata: searchMetadata }
-          : {}),
-      });
-      const formatted = formatSearchMemoryResponse(response);
+      // withResponse() exposes the raw Response so we can read the server's
+      // X-Search-Id / X-Memory-Count / X-Node-Count headers. That is more robust
+      // than regex-parsing the TOON body, which stays as a fallback for servers
+      // that predate those headers.
+      const { data: response, response: httpResponse } = await client.memory
+        .search({
+          query: args.query!,
+          ...(memorySearchScope.external_user_id
+            ? { external_user_id: memorySearchScope.external_user_id }
+            : {}),
+          ...(memorySearchScope.search_acl
+            ? { search_acl: memorySearchScope.search_acl }
+            : {}),
+          max_memories: args.maxMemories ?? 20,
+          max_nodes: 20,
+          enable_agentic_graph: true,
+          reranking_config: {
+            reranking_enabled: chosenProvider !== "none",
+            reranking_provider: chosenProvider,
+            ...(chosenModel ? { reranking_model: chosenModel } : {}),
+            ...(args.rerankingDomainId
+              ? { domain_id: args.rerankingDomainId }
+              : {}),
+          },
+          response_format: "toon",
+          ...(searchPolicy ? { policy: searchPolicy } : {}),
+          ...(Object.keys(searchMetadata).length > 0
+            ? { metadata: searchMetadata }
+            : {}),
+        })
+        .withResponse();
+      const formatted = formatSearchMemoryResponse(
+        response,
+        httpResponse.headers,
+      );
       // Only auto-submit low-relevance feedback when the server genuinely returned
       // nothing. memoryCount is now recovered from the TOON envelope, so a parse
       // failure must NOT be mistaken for a zero-result search — that would train
