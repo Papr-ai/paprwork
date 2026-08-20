@@ -18,7 +18,15 @@ export interface PaprPlanLimits {
 
 export interface PaprUsageSnapshot {
   memoriesCount: number;
+  /**
+   * Total storage against the plan limit: Papr Memory plus App Files.
+   * Both draw on one allowance, so this is what the storage bar shows.
+   */
   storageCount: number;
+  /** Memory-only bytes, for the breakdown under the bar. */
+  memoryStorageCount: number;
+  /** App Files bytes (recordings, uploads), for the breakdown. */
+  appStorageCount: number;
   miniInteractionCount: number;
 }
 

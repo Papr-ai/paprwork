@@ -39,7 +39,10 @@ const PAPR_PLATFORM_URL = (
 interface UsageMetricsResponse {
   organization?: {
     memoriesCount?: number;
+    /** Papr Memory bytes only — App Files are counted separately. */
     storageCount?: number;
+    /** App Files bytes (recordings, uploads) sharing the same plan limit. */
+    appStorageCount?: number;
   };
   currentMonth?: {
     totalInteractions?: number;
@@ -317,10 +320,17 @@ async function fetchUsageMetrics(
       }
     : null;
 
+  const memoryStorageBytes = metrics.organization?.storageCount ?? 0;
+  const appStorageBytes = metrics.organization?.appStorageCount ?? 0;
+
   return {
     usage: {
       memoriesCount: metrics.organization?.memoriesCount ?? 0,
-      storageCount: metrics.organization?.storageCount ?? 0,
+      // One plan allowance, two consumers. Showing Memory alone made uploaded
+      // recordings invisible in Settings even though they use the same quota.
+      storageCount: memoryStorageBytes + appStorageBytes,
+      memoryStorageCount: memoryStorageBytes,
+      appStorageCount: appStorageBytes,
       miniInteractionCount: metrics.currentMonth?.totalInteractions ?? 0,
     },
     subscriptionFromMetrics,
