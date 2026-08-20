@@ -74,9 +74,16 @@ export async function setupAgentHandlers(
         let authType: "oauth" | "apiKey" | undefined;
         let usePaprProxy = false;
 
+        const { getAuthEpoch } = await import("../utils/keyResolver.js");
+        const authEpoch = getAuthEpoch();
+
         if (
           existingSession &&
-          agentService.isSameProvider(existingSession.config, config)
+          agentService.isSameProvider(existingSession.config, config) &&
+          // A session holds its credential for its whole lifetime, so reusing it
+          // blindly would keep sending the old one after the user switched auth
+          // mode or updated a key. Only reuse while the epoch still matches.
+          existingSession.config.authEpoch === authEpoch
         ) {
           // Reuse API key and auth type from existing session (ZERO keychain access!)
           apiKey = existingSession.config.apiKey;
@@ -86,6 +93,11 @@ export async function setupAgentHandlers(
             `[Agent WS] Reusing cached API key for chat ${chatId} (${config.provider})`,
           );
         } else {
+          if (existingSession && existingSession.config.authEpoch !== authEpoch) {
+            console.log(
+              `[Agent WS] Credentials changed since session was created — re-resolving auth for chat ${chatId}`,
+            );
+          }
           // Fetch API key via IPC (secure method - never sent over WebSocket)
           // Only happens on first message or when switching providers
           const t2 = performance.now();
@@ -194,7 +206,13 @@ export async function setupAgentHandlers(
         }
 
         // Create internal config with API key and auth type (for OAuth vs API key routing)
-        const configInternal = { ...config, apiKey, authType, usePaprProxy };
+        const configInternal = {
+          ...config,
+          apiKey,
+          authType,
+          usePaprProxy,
+          authEpoch,
+        };
 
         // Log which authentication method is being used
         if (usePaprProxy) {

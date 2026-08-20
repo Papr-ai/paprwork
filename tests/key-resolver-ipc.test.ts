@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   clearKeyCache,
   getApiKeys,
+  getAuthEpoch,
   getPaprApiKey,
+  getProviderAuth,
   preserveEnvKeyBeforeOverwrite,
 } from "../src/gateway/utils/keyResolver.js";
 import type {
@@ -105,6 +107,57 @@ describe("keyResolver IPC flow", () => {
     const keys = await getApiKeys(["OPENAI_API_KEY"], fakeIpcWithoutSend);
 
     expect(keys.OPENAI_API_KEY).toBe("env-fallback-key");
+  });
+
+  test("bumps the auth epoch when cached credentials are cleared", () => {
+    // Chat sessions keep the credential they resolved at creation, so the epoch is
+    // the only signal telling them an auth-mode switch invalidated it.
+    const before = getAuthEpoch();
+
+    clearKeyCache("ANTHROPIC_API_KEY");
+
+    expect(getAuthEpoch()).toBeGreaterThan(before);
+  });
+
+  test("re-asks main for OAuth tokens even when one is already cached", async () => {
+    // Main withholds the OAuth token once the user picks API key, so a cached
+    // token must not stop us from re-reading that decision.
+    process.env.NODE_ENV = "development";
+    process.env.ANTHROPIC_API_KEY = "sk-ant-api03-real-platform-key";
+
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    let withholdOAuth = false;
+
+    class TogglingOAuthIpc extends EventEmitter {
+      public sentMessages: RequestKeysMessage[] = [];
+
+      send = (message: unknown): void => {
+        const typedMessage = message as RequestKeysMessage;
+        this.sentMessages.push(typedMessage);
+        this.emit("message", {
+          type: "KEYS_RESPONSE",
+          requestId: typedMessage.requestId,
+          keys: {},
+          oauthTokens: withholdOAuth
+            ? {}
+            : { anthropic: { accessToken: "sk-ant-oat01-token", expiresAt } },
+        } satisfies KeysResponseMessage);
+      };
+    }
+
+    const fakeIpc = new TogglingOAuthIpc();
+
+    const asOAuth = await getProviderAuth("anthropic", fakeIpc);
+    expect(asOAuth).toEqual({ type: "oauth", token: "sk-ant-oat01-token" });
+
+    withholdOAuth = true;
+    const asApiKey = await getProviderAuth("anthropic", fakeIpc);
+
+    expect(asApiKey).toEqual({
+      type: "apiKey",
+      key: "sk-ant-api03-real-platform-key",
+    });
+    expect(fakeIpc.sentMessages).toHaveLength(2);
   });
 
   test("getPaprApiKey rejects IPC key scoped to a different namespace", async () => {

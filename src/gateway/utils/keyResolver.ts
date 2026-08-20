@@ -51,6 +51,17 @@ const PAPR_API_KEY_RETRY_COOLDOWN_MS = 3_000;
 const overwrittenEnvKeys: Record<string, string> = {};
 
 /**
+ * Bumped whenever the cached credentials change — auth-mode switch, key edit,
+ * re-auth. Chat sessions keep the credential they resolved at creation for their
+ * whole lifetime, so they compare epochs to notice theirs went stale.
+ */
+let authEpoch = 0;
+
+export function getAuthEpoch(): number {
+  return authEpoch;
+}
+
+/**
  * OAuth access tokens are not Platform API keys — sending one to the Platform
  * API fails or bills against the wrong quota, so never resolve one as a key.
  */
@@ -350,6 +361,7 @@ export async function getPaprApiKey(
  * @param keyName - Optional specific key to clear, or undefined to clear all
  */
 export function clearKeyCache(keyName?: string): void {
+  authEpoch += 1;
   if (keyName) {
     delete keyCache[keyName];
     if (keyName === "PAPR_API_KEY") {
@@ -428,7 +440,11 @@ export async function getProviderAuth(
   // Populate OAuth cache from Electron main process when available.
   // In dev mode getApiKeys() reads process.env only, but the gateway still runs
   // as an Electron child with IPC — so OAuth tokens from Settings must be loaded here.
-  if (ipcProcess.send && !hasValidOAuthToken(provider)) {
+  //
+  // Ask on every resolution, not just when the cache is empty: main decides which
+  // credentials the gateway may see (it withholds OAuth when the user picked API
+  // key), and a cached token must never keep us from re-reading that decision.
+  if (ipcProcess.send) {
     try {
       await requestKeysViaIPC([keyName], ipcProcess);
     } catch (error) {
