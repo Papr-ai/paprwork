@@ -12,15 +12,26 @@ import {
 } from "./MiniAppPublishBar";
 import { MiniAppFilesView } from "./MiniAppFilesView";
 import type { AppWorkspaceMode } from "../../hooks/useAppWorkspace";
-import { clearCloudPreviewCookies, buildUpstreamCloudPreviewUrl } from "../../utils/cloudDesktopPreview";
+import {
+  clearCloudPreviewCookies,
+  buildUpstreamPublishedWebUrl,
+  parsePublishedAppUrl,
+} from "../../utils/cloudDesktopPreview";
+import { prepareCloudPreviewIframe } from "../../utils/cloudPreviewSession";
+import { usePreviewTabLifecycle } from "../../utils/previewIframeLifecycle";
 import { confirmRefreshIfNewRevision } from "../../utils/publishedAppRevisionCheck";
 import "./MiniAppPublishBar.css";
 
 interface MiniAppViewProps {
   appId: string;
+  /** False when preview tab is backgrounded but still LRU-mounted. */
+  previewTabVisible?: boolean;
 }
 
-export function MiniAppView({ appId }: MiniAppViewProps) {
+export function MiniAppView({
+  appId,
+  previewTabVisible = true,
+}: MiniAppViewProps) {
   const { reloadKey, triggerReload } = useApp(appId);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [appTitle, setAppTitle] = useState("Mini-app");
@@ -28,6 +39,11 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
   const [viewMode, setViewMode] = useState<AppPreviewMode>("local");
   const [workspaceMode, setWorkspaceMode] = useState<AppWorkspaceMode>("preview");
   const [iframeLoadKey, setIframeLoadKey] = useState(0);
+  const [publishedIframeBaseUrl, setPublishedIframeBaseUrl] = useState<string | null>(
+    null,
+  );
+  const [publishedPreviewBootstrapping, setPublishedPreviewBootstrapping] =
+    useState(false);
   const [iframeLoadError, setIframeLoadError] = useState<string | null>(null);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [appMissingInWorkspace, setAppMissingInWorkspace] = useState(false);
@@ -53,18 +69,25 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
     cloudLineage?.mode === "track" &&
     Boolean(cloudLineage.sourceNamespaceId && cloudLineage.sourceSlug);
 
-  const upstreamPreviewUrl = useMemo(() => {
+  const upstreamLiveUrl = useMemo(() => {
     if (!isTrackCollaborator || !cloudLineage) return null;
-    return buildUpstreamCloudPreviewUrl({
+    return buildUpstreamPublishedWebUrl({
       sourceNamespaceId: cloudLineage.sourceNamespaceId,
       sourceSlug: cloudLineage.sourceSlug,
     });
   }, [isTrackCollaborator, cloudLineage]);
 
+  const publishedLiveUrl = useMemo(() => {
+    if (isTrackCollaborator) {
+      return upstreamLiveUrl;
+    }
+    return cloud.publishedWebUrl;
+  }, [isTrackCollaborator, upstreamLiveUrl, cloud.publishedWebUrl]);
+
   const isPublishedPreview =
     viewMode === "published" &&
-    ((isTrackCollaborator && !!upstreamPreviewUrl) ||
-      (cloud.live && !!cloud.publishedPreviewUrl));
+    ((isTrackCollaborator && !!upstreamLiveUrl) ||
+      (cloud.live && !!cloud.publishedWebUrl));
 
   // Debounced cloud→local Turso pull when opening local preview (scoped to this app).
   useEffect(() => {
@@ -78,13 +101,53 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
     });
   }, [appId, gatewayBaseUrl, isPublishedPreview, viewMode]);
 
+  useEffect(() => {
+    if (!isPublishedPreview || !publishedLiveUrl) {
+      setPublishedIframeBaseUrl(null);
+      setPublishedPreviewBootstrapping(false);
+      return;
+    }
+
+    let cancelled = false;
+    setPublishedPreviewBootstrapping(true);
+    setPublishedIframeBaseUrl(null);
+
+    const parsed = parsePublishedAppUrl(publishedLiveUrl);
+    const bootstrap = parsed
+      ? prepareCloudPreviewIframe({
+          namespaceId: parsed.namespaceId,
+          slug: parsed.slug,
+          shareToken: parsed.shareToken,
+          liveUrl: publishedLiveUrl,
+        })
+      : Promise.resolve({
+          iframeUrl: publishedLiveUrl,
+          mode: "proxy" as const,
+        });
+
+    void bootstrap
+      .then((resolved) => {
+        if (cancelled) return;
+        setPublishedIframeBaseUrl(resolved.iframeUrl);
+        setPublishedPreviewBootstrapping(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPublishedIframeBaseUrl(publishedLiveUrl);
+        setPublishedPreviewBootstrapping(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isPublishedPreview, publishedLiveUrl, iframeLoadKey]);
+
   const iframeSrc = useMemo(() => {
     if (isPublishedPreview) {
-      const base =
-        isTrackCollaborator && upstreamPreviewUrl
-          ? upstreamPreviewUrl
-          : cloud.publishedPreviewUrl!;
-      const url = new URL(base);
+      if (!publishedIframeBaseUrl) {
+        return null;
+      }
+      const url = new URL(publishedIframeBaseUrl);
       url.searchParams.set("_r", String(iframeLoadKey));
       return url.toString();
     }
@@ -97,10 +160,10 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
     reloadKey,
     iframeLoadKey,
     isPublishedPreview,
-    cloud.publishedPreviewUrl,
-    isTrackCollaborator,
-    upstreamPreviewUrl,
+    publishedIframeBaseUrl,
   ]);
+
+  usePreviewTabLifecycle(iframeRef, previewTabVisible);
 
   const scheduleIframeRetry = useCallback((reason: string) => {
     setIframeLoadError(reason);
@@ -483,11 +546,11 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
               <p>Gateway is starting — app preview will load when ready…</p>
             </div>
           ) : null}
-          {shouldLoadLocalIframe || isPublishedPreview ? (
+          {shouldLoadLocalIframe || (isPublishedPreview && iframeSrc) ? (
             !appMissingInWorkspace ? (
             <iframe
               ref={iframeRef}
-              key={`${appId}-${viewMode}-${isPublishedPreview ? cloud.publishedPreviewUrl : reloadKey}-${iframeLoadKey}`}
+              key={`${appId}-${viewMode}-${isPublishedPreview ? publishedLiveUrl : reloadKey}-${iframeLoadKey}`}
               className="mini-app-view__frame"
               src={iframeSrc}
               title={`mini-app-${appId}`}
@@ -515,6 +578,11 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
               }}
             />
             ) : null
+          ) : null}
+          {publishedPreviewBootstrapping ? (
+            <div className="mini-app-view__overlay">
+              <p>Connecting to apps.papr.ai…</p>
+            </div>
           ) : null}
           {runtimeError && !gatewaySupervisorStarting ? (
             <div className="mini-app-view__overlay mini-app-view__overlay--hint">

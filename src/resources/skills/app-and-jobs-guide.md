@@ -48,7 +48,7 @@ If the task is explicit and small, merge steps. Always explain tradeoffs when sk
 | `read_app_data_sources` | List registered data sources for an app |
 | `read_skill` | Load a skill for detailed guidance |
 
-> Mini-app REST APIs: **`/api/db/query`** (reads), **`/api/db/write`** (writes), **`/api/db/exec`** (CREATE TABLE IF NOT EXISTS only), **`/api/app/backend/:action`**, **`/api/jobs/run`**, **`/api/credentials/client-keys`** (publishable keys only). **`/api/bash/run` is disabled** for mini-apps.
+> Mini-app REST APIs: **`/api/db/query`** (single read), **`/api/db/batch`** (batch reads; aliases `query-batch`, `read-batch`), **`/api/db/write`** (single write), **`/api/db/write-batch`** (batch writes — default **`atomic: false`**, optional **`atomic: true`** on same database), **`/api/db/exec`** (CREATE TABLE IF NOT EXISTS only), **`/api/app/backend/:action`**, **`/api/jobs/run`**, **`/api/credentials/client-keys`** (publishable keys only). **`/api/bash/run` is disabled** for mini-apps.
 
 ---
 
@@ -250,6 +250,32 @@ const { lastInsertRowid } = await fetch('/api/db/write', {
 **Security:** Only `INSERT`, `UPDATE`, `DELETE`, `REPLACE` on `/api/db/write`. Only databases in `data-sources.json`. Always use `params` with `?` placeholders.
 
 **Write vs trigger a job:** Use `/api/db/write` for direct state changes the app owns (select, flag, delete). Use `/api/jobs/run` when the change requires backend processing (LLM call, API call, complex logic).
+
+### Batch reads and writes (two lanes — do not mix)
+
+| Lane | Endpoint | Use when |
+|------|----------|----------|
+| Read batch | `POST /api/db/batch` (aliases: `query-batch`, `read-batch`) | 2+ **SELECT**s on mount — one HTTP round trip, max 25 statements |
+| Write batch | `POST /api/db/write-batch` | 2+ **INSERT/UPDATE/DELETE** in one user action — max 25 statements |
+
+- **Never** put INSERT/UPDATE/DELETE in `/api/db/batch` — each statement gets `{ ok: false, error: "Only SELECT..." }`.
+- **`write-batch` returns `{ atomic, results }`** — default **`atomic: false`**: statements commit one at a time; check every `results[i].ok`. Pass **`atomic: true`** for all-or-nothing on the **same linked database** (`sourceId`).
+- Cross-database sequences still need **`/api/app/backend/:action`** or a job.
+
+```typescript
+// Batch read — page load
+const { results } = await fetch('/api/db/batch', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    appId: APP_ID,
+    statements: [
+      { sourceId: 'main', sql: 'SELECT * FROM people LIMIT 50' },
+      { sourceId: 'main', sql: 'SELECT * FROM settings WHERE id = 1' },
+    ],
+  }),
+}).then(r => r.json());
+```
 
 ---
 

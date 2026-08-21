@@ -40,7 +40,9 @@ With a contract:
 - Use `onDbChanged` to auto-refresh when any write path changes the DB (job, agent, Turso pull)
 - Use `onStatusChanged` to react to job lifecycle (completed, failed, running)
 - **Never** poll `/api/db/query` on an interval — cloud apps bill Turso per row read
-- **Batch page-load queries**: if the app fires 2+ queries on mount, use one `POST /api/db/batch` with `{ appId, statements: [{ sql, params?, sourceId? }, ...] }` (max 25) → `{ results: [{ ok, rows, ... }] }`. One round trip instead of N — works local and cloud.
+- **Batch page-load reads**: use **`POST /api/db/batch`** (aliases: **`/api/db/query-batch`**, **`/api/db/read-batch`**) with `{ appId, statements: [{ sql, params?, sourceId? }, ...] }` (max 25) → `{ results: [{ ok, rows?, error? }, ...] }`. **SELECT / WITH only** — INSERT/UPDATE/DELETE in this call returns `{ ok: false, error: "Only SELECT..." }` per statement.
+- **Batch writes**: use **`POST /api/db/write-batch`** with `{ appId, statements: [...] }` → `{ atomic, results: [...] }`. Default **`atomic: false`** — partial commits possible; check every `results[i].ok`. Pass **`atomic: true`** for one transaction on the same linked database (all-or-nothing).
+- **Wrong paths return HTML locally** if you typo the URL (e.g. `/api/user/me`) — gateway serves the SPA shell. Real DB batch routes: **`/api/db/batch`**, **`/api/db/write-batch`** only (plus query-batch/read-batch aliases for reads).
 - Jobs emit live progress: `PAPR_PROGRESS {"event":"...","payload":{...}}` on stdout
 - Fallback: manual refresh button only
 
@@ -113,7 +115,7 @@ When cloud sync is enabled (default):
 
 | Works on cloud | Desktop-only |
 |----------------|--------------|
-| `/api/db/schema`, `/api/db/query`, `/api/db/batch`, `/api/db/write`, `/api/db/exec` | `window.paprAPI` (chat.open, shell, etc.) |
+| `/api/db/schema`, `/api/db/query`, `/api/db/batch` (aliases: `query-batch`, `read-batch`), `/api/db/write`, `/api/db/write-batch`, `/api/db/exec` | `window.paprAPI` (chat.open, shell, etc.) |
 | `/api/jobs/list`, `/api/jobs/status`, `/api/jobs/run`, `/api/jobs/events` (SSE) | `/api/jobs/create` |
 | `/api/app/backend/:action` (vault keys, memory add/search via `/v1/memory`) | `/api/memory/*` (does not exist — use backend handlers) |
 

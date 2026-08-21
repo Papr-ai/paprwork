@@ -11,11 +11,16 @@ import { getPaprRoot } from "../../../core/utils/paprRoot.js";
 import type { CloudAppMetaFile } from "../cloudSync/cloudAppMeta.js";
 import type { DatabasesRegistryFile } from "../DatabaseRegistryService.js";
 import type { JobConfigSlice } from "../jobs/jobRuntimeFields.js";
+import type { AppDbConfigPayload } from "./appDbConfigUpload.js";
 
 const OUTBOX_FILENAME = "metadata-outbox.jsonl";
 const MAX_ATTEMPTS = 8;
 
-export type MetadataOutboxKind = "jobs" | "databases" | "app-runtime-meta";
+export type MetadataOutboxKind =
+  | "jobs"
+  | "databases"
+  | "app-runtime-meta"
+  | "app-db-config";
 
 export interface MetadataOutboxEntry {
   id: string;
@@ -27,6 +32,7 @@ export interface MetadataOutboxEntry {
   registry?: DatabasesRegistryFile;
   appId?: string;
   appRuntimeMeta?: CloudAppMetaFile;
+  appDbConfig?: AppDbConfigPayload;
 }
 
 function outboxPath(): string {
@@ -78,6 +84,13 @@ export async function enqueueMetadataOutboxEntry(
     ) {
       return true;
     }
+    if (
+      entry.kind === "app-db-config" &&
+      existing.kind === "app-db-config" &&
+      existing.appId !== entry.appId
+    ) {
+      return true;
+    }
     return false;
   });
   filtered.push({
@@ -119,6 +132,7 @@ export async function flushMetadataOutbox(): Promise<{ flushed: number; failed: 
     uploadDatabasesRegistryToCloudDirect,
     uploadAppRuntimeMetaToCloudDirect,
   } = await import("./MetadataRegistryClient.js");
+  const { uploadAppDbConfigToCloudDirect } = await import("./appDbConfigUpload.js");
 
   let flushed = 0;
   let failed = 0;
@@ -136,6 +150,12 @@ export async function flushMetadataOutbox(): Promise<{ flushed: number; failed: 
         entry.appRuntimeMeta
       ) {
         ok = await uploadAppRuntimeMetaToCloudDirect(entry.appId, entry.appRuntimeMeta);
+      } else if (
+        entry.kind === "app-db-config" &&
+        entry.appId &&
+        entry.appDbConfig
+      ) {
+        ok = await uploadAppDbConfigToCloudDirect(entry.appId, entry.appDbConfig);
       }
       if (ok) {
         await removeEntry(entry.id);

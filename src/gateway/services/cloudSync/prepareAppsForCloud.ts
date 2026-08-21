@@ -73,6 +73,11 @@ export async function prepareAppForCloudGitSync(
 
     const { writeCloudAppMeta } = await import("./cloudAppMeta.js");
     await writeCloudAppMeta(paprDir, appId);
+
+    const { uploadAppDbConfigToCloud } = await import(
+      "../syncV3/appDbConfigUpload.js"
+    );
+    void uploadAppDbConfigToCloud(paprDir, appId).catch(() => {});
   } catch (error) {
     console.warn(
       `[CloudSync] cloud prep skipped for ${appId}:`,

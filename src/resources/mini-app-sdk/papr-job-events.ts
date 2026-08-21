@@ -13,6 +13,10 @@
  *   });
  */
 
+import {
+  registerPausablePreviewResource,
+} from "./papr-preview-lifecycle.ts";
+
 export interface JobStatusChangedEvent {
   jobId: string;
   name?: string;
@@ -70,15 +74,10 @@ function parseEventData<T>(raw: string): T | null {
   }
 }
 
-/**
- * Subscribe to job lifecycle + progress events via Server-Sent Events.
- * Returns an unsubscribe function — call on view teardown.
- */
-export function subscribeJobEvents(
+function attachJobEventListeners(
+  source: EventSource,
   options: SubscribeJobEventsOptions,
-): () => void {
-  const source = new EventSource(buildEventsUrl(options.jobIds, options.dbIds));
-
+): void {
   source.addEventListener("jobs:status-changed", (ev: MessageEvent) => {
     const data = parseEventData<JobStatusChangedEvent>(String(ev.data));
     if (data) {
@@ -110,9 +109,39 @@ export function subscribeJobEvents(
   source.onerror = (err) => {
     options.onError?.(err);
   };
+}
+
+/**
+ * Subscribe to job lifecycle + progress events via Server-Sent Events.
+ * Pauses the connection while the preview tab is backgrounded (no reload).
+ * Returns an unsubscribe function — call on view teardown.
+ */
+export function subscribeJobEvents(
+  options: SubscribeJobEventsOptions,
+): () => void {
+  let source: EventSource | null = new EventSource(
+    buildEventsUrl(options.jobIds, options.dbIds),
+  );
+  attachJobEventListeners(source, options);
+
+  const unregisterPausable = registerPausablePreviewResource({
+    pause: () => {
+      source?.close();
+      source = null;
+    },
+    resume: () => {
+      if (source) {
+        return;
+      }
+      source = new EventSource(buildEventsUrl(options.jobIds, options.dbIds));
+      attachJobEventListeners(source, options);
+    },
+  });
 
   return () => {
-    source.close();
+    unregisterPausable();
+    source?.close();
+    source = null;
   };
 }
 

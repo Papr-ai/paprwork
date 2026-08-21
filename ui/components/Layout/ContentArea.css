@@ -52,6 +52,61 @@
   display: flex;
 }
 
+.content-pane__keep-alive--app {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Single layer — one host per tab; placement toggles visibility without remount */
+.content-area__app-tab-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.content-area__app-tab-layer .content-pane__keep-alive--app {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.content-area__app-tab-layer
+  .content-pane__keep-alive--app.content-pane__keep-alive--placement-full,
+.content-area__app-tab-layer
+  .content-pane__keep-alive--app.content-pane__keep-alive--placement-left,
+.content-area__app-tab-layer
+  .content-pane__keep-alive--app.content-pane__keep-alive--placement-right {
+  display: flex;
+  pointer-events: auto;
+}
+
+.content-area--split
+  .content-area__app-tab-layer
+  .content-pane__keep-alive--placement-left {
+  right: calc((1 - var(--split-ratio)) * 100% + 5px);
+}
+
+.content-area--split
+  .content-area__app-tab-layer
+  .content-pane__keep-alive--placement-right {
+  left: calc(var(--split-ratio) * 100% + 5px);
+}
+
+/* Off-screen cache for app preview tabs (iframes stay loaded) */
+.content-area__app-tab-cache {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+  visibility: hidden;
+}
+
 /* Add border to left pane in split view for better visual separation */
 .content-area--split .content-pane--left {
   border-right: 1px solid var(--border-color);

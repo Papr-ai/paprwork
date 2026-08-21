@@ -1,95 +1,154 @@
-import { describe, expect, it, beforeEach } from "vitest";
-import {
-  DatabaseRegistryService,
-  dbIdFromPath,
-  resetDatabaseRegistryForWorkspaceSwitch,
-} from "../src/gateway/services/DatabaseRegistryService.js";
-import type { AppDataSource } from "../src/gateway/services/appDataSources.js";
-import { dbTursoDatabaseName } from "../src/gateway/services/tursoDatabaseNaming.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadAppDataSourcesConfig } from "../src/gateway/services/appRuntime/cloudDatabaseRegistry.js";
+import { resetCloudAppHostCachesForTests } from "../src/gateway/services/appRuntime/cloudAppHostCache.js";
+import type { AppRuntimeRouteAuth } from "../src/gateway/services/appRuntime/types.js";
+import { PAPR_APP_CLOUD_REVISION_PATH } from "../src/gateway/services/cloudSync/cloudAppRevisionMarker.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
-describe("DatabaseRegistryService cloud hydration", () => {
-  beforeEach(() => {
-    resetDatabaseRegistryForWorkspaceSwitch();
-  });
+vi.mock("../src/gateway/services/appRuntime/memoryRuntimeClient.js", () => ({
+  fetchRuntimeRepoFile: vi.fn(),
+}));
 
-  it("mergeFromRegistryFile loads synced databases.json entries", () => {
-    const registry = new DatabaseRegistryService("/tmp/papr-data", "/tmp/papr-apps");
-    const dbPath = "/Users/me/Papr/data/databases/myapp/data.db";
-    const dbId = dbIdFromPath(dbPath);
+import { fetchRuntimeRepoFile } from "../src/gateway/services/appRuntime/memoryRuntimeClient.js";
 
-    const merged = registry.mergeFromRegistryFile(
-      JSON.stringify({
-        version: 1,
-        databases: {
-          [dbId]: {
-            dbId,
-            localPath: dbPath,
-            tursoShortName: dbTursoDatabaseName(dbId),
-            isolation: "shared",
-            status: "active",
-            createdAt: "2026-01-01T00:00:00.000Z",
-            updatedAt: "2026-01-02T00:00:00.000Z",
-          },
-        },
-      }),
-    );
+useIsolatedPaprWorkspace("cloud-database-registry");
 
-    expect(merged).toBe(1);
-    expect(registry.getById(dbId)?.localPath).toBe(dbPath);
-  });
+const auth: AppRuntimeRouteAuth = {
+  namespaceId: "ns-1",
+  slug: "my-app",
+};
 
-  it("ensureRecordForSource synthesizes shared record when registry empty", () => {
-    const registry = new DatabaseRegistryService("/tmp/papr-data", "/tmp/papr-apps");
-    const dbPath = "/Users/me/Papr/data/databases/fetch-job/data.db";
-    const source: AppDataSource = {
-      id: "job:main",
-      type: "sqlite",
-      jobId: "a5b67ed7-2372-42af-bc39-59570f1455b9",
-      dbId: dbIdFromPath(dbPath),
-      alias: "Fetch Meetings",
-      dbPath,
-      tables: [],
-      linkedAt: "2026-01-01T00:00:00.000Z",
-    };
+afterEach(() => {
+  resetCloudAppHostCachesForTests();
+  vi.clearAllMocks();
+});
 
-    const record = registry.ensureRecordForSource(source);
-    expect(record.dbId).toBe(source.dbId);
-    expect(record.isolation).toBe("shared");
-    expect(registry.getById(source.dbId!)).toBeDefined();
-  });
+describe("loadAppDataSourcesConfig", () => {
+  it("fetches data-sources, linked-databases, and databases.json in parallel", async () => {
+    const callOrder: string[] = [];
 
-  it("enrichSource repairs stale dbId to match registry path", () => {
-    const registry = new DatabaseRegistryService("/tmp/papr-data", "/tmp/papr-apps");
-    const dbPath = "/Users/me/Papr/data/databases/myapp/data.db";
-    const canonicalId = dbIdFromPath(dbPath);
-
-    registry.mergeFromRegistryFile(
-      JSON.stringify({
-        version: 1,
-        databases: {
-          [canonicalId]: {
-            dbId: canonicalId,
-            localPath: dbPath,
-            tursoShortName: dbTursoDatabaseName(canonicalId),
-            isolation: "shared",
-            status: "active",
-            createdAt: "2026-01-01T00:00:00.000Z",
-            updatedAt: "2026-01-01T00:00:00.000Z",
-          },
-        },
-      }),
-    );
-
-    const enriched = registry.enrichSource({
-      id: "bad:main",
-      type: "sqlite",
-      dbId: "db-wrong000",
-      alias: "main",
-      dbPath,
-      tables: [],
-      linkedAt: "2026-01-01T00:00:00.000Z",
+    vi.mocked(fetchRuntimeRepoFile).mockImplementation(async (_auth, path) => {
+      if (typeof path === "string" && path.includes(PAPR_APP_CLOUD_REVISION_PATH)) {
+        return { content: "rev-1\n", contentType: "text/plain" };
+      }
+      callOrder.push(String(path));
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (path === "data-sources.json") {
+        return {
+          content: JSON.stringify({
+            sources: [{ alias: "main", jobId: "job-1", dbPath: "data/data.db" }],
+          }),
+          contentType: "application/json",
+        };
+      }
+      if (path === "linked-databases.json") {
+        return { content: JSON.stringify({ databases: {} }), contentType: "application/json" };
+      }
+      if (path === "data/databases.json") {
+        return { content: JSON.stringify({ databases: {} }), contentType: "application/json" };
+      }
+      return null;
     });
 
-    expect(enriched.dbId).toBe(canonicalId);
+    const config = await loadAppDataSourcesConfig(auth);
+
+    expect(config.sources).toHaveLength(1);
+    expect(config.sources[0]?.alias).toBe("main");
+    // All three config files start fetching before any completes (~parallel).
+    expect(callOrder.slice(0, 3).sort()).toEqual(
+      ["data-sources.json", "data/databases.json", "linked-databases.json"].sort(),
+    );
+  });
+
+  it("caches parsed app db config keyed by revision (Phase 3.3)", async () => {
+    vi.mocked(fetchRuntimeRepoFile).mockImplementation(async (_auth, path) => {
+      if (typeof path === "string" && path.includes(PAPR_APP_CLOUD_REVISION_PATH)) {
+        return { content: "rev-1\n", contentType: "text/plain" };
+      }
+      if (path === "data-sources.json") {
+        return {
+          content: JSON.stringify({
+            sources: [{ alias: "main", jobId: "job-1", dbPath: "data/data.db" }],
+          }),
+          contentType: "application/json",
+        };
+      }
+      if (path === "linked-databases.json") {
+        return { content: JSON.stringify({ databases: {} }), contentType: "application/json" };
+      }
+      if (path === "data/databases.json") {
+        return { content: JSON.stringify({ databases: {} }), contentType: "application/json" };
+      }
+      return null;
+    });
+
+    const stats1 = { cacheHit: false as boolean | undefined };
+    await loadAppDataSourcesConfig(auth, "data-sources.json", stats1);
+    expect(stats1.cacheHit).toBe(false);
+
+    const stats2 = { cacheHit: false as boolean | undefined };
+    await loadAppDataSourcesConfig(auth, "data-sources.json", stats2);
+    expect(stats2.cacheHit).toBe(true);
+
+    // Revision marker + 3 files on first load only.
+    expect(fetchRuntimeRepoFile).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not cache empty config when data-sources.json is missing", async () => {
+    vi.mocked(fetchRuntimeRepoFile).mockImplementation(async (_auth, path) => {
+      if (typeof path === "string" && path.includes(PAPR_APP_CLOUD_REVISION_PATH)) {
+        return { content: "rev-1\n", contentType: "text/plain" };
+      }
+      if (path === "data-sources.json") {
+        return null;
+      }
+      if (path === "linked-databases.json") {
+        return {
+          content: JSON.stringify({
+            version: 1,
+            databases: { "db-1": { dbId: "db-1", label: "main" } },
+          }),
+          contentType: "application/json",
+        };
+      }
+      if (path === "data/databases.json") {
+        return { content: JSON.stringify({ databases: {} }), contentType: "application/json" };
+      }
+      return null;
+    });
+
+    const stats1 = { cacheHit: false as boolean | undefined };
+    const first = await loadAppDataSourcesConfig(auth, "data-sources.json", stats1);
+    expect(first.sources).toHaveLength(0);
+    expect(stats1.cacheHit).toBe(false);
+
+    vi.mocked(fetchRuntimeRepoFile).mockImplementation(async (_auth, path) => {
+      if (typeof path === "string" && path.includes(PAPR_APP_CLOUD_REVISION_PATH)) {
+        return { content: "rev-1\n", contentType: "text/plain" };
+      }
+      if (path === "data-sources.json") {
+        return {
+          content: JSON.stringify({
+            sources: [{ alias: "main", jobId: "job-1", dbPath: "data/data.db" }],
+          }),
+          contentType: "application/json",
+        };
+      }
+      if (path === "linked-databases.json") {
+        return {
+          content: JSON.stringify({ version: 1, databases: {} }),
+          contentType: "application/json",
+        };
+      }
+      if (path === "data/databases.json") {
+        return { content: JSON.stringify({ databases: {} }), contentType: "application/json" };
+      }
+      return null;
+    });
+
+    const stats2 = { cacheHit: false as boolean | undefined };
+    const second = await loadAppDataSourcesConfig(auth, "data-sources.json", stats2);
+    expect(second.sources).toHaveLength(1);
+    expect(stats2.cacheHit).toBe(false);
   });
 });

@@ -21,8 +21,13 @@ import {
   writeCachedCloudPublishState,
 } from "../../utils/cloudPublishCache";
 import { fetchCloudPublishState } from "../../utils/cloudPublishApi";
+import {
+  readAppsViewTab,
+  writeAppsViewTab,
+  type AppsViewTab,
+} from "../../utils/appsViewTabPersistence";
 
-type ViewTab = "my-apps" | "namespace-community" | "community";
+type ViewTab = AppsViewTab;
 type SortOption = "recent" | "name";
 type StatusFilter =
   | "all"
@@ -93,7 +98,13 @@ export function AppsView() {
     </>
   );
 
-  const [viewTab, setViewTab] = useState<ViewTab>("my-apps");
+  const [viewTab, setViewTabState] = useState<ViewTab>(
+    () => readAppsViewTab() ?? "my-apps",
+  );
+  const setViewTab = useCallback((tab: ViewTab) => {
+    setViewTabState(tab);
+    writeAppsViewTab(tab);
+  }, []);
   const [sortBy, setSortBy] = useState<SortOption>("recent");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [publishRevision, setPublishRevision] = useState(0);
@@ -159,13 +170,16 @@ export function AppsView() {
     };
     window.addEventListener("papr-apps-view-tab", onAppsTab);
     return () => window.removeEventListener("papr-apps-view-tab", onAppsTab);
-  }, []);
+  }, [setViewTab]);
 
   useEffect(() => {
+    if (papr.loading) {
+      return;
+    }
     if (!showNamespaceTabs && viewTab === "namespace-community") {
       setViewTab("my-apps");
     }
-  }, [showNamespaceTabs, viewTab]);
+  }, [papr.loading, showNamespaceTabs, viewTab, setViewTab]);
 
   useEffect(() => {
     setCatalogSearchQuery("");

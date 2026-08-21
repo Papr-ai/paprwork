@@ -3,6 +3,7 @@
  */
 
 import { createHash } from "node:crypto";
+import type { AppDataSourcesFile } from "../appDataSources.js";
 import type { AppAccessContext, AppPublishResolver, AppRuntimeRouteAuth } from "./types.js";
 import { fetchRuntimeRepoFile } from "./memoryRuntimeClient.js";
 import {
@@ -35,7 +36,8 @@ import {
 const REPO_FILE_FRESH_MS = 600_000;
 const REPO_FILE_STALE_MS = 86_400_000;
 const REPO_REVISION_TTL_MS = 5_000;
-const ACCESS_TTL_MS = 300_000;
+/** Publish/link permissions rarely change mid-session; bust on revision notify. */
+const ACCESS_TTL_MS = 30 * 60 * 1000;
 const TRANSPILE_TTL_MS = 3_600_000;
 
 interface TimedEntry<T> {
@@ -55,6 +57,15 @@ const repoRevisionCache = new Map<string, TimedEntry<string>>();
 const accessCache = new Map<string, TimedEntry<AppAccessContext | null>>();
 const transpileCache = new Map<string, TimedEntry<MiniAppTranspileResult>>();
 
+/** Parsed app db config (Phase 3.3) — keyed by namespace + slug + revision, not per-user auth. */
+export interface AppDbConfigCacheEntry {
+  config: AppDataSourcesFile;
+  linkedContent?: string;
+  databasesContent?: string;
+}
+
+const appDbConfigCache = new Map<string, SwrEntry<AppDbConfigCacheEntry>>();
+
 
 /** Sweep interval — purge expired entries every 5 minutes */
 const SWEEP_INTERVAL_MS = 300_000;
@@ -63,6 +74,9 @@ function sweepExpired(): void {
   const now = Date.now();
   for (const [key, entry] of repoFileCache) {
     if (now > entry.staleUntil) repoFileCache.delete(key);
+  }
+  for (const [key, entry] of appDbConfigCache) {
+    if (now > entry.staleUntil) appDbConfigCache.delete(key);
   }
   for (const cache of [accessCache, transpileCache, repoRevisionCache]) {
     for (const [key, entry] of cache) {
@@ -117,6 +131,14 @@ function repoFileCacheKey(
   relativePath: string,
 ): string {
   return `${runtimeAuthKey(auth)}:${revision}:${relativePath}`;
+}
+
+/** Per-app git revision for cache keys (`.papr-cloud-revision` or repo head). */
+export async function resolveAppCacheRevision(
+  auth: AppRuntimeRouteAuth,
+  bypassRevisionCache = false,
+): Promise<string> {
+  return getAppCacheRevision(auth, bypassRevisionCache);
 }
 
 async function getAppCacheRevision(
@@ -240,14 +262,70 @@ export async function fetchCachedRuntimeRepoFile(
   return file;
 }
 
+function appDbConfigCacheKey(
+  namespaceId: string,
+  slug: string,
+  revision: string,
+): string {
+  return `${namespaceId}:${slug}:${revision}:app-db-config`;
+}
+
+export function readAppDbConfigCache(
+  namespaceId: string,
+  slug: string,
+  revision: string,
+): AppDbConfigCacheEntry | undefined {
+  const key = appDbConfigCacheKey(namespaceId, slug, revision);
+  const entry = appDbConfigCache.get(key);
+  if (!entry) {
+    return undefined;
+  }
+  if (Date.now() > entry.staleUntil) {
+    appDbConfigCache.delete(key);
+    return undefined;
+  }
+  return entry.value;
+}
+
+export function writeAppDbConfigCache(
+  namespaceId: string,
+  slug: string,
+  revision: string,
+  value: AppDbConfigCacheEntry,
+): void {
+  const key = appDbConfigCacheKey(namespaceId, slug, revision);
+  const now = Date.now();
+  appDbConfigCache.set(key, {
+    value,
+    freshUntil: now + REPO_FILE_FRESH_MS,
+    staleUntil: now + REPO_FILE_STALE_MS,
+  });
+}
+
+function invalidateAppDbConfigCacheByPrefix(prefix: string): void {
+  for (const key of appDbConfigCache.keys()) {
+    if (key.startsWith(prefix)) {
+      appDbConfigCache.delete(key);
+    }
+  }
+}
+
 export async function validateCachedAccess(
   publishResolver: AppPublishResolver,
   runtimeAuth: AppRuntimeRouteAuth,
+  stats?: { cacheHit?: boolean },
 ): Promise<AppAccessContext | null> {
   const key = runtimeAuthKey(runtimeAuth);
   const cached = readTimed(accessCache, key);
   if (cached !== undefined) {
+    if (stats) {
+      stats.cacheHit = true;
+    }
     return cached;
+  }
+
+  if (stats) {
+    stats.cacheHit = false;
   }
 
   const access = await publishResolver.validateAccess({
@@ -315,6 +393,28 @@ export function resetCloudAppHostCachesForTests(): void {
   repoRevisionCache.clear();
   accessCache.clear();
   transpileCache.clear();
+  appDbConfigCache.clear();
+}
+
+function invalidateAccessCacheByPrefix(prefix: string): void {
+  for (const key of accessCache.keys()) {
+    if (key.startsWith(prefix)) {
+      accessCache.delete(key);
+    }
+  }
+}
+
+/** Drop cached access after publish / permission changes (same key prefix as runtimeAuthKey). */
+export function invalidateAccessCacheForPublishedApp(
+  namespaceId: string,
+  slug: string,
+): void {
+  invalidateAccessCacheByPrefix(`${namespaceId}:${slug}:`);
+}
+
+/** Broader access invalidation when publish slug is unknown. */
+export function invalidateAccessCacheForNamespace(namespaceId: string): void {
+  invalidateAccessCacheByPrefix(`${namespaceId}:`);
 }
 
 /** Drop cached repo files after desktop sync so the next fetch sees the new head. */
@@ -333,6 +433,8 @@ export function invalidateRepoCacheForPublishedApp(
       repoRevisionCache.delete(key);
     }
   }
+  invalidateAppDbConfigCacheByPrefix(prefix);
+  invalidateAccessCacheForPublishedApp(namespaceId, slug);
 }
 
 /** Broader invalidation when publish slug is unknown (Pub/Sub commit fanout). */
@@ -348,4 +450,6 @@ export function invalidateRepoCacheForNamespace(namespaceId: string): void {
       repoRevisionCache.delete(key);
     }
   }
+  invalidateAppDbConfigCacheByPrefix(prefix);
+  invalidateAccessCacheForNamespace(namespaceId);
 }

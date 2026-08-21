@@ -3,7 +3,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { CommunityCatalogEntry } from "../src/core/types/communityCatalog.js";
 import {
   isCommunityCatalogListed,
-  isCommunityInstallListing,
+  isCommunityBrowseListing,
   shouldIncludeInPublicCommunity,
 } from "../src/gateway/services/CommunityCatalogService.js";
 
@@ -176,13 +176,20 @@ describe("shouldIncludeInPublicCommunity — link-only apps", () => {
   });
 });
 
-describe("isCommunityInstallListing", () => {
-  it("requires codeInstallable for global Community Apps", () => {
-    expect(isCommunityInstallListing(cloudEntry({ codeInstallable: false }))).toBe(
-      false,
-    );
-    expect(isCommunityInstallListing(cloudEntry({ codeInstallable: true }))).toBe(
+describe("isCommunityBrowseListing", () => {
+  it("includes installable and live-preview public apps", () => {
+    expect(isCommunityBrowseListing(cloudEntry({ codeInstallable: true }))).toBe(
       true,
     );
+    expect(
+      isCommunityBrowseListing(
+        cloudEntry({ codeInstallable: false, liveViewable: true }),
+      ),
+    ).toBe(true);
+    expect(
+      isCommunityBrowseListing(
+        cloudEntry({ codeInstallable: false, liveViewable: false }),
+      ),
+    ).toBe(false);
   });
 });

@@ -2406,9 +2406,13 @@ Mini-apps **can** persist to linked job SQLite databases. The gateway splits thi
 | \`GET /api/access?appId=...\` | Caller \`{ mode, isOwner, canRead, canWrite, loggedIn, userId?, email? }\` — gate admin UI + row filters (see Multi-user section) |
 | \`GET /api/members?appId=...\` | Workspace roster \`{ members: [{ userId, email, displayName, role }] }\` — role pickers; requires sign-in (same \`userId\` as access) |
 | \`GET /api/db/schema?appId=...\` | List tables/columns for linked sources |
-| \`POST /api/db/query\` | **Only** \`SELECT\` and \`WITH ... SELECT\` |
-| \`POST /api/db/write\` | \`INSERT\`, \`UPDATE\`, \`DELETE\`, \`REPLACE\`, \`UPSERT\` — use \`?\` placeholders and a \`params\` array for any user-supplied values |
+| \`POST /api/db/query\` | **Only** \`SELECT\` and \`WITH ... SELECT\` (single statement) |
+| \`POST /api/db/batch\` | **Batch reads** — up to 25 \`SELECT\`/\`WITH\` only. Aliases: \`query-batch\`, \`read-batch\`. Returns \`{ results: [{ ok, rows?, error? }] }\`. **Never mix writes.** |
+| \`POST /api/db/write\` | **Single write** — \`INSERT\`, \`UPDATE\`, \`DELETE\`, \`REPLACE\`, \`UPSERT\` — use \`?\` placeholders and \`params\` |
+| \`POST /api/db/write-batch\` | **Batch writes** — up to 25 write statements. Default \`atomic: false\` (partial commits possible — check every \`results[i].ok\`). Pass \`atomic: true\` for one SQLite/Turso transaction on the **same linked database**. |
 | \`POST /api/db/exec\` | **Only** \`CREATE TABLE IF NOT EXISTS ...\` (schema bootstrap) |
+
+**Batch semantics (\`write-batch\`):** Default \`atomic: false\` — each SQL statement commits independently; partial success is possible. Pass \`atomic: true\` for all-or-nothing on one linked database (same \`sourceId\`). Cross-database sequences still need \`/api/app/backend/:action\` or a job.
 
 \`\`\`typescript
 // Read — pass sourceId (alias from attach_database)
@@ -2450,7 +2454,7 @@ When only one DB is linked, \`sourceId\` may be omitted. With multiple linked DB
 | Capability | Desktop gateway | Cloud (\`apps.papr.ai\`) |
 |---|---|---|
 | \`/api/access\` | ✅ always \`isOwner: true\` | ✅ \`isOwner\` when publisher signed in |
-| \`/api/db/schema\`, \`/api/db/query\`, \`/api/db/write\`, \`/api/db/exec\` | ✅ SQLite | ✅ Turso — **same endpoints, same app code** |
+| \`/api/db/schema\`, \`/api/db/query\`, \`/api/db/batch\`, \`/api/db/write\`, \`/api/db/write-batch\`, \`/api/db/exec\` | ✅ SQLite | ✅ Turso — **same endpoints, same app code** |
 | \`/api/db/*\` | ✅ | ✅ on \`apps.papr.ai\` (Turso proxy) |
 | \`/api/app/backend/:action\` | ✅ local subprocess | ✅ Cloud App Host edge subprocess (handlers in \`apps/{appId}/backend/\`) |
 | \`/api/jobs/list\`, \`/api/jobs/status\`, \`/api/jobs/run\`, \`/api/jobs/events\` | ✅ | ✅ on \`apps.papr.ai\` — **including share links** (requires \`canRead\`) |
@@ -2465,7 +2469,7 @@ When only one DB is linked, \`sourceId\` may be omitted. With multiple linked DB
 
 **When to create backend handlers vs. direct /api/db/* calls (REQUIRED decision):**
 - **Direct \`/api/db/*\`:** Simple read-only dashboards with 1-2 **indexed SELECTs with LIMIT** — no runtime \`COUNT(*)\` table scans
-- **Backend handlers required:** 3+ DB operations (CRUD app), vault/API keys, external API calls with secrets, complex JOINs, **dashboard KPIs across tables**, data validation, multi-table transactions, OAuth token exchange, file system access, server-side auth checks
+- **Backend handlers required:** 3+ DB operations (CRUD app), vault/API keys, external API calls with secrets, complex JOINs, **dashboard KPIs across tables**, data validation, **multi-database transactions**, OAuth token exchange, file system access, server-side auth checks
 - **Cloud read budget:** \`validate_app\` flags nested \`COUNT(*)\` subqueries, \`SELECT *\` without LIMIT, and tab-switch re-fetch storms. Product Architect must estimate rows/read per page load — see \`PRODUCT_ARCHITECT_GUIDE.md\` § Cloud Read Budget.
 - **Backend is NOT just for SQL** — any server-side logic belongs in backend handlers: external API proxy calls, webhook processing, auth validation, file I/O, data transformation. If your app calls ANY external API with a secret key, it MUST go through a backend handler.
 - **Rule of thumb:** If frontend \`db.ts\` has 5+ raw SQL functions calling \`/api/db/query|write\`, extract to \`backend/\` actions. A \`db.ts\` with 15 fetch-to-SQL wrappers is the #1 architecture anti-pattern — it means the agent skipped the backend layer entirely.

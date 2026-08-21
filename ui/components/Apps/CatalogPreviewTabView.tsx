@@ -24,6 +24,7 @@ import "./CloudCatalogPreviewView.css";
 
 interface CatalogPreviewTabViewProps {
   tab: Tab;
+  previewTabVisible?: boolean;
 }
 
 function buildPreviewMetadataFromCatalogEntry(
@@ -55,7 +56,10 @@ async function recoverCatalogPreviewMetadata(
   return buildPreviewMetadataFromCatalogEntry(entry);
 }
 
-export function CatalogPreviewTabView({ tab }: CatalogPreviewTabViewProps) {
+export function CatalogPreviewTabView({
+  tab,
+  previewTabVisible = true,
+}: CatalogPreviewTabViewProps) {
   const directPreview = readCloudCatalogPreviewTabMetadata(tab);
   const [preview, setPreview] = useState<CloudCatalogPreviewTabMetadata | null>(
     directPreview,
@@ -146,5 +150,11 @@ export function CatalogPreviewTabView({ tab }: CatalogPreviewTabViewProps) {
     );
   }
 
-  return <CloudCatalogPreviewView title={tab.title} preview={preview} />;
+  return (
+    <CloudCatalogPreviewView
+      title={tab.title}
+      preview={preview}
+      previewTabVisible={previewTabVisible}
+    />
+  );
 }

@@ -25,6 +25,25 @@ function authCloneUrl(cloneUrl: string, token: string): string {
   return `https://x-access-token:${token}@${normalized}`;
 }
 
+/** Strip embedded git credentials from clone error output before logging. */
+export function redactGitCloneErrorMessage(message: string): string {
+  return message
+    .replace(/https:\/\/x-access-token:[^@\s]+@/gi, "https://***@")
+    .replace(/ghs_[A-Za-z0-9_]+/g, "ghs_***");
+}
+
+/** True when git clone failed because the remote repo does not exist or is inaccessible. */
+export function isGitRepositoryNotFoundError(error: unknown): boolean {
+  const message = redactGitCloneErrorMessage(
+    error instanceof Error ? error.message : String(error),
+  ).toLowerCase();
+  return (
+    message.includes("repository not found") ||
+    message.includes("remote: not found") ||
+    (message.includes("failed (128)") && message.includes("not found"))
+  );
+}
+
 /** Sync V3 per-app repos use repo root; legacy namespace repos use apps/{appId}/. */
 export function isAppRepoRootPath(repoPath: string): boolean {
   const normalized = repoPath.replace(/\\/g, "/").trim();
@@ -66,9 +85,12 @@ async function runCommand(
         resolve();
         return;
       }
+      const safeArgs = args.map((arg) =>
+        arg.replace(/https:\/\/x-access-token:[^@]+@/gi, "https://***@"),
+      );
       reject(
         new Error(
-          `${command} ${args.join(" ")} failed (${code ?? "unknown"}): ${stderr.trim()}`,
+          `${command} ${safeArgs.join(" ")} failed (${code ?? "unknown"}): ${redactGitCloneErrorMessage(stderr.trim())}`,
         ),
       );
     });

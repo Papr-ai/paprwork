@@ -17,12 +17,8 @@ export function resolveLocalAppIdForCatalogEntry(
 ): string | null {
   if (!entry.appId) return null;
 
-  if (installedAppIds.has(entry.appId)) {
-    return entry.appId;
-  }
-
-  // Catalog marks owned from apps.json; My Apps may hide the same app when workspace
-  // assignment does not match the active namespace filter.
+  // Publisher copy — always open the local mini-app (same id as cloud publish).
+  // Do not gate on the artifacts cache; it can lag behind app:list on Community mount.
   if (entry.isOwned) {
     return entry.appId;
   }
@@ -45,5 +41,17 @@ export function canInstallCloudCatalogEntry(
   entry: CommunityCatalogEntry,
   localAppId: string | null,
 ): boolean {
-  return entry.codeInstallable && localAppId === null;
+  if (!entry.codeInstallable || entry.isOwned) {
+    return false;
+  }
+  return localAppId === null;
+}
+
+/** Open local mini-app tab when a publisher copy or installed fork exists on disk. */
+export function shouldOpenCatalogEntryLocally(
+  entry: CommunityCatalogEntry,
+  installedAppIds: ReadonlySet<string>,
+  lineageIndex: CloudLineageIndex | null,
+): boolean {
+  return resolveLocalAppIdForCatalogEntry(entry, installedAppIds, lineageIndex) !== null;
 }

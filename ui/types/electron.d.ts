@@ -393,6 +393,19 @@ export interface ElectronAPI {
     ) => Promise<{ success: boolean; enabled?: boolean; error?: string }>;
   };
 
+  cloudPreview: {
+    seedSession: (input: {
+      namespaceId: string;
+      slug: string;
+      shareToken?: string;
+    }) => Promise<{
+      success: boolean;
+      cached?: boolean;
+      cookieCount?: number;
+      error?: string;
+    }>;
+  };
+
   // Ollama API - Auto-install and manage local AI models
   ollama: {
     checkStatus: () => Promise<{

@@ -8,7 +8,7 @@
 // Load environment variables from .env.local FIRST (before any other imports)
 require("dotenv").config({ path: require("path").join(__dirname, "../../.env.local") });
 
-const { app, BrowserWindow, Menu, shell, dialog, ipcMain, powerMonitor, nativeTheme } = require("electron");
+const { app, BrowserWindow, Menu, shell, dialog, ipcMain, powerMonitor, nativeTheme, session } = require("electron");
 const { spawn, execSync } = require("child_process");
 const path = require("path");
 const http = require("http");
@@ -16,6 +16,7 @@ const { autoUpdater } = require("electron-updater");
 const {
   registerGeolocationPermissionHandlers,
 } = require("./geolocationPermission.cjs");
+const { registerCloudPreviewSessionIPC } = require("./ipc/cloudPreviewSession.cjs");
 
 // Set app name for macOS Keychain (must be before any safeStorage usage)
 // This determines the keychain entry name: "Papr Work Safe Storage"
@@ -2351,6 +2352,8 @@ app.whenReady().then(async () => {
       }
     },
   });
+
+  registerCloudPreviewSessionIPC(ipcMain, session);
 
   if (ensureActiveNamespaceApiKey) {
     try {

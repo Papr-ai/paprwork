@@ -36,9 +36,17 @@ import {
   getCatalogShareBadge,
 } from "../../utils/communityCatalogDisplay";
 import {
+  countHiddenPreviewOnlyCommunityEntries,
+  readCommunityShowPreviewOnlyPreference,
+  shouldShowInCommunityBrowse,
+  sortCommunityEntriesInstallableFirst,
+  writeCommunityShowPreviewOnlyPreference,
+} from "../../utils/communityCatalogBrowseFilter";
+import {
   resolveCatalogLiveWebUrl,
   resolveCatalogPreviewIframeUrl,
 } from "../../utils/catalogPreviewUrl";
+import { prefetchCloudPreviewSession } from "../../utils/cloudPreviewSession";
 import {
   cloudCatalogPreviewEntityId,
   type CloudCatalogPreviewTabMetadata,
@@ -227,6 +235,13 @@ export function CommunityAppsView({
   const searchQuery = searchQueryProp ?? internalSearchQuery;
   const setSearchQuery = onSearchQueryChange ?? setInternalSearchQuery;
   const [showAllPlatforms, setShowAllPlatforms] = useState(false);
+  const [showPreviewOnlyApps, setShowPreviewOnlyAppsState] = useState(
+    () => readCommunityShowPreviewOnlyPreference(),
+  );
+  const setShowPreviewOnlyApps = useCallback((show: boolean) => {
+    setShowPreviewOnlyAppsState(show);
+    writeCommunityShowPreviewOnlyPreference(show);
+  }, []);
   const [wizardEntry, setWizardEntry] = useState<OssRegistryEntry | null>(null);
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [installToast, setInstallToast] = useState<string | null>(null);
@@ -375,8 +390,10 @@ export function CommunityAppsView({
   }, []);
 
   useEffect(() => {
+    if (!catalog) return;
+    void loadArtifacts();
     void fetchLineage();
-  }, [fetchLineage]);
+  }, [catalog, loadArtifacts, fetchLineage]);
 
   const openAgentDatabaseSetup = useCallback(
     async (message: string, appId?: string, appTitle?: string) => {
@@ -561,6 +578,14 @@ export function CommunityAppsView({
     void installCloudApp(entry);
   };
 
+  const openLocalApp = useCallback(
+    (appId: string, title: string) => {
+      const tabId = createTab("app", appId, title);
+      switchToTab(tabId);
+    },
+    [createTab, switchToTab],
+  );
+
   const openCloudPreview = useCallback(
     (entry: CommunityCatalogEntry) => {
       const previewIframeUrl = resolveCatalogPreviewIframeUrl(entry);
@@ -592,6 +617,33 @@ export function CommunityAppsView({
     },
     [createTab, switchToTab],
   );
+
+  const prefetchCloudPreview = useCallback((
+    entry: CommunityCatalogEntry,
+    localAppId: string | null,
+  ) => {
+    if (localAppId) {
+      return;
+    }
+    const liveUrl = resolveCatalogLiveWebUrl(entry);
+    const namespaceId = entry.namespaceId?.trim();
+    const slug = entry.slug?.trim();
+    if (!liveUrl || !namespaceId || !slug) {
+      return;
+    }
+    let shareToken: string | undefined;
+    try {
+      shareToken = new URL(liveUrl).searchParams.get("t") ?? undefined;
+    } catch {
+      shareToken = undefined;
+    }
+    prefetchCloudPreviewSession({
+      namespaceId,
+      slug,
+      shareToken,
+      liveUrl,
+    });
+  }, []);
 
   const handleOssImportClick = (entry: CommunityCatalogEntry) => {
     const ossEntry = toOssEntry(entry);
@@ -642,7 +694,15 @@ export function CommunityAppsView({
 
   const filteredEntries =
     catalog?.entries.filter((entry) => {
-      if (scope === "global" && !entry.codeInstallable) {
+      if (scope === "global" && !entry.codeInstallable && !entry.liveViewable) {
+        return false;
+      }
+      if (
+        scope === "global" &&
+        !shouldShowInCommunityBrowse(entry, {
+          showPreviewOnly: showPreviewOnlyApps,
+        })
+      ) {
         return false;
       }
       if (scope !== "global" && entry.source === "opensource") {
@@ -662,6 +722,11 @@ export function CommunityAppsView({
       );
     }) ?? [];
 
+  const hiddenPreviewOnlyCount =
+    scope === "global" && catalog
+      ? countHiddenPreviewOnlyCommunityEntries(catalog.entries)
+      : 0;
+
   const teamEntries =
     scope === "namespace"
       ? filteredEntries.filter((entry) => isTeamSharedVisibility(entry.visibility))
@@ -669,7 +734,7 @@ export function CommunityAppsView({
   const publicWorkspaceEntries =
     scope === "namespace"
       ? filteredEntries.filter((entry) => !isTeamSharedVisibility(entry.visibility))
-      : filteredEntries;
+      : sortCommunityEntriesInstallableFirst(filteredEntries);
 
   const renderCatalogGrid = (entries: CommunityCatalogEntry[]) => (
     <div className="community-apps__grid">
@@ -694,8 +759,15 @@ export function CommunityAppsView({
             onCloudInstall={() => startCloudInstall(entry)}
             isInstalling={installingId === entry.catalogId}
             onOpen={
-              entry.liveUrl || (entry.namespaceId && entry.slug)
-                ? () => openCloudPreview(entry)
+              localAppId
+                ? () => openLocalApp(localAppId, entry.name)
+                : entry.liveUrl || (entry.namespaceId && entry.slug)
+                  ? () => openCloudPreview(entry)
+                  : undefined
+            }
+            onOpenHover={
+              !localAppId && (entry.liveUrl || (entry.namespaceId && entry.slug))
+                ? () => prefetchCloudPreview(entry, localAppId)
                 : undefined
             }
           />
@@ -744,6 +816,17 @@ export function CommunityAppsView({
               {scope === "namespace" ? "Team apps" : "Community apps"}
             </span>
             <div className="apps-view__library-toolbar-actions">
+              {scope === "global" && hiddenPreviewOnlyCount > 0 ? (
+                <button
+                  type="button"
+                  className="community-apps__browse-filter-toggle"
+                  onClick={() => setShowPreviewOnlyApps(!showPreviewOnlyApps)}
+                >
+                  {showPreviewOnlyApps
+                    ? "Installable apps only"
+                    : `Show preview-only (+${hiddenPreviewOnlyCount})`}
+                </button>
+              ) : null}
               {catalog ? (() => {
                 const summary = catalogSummaryLine(
                   scope,
@@ -834,6 +917,18 @@ export function CommunityAppsView({
         </button>
       )}
 
+      {scope === "global" && !hideToolbar && hiddenPreviewOnlyCount > 0 ? (
+        <button
+          type="button"
+          className="community-apps__browse-filter-toggle"
+          onClick={() => setShowPreviewOnlyApps(!showPreviewOnlyApps)}
+        >
+          {showPreviewOnlyApps
+            ? "Installable apps only"
+            : `Show preview-only apps (+${hiddenPreviewOnlyCount})`}
+        </button>
+      ) : null}
+
       {filteredEntries.length === 0 && (
         <div className="community-apps__status">
           <p className="community-apps__empty-text">
@@ -918,6 +1013,7 @@ interface CommunityAppCardProps {
   onOssImport: () => void;
   onCloudInstall: () => void;
   onOpen?: () => void;
+  onOpenHover?: () => void;
 }
 
 function CommunityAppCard({
@@ -929,6 +1025,7 @@ function CommunityAppCard({
   onOssImport,
   onCloudInstall,
   onOpen,
+  onOpenHover,
 }: CommunityAppCardProps) {
   const [showDetails, setShowDetails] = useState(false);
 
@@ -1113,11 +1210,13 @@ function CommunityAppCard({
               <span className="community-card__detail-label">Open</span>
               <span className="community-card__detail-value">
                 {entry.source === "cloud"
-                  ? entry.liveViewable
-                    ? "Live preview in Paprwork"
-                    : entry.codeInstallable
-                      ? "Customize locally (fork)"
-                      : "Web app only"
+                  ? localAppId
+                    ? "Open in My Apps"
+                    : entry.liveViewable
+                      ? "Live preview in Paprwork"
+                      : entry.codeInstallable
+                        ? "Customize locally (fork)"
+                        : "Web app only"
                   : "GitHub bundle"}
               </span>
             </div>
@@ -1147,6 +1246,8 @@ function CommunityAppCard({
                 type="button"
                 className="community-card__action-btn community-card__action-btn--primary"
                 onClick={onOpen}
+                onMouseEnter={onOpenHover}
+                onFocus={onOpenHover}
               >
                 Open
               </button>

@@ -18,6 +18,17 @@ import { AppWorkflow } from "./AppWorkflow";
 import { CloudOnlyJobsBanner, JobCloudSection } from "./JobCloudSection";
 import type { JobExecutionPlacement } from "./jobCloudTypes";
 import { renderAppIcon } from "../../utils/renderAppIcon";
+import {
+  buildDelegationRunGroups,
+  delegationRunLabel,
+  formatDelegationGroupSummary,
+  isDelegationRun,
+} from "../../utils/delegationJobGrouping";
+import {
+  JOB_TYPE_FILTER_OPTIONS,
+  matchesJobTypeFilter,
+  type JobTypeFilter,
+} from "../../utils/jobListFilters";
 import "./JobsView.css";
 
 type JobFilter = "all" | "running" | "idle" | "scheduled";
@@ -65,11 +76,16 @@ export function JobsView() {
   const { loadArtifacts } = useArtifacts();
   const [viewMode, setViewMode] = useState<ViewMode>("workflow");
   const [currentFilter, setCurrentFilter] = useState<JobFilter>("all");
+  const [typeFilter, setTypeFilter] = useState<JobTypeFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
   const [appDropdownOpen, setAppDropdownOpen] = useState(false);
   const [workflowSelectedJobId, setWorkflowSelectedJobId] = useState<string | null>(null);
+  const [expandedDelegationGroups, setExpandedDelegationGroups] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [hideCompletedDelegations, setHideCompletedDelegations] = useState(true);
   const appDropdownRef = useRef<HTMLDivElement>(null);
   const focusJobId = useJobNavigationStore((s) => s.focusJobId);
   const clearFocusJob = useJobNavigationStore((s) => s.clearFocusJob);
@@ -259,18 +275,51 @@ export function JobsView() {
       if (currentFilter === "running" && !isActive(job)) return false;
       if (currentFilter === "idle" && isActive(job)) return false;
       if (currentFilter === "scheduled" && !job.schedule?.enabled) return false;
+      if (!matchesJobTypeFilter(job, typeFilter)) return false;
       if (!searchQuery.trim()) return true;
       const haystack = `${job.name} ${job.type} ${job.command ?? ""}`.toLowerCase();
       return haystack.includes(searchQuery.toLowerCase());
     });
-  }, [jobs, currentFilter, searchQuery, appFilteredJobIds]);
+  }, [jobs, currentFilter, typeFilter, searchQuery, appFilteredJobIds]);
+
+  const { regularFilteredJobs, delegationGroups } = useMemo(() => {
+    const regular: JobRecord[] = [];
+    const delegation: JobRecord[] = [];
+    for (const job of filteredJobs) {
+      if (isDelegationRun(job)) {
+        delegation.push(job);
+      } else {
+        regular.push(job);
+      }
+    }
+    return {
+      regularFilteredJobs: regular,
+      delegationGroups: buildDelegationRunGroups(delegation, {
+        hideCompleted: hideCompletedDelegations,
+      }),
+    };
+  }, [filteredJobs, hideCompletedDelegations]);
+
+  useEffect(() => {
+    setExpandedDelegationGroups((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const group of delegationGroups) {
+        if (group.hasActive && !next.has(group.key)) {
+          next.add(group.key);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [delegationGroups]);
 
   const groupedJobs = useMemo(() => {
     const appMap = new Map<string, JobRecord[]>();
     const ungrouped: JobRecord[] = [];
     const unlinkedSet = new Set(unlinkedJobIds);
 
-    for (const job of filteredJobs) {
+    for (const job of regularFilteredJobs) {
       if (unlinkedSet.has(job.id)) {
         ungrouped.push(job);
         continue;
@@ -290,7 +339,19 @@ export function JobsView() {
 
     const sortedApps = [...appMap.entries()].sort(([a], [b]) => a.localeCompare(b));
     return { apps: sortedApps, ungrouped };
-  }, [filteredJobs, graph, unlinkedJobIds]);
+  }, [regularFilteredJobs, graph, unlinkedJobIds]);
+
+  const toggleDelegationGroup = (groupKey: string) => {
+    setExpandedDelegationGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) {
+        next.delete(groupKey);
+      } else {
+        next.add(groupKey);
+      }
+      return next;
+    });
+  };
 
   const selectedAppName = useMemo(() => {
     if (!listAppFilterId) return "All Apps";
@@ -416,11 +477,15 @@ export function JobsView() {
     return "";
   };
 
-  const renderJobRow = (job: JobRecord) => {
+  const renderJobRow = (
+    job: JobRecord,
+    options?: { displayName?: string; nested?: boolean },
+  ) => {
     const isRunning = job.status === "running";
     const isWaiting = job.status === "waiting_permission";
     const isActive = isRunning || isWaiting;
     const isExpanded = expandedJobId === job.id;
+    const rowLabel = options?.displayName ?? job.name;
 
     const linkedApps: string[] = [];
     if (graph) {
@@ -434,7 +499,7 @@ export function JobsView() {
     return (
       <div
         id={`job-row-${job.id}`}
-        className={`jv2-row ${isExpanded ? "jv2-row--expanded" : ""}`}
+        className={`jv2-row ${options?.nested ? "jv2-row--nested" : ""} ${isExpanded ? "jv2-row--expanded" : ""}`}
         key={job.id}
       >
         <div className="jv2-row-main" onClick={() => toggleDetails(job.id)}>
@@ -442,8 +507,11 @@ export function JobsView() {
             <span
               className={`jv2-dot ${isWaiting ? "jv2-dot--waiting" : isRunning ? "jv2-dot--running" : job.status === "failed" ? "jv2-dot--failed" : ""}`}
             />
-            <span className="jv2-name">{job.name}</span>
-            <span className="jv2-type">{job.type}</span>
+            <span className="jv2-name">{rowLabel}</span>
+            {!options?.nested && <span className="jv2-type">{job.type}</span>}
+            {options?.nested && (
+              <span className="jv2-type jv2-type--muted">{job.status}</span>
+            )}
           </div>
           <div className="jv2-row-right">
             {triggerLabel(job) && (
@@ -455,13 +523,19 @@ export function JobsView() {
               <span className="jv2-badge jv2-badge--waiting">Awaiting approval</span>
             )}
             {job.executionCapability === "local-only" && (
-              <span className="jv2-row-cloud-badge jv2-row-cloud-badge--local-only">
-                Local only
+              <span
+                className="jv2-row-cloud-badge jv2-row-cloud-badge--local-only"
+                title="Future scheduled runs stay on this device — cloud scheduler won't fire this job"
+              >
+                Schedules locally
               </span>
             )}
             {job.lastRunSource?.startsWith("cloud") && (
-              <span className="jv2-row-cloud-badge" title="Last run was on Papr Cloud">
-                Cloud run
+              <span
+                className="jv2-row-cloud-badge"
+                title="Most recent run executed on Papr Cloud (one-off manual run or past schedule setting)"
+              >
+                Last: cloud
               </span>
             )}
             <span className="jv2-time">{lastRunLabel(job)}</span>
@@ -751,7 +825,76 @@ export function JobsView() {
     );
   };
 
+  const renderDelegationSection = () => {
+    if (delegationGroups.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="jv2-group jv2-group--delegations">
+        <div className="jv2-group-header jv2-group-header--delegations">
+          <span className="jv2-group-name">Delegations</span>
+          <label className="jv2-delegation-filter">
+            <input
+              type="checkbox"
+              checked={hideCompletedDelegations}
+              onChange={(event) => setHideCompletedDelegations(event.target.checked)}
+            />
+            Hide completed
+          </label>
+        </div>
+        {delegationGroups.map((group) => {
+          const isExpanded = expandedDelegationGroups.has(group.key);
+          return (
+            <div
+              key={group.key}
+              className={`jv2-delegation-group ${isExpanded ? "jv2-delegation-group--expanded" : ""}`}
+            >
+              <button
+                type="button"
+                className="jv2-delegation-summary"
+                onClick={() => toggleDelegationGroup(group.key)}
+              >
+                <span className="jv2-delegation-summary-left">
+                  <svg
+                    width="10"
+                    height="10"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    className={`jv2-delegation-chevron ${isExpanded ? "jv2-delegation-chevron--open" : ""}`}
+                    aria-hidden
+                  >
+                    <polyline points="9 6 15 12 9 18" stroke="currentColor" strokeWidth="2" />
+                  </svg>
+                  {group.hasActive && <span className="jv2-dot jv2-dot--running" />}
+                  <span className="jv2-delegation-profile">{group.profileName}</span>
+                  <span className="jv2-delegation-meta">
+                    {formatDelegationGroupSummary(group)}
+                  </span>
+                </span>
+                <span className="jv2-delegation-last">
+                  {group.lastRunAt ? `Last ${formatRelativeTime(group.lastRunAt)}` : "Never run"}
+                </span>
+              </button>
+              {isExpanded &&
+                group.runs.map((run, index) =>
+                  renderJobRow(run, {
+                    nested: true,
+                    displayName: delegationRunLabel(run, index, group.runs.length),
+                  }),
+                )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   const hasFolders = groupedJobs.apps.length > 0;
+  const hasRegularJobs =
+    groupedJobs.apps.some(([, appJobs]) => appJobs.length > 0) ||
+    groupedJobs.ungrouped.length > 0;
+  const hasListContent = delegationGroups.length > 0 || hasRegularJobs;
   const isWorkflow = viewMode === "workflow";
 
   return (
@@ -948,17 +1091,30 @@ export function JobsView() {
                 </button>
               ))}
             </div>
+            <div className="jv2-filters jv2-filters--types">
+              {JOB_TYPE_FILTER_OPTIONS.map(({ value, label }) => (
+                <button
+                  key={value}
+                  className={typeFilter === value ? "jv2-filter jv2-filter--active" : "jv2-filter"}
+                  onClick={() => setTypeFilter(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="jv2-content">
             <div className="jv2-list">
               {loading && <p className="jv2-empty">Loading…</p>}
               {error && <p className="jv2-empty">{error}</p>}
-              {!loading && filteredJobs.length === 0 && (
+              {!loading && !hasListContent && (
                 <div className="jv2-empty">
                   <p>No matching jobs</p>
                 </div>
               )}
+
+              {renderDelegationSection()}
 
               {hasFolders &&
                 groupedJobs.apps.map(([appName, appJobs]) => (

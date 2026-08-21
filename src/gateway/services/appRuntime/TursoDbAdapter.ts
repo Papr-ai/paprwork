@@ -37,11 +37,12 @@ import type {
   DbWriteResult,
   TursoCredentialsProvider,
 } from "./types.js";
-import { displayTableName, rewriteSqlForTurso } from "./rewriteSqlForTurso.js";
+import { rewriteSqlForTurso } from "./rewriteSqlForTurso.js";
 import {
   resolveTursoActingUserIdForSource,
   type TursoDbActors,
 } from "./tursoRuntimeIdentity.js";
+import type { WorkspaceLogHostScope } from "../../../core/types/workspaceLog.js";
 
 /** Cloud host request: `userId` = publisher; optional session visitor for per-user DBs. */
 type TursoDbActorInput = {
@@ -80,6 +81,20 @@ export class TursoDbAdapter {
     return {
       publisherUserId: input.userId,
       callerUserId: input.callerUserId,
+    };
+  }
+
+  private buildWorkspaceLogHostScope(input: {
+    orgId: string;
+    namespaceId: string;
+    userId: string;
+    appId: string;
+  }): WorkspaceLogHostScope {
+    return {
+      orgId: input.orgId,
+      namespaceId: input.namespaceId,
+      ownerUserId: input.userId,
+      appId: input.appId,
     };
   }
 
@@ -265,6 +280,11 @@ export class TursoDbAdapter {
     );
   }
 
+  /**
+   * Resolve linked source + SQL rewrite from in-memory config only.
+   * Does not open Turso — callers fetch the client when they need to execute.
+   * (rewriteSqlForTurso is identity today; remote table introspection was ~1 RTT/op.)
+   */
   async resolveSource(
     config: AppDataSourcesFile,
     options: {
@@ -277,45 +297,18 @@ export class TursoDbAdapter {
       runtimeAuth: AppRuntimeRouteAuth;
     },
   ): Promise<{ source: AppDataSource; remoteSql: string; localTables: string[] }> {
-    const tableExists = async (_dbPath: string, table: string): Promise<boolean> => {
-      for (const candidate of config.sources) {
-        const client = await this.getClientForSource(
-          options.orgId,
-          options.namespaceId,
-          options.actors,
-          options.runtimeAuth,
-          candidate,
-        );
-        const row = await client.execute({
-          sql: `SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1`,
-          args: [table],
-        });
-        if (row.rows.length > 0) return true;
-      }
-      return false;
-    };
+    void options.orgId;
+    void options.namespaceId;
+    void options.actors;
+    void options.runtimeAuth;
 
     const source = await resolveAppDataSource(config, {
       sourceId: options.sourceId,
       sql: options.sql,
       operation: options.operation,
-      tableExists,
     });
 
-    const client = await this.getClientForSource(
-      options.orgId,
-      options.namespaceId,
-      options.actors,
-      options.runtimeAuth,
-      source,
-    );
-
-    const remoteTables = await this.listRemoteTables(client);
-    const localTables = remoteTables
-      .map((name) => displayTableName(name, source.jobId ?? ""))
-      .filter((name): name is string => name !== null);
-    const syncable = filterSyncableTables(localTables.length ? localTables : source.tables);
-
+    const syncable = filterSyncableTables(source.tables);
     const remoteSql = options.sql
       ? rewriteSqlForTurso(options.sql, source, syncable)
       : "";
@@ -398,16 +391,21 @@ export class TursoDbAdapter {
       const { appendRuntimeWorkspaceLogEntry } = await import(
         "./memoryRuntimeClient.js"
       );
-      const appendResult = await appendRuntimeWorkspaceLogEntry(input.runtimeAuth, {
-        replicaId: database,
-        kind: "row",
-        dbSourceId: source.alias ?? source.jobId,
-        payload: {
-          appId: input.appId,
-          sql: remoteSql,
-          params: input.params,
+      const hostScope = this.buildWorkspaceLogHostScope(input);
+      const appendResult = await appendRuntimeWorkspaceLogEntry(
+        input.runtimeAuth,
+        {
+          replicaId: database,
+          kind: "row",
+          dbSourceId: source.alias ?? source.jobId,
+          payload: {
+            appId: input.appId,
+            sql: remoteSql,
+            params: input.params,
+          },
         },
-      });
+        hostScope,
+      );
       this.syncVersionMemo.delete(cacheKey);
 
       if (process.env.CLOUD_DB_WRITE_TIMING !== "0") {
@@ -463,7 +461,9 @@ export class TursoDbAdapter {
     config: AppDataSourcesFile;
     appId: string;
     statements: DbWriteBatchStatement[];
+    atomic?: boolean;
   }): Promise<{ results: DbWriteBatchResultItem[] }> {
+    const atomic = input.atomic === true;
     const actors = this.toActors(input);
     if (input.statements.length === 0) {
       throw new Error("Batch must include at least one statement");
@@ -506,6 +506,115 @@ export class TursoDbAdapter {
 
     const results: DbWriteBatchResultItem[] = new Array(input.statements.length);
 
+    if (atomic) {
+      const databases = new Set(resolved.map((item) => item.database));
+      if (databases.size > 1) {
+        throw Object.assign(
+          new Error(
+            "atomic write-batch requires all statements on the same linked database (sourceId).",
+          ),
+          { status: 400 },
+        );
+      }
+
+      const group = resolved;
+      const database = group[0].database;
+      const actingUserId = resolveTursoActingUserIdForSource(group[0].source, actors);
+      const cacheKey = this.clientKey(input.runtimeAuth, actingUserId, database);
+
+      if (this.usesWorkspaceLogAuthority()) {
+        const { appendRuntimeWorkspaceLogBatch } = await import(
+          "./memoryRuntimeClient.js"
+        );
+        const hostScope = this.buildWorkspaceLogHostScope(input);
+        try {
+          const batchResult = await appendRuntimeWorkspaceLogBatch(
+            input.runtimeAuth,
+            {
+              replicaId: database,
+              entries: group.map((item) => ({
+                kind: "row" as const,
+                dbSourceId: item.source.alias ?? item.source.jobId,
+                payload: {
+                  appId: input.appId,
+                  sql: item.remoteSql,
+                  params: item.params,
+                },
+              })),
+            },
+            hostScope,
+          );
+          this.syncVersionMemo.delete(cacheKey);
+          for (const item of group) {
+            results[item.index] = {
+              ok: true,
+              changes: 1,
+              lastInsertRowid: 0,
+              source: item.source.alias,
+            };
+          }
+          if (process.env.CLOUD_DB_WRITE_TIMING !== "0") {
+            console.log(
+              `[TursoDbAdapter] atomic writeBatch app=${input.appId} replica=${database} ` +
+                `count=${batchResult.count} memoryLatencyMs=${batchResult.latencyMs}`,
+            );
+          }
+        } catch (err) {
+          const message = (err as Error).message;
+          for (const item of group) {
+            results[item.index] = {
+              ok: false,
+              changes: 0,
+              lastInsertRowid: 0,
+              source: item.source.alias,
+              error: message,
+            };
+          }
+        }
+        return { results };
+      }
+
+      try {
+        const client = await this.getClientForSource(
+          input.orgId,
+          input.namespaceId,
+          actors,
+          input.runtimeAuth,
+          group[0].source,
+        );
+        await this.ensureRemoteChangeLogReady(client, cacheKey);
+        const batchResults = await client.batch(
+          group.map((item) => ({
+            sql: item.remoteSql,
+            args: toLibsqlArgs(item.params),
+          })),
+        );
+        await this.bumpSyncVersionSafe(client, cacheKey);
+        for (let i = 0; i < group.length; i++) {
+          const item = group[i];
+          const row = batchResults[i];
+          results[item.index] = {
+            ok: true,
+            changes: row.rowsAffected,
+            lastInsertRowid: Number(row.lastInsertRowid ?? 0),
+            source: item.source.alias,
+          };
+        }
+      } catch (err) {
+        const message = (err as Error).message;
+        for (const item of group) {
+          results[item.index] = {
+            ok: false,
+            changes: 0,
+            lastInsertRowid: 0,
+            source: item.source.alias,
+            error: message,
+          };
+        }
+      }
+      return { results };
+    }
+
     if (this.usesWorkspaceLogAuthority()) {
       const groups = new Map<string, ResolvedStmt[]>();
       for (const item of resolved) {
@@ -517,6 +626,7 @@ export class TursoDbAdapter {
       const { appendRuntimeWorkspaceLogBatch } = await import(
         "./memoryRuntimeClient.js"
       );
+      const hostScope = this.buildWorkspaceLogHostScope(input);
 
       for (const [database, group] of groups) {
         const actingUserId = resolveTursoActingUserIdForSource(
@@ -543,6 +653,7 @@ export class TursoDbAdapter {
                 },
               })),
             },
+            hostScope,
           );
           this.syncVersionMemo.delete(cacheKey);
 
@@ -642,15 +753,20 @@ export class TursoDbAdapter {
       const { appendRuntimeWorkspaceLogEntry } = await import(
         "./memoryRuntimeClient.js"
       );
-      await appendRuntimeWorkspaceLogEntry(input.runtimeAuth, {
-        replicaId: database,
-        kind: "schema",
-        dbSourceId: source.alias ?? source.jobId,
-        payload: {
-          appId: input.appId,
-          sql: input.sql,
+      const hostScope = this.buildWorkspaceLogHostScope(input);
+      await appendRuntimeWorkspaceLogEntry(
+        input.runtimeAuth,
+        {
+          replicaId: database,
+          kind: "schema",
+          dbSourceId: source.alias ?? source.jobId,
+          payload: {
+            appId: input.appId,
+            sql: input.sql,
+          },
         },
-      });
+        hostScope,
+      );
       this.syncVersionMemo.delete(cacheKey);
       return { ok: true, source: source.alias };
     }

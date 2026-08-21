@@ -266,6 +266,23 @@ export class DbRouter {
     return this.pool.write(appId, source.dbPath, sql, params);
   }
 
+  async writeBatch(
+    appId: string,
+    source: AppDataSource,
+    statements: ReadonlyArray<{ sql: string; params?: unknown[] }>,
+  ): Promise<import("../DbQueryPool.js").WriteResult[]> {
+    if (!isLocalDbReadable(source.dbPath)) {
+      throw Object.assign(
+        new Error(
+          `Cannot write: local database missing at ${source.dbPath}. ` +
+            "Run the linked job on this device or restore from Turso pull first.",
+        ),
+        { status: 503 },
+      );
+    }
+    return this.pool.writeBatch(appId, source.dbPath, [...statements]);
+  }
+
   async exec(appId: string, source: AppDataSource, sql: string): Promise<void> {
     if (!isLocalDbReadable(source.dbPath)) {
       throw Object.assign(

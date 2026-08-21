@@ -13,6 +13,7 @@ import {
   getWorkspaceSwitchOverlaySnapshot,
   resetWorkspaceSwitchOverlayForTests,
 } from "../ui/lib/workspaceSwitchOverlay";
+import { writeWorkspaceUiCache, buildWorkspaceUiCacheKey } from "../ui/lib/workspaceUiCache";
 
 const gatewaySendMock = vi.fn(async (type: string) => {
   if (type === "chat:list") {
@@ -341,6 +342,119 @@ describe("reloadUiForWorkspaceSwitch", () => {
     expect(
       useTabStore.getState().tabs.some((tab) => tab.title === "Old org app"),
     ).toBe(false);
+  });
+
+  it("prepareWorkspaceSwitchReload flushes leaving workspace tabs before clearing UI", async () => {
+    vi.useFakeTimers();
+    stubWindowForReload();
+    attachWorkspaceSwitchBroadcastListener();
+
+    useTabStore.getState().createTab("chat", "chat-leave", "Leaving chat");
+    useTabStore.getState().createTab("app", "app-leave", "Leaving app");
+
+    const saveTabsCalls: Array<{ length: number; titles: string[] }> = [];
+    gatewaySendMock.mockImplementation(async (type: string, payload?: unknown) => {
+      if (type === "app:save_tabs") {
+        const tabs = Array.isArray(payload)
+          ? (payload as Array<{ title: string }>)
+          : [];
+        saveTabsCalls.push({
+          length: tabs.length,
+          titles: tabs.map((tab) => tab.title),
+        });
+        return { success: true };
+      }
+      if (type === "app:save_state") {
+        return { success: true };
+      }
+      if (type === "app:load_tabs") {
+        return { success: true, data: [] };
+      }
+      if (type === "app:load_state") {
+        return {
+          success: true,
+          data: { activeTabId: null, splitRatio: 0.5, history: [], historyIndex: -1 },
+        };
+      }
+      if (type === "chat:list") {
+        return { success: true, data: [] };
+      }
+      return { success: true, data: undefined };
+    });
+
+    const reloadPromise = prepareWorkspaceSwitchReload({
+      organizationName: "Acme",
+      namespaceName: "Production",
+      targetWorkspaceKey: buildWorkspaceUiCacheKey("org-target", "ns-target"),
+    });
+    await reloadPromise;
+
+    expect(saveTabsCalls.length).toBeGreaterThanOrEqual(1);
+    expect(saveTabsCalls[0]?.length).toBeGreaterThanOrEqual(2);
+    expect(saveTabsCalls[0]?.titles).toContain("Leaving chat");
+    expect(saveTabsCalls[0]?.titles).toContain("Leaving app");
+    expect(useTabStore.getState().tabs.some((tab) => tab.title === "Leaving chat")).toBe(
+      false,
+    );
+  });
+
+  it("prepareWorkspaceSwitchReload hydrates target workspace tabs from cache while waiting for gateway", async () => {
+    vi.useFakeTimers();
+    stubWindowForReload();
+    attachWorkspaceSwitchBroadcastListener();
+
+    const targetKey = buildWorkspaceUiCacheKey("org-target", "ns-target");
+    writeWorkspaceUiCache(targetKey, {
+      tabs: [
+        {
+          id: "chat-chat-cached",
+          type: "chat",
+          entityId: "chat-cached",
+          title: "Cached chat",
+          displayMode: "standalone",
+          parentTabId: null,
+          childTabIds: [],
+          position: 0,
+          isFavorite: false,
+        },
+      ],
+      activeTabId: "chat-chat-cached",
+      splitRatio: 0.5,
+      splitRatios: {},
+      history: [],
+      historyIndex: -1,
+      artifacts: [],
+    });
+
+    gatewaySendMock.mockImplementation(async (type: string) => {
+      if (type === "app:save_tabs" || type === "app:save_state") {
+        return { success: true };
+      }
+      if (type === "app:load_tabs") {
+        return { success: true, data: [] };
+      }
+      if (type === "app:load_state") {
+        return {
+          success: true,
+          data: { activeTabId: null, splitRatio: 0.5, history: [], historyIndex: -1 },
+        };
+      }
+      if (type === "chat:list") {
+        return { success: true, data: [] };
+      }
+      return { success: true, data: undefined };
+    });
+
+    const reloadPromise = prepareWorkspaceSwitchReload({
+      organizationName: "Acme",
+      namespaceName: "Production",
+      targetWorkspaceKey: targetKey,
+    });
+    await reloadPromise;
+
+    expect(
+      useTabStore.getState().tabs.some((tab) => tab.title === "Cached chat"),
+    ).toBe(true);
   });
 
   it("prepareWorkspaceSwitchReload shows overlay before gateway switch completes", async () => {

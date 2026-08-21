@@ -3,7 +3,7 @@
  * Reference: Paprwork v1 settings modal
  */
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useProfileStore } from "../../stores/profileStore";
 import { useAppUpdater } from "../../hooks/useAppUpdater";
 import { gateway } from "../../src/lib/gateway";
@@ -24,6 +24,10 @@ import {
 import { useChat } from "../../hooks/useChat";
 import { useTabs } from "../../hooks/useTabs";
 import { startPlatformFeedbackChat } from "../../utils/startPlatformFeedbackChat";
+import {
+  readSettingsViewTab,
+  writeSettingsViewTab,
+} from "../../utils/settingsViewTabPersistence";
 import "./SettingsView.css";
 
 type SettingsNavItem = {
@@ -128,11 +132,21 @@ const SETTINGS_NAV: SettingsNavItem[] = [
 ];
 
 export function SettingsView() {
-  const [activeTab, setActiveTab] = useState<SettingsTab>("profile");
+  const [activeTab, setActiveTabState] = useState<SettingsTab>(
+    () => readSettingsViewTab() ?? "profile",
+  );
   const [scrollToPickerModels, setScrollToPickerModels] = useState(false);
 
+  const setActiveTab = useCallback((tab: SettingsTab) => {
+    setActiveTabState(tab);
+    writeSettingsViewTab(tab);
+  }, []);
+
+  const openedSectionRef = useRef(activeTab);
   useEffect(() => {
-    trackEvent("paprwork_settings_opened", { section: "profile" } as Record<string, unknown>);
+    trackEvent("paprwork_settings_opened", {
+      section: openedSectionRef.current,
+    } as Record<string, unknown>);
   }, []);
 
   useEffect(() => {
@@ -148,7 +162,7 @@ export function SettingsView() {
     };
     window.addEventListener("papr:open-settings", handler);
     return () => window.removeEventListener("papr:open-settings", handler);
-  }, []);
+  }, [setActiveTab]);
 
   const handleNavClick = (tab: SettingsTab) => {
     setActiveTab(tab);
@@ -996,6 +1010,50 @@ function AboutTab() {
             </button>
           </div>
         </div>
+
+        {currentVersion === "2.4.4" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.4</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Faster Cloud Database Queries</strong>
+                <p>
+                  Mini-app database reads and writes are batched and pooled for
+                  noticeably snappier cloud app performance.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Desktop Session Bridge</strong>
+                <p>
+                  Cloud catalog previews share your Papr login session with the
+                  gateway so signed-in apps load without extra setup.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>App Tab Keep-Alive</strong>
+                <p>
+                  Switching tabs no longer reloads mini-apps — your app state
+                  stays warm while you work across chats and settings.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Jobs &amp; Catalog Filters</strong>
+                <p>
+                  Filter jobs by app or delegation group, and browse the
+                  community catalog with search and category filters.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.4"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
 
         {currentVersion === "2.4.3" && (
           <div className="about-card">

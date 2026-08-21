@@ -61,6 +61,7 @@ import {
   registerCloudDesktopPreviewApiProxy,
   registerCloudDesktopPreviewRoutes,
 } from "./services/appRuntime/cloudDesktopPreviewProxy.js";
+import { registerCloudPreviewSessionSeedRoute } from "./services/appRuntime/cloudPreviewSessionSeed.js";
 import type { Request } from "express";
 import {
   initializeJobsService,
@@ -287,6 +288,11 @@ function registerProductionUiCatchAll(app: express.Application): void {
     if (req.path.startsWith("/assets/")) {
       return next();
     }
+    // Unknown /api/* must not fall through to the SPA shell (apps parse HTML as JSON).
+    if (req.path.startsWith("/api/")) {
+      res.status(404).json({ error: `Unknown API route: ${req.method} ${req.path}` });
+      return;
+    }
     res.sendFile(path.join(productionUiPath, "index.html"));
   });
 }
@@ -492,6 +498,7 @@ async function startGateway(): Promise<void> {
     app.use(express.json({ limit: "5mb" }));
 
     registerCloudDesktopPreviewApiProxy(app);
+    registerCloudPreviewSessionSeedRoute(app);
 
     app.get("/api/db/schema", async (req, res) => {
       try {
@@ -721,6 +728,11 @@ async function startGateway(): Promise<void> {
           token,
           waitForTurso: body.wait === true,
         });
+        if (result.code.skipped && result.code.reason) {
+          console.log(
+            `[Gateway] /api/apps/sync-from-cloud skipped for ${appId}: ${result.code.reason.slice(0, 120)}`,
+          );
+        }
         res.json({ success: true, ...result });
       } catch (err) {
         console.error("[Gateway] /api/apps/sync-from-cloud error:", err);
@@ -811,7 +823,12 @@ async function startGateway(): Promise<void> {
     // Runs multiple read-only statements in one HTTP round trip. Mirrors the
     // Cloud App Host /api/db/batch contract so apps behave identically in
     // local preview and on apps.papr.ai.
-    app.post("/api/db/batch", async (req, res) => {
+    // Aliases: /api/db/query-batch and /api/db/read-batch (same handler).
+    // Writes belong on POST /api/db/write-batch — never mix INSERT/UPDATE into batch.
+    const handleDbReadBatch = async (
+      req: import("express").Request,
+      res: import("express").Response,
+    ): Promise<void> => {
       try {
         const { appId: bodyAppId, statements } = req.body as {
           appId?: string;
@@ -861,7 +878,10 @@ async function startGateway(): Promise<void> {
         console.error("[Gateway] /api/db/batch error:", err);
         res.status(500).json({ error: (err as Error).message });
       }
-    });
+    };
+    app.post("/api/db/batch", handleDbReadBatch);
+    app.post("/api/db/query-batch", handleDbReadBatch);
+    app.post("/api/db/read-batch", handleDbReadBatch);
 
     // ── Mini-app SQLite write API ────────────────────────────────────────────
     // Apps call: fetch('/api/db/write', { method: 'POST', body: JSON.stringify({ appId, sql, params }) })
@@ -957,14 +977,17 @@ async function startGateway(): Promise<void> {
     // ── Mini-app SQLite write batch API ─────────────────────────────────────
     // Apps call: fetch('/api/db/write-batch', { method: 'POST', body: JSON.stringify({ appId, statements: [...] }) })
     // Same write rules as /api/db/write; up to 25 statements per request.
-    // Returns: { results: [{ ok, changes, lastInsertRowid, source?, error? }, ...] }
+    // Returns: { atomic: boolean, results: [{ ok, changes, lastInsertRowid, source?, error? }, ...] }
+    // Default atomic: false — partial commits possible. Pass atomic: true for one SQLite transaction
+    // (all statements must target the same linked database).
     // ─────────────────────────────────────────────────────────────────────────
 
     app.post("/api/db/write-batch", async (req, res) => {
       try {
-        const { appId: bodyAppId, statements } = req.body as {
+        const { appId: bodyAppId, statements, atomic } = req.body as {
           appId?: string;
           statements?: Array<{ sourceId?: string; sql?: string; params?: unknown[] }>;
+          atomic?: boolean;
         };
 
         if (!Array.isArray(statements) || statements.length === 0) {
@@ -983,77 +1006,31 @@ async function startGateway(): Promise<void> {
         }
         const appId = resolved.appId;
 
-        const { writeLinkedDbRowLocalFirst } = await import(
-          "./services/syncV3/localFirstDbWrite.js"
-        );
-        const { assertReplaySafeRowSql } = await import(
-          "./services/syncV3/replaySafeSql.js"
+        const { executeMiniAppWriteBatch } = await import(
+          "./services/miniAppWriteBatch.js"
         );
 
-        const results: Array<Record<string, unknown>> = [];
-        for (const stmt of statements) {
-          if (!stmt?.sql) {
-            res.status(400).json({ error: "Every statement requires sql" });
-            return;
-          }
-
-          const trimmed = stmt.sql.trim().toLowerCase();
-          const isWrite =
-            trimmed.startsWith("insert") ||
-            trimmed.startsWith("update") ||
-            trimmed.startsWith("delete") ||
-            trimmed.startsWith("replace") ||
-            trimmed.startsWith("upsert");
-          if (!isWrite) {
-            res.status(403).json({
-              error:
-                "Only INSERT, UPDATE, DELETE, REPLACE, and UPSERT are allowed on /api/db/write-batch.",
-            });
-            return;
-          }
-
-          try {
-            let source: import("./services/appDataSources.js").AppDataSource;
-            try {
-              source = await resolveLinkedSource(
-                appId,
-                stmt.sourceId,
-                stmt.sql,
-                "write",
-              );
-            } catch (err) {
-              const e = err as Error & { status?: number };
-              results.push({ ok: false, error: e.message });
-              continue;
-            }
-
-            assertReplaySafeRowSql(stmt.sql);
-            const result = await writeLinkedDbRowLocalFirst(
-              dbPool,
-              dbRouter,
-              appId,
-              source,
-              stmt.sql,
-              stmt.params,
-            );
-            results.push({ ok: true, ...result, source: source.alias });
-          } catch (stmtErr) {
-            const e = stmtErr as Error & { name?: string };
-            if (e.name === "NonReplaySafeSqlError") {
-              results.push({ ok: false, error: e.message });
-              continue;
-            }
-            results.push({ ok: false, error: e.message });
-          }
-        }
+        const payload = await executeMiniAppWriteBatch({
+          appId,
+          statements,
+          atomic: atomic === true,
+          pool: dbPool,
+          dbRouter,
+          resolveLinkedSource,
+        });
 
         console.log(
-          `[Gateway] /api/db/write-batch app=${appId} count=${statements.length}`,
+          `[Gateway] /api/db/write-batch app=${appId} count=${statements.length} atomic=${payload.atomic}`,
         );
-        res.json({ results });
+        res.json(payload);
       } catch (err) {
+        const e = err as Error & { status?: number };
+        if (e.status) {
+          res.status(e.status).json({ error: e.message });
+          return;
+        }
         console.error("[Gateway] /api/db/write-batch error:", err);
-        res.status(500).json({ error: (err as Error).message });
+        res.status(500).json({ error: e.message });
       }
     });
     // ─────────────────────────────────────────────────────────────────────────

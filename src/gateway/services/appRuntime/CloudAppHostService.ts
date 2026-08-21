@@ -28,7 +28,7 @@ import {
   assertReadOnlySql,
   assertWriteSql,
 } from "./sqlValidation.js";
-import { parseDataSourcesFile, type AppDataSourcesFile } from "../appDataSources.js";
+import { type AppDataSourcesFile } from "../appDataSources.js";
 import { resolveDbEventTarget } from "../../utils/resolveDbEventTarget.js";
 import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
 import {
@@ -120,7 +120,7 @@ import {
   injectPaprAppRevisionMeta,
   resolvePublishedAppRevision,
 } from "./publishedAppRevision.js";
-import { hydrateCloudDatabaseRegistry } from "./cloudDatabaseRegistry.js";
+import { loadAppDataSourcesConfig } from "./cloudDatabaseRegistry.js";
 
 export interface CloudAppHostDeps {
   tursoCredentials: TursoCredentialsProvider;
@@ -216,6 +216,33 @@ function getRequestPaprApiKey(req: Request): string | undefined {
   return undefined;
 }
 
+/** Exposed as Server-Timing for E2E / browser devtools (Phase 1 perf tracking). */
+function setCloudDbServerTiming(
+  res: Response,
+  parts: Record<string, number | string>,
+): void {
+  const header = Object.entries(parts)
+    .map(([name, value]) =>
+      typeof value === "number"
+        ? `${name};dur=${Math.round(value)}`
+        : `${name};desc="${String(value).replace(/"/g, "")}"`,
+    )
+    .join(", ");
+  if (header) {
+    res.setHeader("Server-Timing", header);
+  }
+}
+
+function cloudHostCacheTimingParts(perf: {
+  accessCacheHit: boolean;
+  configCacheHit: boolean;
+}): Record<string, string> {
+  return {
+    accessCache: perf.accessCacheHit ? "hit" : "miss",
+    configCache: perf.configCacheHit ? "hit" : "miss",
+  };
+}
+
 export class CloudAppHostService {
   private readonly turso: TursoDbAdapter;
   private readonly auth = new CloudAppHostAuthService();
@@ -285,7 +312,12 @@ export class CloudAppHostService {
     app.get("/api/members", (req, res) => void this.handleMembers(req, res));
     app.get("/api/db/schema", (req, res) => this.handleSchema(req, res));
     app.post("/api/db/query", (req, res) => this.handleQuery(req, res));
-    app.post("/api/db/batch", (req, res) => this.handleBatchQuery(req, res));
+    const handleBatchQueryRoute = (req: Request, res: Response): void => {
+      void this.handleBatchQuery(req, res);
+    };
+    app.post("/api/db/batch", handleBatchQueryRoute);
+    app.post("/api/db/query-batch", handleBatchQueryRoute);
+    app.post("/api/db/read-batch", handleBatchQueryRoute);
     app.post("/api/db/write", (req, res) => this.handleWrite(req, res));
     app.post("/api/db/write-batch", (req, res) => this.handleWriteBatch(req, res));
     app.post("/api/db/exec", (req, res) => this.handleExec(req, res));
@@ -684,14 +716,25 @@ export class CloudAppHostService {
   private async resolveAccess(
     req: Request,
     appId?: string,
+    enrichedAuth?: AppRuntimeRouteAuth,
+    perf?: { accessCacheHit?: boolean },
   ): Promise<AppAccessContext | null> {
-    const baseAuth = this.buildRuntimeAuth(req);
+    const baseAuth = enrichedAuth ?? this.buildRuntimeAuth(req);
     if (!baseAuth) {
       return null;
     }
 
-    const runtimeAuth = (await enrichRuntimeAuthWithPaprApiKey(baseAuth)) ?? baseAuth;
-    const access = await validateCachedAccess(this.deps.publishResolver, runtimeAuth);
+    const runtimeAuth =
+      enrichedAuth ?? ((await enrichRuntimeAuthWithPaprApiKey(baseAuth)) ?? baseAuth);
+    const accessStats = { cacheHit: false as boolean | undefined };
+    const access = await validateCachedAccess(
+      this.deps.publishResolver,
+      runtimeAuth,
+      accessStats,
+    );
+    if (perf && accessStats.cacheHit !== undefined) {
+      perf.accessCacheHit = accessStats.cacheHit;
+    }
     if (!access) return null;
 
     if (access.mode === "public_read" && !runtimeAuth.sessionToken) {
@@ -729,19 +772,23 @@ export class CloudAppHostService {
     req: Request,
     res: Response,
     requestedAppId?: string,
+    perf?: { accessCacheHit?: boolean },
   ): Promise<{
     runtimeAuth: AppRuntimeRouteAuth;
     access: AppAccessContext;
     appId: string;
   } | null> {
-    const runtimeAuth = this.buildRuntimeAuth(req);
-    if (!runtimeAuth) {
+    const baseAuth = this.buildRuntimeAuth(req);
+    if (!baseAuth) {
       res.status(403).json({ error: "Forbidden" });
       return null;
     }
 
+    const runtimeAuth =
+      (await enrichRuntimeAuthWithPaprApiKey(baseAuth)) ?? baseAuth;
+
     const trimmedAppId = requestedAppId?.trim() || undefined;
-    const access = await this.resolveAccess(req, trimmedAppId);
+    const access = await this.resolveAccess(req, trimmedAppId, runtimeAuth, perf);
     if (!access) {
       await this.respondAccessDenied(req, res, runtimeAuth);
       return null;
@@ -759,14 +806,9 @@ export class CloudAppHostService {
   private async loadDataSources(
     runtimeAuth: AppRuntimeRouteAuth,
     requestedPath = "data-sources.json",
-  ): Promise<ReturnType<typeof parseDataSourcesFile>> {
-    const file = await fetchCachedRuntimeRepoFile(runtimeAuth, requestedPath);
-    if (!file?.content) {
-      return { sources: [] };
-    }
-    const config = parseDataSourcesFile(file.content);
-    await hydrateCloudDatabaseRegistry(runtimeAuth, config);
-    return config;
+    stats?: { cacheHit?: boolean },
+  ): Promise<AppDataSourcesFile> {
+    return loadAppDataSourcesConfig(runtimeAuth, requestedPath, stats);
   }
 
   /** Fire-and-forget Turso client warm on app open (reads + legacy write paths). */
@@ -909,6 +951,13 @@ export class CloudAppHostService {
   }
 
   private async handleQuery(req: Request, res: Response): Promise<void> {
+    const queryStarted = performance.now();
+    let accessMs = 0;
+    let configMs = 0;
+    let tursoQueryMs = 0;
+    let cacheHit = false;
+    const perf = { accessCacheHit: false, configCacheHit: false };
+
     try {
       const { appId: requestedAppId, sourceId, sql, params } = req.body as {
         appId?: string;
@@ -925,13 +974,23 @@ export class CloudAppHostService {
 
       if (!this.enforceDbRateLimit(req, res, "read")) return;
 
-      const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+      const ctxStarted = performance.now();
+      const ctx = await this.resolveDbAppContext(req, res, requestedAppId, perf);
+      accessMs = performance.now() - ctxStarted;
       if (!ctx) return;
       const { runtimeAuth, access, appId } = ctx;
 
       if (!access.canRead) {
         await this.respondAccessDenied(req, res, runtimeAuth);
         return;
+      }
+
+      const configStarted = performance.now();
+      const configStats = { cacheHit: false as boolean | undefined };
+      const config = await this.loadDataSources(runtimeAuth, "data-sources.json", configStats);
+      configMs = performance.now() - configStarted;
+      if (configStats.cacheHit !== undefined) {
+        perf.configCacheHit = configStats.cacheHit;
       }
 
       // Micro-cache: collapse polling apps and concurrent viewers into
@@ -949,27 +1008,37 @@ export class CloudAppHostService {
         // Version gate: desktop boundary-sync pushes bump _papr_sync_meta on
         // Turso directly (they never call this host). A memoized single-row
         // version check bounds cache staleness for those writes to ~2.5s.
-        const gateConfig = await this.loadDataSources(runtimeAuth);
+        const versionStarted = performance.now();
         const changed = await this.turso.hasRemoteChanged({
           orgId: access.orgId,
           namespaceId: access.namespaceId,
           ...this.tursoDbRequest(access, runtimeAuth),
           runtimeAuth,
-          config: gateConfig,
+          config,
           sourceId,
         });
+        tursoQueryMs += performance.now() - versionStarted;
         if (changed) {
           invalidateDbCacheForApp(runtimeAuth.namespaceId, runtimeAuth.slug);
-          this.publishDbChangedForSource(gateConfig, sourceId, appId, runtimeAuth);
+          this.publishDbChangedForSource(config, sourceId, appId, runtimeAuth);
           cached = undefined;
         } else {
+          cacheHit = true;
           res.setHeader("X-Papr-Db-Cache", "hit");
+          setCloudDbServerTiming(res, {
+            access: accessMs,
+            config: configMs,
+            turso: tursoQueryMs,
+            total: performance.now() - queryStarted,
+            cache: "hit",
+            ...cloudHostCacheTimingParts(perf),
+          });
           res.json(cached);
           return;
         }
       }
 
-      const config = await this.loadDataSources(runtimeAuth);
+      const queryExecStarted = performance.now();
       const result = await this.turso.query({
         orgId: access.orgId,
         namespaceId: access.namespaceId,
@@ -980,14 +1049,32 @@ export class CloudAppHostService {
         sql,
         params,
       });
+      tursoQueryMs += performance.now() - queryExecStarted;
       setCachedDbResult(cacheKey, result, {
         namespaceId: runtimeAuth.namespaceId,
         slug: runtimeAuth.slug,
+      });
+      setCloudDbServerTiming(res, {
+        access: accessMs,
+        config: configMs,
+        turso: tursoQueryMs,
+        total: performance.now() - queryStarted,
+        cache: "miss",
+        ...cloudHostCacheTimingParts(perf),
       });
       res.json(result);
     } catch (err) {
       const e = err as Error & { status?: number };
       res.status(e.status ?? 500).json({ error: e.message });
+    } finally {
+      const totalMs = Math.round(performance.now() - queryStarted);
+      if (process.env.CLOUD_DB_QUERY_TIMING !== "0") {
+        console.log(
+          `[CloudAppHost] /api/db/query timing accessMs=${Math.round(accessMs)} ` +
+            `configMs=${Math.round(configMs)} tursoQueryMs=${Math.round(tursoQueryMs)} ` +
+            `totalMs=${totalMs} cache=${cacheHit ? "hit" : "miss"}`,
+        );
+      }
     }
   }
 
@@ -999,6 +1086,11 @@ export class CloudAppHostService {
    * per-statement errors are returned in-place without failing the batch.
    */
   private async handleBatchQuery(req: Request, res: Response): Promise<void> {
+    const queryStarted = performance.now();
+    let accessMs = 0;
+    let configMs = 0;
+    let tursoQueryMs = 0;
+
     try {
       const { appId: requestedAppId, statements } = req.body as {
         appId?: string;
@@ -1022,7 +1114,9 @@ export class CloudAppHostService {
 
       if (!this.enforceDbRateLimit(req, res, "read", statements.length)) return;
 
+      const ctxStarted = performance.now();
       const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+      accessMs = performance.now() - ctxStarted;
       if (!ctx) return;
       const { runtimeAuth, access, appId } = ctx;
 
@@ -1031,11 +1125,14 @@ export class CloudAppHostService {
         return;
       }
 
+      const configStarted = performance.now();
       const config = await this.loadDataSources(runtimeAuth);
+      configMs = performance.now() - configStarted;
 
       // Version gate (see handleQuery): one memoized check per distinct
       // source in the batch; any change busts the app's cache up front.
       const distinctSourceIds = [...new Set(statements.map((s) => s.sourceId))];
+      const versionStarted = performance.now();
       for (const gateSourceId of distinctSourceIds) {
         const changed = await this.turso.hasRemoteChanged({
           orgId: access.orgId,
@@ -1051,6 +1148,7 @@ export class CloudAppHostService {
           break;
         }
       }
+      tursoQueryMs += performance.now() - versionStarted;
 
       const results: Array<Record<string, unknown>> = [];
       for (const stmt of statements) {
@@ -1068,6 +1166,7 @@ export class CloudAppHostService {
             results.push({ ok: true, ...(cached as Record<string, unknown>) });
             continue;
           }
+          const stmtStarted = performance.now();
           const result = await this.turso.query({
             orgId: access.orgId,
             namespaceId: access.namespaceId,
@@ -1078,6 +1177,7 @@ export class CloudAppHostService {
             sql: stmt.sql as string,
             params: stmt.params,
           });
+          tursoQueryMs += performance.now() - stmtStarted;
           setCachedDbResult(cacheKey, result, {
             namespaceId: runtimeAuth.namespaceId,
             slug: runtimeAuth.slug,
@@ -1091,6 +1191,15 @@ export class CloudAppHostService {
     } catch (err) {
       const e = err as Error & { status?: number };
       res.status(e.status ?? 500).json({ error: e.message });
+    } finally {
+      const totalMs = Math.round(performance.now() - queryStarted);
+      if (process.env.CLOUD_DB_QUERY_TIMING !== "0") {
+        console.log(
+          `[CloudAppHost] /api/db/query-batch timing accessMs=${Math.round(accessMs)} ` +
+            `configMs=${Math.round(configMs)} tursoQueryMs=${Math.round(tursoQueryMs)} ` +
+            `totalMs=${totalMs}`,
+        );
+      }
     }
   }
 
@@ -1152,6 +1261,12 @@ export class CloudAppHostService {
       // Bust read micro-cache and emit db-changed so UIs refresh
       invalidateDbCacheForApp(runtimeAuth.namespaceId, runtimeAuth.slug);
       this.publishDbChangedForSource(config, sourceId, appId, runtimeAuth);
+      setCloudDbServerTiming(res, {
+        access: accessMs,
+        config: configMs,
+        turso: tursoWriteMs,
+        total: performance.now() - writeStarted,
+      });
       res.json(result);
     } catch (err) {
       const e = err as Error & { status?: number };
@@ -1175,9 +1290,10 @@ export class CloudAppHostService {
     let tursoWriteMs = 0;
 
     try {
-      const { appId: requestedAppId, statements } = req.body as {
+      const { appId: requestedAppId, statements, atomic } = req.body as {
         appId?: string;
         statements?: Array<{ sourceId?: string; sql?: string; params?: unknown[] }>;
+        atomic?: boolean;
       };
       if (!Array.isArray(statements) || statements.length === 0) {
         res.status(400).json({ error: "non-empty statements[] is required" });
@@ -1226,6 +1342,7 @@ export class CloudAppHostService {
         runtimeAuth,
         config,
         appId,
+        atomic: atomic === true,
         statements: statements.map((stmt) => ({
           sourceId: stmt.sourceId,
           sql: stmt.sql as string,
@@ -1241,7 +1358,13 @@ export class CloudAppHostService {
       for (const sourceId of distinctSourceIds) {
         this.publishDbChangedForSource(config, sourceId, appId, runtimeAuth);
       }
-      res.json(batchResult);
+      setCloudDbServerTiming(res, {
+        access: accessMs,
+        config: configMs,
+        turso: tursoWriteMs,
+        total: performance.now() - writeStarted,
+      });
+      res.json({ atomic: atomic === true, ...batchResult });
     } catch (err) {
       const e = err as Error & { status?: number };
       res.status(e.status ?? 500).json({ error: e.message });

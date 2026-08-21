@@ -163,8 +163,19 @@
 .jv2-toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
   margin-bottom: 24px;
+}
+
+.jv2-filters--types {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.jv2-filters--types .jv2-filter {
+  padding: 5px 10px;
+  font-size: 12px;
 }
 
 /* ── App dropdown ────────────────────────────────────────────────────────── */
@@ -358,6 +369,108 @@
   border: 1px solid var(--border-color);
   border-radius: 999px;
   padding: 1px 8px;
+}
+
+/* ── Delegation groups ───────────────────────────────────────────────────── */
+
+.jv2-group--delegations {
+  border-color: rgba(99, 102, 241, 0.25);
+}
+
+.jv2-group-header--delegations {
+  gap: 12px;
+}
+
+.jv2-delegation-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.jv2-delegation-filter input {
+  accent-color: var(--primary-color);
+}
+
+.jv2-delegation-group {
+  border-bottom: 1px solid var(--border-color);
+}
+
+.jv2-delegation-group:last-child {
+  border-bottom: none;
+}
+
+.jv2-delegation-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 12px 20px;
+  border: none;
+  background: var(--background-color);
+  cursor: pointer;
+  gap: 16px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.jv2-delegation-summary:hover {
+  background: var(--background-secondary);
+}
+
+.jv2-delegation-summary-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.jv2-delegation-chevron {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  transition: transform 0.15s ease;
+}
+
+.jv2-delegation-chevron--open {
+  transform: rotate(90deg);
+}
+
+.jv2-delegation-profile {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.jv2-delegation-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.jv2-delegation-last {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.jv2-row--nested .jv2-row-main {
+  padding: 10px 20px 10px 44px;
+  min-height: 40px;
+}
+
+.jv2-type--muted {
+  text-transform: capitalize;
+  opacity: 0.75;
 }
 
 /* ── Job rows ────────────────────────────────────────────────────────────── */

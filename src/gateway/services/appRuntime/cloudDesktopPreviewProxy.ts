@@ -202,6 +202,10 @@ function cloudPreviewContextFromParams(
   return { namespaceId, slug, shareToken };
 }
 
+function isHtmlStaticPath(relativePath: string): boolean {
+  return relativePath === "index.html" || relativePath.endsWith(".html");
+}
+
 export async function proxyCloudStaticRequest(
   req: Request,
   res: Response,
@@ -209,12 +213,16 @@ export async function proxyCloudStaticRequest(
   subPath: string,
 ): Promise<void> {
   const runtimeAuth = await resolveCloudPreviewRuntimeAuth(ctx);
-  const localAccess = await validateDesktopCloudPreviewAccess(runtimeAuth);
 
   const queryIndex = req.url.indexOf("?");
   const query = queryIndex >= 0 ? req.url.slice(queryIndex) : "";
   const targetPath = subPath.length > 0 ? subPath : "index.html";
   const targetUrl = `${CLOUD_APPS_HOST}/${ctx.namespaceId}/${ctx.slug}/${targetPath}${query}`;
+
+  // Access validate is only needed for HTML share-gate retry — not every asset.
+  const localAccess = isHtmlStaticPath(targetPath)
+    ? await validateDesktopCloudPreviewAccess(runtimeAuth)
+    : null;
 
   const acceptHeader =
     typeof req.headers.accept === "string" ? req.headers.accept : "*/*";
@@ -224,6 +232,7 @@ export async function proxyCloudStaticRequest(
   ): Promise<globalThis.Response> {
     const authHeaders = await buildCloudPreviewAuthHeaders(ctx, {
       enrichFromSession,
+      auth: runtimeAuth,
     });
     return fetch(targetUrl, {
       method: req.method,
@@ -265,6 +274,12 @@ export async function proxyCloudStaticRequest(
   if (resolvedContentType) {
     res.setHeader("Content-Type", resolvedContentType);
   }
+  const cacheControl = upstreamRes.headers.get("cache-control");
+  if (cacheControl) {
+    res.setHeader("Cache-Control", cacheControl);
+  } else if (upstreamRes.ok && targetPath.startsWith("dist/")) {
+    res.setHeader("Cache-Control", "public, max-age=300");
+  }
   res.send(body);
 }
 
@@ -276,6 +291,7 @@ export async function proxyCloudApiRequest(
   const runtimeAuth = await resolveCloudPreviewRuntimeAuth(ctx);
   const authHeaders = await buildCloudPreviewAuthHeaders(ctx, {
     enrichFromSession: Boolean(runtimeAuth.sessionToken),
+    auth: runtimeAuth,
   });
   const targetUrl = await buildProxiedApiUrl(req, ctx);
 

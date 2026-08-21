@@ -90,6 +90,12 @@ function cookieSuffix(maxAgeSec: number, secure: boolean, path = "/"): string {
   return `Path=${path}; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${secure ? "; Secure" : ""}`;
 }
 
+function cookieSuffixEmbedded(maxAgeSec: number, secure: boolean, path = "/"): string {
+  // SameSite=None so cookies work in Paprwork desktop iframes (cross-site parent).
+  const sameSite = secure ? "None" : "Lax";
+  return `Path=${path}; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAgeSec}${secure ? "; Secure" : ""}`;
+}
+
 export function buildSessionCookie(
   sessionToken: string,
   secure: boolean,
@@ -112,6 +118,30 @@ export function buildSessionCookie(
   const value = encodeSignedJson(payload, secret);
   // Path=/ is required — Path=/auth only sends the cookie to /auth/* (breaks app routes).
   return `${PAPR_SESSION_COOKIE}=${encodeURIComponent(value)}; ${cookieSuffix(SESSION_MAX_AGE_SEC, secure, "/")}`;
+}
+
+/** Session cookie for desktop-bridge / embedded iframe preview (cross-site parent). */
+export function buildSessionCookieForEmbeddedPreview(
+  sessionToken: string,
+  secure: boolean,
+  externalUserId?: string,
+  email?: string,
+): string {
+  const secret = getCookieSigningSecret();
+  const payload: Record<string, unknown> = {
+    sessionToken,
+    exp: Date.now() + SESSION_MAX_AGE_SEC * 1000,
+  };
+  const trimmedUserId = externalUserId?.trim();
+  if (trimmedUserId) {
+    payload.externalUserId = trimmedUserId;
+  }
+  const trimmedEmail = email?.trim();
+  if (trimmedEmail) {
+    payload.email = trimmedEmail;
+  }
+  const value = encodeSignedJson(payload, secret);
+  return `${PAPR_SESSION_COOKIE}=${encodeURIComponent(value)}; ${cookieSuffixEmbedded(SESSION_MAX_AGE_SEC, secure, "/")}`;
 }
 
 /** Clears session cookies at both / and legacy /auth paths (production had a bad scope). */

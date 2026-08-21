@@ -90,9 +90,17 @@ describe("TursoDbAdapter.writeBatch (Reco #4)", () => {
     });
 
     expect(appendRuntimeWorkspaceLogBatch).toHaveBeenCalledTimes(1);
-    const batchArg = vi.mocked(appendRuntimeWorkspaceLogBatch).mock.calls[0]?.[1];
+    const batchCall = vi.mocked(appendRuntimeWorkspaceLogBatch).mock.calls[0];
+    const batchArg = batchCall?.[1];
+    const hostScope = batchCall?.[2];
     expect(batchArg?.replicaId).toBe("j-job1");
     expect(batchArg?.entries).toHaveLength(3);
+    expect(hostScope).toEqual({
+      orgId: "org-1",
+      namespaceId: "ns-1",
+      ownerUserId: "user-1",
+      appId: "app-1",
+    });
     expect(result.results).toHaveLength(3);
     expect(result.results.every((row) => row.ok === true)).toBe(true);
     expect(result.results.every((row) => row.source === "main")).toBe(true);
@@ -119,5 +127,63 @@ describe("TursoDbAdapter.writeBatch (Reco #4)", () => {
         statements,
       }),
     ).rejects.toThrow(/Batch limited to 25/);
+  });
+
+  it("rejects atomic batch spanning multiple replicas", async () => {
+    vi.mocked(appendRuntimeWorkspaceLogBatch).mockResolvedValue({
+      replicaId: "j-job1",
+      firstSeq: 1,
+      lastSeq: 1,
+      count: 1,
+      hlc: "2026-01-01T00:00:00Z",
+      latencyMs: 10,
+    });
+
+    const adapter = new TursoDbAdapter({
+      getUserDatabaseToken: vi.fn(),
+    } as unknown as TursoCredentialsProvider);
+
+    const sourceA = config.sources[0];
+    const sourceB = {
+      ...sourceA,
+      id: "job-2:main",
+      jobId: "job-2",
+      alias: "secondary",
+    };
+
+    vi.spyOn(adapter, "resolveSource")
+      .mockResolvedValueOnce({
+        source: sourceA,
+        remoteSql: "INSERT INTO t (n) VALUES (?)",
+      })
+      .mockResolvedValueOnce({
+        source: sourceB,
+        remoteSql: "INSERT INTO t (n) VALUES (?)",
+      });
+
+    const resolveDb = vi.spyOn(
+      adapter as unknown as { resolveTursoDatabaseName: () => Promise<string> },
+      "resolveTursoDatabaseName",
+    );
+    resolveDb.mockResolvedValueOnce("j-job1").mockResolvedValueOnce("j-job2");
+
+    await expect(
+      adapter.writeBatch({
+        orgId: "org-1",
+        namespaceId: "ns-1",
+        userId: "user-1",
+        runtimeAuth,
+        config: {
+          ...config,
+          sources: [sourceA, sourceB],
+        },
+        appId: "app-1",
+        atomic: true,
+        statements: [
+          { sql: "INSERT INTO t (n) VALUES (?)", params: [1] },
+          { sql: "INSERT INTO t (n) VALUES (?)", params: [2], sourceId: "secondary" },
+        ],
+      }),
+    ).rejects.toThrow(/same linked database/);
   });
 });

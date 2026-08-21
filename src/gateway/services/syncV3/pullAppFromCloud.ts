@@ -28,7 +28,7 @@ export async function pullAppFromCloud(
     const turso = await reconcileLinkedSourcesFromCloud(
       bridge,
       { appId },
-      { trigger: "manual" },
+      { trigger: "manual", assumeRemoteChanged: true },
     );
     return { appId, code, tursoScheduled: false, turso };
   }

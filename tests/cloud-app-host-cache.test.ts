@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cacheControlForAppAsset,
   fetchCachedRuntimeRepoFile,
+  invalidateRepoCacheForPublishedApp,
   resetCloudAppHostCachesForTests,
   validateCachedAccess,
 } from "../src/gateway/services/appRuntime/cloudAppHostCache.js";
@@ -68,6 +69,26 @@ describe("cloudAppHostCache", () => {
     };
 
     await validateCachedAccess(publishResolver, auth);
+    await validateCachedAccess(publishResolver, auth);
+
+    expect(publishResolver.validateAccess).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates access cache when repo cache is busted for publish", async () => {
+    const publishResolver: AppPublishResolver = {
+      validateAccess: vi.fn().mockResolvedValue({
+        orgId: "org",
+        namespaceId: "ns-1",
+        userId: "user",
+        appId: "app-1",
+        mode: "owner",
+        canRead: true,
+        canWrite: true,
+      }),
+    };
+
+    await validateCachedAccess(publishResolver, auth);
+    invalidateRepoCacheForPublishedApp("ns-1", "my-app");
     await validateCachedAccess(publishResolver, auth);
 
     expect(publishResolver.validateAccess).toHaveBeenCalledTimes(2);
