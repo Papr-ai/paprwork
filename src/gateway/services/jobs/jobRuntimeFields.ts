@@ -29,6 +29,7 @@ export const JOB_CONFIG_FIELD_KEYS = [
   "reportChatId",
   "provider",
   "model",
+  "executionCapability",
   "recipe",
   "createdAt",
 ] as const satisfies readonly (keyof JobRecord)[];
@@ -51,6 +52,8 @@ export const JOB_RUNTIME_FIELD_KEYS = [
   "waitingScheduleRisk",
   "lastEvaluation",
   "scheduleState",
+  /** Where the last run executed: desktop, cloud_scheduler, cloud_manual, etc. */
+  "lastRunSource",
 ] as const satisfies readonly (keyof JobRecord)[];
 
 export type JobConfigSlice = Pick<

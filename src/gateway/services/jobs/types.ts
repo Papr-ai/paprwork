@@ -80,6 +80,8 @@ export interface JobRecord {
   nextRetryAt?: string;
   /** Captured stdout from the last completed run (capped at 32KB). Available via WebSocket and wait:true response. */
   lastOutput?: string;
+  /** Where the most recent run executed (desktop vs cloud). Runtime-only — not in git. */
+  lastRunSource?: string;
   /** When status is waiting_permission, lists the API key names awaiting user approval. */
   waitingPermissionKeys?: string[];
   /** When status is waiting_permission, high-frequency agent schedule awaiting user approval. */

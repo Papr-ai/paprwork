@@ -997,6 +997,36 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.4.2" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.2</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Job Cloud Status</strong>
+                <p>
+                  The Jobs view now shows whether each job last ran on desktop
+                  or in the cloud, with live status from the cloud scheduler.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Build Fix</strong>
+                <p>
+                  Fixed a gateway compile error that blocked v2.4.1 from
+                  building locally.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.2"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.4.1" && (
           <div className="about-card">
             <h3>What's New in v2.4.1</h3>

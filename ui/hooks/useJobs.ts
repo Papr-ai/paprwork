@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { gateway } from "../src/lib/gateway";
+import type { JobCloudStatusReport, JobExecutionPlacement } from "../components/Jobs/jobCloudTypes";
 
 export type JobType =
   | "shell"
@@ -64,6 +65,10 @@ export interface JobRecord {
     passed: boolean;
     timestamp: string;
   };
+  /** Scheduled execution placement when cloud sync is on */
+  executionCapability?: "local-only" | "local-preferred" | "cloud-preferred" | "cloud-capable";
+  /** Where the most recent run executed */
+  lastRunSource?: string;
 }
 
 export interface JobGraphAppLink {
@@ -102,6 +107,8 @@ export function useJobs() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [defaultModel, setDefaultModel] = useState<string>("gpt-5-6-sol");
+  const [cloudStatus, setCloudStatus] = useState<JobCloudStatusReport | null>(null);
+  const [updatingPlacementJobId, setUpdatingPlacementJobId] = useState<string | null>(null);
   const fingerprintRef = useRef("");
   const initialLoadDone = useRef(false);
 
@@ -226,6 +233,36 @@ export function useJobs() {
     return updated;
   }, []);
 
+  const loadCloudStatus = useCallback(async () => {
+    try {
+      const response = await gateway.send("jobs:cloud-status", {});
+      if (response.success && response.data) {
+        setCloudStatus(response.data as JobCloudStatusReport);
+      }
+    } catch {
+      /* non-fatal — user may be offline or unsigned */
+    }
+  }, []);
+
+  const updateJobPlacement = useCallback(
+    async (jobId: string, executionCapability: JobExecutionPlacement) => {
+      setUpdatingPlacementJobId(jobId);
+      setError(null);
+      try {
+        const response = await gateway.send("jobs:update", {
+          jobId,
+          executionCapability,
+        });
+        const updated = response.data as JobRecord;
+        setJobs((prev) => prev.map((job) => (job.id === jobId ? updated : job)));
+        return updated;
+      } finally {
+        setUpdatingPlacementJobId(null);
+      }
+    },
+    [],
+  );
+
   const deleteJob = useCallback(
     async (jobId: string, deleteFiles = true, deleteTursoDb = true) => {
       setError(null);
@@ -234,24 +271,30 @@ export function useJobs() {
       if (result.deleted) {
         setJobs((prev) => prev.filter((job) => job.id !== jobId));
         void loadGraph();
+        void loadCloudStatus();
       }
       return result;
     },
-    [loadGraph],
+    [loadGraph, loadCloudStatus],
   );
 
   useEffect(() => {
     void loadJobs(false);
     void loadGraph();
     void loadDefaultModel();
+    void loadCloudStatus();
     initialLoadDone.current = true;
     const timer = setInterval(() => {
       void loadJobs(true);
     }, 10000);
+    const cloudTimer = setInterval(() => {
+      void loadCloudStatus();
+    }, 30000);
 
     const onWorkspaceReload = () => {
       void loadJobs(true);
       void loadGraph();
+      void loadCloudStatus();
     };
     window.addEventListener("papr-workspace-reload", onWorkspaceReload);
 
@@ -298,10 +341,11 @@ export function useJobs() {
     window.addEventListener("gateway-broadcast", handler as EventListener);
     return () => {
       clearInterval(timer);
+      clearInterval(cloudTimer);
       window.removeEventListener("papr-workspace-reload", onWorkspaceReload);
       window.removeEventListener("gateway-broadcast", handler as EventListener);
     };
-  }, [loadJobs, loadGraph]);
+  }, [loadJobs, loadGraph, loadCloudStatus]);
 
   return {
     jobs,
@@ -320,5 +364,9 @@ export function useJobs() {
     stopJob,
     deleteJob,
     loadLogs,
+    cloudStatus,
+    loadCloudStatus,
+    updateJobPlacement,
+    updatingPlacementJobId,
   };
 }

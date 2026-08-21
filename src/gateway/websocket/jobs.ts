@@ -5,6 +5,7 @@ import {
   getJobsService,
   type JobDelivery,
   type JobDependency,
+  type JobExecutionCapability,
   type JobMemoryPolicy,
   type JobRetryPolicy,
   type JobSchedule,
@@ -101,6 +102,7 @@ interface UpdateJobPayload {
   maxTurns?: number;
   memoryPolicy?: "none" | "summary" | "full";
   reportChatId?: string;
+  executionCapability?: JobExecutionCapability;
 }
 
 interface JobDbInfoPayload {
@@ -245,6 +247,18 @@ export async function setupJobsHandlers(
           payload.approved,
         );
         sendResponse(ws, { id: message.id, success: true, data: job });
+        break;
+      }
+      case "jobs:cloud-status": {
+        await jobsService.initialize();
+        const localJobs = await jobsService.listJobs();
+        const { fetchCloudJobSummaries } = await import(
+          "../services/jobs/jobCloudSummary.js"
+        );
+        const report = await fetchCloudJobSummaries(
+          localJobs.map((job) => job.id),
+        );
+        sendResponse(ws, { id: message.id, success: true, data: report });
         break;
       }
       case "jobs:delete": {

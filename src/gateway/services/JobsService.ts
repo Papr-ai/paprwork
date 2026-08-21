@@ -105,6 +105,7 @@ export type {
   CreateJobInput,
   JobDelivery,
   JobDependency,
+  JobExecutionCapability,
   JobGraph,
   JobGraphAppLink,
   JobGraphEdge,
@@ -956,6 +957,9 @@ export class JobsService {
     if (patch.scheduleState !== undefined) {
       updates.scheduleState = patch.scheduleState;
     }
+    if (patch.source) {
+      updates.lastRunSource = patch.source;
+    }
 
     return this.setJobStatus(job.id, status, updates, {
       updatedAt: recordedAt,
@@ -1618,11 +1622,18 @@ export class JobsService {
       throw new Error(`Job not found: ${jobId}`);
     }
     const now = options?.updatedAt ?? new Date().toISOString();
+    const shouldTagDesktopRun =
+      !options?.fromCloudPatch &&
+      (status === "running" ||
+        status === "completed" ||
+        status === "failed" ||
+        status === "cancelled");
     const next: JobRecord = {
       ...existing,
       ...updates,
       status,
       updatedAt: now,
+      ...(shouldTagDesktopRun ? { lastRunSource: "desktop" } : {}),
       ...(status === "running" ? { lastRunAt: now, error: undefined } : {}),
       ...(status === "completed" ||
       status === "failed" ||
@@ -2575,6 +2586,7 @@ export class JobsService {
         | "provider"
         | "model"
         | "recipe"
+        | "executionCapability"
       >
     >,
   ): Promise<import("./jobs/types.js").JobRecord> {

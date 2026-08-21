@@ -15,6 +15,8 @@ import {
 import { openJobDiagnosisChat } from "../../utils/jobDiagnosis";
 import { JobPermissionBanner } from "../Chat/JobPermissionBanner";
 import { AppWorkflow } from "./AppWorkflow";
+import { CloudOnlyJobsBanner, JobCloudSection } from "./JobCloudSection";
+import type { JobExecutionPlacement } from "./jobCloudTypes";
 import { renderAppIcon } from "../../utils/renderAppIcon";
 import "./JobsView.css";
 
@@ -46,8 +48,17 @@ export function JobsView() {
     loadLogs,
     logsByJobId,
     defaultModel,
+    cloudStatus,
+    loadCloudStatus,
+    updateJobPlacement,
+    updatingPlacementJobId,
   } = useJobs();
-  const [deleteConfirm, setDeleteConfirm] = useState<{ jobId: string; jobName: string } | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{
+    jobId: string;
+    jobName: string;
+    deleteFiles: boolean;
+    deleteTursoDb: boolean;
+  } | null>(null);
   const { createChat } = useChat();
   const { createTab, switchToTab } = useTabStore();
   const artifacts = useArtifactsStore((s) => s.artifacts);
@@ -131,8 +142,9 @@ export function JobsView() {
 
   const handleDeleteJob = useCallback(
     async (jobId: string) => {
+      if (!deleteConfirm) return;
       setDeleteConfirm(null);
-      await deleteJob(jobId, true);
+      await deleteJob(jobId, deleteConfirm.deleteFiles, deleteConfirm.deleteTursoDb);
       if (expandedJobId === jobId) {
         setExpandedJobId(null);
       }
@@ -140,7 +152,25 @@ export function JobsView() {
         setWorkflowSelectedJobId(null);
       }
     },
-    [deleteJob, expandedJobId, workflowSelectedJobId],
+    [deleteJob, deleteConfirm, expandedJobId, workflowSelectedJobId],
+  );
+
+  const handlePlacementChange = useCallback(
+    (jobId: string, placement: JobExecutionPlacement) => {
+      void updateJobPlacement(jobId, placement);
+    },
+    [updateJobPlacement],
+  );
+
+  const renderCloudSection = (job: JobRecord) => (
+    <JobCloudSection
+      job={job}
+      cloudStatus={cloudStatus}
+      cloudSummary={cloudStatus?.summariesById[job.id]}
+      updatingPlacement={updatingPlacementJobId === job.id}
+      onPlacementChange={(placement) => handlePlacementChange(job.id, placement)}
+      onRefreshCloud={() => void loadCloudStatus()}
+    />
   );
 
   useEffect(() => {
@@ -278,12 +308,14 @@ export function JobsView() {
     } else {
       setExpandedJobId(jobId);
       void loadLogs(jobId);
+      void loadCloudStatus();
     }
   };
 
   const handleWorkflowJobSelect = (jobId: string) => {
     setWorkflowSelectedJobId(jobId);
     void loadLogs(jobId);
+    void loadCloudStatus();
   };
 
   const formatRelativeTime = (isoString?: string): string => {
@@ -422,6 +454,16 @@ export function JobsView() {
             {isWaiting && (
               <span className="jv2-badge jv2-badge--waiting">Awaiting approval</span>
             )}
+            {job.executionCapability === "local-only" && (
+              <span className="jv2-row-cloud-badge jv2-row-cloud-badge--local-only">
+                Local only
+              </span>
+            )}
+            {job.lastRunSource?.startsWith("cloud") && (
+              <span className="jv2-row-cloud-badge" title="Last run was on Papr Cloud">
+                Cloud run
+              </span>
+            )}
             <span className="jv2-time">{lastRunLabel(job)}</span>
             <div className="jv2-actions" onClick={(e) => e.stopPropagation()}>
               {isActive ? (
@@ -491,7 +533,14 @@ export function JobsView() {
                   </button>
                   <button
                     className="jv2-wf-action-btn jv2-wf-action-btn--danger"
-                    onClick={() => setDeleteConfirm({ jobId: job.id, jobName: job.name })}
+                    onClick={() =>
+                      setDeleteConfirm({
+                        jobId: job.id,
+                        jobName: job.name,
+                        deleteFiles: true,
+                        deleteTursoDb: true,
+                      })
+                    }
                   >
                     Delete
                   </button>
@@ -552,6 +601,7 @@ export function JobsView() {
                 </div>
               )}
             </div>
+            {renderCloudSection(job)}
             {job.command && (
               <div className="jv2-command-section">
                 <span className="jv2-detail-label">Command</span>
@@ -629,7 +679,14 @@ export function JobsView() {
               </button>
               <button
                 className="jv2-wf-action-btn jv2-wf-action-btn--danger"
-                onClick={() => setDeleteConfirm({ jobId: job.id, jobName: job.name })}
+                onClick={() =>
+                  setDeleteConfirm({
+                    jobId: job.id,
+                    jobName: job.name,
+                    deleteFiles: true,
+                    deleteTursoDb: true,
+                  })
+                }
               >
                 Delete
               </button>
@@ -668,6 +725,8 @@ export function JobsView() {
           )}
         </div>
 
+        {renderCloudSection(job)}
+
         {job.command && (
           <div className="jv2-command-section">
             <span className="jv2-detail-label">Command</span>
@@ -698,6 +757,10 @@ export function JobsView() {
   return (
     <div className={`jv2 ${isWorkflow ? "jv2--workflow" : ""}`}>
       <JobPermissionBanner />
+      <CloudOnlyJobsBanner
+        cloudStatus={cloudStatus}
+        summariesById={cloudStatus?.summariesById ?? {}}
+      />
       <div className="jv2-header">
         <div className="jv2-header-left">
           <h1 className="jv2-title">Jobs</h1>
@@ -933,8 +996,36 @@ export function JobsView() {
             <h3 className="jv2-modal-title">Delete Job</h3>
             <p className="jv2-modal-text">
               Are you sure you want to delete <strong>{deleteConfirm.jobName}</strong>?
-              This will remove the job and all its files (scripts, logs, local database).
-              Any Turso cloud database for this job will also be deleted.
+            </p>
+            <div className="jv2-modal-checkboxes">
+              <label className="jv2-modal-checkbox">
+                <input
+                  type="checkbox"
+                  checked={deleteConfirm.deleteFiles}
+                  onChange={(e) =>
+                    setDeleteConfirm((prev) =>
+                      prev ? { ...prev, deleteFiles: e.target.checked } : prev,
+                    )
+                  }
+                />
+                <span>Delete local job files (scripts, logs, scratch database)</span>
+              </label>
+              <label className="jv2-modal-checkbox">
+                <input
+                  type="checkbox"
+                  checked={deleteConfirm.deleteTursoDb}
+                  onChange={(e) =>
+                    setDeleteConfirm((prev) =>
+                      prev ? { ...prev, deleteTursoDb: e.target.checked } : prev,
+                    )
+                  }
+                />
+                <span>Delete Turso cloud database for this job</span>
+              </label>
+            </div>
+            <p className="jv2-modal-note">
+              The cloud job catalog updates automatically when you delete — scheduled cloud runs
+              stop for this job. Local-only jobs are never scheduled in the cloud.
             </p>
             <div className="jv2-modal-actions">
               <button
