@@ -67,6 +67,7 @@ import {
   reconcilePlatformCatalogManifest,
 } from "./syncV3/platformCatalogManifest.js";
 import { withPublishInFlight } from "./cloudPublishInFlight.js";
+import { coerceRequireSignInForPerUserIsolation } from "./appRuntime/cloudAppPerUserAccess.js";
 
 export interface CloudPublishConfig {
   appId: string;
@@ -465,10 +466,16 @@ export class CloudAppPublishService {
       accessMode: options?.accessMode ?? prefs.accessMode,
     });
     const codeAccess = options?.codeAccess ?? prefs.codeAccess ?? "off";
-    const requireSignIn =
+    const perUserIsolation =
+      options?.perUserIsolation !== undefined
+        ? options.perUserIsolation
+        : prefs.perUserIsolation;
+    const requireSignIn = coerceRequireSignInForPerUserIsolation(
+      perUserIsolation,
       options?.requireSignIn !== undefined
         ? options.requireSignIn
-        : prefs.requireSignIn;
+        : prefs.requireSignIn,
+    );
     const publishFields = resolvePublishFieldsFromPrefs({
       loginAccess: sharing.loginAccess,
       externalLink: sharing.externalLink,
@@ -476,11 +483,6 @@ export class CloudAppPublishService {
       codeAccess,
       requireSignIn,
     });
-
-    const perUserIsolation =
-      options?.perUserIsolation !== undefined
-        ? options.perUserIsolation
-        : prefs.perUserIsolation;
 
     if (perUserIsolation !== undefined) {
       const { applyPerUserIsolationForApp } = await import(
@@ -796,6 +798,19 @@ export class CloudAppPublishService {
       options?.perUserIsolation !== undefined
         ? options.perUserIsolation
         : prefs.perUserIsolation;
+
+    if (perUserIsolation === true && requireSignIn !== true) {
+      requireSignIn = true;
+      if (hasExplicitSharing) {
+        publishFields = resolvePublishFieldsFromPrefs({
+          loginAccess: sharing.loginAccess,
+          externalLink: sharing.externalLink,
+          accessMode: options?.accessMode ?? prefs.accessMode,
+          codeAccess,
+          requireSignIn: true,
+        });
+      }
+    }
 
     if (perUserIsolation !== undefined) {
       const { applyPerUserIsolationForApp } = await import(

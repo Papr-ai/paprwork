@@ -5,6 +5,7 @@
 
 import type { UiAgentFocusContext } from "../../src/core/types/agentFocus";
 import type { Tab } from "../types/tabs";
+import { readCloudCatalogPreviewTabMetadata } from "../types/cloudCatalogPreviewTab";
 import { useTabStore } from "../stores/tabStore";
 import { useJobNavigationStore } from "../stores/jobNavigationStore";
 
@@ -109,8 +110,10 @@ export function resolveAgentFocusContext(
   const focus: UiAgentFocusContext = {};
 
   if (appTab) {
+    const catalogPreview = readCloudCatalogPreviewTabMetadata(appTab);
+    const focusAppId = catalogPreview?.publisherAppId ?? appTab.entityId;
     focus.activeApp = {
-      appId: appTab.entityId,
+      appId: focusAppId,
       title: appTab.title,
     };
   }

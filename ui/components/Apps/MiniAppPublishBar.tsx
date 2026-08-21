@@ -1166,7 +1166,11 @@ export function MiniAppPublishBar({
                       checked={perUserIsolation}
                       onChange={(event) => {
                         if (shareSheetBusy) return;
-                        setPerUserIsolation(event.target.checked);
+                        const checked = event.target.checked;
+                        setPerUserIsolation(checked);
+                        if (checked) {
+                          setRequireSignIn(true);
+                        }
                       }}
                     />
                     <span>Per-user isolation &amp; personalization</span>

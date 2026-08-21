@@ -31,9 +31,13 @@ export interface MiniAppAccessResponse {
   canWrite: boolean;
   loggedIn: boolean;
   isOwner: boolean;
-  /** Papr user id — present when loggedIn; server-resolved, not client-supplied. */
+  /** Caller's Parse objectId — present when loggedIn; use for row filters (not publisher). */
   userId?: string;
-  /** Convenience for admin UIs — present when loggedIn and email is known. */
+  /** Same as userId — mirrors cloud API external_user_id naming. */
+  externalUserId?: string;
+  /** Publish-catalog owner Parse id — for admin comparisons, not row ACL. */
+  publisherUserId?: string;
+  /** Caller's email when known (session). */
   email?: string;
   appId?: string;
 }

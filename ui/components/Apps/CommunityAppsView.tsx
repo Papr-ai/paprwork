@@ -35,6 +35,14 @@ import {
   getCatalogByline,
   getCatalogShareBadge,
 } from "../../utils/communityCatalogDisplay";
+import {
+  resolveCatalogLiveWebUrl,
+  resolveCatalogPreviewIframeUrl,
+} from "../../utils/catalogPreviewUrl";
+import {
+  cloudCatalogPreviewEntityId,
+  type CloudCatalogPreviewTabMetadata,
+} from "../../types/cloudCatalogPreviewTab";
 
 const GATEWAY =
   typeof import.meta !== "undefined" &&
@@ -552,26 +560,37 @@ export function CommunityAppsView({
     void installCloudApp(entry);
   };
 
-  const openLocalApp = useCallback(
-    (appId: string, title: string) => {
-      const tabId = createTab("app", appId, title);
+  const openCloudPreview = useCallback(
+    (entry: CommunityCatalogEntry) => {
+      const previewIframeUrl = resolveCatalogPreviewIframeUrl(entry);
+      const liveUrl = resolveCatalogLiveWebUrl(entry);
+      if (!previewIframeUrl || !liveUrl) {
+        setError("This app does not have a live preview URL yet.");
+        return;
+      }
+
+      trackEvent("paprwork_community_app_previewed", {
+        url: liveUrl,
+        app_name: entry.name,
+        in_app_iframe: true,
+      } as Record<string, unknown>);
+
+      const metadata: CloudCatalogPreviewTabMetadata = {
+        cloudCatalogPreview: true,
+        previewIframeUrl,
+        liveUrl,
+        catalogId: entry.catalogId,
+        ...(entry.appId ? { publisherAppId: entry.appId } : {}),
+        ...(entry.namespaceId ? { namespaceId: entry.namespaceId } : {}),
+        ...(entry.slug ? { slug: entry.slug } : {}),
+      };
+
+      const entityId = cloudCatalogPreviewEntityId(entry.catalogId);
+      const tabId = createTab("app", entityId, entry.name, metadata);
       switchToTab(tabId);
     },
     [createTab, switchToTab],
   );
-
-  const openLiveApp = async (url: string, appName?: string) => {
-    trackEvent("paprwork_community_app_previewed", { url, app_name: appName } as Record<string, unknown>);
-    try {
-      if (window.electronAPI?.system?.invoke) {
-        await window.electronAPI.system.invoke("shell.openExternal", url);
-      } else {
-        window.open(url, "_blank", "noopener,noreferrer");
-      }
-    } catch {
-      /* ignore */
-    }
-  };
 
   const handleOssImportClick = (entry: CommunityCatalogEntry) => {
     const ossEntry = toOssEntry(entry);
@@ -673,14 +692,10 @@ export function CommunityAppsView({
             onOssImport={() => handleOssImportClick(entry)}
             onCloudInstall={() => startCloudInstall(entry)}
             isInstalling={installingId === entry.catalogId}
-            onOpenLocal={
-              localAppId
-                ? () => openLocalApp(localAppId, entry.name)
-                : undefined
-            }
-            onOpenLive={
-              entry.liveViewable && entry.liveUrl
-                ? () => void openLiveApp(entry.liveUrl!, entry.name)
+            onOpen={
+              entry.liveViewable &&
+              (entry.liveUrl || (entry.namespaceId && entry.slug))
+                ? () => openCloudPreview(entry)
                 : undefined
             }
           />
@@ -947,8 +962,7 @@ interface CommunityAppCardProps {
   isInstalling?: boolean;
   onOssImport: () => void;
   onCloudInstall: () => void;
-  onOpenLocal?: () => void;
-  onOpenLive?: () => void;
+  onOpen?: () => void;
 }
 
 function CommunityAppCard({
@@ -959,8 +973,7 @@ function CommunityAppCard({
   isInstalling = false,
   onOssImport,
   onCloudInstall,
-  onOpenLocal,
-  onOpenLive,
+  onOpen,
 }: CommunityAppCardProps) {
   const [showDetails, setShowDetails] = useState(false);
 
@@ -1142,15 +1155,25 @@ function CommunityAppCard({
               </div>
             ) : null}
             <div className="community-card__detail-row">
-              <span className="community-card__detail-label">Install</span>
+              <span className="community-card__detail-label">Open</span>
               <span className="community-card__detail-value">
                 {entry.source === "cloud"
-                  ? entry.codeInstallable
-                    ? "Install to edit in Paprwork"
-                    : "Web app only"
+                  ? entry.liveViewable
+                    ? "Live preview in Paprwork"
+                    : entry.codeInstallable
+                      ? "Customize locally (fork)"
+                      : "Web app only"
                   : "GitHub bundle"}
               </span>
             </div>
+            {entry.source === "cloud" && entry.codeInstallable ? (
+              <div className="community-card__detail-row">
+                <span className="community-card__detail-label">Customize</span>
+                <span className="community-card__detail-value">
+                  Fork source to edit or contribute (optional)
+                </span>
+              </div>
+            ) : null}
             {entry.source === "cloud" && entry.slug ? (
               <div className="community-card__detail-row">
                 <span className="community-card__detail-label">Slug</span>
@@ -1164,32 +1187,23 @@ function CommunityAppCard({
       {entry.source === "cloud" ? (
         <div className="community-card__actions">
           <div className="community-card__actions-row">
-            {onOpenLocal ? (
+            {onOpen ? (
               <button
                 type="button"
                 className="community-card__action-btn community-card__action-btn--primary"
-                onClick={onOpenLocal}
+                onClick={onOpen}
               >
-                Open in Paprwork
-              </button>
-            ) : null}
-            {entry.liveViewable && onOpenLive ? (
-              <button
-                type="button"
-                className="community-card__action-btn"
-                onClick={onOpenLive}
-              >
-                Preview
+                Open
               </button>
             ) : null}
             {showInstall ? (
               <button
                 type="button"
-                className="community-card__action-btn community-card__action-btn--primary"
+                className={`community-card__action-btn${onOpen ? "" : " community-card__action-btn--primary"}`}
                 onClick={onCloudInstall}
                 disabled={isInstalling}
               >
-                {isInstalling ? "Installing…" : "Install"}
+                {isInstalling ? "Installing…" : "Customize"}
               </button>
             ) : null}
           </div>

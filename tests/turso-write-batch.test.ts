@@ -10,6 +10,13 @@ vi.mock("../src/gateway/services/appRuntime/memoryRuntimeClient.js", () => ({
   appendRuntimeWorkspaceLogEntry: vi.fn(),
 }));
 
+vi.mock("../src/gateway/services/DatabaseRegistryService.js", () => ({
+  getDatabaseRegistryService: vi.fn(() => ({
+    getRecordForSource: () => undefined,
+  })),
+  tursoNameForRecord: vi.fn(),
+}));
+
 import { TursoDbAdapter } from "../src/gateway/services/appRuntime/TursoDbAdapter.js";
 import { appendRuntimeWorkspaceLogBatch } from "../src/gateway/services/appRuntime/memoryRuntimeClient.js";
 

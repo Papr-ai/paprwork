@@ -84,6 +84,7 @@ import {
   buildMiniAppAccessResponse,
   mergeVerifiedCallerJobParams,
 } from "./miniAppAccess.js";
+import { configHasPerUserLinkedSources } from "./cloudAppPerUserAccess.js";
 import {
   assertMiniAppMembersAccess,
   listMiniAppMembers,
@@ -374,6 +375,39 @@ export class CloudAppHostService {
   }
 
   /**
+   * Turso replica actors: publisher (shared DBs) + session caller (per-user DBs).
+   */
+  private tursoDbRequest(
+    access: AppAccessContext,
+    runtimeAuth: AppRuntimeRouteAuth,
+  ): { userId: string; callerUserId?: string } {
+    return {
+      userId: access.userId,
+      callerUserId: runtimeAuth.externalUserId,
+    };
+  }
+
+  private callerIsSignedIn(runtimeAuth: AppRuntimeRouteAuth): boolean {
+    return Boolean(
+      runtimeAuth.sessionToken?.trim() || runtimeAuth.externalUserId?.trim(),
+    );
+  }
+
+  private async accessBlockedForAnonymousPerUserData(
+    runtimeAuth: AppRuntimeRouteAuth,
+  ): Promise<boolean> {
+    if (this.callerIsSignedIn(runtimeAuth)) {
+      return false;
+    }
+    try {
+      const config = await this.loadDataSources(runtimeAuth);
+      return configHasPerUserLinkedSources(config);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Rate-limit guard for /api/db/* endpoints. Returns true when the request
    * may proceed; otherwise responds 429 with Retry-After.
    */
@@ -553,7 +587,7 @@ export class CloudAppHostService {
       const result = await this.turso.query({
         orgId: access.orgId,
         namespaceId: access.namespaceId,
-        userId: access.userId,
+        ...this.tursoDbRequest(access, runtimeAuth),
         runtimeAuth,
         config,
         sourceId,
@@ -571,9 +605,7 @@ export class CloudAppHostService {
       const decision = resolveCloudFileUrl(row, {
         requestedAppId: appId,
         canRead: access.canRead,
-        // A logged-out visitor on a public app has no user identity. Normalise
-        // to null so ownership comparisons cannot accidentally match "".
-        userId: access.userId || null,
+        userId: runtimeAuth.externalUserId || null,
         isPublished: true,
       });
 
@@ -625,7 +657,7 @@ export class CloudAppHostService {
       const result = await this.turso.query({
         orgId: access.orgId,
         namespaceId: access.namespaceId,
-        userId: access.userId,
+        ...this.tursoDbRequest(access, runtimeAuth),
         runtimeAuth,
         config,
         sourceId,
@@ -639,7 +671,8 @@ export class CloudAppHostService {
       const visible = rows.filter(
         (row) =>
           !row.object_key.includes("/users/") ||
-          (access.userId && row.object_key.includes(`/users/${access.userId}/`)),
+          (runtimeAuth.externalUserId &&
+            row.object_key.includes(`/users/${runtimeAuth.externalUserId}/`)),
       );
       res.json({ files: visible });
     } catch (err) {
@@ -677,6 +710,11 @@ export class CloudAppHostService {
     if (appId && access.appId !== appId) {
       return null;
     }
+
+    if (await this.accessBlockedForAnonymousPerUserData(runtimeAuth)) {
+      return null;
+    }
+
     return access;
   }
 
@@ -742,7 +780,7 @@ export class CloudAppHostService {
     await this.turso.warmLinkedSources({
       orgId: access.orgId,
       namespaceId: access.namespaceId,
-      userId: access.userId,
+      ...this.tursoDbRequest(access, runtimeAuth),
       runtimeAuth,
       config,
     });
@@ -783,10 +821,14 @@ export class CloudAppHostService {
       const access = await this.resolveAccess(req, trimmedAppId);
       const loggedIn = Boolean(this.auth.getSessionToken(req));
       const appId = trimmedAppId ?? access?.appId;
+      const callerUserId = runtimeAuth.externalUserId;
       const email = loggedIn ? this.auth.getSessionEmail(req) : undefined;
 
       res.json(
-        buildMiniAppAccessResponse(access, loggedIn, appId, { email }),
+        buildMiniAppAccessResponse(access, loggedIn, appId, {
+          userId: callerUserId,
+          email,
+        }),
       );
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -855,7 +897,7 @@ export class CloudAppHostService {
       const sources = await this.turso.schema({
         orgId: access.orgId,
         namespaceId: access.namespaceId,
-        userId: access.userId,
+        ...this.tursoDbRequest(access, runtimeAuth),
         runtimeAuth,
         config,
       });
@@ -910,7 +952,7 @@ export class CloudAppHostService {
         const changed = await this.turso.hasRemoteChanged({
           orgId: access.orgId,
           namespaceId: access.namespaceId,
-          userId: access.userId,
+          ...this.tursoDbRequest(access, runtimeAuth),
           runtimeAuth,
           config: gateConfig,
           sourceId,
@@ -930,7 +972,7 @@ export class CloudAppHostService {
       const result = await this.turso.query({
         orgId: access.orgId,
         namespaceId: access.namespaceId,
-        userId: access.userId,
+        ...this.tursoDbRequest(access, runtimeAuth),
         runtimeAuth,
         config,
         sourceId,
@@ -997,7 +1039,7 @@ export class CloudAppHostService {
         const changed = await this.turso.hasRemoteChanged({
           orgId: access.orgId,
           namespaceId: access.namespaceId,
-          userId: access.userId,
+          ...this.tursoDbRequest(access, runtimeAuth),
           runtimeAuth,
           config,
           sourceId: gateSourceId,
@@ -1028,7 +1070,7 @@ export class CloudAppHostService {
           const result = await this.turso.query({
             orgId: access.orgId,
             namespaceId: access.namespaceId,
-            userId: access.userId,
+            ...this.tursoDbRequest(access, runtimeAuth),
             runtimeAuth,
             config,
             sourceId: stmt.sourceId,
@@ -1096,7 +1138,7 @@ export class CloudAppHostService {
       const result = await this.turso.write({
         orgId: access.orgId,
         namespaceId: access.namespaceId,
-        userId: access.userId,
+        ...this.tursoDbRequest(access, runtimeAuth),
         runtimeAuth,
         config,
         appId,
@@ -1179,7 +1221,7 @@ export class CloudAppHostService {
       const batchResult = await this.turso.writeBatch({
         orgId: access.orgId,
         namespaceId: access.namespaceId,
-        userId: access.userId,
+        ...this.tursoDbRequest(access, runtimeAuth),
         runtimeAuth,
         config,
         appId,
@@ -1247,7 +1289,7 @@ export class CloudAppHostService {
       const result = await this.turso.exec({
         orgId: access.orgId,
         namespaceId: access.namespaceId,
-        userId: access.userId,
+        ...this.tursoDbRequest(access, runtimeAuth),
         runtimeAuth,
         config,
         appId,
@@ -1539,10 +1581,14 @@ export class CloudAppHostService {
 
       const jobInput = {
         jobId: body.jobId,
-        params: mergeVerifiedCallerJobParams(body.params, Boolean(this.auth.getSessionToken(req)), {
-          userId: access.userId,
-          email: this.auth.getSessionEmail(req),
-        }),
+        params: mergeVerifiedCallerJobParams(
+          body.params,
+          Boolean(this.auth.getSessionToken(req)),
+          {
+            userId: runtimeAuth.externalUserId,
+            email: this.auth.getSessionEmail(req),
+          },
+        ),
         timeoutMs: body.timeoutMs,
       };
 
@@ -1945,6 +1991,7 @@ export class CloudAppHostService {
             orgId: access.orgId,
             namespaceId: access.namespaceId,
             userId: access.userId,
+            callerUserId: runtimeAuth.externalUserId,
             config,
             currentRevision: revision ?? null,
           });

@@ -471,7 +471,6 @@ export class JobsService {
     await this.migrateAndHydrateJobRuntimeFiles();
     await this.hydrateJobRuntimeFromCloud();
     await this.backfillJobAppIds();
-    await this.rebuildIndexIfCorrupted(); // Safety net: recover jobs on disk but missing from index
     await this.pruneStaleJobEntries(); // Remove index entries whose folders were deleted (e.g. bash rm)
     await this.installDefaultJobs(); // Optional extra bundled jobs (Home uses default-job.json)
     await this.installWorkspaceChatJob();
@@ -663,8 +662,7 @@ export class JobsService {
       }
       console.error("[JobsService] Failed to load jobs:", error);
 
-      // File exists but is corrupted (truncated write, etc.).
-      // Back it up so rebuildIndexIfCorrupted() can recover from disk.
+      // File exists but is corrupted (truncated write, etc.) — start empty; restore from backup manually.
       try {
         const backupPath = this.jobsIndexPath + `.corrupt-${Date.now()}`;
         await fs.copyFile(this.jobsIndexPath, backupPath);
@@ -673,174 +671,6 @@ export class JobsService {
         // backup failed — not critical
       }
       this.jobs = new Map();
-    }
-  }
-
-  /**
-   * Safety net: detect if jobs.json is missing jobs that exist on disk.
-   * Handles corruption from crashes, failed updates, or race conditions.
-   * Scans ~/Papr/jobs/ for job directories not in the index and re-adds them.
-   */
-  private async rebuildIndexIfCorrupted(): Promise<void> {
-    try {
-      const { readMigrationMarker, shouldSkipDailyBriefJobDirRecovery } =
-        await import("./migrateLegacyHomeDailyBriefJob.js");
-      const migrationMarker = await readMigrationMarker(getPaprRoot());
-
-      const dirsOnDisk = await fs.readdir(this.jobsRootDir);
-      const jobDirsOnDisk: string[] = [];
-
-      for (const dirName of dirsOnDisk) {
-        if (shouldSkipDailyBriefJobDirRecovery(dirName, migrationMarker)) {
-          continue;
-        }
-        const dirPath = path.join(this.jobsRootDir, dirName);
-        try {
-          const stat = await fs.stat(dirPath);
-          if (!stat.isDirectory()) continue;
-          const files = await fs.readdir(dirPath);
-          if (files.length === 0) continue;
-          jobDirsOnDisk.push(dirName);
-        } catch {
-          continue;
-        }
-      }
-
-      const missingJobIds = jobDirsOnDisk.filter(id => !this.jobs.has(id));
-
-      if (missingJobIds.length === 0) return;
-
-      console.warn(
-        `[JobsService] INDEX CORRUPTION DETECTED: ${missingJobIds.length} jobs on disk but missing from jobs.json. Rebuilding...`
-      );
-
-      try {
-        const backupPath = this.jobsIndexPath + `.backup-${Date.now()}`;
-        await fs.copyFile(this.jobsIndexPath, backupPath);
-        console.log(`[JobsService] Backed up corrupted index to ${backupPath}`);
-      } catch {
-        // No existing file to back up
-      }
-
-      for (const jobId of missingJobIds) {
-        const jobDir = path.join(this.jobsRootDir, jobId);
-
-        let jobJsonRecord: Partial<JobRecord> | null = null;
-        try {
-          const content = await fs.readFile(
-            path.join(jobDir, "job.json"),
-            "utf-8",
-          );
-          jobJsonRecord = JSON.parse(content) as Partial<JobRecord>;
-        } catch {
-          // job.json missing or corrupt — fall back to legacy recovery below
-        }
-
-        if (jobJsonRecord?.type === "subagent") {
-          // Ephemeral delegate_task runs — not indexed user jobs.
-          if (jobJsonRecord.delegatedBy?.trim()) {
-            console.log(
-              `[JobsService] Skipping delegated subagent entry: ${jobId}`,
-            );
-            continue;
-          }
-          // Persistent subagent jobs (app agent chat) must stay in jobs.json for cloud web.
-          if (
-            jobJsonRecord.id &&
-            jobJsonRecord.name &&
-            Array.isArray(jobJsonRecord.appIds) &&
-            jobJsonRecord.appIds.length > 0
-          ) {
-            const recoveredSubagent: JobRecord = {
-              ...(jobJsonRecord as JobRecord),
-              id: jobJsonRecord.id,
-              name: jobJsonRecord.name,
-              type: "subagent",
-              status: (jobJsonRecord.status as JobStatus) ?? "idle",
-              appIds: jobJsonRecord.appIds,
-              createdAt:
-                jobJsonRecord.createdAt ?? new Date().toISOString(),
-              updatedAt:
-                jobJsonRecord.updatedAt ?? new Date().toISOString(),
-            };
-            this.jobs.set(jobId, recoveredSubagent);
-            console.log(
-              `[JobsService] Recovered subagent job from job.json: ${jobId} - ${recoveredSubagent.name}`,
-            );
-            continue;
-          }
-          console.log(
-            `[JobsService] Skipping subagent entry without appIds: ${jobId}`,
-          );
-          continue;
-        }
-
-        let name = jobId;
-        let type: JobType = "bash";
-        let command = "";
-        let createdAt = new Date().toISOString();
-
-        // Try reading job.json first (primary source), then metadata.json (legacy)
-        let recoveredFromFile = false;
-        let folder: string | undefined;
-        for (const filename of ["job.json", "metadata.json"]) {
-          if (recoveredFromFile) break;
-          try {
-            const content = await fs.readFile(path.join(jobDir, filename), "utf-8");
-            const data = JSON.parse(content) as Partial<JobRecord>;
-            name = data.name || name;
-            type = (data.type as JobType) || type;
-            command = data.command || command;
-            if (data.createdAt) createdAt = data.createdAt;
-            if (data.folder) folder = data.folder;
-            recoveredFromFile = true;
-            console.log(`[JobsService] Recovered job data from ${filename}: ${jobId} → "${name}"`);
-          } catch {
-            // File doesn't exist or is corrupted, try next
-          }
-        }
-
-        if (!recoveredFromFile) {
-          // No job.json or metadata.json — try to infer type from files on disk
-          try {
-            const files = await fs.readdir(path.join(jobDir, "code"));
-            if (files.some(f => f.endsWith(".py"))) type = "python";
-            else if (files.some(f => f.endsWith(".js") || f.endsWith(".ts"))) type = "node";
-            else if (files.some(f => f.endsWith(".swift"))) type = "swift";
-          } catch {
-            // No code directory
-          }
-        }
-
-        try {
-          const stat = await fs.stat(jobDir);
-          createdAt = stat.birthtime.toISOString();
-        } catch {
-          // Use current time
-        }
-
-        const recoveredJob: JobRecord = {
-          id: jobId,
-          name,
-          type,
-          status: "idle" as JobStatus,
-          appIds: [],
-          command,
-          createdAt,
-          updatedAt: new Date().toISOString(),
-          ...(folder ? { folder } : {}),
-        };
-
-        this.jobs.set(jobId, recoveredJob);
-        console.log(`[JobsService] Recovered job from disk: ${jobId} - ${name}`);
-      }
-
-      await this.saveJobs();
-      console.log(
-        `[JobsService] Index rebuilt: recovered ${missingJobIds.length} jobs. Total: ${this.jobs.size}`
-      );
-    } catch (error) {
-      console.error("[JobsService] Failed to rebuild index:", error);
     }
   }
 
@@ -885,7 +715,6 @@ export class JobsService {
     console.log("[JobsService] Reloading jobs from disk...");
     await this.loadJobs();
     await this.hydrateJobsFromRuntimeFiles();
-    await this.rebuildIndexIfCorrupted();
     await this.pruneStaleJobEntries();
     console.log(`[JobsService] Reloaded ${this.jobs.size} jobs from disk`);
     

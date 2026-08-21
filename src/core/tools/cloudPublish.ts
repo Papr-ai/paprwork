@@ -273,6 +273,9 @@ If Cloud Sync is disabled, returns an error with fallbackTool=export_app_bundle 
       if (args.perUserIsolation !== undefined) {
         publishOptions.perUserIsolation = args.perUserIsolation;
       }
+      if (publishOptions.perUserIsolation === true) {
+        publishOptions.requireSignIn = true;
+      }
 
       const config = await publishService.publishOrUpdateSharing(
         args.appId,

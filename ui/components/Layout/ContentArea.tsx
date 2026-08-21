@@ -16,6 +16,8 @@ import { DocumentView } from "../Documents/DocumentView";
 import { SettingsView } from "../Settings/SettingsView";
 import { JobsView } from "../Jobs/JobsView";
 import { MiniAppView } from "../Apps/MiniAppView";
+import { CloudCatalogPreviewView } from "../Apps/CloudCatalogPreviewView";
+import { readCloudCatalogPreviewTabMetadata } from "../../types/cloudCatalogPreviewTab";
 import { SkillsView } from "../Skills/SkillsView";
 import { AgentsView } from "../Agents/AgentsViewCards";
 import { ViewsView } from "../Views/ViewsView";
@@ -273,8 +275,19 @@ export function ContentArea() {
         return <ViewsView />;
       case "view":
         return <TableView entityId={tab.entityId} />;
-      case "app":
+      case "app": {
+        const catalogPreview = readCloudCatalogPreviewTabMetadata(tab);
+        if (catalogPreview) {
+          return (
+            <CloudCatalogPreviewView
+              key={tab.id}
+              title={tab.title}
+              preview={catalogPreview}
+            />
+          );
+        }
         return <MiniAppView key={tab.entityId} appId={tab.entityId} />;
+      }
       case "getting-started":
         return <OnboardingView />;
       case "home":

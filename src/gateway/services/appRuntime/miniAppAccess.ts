@@ -12,25 +12,21 @@ export const VERIFIED_CALLER_USER_ID_PARAM = "PAPR_CALLER_USER_ID";
 export const VERIFIED_CALLER_EMAIL_PARAM = "PAPR_CALLER_EMAIL";
 
 export interface MiniAppCallerIdentity {
+  /** Parse _User.objectId — same value as externalUserId on cloud. */
   userId?: string;
   email?: string;
 }
 
-function appendCallerIdentity(
-  response: MiniAppAccessResponse,
-  loggedIn: boolean,
-  identity?: MiniAppCallerIdentity,
-): MiniAppAccessResponse {
-  if (!loggedIn) {
-    return response;
+function resolveIsOwner(
+  access: AppAccessContext,
+  callerUserId?: string,
+): boolean {
+  if (access.mode === "owner") {
+    return true;
   }
-  const userId = identity?.userId?.trim();
-  const email = identity?.email?.trim();
-  return {
-    ...response,
-    ...(userId ? { userId } : {}),
-    ...(email ? { email } : {}),
-  };
+  const caller = callerUserId?.trim();
+  const publisher = access.userId.trim();
+  return Boolean(caller && caller === publisher);
 }
 
 export function buildMiniAppAccessResponse(
@@ -40,32 +36,41 @@ export function buildMiniAppAccessResponse(
   identity?: MiniAppCallerIdentity,
 ): MiniAppAccessResponse {
   if (!access) {
-    return appendCallerIdentity(
-      {
-        mode: null,
-        canRead: false,
-        canWrite: false,
-        loggedIn,
-        isOwner: false,
-        ...(appId ? { appId } : {}),
-      },
+    return {
+      mode: null,
+      canRead: false,
+      canWrite: false,
       loggedIn,
-      identity,
-    );
+      isOwner: false,
+      ...(appId ? { appId } : {}),
+    };
   }
 
-  return appendCallerIdentity(
-    {
-      mode: access.mode,
-      canRead: access.canRead,
-      canWrite: access.canWrite,
-      loggedIn,
-      isOwner: access.mode === "owner",
-      appId: access.appId,
-    },
+  const callerUserId = identity?.userId?.trim();
+  const email = identity?.email?.trim();
+  const publisherUserId = access.userId;
+  const isOwner = resolveIsOwner(access, callerUserId);
+
+  const base: MiniAppAccessResponse = {
+    mode: access.mode,
+    canRead: access.canRead,
+    canWrite: access.canWrite,
     loggedIn,
-    { userId: access.userId, ...identity },
-  );
+    isOwner,
+    appId: access.appId,
+    publisherUserId,
+  };
+
+  if (!loggedIn || !callerUserId) {
+    return base;
+  }
+
+  return {
+    ...base,
+    userId: callerUserId,
+    externalUserId: callerUserId,
+    ...(email ? { email } : {}),
+  };
 }
 
 /** Desktop Paprwork iframe — always owner with full read/write. */
@@ -73,18 +78,24 @@ export function buildLocalDesktopAccessResponse(
   appId: string,
   identity?: MiniAppCallerIdentity,
 ): MiniAppAccessResponse {
-  return appendCallerIdentity(
-    {
-      mode: "owner",
-      canRead: true,
-      canWrite: true,
-      loggedIn: true,
-      isOwner: true,
-      appId,
-    },
-    true,
-    identity,
-  );
+  const callerUserId = identity?.userId?.trim();
+  const email = identity?.email?.trim();
+  return {
+    mode: "owner",
+    canRead: true,
+    canWrite: true,
+    loggedIn: true,
+    isOwner: true,
+    appId,
+    ...(callerUserId
+      ? {
+          userId: callerUserId,
+          externalUserId: callerUserId,
+          publisherUserId: callerUserId,
+        }
+      : {}),
+    ...(email ? { email } : {}),
+  };
 }
 
 /** Merge verified caller identity into job params (server wins over client). */

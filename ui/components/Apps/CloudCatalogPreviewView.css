@@ -1,0 +1,51 @@
+.cloud-catalog-preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.25));
+  background: var(--surface-elevated, rgba(255, 255, 255, 0.04));
+  flex-shrink: 0;
+}
+
+.cloud-catalog-preview-bar__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, inherit);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.cloud-catalog-preview-bar__badge {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.65));
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(0, 102, 255, 0.12);
+  flex-shrink: 0;
+}
+
+.cloud-catalog-preview-bar__actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.cloud-catalog-preview-bar__btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.35));
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.cloud-catalog-preview-bar__btn:hover {
+  background: rgba(128, 128, 128, 0.12);
+}

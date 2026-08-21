@@ -21,6 +21,8 @@
  *   --tag=TAG             Image tag (default: git short sha or timestamp)
  *   --memory-url=URL      Memory server URL (default: https://memory.papr.ai)
  *   --public-url=URL      Public URL for Auth0 redirect (default: https://apps.papr.ai)
+ *   --cloud-build         Build on GCP (faster on Apple Silicon vs local linux/amd64)
+ *   --fast                Shorthand: --cloud-build (repeat deploys)
  *   --dry-run             Print commands without executing
  */
 
@@ -51,6 +53,7 @@ const getArg = (name, fallback) => {
   return hit ? hit.split("=").slice(1).join("=") : fallback;
 };
 const dryRun = args.includes("--dry-run");
+const fastDeploy = args.includes("--fast");
 
 const project = getArg("project", process.env.GCP_APPS_PROJECT_ID);
 const region = getArg("region", process.env.GCP_APPS_REGION ?? "us-west1");
@@ -100,6 +103,7 @@ console.log(`Service:     ${service}`);
 console.log(`Image:       ${fullImage}`);
 console.log(`Memory URL:  ${memoryUrl}`);
 console.log(`Public URL:  ${publicUrl}`);
+if (fastDeploy) console.log("Mode:        FAST (cloud-build)");
 if (dryRun) console.log("Mode:        DRY RUN");
 
 console.log("\n--- Pre-flight checklist ---");
@@ -157,7 +161,10 @@ if (secretCheck.status !== 0) {
 }
 
 console.log("\n--- Step 4: Build & push Docker image ---");
-const useCloudBuild = args.includes("--cloud-build") || process.env.CLOUD_APP_HOST_CLOUD_BUILD === "1";
+const useCloudBuild =
+  args.includes("--cloud-build") ||
+  fastDeploy ||
+  process.env.CLOUD_APP_HOST_CLOUD_BUILD === "1";
 if (useCloudBuild) {
   run(
     `gcloud builds submit --project=${project} --region=${region} --config=cloudbuild-cloud-app-host.yaml --substitutions=_IMAGE=${fullImage} .`,

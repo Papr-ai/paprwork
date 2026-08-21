@@ -38,6 +38,16 @@ import type {
   TursoCredentialsProvider,
 } from "./types.js";
 import { displayTableName, rewriteSqlForTurso } from "./rewriteSqlForTurso.js";
+import {
+  resolveTursoActingUserIdForSource,
+  type TursoDbActors,
+} from "./tursoRuntimeIdentity.js";
+
+/** Cloud host request: `userId` = publisher; optional session visitor for per-user DBs. */
+type TursoDbActorInput = {
+  userId: string;
+  callerUserId?: string;
+};
 
 function toLibsqlArgs(params: unknown[] | undefined): InArgs {
   return (params ?? []) as InArgs;
@@ -66,6 +76,13 @@ export class TursoDbAdapter {
 
   constructor(private readonly credentials: TursoCredentialsProvider) {}
 
+  private toActors(input: TursoDbActorInput): TursoDbActors {
+    return {
+      publisherUserId: input.userId,
+      callerUserId: input.callerUserId,
+    };
+  }
+
   private clientKey(
     runtimeAuth: AppRuntimeRouteAuth,
     userId: string,
@@ -76,12 +93,13 @@ export class TursoDbAdapter {
 
   private async resolveTursoDatabaseName(
     source: AppDataSource,
-    userId: string,
+    actors: TursoDbActors,
   ): Promise<string> {
+    const actingUserId = resolveTursoActingUserIdForSource(source, actors);
     const registry = getDatabaseRegistryService();
     const record = registry.getRecordForSource(source);
     if (record) {
-      return tursoNameForRecord(record, userId);
+      return tursoNameForRecord(record, actingUserId);
     }
     if (source.dbId) {
       // Fail closed: a dbId source without a registry record could be
@@ -102,19 +120,20 @@ export class TursoDbAdapter {
   private async getClientForSource(
     orgId: string,
     namespaceId: string,
-    userId: string,
+    actors: TursoDbActors,
     runtimeAuth: AppRuntimeRouteAuth,
     source: AppDataSource,
   ): Promise<Client> {
-    const database = await this.resolveTursoDatabaseName(source, userId);
-    const cacheKey = this.clientKey(runtimeAuth, userId, database);
+    const actingUserId = resolveTursoActingUserIdForSource(source, actors);
+    const database = await this.resolveTursoDatabaseName(source, actors);
+    const cacheKey = this.clientKey(runtimeAuth, actingUserId, database);
     const cached = this.clientCache.get(cacheKey);
     if (cached) return cached;
 
     const { tursoUrl, authToken } = await this.credentials.getUserDatabaseToken(
       orgId,
       namespaceId,
-      userId,
+      actingUserId,
       runtimeAuth,
       database,
     );
@@ -130,7 +149,7 @@ export class TursoDbAdapter {
           const baseCreds = await this.credentials.getUserDatabaseToken(
             orgId,
             namespaceId,
-            userId,
+            actingUserId,
             runtimeAuth,
             baseName,
           );
@@ -199,25 +218,23 @@ export class TursoDbAdapter {
    * SYNC_VERSION_CHECK_MS so cache-hit paths stay cheap (at most one
    * single-row read per window). Fail-open: errors report "unchanged".
    */
-  async hasRemoteChanged(input: {
+  async hasRemoteChanged(input: TursoDbActorInput & {
     orgId: string;
     namespaceId: string;
-    userId: string;
     runtimeAuth: AppRuntimeRouteAuth;
     config: AppDataSourcesFile;
     sourceId?: string;
   }): Promise<boolean> {
     try {
+      const actors = this.toActors(input);
       const source = await resolveAppDataSource(input.config, {
         sourceId: input.sourceId,
         operation: "read",
       });
       if (!source) return false;
-      const database = await this.resolveTursoDatabaseName(
-        source,
-        input.userId,
-      );
-      const key = this.clientKey(input.runtimeAuth, input.userId, database);
+      const actingUserId = resolveTursoActingUserIdForSource(source, actors);
+      const database = await this.resolveTursoDatabaseName(source, actors);
+      const key = this.clientKey(input.runtimeAuth, actingUserId, database);
       const memo = this.syncVersionMemo.get(key);
       const now = Date.now();
       if (memo && now - memo.checkedAt < SYNC_VERSION_CHECK_MS) return false;
@@ -225,7 +242,7 @@ export class TursoDbAdapter {
       const client = await this.getClientForSource(
         input.orgId,
         input.namespaceId,
-        input.userId,
+        actors,
         input.runtimeAuth,
         source,
       );
@@ -256,7 +273,7 @@ export class TursoDbAdapter {
       operation: "read" | "write";
       orgId: string;
       namespaceId: string;
-      userId: string;
+      actors: TursoDbActors;
       runtimeAuth: AppRuntimeRouteAuth;
     },
   ): Promise<{ source: AppDataSource; remoteSql: string; localTables: string[] }> {
@@ -265,7 +282,7 @@ export class TursoDbAdapter {
         const client = await this.getClientForSource(
           options.orgId,
           options.namespaceId,
-          options.userId,
+          options.actors,
           options.runtimeAuth,
           candidate,
         );
@@ -288,7 +305,7 @@ export class TursoDbAdapter {
     const client = await this.getClientForSource(
       options.orgId,
       options.namespaceId,
-      options.userId,
+      options.actors,
       options.runtimeAuth,
       source,
     );
@@ -306,30 +323,30 @@ export class TursoDbAdapter {
     return { source, remoteSql, localTables: syncable };
   }
 
-  async query(input: {
+  async query(input: TursoDbActorInput & {
     orgId: string;
     namespaceId: string;
-    userId: string;
     runtimeAuth: AppRuntimeRouteAuth;
     config: AppDataSourcesFile;
     sourceId?: string;
     sql: string;
     params?: unknown[];
   }): Promise<DbQueryResult> {
+    const actors = this.toActors(input);
     const { source, remoteSql } = await this.resolveSource(input.config, {
       sourceId: input.sourceId,
       sql: input.sql,
       operation: "read",
       orgId: input.orgId,
       namespaceId: input.namespaceId,
-      userId: input.userId,
+      actors,
       runtimeAuth: input.runtimeAuth,
     });
 
     const client = await this.getClientForSource(
       input.orgId,
       input.namespaceId,
-      input.userId,
+      actors,
       input.runtimeAuth,
       source,
     );
@@ -352,10 +369,9 @@ export class TursoDbAdapter {
     };
   }
 
-  async write(input: {
+  async write(input: TursoDbActorInput & {
     orgId: string;
     namespaceId: string;
-    userId: string;
     runtimeAuth: AppRuntimeRouteAuth;
     config: AppDataSourcesFile;
     appId: string;
@@ -363,18 +379,20 @@ export class TursoDbAdapter {
     sql: string;
     params?: unknown[];
   }): Promise<DbWriteResult> {
+    const actors = this.toActors(input);
     const { source, remoteSql } = await this.resolveSource(input.config, {
       sourceId: input.sourceId,
       sql: input.sql,
       operation: "write",
       orgId: input.orgId,
       namespaceId: input.namespaceId,
-      userId: input.userId,
+      actors,
       runtimeAuth: input.runtimeAuth,
     });
 
-    const database = await this.resolveTursoDatabaseName(source, input.userId);
-    const cacheKey = this.clientKey(input.runtimeAuth, input.userId, database);
+    const database = await this.resolveTursoDatabaseName(source, actors);
+    const actingUserId = resolveTursoActingUserIdForSource(source, actors);
+    const cacheKey = this.clientKey(input.runtimeAuth, actingUserId, database);
 
     if (this.usesWorkspaceLogAuthority()) {
       const { appendRuntimeWorkspaceLogEntry } = await import(
@@ -410,7 +428,7 @@ export class TursoDbAdapter {
     const client = await this.getClientForSource(
       input.orgId,
       input.namespaceId,
-      input.userId,
+      actors,
       input.runtimeAuth,
       source,
     );
@@ -438,15 +456,15 @@ export class TursoDbAdapter {
   /** Max row writes per interactive batch (matches read batch cap). */
   static readonly MAX_WRITE_BATCH = 25;
 
-  async writeBatch(input: {
+  async writeBatch(input: TursoDbActorInput & {
     orgId: string;
     namespaceId: string;
-    userId: string;
     runtimeAuth: AppRuntimeRouteAuth;
     config: AppDataSourcesFile;
     appId: string;
     statements: DbWriteBatchStatement[];
   }): Promise<{ results: DbWriteBatchResultItem[] }> {
+    const actors = this.toActors(input);
     if (input.statements.length === 0) {
       throw new Error("Batch must include at least one statement");
     }
@@ -473,10 +491,10 @@ export class TursoDbAdapter {
         operation: "write",
         orgId: input.orgId,
         namespaceId: input.namespaceId,
-        userId: input.userId,
+        actors,
         runtimeAuth: input.runtimeAuth,
       });
-      const database = await this.resolveTursoDatabaseName(source, input.userId);
+      const database = await this.resolveTursoDatabaseName(source, actors);
       resolved.push({
         index,
         source,
@@ -501,9 +519,13 @@ export class TursoDbAdapter {
       );
 
       for (const [database, group] of groups) {
+        const actingUserId = resolveTursoActingUserIdForSource(
+          group[0].source,
+          actors,
+        );
         const cacheKey = this.clientKey(
           input.runtimeAuth,
-          input.userId,
+          actingUserId,
           database,
         );
         try {
@@ -562,6 +584,7 @@ export class TursoDbAdapter {
           orgId: input.orgId,
           namespaceId: input.namespaceId,
           userId: input.userId,
+          callerUserId: input.callerUserId,
           runtimeAuth: input.runtimeAuth,
           config: input.config,
           appId: input.appId,
@@ -584,35 +607,36 @@ export class TursoDbAdapter {
     return { results };
   }
 
-  async exec(input: {
+  async exec(input: TursoDbActorInput & {
     orgId: string;
     namespaceId: string;
-    userId: string;
     runtimeAuth: AppRuntimeRouteAuth;
     config: AppDataSourcesFile;
     appId: string;
     sourceId?: string;
     sql: string;
   }): Promise<{ ok: true; source: string }> {
+    const actors = this.toActors(input);
     const { source } = await this.resolveSource(input.config, {
       sourceId: input.sourceId,
       sql: input.sql,
       operation: "write",
       orgId: input.orgId,
       namespaceId: input.namespaceId,
-      userId: input.userId,
+      actors,
       runtimeAuth: input.runtimeAuth,
     });
 
     const client = await this.getClientForSource(
       input.orgId,
       input.namespaceId,
-      input.userId,
+      actors,
       input.runtimeAuth,
       source,
     );
-    const database = await this.resolveTursoDatabaseName(source, input.userId);
-    const cacheKey = this.clientKey(input.runtimeAuth, input.userId, database);
+    const database = await this.resolveTursoDatabaseName(source, actors);
+    const actingUserId = resolveTursoActingUserIdForSource(source, actors);
+    const cacheKey = this.clientKey(input.runtimeAuth, actingUserId, database);
 
     if (this.usesWorkspaceLogAuthority()) {
       const { appendRuntimeWorkspaceLogEntry } = await import(
@@ -641,20 +665,20 @@ export class TursoDbAdapter {
     return Boolean(process.env.PAPR_CLOUD_APP_HOST_KEY?.trim());
   }
 
-  async schema(input: {
+  async schema(input: TursoDbActorInput & {
     orgId: string;
     namespaceId: string;
-    userId: string;
     runtimeAuth: AppRuntimeRouteAuth;
     config: AppDataSourcesFile;
   }): Promise<DbSchemaSource[]> {
+    const actors = this.toActors(input);
     return Promise.all(
       input.config.sources.map(async (source) => {
         try {
           const client = await this.getClientForSource(
             input.orgId,
             input.namespaceId,
-            input.userId,
+            actors,
             input.runtimeAuth,
             source,
           );
@@ -699,13 +723,13 @@ export class TursoDbAdapter {
   }
 
   /** Highest applied migration id across all linked sources (for schema gate). */
-  async getMaxAppliedMigrationId(input: {
+  async getMaxAppliedMigrationId(input: TursoDbActorInput & {
     orgId: string;
     namespaceId: string;
-    userId: string;
     runtimeAuth: AppRuntimeRouteAuth;
     config: AppDataSourcesFile;
   }): Promise<string | null> {
+    const actors = this.toActors(input);
     let maxId: string | null = null;
 
     for (const source of input.config.sources) {
@@ -713,7 +737,7 @@ export class TursoDbAdapter {
         const client = await this.getClientForSource(
           input.orgId,
           input.namespaceId,
-          input.userId,
+          actors,
           input.runtimeAuth,
           source,
         );
@@ -741,13 +765,13 @@ export class TursoDbAdapter {
    * Best-effort prefetch of Turso db-token + libsql clients for linked sources.
    * Called async on app open so first read/write avoids cold-token latency.
    */
-  async warmLinkedSources(input: {
+  async warmLinkedSources(input: TursoDbActorInput & {
     orgId: string;
     namespaceId: string;
-    userId: string;
     runtimeAuth: AppRuntimeRouteAuth;
     config: AppDataSourcesFile;
   }): Promise<void> {
+    const actors = this.toActors(input);
     for (const source of input.config.sources) {
       if (!source.jobId && !source.dbId) {
         continue;
@@ -756,7 +780,7 @@ export class TursoDbAdapter {
         await this.getClientForSource(
           input.orgId,
           input.namespaceId,
-          input.userId,
+          actors,
           input.runtimeAuth,
           source,
         );

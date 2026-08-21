@@ -47,6 +47,7 @@ export async function evaluateCloudAppSchemaGate(input: {
   orgId: string;
   namespaceId: string;
   userId: string;
+  callerUserId?: string;
   config: AppDataSourcesFile;
   currentRevision: string | null;
 }): Promise<SchemaGateResult> {
@@ -72,6 +73,7 @@ export async function evaluateCloudAppSchemaGate(input: {
     orgId: input.orgId,
     namespaceId: input.namespaceId,
     userId: input.userId,
+    callerUserId: input.callerUserId,
     runtimeAuth: input.runtimeAuth,
     config: input.config,
   });

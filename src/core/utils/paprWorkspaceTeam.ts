@@ -139,7 +139,6 @@ interface NamespaceWorkspaceGraphQLResponse {
       objectId?: string;
       organization?: {
         workspace?: { objectId?: string };
-        workSpace?: { objectId?: string };
       };
     };
   };
@@ -170,7 +169,6 @@ export async function resolveWorkspaceIdForNamespace(
             objectId
             organization {
               workspace { objectId }
-              workSpace { objectId }
             }
           }
         }
@@ -189,7 +187,6 @@ export async function resolveWorkspaceIdForNamespace(
   }
 
   const org = json.data?.namespace?.organization;
-  const workspaceId =
-    org?.workspace?.objectId?.trim() || org?.workSpace?.objectId?.trim();
+  const workspaceId = org?.workspace?.objectId?.trim();
   return workspaceId || null;
 }

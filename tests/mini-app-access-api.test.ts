@@ -35,11 +35,13 @@ describe("miniAppAccess", () => {
       isOwner: true,
       appId: "app-123",
       userId: "user-abc",
+      externalUserId: "user-abc",
+      publisherUserId: "user-abc",
       email: "dev@papr.ai",
     });
   });
 
-  it("cloud owner access sets isOwner and userId when logged in", () => {
+  it("cloud owner access sets isOwner and caller userId when logged in", () => {
     const ctx: AppAccessContext = {
       orgId: "org",
       namespaceId: "ns",
@@ -50,7 +52,10 @@ describe("miniAppAccess", () => {
       canWrite: true,
     };
     expect(
-      buildMiniAppAccessResponse(ctx, true, undefined, { email: "owner@papr.ai" }),
+      buildMiniAppAccessResponse(ctx, true, undefined, {
+        userId: "user-42",
+        email: "owner@papr.ai",
+      }),
     ).toEqual({
       mode: "owner",
       canRead: true,
@@ -58,26 +63,60 @@ describe("miniAppAccess", () => {
       loggedIn: true,
       isOwner: true,
       appId: "app-1",
+      publisherUserId: "user-42",
       userId: "user-42",
+      externalUserId: "user-42",
       email: "owner@papr.ai",
     });
   });
 
-  it("team member access exposes userId for per-user authorization", () => {
+  it("team member gets caller userId, not publisher userId", () => {
     const ctx: AppAccessContext = {
       orgId: "org",
       namespaceId: "ns",
-      userId: "teammate-9",
+      userId: "publisher-1",
       appId: "app-1",
       mode: "team",
       canRead: true,
       canWrite: true,
     };
-    expect(buildMiniAppAccessResponse(ctx, true)).toMatchObject({
+    expect(
+      buildMiniAppAccessResponse(ctx, true, undefined, {
+        userId: "teammate-9",
+        email: "teammate@papr.ai",
+      }),
+    ).toEqual({
       mode: "team",
-      isOwner: false,
+      canRead: true,
+      canWrite: true,
       loggedIn: true,
+      isOwner: false,
+      appId: "app-1",
+      publisherUserId: "publisher-1",
       userId: "teammate-9",
+      externalUserId: "teammate-9",
+      email: "teammate@papr.ai",
+    });
+  });
+
+  it("publisher visiting team app is isOwner when caller matches publisher", () => {
+    const ctx: AppAccessContext = {
+      orgId: "org",
+      namespaceId: "ns",
+      userId: "publisher-1",
+      appId: "app-1",
+      mode: "team",
+      canRead: true,
+      canWrite: true,
+    };
+    expect(
+      buildMiniAppAccessResponse(ctx, true, undefined, {
+        userId: "publisher-1",
+      }),
+    ).toMatchObject({
+      isOwner: true,
+      publisherUserId: "publisher-1",
+      userId: "publisher-1",
     });
   });
 
@@ -85,7 +124,7 @@ describe("miniAppAccess", () => {
     const ctx: AppAccessContext = {
       orgId: "org",
       namespaceId: "ns",
-      userId: "anon",
+      userId: "publisher-1",
       appId: "app-1",
       mode: "public_read",
       canRead: true,
@@ -98,6 +137,7 @@ describe("miniAppAccess", () => {
       loggedIn: false,
       isOwner: false,
       appId: "app-1",
+      publisherUserId: "publisher-1",
     });
   });
 

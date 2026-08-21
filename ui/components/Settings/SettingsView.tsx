@@ -997,6 +997,43 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.4.1" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.1</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Per-User Database Isolation</strong>
+                <p>
+                  Apps with per-user Turso sources now require Papr sign-in and
+                  route each visitor to their own database replica.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Community Catalog Preview</strong>
+                <p>
+                  Browse and preview published apps from the community catalog
+                  directly inside Paprwork without leaving the app.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Smarter Mini-App Access</strong>
+                <p>
+                  Team and shared published apps now correctly identify owners
+                  and enforce read/write permissions for signed-in visitors.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.1"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.4.0" && (
           <div className="about-card">
             <h3>What's New in v2.4.0</h3>
