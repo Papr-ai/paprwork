@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import * as fs from "fs";
 import * as path from "path";
 import { resolvePaprUserDataPath } from "../../../core/utils/paprWorkspace.js";
+import { MAX_INLINE_PAYLOAD_BYTES } from "./messagePayloadStore.js";
 
 const CHARS_PER_TOKEN = 4;
 /** Rough chars/line when we only have lines_of_code from index metadata */
@@ -241,6 +242,7 @@ export function computeMemorySearchSavings(
          WHERE role = 'assistant'
            AND tool_calls IS NOT NULL
            AND tool_calls != ''
+           AND LENGTH(tool_calls) <= ${MAX_INLINE_PAYLOAD_BYTES}
            AND timestamp >= ?
            AND (
              tool_calls LIKE '%"search_agent_memory"%'
@@ -257,6 +259,7 @@ export function computeMemorySearchSavings(
          WHERE role = 'assistant'
            AND tool_calls IS NOT NULL
            AND tool_calls != ''
+           AND LENGTH(tool_calls) <= ${MAX_INLINE_PAYLOAD_BYTES}
            AND (
              tool_calls LIKE '%"search_agent_memory"%'
              OR tool_calls LIKE '%"search_memory"%'

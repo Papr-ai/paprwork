@@ -132,6 +132,7 @@
     "test:app-agent-storage-e2e": "node scripts/test-app-agent-storage-e2e.mjs",
     "test:app-agent-deploy-verify": "node scripts/verify-app-agent-chat-deploy.mjs",
     "setup:apps-dns": "node scripts/setup-apps-papr-ai-dns.mjs",
+    "test:payload-migration": "npm run build:gateway && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-tool-payload-migration.mjs",
     "test:turso-auto-push": "ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-turso-auto-push.mjs",
     "test:turso-permanent-skip": "npm run build:gateway && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-turso-permanent-skip.mjs",
     "test:turso-delta-sync": "npm run build:gateway && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-turso-delta-sync.mjs",

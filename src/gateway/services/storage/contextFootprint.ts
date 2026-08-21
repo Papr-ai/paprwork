@@ -55,6 +55,8 @@ interface ToolCallRecord {
   name?: string;
   args?: unknown;
   result?: unknown;
+  /** Present when `result` is only a preview of a payload kept outside the row. */
+  resultOffload?: { totalChars?: number };
 }
 
 export interface ChatTurnFootprint {
@@ -114,8 +116,15 @@ function estimateToolCallsChars(
     if (call.args !== undefined) {
       chars += stringifyResult(call.args).length;
     }
-    const fullResult = stringifyResult(call.result);
-    chars += truncateToolResult(fullResult, truncateResultsAt).length;
+    const storedResult = stringifyResult(call.result);
+    if (truncateResultsAt === null) {
+      // Untruncated baseline: an offloaded result only keeps a preview in the
+      // row, so its real size comes from the offload pointer.
+      chars += call.resultOffload?.totalChars ?? storedResult.length;
+    } else {
+      // What the model actually receives, which is the stored value.
+      chars += truncateToolResult(storedResult, truncateResultsAt).length;
+    }
     if (typeof call.name === "string") {
       chars += call.name.length;
     }
