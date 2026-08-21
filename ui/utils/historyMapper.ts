@@ -182,6 +182,10 @@ export function mapHistoryMessages(
       reasoning,
       toolCalls,
       sequence: sequenceRaw, // Include sequence for interleaved rendering
+      // Persisted by the gateway when a turn never finished. Carrying it through
+      // keeps an interrupted turn labelled as such after a reload, instead of
+      // reappearing as a finished answer.
+      ...(candidate.incomplete === true ? { interrupted: true } : {}),
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
     };
   });
