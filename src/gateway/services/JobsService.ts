@@ -491,6 +491,8 @@ export class JobsService {
 
     await this.reconcileScheduleStates();
 
+    await this.migrateUnlinkedJobsToLocalOnly();
+
     void this.rebuildGraph();
 
     this.initialized = true;
@@ -1339,6 +1341,9 @@ export class JobsService {
 
     const now = new Date().toISOString();
     const id = uuidv4();
+    const { defaultExecutionCapabilityForAppIds } = await import(
+      "./jobs/executionCapability.js"
+    );
     const job: JobRecord = {
       id,
       name: input.name,
@@ -1369,6 +1374,10 @@ export class JobsService {
       provider: input.provider,
       model: input.model,
       recipe: input.recipe,
+      executionCapability: defaultExecutionCapabilityForAppIds(
+        appIds,
+        input.executionCapability,
+      ),
       createdAt: now,
       updatedAt: now,
     };
@@ -1453,9 +1462,13 @@ export class JobsService {
       : jobDef.command;
 
     const now = new Date().toISOString();
+    const { defaultExecutionCapabilityForAppIds } = await import(
+      "./jobs/executionCapability.js"
+    );
+    const resolvedAppIds = jobDef.appIds?.length ? jobDef.appIds : [STANDALONE_APP_ID];
     const job: JobRecord = {
       status: "pending",
-      appIds: jobDef.appIds?.length ? jobDef.appIds : [STANDALONE_APP_ID],
+      appIds: resolvedAppIds,
       dependsOn: [],
       retries: { maxAttempts: 1, backoffMs: 1000 },
       retentionDays: 14,
@@ -1463,6 +1476,10 @@ export class JobsService {
       memoryPolicy: "none",
       ...jobDef,
       ...(normalizedCommand ? { command: normalizedCommand } : {}),
+      executionCapability: defaultExecutionCapabilityForAppIds(
+        resolvedAppIds,
+        jobDef.executionCapability,
+      ),
       createdAt: jobDef.createdAt || now,
       updatedAt: now,
     };
@@ -1891,6 +1908,45 @@ export class JobsService {
           updatedAt: new Date().toISOString(),
         });
       }
+    }
+  }
+
+  /**
+   * Pin orphan / unlinked jobs to local-only so the cloud scheduler ignores them.
+   * Only applies when executionCapability is unset (explicit user choice is preserved).
+   */
+  private async migrateUnlinkedJobsToLocalOnly(): Promise<void> {
+    const jobs = Array.from(this.jobs.values());
+    if (jobs.length === 0) {
+      return;
+    }
+
+    const { collectLinkedJobIds } = await import("./jobs/jobAppLinkage.js");
+    const { shouldDefaultUnlinkedJobToLocalOnly, UNLINKED_JOB_EXECUTION_CAPABILITY } =
+      await import("./jobs/executionCapability.js");
+
+    const linkedJobIds = await collectLinkedJobIds(jobs);
+    let changed = 0;
+
+    for (const job of jobs) {
+      if (!shouldDefaultUnlinkedJobToLocalOnly(job, linkedJobIds)) {
+        continue;
+      }
+      const updated: JobRecord = {
+        ...job,
+        executionCapability: UNLINKED_JOB_EXECUTION_CAPABILITY,
+        updatedAt: new Date().toISOString(),
+      };
+      this.jobs.set(job.id, updated);
+      await this.persistJobRecord(updated);
+      changed += 1;
+    }
+
+    if (changed > 0) {
+      await this.saveJobs();
+      console.log(
+        `[JobsService] Set local-only execution for ${changed} unlinked job(s)`,
+      );
     }
   }
 

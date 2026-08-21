@@ -12,6 +12,15 @@ import {
   type CloudRouteContext,
 } from "./cloudAppHostContext.js";
 import { resolvePublishedApp } from "./cloudAppPublishClient.js";
+import {
+  buildCloudPreviewAuthHeaders,
+  isCloudShareGateHtml,
+  resolveCloudPreviewRuntimeAuth,
+} from "./cloudPreviewRuntimeAuth.js";
+import {
+  buildDesktopCloudPreviewAccessResponse,
+  validateDesktopCloudPreviewAccess,
+} from "./cloudPreviewDesktopAccess.js";
 
 const CLOUD_APPS_HOST =
   process.env.PAPR_CLOUD_APPS_HOST?.replace(/\/$/, "") ?? "https://apps.papr.ai";
@@ -69,7 +78,8 @@ function resolveCloudPreviewContextFromReferer(
     const url = new URL(referer);
     const match = url.pathname.match(/^\/cloud-preview\/([^/]+)\/([^/]+)\/?/);
     if (!match?.[1] || !match[2]) return null;
-    return { namespaceId: match[1], slug: match[2] };
+    const shareToken = url.searchParams.get("t")?.trim() || undefined;
+    return { namespaceId: match[1], slug: match[2], shareToken };
   } catch {
     return null;
   }
@@ -104,18 +114,6 @@ export function isCloudProxyableApiPath(path: string): boolean {
   return PROXYABLE_API_PREFIXES.some(
     (prefix) => path === prefix || path.startsWith(prefix),
   );
-}
-
-async function buildAuthHeaders(ctx: CloudRouteContext): Promise<Record<string, string>> {
-  const headers: Record<string, string> = {
-    "X-Papr-Namespace-Id": ctx.namespaceId,
-    "X-Papr-Slug": ctx.slug,
-  };
-  const apiKey = await getApiKey("PAPR_API_KEY");
-  if (apiKey) headers["X-API-Key"] = apiKey;
-  const sessionToken = await getApiKey("PAPR_SESSION_TOKEN");
-  if (sessionToken) headers["X-Session-Token"] = sessionToken;
-  return headers;
 }
 
 async function resolveCloudAppId(ctx: CloudRouteContext): Promise<string | undefined> {
@@ -197,10 +195,11 @@ function rewriteHtmlBaseHref(html: string, ctx: CloudRouteContext): string {
 function cloudPreviewContextFromParams(
   namespaceId: string,
   slug: string,
+  shareToken?: string,
 ): CloudRouteContext | null {
   if (!namespaceId || !slug) return null;
   if (isReservedCloudPathSegment(namespaceId)) return null;
-  return { namespaceId, slug };
+  return { namespaceId, slug, shareToken };
 }
 
 export async function proxyCloudStaticRequest(
@@ -209,40 +208,62 @@ export async function proxyCloudStaticRequest(
   ctx: CloudRouteContext,
   subPath: string,
 ): Promise<void> {
-  const authHeaders = await buildAuthHeaders(ctx);
+  const runtimeAuth = await resolveCloudPreviewRuntimeAuth(ctx);
+  const localAccess = await validateDesktopCloudPreviewAccess(runtimeAuth);
+
   const queryIndex = req.url.indexOf("?");
   const query = queryIndex >= 0 ? req.url.slice(queryIndex) : "";
   const targetPath = subPath.length > 0 ? subPath : "index.html";
   const targetUrl = `${CLOUD_APPS_HOST}/${ctx.namespaceId}/${ctx.slug}/${targetPath}${query}`;
 
-  const upstream = await fetch(targetUrl, {
-    method: req.method,
-    headers: {
-      ...authHeaders,
-      Accept: typeof req.headers.accept === "string" ? req.headers.accept : "*/*",
-    },
-    redirect: "manual",
-  });
+  const acceptHeader =
+    typeof req.headers.accept === "string" ? req.headers.accept : "*/*";
 
-  if (upstream.status >= 300 && upstream.status < 400) {
-    const location = upstream.headers.get("location");
+  async function fetchUpstream(
+    enrichFromSession: boolean,
+  ): Promise<globalThis.Response> {
+    const authHeaders = await buildCloudPreviewAuthHeaders(ctx, {
+      enrichFromSession,
+    });
+    return fetch(targetUrl, {
+      method: req.method,
+      headers: {
+        ...authHeaders,
+        Accept: acceptHeader,
+      },
+      redirect: "manual",
+    });
+  }
+
+  let upstreamRes = await fetchUpstream(false);
+  let body = Buffer.from(await upstreamRes.arrayBuffer());
+  let resolvedContentType = upstreamRes.headers.get("content-type") ?? "";
+
+  if (resolvedContentType.includes("text/html") && localAccess?.canRead) {
+    const html = body.toString("utf8");
+    if (isCloudShareGateHtml(html)) {
+      upstreamRes = await fetchUpstream(true);
+      body = Buffer.from(await upstreamRes.arrayBuffer());
+      resolvedContentType = upstreamRes.headers.get("content-type") ?? resolvedContentType;
+    }
+  }
+
+  if (upstreamRes.status >= 300 && upstreamRes.status < 400) {
+    const location = upstreamRes.headers.get("location");
     if (location) {
-      res.redirect(upstream.status, location);
+      res.redirect(upstreamRes.status, location);
       return;
     }
   }
 
-  const contentType = upstream.headers.get("content-type") ?? "";
-  let body = Buffer.from(await upstream.arrayBuffer());
-
-  if (contentType.includes("text/html")) {
+  if (resolvedContentType.includes("text/html")) {
     const html = rewriteHtmlBaseHref(body.toString("utf8"), ctx);
     body = Buffer.from(html, "utf8");
   }
 
-  res.status(upstream.status);
-  if (contentType) {
-    res.setHeader("Content-Type", contentType);
+  res.status(upstreamRes.status);
+  if (resolvedContentType) {
+    res.setHeader("Content-Type", resolvedContentType);
   }
   res.send(body);
 }
@@ -252,7 +273,10 @@ export async function proxyCloudApiRequest(
   res: Response,
   ctx: CloudRouteContext,
 ): Promise<void> {
-  const authHeaders = await buildAuthHeaders(ctx);
+  const runtimeAuth = await resolveCloudPreviewRuntimeAuth(ctx);
+  const authHeaders = await buildCloudPreviewAuthHeaders(ctx, {
+    enrichFromSession: Boolean(runtimeAuth.sessionToken),
+  });
   const targetUrl = await buildProxiedApiUrl(req, ctx);
 
   const headers: Record<string, string> = {
@@ -297,7 +321,9 @@ export function registerCloudDesktopPreviewRoutes(app: Express): void {
       res.status(404).send("Not found");
       return;
     }
-    const ctx = cloudPreviewContextFromParams(namespaceId, slug);
+    const shareToken =
+      typeof req.query.t === "string" ? req.query.t.trim() || undefined : undefined;
+    const ctx = cloudPreviewContextFromParams(namespaceId, slug, shareToken);
     if (!ctx) {
       res.status(404).send("Not found");
       return;
@@ -332,6 +358,21 @@ export function registerCloudDesktopPreviewApiProxy(app: Express): void {
       next();
       return;
     }
+
+    if (req.method === "GET" && req.path === "/api/access") {
+      void buildDesktopCloudPreviewAccessResponse(ctx)
+        .then((body) => {
+          res.json(body);
+        })
+        .catch((err: unknown) => {
+          console.error("[Gateway] cloud-preview /api/access error:", err);
+          if (!res.headersSent) {
+            res.status(500).json({ error: (err as Error).message });
+          }
+        });
+      return;
+    }
+
     void proxyCloudApiRequest(req, res, ctx).catch((err: unknown) => {
       console.error("[Gateway] cloud-preview API proxy error:", err);
       if (!res.headersSent) {

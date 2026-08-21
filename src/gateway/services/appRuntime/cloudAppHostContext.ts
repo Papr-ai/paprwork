@@ -5,6 +5,8 @@
 export interface CloudRouteContext {
   namespaceId: string;
   slug: string;
+  /** Share link token (?t=) for link-gated published apps. */
+  shareToken?: string;
 }
 
 const RESERVED_SEGMENTS = new Set(["health", "api", "apps", "auth"]);
@@ -36,6 +38,20 @@ function headerValue(
   if (typeof value === "string" && value.length > 0) return value;
   if (Array.isArray(value) && value[0]) return value[0];
   return undefined;
+}
+
+/** Desktop cloud-preview proxy passes Parse session token via header (not cookie). */
+export function headerSessionToken(
+  headers: Record<string, string | string[] | undefined> | undefined,
+): string | undefined {
+  return headerValue(headers, "x-session-token");
+}
+
+/** Desktop cloud-preview proxy passes caller Parse objectId via header. */
+export function headerExternalUserId(
+  headers: Record<string, string | string[] | undefined> | undefined,
+): string | undefined {
+  return headerValue(headers, "x-papr-external-user-id");
 }
 
 function queryValue(query: Record<string, unknown> | undefined, key: string): string | undefined {

@@ -12,6 +12,7 @@ import {
   mergeLocalTabsIntoSnapshot,
   normalizeTabHierarchy,
 } from '../lib/persistedAppState';
+import { serializeTabForGatewayPersistence } from '../lib/tabPersistenceMetadata';
 import { isWorkspaceSwitchReloading } from '../lib/workspaceSwitchReload';
 import {
   buildWorkspaceUiCacheKey,
@@ -116,19 +117,9 @@ export function useAppStatePersistence() {
       console.log('[Persistence] Saving tabs to SQLite...');
       const saveStartTime = performance.now();
       
-      // Convert tabs to SQLite format
-      const tabsToSave = tabs.map((tab, index) => ({
-        id: tab.id,
-        type: tab.type,
-        entityId: tab.entityId,
-        title: tab.title,
-        displayMode: tab.displayMode,
-        parentTabId: tab.parentTabId,
-        position: index,
-        isFavorite: tab.isFavorite || false,
-        createdAt: new Date().toISOString(),
-        lastAccessedAt: new Date().toISOString(),
-      }));
+      const tabsToSave = tabs.map((tab, index) =>
+        serializeTabForGatewayPersistence(tab, index),
+      );
 
       gateway.send('app:save_tabs', tabsToSave).then(() => {
         console.log(`[Persistence] Saved ${tabs.length} tabs in ${(performance.now() - saveStartTime).toFixed(2)}ms`);

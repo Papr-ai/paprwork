@@ -5,6 +5,7 @@ import { useGatewaySupervisorStatus } from "../../hooks/useGatewaySupervisorStat
 import { trackEvent } from "../../lib/telemetry";
 import { gateway } from "../../src/lib/gateway";
 import type { ArtifactCloudLineage } from "../../stores/artifactsStore";
+import { isCatalogPreviewEntityId } from "../../types/cloudCatalogPreviewTab";
 import {
   MiniAppPublishBar,
   type AppPreviewMode,
@@ -136,6 +137,9 @@ export function MiniAppView({ appId }: MiniAppViewProps) {
     setAppMissingInWorkspace(false);
     setIframeLoadError(null);
     setRuntimeError(null);
+    if (isCatalogPreviewEntityId(appId)) {
+      return;
+    }
     void (async () => {
       try {
         const resp = await gateway.send("app:get", { appId });

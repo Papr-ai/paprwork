@@ -997,6 +997,43 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.4.3" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.3</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Install from Community Catalog</strong>
+                <p>
+                  Fork or track cloud apps directly from the community catalog
+                  with a guided install flow and requirement checks.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Richer Catalog Preview</strong>
+                <p>
+                  Preview cloud apps in dedicated tabs with URL bar navigation,
+                  persistent tab state, and session-based access validation.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Job–App Linkage</strong>
+                <p>
+                  Jobs now track which apps they belong to for clearer cloud
+                  scheduling and execution capability routing.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.3"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.4.2" && (
           <div className="about-card">
             <h3>What's New in v2.4.2</h3>

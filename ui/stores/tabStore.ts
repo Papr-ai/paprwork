@@ -139,6 +139,21 @@ export const useTabStore = create<TabState>()((set, get) => ({
         // Check if tab already exists
         const existingTab = get().tabs.find((t) => t.id === tabId);
         if (existingTab) {
+          const hasMetadata = Object.keys(metadata).length > 0;
+          if (hasMetadata || title !== existingTab.title) {
+            set((state) => ({
+              tabs: state.tabs.map((t) =>
+                t.id === tabId
+                  ? {
+                      ...t,
+                      title,
+                      icon: (metadata.icon as string | undefined) ?? t.icon,
+                      metadata: hasMetadata ? { ...t.metadata, ...metadata } : t.metadata,
+                    }
+                  : t,
+              ),
+            }));
+          }
           // Orphan child (hidden from tab bar) — promote so explicit opens get a visible tab
           if (existingTab.displayMode === "child" && !existingTab.parentTabId) {
             get().promoteToStandalone(tabId);

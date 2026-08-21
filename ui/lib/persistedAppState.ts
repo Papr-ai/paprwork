@@ -4,9 +4,11 @@
 
 import { useTabStore } from "../stores/tabStore";
 import type { TabType } from "../types/tabs";
+import { isCatalogPreviewEntityId } from "../types/cloudCatalogPreviewTab";
 import { gateway } from "../src/lib/gateway";
 import { ensureDefaultChatTab } from "./ensureDefaultChatTab";
 import { ensureSettingsTab } from "./ensureSettingsTab";
+import { serializeTabForGatewayPersistence } from "./tabPersistenceMetadata";
 
 interface TabRow {
   id: string;
@@ -17,6 +19,7 @@ interface TabRow {
   parentTabId: string | null;
   position: number;
   isFavorite: boolean;
+  metadata?: Record<string, unknown>;
 }
 
 /** Save open tabs + navigation state to the current workspace before switching away. */
@@ -32,18 +35,7 @@ export async function flushWorkspaceStateToGateway(): Promise<void> {
 
   const tabs = normalizeTabHierarchy(rawTabs);
 
-  const tabsToSave = tabs.map((tab, index) => ({
-    id: tab.id,
-    type: tab.type,
-    entityId: tab.entityId,
-    title: tab.title,
-    displayMode: tab.displayMode,
-    parentTabId: tab.parentTabId,
-    position: index,
-    isFavorite: tab.isFavorite || false,
-    createdAt: new Date().toISOString(),
-    lastAccessedAt: new Date().toISOString(),
-  }));
+  const tabsToSave = tabs.map((tab, index) => serializeTabForGatewayPersistence(tab, index));
 
   await gateway.send("app:save_tabs", tabsToSave);
 
@@ -373,6 +365,7 @@ function mapTabRow(tab: TabRow) {
     isFavorite: tab.isFavorite,
     hasUnread: false,
     isStreaming: false,
+    ...(tab.metadata ? { metadata: tab.metadata } : {}),
   };
 }
 
@@ -391,6 +384,9 @@ export function pruneStaleEntityTabs<
       return valid.validChatIds?.has(tab.entityId) ?? true;
     }
     if (tab.type === "app") {
+      if (isCatalogPreviewEntityId(tab.entityId)) {
+        return true;
+      }
       return valid.validAppIds?.has(tab.entityId) ?? true;
     }
     if (tab.type === "document") {

@@ -43,6 +43,7 @@ import {
   cloudCatalogPreviewEntityId,
   type CloudCatalogPreviewTabMetadata,
 } from "../../types/cloudCatalogPreviewTab";
+import { CloudCatalogInstallModal } from "./CloudCatalogInstallModal";
 
 const GATEWAY =
   typeof import.meta !== "undefined" &&
@@ -565,7 +566,7 @@ export function CommunityAppsView({
       const previewIframeUrl = resolveCatalogPreviewIframeUrl(entry);
       const liveUrl = resolveCatalogLiveWebUrl(entry);
       if (!previewIframeUrl || !liveUrl) {
-        setError("This app does not have a live preview URL yet.");
+        setInstallError("This app does not have a live preview URL yet.");
         return;
       }
 
@@ -693,8 +694,7 @@ export function CommunityAppsView({
             onCloudInstall={() => startCloudInstall(entry)}
             isInstalling={installingId === entry.catalogId}
             onOpen={
-              entry.liveViewable &&
-              (entry.liveUrl || (entry.namespaceId && entry.slug))
+              entry.liveUrl || (entry.namespaceId && entry.slug)
                 ? () => openCloudPreview(entry)
                 : undefined
             }
@@ -862,61 +862,16 @@ export function CommunityAppsView({
       )}
 
       {installModeEntry ? (
-        <div
-          className="community-install-modal__backdrop"
-          role="presentation"
-          onClick={() => setInstallModeEntry(null)}
-        >
-          <div
-            className="community-install-modal"
-            role="dialog"
-            aria-modal="true"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="community-install-modal__title">
-              Install {installModeEntry.name}
-            </h3>
-            <p className="community-install-modal__desc">
-              Choose how this cloud app lands in your Papr Work workspace.
-            </p>
-            <button
-              type="button"
-              className="community-install-modal__option"
-              disabled={installingId === installModeEntry.catalogId}
-              onClick={() => {
-                const target = installModeEntry;
-                setInstallModeEntry(null);
-                void installCloudApp(target, "fork");
-              }}
-            >
-              <strong>Fork</strong>
-              <span>Independent copy — edit freely, send changes back to owner.</span>
-            </button>
-            <button
-              type="button"
-              className="community-install-modal__option"
-              disabled={installingId === installModeEntry.catalogId}
-              onClick={() => {
-                const target = installModeEntry;
-                setInstallModeEntry(null);
-                void installCloudApp(target, "track");
-              }}
-            >
-              <strong>Collaborate and get updates</strong>
-              <span>
-                Stay connected to the publisher and pull their updates when
-                you&apos;re ready.
-              </span>
-            </button>
-            <button
-              type="button"
-              className="community-install-modal__cancel"
-              onClick={() => setInstallModeEntry(null)}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
+        <CloudCatalogInstallModal
+          entry={installModeEntry}
+          installing={installingId === installModeEntry.catalogId}
+          onClose={() => setInstallModeEntry(null)}
+          onSelectMode={(mode) => {
+            const target = installModeEntry;
+            setInstallModeEntry(null);
+            void installCloudApp(target, mode);
+          }}
+        />
       ) : null}
 
       {wizardEntry && (

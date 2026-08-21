@@ -166,6 +166,7 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
         slug: input.slug,
         paprApiKey: input.paprApiKey,
         shareToken: input.shareToken,
+        ...(input.sessionToken ? { sessionToken: input.sessionToken } : {}),
         ...(input.externalUserId ? { external_user_id: input.externalUserId } : {}),
       }),
     });

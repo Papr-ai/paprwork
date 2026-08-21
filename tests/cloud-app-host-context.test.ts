@@ -4,6 +4,8 @@ import {
   PAPR_CLOUD_NAMESPACE_META,
   PAPR_CLOUD_SLUG_META,
   resolveCloudRouteContext,
+  headerSessionToken,
+  headerExternalUserId,
 } from "../src/gateway/services/appRuntime/cloudAppHostContext.js";
 
 describe("cloudAppHostContext", () => {
@@ -36,5 +38,14 @@ describe("cloudAppHostContext", () => {
 
     expect(html).toContain(`name="${PAPR_CLOUD_NAMESPACE_META}" content="ns-abc"`);
     expect(html).toContain(`name="${PAPR_CLOUD_SLUG_META}" content="deck-studio"`);
+  });
+
+  it("reads desktop proxy session and user headers", () => {
+    expect(
+      headerSessionToken({ "x-session-token": "sess_from_desktop" }),
+    ).toBe("sess_from_desktop");
+    expect(
+      headerExternalUserId({ "x-papr-external-user-id": "user_abc" }),
+    ).toBe("user_abc");
   });
 });

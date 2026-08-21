@@ -1,10 +1,14 @@
 import { describe, expect, test } from "vitest";
 import {
   DEFAULT_JOB_EXECUTION_CAPABILITY,
+  UNLINKED_JOB_EXECUTION_CAPABILITY,
+  defaultExecutionCapabilityForAppIds,
+  shouldDefaultUnlinkedJobToLocalOnly,
   isJobDeferredToCloudScheduler,
   normalizeExecutionCapability,
   shouldDesktopSchedulerRunJob,
 } from "../src/gateway/services/jobs/executionCapability.js";
+import { STANDALONE_APP_ID } from "../src/gateway/services/jobs/appIds.js";
 
 describe("executionCapability", () => {
   test("defaults unset and legacy cloud-capable to local-preferred", () => {
@@ -63,6 +67,51 @@ describe("executionCapability", () => {
       isJobDeferredToCloudScheduler(
         { executionCapability: "cloud-preferred" },
         false,
+      ),
+    ).toBe(false);
+  });
+
+  test("standalone appIds default to local-only", () => {
+    expect(UNLINKED_JOB_EXECUTION_CAPABILITY).toBe("local-only");
+    expect(defaultExecutionCapabilityForAppIds([STANDALONE_APP_ID])).toBe(
+      "local-only",
+    );
+    expect(
+      defaultExecutionCapabilityForAppIds(["app-real-id"]),
+    ).toBeUndefined();
+    expect(
+      defaultExecutionCapabilityForAppIds([STANDALONE_APP_ID], "cloud-preferred"),
+    ).toBe("cloud-preferred");
+  });
+
+  test("shouldDefaultUnlinkedJobToLocalOnly skips explicit capability", () => {
+    const linked = new Set(["linked-job"]);
+    expect(
+      shouldDefaultUnlinkedJobToLocalOnly(
+        {
+          id: "linked-job",
+          appIds: ["app-a"],
+          executionCapability: "local-preferred",
+        },
+        linked,
+      ),
+    ).toBe(false);
+    expect(
+      shouldDefaultUnlinkedJobToLocalOnly(
+        { id: "orphan", appIds: [STANDALONE_APP_ID] },
+        linked,
+      ),
+    ).toBe(true);
+    expect(
+      shouldDefaultUnlinkedJobToLocalOnly(
+        { id: "ghost", appIds: ["missing-app"] },
+        linked,
+      ),
+    ).toBe(true);
+    expect(
+      shouldDefaultUnlinkedJobToLocalOnly(
+        { id: "linked-job", appIds: ["app-a"] },
+        linked,
       ),
     ).toBe(false);
   });

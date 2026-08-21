@@ -1,4 +1,5 @@
 import type { JobRecord } from "./types.js";
+import { isStandaloneOnly, STANDALONE_APP_ID } from "./appIds.js";
 
 /** Scheduled execution placement when cloud sync is enabled. */
 export type JobExecutionCapability =
@@ -15,9 +16,40 @@ export type NormalizedJobExecutionCapability =
   | "local-preferred"
   | "cloud-preferred";
 
-/** Default for new jobs and unset legacy records. */
+/** Default for app-linked jobs when unset. */
 export const DEFAULT_JOB_EXECUTION_CAPABILITY: NormalizedJobExecutionCapability =
   "local-preferred";
+
+/** Default for orphan / unlinked jobs (no cloud scheduling until linked). */
+export const UNLINKED_JOB_EXECUTION_CAPABILITY: NormalizedJobExecutionCapability =
+  "local-only";
+
+export function defaultExecutionCapabilityForAppIds(
+  appIds: readonly string[] | undefined,
+  explicit?: JobExecutionCapabilityInput,
+): JobExecutionCapability | undefined {
+  if (explicit !== undefined) {
+    return explicit;
+  }
+  if (isStandaloneOnly(appIds ?? [STANDALONE_APP_ID])) {
+    return UNLINKED_JOB_EXECUTION_CAPABILITY;
+  }
+  return undefined;
+}
+
+/** True when an unset job should be pinned to local-only (standalone or not app-linked). */
+export function shouldDefaultUnlinkedJobToLocalOnly(
+  job: Pick<JobRecord, "id" | "appIds" | "executionCapability">,
+  linkedJobIds: ReadonlySet<string>,
+): boolean {
+  if (job.executionCapability !== undefined) {
+    return false;
+  }
+  if (isStandaloneOnly(job.appIds ?? [])) {
+    return true;
+  }
+  return !linkedJobIds.has(job.id);
+}
 
 export function normalizeExecutionCapability(
   value: JobExecutionCapabilityInput,

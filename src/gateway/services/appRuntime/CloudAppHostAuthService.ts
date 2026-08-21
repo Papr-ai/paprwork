@@ -20,7 +20,7 @@ import {
   buildPaprAuthCallbackPageHtml,
   humanizeAppSlug,
 } from "../../../resources/mini-app-sdk/papr-auth-ui.js";
-import { parseCookieHeader } from "./cloudAppHostContext.js";
+import { parseCookieHeader, headerSessionToken, headerExternalUserId } from "./cloudAppHostContext.js";
 import {
   buildAuthPendingCookie,
   buildSessionCookie,
@@ -61,11 +61,17 @@ export class CloudAppHostAuthService {
   }
 
   getSessionToken(req: Request): string | undefined {
-    return readCloudAppSessionFromCookie(req.headers.cookie)?.sessionToken;
+    return (
+      readCloudAppSessionFromCookie(req.headers.cookie)?.sessionToken ??
+      headerSessionToken(req.headers)
+    );
   }
 
   getExternalUserId(req: Request): string | undefined {
-    return readCloudAppSessionFromCookie(req.headers.cookie)?.externalUserId;
+    return (
+      readCloudAppSessionFromCookie(req.headers.cookie)?.externalUserId ??
+      headerExternalUserId(req.headers)
+    );
   }
 
   getSessionEmail(req: Request): string | undefined {

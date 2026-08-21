@@ -47,6 +47,7 @@ import {
   fetchCloudCompatibility,
 } from "../../utils/cloudPublishApi";
 import type { CloudCompatibilityReport } from "../../src/core/types/cloudAppCompatibility";
+import { PreviewUrlRow } from "./PreviewUrlRow";
 import "./MiniAppPublishBar.css";
 import "./AppWorkspaceMenu.css";
 
@@ -917,38 +918,17 @@ export function MiniAppPublishBar({
         ) : null}
 
         {workspaceMode === "preview" && previewDisplayUrl ? (
-          <div className="mini-app-publish-bar__url-row">
-            <span className="mini-app-publish-bar__url" title={previewDisplayUrl}>
-              {previewDisplayUrl}
-            </span>
-            <button
-              type="button"
-              className="mini-app-publish-bar__icon-button"
-              title={viewMode === "published" ? "Refresh web preview" : "Refresh local preview"}
-              aria-label="Refresh preview"
-              onClick={() => onRefreshPreview?.()}
-            >
-              <RefreshIcon />
-            </button>
-            <button
-              type="button"
-              className="mini-app-publish-bar__icon-button"
-              title="Open in browser"
-              aria-label="Open in browser"
-              onClick={() => void cloud.openInBrowser(previewDisplayUrl)}
-            >
-              <OpenExternalIcon />
-            </button>
-            <button
-              type="button"
-              className="mini-app-publish-bar__icon-button"
-              title="Copy link"
-              aria-label="Copy link"
-              onClick={() => void cloud.copyLink(previewDisplayUrl)}
-            >
-              <CopyIcon />
-            </button>
-          </div>
+          <PreviewUrlRow
+            displayUrl={previewDisplayUrl}
+            refreshTitle={
+              viewMode === "published"
+                ? "Refresh web preview"
+                : "Refresh local preview"
+            }
+            onRefresh={() => onRefreshPreview?.()}
+            onOpenInBrowser={() => void cloud.openInBrowser(previewDisplayUrl)}
+            onCopyLink={() => void cloud.copyLink(previewDisplayUrl)}
+          />
         ) : null}
 
         <div className="mini-app-publish-bar__actions">

@@ -27,6 +27,7 @@ export interface TabMetadata {
   isFavorite: boolean;
   createdAt: string;
   lastAccessedAt: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface AppState {
@@ -91,6 +92,12 @@ export class AppStateStorage {
       CREATE INDEX IF NOT EXISTS idx_tabs_position ON tabs(position);
       CREATE INDEX IF NOT EXISTS idx_tabs_favorite ON tabs(is_favorite);
     `);
+
+    try {
+      this.db.exec(`ALTER TABLE tabs ADD COLUMN metadata_json TEXT`);
+    } catch {
+      // Column already exists
+    }
   }
 
   /**
@@ -106,8 +113,8 @@ export class AppStateStorage {
       const stmt = this.db.prepare(`
         INSERT INTO tabs (
           id, type, entity_id, title, display_mode, parent_tab_id,
-          position, is_favorite, created_at, last_accessed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          position, is_favorite, created_at, last_accessed_at, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       for (const tab of tabsToSave) {
@@ -122,6 +129,7 @@ export class AppStateStorage {
           tab.isFavorite ? 1 : 0,
           tab.createdAt,
           tab.lastAccessedAt,
+          tab.metadata ? JSON.stringify(tab.metadata) : null,
         );
       }
     });
@@ -149,6 +157,7 @@ export class AppStateStorage {
       isFavorite: row.is_favorite === 1,
       createdAt: row.created_at,
       lastAccessedAt: row.last_accessed_at,
+      metadata: parsePersistedTabMetadata(row.metadata_json),
     }));
   }
 
@@ -267,6 +276,7 @@ export class AppStateStorage {
       isFavorite: true,
       createdAt: row.created_at,
       lastAccessedAt: row.last_accessed_at,
+      metadata: parsePersistedTabMetadata(row.metadata_json),
     }));
   }
 
@@ -278,6 +288,23 @@ export class AppStateStorage {
     this.closed = true;
     this.db.close();
   }
+}
+
+function parsePersistedTabMetadata(
+  raw: unknown,
+): Record<string, unknown> | undefined {
+  if (typeof raw !== "string" || !raw.trim()) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 // Singleton instance

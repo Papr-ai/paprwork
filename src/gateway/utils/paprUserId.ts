@@ -27,8 +27,14 @@ export function getPaprUserId(): string | undefined {
   try {
     const settingsPath = path.join(getPaprDataDir(), "settings.json");
     const raw = fs.readFileSync(settingsPath, "utf-8");
-    const settings = JSON.parse(raw) as { profile?: { paprUserId?: string } };
-    cachedUserId = settings.profile?.paprUserId?.trim() ?? "";
+    const settings = JSON.parse(raw) as {
+      profile?: { paprUserId?: string };
+      paprProfile?: { userId?: string };
+    };
+    cachedUserId =
+      settings.profile?.paprUserId?.trim() ??
+      settings.paprProfile?.userId?.trim() ??
+      "";
     cachedAt = now;
     return cachedUserId || undefined;
   } catch {

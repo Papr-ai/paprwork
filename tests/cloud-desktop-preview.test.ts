@@ -1,9 +1,23 @@
 import { describe, expect, it } from "vitest";
+import { isCloudShareGateHtml } from "../src/gateway/services/appRuntime/cloudPreviewRuntimeAuth.js";
 import {
   buildUpstreamCloudPreviewUrl,
   buildUpstreamPublishedWebUrl,
   parsePublishedAppUrl,
 } from "../ui/utils/cloudDesktopPreview.js";
+
+describe("isCloudShareGateHtml", () => {
+  it("detects team sign-in gate HTML", () => {
+    const html = `<!DOCTYPE html><html><body><main><p class="status">Sign in required</p></main></body></html>`;
+    expect(isCloudShareGateHtml(html)).toBe(true);
+  });
+
+  it("returns false for normal mini-app HTML", () => {
+    expect(isCloudShareGateHtml("<html><body><div id=\"root\"></div></body></html>")).toBe(
+      false,
+    );
+  });
+});
 
 describe("cloudDesktopPreview (track collaborator Web)", () => {
   it("buildUpstreamPublishedWebUrl uses publisher namespace and slug", () => {

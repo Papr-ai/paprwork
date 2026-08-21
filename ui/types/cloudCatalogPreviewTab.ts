@@ -49,3 +49,23 @@ export function readCloudCatalogPreviewTabMetadata(
 export function cloudCatalogPreviewEntityId(catalogId: string): string {
   return `catalog-preview-${catalogId.replace(/[^a-zA-Z0-9_-]+/g, "-")}`;
 }
+
+export function isCatalogPreviewEntityId(entityId: string): boolean {
+  return entityId.startsWith("catalog-preview-");
+}
+
+/** Reverse stable entityId → catalogId for cloud entries (cloud:{appId}). */
+export function catalogIdFromPreviewEntityId(entityId: string): string | null {
+  if (!isCatalogPreviewEntityId(entityId)) {
+    return null;
+  }
+  const encoded = entityId.slice("catalog-preview-".length);
+  if (!encoded.startsWith("cloud-")) {
+    return null;
+  }
+  const appId = encoded.slice("cloud-".length);
+  if (!appId) {
+    return null;
+  }
+  return `cloud:${appId}`;
+}

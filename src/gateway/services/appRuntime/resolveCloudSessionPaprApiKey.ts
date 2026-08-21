@@ -1,9 +1,12 @@
 /**
  * Resolve a Papr org API key from a web session cookie for Cloud App Host runtime calls.
- * Desktop preview passes X-API-Key; apps.papr.ai sign-in only sets papr_session.
+ * Used server-side on apps.papr.ai when the browser only has papr_session (no X-API-Key).
+ * Desktop cloud-preview proxy does not call this — it forwards session + external_user_id only.
  */
 
 import { GET_NAMESPACE_API_KEYS } from "../../../core/papr/paprLoginGraphql.js";
+import { parsePaprApiKeyScope } from "../../../core/utils/paprApiKey.js";
+import { readActiveWorkspacePointer } from "../../../core/utils/paprWorkspace.js";
 import type { AppRuntimeRouteAuth } from "./types.js";
 
 const PARSE_GRAPHQL_URL =
@@ -68,19 +71,44 @@ export async function fetchNamespaceApiKeyForSession(
   return apiKey;
 }
 
-/** Attach paprApiKey when the browser only has a signed-in session cookie. */
+function paprApiKeyMatchesNamespaceId(apiKey: string, namespaceId: string): boolean {
+  const trimmed = apiKey.trim();
+  const scope = parsePaprApiKeyScope(trimmed);
+  if (scope) {
+    return scope.namespaceId === namespaceId;
+  }
+  const activeNamespaceId =
+    process.env.PAPR_NAMESPACE_ID?.trim() ||
+    readActiveWorkspacePointer()?.namespaceId;
+  return activeNamespaceId === namespaceId;
+}
+
+/** Attach a namespace-scoped paprApiKey; drop workspace keys for other namespaces. */
 export async function enrichRuntimeAuthWithPaprApiKey(
   auth: AppRuntimeRouteAuth | null,
 ): Promise<AppRuntimeRouteAuth | null> {
-  if (!auth || auth.paprApiKey || !auth.sessionToken) {
+  if (!auth) {
     return auth;
   }
 
-  const paprApiKey = await fetchNamespaceApiKeyForSession(
-    auth.sessionToken,
-    auth.namespaceId,
-  );
-  if (!paprApiKey) {
+  let paprApiKey = auth.paprApiKey;
+  if (paprApiKey && !paprApiKeyMatchesNamespaceId(paprApiKey, auth.namespaceId)) {
+    paprApiKey = undefined;
+  } else if (paprApiKey) {
+    return auth;
+  }
+
+  if (auth.sessionToken) {
+    const namespaceKey = await fetchNamespaceApiKeyForSession(
+      auth.sessionToken,
+      auth.namespaceId,
+    );
+    if (namespaceKey) {
+      paprApiKey = namespaceKey;
+    }
+  }
+
+  if (paprApiKey === auth.paprApiKey) {
     return auth;
   }
 
