@@ -35,6 +35,16 @@ export interface StoredMessage {
     args: Record<string, any>;
     result?: string;
     status?: "pending" | "success" | "error" | "interrupted";
+    /**
+     * Set when `result` is only a preview because the full text was moved to a
+     * sidecar file. `get_full_tool_result` follows this to read the original.
+     */
+    resultOffload?: {
+      /** Sidecar location, relative to the directory holding chats.db. */
+      file: string;
+      /** Length in characters of the full result. */
+      totalChars: number;
+    };
   }>;
 
   // Sequence tracking (V1 compatibility for interleaved text/tool calls)
@@ -153,6 +163,19 @@ export interface IStorageProvider {
    * @param chatId - Chat session ID
    */
   loadMessagesForLLM(chatId: string): Promise<any[]>;
+
+  /**
+   * Read the full text of a tool result that was offloaded to sidecar storage.
+   * Returns null when the tool call has no offloaded result.
+   *
+   * Only providers that own local files implement this; loaded messages carry
+   * an inline preview either way.
+   */
+  readOffloadedToolResult?(
+    chatId: string,
+    messageId: string,
+    toolCallId: string,
+  ): Promise<string | null>;
 
   // ===== Summary Operations =====
 

@@ -80,6 +80,12 @@ export const getFullToolResultTool = createTool({
         toolCallId: args.toolCallId,
         toolName: args.toolName,
         loadMessages: (chatId) => storage.loadMessages(chatId),
+        // Very large results are kept in sidecar files rather than in the row,
+        // so the loaded message only carries a preview.
+        readOffloaded: storage.readOffloadedToolResult
+          ? (chatId, messageId, toolCallId) =>
+              storage.readOffloadedToolResult!(chatId, messageId, toolCallId)
+          : undefined,
       });
 
       if (!match) {
