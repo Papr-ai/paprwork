@@ -7,8 +7,10 @@ import Database from "better-sqlite3";
 import {
   filterSyncableTables,
   listUserTables,
+  quoteIdent,
   readRemoteTableSchema,
   readTableSchema,
+  type TableColumn,
 } from "../tursoSyncBridgeCore.js";
 import type { JobMigrationSchemaOp } from "../../../core/types/jobMigrations.js";
 import { resolveMigrationRootFromDbPath } from "../jobs/databaseMigrations.js";
@@ -56,6 +58,88 @@ async function openRemoteClient(
   return { remote, close: () => remote.close() };
 }
 
+const REBUILD_SUFFIX = "__papr_rebuild";
+
+function columnDefinition(col: TableColumn, inlinePk: boolean): string {
+  const type = col.type.trim() || "TEXT";
+  return `${quoteIdent(col.name)} ${type}${inlinePk ? " PRIMARY KEY" : ""}`;
+}
+
+/**
+ * Rebuild a remote table so its column types and PRIMARY KEY match local.
+ *
+ * SQLite cannot ALTER a column's type or add a PRIMARY KEY to an existing
+ * table, so a copy-and-swap is the only way to express this drift. Without it
+ * the healer produced zero ops for PK/type drift: the table was reported
+ * drifted forever, and publish stayed blocked no matter how many times the
+ * user pressed Upload.
+ *
+ * These statements run against Turso only — local is already the source of
+ * truth for the schema we are converging on.
+ */
+function buildRemoteTableRebuildOps(
+  tableName: string,
+  localColumns: readonly TableColumn[],
+  remoteColumns: readonly TableColumn[],
+): JobMigrationSchemaOp[] {
+  const temp = `${tableName}${REBUILD_SUFFIX}`;
+  const pkCols = localColumns.filter((col) => col.primaryKey);
+  const singlePk = pkCols.length === 1;
+
+  const colDefs = localColumns
+    .map((col) => columnDefinition(col, singlePk && col.primaryKey))
+    .join(", ");
+  const compositePk =
+    pkCols.length > 1
+      ? `, PRIMARY KEY (${pkCols.map((col) => quoteIdent(col.name)).join(", ")})`
+      : "";
+
+  // Only copy columns the remote actually has; anything else would fail to
+  // resolve in the SELECT and abort the whole rebuild.
+  const remoteNames = new Set(remoteColumns.map((col) => col.name));
+  const carried = localColumns
+    .filter((col) => remoteNames.has(col.name))
+    .map((col) => quoteIdent(col.name))
+    .join(", ");
+
+  const statements = [
+    // A previous interrupted rebuild would otherwise block CREATE.
+    `DROP TABLE IF EXISTS ${quoteIdent(temp)}`,
+    `CREATE TABLE ${quoteIdent(temp)} (${colDefs}${compositePk})`,
+  ];
+  if (carried.length > 0) {
+    // OR IGNORE: the drifted table had no PRIMARY KEY, so it may hold
+    // duplicate keys that the rebuilt table legitimately rejects.
+    statements.push(
+      `INSERT OR IGNORE INTO ${quoteIdent(temp)} (${carried}) SELECT ${carried} FROM ${quoteIdent(tableName)}`,
+    );
+  }
+  statements.push(`DROP TABLE ${quoteIdent(tableName)}`);
+  statements.push(
+    `ALTER TABLE ${quoteIdent(temp)} RENAME TO ${quoteIdent(tableName)}`,
+  );
+
+  return statements.map((statement) => ({ kind: "sql" as const, statement }));
+}
+
+/** Columns present on both sides whose type or PK flag disagrees. */
+function incompatibleColumns(
+  localColumns: readonly TableColumn[],
+  remoteColumns: readonly TableColumn[],
+): TableColumn[] {
+  const remoteByName = new Map(remoteColumns.map((col) => [col.name, col]));
+  return localColumns.filter((localCol) => {
+    const remoteCol = remoteByName.get(localCol.name);
+    if (!remoteCol) {
+      return false; // handled by add_column
+    }
+    const typeDiffers =
+      (localCol.type.trim() || "TEXT").toUpperCase() !==
+      (remoteCol.type.trim() || "TEXT").toUpperCase();
+    return typeDiffers || localCol.primaryKey !== remoteCol.primaryKey;
+  });
+}
+
 async function buildColumnDriftHealOps(
   remote: Client,
   localDb: Database.Database,
@@ -83,10 +167,19 @@ async function buildColumnDriftHealOps(
       continue;
     }
 
-    const localCols = userSchemaColumns(readTableSchema(localDb, tableName));
-    const remoteCols = userSchemaColumns(
-      await readRemoteTableSchema(remote, tableName),
-    );
+    const localAll = readTableSchema(localDb, tableName);
+    const remoteAll = await readRemoteTableSchema(remote, tableName);
+    const localCols = userSchemaColumns(localAll);
+    const remoteCols = userSchemaColumns(remoteAll);
+
+    // Type/PK differences cannot be expressed as ALTER TABLE, so a table that
+    // drifts that way needs a full rebuild. Emitting add_column ops here (or
+    // nothing at all) leaves the table permanently drifted.
+    if (incompatibleColumns(localCols, remoteCols).length > 0) {
+      ops.push(...buildRemoteTableRebuildOps(tableName, localAll, remoteAll));
+      continue;
+    }
+
     const remoteNames = new Set(remoteCols.map((col) => col.name));
     for (const localCol of localCols) {
       if (!remoteNames.has(localCol.name)) {
